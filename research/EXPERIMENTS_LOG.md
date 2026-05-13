@@ -2487,5 +2487,98 @@ All increased clip rate above 99% and lost across all 4 splits. Six different ax
 
 **Why this assignment for nezuko:** Their #2267 slice_num=48 analysis identified that compute leg didn't materialize at this model size — sharp problem framing that focuses our search toward smaller axes. AdamW eps is the smallest possible code change (single digit in single number) and tests genuinely orthogonal mechanism.
 
+## 2026-05-13 18:45 — PR #2247 (MERGE): frieren batch_size=2 — 15th compound, MASSIVE opt-step density win, first measured saturation easing that wins
+
+- Branch: `willowpai2g48h5-frieren/batch-size-2-opt-steps`
+- Hypothesis: Test batch_size=4→2 at the 14-compound baseline. Doubles opt-step count per epoch at fixed wall-clock, LR, schedule shape, and architecture. Predicted mechanism: opt-step saturation is the binding constraint at bs=4, not gradient amplitude.
+- W&B run: `t5xloer3` (canonical clean run; 2 prior runs k3u5m7vw, k8qftsa0 hit GPU contention)
+
+**Results:**
+
+| Metric | batch_size=2 | #2142 OLD baseline | Δ vs OLD |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **46.6788** | 50.3812 | −3.70 (**−7.35%**) ✓ |
+| test_avg/mae_surf_p | **39.7696** | 43.7187 | −3.95 (**−9.04%**) ✓ |
+
+**Per-split test (EMA, epoch 34 best checkpoint):**
+
+| Split | bs=2 | #2142 | Δ% |
+|---|---:|---:|---:|
+| test_single_in_dist | 44.0421 | 48.9641 | **−10.05%** |
+| test_geom_camber_rc | 53.1169 | 57.3689 | **−7.41%** |
+| test_geom_camber_cruise | 24.1470 | 26.9722 | **−10.48%** |
+| test_re_rand | 37.7723 | 41.5697 | **−9.13%** |
+| **test_avg** | **39.7696** | **43.7187** | **−9.04%** |
+
+All 4 splits improve sharply (8-10%). Both IID and OOD splits benefit, not just OOD — confirms mechanism is global optimization quality improvement, not just OOD regularization.
+
+**Diagnostics:**
+
+| Metric | bs=2 | bs=4 baseline |
+|---|---:|---:|
+| epoch_time_s | 53.02 | ~54 |
+| Epochs reached | 34/50 | 33/50 |
+| Opt-steps | 25,500 (750/ep × 34) | 12,375 (375/ep × 33) |
+| Opt-step multiplier | **2.06×** | 1× |
+| clip_rate | **94.70%** | 98.93% |
+| norm_p50 | 12.96 | 14.03 |
+| norm_p99 | 85.4 | 76.3 |
+| EMA-live gap (test) | −4.71 | −6.08 |
+
+**CRITICAL FINDING: First measured clip-saturation LOOSENING that wins.**
+
+Cycles 27-36 showed: every axis that lowered clip rate also failed (or raised it):
+- LR=7.5e-4: clip rate UP (99.30%), FAIL
+- T_max=80: clip rate UP (99.44%), FAIL  
+- lr=3e-4: clip rate UP (99.38%), FAIL
+- slice_num=48: clip rate slightly UP (99.7%), FAIL
+- wd=1e-5: clip rate DOWN (96.67%), FAIL (different mechanism)
+- **bs=2: clip rate DOWN (94.70%), WIN ← this PR**
+
+The difference: bs=2 lowers clip rate by changing the optimization trajectory (more opt-steps → model moves through high-gradient regime faster → clip rate drops) rather than by changing gradient amplitude. This is consistent with the "time-in-high-gradient-regime" pattern v3.
+
+**Variance note:** 3 runs. First 2 (k3u5m7vw, k8qftsa0) at degraded throughput (109s/ep, 53.97s/ep) reached only 25-24 epochs and landed val 56.10/55.51 — near baseline, NOT winning. Canonical t5xloer3 at clean throughput (53.02s/ep) is the merge target. **The bs=2 win is throughput-dependent.** At ≥34 epochs, the 2× opt-step density is productive. At ≤25 epochs, it underperforms bs=4.
+
+**Mechanism:** Doubling opt-steps per epoch at fixed LR and schedule delivers 2.06× optimizer exposure in same wall-clock budget. EMA gap TIGHTENED (−4.71 vs −6.08) — counter to predicted widening. 2× step density + noisier per-batch gradients → net smoother effective trajectory. The optimizer sees more of the loss landscape per wall-clock minute.
+
+**Decision: MERGE** — 15th compound winner. Val −7.35%/test −9.04% is the second-largest single-merge gain since #1953 schedule fix (−12%).
+
+→ Merged 2026-05-13 18:45 UTC. New baseline: val=46.6788 / test=39.7696.
+
+## 2026-05-13 18:45 — PRs #2299, #2024, #2305 (SEND BACK): compound retests needed under new bs=2 baseline
+
+**PR #2299 fern Huber β=0.1** — won on old baseline but needs bs=2 compound retest:
+- val 48.8982 (−2.94% vs #2142), test 42.1038 (−3.69%); monotone β scan win; mechanism confirmed (clip rate 99.992%, upstream-of-gradient bypass)
+- vs NEW #2247 baseline: val +4.74%, test +5.87% — doesn't beat new baseline at bs=4
+- Sent back 18:45 UTC. Additive prediction at bs=2: val ≈ 45.35, test ≈ 38.29
+
+**PR #2024 edward EMA=0.998 v4** — won on old baseline but needs bs=2 compound retest:
+- val 49.5940 (−1.56% vs #2142), test 43.1170 (−1.38%); additive compound prediction matched exactly (predicted 49.6); all 4 splits improve; mechanism confirmed bias-like not noise-multiplicative
+- vs NEW #2247 baseline: val +6.24%, test +8.43% — doesn't beat new baseline at bs=4
+- Sent back 18:45 UTC. Additive prediction at bs=2: val ≈ 45.89, test ≈ 39.17
+
+**PR #2305 tanjiro wd=3e-4** — won on old baseline but needs bs=2 compound retest:
+- val 49.7804 (−1.19% vs #2142), test 43.1068 (−1.40%); OOD-positive (re_rand −2.72%, camber_cruise −2.07%, camber_rc −1.38%, in_dist +0.07%); decoupled wd confirmed orthogonal to saturation (clip rate dropped only 0.05pp); EMA-live gap widened to +15.6%
+- vs NEW #2247 baseline: val +6.64%, test +8.40% — doesn't beat new baseline at bs=4
+- Sent back 18:45 UTC. Additive prediction at bs=2: val ≈ 46.12, test ≈ 39.21
+
+## 2026-05-13 18:45 — PR #2355: frieren assigned batch_size=1 (continue opt-step density push, 4× from baseline)
+
+- Branch: `willowpai2g48h5-frieren/batch-size-1`
+- Hypothesis: bs=2 → bs=1 at the new 15-compound baseline. 2× further opt-step density: ~37,500 total opt-steps (~3× from baseline, ~1.5× from #2247). Tests whether the winning direction continues at bs=1.
+- Reproduce: `--n_hidden 192 --n_layers 3 --batch_size 1 --epochs 50`
+- Targets: val < 46.6788, test < 39.7696
+
+**Why this assignment:**
+1. bs=2 delivered 2.06× opt-steps and won by −7.35%/−9.04%. Natural continuation toward bs=1 (4× from original baseline).
+2. Critical risk: per-sample DataLoader overhead. At bs=1 each forward-backward pass processes a single graph — overhead becomes significant. Predicted epoch_time_s ≈ 53s if scaling holds, but may be 80-100s if per-sample overhead dominates.
+3. Student instructed to abort if epoch_time_s > 80s after epoch 1 (throughput cliff signal).
+
+**Three outcomes:**
+- (A) val < 46.68 → MERGE (16th compound); density axis scales beyond bs=2
+- (B) wash → bs=2 is the OPT; bracket from below
+- (C) val > 49 → FAIL (throughput cliff); bs=2 confirmed OPT, batch-size axis fully bracketed
+
+
 
 

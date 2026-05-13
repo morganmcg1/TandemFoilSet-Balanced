@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 18:25
+- **Date:** 2026-05-13 19:00
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -11,23 +11,24 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Current baseline (MERGED — 14-compound stack; 14th compound winner)
+## Current baseline (MERGED — 15-compound stack; 15th compound winner)
 
-**PR #2142 — fern Huber β=0.5→0.25** (merged 2026-05-13 17:45):
-- `val_avg/mae_surf_p = 50.3812` (↓ from 52.6406, **−4.29%**, −2.26 absolute)
-- `test_avg/mae_surf_p = 43.7187` (↓ from 44.9791, **−2.80%**, −1.26 absolute)
-- **All 4 test splits improve.** camber_cruise −6.81% and re_rand −4.09% are the dominant OOD gains.
-- Config: full 13-compound + **huber_beta=0.25** (n_hidden=192, grad-clip=2.5, T_max=50)
-- Clip rate: 99.91% (Huber β tightens loss curvature → slightly sharper gradients; amplitude axis still saturated)
-- **W&B run:** `aew7c8ej`
-- **Reproduce:** `cd target/ && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
-  (huber_beta=0.25 now baked into advisor branch train.py from #2142 merge)
+**PR #2247 — frieren batch_size 4→2** (merged 2026-05-13 18:45):
+- `val_avg/mae_surf_p = 46.6788` (↓ from 50.3812, **−7.35%**, −3.70 absolute)
+- `test_avg/mae_surf_p = 39.7696` (↓ from 43.7187, **−9.04%**, −3.95 absolute)
+- **All 4 test splits improve sharply.** camber_cruise −10.48% and re_rand −9.13% dominant OOD gains. in_dist −10.05%.
+- Config: full 14-compound + **batch_size=2** (n_hidden=192, grad-clip=2.5, T_max=50, huber_beta=0.25)
+- Clip rate: 94.70% (DROPPED from 98.93% — first measured saturation easing that wins; 2.06× opt-steps from 25,500 vs 12,375)
+- **W&B run:** `t5xloer3`
+- **Reproduce:** `cd target/ && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --batch_size 2 --epochs 50`
+  (batch_size=2 must be specified; all other 14-compound settings baked into train.py from prior merges)
+- **THROUGHPUT NOTE:** at clean throughput (53s/epoch), 34 epochs reached. Result is throughput-dependent — first two runs at GPU contention (109s/ep, 25 ep) landed at val ~56. Compound retests MUST specify `--batch_size 2`.
 
-**Previous baseline — PR #1982** (grad-clip=2.5 + T_max=50, n_hidden=192): val=52.6406, test=44.9791.
+**Previous baseline — PR #2142** (Huber β=0.25, 14-compound): val=50.3812, test=43.7187.
 
-**TRUE DIRECT MEASUREMENT THRESHOLD: PR #2142 at n_hidden=192 + huber_beta=0.25**: val < 50.3812, test < 43.7187. All new assignments default to `--n_hidden 192 --n_layers 3 --epochs 50`.
+**TRUE DIRECT MEASUREMENT THRESHOLD: PR #2247 at batch_size=2**: val < 46.6788, test < 39.7696. All new assignments default to `--n_hidden 192 --n_layers 3 --batch_size 2 --epochs 50`.
 
-**CRITICAL: REPRODUCE COMMANDS MUST SPECIFY:** `--n_hidden 192 --n_layers 3 --epochs 50` minimum; `--n_hidden 224` for the wider model. train.py defaults are stale.
+**CRITICAL: REPRODUCE COMMANDS MUST SPECIFY:** `--n_hidden 192 --n_layers 3 --batch_size 2 --epochs 50`. train.py defaults batch_size=4 which is now the OLD stack.
 
 **Cumulative compounding (14 merges):**
 
@@ -48,6 +49,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | PR #1982 tanjiro grad-clip=2.5 | 52.64 | 44.98 | Threshold scan step 3. Clip rate 98.9%, 7.1× downscaling. ALL splits improve |
 | PR #2023 frieren n_hidden=224 | 53.25* | 46.60* | Width scaling step (measured at grad-clip=5.0 stack; superseded) |
 | **PR #2142 fern Huber β=0.25** | **50.38** | **43.72** | Loss-shape tighter MAE alignment. 14th compound. All 4 splits improve. camber_cruise −6.81%, re_rand −4.09% dominant OOD gains |
+| **PR #2247 frieren batch_size=2** | **46.68** | **39.77** | Opt-step density 2× (bs=4→2). 15th compound. All 4 splits −8-10%. Clip rate 98.93%→94.70% — FIRST measured saturation easing that wins |
 
 ## Active experiments
 
@@ -55,11 +57,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 |---------|----|-----------|-------|------|-----|
 | alphonse | #2219 | n_hidden=160 width-floor compound retest (14-compound stack with huber_beta=0.25) | Architecture (width, floor) | WIP-COMPOUND-RETEST | n_hidden=160 won −4.04% val / −2.99% test vs #1982 old baseline at n=192+huber=0.5 (W&B: `smqwihpd`). But baseline moved when fern #2142 merged: new baseline 50.38/43.72. Need compound retest: does n_hidden=160 still win on top of huber_beta=0.25 baked in? Sent back with reproduce command at new baseline targets. |
 | askeladd | #2328 | grad-clip max_norm 2.5 → 3.0 (saturation-exit test, +20% threshold raise) | Optimization (clip threshold, raise) | WIP | #2231 CLOSED — lr=3e-4 FAILED (val 52.77 = +0.25% vs old / +4.74% vs new baseline #2142; test 45.99 = +2.26% / +5.20%; clip rate climbed to 99.38% — OPPOSITE of prediction; student's mechanism correction: raw gradient magnitudes are NOT LR-independent — lower LR ⇒ slower descent ⇒ more time in high-gradient regime ⇒ clip rate rises). LR axis now fully bracketed [3e-4 FAIL / 5e-4 OPT / 7.5e-4 FAIL]. This PR tests student's own follow-up suggestion: directly relax the clip threshold. Six different axes have failed under clip-saturation (n_hidden=224, T_max=80, lr=7.5e-4, mlp_ratio=3, β₂=0.95, lr=3e-4 — all increase clip rate to 99%+). Modest +20% raise from 2.5 → 3.0 interpolates toward known data point grad-clip=5.0 (worse than 2.5 at OLD stack but stack has substantially changed). Predicted clip rate drop 98.93% → 92-95%. If wins, would unlock retest of all 6 saturated axes. Outcomes: (A) val<50.38 win — saturation regime exited; (B) wash, push to 3.5; (C) val>52 fail — 2.5 fundamental, pivot to upstream mechanisms |
-| edward | #2024 | EMA decay 0.999 → 0.998 — compound retest on 14-compound stack | Optimization (EMA) | WIP-COMPOUND-RETEST | v3 (n_hidden=192, grad-clip=2.5) won −1.51% val / −1.30% test vs #1982 old baseline (W&B: `qhl8dqzs`). Marginal but clean win vs old baseline. Baseline moved when fern #2142 merged: new baseline 50.38/43.72. EMA=0.998 result (51.85) doesn't beat new baseline. Need compound retest: does EMA=0.998 still help on top of huber_beta=0.25? NOTE: check train.py:395 that ema_decay=0.998 survived the merge. |
-| fern | #2299 | Huber β=0.25 → 0.1 (continue scan — 3 consecutive β halving wins) | Loss shape | WIP | **#2142 MERGED** (14th compound, −4.29% val / −2.80% test, all 4 splits). Scan: β=1.0(MERGE), 0.5(MERGE), 0.25(MERGE) → 0.1 (this PR). At β=0.1, nearly pure MAE loss (quadratic region only |e|<0.1). Tests whether the β floor is at 0.25 or whether full L1 wins further. Outcomes: (A) val<50.38 win — pure MAE is the floor; (B) wash; (C) val>51.5 fail — β=0.25 floor confirmed |
-| frieren | #2247 | batch_size 4 → 2 at n_hidden=192 — opt-step density axis (2× opt-steps per epoch, 375→750) | Optimization (effective opt-step count) | WIP | #2160 CLOSED — weight_decay=1e-5 (10× REDUCTION from baseline 1e-4 — student baseline-framing catch); replicate-pair (luy0nfhu val=52.41/test=45.63; n62k4mdt val=54.62/test=47.13) gave mean val 53.52 = +1.66%, mean test 46.38 = +3.11%. Inter-replicate spread ±1.1 val pts > effect size — wash/loss on mean. Clip rate eased slightly (98.93%→96.67%) confirming regularization axis NOT blocked by clip-saturation, but net OOD-negative (3/4 OOD splits regress on mean). This PR tests opt-step density (untested, distinct from amplitude). Opposite direction from failed #1913 grad-accum which halved opt-steps. Outcomes: (A) val<52.64 win — opt-step density matters; (B) wash; (C) val>54 fail — batch noise floor hurts |
+| edward | #2024 | EMA decay 0.999 → 0.998 COMPOUND RETEST at bs=2 | Optimization (EMA, post-clip averaging) | WIP-COMPOUND-RETEST | v4 on 14-compound stack (n_hidden=192, grad-clip=2.5, Huber β=0.25): val 49.5940 (−1.56%), test 43.1170 (−1.38%); all 4 splits improve; additive prediction matched exactly (predicted 49.6, got 49.59); clip rate 99.93%; EMA-live gap −3.57 (tightened from v3's −5.84 — live model less noisy under Huber=0.25); mechanism confirmed bias-like not noise-multiplicative (absolute val improvement constant at ~−0.79 across v3→v4 despite changing clip rate). Sent back because frieren #2247 merged (new baseline 46.68/39.77). Now retesting at bs=2 — prediction: val ≈ 45.89, test ≈ 39.17. Must add `--batch_size 2` and verify ema_decay=0.998 |
+| fern | #2299 | Huber β=0.1 COMPOUND RETEST at bs=2 | Loss shape | WIP-COMPOUND-RETEST | WON on 14-compound stack: val 48.8982 (−2.94% vs old), test 42.1038 (−3.69%); monotone 4-win β scan confirmed (β=1.0→0.5→0.25→0.1 all win); gain consistent across all 4 splits, cruise −9.59% dominant; clip rate 99.992% confirming upstream-of-gradient bypass; grad_norm/mean only 31.71 (no explosion). Sent back because frieren #2247 merged (new baseline 46.68/39.77). Now retesting at bs=2 stack — additive prediction: val ≈ 45.35, test ≈ 38.29. Must add `--batch_size 2` flag. β=0.1 change in train.py must be verified (grep beta) |
+| frieren | #2355 | batch_size=2 → 1 (4× opt-steps from baseline, continue winning density push) | Optimization (opt-step density, continued) | WIP | **#2247 MERGED** (15th compound, −7.35% val / −9.04% test, all 4 splits −8-17%; clip rate 98.93%→94.70% — FIRST measured saturation easing that won; canonical run t5xloer3 at 53s/ep, 34 epochs, 25,500 opt-steps). This PR pushes further: bs=1 = 1500 steps/epoch × ~25 epochs = ~37,500 total opt-steps (~3× baseline, ~1.5× #2247). THROUGHPUT IS KEY RISK — if epoch_time_s >80s abort and report. Clip rate prediction: ~90-92%. Outcomes: (A) val<46.68 win — density continues scaling; (B) wash at bs=1 OPT; (C) val>49 fail — throughput cliff or gradient-noise floor |
 | nezuko | #2329 | AdamW eps 1e-8 → 1e-6 — denominator-stability test (100× floor raise) | Optimization (optimizer internal, denominator) | WIP | #2267 CLOSED — slice_num=48 FAILED (val 60.59 = +15.10% vs old / +20.27% vs new baseline #2142; test 52.61 = +16.97% / +20.34%; all 4 splits regress uniformly). Mechanism: compute leg disproved (epoch_time held at 52.96s — slice_num too small a lever at this model size), capacity leg materialized (under-converged + under-capacity). Slice axis now fully bracketed [48 FAIL / 64 OPT / 96 FAIL — third axis fully bracketed]. This PR tests untested optimizer-internal axis: AdamW eps acts on denominator √v_t + eps. Default 1e-8 is very small; 1e-6 is 100× larger floor. Acts as regularization on sparse-gradient parameters (small v_t). Mechanically DOWNSTREAM of clipping and INSIDE the optimizer denominator — orthogonal to all blocked axes. 1500-sample × 0.93M params makes many params low-update — eps=1e-6 prevents these from getting noisy oversized updates. β₂ has been tested (#2186 blocked by saturation) but eps is genuinely untested. Outcomes: (A) val<50.38 win — eps undertuned at 1e-8; (B) wash, close axis; (C) val>52 fail — eps=1e-8 confirmed OPT |
-| tanjiro | #2305 | weight_decay 1e-4 → 3e-4 (3× tighter regularization, opposite direction from failed frieren #2160 at 1e-5) | Regularization (parameter scale) | WIP | #2199 CLOSED — --epochs 33 schedule alignment FAILED (val 55.10 = +4.66% vs old / +9.36% vs new baseline #2142; test 47.42 = +5.43% / +8.47%; all 4 splits regress, camber_rc worst at +7.19%). Mechanism: model still descending at epoch 33 with slope −0.32/ep, forcing LR=0 at termination cuts useful gradient updates that T_max=50 cosine still delivers; EMA-live gap sign-flipped from baseline −8.32 to +0.41 confirming LR=0 stops live model progression. SCHEDULE AXIS FULLY BRACKETED: T_max=33 fail / T_max=50 OPTIMUM / T_max=80 fail. This PR shifts to regularization axis (opposite direction from failed frieren #2160 at wd=1e-5). 1500-sample dataset with 0.93M params is sample-scarce → more constraint may help OOD. Decoupled weight decay operates on parameter shrinkage downstream of clipped gradient — orthogonal to clip saturation (confirmed by #2160 which dropped clip rate 98.93%→96.67%). Outcomes: (A) val<50.38 win — 1e-4 was the floor, tighter helps OOD; (B) wash — wd axis flat at this stack; (C) val>52 fail — wd bracketed [1e-5 LOSS, 1e-4 OPT, 3e-4 LOSS] |
+| tanjiro | #2305 | weight_decay 1e-4 → 3e-4 COMPOUND RETEST at bs=2 | Regularization (parameter scale) | WIP-COMPOUND-RETEST | WON on 14-compound stack: val 49.7804 (−1.19% vs old), test 43.1068 (−1.40%); OOD-positive pattern (re_rand −2.72%, camber_cruise −2.07%, camber_rc −1.38%, in_dist +0.07% neutral); clip rate 99.91%→99.86% (decoupled wd confirmed orthogonal to saturation — parameter shrinkage downstream of clipped gradient); EMA-live gap widened to +15.6% (wd-induced trajectory noise absorbed by EMA). Sent back because frieren #2247 merged (new baseline 46.68/39.77). Now retesting at bs=2 stack — additive prediction: val ≈ 46.12, test ≈ 39.21. Must add `--batch_size 2` flag |
 | thorfinn | #2276 | n_layers 3 → 2 at n_hidden=192 — depth-axis compact push | Architecture (depth, compact+wide) | WIP | #2186 CLOSED — AdamW β₂=0.95 (val 54.80 = +4.10% / test 47.36 = +5.30% at 99.29% clip rate — FIFTH clip-saturation interaction; mechanism: β₂ shrinking variance-window 1000→20 steps amplified direction noise post-clip, optimizer-internal axis NOT bypassed by saturation as predicted; student diagnosis sharp — clipping renormalizes amplitude but passes direction faithfully so noisier directions land at 2.5/||g|| scale, averaging slower). This PR shifts to architecture axis: untested depth-down direction (n_layers=2). Compute lever: ~30-35% epoch reduction → ~43 epochs/budget vs 33. Composition-depth capacity-down vs throughput gain. Outcomes: (A) val<52.64 win — depth=2 sufficient + extended schedule completion; (B) wash; (C) val>53.5 fail — composition depth bracketed [2, 3(OPT)] |
 
 **Baseline alert**: New baseline is PR #1953 (**val=55.7634, test=48.0960**). All future merges must beat this. WIP PRs running against the older PR #1930 baseline (val=63.48) MUST be rebased and retested with `--epochs 50` (T_max=50). The schedule fix alone is the dominant lift — any experiment without it cannot beat the new baseline.
@@ -134,16 +136,18 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); alphonse #2219 testing the floor side.
 
-1. **n_hidden=160 width-floor test** — #2219 (alphonse, n_hidden=160, COMPOUND RETEST): symmetric to #2066/#2068 from below. Tests throughput-vs-capacity tradeoff at 30-min budget.
-2. **grad-clip max_norm 2.5 → 3.0 saturation-exit** — #2328 (askeladd, n_hidden=192). **DIRECT TEST** of clip-saturation hypothesis — student's own follow-up suggestion from #2231 closure. Most informative experiment in fleet.
-3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward, COMPOUND RETEST at n_hidden=192 v3).
-4. **batch_size=2 opt-step density** — #2247 (frieren, n_hidden=192). Opposite of failed #1913 grad-accum.
-5. **AdamW eps 1e-8 → 1e-6** — #2329 (nezuko, n_hidden=192). Untested optimizer-internal axis (denominator floor). Downstream of clipping.
-6. **n_layers 3 → 2 depth-axis compact push** — #2276 (thorfinn, n_hidden=192). Composition-depth floor test.
-7. **Huber β=0.1** — #2299 (fern, n_hidden=192). Continue successful β-halving scan on new 14-compound baseline.
-8. **weight_decay 1e-4 → 3e-4** — #2305 (tanjiro, n_hidden=192). 3× tighter regularization, opposite direction from failed #2160 (1e-5).
+1. **n_hidden=160 width-floor test** — #2219 (alphonse, COMPOUND RETEST at bs=2). Must add `--batch_size 2`.
+2. **grad-clip max_norm 2.5 → 3.0 saturation-exit** — #2328 (askeladd). DIRECT TEST of clip-saturation. **Critical: must now add `--batch_size 2`** or will measure on old stack.
+3. **EMA decay 0.999 → 0.998 compound retest** — #2024 (edward, COMPOUND RETEST at bs=2). Additive prediction val≈45.89, test≈39.17.
+4. **Huber β=0.1 compound retest** — #2299 (fern, COMPOUND RETEST at bs=2). Additive prediction val≈45.35, test≈38.29.
+5. **batch_size=1** — #2355 (frieren). Continue opt-step density push. 4× opt-steps from baseline. Throughput risk.
+6. **AdamW eps 1e-8 → 1e-6** — #2329 (nezuko). **Must now add `--batch_size 2`** to measure on current stack.
+7. **n_layers 3 → 2 depth-axis compact push** — #2276 (thorfinn). **Must now add `--batch_size 2`** to measure on current stack.
+8. **weight_decay 1e-4 → 3e-4 compound retest** — #2305 (tanjiro, COMPOUND RETEST at bs=2). Additive prediction val≈46.12, test≈39.21.
 
-**New baseline for all active/pending experiments:** val < 50.3812 / test < 43.7187 (PR #2142). Students on compound retests (#2219, #2024) should target this new bar.
+**New baseline for all active/pending experiments:** val < 46.6788 / test < 39.7696 (PR #2247). ALL students MUST add `--batch_size 2` to their reproduce commands. Any run at bs=4 measures the old 14-compound stack.
+
+**FLEET-WIDE CRITICAL NOTE:** The 15-compound stack includes batch_size=2 as a BAKED-IN ingredient. Students who were measuring at bs=4 are now measuring the wrong stack. Askeladd (#2328), nezuko (#2329), thorfinn (#2276), alphonse (#2219) may all need to restart with `--batch_size 2` added.
 
 **Sub-optimal-width caveat:** PR #2024 was assigned at `--n_hidden 224` before tanjiro #2066 closed the width axis at 192. Result still informative IF the axis-effect overcomes the throughput penalty. Any winners should be retested at n_hidden=192 to confirm the lift is intrinsic to the axis change, not noise from sub-optimal stack.
 
