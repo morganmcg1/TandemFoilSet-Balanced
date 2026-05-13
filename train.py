@@ -281,8 +281,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            # Per-channel vol-loss weighting (mirrors training loop).
+            vol_ch_weights = abs_err.new_tensor([1.0, 1.0, 2.0])
             vol_loss_sum += (
-                (abs_err * vol_mask.unsqueeze(-1)).sum()
+                ((abs_err * vol_ch_weights) * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             # H18: per-channel surf-loss weighting (mirrors training loop).
@@ -360,6 +362,8 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_ch_weight": [0.5, 0.5, 2.0],
+        "vol_ch_weight": [1.0, 1.0, 2.0],
         "epochs_configured": cfg.epochs,
     }
 
@@ -491,6 +495,8 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "surf_ch_weight": [0.5, 0.5, 2.0],
+        "vol_ch_weight": [1.0, 1.0, 2.0],
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -521,7 +527,9 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        # Per-channel vol-loss weighting. Upweights pressure (channel 2) 2×; Ux/Uy unchanged.
+        vol_ch_weights = abs_err.new_tensor([1.0, 1.0, 2.0])
+        vol_loss = ((abs_err * vol_ch_weights) * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         # H18: per-channel surf-loss weighting. Mass-preserving (sum = 3.0).
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
         surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
