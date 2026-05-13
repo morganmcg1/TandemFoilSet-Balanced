@@ -426,6 +426,8 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    use_torch_compile: bool = False    # JIT compile the model via torch.compile
+    compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -479,6 +481,16 @@ all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
 
+if cfg.use_torch_compile:
+    # Variable mesh sizes (74K-242K nodes) → use dynamic=True so we get a
+    # single symbolic-shape graph instead of one recompile per unique N_max.
+    torch.set_float32_matmul_precision("high")  # TF32 matmul
+    torch.backends.cudnn.benchmark = True
+    import torch._dynamo
+    torch._dynamo.config.cache_size_limit = 64
+    print(f"[torch.compile] mode={cfg.compile_mode} dynamic=True")
+    model = torch.compile(model, mode=cfg.compile_mode, dynamic=True)
+
 _head_lr = cfg.surf_head_lr if cfg.surf_head_lr > 0.0 else cfg.lr
 optimizer = torch.optim.AdamW(
     [
@@ -523,6 +535,8 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+compile_warmup_s = 0.0
+compile_warmup_logged = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -543,6 +557,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.use_torch_compile and not compile_warmup_logged:
+            _warmup_t0 = time.time()
         pred = model({"x": x_norm})["preds"]
         pred = surf_head(pred, x_norm, is_surface)
 
@@ -588,6 +604,12 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
+        if cfg.use_torch_compile and not compile_warmup_logged:
+            torch.cuda.synchronize()
+            compile_warmup_s = time.time() - _warmup_t0
+            wandb.log({"compile/first_batch_s": compile_warmup_s, "global_step": global_step})
+            print(f"[torch.compile] first batch (compile+CUDA-graph warmup): {compile_warmup_s:.1f}s")
+            compile_warmup_logged = True
         # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
         with torch.no_grad():
             if delta > 0 and surf_mask.any():
@@ -667,6 +689,19 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+if cfg.use_torch_compile:
+    try:
+        import torch._dynamo as _dynamo
+        compile_times = _dynamo.utils.compile_times(repr="csv")
+        print(f"[torch.compile] compile_times (csv):\n{compile_times}")
+        # Frame count is one proxy for recompilation count.
+        frame_count = _dynamo.utils.counters.get("frames", {}).get("ok", 0)
+        wandb.summary["compile/frames_ok"] = frame_count
+        wandb.summary["compile/first_batch_s"] = compile_warmup_s
+        print(f"[torch.compile] frames compiled OK: {frame_count}")
+    except Exception as e:
+        print(f"[torch.compile] could not collect compile stats: {e}")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
