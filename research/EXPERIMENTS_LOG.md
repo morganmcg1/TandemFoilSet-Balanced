@@ -1,5 +1,77 @@
 # SENPAI Research Results
 
+## 2026-05-13 06:20 — PR #1924: More attention heads: n_head 4→8 (wall-clock-neutral capacity axis)
+
+- **Branch:** `willowpai2g48h4-edward/n-head-8` (CLOSED — dead end)
+- **Student:** willowpai2g48h4-edward
+- **W&B run:** `m8kevrph`
+- **Hypothesis:** n_head 4→8 at fixed n_hidden=128 (head_dim 32→16) is wall-clock-neutral because total attention FLOPs are conserved at fixed sequence×hidden. 8 heads should provide richer slice-attention patterns improving accuracy.
+
+### Results
+
+| Metric | Baseline (n_head=4, #1558) | n_head=8 (`m8kevrph`) | Δ |
+|--------|---------------------------|-----------------------|---|
+| `val_avg/mae_surf_p` | 98.1642 (epoch 14) | 116.4421 (epoch 11) | **+18.62% regression** |
+| `test_avg/mae_surf_p` (3-split) | 98.7537 | 117.3519 | **+18.83% regression** |
+| Per-epoch wall time | 133.4 s | 175.0 s | **+31.2% slowdown** |
+| Epochs in 30-min cap | 14 | 11 | −3 epochs |
+
+Per-split val MAE (best ckpt epoch 11):
+| Split | Baseline | n_head=8 | Δ |
+|-------|----------|----------|---|
+| val_single_in_dist | 123.14 | 146.41 | +18.9% |
+| val_geom_camber_rc | 107.24 | 130.59 | +21.8% |
+| val_geom_camber_cruise | 73.28 | 85.99 | +17.3% |
+| val_re_rand | 88.99 | 102.79 | +15.5% |
+| **val_avg** | **98.1642** | **116.4421** | **+18.6%** |
+
+**Key per-epoch comparison**: At equal epoch 11, n_head=8 beats baseline by −9.3% (116.44 vs 128.39) — meaning 8 heads ARE better per epoch. The regression is entirely due to wall-clock (+31% per epoch → 11 vs 14 epochs).
+
+### Analysis
+
+Wall-clock prediction wrong. FLOPs conservation assumed but ignores kernel overhead: at head_dim=16, each head's matmul is below GEMM efficiency threshold. More per-head launches (`to_q/k/v/einsum`) cause overhead that doesn't fuse. The Transolver `slice_token = einsum("bhnc,bhng→bhgc", ...)` scales linearly with n_head and dominates step time.
+
+**Conclusion**: Fifth wall-clock-bound capacity failure. Pareto frontier (depth=5, n_head=4, slice_num=64, ~14 ep) confirmed across all capacity-axis perturbations. Arm 2 (n_head=16) correctly skipped per branching rule.
+
+### Residual opportunities
+- n_head=8 IS better per epoch — would win under longer wall-clock budget
+- bf16/torch.compile might recover the 31% overhead and flip to a win (#1572)
+- Capacity wins at our budget must come from efficiency (BF16), not parameter count
+
+---
+
+## 2026-05-13 06:20 — PR #1868: log(Re) quantile bucketing sampler — explicit Re-curriculum (bounded)
+
+- **Branch:** `willowpai2g48h4-tanjiro/log-re-quantile-bucketing` (CLOSED — mechanism failure)
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs:** `ij9lcpi8` (10 buckets), `2ogoct1f` (5 buckets)
+- **Hypothesis:** Quantile-bucket the log(Re) range, sample uniformly across buckets, weight by 1/count — a bounded replacement for the +272% 1/var(p) sampler failure.
+
+### Results
+
+| Arm | best_epoch | val_avg/mae_surf_p | test_avg (4-split) | Δ vs baseline |
+|-----|------------|-------------------|-------------------|---------------|
+| Baseline (#1558) | 14 | 98.1642 | NaN | — |
+| Arm 1 (10 buckets) `ij9lcpi8` | 12 | 120.1534 | 109.7494 | **+22.4%** |
+| Arm 2 (5 buckets) `2ogoct1f` | 14 | 106.2364 | 95.8183 | **+8.2%** |
+
+### Analysis
+
+**Structural no-op**: Quantile bucketing by construction puts ~equal sample counts in each bucket (max/min ratio 1.013–1.020×). Therefore 1/count weights are also ~uniform (max/min 1.013–1.020×). After composition with existing domain weights, effective distribution is essentially identical to baseline. The ±2% perturbation from Re-bucket factor just reshuffles the sample ordering via `WeightedRandomSampler`, introducing RNG noise.
+
+Root cause: The two design choices "sample uniformly across buckets via quantile" and "weight by 1/count" cancel each other out by construction.
+
+The regression comes from the tiny sampler weight perturbation reshuffling the per-step sample order, compounding with cosine LR. Both arms ran at similar epoch counts to baseline but with different (worse) luck on the sample draw.
+
+**Conclusion**: Mechanism is broken, not just under-parameterized. Equal-width log(Re) buckets (not quantile) or a loss-side multiplier would both work. Follow-up: loss-side Re-curriculum (#1978 tanjiro), which avoids the sampler cancellation entirely.
+
+### Residual opportunities
+- Equal-width log(Re) buckets would produce non-uniform counts and non-trivial 1/count weights
+- Loss-side multiplier `w = 1 + α × |norm(log(Re))|` is independent of bucket count (#1978)
+- Multi-seed confirmation would clarify whether the +8.4% is noise vs. real harm
+
+---
+
 ## 2026-05-12 19:00 — PR #1502: Batch inverse-variance weighting for heteroscedastic Re
 
 - **Branch:** `willowpai2g48h4-tanjiro/per-sample-re-normalized-loss` (squash-merged into `icml-appendix-willow-pai2g-48h-r4`)
