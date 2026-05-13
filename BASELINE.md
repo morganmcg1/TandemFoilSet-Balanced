@@ -37,7 +37,33 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
-### 2026-05-13 17:05 — PR #2370 (`charliepai2g24h4-frieren/learned-freqs-no-wd-10x-lr`)
+### 2026-05-13 18:30 — PR #2436 (`charliepai2g24h4-fern/layerscale-lr-10x`)
+
+LayerScale γ params (5 blocks × 2 paths × 128 channels = 1280 scalars) in a separate AdamW group with no weight-decay + 10× lr (`lr=5e-3, wd=0`). Same optimizer-group recipe that won on freqs in #2370, now applied to the next additive-scale parameter class. The MLP-side LayerScale γ shifted 4.6–6.2× off init=0.025 (settled at 0.114–0.156), and the attn-side γ developed extreme per-channel diversity (std/mean ratios 247–319%). Both signals confirm that default WD=1e-4 + lr=5e-4 was systematically under-training these scale parameters.
+
+**Note on n_params correction**: prior baseline entry (PR #2370) listed n_params=831,197, but that was measured on stale checkout `git_commit=e39f7bf` (pre-#2304 inner_dim=288 merge). The actual model count on current advisor HEAD with inner_dim=288 is **892,637**. Both fern (this PR) and thorfinn (#2435 closed) independently caught this discrepancy. From this entry onward, n_params is reported correctly for the as-merged architecture.
+
+- **`val_avg/mae_surf_p`** = **58.6093** (best @ epoch 12; **−1.60%** vs prior #2370 baseline 59.5645)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **50.7946** (**−1.59%** vs prior 51.6141)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 70.160 (−0.11% — neutral)
+  - `val_geom_camber_rc` = 71.104 (−0.51%)
+  - `val_geom_camber_cruise` = **36.251** (**−7.49%** — largest val gain)
+  - `val_re_rand` = 56.922 (−0.78%)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 63.342 (+3.94% — only regression; partially offset by val_single_in_dist neutrality)
+  - `test_geom_camber_rc` = 63.135 (−1.55%)
+  - `test_geom_camber_cruise` = **29.692** (**−8.29%** — largest test gain)
+  - `test_re_rand` = **47.009** (−4.08%)
+- **Mechanism**: LayerScale γ is multiplicative-on-activations (additive scale), so the 10× lr no-WD recipe that worked on freqs transfers cleanly. MLP-path γ converges to substantially larger amplitudes (4.6–6.2× off init) and attn-path γ develops sparse-gating per-channel diversity (signed amplitudes, many channels near 0 with a few strongly amplified). This is the second instance of the **additive-scale optimizer-group axis** producing a compound win. Slice-attention temperature (PR #2437 CLOSED Outcome C) was the falsifier showing softmax-internal scale does NOT benefit from the same recipe.
+- **Compound progress**: 18 merges, **100.957 → 58.6093 = −41.94%**
+- **Param count**: **892,637** (1280 LayerScale γ scalars regrouped, no new parameters)
+- **Metric artifacts**: `models/model-charliepai2g24h4-fern-layerscale-lr-10x-20260513-161832/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-fern --experiment_name charliepai2g24h4-fern/layerscale-lr-10x`
+
+---
+
+### 2026-05-13 17:05 — PR #2370 (`charliepai2g24h4-frieren/learned-freqs-no-wd-10x-lr`) — *superseded; see n_params note above*
 
 Learned Fourier frequencies (6 learnable params) with no weight-decay + 10× lr multiplier. The fixed dyadic init `[1,2,4,8,16,32]` was over-regularized by default WD=1e-4 and lr=5e-4 — freqs barely moved in the earlier #2312 attempt. This PR puts the freq vector in a separate AdamW param group: `weight_decay=0`, `lr=5e-3` (10×). Bottom 3 freqs (1,2,4) now shift 14–27% off init toward [0.75, 1.46, 3.44], capturing dominant pressure-gradient spatial bands. Top 3 freqs (8,16,32) remain pinned — gradient-magnitude limited even at 10× lr.
 
