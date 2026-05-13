@@ -1031,3 +1031,109 @@ Notable: two seeds give 92.17 / 92.19 — variance < 0.05%, this is a clean nega
 - Target: test_avg/mae_surf_p < 80.62
 
 ---
+
+---
+
+## 2026-05-13 10:30 — PR #2090: Gradient norm clipping max_norm=5.0 — MERGED ✓ NEW BEST
+- Branch: willowpai2g48h1-tanjiro/grad-clip-5-on-lion
+- W&B run: `0w7kkvb8` — group `grad-clip-lion-sweep`
+
+| Metric | grad_clip=5.0 | Baseline (PR #1980) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep14) | **75.8431** | 90.82 | **−16.50%** |
+| **test_avg/mae_surf_p** | **68.0957** | **80.62** | **−15.52%** |
+
+Per-split test MAE:
+| Split | clip=5.0 | Baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 68.29 | 82.23 | −16.96% |
+| test_geom_camber_rc | 82.24 | 93.60 | −12.14% |
+| test_geom_camber_cruise | 50.71 | 61.57 | −17.62% |
+| test_re_rand | 71.14 | 85.06 | −16.37% |
+
+- Epochs completed: 15 / 18 (30-min timeout, ~127 s/epoch)
+- Peak GPU memory: 43.4 GB (no overhead vs baseline)
+- Config: bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + Fourier L=8 + n_hidden=192 + **grad_clip_max_norm=5.0**
+- Gradient norm diagnostics: mean 19–109, fire_rate 84–100% throughout training
+
+**Analysis**: The original hypothesis (tail-only stabilizer, fire_rate 5–15%) was REJECTED in mechanism but CONFIRMED massively in outcome. clip=5.0 sits well below the mean gradient norm (mean ~19–108 across epochs), making it a bulk rescaler not a tail clipper — yet produces an extraordinary −15.5% improvement. 
+
+Mechanism explanation accepted: Lion's sign update inherently discards per-parameter magnitude — the magnitude signal AdamW relies on. Clipping g before the momentum buffer update smooths the *direction* signal, reducing sign-vote variance under grad-accum=2. Since Lion doesn't use magnitude for its update, losing magnitude information to clipping is free, while gaining directional smoothness is pure upside. This is the exact opposite of what clip=1.0 did to AdamW (#1798 regression): AdamW's gradient normalization by √v does preserve relative per-parameter magnitudes — clipping clobbers that signal.
+
+Fire-rate decay curve (100% → 85% across 15 epochs) reflects the training-loss descent reducing grad magnitudes ~5×, never reaching true tail-clipping regime. If tail-only behavior is desired, max_norm would need to be 30–50.
+
+Per-split pattern: uniform improvement (−12% to −18%), no outlier split. Largest absolute drop: cruise (−10.9), confirming clip helps gradient-direction smoothness everywhere, not just on OOD splits.
+
+**Grad-clip lever WIDE OPEN**: fire_rate never dropped below 84%. The optimal clip threshold may be lower (2.0) or higher (10.0). Student suggested max_norm=2.0 (more aggressive) and max_norm=50.0 (genuine tail-only). These are high-priority follow-up arms.
+
+**New baseline**: test_avg/mae_surf_p = 68.0957, val = 75.8431. All future experiments compare against this.
+
+**Action**: MERGED. Assigned follow-up experiments to idle students.
+
+---
+
+## 2026-05-13 10:30 — PR #2121: slice_num=48 — SENT BACK (new baseline supersedes result)
+- Branch: willowpai2g48h1-nezuko/slice-num-48
+- W&B run: `grrj3ebc` — group `slice-num-sweep`
+
+| Metric | slice=48 | Old Baseline (PR #1980) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep16) | 88.0184 | 90.82 | −3.08% |
+| **test_avg/mae_surf_p** | **79.5970** | **80.62** | **−1.27%** |
+
+Per-split test MAE:
+| Split | slice=48 | Old Baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 81.99 | 82.23 | −0.29% |
+| test_geom_camber_rc | 92.79 | 93.60 | −0.87% |
+| test_geom_camber_cruise | 61.11 | 61.57 | −0.74% |
+| test_re_rand | 82.49 | 85.06 | −3.02% |
+
+- Epochs completed: 16 / 18 (30-min timeout, ~118.5 s/epoch — ~7% faster than baseline)
+- Peak GPU memory: 40.3 GB (−6% vs 43 GB baseline — smaller than predicted 32 GB)
+- Config: bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + Fourier L=8 + n_hidden=192 + **slice_num=48**
+
+**Analysis**: Hypothesis partially confirmed. Capacity wasn't the bottleneck (all 4 splits improve uniformly, cruise stable at −0.74%), per-epoch cost dropped as predicted (~118.5s), but:
+1. Didn't gain extra epochs (16 vs 18, baseline ran 14/18 — so different limit). Actual per-epoch saving was ~7% not enough to add epochs within the 30-min cap.
+2. Memory drop much smaller than predicted (−6% not −25%) — attention overhead dominates, not slot matrix overhead.
+3. The gain is genuine generalization improvement (leaner slot partitioning regularizes physics-attention), not extra refinement epochs.
+
+**Decision**: Sent back to retest on NEW baseline (test=68.10, with grad_clip=5.0). The slice_num=48 result (79.60) no longer beats the new baseline. PR #2090 was merged after this review. Student instructed to rerun with `--grad_clip_max_norm 5.0` and slice_num=48 to test stacking.
+
+**Action**: Sent back. New target: test < 68.0957.
+
+---
+
+## 2026-05-13 10:45 — PR #2030: DropPath stochastic depth rate=0.1 — CLOSED ✗
+- Branch: willowpai2g48h1-thorfinn/drop-path-stochastic-depth
+- W&B run: `sibpy807` — group `drop-path-thorfinn`
+
+| Metric | DropPath 0.1 | Baseline (PR #1980) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 94.2480 | 90.82 | +3.8% |
+| **test_avg/mae_surf_p** | **85.4658** | **80.62** | **+6.0%** |
+
+Per-split:
+| Split | DropPath 0.1 | Baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 90.46 | 82.23 | **+10.0%** |
+| test_geom_camber_rc | 99.95 | 93.60 | +6.8% |
+| test_geom_camber_cruise | 63.99 | 61.57 | +3.9% |
+| test_re_rand | 87.46 | 85.06 | +2.8% |
+
+- Epochs completed: 18 / 18 (all completed, 30.67 min)
+- Peak GPU memory: ~79 GB
+- Config: Lion lr=1.5e-4 + accum=2 + Fourier L=8 + n_hidden=192 + **drop_path_rate=0.1** (linear schedule, 0→0.1 across layers 0→4)
+
+**Analysis**: Textbook underfitting signature — in_dist took the biggest hit (+10%). A useful regularizer would tighten OOD > in_dist. This shows the opposite: uniform capacity reduction across the board, with the easiest-to-fit split losing the most.
+
+Root causes:
+1. **Depth=5 is too shallow**: DropPath works via implicit sub-network ensemble averaging. At depth=5, each block carries proportionally much more representational load vs 24-layer networks where the technique was designed.
+2. **18 epochs insufficient for ensemble averaging**: ConvNeXt/CaiT are trained 300+ epochs; sub-network ensemble needs many more updates to average out stochastic branch dropping.
+3. **Lion sign-momentum amplifies branch-level noise**: Lion quantizes gradient direction via sign(); DropPath's zero-residual updates inject fundamentally different optimization trajectory signals that AdamW would absorb but Lion propagates.
+
+**DropPath family CLOSED**: Depth, training budget, and Lion sign-momentum all work against stochastic depth on this stack.
+
+Note: New baseline is test=68.10 (PR #2090 grad_clip=5.0 merged same cycle). DropPath would need to beat 68.10, not 80.62.
+
+**Action**: CLOSED. New experiment assigned to thorfinn.
