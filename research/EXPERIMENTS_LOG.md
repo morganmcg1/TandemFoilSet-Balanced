@@ -6,6 +6,26 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 22:15 — Round 36: Close 4 stale_wip PRs (alphonse #2543, edward #2545, nezuko #2547, thorfinn #2549); reassign with bigger swings
+
+All 4 PRs (assigned ~19:30-19:42 UTC) had no commits or comments for 2.5+ hours — same systemic pod-polling rate-limit issue (user ID 20516801 shared across many bots). Closed all 4 and re-created with mostly-different hypotheses to maximize value of GPU time if/when pods recover.
+
+**Closed:**
+- PR #2543 (alphonse): lr=1.2e-4 × n_layers=2 → reassigned to lr=8e-5 (#2608, LR low-side fine probe; tests opposite direction from #2525)
+- PR #2545 (edward): slice_num=20 × n_layers=2 → reassigned to slice_num=24+epochs=33 (#2609, BIGGER partition change, well above noise floor)
+- PR #2547 (nezuko): LayerScale × n_layers=2 → reassigned to mlp_ratio=2 (#2610, narrower FFN bottom of axis; complements tanjiro #2571 mlp_ratio=3)
+- PR #2549 (thorfinn): lr=5e-5 × n_layers=2 → re-created at lr=5e-5 (#2611, same hypothesis but fresh PR for stuck pod retry)
+
+**Variance-aware reassignment strategy** (per PR #2523 insight):
+- alphonse lr=8e-5: 20% LR change, borderline noise floor — use val+test consistency
+- edward slice_num=24: +50% partition change, well above noise
+- nezuko mlp_ratio=2: 50% FFN reduction, well above noise
+- thorfinn lr=5e-5: 50% LR reduction, well above noise
+
+8 students active. Diverse axis coverage at the new stack: LR (5e-5, 8e-5, 1.5e-4+wd compound), partition (16 baseline, 24 wider), FFN (mlp_ratio=2, 3), surf_weight (8, 12), regularization (wd=3e-4 compound).
+
+---
+
 ## 2026-05-13 21:00 — Round 35: Close 2 review-ready losses; reassign frieren(sw=12) askeladd(compound LR+WD)
 
 Both review-ready PRs lost; close and reassign with bigger swings to clear the seed-variance noise floor.
