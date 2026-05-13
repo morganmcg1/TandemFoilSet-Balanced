@@ -21,9 +21,10 @@ SPDX-License-Identifier: Apache-2.0
   5. **Batch-size** — nezuko #2421 (bs=1+Lion)
   6. **Slice-num** — alphonse #2358 (slice=16+Lion)
   7. **Width-down** — fern #2464 (n_hidden=96+Lion; stalled on rate limits, GPU idle)
-- **In-flight (7 active GPUs, fern rate-limited/idle):**
+  8. **Fourier K continuation** — askeladd #2552 (K=16 and K=20 on Lion stack; K was monotone 4→8→12 on AdamW, testing if trend continues post-Lion)
+- **In-flight (8 active GPUs):**
   - alphonse #2358: redirected to slice_num=16+Lion+n_layers=4 retest; needs rebase
-  - askeladd: MERGED ✅ (new baseline = 43.20)
+  - askeladd #2552: **NEW** Fourier K continuation on Lion stack — K=16 and K=20 arms; K curve was monotone 4→8→12 on AdamW stack, probing whether trend holds under Lion
   - edward #2462: sent back for n_layers=3+Lion retest
   - fern #2464: pod stalled on GitHub GraphQL rate limits — GPU=0%, last contact ~18:45. Updated instructions posted; rate limits expected to recover
   - frieren #2192: sent back for n_head=2+Lion retest
