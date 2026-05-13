@@ -197,7 +197,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                stoch_depth_prob=0.1 * (i / max(n_layers - 1, 1)),
+                stoch_depth_prob=0.15 * (i / max(n_layers - 1, 1)),
             )
             for i in range(n_layers)
         ])
@@ -419,6 +419,7 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Block stoch_depth_probs: {[round(b.stoch_depth_prob, 4) for b in model.blocks]}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
