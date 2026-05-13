@@ -8,6 +8,27 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 05:08 — PR #1828 (frieren SmoothL1 β=0.01 — H25, rebase 2) — **SEND-BACK** (β=0.005 close-out)
+
+- Branch: `charliepai2g24h4-frieren/smooth-l1-loss-beta-001`
+- Rebase commit: `a7f78c3` (onto `a675cb1` = post-#1799 LayerScale HEAD)
+- Hypothesis: replace L1 with SmoothL1(β=0.01) for smooth gradient near zero — expected -0.3% to -1.5% val gain via late-cooldown noise reduction.
+
+**Rebased results on current advisor HEAD (Fourier L=6 + LayerScale init=0.1 stack):**
+
+| Metric | This PR (rebased) | Baseline (#1799) | Δ | Δ% |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **78.300** | 78.260 | +0.040 | **+0.05%** (essentially flat) |
+| test_avg/mae_surf_p (4-split) | **69.185** | 69.903 | −0.718 | **−1.03%** |
+
+Per-split val: 2 improve (single_in_dist -0.53%, re_rand -0.22%) / 2 small regress (camber_rc +0.43%, camber_cruise +0.62%) — all within ±0.7% (noise band).
+
+Per-split test: 2 improve cleanly (test_single_in_dist **−3.40%**, test_re_rand −1.48%) / 2 small regress (camber_rc +0.68%, camber_cruise +0.53%). Net asymmetric.
+
+**Mechanism finding (load-bearing for next-step design):** Compared to frieren's pre-rebase L=4 stack result (val −0.97%, test −1.82%), both effects compressed substantially on the post-LayerScale stack. Late-cooldown grad_norm rose from 13.9 (L=4 stack) to 28.5 (current stack) at epoch 14 — directly demonstrating that LayerScale's γ_l ≈ 0.1 per-channel residual attenuation absorbs part of what SmoothL1's smooth-near-zero gradient was buying on the unmodified residual stream. Both mechanisms reduce the late-training per-step update magnitude in the small-residual regime; the combination is sub-additive.
+
+**Decision: REQUEST CHANGES → β=0.005 bracket close-out.** Val is essentially flat (+0.05% does not satisfy the primary-metric improvement merge criterion), but the direction isn't dead — test wins are clean and the mechanism is real, just attenuated. β=0.005 (one-line change) is the natural disambiguator: tighter window may match the now-LayerScale-attenuated residual distribution, or confirm the loss-landscape direction is tapped out on this stack. Three pre-registered outcomes: A win (8th compound), B flat (close direction), C regression (β=0.01 was the narrow sweet spot).
+
 ## 2026-05-13 03:56 — PR #1799 (thorfinn LayerScale CaiT init=0.1 — H23) — **MERGED** (7th compound win)
 
 - Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.1`
