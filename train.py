@@ -218,7 +218,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, huber_beta: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -241,7 +241,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=huber_beta, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -328,6 +328,7 @@ def save_model_artifact(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "huber_beta": cfg.huber_beta,
     }
 
     description = (
@@ -387,6 +388,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    huber_beta: float = 1.0  # Smooth-L1 transition point; lower = more L1, higher = more MSE
 
 
 cfg = sp.parse(Config)
@@ -504,7 +506,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.huber_beta, reduction='none')
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -537,7 +539,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -618,7 +620,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         base_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
             for name, loader in test_loaders.items()
         }
         base_test_avg = aggregate_splits(base_test_metrics)
@@ -634,7 +636,7 @@ if best_metrics:
 
     print("\nEvaluating SWA model on val splits...")
     swa_val_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -648,7 +650,7 @@ if best_metrics:
     if not cfg.skip_test and test_loaders is not None:
         print("\nEvaluating SWA model on test splits...")
         swa_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
             for name, loader in test_loaders.items()
         }
         swa_test_avg = aggregate_splits(swa_test_metrics)
@@ -710,6 +712,7 @@ if best_metrics:
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "huber_beta": cfg.huber_beta,
     }
     description = (
         f"Transolver SWA checkpoint — swa val_avg/mae_surf_p = {swa_val_avg_surf_p:.4f} "
