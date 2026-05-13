@@ -6,6 +6,31 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~15:25 — PRs #2214, #2185 — CLOSED (lose vs new baseline but confirm orthogonal mechanisms)
+
+Both PRs were originally targeted at the OLD n_layers=4 baseline (40.158/34.904); both win comfortably against that old stack but lose against the new n_layers=3 baseline (38.270/32.470). The depth-reduction advantage from PR #2107/#2228 is the dominant gain.
+
+### PR #2214 (nezuko sw=5 on n_layers=4): val=39.693 / test=33.712
+- vs OLD #2172: **−1.16% val / −3.42% test** (would have been a win)
+- vs NEW #2228: **+3.72% val / +3.83% test** (loses on current)
+- **Vol-gradient mechanism CONFIRMED active on compact stack:** mae_vol_p improved on every split by −7.9% to −14.9%. The mechanism (sw=5 reallocates L1 gradient from surface to volume → richer volumetric features → better surface via shared encoder) transfers from deep to compact stacks.
+- **Test (−3.42%) > val (−1.16%):** strong generalization signal.
+- **Predictor:** fern's #2245 (sw=5 on n_layers=3) should win — mechanism transfers across depth.
+
+### PR #2185 (edward mlp_ratio=6 on n_layers=4): val=41.496 / test=35.377
+- vs OLD #2108: **−3.08% val / −4.12% test** (would have been a strong win)
+- vs NEW #2228: **+8.43% val / +8.95% test** (loses on current)
+- **mlp_ratio=6 wins uniformly:** every split improved on val and test. No regressions.
+- **best_epoch=22/22 STILL DESCENDING** — capacity expansion preserves epoch-budget mechanism.
+- **Per-epoch cost: +8% only** — budget impact manageable.
+- **Predictor:** mlp_ratio=6 on n_layers=3 (edward's new PR #2278) likely wins — projected val ~37.1.
+
+### Reassignments
+- nezuko → PR #2279: sw=3 on n_layers=3 (fills sw curve between sw=2/sw=5)
+- edward → PR #2278: mlp_ratio=6 on n_layers=3+epochs=28 (mechanism transfer to new best)
+
+---
+
 ## 2026-05-13 ~15:00 — PR #2230: n_layers=2 + slice_num=32 + epochs=33 (frieren) — CLOSED (capacity floor at n_layers=3 identified)
 
 - val=39.507 / test=33.419 vs new baseline (39.143 / 33.571) — val +0.94%, test −0.45%. The val direction is the loss verdict.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~15:00
+- **Date:** 2026-05-13 ~15:30
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -81,38 +81,44 @@
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
 
-## Active experiments (Round 22)
+## Active experiments (Round 23)
 
-**New baseline: val=38.270 (PR #2228), test=32.470**
+**Baseline: val=38.270 (PR #2228), test=32.470**
 
 | Student | PR | Hypothesis | Stack |
 |---------|-----|------------|-----------|
 | tanjiro | #2273 | **Linear warmup (2 ep) + cosine** on n_layers=3+epochs=30 (code change) | n_layers=3 |
-| alphonse | #2229 | slice_num=24 on n_layers=3+epochs=33 (in flight) | n_layers=3 |
 | frieren | #2274 | weight_decay=0 on n_layers=3+epochs=30 (test if compact model needs reg) | n_layers=3 |
+| edward | #2278 | **mlp_ratio=6 on n_layers=3+epochs=28** (mechanism transfer from PR #2185) | n_layers=3 |
+| nezuko | #2279 | **surf_weight=3 on n_layers=3+epochs=27** (fill sw curve at compact stack) | n_layers=3 |
 | fern | #2245 | surf_weight=5 on n_layers=3+epochs=27 (vol-gradient mechanism) | n_layers=3 |
 | askeladd | #2248 | surf_weight=2 on n_layers=3+epochs=27 (bracket vol-gradient axis below) | n_layers=3 |
-| nezuko | #2214 | surf_weight=5 on n_layers=4+slice_num=32+epochs=24 (n_head=4 confirmed) | n_layers=4 |
-| edward | #2185 | mlp_ratio=6 on n_layers=4+slice_num=32+epochs=24 (legacy stack) | n_layers=4 |
+| alphonse | #2229 | slice_num=24 on n_layers=3+epochs=33 (per-epoch speedup) | n_layers=3 |
 | thorfinn | #2151 | slice_num=24 on n_layers=4 (legacy stack) | n_layers=4 |
 
-**Round summary:** 5/8 students on the n_layers=3 stack testing orthogonal axes (warmup, slice_num, WD, surf_weight×2). 3/8 on legacy n_layers=4 stack — will need to beat 38.270 to win.
+**Round summary:** 7/8 students on the n_layers=3 stack. The vol-gradient axis (surf_weight) is being thoroughly bracketed at compact stack: sw=2 (askeladd), sw=3 (nezuko), sw=5 (fern), sw=10 (baseline). Combined with mlp_ratio=6 mechanism transfer, warmup schedule test, WD floor test, and slice_num=24 speedup — covers most orthogonal axes simultaneously.
 
-**Closed this turn:** #2213 (fern n_head=2+epochs=24, +2.01% val), #2193 (askeladd n_head=1, +12.4% val), #2230 (frieren n_layers=2, +0.94% val capacity floor identified).
+**Closed this turn:** #2214 (nezuko sw=5 on n_layers=4, val=39.693 +3.7% lose vs new baseline but confirms vol-gradient mechanism); #2185 (edward mlp_ratio=6 on n_layers=4, val=41.496 +8.4% lose vs new baseline but confirms mlp_ratio mechanism — both mechanisms reassigned to n_layers=3 stack via PRs #2278/#2279).
+
+## Confirmed mechanisms (orthogonal to compact stack)
+
+**PR #2214 (sw=5 on n_layers=4):** Per-split mae_vol_p improved on every split (−7.9 to −14.9%). Test surface −3.42%. Surface MAE rises slightly because per-split val gradient mass on surface drops 2× — but vol-gradient mechanism is real and transfers. → **fern #2245 (sw=5) and nezuko #2279 (sw=3) will exercise this mechanism at compact stack.**
+
+**PR #2185 (mlp_ratio=6 on n_layers=4):** Every split improved on test, test gain −4.12% > val gain. Still descending at best_epoch=22/22. → **edward #2278 testing this on n_layers=3+epochs=28; projected val ~37.1 if additive.**
 
 ## Next priority hypotheses (when slots open)
 
-**Highest EV (direct extensions of current best):**
-1. **surf_weight=5 on n_layers=3+slice_num=32**: nezuko is testing sw=5 on n_layers=4 — retest on new depth after that completes
-2. **slice_num=16 on n_layers=3**: if alphonse #2229 (slice_num=24) wins, continue sweep
-3. **n_layers=2 + slice_num=24**: compound if both individual wins land
-4. **n_head=2 on n_layers=3+slice_num=32**: fern's test is on n_layers=4; needs retest at new depth
-5. **mlp_ratio=6 on n_layers=3**: edward's test is on n_layers=4; needs retest at new depth
+**Highest EV (depend on Round 23 outcomes):**
+1. **Compound mlp_ratio=6 + sw=5 + n_layers=3**: if #2278 and #2245 both win, stack mechanisms
+2. **mlp_ratio=8 on n_layers=3**: if mlp_ratio=6 wins, push axis further
+3. **Compound winning warmup + epochs=30 stack**: if #2273 wins, prepend warmup to winning configs
+4. **slice_num=16 on n_layers=3**: if #2229 (slice_num=24) wins, continue sweep
+5. **lr=1.5e-4 on n_layers=3+slice_num=32**: prior test was neutral at n_layers=4 — may differ at compact depth
 
-**Medium priority (orthogonal axes not yet fully explored):**
-6. **surf_weight=2 on n_layers=3**: sw axis not fully swept at new depth
-7. **lr=1.5e-4 on n_layers=3+slice_num=32**: prior test was neutral at n_layers=4 — may differ at n_layers=3 (different capacity/speed tradeoff)
-8. **n_hidden reduction** (e.g., n_hidden=96): if n_layers=2 loses on capacity grounds, trading params for width might recover
+**Medium priority (orthogonal axes not yet fully explored at compact stack):**
+6. **n_hidden=96 on n_layers=3**: trade width for depth — may recover capacity floor margin
+7. **Triangular LR / OneCycle on epochs=30**: if cosine warmup wins, test alternative schedules
+8. **bf16→fp16**: if speedup is real without precision loss, increases epoch budget further
 
 **Research frontier ideas:**
 - PINN-style auxiliary loss (divergence/curl regularization) — physics-informed volume constraint
