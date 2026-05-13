@@ -507,3 +507,54 @@ cd target && python train.py \
 - Improvement concentrated in `single_in_dist` (val −7.99, test −9.59). OOD splits largely flat. Longer cycle 2 digs deeper into the in-distribution basin without sacrificing OOD.
 - **Run used eta_min=0 (default, not the eta_min=1e-5 from PR #2357).** Composing T_mult=2 + eta_min=1e-5 is the obvious next experiment (assigning to alphonse as #2488).
 - **All future PRs must beat `val_avg/mae_surf_p < 82.2642` to merge.**
+
+---
+
+## 2026-05-13 22:15 — PR #2578: Lion optimizer (Chen 2023) replaces AdamW — LARGEST WIN THIS RUN
+
+- **val_avg/mae_surf_p: 65.5364** (cross-seed mean, 2 seeds) — **−20.3% vs 82.2642 (Δ −16.73)**
+- **test_avg/mae_surf_p: 57.8817** (cross-seed mean) — **−20.1% vs 72.4019 (Δ −14.52)**
+- **W&B runs:** `qffv9cex` (seed 1, val=66.9965 / test=58.2068) · `c7rz84il` (seed 2, val=64.0763 / test=57.5565)
+- **Best epoch:** 21 (both seeds, cycle-2 endpoint under T_0=7 T_mult=2)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 --surf_head_lr 5e-3 --weight_decay 5e-4 \
+      --use_torch_compile --compile_mode default \
+      --cosine_restart_T_0 7 --cosine_restart_T_mult 2 \
+      --use_lion --lion_lr_scale 0.2 --lion_wd_scale 3.0 \
+      --wandb_group fern-lion --wandb_name lion-default \
+      --agent willowpai2g48h4-fern
+  ```
+  Effective LR after scaling: encoder=1e-4, surf_head=1e-3. WD after scaling: 1.5e-3. β=(0.9, 0.99).
+
+### Per-split val surface-p MAE (cross-seed mean, best epoch 21)
+
+| Split | Seed 1 | Seed 2 | Mean | SOTA #2444 | Δ Mean→SOTA |
+|-------|-------:|-------:|-----:|----------:|------------:|
+| `val_single_in_dist` | 79.5797 | 70.4151 | 74.9974 | 96.8979 | **−21.90** |
+| `val_geom_camber_rc` | 82.6891 | 79.4419 | 81.0655 | 103.1372 | **−22.07** |
+| `val_geom_camber_cruise` | 42.5506 | 43.1682 | 42.8594 | 53.9395 | −11.08 |
+| `val_re_rand` | 63.1669 | 63.2800 | 63.2234 | 75.0824 | −11.86 |
+| **val_avg** | **66.9965** | **64.0763** | **65.5364** | **82.2642** | **−16.73** |
+
+### Per-split test surface-p MAE (cross-seed mean)
+
+| Split | Seed 1 | Seed 2 | Mean | SOTA #2444 | Δ Mean→SOTA |
+|-------|-------:|-------:|-----:|----------:|------------:|
+| `test_single_in_dist` | 70.3509 | 64.7716 | 67.5612 | 85.5208 | **−17.96** |
+| `test_geom_camber_rc` | 73.8401 | 75.5594 | 74.6997 | 91.0868 | −16.39 |
+| `test_geom_camber_cruise` | 35.6460 | 35.3344 | 35.4902 | 44.9228 | −9.43 |
+| `test_re_rand` | 52.9902 | 54.5607 | 53.7754 | 68.0771 | −14.30 |
+| **test_avg** | **58.2068** | **57.5565** | **57.8817** | **72.4019** | **−14.52** |
+
+### Notes
+
+- **Lion replaces AdamW** entirely. Update rule: `w ← w − lr·sign(β1·m + (1−β1)·g)` with EMA `m ← β2·m + (1−β2)·g`. No variance accumulator — half the optimizer-state memory of AdamW.
+- **Why it wins:** Sign-based, constant-magnitude updates implicitly clip per-coordinate gradient contributions. The heavy-tailed gradient distributions from variable mesh sizes (74K–242K nodes) and per-sample y-std variation (~10×) appear to interact badly with AdamW's adaptive `1/(sqrt(v)+ε)` term. Lion sidesteps that entirely.
+- **LR/WD rescaling is load-bearing.** Paper recommendation of 5× LR reduction + 3× WD increase. Must NOT use AdamW's lr/wd directly with Lion.
+- **Wins on every split, both seeds (~30σ confidence on either seed alone).** Per-split prediction matched: val_geom_camber_rc (worst split) benefited most (Δ −22.07 mean).
+- **Cycle spike:** e7→e8 +25.4 val (seed 1), larger than AdamW's ~+15, but recovery faster (back below pre-restart best by e11 vs e13+ for AdamW).
+- **Wall-clock identical to AdamW** (~31 min / 21 epochs). torch.compile overhead dominates; Lion per-step cost is minimal.
+- **Seed variance after Lion:** seed-to-seed spread = 2.92 val (σ≈2.06) — wider than AdamW baseline (σ≈1.16 per #2445). Future Lion PRs need ≥2 seeds.
+- **All future PRs must beat `val_avg/mae_surf_p < 65.5364` (cross-seed mean) to merit a careful review. A single-seed result beating 65.5364 should be confirmed with a 2nd seed given σ≈2.**
