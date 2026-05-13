@@ -1,5 +1,91 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 02:45 — PR #1769: GeGLU activation + Lion optimizer (tanjiro)
+
+**New best: `val_avg/mae_surf_p` = 64.918** (epoch 13, 30-min wall-clock cap)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| **MLP activation** | **GeGLU (gated)** ← changed |
+| Loss | L1 (MAE) in normalized space, surf_weight=10 |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR (T_max=epochs) |
+| `batch_size` | 4 |
+| `epochs` | 50 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+
+> **GeGLU implementation:** fc1 output split into two halves; `GeGLU(x) = GELU(x1) * x2`. fc2 input dim = n_hidden * mlp_ratio / 2. With mlp_ratio=4: fc1 projects n_hidden → 4*n_hidden, splits into 2×n_hidden chunks, gate reduces to 2*n_hidden, fc2 projects 2*n_hidden → n_hidden. Per-epoch time ~143s (essentially identical to GELU+Lion thanks to bf16 absorbing FLOP overhead).
+
+### Val metrics (best checkpoint, epoch 13)
+
+| Split | `mae_surf_p` |
+|---|---|
+| val_single_in_dist | 72.021 |
+| val_geom_camber_rc | 89.234 |
+| val_geom_camber_cruise | 37.058 |
+| val_re_rand | 61.359 |
+| **val_avg/mae_surf_p** | **64.918** |
+
+### Test metrics (best-val checkpoint, epoch 13)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 64.947 |
+| test_geom_camber_rc | 80.467 |
+| test_geom_camber_cruise | 32.329 |
+| test_re_rand | 54.939 |
+| **test_avg/mae_surf_p** | **58.171** |
+
+### Improvement vs PR #1725 baseline (86.938 val / 77.990 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 98.979 | 72.021 | −27.2% | 91.606 | 64.947 | −29.1% |
+| geom_camber_rc | 104.737 | 89.234 | −14.8% | 92.561 | 80.467 | −13.1% |
+| geom_camber_cruise | 62.041 | 37.058 | **−40.3%** | 52.841 | 32.329 | **−38.8%** |
+| re_rand | 81.995 | 61.359 | −25.2% | 74.952 | 54.939 | −26.7% |
+| **avg** | **86.938** | **64.918** | **−25.3%** | **77.990** | **58.171** | **−25.4%** |
+
+> Largest single-PR improvement in the research programme (+Lion was -14.3%, +L1 was -20.5%; GeGLU+Lion exceeds both). Training was still descending at epoch 13 cutoff — significant headroom remains. The cruise split saw the most dramatic gain (-40.3%), suggesting GeGLU routing is especially effective for high-camber transonic regime features.
+
+### Metric artifacts
+
+`models/model-charliepai2g48h3-tanjiro-geglu-lion-20260513-012007/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent <student> \
+  --experiment_name <name> \
+  --epochs 50 \
+  --lr 1e-4 \
+  --weight_decay 1e-4 \
+  --batch_size 4 \
+  --surf_weight 10
+```
+
+Note: GeGLU activation is now the default in `train.py` (merged from PR #1769). Lion optimizer and bf16 also already defaults.
+
+---
+
+## Benchmark to beat
+
+**`val_avg/mae_surf_p` < 64.918** — lower is better.
+
+Test metric benchmark: **`test_avg/mae_surf_p` < 58.171**.
+
+Hardest splits: geom_camber_rc (89.2 val) and single_in_dist (72.0 val). Cruise improved most dramatically (-40.3%) and is now the easiest split at 37.1 val.
+
+---
+
 ## 2026-05-13 01:45 — PR #1725: Lion optimizer lr=1e-4 (edward)
 
 **New best: `val_avg/mae_surf_p` = 86.938** (epoch 11, 30-min wall-clock cap)
