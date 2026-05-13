@@ -1,6 +1,41 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-## Current best — PR #1482 (2026-05-12)
+## Current best — PR #1573 (2026-05-13)
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **122.7043** |
+| val_single_in_dist/mae_surf_p | 159.59 |
+| val_geom_camber_rc/mae_surf_p | 134.74 |
+| val_geom_camber_cruise/mae_surf_p | 89.18 |
+| val_re_rand/mae_surf_p | 107.31 |
+| test_avg/mae_surf_p (bs=4) | NaN† |
+| test_single_in_dist/mae_surf_p | 137.28 |
+| test_geom_camber_rc/mae_surf_p | 121.04 |
+| test_geom_camber_cruise/mae_surf_p | NaN† |
+| test_re_rand/mae_surf_p | 103.32 |
+| test_avg (bs=1 clean eval) | **110.2527** |
+| best_epoch | 12 (of 50; timeout-cut at 31.2 min) |
+
+†bs=4 NaN on test_geom_camber_cruise is a deterministic inference-time attention numerics edge case (specific bs=4 batch compositions in PhysicsAttention at specific mesh-size mixes). Not the data bug — gradient clipping did not fix it (train-side clip doesn't affect inference activations). bs=1 eval is fully clean. Askeladd's #1536 (NaN guard) addresses the data bug separately.
+
+**Artifacts:** `models/model-charliepai2g24h2-frieren-warmup-lr75e-4-gradclip-20260512-235148/`
+
+**Change from PR #1482 floor:** Reduced peak lr from 1e-3 → 7.5e-4, added `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` immediately before `optimizer.step()`. Warmup+cosine schedule unchanged. val_avg/mae_surf_p improved **−4.2%** (128.09 → 122.70). bs=1 test improved **−6.1%** (117.40 → 110.25).
+
+**Config run:**
+```bash
+cd target && python train.py \
+  --lr 7.5e-4 \
+  --agent charliepai2g24h2-frieren \
+  --experiment_name "charliepai2g24h2-frieren/warmup-lr75e-4-gradclip"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.66M params)
+Optimizer: AdamW lr=7.5e-4 (peak), wd=1e-4, batch_size=4, chan_w=[1,1,5], surf_weight=10, 3-ep warmup + cosine(T_max=47, eta_min=1e-6), gradient-clip max_norm=1.0, fp32
+Peak VRAM: 42.12 GB. Wall clock: 31.2 min → 12 epochs.
+
+## Previous best — PR #1482 (2026-05-12)
 
 | Metric | Value |
 |---|---|
