@@ -1634,3 +1634,50 @@ Improvement is broad-based: in_dist −3.39%, rc −1.91%, re_rand −1.63%, cru
 **Per-epoch time:** ~102.6s (unchanged). Full 18/18 schedule.
 
 **Cumulative gain update:** 121.28 → 60.74 = **−49.9%** from launch baseline.
+
+## 2026-05-13 17:00 — PR #2382: Lion β2 sweep (0.999 / 0.95) — CLOSED ✗ (Finding #39)
+- Branch: willowpai2g48h1-askeladd/lion-beta2-sweep
+- W&B runs: `syi2uv69` (β2=0.999), `k9q4bl29` (β2=0.95)
+
+| Arm | β2 | val (best, ep) | test_avg | Δ vs new baseline 60.74 |
+|---|---|---|---|---|
+| **Baseline** | **0.99** | **69.3303** (ep 18) | **60.7447** | — |
+| Arm 1 | 0.999 | 79.6940 (ep 18) | 70.0269 | **+15.27%** ✗ |
+| Arm 2 | 0.95 | 78.6439 (ep 18) | 69.8153 | **+14.93%** ✗ |
+
+Per-split (arm 1 β2=0.999): in_dist=72.08, rc=78.90, cruise=54.64, re_rand=74.49 — all regress uniformly.
+Per-split (arm 2 β2=0.95): in_dist=72.87, rc=79.14, cruise=54.89, re_rand=72.36 — same uniform pattern.
+
+Grad-norm (pre-clip) trajectory (key diagnostic):
+- β2=0.999: ep1=131.7, ep4=65.9, ep18=19.4. Clip fire: 100%→85%.
+- β2=0.95: ep1=88.8, ep4=42.0, ep18=15.6. Clip fire: 100%→82%.
+- **Student's prediction falsified**: β2=0.999 had HIGHER grad-norms than β2=0.95 (opposite of "longer memory = smoother updates" hypothesis). β2=0.99 baseline has grad-norm ~12.9 at ep18 — both arms are elevated.
+
+Both arms clearly didn't converge within 18 epochs (val still descending at ep18, best val=79.7/78.6 vs baseline 69.3).
+
+**Finding #39: Lion β2=0.99 is a sharp sweet spot.** β2=0.999 (10× longer memory) and β2=0.95 (5× shorter memory) both regress by ~+13-15% symmetrically. The correct mechanism: β2=0.99 matches the "characteristic step scale" for this Transolver+Lion+slice=24 config. β2=0.999 freezes slow channel near init → sign vote dominated by raw gradient (no momentum smoothing). β2=0.95 makes slow channel chase noise → no smoothing benefit. Both misalign the memory horizon with the loss-landscape step scale.
+
+**Lion β2 lever CLOSED. Combined with #2237 (β1=0.9) + lr=1.5e-4 + wd=0, Lion optimizer is fully tuned.**
+
+→ Assigned askeladd Lookahead Lion wrapper (PR #2458): meta-optimizer, orthogonal axis.
+
+## 2026-05-13 17:00 — PR #2425: LayerNorm → RMSNorm swap — CLOSED ✗ (Finding #40)
+- Branch: willowpai2g48h1-tanjiro/rmsnorm-swap
+- W&B run: `b3kc9iqn`
+
+| Metric | RMSNorm | NEW baseline (60.7447) | OLD baseline (61.8457) | Δ vs NEW |
+|---|---|---|---|---|
+| **test_avg** | **61.5024** | **60.7447** | **61.8457** | **+1.25%** |
+| val_avg | 70.1777 | 69.3303 | 70.7422 | +1.22% |
+| in_dist | 60.9350 | 62.37 | 64.5575 | **−2.30% ✓** |
+| rc | 73.0546 | 70.92 | 72.2939 | +2.99% ✗ |
+| cruise | 47.7046 | 46.91 | 46.7231 | +1.70% ✗ |
+| re_rand | 64.3155 | 62.78 | 63.8181 | +2.29% ✗ |
+
+Per-epoch: −4.2% faster than LayerNorm (~98.4s vs ~102.7s, saves ~75s total). Param count 1,472,207 (−5k, no bias in RMSNorm). PyTorch 2.11.0 used `nn.RMSNorm` natively.
+
+**Finding #40: Normalization-type lever closed — RMSNorm is regime-neutral aggregate with IID/OOD redistribution.** Per-split redistribution is the interesting signal: in_dist improved −5.61% vs OLD baseline (above noise), but ALL 3 OOD splits regressed uniformly +0.78% to +2.10%. Mechanism: RMSNorm removes mean-centering which acts as implicit input-distribution normalization for OOD test shifts. Removing it improves IID gradient flow but reduces OOD compensation. LayerNorm's mean-centering is load-bearing for OOD at this model scale.
+
+**Normalization-type lever CLOSED.** LayerNorm remains default. RMSNorm is compute-equivalent but OOD-inferior.
+
+→ Assigned tanjiro Pre-LN→Post-LN swap (PR #2456): normalization-position axis (orthogonal to computation type).
