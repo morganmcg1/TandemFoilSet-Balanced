@@ -47,6 +47,44 @@ from data import (
     pad_collate,
 )
 from soap import SOAP
+from torch.utils.data import Dataset
+
+# Local surface-curvature feature appended as the 25th channel of x.
+# Built once via ``build_curvature_cache.py``; per-sample κ files share the
+# split layout and filenames of the on-PVC ``splits_v2``.
+CURVATURE_CACHE_DIR = Path("curvature_cache/splits_v2")
+
+
+class CurvatureWrappedDataset(Dataset):
+    """Wrap a base ``SplitDataset``/``TestDataset`` and append normalised κ to x.
+
+    The κ tensor is loaded from a cache file named the same as the base file
+    (e.g. ``000042.pt``). It is divided by the training-set 99th-percentile of
+    ``|κ|`` to land most of its mass in roughly ``[-1, +1]`` (with rare outliers
+    on leading edges), then concatenated to ``x`` as channel 24.
+    """
+
+    def __init__(self, base, curv_dir, kappa_p99: float):
+        self.base = base
+        self.curv_dir = Path(curv_dir)
+        self.kappa_p99 = float(kappa_p99) if kappa_p99 > 0 else 1.0
+
+    def __len__(self):
+        return len(self.base)
+
+    def _filename(self, idx):
+        if hasattr(self.base, "files"):
+            return self.base.files[idx].name
+        if hasattr(self.base, "x_files"):
+            return self.base.x_files[idx].name
+        raise AttributeError("Base dataset has neither .files nor .x_files")
+
+    def __getitem__(self, idx):
+        x, y, is_surf = self.base[idx]
+        kappa = torch.load(self.curv_dir / self._filename(idx), weights_only=True)
+        kappa_norm = (kappa.float() / self.kappa_p99).unsqueeze(-1)
+        x_aug = torch.cat([x, kappa_norm], dim=-1)
+        return x_aug, y, is_surf
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -479,6 +517,26 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# Load curvature normalisation stat (train-set 99th percentile of |κ|). The
+# ``build_curvature_cache.py`` script must run before training to populate this.
+with open(CURVATURE_CACHE_DIR / "stats.json") as f:
+    _curv_stats = json.load(f)
+KAPPA_P99 = float(_curv_stats["kappa_abs_p99"])
+print(f"Curvature normalisation: kappa_p99 = {KAPPA_P99:.4f} (training set abs(κ) 99th-percentile)")
+
+# Wrap datasets so __getitem__ returns x with an extra normalised-κ column.
+train_ds = CurvatureWrappedDataset(train_ds, CURVATURE_CACHE_DIR / "train", KAPPA_P99)
+val_splits = {
+    name: CurvatureWrappedDataset(ds, CURVATURE_CACHE_DIR / name, KAPPA_P99)
+    for name, ds in val_splits.items()
+}
+
+# Extend the normalisation stats to 25 dims so ``(x - x_mean) / x_std`` passes
+# the pre-normalised κ column through unchanged. The wrapper already applies
+# ``κ / p99``; this keeps mean=0, std=1 for the κ channel.
+stats["x_mean"] = torch.cat([stats["x_mean"], torch.zeros(1, device=device)])
+stats["x_std"] = torch.cat([stats["x_std"], torch.ones(1, device=device)])
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
@@ -497,7 +555,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 1,  # +1 for surface-curvature channel appended in CurvatureWrappedDataset
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -509,6 +567,11 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+# Small init for the curvature column in the first preprocess linear so the
+# new feature starts as a quiet residual addition; default is trunc_normal_(std=0.02).
+with torch.no_grad():
+    n_hidden_pre = model.preprocess.linear_pre[0].weight.shape[0]
+    model.preprocess.linear_pre[0].weight[:, -1] = torch.randn(n_hidden_pre, device=device) * 0.01
 rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
@@ -646,12 +709,34 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    # Curvature feature diagnostics (over valid nodes in each batch). Logged in
+    # physical units of κ (multiplied back by KAPPA_P99 from normalised input).
+    kappa_min_e = float("inf")
+    kappa_max_e = float("-inf")
+    kappa_sum_e = 0.0
+    kappa_abssum_e = 0.0
+    kappa_pos_count_e = 0
+    kappa_n_e = 0
+    kappa_col_grad_norm_sum = 0.0
+    kappa_col_grad_norm_count = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Curvature feature diagnostics (un-normalise back to physical units for logging).
+        with torch.no_grad():
+            k_norm = x[..., 24]  # κ / κ_p99 in pre-normalised input space
+            k_valid = k_norm[mask] * KAPPA_P99
+            if k_valid.numel() > 0:
+                kappa_min_e = min(kappa_min_e, float(k_valid.min()))
+                kappa_max_e = max(kappa_max_e, float(k_valid.max()))
+                kappa_sum_e += float(k_valid.sum())
+                kappa_abssum_e += float(k_valid.abs().sum())
+                kappa_pos_count_e += int((k_valid > 0).sum())
+                kappa_n_e += int(k_valid.numel())
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -720,6 +805,14 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_norm_max = grad_norm_val
             if grad_norm_val > cfg.grad_clip:
                 epoch_grad_clipped += 1
+            # Curvature column gradient norm (last input column of preprocess
+            # linear). Run after unscale and clip so the value is in the same
+            # physical scale as ``grad_norm_mean``.
+            with torch.no_grad():
+                preprocess_w = uncompiled_model.preprocess.linear_pre[0].weight
+                if preprocess_w.grad is not None:
+                    kappa_col_grad_norm_sum += float(preprocess_w.grad[:, -1].norm())
+                    kappa_col_grad_norm_count += 1
         scaler.step(optimizer)
         scaler.update()
 
@@ -795,6 +888,19 @@ for epoch in range(MAX_EPOCHS):
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
 
+    # Curvature summary for the epoch.
+    if kappa_n_e > 0:
+        kappa_mean_e = kappa_sum_e / kappa_n_e
+        kappa_abs_mean_e = kappa_abssum_e / kappa_n_e
+        kappa_sign_balance_e = kappa_pos_count_e / kappa_n_e
+    else:
+        kappa_mean_e = kappa_abs_mean_e = kappa_sign_balance_e = 0.0
+        kappa_min_e = kappa_max_e = 0.0
+    kappa_col_grad_norm_mean = (
+        kappa_col_grad_norm_sum / kappa_col_grad_norm_count
+        if kappa_col_grad_norm_count > 0 else 0.0
+    )
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -844,6 +950,13 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "curvature/kappa_p99": KAPPA_P99,
+        "curvature/kappa_min": kappa_min_e,
+        "curvature/kappa_max": kappa_max_e,
+        "curvature/kappa_mean": kappa_mean_e,
+        "curvature/kappa_abs_mean": kappa_abs_mean_e,
+        "curvature/sign_balance": kappa_sign_balance_e,
+        "curvature/grad_norm_mean": kappa_col_grad_norm_mean,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -871,6 +984,11 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    print(
+        f"    Curvature   p99={KAPPA_P99:.3f}  min={kappa_min_e:.3f} max={kappa_max_e:.3f}  "
+        f"mean={kappa_mean_e:.3f} absmean={kappa_abs_mean_e:.3f}  "
+        f"sign_pos={kappa_sign_balance_e:.3f}  grad_norm={kappa_col_grad_norm_mean:.5f}"
+    )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -918,6 +1036,10 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        test_datasets = {
+            name: CurvatureWrappedDataset(ds, CURVATURE_CACHE_DIR / name, KAPPA_P99)
+            for name, ds in test_datasets.items()
+        }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
