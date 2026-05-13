@@ -351,3 +351,41 @@ Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135
 - Intermediate-size n_hidden=224, n_layers=7, n_head=8 (~3.4M, dim_head=28) should fit at bs=4 with headroom and get ~15-20 epochs.
 - Model NaN in p-channel at test_geom_camber_cruise may indicate early-training numerical instability in the slice attention temperature.
 </content>
+
+## 2026-05-13 02:00 — PR #1708: Lookahead optimizer (k=5/10, α=0.5) — CLOSED
+
+- Branch: `charliepai2g24h2-edward/lookahead-optimizer-k5-alpha0p5`
+- Hypothesis: Lookahead wraps AdamW with slow-weight averaging to smooth trajectory and potentially aid generalization
+- Artifacts: `models/model-charliepai2g24h2-edward-lookahead-optimizer-k5-alpha0p5-20260513-000558/metrics.jsonl`
+
+| Run | k | Best val_avg/mae_surf_p | Δ vs floor |
+|---|---|---|---|
+| k=5 clean | 5 | 143.62 | **+17.0%** ↑ (worse) |
+| k=5 contended | 5 | 153.47 | +25.1% ↑ |
+| k=10 | 10 | 152.54 | +24.3% ↑ |
+
+**Conclusion:** Same regime-mismatch failure as EMA (#1603). In the rapid-descent regime (>10 MAE/epoch drop), Lookahead's slow weights average old-worse with new-better parameters, dragging convergence back. Pattern consistent: any weight-averaging optimizer fails in this regime. Closed as dead end. Edward reassigned to Huber loss (#1801).
+
+## 2026-05-13 02:05 — PR #1477: AMP bf16 + gradient clipping + NaN-y bug fix — SENT BACK
+
+- Branch: `charliepai2g24h2-fern/amp-bf16-gradclip`
+- Hypothesis: AMP bf16 reduces VRAM ~24% → more epochs per 30-min cap → better convergence
+- Artifacts: `models/model-charliepai2g24h2-fern-amp-bf16-gradclip-confirm-20260513-005403/metrics.jsonl`
+
+| Split | This run (bf16 only) | Floor #1573 | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist | 108.34 | 159.59 | **−32%** |
+| val_geom_camber_rc | 105.61 | 134.74 | **−22%** |
+| val_geom_camber_cruise | 73.20 | 89.18 | **−18%** |
+| val_re_rand | 91.07 | 107.31 | **−15%** |
+| **val_avg** | **94.55** | **122.70** | **−23%** |
+| test_avg (bs=4, clean!) | **84.64** | 110.25 (bs=1) | — |
+
+**BUT:** Fern's config REVERTS chan_w=[1,1,5] and 3-ep warmup from advisor. Run was at lr=5e-4 with plain CosineAnnealingLR(T_max=50). Missing the full floor stack. 19 epochs (vs 12 for floor) = 58% more budget from VRAM reduction.
+
+**Sent back:** asked to rebase onto current advisor and re-run with full floor stack (chan_w + warmup + gradclip + lr=7.5e-4) + AMP bf16 + bug fix.
+
+**Key insights:**
+- AMP bf16 unlocks ~32 GB VRAM (vs 42 GB fp32) → 7-8 more epochs per 30-min cap. This is likely the main driver.
+- bf16 inference also fixes the bs=4 NaN on test_geom_camber_cruise (test 84.64 is fully clean bs=4)
+- Fern's evaluate_split NaN-y prefilter is a clean bug fix for the Type-1 data NaN. Supersedes askeladd's #1536 fix.
