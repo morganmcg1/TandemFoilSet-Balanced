@@ -240,17 +240,17 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
-            chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
-            sq_err = sq_err * chan_w[None, None, :]
+            huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=1.0, reduction='none')
+            chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=huber_err.dtype)
+            huber_err = huber_err * chan_w[None, None, :]
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (huber_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (huber_err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -460,14 +460,14 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
-        chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
-        sq_err = sq_err * chan_w[None, None, :]
+        huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=1.0, reduction='none')
+        chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=huber_err.dtype)
+        huber_err = huber_err * chan_w[None, None, :]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
