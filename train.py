@@ -258,7 +258,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()  # back to fp32 for downstream metric accumulation
 
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.75, reduction="none")
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -507,7 +507,7 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.75, reduction="none")
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
