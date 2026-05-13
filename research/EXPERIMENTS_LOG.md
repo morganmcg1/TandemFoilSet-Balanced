@@ -11,6 +11,54 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 12:25 — Cycle 35: PR #2203 MERGED (11th win, batch_size=1) + #2025 sent back + #2152 closed + #2025/#2203 results + 2 new arms
+
+### PR #2203 fern — batch_size 2→1 (effective batch 4→2): MERGED ✓ (11th win)
+
+W&B run: `5rqwzawl`
+
+| Metric | Baseline (#2085) | This run | Δ |
+|--------|-----------------:|---------:|---|
+| val_avg/mae_surf_p | 73.1639 | **70.3559** | **-3.84% ✓** |
+| test_avg/mae_surf_p | 64.1593 | **61.0663** | **-4.82% ✓** |
+| test single_in_dist | 68.7866 | **66.0608** | **-3.96%** |
+| test geom_camber_rc | 77.3583 | **73.5254** | **-4.95%** |
+| test geom_camber_cruise | 45.4690 | **43.1260** | **-5.15%** |
+| test re_rand | 65.0232 | **61.5528** | **-5.34%** |
+
+All four splits improve again. **New baseline: val=70.3559, test=61.0663.** Cumulative: -46.6% from start (131.79 → 70.3559).
+
+**Analysis:** Continued the eff_batch trend (8→4→2). Halving microbatch from 2→1 keeping grad_accum=2 doubles the number of forward/backward passes per epoch and produces noisier per-step gradient estimates. The OOD splits show the largest gains again (-4.95% to -5.34%), reinforcing the noise-as-regularisation mechanism. Peak GPU memory 45 GB (still ~half capacity).
+
+### PR #2025 askeladd — grad_clip max_norm 1.0→1.5: SENT BACK (compounding test)
+
+W&B run `41y8bkyd` (max_norm=1.5, batch_size=2, current stack at run time):
+- val=70.583, test=61.295 (beat old baseline 73.16/64.16 by -3.52%/-4.46%, all 4 splits ↓)
+
+This was a real win against #2085 — and BOTH askeladd's max_norm=1.5 and fern's batch_size=1 were tested in parallel against #2085. Merging fern first; the askeladd win is mechanistically related (both affect gradient magnitude/noise), so we don't yet know if they compound. Sent back to retest max_norm=1.5 with current code (batch_size=1 now default). If max_norm=1.5 still beats val=70.3559 under batch_size=1, that's a 12th win.
+
+### PR #2152 frieren — smooth_l1 β 0.25→0.20: CLOSED ✗
+
+W&B run `q6limcfv`: val=74.92, test=66.75 vs baseline #2055 73.88/66.02 = **+1.41%/+1.10%**. β-axis below 0.25 fully mapped, strictly monotone:
+
+| β | val_avg | vs #2055 baseline | Source |
+|---|---:|---:|---|
+| 0.15 | 75.28 | +1.90% | #2133 |
+| 0.20 | 74.92 | +1.41% | this PR |
+| 0.25 | 73.88 | 0 | #2055 (winner) |
+| 0.50 | regressed | — | prior |
+
+**β=0.25 is a sharp local optimum, axis closed both sides.**
+
+### New assignments (cycle 35)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| frieren | AdamW eps 1e-8 → 1e-9 (untested direction; eps=1e-6 was tested upward and failed under OLD stack, but eps axis hasn't been re-tested under noisier batch_size=1+beta2=0.98 regime) | #2250 |
+| fern | grad_accum 2→1 (effective batch 2→1, true SGD per microbatch; continue the eff_batch trend that produced PR #2085 and #2203) | #2254 |
+
+---
+
 ## 2026-05-13 12:05 — Cycle 34: #2148 closed (three_phase +22%) + #2025 PENDING WINNER (W&B 41y8bkyd val=70.58) + 1 new arm
 
 ### PR #2148 tanjiro — OneCycleLR three_phase=True: CLOSED ✗
