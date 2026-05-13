@@ -94,6 +94,75 @@ def apply_rff(x_batch: torch.Tensor) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Foil mirroring (z=0 reflection) augmentation — PR #2257
+#
+# The flow has a z-axis reflection symmetry: every (geometry, freestream) →
+# (Ux, Uy, p) sample has a mirror partner where z, AoA, Uy all flip sign while
+# Ux and p remain unchanged. This lets us double the effective training set
+# by applying the mirror with p=0.5 per sample during training only.
+#
+# Empirically (data inspection on cruise sample with AoA≈0°):
+#   x dim 1  (z-coord)      : flip
+#   x dim 2  (saf0)         : invariant
+#   x dim 3  (saf1)         : flip
+#   x dims 4-11 (dsdf, 8 directional distances) : permute by [0,7,6,5,4,3,2,1]
+#                              (compass-style direction set; vertical mirror
+#                               keeps E/W and swaps N↔S, NE↔SE, NW↔SW)
+#   x dim 14 (AoA0, radians): flip
+#   x dim 18 (AoA1, radians): flip
+#   x dim 22 (gap, signed z-offset between foils) : flip
+#   y dim 1 (Uy)            : flip
+# Everything else (x, log_Re, NACA, stagger, Ux, p, is_surface) unchanged.
+#
+# Tested on cruise val_geom_camber_cruise/000088.pt (AoA=-0.12°, near-symmetric):
+# with this exact permutation, twin-pair residuals are ~3× smaller than naive
+# (no permutation) — confirming the permutation hypothesis.
+# ---------------------------------------------------------------------------
+
+# dsdf permutation under z-flip: indices 0..7 are 8 evenly-spaced directions
+# (45° apart). Vertical mirror (z → -z) maps direction k·45° to -k·45°.
+DSDF_PERM_Z = torch.tensor([0, 7, 6, 5, 4, 3, 2, 1], dtype=torch.long)
+
+
+def mirror_z_batch(x: torch.Tensor, y: torch.Tensor, flip_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply z=0 reflection to selected samples in a batch.
+
+    Args:
+        x:         [B, N, 24] node features
+        y:         [B, N, 3]  targets (Ux, Uy, p)
+        flip_mask: [B]        bool, True for samples to mirror
+
+    Returns mirrored (x, y). Per-sample mirror is composed of: sign-flip on
+    z/saf1/AoA/gap/Uy, dsdf 8-direction permutation, leaves all else intact.
+    """
+    if not flip_mask.any():
+        return x, y
+    fm = flip_mask.view(-1, 1, 1).to(x.dtype)              # [B,1,1] 0/1 selector
+    sign = 1.0 - 2.0 * fm                                  # [B,1,1] +1 keep, -1 flip
+
+    x_out = x.clone()
+    # Sign-flips on x (broadcasting handles padding zeros cleanly).
+    x_out[..., 1:2] *= sign        # z-coord
+    x_out[..., 3:4] *= sign        # saf1
+    x_out[..., 14:15] *= sign      # AoA foil 1
+    x_out[..., 18:19] *= sign      # AoA foil 2
+    x_out[..., 22:23] *= sign      # gap (signed z-offset between foils)
+
+    # dsdf permutation: only for flipped samples. Index along dsdf-slice with the
+    # permutation tensor; non-flipped samples keep original ordering via a where.
+    dsdf = x_out[..., 4:12]                                # [B, N, 8]
+    perm_idx = DSDF_PERM_Z.to(dsdf.device)
+    dsdf_perm = dsdf.index_select(-1, perm_idx)            # [B, N, 8]
+    flip_b = flip_mask.view(-1, 1, 1).to(dsdf.device)      # [B, 1, 1]
+    x_out[..., 4:12] = torch.where(flip_b, dsdf_perm, dsdf)
+
+    # Target: Uy (channel 1) flips, Ux and p unchanged.
+    y_out = y.clone()
+    y_out[..., 1:2] *= sign
+    return x_out, y_out
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -515,6 +584,42 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# PR #2257 startup verification: pull one batch, apply mirror to all samples,
+# verify the transform inverts cleanly and val/test loaders are NOT augmented.
+print("\n[mirror-aug probe] Verifying mirror_z_batch transformation...")
+_probe_loader = DataLoader(train_ds, batch_size=2, shuffle=False, collate_fn=pad_collate)
+_x_p, _y_p, _sf_p, _mk_p = next(iter(_probe_loader))
+_x_p = _x_p.to(device); _y_p = _y_p.to(device)
+_flip_all = torch.ones(_x_p.shape[0], dtype=torch.bool, device=device)
+_xm, _ym = mirror_z_batch(_x_p, _y_p, _flip_all)
+# Inverse: applying mirror twice should round-trip
+_xrt, _yrt = mirror_z_batch(_xm, _ym, _flip_all)
+_x_err = (_xrt - _x_p).abs().max().item()
+_y_err = (_yrt - _y_p).abs().max().item()
+# Per-feature spot-check on sample 0
+_valid = _mk_p[0]
+_xs0 = _x_p[0, _valid]
+_xms0 = _xm[0, _valid]
+print(f"  z   range: orig=[{_xs0[:,1].min():.2f},{_xs0[:,1].max():.2f}] "
+      f"→ mirror=[{_xms0[:,1].min():.2f},{_xms0[:,1].max():.2f}]  (should be flipped)")
+print(f"  x   range: orig=[{_xs0[:,0].min():.2f},{_xs0[:,0].max():.2f}] "
+      f"→ mirror=[{_xms0[:,0].min():.2f},{_xms0[:,0].max():.2f}]  (should be unchanged)")
+print(f"  AoA0 orig={_xs0[0,14]*180/3.14159:.2f}° → mirror={_xms0[0,14]*180/3.14159:.2f}°  (should be flipped)")
+print(f"  gap  orig={_xs0[0,22].item():.3f}   → mirror={_xms0[0,22].item():.3f}    (should be flipped)")
+print(f"  NACA0 M orig={_xs0[0,15].item():.3f} → mirror={_xms0[0,15].item():.3f}    (should be unchanged)")
+print(f"  stagger orig={_xs0[0,23].item():.3f} → mirror={_xms0[0,23].item():.3f}    (should be unchanged)")
+print(f"  saf0 |max(orig-mirror)|={(_xs0[:,2] - _xms0[:,2]).abs().max():.4f}  (should be 0)")
+print(f"  saf1 |max(orig+mirror)|={(_xs0[:,3] + _xms0[:,3]).abs().max():.4f}  (should be 0)")
+print(f"  dsdf orig[0,4:12]={_xs0[0,4:12].tolist()}")
+print(f"  dsdf mirr[0,4:12]={_xms0[0,4:12].tolist()}  (perm [0,7,6,5,4,3,2,1])")
+print(f"  y Ux: |max(orig-mirror)|={(_y_p[0,_valid,0] - _ym[0,_valid,0]).abs().max():.4f}  (should be 0)")
+print(f"  y Uy: |max(orig+mirror)|={(_y_p[0,_valid,1] + _ym[0,_valid,1]).abs().max():.4f}  (should be 0)")
+print(f"  y p : |max(orig-mirror)|={(_y_p[0,_valid,2] - _ym[0,_valid,2]).abs().max():.4f}  (should be 0)")
+print(f"  Round-trip (mirror twice): max_err_x={_x_err:.2e}, max_err_y={_y_err:.2e}")
+print(f"  val/test loaders are constructed without any augmentation — see val_loaders dict above.")
+del _probe_loader, _x_p, _y_p, _sf_p, _mk_p, _xm, _ym, _xrt, _yrt
+
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -531,6 +636,12 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # PR #2257: z=0 mirror augmentation. p=0.5 per sample, TRAINING ONLY.
+        # Applied in raw (un-normalized) feature space — normalization runs after
+        # so the model sees a normalized mirrored sample with the same stats.
+        flip_mask = torch.rand(x.shape[0], device=device) < 0.5
+        x, y = mirror_z_batch(x, y, flip_mask)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
