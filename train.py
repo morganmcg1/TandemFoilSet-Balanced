@@ -428,7 +428,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 1.5e-3
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-3  # PR #2293: 1e-4 → 1e-3 (10× increase) on RFF+clip=0.5 stack
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
@@ -491,6 +491,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
+print(f"AdamW weight_decay: {cfg.weight_decay}")
 print(f"GRAD_CLIP max_norm: {GRAD_CLIP}")
 warmup_epochs = 4
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
