@@ -6,7 +6,8 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 10:05 UTC
+- **Date / time:** 2026-05-13 10:55 UTC
+- **PENDING WINNER:** PR #2085 fern batch_size=2 has a winning W&B run (`w23g16k0`: val=73.16 -0.97%, test=64.16 -2.83%, all 4 splits improved). Student has not posted SENPAI-RESULT marker yet — directive comment posted requesting immediate submission.
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
