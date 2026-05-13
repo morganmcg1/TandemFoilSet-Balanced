@@ -420,6 +420,7 @@ class Config:
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
     onecycle_target_epochs: int = 18   # OneCycleLR total_steps calibration
     onecycle_pct_start: float = 0.1
+    cycle_momentum: bool = False  # disable PyTorch's default beta1 cycling; keep AdamW beta1=0.95 fixed
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -492,6 +493,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     anneal_strategy="linear",
     div_factor=cfg.max_lr / cfg.lr,   # initial_lr = max_lr / div_factor = cfg.lr
     final_div_factor=1e4,             # final_lr = initial_lr / 1e4
+    cycle_momentum=cfg.cycle_momentum,  # keep AdamW beta1=0.95 fixed; disable PyTorch's default momentum cycling
 )
 
 run = wandb.init(
