@@ -8,11 +8,10 @@
 | | |
 |---|---|
 | Optimizer | AdamW |
-| LR | 1e-3 (+ 3-epoch linear warmup) |
+| LR / Scheduler | OneCycleLR(max_lr=1e-3, total_steps=29×steps/ep, pct_start=0.1, div_factor=10, final_div_factor=1e3) |
 | Weight decay | 1e-4 |
 | Batch size | 4 |
 | Epochs | 50 (capped at 30 min wall) |
-| Scheduler | SequentialLR: LinearLR(3 ep) → CosineAnnealingLR(T_max=47) |
 | Loss | MSE, `vol_loss + 10 * surf_loss` |
 | Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=128, mlp_ratio=2 |
 | Compile | torch.compile(model, mode="default", dynamic=True) |
@@ -25,6 +24,38 @@
 Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
+
+### 2026-05-13 00:00 — PR #1404: OneCycleLR (max_lr=1e-3, SCHEDULER_EPOCHS=29, per-batch step) — schedule shape win
+
+- **val_avg/mae_surf_p:** **70.9449** (best epoch 29 of 29 — still descending at cutoff!) ✓ NEW BASELINE
+- **test_avg/mae_surf_p (4-split, bf16 eval):** **61.8276** (cruise biased low by nan_to_num zeroing)
+- **Test 3-split mean (excl. cruise):** 68.12
+- **Per-split val surface MAE (best epoch 29):**
+  - `val_single_in_dist`: p=80.87, Ux=0.971, Uy=0.518
+  - `val_geom_camber_rc`: p=80.80, Ux=1.610, Uy=0.683
+  - `val_geom_camber_cruise`: p=51.75, Ux=0.596, Uy=0.379
+  - `val_re_rand`: p=70.36, Ux=1.109, Uy=0.530
+- **Per-split test:** test_single_in_dist=70.98, test_geom_camber_rc=72.75, test_re_rand=60.63, test_geom_camber_cruise=42.96 (biased low)
+- **W&B run:** `wd9na4r7`
+- **Peak GPU:** 50.97 GB | **Sec/epoch:** ~62.5s | **Epochs:** 29/50 (30-min cap, best epoch=29 = last)
+- **vs prior baseline (#1373):** val −4.90 (−6.5%), test −5.48 (−8.1%) — large, consistent across all 4 splits
+- **Model diff vs prior baseline (#1373, lr=1e-3 + warmup + cosine):**
+  - Replaced `SequentialLR([LinearLR(warmup=3), CosineAnnealingLR(T_max=47)])` with `OneCycleLR(max_lr=1e-3, total_steps=29×steps_per_epoch, pct_start=0.1, anneal_strategy="cos", div_factor=10, final_div_factor=1e3)`
+  - `scheduler.step()` moved from per-epoch to per-batch (inside training loop)
+  - LR range: 1e-4 → 1e-3 (peak) → 1e-7 (final) — decay tail fires within the 30-min cap
+- **Reproduce:**
+  ```bash
+  cd target
+  python train.py --agent willowpai2g24h4-nezuko --wandb_name "willowpai2g24h4-nezuko/onecycle-lr-max1e3-pct0.1-28ep-rebased"
+  ```
+
+**Key insight:** Best epoch is the last (29) — model still descending monotonically at cutoff. The OneCycleLR per-batch stepping gives 10875 LR updates (vs 29 for cosine) and fully fires the decay tail to LR≈1e-7. The schedule shape advantage over warmup+cosine is real and large.
+
+**Note on test_avg:** cruise bf16 vol_loss=inf (nan_to_num zeroed), same caveat as prior baselines. Frieren #1556 fp32-eval follow-up will recover faithful 4-split test_avg.
+
+**Next target:** beat val_avg/mae_surf_p = 70.9449 / test_avg/mae_surf_p = 61.8276
+
+---
 
 ### 2026-05-12 23:XX — PR #1373: lr=1e-3 + 3-epoch linear warmup + cosine (on top of compile + bf16 + slice_num=128)
 
