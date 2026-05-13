@@ -8,6 +8,29 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 19:10 — PR #2314: Lion optimizer (lr=1e-4) on full stack (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **43.1973** (W&B run `h2m396kw`) — **−19.8%** vs prior baseline 53.84
+- **`test_avg/mae_surf_p` (4-split, finite):** **35.7630** — **−23.8%** vs prior 46.93
+- **`test_no_ema_avg/mae_surf_p`:** 39.74
+- **Per-split val surface-p MAE (`h2m396kw`, Lion lr=1e-4+n_layers=4+bs=2+slice32+fourier_k=12, best-val epoch 32):**
+  - val_single_in_dist: 41.63  (vs 57.24 → −27.3%) ✅
+  - val_geom_camber_rc: 56.63  (vs 62.57 → −9.5%) ✅
+  - val_geom_camber_cruise: 29.58  (vs 40.50 → −26.9%) ✅
+  - val_re_rand: 44.96  (vs 55.05 → −18.3%) ✅
+- **Per-split test surface-p MAE (`h2m396kw`, 4-split clean):**
+  - test_single_in_dist: 34.16  (vs 50.16 → −31.9%) ✅
+  - test_geom_camber_rc: 47.74  (vs 56.06 → −14.8%) ✅
+  - test_geom_camber_cruise: 24.83  (vs 33.72 → −26.4%) ✅
+  - test_re_rand: 36.32  (vs 47.79 → −24.0%) ✅
+- **Mechanism:** Lion (Chen et al. 2023) uses sign-based momentum updates (same direction as EMA of gradient, but normalized). At lr=1e-4 (recommended AdamW_lr/5 ≈ 5e-4/5), Lion achieved 32 epochs in 30 min — matched AdamW's throughput (57.8 s/ep). The magnitude normalization means every update step is effectively at max step size, making each gradient more impactful. All 8/8 per-split metrics improved. Largest gains on smooth geometry (camber_cruise −26.9% val, −26.4% test) and single_in_dist (−27.3% val, −31.9% test). Smallest gain on camber_rc (OOD geometry, harder regime), still −9.5%. Second seed on n_layers=5 (pre-merge stack) got val 45.48 / test 37.95, confirming direction is real across seeds and stack variants.
+- **Compute:** 32/50 epochs, 57.8 s/epoch, ~31 min total, 11.2 GB VRAM, 548,755 params.
+- **Merge bar update (vs val 43.20 / test 35.76):**
+  - ≤ 38.9 val → **merge** (≥10% gain)
+  - 38.9 – 43.2 → **second seed**
+  - ≥ 43.2 → **close**
+- **Reproduce:** `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --optimizer lion --lr 1e-4`
+
 ## 2026-05-13 16:43 — PR #2119: n_layers=4 on bs=2+slice32+fourier_k=12 stack (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **53.8380** (W&B run `qttr6jay`) — **−6.71%** vs prior baseline 57.71
