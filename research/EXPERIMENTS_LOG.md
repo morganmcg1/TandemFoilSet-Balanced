@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 21:00 UTC — Round 61
+
+### PR #2553 edward: Lion lr=1.5e-4 sweep — MERGED ✓ (NEW BASELINE 33.4935)
+
+- **Branch:** `charliepai2g48h5-edward/lion-lr15e-5`
+- **Hypothesis:** Lion lr=1.5e-4 (1.5× the #2524 lr=1e-4 baseline), all other params unchanged. Tests whether higher LR within Lion family unlocks faster convergence or deeper minimum.
+- **Metrics:**
+
+| Metric | Value | Δ vs #2524 (36.3994) | Δ vs AdamW #2307 |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **33.4935** | **−8.05%** | −20.91% |
+| `test_avg/mae_surf_p` | **28.6279** | **−8.30%** | −25.66% |
+
+Per-split:
+
+| Split | val | Δ vs #2524 |
+|---|---|---|
+| `val_single_in_dist` | 25.7691 | −9.60% |
+| `val_geom_camber_rc` | 50.5514 | −3.50% (least) |
+| `val_geom_camber_cruise` | 20.2827 | −14.36% (most) |
+| `val_re_rand` | 37.3708 | −8.90% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-edward-lion-lr15e-5-20260513-200129/metrics.jsonl`
+- **Best epoch:** 70/70 (terminal; still monotonically descending at LR≈0)
+- **First beat baseline:** epoch 54 (model crossed 36.3994 with 16 epochs to spare)
+- **Lion momentum non-zero fraction:** 0.9958 (fully populated)
+
+**Analysis:** LR=1.5e-4 wins decisively but NOT via earlier convergence (Scenario A falsified). Best epoch moved LATER (ep65→ep70) — the higher LR explored wider loss landscape before cosine tail, unlocking a deeper minimum. Model is still budget-bound at ep70. Per-split signature uniform improvement, largest on cruise (−14.36%), smallest on camber_rc (−3.50%). 2nd consecutive Lion-family WIN.
+
+Note: test_geom_camber_cruise/loss=NaN in eval (bf16 vol_loss overflow); MAE values valid (FP64 accumulator).
+
+**Action:** MERGED → new baseline 33.4935 / 28.6279. Assigned #2583 edward Lion lr=2e-4 (next step up; best epoch still ep70 at 1.5e-4 → still budget-bound → more LR headroom may unlock even deeper minimum). Baseline to beat: val < 33.4935.
+
+---
+
 ## 2026-05-14 20:50 UTC — Round 60
 
 ### PR #2550 frieren: Lookahead(k=5, α=0.5) wraps AdamW — CLOSED (LOSS, 26th taxon)
