@@ -165,7 +165,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 stoch_depth_prob: float = 0.0):
+                 stoch_depth_prob: float = 0.0,
+                 layer_scale_init: float = 0.1):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
@@ -177,6 +178,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.layer_scale_attn = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
+        self.layer_scale_mlp = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -190,8 +193,8 @@ class TransolverBlock(nn.Module):
                 if self.last_layer:
                     return self.mlp2(self.ln_3(fx))
                 return fx
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.layer_scale_attn * self.attn(self.ln_1(fx)) + fx
+        fx = self.layer_scale_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -449,6 +452,12 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"n_params: {n_params}")
+for i, b in enumerate(model.blocks):
+    print(
+        f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
+        f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
+    )
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
@@ -559,6 +568,23 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- Log final per-block LayerScale stats (end-of-training state) ---
+final_layer_scale_stats: dict[str, float] = {}
+for i, b in enumerate(model.blocks):
+    final_layer_scale_stats[f"final/layer_scale_attn_l{i}_mean"] = float(b.layer_scale_attn.mean().item())
+    final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
+    final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
+    final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
+append_metrics_jsonl(metrics_jsonl_path, {"event": "final", **final_layer_scale_stats})
+print("Final LayerScale stats (end-of-training):")
+for i in range(len(model.blocks)):
+    print(
+        f"  block {i}: attn mean={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_mean']:.4f} "
+        f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
+        f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
+        f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+    )
 
 # --- Test evaluation + local summary ---
 if best_metrics:
