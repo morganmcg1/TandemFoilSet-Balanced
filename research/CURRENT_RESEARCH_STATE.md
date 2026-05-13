@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 02:55 UTC (**MERGE #1772 edward Fourier L=6** as 6th compound win — new baseline **82.311 val / 73.330 test, -18.5% over 6 merges**; close #1608 frieren EMA-0.999 +2.93% val/+4.12% test on rebased run — EMA's weight-space smoothing fights Fourier high-frequency feature responses (val_single_in_dist +6.17% inverse-correlates with Fourier's largest gain); assign #1828 frieren SmoothL1 β=0.01, #1830 edward Fourier L=8 plateau-probe; in-flight: #1711, #1753, #1799, #1811, #1828, #1830; rebasing: #1549, #1754)
+- **Last updated**: 2026-05-13 03:10 UTC (close #1811 tanjiro per-channel output heads +1.99% val/+0.89% test — student found confound: baseline already had shared MLP decoder, so experiment was "split capacity at half width" not "specialize at fixed capacity"; per-split direction inverted prediction (val_single_in_dist +5.34%); decoder-side direction closed; assign #1852 tanjiro coord jitter aug std=0.005 — fresh data-augmentation pivot; in-flight: #1711, #1753, #1799, #1828, #1830, #1852; rebasing: #1549, #1754)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -66,7 +66,7 @@ pure spike suppression. The 1.0 / 25 / 50 bracket points map to a clear
 asymmetric profile around 25. **Lower bracket point (max_norm=10, #1713)
 now in flight** to complete the curve.
 
-Active threads (post #1772 merge → #1830 follow-up; post #1608 close → #1828):
+Active threads (post #1811 close → #1852 coord jitter pivot):
 
 1. **Per-channel surf-loss weighting** (alphonse #1711, H18,
    `[0.5, 0.5, 2.0]`) — loss-layer rebalancing toward pressure channel.
@@ -83,11 +83,13 @@ Active threads (post #1772 merge → #1830 follow-up; post #1608 close → #1828
 5. **LayerScale CaiT-style init=0.1** (thorfinn #1799, H23) — fresh axis
    pivot after closed AdamW betas direction. Per-channel learnable γ_l
    gates each residual branch; +0.19% params; compounds with stoch-depth.
-6. **Per-channel output head MLPs** (tanjiro #1811, H24) — fresh
-   architecture pivot after closed stoch-depth single-knob direction.
-   3 × Sequential(Linear(128→64), GELU, Linear(64→1)) replace shared
-   final linear; +3.72% params; strengthens closed H17 γ/β idea with
-   non-linear per-channel decoders.
+6. **Coord jitter augmentation std=0.005** (tanjiro #1852, H27) — fresh
+   data-augmentation pivot after closed decoder-side direction. Add
+   Gaussian noise to normalized spatial coords (x, z) before Fourier
+   encoding, masked to non-padded nodes, train-only. Zero param cost.
+   Mechanism: forces invariance to mesh-level coord perturbations,
+   regularizes high-freq Fourier feature responses (L=6 features at
+   `sin(32π·x)` are highly sensitive to small δx).
 7. **SmoothL1 (Huber) loss with β=0.01** (frieren #1828, H25) — fresh
    axis after closed EMA-0.999. Loss-landscape smoothing replacing L1's
    subgradient discontinuity at zero. Mechanism predicted orthogonal to
@@ -137,22 +139,24 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 | alphonse | #1711 | `surf-ch-weight-h18` | WIP | tbd |
 | askeladd | #1753 | `adaptive-grad-clip-q50-a1.5` | WIP | tbd |
 
-## Round 2 wave 6 — partial resolution (#1772 MERGED, #1773 closed, #1799/#1811 in flight)
+## Round 2 wave 6 — resolution (#1772 MERGED, #1773/#1811 closed, #1799 in flight)
 
 | Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
 | edward | #1772 | `fourier-coords-L6` | **MERGED** (new baseline 82.311) | -2.89% val, -1.78% test |
 | thorfinn | #1773 | `adamw-betas-0.95` | **CLOSED** (non-uniform regression, regime mismatch) | +1.97% val, +1.61% test |
 | thorfinn | #1799 | `layerscale-init-0.1` | WIP | tbd |
-| tanjiro | #1811 | `output-head-per-channel-mlp` | WIP | tbd |
+| tanjiro | #1811 | `output-head-per-channel-mlp` | **CLOSED** (confound: baseline had shared MLP, experiment effectively split capacity to half width; val_single_in_dist regressed +5.34%, opposite predicted direction) | +1.99% val, +0.89% test |
 
-## Round 2 wave 7 — kick-off (#1608 closed → fresh #1828; #1830 follow-up to merged #1772)
+## Round 2 wave 7 — kick-off (#1608/#1811 closed → fresh #1828/#1852; #1830 follow-up to merged #1772)
 
 | Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
 | frieren | #1608 | `ema-weights-0.999` | **CLOSED** (rebased: weight-space smoothing fights Fourier sharpening, inverse-correlates per-split) | +2.93% val, +4.12% test |
+| tanjiro | #1811 | `output-head-per-channel-mlp` | **CLOSED** (confound: split capacity at half width; val_single_in_dist regressed +5.34% inverse to prediction) | +1.99% val |
 | frieren | #1828 | `smooth-l1-loss-beta-001` | WIP | tbd |
 | edward | #1830 | `fourier-coords-L8` | WIP — plateau-probe follow-up to merged #1772 L=6 | tbd |
+| tanjiro | #1852 | `coord-jitter-aug-0.005` | WIP — fresh data-aug axis after closed decoder-side direction | tbd |
 
 ## Wave-1 / wave-2 carryover (still WIP)
 
@@ -178,8 +182,9 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 - **Log compression is dead** on this dataset (full-channel #1610 regressed +1.18%, pressure-only #1636 regressed +5.32%; channel-attribution theory falsified).
 - **Gumbel-Softmax-style noise injection is dead** in this 30-min budget regime (#1553 3-run mean +4.4%); slice-collapse must be attacked deterministically.
 
-## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:55 UTC)
+## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 03:10 UTC)
 
+- **#1811 output-head-per-channel-mlp (tanjiro)** — **CLOSED** at +1.99% val, +0.89% test. Student found a critical confound in the PR spec: the baseline `mlp2` was already `Sequential(Linear(128→128), GELU, Linear(128→3))` (a shared 128-hidden MLP), not a single Linear projection. The 3 × Sequential(Linear(128→64), GELU, Linear(64→1)) replacement effectively *halves* per-channel hidden capacity (128 → 64) while only adding +8K params. Per-split direction inverted prediction: `val_single_in_dist` (predicted to gain most) regressed +5.34% (largest hit). Cross-channel features the shared decoder learns (pressure-velocity correlations from physics) appear more valuable than per-channel specialization at reduced width. **Axis-wide finding: decoder-side per-channel direction is closed regardless of capacity setting; merged ~666K stack is well-balanced at the decoder.** Picked coord jitter augmentation as the fresh data-augmentation pivot.
 - **#1772 fourier-coords-L6 (edward)** — **MERGED** as new baseline **82.311** val / **73.330** test. -2.89% val, -1.78% test vs #1548 baseline. 6th compound win on this branch. All 8 splits improve (-0.91% to -4.10% on val, -1.17% to -2.91% on test). Surprise -4.10% on val_re_rand (pre-registered as ~flat) — mechanism finding: at L=4 the network was over-spending preprocess MLP capacity on low-freq geometry; L=6 frees capacity for Reynolds-dependent features. `val_geom_camber_cruise` only -0.91% (was -7.94% at L=4) — leading-edge plateau indicator. No overfit signature (best ep=15, wall time unchanged). Pre-registered follow-up: #1830 L=8 plateau-probe.
 - **#1608 ema-weights-0.999 (frieren)** — **CLOSED** at +2.93% val, +4.12% test (rebased onto current 84.762 baseline). Pre-rebase had won -2.64% val on old 98.353 baseline, but the rebase flipped the sign: EMA's low-pass smoothing on weights fights Fourier's high-frequency feature responses. Per-split: `val_single_in_dist` (Fourier's biggest gain at -11.35%) regressed +6.17% under EMA; `test_single_in_dist` regressed +7.80%. Clean inverse correlation between Fourier-gain magnitude and EMA-regression magnitude. Two compounding mechanisms: (a) decay=0.999 effective window ≈ 2.7 epochs is too long for T_max=15 cosine cooldown, so the EMA copy structurally trails the live model into the final cooldown; (b) EMA's spectral smoothing undoes Fourier's spectral sharpening. **Axis-wide finding: weight-space smoothing is closed on this compound; future variance-reduction PRs must target loss-landscape or trajectory features instead. Picked SmoothL1 (β=0.01) as the loss-landscape pivot.**
 - **#1754 lr-warmup-h19 (nezuko)** — **REBASING**. Won on old baseline at -0.64% val, -1.71% test (3/4 val splits improve, all 4 test splits improve). Mechanism check passes (ep1 last-batch pre-clip grad-norm dropped ~35%). Sent back to re-measure on new 84.762 baseline post-Fourier-merge. Expected post-rebase: -0.3% to -1.5% on val_avg (warmup is orthogonal to Fourier input encoding).
@@ -247,7 +252,7 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 | fern | #1549 | rebasing (FiLM 81.291 signal pending vs 82.311 baseline) |
 | frieren | #1828 | WIP (H25 SmoothL1 β=0.01 — Huber loss replacing L1, loss-landscape pivot after closed EMA) |
 | nezuko | #1754 | rebasing (H19 LR warmup — won on old baseline, re-running on 82.311) |
-| tanjiro | #1811 | WIP (H24 per-channel output head MLPs — 3 × Linear→GELU→Linear) |
+| tanjiro | #1852 | WIP (H27 coord jitter aug std=0.005 — fresh data-aug pivot after closed decoder-side direction) |
 | thorfinn | #1799 | WIP (LayerScale CaiT-style init=0.1 — per-block residual gating) |
 
 Zero idle students. Zero idle GPUs.

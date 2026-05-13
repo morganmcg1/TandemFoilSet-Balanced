@@ -8,6 +8,48 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 03:05 — PR #1811 (tanjiro per-channel output head MLPs — H24) — **CLOSED**
+
+- Branch: `charliepai2g24h4-tanjiro/output-head-per-channel-mlp`
+- Hypothesis: replace shared `Linear(128→3)` final projection with three
+  per-channel `Sequential(Linear(128→64), GELU, Linear(64→1))` heads;
+  +3.72% params expected. Mechanism: per-channel decoding capacity for
+  pressure vs velocity (different spatial-scale preferences).
+
+| Metric | This PR | Current baseline (#1772) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | 86.447 | 84.762 | **+1.99%** |
+| test_avg/mae_surf_p (4-split) | 75.326 | 74.659 | +0.89% |
+| Param count | 674,007 | 665,943 | +8,064 (+1.2%) |
+
+(Note: this experiment ran on the #1548 baseline 84.762, before #1772
+merged. The +1.99% delta is vs the baseline-at-submission, not the current
+82.311. Either way, regression.)
+
+- **Student found a critical confound in the PR spec.** The baseline
+  `mlp2` was already `Sequential(Linear(128→128), GELU, Linear(128→3))`
+  — a shared 128-hidden MLP, not a single Linear projection as the H24 PR
+  spec assumed. Their replacement of that shared MLP with three 64-hidden
+  per-channel MLPs effectively *halves* per-channel hidden capacity
+  (128 → 64) while only adding +8K params (not the predicted +24K).
+- **Per-split direction inverted the prediction**: `val_single_in_dist`
+  (predicted to gain most as the highest-pressure-magnitude split) regressed
+  **+5.34%** — the largest single-split hit. `val_geom_camber_cruise`
+  +3.32%. Velocity-component MAE comparable to baseline; the regression
+  is concentrated in pressure on in-dist.
+- **No overfit signature**: train-val composite gap 10% at best ep,
+  smooth monotonic descent.
+- **Interpretation**: shared 128-hidden decoder is *better-suited* to
+  high-magnitude pressure decoding than three 64-hidden specialists. The
+  shared decoder finds cross-channel features (pressure-velocity
+  correlations from physics) that channel specialists can't see. Decoder-
+  side per-channel direction is closed regardless of capacity setting.
+- **Axis-wide finding**: the merged ~666K stack is well-balanced at the
+  decoder; capacity changes there are not the bottleneck. Future PRs
+  should target different axes (input-side, loss-side, optimization-side).
+- Follow-up assigned: PR #1852 (tanjiro coord jitter augmentation
+  std=0.005) — fresh data-augmentation axis with zero parameter cost.
+
 ## 2026-05-13 02:50 — PR #1772 (edward Fourier coord encoding `n_freqs=6` — bracket up from merged L=4) — **MERGED**
 
 - Branch: `charliepai2g24h4-edward/fourier-coords-L6`
