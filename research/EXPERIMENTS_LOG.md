@@ -4,6 +4,63 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 18:45 — PR #2512 (ASSIGNED, thorfinn): Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 on Lion stack (Tancik §5) — compose resolution + regularization
+
+- **Branch:** `willowpai2g48h2-thorfinn/multiscale-rff-8sigma0p5-8sigma0p1`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** #2407 established σ=0.1 acts primarily as a **regularizer** (drives in-distribution test win −3.22%, not OOD-geom), and σ=0.5 provides positional resolution (val baseline). Multi-scale RFF (Tancik 2020 §5) partitions B-matrix columns across multiple bandwidths in a single concatenated feature vector; 8 features at σ=0.5 + 8 features at σ=0.1 keeps total channels = 32 (zero compute/VRAM increase) while combining both mechanisms.
+- **Why this is high-value:** Direct test of additivity between the two RFF mechanisms identified in #2407. Strong literature backing (Tancik 2020 §5 explicitly recommends multi-scale). One-line code change (modify `FourierCoordFeatures.__init__` to accept tuple-of-sigmas). Single-arm experiment, sharp decision rule on whether val + test composes.
+
+---
+
+## 2026-05-13 18:45 — PR #2407 (CLOSED, thorfinn): RFF σ=0.1 + σ=0.25 seed-1 bracket below — σ floor on Lion stack
+
+- **Branch:** `willowpai2g48h2-thorfinn/lion-rff-sigma-0p1-bracket-below`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Continue σ-bracket below σ=0.25 (Arm 1 σ=0.1) and validate σ=0.25 test win with seed-1 replicate (Arm 2). Tests whether σ→smaller continues to improve OOD-geom test or hits a floor, and whether the σ=0.25 test win from #2168 was seed-robust.
+
+### Result table
+
+| Arm | Config | seed | val_avg | test_avg | Δ val vs σ=0.5 | Δ test vs σ=0.5 | Verdict |
+|---|---|---:|---:|---:|---:|---:|---|
+| 1 | σ=0.1 | 0 | 46.2356 | 39.1518 | +1.03% | **−1.29%** | val floor hit; test gain but regularizer effect |
+| 2 | σ=0.25 | 1 | 46.7856 | 40.4270 | +2.23% | +1.93% | refutes seed-0 win |
+| ref | σ=0.25 | 0 | 46.0009 | 39.0076 | (#2168) | (#2168) | original seed-0 result |
+| **σ=0.25 cross-seed mean** | — | 0,1 | **46.3933** | **39.7173** | +0.63% | +0.14% | **ties σ=0.5; NOT a merge** |
+
+**W&B runs:** `hmic4qwn` (Arm 1), `93e9m26v` (Arm 2). Both 30.6 min wall, healthy training, peak ~44 GB / 96 GB.
+
+### Per-split SWA (Arm 1 σ=0.1, paper-facing test in bold)
+
+| Split | val σ=0.1 | val σ=0.5 | Δ% | test σ=0.1 | test σ=0.5 | Δ% |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 50.222 | 48.774 | +2.97% | **41.084** | 42.451 | **−3.22%** |
+| geom_camber_rc | 58.550 | 58.290 | +0.45% | **52.634** | 54.596 | **−3.59%** |
+| geom_camber_cruise | 29.168 | 29.111 | +0.20% | 24.250 | 23.445 | **+3.43% (worse)** |
+| re_rand | 47.002 | 46.885 | +0.25% | 38.640 | 38.156 | +1.27% |
+
+**Critical finding:** σ=0.1's test gain is **driven by single_in_dist**, not OOD-geom. geom_camber_cruise *reverses* (+3.43% worse than σ=0.5). The original mechanism story "lower σ helps OOD-geom more" partially survives at rc (−3.59%, tied with σ=0.25's 52.557) but fails at cruise.
+
+### Diagnostics
+
+| Diagnostic | Arm 1 (σ=0.1) | Arm 2 (σ=0.25 s1) | Note |
+|---|---:|---:|---|
+| `fourier/rff_mean` | **0.441** | 0.385 | cos-dominated at low σ (near-degenerate) |
+| `fourier/rff_std` | 0.553 | 0.593 | < theoretical 0.707 |
+| `final/log_sigma_*` | **−0.9037** | **−0.9037** | Kendall collapse to clamp under Lion (10th + 11th confirmations) |
+| `train/clip_fraction_mean` | **0.992** | **0.997** | **2nd independent confirmation of ≈0.99** (matches frieren #2363 0.99); BASELINE.md "~0.74" is stale |
+| `best_epoch` (base) | 12 | 13 | both converged late |
+
+### Banked findings (5)
+
+1. **σ bracket bottomed out on val.** σ→smaller is dead on primary metric; σ=0.5 stays canonical.
+2. **σ=0.25's test win was a seed-0 outlier.** Cross-seed mean test (39.72) ties σ=0.5 (39.66). Seed gap +1.42, well above val-gap noise ~0.86.
+3. **σ=0.1 mechanism = regularizer, not OOD-prior.** Gain driver is single_in_dist (−3.22%), not OOD-geom; cruise REVERSES. Low-σ Fourier features → near-degenerate (rff_mean=0.44 cos-dominated) → smoother predictions. This is the kind of regularizer that should compose with high-σ resolution → motivates #2512 multi-scale RFF.
+4. **2nd independent clip_fraction≈0.99 confirmation.** Under Lion+max_norm=0.5, the clipper saturates every step (99.2% / 99.7%). BASELINE.md "~0.74" note is from a different regime. Worth a future max_norm relaxation pass.
+5. **σ axis exhaustion = pivot signal.** Five σ values tested (0.1, 0.25 ×2 seeds, 0.5, 0.75, 1.0). σ=0.5 wins on val. Pivot to multi-scale composition (Tancik §5) or huber_beta sweep on RFF baseline (student's suggested follow-up, banked for later wave).
+
+---
+
 ## 2026-05-13 18:10 — PR #2500 (ASSIGNED, alphonse): Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — fix mean drift, preserve spread + test gain
 
 - **Branch:** `willowpai2g48h2-alphonse/anchor-mean-log-sigma-on-sigma0p5`

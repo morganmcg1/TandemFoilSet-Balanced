@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 18:10 (closed #2443 alphonse Kendall log_σ AdamW-eq init — **cleanest σ-collapse mechanism finding on wave: init alone prevents collapse, spread 0.000→0.478, test improved −0.40 on paper metric, but mean drift inflates all eff_w 3× and regresses val +0.61**. Sent back fern #2311 for rebase + rerun (WINNER pending). Assigned #2500 alphonse anchor-mean(log_σ) 2-arm sweep λ∈{1,5} to fix mean drift while preserving spread)
+- **Last updated:** 2026-05-13 18:45 (closed #2407 thorfinn σ=0.1+σ=0.25-seed1 bracket — **σ axis exhausted on val (σ=0.1 floor at +1.03%); σ=0.25 test win refuted as seed-0 outlier (cross-seed mean ties σ=0.5); σ=0.1 test gain mechanism revised: REGULARIZER not OOD-prior, driver = single_in_dist −3.22% not OOD-geom; 2nd independent clip_fraction≈0.99 confirmation**. Assigned #2512 thorfinn multi-scale RFF 8×σ=0.5 + 8×σ=0.1 to test composition of resolution + regularization, Tancik §5 backing, zero compute increase. Earlier this loop closed #2443 alphonse, #2429 edward, #2363 frieren; assigned #2500 alphonse, #2481 edward, #2484 frieren; sent back fern #2311 WINNER pending rebase+rerun)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -54,14 +54,14 @@
 
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
-| **#2407** | **thorfinn** | wip | RFF σ=0.1 + σ=0.25 seed-1 bracket | Find OOD-geom floor; settle val-vs-test seed noise |
+| **#2512** | **thorfinn** | wip (NEW) | Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (Tancik §5) | Test additivity: σ=0.5 gives resolution (val), σ=0.1 gives regularization (test single_in_dist). One-line code change to FourierCoordFeatures (tuple-of-sigmas); total channels unchanged → zero compute increase |
 | **#2390** | **askeladd** | wip (sent back) | Lion wd sweep on σ=0.5: 2-arm {3e-3, 1e-2} | Mechanism validated on σ=1.0 (wd=3e-3 wins −0.56 val); 6th σ-collapse; non-shrinkage mechanism. Rebase + extend up. |
 | **#2311** | **fern** | wip (PENDING REBASE+RERUN — WINNER) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | **Arm 2 lr=5e-4 wins both axes** (val 45.22 / test 38.77, −0.55 val / −0.90 test); rebased branch is now CLEAN; awaiting confirmation rerun |
 | **#2442** | **nezuko** | wip | n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 | Real capacity axis at equal compute; brackets current n_head=4 |
-| **#2500** | **alphonse** | wip (NEW) | Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} | Fix mean-drift mechanism (#2443 surfaced it); preserve test gain (−0.40) while recovering val. Single new loss term + 1 hyperparameter |
+| **#2500** | **alphonse** | wip | Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} | Fix mean-drift mechanism (#2443 surfaced it); preserve test gain (−0.40) while recovering val. Single new loss term + 1 hyperparameter |
 | **#2463** | **tanjiro** | wip | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Isolate SWA averaging-lr level (orthogonal to ramp-speed axis). Predicted: 0.05x wins (DOWN ramp + deep avg) per tanjiro's #2342 finding |
-| **#2481** | **edward** | wip (NEW) | SWA anneal_epochs=1 on σ=0.5 Lion stack | 1-epoch SWALR ramp instead of 2 — all 3 averaged epochs at swa_lr=6e-5; directly motivated by edward's #2429 Diagnostic 3 |
-| **#2484** | **frieren** | wip (NEW) | Skip-SWALR entirely on σ=0.5 Lion stack | Let cosine continue through SWA window — averages cosine-tail weights instead of SWALR-floor; directly tests the SWALR-overrides-cosine mental model that misled #2187/#2285/#2342/#2429 |
+| **#2481** | **edward** | wip | SWA anneal_epochs=1 on σ=0.5 Lion stack | 1-epoch SWALR ramp instead of 2 — all 3 averaged epochs at swa_lr=6e-5; directly motivated by edward's #2429 Diagnostic 3 |
+| **#2484** | **frieren** | wip | Skip-SWALR entirely on σ=0.5 Lion stack | Let cosine continue through SWA window — averages cosine-tail weights instead of SWALR-floor; directly tests the SWALR-overrides-cosine mental model that misled #2187/#2285/#2342/#2429 |
 
 **⚠ Mid-wave baseline shift:** σ=0.5 merged while 7 PRs were in-flight on σ=1.0 Lion stack. Notice posted to all 7 with updated thresholds. Triage rule for these landing runs:
 - val < 45.76 → MERGE (mechanism compounded with σ=0.5 implicitly via independence)
@@ -99,6 +99,10 @@
 25. **σ-collapse fix #2: Init at AdamW-equilibrium alone prevents collapse under Lion (#2443 alphonse CLOSED, banked mechanism)** — **strong-form refutation** of the previously-banked finding that "Lion's sign-update is wholly responsible for collapse". Per-channel Kendall gradient SIGN is sufficient signal to maintain differentiation given a non-degenerate starting point. log_σ trajectory: 0.150 (init) → 0.478 (final), monotonically growing, never collapsing. **Three-tier σ-spread ordering on σ=0.5 Lion stack:** Lion+Kendall baseline (spread 0.000) < AdamW+Kendall (spread ~0.15) < Lion+AdamW-eq-init (spread 0.478) < Hybrid Lion+AdamW (spread 0.81, fern #2311 pending). **Test improved by −0.40 on paper-facing metric** (geom_camber_rc −0.72, single_in_dist −1.04) despite val regression of +0.61. **Open mechanism:** Lion's sign-update still drifts mean(log_σ) ~0.6 nats more negative (−1.40 → −1.99), inflating all effective weights ~3× → val regression. **#2500 alphonse tests the mean-anchor fix** (L2 anchor loss on mean(log_σ) at AdamW-eq target).
 26. **Val/test divergence first observed in this direction on Wave 12 (#2443 alphonse)** — differentiated Kendall weighting (Lion+AdamW-eq init) acts as an OOD regularizer: slight val degradation, real test gain especially on harder OOD splits. For paper-facing test number this is interesting; for the merge gate it's a regression. Connects to #2390 askeladd's wd-not-shrinkage finding — both suggest Lion has multiple knobs that act through OOD-regularization channels distinct from the model parameter values directly.
 27. **σ-collapse fix #1 confirmed and 0.55-val winner on σ=0.5 stack (#2311 fern Arm 2)** — hybrid Lion(model) + AdamW(log_σ) at lr=5e-4: val 45.22 (−0.55) and test 38.77 (−0.90). Spread 0.475, mean −1.98 (5× more spread than AdamW equilibrium, comparable to alphonse's #2443 init mechanism). **Test wins on 3/4 splits including single_in_dist −2.11 and geom_camber_rc −1.82** — biggest gains on the load-bearing OOD splits. Branch rebased CLEAN; awaiting confirmation rerun before merging. **Compound potential with #2500 anchor-mean** is the natural next step — both mechanisms (optimizer split + mean anchor) attack different parts of the σ-stability problem and should stack.
+28. **σ axis exhausted on val; σ=0.25 test win NOT seed-robust (#2407 thorfinn CLOSED)** — five σ values tested (0.1, 0.25×2 seeds, 0.5, 0.75, 1.0). σ=0.1 hits val floor (+1.03%); σ=0.25 cross-seed test mean (39.72) ties σ=0.5 (39.66). σ→smaller direction dead on primary metric; **σ=0.5 stays canonical**. Seed gap +1.42 at σ=0.25 is well above val-gap noise estimate ~0.86 → seed-0 favorable noise draw, not a real improvement.
+29. **σ=0.1 mechanism revision: REGULARIZER not OOD-prior (#2407 thorfinn CLOSED)** — gain driver is **single_in_dist test −3.22%**, NOT OOD-geometry. geom_camber_cruise REVERSES (+3.43% worse than σ=0.5); geom_camber_rc only tied with σ=0.25. **The original mechanism story partially survives at rc but fails at cruise.** Low-σ Fourier features become near-degenerate (rff_mean=0.44 cos-dominated; rff_std=0.553 vs theory 0.707) → reduced per-point positional info → smoother predictions → in-distribution test win. **Directly motivates #2512 multi-scale RFF**: if σ=0.1 acts as regularizer, it should compose with σ=0.5's coordinate resolution.
+30. **2nd independent clip_fraction≈0.99 confirmation under Lion+max_norm=0.5 (#2407 thorfinn)** — both arms: 0.992 / 0.997 (matches frieren #2363's 0.99 flag). BASELINE.md's "~0.74" note is from a different regime / earlier stack — under our current σ=0.5 baseline, max_norm=0.5 clips every step → Lion effectively becomes sign-of-sign at fixed norm. **Banked for future max_norm relaxation pass on the merged stack** (alphonse #2270 already closed max_norm relaxation under β=0.3+Huber+AdamW; under-Lion remains open).
+31. **10th + 11th independent σ-collapse confirmations (#2407)** — both Arm 1 (σ=0.1) and Arm 2 (σ=0.25 seed-1) show `final/log_sigma_*` = −0.9037 (Kendall clamp floor). σ-collapse mechanism is **invariant to RFF σ ∈ {0.1, 0.25, 0.5, 1.0}** at the optimizer level — independent of input encoding bandwidth. Reinforces the structural-not-data nature of the collapse identified in #2311 and #2443.
 
 ## Key open bottlenecks
 
@@ -116,22 +120,23 @@
 ## Potential next directions (Wave 12 / post-σ=0.5 baseline)
 
 1. **Lion + hybrid AdamW for Kendall σ heads (#2311 fern)** — **WINNER pending merge** (val 45.22 / test 38.77 on σ=0.5 stack, rebased branch is CLEAN, awaiting confirmation rerun).
-2. **Anchor mean(log_σ) loss at AdamW-eq + init at eq (#2500 alphonse NEW)** — fix mean-drift mechanism uncovered by #2443; 2-arm λ ∈ {1, 5}.
-3. **σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn)** — close out the RFF σ axis on Lion stack.
+2. **Anchor mean(log_σ) loss at AdamW-eq + init at eq (#2500 alphonse)** — fix mean-drift mechanism uncovered by #2443; 2-arm λ ∈ {1, 5}.
+3. **Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (#2512 thorfinn NEW)** — test additivity of resolution + regularization from #2407 mechanism revision. Tancik 2020 §5 backing. One-line code change, total channels unchanged.
 4. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro)** — averaging-lr level axis from #2342 mechanism finding.
 5. **SWA anneal_epochs=1 on σ=0.5 (#2481 edward)** — SWALR ramp speed; all 3 averaged epochs at swa_lr.
 6. **Skip-SWALR entirely on σ=0.5 (#2484 frieren)** — direct test of SWALR-overrides-cosine mental model; cosine-tail vs SWALR-floor averaging.
-7. **n_head ∈ {2, 8} bidirectional at n_hidden=128 on σ=0.5 (#2442)** — equal-compute attention-granularity reshuffle; targets geom_camber_rc.
-8. **Lion wd sweep on σ=0.5 (#2390)** — orthogonal Lion fine-tuning axis.
+7. **n_head ∈ {2, 8} bidirectional at n_hidden=128 on σ=0.5 (#2442 nezuko)** — equal-compute attention-granularity reshuffle; targets geom_camber_rc.
+8. **Lion wd sweep on σ=0.5 (#2390 askeladd)** — orthogonal Lion fine-tuning axis.
 9. **Delay-SWA-start (frac=0.85)** — narrow window but truly low-lr averaging (tanjiro #2342 suggested follow-up #3). Composes with #2463 Arm A. **Opposite direction from CLOSED #2429.**
-10. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
-11. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
-12. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
-13. **Beyond σ=0.1** — if #2407 confirms σ=0.1 continues winning test, the axis becomes "DC Fourier features only" (σ→0). The Fourier head degenerates to a learned bias.
+10. **huber_beta re-sweep on RFF baseline** — β=0.3 came from pre-RFF stack, never re-validated on Lion+RFF+Kendall (thorfinn #2407 suggested follow-up). Possible test gain orthogonal to RFF σ.
+11. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
+12. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
+13. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
 14. **Fixed (non-learnable) per-channel loss weights** matching #1906 pattern — even simpler alt than #2443 if init-drift turns out to be the issue.
 15. **n_layers depth sweep at fixed n_hidden** — if #2442 closes head axis, depth at fixed compute is the next architectural axis.
-16. **clip_fraction definition audit / pre-clip grad_norm p50/p90/p99 logging** — resolve the 99% (frieren #2363) vs 74% (#2063 BASELINE.md) discrepancy; informs future grad-clip and gradient-distribution work.
-17. **Cyclic LR through SWA window** (Izmailov's original recommendation) — if skip-SWALR (#2484) wins or ties, the natural follow-up is cosine-restarts during averaging window.
+16. **clip_fraction definition audit / pre-clip grad_norm p50/p90/p99 logging** — resolve the 99% (frieren #2363, thorfinn #2407 confirmed) vs 74% (#2063 BASELINE.md) discrepancy; informs future grad-clip and gradient-distribution work.
+17. **max_norm relaxation under Lion+σ=0.5** — clip_fraction=99% under max_norm=0.5 means Lion effectively sign-of-sign at fixed norm. Under Lion (not yet tested on this stack) try max_norm=1.0 or 2.0; orthogonal to alphonse #2270's AdamW result.
+18. **Cyclic LR through SWA window** (Izmailov's original recommendation) — if skip-SWALR (#2484) wins or ties, the natural follow-up is cosine-restarts during averaging window.
 
 ## Mechanism-axis coverage
 
@@ -139,17 +144,21 @@
 1. Huber β=1.0 (#1452), 2. Per-sample Re-weight (#1586), 3. FiLM (#1585), 4. Grad-clip 1.0 (#1731), 5. Grad-clip 0.5 (#1831), 6. Kendall σ (#1906), 7. RFF σ=1.0 (#2082), 8. Huber β=0.3 (#1757), 9. Lion lr=3e-4 wd=3e-4 (#2063), 10. **RFF σ=0.5 (#2168)** ← CURRENT
 
 ### 🔬 In-flight (Wave 12)
-- RFF σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn) — find OOD-geom floor
+- Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (#2512 thorfinn) — test resolution + regularization additivity, Tancik §5
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — mechanism validated on σ=1.0 (wd=3e-3 wins −0.56 val); composition + ceiling test
-- Hybrid Lion+AdamW for Kendall σ on σ=0.5 + lr sweep {3e-4, 5e-4} (#2311 fern) — fix AdamW overshoot
-- SWA start_frac sweep {0.5, 0.6} on σ=0.5 (#2429 edward) — width axis; sharpened prediction (earlier should win)
-- Lion + linear warmup 3 epochs (#2363 frieren) — fix early-oscillation
+- Hybrid Lion+AdamW for Kendall σ on σ=0.5 + lr sweep {3e-4, 5e-4} (#2311 fern) — fix AdamW overshoot; **Arm 2 lr=5e-4 WINNER pending rebase+rerun**
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — equal-compute capacity reshuffle
-- Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion (#2443 alphonse) — structural alt to hybrid optim
+- Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} (#2500 alphonse) — fix mean drift from #2443
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — averaging-lr level axis; isolates SWALR ramp direction effect
+- SWA anneal_epochs=1 on σ=0.5 (#2481 edward) — 1-epoch ramp instead of 2; all 3 averaged epochs at swa_lr=6e-5
+- Skip-SWALR entirely on σ=0.5 (#2484 frieren) — direct test of SWALR-overrides-cosine mental model
 
-### ✗ Closed (29+ axes)
+### ✗ Closed (30+ axes)
 - drop-grad-clip-on-Lion (#2347, 2026-05-13 16:00): max_norm=0.5 is right setting, 4 banked findings inc. 4th σ-collapse confirmation
 - slice_num=96 (#2378, 2026-05-13 16:30): NOT a capacity axis (+5K params not +310K), regressed +4.19 val, 5 banked findings inc. 5th σ-collapse confirmation
 - max_norm relaxation {0.75, 1.0} (#2270, 2026-05-13 16:35): clip_fraction stays ≥0.995 even at 2× cap under β=0.3-Huber, 5 banked findings inc. AdamW-equilibrium log_σ targets for #2443
 - T_max ∈ {10, 12} cosine compression (#2342, 2026-05-13 17:00): clean regression +5.5% to +8.9% val; **6 banked findings inc. SWALR-overrides-cosine pathology — the most valuable mechanistic finding of Wave 12**; opens new swa_lr direction axis via #2463
+- swa_start_frac ∈ {0.5, 0.6} (#2429 edward, 2026-05-13 17:30): monotonically worse with smaller frac; **3rd SWALR-overrides-cosine confirmation**; geom_camber_rc identified as load-bearing OOD split (~2× other splits)
+- Lion + linear warmup 3 epochs (#2363 frieren, 2026-05-13 17:30): epoch-1 val WORSE with warmup → Adam→Lion mental model refuted; **Lion has no chaotic init phase**; clip_fraction invariant to lr; 9th σ-collapse confirmation
+- Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion (#2443 alphonse, 2026-05-13 18:10): **cleanest σ-collapse mechanism finding on wave — init alone prevents collapse**; spread 0.000→0.478, test −0.40, but mean drift inflates eff_w 3× → val +0.61; motivates #2500 mean anchor
+- RFF σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn, 2026-05-13 18:45): σ axis exhausted on val; σ=0.25 test win refuted as seed-0 outlier; **σ=0.1 = regularizer NOT OOD-prior** (driver = single_in_dist, not OOD-geom); 2nd clip_fraction≈0.99 confirmation; 10th + 11th σ-collapse confirmations; motivates #2512 multi-scale RFF
