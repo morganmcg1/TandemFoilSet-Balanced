@@ -39,10 +39,53 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **36.3994** | #2524 | Lion optimizer (lr=1e-4, wd=3e-4, β₂=0.99) + L1 + compile + bf16 + slice_num=24 + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + n_hidden=96 | ep65 of 67 (best≠terminal); **−14.05% vs #2307** (42.3455); uniform WIN all 4 splits 9.7-19.6%; val_geom_camber_rc 60.83→52.39 (-13.88%) — largest rc movement since launch; mechanism: Lion sign-step aligns with L1 sign-gradients; bf16-stable (no v_hat) |
-| `test_avg/mae_surf_p` | **31.2200** | #2524 | — | test from best-val checkpoint ep65; **−18.92% vs #2307** (38.5059) |
+| `val_avg/mae_surf_p` | **33.4935** | #2553 | Lion lr=1.5e-4 (1.5× #2524's lr=1e-4); wd=3e-4, betas=(0.9, 0.99); all other params unchanged | ep70/70 (best=terminal; still monotonically descending); **−8.05% vs #2524** (36.3994); uniform WIN all 4 splits 3.5-14.4%; mechanism: higher LR unlocked deeper minimum within same budget |
+| `test_avg/mae_surf_p` | **28.6279** | #2553 | — | test from best-val checkpoint ep70; **−8.30% vs #2524** (31.2200) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 36.3994` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 33.4935` to be merged.
+
+## 2026-05-14 21:00 — PR #2553: Lion lr=1.5e-4 sweep: uniform WIN −8.05% (NEW BEST)
+
+- **Student:** charliepai2g48h5-edward
+- **Best epoch:** 70 of 70 (best=terminal; still monotonically descending at terminal, LR annealed to 0)
+- **Epochs reached:** 70 (full schedule; ~25.6 s/epoch, ~30 min wall-clock)
+- **Peak GPU memory:** 14.01 GB (unchanged from #2524)
+- **Param count:** 328,235 (unchanged — only lr changed)
+- **Lion momentum non-zero fraction:** 0.9958 (fully populated; consistent with #2524 0.9986)
+
+| Split | val mae_surf_p | Δ vs #2524 (36.3994) | Δ vs AdamW #2307 (42.3455) |
+|---|---|---|---|
+| `val_single_in_dist` | **25.7691** | **−9.60%** | −27.36% |
+| `val_geom_camber_rc` | **50.5514** | **−3.50%** | −16.90% |
+| `val_geom_camber_cruise` | **20.2827** | **−14.36%** | −26.65% |
+| `val_re_rand` | **37.3708** | **−8.90%** | −17.73% |
+| **val_avg** | **33.4935** | **−8.05%** | −20.91% |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | **24.7056** |
+| `test_geom_camber_rc` | **43.8462** |
+| `test_geom_camber_cruise` | **16.8409** |
+| `test_re_rand` | **29.1189** |
+| **test_avg** | **28.6279** |
+
+- **Note on test_geom_camber_cruise/loss=NaN:** bf16 vol_loss overflow on one sample's squared-loss accumulation during test eval; MAE values (FP64 accumulator) are valid and consistent with val pattern. Not blocking.
+- **Mechanism:** Higher LR (1.5× from 1e-4) unlocked a deeper minimum. Best epoch moved LATER (ep70 vs ep65 for lr=1e-4) confirming the model continued exploring more terrain in mid-training before cosine cooldown. Lion's sign-step is most powerful when LR is generous enough to take large steps before schedule contracts. First beat baseline: epoch 54.
+- **Config change:** `--lr 1.5e-4` vs #2524's `--lr 1e-4`. All other params unchanged (wd=3e-4, betas=(0.9, 0.99), epochs=70).
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-edward-lion-lr15e-5-20260513-200129/metrics.jsonl`
+  `models/model-charliepai2g48h5-edward-lion-lr15e-5-20260513-200129/metrics.yaml`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-edward \
+      --experiment_name "charliepai2g48h5-edward/lion-lr15e-5" \
+      --lr 1.5e-4 \
+      --weight_decay 3e-4 \
+      --epochs 70
+  ```
+
+---
 
 ## 2026-05-14 05:50 — PR #2524: Lion optimizer (lr=1e-4, wd=3e-4, betas=(0.9, 0.99)): uniform WIN −14.05%
 
