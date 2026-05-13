@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-13 10:00 — Round 23
+
+### PR #1774 alphonse: lr 5e-4 → 7.5e-4 (+50%) — CLOSED (LOSS, lr-UP axis decisively closed)
+
+- **Branch:** `charliepai2g48h5-alphonse/lr-7.5e-4`
+- **Hypothesis:** +50% LR bump on current advisor stack to compound with L1's unit-bounded gradients.
+- **Round-1 (β=0.5 baseline, n=2):** val_avg mean = 63.30 vs 64.07 (−1.20%), test = +1.51%. Wash.
+- **Round-2 (post-rebase, n=5):** L1+slice=64 (n=2) mean = 60.82 (wash-with-loss-tail vs 59.54); L1+slice=32 current advisor (n=3) mean = **62.66 (+16.0% LOSS)**, test = 54.73 (+14.9%).
+
+**Per-split (slice=32 stack, mean of 3 runs):**
+
+| Split | lr=7.5e-4 (n=3) | Baseline (#1846) | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 59.98 | 59.09 | +1.5% |
+| `val_geom_camber_rc` | 79.29 | 67.45 | +17.6% ✗ |
+| `val_geom_camber_cruise` | 46.91 | 35.72 | +31.3% ✗ |
+| `val_re_rand` | 64.48 | 53.76 | +19.9% ✗ |
+
+- **Analysis:** Three independent slice=32 runs all >60 confirms the lr-UP lever is decisively wrong on the current stack. Mechanism: slice_num=32 cuts attention capacity → sharper loss landscape → bigger steps land in worse basins by epoch 30+. Adam preconditions magnitudes, not directions. The student's run-variance work established a ~1.5-point noise band; this is well outside.
+- **lr-peak axis status:** Closed at +50% across **three** landscape variants (β=0.5, L1+slice=64, L1+slice=32). All show wash-or-loss; none show a clean win.
+- **Next:** Reassigned alphonse the inverse probe (her follow-up #2): lr=3.75e-4 (-25%) on current advisor — PR #1997.
+
+### Assignments: Round 23
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1997 | alphonse | lr 5e-4 → 3.75e-4 (-25%) — capacity↔LR coupling DOWN probe |
+
+---
+
 ## 2026-05-13 09:30 — Round 22
 
 ### PR #1921 nezuko: pos-jitter σ=0.01 — CLOSED (LOSS, informative split-level signal)

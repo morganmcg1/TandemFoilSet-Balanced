@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 09:30 (round-22: Closed #1921 nezuko pos-jitter LOSS (+3.1% val); closed #1905 thorfinn SGDR stale; assigned #1988 nezuko fun-jitter-re-aoa-0.05 + #1989 thorfinn sgdr-t0-10-retry. **Baseline still 54.0051**)
+- **As of:** 2026-05-13 10:00 (round-23: Closed #1774 alphonse lr=7.5e-4 LOSS (+16% val on slice=32 — lr-UP closed across all 3 landscapes); assigned #1997 alphonse lr-3.75e-4 capacity↔LR DOWN probe. **Baseline still 54.0051**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -59,7 +59,7 @@ Per-split baseline (PR #1846):
 | #1976 | tanjiro | DropPath p_max=0.1 stochastic depth | **New round-21** — OOD generalization via block-level residual-branch regularization |
 | #1946 | edward | EMA model weights — retune to **decay=0.999** | Round-19 first try (0.9999) lagged catastrophically; round-20 send-back to 0.999 (~2-epoch half-life). +dual EMA/raw val logging. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
-| #1774 | alphonse | lr=7.5e-4 | On Huber β=0.5 baseline; needs rebase |
+| #1997 | alphonse | lr 5e-4 → 3.75e-4 (-25%) | **Round-23** — capacity↔LR coupling DOWN probe; follow-up to closed #1774 |
 | #1653 | askeladd | Grad clip max_norm=1.0 | Proven -6.94% on β=0.5; needs L1+sampler+slice32 rebase |
 
 ## Warning on in-flight rebase
@@ -84,6 +84,7 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 - **slice_num=16:** val wash (+0.41%) with in-dist/OOD trade-off; 32 is the global optimum (PR #1903). **slice_num axis fully closed.**
 - **AdamW β2=0.95:** LOSS on L1 (+4.42% on L1 base, +15% vs current). Shorter second-moment memory amplifies L1 sign-flip noise (PR #1845). β2 axis closed.
 - **AdamW β2=0.95 (earlier β=0.5 test):** near-wash on β=0.5, no clear signal (PR #1676).
+- **lr=7.5e-4 (+50% lr-UP):** LOSS on L1+slice=32 (+16% vs current, n=3 mean 62.66) — closed across all 3 landscape variants tested (β=0.5 wash, L1+slice=64 wash-with-loss-tail, L1+slice=32 LOSS) (PR #1774). lr-UP axis closed; capacity↔LR coupling DOWN probe in flight as #1997.
 
 ## Open questions / next experiments
 
