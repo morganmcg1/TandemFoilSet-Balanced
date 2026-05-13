@@ -231,6 +231,32 @@
 
 ---
 
+## 2026-05-13 12:54 — PR #2167: Cosine T_max=16 + eta_min=1e-5 at lr=2e-4 (fern) — CLOSED, REGRESSION
+
+- **Branch:** `willowpai2g24h5-fern/cosine-tmax-lr2e-4`
+- **Hypothesis:** At lr=2e-4, T_max=epochs=50 prevents the cosine schedule from completing; T_max=16 (matched to budget) should unlock the lr=2e-4 regime.
+- **W&B runs:** `798tkeey` (Arm 1: T_max=16, eta_min=1e-5), `2go6qmev` (Arm 2: T_max=50, eta_min=1e-5)
+- **Note:** Runs used train.py default n_head=2 (post-#2069 merge) — so this tests lr=2e-4 on n_head=2 compound with cosine variants
+
+| Arm | T_max | eta_min | lr | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (50.91) |
+|-----|-------|---------|-----|--------|---------------------|----------------------|----------------------|
+| 1 | 16 | 1e-5 | 2e-4 | `798tkeey` | 56.43 | 47.77 | +10.9% / +9.4% |
+| 2 | 50 | 1e-5 | 2e-4 | `2go6qmev` | 57.74 | 49.66 | +13.4% / +13.7% |
+
+**Val trajectories:** Arm 1 ep13→ep16: 58.97→58.38→57.40→56.43 (Δ −2.54, steepest at end). Arm 2 ep13→ep16: 63.13→60.21→57.74→58.36 (best ep15, regressed ep16 from high LR noise).
+
+**Result:** CLOSED. Key findings:
+1. **Schedule-matching (T_max=16) has signal but is insufficient at lr=2e-4 on n_head=2**: Arm 1 beats Arm 2 by 1.31 val — schedule shape matters
+2. **lr=2e-4 on n_head=2 regresses ~5.5 val** even with best schedule — lr × n_head interaction is the dominant factor
+3. **eta_min=1e-5 in isolation does not help** (Arm 2 vs old baseline 55.41 with eta_min=0 — Arm 2 worse)
+4. **T_max=50 is fundamentally mismatched to 30-min budget** — at epoch 16, lr≈1.81e-4 (vs Arm 1's 1e-5); first ep16 noise spike confirms the slow-decay arc was truncated
+
+**Pattern confirmed:** Cosine schedule changes consistently regress at this 30-min budget — the model is under-converged at default schedule, and forcing LR down faster cuts off productive learning.
+
+**Fern reassigned:** PR #2295 — EMA decay sweep (0.999 vs 0.95) on current sw=5+n_head=2+lr=1e-4 compound. EMA decay set at 0.99 in #1607 for old compound; hasn't been re-tuned for new architecture+loss.
+
+---
+
 ## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`
