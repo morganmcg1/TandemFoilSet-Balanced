@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 07:00 — willow-pai2g-48h-r1, round 2 continued. **NEW BEST: test=80.62 (PR #1980 grad-accum=2)**. Cumulative gain from PR #1391: 121.28 → 80.62 = −33.5%.
+- 2026-05-13 07:15 — willow-pai2g-48h-r1, round 2 continued. **NEW BEST: test=80.62 (PR #1980 grad-accum=2)**. Cumulative gain from PR #1391: 121.28 → 80.62 = −33.5%. All 8 students assigned (#1945 #1887 #1967 #1969 #1798 #2009 #2010 #2030).
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #1980 merged — gradient accumulation accum=2)
@@ -39,7 +39,8 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 | tanjiro | #1798 | grad-norm-clip | **wip** | max_norm=1.0. In-flight (65 GB GPU). |
 | thorfinn | #1395 | lion-optimizer | **MERGED** ✓ | test 83.77 (−10.2% vs Fourier baseline). |
 | thorfinn | #1876 | n-head-8 | **CLOSED** ✗ | +25.4%. head_dim<32 + per-epoch cost. |
-| thorfinn | #1971 | lion-beta2-0999 | **wip** | beta2=0.999. In-flight (94 GB GPU). |
+| thorfinn | #1971 | lion-beta2-0999 | **CLOSED** ✗ | +5.99%. Horizon (~1000 steps) exceeded training budget. |
+| thorfinn | #2030 | drop-path-stochastic-depth | **wip** (new) | DropPath rate=0.1 linear schedule, both residuals. Orthogonal regularizer. |
 
 ## Key research findings so far
 1. **Throughput matters at 30-min budget**: bf16+batch-8 → 17 epochs → round-1 win.
@@ -57,6 +58,7 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 13. **Batch-size lever CLOSED (direct)**: bs=8 = 2.1× fewer steps. Starvation > gradient quality.
 14. **Gradient accumulation (accum=2) WINS**: −3.77%, 43 GB unchanged. Mechanism: tighter micro-batch padding reduces sign-vote noise for Lion. **New best: test=80.62**.
 15. **LR floor (eta_min=lr/10) CLOSED**: Raises LR at epoch 14 by 75% — overshoots refinement window under truncated cosine.
+16. **Lion beta2 horizon lever CLOSED**: beta2=0.999 horizon (~1000 steps) exceeds our 1170-1316 step training budget. Buffer never equilibrates → sign-vote signal degradation across all splits. beta2=0.99 is well-matched to truncated training.
 
 ## Active hypotheses in-flight
 | PR | Student | Hypothesis | Status | Expected gain |
@@ -69,6 +71,7 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 | #1971 | thorfinn | lion_beta2=0.999 | Training (94 GB) | −2% to −5% |
 | #2009 | askeladd | Grad-accum=4 (eff_bs=16) | Starting | win or informative loss |
 | #2010 | edward | SiLU activation (GELU→SiLU) | Starting | −0.5% to −2.5% |
+| #2030 | thorfinn | DropPath rate=0.1 linear schedule | Starting | −0.5% to −2.5% |
 
 ## Key open questions
 1. **Does n_hidden=256 compound with grad-accum?** Width was the dominant lever; Lion's memory savings should enable 256.
@@ -81,3 +84,4 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 - Fourier L=16 result (frieren #1887)
 - SiLU result (edward #2010) — fast, orthogonal
 - Grad-accum=4 saturation test (askeladd #2009)
+- DropPath stochastic depth (thorfinn #2030) — pure structural regularizer, orthogonal

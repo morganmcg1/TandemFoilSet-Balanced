@@ -690,3 +690,32 @@ Third dead-end from per-epoch cost in round-2. Pattern confirmed: any change tha
 - Branch: willowpai2g48h1-edward/swiglu-activation
 - Hypothesis: Replace GELU with SiLU in all MLP blocks (model_config: act="silu"). SiLU is already in ACTIVATION dict. Single parameter change, zero memory/compute overhead. SiLU consistently matches or beats GELU on modern Transformer benchmarks. Testing on grad-accum=2 stack (--accumulation_steps 2).
 - Target: test_avg/mae_surf_p < 80.62 (new baseline)
+
+---
+
+## 2026-05-13 07:15 — PR #1971: Lion beta2=0.999 — CLOSED (regressed)
+- Branch: willowpai2g48h1-thorfinn/lion-beta2-0999
+- Hypothesis: Increase Lion beta2 from 0.99 → 0.999. Longer sign-momentum horizon (~1000 steps vs ~100 at beta2=0.99) for more stable sign votes under bs=4 padding noise.
+- W&B run: see PR #1971 comments
+- Config: Lion lr=1.5e-4, **lion_beta2=0.999**, Fourier L=8, n_hidden=192, bs=4, bf16
+
+| Metric | beta2=0.999 | Lion baseline (83.77) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **88.79** | **83.77** | **+5.99%** |
+
+**Analysis (from student diagnosis, adopted)**: The 0.999 horizon (~1000 steps to forget a gradient) **exceeds the total training step budget** of 1170-1316 steps at bs=4. The momentum buffer never equilibrates — it remains in an "averaging-in" phase for the entire run. Sign votes are dominated by the initial random-gradient soup rather than the optimization trajectory. At beta2=0.99 (~100-step horizon), the buffer equilibrates after ~3 epochs, then tracks the true gradient direction productively for the remaining 15 epochs.
+
+Per-split signs are uniformly bad (no compensating wins on any split), consistent with a system-wide signal degradation rather than a regularization tradeoff.
+
+**Lion beta2 horizon lever: CLOSED.** beta2=0.99 (~100 steps) is well-matched to our truncated step budget. beta2=0.999 would only be viable with substantially longer training. beta2=0.95 (already ruled out in original Lion paper for general use) would shorten the horizon further but is unlikely to improve over 0.99 given the variable-mesh batch noise.
+
+**Action**: Closed. Assigned thorfinn drop-path-stochastic-depth (#2030).
+
+---
+
+## 2026-05-13 07:15 — PR #2030 (NEW): DropPath stochastic depth (rate=0.1)
+- Branch: willowpai2g48h1-thorfinn/drop-path-stochastic-depth
+- Hypothesis: Add DropPath (stochastic depth) at the residual branches of each TransolverBlock with linear schedule 0→0.1 across 5 layers. Stochastically drops the entire attention or MLP residual branch during training; identity at inference. Acts as implicit ensembling over depth subnets without touching optimizer state, loss, or representation — pure structural regularizer.
+- Mechanism: Orthogonal to every previous lever (Lion, bf16, Fourier, grad-accum, n_hidden, schedule). Per-split divergence pattern (cruise=61.57 vs rc=93.60, 1.52× gap) suggests OOD regularization headroom. Zero memory/compute overhead — just a per-sample Bernoulli mask during training.
+- References: Huang 2016 (stochastic depth), Touvron 2021 (CaiT linear schedule), Liu 2022 (ConvNeXt).
+- Target: test_avg/mae_surf_p < 80.62 (new baseline from #1980)
