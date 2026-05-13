@@ -467,6 +467,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
 
 
 cfg = sp.parse(Config)
@@ -591,6 +592,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_max = 0.0
+    epoch_clip_fraction_sum = 0.0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -630,9 +634,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm_val = None
+        clip_fired = 0.0
+        if cfg.max_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_norm)
+            grad_norm_val = grad_norm.item()
+            clip_fired = 1.0 if grad_norm_val > cfg.max_norm else 0.0
+            epoch_grad_norm_sum += grad_norm_val
+            epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm_val)
+            epoch_clip_fraction_sum += clip_fired
         optimizer.step()
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
             "train/re_weight_min": re_weight.min().item(),
@@ -641,7 +654,11 @@ for epoch in range(MAX_EPOCHS):
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
             "global_step": global_step,
-        })
+        }
+        if grad_norm_val is not None:
+            log_payload["train/grad_norm"] = grad_norm_val
+            log_payload["train/clip_fraction"] = clip_fired
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -679,6 +696,10 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.max_norm > 0 and n_batches > 0:
+        log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
+        log_metrics["train/grad_norm_max"] = epoch_grad_norm_max
+        log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / n_batches
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
