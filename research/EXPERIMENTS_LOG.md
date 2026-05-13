@@ -2279,4 +2279,213 @@ Mixed split picture: in_dist and camber_rc mild regression; camber_cruise and re
 - Run time: same as baseline.
 - Risk: if 1e-4 is already the OPT, 3× too tight may hurt all splits ~uniformly.
 
+## 2026-05-13 18:25 — PR #2267 (CLOSE): nezuko slice_num=48 — slice axis fully bracketed, capacity floor confirmed
+
+- Branch: `willowpai2g48h5-nezuko/slice-num-48-capacity-down`
+- Hypothesis: Test slice_num 64 → 48 capacity-down on PhysicsAttention, untested at the current 13-compound stack. Predicted compute lever ~25-30% attention compute reduction → ~42 epochs/budget vs 33.
+- W&B run: `jiz7ybwl`
+
+**Results:**
+
+| Metric | slice_num=48 | #1982 OLD baseline | #2142 NEW baseline | Δ vs OLD | Δ vs NEW |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **60.5897** | 52.6406 | 50.3812 | +7.95 (**+15.10%**) ✗ | +10.21 (**+20.27%**) ✗ |
+| test_avg/mae_surf_p | **52.6121** | 44.9791 | 43.7187 | +7.63 (**+16.97%**) ✗ | +8.89 (**+20.34%**) ✗ |
+
+All 4 splits regress on both val and test — uniform capacity loss, not split-specific.
+
+**Per-split val (EMA, epoch 25 best checkpoint):**
+
+| Split | val |
+|---|---:|
+| val_single_in_dist | 68.85 |
+| val_geom_camber_rc | 72.13 |
+| val_geom_camber_cruise | 41.56 |
+| val_re_rand | 59.82 |
+| **val_avg** | **60.59** |
+
+**Per-split test (EMA, best-val checkpoint):**
+
+| Split | test |
+|---|---:|
+| test_single_in_dist | 59.61 |
+| test_geom_camber_rc | 64.75 |
+| test_geom_camber_cruise | 35.32 |
+| test_re_rand | 50.77 |
+| **test_avg** | **52.61** |
+
+**Diagnostics:**
+
+| Diagnostic | Value | Note |
+|---|---:|---|
+| epoch_time_s | 52.96 | **Same as baseline** — predicted ~42s wrong |
+| Best epoch | 25/50 | Worse, not better, throughput |
+| grad_clip/clip_rate | 0.9969 | Slightly higher than baseline 0.989 |
+| grad_clip/norm_mean | 20.82 | vs threshold 2.5 — strongly clipped |
+| Model params | 0.93M | Same as baseline (slice_num is partitioning, not param count) |
+
+**Mechanism diagnosis (student's analysis sharp):**
+
+1. **Compute leg disproved.** Predicted attention compute reduction did NOT materialize. At n_hidden=192/n_layers=3, the wall-time bottleneck is NOT slice_num attention compute — likely dominated by FFN path (mlp_ratio=2 × 192 = 384-dim) or data loading. slice_num is too small a lever to move epoch time at this model size.
+
+2. **Capacity leg materialized.** Without the compute benefit to offset, slice_num=48 just lost representational fidelity. 48-slice partition too coarse for 24-dim input × tandem-foil geometric diversity. Val curve still descending at epoch 25 (slope ~−2/ep between final epochs) → under-converged AND under-capacity. The "epoch-saturated, not capacity-saturated" reframing from PR #1953 does NOT generalize to this axis.
+
+3. **Clip rate climbed 98.9% → 99.7%** — consistent with capacity-down increasing optimization difficulty. But 0.8pp shift can't explain +17% regression. Pure capacity loss.
+
+**Slice axis now fully bracketed:**
+
+| slice_num | Stack | val Δ | Verdict |
+|---|---|---:|---|
+| 48 (this PR) | 14-comp + huber_β=0.25 | +15.10% | **FAIL — capacity floor** |
+| **64 (current)** | 14-comp | **0% (OPT)** | **OPTIMUM** |
+| 96 (#1550) | n_layers=5 | +10.4% | FAIL — ceiling, different stack |
+
+**Why close (not request changes):** No remaining slice_num points worth testing. Going to 32 would deepen the regression (no compute benefit + worse capacity). Different axis needed.
+
+**Third axis to be fully bracketed** (after width 192=OPT bracketed at top, schedule T_max=50=OPT bracketed both ends). Slice axis joins closed-both-sides ledger.
+
+→ Closed 2026-05-13 18:25 UTC (comment 4441691912).
+
+## 2026-05-13 18:25 — PR #2231 (CLOSE): askeladd lr=3e-4 — LR axis fully bracketed, mechanism corrected to delayed-convergence amplification
+
+- Branch: `willowpai2g48h5-askeladd/lr-3e-4-lower-amplitude`
+- Hypothesis: Test lr 5e-4 → 3e-4 lower-amplitude as the symmetric counter-test to #2159 (lr=7.5e-4 failed). Predicted: lower LR → exit clip saturation (clip rate 98.93% → 92-95%, norm_mean stable).
+- W&B run: `oix3lit8`
+
+**Results — HYPOTHESIS FALSIFIED IN SIGN:**
+
+| Metric | lr=3e-4 | #1982 OLD baseline | #2142 NEW baseline | Δ vs OLD | Δ vs NEW |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **52.7711** | 52.6406 | 50.3812 | +0.13 (+0.25% wash) | +2.39 (**+4.74%** fail) ✗ |
+| test_avg/mae_surf_p | **45.9951** | 44.9791 | 43.7187 | +1.02 (**+2.26%** soft regr) | +2.28 (**+5.20%** fail) ✗ |
+
+**Per-split test (EMA / primary; live in parens):**
+
+| Split | EMA | live |
+|---|---:|---:|
+| test_single_in_dist | 53.77 | 62.95 |
+| test_geom_camber_rc | 60.45 | 64.07 |
+| test_geom_camber_cruise | 27.87 | 30.15 |
+| test_re_rand | 41.89 | 45.50 |
+
+EMA−live test gap: −4.67 (EMA strictly better on all 4 splits)
+
+**Clip diagnostics — OPPOSITE of prediction:**
+
+| Diagnostic | Predicted (lr=3e-4) | Baseline (#1982) | Actual | Direction |
+|---|---|---|---|---|
+| clip_rate | ~0.92-0.95 (drop) | 0.9893 | **0.9938** | **OPPOSITE — increased** |
+| norm_mean | ~17-18 (stable) | 17.85 | **23.79** | **HIGHER** |
+| Mean downscaling | ~4-5× | 7.14× | **9.52×** | **HIGHER** |
+| norm_max | — | — | 220.79 | — |
+| norm_p50/p90/p99 | — | — | 19.03 / 45.59 / 95.35 | — |
+
+EMA-live gap = −4.77 (large gap, consistent with high-update-noise from heavy clipping)
+Best epoch = 33 = final epoch (no late-phase low-LR refinement consumed; same throughput as baseline)
+
+**Student's mechanism correction (KEY FINDING):**
+
+> The hypothesis assumed raw gradient norms are roughly LR-independent at fixed iteration. They aren't: at lower LR, parameters move less per step, so the network stays farther from a local minimum longer, and gradient *magnitudes* stay larger. Net effect on clipping is the opposite of intended — lower LR makes the saturation regime WORSE, not better.
+
+This is a fundamental correction to my "amplitude axis" mental model. I had been treating LR magnitude as something that directly modulates gradient amplitude. In reality, LR modulates *trajectory speed through gradient-magnitude space*. Lower LR slows traversal of the high-gradient early-training regime, INCREASING the proportion of clipped steps.
+
+**LR axis now fully bracketed under 14-compound stack:**
+
+| LR | Stack | clip rate | val Δ | Verdict |
+|---|---|---:|---:|---|
+| 3e-4 (this PR) | 14-comp + huber_β=0.25 | 99.38% | +0.25% / +4.74%(new) | **FAIL — slow-descent amplification** |
+| **5e-4 (current)** | 14-comp | **98.93%** | **0% (OPT)** | **OPTIMUM** |
+| 7.5e-4 (#2159) | 13-comp | 99.30% | +7.77% | FAIL — amplitude over-saturation |
+
+Symmetric failure mode: BOTH directions increase clip rate (3e-4: +0.45pp / 7.5e-4: +0.37pp). At LR=5e-4, trajectory speed matched to loss-landscape curvature → minimum time in high-gradient regime.
+
+**Pattern v3 refinement (from this mechanism correction):**
+
+The "clip-saturation blocks amplitude axes" pattern v1 was INCOMPLETE. v2 added "direction-variance axes." v3 unifies these:
+> **Any axis perturbation that increases time-in-high-gradient-regime will increase clip rate and fail.**
+> - Direct amplitude scaling (n_hidden, mlp_ratio): more params → more time before convergence
+> - Schedule shifts (T_max=80 extends; T_max=33 truncates): both reshape descent rate
+> - LR magnitude in EITHER direction: too high → unstable, too low → slow descent
+> - Optimizer variance (β₂=0.95): noisier directions → slower per-direction averaging
+> - Capacity-down (slice_num=48): under-fitting keeps gradient magnitudes high
+
+This is broader than v2's "amplitude OR direction-variance" — it's about **time-in-high-gradient-regime**.
+
+**Why close (not request changes):** LR axis genuinely closed. No remaining points in [3e-4, 7.5e-4] warrant testing under current clip threshold. Information is in grad-clip threshold axis now.
+
+**Fourth axis to be fully bracketed** (after width, schedule, slice). LR axis joins closed-both-sides ledger.
+
+→ Closed 2026-05-13 18:25 UTC (comment 4441696555).
+
+## 2026-05-13 18:25 — PR #2328: askeladd assigned grad-clip max_norm 2.5 → 3.0 (saturation-exit test, student's own #2231 follow-up suggestion)
+
+- Branch: `willowpai2g48h5-askeladd/grad-clip-3p0-saturation-exit`
+- Hypothesis: Test grad-clip max_norm 2.5 → 3.0 (+20% threshold raise) at the 14-compound baseline. **Direct test of whether the clip-saturation regime can be exited by relaxing the threshold itself.** Student's own follow-up suggestion from #2231 closure: "The right next axis to test is grad-clip floor at 3.0-3.5 — combined with a small LR sweep around 5e-4."
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` with `max_norm=2.5 → 3.0` in train.py.
+- Targets: val < 50.3812, test < 43.7187 (new 14-compound baseline).
+
+**Why this is the highest-leverage experiment in the fleet:**
+
+Six distinct axes have now failed under clip-saturation:
+- #2066 n_hidden=224 (+3.22%)
+- #2000 T_max=80 (+4.54%)
+- #2159 lr=7.5e-4 (+7.77%)
+- #2053 mlp_ratio=3 (+6.66%)
+- #2186 β₂=0.95 (+4.10%)
+- #2231 lr=3e-4 (+4.74% vs new)
+
+All increased clip rate above 99% and lost across all 4 splits. Six different axes producing the same failure mode strongly implicates the clip threshold itself as the binding constraint. Raising threshold from 2.5 → 3.0 is the **most direct test** of this hypothesis.
+
+**Mechanism prediction:**
+- Clip rate drops from 98.93% → 92-95% (based on per-step norm distribution from #1982 logs: p50≈19, p90≈45, p99≈95).
+- Downscaling factor for typical step: 7.14× → 5.95× — gentler renormalization, more amplitude information preserved.
+- At ~95% clipped + 5% un-clipped, optimizer gets occasional amplitude information that AdamW v_t can use → exits direction-only SGD regime.
+
+**Three outcomes:**
+- (A) val < 50.38 → MERGE (15th compound). **Critical: would unlock retesting of ALL 6 previously-saturated axes at the new threshold.** Potentially opens a huge follow-up program.
+- (B) val ∈ [50.5, 51.5] → WASH. Mechanism near-flat at threshold 3.0. Push to 3.5 next.
+- (C) val > 52 → FAIL. 2.5 is fundamental. Pivot to upstream mechanisms (gradient noise, optimizer family change, normalization swap).
+
+**Why this assignment for askeladd:** Their #2231 mechanism correction ("raw gradient magnitudes are not LR-independent — lower LR ⇒ slower descent ⇒ more clipping") was the sharpest analysis in this round of experiments. They suggested grad-clip raise as the natural follow-up. We're putting the test in their hands.
+
+**Predictions:**
+- Clip rate: 0.92-0.95 (drop from 0.989)
+- norm_mean: drops slightly (more typical-amplitude steps preserved)
+- EMA-live gap: SHRINKS (live model less noisy → less work for EMA)
+- Throughput: unchanged
+- Risk: 3.0 may be on the wrong side of [2.5 OPT, 5.0 worse] interval from old stack scan — but stack composition has changed significantly with Huber β=0.25, EMA, etc.
+
+## 2026-05-13 18:25 — PR #2329: nezuko assigned AdamW eps 1e-8 → 1e-6 (denominator-stability test, untested optimizer-internal axis)
+
+- Branch: `willowpai2g48h5-nezuko/adamw-eps-1e-6`
+- Hypothesis: Test AdamW eps 1e-8 → 1e-6 (100× floor raise) at the 14-compound baseline. Untested at any stack on this project. Tests a different mechanism than any in-flight experiment: numerical denominator stability in the adaptive-LR computation.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` with `eps=1e-6` added to AdamW construction in train.py.
+- Targets: val < 50.3812, test < 43.7187 (new 14-compound baseline).
+
+**Why this assignment:**
+
+1. **Untested optimizer-internal axis.** AdamW has TWO internal axes: betas and eps. β₂ has been tested (#2186 — blocked by saturation). eps has NEVER been tested.
+
+2. **AdamW update rule:** `θ_t ← θ_{t-1} − lr · m_t / (√v_t + eps)`. The eps term acts as a floor on the denominator. Default 1e-8 is very small; 1e-6 acts as a floor whenever `v_t < 1e-12` (sqrt < 1e-6).
+
+3. **Why this could bypass clip-saturation.** Clipping operates at gradient site. AdamW computes m_t, v_t from CLIPPED gradient. At 99% clip rate, gradient direction preserved but amplitude fixed at 2.5/||g||. Increasing eps damps adaptive scaling, particularly for rarely-updated parameters. Mechanically DOWNSTREAM of clipping and INSIDE optimizer denominator — orthogonal to every previously-tested mechanism.
+
+4. **Sample-scarce regime intuition:** 1500 samples × 0.93M params = many params with low total gradient signal. Their v_t will be small (~1e-8 to 1e-10). Larger eps prevents noisy oversized updates on these params.
+
+5. **One-line change**, clean attribution.
+
+**Three outcomes:**
+- (A) val < 50.38 → MERGE (15th compound). eps undertuned at 1e-8.
+- (B) wash → close axis. eps mechanism real but small magnitude.
+- (C) val > 52 → FAIL. eps=1e-8 confirmed OPT. Next: try eps=1e-9 or pivot to Lion/Adafactor.
+
+**Mechanism predictions:**
+- Clip rate: ~unchanged (eps is post-clip).
+- norm_mean: unchanged.
+- Training stability: more stable in first 1-2 epochs.
+- Best epoch: similar to baseline.
+
+**Why this assignment for nezuko:** Their #2267 slice_num=48 analysis identified that compute leg didn't materialize at this model size — sharp problem framing that focuses our search toward smaller axes. AdamW eps is the smallest possible code change (single digit in single number) and tests genuinely orthogonal mechanism.
+
+
 
