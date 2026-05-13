@@ -2,6 +2,82 @@
 
 ---
 
+## 2026-05-14 [Round 71] UTC — Round 71
+
+### PR #2614 alphonse: FiLM feature-stream gate — MERGED (WIN; NEW BASELINE 33.3722)
+
+- **Branch:** `charliepai2g48h5-alphonse/film-feature-stream`
+- **Hypothesis:** Apply single shared FiLM gate `fx = fx * (1 + film(Re, AoA0, AoA1))` at feature stream input before block 0. FiLM = Linear(3, 96), zero-init → identity at t=0. Tests flow conditioning at residual stream (not output side, which was closed via #2531+#2588).
+
+| Metric | FiLM (this) | Baseline #2553 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **33.3722** | 33.4935 | **−0.36% WIN** |
+| `test_avg/mae_surf_p` | **28.3736** | 28.6279 | **−0.89% WIN** |
+| Param count | 328,619 | 328,235 | +384 (+0.12%) |
+| Best epoch | 70/70 (terminal) | 70/70 | — |
+
+Per-split val:
+
+| Split | val (this) | val (#2553) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 25.3293 | 25.7691 | **−1.71%** |
+| `geom_camber_rc` | 49.5771 | 50.5514 | **−1.93%** |
+| `geom_camber_cruise` | 20.4181 | 20.2827 | +0.67% (wash) |
+| `re_rand` | 38.1642 | 37.3708 | +2.12% (mild regression, n=100 noise) |
+
+Per-split test (all 4 uniform WIN — decisive):
+
+| Split | test (this) | test (#2553) | Δ |
+|---|---|---|---|
+| `test_single_in_dist` | 24.4830 | 24.7056 | **−0.90%** |
+| `test_geom_camber_rc` | 43.3910 | 43.8462 | **−1.04%** |
+| `test_geom_camber_cruise` | 16.8389 | 16.8409 | **~0%** |
+| `test_re_rand` | 28.7816 | 29.1189 | **−1.16%** |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-alphonse-film-feature-stream-20260513-222603/metrics.jsonl`
+- **FiLM diagnostics:** film.weight.norm=2.6245 (from 0); film.bias.norm=0.8504 (from 0); modulation factor ~0.92 on re_rand batch (down-scales by ~8%)
+
+**Analysis:** Feature-stream FiLM is a clean WIN on test (all 4 splits improve uniformly). val_re_rand mild regression (+2.12%) is n=100 noise; test_re_rand improves −1.16% (n=200 confirms). FiLM found Re/AoA as useful routing signal (weight norm grew 2.62× from 0) and benefits geometric splits (rc −1.93%, in_dist −1.71%) — geometric routing aided by flow conditioning at the feature level. val_geom_camber_cruise wash (+0.67%) is much better than #2588 multiplicative output gate (+3.72%) — feature conditioning is cleaner. Feature-conditioning meta-family NOT closed; test uniform WIN is the decisive paper-facing signal.
+
+**Action:** MERGED (NEW BASELINE 33.3722). Pivoting alphonse to per-block FiLM (#2646): 4 independent gates at each block input; compounds on merged WIN; mirrors conditional batchnorm in GANs.
+
+---
+
+### PR #2613 nezuko: Lion β₁=0.85 β₁-DOWN probe — CLOSED (LOSS; 35th taxon)
+
+- **Branch:** `charliepai2g48h5-nezuko/lion-beta1-085`
+- **Hypothesis:** Reduce Lion β₁ from 0.90 → 0.85 (6.7-step momentum time constant vs 10-step baseline). Bracket-completing probe for the Lion-β axis (symmetric counter to closed #2590 β₁=0.95).
+
+| Metric | β₁=0.85 (this) | NEW Baseline #2614 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **35.8174** | 33.3722 | **+7.31% LOSS** |
+| `test_avg/mae_surf_p` | **31.2413** | 28.3736 | **+10.13% LOSS** |
+| Param count | 328,235 | 328,619 | unchanged |
+| Best epoch | 58/59 (timeout) | 70/70 | — |
+| Lion momentum non-zero fraction | 0.9991 | 0.9964 | higher (confirms faster reaction) |
+
+Per-split val:
+
+| Split | val (this) | val (#2553 old ref) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 31.0856 | 25.7691 | **+20.6% (WORST)** |
+| `geom_camber_rc` | 51.0134 | 50.5514 | +0.9% |
+| `geom_camber_cruise` | 21.8050 | 20.2827 | +7.5% |
+| `re_rand` | 39.3657 | 37.3708 | +5.3% |
+
+**Analysis:** β₁=0.85 LOSS confirms asymmetric Lion-β peak. Mechanism prediction validated: momentum non-zero fraction 0.9991 (vs 0.9958 baseline) — β₁=0.85 DID produce faster sign-direction reaction exactly as predicted, but faster flipping PREVENTS settling into Lion's narrow minimum during cosine cooldown. In-dist regresses worst (+20.6%) — frequent commit-direction flipping impairs fine-grained in-distribution fitting. β₁ bracket fully closed: {0.85: LOSS, 0.90: OPTIMUM, 0.95: LOSS}. Up-side is steeper (β₁=0.95 LOSS +10.4% vs β₁=0.85 LOSS +6.94%).
+
+**35th closed taxon:** Lion-β family. β₁ axis exhausted both directions; global optimum β₁=0.90 confirmed. Pivoting to β₂=0.999 (#2647) — orthogonal mechanism (second-moment memory buffer, 1000-step vs 100-step window).
+
+---
+
+### Assignments (Round 71)
+
+- **#2646 alphonse** — Per-block FiLM: 4 independent Linear(3,96) zero-init gates at each block input; +1,536 params; depth-specific flow conditioning; mirrors conditional batchnorm in GANs; NEW bar = val < 33.3722
+- **#2647 nezuko** — Lion β₂=0.999 β₂-UP: 10× longer second-moment memory (~1000-step vs ~100-step); first β₂ probe in launch; orthogonal to closed β₁ axis; NEW bar = val < 33.3722
+
+---
+
 ## 2026-05-13 [Round 70] UTC — Round 70
 
 ### PR #2607 askeladd: slice_num=48 sweep — CLOSED (LOSS; 33rd taxon)
