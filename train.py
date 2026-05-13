@@ -430,6 +430,7 @@ class Config:
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
+    cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -506,8 +507,9 @@ if cfg.cosine_restart_T_0 > 0:
         optimizer,
         T_0=cfg.cosine_restart_T_0,
         T_mult=cfg.cosine_restart_T_mult,
+        eta_min=cfg.cosine_restart_eta_min,
     )
-    print(f"[lr] CosineAnnealingWarmRestarts T_0={cfg.cosine_restart_T_0} T_mult={cfg.cosine_restart_T_mult}")
+    print(f"[lr] CosineAnnealingWarmRestarts T_0={cfg.cosine_restart_T_0} T_mult={cfg.cosine_restart_T_mult} eta_min={cfg.cosine_restart_eta_min}")
 else:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
     print(f"[lr] CosineAnnealingLR T_max={MAX_EPOCHS}")
