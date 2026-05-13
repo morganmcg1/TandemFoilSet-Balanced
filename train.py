@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -169,23 +170,62 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class FourierCoordFeatures(nn.Module):
+    """Random Fourier Features (Tancik et al. NeurIPS 2020) on per-node coordinates.
+
+    Projects (x, z) -> [sin(2*pi*B*x), cos(2*pi*B*x)] where ``B`` is a fixed
+    random matrix with entries ~ N(0, sigma^2). The matrix is registered as a
+    buffer (frozen), since learning B causes spectral collapse (Tancik 2020).
+    """
+
+    def __init__(self, coord_dim: int = 2, num_features: int = 16, sigma: float = 1.0):
+        super().__init__()
+        B = torch.randn(coord_dim, num_features) * sigma
+        self.register_buffer("B", B)
+        self.coord_dim = coord_dim
+        self.num_features = num_features
+        self.sigma = sigma
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        # coords: [..., coord_dim] (already z-score normalized upstream)
+        x_proj = 2.0 * math.pi * (coords @ self.B)  # [..., num_features]
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)  # [..., 2*num_features]
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 fourier_features: bool = False,
+                 fourier_num_features: int = 16,
+                 fourier_sigma: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        # Random Fourier Features on coords (Tancik 2020). Coords are the first
+        # ``space_dim`` channels of x and are already z-score normalized.
+        self.fourier_features = fourier_features
+        if fourier_features:
+            self.fourier_coords = FourierCoordFeatures(
+                coord_dim=space_dim,
+                num_features=fourier_num_features,
+                sigma=fourier_sigma,
+            )
+            extra_dim = 2 * fourier_num_features
+        else:
+            self.fourier_coords = None
+            extra_dim = 0
+
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + extra_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + extra_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -199,6 +239,9 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Diagnostics filled on first forward pass.
+        self._coord_diag: dict[str, float] | None = None
+        self._rff_diag: dict[str, float] | None = None
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -212,6 +255,25 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.fourier_coords is not None:
+            coords = x[..., : self.space_dim]
+            rff = self.fourier_coords(coords)  # [B, N, 2*num_features]
+            # Capture diagnostics on the very first forward pass only.
+            if self._coord_diag is None:
+                with torch.no_grad():
+                    self._coord_diag = {
+                        "min": coords.min().item(),
+                        "max": coords.max().item(),
+                        "mean": coords.mean().item(),
+                        "std": coords.std().item(),
+                    }
+                    self._rff_diag = {
+                        "mean": rff.mean().item(),
+                        "std": rff.std().item(),
+                        "min": rff.min().item(),
+                        "max": rff.max().item(),
+                    }
+            x = torch.cat([x, rff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Optional FiLM params [B, L, 2, H] — sliced per block as (gamma, beta) each [B, 1, H].
         film_params = data.get("film", None)
@@ -469,6 +531,9 @@ class Config:
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
     use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
+    fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
+    fourier_num_features: int = 16  # Number of random frequency vectors B columns.
+    fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
 
 
 cfg = sp.parse(Config)
@@ -526,10 +591,18 @@ model = FiLMTransolver(
     mlp_ratio=model_config["mlp_ratio"],
     output_fields=model_config["output_fields"],
     output_dims=model_config["output_dims"],
+    fourier_features=cfg.fourier_features,
+    fourier_num_features=cfg.fourier_num_features,
+    fourier_sigma=cfg.fourier_sigma,
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
 print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K)")
+if cfg.fourier_features:
+    print(
+        f"Fourier features: ON (num_features={cfg.fourier_num_features}, sigma={cfg.fourier_sigma}, "
+        f"input expanded by {2*cfg.fourier_num_features} channels)"
+    )
 
 # Kendall uncertainty heads — per-channel learnable log_sigma scalars (Kendall, Gal, Cipolla 2018).
 # Channel order matches loss decomposition: [surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy].
@@ -600,6 +673,7 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+fourier_diag_logged = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -708,6 +782,25 @@ for epoch in range(MAX_EPOCHS):
                     log_payload[f"train/log_sigma_{name}"] = ls[ci].item()
                     log_payload[f"train/effective_weight_{name}"] = eff_w[ci].item()
                     log_payload[f"train/per_channel_loss_{name}"] = kendall_losses[ci].item()
+        if (
+            cfg.fourier_features
+            and not fourier_diag_logged
+            and model.transolver._coord_diag is not None
+        ):
+            summary_update = {}
+            for k, v in model.transolver._coord_diag.items():
+                summary_update[f"fourier/coord_{k}"] = v
+            for k, v in model.transolver._rff_diag.items():
+                summary_update[f"fourier/rff_{k}"] = v
+            wandb.summary.update(summary_update)
+            log_payload.update(summary_update)
+            print(
+                "Fourier diag — coord "
+                + ", ".join(f"{k}={v:.4f}" for k, v in model.transolver._coord_diag.items())
+                + " | RFF "
+                + ", ".join(f"{k}={v:.4f}" for k, v in model.transolver._rff_diag.items())
+            )
+            fourier_diag_logged = True
         wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
