@@ -25,7 +25,7 @@ Floor progression: 122.70 → 111.15 → 105.68 → 85.93 → **84.54**
 | #2019 | frieren | T_max=11 (cosine complete) vs eta_min=1e-7 | Schedule | Needs rebase onto AMP floor |
 | #2061 | tanjiro | mlp_ratio=4 | Architecture | Needs rebase onto AMP floor |
 | #1681 | nezuko | Weight decay 5e-4 | Regularization | Needs rebase onto AMP floor |
-| — | fern | IDLE — just freed (PR #1477 merged) | — | Needs new assignment |
+| #2096 | fern | n_hidden=128→160 (wider Transolver) | Architecture | Just assigned |
 
 ## Recent decisions
 
