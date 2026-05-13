@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| **#2210 sw=5 on n_head=2+Lion+MAE+lr=1e-4** | **50.91** | **43.68** | −0.39% val / −1.13% test vs n_head=2 baseline; wins 2/4 test splits (single_in_dist −2.81, re_rand −0.91) |
+| **#2218 slice_num=32 on n_head=2+Lion+MAE+lr=1e-4** | **49.86** | **42.19** | −2.06% val / −3.40% test vs #2210 baseline; wins all 4 test splits; 23 epochs in budget |
+| #2210 sw=5 on n_head=2+Lion+MAE+lr=1e-4 | 50.91 | 43.68 | −0.39% val / −1.13% test vs n_head=2 baseline; wins 2/4 test splits (single_in_dist −2.81, re_rand −0.91) |
 | #2069 n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 | −7.76% val / −7.78% test vs lr=2e-4 baseline; wins all 4 test splits; 20 epochs in budget |
 | #1932 Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 | −2.06% val / −1.88% test vs MAE baseline; wins 3/4 test splits |
 | #1825 MAE (L1) loss on Lion+EMA | 56.58 | 48.82 | −7.71% val / −7.34% test vs Lion baseline; wins all 4 test splits |
@@ -35,6 +36,21 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 13:50 — PR #2218: slice_num=32 on n_head=2 compound (alphonse)
+
+- **val_avg/mae_surf_p (best epoch 23):** 49.864 — **−2.06% vs #2210 baseline (50.91)**
+- **test_avg/mae_surf_p:** 42.187 — **−3.40% vs #2210 baseline (43.68)**
+- **Per-test-split:** single_in_dist=45.46 (−0.96 vs baseline 46.42), geom_camber_rc=56.04 (−2.56 vs baseline 58.60), geom_camber_cruise=25.68 (−1.65 vs baseline 27.33), re_rand=41.57 (−0.82 vs baseline 42.39) — **all 4 splits improve**
+- **Epochs completed:** 23 in ~30 min (vs 20 at slice_num=64 — 13% more epochs, 81.4s/ep vs 93.5s/ep); val still descending at cap — NOT converged
+- **W&B run:** `8qjqtb70`
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **slice_num=32** + surf_weight=10
+- **Note:** surf_weight=5 from #2210 is NOT included here (run used default sw=10). Interaction slice_num=32 × sw=5 is unexplored.
+- **Reproduce:** `cd "target/" && python train.py --n_head 2 --slice_num 32 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-alphonse --wandb_name "willowpai2g24h5-alphonse/slice32-n2-lion-mae" --wandb_group "willow-pai2g-24h-r5-slice-num"`
+
+**Key change:** slice_num 64 → 32. Coarser spatial abstraction at n_head=2 (per-head dim=64) concentrates slice capacity over fewer but richer tokens. Crucially, slice_num=32 is 13% faster per epoch, yielding 23 epochs in the same 30-min wall-clock (vs 20 at slice_num=64). Wins all 4 test splits including OOD camber splits (−1.40 rc, −1.06 cruise). slice_num=128 regresses +5.06/+4.60 val/test and is slower (114.8s/ep, 16 epochs). Monotonic signal: 32 < 64 < 128.
 
 ---
 
