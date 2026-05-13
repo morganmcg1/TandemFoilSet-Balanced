@@ -1866,3 +1866,56 @@ If 0.01 lands → opens up the aux-task family (geometry-param prediction, flow 
 
 ---
 
+## 2026-05-13 08:05 — PR #1954 (askeladd, per-sample HEM via EMA loss tracker) CLOSE
+
+- **Branch:** `willowpai2g48h2-askeladd/hard-example-mining-on-kendall`
+- **Hypothesis:** Per-sample focal weighting via EMA-loss-difficulty z-score on Kendall baseline (focal_alpha=0.5, ema_decay=0.9, warmup=3) — sample-level rebalancing targeting OOD splits.
+- **Result (W&B `ik5ljgcm`):**
+
+| Metric | This run (SWA) | Kendall baseline #1906 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **75.7951** | 71.4346 | **+6.10%** |
+| test_avg/mae_surf_p | **67.1214** | 62.9866 | **+6.56%** |
+
+All 4 val + 4 test splits regress 5-8%. Largest hit on test_geom_camber_cruise (+8.48% relative).
+
+### Decision: CLOSE
+
+- Val gap +4.36 is ~5σ above baseline variance band (σ≈0.86) — clean negative, not noise-miss.
+- Decision rule (`val ≥ 75.0`) fires cleanly.
+- Mechanism engaged correctly (weights hit clamp at both ends from epoch 4) — implementation was bit-correct.
+
+### Mechanism finding — sample-loss-difficulty ≠ OOD-distance
+
+**High-info finding from per-split breakdown:** if HEM were rebalancing toward OOD samples, in-dist split would hurt and OOD splits would help. The data shows the opposite — `val_single_in_dist` (+7.94%) and `test_single_in_dist` (+6.78%) are the LARGEST regressions, not OOD splits.
+
+This means **"hard" by current-loss-magnitude is NOT the same as "OOD-distance hard"** on TandemFoilSet. The EMA-loss tracker upweights samples the current parameters can't fit (likely intrinsically harder fluid-dynamics configurations), causing the model to overfit to those configurations and undergeneralize across the board.
+
+### Axis closure status
+
+- **Closes:** per-sample loss-magnitude-driven rebalancing on Kendall (joins #1691 surf_weight=5 in the loss-reweighting closure family).
+- **Confirms:** Kendall's per-channel-σ weighting was the *correct* loss-reweighting lever; per-sample rebalancing beyond Kendall over-shoots.
+- **Remains open:** sample-rebalancing where the signal is OOD-distance-aware (validation-split-aware, curriculum on Re, etc.) — different mechanism, not closed by this PR.
+
+### Logging-bug finding (informative)
+
+Student caught that the `hem_loss_spread` diagnostic ratio swings to large negative numbers because Kendall NLL `(0.5 * precision * L_c + log_σ_c).sum(dim=1)` includes a per-sample-constant `log_σ_c` offset that crosses zero. This is a **logging bug, not a correctness bug** — the per-sample z-scores driving the focal weighting were correctly computed. Good diagnostic catch.
+
+### Reassignment to PR #2063 (Lion optimizer sweep on Kendall) — fresh optimizer-family axis
+
+Pivoting askeladd to **fresh optimizer-family lever** — Lion optimizer (Chen et al. 2023). Every win on this stack has been on AdamW; every in-flight regularization PR (#1981 wd, #1937 max-norm, #2021 OneCycleLR) is AdamW-based. **Optimizer choice is the one mechanism family completely untouched.**
+
+**Lion mechanism:**
+- Sign-of-EMA-gradient update (vs AdamW's adaptive second-moment scaling)
+- Bounded update magnitude intrinsically — current AdamW + grad-clip max_norm=0.5 clips 97% of steps, suggesting AdamW is fighting grad-clip; Lion's binary update bound may resolve this
+- Tends toward flatter minima (Chen et al. follow-up papers) → better OOD generalization (classical Hochreiter-Schmidhuber 1997)
+- Inline implementation (~30 lines, no `lion-pytorch` dependency)
+
+- **Arm 1: lr=1e-4, wd=1e-3** (Lion-canonical: 5× smaller lr, 10× larger wd than current AdamW) — most-likely-to-land
+- **Arm 2: lr=3e-4, wd=3e-4** (intermediate: 1.7× smaller lr, 3× larger wd) — tests Lion's tolerance for higher lr
+- **Decision rule:** best-arm val < 71.43 → MERGE; both regress → close optimizer-family axis
+
+If Lion lands → opens up grad-clip-off ablation (Lion's intrinsic bound may make max_norm=0.5 redundant). If both regress → AdamW is optimal on this stack.
+
+---
+

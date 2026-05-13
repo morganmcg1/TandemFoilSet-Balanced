@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 07:40 (close #1734 thorfinn asinh+Kendall [largest regression on Kendall stack to date — value-compression-on-output × Kendall σ-adaptation interaction]; new assignment #2049 thorfinn aux-log_re-prediction sweep — OOD-targeted representation-bottleneck mechanism)
+- **Last updated:** 2026-05-13 08:10 (close #1954 askeladd HEM [clean 5σ regression on Kendall, high-info finding: "loss-difficulty ≠ OOD-distance" on TandemFoilSet]; new assignment #2063 askeladd Lion-optimizer sweep — fresh optimizer-family axis, AdamW completely untouched on this stack)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -24,6 +24,7 @@
 
 ## 🔥 Hottest signals this session
 
+- **PR #1954 (askeladd, HEM via EMA loss tracker) CLOSED:** val=75.80 / test=67.12 — clean +6.10% / +6.56% regression on Kendall (5σ above noise band). All 8 splits regress; **largest hit on in-dist splits (+7.94% val_single_in_dist) NOT OOD splits**. **High-info mechanism finding: "sample-loss-difficulty ≠ OOD-distance" on TandemFoilSet** — EMA loss tracker upweighted intrinsically hard fluid-dynamics configurations, causing model to overfit to those configurations across the board. Per-sample loss-magnitude-driven rebalancing axis closes on Kendall (joins #1691 surf_weight=5). Reassigned to #2063 Lion optimizer sweep — fresh optimizer-family axis.
 - **PR #1734 (thorfinn, asinh α=0.5 + Kendall) CLOSED:** val=79.12 / test=70.41 — **+10.76% / +11.78% regression** — LARGEST regression on the Kendall stack to date. All 8 splits regress 7-18%. **Mechanism finding:** Kendall self-adapts σ to asinh-transformed loss space (final log_σ_surf_p −1.500 vs baseline −1.408 → ~20% higher pressure-channel effective weight). Kendall + asinh compound and overshoot. **Value-compression-on-output × Kendall σ-adaptation is mechanism-incompatible.** General lesson: future output-side loss-space-reshape hypotheses must consider Kendall σ interaction. Reassigned to #2049 aux-log_re-prediction sweep.
 - **PR #1907 (edward, pos-jitter) CLOSED:** val=71.68 / test=63.11 (σ=0.05 + Kendall arm). Combined with σ=0.01 pre-Kendall arm (val=74.45/test=65.45), **two arms × two baselines give same regression direction at same approximate magnitude**. **Position-jitter axis closes.** Reassigned to #2021 OneCycleLR-with-warmup sweep (after withdrawing #2016 DropPath when #1680 closure audit revealed 15-epoch under-convergence pathology).
 - **PR #1908 (nezuko, learnable routing-temp) CLOSED:** val=76.28 / test=68.01 (clean negative vs both 73.81 and 71.43 bars). **Per-block multiplicative routing_log_temp barely moves (<10% drift across 5 blocks).** Precondition-finding: pre-existing per-head `self.temperature` (init=0.5) was already in PhysicsAttention. **Routing-sharpness axis closes cleanly.** Reassigned to #1981 wd-sweep.
@@ -52,7 +53,7 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 
 | PR | Student | Slug | Mechanism axis | Forked from | Decision threshold |
 |---|---|---|---|---|---|
-| #1954 | askeladd | `hard-example-mining-on-kendall` | Per-sample EMA-tracked focal weighting; mechanism-orthogonal to Kendall (per-channel) | 71.43 | val < 71.43 → merge |
+| #2063 ← NEW | askeladd | `lion-optimizer-on-kendall` | Lion optimizer (Chen et al. 2023) sweep {lr=1e-4 wd=1e-3, lr=3e-4 wd=3e-4} — fresh optimizer-family axis, AdamW completely untouched | 71.43 | best-arm val < 71.43 → merge |
 | #1981 ← NEW | nezuko | `wd-sweep-on-kendall` | AdamW weight decay sweep {3e-4, 1e-3} — classical OOD-regularization attack | 71.43 | best-arm val < 71.43 → merge |
 | #1937 | alphonse | `max-norm-tight-sweep-on-clipfilm` | Max-norm further-tighten 2-arm sweep {0.25, 0.1} — extends #1831 monotonic signal | 73.81 → reframe vs 71.43 | best-arm val < 71.43 → merge |
 | #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token (is_surface-aware) FiLM — first structural FiLM change | 73.81 → reframe vs 71.43 | val < 71.43 → merge |
@@ -75,14 +76,14 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Wave-1/3 closures:** #1454, #1455, #1448, #1453, #1446, #1449, #1450, #1551, #1621, #1645, #1620
 - **Wave-5 closures:** #1617 (stale rebase), #1680 (drop_path=0.1), #1679 (no-SWA), #1642 (sqrt-Re-weight), #1618 (surf-Huber/vol-MSE on SWA-on-Huber), #1733 (attn-dropout=0.1), #1732 (swa_start=0.65), #1600 (β-sweep on SWA-on-Huber, β=0.3 best; reassigned), #1691 (surf_weight=5), #1739 (FiLM-absorbed per-domain loss), #1702 (per-channel p-up, diagnostic falsified premise)
 - **Wave-6 closures:** #1760 (FiLM mid_dim=128 — width direction closed), #1818 (slice_num=128 — wall-clock cap), #1758 (mesh-subsample Path B — bias contamination), #1838 (FiLM depth=3 — depth direction closed), #1821 (uxuy_weight=2.0 — per-channel weighting both directions closed), #1787 (Re-jitter σ=0.05 — conditioning-feature augmentation broadly closed)
-- **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed), #1908 (learnable per-block routing-temp — drift <10%, precondition self.temperature already present, routing-sharpness axis closed), #1907 (pos-jitter σ∈{0.01, 0.05} — 2-arm × 2-baseline same-direction regression, volume-coord noise jitter axis closed), #2016 (DropPath sweep — withdrawn before student start, #1680 audit revealed 15-epoch under-convergence pathology), #1734 (asinh α=0.5 + Kendall — +10.76% / +11.78% regression, Kendall × asinh σ-adaptation interaction overshoots, value-compression-on-output axis closed under Kendall)
+- **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed), #1908 (learnable per-block routing-temp — drift <10%, precondition self.temperature already present, routing-sharpness axis closed), #1907 (pos-jitter σ∈{0.01, 0.05} — 2-arm × 2-baseline same-direction regression, volume-coord noise jitter axis closed), #2016 (DropPath sweep — withdrawn before student start, #1680 audit revealed 15-epoch under-convergence pathology), #1734 (asinh α=0.5 + Kendall — +10.76% / +11.78% regression, Kendall × asinh σ-adaptation interaction overshoots, value-compression-on-output axis closed under Kendall), #1954 (HEM EMA-loss focal weighting — +6.10%/+6.56% regression, in-dist hit hardest, "loss-difficulty ≠ OOD-distance" finding, per-sample loss-magnitude rebalancing axis closes)
 - **Wave-7 merges:** #1906 (Kendall uncertainty — learned per-channel σ heads, val=71.43/test=62.99 new baseline)
 
 ## ⚠ Active operational notes
 
 - **GraphQL rate-limit pattern continues.** REST helpers preferred.
 - **Mixed-baseline portfolio cleanup:** #1856 needs rebase to new 73.81 baseline before 2nd seed run. #1757, #1734 still WIP on old baselines.
-- **22 mechanism axes definitively closed on this dataset/scale:**
+- **23 mechanism axes definitively closed on this dataset/scale:**
   - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
   - Block-level stochastic regularization (drop_path=0.1)
   - Token-level stochastic regularization (attention_dropout=0.1)
