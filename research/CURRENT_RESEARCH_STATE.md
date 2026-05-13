@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 17:00
+- 2026-05-13 17:10
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -88,8 +88,8 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 | #2403 | tanjiro | GeGLU mlp_ratio sweep — sent back, testing swiglu_hidden=256 (mlp_ratio≈1.6) | WIP (sent back) | Beat 43.73 |
 | #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP | Beat 43.73 |
 | #2461 | nezuko | n_layers=4 + β1=0.85 compound: depth+optimizer co-change | WIP — new | Beat 43.73 |
-| #2432 | thorfinn | slice_num=48 (15% per-epoch cost recovery, +2 cosine-tail epochs) | WIP | Beat 43.73 |
-| #1979 | alphonse | n_layers=6 depth sweep (stale pre-β1 baseline; directionally informative) | WIP (stale) | Beat 43.73 |
+| #2432 | thorfinn | slice_num=48 + β1=0.85 (sent back: val=45.00 on old stack; re-run w/ β1=0.85) | WIP (sent back) | Beat 43.73 |
+| #2467 | alphonse | Lion lr sweep on β1=0.85 stack: lr∈{2.5e-4, 3e-4} | WIP — new | Beat 43.73 |
 | #2459 | askeladd | β1 lower-bound: β1∈{0.875, 0.80} to narrow optimum below 0.85 | WIP — new | Beat 43.73 |
 
 ## Recently closed/merged
@@ -97,6 +97,8 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 | PR | Student | Outcome | Note |
 |---|---|---|---|
 | #2405 | askeladd | **MERGED** | Lion β1=0.85: val=43.73 (−4.8% vs 45.92), test=41.86 (−5.6%). Arm A (β1=0.85) clear winner; Arm B (β1=0.95) catastrophically regresses +19.7%. **New baseline 43.73/41.86.** Direction-smoothness axis: lower β1 → more reactive sign update → faster val convergence with B=4 noisy gradients. |
+| #2432 | thorfinn | SENT BACK | slice_num=48+β1=0.90: val=45.00 (−2.0% vs old 45.92; +2.9% vs new 43.73). Pre-β1=0.85 stack. Test −3.8% real. Re-running with β1=0.85: projected val≈42.84. |
+| #1979 | alphonse | CLOSED | n_layers=6+old stack: stalled ~2h, no terminal result. Budget-starved (152s/ep, hits 30-min cap at ~11 epochs). Direction already confirmed dead by fern #2349. Reassigned to lr sweep #2467. |
 | #2424 | nezuko | CLOSED | n_layers=4+β1=0.90: val=45.88 (beats old 45.92 by 0.04, within noise; +4.9% vs new 43.73). Run used pre-merge β1=0.90 stack. Test −1.8% real. Reassigned to n_layers=4+β1=0.85 (#2461). |
 | #2401 | fern | CLOSED | GeGLU gate on `PhysicsAttention.to_out` (hidden=56): val=52.98 (+15.4% worse). Bottleneck rank loss (160→56→160) dominates gate benefit. Param-parity ≠ capability-parity. Epoch time +17% (131s vs 112s) → 2 fewer epochs at budget. Reassigned to LayerScale (#2460). |
 | #2315 | thorfinn | CLOSED | RMSNorm: pod stalled. 0 commits, 0 comments, GPU dropped to 0% over 3.5h. Hypothesis untested. Replaced with simpler single-line slice_num=48 assignment (#2432). |
@@ -149,6 +151,8 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 - **Lion β2=0.999 on GeGLU stack (#1844 CLOSED)**: +6.3% val. ~10× longer EMA timescale costs too much warmup within 30-min/16-epoch cap. β2=0.99 confirmed optimal.
 - **Lion β1=0.95 (#2405 Arm B)**: +19.7% val vs baseline. Inertial β1 (sign dominated by stale EMA) badly underperforms at B=4. β1=0.85 is the winner; explore β1∈{0.80, 0.875} to find lower bound of optimum.
 - **GeGLU bottleneck on `to_out` (#2401 CLOSED)**: +15.4% worse. Rank cut (160→56→160) dominates gate benefit. Epoch time +17%. Gating helps in 2-layer FFN context but not 1-layer attention projection at parity params.
+- **n_layers=6 depth sweep (#1979, #2349 both CLOSED)**: Budget-starved. +18% per-epoch cost → only 11-12 epochs at 30-min cap. n_layers=4 (−18% cost, all 16 epochs) shows the depth sweet spot is ≤5, likely at 4.
+- **slice_num=48 on old β1=0.90 stack (#2432 SENT BACK)**: Genuine direction (−2.0% val, −3.8% test vs old baseline) but pre-β1=0.85 stack. Re-running with β1=0.85 → projected val≈42.84.
 - **SWA mid-training (#1463)**: regresses in 13-epoch monotonic regime. Partial camber_rc signal — revisit at 24+ epochs.
 - **LR/clip ceiling at AdamW stage (#1683)**: both 2× arms regress on test. Obsoleted by Lion switch.
 - **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.
