@@ -103,7 +103,7 @@ class SwiGLUMLP(nn.Module):
         self.w_down = nn.Linear(inner_dim, in_dim, bias=False)
 
     def forward(self, x):
-        return self.w_down(F.relu(self.w_gate(x)) * self.w_up(x))   # H39: ReGLU gate (ReLU = max(0,x))
+        return self.w_down(self.w_gate(x).abs() * self.w_up(x))   # H47: AbsGLU gate (|x| = bidirectional magnitude)
 
 
 class FourierCoordEnc(nn.Module):
@@ -481,14 +481,13 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
-# H39: ReGLU gate sanity check (ReLU = max(0,x))
-_h39_test_x = torch.tensor([-1.0, 0.0, 1.0])
-print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 0.0000)")
-print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
-print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
-print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
-print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")  # should print 288
-print(f"[H46] n_params: {n_params}")  # should print ~892,631
+# H47: AbsGLU gate sanity check (|x| = bidirectional magnitude, slope ±1)
+_h47_test_x = torch.tensor([-1.0, 0.0, 1.0])
+print(f"[H47] AbsGLU gate at x=-1: {_h47_test_x[0].abs().item():.4f} (expected 1.0000)")
+print(f"[H47] AbsGLU gate at x= 0: {_h47_test_x[1].abs().item():.4f} (expected 0.0000)")
+print(f"[H47] AbsGLU gate at x=+1: {_h47_test_x[2].abs().item():.4f} (expected 1.0000)")
+print(f"[H47] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
+print(f"[H47] w_gate.weight.shape: {tuple(model.blocks[0].mlp.w_gate.weight.shape)} (expected (288, 128))")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
