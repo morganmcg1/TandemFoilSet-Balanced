@@ -6,6 +6,56 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 08:45 — PR #1765: Lion lr=1.5e-4 — CLOSED (+4.21% val, +1.11% test)
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/lion-lr-2e-4-rebased (multi-rebase, renamed)
+- **Hypothesis:** lr=1.5e-4 is a better midpoint than lr=2e-4 (which overshot on geom_camber_rc) on the current modernized stack.
+- **Result:** Two arms — sw=5: val=53.192 / test=45.471; sw=10: val=53.398 / test=46.652. Both vs baseline 51.040 / 44.390.
+
+| Metric | PR #1956 baseline | sw=5 + lr=1.5e-4 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 51.040 | 53.192 | +4.21% |
+| test_avg/mae_surf_p | 44.390 | 45.471 | +2.43% |
+
+- **Conclusion:** LR axis exhausted from both directions. lr=1.5e-4 (+4.21% worse) and lr=2e-4 (known worse on RMSNorm stack) both fail. lr=1e-4 is the confirmed optimum for Lion on this stack. T_max=12 shift dominates any LR midpoint benefit.
+- **Key bug fix in branch:** `lr=1e-4` hardcoded in Lion constructor (train.py:441) → `lr=cfg.lr` fix applied by student. Fix NOT yet in advisor branch — sent alert to frieren #2006 to apply before running lr=8e-5.
+- **Metric artifacts:** `models/model-charliepai2g48h3-alphonse-lion-lr-1.5e-4-tmax12-sw5-20260513-055705/metrics.jsonl`, `models/model-charliepai2g48h3-alphonse-lion-lr-1.5e-4-tmax12-sw10-20260513-065306/metrics.jsonl`
+- **Reassigned alphonse:** PR #2043 DropPath stochastic depth rate=0.1
+
+---
+
+## 2026-05-13 08:45 — PR #1766: Lion WD=1e-2 (RMSNorm+GeGLU rerun) — CLOSED (+16.6% val vs current)
+
+- **Student:** charliepai2g48h3-askeladd
+- **Branch:** charliepai2g48h3-askeladd/lion-wd-1e-2
+- **Hypothesis:** Lion paper recommends WD 10-100× higher than Adam; WD=1e-2 should compound with GeGLU+RMSNorm regularization.
+- **Result (primary arm):** val=59.517 / test=53.732. Vs current baseline 51.040 (+16.6% worse).
+- **Additional data point:** WD=1e-2 + T_max=12 + sw=10: val=54.594 (+6.96% worse). Neither arm beats current baseline.
+
+| Metric | Current baseline | WD=1e-2 arm | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 51.040 | 59.517 | +16.6% |
+| test_avg/mae_surf_p | 44.390 | 53.732 | +21.0% |
+
+- **Conclusion:** WD axis fully exhausted. WD=1e-4 optimal confirmed (WD=1e-1, 3e-2, 1e-2 all worse). RMSNorm+GeGLU already provide implicit regularization that previously WD=1e-2 was compensating for; marginal WD benefit disappears on the modernized stack.
+- **Note:** PR was opened against an older stack and required multiple rebases; final result still outdated vs compound baseline. WD hypothesis was valid but axis is saturated.
+- **Metric artifacts:** `models/model-lion-wd-1e-2-rmsnorm-geglu-20260513-051233/metrics.jsonl`
+- **Reassigned askeladd:** PR #2038 n_head=2 (head_dim 32→64 sweep)
+
+---
+
+## 2026-05-13 08:45 — PR #1948: surf_weight=3 — CLOSED (stale draft, no results)
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Branch:** charliepai2g48h3-thorfinn/surf-weight-3
+- **Hypothesis:** Is the surf_weight optimum below 5? Test sw=3 to find the gradient budget floor.
+- **Result:** None — draft PR with no training run started. Built on T_max=50 stack (stale).
+- **Conclusion:** Closed as stale. Surf_weight axis below 5 now covered by nezuko #2029 (sw=2) on the current T_max=12+sw=5 compound stack.
+- **Reassigned thorfinn:** PR #2040 gradient clipping max_norm=1.0
+
+---
+
 ## 2026-05-13 07:25 — PR #1956: T_max=12 + surf_weight=5 compound — MERGED (−3.33% val, −1.29% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-nezuko

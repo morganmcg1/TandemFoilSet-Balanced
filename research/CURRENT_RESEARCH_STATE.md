@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~06:10
+- **Date:** 2026-05-13 ~08:50
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -78,75 +78,55 @@
 3. **L1 loss in normalized space is validated**: channel-weighted loss hurts on GeGLU+Lion (+11%); GeGLU gates do implicit channel balancing — the gradient channel weights must stay equal.
 4. **surf_weight=5 mechanism confirmed**: halving surface:volume ratio reallocates L1 gradient to volume nodes → richer volumetric features → better surface via geometric context. All 4 splits improved, vol MAE improved −7% to −26%.
 5. **AdamW hyperparameter space is exhausted**: All optimizer knobs tested. Lion is the new baseline optimizer.
-6. **Lion WD=1e-2 confirmed on Lion+GELU (−10.4%)**: awaiting retest on full RMSNorm+GeGLU+Lion+surf_weight=5 stack.
-7. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc became easier; single_in_dist became the primary bottleneck. surf_weight=5 cracked single_in_dist (−20.5% val).
-8. **geom_camber_rc (72.0 val) is now the hardest split** — primary target for further improvement.
+6. **LR axis saturated at 1e-4**: lr=1.5e-4 (+4.21%), lr=2e-4 (+0.98% val) both worse. lr=8e-5 being tested (frieren #2006).
+7. **WD axis saturated at 1e-4**: WD=1e-2 confirmed +16.6% worse vs current baseline (after rebasing to T_max=12+sw=5 stack). RMSNorm+GeGLU already provides implicit regularization.
+8. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc improved −17.2%; it remains the single highest-loss split at val=64.886.
+9. **geom_camber_rc (64.886 val) is the dominant bottleneck** — primary target for further improvement.
 
-## Active experiments (Round 13 — all on T_max=12+sw=5 compound baseline, val=51.040)
+## Active experiments (Round 14 — all on T_max=12+sw=5 compound baseline, val=51.040)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR | WIP (rerun) |
-| askeladd | #1766 | Lion WD=1e-2: paper-recommended on full stack | WIP (stale) |
-| edward | #1995 | n_layers=5: shallower model → ~15 epochs in 30-min budget | WIP |
-| fern | #1996 | slice_num=48: tighter PhysicsAttention → ~14 epochs in budget | WIP |
-| nezuko | #2029 | surf_weight=2: continue gradient sweep below sw=5 | NEW |
-| thorfinn | #1948 | surf_weight=3 (on T_max=50 old stack — will compare vs 51.040 on review) | WIP |
-| frieren | #2006 | Lion lr=8e-5: bracket alphonse's 1.5e-4 from below | WIP |
-| tanjiro | #2007 | mlp_ratio=2: test if "gating wins outright" extends below 4 | WIP |
+| edward | #1995 | n_layers=5: shallower model → more epochs in 30-min budget | WIP |
+| fern | #1996 | slice_num=48: tighter PhysicsAttention partitions | WIP |
+| frieren | #2006 | Lion lr=8e-5: bracket LR from below (⚠ bug fix required) | WIP |
+| tanjiro | #2007 | mlp_ratio=2: test if gating dominates at half-width MLP | WIP |
+| nezuko | #2029 | surf_weight=2: continue gradient sweep below sw=5 | WIP |
+| askeladd | #2038 | n_head=2: trade attention parallelism for per-head capacity (head_dim 32→64) | NEW |
+| thorfinn | #2040 | grad-clip max_norm=1.0: stabilize Lion EMA (different mechanism from old AdamW test) | NEW |
+| alphonse | #2043 | DropPath stochastic depth rate=0.1: path-level regularization | NEW |
 
 **Recently merged:**
 - nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val / −1.29% test) ← **NEW BASELINE 51.040/44.390**
-- nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test)
-- thorfinn #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (−9.03% val / −9.76% test)
-- frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
-**Recently closed:**
-- frieren #1983: T_max=10 (+10.96%) — CosineAnnealingLR is cyclic; T_max < cfg.epochs always strictly worse
-- tanjiro #1984: n_hidden=160 (val −0.247% / test +1.268%) — val/test inversion = noise; +52% params disproportionate
-- edward #1925: WD=3e-2 (+0.06% on prior baseline) — WD axis saturated
-- fern #1790: Lion 2-epoch warmup — stale + conflicts with T_max=12
-- frieren #1920: eta_min=1e-5 (+12.05% vs current baseline) — mechanism redundant with T_max=12; T_max=12 cleanly decays LR to 0, which is strictly better than a 1e-5 floor
-- tanjiro #1872: mlp_ratio=8 (+5.95%) — "gating wins outright"; fc2 capacity expansion adds noise pathways that gate doesn't fully suppress at 12 epochs
-- frieren #1890: n_layers=7 (+4.6%) — depth incompatible with budget
-- edward #1889: WD=1e-1 (+2.72%) — over-regularizes
-- edward #1859: SmoothL1 β=0.1 (+7.1%) — all loss modifications exhausted
-- edward #1767: channel-weighted L1 (+11%) — GeGLU gates do implicit channel balancing
-- tanjiro #1824: SwiGLU (+1.6%) — GELU's negative gate range benefits CFD features
+**Recently closed (Round 14):**
+- alphonse #1765: Lion lr=1.5e-4 (+4.21% worse) — LR axis saturated, lr=1e-4 confirmed optimum from both sides
+- askeladd #1766: Lion WD=1e-2 rerun (+16.6% worse) — WD axis saturated; RMSNorm+GeGLU provides implicit regularization
+- thorfinn #1948: surf_weight=3 stale draft — surf_weight axis covered by nezuko #2029
 
-## Critical infra issue: train.py:440 LR hardcoding bug
+**Earlier closures:**
+- frieren #1983: T_max=10 (+10.96%) — CosineAnnealingLR cyclic; T_max < cfg.epochs always strictly worse
+- tanjiro #1984: n_hidden=160 (val/test inversion) — OOD bottleneck is geometric extrapolation, not feature capacity
+- edward #1925: WD=3e-2 — WD axis saturated
 
-Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`lr=cfg.lr`, plus `Config.lr` default updated to 1e-4). Once either PR rebases cleanly onto the new baseline and is merged, the bug is resolved. **Until then, any LR experiment with `--lr != 1e-4` is silently broken.** alphonse confirmed fix works (config shows lr=0.0002 was applied correctly in their rerun).
+## Critical infra issue: train.py:441 LR hardcoding bug
 
-## Round 11 priorities (T_max=12 + RMSNorm+GeGLU+Lion baseline, val=52.798)
+`optimizer = Lion(model.parameters(), lr=1e-4, ...)` — `--lr` CLI flag silently ignored. Fix: `lr=cfg.lr`. **NOT yet in advisor branch.** Frieren #2006 (lr=8e-5) has been alerted. Any LR experiment with `--lr != 1e-4` must apply this fix first.
 
-**Tier 1 (highest expected impact — compound the wins):**
-1. **T_max=12 + surf_weight=5 compound** (nezuko #1956): pure orthogonal stacking; predicted val ~48-50 if mechanisms compound additively. THE KEY IN-FLIGHT EXPERIMENT.
-2. **surf_weight=3 with T_max=12** (thorfinn #1948): continues surf_weight sweep (5 → 3 → ?)
+## Next queued ideas (for when Round 14 slots open up)
 
-**Tier 2 (LR/WD bracket completion):**
-3. **Lion WD=1e-2** (askeladd #1766, stale): WD axis nearly closed; this point confirms valley shape
-4. **Lion lr=1.5e-4** (alphonse #1765, rerun): higher LR on T_max=12
-5. **Lion lr=8e-5** (frieren #2006): lower LR on T_max=12 — brackets alphonse from below
-
-**Tier 3 (throughput / capacity tuning):**
-6. **n_layers=5** (edward #1995): shallower → 15 epochs in budget?
-7. **slice_num=48** (fern #1996): tighter PhysicsAttention → 14 epochs
-8. **mlp_ratio=2** (tanjiro #2007): test if gating dominates at half-width MLP
-
-**Queued ideas for next idle students:**
-- **AdamW comparison on current stack** — sanity check Lion still wins; AdamW dead-end was on the OLD (pre-RMSNorm/GeGLU/T_max=12) stack
-- **batch=8 + lr=1.4e-4 (sqrt scaling)**: previous batch=8 dead end didn't compensate LR — proper scaling may recover step-count loss
-- **Geometric data augmentation** (rotation/flip aerofoils): physically valid for symmetric properties; targets geom_camber_rc OOD
-- **PINN-style auxiliary loss** (divergence/curl penalty on volume predictions): physics-informed regularization
-- **Spectral conv layer or FNO-style global filter**: alternative to PhysicsAttention slice pooling
-- **Test-time augmentation (TTA)**: ensemble rotations at inference; should help OOD splits
+- **surf_weight=4** (bracket between 5 and 2) — only after nezuko sw=2 result
+- **Geometric data augmentation** (flip/scale) — targets geom_camber_rc OOD
+- **PINN-style auxiliary loss** (divergence/curl) — physics-informed volume regularization
+- **n_head=1** — only if askeladd n_head=2 wins
+- **FNO-style global filter** — alternative to PhysicsAttention
+- **AdamW re-test** on full current stack — was beaten on old stack by 14.3%; worth confirming persists
 
 ## Key constraints
 
-- 30 min / run cap: 12 epochs at ~138s/epoch with T_max=12 (cosine fully decays)
-- Per-epoch time eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~160s/epoch even with RMSNorm+Lion; confirmed dead in PR #1890)
+- 30 min / run cap: 12 epochs at ~138s/epoch with T_max=12 (cosine fully decays to 0)
+- Per-epoch time eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~160s/epoch)
 - EMA: cold-start drag, incompatible with short budget
-- Batch increase: always worse (step-count limited)
-- Gradient clipping: always worse (oscillations are useful)
-- Dropout: always worse (model is underfitting at 14 epochs)
+- Batch increase: step-count limited (always worse)
+- Gradient clipping (old AdamW stack): worse — re-testing on Lion stack in PR #2040 (different mechanism)
+- Dropout: always worse (model is underfitting)
