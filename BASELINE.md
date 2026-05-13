@@ -8,6 +8,59 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 11:45 — PR #2082: Random Fourier Features (σ=1.0, Tancik 2020) on Kendall baseline
+
+- **val_avg/mae_surf_p:** **70.6271** (seed 0, SWA-model eval)
+- **test_avg/mae_surf_p:** **62.0907** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #1906 (71.4346 / 62.9866): val **−1.13%**, test **−1.42%**
+- ⚠ Both arms hit the 30-min timeout at epoch 13/15 — SWA averaged over only 2 epochs (12+13); the gain is likely conservative.
+
+### Per-split SWA val (surface MAE, p)
+
+| Split | val (RFF σ=1.0) | Baseline #1906 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 78.743 | 79.177 | −0.434 |
+| **val_geom_camber_rc** | **84.063** | **88.087** | **−4.024 (−4.57%)** |
+| val_geom_camber_cruise | 50.114 | 49.189 | +0.925 |
+| val_re_rand | 69.588 | 69.286 | +0.302 |
+| **swa_val_avg** | **70.627** | **71.435** | **−0.808 (−1.13%)** |
+
+### Per-split SWA test (surface MAE, p)
+
+| Split | test (RFF σ=1.0) | Baseline #1906 | Δ |
+|---|---|---|---|
+| test_single_in_dist | 69.239 | 68.638 | +0.601 |
+| **test_geom_camber_rc** | **75.741** | **79.950** | **−4.209 (−5.26%)** |
+| test_geom_camber_cruise | 41.418 | 41.435 | −0.017 |
+| test_re_rand | 61.964 | 61.923 | +0.041 |
+| **swa_test_avg** | **62.091** | **62.987** | **−0.896 (−1.42%)** |
+
+### Mechanism
+
+Low-frequency Fourier encoding (σ=1.0 nominal ≈ σ≈5 at z-score-normalized mesh scale ≈ [−7, +7]) selectively boosts `geom_camber_rc` split — the persistent FiLM geometry bottleneck. σ=4.0 overfits and regresses everywhere. Kendall σ stays stable under +32 input channels (log_σ drift ≤ 0.02). RFF acts as a learning prior, not extra capacity.
+
+### Config
+
+- Same as PR #1906 (Kendall + FiLM + grad-clip max_norm=0.5) plus **`--fourier_features --fourier_num_features 16 --fourier_sigma 1.0`**
+- +32 input channels (16 sin + 16 cos projections from 2D coordinates)
+- +8.2K extra params in preprocess MLP (0.75M total, unchanged architecture depth)
+- Coordinate space: z-score-normalized (std≈0.82, range≈[−7,+7]) — RFF sees unnormalized-like range; σ=1.0 is effectively moderate-frequency
+- W&B runs: `2jqhk53m` (σ=1.0, **WIN**), `b424li5b` (σ=4.0, regression)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 1.0 \
+  --seed 0 \
+  --agent willowpai2g48h2-alphonse \
+  --wandb_name willowpai2g48h2-alphonse/fourier-sigma-1p0-on-kendall \
+  --wandb_group fourier-coord-features-on-kendall
+```
+
+---
+
 ## 2026-05-13 — PR #1906: Kendall uncertainty-weighted multi-task loss (learned per-channel σ) on grad-clip+FiLM baseline
 
 - **val_avg/mae_surf_p:** **71.4346** (seed 0, SWA-model eval)
