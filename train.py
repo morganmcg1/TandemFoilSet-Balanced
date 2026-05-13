@@ -656,6 +656,18 @@ for epoch in range(MAX_EPOCHS):
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+            # Global mesh translation augmentation (training only).
+            # NSE is translation-invariant: shifting the entire mesh rigidly by
+            # (dx, dy) preserves all physics. Channels 2-3 (saf) and 4-11 (dsdf)
+            # are surface-relative features that are invariant to translation, so
+            # only the absolute positions in channels 0-1 need shifting.
+            TRANSLATION_RANGE = 0.05
+            if model.training:
+                shift = (torch.rand(x_norm.shape[0], 1, 2, device=x_norm.device) * 2 - 1) * TRANSLATION_RANGE
+                x_norm = x_norm.clone()
+                x_norm[:, :, :2] = x_norm[:, :, :2] + shift
+
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
@@ -834,6 +846,8 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_huber_per_ch": vol_huber_per_ch,
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
+        "coord_translation_range": 0.05,
+        "coord_translation_applied_train_only": True,
         "loss_type": "huber_relative_l2_channel_weighted",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,

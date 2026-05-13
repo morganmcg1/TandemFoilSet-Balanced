@@ -1,0 +1,44 @@
+Device: cuda [DEBUG]
+Train: 6, val_single_in_dist: 2, val_geom_camber_rc: 2, val_geom_camber_cruise: 2, val_re_rand: 2
+Model: Transolver (0.67M params, incl. ReFiLM 4624) + ReScaleHead (163 params)
+Compiling model: mode='default', dynamic=True
+Per-channel loss weights (Ux, Uy, p): [1.0, 1.0, 5.0]
+Epoch 1/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 1/3:  50%|█████     | 1/2 [00:31<00:31, 31.96s/it]                                                        /usr/local/lib/python3.10/dist-packages/torch/_inductor/compile_fx.py:322: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+Epoch   1 (42s) [10.2GB]  lr=0.001000  train[vol=0.1460 surf=0.1405 l2_frac=0.109]  grad[mean=6.451 max=11.628 clipped=1.00]  val_avg_surf_p=483.6789 *
+    HuberPerCh (unweighted)  surf[Ux=0.09777 Uy=0.01568 p=0.04610]  vol[Ux=0.07755 Uy=0.04719 p=0.04317]
+    ReScaleHead  mean=['0.999', '0.999', '0.999']  std=['0.000', '0.000', '0.000']  corr_logRe=['+0.000', '+0.000', '+0.000']
+    SliceEntropy(diag)  mean=4.158  gamma[abs_max=0.002, std=0.000]  beta[abs_max=0.003, std=0.002]
+    val_single_in_dist         loss=230.2805  surf[p=1066.1029 Ux=27.2391 Uy=3.2800]  vol[p=879.6929 Ux=23.3267 Uy=7.9272]
+    val_geom_camber_rc         loss=44.8889  surf[p=571.1554 Ux=21.9898 Uy=3.6144]  vol[p=537.4789 Ux=16.3925 Uy=7.5930]
+    val_geom_camber_cruise     loss=15.6171  surf[p=212.3559 Ux=21.1042 Uy=1.3268]  vol[p=193.6701 Ux=15.0087 Uy=3.1336]
+    val_re_rand                loss=13.1696  surf[p=85.1015 Ux=22.1566 Uy=1.1001]  vol[p=84.5810 Ux=17.5537 Uy=2.5981]
+Epoch 2/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 2/3:  50%|█████     | 1/2 [00:00<00:00,  6.90it/s]                                                        Epoch   2 (1s) [10.2GB]  lr=0.000997  train[vol=0.1398 surf=0.1348 l2_frac=0.185]  grad[mean=3.854 max=6.433 clipped=1.00]  val_avg_surf_p=462.7160 *
+    HuberPerCh (unweighted)  surf[Ux=0.09942 Uy=0.01494 p=0.04222]  vol[Ux=0.07786 Uy=0.04434 p=0.03808]
+    ReScaleHead  mean=['1.001', '1.004', '1.006']  std=['0.001', '0.002', '0.003']  corr_logRe=['+0.605', '+0.605', '+0.813']
+    val_single_in_dist         loss=227.2546  surf[p=1037.8059 Ux=27.2651 Uy=3.3712]  vol[p=846.8448 Ux=23.6282 Uy=7.9339]
+    val_geom_camber_rc         loss=43.2059  surf[p=527.1020 Ux=21.5870 Uy=3.7975]  vol[p=486.9703 Ux=16.5205 Uy=7.5977]
+    val_geom_camber_cruise     loss=15.6402  surf[p=226.7843 Ux=20.8326 Uy=1.4967]  vol[p=190.2710 Ux=15.2561 Uy=3.1343]
+    val_re_rand                loss=12.6715  surf[p=59.1717 Ux=21.6558 Uy=1.2985]  vol[p=45.5989 Ux=18.0272 Uy=2.6056]
+Epoch 3/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 3/3:  50%|█████     | 1/2 [00:00<00:00,  7.72it/s]                                                        Epoch   3 (1s) [10.2GB]  lr=0.000988  train[vol=0.1298 surf=0.1302 l2_frac=0.237]  grad[mean=10.103 max=10.196 clipped=1.00]  val_avg_surf_p=463.2182
+    HuberPerCh (unweighted)  surf[Ux=0.09896 Uy=0.01578 p=0.04084]  vol[Ux=0.07833 Uy=0.04492 p=0.03548]
+    ReScaleHead  mean=['1.004', '1.005', '1.008']  std=['0.001', '0.002', '0.003']  corr_logRe=['+0.772', '+0.772', '+0.584']
+    val_single_in_dist         loss=229.8172  surf[p=1044.1027 Ux=26.8942 Uy=3.3260]  vol[p=860.0332 Ux=23.7678 Uy=7.8774]
+    val_geom_camber_rc         loss=45.1489  surf[p=545.1878 Ux=21.9824 Uy=3.6433]  vol[p=517.2986 Ux=16.6609 Uy=7.4449]
+    val_geom_camber_cruise     loss=15.9213  surf[p=210.1567 Ux=21.0420 Uy=1.3952]  vol[p=166.6869 Ux=15.2860 Uy=3.0076]
+    val_re_rand                loss=13.3458  surf[p=53.4257 Ux=22.3843 Uy=1.1515]  vol[p=58.1687 Ux=18.0715 Uy=2.4750]
+
+Training done in 0.7 min
+
+Best val: epoch 2, val_avg/mae_surf_p = 462.7160
+
+Evaluating on held-out test splits...
+Test: test_single_in_dist: 2, test_geom_camber_rc: 2, test_geom_camber_cruise: 2, test_re_rand: 2
+
+  TEST  avg_surf_p=336.2853
+    test_single_in_dist        loss=26.8862  surf[p=258.2149 Ux=22.6239 Uy=1.5831]  vol[p=190.7840 Ux=19.4524 Uy=3.1207]
+    test_geom_camber_rc        loss=34.4613  surf[p=445.5736 Ux=21.5920 Uy=2.4692]  vol[p=410.3616 Ux=16.1966 Uy=5.5848]
+    test_geom_camber_cruise    loss=22.4149  surf[p=262.1672 Ux=26.2491 Uy=1.6631]  vol[p=225.8559 Ux=23.7545 Uy=3.8864]
+    test_re_rand               loss=27.7687  surf[p=379.1856 Ux=19.8618 Uy=3.7408]  vol[p=340.1275 Ux=14.2231 Uy=7.3993]
+
+Saved experiment summary to models/model-charliepai2g24h1-tanjiro-coord-translation-aug-debug-20260513-090801/metrics.yaml
