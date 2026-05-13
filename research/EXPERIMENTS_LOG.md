@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-13 22:45 — CYCLE 10
+
+### PR #2568: lr=2e-4 + T_max=20 STACK — MERGED ✓ NEW BEST
+- Branch: willowpai2g48h1-askeladd/lr-tmax20-postln-stack
+- Hypothesis: Stack the confirmed lr=2e-4 win (PR #2494) with the T_max=20 extension (Finding #47). Val crossover at e17 (textbook Finding #47 pattern).
+- W&B run: `lym1yzlo` (group: postln-lr-tmax-stack)
+
+| Metric | lr=2e-4+T_max=20 | lr=2e-4+T_max=18 (#2494) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **53.1311** | 55.9044 | −5.00% |
+| **test_avg/mae_surf_p** | **46.2751** | **47.9076** | **−3.41%** vs #2494 / **−1.30%** vs #2572 |
+| test_single_in_dist | 47.8109 | 47.82 | flat |
+| test_geom_camber_rc | 58.8461 | 60.53 | −2.78% |
+| test_geom_camber_cruise | 32.0006 | 34.40 | −6.98% |
+| test_re_rand | 46.4428 | 48.88 | −4.97% |
+
+**Analysis:** Exact Finding #47 tail-crossover pattern (e16: +0.73 behind, e17: −1.29 ahead, e18: −2.77 ahead). IID flat; all OOD gains driven by the T_max=20 extended cosine tail. Clip-fire at e18=57.4% (vs 51.6% at T_max=18 — higher tail LR keeps clip more active). Decision: MERGED. New best: 46.2751, cumulative −61.8%.
+
+### PR #2573: mlp_ratio=3 — CLOSED ✗
+- Test=47.5359 vs new best 46.2751 (+2.68% worse). +9.2% per-epoch overhead (111.4s) cut epoch 18. val→test transfer gap (−3.59% val, −0.78% test) indicates overfitting. in_dist regressed +1.15%. Finding: mlp_ratio=2 well-calibrated; wider MLP is timeout-bound at current budget.
+
+### PR #2577: slice_num=32 — CLOSED ✗
+- Test=48.5065 vs new best 46.2751 (+4.75% worse). rc regressed +1.21% (opposite of hypothesis direction). Per-epoch overhead +5.6% (107.8s) cut epoch 18. Finding: slice_num=24 well-calibrated under post-LN — coarser→finer K-means clustering does not improve OOD resolution in the bounded residual stream.
+
+### PR #2466: SwiGLU MLP — CLOSED ✗ (stale WIP)
+- Two status checks sent (19:21, 20:21), no student response in 2+ hours. d0nsbeam run at test=51.59 tied old baseline — SwiGLU neutral. No lr=2e-4 confirmation arm launched.
+
+### PR #2499: RMSNorm under post-LN — CLOSED ✗ (stale WIP)
+- Status check sent (20:21), no student response in 1+ hours. r2oxlnwy crashed. RMSNorm already showed neutral result standalone (Finding #40). Stale — not worth continuing.
+
+### New assignments (cycle 10)
+- **fern #2630:** lr=2.5e-4 + T_max=20 — maps right side of LR valley at new baseline T_max
+- **edward #2632:** lr=2.25e-4 + T_max=22 — new LR optimum × further T_max extension
+- **nezuko #2634:** surf_weight=15 UP — Finding #53 mirror, rc-targeted (rc=58.85 is largest headroom)
+- **tanjiro #2640:** mlp_ratio=2.5 — non-integer capacity compromise (estimated ~106s/epoch, within 110s gate)
+
+---
+
 ## 2026-05-13 21:25 — CYCLE 9
 
 ### PR #2572: LR midpoint refinement — lr=2.25e-4 — MERGED ✓ NEW BEST

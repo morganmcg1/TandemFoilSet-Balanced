@@ -1,20 +1,20 @@
 # SENPAI Research State
 
-- 2026-05-13 21:25 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=46.8821 (PR #2572 Lion lr=2.25e-4 + post-LN + T_max=18 + wd=0)**. Cumulative gain from PR #1391: 121.28 → 46.88 = **−61.4%**.
+- 2026-05-13 22:45 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=46.2751 (PR #2568 Lion lr=2e-4 + post-LN + T_max=20 + wd=0)**. Cumulative gain from PR #1391: 121.28 → 46.28 = **−61.8%**.
 - No directives from human researcher team yet.
 
-## Current baseline (PR #2572 merged — lr=2.25e-4 interior LR optimum)
+## Current baseline (PR #2568 merged — lr=2e-4 + T_max=20 stack)
 
-**test_avg/mae_surf_p = 46.8821** | val = 54.5798 (best epoch 18/18)
-Config: bf16 + bs=4 + accum=2 + Lion **lr=2.25e-4** + β1=0.9 + β2=0.99 + **wd=0** + Fourier L=8 + n_hidden=192, n_layers=5, n_head=4, **slice_num=24**, mlp_ratio=2 + **grad_clip_max_norm=5.0** + surf_weight=10 + act=gelu + eta_min=0 + dropout=0 + **post-LN** + **t_max=18**. W&B run: f5nlky02.
+**test_avg/mae_surf_p = 46.2751** | val = 53.1311 (best epoch 18/18)
+Config: bf16 + bs=4 + accum=2 + Lion **lr=2e-4** + β1=0.9 + β2=0.99 + **wd=0** + Fourier L=8 + n_hidden=192, n_layers=5, n_head=4, **slice_num=24**, mlp_ratio=2 + **grad_clip_max_norm=5.0** + surf_weight=10 + act=gelu + eta_min=0 + dropout=0 + **post-LN** + **t_max=20**. W&B run: lym1yzlo.
 
-Per-split: in_dist=46.7260, rc=60.1858, cruise=33.0391, re_rand=47.5775.
+Per-split: in_dist=47.8109, rc=58.8461, cruise=32.0006, re_rand=46.4428.
 
-**Reproduce:** `cd target/ && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --lr 2.25e-4`
+**Reproduce:** `cd target/ && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --lr 2e-4 --t_max 20`
 
-⚠️ ALL future run commands must include `--weight_decay 0.0` and `--lr 2.25e-4`.
+⚠️ ALL future run commands must include `--weight_decay 0.0 --lr 2e-4 --t_max 20`.
 ⚠️ Post-LN is now merged into train.py default via PR #2456.
-⚠️ Default `t_max=18` in Config dataclass; use **`--lr 2.25e-4`** alone for current best. T_max=20 stack at the new LR is being tested by frieren #2591.
+⚠️ Note: lr=2.25e-4 at T_max=18 gave 46.8821 (PR #2572 — also a win, slightly worse). lr=2e-4+T_max=20 (46.27) is now the baseline. frieren #2591 tests lr=2.25e-4+T_max=20 to find the compound optimum.
 
 ## Win history (this round)
 
@@ -25,7 +25,8 @@ Per-split: in_dist=46.7260, rc=60.1858, cruise=33.0391, re_rand=47.5775.
 | #2456 | post-LN swap | 51.5839 | −15.08% | −57.5% |
 | #2508 | T_max=20 | 49.3466 | −4.34% | −59.3% |
 | #2494 | lr=2e-4 | 47.9076 | −2.92% | −60.5% |
-| **#2572** | **lr=2.25e-4** | **46.8821** | **−2.14%** | **−61.4%** |
+| #2572 | lr=2.25e-4 | 46.8821 | −2.14% | −61.4% |
+| **#2568** | **lr=2e-4 + T_max=20** | **46.2751** | **−1.30%** | **−61.8%** |
 
 ## Major milestones
 
@@ -54,15 +55,23 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 ### Per-split lever-flip under post-LN (Finding #53, frieren #2426)
 The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN. Pre-LN: sw=5 → rc −0.74 (DOWN helps rc). Post-LN: sw=5 → rc +1.49 (DOWN hurts rc). Cruise mirror-inverted. Mechanism: post-LN's compressed residual stream makes surface/volume token representations more similar, breaking the surf_weight gradient signal that pre-LN had. **Implication:** other per-split findings from pre-LN should be re-validated case-by-case under post-LN.
 
-## Round-3 status (updated 2026-05-13 21:00)
+## Round-3 status (updated 2026-05-13 22:45)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
-| thorfinn | #2584 | Stack lr=2e-4 + T_max=22 under post-LN | **wip** |
+| frieren | #2591 | lr=2.25e-4 + T_max=20 STACK | **wip** |
+| thorfinn | #2584 | lr=2e-4 + T_max=22 stack | **wip** |
 | alphonse | #2586 | grad_clip_max_norm=3.0 under post-LN+lr=2e-4 | **wip** |
-| askeladd | #2568 | lr=2e-4 + T_max=20 STACK | **wip** |
-| frieren | #2591 | lr=2.25e-4 + T_max=20 STACK (new LR win + T_max extension) | **wip** (NEW) |
-| frieren | #2572 | lr=2.25e-4 LR midpoint refinement | **MERGED** ✓ test=46.8821 (−2.14%). **NEW BEST.** |
+| fern | #2630 | lr=2.5e-4 + T_max=20 (right-side LR probe) | **wip** (NEW) |
+| edward | #2632 | lr=2.25e-4 + T_max=22 (new LR × T_max extension) | **wip** (NEW) |
+| nezuko | #2634 | surf_weight=15 UP (Finding #53 mirror) | **wip** (NEW) |
+| tanjiro | #2640 | mlp_ratio=2.5 (non-integer capacity compromise) | **wip** (NEW) |
+| askeladd | #2568 | lr=2e-4 + T_max=20 STACK | **MERGED** ✓ test=46.2751 (−1.30%). **NEW BEST.** |
+| frieren | #2572 | lr=2.25e-4 LR midpoint refinement | **MERGED** ✓ test=46.8821 (−2.14%) |
+| fern | #2573 | mlp_ratio=3 capacity width | **CLOSED** ✗ +2.68% worse vs new best. Timeout-bound. |
+| edward | #2577 | slice_num=32 physics re-cal | **CLOSED** ✗ +4.75% worse, rc regressed. |
+| nezuko | #2466 | SwiGLU MLP | **CLOSED** ✗ stale WIP (tied with old baseline, no response). |
+| tanjiro | #2499 | RMSNorm under post-LN | **CLOSED** ✗ stale WIP (crashed, no response). |
 | fern | #2573 | mlp_ratio=3 capacity width without depth | **wip** |
 | edward | #2577 | slice_num=32 physics-aware re-cal under post-LN | **wip** |
 | nezuko | #2466 | SwiGLU MLP (param-matched) | **wip** (status check #2 sent — `d0nsbeam` run finished at test=51.59 on old config, awaiting confirmation arm with lr=2e-4) |
@@ -131,37 +140,34 @@ The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN.
 
 ## Active experiments (8 students — all occupied)
 
-### Tier 1: Winner compounds + LR×T_max landscape mapping (HIGHEST EV)
+### Tier 1: LR×T_max landscape — primary grid mapping (HIGHEST EV)
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
-| #2591 | frieren | **lr=2.25e-4 + T_max=20 STACK** (new LR win + T_max extension) | −1.5% to −3.0% (compound of two confirmed wins) |
-| #2568 | askeladd | **lr=2e-4 + T_max=20 STACK** | −1% to −3% (compound of old LR + T_max; maps grid) |
-| #2584 | thorfinn | **lr=2e-4 + T_max=22 STACK** (mechanism extension of #2527 win) | −1.5% to −2.7% (maps T_max axis at old LR) |
+| #2591 | frieren | **lr=2.25e-4 + T_max=20 STACK** (new LR optimum + T_max=20) | −0.5% to −2% vs 46.27 |
+| #2584 | thorfinn | **lr=2e-4 + T_max=22** (old LR + further T_max extension) | −0.5% to −1.5% vs 46.27 |
+| #2630 | fern | **lr=2.5e-4 + T_max=20** (right-side LR probe at T_max=20) | maps valley; −1% if optimum shifts right |
+| #2632 | edward | **lr=2.25e-4 + T_max=22** (new LR + further extension) | −1% to −2% vs 46.27 |
 
-### Tier 2: Optimizer-fine-tuning probes (clip + LR axis)
+### Tier 2: Optimizer and regularization probes
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
-| #2586 | alphonse | grad_clip=3.0 (tightened under lr=2e-4: 50%+ clip-fire at e18) | −0.5% to −2.0% (regularization tightening) |
+| #2586 | alphonse | grad_clip=3.0 (tightened: 57.4% clip-fire at e18 in #2568) | −0.5% to −2.0% |
 
-### Tier 3: Capacity expansion (orthogonal to LR axis)
+### Tier 3: Loss formulation + capacity
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
-| #2573 | fern | mlp_ratio=3 (width without depth) | −1% to −3% (capacity unused under post-LN+lr=2e-4) |
-| #2577 | edward | slice_num=32 (physics-aware re-cal) | OOD-focused, especially rc=60.53 |
-
-### Tier 4: Sub-architectural probes (awaiting student response)
-| PR | Student | Hypothesis | Expected gain |
-|---|---|---|---|
-| #2466 | nezuko | SwiGLU MLP (status check pending — old run at test=51.59, needs lr=2e-4 retry) | awaiting student |
-| #2499 | tanjiro | RMSNorm under post-LN (status check pending — last run crashed) | awaiting student |
+| #2634 | nezuko | surf_weight=15 UP (Finding #53 mirror — rc-targeted) | rc-focused; −1% if directional sign holds |
+| #2640 | tanjiro | mlp_ratio=2.5 (non-integer capacity compromise, stays under 110s gate) | −0.5% to −1.5% if timeout was the blocker |
 
 ## Key open questions
 
-1. **Does the lr=2.25e-4 + T_max=20 stack compound?** (frieren #2591, NEW) — HIGHEST PRIORITY. If yes, test≈45.5–46.2 expected. The most natural compound experiment on the board.
-2. **Does lr=2e-4 + T_max=20 stack compound?** (askeladd #2568) — maps the grid at old LR. Together with #2591 determines whether T_max benefit scales with LR.
-3. **Does lr=2e-4 + T_max=22 compound favorably?** (thorfinn #2584) — extension of Finding #56 tail-descent win. Maps the T_max axis at old LR.
-4. **Does tightened clip=3.0 help under lr=2e-4?** (alphonse #2586) — clip-fire 51.6% at e18 in #2494; testing whether the active clipping ceiling is load-bearing regularization.
-5. **LR right-side mapping:** lr=2.5e-4 (right side of valley, per frieren's diagnostic framework) — not yet assigned.
+1. **Does lr=2.25e-4 + T_max=20 beat lr=2e-4 + T_max=20?** (frieren #2591) — determines whether the LR optimum (2.25e-4) and T_max (20) compound at BOTH levels. If yes, new best < 46.27.
+2. **Does lr=2e-4 + T_max=22 extend the T_max benefit further?** (thorfinn #2584) — T_max=20 gave −1.30% vs T_max=18; does T_max=22 continue the pattern?
+3. **Does lr=2.5e-4 win at T_max=20?** (fern #2630) — maps right side of LR valley at new T_max baseline. If optimum is at 2.5e-4, we shift the best config further.
+4. **Does lr=2.25e-4 + T_max=22 beat 2.25e-4 + T_max=20?** (edward #2632) — maps outer corner of LR×T_max grid.
+5. **Does tightened clip=3.0 help?** (alphonse #2586) — clip-fire 57.4% at e18 in #2568.
+6. **Does surf_weight=15 UP help rc?** (nezuko #2634) — Finding #53 mirror; rc is still the largest headroom split (58.85).
+7. **Does mlp_ratio=2.5 stay under budget and help?** (tanjiro #2640) — mlp_ratio=3 was timeout-bound (+9.2% overhead); 2.5 estimated ~+4.6%.
 5. **Can mlp_ratio=3 add capacity without breaking budget?** (fern #2573) — capacity-via-width vs the depth-failure mode of n_layers=6.
 6. **Does slice_num=32 unlock more physics-aware OOD performance?** (edward #2577) — slice_num=24 was a pre-LN closure; post-LN's stationary residual stream may support finer groupings.
 7. **Does SwiGLU's gating compound with lr=2e-4?** (nezuko #2466) — old run at test=51.59 was under-config.
@@ -178,11 +184,11 @@ The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN.
 
 ## IMPORTANT NOTES
 
-- **All new/updated run commands must include `--weight_decay 0.0` and `--lr 2.25e-4`**
+- **All new/updated run commands must include `--weight_decay 0.0 --lr 2e-4 --t_max 20`** (baseline config)
 - **Post-LN is now the default** in train.py (merged via #2456)
-- **lr=2.25e-4 is the new optimal** (Finding #54 updated); Config default is still lr=1.5e-4 — use `--lr 2.25e-4` explicitly
-- **t_max default is 18** in Config; the lr=2.25e-4 win at T_max=18 is current best — `--lr 2.25e-4` alone reproduces it. T_max=20 stack being tested by frieren #2591.
-- **New baseline: 46.8821** — ALL comparisons use this
+- **lr=2e-4 + T_max=20 is the current best config** (PR #2568). Config defaults are lr=1.5e-4 and t_max=18 — use `--lr 2e-4 --t_max 20` explicitly.
+- **New baseline: 46.2751** — ALL comparisons use this
+- lr=2.25e-4 (PR #2572, 46.8821) is slightly worse than lr=2e-4 + T_max=20 at the noise floor. The compound (lr=2.25e-4 + T_max=20, #2591) should resolve which axis wins.
 - **All 8 students are occupied** — no idle GPUs
 - **Pre-LN findings are not transferable wholesale** (Finding #53: per-split flips can occur under post-LN). Re-validate case-by-case.
 
@@ -200,7 +206,7 @@ The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN.
 | n_head | CLOSED | n_head=4 |
 | slice_num | **TESTING** (#2577) under post-LN+lr=2e-4 | slice_num=24 (pre-LN closure) |
 | mlp_ratio | **TESTING** (#2573) under post-LN+lr=2e-4 | mlp_ratio=2 (pre-LN closure) |
-| T_max cosine | **TESTING** T_max=22 stack (#2584) and T_max=20 stack (#2568) | T_max=18 (current best is lr=2e-4 + T_max=18) |
+| T_max cosine | **TESTING** T_max=22 stacks (#2584, #2632) | T_max=20 (current best is lr=2e-4 + T_max=20) |
 | weight_decay | CLOSED | wd=0 |
 | Attention dropout | CLOSED | 0.0 |
 | Normalization type | CLOSED | LayerNorm |
