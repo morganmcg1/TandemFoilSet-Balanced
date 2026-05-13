@@ -492,6 +492,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     anneal_strategy="linear",
     div_factor=cfg.max_lr / cfg.lr,   # initial_lr = max_lr / div_factor = cfg.lr
     final_div_factor=1e4,             # final_lr = initial_lr / 1e4
+    three_phase=True,
 )
 
 run = wandb.init(
