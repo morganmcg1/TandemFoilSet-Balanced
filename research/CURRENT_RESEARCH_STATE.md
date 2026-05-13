@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 22:10 — edward #2596 (n_layers=3+n_head=2+Lion) CLOSED (val 41.62, +3.34% regress; +14.25% on single_in_dist confirms depth/head axes don't compound). Reassigned to **#2612 EMA decay sweep** (0.9995, 0.9999). Confirmed regressions on n_head=2+Lion stack so far: n_layers=3 (#2596 closed), n_head=1 (#2593 first seed 44.08, second crashed), wd=3e-4 (#2555 5xmshkwk 41.32). **Plateau-watch: 3 confirmed regressions, 2 more would trigger Plateau Protocol.**
+- **Date**: 2026-05-13 22:55 — Confirmed regressions on n_head=2+Lion stack expanding: (a) frieren #2593 **CLOSED** — n_head=1 val 44.08 +9.44% confirms n_head sweep non-monotone (n_head=2 is local optimum); (b) edward #2612 first arm `9ir26ul6` ema=0.9995 finished at **val 47.97 +19.1%** (huge regression, hypothesis inverted — slower EMA pulls EMA toward stale higher-loss weights); pivoted edward to ema_decay=0.998 (faster); (c) thorfinn #2555 wd=1e-3 `d4dd5gd1` finished at val 40.91 +1.6% (axis closed; wd default 1e-4 is optimal); (d) askeladd #2552 K=16 has crashed 3× (v1, v2, v3 currently at 27.5 min val 43.18 trending regress). frieren reassigned to **#2644 SwitchEMA** (interval=500, 1000). **Plateau-watch: 4-5 confirmed regressions on n_head=2 stack — already in Plateau Protocol territory; RESEARCH_IDEAS_2026-05-13_22:30.md prepared with 12 bold ideas.**
 - **Current best (merged)**: PR #2192 frieren n_head=2+Lion (run `gd934e9l`) at **val 40.2741 / test 33.6017** — all 8 per-split metrics improve vs Lion-only baseline. 36 epochs (still descending at cap), 49.5 s/epoch, 548K params, ~13.6 GB VRAM. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4`
 - **Updated merge bar (vs 40.27 baseline)**: ≤36.2 val ⇒ merge (≥10% gain), 36.2-40.3 → second seed, ≥40.3 → close.
 - **Closed axes on Lion+n_head=2 stack:**
@@ -13,25 +13,29 @@ SPDX-License-Identifier: Apache-2.0
   - cosine-tail shape (pre-Lion), width-up n_hidden=192 (pre-Lion), Lion lr=3e-4 (pre-n_head=2)
   - wd=3e-4 on n_head=4 stack: val 42.85 (now +6.4% regress vs new baseline 40.27)
   - **n_layers=3 + n_head=2 + Lion (#2596 edward)**: val 41.62 +3.34%; +14.25% on single_in_dist confirms depth+head don't compound (dim_head=64 needs 4 blocks of refinement)
-  - **n_head=1 isolation (#2593 frieren, seed1 x0o1lj5y val 44.08)**: +9.5% regress, second seed crashed — confirms n_head=2 is the n_head sweet spot; trend is NOT monotone past 2
+  - **n_head=1 isolation (#2593 frieren, seed1 x0o1lj5y val 44.08)**: +9.44% regress, second seed crashed — confirms n_head=2 is the n_head sweet spot; trend is NOT monotone past 2 (CLOSED 22:55)
+  - **EMA decay 0.9995 on n_head=2+Lion (#2612 edward arm 1, `9ir26ul6`)**: val 47.97 +19.1% — much worse; slower EMA pulls EMA toward stale earlier-trajectory weights; pivoting Arm B to ema=0.998 (faster) to test the opposite direction
+  - **Lion weight_decay sweep on n_head=2 (#2555)**: wd=3e-4 (5xmshkwk) val 41.32 +2.6%; wd=1e-3 (d4dd5gd1) val 40.91 +1.6%; both regress; default wd=1e-4 is optimal
 - **Active research directions (all on n_head=2+Lion stack):**
-  1. **EMA decay sweep** — edward #2612 (**NEW PR**, 0.9995 + 0.9999 on n_head=2+Lion; targets "gradient-step-bound, still descending at cap" observation; predicted 1-3% gain if slower EMA captures more of late-low-LR portion)
-  2. **n_head=1 isolation** — frieren #2593 (seed1 finished val 44.08, +9.5% regress; seed2 crashed; awaiting student terminal SENPAI-RESULT)
-  3. **Fourier K continuation** — askeladd #2552 (K=16 first run `ik2i80ar` crashed at val 44.02 mid-train; K=16 retry `y10si1ew` running 12 min; K=20 arm pending)
-  4. **Lion weight_decay sweep** — thorfinn #2555 (wd=3e-4 `5xmshkwk` finished at val 41.32 +2.6% regress; wd=1e-3 `d4dd5gd1` running 9.5 min)
-  5. **Lion LR flank** — tanjiro #2449 (lr=5e-5 and lr=2e-4 on n_head=2+Lion; rate-limited)
-  6. **Batch-size bs=1** — nezuko #2421 (bs=1+n_head=2+Lion; rate-limited)
-  7. **Slice-num=16** — alphonse #2358 (slice=16+n_head=2+Lion; rate-limited, needs rebase)
-  8. **Width-down n_hidden=96** — fern #2464 (n_hidden=96+n_head=2+Lion; rate-limited)
-- **Student status (22:10 UTC):**
-  - alphonse #2358: rate-limited (GPU=0% earlier), needs rebase
-  - askeladd #2552: K=16 first run crashed, retry running (12 min in, val 64 early)
-  - edward #2612: **NEW PR** — EMA decay sweep (0.9995, 0.9999) on n_head=2+Lion (after #2596 closed)
-  - fern #2464: rate-limited (GPU=0%), needs work
-  - frieren #2593: 1 finished bad, 1 crashed — needs terminal post and likely close (CLEAR REGRESSION)
-  - nezuko #2421: rate-limited, needs work
-  - tanjiro #2449: rate-limited, needs work
-  - thorfinn #2555: wd=3e-4 finished bad, wd=1e-3 still running (9.5 min in)
+  1. **SwitchEMA** — frieren #2644 (**NEW PR**, periodic EMA-to-weights swap, interval=500 and 1000; zero compute overhead; targets gradient-step-bound observation; requires small train.py code change)
+  2. **EMA decay 0.998** — edward #2612 (pivoted from 0.9995/0.9999; testing faster-EMA direction)
+  3. **Fourier K continuation** — askeladd #2552 (K=16 crashed 3× (ik2i80ar, lo8zls4m, y10si1ew); v3 `eqzo2qox` at 27.5 min val 43.18 trending regress; K=20 not started)
+  4. **Lion LR flank** — tanjiro #2449 (rate-limited, redirected to Lion lr-flank)
+  5. **Batch-size bs=1** — nezuko #2421 (rate-limited)
+  6. **Slice-num=16** — alphonse #2358 (rate-limited, needs rebase — merge conflict)
+  7. **Width-down n_hidden=96** — fern #2464 (rate-limited)
+- **Closing soon (likely):**
+  - thorfinn #2555 (both wd arms regress — wd axis closed)
+  - askeladd #2552 K=16 (multiple crashes, v3 trending regress; K=20 arm pending)
+- **Student status (22:55 UTC):**
+  - alphonse #2358: rate-limited (no work seen by pod), needs rebase (mergeable_state=dirty)
+  - askeladd #2552: K=16 v3 running (27.5 min, val 43.18); K=20 pending
+  - edward #2612: 3 duplicate-launch 0.9995 runs (1 finished bad, 2 in flight); pivoted to ema=0.998
+  - fern #2464: rate-limited
+  - frieren #2644: **NEW PR** — SwitchEMA assignment (post #2593 close)
+  - nezuko #2421: rate-limited
+  - tanjiro #2449: rate-limited
+  - thorfinn #2555: both arms regress (wd=3e-4 +2.6%, wd=1e-3 +1.6%); 3rd run `581t7ak5` (duplicate launch) in progress; awaiting terminal post
 - **KEY MECHANISM FINDINGS:**
   - **n_head=2 win mechanism**: dim_head=64 (vs 32 at n_head=4) enriches per-head geometry encoding in PhysicsAttention. Compounds with Lion. Trend NOT monotone — n_head=1 (#2593 seed1) regressed +9.5%, confirming n_head=2 is the local optimum (not a monotone-decrease axis). All seeds hit best_epoch=final_epoch → training still under-budgeted.
   - **Depth/head axes are non-additive**: n_layers=3+n_head=2 (#2596) regressed +3.34% (and +14.25% on single_in_dist). dim_head=64 needs 4 blocks of iterative refinement; reducing depth starves per-block representational throughput. Depth axis (compute-per-block) and head-count axis (per-slice capacity) target different bottlenecks and don't stack.
