@@ -6,6 +6,30 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~11:00 — PR #2007: mlp_ratio=2 — CLOSED (+9.95% val, +10.28% test)
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/mlp-ratio-2
+- **Hypothesis:** Reduce mlp_ratio 4→2 (n_hidden stays 128, GeGLU halves fc2 width). Predicted: 30% param reduction → faster epochs → more epochs in 30-min budget → better convergence via epoch-count mechanism.
+- **Result:** val=51.508 / test=45.034 (best_epoch=14, n_layers=6 stack, T_max=14, sw=10)
+
+| Split | val (current baseline 46.847) | val (mlp_ratio=2) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 50.491 | 55.152 | +9.2% | 49.255 |
+| geom_camber_rc | 60.364 | 64.952 | +7.6% | 59.137 |
+| geom_camber_cruise | 29.835 | 32.793 | +9.9% | 27.218 |
+| re_rand | 46.699 | 53.136 | +13.8% | 44.526 |
+| **avg** | **46.847** | **51.508** | **+9.95%** | **45.034** |
+
+- **Why it lost cleanly:** Student ran on old n_layers=6 stack with T_max=14 (not the current n_layers=5 + slice_num=48). The apparent improvement vs old baseline 52.798 was mostly T_max alignment (2 extra epochs), not mlp_ratio. Student correctly flagged this in writeup. vs current baseline 46.847 it is +9.95% worse.
+- **mlp_ratio=2 speedup:** ~10% per-epoch (128s vs ~116s on n_layers=5 stack). Not enough to gain another epoch in budget — would need ~30-40% speedup.
+- **Conclusion:** mlp_ratio reduction is not load-bearing at this depth. The gating mechanism (GeGLU) is already providing the capacity benefit; reducing mlp_ratio only removes capacity without providing a meaningful epoch-budget gain.
+- **n_params:** 683,547 (30% smaller than baseline 976,827)
+- **Metric artifacts:** student PR #2007 comments (no jsonl path provided)
+- **Reassigned tanjiro:** PR #2080 n_layers=4 + T_max=17 (continue depth sweep)
+
+---
+
 ## 2026-05-13 09:15 — PR #1996: slice_num=48 + T_max=15 — MERGED (−1.33% val, −1.10% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-fern

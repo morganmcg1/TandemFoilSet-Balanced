@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~09:20
+- **Date:** 2026-05-13 ~11:00
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -69,6 +69,7 @@
 - **WD=1e-1**: +2.72% (PR #1889 — over-regularizes; best_epoch=10, train descending while val climbs; WD space above 1e-2 exhausted)
 - **lr=2e-4 on RMSNorm stack**: +0.98% val (PR #1765 — RMSNorm tightened loss surface; lr=2e-4 overshoots on geom_camber_rc; test −1.23% ✓; pivot to lr=1.5e-4)
 - **mlp_ratio=8 + GeGLU**: +5.95% (PR #1872 — gating wins outright; fc2 capacity expansion beyond 256 channels adds noise pathways; mlp_ratio=4 optimal)
+- **mlp_ratio=2**: +9.95% vs current baseline (PR #2007, n_layers=6 stack — 30% param savings, ~10% per-epoch speedup; speedup too small to unlock new epoch budget; mlp_ratio axis now bracketed: 2 worse, 4 optimal, 8 worse)
 - **CosineAnnealingLR eta_min=1e-5**: +12.05% vs current baseline (PR #1920 — LR floor above 0 conflicts with T_max=12 which cleanly decays to 0; T_max=12 strictly dominates)
 - **Lion WD=3e-2**: +0.06% (PR #1925 — WD valley confirmed flat [1e-4→3e-2]; WD=1e-1 bends up; entire WD axis exhausted on this stack)
 - **Lion 2-epoch warmup**: mechanism conflict with T_max=12 (PR #1790 — warmup costs 17% of 12-epoch budget; cold-start problem already addressed by T_max=12 cosine; student stale on rerun)
@@ -92,16 +93,16 @@
 8. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc improved −17.2%; it remains the single highest-loss split at val=64.886.
 9. **geom_camber_rc (64.886 val) is the dominant bottleneck** — primary target for further improvement.
 
-## Active experiments (Round 16)
+## Active experiments (Round 16/17)
 
-⚠ **Baseline shifting rapidly:** Most in-flight PRs (#2006, #2007, #2029, #2038, #2040, #2043) are on OLD n_layers=6 + T_max=12 stack. Their results will likely be val ~50-53, worse than new baseline (46.847). Review strategy: note relative improvement for potential compound-stack re-test; close if they don't beat 46.847 and don't show unusual signal.
+⚠ **Baseline shifting rapidly:** Most in-flight PRs (#2006, #2029, #2038, #2040, #2043) are on OLD n_layers=6 + T_max=12 stack. Their results will likely be val ~50-53, worse than new baseline (46.847). Review strategy: note relative improvement for potential compound-stack re-test; close if they don't beat 46.847 and don't show unusual signal.
 
 | Student | PR | Hypothesis | Base stack |
 |---------|-----|------------|-----------|
 | edward | #2048 | surf_weight=5 on n_layers=5+T_max=14 | NEW n_layers=5 |
 | fern | #2062 | n_layers=5 + slice_num=48 compound verification + T_max tuning | NEW compound |
+| tanjiro | #2080 | n_layers=4 + T_max=17 (continue depth sweep) | NEW compound |
 | frieren | #2006 | Lion lr=8e-5 (⚠ apply lr=cfg.lr fix) | OLD n_layers=6 |
-| tanjiro | #2007 | mlp_ratio=2 | OLD n_layers=6 |
 | nezuko | #2029 | surf_weight=2 | OLD n_layers=6 |
 | askeladd | #2038 | n_head=2 | OLD n_layers=6 |
 | thorfinn | #2040 | grad-clip max_norm=1.0 | OLD n_layers=6 |
@@ -113,6 +114,7 @@
 - nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val)
 
 **Recently closed:**
+- tanjiro #2007: mlp_ratio=2 (+9.95% worse vs 46.847) — parameter savings don't buy enough per-epoch speedup to unlock new epoch budget
 - alphonse #1765: Lion lr=1.5e-4 (+4.21% worse) — LR axis saturated
 - askeladd #1766: Lion WD=1e-2 rerun (+16.6% worse) — WD axis saturated
 - thorfinn #1948: surf_weight=3 stale draft
@@ -133,14 +135,15 @@ The dominant win pattern this session has been "make epochs faster → fit more 
 2. Does surf_weight=5 compound onto the new stack? (edward #2048, in flight)
 3. Is there a per-epoch floor? At some point adding epochs has diminishing returns even with T_max alignment.
 
-## Next queued ideas (for when Round 16 slots open up)
+## Next queued ideas (for when Round 17 slots open up)
 
-- **n_layers=4 + T_max=18**: depth sweep — does "shallower = more epochs" keep winning?
-- **surf_weight=5 on n_layers=5+slice_num=48**: after fern #2062 verifies compound
+- **n_layers=3 + T_max=~20**: if n_layers=4 wins, push one step further; if n_layers=4 loses, bracket confirmed at 4–5
+- **surf_weight=5 on n_layers=5+slice_num=48**: after fern #2062 verifies compound (edward #2048 already testing on n_layers=5 but pre-slice_num=48)
+- **T_max alignment after fern #2062**: if n_layers=5+slice_num=48 gives ~100-108s/epoch, T_max=16 or 17 may be better than 15
 - **Any winning axis from old-stack screening** (n_head=2, grad-clip, droppath) re-tested on current compound stack
 - **Geometric data augmentation** (flip/scale) — targets geom_camber_rc OOD
 - **PINN-style auxiliary loss** (divergence/curl) — physics-informed volume regularization
-- **n_head=2 on new stack** — if askeladd #2038 shows improvement on old stack
+- **lr bug fix PR**: apply train.py:441 fix (`lr=cfg.lr`) as a standalone change to advisor branch
 
 ## Key constraints
 
