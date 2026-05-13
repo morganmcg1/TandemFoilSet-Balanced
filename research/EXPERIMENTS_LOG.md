@@ -6,6 +6,36 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 16:45 — PR #2417 — CLOSED (n_head=2 loses at slice_num=12; n_head axis fully closed)
+
+**thorfinn: n_head=2 on n_layers=3+slice_num=12+epochs=36**
+- vs baseline (PR #2351 val=35.969): val=37.193 (**+3.40% LOSS**), test=31.269 (+3.32%)
+- Capped at epoch 33/36 (30-min limit). Extrapolated to epoch 36: ~36.3 — still above baseline.
+- single_in_dist takes the biggest hit (+2.5 val units); OOD splits more moderate (+0.5–1.0)
+
+**n_head axis now CLOSED across all tested slice_num values:**
+- slice_num=24: n_head=2 lost +0.71% (edward #2383)
+- slice_num=12: n_head=2 lost +3.40% (thorfinn #2417)
+- n_head=4 parallelism confirmed optimal at both partitions. Axis robust — no further testing needed.
+
+**Metric artifacts:** `models/model-nhead2-nlayers3-slicenum12-20260513-155612/metrics.jsonl`
+
+---
+
+## 2026-05-13 16:45 — PR #2375 — CLOSED (slice_num=20 fills partition gap; loses vs current baseline)
+
+**askeladd: slice_num=20 on n_layers=3+epochs=34**
+- vs PR #2229 (old baseline 37.366): val=36.854 (**−1.37% WIN vs old**), test=30.938 (−1.38%)
+- vs CURRENT baseline (PR #2348, val=35.548): **+3.67% LOSS** — cannot beat new baseline
+- All 4/4 val splits improved vs old baseline. best_epoch=34/34 (still descending, budget-limited at ~55s/epoch)
+- Partition sweep: 32→24→20 = 39.143→37.366→36.854 (monotone but gains diminishing)
+
+**Partition floor near 16 confirmed:** 20 > 16 (36.854 vs 35.548), 12 > 16 (35.969 vs 35.548). Non-monotone with trough at 16.
+
+**Metric artifacts:** `models/model-charliepai2g48h3-askeladd-slicenum20-nlayers3-20260513-155336/metrics.jsonl`
+
+---
+
 ## 2026-05-13 16:30 — PR #2383 — CLOSED (n_head=2 loses at slice_num=24; n_head=4 confirmed optimal)
 
 **edward: n_head=2 on n_layers=3+slice_num=24+epochs=33**

@@ -91,16 +91,16 @@
 | Student | PR | Hypothesis | Stack | Can beat baseline? |
 |---------|-----|------------|-----------|---|
 | alphonse | #2431 | **lr=1.5e-4 × slice_num=16 (compound)** | n_layers=3+slice_num=16 | **YES — highest EV** |
-| askeladd | #2375 | slice_num=20 on n_layers=3+epochs=34 (partition sweep informative) | n_layers=3 | probably not (35.9–36.5 expected) |
-| tanjiro | #2408 | **slice_num=8 on n_layers=3+epochs=38** (partition floor probe) | n_layers=3 | likely NO (capacity loss) |
-| fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | **possible** — tests lr at non-optimal slice_num |
+| askeladd | #2451 | **slice_num=18 on n_layers=3+epochs=36** (partition gap 20→16) | n_layers=3 | **possible winner** |
+| tanjiro | #2408 | slice_num=8 on n_layers=3+epochs=38 (partition floor probe) | n_layers=3 | likely NO (capacity loss) |
+| fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | possible — LR axis at sub-optimal partition |
 | edward | #2447 | **slice_num=14 on n_layers=3+epochs=36** (partition neighborhood probe) | n_layers=3 | **possible winner** |
-| thorfinn | #2417 | n_head=2 on n_layers=3+slice_num=12+epochs=36 (head axis at old best) | n_layers=3+slice_num=12 | unlikely — sub-optimal slice_num |
+| thorfinn | #2450 | **lr=5e-5 on n_layers=3+slice_num=16+epochs=36** (lower LR bound) | n_layers=3+slice_num=16 | possible — completes LR axis |
 | frieren | #2402 | lr=5e-5 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
 | nezuko | #2404 | n_head=1 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
 
-**Merged this turn:** #2351 (tanjiro slice_num=12, val=35.969, PR round 27), #2348 (alphonse slice_num=16, val=35.548, PR round 28)
-**Closed this turn:** #2353 (thorfinn lr=1.5e-4 at old stack), #2301 (fern stale), #2367 (frieren lr=2e-4), #2279 (nezuko sw=3), #2350 (edward mlp_ratio=2)
+**Merged:** #2351 (tanjiro slice_num=12, val=35.969), #2348 (alphonse slice_num=16, val=35.548)
+**Closed this round:** #2417 (thorfinn n_head=2@slice12 +3.4%), #2375 (askeladd slice20 beats old baseline but loses vs 35.548), #2383 (edward n_head=2@slice24 +0.71%), #2353/#2301/#2367/#2279/#2350 (prior round)
 
 **Complete baseline trajectory:** 40.158 → 39.143 → 38.270 → 37.366 → 35.969 → **35.548** (−11.5% total from round start)
 
@@ -109,11 +109,13 @@
 **Partition sweep ladder (completed + in-flight):**
 - slice_num=32 → val=39.143 (PR #2107)
 - slice_num=24 → val=37.366 (PR #2229)
-- slice_num=20 → askeladd #2375 (in flight, expected ~36.5–37, informative only)
+- slice_num=20 → val=36.854 (PR #2375, beats old baseline, loses vs new)
+- slice_num=18 → askeladd #2451 (IN FLIGHT — filling 20→16 gap)
 - **slice_num=16 → val=35.548 (PR #2348, CURRENT BASELINE)**
-- slice_num=12 → val=35.969 (PR #2351, WORSE than 16)
-- slice_num=8 → tanjiro #2408 (in flight — expected to lose; capacity floor)
-- **NON-MONOTONE CONFIRMED: 16 < 12 in val. Floor is near slice_num=16.**
+- slice_num=14 → edward #2447 (IN FLIGHT — lower-side probe)
+- slice_num=12 → val=35.969 (PR #2351, WORSE than 16 — non-monotone)
+- slice_num=8 → tanjiro #2408 (IN FLIGHT — expected capacity collapse)
+- **NON-MONOTONE TROUGH AT 16: 20>16<12. Probing 18 and 14 to pin exact optimum.**
 
 ## Confirmed mechanisms
 
@@ -145,9 +147,9 @@
 - slice_num=8: tanjiro #2408 (in flight — expected capacity collapse)
 
 **LR axis state at slice_num=16 (ACTIVE):**
-- lr=5e-5 (NOT YET TESTED at slice_num=16)
+- lr=5e-5 (thorfinn #2450, IN FLIGHT — lower bound)
 - lr=1e-4 (BASELINE, val=35.548)
-- lr=1.5e-4 (alphonse #2431, IN FLIGHT — highest EV)
+- lr=1.5e-4 (alphonse #2431, IN FLIGHT — compound with slice_num=16)
 - lr=2e-4 (ceiling confirmed below 2e-4 from #2367)
 
 **LR axis state at slice_num=12 (informative only):**
@@ -174,7 +176,7 @@
 - **grad-clip**: worse for Lion (sign-update already handles magnitude)
 - **DropPath**: needs 100-300 epoch budgets; useless at 20-30 epoch budgets
 - **Dropout**: always worse (model is underfitting)
-- **n_head=2 on n_layers=3+slice_num=24**: +0.71% val / +3.53% test worse (PR #2383). Parallelism wins — 4 heads as soft mixture-of-specialists beats 2 wider heads despite +6% more params. n_head axis closed at slice_num=24; not yet retested at slice_num=16.
+- **n_head=2 FULLY CLOSED across slice_num range**: +0.71% at slice_num=24 (edward #2383), +3.40% at slice_num=12 (thorfinn #2417). Consistent direction. n_head=4 parallelism is robust optimal — 4 heads as soft mixture-of-specialists beats 2 wider heads despite +6% more params. No further n_head testing warranted.
 - **n_head=2 on n_layers=4**: marginal win (+0.25%), but current best is n_layers=3+n_head=4 anyway
 - See full dead-ends list in older entries above for complete history
 
