@@ -1823,3 +1823,46 @@ If arm 1 lands → finer `pct_start` sweep {0.05, 0.15}. If arm 2 lands → may 
 
 ---
 
+## 2026-05-13 07:38 — PR #1734 (thorfinn, asinh α=0.5 on Kendall) CLOSE
+
+- **Branch:** `willowpai2g48h2-thorfinn/asinh-pressure-on-filmed` (rebased onto Kendall + max_norm=0.5)
+- **Hypothesis:** Asinh value-level compression on pressure target (α=0.5 gentler arm) — rerun on current Kendall baseline.
+- **Result (W&B `o9azpm27`):**
+
+| Metric | This run (SWA) | Kendall baseline #1906 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **79.1227** | 71.4346 | **+10.76%** |
+| test_avg/mae_surf_p | **70.4069** | 62.9866 | **+11.78%** |
+
+All 4 val splits + 4 test splits regress 7–18%. **Largest regression on the Kendall stack to date.** Decision rule (`val ≥ 75.0 → CLOSE`) fires cleanly.
+
+### Mechanism finding — output-side warps clash with Kendall σ adaptation
+
+The high-info content is the Kendall × asinh interaction trajectory:
+- **Kendall self-adapts σ to the asinh-transformed loss space.** Final `log_σ_surf_p = −1.500` (effective weight 10.04) vs Kendall-baseline `log_σ_surf_p = −1.408` (effective weight 8.36).
+- **Kendall pushes the pressure-channel weight ~20% higher** to compensate for asinh's compressed loss magnitude.
+- This amplification compounds with asinh's per-sample gradient reshape and **overshoots**. Each lever individually was ~flat on FiLM baseline; stacked under Kendall the compounding becomes +10–12% regression.
+
+### Axis closure status
+
+- **Closes:** value-level compression on outputs when stacked on Kendall (asinh α ∈ {0.5, 1.0} both regress under Kendall).
+- **General lesson:** future output-side loss-space-reshape hypotheses should consider Kendall σ-adaptation interaction.
+- **Asinh on inputs** (different mechanism, not outputs) remains untested.
+
+### Reassignment to PR #2049 (auxiliary log_re prediction head on Kendall)
+
+Pivoting thorfinn to **OOD-targeted representation-bottleneck mechanism** — auxiliary log_re prediction MLP head per block, sweep {0.01, 0.1} weight.
+
+**Rationale:** `test_re_rand` was the OOD split with the LEAST improvement under Kendall (test_re_rand +0.33, basically flat). Forcing intermediate blocks to maintain explicit Re information via aux MSE loss should target this gap directly. Mechanism-orthogonal to all 7 in-flight + Kendall:
+- Not optimizer-stability (#1937), not loss-shape (#1757), not value-compression (closed #1734), not loss-weighting (Kendall in baseline; #1981 wd), not arch-structural (#1938), not sample-rebalancing (#1954), not input-aug (#1873), not schedule (#2021).
+- **Auxiliary task on intermediate features is a fresh mechanism family.**
+
+- **Arm 1: aux_re_weight=0.01** (gentle, most-likely-to-land)
+- **Arm 2: aux_re_weight=0.1** (moderate, tests stronger aux pressure)
+- **Decision rule:** best-arm val < 71.43 → MERGE; both regress → axis closes
+- **Special override:** `test_re_rand` improvement ≥3% triggers send-back even if val flat — OOD-split target
+
+If 0.01 lands → opens up the aux-task family (geometry-param prediction, flow consistency, etc.). If both regress → Re is implicitly captured by FiLM and aux task is redundant.
+
+---
+
