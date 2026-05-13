@@ -62,6 +62,8 @@
 - **CosineAnnealingLR eta_min=1e-5**: +12.05% vs current baseline (PR #1920 — LR floor above 0 conflicts with T_max=12 which cleanly decays to 0; T_max=12 strictly dominates)
 - **Lion WD=3e-2**: +0.06% (PR #1925 — WD valley confirmed flat [1e-4→3e-2]; WD=1e-1 bends up; entire WD axis exhausted on this stack)
 - **Lion 2-epoch warmup**: mechanism conflict with T_max=12 (PR #1790 — warmup costs 17% of 12-epoch budget; cold-start problem already addressed by T_max=12 cosine; student stale on rerun)
+- **CosineAnnealingLR T_max=10**: +10.96% val / +11.95% test (PR #1983 — `CosineAnnealingLR` is cyclic, not clamped; epoch 11 ran at LR=0 (dead); T_max < cfg.epochs is *always strictly worse*; T_max should ≥ epoch count)
+- **n_hidden=160**: val −0.247% / test +1.268% (PR #1984 — val/test direction inversion = noise signature; +52% params, +12% wall-clock disproportionate; geom_camber_rc test regressed +2.88% — OOD bottleneck is geometric extrapolation not feature capacity)
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
 - EMA decay=0.999: cold-start drag (+41% worse)
@@ -85,12 +87,12 @@
 |---------|-----|------------|--------|
 | alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR | WIP (rerun) |
 | askeladd | #1766 | Lion WD=1e-2: paper-recommended on full stack | WIP (stale) |
-| edward | #1995 | n_layers=5: shallower model → ~15 epochs in 30-min budget | NEW |
-| fern | #1996 | slice_num=48: tighter PhysicsAttention → ~14 epochs in budget | NEW |
+| edward | #1995 | n_layers=5: shallower model → ~15 epochs in 30-min budget | WIP |
+| fern | #1996 | slice_num=48: tighter PhysicsAttention → ~14 epochs in budget | WIP |
 | nezuko | #1956 | **T_max=12 + surf_weight=5 compound** | WIP |
 | thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | WIP |
-| frieren | #1983 | CosineAnnealingLR T_max=10: push cosine floor to epoch 10 | WIP |
-| tanjiro | #1984 | n_hidden=160: widen attention dim for richer aerodynamic features | WIP |
+| frieren | #2006 | Lion lr=8e-5: bracket alphonse's 1.5e-4 from below | NEW |
+| tanjiro | #2007 | mlp_ratio=2: test if "gating wins outright" extends below 4 | NEW |
 
 **Recently merged:**
 - nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test) ← NEW BASELINE 52.798/44.972
@@ -98,6 +100,8 @@
 - frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
 **Recently closed:**
+- frieren #1983: T_max=10 (+10.96% val / +11.95% test) — CosineAnnealingLR is cyclic, not clamped at T_max; epoch 11 dead with LR=0; T_max < cfg.epochs always strictly worse
+- tanjiro #1984: n_hidden=160 (val −0.247% / test +1.268%) — val/test inversion = noise; +52% params disproportionate for marginal gain; targeted geom_camber_rc regressed on test
 - edward #1925: WD=3e-2 (+0.06% on prior baseline; +19.4% vs current) — WD axis confirmed flat [1e-4→3e-2]; exhausted
 - fern #1790: Lion 2-epoch warmup — stale + mechanism conflicts with T_max=12 (warmup wastes 17% of budget when cosine already handles full decay)
 - frieren #1920: eta_min=1e-5 (+12.05% vs current baseline) — mechanism redundant with T_max=12; T_max=12 cleanly decays LR to 0, which is strictly better than a 1e-5 floor
@@ -114,26 +118,27 @@ Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`l
 
 ## Round 11 priorities (T_max=12 + RMSNorm+GeGLU+Lion baseline, val=52.798)
 
-**Tier 1 (compound the two recent wins):**
-1. **T_max=12 + surf_weight=5 compound** (nezuko #1956): pure orthogonal stacking; predicted val ~48-50 if mechanisms compound additively.
-2. **surf_weight=3 with T_max=12** (thorfinn #1948): if running on old T_max=50 stack, may need re-evaluation against new baseline.
+**Tier 1 (highest expected impact — compound the wins):**
+1. **T_max=12 + surf_weight=5 compound** (nezuko #1956): pure orthogonal stacking; predicted val ~48-50 if mechanisms compound additively. THE KEY IN-FLIGHT EXPERIMENT.
+2. **surf_weight=3 with T_max=12** (thorfinn #1948): continues surf_weight sweep (5 → 3 → ?)
 
-**Tier 2 (optimizer tuning — older PRs may need rebase to T_max=12 baseline):**
-3. **Lion WD=1e-2** (askeladd #1766, stale): confirmed −10.4% on Lion+GELU; needs rebase to T_max=12.
-4. **Lion WD=3e-2** (edward #1925): brackets WD optimum; may need to re-evaluate at T_max=12.
-5. **Lion lr=1.5e-4** (alphonse #1765): pivot from 2e-4; at T_max=12 the cosine fully decays — higher initial LR may now be tolerable.
+**Tier 2 (LR/WD bracket completion):**
+3. **Lion WD=1e-2** (askeladd #1766, stale): WD axis nearly closed; this point confirms valley shape
+4. **Lion lr=1.5e-4** (alphonse #1765, rerun): higher LR on T_max=12
+5. **Lion lr=8e-5** (frieren #2006): lower LR on T_max=12 — brackets alphonse from below
 
-**Tier 3 (schedule/architecture — older PRs may need rebase):**
-6. **Lion + 2-epoch warmup** (fern #1790): at T_max=12, warmup eats 17% of budget — may not compound.
-7. **mlp_ratio=8 + GeGLU** (tanjiro #1872, stale — nudged): recover fc2 capacity halved by GeGLU split.
-8. **CosineAnnealingLR eta_min=1e-5** (frieren #1920): non-zero LR floor for Lion tail; potentially redundant with T_max=12 now that LR reaches 0 cleanly.
+**Tier 3 (throughput / capacity tuning):**
+6. **n_layers=5** (edward #1995): shallower → 15 epochs in budget?
+7. **slice_num=48** (fern #1996): tighter PhysicsAttention → 14 epochs
+8. **mlp_ratio=2** (tanjiro #2007): test if gating dominates at half-width MLP
 
-**Queued ideas for next idle students (after current round lands):**
-- **T_max=11**: T_max=10 assigned to frieren (#1983); if T_max=10 wins, try 11 to bracket optimum
-- **surf_weight=2 with T_max=12**: if T_max=12+sw=5 compound (nezuko #1956) holds, keep sweeping
-- **geom_camber_rc-targeted experiments**: 67.7 val still dominates the average; worth targeted interventions
-- **PhysicsAttention slice_num=48**: slight reduction for faster epochs, more steps in budget
-- **Higher LR (1.5e-4 or 2e-4) + T_max=12 compound**: now that LR decays to 0, larger initial steps may be tolerable; alphonse #1765 testing 1.5e-4
+**Queued ideas for next idle students:**
+- **AdamW comparison on current stack** — sanity check Lion still wins; AdamW dead-end was on the OLD (pre-RMSNorm/GeGLU/T_max=12) stack
+- **batch=8 + lr=1.4e-4 (sqrt scaling)**: previous batch=8 dead end didn't compensate LR — proper scaling may recover step-count loss
+- **Geometric data augmentation** (rotation/flip aerofoils): physically valid for symmetric properties; targets geom_camber_rc OOD
+- **PINN-style auxiliary loss** (divergence/curl penalty on volume predictions): physics-informed regularization
+- **Spectral conv layer or FNO-style global filter**: alternative to PhysicsAttention slice pooling
+- **Test-time augmentation (TTA)**: ensemble rotations at inference; should help OOD splits
 
 ## Key constraints
 

@@ -6,6 +6,60 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 07:00 — PR #1983: CosineAnnealingLR T_max=10 — CLOSED (+10.96% val, +11.95% test)
+
+- **Student:** charliepai2g48h3-frieren
+- **Branch:** charliepai2g48h3-frieren/t-max-10
+- **Hypothesis:** T_max=10 (vs current T_max=12) pushes cosine floor earlier, gives Lion more low-LR refinement time.
+- **Result:** val=58.586, test=50.346 (epoch 12/12)
+
+| Split | val (T_max=10) | val (T_max=12 baseline) | Δ |
+|---|---|---|---|
+| single_in_dist | 63.472 | 58.907 | +7.75% |
+| geom_camber_rc | 74.086 | 67.658 | **+9.50%** |
+| geom_camber_cruise | 38.763 | 33.380 | **+16.13%** |
+| re_rand | 58.024 | 51.248 | **+13.22%** |
+| **avg** | **58.586** | **52.798** | **+10.96%** |
+
+- **Test:** 50.346 vs 44.972 = **+11.95% worse**
+- **Mechanism (student-identified, excellent analysis):**
+  1. PyTorch `CosineAnnealingLR` is cyclic, not clamped at T_max. After T_max it continues the cosine, bouncing LR back up.
+  2. With T_max=10 and 12 epochs run: epoch 11 LR was **exactly 0** → DEAD EPOCH (val identical to epoch 10). Epoch 12 bumped back to 2.4e-6 as cosine started rising.
+  3. T_max=12's gains came from gradual decay across epochs 9-12 (1e-5 → 0), NOT from "near-zero floor." Compressing this to T_max=10 truncated the productive part of the cosine — epochs 9-10 ran at sub-3e-6 LRs where Lion's sign-update has nothing useful to do.
+- **Dead end mechanism documented:** T_max < cfg.epochs is always strictly worse. T_max should be ≥ epoch count.
+- **Reassigned frieren:** PR #2006 Lion lr=8e-5 (bracket alphonse's 1.5e-4 from below)
+
+---
+
+## 2026-05-13 07:00 — PR #1984: n_hidden=160 — CLOSED (val −0.247% / test +1.268%; complexity disproportionate)
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/n-hidden-160
+- **Hypothesis:** Widen Q/K/V/PhysicsAttention dim from 128→160 to capture richer aerodynamic features.
+- **Result:** val=52.668 (−0.247% vs 52.798), test=45.542 (+1.268% vs 44.972), 12 epochs in 31.5 min
+
+| Split | val (n=160) | val (n=128 baseline) | Δ | test (n=160) | test (n=128) | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 57.375 | 58.907 | **−2.60%** | 50.878 | 50.239 | +1.27% |
+| geom_camber_rc | 67.923 | 67.658 | +0.39% | 61.274 | 59.561 | **+2.88%** |
+| geom_camber_cruise | 33.528 | 33.380 | +0.44% | 27.207 | 27.740 | −1.92% |
+| re_rand | 51.845 | 51.248 | +1.17% | 42.810 | 42.345 | +1.10% |
+| **avg** | **52.668** | **52.798** | **−0.247%** | **45.542** | **44.972** | **+1.27%** |
+
+- **Per-epoch cost:** +12% (157s vs 140s) — much cheaper than predicted +60%
+- **n_params:** +52% (1.522M vs ~1.0M)
+- **Peak GPU memory:** 55.22 GB (up from baseline)
+- **Decision rationale (closed not merged):**
+  - Val/test direction inversion → noise signature, not real win
+  - "Disproportionate complexity for tiny gain" clause applies (+52% params for −0.247% val)
+  - Targeted hardest split (geom_camber_rc) regressed on test (+2.88%) — the mechanism didn't work
+  - Permanent slowdown on all future experiments if merged
+- **Useful signal:** single_in_dist val −2.60% suggests wider attention helps in-distribution; OOD splits resist. This is opposite RMSNorm's signal (which cracked geom_camber_rc) — confirms OOD bottleneck is geometric extrapolation, not feature capacity.
+- **Per-epoch calibration:** n_hidden widening is much cheaper than expected (+12% not +60%)
+- **Reassigned tanjiro:** PR #2007 mlp_ratio=2 (test if "gating wins outright" extends below 4)
+
+---
+
 ## 2026-05-13 06:45 — PR #1925: Lion WD=3e-2 — CLOSED (WD axis saturated, +0.06% on prior baseline)
 
 - **Student:** charliepai2g48h3-edward
