@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 01:25
+- 2026-05-13 01:30
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -36,14 +36,14 @@ Merged stack: warmup3+cosine13 + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(l
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #1755 | fern | n_hidden=192 + BF16 (wider model unlocked by BF16 VRAM cut) | WIP | Beat 73.15 |
-| #1656 | thorfinn | Dropout=0.1 in attention + MLP | WIP | Beat 73.15 |
-| #1639 | alphonse | Huber/Smooth-L1 loss (delta=1.0) | WIP (crashloop) | Beat 73.15 |
+| #1780 | tanjiro | Lion + longer cosine (epochs=16, BF16) — exploit non-convergence at epoch 13 | WIP | Beat 73.15 |
+| #1782 | frieren | Lion LR scan (2e-4, 2.5e-4, 4e-4) — narrow optimal between 1.5e-4 and 3e-4 | WIP | Beat 73.15 |
+| #1755 | fern | n_hidden=192 + BF16 (wider model unlocked by BF16 VRAM cut) | WIP — needs Lion rebase | Beat 73.15 |
+| #1656 | thorfinn | Dropout=0.1 in attention + MLP on Lion stack | WIP — needs Lion rebase | Beat 73.15 |
+| #1639 | alphonse | Huber/Smooth-L1 loss (delta=1.0) on Lion stack | WIP — needs Lion rebase | Beat 73.15 |
 | #1481 | nezuko | slice_num=128 | WIP | Beat 73.15 |
 | #1470 | edward | Instance-norm loss | WIP | Beat 73.15 |
-| #1463 | askeladd | Warmup+SWA+grad_clip compose | WIP (rebase needed) | Beat 73.15 |
-| tanjiro | tanjiro | IDLE — assigning Lion follow-up | Assigning | Beat 73.15 |
-| frieren | frieren | IDLE — assigning Lion follow-up | Assigning | Beat 73.15 |
+| #1463 | askeladd | Warmup+SWA+grad_clip compose on Lion stack | WIP — needs Lion rebase | Beat 73.15 |
 
 ## Recently closed/merged
 
