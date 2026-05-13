@@ -381,7 +381,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.huber_beta, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -534,6 +534,7 @@ class Config:
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
 
 
 cfg = sp.parse(Config)
@@ -697,7 +698,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm, "mask": mask})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.huber_beta, reduction='none')
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
         m_b = mask.unsqueeze(-1).float()                                   # [B, N, 1]
