@@ -247,3 +247,46 @@ cd "target/" && python train.py \
 ```
 
 *(All defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18. `batch_size=4` + `accumulation_steps=2` required for eff_bs=8 at 43 GB peak.)*
+
+## 2026-05-13 10:30 — PR #2090: Gradient norm clipping max_norm=5.0 on Lion+grad-accum stack
+
+**Changes merged:** Added `grad_clip_max_norm: float = 0.0` to `Config` (0.0 = disabled). When > 0, clips gradient norm after accumulation, before Lion step: `nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_max_norm)`. Grad-norm diagnostics (mean, max, fire-rate) logged per epoch via W&B. No other changes to optimizer, schedule, or architecture.
+
+**Key finding:** clip=5.0 is a **bulk rescaler** on Lion — fire rate 84–100% throughout training (mean grad norm ≈ 19–108 vs threshold 5.0), never a tail-only stabilizer as hypothesized. Despite this, produces a massive −15.5% test improvement. Mechanism: Lion's sign-update discards per-parameter magnitude; clipping `g` before the momentum buffer update smooths the *direction* signal, reducing variance in the sign vote under grad-accum=2. The opposite of AdamW clip behavior (which hurts by flattening parameter-importance signal that AdamW relies on). All 4 test splits improve uniformly (−12% to −18%).
+
+### Primary metrics (best val checkpoint, epoch 14 of 15)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **75.8431** | −16.50% |
+| **test_avg/mae_surf_p** | **68.0957** | **−15.52%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | Δ vs prev baseline |
+|---|---|---|
+| test_single_in_dist | 68.29 | −16.96% |
+| test_geom_camber_rc | 82.24 | −12.14% |
+| test_geom_camber_cruise | 50.71 | −17.62% |
+| test_re_rand | 71.14 | −16.37% |
+
+### Run info
+
+- **W&B run:** `0w7kkvb8` — group `grad-clip-lion-sweep`
+- **Epochs:** 15 / 18 (30-min timeout, ~126 s/epoch)
+- **Peak GPU memory:** 43.4 GB (unchanged — no additional memory overhead)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, space_dim=34 (Fourier L=8)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --accumulation_steps 2 \
+  --grad_clip_max_norm 5.0 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(All defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18. `--grad_clip_max_norm 5.0` is the new required flag — value 0 (default) disables clipping.)*
