@@ -383,6 +383,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     lion_lr: float = 1.5e-4
     lion_weight_decay: float = 3e-5
+    lion_beta1: float = 0.9
 
 
 cfg = sp.parse(Config)
@@ -439,8 +440,8 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 from lion_pytorch import Lion
 LION_LR = cfg.lion_lr
 LION_WD = cfg.lion_weight_decay
-optimizer = Lion(model.parameters(), lr=LION_LR, weight_decay=LION_WD)
-print(f"Optimizer: Lion (lr={LION_LR}, weight_decay={LION_WD}) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
+optimizer = Lion(model.parameters(), lr=LION_LR, weight_decay=LION_WD, betas=(cfg.lion_beta1, 0.99))
+print(f"Optimizer: Lion (lr={LION_LR}, weight_decay={LION_WD}, beta1={cfg.lion_beta1}, beta2=0.99) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
 import math
 WARMUP_EPOCHS = 3
 def lr_lambda(epoch):
@@ -466,6 +467,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "optimizer": "Lion",
         "lion_lr": LION_LR,
         "lion_weight_decay": LION_WD,
+        "lion_beta1": cfg.lion_beta1,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
