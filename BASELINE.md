@@ -1,5 +1,71 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 07:25 — PR #1956: T_max=12 + surf_weight=5 compound (nezuko)
+
+**New best: `val_avg/mae_surf_p` = 51.040** (epoch 12, 30-min wall-clock cap, surf_weight=5)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE) in normalized space, **`surf_weight=5`** ← updated |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=12 |
+| `epochs` | 12 |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+
+> **Compound mechanism:** T_max=12 aligns cosine decay to the actual epoch budget (LR→0 at epoch 12). surf_weight=5 reallocates L1 gradient from surface to volume nodes, yielding −10% to −14% volume MAE improvement across all splits. Both mechanisms are orthogonal and compound sub-linearly (−3.33% additional val improvement on top of T_max=12 baseline, vs the −9.03% surf_weight=5 achieved on the older T_max=50 stack).
+
+### Val metrics (best checkpoint, epoch 12/12)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 56.933 | 60.506 |
+| val_geom_camber_rc | **64.886** | 65.720 |
+| val_geom_camber_cruise | 31.056 | 28.904 |
+| val_re_rand | 51.287 | 48.815 |
+| **val_avg/mae_surf_p** | **51.040** | — |
+
+### Test metrics (best-val checkpoint, epoch 12)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 50.459 |
+| test_geom_camber_rc | 59.341 |
+| test_geom_camber_cruise | 25.501 |
+| test_re_rand | 42.260 |
+| **test_avg/mae_surf_p** | **44.390** |
+
+### Improvement vs PR #1793 baseline (52.798 val / 44.972 test)
+
+| Split | Old val (T=12, sw=10) | New val (T=12, sw=5) | Δ val |
+|---|---|---|---|
+| single_in_dist | 58.907 | 56.933 | −3.35% |
+| geom_camber_rc | 67.658 | 64.886 | −4.10% |
+| geom_camber_cruise | 33.380 | 31.056 | −6.96% |
+| re_rand | 51.248 | 51.287 | +0.08% |
+| **avg** | **52.798** | **51.040** | **−3.33%** |
+
+**Test: 44.390 vs 44.972 = −1.29%**
+
+### Metric artifacts
+`models/model-charliepai2g48h3-nezuko-tmax-12-surf-weight-5-compound-20260513-055720/metrics.jsonl`
+
+### Reproduce command
+```bash
+cd target/ && python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 5
+```
+
+---
+
 ## 2026-05-13 06:05 — PR #1793: CosineAnnealingLR T_max=12 on RMSNorm+GeGLU+Lion (nezuko)
 
 **New best: `val_avg/mae_surf_p` = 52.798** (epoch 12, 30-min wall-clock cap, surf_weight=10)
