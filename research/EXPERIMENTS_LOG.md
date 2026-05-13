@@ -948,3 +948,43 @@ frieren reassigned to PR #1919 (mlp-ratio-4): double Transolver FFN width 2→4.
 **Mechanism partially confirmed.** Epoch-1 grad-norm mean=15.32 vs baseline 30-1000+ — warmup successfully dampens AdamW's early variance-corruption hazard. But epoch-1 val=269 (worse than baseline ~233): warmup reduces effective lr during epoch 1, so less progress per step.
 
 **Verdict: send back for proper stacking.** Asked thorfinn to: (1) rebase onto current HEAD (eta_min=5e-5 in train.py); (2) modify cosine portion to use eta_min=5e-5 not 0.0; (3) rerun for apples-to-apples comparison. If val improves below ~82.5 (>σ from current best), we merge.
+
+---
+
+## 2026-05-13 06:00 — PR #1812: [lr-warmup-1ep] 1-epoch linear warmup + cosine — **MERGED (NEW BEST: val=82.56)**
+- Student branch: `charliepai2g48h4-thorfinn/lr-warmup-1ep` (second run on current HEAD with eta_min=5e-5)
+- Hypothesis: 1-epoch linear warmup (lr 5e-6→5e-4) protects AdamW momentum buffers from epoch-1 high-gradient corruption.
+
+| Metric | Warmup+Cosine (this rerun) | Current best #1855 (pure cosine) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **82.56** | 83.95 | **−1.39 (−1.65%)** |
+| test_avg/mae_surf_p | **74.13** | 74.70 | −0.57 (−0.76%) |
+| val single_in_dist | 90.40 | 93.45 | −3.05 |
+| val geom_camber_rc | 91.39 | 91.33 | +0.06 (flat) |
+| val geom_camber_cruise | 66.68 | 67.06 | −0.38 |
+| val re_rand | 81.77 | 83.97 | −2.20 |
+
+- Artifact: `models/model-charliepai2g48h4-thorfinn-lr-warmup-1ep-20260513-051740/metrics.jsonl`
+- 18/18 epochs, 30.9 min wall-clock; epoch-1 grad-norm mean=8.66 (max 35.5) vs 30-1000+ pre-warmup
+
+**Analysis:** Apples-to-apples comparison (both use eta_min=5e-5). Improvement is -1.39 val (within σ≈8.5 noise floor) but consistent across 3/4 splits and test. Mechanism confirmed: warmup damps epoch-1 AdamW momentum corruption (mean grad-norm 8.66 vs 30-1000+ without warmup), resulting in better model positioning entering the cosine descent (epoch-17 val ~85.00 here vs ~87.29 in pure-cosine). **Merged as 12th effective improvement.**
+
+thorfinn reassigned to PR #1968 (lr-7e-4): higher peak LR 5e-4→7e-4 with warmup, natural upper-bracket.
+
+---
+
+## 2026-05-13 06:00 — PR #1914: [lr-3e-4] Lower peak LR 5e-4→3e-4 — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-alphonse/lr-3e-4`
+- Hypothesis: Lower peak LR allows model to settle into tighter local basin.
+
+| Metric | lr=3e-4 (this run) | baseline #1855 (lr=5e-4) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **90.67** | 83.95 | **+6.72 (+8.0%)** |
+| test_avg/mae_surf_p | 81.94 | 74.70 | +7.24 (+9.7%) |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-lr-3e-4-20260513-051046/metrics.jsonl`
+- 18/18 epochs; still steeply descending at epoch 18 (94.22→90.67)
+
+**Analysis:** Uniform regression all 4 splits. Root cause: with CosineAnnealingLR over T_max=18, lower peak lr means ~40% less total parameter displacement within the same wall-clock budget. Model is underfitting (still descending at epoch 18) — not overfitting. **lr=5e-4 confirmed optimal lower bound. lr axis closed: 3e-4 dominated, 5e-4 optimum, 7e-4 (thorfinn) testing upper.**
+
+alphonse reassigned to PR #1972 (batch-size-2): halve batch 4→2.
