@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-13 10:30 — Round 24
+
+### PR #1988 nezuko: fun-jitter σ=0.05 on Re/AoA — SENT BACK (LOSS, retune σ=0.025 for axis closure)
+
+- **Branch:** `charliepai2g48h5-nezuko/fun-jitter-re-aoa-0.05`
+- **Hypothesis:** Per-sample Gaussian noise on dims 13/14/18 (Re/AoA1/AoA2), σ=0.05, training only.
+- **Result:** val_avg/mae_surf_p = **60.45** (+11.9% LOSS). test = 52.89 (+11.1%).
+
+| Split | This run | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 61.51 | 59.09 | +4.1% |
+| `val_geom_camber_rc` | 75.69 | 67.45 | +12.2% |
+| `val_geom_camber_cruise` | 43.55 | 35.72 | +21.9% |
+| `val_re_rand` (TARGETED) | 61.05 | 53.76 | **+13.6% ✗** |
+
+- **Analysis:** Targeted OOD axis (val_re_rand) got worse, not better. Mechanism: condition channels are "exact" sample-level constants broadcast to all nodes — perturbing them tells the model the operating condition itself is uncertain. This is fundamentally different from coord jitter (mesh already has natural noise). Direction of damage differs from #1921: pos-jitter gave in-dist win + OOD loss; fun-jitter gives no-in-dist-win + OOD-only loss (information removal on load-bearing channels).
+- **Send-back:** σ=0.025 probe for clean σ-sweep closure. Student's recommendation #1. Either lands wash (axis salvageable at finer magnitude) or smaller LOSS (axis closes decisively).
+
+### PR #1946 edward: EMA decay=0.999 with dual-eval diagnostic — SENT BACK (wash/test-tie, drop diagnostic to recover budget)
+
+- **Branch:** `charliepai2g48h5-edward/ema-weights-0.9999`
+- **Hypothesis:** EMA model weights with decay=0.999 (half-life ~2 epochs, ~693 steps) for OOD generalization via flat-minima effect.
+- **Result:** val_avg = 54.91 (+1.67%), test = **47.60 (−0.05%, effectively tied)**. 41 epochs vs baseline ~48-50.
+
+| Split | EMA val | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 51.47 | 59.09 | **−12.9% ✓** |
+| `val_geom_camber_rc` | 71.07 | 67.45 | +5.4% |
+| `val_geom_camber_cruise` | 38.89 | 35.72 | +8.9% |
+| `val_re_rand` | 58.19 | 53.76 | +8.2% |
+
+**Mechanism CONFIRMED by diagnostic.** EMA-vs-raw dual-eval table:
+
+| Epoch | EMA val | Raw val | EMA − Raw |
+|---:|---:|---:|---:|
+| 10 | 117.56 | 131.55 | **−13.98** (EMA first beats raw) |
+| 20 | 78.90 | 104.22 | −25.32 |
+| 41 | 54.91 | 55.72 | −0.81 |
+
+- **Analysis:** EMA-of-weights mechanism works (cross-over at ep10 after init-weight pollution decays). Wash vs baseline is budget arithmetic, not mechanism failure: dual-eval cost ~3 s/epoch × 41 epochs = ~6 lost epochs vs baseline's full 50-epoch budget. Cosine LR was still annealing at ep41.
+- **Cross-experiment pattern:** Both #1921 pos-jitter and #1946 EMA give ~-13% on val_single_in_dist (two structurally different mechanisms, same in-dist win magnitude). In-dist generalization has ~14% headroom unlockable; OOD requires structurally different interventions.
+- **Send-back:** Drop the dual-eval diagnostic, rerun with full 50-epoch budget. Student's recommendation #1. Predicted landing: 51-53 val_avg, below baseline.
+
+---
+
 ## 2026-05-13 10:00 — Round 23
 
 ### PR #1774 alphonse: lr 5e-4 → 7.5e-4 (+50%) — CLOSED (LOSS, lr-UP axis decisively closed)

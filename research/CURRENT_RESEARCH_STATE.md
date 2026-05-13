@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 10:00 (round-23: Closed #1774 alphonse lr=7.5e-4 LOSS (+16% val on slice=32 — lr-UP closed across all 3 landscapes); assigned #1997 alphonse lr-3.75e-4 capacity↔LR DOWN probe. **Baseline still 54.0051**)
+- **As of:** 2026-05-13 10:30 (round-24: Sent back #1988 nezuko fun-jitter σ=0.05 LOSS → σ=0.025 for axis closure; sent back #1946 edward EMA decay=0.999 (test tied at 47.60, mechanism confirmed by dual-eval) → drop diagnostic for full-budget rerun. **Baseline still 54.0051**. Cross-experiment pattern: in-dist headroom ~14% (pos-jitter -13.7%, EMA -12.9% both on val_single_in_dist); OOD needs structurally different interventions)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -53,11 +53,11 @@ Per-split baseline (PR #1846):
 
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
-| #1988 | nezuko | Per-sample fun_dim jitter on dims 13/14/18 (Re/AoA/AoA2), σ=0.05 | **New round-22** — OOD generalization via condition-channel augmentation; follow-up to closed #1921 pos-jitter |
+| #1988 | nezuko | Per-sample fun_dim jitter Re/AoA — **retune σ=0.025** | **Round-24 send-back** — σ=0.05 LOSS (+11.9%); σ=0.025 probe for clean axis closure |
 | #1926 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **New round-18** — faster norm + L1 gradient stability |
 | #1989 | thorfinn | Cosine warm restarts T_0=10 T_mult=2 | **Round-22 retry** — SGDR schedule; resubmit of stale #1905 |
 | #1976 | tanjiro | DropPath p_max=0.1 stochastic depth | **New round-21** — OOD generalization via block-level residual-branch regularization |
-| #1946 | edward | EMA model weights — retune to **decay=0.999** | Round-19 first try (0.9999) lagged catastrophically; round-20 send-back to 0.999 (~2-epoch half-life). +dual EMA/raw val logging. |
+| #1946 | edward | EMA decay=0.999 — **drop diagnostic, full-budget rerun** | **Round-24 send-back** — mechanism confirmed by dual-eval (EMA<raw from ep10); test tied at 47.60. Need full 50-epoch budget. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
 | #1997 | alphonse | lr 5e-4 → 3.75e-4 (-25%) | **Round-23** — capacity↔LR coupling DOWN probe; follow-up to closed #1774 |
 | #1653 | askeladd | Grad clip max_norm=1.0 | Proven -6.94% on β=0.5; needs L1+sampler+slice32 rebase |
@@ -89,10 +89,10 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 ## Open questions / next experiments
 
 1. **OOD generalization** — primary bottleneck. Both `val_geom_camber_rc` (67.45) and `val_re_rand` (53.76) are 30-40% higher than geom_camber_cruise. Do NOT respond to sampler changes.
-   - **Coord-jitter (#1921) CLOSED (LOSS):** -13.7% in-dist, but all OOD splits degraded. Spatial precision is load-bearing for camber inference. Coord-jitter is the wrong axis for shape-OOD.
-   - **Condition-jitter (#1988 in flight):** Per-sample noise on Re/AoA dims (13/14/18), σ=0.05 — directly targets the condition mapping bottleneck identified by #1921 diagnosis.
-   - Domain conditional embedding (student suggestion #1904-followup-4) — structural signal vs. resampling. Untested; would require architecture change.
-   - AoA reflection augmentation — physically motivated for cambered foils but tricky for racecar (one-sided AoA range).
+   - **Coord-jitter (#1921) CLOSED (LOSS):** -13.7% in-dist, but all OOD splits degraded. Spatial precision is load-bearing for camber inference.
+   - **Fun-jitter Re/AoA σ=0.05 (#1988) LOSS at this magnitude:** +13.6% on targeted val_re_rand. σ=0.025 probe in flight to close the σ-sweep cleanly.
+   - **In-dist headroom (~14%) is unlockable but does NOT translate to OOD:** pos-jitter (-13.7%) and EMA (-12.9%) both give big val_single_in_dist wins; neither helps OOD. The in-dist→OOD compounding doesn't exist with simple regularization.
+   - Untried structural OOD interventions: domain conditional embedding (architectural), Lookahead optimizer (slow/fast trajectory), AoA reflection.
 2. **Normalization** — RMSNorm in flight (#1926). Pre-LN vs Post-LN placement also untested.
 3. **Proven-lever stack on new baseline** — grad-clip (#1653), WD=5e-5 (#1775) all need rebasing to current 54.00 baseline. β2 axis is now closed (PR #1845).
 4. **Schedule** — SGDR in flight (#1905). Warm restarts may unlock multi-descent gains.
