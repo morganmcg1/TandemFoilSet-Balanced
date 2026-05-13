@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1825 MAE (L1) loss on Lion+EMA | **56.58** | **48.82** | −7.71% val / −7.34% test vs Lion baseline; wins all 4 test splits |
+| #1932 Lion lr=2e-4 (wd=1e-4) on Lion+MAE | **55.41** | **47.90** | −2.06% val / −1.88% test vs MAE baseline; wins 3/4 test splits |
+| #1825 MAE (L1) loss on Lion+EMA | 56.58 | 48.82 | −7.71% val / −7.34% test vs Lion baseline; wins all 4 test splits |
 | #1781 Lion optimizer lr=1e-4 | 61.30 | 52.68 | −20.4% val / −22.8% test vs EMA-0.99 baseline; uniform 20–28% across all 4 test splits |
 | #1607 EMA decay=0.99 | 77.05 | 68.27 | −22.1% val / −23.1% test vs prior best; uniform gains all 4 splits |
 | #1367 Dropout=0.2 + clip_grad=1.0 | 98.96 | 88.74 | dropout standalone on BF16; merged into Fourier+Huber base |
@@ -32,6 +33,22 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 08:30 — PR #1932: Lion lr=2e-4 scaling on Lion+MAE compound (thorfinn)
+
+- **val_avg/mae_surf_p (best epoch 16):** 55.4117 — **−2.06% vs MAE baseline (56.577)**
+- **test_avg/mae_surf_p:** 47.8993 — **−1.88% vs MAE baseline (48.817)**
+- **Per-val-split:** single_in_dist=61.41, geom_camber_rc=67.37, geom_camber_cruise=37.14, re_rand=55.73
+- **Per-test-split:** single_in_dist=51.084 (−4.85%), geom_camber_rc=62.288 (−1.49%), geom_camber_cruise=31.211 (+1.30%), re_rand=47.014 (−1.10%)
+- **Epochs completed:** 16 in ~30.5 min; val still descending steeply at cap (last 4 epochs: 61.27→59.07→57.82→55.41, ≈−2 pts/epoch)
+- **W&B run:** `y8oh2gxf`
+- **Reproduce:** `cd "target/" && python train.py --optimizer lion --lr 2e-4 --weight_decay 1e-4 --loss_type mae --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-thorfinn --wandb_name "willowpai2g24h5-thorfinn/lion-lr2e-4-wd1e-4-mae" --wandb_group "willow-pai2g-24h-r5-lion-lr"`
+
+**Key change:** Lion lr 1e-4 → 2e-4, wd unchanged at 1e-4. Arm 2 (canonical wd=5e-4 scaling) regressed slightly (+0.4% val) — EMA+dropout already provide enough regularization; additional wd over-constrains. Winning arm confirms the lr-doubling trend holds for the third octave (5e-5→1e-4→2e-4) without saturation. Val curve still steep at cap — model is NOT converged.
+
+**Compound:** Fourier(L=6, mf32) + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=2e-4, wd=1e-4)
 
 ---
 
