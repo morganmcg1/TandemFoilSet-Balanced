@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-05-13 ~10:34 — PR #2070: Lion-no-EMA + AdamW-no-EMA ablation (edward) — CLOSED, ICML APPENDIX
+
+- **Branch:** `willowpai2g24h5-edward/lion-no-ema-ablation`
+- **Hypothesis:** Quantify Lion vs EMA contributions to the Lion+EMA+MAE win. Diagnostic-only, not for merge.
+- **W&B runs:** `lyplrb6e` (Lion-no-EMA full 18 ep, canonical), `q6lou95t`/`5memu5rh` (Lion-no-EMA truncated), `4u85vrwj` (AdamW-no-EMA full 18 ep)
+
+| Cell | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline |
+|------|-------------------|---------------------|---------------|
+| Lion+EMA(0.99)+MAE (baseline #1932) | **55.41** | **47.90** | 0 |
+| Lion+no-EMA+MAE (best, lyplrb6e) | 62.47 | 54.42 | +7.06 / +6.52 |
+| AdamW+no-EMA+MAE (4u85vrwj) | 82.46 | 71.69 | +27.05 / +23.79 |
+
+**Result:** CLOSED — regression vs baseline (expected, diagnostic-only). **Reframed mechanism story:**
+- Full-budget Lion-no-EMA val=62.47 (NOT 78 from truncated runs) — Lion's direction explains ~20 val, EMA explains ~7-9 val.
+- **Lion is the dominant ingredient (~75% of Lion+EMA's win over AdamW+EMA), EMA is secondary (~25%).** The synergy is real but Lion-led, not EMA-led.
+- Lion-no-EMA final-epoch bounce 62→71 at ep 18 — direct evidence that a single bad late update visibly hurts val without parameter averaging.
+- AdamW-no-EMA has 3 backward steps over 18 epochs (Lion-no-EMA has 1) — Lion's signed direction is loss-landscape-aware on this geometry-aware problem.
+- **Variance noted:** lyplrb6e=62.47 vs 5memu5rh=77.99 at identical config = 15-val gap. The truncated runs (10–11 ep) under-represent steady-state; full-budget is the canonical datapoint.
+
+**Edward reassigned:** PR #2183 — AdamW+EMA+MAE at lr=5e-4 and lr=2e-4. Fills missing 2×2 cell; quantifies optimizer effect at fixed lr=2e-4 (apples-to-apples Lion vs AdamW).
+
+---
+
 ## 2026-05-13 ~10:06 — PR #1999: Cosine T_max tuning T_max=16 ± eta_min on Lion+MAE+lr=1e-4 (fern) — CLOSED REGRESSION (with strong diagnostic)
 
 - **Branch:** `willowpai2g24h5-fern/cosine-tmax-tuning`

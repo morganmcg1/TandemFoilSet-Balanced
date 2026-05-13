@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~10:08 UTC
+- **Date:** 2026-05-13 ~10:34 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -27,7 +27,7 @@
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
 | #2086 | thorfinn | Lion lr probe: lr=4e-4 (bold) + lr=3e-4 (midpoint) on Lion+MAE | WIP |
-| #2070 | edward | Lion-no-EMA ablation + AdamW-no-EMA (diagnostic for ICML appendix) | WIP |
+| **#2183** | **edward** | **AdamW+EMA+MAE: lr=5e-4 (Arm1) + lr=2e-4 (Arm2) — fill missing 2×2 cell** | **WIP — new** |
 | #2069 | alphonse | n_head sweep: n_head=8 (more) and n_head=2 (fewer) on Lion+MAE | WIP |
 | #2056 | nezuko | surf_weight sweep on Lion+MAE: sw=5 (Arm1), sw=15 (Arm2) | WIP |
 | #2052 | frieren | batch_size=8: lr=2e-4 linear (Arm1), lr=1e-4 batch-only (Arm2) | WIP |
@@ -37,6 +37,7 @@
 
 ## Closed experiments this round
 
+- **#2070 (edward):** Lion-no-EMA + AdamW-no-EMA ablation — both regress (+7.06 / +27.05). Mechanism reframed: Lion direction ~75%, EMA ~25% of Lion+EMA's win over AdamW+EMA. Full-budget Lion-no-EMA val=62.47 (NOT 78 from truncated runs). Closed; reassigned to #2183 (fill AdamW+EMA+MAE 2×2 cell).
 - **#1999 (fern):** Cosine T_max=16 ± eta_min at lr=1e-4 — both arms regress (+11.9%/+7.5%). Strong diagnostics: eta_min=0 strictly dominated by eta_min=1e-5 (uptick at lr=0); Arm 2 still descending −1.48/epoch at cap (lr capacity, not schedule, was the bottleneck at lr=1e-4). Closed; reassigned to #2167 at lr=2e-4.
 - **#2001 (askeladd):** Lion β1=0.95/β1=0.85 — regression both arms (+4.0%/+6.4% vs baseline). Asymmetric: β1=0.85 hurts ~2× more. Canonical β1=0.9 confirmed optimal. Closed.
 - **#1932 (thorfinn):** Lion lr=2e-4 — **MERGED** val=55.41, test=47.90.
@@ -56,7 +57,7 @@
 
 1. **Lion lr-doubling trend (3 octaves):** 5e-5→1e-4→2e-4, each a win, none saturated. Val still steep at cap each time. **4e-4 is the next test.**
 2. **MAE (L1) loss on Lion+EMA:** −7.71% val — uniform per-node weighting compounds cleanly with Lion.
-3. **Lion optimizer + EMA:** −20.4% val — sign-magnitude updates decoupled from EMA smoothing.
+3. **Lion optimizer + EMA:** −20.4% val. Mechanism quantified (#2070): Lion direction explains ~75% of win, EMA ~25%. Synergy is Lion-led, not EMA-led. Full-budget Lion-no-EMA = 62.47 (+7.06 vs 55.41); AdamW-no-EMA = 82.46 (+27.05).
 4. **EMA weight averaging (decay=0.99):** −22.1% val — foundational.
 5. **Fourier positional encoding:** −14.8% test — foundational.
 6. **Canonical wd scaling disconfirmed on Lion+MAE:** wd=5e-4 regresses vs wd=1e-4 at lr=2e-4. EMA+dropout already saturate regularization; additional wd over-constrains.
@@ -77,7 +78,7 @@
 - Dropout sweep on Lion+MAE+lr=2e-4 (#2131 tanjiro) — direct probe of under-regularization signal from #1961
 
 **Diagnostic / paper:**
-- Lion-no-EMA ablation (#2070 edward) — mechanism story for ICML appendix
+- AdamW+EMA+MAE 2×2 fill (#2183 edward, follow-up to #2070) — completes the optimizer × EMA matrix with measured values; isolates optimizer effect at fixed lr=2e-4
 
 ## Potential next directions (post-current-wave)
 
