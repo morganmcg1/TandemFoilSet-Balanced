@@ -1782,3 +1782,33 @@ Tanjiro pod was stuck for ~5 hours on a pod-side secondary rate-limit cycle (eac
 
 **Programme learning**: SECOND independent confirmation (with #2594) that the OOD axis is **shape-distribution NOT mesh-position-distribution**. AoA rotation perturbs the AoA manifold but the rc bottleneck doesn't live on that manifold. Reassigning askeladd to surface-normal feature (genuinely new shape info, orthogonal to SDF magnitude / curvature 2nd-derivative).
 
+
+## 2026-05-13 23:32 — PR #2585 (2 arms): ReFiLM-residual stream — CLOSED
+- **Branch**: `charliepai2g24h1-alphonse/refilm-residual-stream-shared` (+ hidden4-late variant)
+- **Hypothesis**: Re-conditioned FiLM on the residual stream (h ← γ(Re)·h + β(Re) + h_skip) — trunk-level Re conditioning beyond slice logits.
+- **Status**: **CLOSED — axis exhausted across 2 arms**
+
+| Arm | val_avg | Δ | test_avg | Δ | |γ|max | corr(mod, log_Re) |
+|---|---|---|---|---|---|---|
+| Baseline #2011 | 28.8762 | — | 24.9992 | — | — | — |
+| Arm 1: h=8, all blocks | 28.8934 | +0.06% (tied) | 24.5737 | **-1.70%** ✅ | 0.854 | -0.934 |
+| Arm 2: h=4, blocks 2-4 | 29.2558 | +1.31% ❌ | 24.7541 | -0.98% ✅ | 0.770 | -0.757 |
+
+- **Per-split (Arm 1 vs Arm 2 vs baseline)**:
+  - val_single_in_dist: +1.19% / **+6.35%** ❌ both regressed (in-dist perturbation)
+  - val_geom_camber_rc: +2.04% / -1.09% (Arm 2 fixes Arm 1's rc regression)
+  - val_geom_camber_cruise: -4.04% / -2.91% (both improve)
+  - val_re_rand: -1.79% (target) / +1.85% (Arm 2 LOSES val_re_rand gain)
+
+- **Diagnostic insights from student**:
+  1. **Capacity isn't the lever**: halving hidden from 8→4 barely moved |γ|max (0.854→0.770). The optimizer drives gates to ~0.7-0.8 regardless. Gradient signal dominates, not expressivity.
+  2. **Depth restriction is a sharp trade**: skipping blocks 0-1 fixes rc but cancels val_re_rand gain. Re-modulation effect is distributed across all blocks; restricting it cuts the signal.
+  3. **Mechanism remains valid** (corr_mod_logre confirmed across arms, gates open from zero init, slice-logit FiLM stats unchanged) — the axis itself doesn't translate to val_avg wins.
+  4. **val_single_in_dist regresses in BOTH arms** → ANY Re-conditioning of the residual stream perturbs the in-distribution feature pipeline. The injection point is the issue, not the parameterization.
+
+- **Metrics JSONL**:
+  - Arm 1: `models/model-charliepai2g24h1-alphonse-refilm-residual-stream-shared-20260513-210800/metrics.jsonl`
+  - Arm 2: `models/model-charliepai2g24h1-alphonse-refilm-residual-stream-shared-hidden4-late-20260513-223401/metrics.jsonl`
+
+**Programme learning**: **Residual-stream FiLM injection point CLOSED**. The mechanism works but the in-dist-vs-OOD trade-off is fundamental at this injection point. The unbounded amplification potential of γ⊙h+β before the next norm distorts in-distribution features. Reassigned alphonse to **#2650 re-conditional-layernorm-affine** — same Re-conditioning idea at a DIFFERENT injection point: LN's γ/β (post-normalization affine), which operates in a feature-bounded regime by construction. Canonical Conditional-InstanceNorm pattern from Dumoulin et al. 2017 — different inductive bias than residual-stream gating.
+
