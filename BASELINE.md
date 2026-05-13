@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1781 Lion optimizer lr=1e-4 | **61.30** | **52.68** | −20.4% val / −22.8% test vs EMA-0.99 baseline; uniform 20–28% across all 4 test splits |
+| #1825 MAE (L1) loss on Lion+EMA | **56.58** | **48.82** | −7.71% val / −7.34% test vs Lion baseline; wins all 4 test splits |
+| #1781 Lion optimizer lr=1e-4 | 61.30 | 52.68 | −20.4% val / −22.8% test vs EMA-0.99 baseline; uniform 20–28% across all 4 test splits |
 | #1607 EMA decay=0.99 | 77.05 | 68.27 | −22.1% val / −23.1% test vs prior best; uniform gains all 4 splits |
 | #1367 Dropout=0.2 + clip_grad=1.0 | 98.96 | 88.74 | dropout standalone on BF16; merged into Fourier+Huber base |
 | #1357 Huber δ=1.0 (on Fourier base) | 98.79 | 88.90 | -4.31% val, -2.13% test vs Fourier baseline |
@@ -31,6 +32,22 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 06:35 — PR #1825: MAE (L1) loss on Lion+EMA base (askeladd)
+
+- **val_avg/mae_surf_p (best epoch 16):** 56.577 — **−7.71% vs Lion baseline (61.302)**
+- **test_avg/mae_surf_p:** 48.817 — **−7.34% vs Lion baseline (52.682)**
+- **Per-val-split:** single_in_dist=60.859, geom_camber_rc=71.849, geom_camber_cruise=36.842, re_rand=56.757
+- **Per-test-split:** single_in_dist=53.687 (−10.24%), geom_camber_rc=63.234 (−2.09%), geom_camber_cruise=30.812 (−12.32%), re_rand=47.535 (−7.14%)
+- **Epochs completed:** 16 in ~30.7 min; val still descending at cap
+- **W&B run:** `03w5fnvm`
+- **Reproduce:** `cd "target/" && python train.py --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-askeladd --wandb_name "willowpai2g24h5-askeladd/mae-loss-lion-ema" --wandb_group "willow-pai2g-24h-r5-loss-type"`
+
+**Key change:** Replace Huber(δ=1.0) loss with MAE/L1 loss (`F.l1_loss`). MAE weights every node's residual linearly and uniformly, directly matching the evaluation metric (`mae_surf_p`). On Lion base the gain is *larger* than on AdamW base (−7.71% vs −3.15%), because Lion's sign-magnitude update already removes per-parameter gradient scale, so L1's per-node uniform aggregation compounds cleanly rather than being partially absorbed by AdamW's second-moment normalization.
+
+**Why bigger on Lion:** Huber's quadratic well around zero down-weights small-residual nodes in the *scalar loss* before backprop starts. L1 gives all nodes equal weight. This property is independent of optimizer choice — it operates at the loss aggregation level. Lion + L1 together produce the largest uniform gains: single_in_dist (−10.24%) and cruise (−12.32%) are the biggest movers.
 
 ---
 
