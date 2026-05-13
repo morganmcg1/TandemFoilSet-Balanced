@@ -1506,3 +1506,30 @@ Note: all runs on OLD pre-slice_num=32 stack (assigned before #2226 merged).
 **Clip lever is fully characterized and closed.** Recording as discriminating positive: mechanism = bulk direction smoothing at fire-rate >80%, optimal threshold ~5.0, [2,5] range. No further clip tuning needed on this stack.
 
 **Follow-up**: Assigned tanjiro attention dropout=0.1 (#2344) — per-epoch-cost-neutral OOD regularizer for rc/re_rand splits.
+
+## 2026-05-13 15:30 — PR #2237: Lion β1 sweep (0.95/0.85): recalibrate momentum under clip — CLOSED ✗
+- Branch: willowpai2g48h1-askeladd/lion-beta1-sweep-clip
+- W&B runs: `9ij4hcyb` (β1=0.95 retry), `whgptt3b` (β1=0.95 primary), `3vt2atrq` (β1=0.85), `vyjph01c` (β1=0.9 same-stack ref)
+
+| Arm | W&B | test_avg/mae_surf_p | Δ vs current best (61.85) | Δ vs same-stack (65.37) |
+|---|---|---|---|---|
+| β1=0.95 retry | 9ij4hcyb | 64.9749 | +5.06% ✗ | −0.60% |
+| β1=0.95 primary | whgptt3b | 65.8957 | +6.55% ✗ | +0.82% |
+| β1=0.85 | 3vt2atrq | 66.8510 | +8.10% ✗ | +2.28% |
+| β1=0.9 ref (PR #2121 era) | vyjph01c | 65.37 | +5.69% ✗ | baseline |
+
+All arms on slice_num=48 stack (pre-PR #2282 merge). Per-split (β1=0.95 retry, best arm): in_dist=62.43, rc=77.14, cruise=51.39, re_rand=68.93.
+
+**Analysis**: No arm beats current best 61.8457. β1=0.9 default is well-calibrated within inter-seed variance.
+
+Key mechanism findings from student's diagnosis (excellent two-seed protocol):
+1. **β1=0.95 vs β1=0.9**: mean test 65.44 vs 65.37 — within inter-seed variance (~1.4% rel spread between two β1=0.95 seeds: 64.97 vs 65.90). Neither better nor worse in any statistically meaningful sense.
+2. **β1=0.85 hurts** (66.85 vs 65.37): Last-epoch grad_norm=22.8 vs 11.07/11.10 for β1=0.95 runs; clip fire-rate 92.6% vs ~65%. Shorter momentum memory → more directional noise → more clip events. β1=0.85 trades direction stability for agility, losing on both counts when clip already smooths magnitude.
+3. **Cosine refinement phase hypothesis falsified**: β1=0.85 was expected to help in the last 1/3 of cosine schedule (where LR has decayed enough that faster momentum response should help). It stayed worse throughout, not just at high-LR.
+4. **Inter-seed variance ~1.4% rel established** as the noise floor: the two β1=0.95 seeds differed by 65.90→64.97 = 1.43%. Single-seed differences <1.4% are indistinguishable from seed variance.
+
+**Lion β1 lever CLOSED.** β1=0.9 confirmed optimal at slice_num=48 + clip=5.0. Range [0.85, 0.95] fully characterized. No further β1 exploration warranted at this stack.
+
+**Finding #32 (inter-seed noise floor)**: ~1.4% rel test_avg/mae_surf_p on this stack/hardware. Any reported improvement from a single seed below this threshold requires multi-seed confirmation before claiming signal vs noise.
+
+**Follow-up**: Assigned askeladd Lion β2 sweep (#2382) — natural continuation, last untested Lion momentum parameter.
