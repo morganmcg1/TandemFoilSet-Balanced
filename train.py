@@ -258,15 +258,27 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()  # back to fp32 for downstream metric accumulation
 
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            # Vol uses uniform β=0.5; surf uses per-channel β: (Ux=0.5, Uy=0.5, p=0.25).
+            # Channel order is (Ux, Uy, p) per data/scoring.py:CHANNELS.
+            huber_err_vol = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            beta_surf = torch.tensor(
+                [0.5, 0.5, 0.25], device=pred.device, dtype=pred.dtype
+            ).view(1, 1, 3)
+            diff = pred - y_norm
+            abs_diff = diff.abs()
+            huber_err_surf = torch.where(
+                abs_diff < beta_surf,
+                0.5 * diff.pow(2) / beta_surf,
+                abs_diff - 0.5 * beta_surf,
+            )
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (huber_err * vol_mask.unsqueeze(-1)).sum()
+                (huber_err_vol * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (huber_err * surf_mask.unsqueeze(-1)).sum()
+                (huber_err_surf * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -470,6 +482,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "beta_vol": 0.5,
+        "beta_surf_per_channel": {"Ux": 0.5, "Uy": 0.5, "p": 0.25},
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -512,12 +526,25 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+
+            # Vol uses uniform β=0.5; surf uses per-channel β: (Ux=0.5, Uy=0.5, p=0.25).
+            # Channel order is (Ux, Uy, p) per data/scoring.py:CHANNELS.
+            huber_err_vol = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            beta_surf = torch.tensor(
+                [0.5, 0.5, 0.25], device=pred.device, dtype=pred.dtype
+            ).view(1, 1, 3)
+            diff = pred - y_norm
+            abs_diff = diff.abs()
+            huber_err_surf = torch.where(
+                abs_diff < beta_surf,
+                0.5 * diff.pow(2) / beta_surf,
+                abs_diff - 0.5 * beta_surf,
+            )
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (huber_err_vol * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (huber_err_surf * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
