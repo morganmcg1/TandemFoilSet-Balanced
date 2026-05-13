@@ -1,19 +1,19 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 07:25 (closed warmup-2ep #1991, n-head-8 #1853; assigned edward #2012 loss-beta-0-5, nezuko #2014 onecycle-lr; 12 effective merges; 8 students active)
+- **As of:** 2026-05-13 07:30 (MERGED #1972 batch-size-2 val=76.24 NEW BEST; sent back #1968 thorfinn lr-7e-4 for rerun on new baseline; assigned alphonse #2036 batch-size-1; 13 effective merges; 8 students active)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
 
 ## Current focus
 
-TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=82.56 / test=74.13 (thorfinn #1812 lr-warmup-1ep). Warmup is the 12th merge — it damps epoch-1 AdamW momentum corruption and positions the model better for the final cosine descent. Sub-80 val remains the next milestone.
+TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=76.24 / test=66.85 (alphonse #1972 batch-size-2). Batch_size=2 is the 13th merge — it doubles optimizer steps/epoch at the same wall-clock, providing 2x gradient refinement per unit time without increased compute cost.
 
-**Key diagnostic:** In every examined run, val_avg/mae_surf_p is still actively descending at the final epoch (warmup run ep17→18 delta=2.44). The 30-min wall-clock cap terminates training before convergence. **The model is undertrained, not overfit.** Highest-ROI interventions extend effective learning within the budget.
+**Key diagnostic:** val still actively descending at final epoch (ep17→18 delta=2.44 in prior warmup run; bs=2 got 19 epochs and best at ep18). Model is undertrained. Batch_size=2 directly addresses this by 2x more parameter updates per wall-clock minute.
 
-**Hardest split:** `val_geom_camber_rc` = 91.39 vs cruise = 66.68 (37% gap). Racecar OOD is the dominant bottleneck.
+**Sub-70 val is the next milestone.** EMA (askeladd #1540) expected to push further. VRAM headroom at bs=2 (17GB of 98GB) enables bigger architectures too.
 
-## Merged recipe (current advisor base — 12 effective merges)
+## Merged recipe (current advisor base — 13 effective merges)
 
 1. **#1512** (`data/scoring.py` NaN fix) — baseline = 123.99
 2. **#1513** (bf16 autocast) — 24% per-epoch speedup
@@ -26,27 +26,27 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 9. **#1762** (surf_weight=5.0) — val=90.58
 10. **#1695** (T_max=18) — val=84.67
 11. **#1855** (eta_min=5e-5) — val=83.95
-12. **#1812** (lr-warmup-1ep) — val=82.56 **CURRENT BEST**
+12. **#1812** (lr-warmup-1ep) — val=82.56
+13. **#1972** (batch_size=4→2) — val=76.24 **CURRENT BEST**
 
-**Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=4, SequentialLR(LinearLR(1ep warmup, 5e-6→5e-4) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+**Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=2, SequentialLR(LinearLR(1ep warmup, 5e-6→5e-4) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
 
 ## Confirmed null results / closed axes
 
-- **max_norm axis CLOSED**: 0.5/1.0/3.0 → 1.0 optimum.
-- **surf_weight axis CLOSED**: 3/5/10/20 → 5 optimum.
-- **depth axis CLOSED**: 5/6/7 → 5 optimum. Gradient dilution + wall-clock penalty under grad-clip.
-- **AdamW β1 axis CLOSED**: 0.9 optimum, 0.95 regresses.
-- **AdamW β2 axis CLOSED**: 0.999 optimum, 0.98 regresses.
-- **slice_num axis CLOSED**: 64 optimum (128 wall-clock bound).
-- **lr lower-bound CLOSED**: 3e-4 dominated by 5e-4 (+8%). 5e-4 optimum on lower side.
-- **loss shape axis CLOSED**: log-cosh regression under grad-clip.
-- **eta_min axis CLOSED**: 5e-5 optimum. 0 worse (84.67), 1e-4 worse (85.06, just closed). 3-point bracket complete.
-- **ref axis CLOSED**: ref=8 optimum. ref=16 regresses (+4.3%, just closed). ref=8 confirmed both sides.
-- **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses sharply (+8.8%, just closed). mlp_ratio=1 (frieren #1992) testing lower bracket.
-- **wd axis CLOSED**: wd=1e-4 confirmed optimum. wd=1e-5 regresses (+3.9%), wd=5e-4 also regressed (older stack). Both sides bracketed.
-- **warmup length CLOSED**: 1-epoch optimum. warmup-2ep regresses (+0.96%, just closed). grad_norm_mean at ep1 already ~9 — damping saturates.
-- **n_head upper CLOSED**: n_head=4 optimum upper-side. n_head=8 regresses sharply (+16.7%, just closed). Note: NOT zero-param — Transolver's per-head dim shrinks attention params -2.4%. n_head=2 (tanjiro #1993) testing lower bracket.
-- **hidden dim CLOSED**: n_hidden=192/256 wall-clock bound.
+- **max_norm axis CLOSED**: 1.0 optimum.
+- **surf_weight axis CLOSED**: 5 optimum.
+- **depth axis CLOSED**: 5 optimum.
+- **AdamW β1 axis CLOSED**: 0.9 optimum.
+- **AdamW β2 axis CLOSED**: 0.999 optimum.
+- **slice_num axis CLOSED**: 64 optimum.
+- **lr lower-bound CLOSED**: 3e-4 dominated. 5e-4 optimum lower-side.
+- **loss shape axis CLOSED**: log-cosh regression. Huber beta=1.0 merged. beta=0.5 (edward #2012) testing sub-axis.
+- **eta_min axis CLOSED**: 5e-5 optimum (0 → 84.67, 5e-5 → 83.95, 1e-4 → 85.06).
+- **ref axis CLOSED**: ref=8 optimum.
+- **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses. mlp_ratio=1 (frieren #1992) testing lower.
+- **wd axis CLOSED**: wd=1e-4 optimum.
+- **warmup length CLOSED**: 1-epoch optimum.
+- **n_head upper CLOSED**: n_head=8 regresses sharply (not zero-param!). n_head=2 (tanjiro #1993) testing lower.
 
 ## Themes
 
@@ -55,79 +55,73 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 3. **LR schedule alignment — MERGED.** T_max=18.
 4. **LR floor — MERGED.** eta_min=5e-5.
 5. **LR warmup — MERGED.** 1-epoch warmup (#1812) — val=82.56.
-6. **EMA weight averaging.** Askeladd #1540. Expected sub-80. Highest priority.
-7. **Loss shape sub-axis.** Edward #2012 (loss-beta-0-5) — NEW. Narrows smooth_l1 quadratic zone.
-8. **LR schedule restart.** Fern #1990 (cawr-t0-9) — WIP. CosineAnnealingWarmRestarts addresses undertraining by adding fresh high-LR phase mid-budget.
-9. **FFN capacity downward bracket.** Frieren #1992 (mlp-ratio-1) — WIP. Completes FFN axis with mlp_ratio=1.
-10. **OneCycleLR schedule.** Nezuko #2014 (onecycle-lr, max_lr=8e-4) — NEW. Single-curve warmup+anneal at higher peak LR.
-11. **LR upper bracket.** Thorfinn #1968 (lr=7e-4 + warmup) — WIP.
-12. **Batch size.** Alphonse #1972 (batch_size=4→2) — WIP.
-13. **Attention heads lower bracket.** Tanjiro #1993 (n_head=4→2) — NEW. Brackets n_head axis with nezuko's n_head=8.
+6. **Batch size — MERGED.** batch_size=2 (#1972) — val=76.24 (+7.65% improvement).
+7. **EMA weight averaging.** Askeladd #1540. Actively training on new HEAD. Expected sub-70.
+8. **LR upper bracket.** Thorfinn #1968 (lr=7e-4, sent back) — rerunning with bs=2 baseline.
+9. **Batch size lower bracket.** Alphonse #2036 (batch-size-1) — NEW. Closes bs axis.
+10. **LR schedule restart.** Fern #1990 (cawr-t0-9) — WIP on old bs=4 HEAD; needs rebase evaluation.
+11. **FFN capacity downward bracket.** Frieren #1992 (mlp-ratio-1) — WIP on old HEAD.
+12. **Loss shape sub-axis.** Edward #2012 (loss-beta-0-5) — WIP.
+13. **OneCycleLR schedule.** Nezuko #2014 (onecycle-lr, max_lr=8e-4) — WIP.
+14. **Attention head lower bracket.** Tanjiro #1993 (n-head-2) — WIP.
 
 ## Leaderboard (val_avg/mae_surf_p)
 
 | Lever | val_avg | test_avg | Status |
 |---|---|---|---|
-| **lr-warmup-1ep (thorfinn #1812)** | **82.56** | **74.13** | **MERGED — CURRENT BEST** |
+| **batch-size-2 (alphonse #1972)** | **76.24** | **66.85** | **MERGED — CURRENT BEST** |
+| lr-warmup-1ep (thorfinn #1812) | 82.56 | 74.13 | MERGED → superseded |
+| lr-7e-4 (thorfinn #1968) | 79.77 | 72.06 | SENT BACK — beat old, not new baseline |
 | eta_min=5e-5 (fern #1855) | 83.95 | 74.70 | MERGED → superseded |
-| T_max=18 (nezuko #1695) | 84.67 | 74.94 | MERGED → superseded |
-| eta_min=1e-4 (fern #1901) | 85.06 | 76.41 | CLOSED — eta_min axis upper closed |
-| ref=16 (edward #1943) | 86.12 | 75.49 | CLOSED — ref axis closed (8 optimum) |
-| β2=0.98 (frieren #1886) | 85.94 | 76.16 | CLOSED |
-| β1=0.95 (tanjiro #1888) | 88.32 | 78.58 | CLOSED |
-| mlp_ratio=4 (frieren #1919) | 89.82 | 80.17 | CLOSED — FFN capacity upper closed |
 | warmup-2ep (edward #1991) | 83.35 | 75.06 | CLOSED — warmup saturates at 1ep |
-| wd=1e-5 (tanjiro #1923) | 85.76 | 76.33 | CLOSED — wd=1e-4 confirmed optimum |
-| n_head=8 (nezuko #1853) | 96.33 | 86.97 | CLOSED — n_head=4 optimum upper; −2.4% params |
-| lr=3e-4 (alphonse #1914) | 90.67 | 81.94 | CLOSED — +8% regression |
-| EMA (askeladd #1540) | 99.60 | 91.15 | Rebasing onto current HEAD — highest priority |
+| T_max=18 (nezuko #1695) | 84.67 | 74.94 | MERGED → superseded |
+| eta_min=1e-4 (fern #1901) | 85.06 | 76.41 | CLOSED — eta_min 5e-5 optimum |
+| n_head=8 (nezuko #1853) | 96.33 | 86.97 | CLOSED — n_head=4 optimum upper |
+| EMA (askeladd #1540) | stale | — | Actively training on new HEAD — highest priority |
 
 ## Active student assignments (all 8)
 
-### Priority: rebase / highest stacking potential
-- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — EMA + full recipe expected sub-80.
+### Priority: EMA + stacking on new baseline
+- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Training at 99% GPU. Results likely on old HEAD. Will evaluate vs new 76.24.
 
-### Capacity / architecture probes
-- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — mlp_ratio=2→1, downward FFN bracket.
-- **PR #1993 — `n-head-2` (tanjiro)** — **WIP** — n_head=4→2 (adds ~55K params from per-head dim expansion).
+### Batch size bracket
+- **PR #2036 — `batch-size-1` (alphonse)** — **WIP (new)** — extreme batch bracket.
 
-### LR / schedule probes
-- **PR #1990 — `cawr-t0-9` (fern)** — **WIP** — CosineAnnealingWarmRestarts T_0=9 addresses undertraining by injecting fresh high-LR phase at epoch 10.
-- **PR #2014 — `onecycle-lr` (nezuko)** — **WIP (new)** — OneCycleLR(max_lr=8e-4, pct_start=0.1) replacing SequentialLR; higher peak + smoother curve.
-- **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP** — lr=5e-4→7e-4 with warmup; upper LR bracket.
+### LR + schedule probes (running on new bs=2 HEAD)
+- **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP (sent back)** — rerunning with bs=2 + lr=7e-4.
+- **PR #1990 — `cawr-t0-9` (fern)** — **WIP** — was on bs=4; evaluate vs new baseline.
+- **PR #2014 — `onecycle-lr` (nezuko)** — **WIP** — was on bs=4; evaluate vs new baseline.
 
-### Loss / regularization probes
-- **PR #2012 — `loss-beta-0-5` (edward)** — **WIP (new)** — smooth_l1 beta=1.0→0.5; narrows quadratic zone.
-
-### Regularization / training dynamics probes
-- **PR #1972 — `batch-size-2` (alphonse)** — **WIP** — batch_size=4→2, 2x optimizer steps/epoch.
+### Capacity / architecture / loss probes
+- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — was on bs=4; evaluate vs new baseline.
+- **PR #2012 — `loss-beta-0-5` (edward)** — **WIP** — was on bs=4; evaluate vs new baseline.
+- **PR #1993 — `n-head-2` (tanjiro)** — **WIP** — was on bs=4; evaluate vs new baseline.
 
 ## Closed / dead ends (complete list)
-- max_norm: bracketed at 0.5/1.0/3.0
-- surf_weight: bracketed at 3/5/10/20
-- depth: 5/6/7 monotonically worse (grad-clip gradient dilution)
-- AdamW β1: 0.9 optimum, 0.95 regresses
-- AdamW β2: 0.999 optimum, 0.98 regresses
-- slice_num: 64 optimum, 128 wall-clock bound
-- lr lower: 3e-4 dominated by 5e-4
-- log-cosh: regression under grad-clip
-- hidden192/256: wall-clock-bound
-- lr1e3-warmup (pre-recipe): warmup consumed budget
-- global-pos-norm: within σ noise
-- huber-seed7-variance: informational (σ≈8.5)
-- eta_min: 3-point bracket complete (0, 5e-5, 1e-4) → 5e-5 optimum
-- ref: ref=8 optimum, ref=16 regresses
-- mlp_ratio upper: mlp_ratio=4 regresses sharply on small dataset
+- max_norm: 0.5/1.0/3.0 → 1.0
+- surf_weight: 3/5/10/20 → 5
+- depth: 5/6/7 → 5
+- AdamW β1: 0.9
+- AdamW β2: 0.999
+- slice_num: 64
+- lr lower: 3e-4 dominated
+- log-cosh loss
+- hidden192/256
+- ref: 8 optimum (16 worse)
+- mlp_ratio upper: 4 worse (1 in flight)
+- eta_min: 3-pt bracket, 5e-5 optimum
+- wd: 1e-4 optimum (1e-5 worse)
+- warmup length: 1ep optimum (2ep worse)
+- n_head upper: 4 optimum (8 worse, NOT zero-param)
 
 ## Highest-priority stacking target
 
-**EMA (askeladd #1540)** — expected single-run gain > 5 val points on top of current 82.56. All other probes are supporting levers. With warmup merged and three fresh in-flight probes (cawr restart, warmup-2ep, mlp-ratio-1), the lab is targeting the undertraining root cause from multiple angles simultaneously.
+**EMA (askeladd #1540)** — actively training. On old bs=4 HEAD, results will arrive shortly. Even if on old HEAD, if it shows meaningful val improvement, we'll evaluate whether to send back for rerun on new bs=2 HEAD.
 
 ## Next frontier after current round
 
-If CAWR/warmup-2ep show the schedule is limiting factor and EMA closes, next probes to consider:
-- **Stochastic weight averaging (SWA)** — complements or extends EMA
-- **OneCycleLR** — higher peak LR (up to 1e-3) with integrated warmup and decay
-- **Per-parameter LR groups** — lower LR for position encodings, higher for MLP blocks
-- **DropPath/stochastic depth** — regularization orthogonal to grad-clip
-- **geom_camber_rc targeted intervention** — this split is 37% harder; targeted loss weighting or data augmentation
+With val=76.24 (sub-80 milestone achieved!), next targets:
+- Sub-70 val with EMA + bs=2 stacking
+- LR exploration: lr=7e-4 + bs=2 (thorfinn rerun)
+- Schedule: CAWR, OneCycleLR on new baseline
+- Capacity: VRAM freed by bs=2 → could test n_hidden=192 again (wall-clock concern may ease)

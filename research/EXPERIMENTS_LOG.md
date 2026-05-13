@@ -1095,3 +1095,37 @@ alphonse reassigned to PR #1972 (batch-size-2): halve batch 4→2.
 So n_head=8 is not a pure inductive bias test — it's (a) finer granularity AND (b) -2.4% attention capacity. Both likely contributed to the regression. tanjiro's n_head=2 (#1993 in flight) tests the opposite direction (+55K params, coarser heads). **Axis disposition: n_head upper CLOSED.** nezuko reassigned to onecycle-lr #2014.
 
 **New assignments after this round:** edward #2012 (loss-beta-0-5), nezuko #2014 (onecycle-lr).
+
+## 2026-05-13 07:30 — PR #1972: [batch-size-2] Halve batch size 4→2 — **MERGED (NEW BEST: val=76.24)**
+- Student branch: `charliepai2g48h4-alphonse/batch-size-2`
+- Hypothesis: bs=2 doubles optimizer steps/epoch at same wall-clock cost, improving generalization.
+
+| Metric | bs=2 (this PR) | Baseline #1812 (bs=4) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **76.24** | 82.56 | **−6.32 (−7.65%) ✓** |
+| test_avg/mae_surf_p | **66.85** | 74.13 | **−7.28 (−9.82%) ✓** |
+| val single_in_dist | 81.78 | 90.40 | −8.62 |
+| val geom_camber_rc | 87.06 | 91.39 | −4.34 |
+| val geom_camber_cruise | 59.39 | 66.68 | −7.29 |
+| val re_rand | 76.74 | 81.77 | −5.03 |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-batch-size-2-20260513-060609/metrics.jsonl`
+- 19 epochs completed (vs 18 for bs=4); schedule adapted automatically (steps-based warmup).
+- n_batches_per_epoch: 375→750; VRAM: ~30GB → ~17GB.
+
+**Analysis:** Larger improvement than any single merge this round. All 8 splits improve; test gains (+7.28 avg) exceed val gains (+6.32 avg) — strong OOD improvement. Mechanism: 2x optimizer steps/epoch at same wall-clock → more gradient refinement per unit time. The warmup mechanism adapts perfectly (steps-based, not epoch-based). **13th effective merge. New best: 76.24.**
+
+---
+
+## 2026-05-13 07:30 — PR #1968: [lr-7e-4] lr=5e-4→7e-4 with warmup — **SENT BACK (beat old baseline, not new)**
+- Student branch: `charliepai2g48h4-thorfinn/lr-7e-4`
+- Result: val=79.77 — beats old baseline (82.56) but DOES NOT beat new baseline (76.24 after alphonse merge).
+
+| Metric | lr=7e-4 (this PR) | Old Baseline #1812 | Δ vs old | vs new baseline 76.24 |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 79.77 | 82.56 | −2.79 | **+3.53 ❌** |
+| test_avg/mae_surf_p | 72.06 | 74.13 | −2.07 | **+5.21 ❌** |
+
+**Decision:** Cannot merge — above new 76.24 baseline. Sent back to rerun with batch_size=2 + lr=7e-4 to test stacking. The combined config (more steps + bigger steps) is untested and could compound or interfere.
+
+**New assignments:** alphonse #2036 (batch-size-1).
