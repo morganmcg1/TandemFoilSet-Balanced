@@ -412,6 +412,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "p_channel_weight": cfg.p_channel_weight,
+        "re_jitter_std": cfg.re_jitter_std,
         "epochs_configured": cfg.epochs,
     }
 
@@ -467,6 +468,9 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Reynolds-number input jitter: per-sample Gaussian noise added to the
+    # normalized log(Re) channel (dim 13) during training only. 0 disables.
+    re_jitter_std: float = 0.05
 
 
 cfg = sp.parse(Config)
@@ -656,6 +660,17 @@ for epoch in range(MAX_EPOCHS):
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # Reynolds-number input jitter (training only). Per-sample Gaussian
+            # noise on normalized log(Re) channel forces Lipschitz smoothness in
+            # the Re direction (Bishop 1995 — Tikhonov regularization). Shape
+            # [B, 1, 1] is broadcast over all N nodes: Re is a global flow
+            # property, so all nodes in one sample share the same Re value.
+            if cfg.re_jitter_std > 0:
+                re_noise = torch.randn(
+                    x_norm.shape[0], 1, 1, device=device, dtype=x_norm.dtype,
+                ) * cfg.re_jitter_std
+                x_norm = x_norm.clone()
+                x_norm[:, :, 13:14] = x_norm[:, :, 13:14] + re_noise
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
@@ -833,6 +848,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_huber_per_ch": surf_huber_per_ch,
         "train/vol_huber_per_ch": vol_huber_per_ch,
         "p_channel_weight": cfg.p_channel_weight,
+        "re_jitter_std": cfg.re_jitter_std,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
         "val_avg/mae_surf_p": avg_surf_p,
