@@ -40,11 +40,12 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 
 | Metric | Value | PR |
 |--------|-------|----|
-| `val_avg/mae_surf_p` | **99.879** | [#1484](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1484) |
-| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **93.596** | #1484 |
-| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | 99.616 | #1484 |
+| `val_avg/mae_surf_p` | **97.620** | [#1686](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1686) |
+| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **91.947** | #1686 |
 
-Previous best (superseded): val 103.100 / test 94.757 — PR #1495 (AoA+NACA augment).
+Previous bests (superseded): #1484 (Huber δ=0.5) val 99.879 / test 93.596 → #1495 (augment) val 103.100 / test 94.757.
+
+**Composability note on #1484 vs #1686:** thorfinn's curriculum ran on the *pre-#1484* train.py (MSE loss, cosine T_max=14) — so the Huber-loss winning ingredient from #1484 has NOT been composed with the curriculum. This is an open follow-up that could yield further gains.
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
 > (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
@@ -314,3 +315,65 @@ cd target/ && python train.py \
 Metrics: `models/model-huber-d0p5-onecycle-ema-20260512-225607/{metrics.yaml,test_safe_eval.json}`
 
 **`safe_test_eval.py` is now an advisor-branch artifact** (committed in PR #1484) — every future PR should run it on the best checkpoint for paper-facing 4-split test reporting.
+
+---
+
+## 2026-05-13 00:56 — PR #1686: Two-stage surf_weight curriculum 1→20 over 5 epochs
+
+**New best result. Replaces PR #1484 as running baseline.**
+
+Linear surf_weight ramp from 1.0 → 20.0 over the first 5 epochs, then
+hold at 20.0. Cosine T_max=14, MSE loss (NOT Huber — predates #1484
+merge). Arm A (ramp 1→10) val 99.48 / test 93.26; Arm B (ramp 1→20)
+val **97.62** / test **91.95** — clear winner.
+
+**Per-split val (Arm B, best epoch 14):**
+
+| Split | `mae_surf_p` |
+|-------|---:|
+| val_single_in_dist | 114.69 (best on this split ever!) |
+| val_geom_camber_rc | 111.06 |
+| val_geom_camber_cruise | 73.99 |
+| val_re_rand | 90.74 |
+| **avg** | **97.62** |
+
+**Per-split test (Arm B, safe 4-split re-eval):**
+
+| Split | `mae_surf_p` |
+|-------|---:|
+| test_single_in_dist | 102.62 |
+| test_geom_camber_rc | 98.62 |
+| test_geom_camber_cruise | 79.69 |
+| test_re_rand | 86.86 |
+| **avg (4-split safe)** | **91.95** |
+
+**Why this works (thorfinn's analysis):** Volume backbone (Ux, Uy, p_volume) needs more steps to converge than surface; ramping surf_weight from low (early epochs let volume catch up) to high (later epochs emphasize surface) gives both objectives the right gradient share. Static `surf_weight=20` would have starved volume in early epochs (askeladd's #1488 v3 result); the curriculum prevents that.
+
+**Per-split insight:** Biggest gains are on `val_single_in_dist` (−4.36) and `test_single_in_dist` (−4.92). The single-foil high-Re split — historically the WORST — benefits most from the curriculum. This is the second time we've seen a substantial improvement on `single_in_dist` (nezuko's Fourier PE v1 also broke through here).
+
+**Config (merged):**
+
+| Param | Value |
+|-------|-------|
+| `surf_weight_warmup_epochs` | **5** ← new field |
+| `surf_weight_init` | **1.0** ← new field (start of ramp) |
+| `surf_weight` | **20.0** ← end of ramp (was 10.0) |
+| All other params | inherit pre-#1484 train.py defaults (no Huber, cosine T_max=14) |
+| `use_onecycle` | **False** (explicit override) |
+| `ema_decay` | 0.999 (inherits default) |
+| `augment` / `aoa_jitter_rad` / `naca_jitter` | True / 0.00873 / 0.002 |
+| `epochs` | 14 |
+
+Reproduce:
+```
+cd target/ && python train.py --agent charliepai2g24h3-thorfinn \
+  --experiment_name curriculum-armB-1to20-5ep \
+  --surf_weight_warmup_epochs 5 --surf_weight_init 1.0 --surf_weight 20.0 \
+  --epochs 14 --use_onecycle False \
+  --augment_aoa_jitter_rad 0.00873 --augment_naca_jitter 0.002 \
+  --grad_clip 1.0 --weight_decay 1e-3
+```
+
+Metrics: `models/model-charliepai2g24h3-thorfinn-curriculum-armB-1to20-5ep-20260512-235512/{metrics.yaml,test_safe_eval.jsonl}`
+
+**Open composability question:** thorfinn ran with **MSE loss**, not Huber. Composing Huber δ=0.5 (from #1484) with the curriculum is an obvious next step — could be additive or substitutive depending on whether they target overlapping failure modes.

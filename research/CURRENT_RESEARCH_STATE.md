@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 00:30 UTC
+- **Date**: 2026-05-13 01:00 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -13,12 +13,13 @@ None received.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 99.879** — PR #1484 v2 (alphonse, Huber loss δ=0.5 on merged stack).
-Test 4-split safe re-eval = **93.596** (−1.23% vs prior #1495 baseline); 3-split proxy = 99.616.
-Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + use_onecycle=True + ema_decay=0.999 + huber_delta=0.5`, 14 epochs at 30-min cap.
-**Per-split val:** single=123.26, rc=118.37, cruise=69.27 (−11.2% absolute on cruise!), re_rand=88.62.
-**Schedule note (P4 revisit):** Arm A used `--use_onecycle True --epochs 50` (the "broken" P4 config) AND won the baseline. Hypothesis: Huber's gradient-clipping property makes the truncated OneCycle anneal benign. Future loss-formulation experiments may not need cosine T_max=14.
-**`safe_test_eval.py` is now the standard 4-split test harness** — committed at repo root via PR #1484. All future PRs must run it on best-val checkpoint for paper-facing test metrics.
+**val_avg/mae_surf_p = 97.620** — PR #1686 (thorfinn, surf_weight curriculum 1→20 over 5 epochs).
+Test 4-split safe re-eval = **91.947** (−1.65% vs PR #1484 baseline 93.596).
+Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + surf_weight_warmup_epochs=5 + surf_weight_init=1.0 + surf_weight=20.0`.
+**Per-split val:** single=114.69 (best ever on this split!), rc=111.06, cruise=73.99, re_rand=90.74.
+**Critical composability note:** thorfinn's run used **MSE loss** (predates PR #1484 Huber merge). Huber δ=0.5 + curriculum stacking is **UNTESTED** — obvious next composition target. Also OneCycleLR was disabled (cosine T_max=14 used). Two open axes to test.
+
+**Previous baseline (#1484, Huber δ=0.5):** val 99.879 / test 93.596 — Huber loss alone on merged stack. Available as a config option (`--huber_delta 0.5`) but not currently in the new winning stack.
 
 **Disproved (closed, mechanistic):** PR #1543 v2 (fern) log-cosh + augment @ 106.93 (+3.71%) / test 100.61 (+6.18%). The v2 − v1 delta ≈ 0 (augmentation added nothing on top of log-cosh, vs +9.4 on MSE) proves log-cosh and augment are SUBSTITUTES, not complements: both target high-Re gradient dominance via different mechanisms. Log-cosh's gradient cap defeats augmentation's purpose on rc split (+13.5% worse, the killer).
 
@@ -35,7 +36,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + use_onecy
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP — v1 had +3.97% val (val_single_in_dist −6.26%! best ever on worst split), sent back v2 with 2 arms: L=2 + cosine, L=4 surface-only + cosine. |
 | tanjiro | #1693 | `swiglu-ffn` | WIP — SwiGLU gated linear unit FFN replacing GELU MLP (single arm, cosine T_max=14) |
-| thorfinn | #1686 | `two-stage-surf-weight-curriculum` | WIP — curriculum ramp surf_weight 1.0→10.0 (Arm A) / 1.0→20.0 (Arm B) over 5 epochs, then hold. cosine T_max=14. |
+| thorfinn | TBD | `huber-plus-curriculum-compose` | IDLE — to be assigned: compose Huber δ=0.5 (PR #1484) with curriculum 1→20 (PR #1686). Critical composability test. |
 
 ## Research themes and findings
 
@@ -43,7 +44,8 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + use_onecy
 1. **Optimization hygiene** (PR #1491): grad_clip=1.0 + wd=1e-3 → 115.40.
 2. **Scheduler + EMA** (PR #1520): OneCycleLR + EMA=0.999 → 112.55 (built on #1491).
 3. **Geometry augmentation** (PR #1495): AoA + NACA camber jitter → 103.10.
-4. **Huber loss δ=0.5** (PR #1484 v2): Huber on top of merged stack → **99.879** val / **93.596** test (4-split safe) → new baseline. Note: ran with `--use_onecycle True --epochs 50` (the P4 "broken" config) AND won, contradicting P4 — to be revisited.
+4. **Huber loss δ=0.5** (PR #1484 v2): Huber on top of merged stack → 99.879 val / 93.596 test (4-split safe). Note: ran with `--use_onecycle True --epochs 50` (the P4 "broken" config) AND won, contradicting P4 under MSE — P4 is loss-specific.
+5. **Two-stage surf_weight curriculum 1→20** (PR #1686): Ramp surf_weight 1→20 over 5 epochs (cosine T_max=14, MSE loss) → **97.620** val / **91.947** test (4-split safe) → new baseline. First substantial improvement on val_single_in_dist (114.69) via training-time mechanism, not data augmentation or PE. NOTE: ran WITHOUT Huber — Huber+curriculum composability is the obvious next composition test.
 
 ### Promising single-split signal (sent back for v2)
 - **Fourier mesh PE** (nezuko #1662 v1): val_avg 107.19 (+3.97%, fails) BUT `val_single_in_dist = 118.03 vs 125.91 = −6.26%` — first substantial improvement on the historically WORST split. OOD splits regressed (rc +13.7%). Schedule confound (OneCycleLR ep=11 instead of cosine T_max=14). v2 with 2 arms: L=2 capacity-fix and L=4 surface-only scope-fix, both on cosine T_max=14.

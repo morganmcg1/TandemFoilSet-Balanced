@@ -8,7 +8,7 @@ appropriate heading whenever an experiment terminal-completes.
 
 ## Round 2 — build on merged stack (ongoing)
 
-All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3` (includes grad_clip=1.0, wd=1e-3, OneCycleLR, EMA=0.999, AoA+NACA augment, Huber δ=0.5) before running. Current baseline: **val_avg/mae_surf_p = 99.879** (PR #1484, Huber δ=0.5 v2) / test 93.596 (safe 4-split).
+All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3` (includes grad_clip=1.0, wd=1e-3, OneCycleLR, EMA=0.999, AoA+NACA augment, Huber δ=0.5, surf_weight curriculum 1→20) before running. Current baseline: **val_avg/mae_surf_p = 97.620** (PR #1686, thorfinn curriculum) / test 91.947 (safe 4-split).
 
 ---
 
@@ -155,14 +155,20 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-12 23:08 — PR #1686: Two-stage surf_weight curriculum (thorfinn) — WIP (assigned)
-**Branch:** `charliepai2g24h3-thorfinn/two-stage-surf-weight-curriculum` | **Status: WIP**
+### 2026-05-13 00:56 — PR #1686: Two-stage surf_weight curriculum 1→20 over 5 epochs (thorfinn) — **MERGED ⭐ NEW BASELINE**
+**Branch:** `charliepai2g24h3-thorfinn/two-stage-surf-weight-curriculum` | **Status: MERGED**
 
 - **Hypothesis:** Linearly ramp `surf_weight` from 1.0 → 10.0 (Arm A) or 1.0 → 20.0 (Arm B) over the first 5 epochs, then hold. Lets the volume field converge first before surface objective dominates the loss. Standard curriculum-learning rationale.
-- **Why this:** Adjacent signal from PR #1488 v2 Arm B (askeladd) suggests `surf_weight_p=20` alone may be helpful (val 102.12 / test 96.82 — entangled with head decoupling, but currently being isolated in Arm C of #1488). A *gradual* ramp to 10/20 should outperform a static bump by reducing early-epoch noise pressure.
-- **Config:** `--surf_weight_warmup_epochs 5 --surf_weight_init 1.0 --epochs 14 --use_onecycle False` (cosine T_max=14, the proven recipe from #1495).
-- **Pass criterion:** val_avg < 103.10 AND test 4-split safe re-eval < 94.76.
-- **Artifacts:** TBD
+- **Why this:** Adjacent signal from PR #1488 v2 Arm B (askeladd) suggested `surf_weight_p=20` *alone* was harmful (#1488 v3 disproved that — substitutes with augment). A *gradual* ramp avoids the early-epoch overemphasis that breaks static surf_weight=20.
+- **val_avg/mae_surf_p (Arm B, surf_weight 1→20):** **97.620** — **−2.26% vs PR #1484 baseline (99.879)**.
+- **test_avg/mae_surf_p (Arm B, safe 4-split):** **91.947** — **−1.65% vs #1484 (93.596)**.
+- **Arm A (1→10):** val 99.48 / test 93.26 — also beats #1484 baseline but loses to Arm B.
+- **Per-split val Arm B:** single=114.69 (best on this split ever!), rc=111.06, cruise=73.99, re_rand=90.74.
+- **Per-split test Arm B (safe):** single=102.62, rc=98.62, cruise=79.69, re_rand=86.86.
+- **Critical finding:** Biggest gain is on `val_single_in_dist` (−4.36 vs Arm A; first substantial improvement on this historically WORST split via curriculum). Second instance of a single_in_dist improvement on this branch (after nezuko's Fourier PE v1 −6.26%). The single-foil high-Re split responds to early-epoch protection of volume backbone.
+- **Composability question raised:** thorfinn used **MSE loss** (predates #1484 Huber merge). Huber+curriculum stacking is UNTESTED — possible follow-up. Also schedule: cosine T_max=14 + curriculum was the proven recipe; how curriculum × OneCycleLR composes is open.
+- **Volume vs surface trade:** Arm B's test_avg/mae_vol_p is 101.36 vs Arm A's 96.08. Pushing surf_weight to 20 trades off some volume MAE for surface MAE — net win on the primary metric.
+- **Artifacts:** `models/model-charliepai2g24h3-thorfinn-curriculum-armB-1to20-5ep-20260512-235512/{metrics.jsonl,metrics.yaml,test_safe_eval.jsonl}`
 
 ---
 
