@@ -419,7 +419,7 @@ class Config:
     amp: bool = True              # bfloat16 autocast on forward+loss
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
     onecycle_target_epochs: int = 18   # OneCycleLR total_steps calibration
-    onecycle_pct_start: float = 0.1
+    onecycle_pct_start: float = 0.05
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
