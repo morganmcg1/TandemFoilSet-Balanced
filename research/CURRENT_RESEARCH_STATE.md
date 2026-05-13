@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~08:10 UTC
+- **Date:** 2026-05-13 ~08:35 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -9,7 +9,8 @@
 
 | PR | What | val | test |
 |----|------|-----|------|
-| #1825 | MAE (L1) loss on Lion+EMA | **56.58** | **48.82** |
+| #1932 | Lion lr=2e-4 (wd=1e-4) on Lion+MAE | **55.41** | **47.90** |
+| #1825 | MAE (L1) loss on Lion+EMA | 56.58 | 48.82 |
 | #1781 | Lion optimizer lr=1e-4+EMA | 61.30 | 52.68 |
 | #1607 | EMA decay=0.99 | 77.05 | 68.27 |
 | #1541 | BF16 + scoring fix | 120.40 | 106.67 |
@@ -17,66 +18,67 @@
 | #1357 | Huber δ=1.0 | 98.79 | 88.90 |
 | #1367 | Dropout=0.2 + clip | 98.96 | 88.74 |
 
-**Current compound:** Fourier + MAE loss + Dropout(0.1 default) + BF16 + EMA(0.99) + Lion(lr=1e-4)
+**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=2e-4, wd=1e-4)
 
-**Note:** Both wins (#1781 Lion, #1825 MAE) still descend at epoch-16 cap. The model is NOT converged; longer budget is highest-EV improvement if allowed.
+**Note:** Every merged win has had val still descending at the 30-min/16-epoch cap. The model is NOT converged; longer budget remains highest-EV improvement if allowed. The lr-doubling trend (5e-5→1e-4→2e-4) has not saturated after 3 octaves.
 
 ## Active experiments (8/8 students assigned)
 
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
-| **#2070** | **edward** | **Lion-no-EMA ablation (Arm1) + AdamW-no-EMA (Arm2) on MAE compound** | **WIP — new (diagnostic)** |
-| **#2069** | **alphonse** | **n_head sweep: n_head=8 (Arm1, more heads), n_head=2 (Arm2, fewer) on Lion+MAE** | **WIP — new** |
-| **#2056** | **nezuko** | **surf_weight sweep on Lion+MAE: sw=5 (Arm1), sw=15 (Arm2)** | **WIP — new** |
-| **#2052** | **frieren** | **batch_size=8: lr=2e-4 linear scaling (Arm1), lr=1e-4 batch-only (Arm2)** | **WIP — new** |
-| #2001 | askeladd | Lion β1 sweep: β1=0.95 (Arm1), β1=0.85 (Arm2) on Lion+MAE+EMA | WIP |
+| **#2086** | **thorfinn** | **Lion lr probe: lr=4e-4 (bold) + lr=3e-4 (midpoint) on Lion+MAE** | **WIP — new** |
+| #2070 | edward | Lion-no-EMA ablation + AdamW-no-EMA (diagnostic for ICML appendix) | WIP |
+| #2069 | alphonse | n_head sweep: n_head=8 (more) and n_head=2 (fewer) on Lion+MAE | WIP |
+| #2056 | nezuko | surf_weight sweep on Lion+MAE: sw=5 (Arm1), sw=15 (Arm2) | WIP |
+| #2052 | frieren | batch_size=8: lr=2e-4 linear (Arm1), lr=1e-4 batch-only (Arm2) | WIP |
+| #2001 | askeladd | Lion β1 sweep: β1=0.95 (Arm1), β1=0.85 (Arm2) | WIP |
 | #1999 | fern | Cosine T_max tuning: T_max=16 (Arm1), T_max=16+eta_min=1e-5 (Arm2) | WIP |
-| #1932 | thorfinn | Lion lr=2e-4 (Arm1), lr=2e-4+wd=5e-4 (Arm2) | WIP |
-| #1961 | tanjiro | FFN width: mlp_ratio=3 (Arm1), mlp_ratio=4 (Arm2) | WIP — nudged (stale) |
+| #1961 | tanjiro | FFN width: mlp_ratio=3 (Arm1), mlp_ratio=4 (Arm2) | WIP — stale (nudged) |
 
 ## Closed experiments this round
 
+- **#1932 (thorfinn):** Lion lr=2e-4 — **MERGED** val=55.41, test=47.90.
 - **#1825 (askeladd):** MAE loss on Lion+EMA — **MERGED** val=56.58, test=48.82.
-- **#1823 (fern):** wd=5e-4 on AdamW base — +1.84% val regression, tied test. Closed.
+- **#1823 (fern):** wd=5e-4 on AdamW base — regression. Closed.
 - **#1781 (thorfinn):** Lion optimizer — **MERGED** val=61.30, test=52.68.
-- **#1761 (tanjiro):** n_layers=6 — both dropout arms regress (+4%). Compute-budget bound at 30-min cap.
-- **#1604 (alphonse):** Asinh pressure transform — +7.5% regression. Huber+Asinh double-compress.
-- **#1748 (edward):** EMA=0.99 + dropout=0.2 — regresses. EMA fills regularisation headroom.
-- **#1786 (frieren):** Higher LR (1e-3/2e-3) on AdamW+EMA — direction superseded by Lion compound. Arm 1 had genuine −3.3% val / −5.7% test gain on pre-Lion base but +31.7% vs current best.
-- **#1752 (nezuko):** surf_weight=5 on pre-Lion AdamW+EMA — +8.4% val regression (uniform across all splits, including volume). Hypothesis decisively falsified.
-- **#1934 (alphonse):** n_hidden=192/256 — monotonic regression with width. Compute-bound at 30-min cap (per-epoch +30%/+53%).
-- **#1857 (edward):** EMA decay 0.995/0.999 — val regression. **Nuanced finding:** decay=0.995 improved test by −1.9% (uniform across splits) despite val regression on pre-Lion base; potential signal for re-test on Lion+MAE.
+- **#1761 (tanjiro):** n_layers=6 — compute-budget bound, +4% regression.
+- **#1934 (alphonse):** n_hidden=192/256 — monotonic regression, compute-bound.
+- **#1857 (edward):** EMA decay 0.995/0.999 — val regression (nuanced test signal at 0.995).
+- **#1786 (frieren):** Higher LR on AdamW — superseded by Lion.
+- **#1752 (nezuko):** surf_weight=5 — +8.4% regression, hypothesis falsified.
+- **#1604 (alphonse):** Asinh transform — +7.5% regression.
+- **#1748 (edward):** EMA+dropout=0.2 — regression.
 
 ## Key findings (all rounds)
 
-1. **MAE (L1) loss on Lion+EMA:** −7.71% val / −7.34% test — largest gain on Lion base. Loss-side property (uniform per-node weighting) is independent of optimizer, compounds cleanly with Lion.
-2. **Lion optimizer (lr=1e-4) + EMA:** −20.4% val / −22.8% test — decouples exploration (Lion sign updates) from integration (EMA averaging). Still descending at cap.
-3. **EMA weight averaging (decay=0.99):** −22.1% val / −23.1% test — foundational for the session.
-4. **Fourier positional encoding (max_freq=32, L=6):** −14.8% test — foundational input feature.
-5. **BF16:** ~4 extra epochs (18 vs ~14) in 30-min window. Foundational.
-6. **Architectural compute-budget wall at 30 min:** Depth (n_layers=6, +19% epoch cost) and width (n_hidden=192/256, +30%/+53%) BOTH lose. Capacity expansion is the wrong direction at this budget. **Only compute-neutral architecture changes (head count, mlp_ratio if cheap) remain on the table.**
-7. **Huber loss (δ=1.0):** Superseded by MAE on Lion base. Huber's quadratic well competes with MAE's uniform per-node weighting.
-8. **Asinh+Huber double-compression:** Both compress the high-Re tail; they compete rather than stack.
-9. **EMA decay test/val asymmetry:** decay=0.995 improved test on the OLD base while regressing val (genuine flatter-basin signal). Re-test on Lion+MAE is warranted but is *not* a top-priority lever.
+1. **Lion lr-doubling trend (3 octaves):** 5e-5→1e-4→2e-4, each a win, none saturated. Val still steep at cap each time. **4e-4 is the next test.**
+2. **MAE (L1) loss on Lion+EMA:** −7.71% val — uniform per-node weighting compounds cleanly with Lion.
+3. **Lion optimizer + EMA:** −20.4% val — sign-magnitude updates decoupled from EMA smoothing.
+4. **EMA weight averaging (decay=0.99):** −22.1% val — foundational.
+5. **Fourier positional encoding:** −14.8% test — foundational.
+6. **Canonical wd scaling disconfirmed on Lion+MAE:** wd=5e-4 regresses vs wd=1e-4 at lr=2e-4. EMA+dropout already saturate regularization; additional wd over-constrains.
+7. **Architectural compute-budget wall:** n_layers=6 (+19%/epoch) and n_hidden=192/256 (+30-53%/epoch) both regress at 30-min cap. Only compute-neutral architecture changes viable (n_head, mlp_ratio).
+8. **BF16:** foundational (+4 epochs in 30-min window).
 
 ## Priority for current wave
 
-**Highest priority (Lion+MAE base):**
+**Optimization frontier:**
+- Lion lr=4e-4 / 3e-4 (#2086 thorfinn) — test saturation boundary of the lr-doubling trend
 - Lion β1 sweep (#2001 askeladd) — β1=0.9 from large-scale vision; small-data optimal may differ
-- Cosine T_max tuning (#1999 fern) — current T_max=50 barely decays LR in 16 epochs
-- Lion lr=2e-4 scaling (#1932 thorfinn) — lr doubling trend from 5e-5→1e-4 hasn't saturated
-- surf_weight on Lion+MAE (#2056 nezuko) — sw=15 untested direction with MAE's uniform per-node weighting
-- batch_size + LR scaling (#2052 frieren) — Lion+EMA may absorb noise reduction from doubled batch
-- mlp_ratio=3/4 FFN expansion (#1961 tanjiro) — compute-cheap capacity expansion
-- **n_head=8 vs n_head=2 (#2069 alphonse)** — compute-neutral architecture, only attention-side knob untested
-- **Lion-no-EMA ablation (#2070 edward)** — diagnostic for ICML appendix; isolates Lion vs EMA mechanism
+- Cosine T_max tuning (#1999 fern) — T_max=50 barely decays LR in 16 epochs
+- surf_weight on Lion+MAE (#2056 nezuko) — sw=15 direction untested with MAE's uniform weighting
+- batch_size + LR scaling (#2052 frieren)
+- n_head sweep (#2069 alphonse) — only compute-neutral attention-side knob untested
+- mlp_ratio=3/4 FFN expansion (#1961 tanjiro, stale)
+
+**Diagnostic / paper:**
+- Lion-no-EMA ablation (#2070 edward) — mechanism story for ICML appendix
 
 ## Potential next directions (post-current-wave)
 
-- **Longer training budget** — both recent merges hit cap mid-descent; highest EV if wall-clock budget extended
-- **Surface-only MAE + volume Huber** — MAE only where metric is measured; Huber on well-behaved interior nodes
-- **OneCycleLR** — peak in middle; pairs with Lion's aggressive exploration
-- **EMA decay tuning on Lion+MAE** — #1857 closed result hinted at test improvement at 0.995 on AdamW base
-- **slice_num sweep on Lion+MAE base** — last unexplored architecture dimension (current=64)
-- **n_head + n_hidden joint search** — wider model with FEWER heads might dodge compute wall via different cost profile
-- **Lookahead-on-Lion** — outer loop slow-update over Lion's fast inner steps (similar mechanism story to Lion+EMA)
+- **Longer training budget** — every win has hit cap mid-descent; highest-EV change if wall-clock extended
+- **Surface-only MAE + volume Huber** — MAE only where metric is measured
+- **OneCycleLR** — peak in middle; pairs with Lion's large exploration amplitude
+- **EMA decay=0.995 retest on Lion+MAE** — #1857 hint suggests test improvement at 0.995
+- **slice_num sweep** — last unexplored architecture dimension (current=64)
+- **β2 (Lion momentum EMA) sweep at lr=2e-4** — at higher lr, β2=0.99 may be the noise bottleneck

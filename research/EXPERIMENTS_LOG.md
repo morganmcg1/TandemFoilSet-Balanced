@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 08:30 — PR #1932: Lion lr=2e-4 scaling on Lion+MAE compound (thorfinn) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-thorfinn/lion-lr-scaling`
+- **Hypothesis:** lr-doubling trend 5e-5→1e-4 hasn't saturated; 1e-4→2e-4 may continue the descent.
+- **W&B runs:** `y8oh2gxf` (Arm 1: lr=2e-4, wd=1e-4, **winner**), `141lcuxh` (Arm 2: lr=2e-4, wd=5e-4)
+
+| Metric | MAE baseline (#1825) | Arm 1 (lr=2e-4, wd=1e-4) | Arm 2 (lr=2e-4, wd=5e-4) | Δ Arm1 |
+|--------|---------------------|--------------------------|--------------------------|--------|
+| val_avg/mae_surf_p | 56.577 | **55.412** | 56.801 | **−2.06%** |
+| test_avg/mae_surf_p | 48.817 | **47.899** | 49.079 | **−1.88%** |
+| test/single_in_dist | 53.687 | **51.084** | 52.326 | −4.85% |
+| test/geom_camber_rc | 63.234 | **62.288** | 65.813 | −1.49% |
+| test/geom_camber_cruise | 30.812 | 31.211 | **30.613** | +1.30% |
+| test/re_rand | 47.535 | **47.014** | 47.563 | −1.10% |
+
+**Result:** MERGED. Arm 1 wins 3/4 test splits + average. Val still descending at epoch-16 cap (last 4 epochs: 61.27→59.07→57.82→55.41, ≈−2 pts/epoch). **Third consecutive lr-doubling win without saturation.**
+
+**Key finding:** Canonical wd scaling (Arm 2, wd=5e-4) disconfirms the Chen et al. `lr×wd≈const` heuristic on this compound. MAE-Lion is already near maximum stable step (L1 gradients are ±1 before sign, so per-param step = ±lr independent of gradient scale). EMA+dropout already saturate the regularization budget; wd=5e-4 over-regularizes — most visible as rc split regression (+4.08%). Arm 1 wins by keeping wd=1e-4.
+
+**Trajectory diagnostic:** Main vs EMA val spread remains ~10 pts at epoch 16 (main_val ≈ 65 vs ema_val 55.41) — EMA still absorbing Lion's noise, not saturated. Longer budget prediction: a few more epochs would push well below 55.
+
+**Thorfinn reassigned:** PR #2086 — lr=4e-4 (bold) and lr=3e-4 (midpoint) to complete the lr curve and detect the saturation/instability boundary.
+
+---
+
 ## 2026-05-13 08:08 — PR #1934: Width expansion n_hidden=192/256 on Lion+EMA (alphonse) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-alphonse/width-expansion`
