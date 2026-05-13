@@ -209,10 +209,13 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
-        # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
-        # are computed once and passed to every block. Zero-init makes (gamma, beta)
-        # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
-        self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
+        # Per-block FiLM Re-conditioning. Each block gets its own gamma/beta from
+        # a separate ReFiLM instance, allowing depth-specific Re-gating. Same
+        # zero-init invariant: all gates start at (0,0) → identical to baseline at step 0.
+        self.re_films = nn.ModuleList([
+            ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
+            for _ in range(n_layers)
+        ])
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -228,9 +231,9 @@ class Transolver(nn.Module):
         # x is already in normalized space (caller normalises with stats), so x[:, 0, 13:14]
         # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
         log_re = x[:, 0, 13:14]
-        gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for block, film in zip(self.blocks, self.re_films):
+            gamma, beta = film(log_re)
             fx = block(fx, gamma, beta)
         return {"preds": fx}
 
@@ -512,9 +515,11 @@ model = Transolver(**model_config).to(device)
 rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
-n_params_film = sum(p.numel() for p in model.re_film.parameters())
+n_params_film_per_block = sum(p.numel() for p in model.re_films[0].parameters())
+n_params_film = sum(p.numel() for p in model.re_films.parameters())
 print(
-    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
+    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film} "
+    f"= {len(model.re_films)} x {n_params_film_per_block}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
 
@@ -536,9 +541,12 @@ model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dyna
 def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
     """Capture per-block per-head mean slice entropy on one val batch.
 
-    Returns: list[list[float]] — outer = blocks, inner = heads (length H per block).
+    Returns:
+      captured: list[list[float]] — outer = blocks, inner = heads (length H per block)
+      gamma_stats_per_block: list[dict] — per-block gamma {mean,std,absmax}
+      beta_stats_per_block:  list[dict] — per-block beta  {mean,std,absmax}
     Uses the uncompiled model to avoid torch.compile recompilation from the
-    Python flag flip. Also returns the gamma/beta running stats observed on that batch.
+    Python flag flip.
     """
     attns = [b.attn for b in uncompiled.blocks]
     for a in attns:
@@ -547,7 +555,8 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
     was_training = uncompiled.training
     uncompiled.eval()
     captured: list | None = None
-    gamma_stats = beta_stats = None
+    gamma_stats_per_block: list[dict] = []
+    beta_stats_per_block: list[dict] = []
     try:
         with torch.no_grad():
             for x, _y, _is_surface, mask in val_loader:
@@ -555,17 +564,18 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
                 mask = mask.to(device_, non_blocking=True)
                 x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
                 log_re = x_norm[:, 0, 13:14]
-                gamma, beta = uncompiled.re_film(log_re)
-                gamma_stats = {
-                    "mean": gamma.mean().item(),
-                    "std": gamma.std().item(),
-                    "absmax": gamma.abs().max().item(),
-                }
-                beta_stats = {
-                    "mean": beta.mean().item(),
-                    "std": beta.std().item(),
-                    "absmax": beta.abs().max().item(),
-                }
+                for film in uncompiled.re_films:
+                    g_i, b_i = film(log_re)
+                    gamma_stats_per_block.append({
+                        "mean": g_i.mean().item(),
+                        "std": g_i.std().item(),
+                        "absmax": g_i.abs().max().item(),
+                    })
+                    beta_stats_per_block.append({
+                        "mean": b_i.mean().item(),
+                        "std": b_i.std().item(),
+                        "absmax": b_i.abs().max().item(),
+                    })
                 _ = uncompiled({"x": x_norm})
                 captured = [
                     [float(v) for v in a._last_slice_entropy.tolist()]
@@ -579,7 +589,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             a._last_slice_entropy = None
         if was_training:
             uncompiled.train()
-    return captured or [], gamma_stats, beta_stats
+    return captured or [], gamma_stats_per_block, beta_stats_per_block
 
 optimizer = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
@@ -866,10 +876,12 @@ for epoch in range(MAX_EPOCHS):
         flat_ent = [v for block_ent in epoch_slice_entropy for v in block_ent]
         if flat_ent:
             mean_ent = sum(flat_ent) / len(flat_ent)
+            g_absmax = [s["absmax"] for s in (epoch_gamma_stats or [])]
+            b_absmax = [s["absmax"] for s in (epoch_beta_stats or [])]
             print(
                 f"    SliceEntropy(diag)  mean={mean_ent:.3f}  "
-                f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
-                f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
+                f"gamma_absmax_per_block={[f'{v:.3f}' for v in g_absmax]}  "
+                f"beta_absmax_per_block={[f'{v:.3f}' for v in b_absmax]}"
             )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
