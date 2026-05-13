@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-05-13 15:30 — Round 30
+
+### PR #2071 thorfinn: Warmup-5-cosine (warmup_epochs 3→5, T_max 47→45) — CLOSED (WASH, bimodal trade-off observed)
+
+- **Branch:** `charliepai2g48h5-thorfinn/warmup-5-cosine`
+- **Hypothesis:** Test whether warmup-5 (longer basin-selection) beats warmup-3 (current best) or whether the shortened settling phase (2 fewer cosine epochs at T_max=45 vs 47) costs more than the extra warmup gains.
+- **Result:** val_avg = **50.7181** (+0.23%), test_avg = **44.1414** (+0.39%). Cleanly within the predicted ±1% wash band. Best epoch 45/45 (terminal). warmup-3 confirmed optimal at this bracket.
+
+**Per-split breakdown (vs 50.6001 warmup-3 baseline) — the diagnostic value:**
+
+| Split | warmup-3 | warmup-5 | Δ | Δ% |
+|---:|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.94 | **46.70** | **−1.25** | **−2.60%** ← basin-selection WIN |
+| `val_geom_camber_rc` | 67.37 | 67.29 | −0.08 | −0.12% (flat) |
+| `val_geom_camber_cruise` | 34.34 | 34.66 | +0.32 | +0.92% |
+| `val_re_rand` | 52.75 | **54.23** | **+1.48** | **+2.81%** ← settling-phase LOSS |
+| **val_avg** | **50.60** | **50.72** | **+0.12** | **+0.23%** wash |
+
+**Mechanism diagnosis:** warmup-5 traded 2 settling epochs for 2 basin-selection epochs. The trade was monotone:
+- In-dist single split benefits from longer basin-selection (−2.60%) — model has time to settle into a better local minimum
+- OOD re_rand split suffers from shortened settling (+2.81%) — late-stage low-LR crystallization is essential for OOD
+- val_geom_camber_rc (hardest OOD) is INSENSITIVE to warmup duration — confirms it's bound by something else entirely (capacity? loss formulation? geometry representation?)
+- val_geom_camber_cruise slightly regressed (+0.92%) — smaller version of re_rand story
+
+**6th bimodal confirmation** (alongside coord-jitter, EMA, grad-clip, lr-DOWN, Lookahead). This time on a SCHEDULE axis — not an averaging-style mechanism. The pattern is broader than first thought: **anything reducing late-stage low-LR settling time hurts OOD** — schedule changes, optimizer averaging, weight averaging, gradient averaging, step-size reduction all map to the same trade-off.
+
+**Mechanism-level principle (now solid):** late-stage low-LR exploration is essential for OOD generalization on Transolver+TandemFoilSet+L1+slice=32. Removing it via any means produces the canonical in-dist↔OOD bimodal trade-off.
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-thorfinn-warmup-5-cosine-20260513-081312/metrics.jsonl`
+- **Next:** Reassign thorfinn to warmup-2 (the OTHER direction of the bracket) — completes the warmup duration bracket and tests if the bimodal trade flips with 1 extra settling epoch.
+
+### PR #2051 askeladd: Lookahead(k=5, α=0.5) wrapping AdamW — CLOSED (LOSS, 5th averaging-style bimodal confirmation)
+
+- **Branch:** `charliepai2g48h5-askeladd/lookahead-k5-a0.5`
+- **Hypothesis:** Lookahead's slow-weight averaging would bias toward flat minima → improve OOD generalization (predicted INVERSE pattern to grad-clip's bimodal). Run was on OLD baseline schedule (CosineAnnealingLR(T_max=50) directly, no warmup-3).
+- **Result:** val_avg = **56.7516** (+5.09% vs old 54.00 baseline, +12.16% vs current 50.60), test_avg = **50.2749** (+5.56%). LOSS. Best=terminal at ep45/45 — still converging at timeout, no overfit reversal.
+
+**Per-split breakdown (vs 54.0051 OLD baseline #1846 — the schedule the student actually ran against):**
+
+| Split | Baseline #1846 | Lookahead | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 59.09 | **53.49** | **−5.60 (−9.48%)** ← in-dist WIN |
+| `val_geom_camber_rc` | 67.45 | 72.60 | +5.15 (+7.64%) ← OOD LOSS |
+| `val_geom_camber_cruise` | 35.72 | 42.15 | +6.43 (+18.0%) ← OOD LOSS (largest) |
+| `val_re_rand` | 53.76 | 58.77 | +5.01 (+9.31%) ← OOD LOSS |
+
+**Hypothesis was the wrong direction.** The student predicted Lookahead would produce the INVERSE of grad-clip's bimodal (OOD-favorable). The result was the SAME as grad-clip's bimodal (in-dist favorable, OOD unfavorable). **5th averaging-style confirmation.**
+
+**Mechanism interpretation:** Lookahead's slow-weight centroid is dominated by the trajectory-average over the k=5 inner steps. With balanced sampler weighted toward single-foil (2× single sampler), the averaging direction biases toward in-distribution geometry — same root cause as the other 4 averaging-style failures, just expressed at a different layer of the optimizer.
+
+**Class definitively closed.** 5 mechanisms — data aug (coord-jitter), weight aug (EMA), gradient aug (grad-clip), step-size aug (lr-DOWN), trajectory aug (Lookahead) — all map to the same in-dist↔OOD trade-off. Plus the schedule-axis warmup-5 (6th, settling-phase reduction). **Future optimizer/regularization experiments in the averaging-style family should be deprioritized.**
+
+**Strong implication for next steps:** OOD generalization requires either:
+1. **Structural input augmentation** (NACA jitter #2072, gap/stagger jitter #2114, fun jitter #1988)
+2. **Architectural changes** (conditional embedding on Re/AoA, multi-task auxiliary loss, RMSNorm #2034 if it changes optimization landscape)
+3. **Extended late-stage settling** (the warmup-2 probe #2112)
+4. **NOT** any optimizer averaging, weight smoothing, or trajectory-bias method.
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-askeladd-lookahead-k5-a0.5-20260513-080103/metrics.jsonl`
+- **Next:** Reassign askeladd to gap/stagger jitter σ=0.02 (channels 22-23) — tandem-arrangement OOD attack, structurally distinct from closed averaging-style class. Complements in-flight NACA jitter (#2072 edward).
+
+### Assignment: Round 30
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2112 | thorfinn | Warmup-2-cosine (warmup_epochs 3→2, T_max 47→48) — OOD-favorable direction of the bimodal trade-off; completes warmup duration bracket |
+| #2114 | askeladd | Gap/stagger jitter σ=0.02 (channels 22-23, per-sample) — tandem-arrangement OOD attack on the last untouched geometric input subspace |
+
+**Rationale (combined):** Closed PRs both point to the same mechanism-level finding — late-stage low-LR settling matters for OOD, and averaging-style interventions can't substitute. Round-30 assignments respond with two complementary probes: (1) thorfinn's warmup-2 directly tests the bimodal trade-off in the predicted-favorable direction (1 extra settling epoch ↔ OOD gain), and (2) askeladd's gap/stagger jitter pivots to a structurally orthogonal class — geometry-channel augmentation. Both have low complexity (1-line and 5-line changes), high diagnostic value, and target the OOD bottleneck via mutually exclusive mechanisms.
+
+---
+
 ## 2026-05-13 14:30 — Round 29
 
 ### PR #1997 alphonse: lr 5e-4 → 3.75e-4 (-25% lr-DOWN) — CLOSED (LOSS, 4th averaging-style bimodal confirmation)
