@@ -47,29 +47,26 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
-# Asinh value-level compression on pressure channel (index 2 of y)
+# Asinh value-level compression on all 3 output channels (Ux, Uy, p) of y.
 # Linear near 0, log-like for large |x|. Inverse: sinh.
-# Compresses the heavy-tailed pressure target so pure-L1 gradient stops
-# over-emphasising leading-edge peaks. Metric still computed in physical
-# space — decompress predictions before unnormalising. (PR #1777)
+# Extends #1777 (pressure-only) to velocity channels — same bulk-redistribution
+# mechanism: asinh compresses tail residuals → more uniform per-node gradient →
+# capacity reallocates from extreme nodes to bulk regions. Metric still computed
+# in physical space — decompress predictions before unnormalising. (PR #1941)
 # ---------------------------------------------------------------------------
 
 ASINH_GAIN = 1.0
 
 
 def compress_pressure(y_norm: torch.Tensor) -> torch.Tensor:
-    """y_norm: [..., 3]. Returns a new tensor with channel 2 asinh-compressed."""
-    y_c = y_norm.clone()
-    y_c[..., 2] = torch.asinh(y_norm[..., 2] * ASINH_GAIN) / ASINH_GAIN
-    return y_c
+    """y_norm: [..., 3]. Returns asinh-compressed tensor across all 3 channels."""
+    return torch.asinh(y_norm * ASINH_GAIN) / ASINH_GAIN
 
 
 def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
     """Inverse of compress_pressure. Decompresses model preds back to normalised scale."""
-    y = y_c.clone()
     # Clamp before sinh to avoid overflow; healthy training keeps pred in ±5 range.
-    y[..., 2] = torch.sinh(y_c[..., 2].clamp(-10, 10) * ASINH_GAIN) / ASINH_GAIN
-    return y
+    return torch.sinh(y_c.clamp(-10, 10) * ASINH_GAIN) / ASINH_GAIN
 
 
 # ---------------------------------------------------------------------------
@@ -506,16 +503,24 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
 
         if epoch == 0 and n_batches == 0:
-            # One-time sanity probe: confirm channels 0/1 untouched, channel 2 compressed,
-            # and decompress→compress round-trips cleanly. (PR #1777)
+            # One-time sanity probe: confirm all 3 channels asinh-compressed
+            # and decompress→compress round-trips cleanly. (PR #1941)
             with torch.no_grad():
                 rt = decompress_pressure(y_target)
-                rt_err = (rt - y_norm).abs().max().item()
-                ch01_match = torch.equal(y_target[..., :2], y_norm[..., :2])
+                rt_err_all = (rt - y_norm).abs().max().item()
+                rt_err_vel = (rt[..., :2] - y_norm[..., :2]).abs().max().item()
+                rt_err_p = (rt[..., 2] - y_norm[..., 2]).abs().max().item()
             print(
-                f"  [asinh probe] y_norm channel-2 |max|={y_norm[..., 2].abs().max().item():.3f} "
-                f"→ y_target channel-2 |max|={y_target[..., 2].abs().max().item():.3f}  "
-                f"round-trip max|err|={rt_err:.2e}  channels-01-unchanged={ch01_match}"
+                f"  [asinh probe all-ch] y_norm |max|=["
+                f"Ux={y_norm[..., 0].abs().max().item():.3f} "
+                f"Uy={y_norm[..., 1].abs().max().item():.3f} "
+                f"p={y_norm[..., 2].abs().max().item():.3f}] "
+                f"→ y_target |max|=["
+                f"Ux={y_target[..., 0].abs().max().item():.3f} "
+                f"Uy={y_target[..., 1].abs().max().item():.3f} "
+                f"p={y_target[..., 2].abs().max().item():.3f}] "
+                f"round-trip max|err|=[all={rt_err_all:.2e} "
+                f"velocity={rt_err_vel:.2e} pressure={rt_err_p:.2e}]"
             )
 
         # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
