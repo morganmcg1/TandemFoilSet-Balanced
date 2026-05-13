@@ -785,3 +785,34 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - Targets compile-stack baseline 71.44.
 
 Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround for PR creation and labels.
+
+## 2026-05-13 03:35 — PR #1806: nezuko LR warmup 2 epochs (review 1, closed)
+
+- Branch: `willowpai2g48h5-nezuko/lr-warmup-2ep`
+- W&B run: `9ksgr8ut` (17 epochs at pre-compile; pre-compile baseline 85.09)
+- Hypothesis: extend warmup from 1 to 2 epochs → more EMA settling → faster useful EMA signal.
+
+| Metric | warmup 2ep (9ksgr8ut) | warmup 1ep baseline (1hn6ur4l) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 88.1364 | 85.0926 | **+3.04 (+3.57% worse)** |
+| `test_avg/mae_surf_p` | 78.7543 | 75.5171 | +3.24 (+4.29% worse) |
+| `test/test_single_in_dist/mae_surf_p` | 92.86 | 87.10 | +5.76 |
+| `test/test_geom_camber_rc/mae_surf_p` | 89.18 | 84.58 | +4.60 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 56.33 | 55.50 | +0.83 |
+| `test/test_re_rand/mae_surf_p` | 76.66 | 74.90 | +1.76 |
+| EMA−live gap at ep 5 (post-2ep-warmup) | +53.63 | n/a | **wider, not narrower (prediction was ≤41.8)** |
+
+- **Hypothesis prediction falsified directly**: epoch-5 EMA-live gap predicted ≤41.8 (v2's epoch-4 gap with 1-ep warmup); observed +53.63 — wider.
+- **Mechanism — two-part failure:**
+  1. EMA settling is *steps-based, not warmup-length-based*. EMA(0.999) has fixed ~693-step half-life regardless of per-step live update magnitude. Adding 375 low-LR steps doesn't buy free EMA settling.
+  2. Live model loses 1 epoch of full-LR training (15 vs 16 near-peak epochs in 17 total). That training signal is unrecoverable.
+- **v2 win reinterpreted**: the +0.83 from PR #1672 likely came from AdamW second-moment stabilization on first batch (start_factor=0.2 ramp prevents bad init seeding), NOT from EMA catch-up compression. One epoch is enough; second epoch buys nothing.
+- **Warmup-length sweep bracketed**: 0 (worse, pre-v2) < 1 (BEST) > 2 (worse, +3.57%).
+- **Decision: CLOSE.** Reassigning nezuko to mlp_ratio=1 (#1878) — capacity-down on MLP axis, completing the 3-axis matrix.
+
+## 2026-05-13 03:35 — PR #1878: nezuko assigned mlp_ratio=1 (compile-stack)
+
+- Branch: `willowpai2g48h5-nezuko/mlp-ratio-1`
+- Hypothesis: reduce mlp_ratio 2→1 (FFN goes 128→256→128 to 128→128). Tests if FFN expansion is over-parameterized on compile stack. Expected ~10-15% per-epoch speedup → ~33 epochs in budget.
+- Companion to frieren #1875 (n_layers=3, depth axis) and askeladd #1841 (slice_num=48, slice axis): completes the 3-axis capacity-down matrix.
+- Targets compile-stack baseline 71.44.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 03:25
+- **Date:** 2026-05-13 03:35
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -42,7 +42,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | #1763 compile MERGED (new best val=71.44); val still descending at cap with T_max=30 starving LR |
 | fern | #1805 | Adaptive Huber β annealing (rebase+retest on compile stack) | Loss shape / schedule | WIP-REBASE | Pre-compile result was small win (val=84.46 vs 85.09, 3/4 splits); sent back for compile-stack retest |
 | frieren | #1875 | n_layers=3 v2 — fresh retry on compile-stack baseline | Architecture (depth, throughput angle) | WIP | #1792 closed without result; depth-axis capacity-down test on compile stack (companion to askeladd #1841 slice axis) |
-| nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED; extend warmup to see if EMA catch-up gain scales |
+| nezuko | #1878 | mlp_ratio=1 — capacity-down on FFN axis (compile-stack test) | Architecture / throughput | WIP | #1806 warmup 2ep closed (+3.57%, EMA settling steps-not-warmup-based); pivoted to MLP axis capacity-down. Completes 3-axis matrix |
 | tanjiro | #1784 | max_norm=10 (rebase+retest on compile stack) | Gradient stability | WIP-REBASE | Pre-compile result was clean win on all 4 splits (val=84.97 vs 85.92); sent back to retest on compile stack |
 | thorfinn | #1858 | SGDR cosine warm restarts (T_0=10, T_mult=2) | LR schedule / exploration | WIP | #1783 Lookahead closed (competes with EMA); pivot to LR schedule exploration via periodic restarts |
 
@@ -67,7 +67,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 **Pattern**: 4 of 4 noise/smoothing mechanisms (surf_weight=30, dropout, grad-clip 1.0, Lookahead) regress on the β=0.5+EMA stack. The β=0.5-sharpened landscape + EMA-smoothed eval has saturated the trajectory-smoothing axis. **Future smoothing/regularization knobs likely won't help**; gains must come from structural changes (architecture, LR schedule shape, capacity, data) — not from another layer of noise control.
 
 ### LR warmup
-- **Warmup 1 epoch** (#1672 v2, nezuko) — val=85.09 (−0.96% vs β=0.5 baseline). MERGED. All 4 splits improved; re_rand best (−1.41). Mechanism: post-warmup EMA catch-up phase compressed (epoch-4 EMA-live gap −26 MAE vs baseline). T_max confounder (~6% higher late LR) still present; 2-epoch warmup under test.
+- **Warmup 1 epoch** (#1672 v2, nezuko) — val=85.09 (−0.96% vs β=0.5 baseline). MERGED. All 4 splits improved; re_rand best (−1.41). **Mechanism reinterpreted after #1806**: not EMA catch-up compression — actually AdamW second-moment stabilization on first batch (start_factor=0.2 prevents bad init seeding); one epoch sufficient.
+- **Warmup 2 epochs** (#1806, nezuko) — val=88.14 (+3.57% worse). Hypothesis prediction directly falsified (ep-5 EMA-live gap predicted ≤41.8, observed +53.63). EMA settling is steps-based not warmup-length-based; longer warmup just costs 1 epoch of full-LR training. Warmup-length sweep bracketed at 1 epoch.
 
 ### Loss shape / Huber β
 - **Huber β=0.5** (#1689, fern) — val=85.92 (−6.96% vs β=1.0 baseline). MERGED. All 4 splits improved; largest gains on hardest splits (in_dist −7.6%, camber_rc −7.0%). Mechanism: β=0.5 moves L1 gradient into the moderate-error bulk where loss density lives, directly aligning with MAE metric.
