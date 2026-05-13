@@ -1,5 +1,57 @@
 # SENPAI Research Results
 
+## 2026-05-13 06:35 — PR #1950: Adaptive Huber delta: EMA of p75 per-batch residuals (self-tuning δ)
+
+- **Branch:** `willowpai2g48h4-fern/adaptive-huber-delta` (CLOSED — mechanism collapse)
+- **Student:** willowpai2g48h4-fern
+- **W&B run:** `dweh5tno`
+- **Hypothesis:** Self-tuning δ via EMA of p75 per-batch surface residuals; warm start at δ=0.5, α=0.99 EMA, clamp [0.2, 2.0]. Tests whether fixed δ=0.5 is sub-optimal across the training trajectory.
+
+### Results
+
+| Metric | Baseline (#1795) | Arm 1 (`dweh5tno`) | Δ |
+|--------|------------------|---------------------|---|
+| `val_avg/mae_surf_p` (best) | 97.9914 | 100.1991 | **+2.25% regression** |
+| `test_avg/mae_surf_p` (4-split) | 88.5311 | 89.4779 | **+1.07% regression** |
+| Best epoch | 11 | 13 / 14 | — |
+
+Arm 2 (p90) correctly skipped per branching rule (δ collapsed below 0.2).
+
+### Mechanism diagnosis — superb root-cause analysis from student
+
+δ trajectory (selected points from `train/adaptive_huber_delta`):
+| step | EMA δ | raw p75 |
+|------|-------|---------|
+| 1 | 0.5057 | 1.0655 |
+| 61 | **0.2096 (floor)** | 0.2125 |
+| 260 | 0.2848 | 0.1503 |
+| 975 | 0.2057 | 0.1109 |
+| 2858 | 0.2003 | 0.0425 |
+| 5245 (final) | 0.2000 | 0.0882 |
+
+- **δ pinned at clamp_lo=0.2 for 88% of training** (439/500 logged steps).
+- Median raw p75 of normalized surface residuals: **0.106** (well below clamp_lo).
+- At δ≈0.2, `surf_l1_frac` (residuals in L1 branch): mean 12.7%, range 0.3–41.6%.
+
+### Analysis
+
+The hypothesis was based on the premise that residuals are "large" early and "small" late. Student's data shows the **decoupled-LR (PR #1795) baseline drives residuals below 0.2 within ~60 training steps** — the surf_head_lr=5e-3 collapses residuals far faster than expected. EMA of p75 correctly tracks this collapse and δ hits the floor immediately.
+
+Effectively, this run was a **fixed-δ=0.2 ablation under the decoupled-LR baseline**. Compare to PR #1627 (fixed-δ sweep) which showed δ=0.2 → +17.2% under the PRE-decoupled-LR baseline. This run shows δ=0.2 → only +2.25% under the new baseline.
+
+**Important side finding**: The merged decoupled LR (PR #1795) flattened the δ-landscape. The δ=0.5 narrow sweet spot is now wider — but δ=0.5 is still the best point we have.
+
+### Suggested follow-ups (from student, prioritized)
+- Lower clamp_lo (0.05) to let δ ride steady-state → effectively pure MSE, expected to underperform (#1650 showed MSE on volume already)
+- Target p99 quantile → may give productive δ in [0.3, 0.6] but is a different hypothesis
+- Fixed δ-sweep under new baseline (clean test) — would only confirm δ=0.5 is optimal; not assigning.
+
+### Residual opportunities
+- Stochastic Depth (DropPath) — regularization angle no other PR is exploring. Assigned to fern as #1987.
+- Other smooth-loss families (LogCosh, Pseudo-Huber) could give a different gradient shape than Huber-δ=0.5; not assigning now since the δ landscape is flat at this baseline.
+
+---
+
 ## 2026-05-13 06:20 — PR #1924: More attention heads: n_head 4→8 (wall-clock-neutral capacity axis)
 
 - **Branch:** `willowpai2g48h4-edward/n-head-8` (CLOSED — dead end)

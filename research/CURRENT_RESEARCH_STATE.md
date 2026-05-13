@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 19)
+- **As of:** 2026-05-13 (updated cycle 20)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -43,7 +43,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 **Active directions:**
 
 1. **Decoupled LR extension** — merged at 5e-3 (−0.18%); trend not exhausted. Push to 7e-3/1e-2 with 2-epoch head warmup to tame late oscillation. #1949 thorfinn (WIP).
-2. **Adaptive Huber δ** — self-tuning EMA of p75 per-batch residuals. Fixed δ=0.5 may be sub-optimal early (large residuals → too few in L1) and late (small residuals → too many in MSE). #1950 fern (WIP).
+2. **Stochastic Depth (DropPath)** — regularization angle no other PR is exploring. p∈{0.05, 0.1} on Transolver residual branches. Targets the late-epoch oscillation pattern seen in PR #1795 baseline. #1987 fern (NEW).
 3. **SWA late-epoch averaging** — average last K checkpoints post-training, bypassing EMA's early-training contamination issue. #1951 askeladd (WIP).
 4. **BF16 capacity unlock** — #1572 frieren (WIP, stale).
 5. **Pressure-channel emphasis** — #1496 alphonse (WIP, stale).
@@ -67,10 +67,10 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 | 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
 | 1922 | nezuko | per-channel-huber-delta | WIP | δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}; tests if global δ over-flattens Ux/Uy distributions |
 | 1949 | thorfinn | surf-head-lr-warmup | WIP | surf_head_lr ∈ {7e-3, 1e-2} + 2-ep head warmup; extends PR #1795 trend |
-| 1950 | fern | adaptive-huber-delta | WIP | EMA of p75 per-batch residuals; self-tuning δ. Arms: p75 and p90 |
 | 1951 | askeladd | swa-late-epoch | WIP | Avg last K checkpoints post-training; avoids EMA's early-training drag |
-| 1974 | edward | encoder-lr-retune | WIP (NEW) | Re-tune encoder LR {3e-4, 7e-4} stacked on surf_head_lr=5e-3; encoder LR stale since pre-Huber |
-| 1978 | tanjiro | re-loss-weight | WIP (NEW) | Per-sample loss multiplier 1+α×|norm(log(Re))|; loss-side Re-curriculum avoiding #1868 sampler no-op |
+| 1974 | edward | encoder-lr-retune | WIP | Re-tune encoder LR {3e-4, 7e-4} stacked on surf_head_lr=5e-3; encoder LR stale since pre-Huber |
+| 1978 | tanjiro | re-loss-weight | WIP | Per-sample loss multiplier 1+α×|norm(log(Re))|; loss-side Re-curriculum avoiding #1868 sampler no-op |
+| 1987 | fern | stochastic-depth | WIP (NEW) | DropPath p∈{0.05, 0.1} on Transolver residual branches; only regularization experiment running |
 
 ## Working hypotheses
 
@@ -96,8 +96,9 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 13. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
 14. **EMA model weights** — **rejected** (PR #1808, +7.8-16.2% regression). 14-epoch budget too short; model in descent phase, not noisy-plateau. EMA window contaminates evaluation with early-training weights. Budget mismatch, not hypothesis failure.
 15. **Decoupled LR for surf_head vs encoder** — **confirmed** (PR #1795, −0.18%). surf_head_lr=5e-3 (10×encoder) is the winning arm; monotonic improvement trend across 1e-3→3e-3→5e-3 not yet exhausted. Extending: PR #1949 thorfinn tests 7e-3/1e-2 with warmup.
-16. **Adaptive Huber δ** — testing (#1950 fern, NEW). EMA of p75 per-batch residuals; self-tuning warm start at δ=0.5.
+16. **Adaptive Huber δ** — **rejected** (PR #1950, +2.25% regression). EMA δ collapsed to clamp floor (0.2) in 60 steps and stayed 88% of training — effectively fixed-δ=0.2. Decoupled-LR merger made δ landscape flatter (PR #1627 saw +17% at δ=0.2; this run only +2.25%). Direction exhausted at this baseline.
 17. **SWA late-epoch averaging** — testing (#1951 askeladd, NEW). Average last K checkpoints to avoid EMA's early-training drag.
+18. **Stochastic Depth (DropPath)** — testing (#1987 fern, NEW). p∈{0.05, 0.1} on Transolver residual branches. Targets late-epoch oscillation; no other PR is exploring regularization.
 
 ## Closed / rejected hypotheses
 
@@ -116,6 +117,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 - **PR #1808** (EMA weights) — +7.8-16.2% regression. Budget too short for EMA; model in descent phase. Closed. Follow-up: SWA late-epoch (#1951).
 - **PR #1868** (log(Re) quantile bucketing) — +8.4% regression. Structural no-op: quantile bounds → equal counts → 1/count weights ≈ uniform. Max/min ratio 1.02×; only ±2% perturbation of existing domain weights. Mechanism itself is broken. Follow-up: loss-side multiplier (#1978).
 - **PR #1924** (n_head=8) — +18.84% regression. +31% per-epoch wall-clock → 11 vs 14 epochs. Fifth wall-clock-bound failure. Pareto frontier fully characterized.
+- **PR #1950** (adaptive Huber δ via EMA of p75 residuals) — +2.25% val regression, +1.07% test. δ collapsed to clamp floor (0.2) within 60 steps because p75 of normalized residuals has median ~0.106. Effectively fixed-δ=0.2 run. Useful side finding: decoupled-LR merger flattened the δ landscape (compare to PR #1627's +17% at δ=0.2). Direction exhausted.
 
 ## Potential next directions
 
