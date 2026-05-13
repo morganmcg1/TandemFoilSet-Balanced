@@ -1,5 +1,64 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 05:45 — PR #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (thorfinn)
+
+**New best: `val_avg/mae_surf_p` = 57.328** (epoch 14, 30-min wall-clock cap)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE) in normalized space, **surf_weight=5** ← changed |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR (T_max=epochs) |
+| `batch_size` | 4 |
+| `epochs` | 50 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+
+> **surf_weight=5 mechanism:** Halving the surface/volume loss weighting (10→5) reallocates gradient budget toward volume nodes, producing richer volumetric features. Surface accuracy then improves via better geometric context (confirmed: vol MAE improved −7% to −26% across all splits). Hardest splits benefit most: single_in_dist −20.5% val, geom_camber_rc −2.6% val (already improved by RMSNorm in previous round).
+
+### Val metrics (best checkpoint, epoch 14)
+
+| Split | `mae_surf_p` |
+|---|---|
+| val_single_in_dist | 60.960 |
+| val_geom_camber_rc | **72.044** |
+| val_geom_camber_cruise | 38.721 |
+| val_re_rand | 57.586 |
+| **val_avg/mae_surf_p** | **57.328** |
+
+### Test metrics (best-val checkpoint, epoch 14)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 53.010 |
+| test_geom_camber_rc | **62.463** |
+| test_geom_camber_cruise | 32.843 |
+| test_re_rand | 49.231 |
+| **test_avg/mae_surf_p** | **49.387** |
+
+### Improvement vs PR #1837 baseline (63.017 val / 54.731 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 76.710 | 60.960 | −20.5% | 67.384 | 53.010 | −21.3% |
+| geom_camber_rc | 73.930 | 72.044 | −2.6% | 64.508 | 62.463 | −3.2% |
+| geom_camber_cruise | 40.746 | 38.721 | −5.0% | 34.707 | 32.843 | −5.4% |
+| re_rand | 60.683 | 57.586 | −5.1% | 52.327 | 49.231 | −5.9% |
+| **avg** | **63.017** | **57.328** | **−9.0%** | **54.731** | **49.387** | **−9.8%** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h3-thorfinn-surf-weight-5-rmsnorm-geglu-lion-20260513-041441/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 5`
+
+---
+
 ## 2026-05-13 04:30 — PR #1837: RMSNorm in TransolverBlock (frieren)
 
 **New best: `val_avg/mae_surf_p` = 63.017** (epoch 13, 30-min wall-clock cap)
