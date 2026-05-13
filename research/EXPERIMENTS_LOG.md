@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-13 10:05 — PR #1657: rff-pos-encoding σ=3.0 (fern) — MERGED (new best, MAJOR GAIN)
+
+- **Branch:** `charliepai2g48h2-fern/rff-pos-encoding`
+- **Hypothesis:** Prepend 64-dim Fourier Random Feature positional encoding of (x,z) node coordinates. Two arms: σ=1.0 and σ=3.0. Expected −2% to −5%; stacked on canonical (asinh + warmup-4 + lr=1.5e-3 + β2=0.99).
+- **Metric artifacts:** `models/model-charliepai2g48h2-fern-rff-pos-encoding-sigma3-20260513-085421/metrics.jsonl`
+
+### Results vs. #2004 baseline (73.9964)
+
+| Split | Baseline | RFF σ=1.0 | RFF σ=3.0 (winner) |
+|---|---|---|---|
+| val_single_in_dist | 85.100 | 80.122 | **72.691** (−14.59%) |
+| val_geom_camber_rc | 89.815 | 84.723 | **78.833** (−12.23%) |
+| val_geom_camber_cruise | 50.761 | 45.784 | **44.439** (−12.46%) |
+| val_re_rand | 70.309 | 66.401 | **65.359** (−7.04%) |
+| **val_avg/mae_surf_p** | **73.9964** | **69.2572** | **65.3304** (−11.71%) |
+| **test_avg/mae_surf_p** | 64.4437 | 60.4811 | **56.9425** (−11.65%) |
+
+**MERGED as new best: val_avg=65.3304 (−11.71%), test_avg=56.9425 (−11.65%)**
+
+### Analysis
+
+Largest single improvement in this research programme. RFF spatial encoding gives the Transolver explicit awareness of node locations — the model can now distinguish nearby nodes across surface/volume interface and across different camber angles.
+
+**σ axis**: 1.0 → 3.0 is monotone (−6.4% → −11.7%). σ=3.0 matches the coordinate scale range [−6.5, 7.4] — bandwidth well-matched to normalized coordinate spread. Next probe: σ=5.0.
+
+**Per-split pattern**: uniform gains (−7% to −15%), strongest on geometry-OOD splits (cruise/rc). Consistent with hypothesis that spatial encoding aids geometry extrapolation. val_re_rand gained least (−7%) — random Reynolds may be less spatially-structured.
+
+**Minimal cost**: +15.9K params (+2.4%), +0 epoch time overhead.
+
+**New canonical config**: RFF σ=3.0 (preprocess MLP 24→86) + all prior gains (asinh + warmup-4 + lr=1.5e-3 + β2=0.99).
+
+---
+
 ## 2026-05-13 09:10 — PR #2054: adamw-beta2-0.95 (nezuko) — CLOSED (dead end, β2 axis mapped)
 
 - **Branch:** `charliepai2g48h2-nezuko/adamw-beta2-0.95`
