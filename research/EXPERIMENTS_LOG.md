@@ -1,5 +1,25 @@
 # SENPAI Research Results
 
+## 2026-05-13 05:30 — PR #1559: Decoupled chan_w (surf=[1,1,5], vol=[1,1,1]) — CLOSED
+
+- Branch: `charliepai2g24h2-alphonse/decoupled-chanw-surf-vol`
+- Hypothesis: chan_w=[1,1,5] should apply to surface loss only; volume loss should stay [1,1,1] since volume mae is not in the primary metric
+- Artifacts: 9-seed sweep on student branch (committed JSONL)
+
+| Statistic | Decoupled chan_w | Pre-floor baseline (#1464 base) | Δ% |
+|---|---:|---:|---:|
+| **val_avg mean (9 seeds)** | **147.0** | 133.94 | **+9.8%** |
+| val_avg best-of-9          | 134.14 | 133.94 | +0.15% |
+| val_avg std                | 8.32   | — | — |
+
+**Decision: CLOSED — mean +9.8% regression across 9 seeds; best-of-9 only ties old pre-floor baseline.**
+
+**Analysis:** Branch was based on a deep pre-floor base (missing warmup, gradclip, Huber). Even discounting the base mismatch, the 9-seed sweep is informative: the **volume term acts as a useful regularizer** even though it's not in the primary metric. Removing the channel upweight from the volume loss (`vol=[1,1,1]` instead of `[1,1,5]`) breaks shared-feature regularization between surface and volume heads. The decoupling intuition (target-only emphasis) is wrong — joint channel weighting is a feature, not a bug. Bug-fix work in the PR duplicates askeladd #1536 and fern #1477 NaN-guard work, so nothing salvageable to cherry-pick.
+
+**Follow-up:** Assigned alphonse #1947 — chan_w sweep under the new Huber β=0.3 regime ([1,1,3] vs [1,1,7]) to see if the optimal upweight magnitude shifted with the loss change.
+
+---
+
 ## 2026-05-13 05:10 — PR #1849: Huber β sweep β=0.5 and β=0.3 — **NEW FLOOR**
 
 - Branch: `charliepai2g24h2-edward/huber-beta-sweep`

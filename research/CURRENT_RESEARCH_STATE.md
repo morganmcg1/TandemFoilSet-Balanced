@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 05:15
+- **Date:** 2026-05-13 05:35
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
@@ -19,17 +19,19 @@ bs=1 clean test_avg = **94.9845** (floor progression: 122.70 → 111.15 → 105.
 
 | PR | Student | Hypothesis | Lever | Status |
 |---|---|---|---|---|
-| #1536 | askeladd | NaN guard + rerun on floor | Bug fix | Rebased (04:18), training |
-| #1559 | alphonse | Decoupled surf/vol chan_w: [1,1,5] surf, [1,1,1] vol | Loss alignment | Training (GPU 47GB) |
-| #1927 | edward | Huber β lower: β=0.1, per-channel β (Ux=0.1, p=0.5) | Loss tuning | Just assigned |
-| #1489 | thorfinn | AoA flip p=0.25 on Huber floor | Augmentation | Bumped; needs rebase+run |
-| #1477 | fern | AMP bf16 + Huber β=0.3 floor stack (r3) | Training efficiency | Rebase in progress |
+| #1536 | askeladd | NaN guard + rerun on floor | Bug fix | Training |
+| #1947 | alphonse | chan_w sweep under β=0.3: [1,1,3] vs [1,1,7] | Loss tuning | Just assigned |
+| #1927 | edward | Huber β lower: β=0.1, per-channel β (Ux=0.1, p=0.5) | Loss tuning | WIP |
+| #1489 | thorfinn | AoA flip p=0.25 on Huber floor | Augmentation | Needs rebase+run |
+| #1477 | fern | AMP bf16 + Huber β=0.3 floor stack (r3) | Training efficiency | CONFLICTING — needs rebase |
 | #1891 | tanjiro | OneCycleLR (max_lr=7.5e-4, per-batch) | Schedule | WIP |
-| #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | Restarted training |
-| #1751 | frieren | Tighter cosine T_max=12 | Schedule | Restarted training |
+| #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | WIP (stale flag) |
+| #1751 | frieren | Tighter cosine T_max=12 | Schedule | WIP (stale flag) |
 
 ## Recent decisions
 
+- **#1559 (alphonse decoupled chan_w) CLOSED**: +9.8% mean regression across 9 seeds; best-of-9 only ties pre-floor baseline. Volume term acts as joint regularizer — decoupling breaks it. Reassigned chan_w sweep under β=0.3 as #1947.
+- **#1947 (alphonse chan_w sweep) ASSIGNED**: [1,1,3] vs [1,1,7] under Huber β=0.3 — natural follow-up to test if optimal chan_w shifted with loss change.
 - **#1849 (edward Huber β sweep) MERGED — NEW FLOOR**: val_avg 111.15 → 105.68 (−4.92%). β=0.3 beats β=0.5 beats β=1.0 for most splits. Exception: cruise (low-residual) prefers β=0.5. Per-channel β now assigned as follow-up (#1927).
 - **#1524 (tanjiro grad-accum r3) CLOSED**: +6.2% regression. Step throughput dominates gradient quality under 30-min timeout.
 - **#1801 (edward Huber β=1.0) MERGED**: val_avg 122.70 → 111.15 (−9.4%).
@@ -56,11 +58,11 @@ bs=1 clean test_avg = **94.9845** (floor progression: 122.70 → 111.15 → 105.
 - **edward per-channel β** (#1927): β=0.1 for velocity, β=0.5 for pressure. May fix cruise regression while improving high-residual splits.
 
 ### In flight
-- **frieren T_max=12** (#1751): Calibrated cosine decay — restarted after rate-limit recovery.
-- **nezuko WD=5e-4** (#1681): Regularization lever — restarted.
-- **alphonse decoupled chan_w** (#1559): [1,1,5] surf + [1,1,1] vol. Training.
+- **alphonse chan_w sweep** (#1947): [1,1,3] vs [1,1,7] under β=0.3 — test if optimal channel upweight shifted.
+- **frieren T_max=12** (#1751): Calibrated cosine decay — stale flag, may need bump.
+- **nezuko WD=5e-4** (#1681): Regularization lever — stale flag, may need bump.
 - **askeladd NaN guard** (#1536): Clean test_avg measurement at β=0.3 floor.
-- **thorfinn AoA flip** (#1489): p=0.25 on Huber floor. Bumped.
+- **thorfinn AoA flip** (#1489): p=0.25 on Huber floor. Needs rebase + run.
 - **tanjiro OneCycleLR** (#1891): Per-batch schedule.
 
 ### Next round queue
