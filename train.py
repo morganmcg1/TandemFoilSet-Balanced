@@ -190,11 +190,12 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
-                                  n_layers=0, res=False, act=act)
+            _pre_in = fun_dim + ref**3
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
-                                  n_layers=0, res=False, act=act)
+            _pre_in = fun_dim + space_dim
+        # Param-equivalent SwiGLU hidden: H s.t. H*(2*_pre_in + n_hidden) ≈ 2*n_hidden*(_pre_in + n_hidden)
+        _swiglu_pre_hidden = int(round(2 * n_hidden * (_pre_in + n_hidden) / (2 * _pre_in + n_hidden) / 8)) * 8
+        self.preprocess = SwiGLU(_pre_in, _swiglu_pre_hidden, n_hidden)
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
