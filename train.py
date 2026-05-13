@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -81,6 +82,35 @@ class MLP(nn.Module):
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
         return self.linear_post(x)
+
+
+class FourierEncoder(nn.Module):
+    """Random Fourier Features encoder for spatial coordinates.
+
+    Maps coords [B, N, n_dim] → Fourier features [B, N, 2*num_freq] via a
+    frozen Gaussian random projection (Tancik et al. 2020, NeurIPS, RFF /
+    NeRF-style positional encoding). The projection matrix B is registered
+    as a buffer (not a Parameter), so it is checkpointed but not learned.
+
+    A fixed seed is used so B is reproducible across runs.
+    """
+
+    def __init__(self, num_freq: int = 4, sigma: float = 1.0, n_dim: int = 2,
+                 seed: int = 1234):
+        super().__init__()
+        self.num_freq = num_freq
+        self.sigma = sigma
+        self.n_dim = n_dim
+        gen = torch.Generator()
+        gen.manual_seed(seed)
+        B = torch.randn(n_dim, num_freq, generator=gen) * sigma
+        self.register_buffer("B", B)
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        # coords: [B, N, n_dim]  →  [B, N, 2*num_freq]
+        proj = coords @ self.B  # [B, N, num_freq]
+        two_pi_proj = 2.0 * math.pi * proj
+        return torch.cat([torch.sin(two_pi_proj), torch.cos(two_pi_proj)], dim=-1)
 
 
 class PhysicsAttention(nn.Module):
@@ -183,18 +213,35 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 num_fourier_freq: int = 0, fourier_sigma: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        # Optional Fourier positional encoding on the (x, z) coords (first
+        # `space_dim` channels of input). 2*num_fourier_freq extra dims are
+        # appended to the input before the preprocess MLP.
+        if num_fourier_freq > 0:
+            self.fourier = FourierEncoder(
+                num_freq=num_fourier_freq, sigma=fourier_sigma, n_dim=space_dim,
+            )
+            fourier_extra_dim = 2 * num_fourier_freq
+        else:
+            self.fourier = None
+            fourier_extra_dim = 0
+        self.num_fourier_freq = num_fourier_freq
+        self.fourier_sigma = fourier_sigma
+
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + fourier_extra_dim,
+                                  n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + fourier_extra_dim,
+                                  n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -229,6 +276,10 @@ class Transolver(nn.Module):
         # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
+        if self.fourier is not None:
+            coords = x[..., : self.space_dim]  # (x, z), normalized
+            fourier_feats = self.fourier(coords)
+            x = torch.cat([x, fourier_feats], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, gamma, beta)
@@ -506,6 +557,10 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    # Random Fourier Features (frozen Gaussian basis) on the (x, z) coords.
+    # 2*num_fourier_freq extra dims appended to the 24-d input before preprocess.
+    num_fourier_freq=4,
+    fourier_sigma=1.0,
 )
 
 model = Transolver(**model_config).to(device)
@@ -517,6 +572,31 @@ print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
+if model.fourier is not None:
+    fb = model.fourier.B
+    print(
+        f"FourierEncoder: num_freq={model.num_fourier_freq}, sigma={model.fourier_sigma}, "
+        f"B shape={tuple(fb.shape)}, B mean={fb.mean().item():+.4f}, "
+        f"B std={fb.std().item():.4f}, B abs_max={fb.abs().max().item():.4f} "
+        f"(frozen, registered as buffer)"
+    )
+    # Verify Fourier output stats on one normalized train batch — we want output
+    # values with reasonable spread (not all near 0 or all clipped to +/-1).
+    with torch.no_grad():
+        _x_sample, _, _, _ = next(iter(train_loader))
+        _x_sample = _x_sample.to(device)
+        _x_norm = (_x_sample - stats["x_mean"]) / stats["x_std"]
+        _coords_sample = _x_norm[..., :2]
+        _ff = model.fourier(_coords_sample)
+        print(
+            f"FourierEncoder sample output: shape={tuple(_ff.shape)}, "
+            f"mean={_ff.mean().item():+.4f}, std={_ff.std().item():.4f}, "
+            f"abs_mean={_ff.abs().mean().item():.4f}  "
+            f"(coords post-norm range: x=[{_coords_sample[..., 0].min().item():.2f},"
+            f"{_coords_sample[..., 0].max().item():.2f}], "
+            f"z=[{_coords_sample[..., 1].min().item():.2f},"
+            f"{_coords_sample[..., 1].max().item():.2f}])"
+        )
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
 # (slice entropy capture). Diagnostics toggle a Python flag that would otherwise
