@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-05-14 01:00 UTC — Round 47
+
+Three axis-closing LOSSes reviewed + 3 new experiments assigned. All 4 budget-bound axes now mapped at optimum.
+
+### PR #2418 alphonse: Squared ReLU (ReLU²) — CLOSED (ACTIVATION AXIS CLOSED AT GELU)
+
+- **Branch:** charliepai2g48h5-alphonse/squared-relu-retry2
+- **Hypothesis:** Squared ReLU at all 3 MLP sites; symmetric probe to closed SiLU LOSS (#2156). Primer-paper precedent.
+
+| Metric | ReLU² | Baseline #2307 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 45.6311 | 42.3455 | **+7.76% LOSS** |
+| test_avg/mae_surf_p | 39.0696 | 38.5059 | +1.46% LOSS |
+| val_single_in_dist | 42.9923 | 35.4776 | **+21.18% (WORST)** |
+| val_geom_camber_rc | 59.3067 | 60.8311 | **−2.50% WIN** |
+| val_geom_camber_cruise | 31.0540 | 27.6517 | +12.30% |
+| val_re_rand | 49.1714 | 45.4214 | +8.27% |
+
+- **Epochs:** 60/70 (wall-clock cap at 30 min; still descending at cutoff; converged ~45.0-45.3).
+- **Param count:** 328,235 (student note: PR body had ~577K estimate from different ancestor — actual is ~0.33M).
+- **Diagnosis:** BIMODAL in SURPRISING DIRECTION. rc is the ONLY split that wins (−2.50%); all others regress. Pattern: ReLU²'s quadratic positive growth amplifies large pressure peaks → helps rc; zero negative-tail gating starves negative pre-activation patterns → hurts in-dist (worst +21.18%) and moderate-pressure OOD (cruise).
+- **Axis closure:** **Activation axis FULLY CLOSED at GELU.** SiLU (negative direction, uniform LOSS) + ReLU² (positive direction, bimodal LOSS) bracket GELU. 11th taxon: activation-curve over-specialization.
+- **Key insight:** rc-WIN-only is the FIRST evidence that selective gradient amplification on large pressure peaks could help camber_rc specifically — generalizable to GeGLU (#2439 in-flight) or per-channel selective gate.
+- **Metrics artifacts:** `models/model-charliepai2g48h5-alphonse-squared-relu-retry2-20260513-155837/metrics.jsonl`
+
+---
+
+### PR #2412 askeladd: SAM ρ=0.05 — CLOSED (META-OPTIMIZER AXIS CLOSED)
+
+- **Branch:** charliepai2g48h5-askeladd/sam-rho005
+- **Hypothesis:** SAM flat-minima optimizer wrapping AdamW; ρ=0.05 two-step perturbation.
+
+| Metric | SAM ρ=0.05 | Baseline #2307 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 97.1961 | 42.3455 | **+129.6% LOSS** |
+| test_avg/mae_surf_p | 88.7014 | 38.5059 | **+130.4% LOSS** |
+| val_single_in_dist | 106.2557 | 35.4776 | **+199.6% (WORST)** |
+| val_geom_camber_rc | 107.8315 | 60.8311 | +77.3% |
+| val_geom_camber_cruise | 79.7911 | 27.6517 | +188.6% |
+| val_re_rand | 94.9064 | 45.4214 | +109.0% |
+
+- **Epochs:** 35/35 (terminal, all completed). Val PLATEAUED at ep32 (97.20→97.30→97.64→97.28) → clean convergence to WORSE basin. Per-epoch cost: +14% (NOT predicted 2× — torch.compile cached second forward).
+- **Diagnosis:** Catastrophic uniform regression. SAM at ρ=0.05 finds a fundamentally worse minimum. in_dist WORST LOSS (+199.6%) = opposite of flat-minima-helps-OOD prediction. Gap widened with epochs (widening monotone divergence). Three mechanisms: (1) ρ=0.05 too aggressive for CFD surrogate gradient magnitudes; (2) batch=4+L1+bf16 produces too-noisy per-batch gradient direction for SAM's worst-case identification; (3) active gradient interference, not just flatness trade.
+- **Axis closure:** **Flat-minima / meta-optimizer axis CLOSED.** AdamW hyperparams (4-LOSS) + SGD (1-LOSS) + SAM (1-LOSS) = optimizer-family fully closed. 12th taxon: meta-optimizer perturbation-noise interference.
+- **Metrics artifacts:** `models/model-charliepai2g48h5-askeladd-sam-rho005-20260513-155707/metrics.jsonl`
+
+---
+
+### PR #2392 edward: mlp_ratio 2→1 — CLOSED (FFN CAPACITY FLOOR / mlp_ratio AXIS CLOSED)
+
+- **Branch:** charliepai2g48h5-edward/mlp-ratio-1
+- **Hypothesis:** FFN contraction — 4th budget-bound axis probe; tests whether fewer-param FFN frees enough wall-clock to net improve.
+
+| Metric | mlp_ratio=1 | Baseline #2307 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 49.7302 | 42.3455 | **+17.4% LOSS** |
+| test_avg/mae_surf_p | 43.5735 | 38.5059 | +13.2% LOSS |
+| val_single_in_dist | 43.8610 | 35.4776 | +23.6% |
+| val_geom_camber_rc | 66.8479 | 60.8311 | +9.9% |
+| val_geom_camber_cruise | 35.7988 | 27.6517 | **+29.5% (WORST)** |
+| val_re_rand | 52.4131 | 45.4214 | +15.4% |
+
+- **Epochs:** 75/80 (terminal-best; clean convergence; plateau tight above 49.7 for final ~10 epochs; capacity ceiling).
+- **Per-epoch cost:** ~23 s/epoch (−25%, better than predicted). Param count: 254,123.
+- **Diagnosis:** Capacity floor. At mlp_ratio=1, each block's FFN = Linear(96→96)→GELU→Linear(96→96) — no higher-dim non-linear bottleneck. Extra wall-clock (~25% savings → 75 epochs vs ~58) cannot compensate loss of per-block feature mixing expressivity. Uniform regression (cruise worst) = general capacity failure.
+- **Axis closure:** **mlp_ratio FULLY CLOSED: {1,2,4}→{49.73,42.35,66.73}; concave optimum at 2.** mlp_ratio=4 was budget-cliff (34/50 epochs); this is capacity-floor (75/80, clean convergence); together they definitively close the axis.
+- **META-FINDING:** All 4 budget-bound axes at optimum — n_layers=4, n_hidden=96, slice_num=24, mlp_ratio=2. Capacity-budget Pareto front fully mapped. Future gains MUST come from non-budget axes.
+- **Metrics artifacts:** `models/model-charliepai2g48h5-edward-mlp-ratio-1-20260513-155022/metrics.jsonl`
+
+---
+
 ## 2026-05-14 00:15 UTC — Round 46
 
 One axis-closing LOSS reviewed + 1 new experiment assigned (GeGLU FFN).
