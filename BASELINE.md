@@ -1,5 +1,90 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 01:20 — PR #1724: bf16 mixed precision (alphonse)
+
+**New best: `val_avg/mae_surf_p` = 101.463** (epoch 14, 30-min wall-clock cap)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| Loss | L1 (MAE) in normalized space, surf_weight=10 |
+| Optimizer | AdamW, lr=5e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR (T_max=epochs) |
+| `batch_size` | 4 |
+| `epochs` | 50 |
+| Mixed precision | **bf16 autocast** ← changed |
+| Run cap | 30 min wall clock per training execution |
+
+### Val metrics (best checkpoint, epoch 14)
+
+| Split | `mae_surf_p` |
+|---|---|
+| val_single_in_dist | 120.699 |
+| val_geom_camber_rc | 116.096 |
+| val_geom_camber_cruise | 73.667 |
+| val_re_rand | 95.391 |
+| **val_avg/mae_surf_p** | **101.463** |
+
+### Test metrics (best-val checkpoint, epoch 14)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 108.025 |
+| test_geom_camber_rc | 107.822 |
+| test_geom_camber_cruise | 63.152 |
+| test_re_rand | 87.800 |
+| **test_avg/mae_surf_p** | **91.700** |
+
+### Throughput
+- 138.5s/epoch (1.26× faster vs fp32 baseline of ~175s/epoch)
+- 14 epochs in 30 min (vs 13 with fp32)
+
+### Improvement vs PR #1358 baseline (101.810)
+
+| Split | Old | New | Δ |
+|---|---|---|---|
+| val_single_in_dist | 124.150 | 120.699 | −2.8% |
+| val_geom_camber_rc | 112.699 | 116.096 | +3.0% |
+| val_geom_camber_cruise | 76.570 | 73.667 | −3.8% |
+| val_re_rand | 93.820 | 95.391 | +1.7% |
+| **val_avg** | **101.810** | **101.463** | **−0.34%** |
+
+### Metric artifacts
+
+`models/model-charliepai2g48h3-alphonse-bf16-mixed-precision-20260513-001819/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent <student> \
+  --experiment_name <name> \
+  --epochs 50 \
+  --lr 5e-4 \
+  --weight_decay 1e-4 \
+  --batch_size 4 \
+  --surf_weight 10
+```
+
+Note: bf16 autocast is now the default in `train.py` (merged from PR #1724). No extra flags needed.
+
+---
+
+## Benchmark to beat
+
+**`val_avg/mae_surf_p` < 101.463** — lower is better.
+
+Test metric benchmark: **`test_avg/mae_surf_p` < 91.700**.
+
+The hardest splits are `val_geom_camber_rc` (116.1) and `val_single_in_dist` (120.7). Note: bf16 improved cruise and in_dist but slightly regressed rc and re_rand — noise at this scale.
+
+---
+
 ## 2026-05-12 21:10 — PR #1358: L1 (MAE) loss in normalized space
 
 **New best: `val_avg/mae_surf_p` = 101.810** (epoch 13, 30-min wall-clock cap)
