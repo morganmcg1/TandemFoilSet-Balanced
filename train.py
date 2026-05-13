@@ -138,9 +138,26 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class LayerScale(nn.Module):
+    """CaiT-style learnable per-channel residual gain (Touvron et al. ICCV 2021).
+
+    Scales a residual branch output by gamma in R^H. gamma is learnable and
+    initialized to a small value (default 1e-4) so residual contributions start
+    near zero — the network behaves like an identity at init and gradually
+    grows the residual branches where the gradient signal supports it.
+    """
+    def __init__(self, hidden_dim: int, init_value: float = 1e-4):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(hidden_dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.gamma
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layerscale_init: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -151,6 +168,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.use_layerscale = layerscale_init > 0.0
+        if self.use_layerscale:
+            self.ls_attn = LayerScale(hidden_dim, init_value=layerscale_init)
+            self.ls_mlp = LayerScale(hidden_dim, init_value=layerscale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -160,8 +181,14 @@ class TransolverBlock(nn.Module):
 
     def forward(self, fx, film=None):
         # film: optional (gamma, beta) tensors each [B, 1, H] for this block
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        attn_out = self.attn(self.ln_1(fx))
+        if self.use_layerscale:
+            attn_out = self.ls_attn(attn_out)
+        fx = attn_out + fx
+        mlp_out = self.mlp(self.ln_2(fx))
+        if self.use_layerscale:
+            mlp_out = self.ls_mlp(mlp_out)
+        fx = mlp_out + fx
         if film is not None:
             gamma, beta = film
             fx = (1 + gamma) * fx + beta
@@ -200,7 +227,8 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  fourier_features: bool = False,
                  fourier_num_features: int = 16,
-                 fourier_sigma: float = 1.0):
+                 fourier_sigma: float = 1.0,
+                 layerscale_init: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -235,6 +263,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                layerscale_init=layerscale_init,
             )
             for i in range(n_layers)
         ])
@@ -534,6 +563,7 @@ class Config:
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    layerscale_init: float = 0.0  # LayerScale (CaiT) per-channel residual gain init. 0.0 disables. CaiT default 1e-4.
 
 
 cfg = sp.parse(Config)
@@ -594,6 +624,7 @@ model = FiLMTransolver(
     fourier_features=cfg.fourier_features,
     fourier_num_features=cfg.fourier_num_features,
     fourier_sigma=cfg.fourier_sigma,
+    layerscale_init=cfg.layerscale_init,
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
@@ -602,6 +633,12 @@ if cfg.fourier_features:
     print(
         f"Fourier features: ON (num_features={cfg.fourier_num_features}, sigma={cfg.fourier_sigma}, "
         f"input expanded by {2*cfg.fourier_num_features} channels)"
+    )
+if cfg.layerscale_init > 0.0:
+    n_ls_params = sum(p.numel() for n, p in model.named_parameters() if ".ls_" in n)
+    print(
+        f"LayerScale: ON (init={cfg.layerscale_init:.0e}, per-channel residual gain on attn+mlp branches, "
+        f"{n_ls_params} extra params)"
     )
 
 # Kendall uncertainty heads — per-channel learnable log_sigma scalars (Kendall, Gal, Cipolla 2018).
@@ -848,6 +885,30 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # LayerScale diagnostics: per-block, per-branch gamma mean/std/min/max.
+    if cfg.layerscale_init > 0.0 and isinstance(model, FiLMTransolver):
+        with torch.no_grad():
+            ls_means_attn = []
+            ls_means_mlp = []
+            for li, block in enumerate(model.transolver.blocks):
+                if not getattr(block, "use_layerscale", False):
+                    continue
+                ga = block.ls_attn.gamma.detach()
+                gm = block.ls_mlp.gamma.detach()
+                log_metrics[f"ls/gamma_attn_mean_L{li}"] = ga.mean().item()
+                log_metrics[f"ls/gamma_attn_std_L{li}"] = ga.std().item()
+                log_metrics[f"ls/gamma_attn_min_L{li}"] = ga.min().item()
+                log_metrics[f"ls/gamma_attn_max_L{li}"] = ga.max().item()
+                log_metrics[f"ls/gamma_mlp_mean_L{li}"] = gm.mean().item()
+                log_metrics[f"ls/gamma_mlp_std_L{li}"] = gm.std().item()
+                log_metrics[f"ls/gamma_mlp_min_L{li}"] = gm.min().item()
+                log_metrics[f"ls/gamma_mlp_max_L{li}"] = gm.max().item()
+                ls_means_attn.append(ga.mean().item())
+                ls_means_mlp.append(gm.mean().item())
+            if ls_means_attn:
+                log_metrics["ls/gamma_attn_mean_all"] = sum(ls_means_attn) / len(ls_means_attn)
+                log_metrics["ls/gamma_mlp_mean_all"] = sum(ls_means_mlp) / len(ls_means_mlp)
 
     # FiLM diagnostics: per-layer mean |gamma| and |beta| from last forward.
     if isinstance(model, FiLMTransolver) and model._last_film is not None:
