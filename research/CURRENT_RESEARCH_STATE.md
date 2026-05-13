@@ -5,18 +5,18 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~16:00 — nezuko bs=2 MERGED (val 57.71/test 49.54, −11.7%); fern K-sweep closed; nezuko reassigned #2421 bs=1; fern reassigned #2423 n_hidden=192+bs2)
+- **Date**: 2026-05-13 (updated ~16:10 — fleet GPU snapshot: 7/8 students 97-99% active; **frieren #2192 arms all complete @ 16:05, terminal pending**)
 - **Current best (merged)**: PR #2389 nezuko bs=2 (run `jc24jr52`) at **val 57.7122 / test 49.5412** — all 4 splits improve, 26/50 epochs, 71 s/epoch, VRAM **13.6 GB** (83% reduction, opens capacity experiments). Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2`
 - **Updated merge bar (vs 57.71 baseline)**: ≤51.9 val ⇒ merge (≥10% gain), 51.9-57.7 → second seed, ≥57.7 → close.
 - **In-flight (8 students, 0 idle):**
   - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32+bs4, Arm B slice_num=16+bs4; running. Notified of new 57.71 baseline.
   - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: likely mid-run. Notified of new 57.71 baseline.
-  - edward #2119 n-layers-sweep: rebased clean; retest n_layers=4+slice32+bs4 pending. Notified of new 57.71 baseline.
+  - edward #2119 n-layers-sweep: rebased onto current advisor HEAD (851b526); retest n_layers=4+slice32+bs=2 running (GPU 99%, isDraft=false but still status:wip awaiting terminal).
   - fern #2423 wider-model-bs2: **newly assigned** — n_hidden=192 on bs=2 stack. VRAM headroom (82 GB free) reopens width axis.
-  - frieren #2192 n-head-sweep (2,4,8): arms likely running with slice32 stack. Notified of new 57.71 baseline.
+  - frieren #2192 n-head-sweep (2,4,8): **all 3 arms complete (GPU 99→0% at 16:05), terminal comment expected next student iter (~16:13)**. Pod GPU pattern: arm1 ~14:45–14:51 (45.8 GB), arm2 ~15:01–15:30 (57.6 GB), arm3 ~15:35–16:05 (27.4 GB).
   - nezuko #2421 bs1-sweep: **newly assigned** — bs=1, zero padding waste, ~2× more grad steps vs bs=2.
-  - tanjiro #2413 cosine-tail-compress: 2 arms `--epochs 25` and `--epochs 22`. Notified of new 57.71 baseline.
-  - thorfinn #2097 coord-jitter-aug: awaiting pick-up with slice32 stack. Notified of new 57.71 baseline.
+  - tanjiro #2413 cosine-tail-compress: Arm A `--epochs 25` running on bs=2 stack (per 15:56 ack — full cosine cycle to LR≈0 at bs=2 timing); Arm B `--epochs 22` queued.
+  - thorfinn #2097 coord-jitter-aug: actively running (GPU 97%, 54.9 GB) — no terminal yet but pod is busy.
 - **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks.
 - **Key structural observations from merged stack:**
   - Full stack: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32 + **batch_size=2**
