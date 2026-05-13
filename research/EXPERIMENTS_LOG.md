@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-05-13 12:00 — Round 26
+
+### PR #1653 askeladd: Grad-clip max_norm=1.0 — CLOSED (WASH on val_avg, OOD regression on primary bottleneck)
+
+- **Branch:** `charliepai2g48h5-askeladd/grad-clip-l1-sampler-slice32` (3-round campaign)
+- **Hypothesis:** Gradient clipping max_norm=1.0 smooths sharp L1 gradient updates to improve generalisation.
+
+**3-round dose-response (monotone lever decay):**
+
+| Base | max_norm=1.0 Δ | val_avg |
+|------|---:|---:|
+| compile + bf16 + β=1.0 | **−14.92%** | ~94 → ~80 |
+| compile + bf16 + β=0.5 | −6.94% | ~69 → ~64 |
+| L1 + sampler + slice=32 (current) | ~0% (wash / mean +0.56%) | ~54 → ~54 |
+
+**Best-run vs variance (n=2 on current baseline):**
+
+| Run | val_avg | Δ baseline | test_avg | Δ baseline |
+|---:|---:|---:|---:|---:|
+| Best | 53.81 | −0.37% | 46.67 | −2.01% |
+| Variance | 54.81 | +1.49% | 47.79 | +0.34% |
+| **Mean** | **54.31** | **+0.56%** | **47.23** | **−0.83%** |
+
+**Per-split breakdown (best run):**
+
+| Split | Baseline | Best run | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 59.09 | 51.22 | **−13.33%** ← in-dist win |
+| `val_geom_camber_rc` | 67.45 | 70.60 | +4.67% ← OOD regression |
+| `val_geom_camber_cruise` | 35.72 | 36.78 | +2.97% ← OOD regression |
+| `val_re_rand` | 53.76 | 56.63 | +5.34% ← OOD regression |
+
+**Analysis:** Grad-clip delivers strong in-dist wins but hurts the two OOD splits that dominate val_avg ceiling (camber_rc, re_rand). Bimodal per-split pattern is structurally wrong for our primary research direction.
+
+**Key mechanistic finding:** The gradient-coherence axis is a *shared* axis with L1 loss and slice_num. These upstream changes have already done the "tame the tails" work grad-clip used to do on cruder bases. SignSGD-like dynamics (L1's ±1 gradients + grad-clip's total-norm clamp) underperform on multi-modal OOD loss surfaces — the per-split bimodal result is the predicted signature (Bernstein et al. 2018).
+
+- **Axis status:** Gradient-coherence axis fully closed. Further grad-clip variants on L1 baseline not expected to flip the OOD-regression pattern.
+- **Next:** Assigned askeladd Lookahead optimizer (Zhang et al. 2019) as PR #2051 — structurally orthogonal lever (slow/fast weight averaging vs per-step magnitude clipping).
+
+### Assignment: Round 26
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2051 | askeladd | Lookahead(k=5, α=0.5) wrapping AdamW — slow/fast weight averaging for flat-minima bias |
+
+---
+
 ## 2026-05-13 11:00 — Round 25
 
 ### PR #1989 thorfinn: SGDR T_0=10 T_mult=2 — CLOSED (LOSS, restart-disruption + L1 mismatch confirmed)

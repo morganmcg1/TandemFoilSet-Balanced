@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 11:00 (round-25: Closed #1989 thorfinn SGDR T_0=10 LOSS (+27.7% — L1+restart fundamentally incompatible; cycle 3 truncation confirmed); closed #1926 frieren RMSNorm stale; assigned #2033 thorfinn warmup-3-cosine + #2034 frieren RMSNorm retry. **Baseline still 54.0051**)
+- **As of:** 2026-05-13 12:00 (round-26: Closed #1653 askeladd grad-clip WASH — monotone lever decay across 3 baselines: β=1.0 −14.92% → β=0.5 −6.94% → L1+slice=32 +0.56% mean; bimodal per-split with OOD regression confirms gradient-coherence axis saturated by upstream L1/sampler changes. Assigned #2051 askeladd Lookahead(k=5,α=0.5). **Baseline still 54.0051**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -60,11 +60,11 @@ Per-split baseline (PR #1846):
 | #1946 | edward | EMA decay=0.999 — **drop diagnostic, full-budget rerun** | **Round-24 send-back** — mechanism confirmed by dual-eval (EMA<raw from ep10); test tied at 47.60. Need full 50-epoch budget. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
 | #1997 | alphonse | lr 5e-4 → 3.75e-4 (-25%) | **Round-23** — capacity↔LR coupling DOWN probe; follow-up to closed #1774 |
-| #1653 | askeladd | Grad clip max_norm=1.0 | Proven -6.94% on β=0.5; needs L1+sampler+slice32 rebase |
+| #2051 | askeladd | Lookahead(k=5, α=0.5) wrapping AdamW | **Round-26** — slow/fast weight averaging; flat-minima bias hypothesis for OOD generalization |
 
 ## Warning on in-flight rebase
 
-Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigned on baselines of 56.62-64.07. The current baseline is 54.0051. Only merge if they beat 54.0051.
+Most long-running in-flight PRs (#1775, #1845, #1883) were assigned on baselines of 56.62-64.07. The current baseline is 54.0051. Only merge if they beat 54.0051.
 
 ## Closed axes (comprehensive)
 
@@ -83,6 +83,7 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 - **slice_num=96:** worse than 64 (PR #1590).
 - **slice_num=16:** val wash (+0.41%) with in-dist/OOD trade-off; 32 is the global optimum (PR #1903). **slice_num axis fully closed.**
 - **AdamW β2=0.95:** LOSS on L1 (+4.42% on L1 base, +15% vs current). Shorter second-moment memory amplifies L1 sign-flip noise (PR #1845). β2 axis closed.
+- **Grad-clip max_norm=1.0:** WASH on L1+sampler+slice=32 (best run −0.37%, mean +0.56%; n=2 straddles baseline). Monotone dose-response: β=1.0 −14.92% → β=0.5 −6.94% → L1+slice=32 ~0%. Bimodal per-split: in-dist −13.33% but OOD +3-5% — structurally wrong for primary bottleneck. Gradient-coherence axis saturated by upstream L1+sampler changes (PR #1653). Gradient-coherence axis closed.
 - **AdamW β2=0.95 (earlier β=0.5 test):** near-wash on β=0.5, no clear signal (PR #1676).
 - **lr=7.5e-4 (+50% lr-UP):** LOSS on L1+slice=32 (+16% vs current, n=3 mean 62.66) — closed across all 3 landscape variants tested (β=0.5 wash, L1+slice=64 wash-with-loss-tail, L1+slice=32 LOSS) (PR #1774). lr-UP axis closed; capacity↔LR coupling DOWN probe in flight as #1997.
 - **SGDR T_0=10 T_mult=2:** LOSS on L1+slice=32 (+27.7% val, n=1, 68.96 vs 54.00). Mechanism worked at cycle level (restart #2 min < restart #1 min) but L1 sign-gradient regime is fundamentally hostile to LR restarts (signs reset, late settling destroyed). Budget-fit variants deferred — L1+restart is the binding incompatibility (PR #1989). Schedule axis continues with warmup+monotone-cosine in flight as #2033.
@@ -97,6 +98,6 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 2. **Normalization** — RMSNorm in flight (#1926). Pre-LN vs Post-LN placement also untested.
 3. **Proven-lever stack on new baseline** — grad-clip (#1653), WD=5e-5 (#1775) all need rebasing to current 54.00 baseline. β2 axis is now closed (PR #1845).
 4. **Schedule** — SGDR in flight (#1905). Warm restarts may unlock multi-descent gains.
-5. **Lookahead optimizer** — slow/fast weight averaging; untested.
+5. **Lookahead optimizer** — slow/fast weight averaging; **in-flight as #2051 askeladd (round-26).** Standard k=5, α=0.5 recipe (Zhang et al. 2019). Hypothesis: implicit flat-minima bias from α-averaging should improve OOD more than in-dist (inverse of grad-clip's pattern).
 6. **Stochastic depth (DropPath)** — block-level residual regularization; different from per-weight attention dropout (closed). Untested.
 7. **EMA model weights for val/test eval** — in flight (#1946 edward). First try decay=0.9999 lagged catastrophically (val=165); rebracket to decay=0.999 (~2-epoch half-life) is correct window for our budget. Result expected next round.
