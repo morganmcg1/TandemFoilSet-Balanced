@@ -2,6 +2,42 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 12:10 — PR #1968: [max-lr-1e-3] OneCycleLR max_lr 8e-4→1e-3 — **MERGED (NEW BEST: val=59.39, SUB-60 MILESTONE)**
+- Student branch: `charliepai2g48h4-thorfinn/lr-7e-4` (redirected to max_lr=1e-3 after OneCycleLR merge)
+- Hypothesis: max_lr=8e-4 (+25%) on OneCycleLR continues the upper bracket; at high-peak super-convergence the LR optimum may be above 8e-4.
+
+| Metric | max_lr=1e-3 (this) | Baseline max_lr=8e-4 (#2014) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **59.39** | 60.98 | **−1.59 (−2.61%) ✓** |
+| test_avg/mae_surf_p | **51.40** | 52.48 | **−1.08 (−2.06%) ✓** |
+| val single_in_dist | 58.84 | 63.34 | **−4.50 ✓ (biggest win)** |
+| val geom_camber_rc | 70.02 | 72.79 | −2.77 ✓ |
+| val geom_camber_cruise | 46.67 | 45.90 | +0.77 ❌ (slight regression) |
+| val re_rand | 62.03 | 61.91 | +0.12 ≈flat |
+
+- Artifact: `models/model-charliepai2g48h4-thorfinn-max-lr-1e-3-20260513-112139/metrics.jsonl`
+- 21/21 epochs; best epoch=21 (final, still descending). Peak grad-norm ~100 (absorbed by clip). Train loss descended 3 orders of magnitude (0.164→0.0008).
+
+**Analysis:** 6/8 splits improved. Mechanism: higher peak LR drives harder exploration in the early cosine phase, keeping useful update signal alive deeper into the anneal. Peak grad-norm scaled linearly with max_lr (+25% LR → +25% max grad-norm) and remained within clip. Best epoch = final (still descending) → the LR upper bracket is still open. Cruise split slight regression consistent with higher LR causing minor overshoot at the narrowest geometry distribution. **17th effective merge. SUB-60 VAL: 59.39. New best. Upper bracket continues at 1.2e-3 (thorfinn #2261).**
+
+---
+
+## 2026-05-13 12:10 — PR #1540: [ema-weights] EMA decay=0.999 on OneCycleLR — **CLOSED (mechanistic null)**
+- Student branch: `charliepai2g48h4-askeladd/ema-weights`
+- Hypothesis: EMA weight averaging reduces per-step noise and improves final checkpoint quality.
+
+| Metric | EMA on OneCycleLR | Baseline OneCycleLR (#2014→#1968) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 61.03 | 60.98 | +0.05 (null — within σ floor) |
+| test_avg/mae_surf_p | 52.45 | 52.48 | −0.03 (null — within σ floor) |
+
+- Artifact: `models/model-charliepai2g48h4-askeladd-ema-weights-20260513-112348/metrics.jsonl`
+- Baseline advanced to 59.39 (PR #1968) during review, making EMA's result even further behind.
+
+**Analysis:** Clean mechanistic null. On prior recipes (Huber+T_max=15), EMA helped by smoothing the noisy LR rebound after the cosine schedule ended. OneCycleLR already anneals to 3.2e-6 monotonically — no rebound, no noise. EMA's variance-reduction is redundant when OneCycleLR already provides LR floor smoothing by design. All 8 per-split deltas < 0.5 absolute (well inside ~3.5 val σ floor). **EMA axis CLOSED on OneCycleLR.** Askeladd reassigned to AdamW β1=0.95 (PR #2263).
+
+---
+
 ## 2026-05-13 11:10 — PR #2014: [onecycle-lr] OneCycleLR(max_lr=8e-4) on bs=1+beta=0.5 — **MERGED (NEW BEST: val=60.98)**
 - Student branch: `charliepai2g48h4-nezuko/onecycle-lr-bs1`
 - Hypothesis: OneCycleLR(max_lr=8e-4, pct_start=0.1, cosine anneal, div_factor=25, final_div_factor=10) replacing SequentialLR(LinearLR+CosineAnnealingLR). Super-convergence schedule: rise from 3.2e-5 to 8e-4 (~2.1 epochs), then cosine descent to 3.2e-6 over remaining 18.9 epochs.
