@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -237,6 +238,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Skip whole samples whose GT contains non-finite values (corrupt data:
+            # test_geom_camber_cruise has one sample with +/-Inf in p). Without this,
+            # Inf in y_norm propagates through (pred - y_norm)**2 (→ Inf loss) and
+            # err * mask (Inf * 0 = NaN) into the MAE accumulator.
+            y_sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask = mask & y_sample_finite.unsqueeze(-1)
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -419,7 +428,8 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=14, eta_min=1e-5)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17, eta_min=1e-5)
+scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -460,34 +470,35 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with autocast(device_type="cuda", dtype=torch.bfloat16):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
 
-        # Huber-shaped per-node residuals in normalized space.
-        # Replaces the squared error in the relative-L2 numerator, combining
-        # per-sample relative scaling with per-node outlier capping.
-        HUBER_DELTA = 0.1
-        residual = pred - y_norm
-        abs_residual = residual.abs()
-        sq_err = torch.where(
-            abs_residual <= HUBER_DELTA,
-            0.5 * residual ** 2,
-            HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
-        )
-        vol_mask = (mask & ~is_surface).unsqueeze(-1)
-        surf_mask = (mask & is_surface).unsqueeze(-1)
+            # Huber-shaped per-node residuals in normalized space.
+            # Replaces the squared error in the relative-L2 numerator, combining
+            # per-sample relative scaling with per-node outlier capping.
+            HUBER_DELTA = 0.1
+            residual = pred - y_norm
+            abs_residual = residual.abs()
+            sq_err = torch.where(
+                abs_residual <= HUBER_DELTA,
+                0.5 * residual ** 2,
+                HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
+            )
+            vol_mask = (mask & ~is_surface).unsqueeze(-1)
+            surf_mask = (mask & is_surface).unsqueeze(-1)
 
-        # Per-sample relative Huber-L2 (Huber numerator, ||y||^2 denominator).
-        # Each sample contributes Σ huber(pred - y) / ||y||^2 — equal weight regardless
-        # of physical scale. Clamp denominators at 1e-6 to guard near-uniform samples.
-        vol_sq = (sq_err * vol_mask).sum(dim=(1, 2))
-        vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
-        surf_sq = (sq_err * surf_mask).sum(dim=(1, 2))
-        surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
-        vol_loss = (vol_sq / vol_denom).mean()
-        surf_loss = (surf_sq / surf_denom).mean()
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            # Per-sample relative Huber-L2 (Huber numerator, ||y||^2 denominator).
+            # Each sample contributes Σ huber(pred - y) / ||y||^2 — equal weight regardless
+            # of physical scale. Clamp denominators at 1e-6 to guard near-uniform samples.
+            vol_sq = (sq_err * vol_mask).sum(dim=(1, 2))
+            vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+            surf_sq = (sq_err * surf_mask).sum(dim=(1, 2))
+            surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+            vol_loss = (vol_sq / vol_denom).mean()
+            surf_loss = (surf_sq / surf_denom).mean()
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         with torch.no_grad():
@@ -497,8 +508,9 @@ for epoch in range(MAX_EPOCHS):
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
 
         optimizer.zero_grad()
-        loss.backward()
+        scaler.scale(loss).backward()
         if cfg.grad_clip > 0:
+            scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             grad_norm_val = float(grad_norm)
             epoch_grad_norm_sum += grad_norm_val
@@ -506,7 +518,8 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_norm_max = grad_norm_val
             if grad_norm_val > cfg.grad_clip:
                 epoch_grad_clipped += 1
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -550,8 +563,9 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
         "scheduler": "cosine_annealing_lr",
-        "scheduler_T_max": 14,
+        "scheduler_T_max": 17,
         "scheduler_eta_min": 1e-5,
+        "amp_dtype": "bfloat16",
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": grad_norm_mean,
