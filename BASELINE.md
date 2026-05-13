@@ -40,10 +40,10 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 
 | Metric | Value | PR |
 |--------|-------|----|
-| `val_avg/mae_surf_p` | **91.507** | [#1745](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1745) |
-| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **85.611** | #1745 |
+| `val_avg/mae_surf_p` | **88.175** | [#1662](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1662) |
+| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **83.362** | #1662 |
 
-Previous bests (superseded): #1686 (curriculum) val 97.620 / test 91.947 → #1484 (Huber δ=0.5) val 99.879 / test 93.596 → #1495 (augment) val 103.100 / test 94.757.
+Previous bests (superseded): #1745 (Huber×curriculum) val 91.507 / test 85.611 → #1686 (curriculum) val 97.620 / test 91.947 → #1484 (Huber δ=0.5) val 99.879 / test 93.596 → #1495 (augment) val 103.100 / test 94.757.
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
 > (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
@@ -439,3 +439,81 @@ cd target/ && python train.py \
 Metrics: `models/model-huber-d0p5-curriculum-1to20-cosine14-20260513-010447/{metrics.jsonl,metrics.yaml,test_safe_eval.json}`
 
 Peak GPU memory: 42.12 GB. Model still converging at epoch 14 cap.
+
+---
+
+## 2026-05-13 05:30 — PR #1662: Fourier mesh PE (surface-only L=4) on merged stack
+
+**New best result. Replaces PR #1745 as running baseline.**
+
+Surface-only Fourier positional encoding with L=4 frequency bands (`pos_freq_bands=4`, `pos_freq_surface_only=True`) added to the #1745 merged stack (Huber δ=0.5 × curriculum 1→20 × EMA × augment). Parameter-free encoding — 666,455 params (same count as v2 Arm B, fewer than #1745's ~770K because of consistent trainable-only param counting).
+
+**The composition is positive and super-additive on val_geom_camber_cruise:**
+- Fourier PE alone (v2, no Huber/curriculum): val_cruise 72.07
+- #1745 (Huber+curriculum, no Fourier): val_cruise 71.16
+- v3 (Fourier + Huber + curriculum): **val_cruise 64.60** — super-additive; neither alone came close.
+
+**Per-split val (best checkpoint, epoch 14/14, EMA weights):**
+
+| Split | `mae_surf_p` | vs #1745 | vs v2 (Fourier-only) |
+|-------|---:|---:|---:|
+| val_single_in_dist | **104.911** | −4.66% | −5.54% |
+| val_geom_camber_rc | **99.544** | −0.89% | −6.95% |
+| val_geom_camber_cruise | **64.603** | **−9.21%** | −10.35% |
+| val_re_rand | **83.642** | −0.88% | **−9.37%** |
+| **avg** | **88.175** | **−3.64%** | **−7.77%** |
+
+**Per-split test (safe 4-split re-eval):**
+
+| Split | `mae_surf_p` | vs #1745 |
+|-------|---:|---:|
+| test_single_in_dist | **93.872** | −2.48% |
+| test_geom_camber_rc | **86.766** | −2.13% |
+| test_geom_camber_cruise | **74.616** | −3.32% |
+| test_re_rand | **78.192** | −2.70% |
+| **avg (4-split safe re-eval)** | **83.362** | **−2.63%** |
+
+All 4 val splits and all 4 test splits improve over #1745.
+
+**Config (merged into advisor branch train.py):**
+
+| Param | Value |
+|-------|-------|
+| `pos_freq_bands` | **4** ← new field |
+| `pos_freq_surface_only` | **True** ← new field |
+| `huber_delta` | 0.5 (from #1484, via #1745) |
+| `surf_weight_warmup_epochs` | 5 (from #1686, via #1745) |
+| `surf_weight_init` | 1.0 (from #1686) |
+| `surf_weight` | 20.0 (from #1686) |
+| `use_onecycle` | False (cosine T_max=14) |
+| `ema_decay` | 0.999 |
+| `augment` | True, aoa_jitter_rad=0.00873, naca_jitter=0.002 |
+| `grad_clip` | 1.0 |
+| `weight_decay` | 1e-3 |
+| `lr` | 5e-4 |
+| `batch_size` | 4 |
+| `n_hidden` / `n_layers` / `n_head` / `slice_num` / `mlp_ratio` | 128 / 5 / 4 / 64 / 2 |
+| epochs | 14 / 14 completed (last epoch was best — still improving at cap) |
+| params | 666,455 (parameter-free PE, parameter count same as v2) |
+| peak GPU mem | 42.28 GB |
+
+⚠ **Config defaults bug (not yet fixed):** train.py Config defaults still hold LOSING values:
+- `huber_delta=1.0` (correct: 0.5)
+- `surf_weight=10.0` (correct: 20.0)
+- `surf_weight_warmup_epochs=0` (correct: 5)
+
+**Always pass these explicitly** when reproducing or building on this baseline. tanjiro's Config-defaults-fix PR will resolve this once SwiGLU lands.
+
+Reproduce:
+```
+cd target/ && python train.py \
+  --experiment_name fourier-L4-surf-on-merged-stack \
+  --pos_freq_bands 4 --pos_freq_surface_only True \
+  --huber_delta 0.5 \
+  --surf_weight_warmup_epochs 5 --surf_weight_init 1.0 --surf_weight 20.0 \
+  --epochs 14 --use_onecycle False \
+  --aoa_jitter_rad 0.00873 --naca_jitter 0.002 \
+  --grad_clip 1.0 --weight_decay 1e-3
+```
+
+Metrics: `models/model-charliepai2g24h3-nezuko-fourier-L4-surf-on-merged-stack-20260513-040812/{metrics.jsonl,metrics.yaml,test_safe_eval.jsonl}`
