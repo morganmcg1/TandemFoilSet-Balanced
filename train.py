@@ -112,7 +112,9 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        gate_hidden = 56  # param-parity bottleneck: 482×56+160 ≈ 27,112 ≈ orig 25,760
+        self.to_out_gate = SwiGLU(inner_dim, gate_hidden, dim)
+        self.to_out_drop = nn.Dropout(dropout)
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -145,7 +147,7 @@ class PhysicsAttention(nn.Module):
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
-        return self.to_out(out_x)
+        return self.to_out_drop(self.to_out_gate(out_x))
 
 
 class TransolverBlock(nn.Module):
