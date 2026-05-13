@@ -8,6 +8,14 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 17:30 — PR #2368 (askeladd flow-cond-film v1) — **CLOSED** (stale WIP; pod never picked up)
+
+- Branch: `charliepai2g24h4-askeladd/flow-cond-film`
+- Hypothesis: FiLM `(γ,β) = MLP(log_Re, AoA0, AoA1)` global conditioning of TransolverBlock activations
+- Status when reviewed: 0 comments, head SHA unchanged since 14:35Z, base SHA `a030db31` predates #2370 merge
+- Action: Closed; reassigned to PR #2453 (`flow-cond-film-v2`) with refreshed baseline anchor (59.5645) and updated feature indices (post-Fourier-enc, cond_indices=[35,36,40] instead of [13,14,18])
+- Commentary: Genuine assignment slot loss — the student pod never picked up the PR before the assignment window closed. Mechanically a non-event for the research line. The v2 PR preserves the hypothesis with corrected anchoring on the post-#2370 stack.
+
 ## 2026-05-13 17:20 — PR #2369 (edward hybrid-fourier-sigma-3) — **CLOSED** (stale baseline; +4.82% vs new baseline 59.5645)
 
 - Branch: `charliepai2g24h4-edward/hybrid-fourier-sigma-3`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 17:20 UTC (Wave 17: CLOSE #2369 edward hybrid-σ=3 (stale baseline +4.82%); ASSIGN #2441 edward hybrid-rff-plus-learned-freqs (additive combination on new stack))
+- **Last updated**: 2026-05-13 17:30 UTC (Wave 17: CLOSE #2368 askeladd flow-cond-film v1 (stale WIP, pod never picked up); ASSIGN #2453 askeladd flow-cond-film-v2 (refreshed on new stack with corrected post-Fourier feature indices [35,36,40]))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -40,7 +40,7 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 | thorfinn | #2435 | learned-freqs-50x-lr | Keep dyadic init, raise lr from 10× to 50× — tests gradient-magnitude limit for top freqs | ASSIGNED |
 | fern | #2436 | layerscale-lr-10x | LayerScale params (10 tensors, 1280 scalars) in 10× lr no-WD group — same optimizer insight as #2370 | ASSIGNED |
 | nezuko | #2437 | slice-temp-lr-10x | Slice attention temperature (20 scalars, 5 blocks × 4 heads) in 10× lr no-WD group | ASSIGNED |
-| askeladd | #2368 | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | IN FLIGHT |
+| askeladd | #2453 | flow-cond-film-v2 | FiLM γ/β = MLP(log_Re,AoA0,AoA1) — refreshed (v1 stale, never picked up); zero-init heads AFTER apply, cond_indices=[35,36,40] | ASSIGNED |
 | edward | #2441 | hybrid-rff-plus-learned-freqs | Additive GaussianRFF σ=3 on top of learned-freqs stack (m=6 fixed RFF concatenated after existing FourierCoordEnc output) | ASSIGNED |
 | alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric | IN FLIGHT |
 | tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD | IN FLIGHT |
@@ -105,7 +105,7 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 2. **Slice temperature lr-10x** (nezuko #2437): does slice attention sharpness benefit from same treatment?
 3. **Freq 50× lr** (thorfinn #2435): can top freqs be unlocked with higher lr?
 4. **Freq equilibrium init** (frieren #2434): was the #2370 win architectural or dynamic?
-5. **FiLM conditioning** (askeladd #2368): proper global conditioning for Re/AoA scalars
+5. **FiLM conditioning** (askeladd #2453): proper global conditioning for Re/AoA scalars (refreshed from stale #2368 on post-#2370 stack)
 6. **Hybrid RFF + learned freqs** (edward #2441 NEW): additive Gaussian σ=3 RFF ON TOP of current learned-freqs stack — tests orthogonality of mechanisms
 7. **QK-norm v2** (tanjiro #2427): with corrected init=0 and tau no-WD
 8. **Asymmetric LayerScale** (alphonse #2414): attn=0.05, mlp=0.025
