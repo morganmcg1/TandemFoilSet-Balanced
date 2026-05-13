@@ -7,6 +7,62 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 06:08 — PR #1800: Truncated L1 (zero-gradient cliff at τ) — CLOSED
+
+- Student branch: `willowpai2g24h3-tanjiro/truncated-l1`
+- Hypothesis: per-element `min(|r|, τ)` zeros gradient on residuals where `|r| ≥ τ`. Predicted to improve high-|p| splits (in_dist + rc) by 2-5% by suppressing outlier influence; cruise (low-|p|) predicted to degrade slightly. Cliff sweep at τ∈{0.5, 1.0, 2.0} plus a τ=1.0+EMA+grad_clip combined arm.
+
+### Results
+
+| arm | run | val_avg | test_avg | Δ vs merged 91.66/81.28 |
+|---|---|---:|---:|---:|
+| L1 baseline | `gif79a0t` | 100.38 | 89.66 | +8.7 val (in noise) |
+| τ=2.0 (light cap) | `cnv0cuz5` | 114.14 | 104.15 | +22 val WORSE |
+| τ=1.0 (primary) | `f8j56db1` | 111.08 | 101.41 | +19 val WORSE |
+| τ=0.5 (tight cap) | `cln0mj4e` | 125.23 | 115.83 | +34 val WORSE |
+| **τ=1.0 + EMA + gc** | `r6tr47d7` | **107.08** | **97.71** | **+15.4 val / +16.4 test WORSE** |
+
+### `train/pct_clipped` at convergence
+
+| arm | last-half mean clip rate |
+|---|---:|
+| τ=2.0 | 0.006 (essentially off) |
+| τ=1.0 (no EMA) | 0.034 |
+| τ=1.0 + EMA + gc | 0.029 |
+| τ=0.5 | 0.107 |
+
+### Mechanism — prediction falsified, reinterpreted
+
+PR-body predicted: at τ=1.0, `val_single_in_dist` and `val_geom_camber_rc` IMPROVE (high-|p| splits where tight cap helps), `cruise` DEGRADES (low-|p| where cap removes signal).
+
+Observed at τ=1.0 (vs L1):
+- val_single_in_dist: **+34.0 MAE (+29%) WORSE** (predicted: improve)
+- val_geom_camber_rc: **+6.3 MAE WORSE** (predicted: improve)
+- val_geom_camber_cruise: +0.4 MAE (essentially unchanged — only correct prediction)
+- val_re_rand: +2.0 MAE WORSE
+
+Reinterpretation: the few worst residuals at convergence (~3% at τ=1.0) ARE the signal needed to learn high-magnitude regions, not outlier noise. Zeroing their gradient kills learning on those regions. Degradation is graded proportional to clip rate.
+
+### EMA-on-truncated_l1 orthogonality check (best τ=1.0+EMA arm `r6tr47d7`)
+
+Dual eval at same best-val checkpoint via #1437's `test_no_ema/*` logging:
+
+| metric | EMA weights | non-EMA weights at same step | Δ |
+|---|---:|---:|---:|
+| test_avg | 97.71 | 108.34 | **−10.6** (EMA wins) |
+| test_geom_camber_rc | 102.29 | 126.05 | **−23.8** |
+| test_geom_camber_cruise | 62.08 | 74.51 | **−12.4** |
+| test_re_rand | 87.62 | 102.26 | **−14.6** |
+| test_single_in_dist | 138.84 | 130.54 | +8.3 (EMA hurts on this split) |
+
+EMA buys ~10.6 test MAE on top of truncated_l1 — **same magnitude as on SmoothL1 (#1437)**. EMA's parameter-trajectory averaging is robust to the underlying gradient-shape choice. Useful generalization: future loss-fn hypotheses can assume EMA stacks for free, and only need to argue about the underlying loss-fn mechanism.
+
+### Conclusions
+
+- **Closed**. Truncated direction does not produce a merge candidate at any τ tested. The closer-to-zero floor at the best τ=1.0+EMA arm (107.08 val, 97.71 test) is 15-16 MAE worse than the merged baseline.
+- **Loss-shape axis is now closed.** Three PRs (#1441 MSE→SmoothL1 winner, #1615 SmoothL1→L1 equivalence, this PR truncated L1 hurts) pin down `sign(r)` bounded-linear gradient as the local optimum on the "gradient aggressiveness vs residual magnitude" axis. Future loss-fn hypotheses should target sample-conditional rather than residual-conditional gradient shape.
+- **Diagnostic `train/pct_clipped` is a new advisor-branch instrument**: not strictly necessary for the merged baseline, but useful for future cliff/clip hypotheses. Living in tanjiro's branch only — would need re-implementation if revisited. (Not landing in advisor branch since this PR is closing.)
+
 ## 2026-05-13 04:52 — PR #1437: EMA of model weights (decay=0.999) — MERGED (winner)
 
 - Student branch: `willowpai2g24h3-fern/ema-decay999`
