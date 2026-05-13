@@ -141,3 +141,23 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 60.09, test < 53.37, all four test splits finite.**
+
+## 2026-05-13 16:03 — PR #1589: Tune AdamW betas to (0.9, 0.95)
+
+- **`val_avg/mae_surf_p`:** 59.9700 (best seed 1, `ycayoagn`)
+- **`test_avg/mae_surf_p`:** 52.3631
+- **Per-split test surf_p (seed 1, `ycayoagn`):** single_in_dist=57.588, geom_camber_rc=64.518, geom_camber_cruise=35.546, re_rand=51.801
+- **Per-split test vol_p (seed 1):** single_in_dist=65.871, geom_camber_rc=70.457, geom_camber_cruise=36.078, re_rand=53.300
+- **Seed 2 (`a14lawft`):** val=61.107, test=54.260 — s2 regresses; two-seed mean val=60.54 (+0.74%), test=53.31 (−0.11%). Per advisor convention, headline uses better seed (s1).
+- **W&B runs:** `ycayoagn` (seed 1, BETTER), `a14lawft` (seed 2)
+- **Implementation note:** Single-line change in `train.py` — `torch.optim.AdamW(..., betas=(0.9, 0.95))` replacing the default `(0.9, 0.999)`. beta2=0.95 shortens the effective second-moment EMA window from ~1000 to ~20 steps, making the adaptive learning rate more reactive to recent gradient history. Rational for the 35-epoch / ~9k-step compute-bound regime: faster-adapting second moment better matches the short-horizon budget.
+- **Compute:** 30.5 min (hits 30-min cap), ~52s/epoch, 35/35 epochs, best=last (still compute-bound). Peak GPU ~42 GB.
+- **Delta vs PR #1692 (grad-clip baseline):** val **−0.2%** (60.09 → 59.97), test **−1.9%** (53.37 → 52.36). In-dist split gained the most (single_in_dist −6.7% test surf_p: 62.00 → 57.59); rc and cruise also improved; re_rand improved.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-tanjiro \
+      --wandb_name "willowpai2g48h3-tanjiro/adamw-betas-09-095-final-s1" \
+      --wandb_group adamw-betas
+  ```
+
+**New merge bar: val < 59.97, test < 52.36, all four test splits finite.**
