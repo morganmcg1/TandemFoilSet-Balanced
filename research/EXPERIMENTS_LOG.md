@@ -308,3 +308,33 @@ Per-split test (all 4 clean):
 **LR curve:** 1e-4 (start) → 1e-3 (peak, ~ep3) → 1e-7 (final, ep29). Decay tail fully fired. 10875 per-batch LR updates (vs 29 for epoch-level cosine). Noisy phase ep11-13 (during early decay) then smooth descent from ep14-29.
 
 **Conclusion: MERGED. Massive −6.5%/−8.1% win on both metrics.** All 4 splits improved consistently. Best epoch = last epoch = still descending at cutoff. Key mechanism: per-batch LR stepping + full decay tail gives the model much better convergence structure than per-epoch warmup+cosine. This is now the default stack. T_max retune (thorfinn #1628) and warmup+cosine LR sweep (alphonse #1687) are both superseded — redirecting to OneCycleLR-based follow-ups.
+
+---
+
+## 2026-05-13 00:55 — PR #1628: T_max=27 via epochs=30 (SENT BACK — stale base, single seed)
+- willowpai2g24h4-thorfinn/tmax-compile-retune
+- **Hypothesis:** Aligning T_max to achievable epoch budget (epochs=30 → T_max=27) eliminates the late-epoch LR-noise uptick observed in PR #1584 (76.43→79.21 between ep27-29).
+- **W&B:** `lm4n59dm`
+
+| Metric | Run #1628 (1 seed) | Ref baseline #1373 (T_max=47) | Δ vs #1373 | Current OneCycleLR #1404 | Δ vs #1404 |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best ckpt) | **69.2638** | 75.8473 | −6.58 (−8.7%) | 70.9449 | **−1.68 (−2.4%)** |
+| test_avg/mae_surf_p (4-split) | **59.6119** | 67.3037 | −7.69 (−11.4%) | 61.8276 | **−2.22 (−3.6%)** |
+| Test 3-split mean (excl. cruise) | 65.58 | 74.80 | −9.22 | 68.12 | −2.54 |
+| Best epoch | 29/30 (last) | 27/29 | — | 29/29 | — |
+| Sec/epoch | 62.6 | 61.2 | — | 62.5 | — |
+| Peak GPU | 29.8 GB | 48.60 GB | — | 50.97 GB | — |
+| LR at termination | 3.38e-6 | — | — | ~1e-7 | — |
+
+**Hypothesis: directionally CONFIRMED on the old stack.** Val curve became monotonically decreasing through epoch 29 (no late-epoch uptick): 78.05 → 76.09 → 73.26 → 71.74 → 70.61 → 70.07 → **69.26**. Best epoch is the last. The LR-noise theory holds: residual LR ~3e-6 at termination is well below the kick-out threshold, vs ~1.9e-4 in PR #1584.
+
+**Procedural issue (why SENT BACK rather than merged):**
+- PR base was commit `23df5a0` (before OneCycleLR #1404 merged at `b1c91fb`). The student didn't rebase, so their training run used the OLD SequentialLR(warmup+cosine, T_max=27) stack, NOT the new OneCycleLR baseline.
+- Diff vs current advisor tip is ONLY `epochs: 50 → 30`. Squash-merging this onto the new OneCycleLR baseline yields OneCycleLR(SCHEDULER_EPOCHS=29) + epochs=30, which runtime-equivalent to current baseline (wall clock caps both at 29 epochs).
+- The merged code would NOT reproduce 69.26 — the result depended on the SequentialLR scheduler family, not the epochs change.
+
+**What the data point actually tells us:**
+- Single-seed comparison: SequentialLR(T_max=27, per-epoch) vs OneCycleLR(SCHEDULER_EPOCHS=29, per-batch). On this seed, SequentialLR(T_max=27) wins by 2.4% val / 3.6% test.
+- Test delta of 3.6% is just above the 2% reliability floor — but this is a single seed, RNG variance is ±5%, AND a different scheduler architecture entirely. Multi-seed confirmation is essential before considering reverting OneCycleLR.
+
+**Conclusion: SENT BACK** for proper rebase + intentional SequentialLR revert + 2-seed confirmation. If 2-seed mean still beats OneCycleLR by >2% test, this becomes a baseline revert candidate. The single-seed lucky-draw possibility is real.

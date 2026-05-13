@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~00:30 UTC
+- **As of:** 2026-05-13 ~00:55 UTC
 - **Track:** `willow-pai2g-24h-r4` (round 6 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
@@ -10,15 +10,18 @@
 
 Round-6 brought the biggest single gain so far: OneCycleLR with per-batch stepping and correctly-sized SCHEDULER_EPOCHS fully fires the LR decay tail (1e-7) within the 30-min cap. The key insight: cosine-per-epoch gave 29 LR updates; OneCycleLR per-batch gives 10875 updates, with much finer decay and a proven deep-LR refinement tail.
 
-The model's best checkpoint is still the LAST epoch (29/29) — we are firmly compute-bottlenecked. Two parallel directions:
+**Hot signal (single-seed, needs confirmation):** Thorfinn #1628 ran on STALE base (warmup+cosine T_max=27, per-epoch step) and got val=69.26 / test=59.61 — beating OneCycleLR baseline by 2.4% val / 3.6% test. Test delta is just above the 2% noise floor BUT this is a single seed with ±5% RNG variance and a different scheduler architecture entirely. Sent back for 2-seed confirmation on properly rebased branch. If confirmed, would prompt reconsidering OneCycleLR as the default scheduler. (Could also indicate that the per-epoch step granularity is fine and the win was really about T_max alignment.)
+
+The model's best checkpoint is still the LAST epoch (29/29) — we are firmly compute-bottlenecked. Three parallel directions:
 
 1. **OneCycleLR hyperparameter sweep** — max_lr and pct_start are the most impactful knobs on the new schedule
-2. **Compute efficiency** — `reduce-overhead` compile mode may give 10-20% more throughput, yielding 3-5 extra epochs of descent
+2. **Scheduler family shootout** — is warmup+cosine(T_max=27, per-epoch) actually competitive with OneCycleLR(SCHEDULER_EPOCHS=29, per-batch)? Multi-seed needed.
+3. **Compute efficiency** — `reduce-overhead` compile mode may give 10-20% more throughput, yielding 3-5 extra epochs of descent
 
 Active threads:
 - **OneCycleLR max_lr=1.5e-3** — does higher peak LR on the winning stack improve further? (alphonse #1716)
 - **OneCycleLR pct_start=0.05** — shorter warmup, more decay time per budget (nezuko #1719)
-- **Thorfinn #1628** — T_max=30 run in flight (cosine stack, superseded by OneCycleLR, but run already started — closing and redirecting after results posted)
+- **Thorfinn #1628** — SENT BACK for 2-seed SequentialLR(T_max=27) shootout on current OneCycleLR base
 - **Askeladd #1379** — smooth-L1 loss on warmup+cosine baseline, in flight. If it beats 75.85, directional signal; won't beat 70.94.
 - **Edward #1383** — channel-weighted loss (p:3) on warmup+cosine, in flight. Same.
 - **Tanjiro #1522** — hidden-192 on compile+bf16, in flight. Same.
@@ -36,7 +39,7 @@ Active threads:
 | frieren | #1556 | fp32-eval every 3 epochs | WIP, run in flight |
 | nezuko | #1719 | OneCycleLR pct_start=0.05 | WIP (just assigned) |
 | tanjiro | #1522 | hidden-192 on compile+bf16 (warmup+cosine) | WIP, run in flight |
-| thorfinn | #1628 | T_max=30 (cosine — superseded, run in flight) | WIP, will close after result |
+| thorfinn | #1628 | SequentialLR(T_max=27) vs OneCycleLR shootout, 2-seed | WIP (sent back for rebase + multi-seed) |
 
 ## Key learnings so far
 
@@ -53,6 +56,7 @@ Active threads:
 ### Immediate (waiting on current PRs)
 - OneCycleLR max_lr sweep: 1.5e-3 (alphonse #1716) — is 1e-3 the ceiling?
 - OneCycleLR pct_start=0.05 (nezuko #1719) — shorter warmup, more decay time
+- Scheduler shootout 2-seed: SequentialLR(T_max=27) vs OneCycleLR (thorfinn #1628) — hot signal needs confirmation
 - Results from askeladd/edward/tanjiro — directional signal on loss/architecture on old stack
 - fp32 eval (frieren #1556) — paper-faithful test_avg
 
