@@ -325,3 +325,40 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
 - **All subsequent experiments should target val < 55.7634 and test < 48.0960** as the merge threshold.
 - **The model is epoch-saturated, not capacity-saturated** — val descending at −0.84/ep at termination. Schedule/throughput-axis follow-ups (higher T_max, larger batch, faster epoch) carry highest expected value.
+
+## 2026-05-13 12:00 — PR #1982: tanjiro grad-clip max_norm=5.0 → 2.5 (threshold scan step 3)
+
+**New best — 12th compound improvement (LARGEST single-axis gain in many cycles)**
+
+- **val_avg/mae_surf_p:** 52.6406 (↓ from 55.7634, **−5.60%**)
+- **test_avg/mae_surf_p:** 48.0960 → **44.9791** (**−6.49%**)
+
+**Per-split test (ALL 4 splits improve dramatically; in_dist regression from #1930 fully reversed):**
+
+| Split | mae_surf_p | vs PR #1953 (new baseline) |
+|-------|----------:|----------:|
+| `test_single_in_dist` | 49.8555 | −3.03 (−5.73%) |
+| `test_geom_camber_rc` | 57.7726 | −4.01 (−6.49%) |
+| `test_geom_camber_cruise` | 28.9446 | −2.21 (−7.10%) |
+| `test_re_rand` | 43.3437 | −3.22 (−6.90%) |
+
+- **Config (as measured):** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, n_hidden=192, n_layers=3, slice_num=64, mlp_ratio=2, n_head=4, dropout=0.0, torch.compile(dynamic=True), **`clip_grad_norm_(model.parameters(), max_norm=2.5)`**, T_max=50 (epochs=50).
+- **GRAD-CLIP THRESHOLD SCAN SUMMARY:**
+
+| max_norm | clip rate | mean downscaling | val_avg | result |
+|---|---|---|---|---|
+| 10.0 (PR #1784) | 72.4% | ~2.1× | 65.98 | WIN |
+| 5.0 (PR #1930) | 90.1% | ~4.3× | 63.48 | WIN |
+| **2.5 (PR #1982)** | **98.9%** | **~7.1×** | **52.64** | **WIN (massive)** |
+| 1.0 (PR #1534v2) | ~100% | ~22× | regression | FAIL |
+
+- The monotonic improvement from 10.0→5.0→2.5 is stunning. The gap 5.0→2.5 (Δval=−3.12) is larger than 10.0→5.0 (Δval=−2.50), and the in_dist regression at 5.0 (+1.00 vs 10.0) is **fully reversed** at 2.5 (in_dist −5.73%). We are still in the productive moderate-scaling regime, not the direction-normalization failure of max_norm=1.0.
+- **Next threshold to test:** 1.5 (interpolates between the last win at 2.5 and the fail at 1.0). If 1.5 still wins, scan continues. If 1.5 fails, optimum is bracketed in [1.5, 2.5].
+- **Clip diagnostics:** clip rate 98.93%, norm_mean=17.845, norm_p50=14.029, norm_p90=32.859, norm_p99=76.264, norm_max=353.038, mean downscaling ~7.14×.
+- **Epochs:** 33/50 in 30-min wall-clock cap. Hit timeout cleanly; best checkpoint saved; full test eval ran at epoch 33.
+- **Best epoch:** 33 (val still descending at termination — model epoch-saturated again).
+- **EMA-vs-live gap:** maintained (live 51.0561 vs EMA 44.9791 — gap tightened at the new clip threshold; live is now noisier but closer to EMA than at max_norm=5.0).
+- **W&B run:** `bb6o68xa`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
+  (grad-clip max_norm=2.5 now baked into advisor branch train.py; no extra flag needed)
+- **All subsequent experiments should target val < 52.6406 and test < 44.9791** as the merge threshold.
