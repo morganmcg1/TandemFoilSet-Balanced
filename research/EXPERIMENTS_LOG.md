@@ -44,6 +44,46 @@ The fix: either (a) reduce width to n_hidden=160 to fit 13 epochs, or (b) keep n
 
 ---
 
+## 2026-05-13 03:01 — PR #1463: SWA from epoch 25 on Lion stack (CLOSED — averages bad early checkpoints)
+
+- Student branch: `charliepai2g24h5-askeladd/swa-final-three-warmup-grad-clip-3`
+- Hypothesis: SWA (Stochastic Weight Averaging, Izmailov 2018) finds a flatter, more generalizable minimum by averaging recent checkpoints late in training. SWA from epoch 25 onward, paired with SWALR (constant LR phase after the cosine schedule), should compose with Lion stack.
+- Stack: Lion lr=3e-4 + warmup3+cosine13 + grad_clip(1.0) + BF16. SWA start_epoch=25 (turned out infeasible — training capped at 13 epochs in 30-min budget), so effective SWA window was different.
+
+### Results
+
+| Metric | Lion baseline (#1641) | SWA (this PR) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 73.15 | 76.14 | **+2.99 (+4.1% REGRESSION)** |
+| test_avg/mae_surf_p | 66.76 | 70.29 | **+3.53 (+5.3% REGRESSION)** |
+
+### Per-split breakdown
+
+| Split | Lion baseline | SWA | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 80.78 | 84.12 | +3.34 (regress) |
+| **val_geom_camber_rc** | **90.86** | **87.19** | **−3.67 (improve)** |
+| val_geom_camber_cruise | 51.56 | 56.31 | +4.75 (regress) |
+| val_re_rand | 69.39 | 76.92 | +7.53 (regress) |
+
+### Analysis (mechanistic, valuable negative result)
+
+**Core failure modes:**
+1. **Averaging in pre-convergence checkpoints.** SWA-start was nominally epoch 25 but training only ran 13 epochs (30-min cap). SWALR likely kicked in well before convergence, averaging weights that still had significant per-epoch progress.
+2. **SWALR perturbs Lion's cosine schedule.** Lion's cosine-annealed sign-quantized steps are tuned to the warmup3+cosine13 trajectory. Imposing a SWALR constant-LR phase on top fights the underlying optimizer's own schedule.
+
+**Interesting partial signal:** val_geom_camber_rc IMPROVES (−3.67 val, −0.94 test). This is exactly the split where SWA's flat-minima story should help most (worst OOD split, where over-fitting val_avg's mode collapses generalization). The cost on the other 3 splits dominates the average, but the camber_rc improvement is real and consistent.
+
+**Conclusion:** SWA needs (a) much later start to avoid averaging in pre-convergence checkpoints, and (b) decoupled averaging that doesn't perturb the underlying optimizer's LR schedule. In the 13-epoch budget regime, vanilla SWA from any epoch is dominated by Lion's own monotonic improvement.
+
+### Decision
+
+Closed. The improvement on camber_rc is interesting enough to revisit if/when we have a longer training budget (24-30 epochs), where checkpoint averaging late in training could outperform single-epoch picks. Right now in the 13-epoch monotonic-improvement regime, every form of mid-training averaging will regress.
+
+askeladd reassigned to PR #1844 (Lion β2=0.99 → 0.999 single-knob sweep).
+
+---
+
 ## 2026-05-13 01:20 — PR #1641: Lion optimizer (MERGED — new baseline 73.15)
 
 - Student branch: `charliepai2g24h5-frieren/lion-optimizer`
