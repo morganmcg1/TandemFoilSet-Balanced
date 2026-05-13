@@ -239,3 +239,32 @@ Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoc
 - Hypothesis: n_layers=6 is the budget-safe depth increase — ~120s/epoch, fitting ~15-16 of 18 scheduled epochs, reaching the low-LR tail unlike n_layers=7.
 - Status: WIP (newly assigned)
 - Target: test_avg < 111.98.
+
+## 2026-05-13 02:00 — PR #1361 trial-5: Wider model n_hidden 192 on schedule-aligned baseline — MERGED ⭐ NEW BASELINE
+- Branch: willowpai2g48h1-askeladd/wider-hidden-192
+- Hypothesis: n_hidden 128→192 on top of PR #1591 schedule-aligned baseline. Width × schedule compounds.
+- W&B runs (3 seeds): `jvphwc6p`, `dcfy4v1z`, `9skp8i3k` — group `wider-hidden-192`
+- Status: **MERGED ✓ — new baseline test=99.69 (−10.97%)**
+
+| Metric | Mean (n=3) | Std | Best seed | Baseline (#1591) | Δ (mean) |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **111.32** | 2.87 | 108.42 | 125.36 | −11.51% |
+| **test_avg/mae_surf_p** | **99.69** | 3.16 | **96.19** | 111.98 | **−10.97%** |
+| test_single_in_dist | 116.57 | 4.13 | 110.92 | 148.79 | −21.6% |
+| test_geom_camber_rc | 108.61 | 2.54 | 105.65 | 117.15 | −7.3% |
+| test_geom_camber_cruise | 74.18 | 2.83 | 71.53 | 77.85 | −4.7% |
+| test_re_rand | 99.41 | 2.26 | 96.66 | 104.13 | −4.5% |
+| Epochs completed | 15-16 | — | — | 17/18 | — |
+| Epoch time | ~126s | — | — | ~96s | +31% |
+
+**Analysis**: The 3-seed accidental replication (entrypoint re-invoked 3×) gives free variance characterization: std=3.16 on test (~3% of mean), worst seed still beats baseline by 8.65%. Width × schedule compounded: trial-4 (un-aligned T_max=50) gave −4.93%; trial-5 (schedule-aligned T_max=18) gives −10.97% — the schedule fix acted as a force-multiplier for capacity. All 4 splits improve, with in_dist showing the largest absolute gain (−21.6%). n_hidden=192 + bs=8 + bf16 OOMs at ~94 GB; bs=4 fallback required as structural constraint.
+
+**Key insight**: Schedule alignment unlocks ~70% of the cumulative gain on top of width. Width alone was −4.93%; width + schedule = −10.97%. The lesson: always align T_max to realistic epoch budget first, then add capacity.
+
+**Action**: Merged as new baseline. Assigned askeladd to PR #1771 — schedule realignment for n_hidden=192 at bs=4 budget (epochs=14 aligns cosine T_max to actual 14 eps/30min).
+
+## 2026-05-13 02:00 — PR #1771 (NEW, assigned): Schedule realignment for n_hidden=192 (epochs=14)
+- Branch: willowpai2g48h1-askeladd/wider-192-schedule-realigned
+- Hypothesis: epochs=18 default was calibrated for n_hidden=128 at bs=8 (17-18 eps/30min). n_hidden=192 at bs=4 runs at ~126s/ep → 14 eps in 30min. At trial-5's cutoff (epoch 15), LR is at 4.7e-5 (6.7% of peak). Setting epochs=14 aligns T_max to actual budget → LR reaches 0 within budget. Same principle as PR #1591 (-7.67%).
+- Status: WIP (newly assigned)
+- Target: test_avg < 99.69.

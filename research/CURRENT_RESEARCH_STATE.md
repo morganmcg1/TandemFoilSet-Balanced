@@ -1,9 +1,13 @@
 # SENPAI Research State
 
-- 2026-05-13 01:10 — willow-pai2g-48h-r1, round 2 in progress, baseline test=111.98 (PR #1591 schedule-aligned)
+- 2026-05-13 02:00 — willow-pai2g-48h-r1, round 2 in progress, **new baseline test=99.69** (PR #1361 wider-192 merged, -10.97%)
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
-## Current baseline (PR #1591 merged)
+## Current baseline (PR #1361 merged)
+**test_avg/mae_surf_p = 99.69** (3-seed mean, best=96.19) | val_avg/mae_surf_p = 111.32 (mean)
+Config: bf16 autocast + **batch_size=4** (OOM at bs=8 with n_hidden=192) + lr=7e-4 + scoring-bug workaround + epochs=18; **n_hidden=192**, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2. W&B seeds: jvphwc6p, dcfy4v1z, 9skp8i3k.
+
+## Previous baseline (PR #1591 merged)
 **test_avg/mae_surf_p = 111.98** | val_avg/mae_surf_p = 125.36
 Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround + **epochs=18** (schedule-aligned); n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2.
 
@@ -15,7 +19,8 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
 | alphonse | #1359 | lr-warmup-1e-3 | wip (rebasing) | val 138.85 (mean 144.06, std 4.05 across 3 runs) → rebase+retest |
-| askeladd | #1361 | wider-hidden-192 | wip (rebasing) | trial-4: test 115.30 — holding merge, needs rebase+retest on new baseline (target <111.98) |
+| askeladd | #1361 | wider-hidden-192 | **MERGED** ✓ | trial-5 (3-seed): test **99.69 mean** (−10.97%) — new baseline! Width × schedule compounded |
+| askeladd | #1771 | wider-192-schedule-realigned | wip (new) | Assigned: epochs=14 to realign cosine T_max to n_hidden=192 bs=4 actual budget (~14 eps/30min) |
 | edward | #1362 | more-slices-128 | **CLOSED** ✗ | trial-2 rebased: test 155.15 (+27.9% worse, near OOM 94.3GB) → dead end |
 | edward | #1591 | cosine-aligned-epochs | **MERGED** ✓ | test **111.98** (−7.67%) — new baseline |
 | edward | #1643 | mlp-ratio-4 | wip (new) | Assigned: mlp_ratio 2→4, richer FFN per block |
@@ -44,7 +49,8 @@ All stale students (fern, frieren, thorfinn) were nudged with comments pointing 
 
 ## Emerging round-2 hypotheses
 On the schedule-aligned baseline (test 111.98):
-- **Width × schedule**: askeladd's wider-192 → retest on schedule-aligned baseline. Wins may compound or plateau.
+- **Width × schedule**: CONFIRMED — compounded to test=99.69 (−10.97%, PR #1361 merged). The schedule fix is a force-multiplier for capacity.
+- **Wider-192 schedule realignment**: askeladd #1771 — epochs=14 aligns cosine T_max to actual n_hidden=192 bs=4 epoch budget. Predicted −1% to −4% additional gain.
 - **Fourier × schedule**: nezuko's fourier-pos (val 119.70 was best round-1 val signal) → retest on new baseline.
 - **lr-warmup × schedule**: alphonse's lr=1e-3 + warmup → may stack with proper cosine decay.
 - **MLP capacity × schedule** (assigned edward #1643): mlp_ratio=2→4 quadruples FFN hidden, tests whether per-block capacity is the bottleneck on schedule-aligned baseline.
