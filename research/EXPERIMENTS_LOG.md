@@ -7,6 +7,33 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 11:05 — PR #1998: Match cosine LR schedule T_max to AMP epoch budget — CLOSED
+
+- Student branch: `willowpai2g24h3-nezuko/cosine-budget-match`
+- Hypothesis: Match `T_max` to AMP epoch budget (~19-20 epochs) so cosine LR fully anneals before 30-min cap fires; should beat the default `T_max=50` which leaves LR at 37% of peak at cap.
+
+### Results (4 arms, all rebased onto AMP+EMA stack `--amp --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999`, pre-warmup-merge)
+
+| arm | --epochs | run id | epochs ran | val_avg | test_avg (EMA) |
+|---|---:|---|---:|---:|---:|
+| 1 (baseline reproduction) | 50 | `jip2if6s` | 14 | 93.08 | 82.34 |
+| 2 (primary) | 20 | `vx3y6l75` | 19 | **81.95** | **72.32** |
+| 3 (partial cool) | 25 | `mv4npbva` | 14 | 95.87 | 85.87 |
+| 4 (aggressive) | 15 | `a6u6x6lu` | 15 | 94.85 | 84.32 |
+| advisor baseline (#1440) | 50 | `30wvu5r0` | 19 | **77.37** | **68.21** |
+
+### Analysis
+
+- Internal "win" of Arm 2 over Arm 1 was a 12% drop in val_avg, but Arm 1 baseline reproduction at 93.08 is WAY worse than advisor reference at 77.37 — slow-seed handicap. Arm 1 only completed 14 epochs because several epochs took 200-213s (vs clean 98s rate).
+- Arm 2 (e=20) absolute val=81.95 is +5.99 vs new advisor baseline 75.96 — **fails decision criteria** (≥76 → close).
+- Within-experiment win is confounded by Arm 1's slow-seed; not a real T_max effect.
+- **Keeper output**: Arm 2's per-epoch val curve table (322.72 → 81.95 across 19 epochs) shows monotonic decline through final epoch. With T_max=20, cosine LR fully anneals to ~0.6% of peak at epoch 19, yet val keeps falling. **The model is undertrained, not over-scheduled.**
+
+### Lessons added to research state
+
+- "Match T_max to AMP epoch budget" is closed as a *direct* lever — schedule completion does not move the metric when the model is under-trained.
+- The diagnostic ("monotonic decline at end of training") motivates the **next axis: peak LR sweep** — if we can't add epochs, make each step more impactful. Reassigning nezuko to LR sweep (#2202).
+
 ## 2026-05-13 10:50 — PR #1438: 5-epoch linear LR warmup before cosine decay — MERGED
 
 - Student branch: `willowpai2g24h3-frieren/warmup-5ep`
