@@ -466,7 +466,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=144,  # H42: 128->144 width bump on ReGLU stack
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -481,6 +481,11 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
+# H42: width-bump diagnostics — residual stream / attention head_dim
+print(
+    f"[H42] n_hidden={model_config['n_hidden']}, n_head={model_config['n_head']}, "
+    f"head_dim={model_config['n_hidden'] // model_config['n_head']}"
+)
 # H39: ReGLU gate sanity check (ReLU = max(0,x))
 _h39_test_x = torch.tensor([-1.0, 0.0, 1.0])
 print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 0.0000)")
