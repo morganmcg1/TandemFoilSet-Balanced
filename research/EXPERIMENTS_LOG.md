@@ -747,3 +747,36 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 **Diagnostic signal preserved**: val_re_rand improved -3.7%, the only positive outlier across both runs. Worth asking whether re_rand (random-Re OOD) responds to a Re-specific regularizer that uniform dropout doesn't capture — points to fern's re-conditioned-scaling direction (#1599).
 
 
+
+---
+
+## 2026-05-13 05:05 — PR #1599: [re-conditioned-scaling] Learned Re-conditioned output scale head — MERGED
+
+- **Branch**: fern/re-conditioned-scaling
+- **Hypothesis**: Re varies 50×+ in the dataset; pressure magnitudes vary by orders of magnitude. Add a tiny 163-param ReScaleHead (log_Re → softplus scale per channel) on top of Transolver output to separate shape learning from scale calibration. Inspired by DimINO Re-dimensionalization (Huang et al. 2024).
+- **Status**: **MERGED** — val_avg -1.95%, new baseline 29.8463
+- **Metrics JSONL**: `models/model-charliepai2g24h1-fern-re-conditioned-scaling-20260513-035742/metrics.jsonl`
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | **29.8463** | **−0.59 (−1.95%)** |
+| test_avg/mae_surf_p | 26.1005 | −0.0008 (≈0%) |
+| val_single_in_dist | 30.20 | −4.07 (-11.9%) |
+| val_geom_camber_rc | 43.11 | +1.68 (+4.1%) |
+| val_geom_camber_cruise | 14.54 | +0.50 (+3.6%) |
+| val_re_rand | 31.54 | −0.48 (−1.5%) |
+| Epochs in 30 min | 29 | unchanged |
+| Peak GPU | 24 GB | unchanged |
+
+**ReScaleHead diagnostics (best epoch 27)**:
+| Channel | scale mean | scale std | corr(scale, log Re) |
+|---------|-----------|----------|---------------------|
+| Ux | 1.180 | 0.058 | +0.637 |
+| Uy | 1.111 | 0.262 | +0.936 |
+| p | 1.308 | 0.527 | +0.858 |
+
+**Analysis**: Val wins via single_in_dist (-4.07) dominating OOD regressions (+2.18 summed). Test is flat (in-dist and OOD gains cancel). Mechanism confirmed in all 3 runs: Uy/p show strong Re-correlation (0.86–0.94); Ux is weak (freestream-dominated). The compound size shrunk significantly vs the SOAP-only baseline run (was -4.7%, now -1.95%) because the SOAP + torch.compile backbone implicitly learns Re-scale through 30 epochs. Still a valid compounding win.
+
+**Programme implication**: ReScaleHead is now the default in the advisor branch. All future experiments inherit it. Future compound direction: 2-channel head (Ux scale ≈ identity; drop Ux to reduce parameter noise) or FiLM-style conditioning (inject log(Re) into PhysicsAttention slice weighting instead of output rescaling).
+
+**Cumulative programme gain**: −74.5% from 117.17 → 29.8463
