@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~12:35
+- **Date:** 2026-05-13 ~13:05
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -107,9 +107,10 @@
 | tanjiro | #2107 (sent back) | **n_layers=3 + slice_num=32 + T_max=27** (compound depth+slice) | NEW slice_num=32 stack |
 | alphonse | #2134 (sent back) | **lr=1.5e-4 + slice_num=32 + n_layers=4** (compound LR+slice) | NEW slice_num=32 stack |
 | nezuko | #2109 | surf_weight=2 + n_layers=4 (still on OLD slice_num=48) | OLD slice_num=48 stack |
-| edward | #2143 | surf_weight=15 + n_layers=4 (still on OLD slice_num=48) | OLD slice_num=48 stack |
+| edward | #2185 | mlp_ratio=6 + slice_num=32 (MLP capacity midpoint) | NEW slice_num=32 stack |
 
-**Recently reviewed (this turn):**
+**Recently reviewed:**
+- edward #2143: sw=15 gave essentially flat val (−0.44% vs OLD), slightly worse test (+1.14% OLD); +7.77% vs NEW baseline. CLOSED. sw axis bracket on n_layers=4 nearly complete (sw=2 nezuko in flight remains). Reassigned to mlp_ratio=6 on new stack.
 - alphonse #2134: lr=1.5e-4 gave −2.24% vs OLD baseline, but +5.81% vs NEW. SENT BACK for compound lr=1.5e-4 + slice_num=32 test.
 - tanjiro #2107: n_layers=3 gave −7.16% vs OLD baseline, +0.49% vs NEW (extraordinarily close). SENT BACK for compound n_layers=3 + slice_num=32 test.
 - fern #2062: stale 4h WIP on superseded stack. CLOSED; reassigned to epochs=24 on new stack (#2172).
@@ -120,6 +121,7 @@
 - fern #1996: slice_num=48 + T_max=15 (−1.33% val)
 
 **Recently closed:**
+- edward #2143: surf_weight=15 on n_layers=4 (+7.77% vs current) — neutral on OLD baseline, surf↔vol trade saturated on n_layers=4
 - fern #2062: n_layers=5 + slice_num=48 (stale, superseded by #2080 + #2108)
 - edward #2048: surf_weight=5 on n_layers=5 (+3.16% vs current) — vol-gradient mechanism active but stack-depth dependent
 - askeladd #2038: n_head=2 on old n_layers=6 stack (+12.4% vs current) — draft never readied; retesting on compact stack

@@ -6,6 +6,30 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~13:00 — PR #2143: surf_weight=15 on n_layers=4 — CLOSED (+7.77% val, +9.50% test vs current)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/surf-weight-15-nlayers4
+- **Hypothesis:** Shallow stacks need MORE surface signal (reverse of nezuko's sw=2 direction) — bracketing test of vol-gradient pathway.
+- **Result:** val=46.140 / test=40.405. Essentially flat on val vs OLD baseline #2080 (−0.44%), slightly worse on test (+1.14%); +7.77% val and +9.50% test above NEW baseline #2108.
+
+| Split | val (sw=10 base) | val (sw=15) | Δ val | test (base) | test (sw=15) | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 49.979 | 49.003 | −1.95% | 44.746 | 43.970 | −1.73% |
+| geom_camber_rc | 61.558 | 59.709 | **−3.00%** | 54.155 | 54.885 | +1.35% |
+| geom_camber_cruise | 27.318 | 29.320 | +7.33% | 22.876 | 24.249 | **+6.00%** |
+| re_rand | 46.518 | 46.527 | +0.02% | 38.025 | 38.516 | +1.29% |
+| **avg** | **46.344** | **46.140** | **−0.44%** | **39.950** | **40.405** | **+1.14%** |
+
+- **Volume MAE regressed +5.08%** across all splits (range: +1.02% rc to +12.74% cruise). Confirms the gradient-redirection mechanism is operating as theorized — but the surface-gain trade was net negative.
+- **'Shallow stacks need more surface signal' hypothesis REFUTED.** sw=10 is at/near the optimum for n_layers=4. The n_layers=6 sw=5 win was a property of that specific depth, not a generic shallow-stack effect.
+- **Key diagnostic:** geom_camber_cruise reacted most strongly to sw shift in BOTH directions (here sw=10→15 worsened it +7.3% val, +12.7% vol). Cruise behavior is volume-context-dominated — useful for designing volume-capacity experiments later.
+- **The surf_weight axis on n_layers=4 is being bracketed:** sw=2 (nezuko #2109, in flight), sw=10 (baseline), sw=15 (this PR, neutral). If nezuko also doesn't beat baseline, the entire axis is saturated for this stack and we should pivot.
+- **Why closed not sent back:** sw=15 + slice_num=32 compound has very low EV (sw=15 wasn't a win on its own).
+- **Reassigned edward:** PR #2185 mlp_ratio=6 on new compact stack (unexplored midpoint of MLP capacity axis: 4=current, 6=untested, 8=lost).
+
+---
+
 ## 2026-05-13 ~12:30 — PR #2134: lr=1.5e-4 on n_layers=4 stack — SENT BACK (compound test)
 
 - **Student:** charliepai2g48h3-alphonse
