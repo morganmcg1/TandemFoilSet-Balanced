@@ -140,7 +140,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4):
+                 layerscale_init_attn=1e-4, layerscale_init_mlp=1e-3):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -148,11 +148,11 @@ class TransolverBlock(nn.Module):
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.gamma_attn = nn.Parameter(layerscale_init_attn * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
-        self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.gamma_mlp = nn.Parameter(layerscale_init_mlp * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -453,7 +453,7 @@ print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"LayerScale: asymmetric init — gamma_attn init=1e-4, gamma_mlp init=1e-3 (data-driven from PR #2195 trained gamma diagnostics: MLP activates 4-8x stronger than attn at converged weights) on all {model_config['n_layers']} TransolverBlocks")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
