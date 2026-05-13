@@ -8,6 +8,60 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 04:15 — PR #1831: Gradient clipping (max_norm=0.5) — tighter clip on FiLM+grad-clip baseline
+
+- **val_avg/mae_surf_p:** **73.8093** (seed 0, SWA-model eval)
+- **test_avg/mae_surf_p:** **65.0381** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #1731 (74.62 / 66.14): val **−1.08%**, test **−1.66%**
+
+### Per-split SWA val (surface MAE, p)
+
+| Split | val (max_norm=0.5) | Δ vs #1731 (74.62) |
+|---|---|---|
+| val_single_in_dist | 85.06 | −1.13 vs 86.19 |
+| val_geom_camber_rc | 90.32 | −0.60 vs 90.92 |
+| val_geom_camber_cruise | 49.62 | −0.70 vs 50.32 |
+| val_re_rand | 70.13 | −0.93 vs 71.06 |
+| **swa_val_avg** | **73.81** | **−0.81 vs 74.62** |
+
+### Per-split SWA test (surface MAE, p)
+
+| Split | test (max_norm=0.5) | Δ vs #1731 (66.14) |
+|---|---|---|
+| test_single_in_dist | 76.74 | −1.19 vs 77.93 |
+| test_geom_camber_rc | 80.34 | −1.03 vs 81.37 |
+| test_geom_camber_cruise | 41.49 | −0.66 vs 42.15 |
+| test_re_rand | 61.59 | −1.50 vs 63.09 |
+| **swa_test_avg** | **65.04** | **−1.10 vs 66.14** |
+
+### Config
+
+- Same as PR #1731 except **`--max_norm 0.5`** (was 1.0)
+- Architecture: Transolver + FiLM (mid_dim=64, zero-init last linear, per-layer (γ,β))
+- Loss: Smooth-L1 (Huber β=1.0)
+- Optimizer: AdamW lr=5e-4, weight_decay=1e-4
+- Scheduler: CosineAnnealingLR(T_max=15)
+- Batch size: 4, surf_weight=10.0
+- Per-sample Re-weight (`1/log_re_shifted`, normalized)
+- SWA: swa_start_frac=0.75, swa_lr=1e-4, anneal_epochs=2
+- Epochs: 15
+- **clip_fraction:** 0.5→99.2% (tighter than 1.0→92%); arm 2.0→77% regressed (val=75.15, test=66.48)
+- W&B run: `h7yzkcwl` (arm 0.5), `h0w87kbe` (arm 2.0, regression confirmation)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 \
+  --max_norm 0.5 \
+  --seed 0 \
+  --agent willowpai2g48h2-nezuko \
+  --wandb_name willowpai2g48h2-nezuko/max-norm-0p5 \
+  --wandb_group max-norm-sweep
+```
+
+---
+
 ## 2026-05-13 03:10 — PR #1731: Gradient clipping (max_norm=1.0) on FiLM baseline (composition test)
 
 - **val_avg/mae_surf_p:** **74.6214** (best seed = seed 0, SWA-model eval)
