@@ -24,7 +24,7 @@ Note: The merged train.py now has Lion+Fourier stacked. The Lion+Fourier combine
 | askeladd | #1771 | wider-192-schedule-realigned | **CLOSED** ✗ | test 104.86 (+5.19%) — T_max=14 worse than T_max=18. |
 | askeladd | #1877 | lion-bs-8-sqrt2-lr | wip | Lion memory enables bs=8. bs=8 + lr=2.1e-4 (√2-scaled). |
 | edward | #1643 | mlp-ratio-4 | wip | mlp_ratio 2→4 on Lion+Fourier+wider baseline |
-| fern | #1796 | weight-decay-1e-3 | wip | wd 1e-4→1e-3 on Lion+Fourier+wider baseline |
+| fern | #1796 | weight-decay-1e-3 | **wip (rebase+rerun)** | First run was on stale AdamW baseline (lr=7e-4, 101GB peak, test=100.10 ≈ tie vs old). Sent back to rebase + rerun under Lion+Fourier. Lion paper rec specifically calls for 3-10× larger wd than AdamW. |
 | frieren | #1710 | surf-weight-5 | **CLOSED** ✗ | test=94.71 (+1.5% vs Fourier base, +13% vs Lion base). Surf-weight lever closed in both directions. |
 | frieren | #1887 | fourier-L-16 | **wip** (new) | fourier_L 8→16, space_dim 34→66. Double frequency resolution ceiling test. |
 | nezuko | #1862 | n-layers-6-fourier-wider | wip | n_layers 5→6 on Fourier+wider+Lion baseline |

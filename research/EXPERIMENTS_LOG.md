@@ -236,6 +236,26 @@ The student's diagnostic pointed to the asymmetric question: if 25 hurts both su
 - Single-line change: `fourier_L: int = 16`
 - Target: test_avg/mae_surf_p < 83.77 (current Lion provisional baseline)
 
+## 2026-05-13 04:55 — PR #1796: Weight decay 1e-4→1e-3 — trial-1 on STALE BASELINE, sent back
+- Branch: willowpai2g48h1-fern/weight-decay-1e-3
+- W&B run: `yg909luj` — group `weight-decay-sweep`
+- **CRITICAL**: Trial-1 ran on pre-Lion config (lr=7e-4 AdamW, 101.75 GB peak — NOT Lion's 43GB). Did NOT pick up the Lion+Fourier merge.
+
+| Metric | Trial-1 (stale base) | Old wider-192 base (99.69) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 111.12 | 111.32 | −0.2% (tie) |
+| test_avg/mae_surf_p | 100.10 | 99.69 | +0.4% (tie/loss) |
+| test_single_in_dist | 121.25 | 116.57 | +4.0% (worse) |
+| test_geom_camber_rc | 112.24 | 108.61 | +3.3% (worse) |
+| test_geom_camber_cruise | **69.97** | 74.18 | **−5.7%** (better) |
+| test_re_rand | **96.93** | 99.41 | **−2.5%** (better) |
+
+**Per-split signal**: Stronger wd helps OOD splits (cruise, re_rand) but hurts in-distribution and rc — equal-weight aggregate is a wash. Hypothesis directionally supported but cancelled in average.
+
+**Action**: Sent back to rebase onto current advisor branch (Lion+Fourier+wider-192) and rerun. Lion paper specifically recommends 3-10× larger wd than AdamW because sign-momentum has uniform-magnitude updates; wd=1e-3 is exactly in the Lion-recommended range. Expected memory drop from 101GB → 43GB confirms whether rebase succeeded.
+
+**Status**: WIP (rerun pending).
+
 ## 2026-05-13 01:10 — PR #1364: Deeper model n_layers 5→7 (CLOSED)
 - Branch: willowpai2g48h1-fern/deeper-7-layers
 - Hypothesis: More Transolver blocks → richer physics representations → better generalization, especially on OOD splits
