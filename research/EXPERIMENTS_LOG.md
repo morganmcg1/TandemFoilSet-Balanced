@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-14 05:00 UTC — Round 55
+
+One review-ready LOSS closed (23rd taxon: auxiliary-objective with trivially-satisfied target — early-training inductive-bias damage) + 1 stale_wip closed and retried + 1 fresh hypothesis assigned (FIRST weight-averaging probe in launch).
+
+### PR #2495 nezuko: Auxiliary camber prediction head λ=0.1 retry-1 — CLOSED (AUX-OBJECTIVE TRIVIALLY-SATISFIED-TARGET AXIS)
+
+- **Branch:** charliepai2g48h5-nezuko/aux-camber-head-l01-retry1
+- **Hypothesis:** Add CamberHead (96→32→1) on surface-pooled last-block hidden; λ=0.1 MSE on `x_norm[:, 0, 15]` (NACA camber foil-1) as auxiliary loss. Targets camber_rc OOD bottleneck via enforced camber-discriminative representations.
+- **Metrics artifact:** `models/model-charliepai2g48h5-nezuko-aux-camber-head-l01-retry1-20260513-183316/metrics.jsonl`
+
+| Metric | aux λ=0.1 | Baseline #2307 (no aux) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **46.9564** | 42.3455 | **+10.89% (LOSS)** |
+| `test_avg/mae_surf_p` | **41.0502** | 38.5059 | **+6.61% (LOSS)** |
+| `val_single_in_dist` | 43.9078 | 35.4776 | **+23.76%** (WORST) |
+| `val_geom_camber_rc` | 63.2450 | 60.8311 | **+3.97%** (LEAST) |
+| `val_geom_camber_cruise` | 30.5603 | 27.6517 | +10.52% |
+| `val_re_rand` | 50.1126 | 45.4214 | +10.33% |
+
+- **58/70 epochs (SENPAI_TIMEOUT_MINUTES=30 capped), best=ep57, terminal=ep58 (1-ep bounce).**
+- **CRITICAL aux-MSE trajectory:**
+  - ep1 aux MSE = 0.986 → ep3 = 0.085 (10× drop in 3 epochs)
+  - ep57 (best) = 0.0016 — aux objective essentially solved
+- **Mechanism (smoking gun):** the camber target `x[:, 0, 15]` is a per-batch broadcast scalar that's literally one of 22 input channels. The hidden representation can trivially copy this through the network — no actual modeling required. By epoch 3, the aux task is solved; past that, λ×aux_loss ≈ 1.6e-4 (negligible vs surf_loss ~1.15). The damage occurs in epochs 1-3 when aux gradient is comparable to surf gradient, shifting representation toward redundant camber-encoding direction.
+- **Per-split DIRECTIONAL signature:** camber_rc hit LEAST (+3.97%) — directionally consistent with aux mechanism shifting representation toward camber-discriminative features. Bimodal gap COMPRESSES from 71% (baseline) to 44% (this run) — but by HURTING in_dist (+23.76%), not by HELPING rc. Not a useful compression.
+- **23rd distinct closed-axis taxon: auxiliary-objective-with-trivially-satisfied-target — early-training inductive-bias damage.** Failure mode is structural (target choice), not λ-tunable; λ=0.05 retry would show smaller-magnitude same failure.
+- **Param-count discrepancy note:** student observed actual model is 331,372 params (BASELINE.md says 576,875 for #2307). The actual baseline build with current advisor config is ~328K — BASELINE.md is stale, likely captured pre-slice_num=24 merge. Documentation bug, not behavior bug. Flagging for separate fix.
+
+### PR #2480 thorfinn: NormFormer Sandwich Norm — CLOSED as 1st stale_wip
+
+- **Last update:** 2026-05-13T17:25:49Z (~11h zero student activity).
+- Hypothesis preserved (residual-stream variance management via Pre-LN + Post-LN; distinct from CLOSED RMSNorm-substitution and FiLM). Reassigned as #2541 RETRY-1 on fresh branch off current advisor with full stack.
+
+### New assignments
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2541 | thorfinn | NormFormer Sandwich Norm RETRY-1: Pre-LN + Post-LN per residual addition (--epochs 70) | Residual-stream variance management; ln_post_attn + ln_post_mlp per block; ~+1.5K params; Shleifer et al. 2021 |
+| #2544 | nezuko | EMA Polyak weight averaging: α=0.999 step-EMA on model parameters; evaluate using EMA snapshot (--epochs 70) | **First weight-averaging probe in launch**; Polyak-Ruppert 1992 + Izmailov et al. 2018 SWA + Cha et al. 2021 SWAD; targets flat-minima OOD generalization (directly relevant to camber_rc 60.83 bottleneck); zero inference param-count change; ~+0.5-1% per-epoch cost; orthogonal to all 22 closed taxa |
+
+---
+
 ## 2026-05-14 04:45 UTC — Round 54 addendum (tanjiro 2nd stale)
 
 PR #2472 tanjiro split-surf-vol-heads RETRY-1 (assignment 2026-05-13T17:15:47Z; no student commits in ~11h) closed as 2nd consecutive stale_wip. Original #2396 was also stale before retry-1. Tanjiro pod has now produced 2 consecutive stalls on the same hypothesis. Reassigned as #2536 RETRY-2 on fresh branch off current advisor (full advisor stack inherited). If RETRY-2 also stalls without committed work, the axis will be deprioritized per same pattern as DropPath (abandoned in round-39 after 4 stalls). Hypothesis remains structurally fresh: decoder-architecture probe bifurcating mlp2 into mlp2_surf + mlp2_vol by is_surface mask, complementary to in-flight alphonse flow-bias #2531 (output-bias from flow conditions), in-flight askeladd PaLM #2526 (block-internal restructure), and closed decoder-skip #2503 (latent-conditioned readout split).
