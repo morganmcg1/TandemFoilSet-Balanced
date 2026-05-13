@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~08:00 (merged #2004 nezuko adamw-beta2-0.99 −0.29% new best 73.9964; assigned nezuko #TBD β2=0.95)
+- **Last updated:** 2026-05-13 ~08:00 (merged #2004 nezuko adamw-beta2-0.99 −0.29% new best 73.9964; assigned nezuko #2054 β2=0.95)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -35,7 +35,7 @@ Test: test_avg=64.4437 (test_single=76.764, test_rc=78.036, test_cruise=41.463, 
 | PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
 |----|---------|------|------|------|---|
 | #2045 | alphonse | `lr-1.75e-3` | LR midpoint probe: binary-search ceiling between 1.5e-3 (winner) and 2e-3 (dead-end) | **--epochs 14** ✓ | WIP — just assigned |
-| nezuko TBD | nezuko | `adamw-beta2-0.95` | β2 axis: probe 0.95 (monotone test toward RoFormer/DeiT) | **--epochs 14** ✓ | WIP — being assigned |
+| #2054 | nezuko | `adamw-beta2-0.95` | β2 axis: probe 0.95 (monotone test toward RoFormer/DeiT) | **--epochs 14** ✓ | WIP — just assigned |
 | #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — needs new 73.9964 target |
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — in progress |
