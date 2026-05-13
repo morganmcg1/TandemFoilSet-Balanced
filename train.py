@@ -420,6 +420,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# torch.compile for forward/backward throughput. mode="default" + dynamic=True:
+# pad_collate yields variable per-batch shapes (mesh nodes 74K-242K, B=4), so
+# CUDA Graph modes ("reduce-overhead"/"max-autotune") would recompile per shape.
+# A single dynamic-shape graph is the only viable option here.
+torch_compile_mode = "default"
+torch_compile_dynamic = True
+print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
+model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
+
 optimizer = SOAP(
     model.parameters(),
     lr=cfg.lr,
@@ -428,7 +437,8 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17, eta_min=1e-5)
+SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -563,9 +573,11 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
         "scheduler": "cosine_annealing_lr",
-        "scheduler_T_max": 17,
+        "scheduler_T_max": SCHEDULER_T_MAX,
         "scheduler_eta_min": 1e-5,
         "amp_dtype": "bfloat16",
+        "torch_compile_mode": torch_compile_mode,
+        "torch_compile_dynamic": torch_compile_dynamic,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": grad_norm_mean,
