@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-14 03:30 UTC — Round 51
+
+One review-ready LOSS closed (19th closed taxon: FFN-gating axis) + 1 fresh hypothesis assigned (axis: input-encoding via Fourier features).
+
+### PR #2439 frieren: GeGLU FFN (gate × GELU(value) at all MLP sites) — CLOSED (FFN-GATING AXIS)
+
+- **Branch:** charliepai2g48h5-frieren/geglu-ffn
+- **Hypothesis:** Replace standard GELU FFN with GeGLU (Shazeer 2020) at all 3 MLP sites: `GeGLU(x) = (xW1) ⊙ GELU(xW2)`. Tests whether multiplicative gating in FFN unlocks representational capacity beyond standard GELU FFN.
+- **Metrics artifact:** student's metrics.jsonl on PR branch
+
+| Metric | GeGLU | Baseline #2307 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **44.3006** | 42.3455 | **+4.62% (LOSS)** |
+| `test_avg/mae_surf_p` | **38.8656** | 38.5059 | **+0.93% (wash)** |
+| `val_single_in_dist` | 35.9695 | 35.4776 | +1.39% |
+| `val_geom_camber_rc` | 62.5817 | 60.8311 | +2.88% |
+| `val_geom_camber_cruise` | 29.9988 | 27.6517 | +8.49% |
+| `val_re_rand` | 48.9525 | 45.4214 | +7.78% |
+
+- **53/55 epochs reached (timeout cut 2 epochs short due to GPU-contention with parallel process).** Best=terminal=ep53 (model still improving).
+- **+90K params** (~+27% over ~330K base).
+- **DECISION: Close as LOSS.** 19th closed-axis: FFN-structure gating closes in budget-bound regime.
+- **MECHANISM (matches student's diagnosis):**
+  1. **+90K params don't earn their keep at the capacity floor.** All 4 budget-axes are at their closed optima (n_layers=4, n_hidden=96, slice_num=24, mlp_ratio=2). Adding 27% more parameters via gating dilutes per-param gradient signal without unlocking new representational capacity. Same lesson as mlp_ratio=4 LOSS (+42.5%) and n_hidden=128 LOSS (-2.5%).
+  2. **GPU contention from parallel `train.py` process** (student noted PID 54740 cohabitation) ran epochs 45-53 at ~2× wall-clock. Student's own assessment: "even with 2 more clean epochs, this would still be a LOSS of ~+4%." The +4.62% gap exceeds what clean compute would close.
+  3. **Test_avg near-wash (+0.93%) vs val_avg +4.62% LOSS** indicates val noise-amplification — but per-split direction is uniformly UP, not bimodal. Not the averaging-style failure mode.
+- **FFN axis summary (post-closure):**
+  - mlp_ratio={1, 2, 4}: 2 optimal (closed both directions)
+  - activation: GELU stays (ReLU² LOSS, SiLU LOSS)
+  - gating (GeGLU): LOSS (this PR)
+  - **FFN architecture probes exhausted at the current stack.** Future FFN moves require changing a non-FFN axis first to re-open the budget envelope.
+
+---
+
+### Assignment — Round 51
+
+#### PR #2509 frieren: Fourier feature encoding K=4 (NeRF/SIREN-style sin/cos on raw spatial coords)
+- **Branch:** charliepai2g48h5-frieren/fourier-features-k4
+- **Hypothesis:** Concatenate 16 sinusoidal features on raw spatial coords (channels 0-1) to the 24-channel input: `fourier_features(coords, K=4) = [sin(2^k * π * coords), cos(2^k * π * coords)]_{k=0..3}` → 4 freqs × 2 coords × 2 sin/cos = 16 extra channels. Preprocess Linear(24→40) projects expanded input into n_hidden=96. **First INPUT-ENCODING architectural probe in this launch.** Targets val_geom_camber_rc OOD bottleneck via high-frequency spatial basis distinct from learned slice embedding. Frequencies [π, 2π, 4π, 8π] cover full mesh scale (~3 chords) to fine boundary-layer detail (~0.06 chord). +1.5K params (preprocess Linear input dim 24→40).
+- **Rationale:** All 4 budget-axes at optimum + all FFN-structure axes closed → next gain must come from non-budget axes. Input encoding is structurally orthogonal to all 19 closed taxa (no prior input-encoding probe). High-frequency basis directly addresses geometric OOD (camber_rc) where sharp curvature near foil generates high-frequency pressure gradients the model currently must learn at coarse-frequency resolution.
+- **Predicted:** -1% to -5% on val_avg with strongest gain on val_geom_camber_rc (camber-OOD with sharp curvature) and val_re_rand (Re-OOD with high-frequency Re-correlated structure).
+- **Diagnostic:** student must log Fourier-channel L2 norm at first batch to verify encoding is computed correctly (expected ~3.7 RMS for 4×2×2=16 channels with sin/cos at standardized coords).
+
+---
+
 ## 2026-05-14 03:15 UTC — Round 50
 
 Two review-ready LOSSes closed + 2 fresh hypotheses assigned (axes: attention-temperature, decoder-skip).
