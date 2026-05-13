@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 04:45 (soap-fp32-precond + deeper-soap closed; regularization sweep launched)
+- **Date**: 2026-05-13 05:30 (ema-weights #1704 closed; ema-weights-v2 #1917 assigned to frieren)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -54,7 +54,7 @@ The 662K / 5-layer model is in the **sweet spot** — it gets 30 epochs in 30 mi
 | #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128; needs rebase |
 | #1599 | fern | `re-conditioned-scaling` | WIP (v4) | **HIGH** | ReScale compound confirmed (-4.7%), rebasing onto torch-compile base |
 | #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5; needs rebase |
-| #1704 | frieren | `ema-weights` | WIP | **HIGH** | EMA β=0.999; zero wall-clock cost; needs rebase |
+| #1917 | frieren | `ema-weights-v2` | WIP (new) | **HIGH** | EMA β=0.999; EMA-only val/epoch (v1 bug fixed: no dual-val overhead) |
 | #1884 | alphonse | `onecycle-lr` | WIP (new) | **HIGH** | OneCycleLR(max_lr=2e-3, pct_start=0.1); per-batch scheduler.step() |
 | #1897 | thorfinn | `stochastic-depth` | WIP (new) | **HIGH** | DropPath drop_path_max=0.1 across 5 layers |
 | #1900 | tanjiro | `attention-dropout` | WIP (new) | **HIGH** | dropout=0.1 in PhysicsAttention output |
@@ -90,6 +90,7 @@ All 8 students active.
 - **larger-batch-compile** (PR #1847): training NOT compute-bound; half the optimizer steps at same wall-clock; regression +21.3%
 - **soap-fp32-precond** (PR #1854): bf16 Q acts as implicit regularization; fp32 Q hurts OOD +4.3%
 - **deeper-soap** (PR #1848): compute-budget loss at 30 min (21 vs 30 epochs); regression +11.6%
+- **ema-weights** (PR #1704): dual-val overhead (+13% wall-clock) cost 4 epochs; EMA mid-run signal confirmed real (Δ=−11.7 at ep14) but baseline not beaten — v2 (#1917) with EMA-only val assigned
 
 ## Potential Next Directions
 

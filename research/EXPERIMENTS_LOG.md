@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-13 05:15 — PR #1704: [ema-weights] EMA model weights for smoother final checkpoint
+
+- **Branch**: charliepai2g24h1-frieren/ema-weights
+- **Hypothesis**: EMA (β=0.999) of model weights produces a smoother final checkpoint than the terminal live-weights checkpoint, at zero training-time cost.
+- **Status**: CLOSED — did not beat baseline; dual-val protocol overhead was the root cause
+
+| Metric | EMA (26 ep) | Live weights (26 ep) | Baseline (30 ep) | Delta vs baseline |
+|--------|-------------|----------------------|------------------|-------------------|
+| ema_val_avg/mae_surf_p | **32.2245** | — | 30.4412 | +1.78 (+5.9%) |
+| val_avg/mae_surf_p (live) | — | 32.0731 | 30.4412 | +1.63 (+5.4%) |
+| ema_test_avg/mae_surf_p | **27.7392** | — | 26.1013 | +1.64 (+6.3%) |
+| Epochs completed | 26 | 26 | 30 | −4 epochs |
+| Mean epoch time | 70.4s | — | ~62s | +13% (dual val) |
+
+**Per-split EMA val (epoch 26):**
+
+| Split | EMA val | EMA test | Baseline val | Baseline test |
+|-------|---------|----------|--------------|---------------|
+| single_in_dist | 35.55 | 35.35 | 34.27 | 32.96 |
+| geom_camber_rc | 43.90 | 39.47 | 41.43 | 37.90 |
+| geom_camber_cruise | 15.63 | 12.37 | 14.04 | 11.38 |
+| re_rand | 33.82 | 23.76 | 32.02 | 22.16 |
+| **avg** | **32.22** | **27.74** | **30.44** | **26.10** |
+
+**Artifact**: `models/model-charliepai2g24h1-frieren-ema-weights-20260513-040222/metrics.jsonl`
+
+**Analysis**: Implementation was correct; EMA trajectory behaved exactly as theory predicts. The mid-run EMA advantage was REAL (Δ=−11.7 MAE at epoch 14 — EMA was ~20% better than live). But two factors killed the result: (1) The PR required logging both live and EMA val each epoch, doubling validation work (+13% wall clock overhead), costing 4 epochs (26 vs 30). (2) Cosine LR with eta_min=1e-5 already smooths late-epoch updates naturally — by epoch 24-26 the EMA and live weights are nearly identical (Δ flips sign at epoch 25). The hypothesis was not wrong about the mechanism; the experimental protocol was wrong. **Closing**, assigning corrected protocol.
+
+**Key EMA trajectory**: shadow lagged init for ~10 epochs, peaked at Δ=−11.7 MAE at epoch 14, narrowed to Δ=+0.15 at epoch 26.
+
+---
+
 ## 2026-05-13 02:10 — PR #1599: [re-conditioned-scaling] sent back v3 — compound confirmed but stale baseline
 
 - **Branch**: charliepai2g24h1-fern/re-conditioned-scaling
