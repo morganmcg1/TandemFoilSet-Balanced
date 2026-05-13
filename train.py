@@ -246,17 +246,23 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, surf_head, loader, stats, surf_weight, device,
+                   use_bf16: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    ``use_bf16=True`` runs the model forward inside BF16 autocast for parity
+    with training. ``accumulate_batch`` casts to float64 before MAE accumulation,
+    so eval precision is unaffected.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    amp_dtype = torch.bfloat16 if use_bf16 else torch.float32
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -267,8 +273,12 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
-            pred = surf_head(pred, x_norm, is_surface)
+            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_bf16):
+                pred = model({"x": x_norm})["preds"]
+                pred = surf_head(pred, x_norm, is_surface)
+            # Cast back to FP32 before downstream loss/scoring so accumulators
+            # see a consistent dtype regardless of autocast.
+            pred = pred.float()
 
             # Guard: data/scoring.py:accumulate_batch has inf*0=NaN when GT has
             # non-finite values. Pre-filter here: nan_to_num both tensors so no
@@ -426,6 +436,9 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    use_bf16: bool = False      # BF16 autocast AMP. Off by default: experiments showed
+                                # n128 regressed val 97.99→101.54 (+3.6%) and n256 was
+                                # 127.48 (couldn't converge in 30 min). Available as an opt-in.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -543,8 +556,18 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        pred = surf_head(pred, x_norm, is_surface)
+        # BF16 autocast for forward; weights stay FP32, optimizer step is FP32.
+        # BF16's FP32-equivalent exponent range avoids the overflow risk that
+        # forced FP16 to need a GradScaler.
+        amp_dtype = torch.bfloat16 if cfg.use_bf16 else torch.float32
+        with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=cfg.use_bf16):
+            pred = model({"x": x_norm})["preds"]
+            pred = surf_head(pred, x_norm, is_surface)
+        # Cast prediction back to FP32 before loss reduction. Summing
+        # millions of nodes in BF16 (7-bit mantissa) loses precision and
+        # can hide small surface-vs-volume differences. Forward (matmul-heavy)
+        # gets the BF16 speedup; reduction stays in FP32.
+        pred = pred.float()
 
         # Per-node Huber (SmoothL1) for surface to align with MAE metric;
         # keep MSE for volume. delta=0 falls back to MSE for surface too.
@@ -618,7 +641,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     surf_head.eval()
     split_metrics = {
-        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device,
+                             use_bf16=cfg.use_bf16)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -693,7 +717,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device,
+                                 use_bf16=cfg.use_bf16)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
