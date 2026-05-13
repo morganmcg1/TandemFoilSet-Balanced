@@ -6,6 +6,40 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~14:15 — PRs #2150, #2134 — CLOSED (dead ends, LR axis saturated)
+
+- **PR #2150 (frieren lr=8e-5):** val=44.017 / test=37.507 — +12.4% above new baseline 39.143. LR axis fully exhausted: lr=8e-5 too slow to converge within epoch budget. Classic undertrained signature, best_epoch=21/21 still descending.
+- **PR #2134 (alphonse lr=1.5e-4):** val=42.748 / test=36.962 — +9.2% above new baseline 39.143. Neutral vs old baseline 42.815 (−0.07%). Student correctly noted lr=1.5e-4 and slice_num=32 exploit the same epoch-budget slack — they don't compound.
+- **Conclusion:** LR axis is saturated at lr=1e-4. No further LR exploration needed on compact stacks.
+
+---
+
+## 2026-05-13 ~14:00 — PR #2107: n_layers=3+slice_num=32+epochs=27 (tanjiro) — MERGED (−8.58% val, −9.02% test) ← NEW BASELINE 39.143
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/nlayers-3
+- **Hypothesis:** Compound n_layers=3 (depth reduction frees per-epoch budget) + slice_num=32 (partition reduction) + aligned T_max=27. Both mechanisms are independent (each frees its own per-epoch budget slack), expected to be additive.
+- **Result:** val=39.143 / test=33.571 vs #2172 baseline (40.158/34.904) = **−2.53%/−3.82%** vs #2108 (42.815/36.899) = **−8.58%/−9.02%**
+
+| Split | val (#2172) | val (this) | Δ vs #2172 | test |
+|---|---|---|---|---|
+| single_in_dist | 40.610 | 40.405 | −0.5% | 35.977 |
+| geom_camber_rc | 54.872 | 51.895 | **−5.4%** | 47.136 |
+| geom_camber_cruise | 23.477 | 22.756 | **−3.1%** | 19.101 |
+| re_rand | 41.675 | 41.517 | −0.4% | 32.070 |
+| **avg** | **40.158** | **39.143** | **−2.53% ✓** | **33.571** |
+
+- **All 4 splits improved** on both val and test.
+- **best_epoch=27/27 STILL DESCENDING** — 25.6 min used, 4.4 min headroom remains. Model still budget-limited!
+- **Per-epoch: ~57s** (down from ~74s at n_layers=4+slice_num=32 — both depth and slice contributed)
+- **Mechanism additive confirmed:** n_layers=3 alone was −7.16% (vs old baseline), slice_num=32 was −7.6% (vs old baseline). Combined: −8.58% vs #2108 (additive, not overlapping).
+- **n_params: 515,055** (~515K, −22% vs #2172's 667K)
+- **Peak memory: 20.96 GB** (lowest in entire session)
+- **Epoch-budget mechanism streak: 8+ consecutive experiments** with best_epoch=final
+- **Metric artifacts:** `models/model-nlayers-3-slicenum32-tmax27-20260513-101844/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~13:30 — PR #2172: epochs=24 on slice_num=32+n_layers=4 — MERGED (−6.21% val, −5.41% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-fern
