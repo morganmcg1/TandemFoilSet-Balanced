@@ -459,6 +459,8 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+swa_history: list[dict] = []   # rolling buffer of last-5 epoch state dicts (CPU float32)
+swa_history_epochs: list[int] = []   # 1-indexed epoch number for each entry in swa_history
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -547,8 +549,74 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # SWA-lite: keep rolling buffer of last 5 epoch weights (CPU float32, ~2.6 MB each)
+    swa_history.append({k: v.detach().clone().cpu().float() for k, v in model.state_dict().items()})
+    swa_history_epochs.append(epoch + 1)
+    if len(swa_history) > 5:
+        swa_history.pop(0)
+        swa_history_epochs.pop(0)
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- SWA-lite evaluation ---
+def _swa_avg(state_dicts: list[dict]) -> dict:
+    avg_sd = {}
+    for k in state_dicts[0].keys():
+        avg_sd[k] = torch.stack([sd[k] for sd in state_dicts], dim=0).mean(dim=0)
+    return avg_sd
+
+for swa_n in [3, 5]:
+    if len(swa_history) < swa_n:
+        print(f"SWA-{swa_n}: not enough epochs ({len(swa_history)}), skipping.")
+        continue
+    avg_sd = _swa_avg(swa_history[-swa_n:])
+    # Cast back to the model dtype (bf16 training may leave buffers as float16/bf16)
+    current_sd = model.state_dict()
+    for k in avg_sd:
+        avg_sd[k] = avg_sd[k].to(dtype=current_sd[k].dtype)
+    model.load_state_dict(avg_sd)
+    model.eval()
+
+    swa_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_split_metrics)
+    swa_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+    print(f"\nSWA-{swa_n} val_avg/mae_surf_p = {swa_avg_surf_p:.4f}  (best_single={best_avg_surf_p:.4f}, delta={swa_avg_surf_p - best_avg_surf_p:+.4f})")
+
+    # Save averaged checkpoint
+    swa_ckpt_path = model_dir / f"checkpoint_swa{swa_n}.pt"
+    torch.save(avg_sd, swa_ckpt_path)
+
+    # Test eval on SWA model
+    if not cfg.skip_test:
+        test_datasets_swa = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        test_loaders_swa = {
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            for name, ds in test_datasets_swa.items()
+        }
+        swa_test_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders_swa.items()
+        }
+        swa_test_avg = aggregate_splits(swa_test_metrics)
+        print(f"  SWA-{swa_n} test_avg/mae_surf_p = {swa_test_avg['avg/mae_surf_p']:.4f}")
+    else:
+        swa_test_metrics = None
+        swa_test_avg = None
+
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": f"swa_eval_n{swa_n}",
+        "swa_n": swa_n,
+        "epochs_averaged": swa_history_epochs[-swa_n:],
+        "val_avg/mae_surf_p": swa_avg_surf_p,
+        "val_splits": swa_split_metrics,
+        "test_avg": swa_test_avg,
+        "test_splits": swa_test_metrics,
+        "ckpt": str(swa_ckpt_path),
+    })
 
 # --- Test evaluation + local summary ---
 if best_metrics:
