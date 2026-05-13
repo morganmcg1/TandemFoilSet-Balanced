@@ -319,3 +319,30 @@ Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoc
 - Branch: willowpai2g48h1-tanjiro/grad-norm-clip
 - Hypothesis: train.py has no grad clipping. Standard in transformer training (GPT, BERT). bf16 + wider model may have gradient spikes disrupting the low-LR refinement phase.
 - Status: WIP (newly assigned). Target: test_avg < 99.69.
+
+## 2026-05-13 02:30 — PR #1387: Fourier positional encoding L=8 (MERGED ✓)
+- Branch: willowpai2g48h1-nezuko/fourier-pos-features
+- Hypothesis: Raw (x,z) coordinates limit the model to low-frequency spatial representations. NeRF-style log-scale Fourier encoding (L=8, space_dim: 2→34) provides explicit high-frequency basis functions, helping the model learn fine-scale pressure gradients near foil leading/trailing edges.
+- W&B runs: `nh6alavj` (trial-5, canonical) + earlier trials `twpifp5a`/`111nh26k` (pre-rebase val-only signal)
+- Status: **MERGED ✓ — new baseline test=93.29**
+
+| Metric | Trial-5 (final) | Baseline (PR #1361) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | **103.29** | 111.32 ± 2.87 | **−7.21%** |
+| **test_avg/mae_surf_p** | **93.29** | 99.69 ± 3.16 | **−6.42%** |
+| test_single_in_dist | **97.57** | 116.57 | −16.30% |
+| test_geom_camber_rc | **106.32** | 108.61 | −2.11% |
+| test_geom_camber_cruise | **72.25** | 74.18 | −2.60% |
+| test_re_rand | **97.04** | 99.41 | −2.38% |
+| Epochs | 15/18 | 15-16/18 | — |
+| Peak GPU memory | 42.5 GB | ~30-40 GB | slight ↑ (space_dim 2→34) |
+| Params | ~1.49M | ~1.47M | +0.02M |
+
+**Analysis**: Fourier × width compounds cleanly. Round-1 val signal (trial-1: val=119.70 at n_hidden=128) carried through to the merged baseline. Rebasing onto n_hidden=192 + schedule-aligned cosine amplified the signal. All 4 splits improve — in_dist wins most (−16.3%) suggesting Fourier helps primarily with in-distribution fine-scale pressure patterns near the foil. OOD gains are more modest (−2 to −3%), consistent with the hypothesis that high-frequency basis helps geometry-specific learning more than Reynolds-number generalization. Model beat best single-seed baseline (96.19) by −3.02%. No NaN or inf in any split (cruise GT bug workaround in baseline handles this).
+
+**Action**: Merged as new baseline. Assigned nezuko to PR #1862 — n_layers=6 on Fourier+wider baseline. Prior depth dead ends (n_layers=6 +14%, n_layers=7 +18%) were at n_hidden=128; retesting at n_hidden=192+Fourier where model has richer per-epoch representations.
+
+## 2026-05-13 02:35 — PR #1862 (NEW): n_layers 5→6 on Fourier+wider-192 baseline
+- Branch: nezuko/n-layers-6-fourier-wider
+- Hypothesis: Depth failed at n_hidden=128 due to training bottleneck (in_dist regressed most). At n_hidden=192 + Fourier (richer residual streams and explicit positional encoding), an extra layer has more structure to compose. Deeper nets extract higher-order feature interactions when input encoding is expressive enough.
+- Status: WIP (newly assigned). Target: test_avg < 93.29.
