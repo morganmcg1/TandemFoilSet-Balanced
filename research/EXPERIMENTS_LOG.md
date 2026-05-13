@@ -11,6 +11,22 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 07:45 — Cycle 23: #1957 closed + #2055 assigned
+
+### PR #1957 tanjiro — smooth_l1 β=0.10: CLOSED ✗
+
+High seed variance: run 1 val=79.42 (+2.2 vs current baseline 77.6444), run 2 val=82.00 (+4.36). Neither beats current baseline (77.6444 after #1959). Mean ≈ 80.71, worse than baseline. Key finding: β=0.10 seed variance ≈ 2.6 val units, larger than the claimed improvement per run. Student's own conclusion: "β-sweep is essentially done at this budget. Loss-side work should move to channel-weighting, residual reweighting, or training-budget changes." β axis closed below 0.25.
+
+The accelerating β-sweep signal (1.0→0.5: -0.77, 0.5→0.25: -3.76) appears to have been partly amplified by seed luck on single-run estimates. β=0.25 remains the optimum.
+
+### New assignment (cycle 23)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| tanjiro | OneCycleLR anneal_strategy 'cos' → 'linear' (fresh schedule-shape axis) | #2055 |
+
+---
+
 ## 2026-05-13 07:20 — Cycle 22: 3 closed + 3 new arms
 
 ### PR #1958 frieren — p_weight=3.0: CLOSED ✗

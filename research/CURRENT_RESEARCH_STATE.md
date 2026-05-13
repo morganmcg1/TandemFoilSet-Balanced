@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 07:25 UTC
+- **Date / time:** 2026-05-13 07:50 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -58,13 +58,14 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 - OneCycleLR final_div_factor=1e3: +15%, mechanism untestable at 30-min cap
 - p_weight=3.0: +6.3%, over-emphasises pressure under MAE-like gradient regime
 - grad_clip=0.5: +12%, undershoots optimizer step magnitude
+- smooth_l1 β<0.25: high seed variance at β=0.10, neither run beats new baseline; β=0.25 confirmed optimum
 
 ### In-flight WIP
 
 | PR | Student | Hypothesis |
 |---|---|---|
 | #1892 | fern | EMA weights (decay sweep 0.999/0.99 + warmup — sent back for retry) |
-| #1957 | tanjiro | β=0.10 (continue accelerating β sweep) |
+| #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
 | #1975 | alphonse | OneCycleLR pct_start 0.1→0.05 (shorter warmup) |
 | #1977 | edward | AdamW eps 1e-8→1e-6 |
 | #2008 | thorfinn | AdamW beta2 0.99→0.98 |
@@ -74,7 +75,7 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 
 ### Priority research directions
 
-1. **β sweep continuation** — β=0.10 in-flight (#1957). If accelerating trend (1.0→0.5: -0.77, 0.5→0.25: -3.76) continues, try β=0.05 or pure MAE. High probability the trend continues.
+1. **β sweep closed below 0.25** — β=0.10 closed (seed variance ≥2.6, neither run beats new baseline). β=0.25 confirmed optimum; further reduction adds noise without clear gain.
 2. **beta2 continuation** — 0.99 won convincingly, 0.98 in-flight (#2008). If that also wins, the optimum may be near 0.97-0.95.
 3. **eps tuning** (#1977 edward) — pairs naturally with beta2 (controls denominator floor in AdamW update).
 4. **p_weight rebalancing** (#1958 frieren) — under β=0.25, gradient magnitudes are more uniform; p_weight=3 may push too hard.
