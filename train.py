@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import subprocess
@@ -461,9 +462,30 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-# T_max=18 matches the achievable epoch count under the 30-min wall-clock cap.
-# eta_min=5e-5 (10% of initial lr) keeps a non-zero LR floor in the final epochs.
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18, eta_min=5e-5)
+# 1-epoch linear warmup followed by cosine annealing over the remaining epochs.
+# SequentialLR milestones are in scheduler steps, so we step per-batch and express
+# both schedulers in batch units. T_MAX_EPOCHS=18 matches the achievable epochs under
+# the 30-min cap (aligns with merged tmax-18 baseline); 1 warmup + 17 cosine = 18.
+# eta_min=5e-5 retains the merged eta-min-5e-5 (#1855) advantage so the warmup is
+# evaluated apples-to-apples against the current pure-cosine best (val=83.95).
+T_MAX_EPOCHS = 18
+n_batches_per_epoch = math.ceil(len(train_loader))
+warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=0.01,   # ramp from 1% of lr (5e-6) to 100% (5e-4)
+    end_factor=1.0,
+    total_iters=n_batches_per_epoch,
+)
+cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=(T_MAX_EPOCHS - 1) * n_batches_per_epoch,  # 17 epochs of cosine, in batch units
+    eta_min=5e-5,
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_sched, cosine_sched],
+    milestones=[n_batches_per_epoch],
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -495,6 +517,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     n_batches = 0
+    lr_start_epoch = optimizer.param_groups[0]["lr"]
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -523,6 +546,7 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        scheduler.step()
 
         gn = grad_norm.item() if torch.is_tensor(grad_norm) else float(grad_norm)
         epoch_grad_norm_sum += gn
@@ -532,8 +556,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    epoch_lr = optimizer.param_groups[0]["lr"]
-    scheduler.step()
+    lr_end_epoch = optimizer.param_groups[0]["lr"]
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
@@ -565,7 +588,9 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
-        "lr": epoch_lr,
+        "lr": lr_end_epoch,
+        "lr_start_epoch": lr_start_epoch,
+        "lr_end_epoch": lr_end_epoch,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": epoch_grad_norm_mean,
