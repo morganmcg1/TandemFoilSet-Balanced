@@ -8,30 +8,45 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **73.15** | PR #1641 (merged 2026-05-13) — Lion optimizer (lr=3e-4) on BF16+grad_clip stack |
-| **test_avg/mae_surf_p** | **66.76** | PR #1641 — all 4 splits finite |
-| Peak VRAM | 42.11 GB | PR #1641 — Lion run (FP32; merged stack now has BF16, expect ~33 GB) |
-| s/epoch | 134.3 s | PR #1641 — Lion run pre-BF16; with BF16 expect ~100 s |
+| **val_avg/mae_surf_p** | **66.44** | PR #1780 (merged 2026-05-13) — Lion + epochs=16 on BF16+grad_clip+Lion stack |
+| **test_avg/mae_surf_p** | **61.78** | PR #1780 — all 4 splits finite |
+| Peak VRAM | 32.94 GB | PR #1780 — BF16 |
+| s/epoch | 101.6 s | PR #1780 — BF16 |
 
-### Per-split val (PR #1641, epoch 13)
-
-| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
-|---|---:|---:|---:|
-| val_single_in_dist | 80.78 | 0.906 | 0.498 |
-| val_geom_camber_rc | 90.86 | 1.614 | 0.736 |
-| val_geom_camber_cruise | 51.56 | 0.567 | 0.400 |
-| val_re_rand | 69.39 | 1.078 | 0.554 |
-| **val_avg** | **73.15** | 1.041 | 0.547 |
-
-### Per-split test (PR #1641, epoch 13 best checkpoint)
+### Per-split val (PR #1780, epoch 16)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 69.02 |
-| test_geom_camber_rc | 77.38 |
-| test_geom_camber_cruise | 59.49 |
-| test_re_rand | 61.14 |
-| **test_avg** | **66.76** |
+| val_single_in_dist | 71.11 |
+| val_geom_camber_rc | 81.78 |
+| val_geom_camber_cruise | 48.92 |
+| val_re_rand | 63.96 |
+| **val_avg** | **66.44** |
+
+### Per-split test (PR #1780, epoch 16 best checkpoint)
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 60.78 |
+| test_geom_camber_rc | 71.40 |
+| test_geom_camber_cruise | 57.42 |
+| test_re_rand | 57.51 |
+| **test_avg** | **61.78** |
+
+## 2026-05-13 03:50 — PR #1780: Lion + epochs 13→16 (MERGED)
+
+- **val_avg/mae_surf_p: 66.44** (↓ 9.2% from 73.15)
+- **test_avg/mae_surf_p: 61.78** (↓ 7.5% from 66.76; all 4 splits finite)
+- **Peak VRAM: 32.94 GB** (matches BF16 prediction)
+- **s/epoch: 100.1–103.1** (avg ~101.6); total wall-clock 27.1 min (within 30-min cap)
+- **Metric artifacts:** `models/model-lion_epochs16-20260513-015116/metrics.jsonl`
+- **What changed:** No code change. Run-time flag only: `--epochs 16` instead of `--epochs 13`. The warmup3+cosine schedule's T_max = epochs - 3 = 13 grows with the flag, so the cosine decay tail extends naturally to epoch 16 where LR ≈ 0.
+- **Why it worked:** PR #1641 baseline at epoch 13 was still descending monotonically (final epoch delta was substantial). The cosine schedule had cut training short of convergence. Three additional epochs at the cosine tail gave −3.84, −1.59, −1.94 improvements — model converged onto the low-LR basin exactly as hypothesized. BF16+Lion's fast per-epoch (~101s) leaves headroom for 16 epochs in the 30-min cap; without BF16 this experiment would be infeasible.
+- **Baseline configuration delta:** epochs 13 → 16 (CLI flag).
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-5 --experiment_name lion_epochs16 --agent <student>
+  ```
 
 ## 2026-05-13 01:20 — PR #1641: Lion optimizer (lr=3e-4) (MERGED)
 
