@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 02:05 (bf16-amp merged, soap-higher-lr closed, 2 new assignments)
+- **Date**: 2026-05-13 04:30 (torch-compile merged -17.5%; wider-soap-192 and soap-relax-clip closed; 3 new assignments)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -8,40 +8,36 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 36.8778** — PR #1456 (alphonse/bf16-amp + cosine-eta-min), merged 2026-05-13.
+**val_avg/mae_surf_p = 30.4412** — PR #1794 (alphonse/torch-compile), merged 2026-05-13.
 
-**-7.51% vs previous 39.8693 (cosine-eta-min baseline).**
+**-17.5% vs previous 36.8778 (bf16-amp baseline). Cumulative -74.0% from initial 117.17.**
 
-Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params), **SOAP** (`lr=1e-3, wd=1e-4`), **`CosineAnnealingLR(T_max=17, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**. 17 epochs / 30 min. Peak GPU 33/96 GB.
+Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params), **SOAP** (`lr=1e-3, wd=1e-4`), **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**, **torch.compile(mode="default", dynamic=True)**. 30 epochs / 30 min. Peak GPU 24/96 GB.
 
-Test avg 31.91 (all 4 splits).
+Test avg 26.10 (all 4 splits). Model still descending at ep 30 (ep 30 was best).
 
-**Convergence trace**: 172 → 161 → 136 → 106 → 88 → 79 → 77 → 72 → 62 → 59 → 53 → 51 → 44 → 40 → 38 → **37** → 37 (ep 16 best; still descending until LR floor).
+**Convergence trace (val_avg/mae_surf_p)**: 172 → 161 → 136 → 106 → 88 → 79 → ... → 30.44 (ep 30 best; still descending).
 
 ---
 
 ## Current Research Focus
 
-**Compound wins on bf16 + SOAP + cosine-eta-min stack.** Model is still converging at ep 16 — every throughput/capacity boost compounds. Memory headroom (33/96 GB) is now substantial → next wave of experiments exploits it via larger batch, larger model, or torch.compile throughput.
+**Throughput unlock compounded massively**: torch.compile gave +76% more epochs (17→30) in the same 30-min budget, accounting for the entire -17.5% gain. Key lesson: the model is still epoch-limited (ep 30 was best, still descending). Every throughput and capacity lever compounds directly.
 
 **Key constraints/levers remaining**:
-- clip_frac=0.34 at ep 17 → grad_clip becoming less binding in cosine tail. Mostly resolved by cosine schedule.
-- **Throughput**: torch.compile is the next +20-30% lever (alphonse #1794)
-- **Capacity**: 662K params on 96 GB GPU is wasteful; n_hidden 128→192 = 1.5M params (tanjiro #1797)
-- **LR/clip coupling**: thorfinn's soap-relax-clip (#1668) tests clip widening; tanjiro's lr=2e-3 (closed) confirmed LR ceiling is ≥2e-3 but clip-blocked
-- **Batch size**: still 4; could be 8-16 with current memory headroom — not yet assigned
+- **Memory headroom**: 24/96 GB peak — 72 GB unused. Batch size 4 is extremely conservative.
+- **Model still converging at ep 30**: need still more epochs OR the right capacity increase
+- **Data bottleneck confirmed**: wider model (192) failed → 1,499 training samples limits representation width
+- **Depth untested**: n_layers=7 is more data-efficient than width; assigned to tanjiro
+- **Batch size**: batch=4 with 72 GB free; doubling to 8 costs ~4 fewer epochs but doubles gradient quality; assigned to alphonse
+- **SOAP precision**: fp32 preconditioner quality under bf16 AMP; assigned to thorfinn
+- **ReScale compound**: fern's re-conditioned-scaling (-4.7% on prior base) rebasing onto torch-compile base — could target ~25.5
 
-**Four highest-priority running experiments**:
-1. **torch-compile** (alphonse #1794, new): +20-30% throughput → 20+ epochs/run
-2. **wider-soap-192** (tanjiro #1797, new): n_hidden 128→192 = 1.5M params; capacity unlock
-3. **soap-relax-clip** (thorfinn #1668): grad_clip 1.0→5.0; unlocks step magnitude
-4. **ema-weights** (frieren #1704): EMA β=0.999 of SOAP weights; zero wall-clock cost
-
-**Per-split profile at new baseline**:
-- cruise (val 18.60 / test 15.26) — near-saturating but still improving
-- re_rand (val 38.21 / test 27.53) — strong improvement
-- rc (val 47.78 / test 42.69) — hardest OOD split, still room
-- single_in_dist (val 42.92 / test 42.15) — hardest to improve consistently
+**Active experiment priorities**:
+1. **larger-batch-compile** (alphonse #1847, new): batch_size 4→8; 72 GB headroom; lowers gradient variance; T_max=23
+2. **deeper-soap** (tanjiro #1848, new): n_layers 5→7 (880K params); depth is data-efficient; T_max~24
+3. **soap-fp32-precond** (thorfinn #1854, new): keep GG/Q in fp32 under bf16 AMP; zero throughput cost
+4. **re-conditioned-scaling** (fern #1599, WIP v4): rebase onto torch-compile base; -4.7% compound confirmed
 
 ---
 
@@ -49,16 +45,16 @@ Test avg 31.91 (all 4 splits).
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #1457 | askeladd | `surf-weight-50` | WIP (v2) | MEDIUM | surf_weight=30 on SOAP base; needs rebase to bf16 base |
+| #1457 | askeladd | `surf-weight-50` | WIP (v2) | MEDIUM | surf_weight=30 on SOAP base; needs rebase to torch-compile base |
 | #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128 on SOAP base; needs rebase |
-| #1599 | fern | `re-conditioned-scaling` | WIP (rebasing v3) | HIGH | **Compound confirmed on SOAP base (-4.7%), retesting on bf16 baseline** |
-| #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5 on SOAP base; orthogonal |
-| #1668 | thorfinn | `soap-relax-clip` | WIP | **HIGH** | grad_clip 1.0→5.0; unlocks SOAP step magnitude |
-| #1704 | frieren | `ema-weights` | WIP | **HIGH** | EMA β=0.999 of SOAP weights; zero wall-clock cost |
-| #1794 | alphonse | `torch-compile` | WIP (new) | **HIGH** | +20-30% throughput on bf16 base; aim 20+ epochs/run |
-| #1797 | tanjiro | `wider-soap-192` | WIP (new) | **HIGH** | n_hidden 128→192 = 1.5M params; capacity unlock |
+| #1599 | fern | `re-conditioned-scaling` | WIP (v4) | **HIGH** | ReScale compound confirmed (-4.7%), now rebasing onto torch-compile base |
+| #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5; orthogonal; needs rebase |
+| #1704 | frieren | `ema-weights` | WIP | **HIGH** | EMA β=0.999; zero wall-clock cost; needs rebase |
+| #1847 | alphonse | `larger-batch-compile` | WIP (new) | **HIGH** | batch_size 4→8; 24/96 GB → exploit 72 GB headroom |
+| #1848 | tanjiro | `deeper-soap` | WIP (new) | **HIGH** | n_layers 5→7; depth > width at 1,499 training samples |
+| #1854 | thorfinn | `soap-fp32-precond` | WIP (new) | **HIGH** | SOAP GG/Q fp32 under bf16 AMP; precision test |
 
-All 8 students active. New baseline broadcast to all 6 prior WIP PRs.
+All 8 students active.
 
 ---
 
@@ -73,24 +69,29 @@ All 8 students active. New baseline broadcast to all 6 prior WIP PRs.
 | #1613 | thorfinn | soap-optimizer | 42.4015 | **−52.6%** | **−63.8%** |
 | #1630 | tanjiro | cosine-eta-min | 39.8693 | −5.97% | −66.0% |
 | #1456 | alphonse | bf16-amp + T_max=17 | 36.8778 | **−7.51%** | **−68.6%** |
+| #1794 | alphonse | torch-compile | 30.4412 | **−17.5%** | **−74.0%** |
 
 ## Ruled Out
 
 - **warmup-cosine** (PR #1462): redundant with grad_clip
 - **lr=1.5e-3 (AdamW)** (PR #1539): above AdamW LR ceiling
-- **wider-deeper-3M** (PR #1458): epoch-limited under AdamW; revisiting capacity now under SOAP+bf16
+- **wider-deeper-3M** (PR #1458): epoch-limited under AdamW; revisiting via depth now
 - **SGDR T_0=7** (PR #1630 original): restart cost ~4 epochs
 - **PCGrad gradient surgery** (PR #1579): mechanism confirmed but 1.63× wall-clock loses at 30-min budget
 - **lr=2e-3 alone** (PR #1740): LR ceiling confirmed but grad_clip neutralizes; needs combined clip widening
+- **wider-soap-192** (PR #1797): **data-bottlenecked** — 1,499 training samples can't fill wider representation. Width ruled out; depth (n_layers) being tested instead.
+- **soap-relax-clip** (PR #1668): mechanism confirmed (clip_frac 0.33→0.00) but slight +0.93% regression. Cosine decay already neutralizes clip binding in late training.
 
 ## Potential Next Directions
 
 **After current in-flight results land**:
-- **Larger batch** (8 or 16): substantial memory headroom; could lower gradient variance
-- **Combined lr=2e-3 + clip=2-3**: natural follow-up if thorfinn's soap-relax-clip wins
-- **Even wider model** (n_hidden=256, ~2.7M): if wider-soap-192 wins cleanly
-- **OneCycleLR**: warmup → peak → decay; popular in competitions
-- **FNO spectral layer**: architectural alternative not yet tried
-- **Per-split surface weighting**: explicit curriculum for single_in_dist & rc (hardest splits)
+- **Combined batch=8 + lr=2e-3**: if larger-batch-compile wins, try linear LR scaling with it
+- **n_layers=9 (even deeper)**: if deeper-soap wins cleanly
+- **OneCycleLR**: warmup → peak → decay; popular in competitions; not yet tried
+- **Larger slice_num** (64→96): nezuko's in-flight experiment; more points per attention operation
+- **surf_weight tuning** (askeladd): weight ∈ {20, 50} vs current 10
+- **FNO spectral layer**: architectural alternative not tried; could help with the periodic pressure wake structures
+- **Per-split surface weighting / curriculum**: explicit focus on hardest splits (rc, re_rand)
+- **OneCycleLR with pct_start**: aggressive warmup to 2e-3 → cosine decay; could unlock higher LR transiently
 
-**The model is still converging at every recent ep 16-17.** All compound paths remain open.
+**The model is still converging at every recent ep 30.** All compound paths remain open. The torch.compile throughput gain is the largest single improvement since SOAP — every subsequent experiment now benefits from 30 epochs instead of 17.

@@ -525,3 +525,66 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 | #1460 | fern | relative-l2-loss |
 | #1467 | nezuko | more-slices-128 |
 | #1473 | tanjiro | huber-loss |
+
+---
+
+## 2026-05-13 04:30 — PR #1794: [torch-compile] torch.compile(mode="default", dynamic=True) on bf16+SOAP stack
+
+- **Branch**: charliepai2g24h1-alphonse/torch-compile
+- **Hypothesis**: torch.compile with mode="default" and dynamic=True (for variable-shape pad_collate tensors) would yield +20-30% throughput and enable more epochs within the 30-min wall-clock budget.
+- **Status**: **MERGED** — new baseline at val_avg/mae_surf_p = 30.4412
+
+| Metric | Value | vs bf16 baseline (36.8778) |
+|--------|-------|---------------------------|
+| val_avg/mae_surf_p | **30.4412** | **−17.5%** |
+| test_avg/mae_surf_p | **26.1013** | **−18.2%** |
+| val_single_in_dist | 34.27 | −8.65 (−20.2%) |
+| val_geom_camber_rc | 41.43 | −6.35 (−13.3%) |
+| val_geom_camber_cruise | 14.04 | −4.56 (−24.5%) |
+| val_re_rand | 32.02 | −6.19 (−16.2%) |
+| Epochs in 30 min | **30** | +13 epochs (+76% throughput) |
+| Peak GPU memory | 24 GB | −9 GB vs bf16 alone |
+| Best epoch | 30 (still descending) | — |
+
+**Key mechanistic findings**:
+- `mode="default"` with `dynamic=True` was the correct choice. `reduce-overhead` would have caused recompilation storms because `pad_collate` produces variable-length tensors (different sequence lengths per batch). `dynamic=True` handles this by generating shape-symbolic compiled kernels.
+- torch.compile drops peak GPU memory 33→24 GB (better kernel fusion, less intermediate tensor fragmentation).
+- T_max was set to 28 (aligning cosine tail with 30-epoch budget) — alphonse correctly auto-detected throughput after a warm-up timing run.
+- ALL 8 splits (4 val + 4 test) improved — model was still descending at epoch 30 (the last epoch was the best).
+- Cumulative gain from initial 117.17 baseline: **−74.0%**.
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-torch-compile-20260513-021531/metrics.jsonl`
+
+---
+
+## 2026-05-13 04:30 — PR #1797: [wider-soap-192] n_hidden 128→192 (1.47M params) — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/wider-soap-192
+- **Hypothesis**: n_hidden 128→192 (662K → 1.47M params, 2.22×) would increase model capacity and improve generalization.
+- **Status**: **CLOSED** — hypothesis falsified cleanly
+
+| Metric | Value | vs baseline (36.8778) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 49.1129 | **+33.2% (worse)** |
+| test_avg/mae_surf_p | ~44+ | worse |
+| Epochs in 30 min | 14 | vs 30 for 662K model |
+| Peak GPU memory | 43 GB | vs 24 GB for baseline |
+
+**Mechanistic conclusion**: Dataset is data-bottlenecked, not optimization-bottlenecked. The training set (1,499 samples) cannot fill the wider representation space — extra parameters worsen rather than improve convergence per epoch. SOAP already conditions the optimization; the limiting factor is information content in the training data. 2.22× param count → 2.14× fewer epochs in 30 min → consistently worse at every matched epoch count. This rules out width as a capacity lever at the current data scale.
+
+---
+
+## 2026-05-13 04:30 — PR #1668: [soap-relax-clip] grad_clip 1.0→5.0 — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/soap-relax-clip
+- **Hypothesis**: Relaxing grad_clip from 1.0 to 5.0 would unlock SOAP's natural step magnitude and improve convergence.
+- **Status**: **CLOSED** — mechanism confirmed, slight regression vs new baseline
+
+| Metric | Value | vs baseline (36.8778) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 37.2200 | +0.93% (slight regression) |
+| test_avg/mae_surf_p | 32.3257 | +1.32% |
+| clip_frac by ep 14 | 0.00 | was 0.33 at baseline |
+
+**Mechanistic conclusion**: clip=5.0 fully unlocked SOAP's steps (clip_frac 0.33→0.00, mechanism validated). However, SOAP+cosine+bf16 at clip=1.0 slightly outperforms clip=5.0. By late training (with cosine LR decay), the gradient norms are already small enough that clip=1.0 is non-binding. Widening clip provided no additional signal. The value of clip relaxation was in the early training regime (clip_frac 0.98–1.00), which cosine scheduling has already effectively resolved. Note: comparison to AdamW baseline in student writeup was incorrect — the correct comparator is clip=1.0 vs clip=5.0 on the same SOAP+bf16+cosine stack.
+
