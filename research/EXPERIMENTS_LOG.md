@@ -2,6 +2,54 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 01:19 — PR #1696: [grad-clip-1.0] Gradient clipping max_norm=1.0 — **MERGED (NEW BEST: val=96.78)**
+- Student branch: `charliepai2g48h4-frieren/grad-clip-1.0`
+- Hypothesis: Gradient clipping with max_norm=1.0 between loss.backward() and optimizer.step() caps per-step update magnitude, reducing instability from outlier high-Re batches.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | **96.78** (best epoch 17/18) |
+| test_avg/mae_surf_p | **86.56** (all 4 splits clean) |
+| val single_in_dist | 110.38 |
+| val geom_camber_rc | 105.34 |
+| val geom_camber_cruise | 75.14 |
+| val re_rand | 96.27 |
+| test single_in_dist | 98.34 |
+| test geom_camber_rc | 94.63 |
+| test geom_camber_cruise | 63.51 |
+| test re_rand | 89.75 |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-grad-clip-1.0-20260512-235444/metrics.jsonl`
+- Run context: pre-Huber HEAD (started 23:54, before Huber merge at ~00:08). Merged HEAD now has Huber+grad-clip.
+- Config: merged recipe (pre-Huber) + `clip_grad_norm_(model.parameters(), max_norm=1.0)` between backward() and step()
+- Grad norms: mean 33–106 across epochs, max 464–770. **Every step was clipped** (norms >> 1.0). Effectively gradient-direction-following with unit step magnitude.
+
+**Analysis:** Largest single improvement on this branch. Δval=−18.03 (−15.7%) vs T_max=15 baseline, Δval=−13.81 (−12.5%) vs Huber-only best. All 4 splits improved without exception. The mechanism is surprising: with typical grad norms of 30–1000, max_norm=1.0 makes the optimizer do normalized gradient descent rather than conventional clipping. This is adaptive per-step scaling that makes lr effectively 30–1000× smaller — a fundamentally different optimization regime. Follow-ups: max_norm=0.5 (frieren #1759) and EMA on top of grad-clip (askeladd #1540 rebasing).
+
+## 2026-05-13 01:19 — PR #1575: [hidden256-bf16] Widen n_hidden 128→256 — **CLOSED (wall-clock-bound regression)**
+- Student branch: `charliepai2g48h4-tanjiro/hidden256-bf16`
+- Hypothesis: Doubling hidden dimension tests whether the model is width-bound.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | 150.77 (best epoch 9/12) |
+| test_avg/mae_surf_p | 136.31 |
+| Epochs completed | 12/50 (30-min cap) |
+| Per-epoch time | ~153s (vs ~100s for n_hidden=128, +53%) |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-hidden256-bf16-20260512-235248/metrics.jsonl`
+
+**Analysis:** Clear regression — val=150.77 vs baseline 114.81, training severely wall-clock-bound. 4× parameter count (2.63M vs 0.66M) causes ~53% slower per-epoch, leaving only 12 epochs in the 30-min cap. Same failure mode as hidden192 (#1406). Width scaling doesn't work under the wall-clock constraint. Depth (edward #1730, layers-6) is the alternative capacity test with much lower compute overhead.
+
+## 2026-05-13 00:59 — PR #1540: [ema-weights] EMA decay=0.999 on Huber+T_max=15 recipe — **SENT BACK (rebasing for grad-clip HEAD)**
+- Student branch: `charliepai2g48h4-askeladd/ema-weights`
+- Second run (rebased onto Huber HEAD): val=99.60 / test=91.15 on Huber+EMA (no grad-clip)
+- Per-split val: single_in_dist=116.54, geom_camber_rc=107.27, geom_camber_cruise=77.39, re_rand=97.23
+- Artifact: `models/model-charliepai2g48h4-askeladd-ema-weights-20260513-000728/metrics.jsonl`
+- Does not beat current best (96.78) as it's on pre-grad-clip HEAD. Sent back to rebase onto Huber+grad-clip HEAD.
+
+**Analysis:** EMA on Huber (no grad-clip): val=99.60 — strong improvement over Huber-only (110.59), Δ−10.99 (−9.94%). Val curve monotonically decreasing (every epoch new best) — pure EMA smoothing effect. However, grad-clip result (96.78) already beats this even without EMA. Next test: EMA on top of Huber+grad-clip. Expected to push below 90.
+
 ## 2026-05-13 00:08 — PR #1374: [huber-loss] Smooth L1 / Huber loss on merged recipe — **MERGED (NEW BEST: val=110.59)**
 - Student branch: `charliepai2g48h4-edward/huber-loss`
 - Hypothesis: MSE loss is sensitive to large-residual samples (high-Re flows with 10× larger pressure gradients), pulling the training signal disproportionately toward outliers. Smooth L1 / Huber loss (beta=1.0) is identical to MSE for small residuals (|e|<1) but linear for large residuals, capping the gradient magnitude per-sample and giving the model a more stable signal.
