@@ -140,7 +140,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 rezero_init=1.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -151,6 +152,11 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        # Per-channel learnable residual gain (Bachlechner 2020 ReZero / CaiT LayerScale).
+        # γ-init=1.0 matches the standard residual path at start; the optimizer prunes
+        # channels that do not help. γ-init<1.0 reproduces a CaiT-style warm start.
+        self.gamma_attn = nn.Parameter(torch.full((hidden_dim,), rezero_init))
+        self.gamma_mlp = nn.Parameter(torch.full((hidden_dim,), rezero_init))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -160,8 +166,8 @@ class TransolverBlock(nn.Module):
 
     def forward(self, fx, film=None):
         # film: optional (gamma, beta) tensors each [B, 1, H] for this block
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
+        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if film is not None:
             gamma, beta = film
             fx = (1 + gamma) * fx + beta
@@ -200,7 +206,8 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  fourier_features: bool = False,
                  fourier_num_features: int = 16,
-                 fourier_sigma: float = 1.0):
+                 fourier_sigma: float = 1.0,
+                 rezero_init: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -235,6 +242,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                rezero_init=rezero_init,
             )
             for i in range(n_layers)
         ])
@@ -535,6 +543,7 @@ class Config:
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
+    rezero_init: float = 1.0  # Per-channel learnable residual gain init (Bachlechner 2020). 1.0=ReZero, <1.0=CaiT-like.
 
 
 cfg = sp.parse(Config)
@@ -595,6 +604,7 @@ model = FiLMTransolver(
     fourier_features=cfg.fourier_features,
     fourier_num_features=cfg.fourier_num_features,
     fourier_sigma=cfg.fourier_sigma,
+    rezero_init=cfg.rezero_init,
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
@@ -850,6 +860,28 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
 
+    # ReZero per-channel γ diagnostics (PR #2269): track mean/std/max of γ_attn and
+    # γ_mlp across all blocks. With γ-init=1.0 we expect channels that hurt to be
+    # damped (mean < 1) and helpful ones to drift; per-block detail printed below.
+    blocks_for_gamma = model.transolver.blocks if isinstance(model, FiLMTransolver) else getattr(model, "blocks", None)
+    if blocks_for_gamma is not None and hasattr(blocks_for_gamma[0], "gamma_attn"):
+        with torch.no_grad():
+            gamma_attn_vals = torch.stack([b.gamma_attn.detach() for b in blocks_for_gamma])  # [L, H]
+            gamma_mlp_vals = torch.stack([b.gamma_mlp.detach() for b in blocks_for_gamma])    # [L, H]
+            log_metrics["gamma/attn_mean"] = gamma_attn_vals.mean().item()
+            log_metrics["gamma/attn_std"] = gamma_attn_vals.std().item()
+            log_metrics["gamma/attn_abs_max"] = gamma_attn_vals.abs().max().item()
+            log_metrics["gamma/mlp_mean"] = gamma_mlp_vals.mean().item()
+            log_metrics["gamma/mlp_std"] = gamma_mlp_vals.std().item()
+            log_metrics["gamma/mlp_abs_max"] = gamma_mlp_vals.abs().max().item()
+            for li in range(gamma_attn_vals.shape[0]):
+                log_metrics[f"gamma/attn_mean_L{li}"] = gamma_attn_vals[li].mean().item()
+                log_metrics[f"gamma/attn_std_L{li}"] = gamma_attn_vals[li].std().item()
+                log_metrics[f"gamma/attn_abs_max_L{li}"] = gamma_attn_vals[li].abs().max().item()
+                log_metrics[f"gamma/mlp_mean_L{li}"] = gamma_mlp_vals[li].mean().item()
+                log_metrics[f"gamma/mlp_std_L{li}"] = gamma_mlp_vals[li].std().item()
+                log_metrics[f"gamma/mlp_abs_max_L{li}"] = gamma_mlp_vals[li].abs().max().item()
+
     # FiLM diagnostics: per-layer mean |gamma| and |beta| from last forward.
     if isinstance(model, FiLMTransolver) and model._last_film is not None:
         film_t = model._last_film  # [B, L, 2, H]
@@ -910,6 +942,32 @@ if cfg.use_kendall_uncertainty:
         kendall_summary[f"final/log_sigma_{n}"] = float(s)
         kendall_summary[f"final/effective_weight_{n}"] = float(w)
     wandb.summary.update(kendall_summary)
+
+# ReZero γ final per-block summary (PR #2269).
+_blocks_for_gamma_final = model.transolver.blocks if isinstance(model, FiLMTransolver) else getattr(model, "blocks", None)
+if _blocks_for_gamma_final is not None and hasattr(_blocks_for_gamma_final[0], "gamma_attn"):
+    with torch.no_grad():
+        ga = torch.stack([b.gamma_attn.detach() for b in _blocks_for_gamma_final]).cpu()
+        gm = torch.stack([b.gamma_mlp.detach() for b in _blocks_for_gamma_final]).cpu()
+    print("\nFinal ReZero γ per block (attn / mlp):")
+    print(f"  {'block':<6} {'attn_mean':>10} {'attn_std':>10} {'|attn|_max':>11}  "
+          f"{'mlp_mean':>10} {'mlp_std':>10} {'|mlp|_max':>11}")
+    gamma_summary: dict[str, float] = {}
+    for li in range(ga.shape[0]):
+        am, asd, amax = ga[li].mean().item(), ga[li].std().item(), ga[li].abs().max().item()
+        mm, msd, mmax = gm[li].mean().item(), gm[li].std().item(), gm[li].abs().max().item()
+        print(f"  L{li:<5d} {am:>10.4f} {asd:>10.4f} {amax:>11.4f}  {mm:>10.4f} {msd:>10.4f} {mmax:>11.4f}")
+        gamma_summary[f"final/gamma_attn_mean_L{li}"] = am
+        gamma_summary[f"final/gamma_attn_std_L{li}"] = asd
+        gamma_summary[f"final/gamma_attn_abs_max_L{li}"] = amax
+        gamma_summary[f"final/gamma_mlp_mean_L{li}"] = mm
+        gamma_summary[f"final/gamma_mlp_std_L{li}"] = msd
+        gamma_summary[f"final/gamma_mlp_abs_max_L{li}"] = mmax
+    gamma_summary["final/gamma_attn_mean_all"] = ga.mean().item()
+    gamma_summary["final/gamma_attn_std_all"] = ga.std().item()
+    gamma_summary["final/gamma_mlp_mean_all"] = gm.mean().item()
+    gamma_summary["final/gamma_mlp_std_all"] = gm.std().item()
+    wandb.summary.update(gamma_summary)
 
 # Persist the SWA-averaged weights regardless of best_metrics so they survive
 # the run even if no base epoch ever improved val_avg/mae_surf_p.
