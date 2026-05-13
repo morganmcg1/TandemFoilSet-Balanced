@@ -692,3 +692,58 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 
 **Programme lesson**: Both width (wider-soap-192) AND depth (deeper-soap) fail at fixed 30-min budget on 1,499 samples. Current 662K/5-layer is in the optimal compute zone. Data-bottleneck is confirmed. Moving to regularization-based improvements.
 
+---
+
+## 2026-05-13 04:55 — PR #1897: [stochastic-depth] DropPath drop_path_max=0.1 across layers — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/stochastic-depth
+- **Hypothesis**: Linear DropPath schedule [0, 0.025, 0.05, 0.075, 0.1] should regularize OOD without inference cost. Predicted OOD splits (rc, re_rand) improve most, in-dist may regress slightly.
+- **Status**: **CLOSED** — clean negative, hypothesis falsified
+- **Metrics JSONL**: `models/model-charliepai2g24h1-thorfinn-stochastic-depth-20260513-041301/metrics.jsonl`
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 33.0241 | **+8.48% (worse)** |
+| test_avg/mae_surf_p | 28.5180 | **+9.26% (worse)** |
+| val_single_in_dist | 37.42 | **+9.20%** (WORST regression) |
+| val_geom_camber_rc | 45.46 | +9.72% |
+| val_geom_camber_cruise | 16.23 | +15.57% |
+| val_re_rand | 32.99 | +3.03% |
+| Peak GPU | 23.88 GB | unchanged |
+| Epochs in 30 min | 29 | -1 |
+
+**Pattern**: EVERY split regressed, in-dist regression LARGEST. Hypothesis predicted opposite (OOD-asymmetric improvement). Best epoch = 29 (last) → still descending.
+
+**Why DropPath failed here**: With only 5 transformer blocks, the linear schedule mean ≈ 5% expected skip rate is too coarse — skipping a whole block is much more destructive than dropping features. Each block likely encodes non-redundant Transolver slice/attention patterns; redundancy assumption violated.
+
+**Net programme lesson**: The "regularization-limited" diagnosis is refuted. Combined with attention-dropout (#1900, ~0% net), TWO independent regularization experiments fail to improve OOD. The OOD-asymmetric regressions in wider/deeper/sharper-precond are better explained by **optimization fragility + compute-budget loss** (each ate epochs through extra per-step cost), NOT by underfit regularization.
+
+---
+
+## 2026-05-13 04:55 — PR #1900: [attention-dropout] dropout=0.1 in PhysicsAttention — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/attention-dropout
+- **Hypothesis**: Enable already-wired but no-op dropout (attn weights + output projection) at p=0.1. Predicted OOD-asymmetric improvement.
+- **Status**: **CLOSED** — within-noise negative, but the per-split signature is diagnostic
+- **Metrics JSONL**: `models/model-charliepai2g24h1-tanjiro-attention-dropout-20260513-041403/metrics.jsonl`
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 30.5841 | +0.47% (within noise) |
+| test_avg/mae_surf_p | 26.6998 | +2.29% (worse) |
+| val_single_in_dist | 33.94 | **-1.0% (better!)** |
+| val_geom_camber_rc | 42.65 | +2.9% |
+| val_geom_camber_cruise | 14.92 | +6.3% |
+| val_re_rand | 30.82 | **-3.7% (better!)** |
+| Peak GPU | 24.49 GB | unchanged |
+| Epochs in 30 min | 29 | -1 |
+
+**Smoking gun observation from student**: *"Loss curve was still trending down at epoch 29 — this is itself evidence the model is not regularization-limited — there was no train/val gap to close."*
+
+**Pattern**: OOD splits split (1 better re_rand / 2 worse rc, cruise). In-dist actually improved (-1.0%) — opposite of the regularization-overfit prediction. Looks like noise-level perturbation with a single positive outlier.
+
+**Net result**: This — combined with stochastic-depth — refutes the regularization-limited diagnosis. The next theme should be **convergence/budget-aware experiments**: weight averaging (SWA, EMA), faster schedules (OneCycleLR #1884 in flight), loss-domain rebalancing (lower surf_weight), NOT more regularization.
+
+**Diagnostic signal preserved**: val_re_rand improved -3.7%, the only positive outlier across both runs. Worth asking whether re_rand (random-Re OOD) responds to a Re-specific regularizer that uniform dropout doesn't capture — points to fern's re-conditioned-scaling direction (#1599).
+
+

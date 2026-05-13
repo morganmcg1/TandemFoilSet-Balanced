@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 05:30 (ema-weights #1704 closed; ema-weights-v2 #1917 assigned to frieren)
+- **Date**: 2026-05-13 05:05 (stochastic-depth + attention-dropout closed; diagnosis revised — convergence/budget-limited, NOT regularization-limited)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -18,31 +18,30 @@ Test avg 26.10 (all 4 splits). Model still descending at ep 30 (ep 30 was best).
 
 ---
 
-## Current Research Focus
+## Current Research Focus — DIAGNOSIS REVISED
 
-**CRITICAL FINDING: Model is regularization-limited, not capacity-limited or optimization-limited.**
+**OLD diagnosis (3 experiments)**: Model is regularization-limited, not capacity-limited.
+**NEW diagnosis (5 experiments)**: Model is **convergence/budget-limited at the 30-min compute floor**, NOT regularization-limited.
 
-Three consecutive experiments confirm this with the same OOD-degradation signature:
-1. **wider-soap-192** (+33%): OOD splits hurt worst by extra width  
-2. **soap-fp32-precond** (+4.3%): sharper fp32 preconditioner → OOD worse, in-dist better  
-3. **deeper-soap** (+11.6%): deeper model undertrains at 30-min budget (uniform regression)
+**Refutation of the regularization-limited diagnosis**:
+- **stochastic-depth** (#1897, +8.48%): EVERY split regressed, in-dist WORST. DropPath was net-harmful.
+- **attention-dropout** (#1900, +0.47%): in-dist actually improved; OOD outcome mixed. Loss still descending at ep 29.
 
-**ALSO CONFIRMED** (batch-bottleneck):
-4. **larger-batch-compile** (+21.3%): halving optimizer steps hurts; training NOT compute-bound at batch=4
+The student observation that crystallized it (#1900 tanjiro):
+> "Loss curve was still trending down at epoch 29 — itself evidence the model is not regularization-limited — there was no train/val gap to close."
 
-**The interpretation**: 1,499 training samples create two constraints simultaneously:
-- **Data bottleneck**: Model memorizes training set if given extra capacity (width, depth) or extra precision (fp32 Q)
-- **Compute bottleneck**: Larger models cost more per epoch and get fewer epochs in 30 min
+**Revised interpretation**: The wider/deeper/sharper-precond OOD regressions reflect **optimization fragility + compute-budget loss** (each ate epochs through extra per-step cost), NOT underfit regularization. With 1,499 training samples + monotone descending loss at cutoff, we are undertrained, not overfitted.
 
-The 662K / 5-layer model is in the **sweet spot** — it gets 30 epochs in 30 min AND doesn't overfit aggressively. But it still overfits: the OOD gap is real (single_in_dist val~34 but rc val~41, re_rand val~32 with test~22).
+---
 
-**Current research focus: regularization sweep at current capacity.**
+## Strategic Path Forward — Convergence-Limited Programme
 
-**OneCycleLR** (alphonse, #1884) simultaneously addresses the schedule question: can a warmup → 2e-3 peak → cosine decay unlock a higher effective LR without cold-start instability?
-
-**Stochastic Depth** (thorfinn, #1897): DropPath drop_path_max=0.1 across 5 layers. Structural regularization — randomly skip blocks, forcing each layer to work independently. Should especially help OOD splits.
-
-**Attention Dropout** (tanjiro, #1900): Enable existing dropout=0.1 in PhysicsAttention output projection (already wired, currently 0.0). Cheapest regularization test.
+**Active themes** (all aligned with "still descending at cutoff" diagnosis):
+1. **Faster convergence**: OneCycleLR with higher peak LR (#1884 alphonse, in flight)
+2. **Weight averaging**: EMA (#1917 frieren, in flight) — averages over the descending trajectory
+3. **Loss-domain rebalancing**: lower surf_weight (tanjiro next)
+4. **Stochastic weight averaging (SWA)**: averages last K epochs of cosine floor (thorfinn next)
+5. **Compound win stacks**: rebases pending — surf-weight-30 (#1457), more-slices (#1467), re-conditioned-scaling (#1599), per-channel-loss-weights (#1614)
 
 ---
 
@@ -52,12 +51,12 @@ The 662K / 5-layer model is in the **sweet spot** — it gets 30 epochs in 30 mi
 |----|---------|------|--------|----------|-------|
 | #1457 | askeladd | `surf-weight-50` | WIP (v2) | MEDIUM | surf_weight=30; needs rebase to torch-compile base |
 | #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128; needs rebase |
-| #1599 | fern | `re-conditioned-scaling` | WIP (v4) | **HIGH** | ReScale compound confirmed (-4.7%), rebasing onto torch-compile base |
+| #1599 | fern | `re-conditioned-scaling` | WIP (v4) | **HIGH** | ReScale compound; re-rand-specific signal in dropout test supports this |
 | #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5; needs rebase |
-| #1917 | frieren | `ema-weights-v2` | WIP (new) | **HIGH** | EMA β=0.999; EMA-only val/epoch (v1 bug fixed: no dual-val overhead) |
-| #1884 | alphonse | `onecycle-lr` | WIP (new) | **HIGH** | OneCycleLR(max_lr=2e-3, pct_start=0.1); per-batch scheduler.step() |
-| #1897 | thorfinn | `stochastic-depth` | WIP (new) | **HIGH** | DropPath drop_path_max=0.1 across 5 layers |
-| #1900 | tanjiro | `attention-dropout` | WIP (new) | **HIGH** | dropout=0.1 in PhysicsAttention output |
+| #1884 | alphonse | `onecycle-lr` | WIP | **HIGH** | OneCycleLR(max_lr=2e-3, pct_start=0.1); convergence pivot |
+| #1917 | frieren | `ema-weights-v2` | WIP | **HIGH** | EMA β=0.999 with EMA-only val (fixes v1's +13% wall-clock penalty) |
+| TBD | thorfinn | `swa-last-k` | NEW | **HIGH** | SWA over last 5 epochs at cosine floor |
+| TBD | tanjiro | `surf-weight-7` | NEW | **HIGH** | Direct test of OOD-rc loss-rebalance hypothesis |
 
 All 8 students active.
 
@@ -90,16 +89,20 @@ All 8 students active.
 - **larger-batch-compile** (PR #1847): training NOT compute-bound; half the optimizer steps at same wall-clock; regression +21.3%
 - **soap-fp32-precond** (PR #1854): bf16 Q acts as implicit regularization; fp32 Q hurts OOD +4.3%
 - **deeper-soap** (PR #1848): compute-budget loss at 30 min (21 vs 30 epochs); regression +11.6%
-- **ema-weights** (PR #1704): dual-val overhead (+13% wall-clock) cost 4 epochs; EMA mid-run signal confirmed real (Δ=−11.7 at ep14) but baseline not beaten — v2 (#1917) with EMA-only val assigned
+- **stochastic-depth** (PR #1897): +8.48% on ALL splits, in-dist WORST. Refutes regularization-limited diagnosis.
+- **attention-dropout** (PR #1900): +0.47% (within noise); loss still descending at ep 29 → not regularization-limited. Confirms revised diagnosis.
+- **ema-weights v1** (PR #1704): +5.9% — dual-val overhead cost 4 epochs. Mid-run signal confirmed (Δ=-11.7 at ep14). v2 #1917 fixes protocol.
 
 ## Potential Next Directions
 
-**After current in-flight regularization results land**:
-- **Compound dropout + stochastic-depth**: if either wins independently, combine them
-- **Label smoothing on surf_weight**: smooth the surface vs volume weight boundary
-- **OneCycleLR + dropout**: combine schedule improvement with regularization if both win
-- **FiLM-style Re conditioning** (from fern's analysis): inject log(Re) into Transolver preprocess MLP as learned bias instead of output rescaling
-- **Input feature augmentation**: ±5% Re noise during training, or geometry mirroring for symmetric foil cases
-- **SWA (Stochastic Weight Averaging)**: average checkpoints from last K epochs; complements EMA-weights
+**After current in-flight convergence experiments land**:
+- **SWA + EMA compound** (if either wins): average over last K cosine-floor checkpoints
+- **OneCycleLR + lower-surf-weight compound**: if both schedule and loss rebalance win
+- **Re-conditioned input embedding** (fern's #1599): re_rand was the only positive outlier in dropout test → Re-specific regularization may be the right knob
+- **Mixup/CutMix on input features**: data-domain augmentation (not model-domain regularization)
+- **T_max sweep** (T_max=21, 35): probe whether 28 is optimal floor-reach epoch
+- **Pseudo-replay / curriculum**: train on easier in-dist first, then OOD-augmented later
+- **Coordinate-aware Re scaling**: inject log(Re) into PhysicsAttention slice weighting
+- **Gradient accumulation** at effective batch=2 (more optimizer steps per epoch)
 
-**The model is still converging at ep 30.** The torch.compile throughput gain is the most important lever found — every future experiment benefits from 30 epochs. Regularization sweep is the current priority.
+**The model is still converging at ep 30.** The torch.compile throughput gain is the most important lever found — every future experiment benefits from 30 epochs. Convergence-aware experiments are the current priority.
