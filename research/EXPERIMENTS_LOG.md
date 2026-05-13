@@ -1226,3 +1226,62 @@ normalized mean per-ch: [-0.026, -0.005, -0.040]  # already ≈ 0
 - thorfinn → n_head 4→8 attention head shape change (PR #2520; clean architectural axis, no param-count change).
 
 ---
+
+## 2026-05-13 19:50 — PR #2420 CLOSED: LR=7e-4 with merged betas=(0.9, 0.95)
+
+- **Student:** willowpai2g48h3-tanjiro
+- **Branch:** willowpai2g48h3-tanjiro/lr-7e4-betas
+- **Hypothesis:** Test lr=7e-4 (+40% vs 5e-4) on the merged betas=(0.9,0.95) baseline; reactive beta2=0.95 was expected to stabilize larger LR.
+
+### Results (2 seeds)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | Δ vs baseline |
+|---|---|---:|---:|---:|---|
+| `k5zl5irq` | 1 | 65.214 | 56.052 | 35/35 | +10.8% / +9.7% |
+| `eyfji1h8` | 2 (better) | 63.440 | 55.019 | 35/35 | +7.7% / +7.7% |
+| **Baseline #2017** | 1 | **58.883** | **51.078** | 35 | — |
+
+All 4 splits finite. Clean monotonic descent on both seeds — no crash, no NaN.
+
+### Conclusion
+
+**CLOSED — clear regression, LR=7e-4 is too aggressive.** Train curve at lr=7e-4 tracks ~10-15% behind baseline at EVERY epoch — not early-epoch spike, not late-epoch plateau, just a slower trajectory throughout. Mechanism: reactive beta2=0.95 (fast adapting) + lr=7e-4 overshoots fine-detail surface-pressure features on harder splits. Cruise (lowest gradient variance) is the only split where lr=7e-4 matches baseline — consistent with the gradient-heterogeneity mechanism. LR axis brackets: 7e-4 fails, 5e-4 current optimum from above.
+
+### Follow-up
+
+- tanjiro → Lion LR bisect 7.5e-5 (after Lion merged as #2516).
+
+---
+
+## 2026-05-13 20:05 — PR #2516 MERGED: Lion optimizer (Chen et al. 2023)
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/lion-optimizer
+- **Hypothesis:** Replace AdamW with Lion optimizer — signed momentum update, no v state, lr×0.1, wd×10. Tests whether AdamW+grad_clip "double normalization" can be replaced by a cleaner sign-based update.
+
+### Results (2 seeds)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | Δ vs baseline |
+|---|---|---:|---:|---:|---|
+| `2aehgwoh` | 1 | 51.162 | 44.288 | 35/35 | −13.1% / −13.3% |
+| `1dj10zec` | 2 (better) | **50.193** | **43.501** | 35/35 | **−14.8% / −14.8%** |
+| **Baseline #2017** | 1 | 58.883 | 51.078 | 35 | — |
+
+**Per-split test surf_p (seed 2):** single_in_dist=46.82, geom_camber_rc=59.38, geom_camber_cruise=26.60, re_rand=41.21 — ALL 4 FINITE.
+
+### Conclusion
+
+**MERGED — 9th baseline shift, −14.8% val/test. Third-largest single-axis win of round 1** (after bf16 −21%, compile −24%). Key findings:
+1. **Mechanism confirmed:** Lion's sign update composes cleanly with grad_clip's global norm normalization. No "double normalization" fight. Early-epoch trajectory (e5=118, e15=82) identical to AdamW, but Lion keeps descending past AdamW plateau at ~59.
+2. **VRAM prediction wrong:** No VRAM drop (24.1 GB both seeds). Optimizer state (2.6 MB vs 5 MB) is negligible for this 0.66M-param model. Lesson: VRAM benefit of Lion only matters at 10-100× model size.
+3. **Still compute-bound:** best=last on both seeds. Lion was still improving at epoch 35; a longer run would likely improve further.
+4. **Uniform test gain:** all 4 splits improved. Cruise −22.4%, re_rand −19.0%, in_dist −16.4%, rc −5.9%.
+
+### Follow-up
+
+- edward → Lion betas bisect (PR #2561)
+- tanjiro → Lion LR 7.5e-5 (PR #2562)
+- nezuko → Gradient Centralization in Lion (PR #2564)
+- fern → max_norm=0.5 on Lion baseline (PR #2565)
+
+---

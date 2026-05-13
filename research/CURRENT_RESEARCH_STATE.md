@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-13 18:50
+- **Date:** 2026-05-13 20:15
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -19,9 +19,10 @@ Round-1 baseline has shifted **eight times in ~18 hours** through stacking compa
 | PR #1910 (vol-Huber β=0.5) | 2026-05-13 07:30 | 65.469 | 57.837 | −3.5% val, −3.3% test |
 | PR #1692 (grad_clip max_norm=1.0) | 2026-05-13 12:00 | 60.093 | 53.370 | −8.2% val, −7.7% test |
 | PR #1589 (AdamW betas 0.9, 0.95) | 2026-05-13 16:03 | 59.970 | 52.363 | −0.2% val, −1.9% test |
-| **PR #2017 (weight_decay 1e-4 → 2e-4)** | **2026-05-13 16:10** | **58.883** | **51.078** | **−1.8% val, −2.4% test** |
+| **PR #2017 (weight_decay 1e-4 → 2e-4)** | **2026-05-13 16:10** | 58.883 | 51.078 | −1.8% val, −2.4% test |
+| **PR #2516 (Lion optimizer)** | **2026-05-13 20:05** | **50.193** | **43.501** | **−14.8% val, −14.8% test** |
 
-The current `train.py` now has **eight** stacked changes: mask after slice softmax, Huber β=0.5 on surf and vol, bf16 autocast, `torch.compile(dynamic=True)`, `clip_grad_norm_(max_norm=1.0)` before each optimizer step, AdamW betas=(0.9, 0.95), and **weight_decay=2e-4**. **Still compute-bound (best=last on both seeds).**
+The current `train.py` now has **nine** stacked changes: mask after slice softmax, Huber β=0.5 on surf and vol, bf16 autocast, `torch.compile(dynamic=True)`, `clip_grad_norm_(max_norm=1.0)`, AdamW betas=(0.9, 0.95), weight_decay=2e-4, and **Lion optimizer (lr=5e-5, wd=2e-3, betas=(0.9, 0.99))**. **Still compute-bound (best=last on both seeds).**
 
 **Key meta-finding from #2017:** grad_clip provides implicit regularization via step-size normalization. Pre-grad-clip optimal wd ≈ 3-5e-4; post-grad-clip optimal wd = 2e-4. The stack now has THREE co-tuned regularizers (grad_clip + wd + vol-Huber). Future regularization additions must be co-calibrated.
 
@@ -33,17 +34,21 @@ The current `train.py` now has **eight** stacked changes: mask after slice softm
 - **Loss-formulation wins stack:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) combined to −8% on val.
 - **Scalar-capacity axis cluster firmly retired across all 3 baselines** (6 total failures).
 
-Round 1 in-flight (8 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
-- **#2486 nezuko (AdamW eps=1e-6)**: assigned 17:00; fixes bf16 subnormal denominator floor (default eps=1e-8 < bf16 min normal 1.175e-7). 1-line change, well-precedented (LLaMA-2/Mistral eps≥1e-5 in bf16).
-- **#2420 tanjiro (lr=7e-4 with merged betas=(0.9, 0.95))**: WIP but crash-looping (6 full-run crashes, debug works). Diagnostic comment sent 18:45. Awaiting traceback or completion.
-- **#2397 fern (grad-clip max_norm=0.5 downward bisect)**: in flight; symmetric bisect of clip threshold.
-- **#2501 askeladd (β_p=0.625 upward bisect):** natural follow-up to #2163; β_p<0.5 hurt hard splits, β_p>0.5 should help; per-channel loop infrastructure already in place.
-- **#2504 frieren (QK-RMSNorm):** normalize Q and K to unit norm per head inside PhysicsAttention; PaLM-2/Gemma-2/ViT-22B style; targets attention entropy collapse on heterogeneous mesh domains.
-- **#2505 alphonse (SiLU activation):** GELU → SiLU in all FFN blocks; improves gradient flow under 100%-clipped training; LLaMA/DINOv2 style; zero param change.
-- **#2516 edward (Lion optimizer):** [NEW 18:45] Replace AdamW with Lion (Chen et al. 2023); signed momentum update, no v state (−30% memory), lr=5e-5 (×0.1), wd=2e-3 (×10); tests optimizer-family axis.
-- **#2520 thorfinn (n_head 4→8):** [NEW 18:45] Increase attention heads from 4 to 8 while n_hidden=128 constant; head_dim 32→16; param-count neutral; tests attention head multiplexing capacity on heterogeneous mesh domains.
+Round 1 in-flight (8 WIP PRs) — all must beat **val < 50.19, test < 43.50** (post-Lion baseline):
 
-**Current merge bar: val < 58.88, test < 51.08, all four test splits finite.**
+**Lion-tuning PRs (on merged Lion baseline):**
+- **#2561 edward (Lion betas bisect):** [NEW 20:10] betas=(0.9, 0.95) vs current (0.9, 0.99); tighter beta2 matched AdamW betas win on #1589; hypothesis: same pattern applies to Lion.
+- **#2562 tanjiro (Lion LR 7.5e-5):** [NEW 20:10] lr=7.5e-5 vs current 5e-5; Lion still descending at epoch 35, may benefit from slightly more aggressive LR.
+- **#2564 nezuko (Gradient Centralization):** [NEW 20:10] 2-line addition inside Lion step to subtract gradient mean; Yong et al. 2020 ECCV; orthogonal to optimizer mechanics.
+- **#2565 fern (max_norm=0.5 on Lion):** [NEW 20:10] grad-clip interaction with Lion is different from AdamW (no adaptive denominator); clean axis test on new stack.
+
+**Architecture/loss PRs (rebasing onto Lion baseline):**
+- **#2520 thorfinn (n_head 4→8):** needs rebase; s1=75.78 on AdamW was large regression; may differ on Lion.
+- **#2505 alphonse (SiLU activation):** needs rebase; s1=72.96 regression on AdamW.
+- **#2504 frieren (QK-RMSNorm):** needs rebase; s1=62.08 on AdamW (above old 58.88 bar).
+- **#2501 askeladd (β_p=0.625):** needs rebase; s2=61.68 on AdamW above bar.
+
+**Current merge bar: val < 50.19, test < 43.50, all four test splits finite.**
 
 **Latest diagnostic finding (2026-05-13 03:00 from PR #1509 close):** The cosine schedule `T_max=MAX_EPOCHS=50` mis-tunes the LR decay to a never-reached horizon. At the bf16 baseline's 18 epochs, end-of-run LR is at ~81% of peak (4.07e-4 vs 5e-4) — the schedule never actually decays. PR #1843 isolates this as a single-axis test.
 
@@ -94,10 +99,18 @@ Round 1 in-flight (8 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
 | #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | CLOSED 17:45 — regression with high seed variance (+2.5% s1, +10.8% s2). Train/val ratio unchanged: noise without payoff. Combined with #2415, noise-injection axis CLOSED. |
 | #2440 | edward    | LR warmup (3-ep linear ramp)     | CLOSED 18:30 — +21.9%/+27.8% regression both seeds. Removing cosine tail dominant effect; cosine-schedule-modification axis fully closed (3rd negative result). |
 | #2506 | thorfinn  | Per-channel target normalization | CLOSED 18:40 — no-op (hypothesis premise wrong: stats.json y_std already [3] tensor, per-channel already active). Student caught before any GPU spend. |
-| #2516 | edward    | Lion optimizer (Chen et al. 2023) | WIP NEW 18:45 — signed momentum, no v state, lr=5e-5, wd=2e-3. Fresh optimizer-family axis. |
-| #2520 | thorfinn  | n_head 4→8 (head_dim 32→16)      | WIP NEW 18:45 — param-count neutral; tests attention head multiplexing on heterogeneous mesh domains. Never tested in round 1. |
+| #2516 | edward    | Lion optimizer (Chen et al. 2023) | **MERGED 20:05** — val=50.19, test=43.50; −14.8% val/test; 9th baseline shift. Third-largest win of round 1. |
+| #2420 | tanjiro   | lr=7e-4 with betas=(0.9, 0.95)   | CLOSED 19:50 — +7.7%/+7.7% regression both seeds. LR=7e-4 too aggressive; brackets from above. |
+| #2486 | nezuko    | AdamW eps=1e-6                   | CLOSED 20:10 — moot: Lion (no eps) merged, axis resolved by optimizer change. |
+| #2397 | fern      | grad-clip max_norm=0.5           | CLOSED 20:10 — 15+ crashes (infrastructure); axis retested on Lion baseline as #2565. |
+| #2556 | tanjiro   | lr=4e-4 (AdamW downward bisect)  | CLOSED 20:10 — moot: Lion merged; AdamW LR axis obsolete. |
+| #2520 | thorfinn  | n_head 4→8 (head_dim 32→16)      | WIP — needs rebase onto Lion; s1=75.78 on AdamW, large regression; retesting on Lion. |
+| #2561 | edward    | Lion betas (0.9, 0.95) bisect    | WIP NEW 20:10 — test tighter beta2 vs paper-default (0.9, 0.99). |
+| #2562 | tanjiro   | Lion LR 7.5e-5 bisect            | WIP NEW 20:10 — test 50% LR increase; Lion still descending at epoch 35. |
+| #2564 | nezuko    | Gradient Centralization + Lion   | WIP NEW 20:10 — 2-line GC inside Lion step (Yong et al. 2020). |
+| #2565 | fern      | max_norm=0.5 on Lion baseline    | WIP NEW 20:10 — clean retest of tight grad-clip interaction with Lion. |
 
-**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 23. **Open:** 8 WIP (nezuko #2486, tanjiro #2420 [crash-loop], fern #2397, askeladd #2501, frieren #2504, alphonse #2505, edward #2516 [lion-NEW], thorfinn #2520 [nhead8-NEW]). **Idle: 0.**
+**Merged:** 9 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas, weight_decay=2e-4, **Lion optimizer**). **Closed:** 26 (+#2420 lr7e4, +#2486 eps-moot, +#2397 crash+moot, +#2556 AdamW-lr-moot). **Open:** 8 WIP (thorfinn #2520, alphonse #2505, frieren #2504, askeladd #2501 [all rebasing], edward #2561 lion-betas, tanjiro #2562 lion-lr, nezuko #2564 lion-gc, fern #2565 lion-clip). **Idle: 0.**
 
 ### Newly-closed axes (2026-05-13 17:45)
 
