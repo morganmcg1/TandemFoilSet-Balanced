@@ -132,6 +132,36 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class FlowCondFourierEnc(nn.Module):
+    """Append Fourier features for flow-condition scalars to post-FourierCoordEnc output.
+
+    Operates on the 46-dim output of FourierCoordEnc (24 spatial Fourier + 22 raw passthrough):
+      - position 35 = log_Re  (raw dim 13)
+      - position 36 = AoA0_rad  (raw dim 14)
+      - position 40 = AoA1_rad  (raw dim 18)
+
+    Appends [sin(freqs*pi*s), cos(freqs*pi*s)] for each conditioning dim.
+    Output shape: [B, N, 46 + 2 * n_freqs * 3]  = [B, N, 58] for n_freqs=2.
+    """
+
+    FLOW_DIMS = [35, 36, 40]  # indices in post-FourierCoordEnc 46-dim space
+
+    def __init__(self, n_freqs: int = 2):
+        super().__init__()
+        self.n_freqs = n_freqs
+        freqs = 2.0 ** torch.arange(n_freqs).float()
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        cond = x[..., self.FLOW_DIMS]                              # [B, N, 3]
+        angles = cond.unsqueeze(-1) * self.freqs[None, None, None, :] * torch.pi
+        sin_f = torch.sin(angles)
+        cos_f = torch.cos(angles)
+        fourier = torch.cat([sin_f, cos_f], dim=-1)               # [B, N, 3, 2*n_freqs]
+        fourier = fourier.reshape(*x.shape[:-1], 2 * self.n_freqs * len(self.FLOW_DIMS))
+        return torch.cat([x, fourier], dim=-1)                     # [B, N, 46+12=58]
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -299,6 +329,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_enc(x_norm)
+            x_norm = flow_cond_enc(x_norm)   # H40: flow-condition Fourier features
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -461,10 +492,12 @@ val_loaders = {
 
 N_FREQS = 6
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+N_FLOW_FREQS = 2
+flow_cond_enc = FlowCondFourierEnc(n_freqs=N_FLOW_FREQS).to(device)
 
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2 + 2 * N_FLOW_FREQS * 3,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -541,6 +574,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
+        x_norm = flow_cond_enc(x_norm)   # H40: flow-condition Fourier features
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
