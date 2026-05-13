@@ -722,3 +722,84 @@ Combined with prior dead ends (#1429 slice_num=128: overflow, #1598 mlp_ratio=4:
 **Lesson learned:** The Transolver at slice_num=64, n_hidden=128, n_layers=5 appears to be well-matched to this dataset and budget. Capacity is not the bottleneck.
 
 ---
+
+## 2026-05-13 02:00 — PR #1776: 4-epoch warmup (frieren) — MERGED ✅ NEW BASELINE
+
+- **Branch:** `charliepai2g48h2-frieren/warmup-4-epochs`
+- **Hypothesis:** Increase warmup_epochs from 2 to 4. LR peak shifts from epoch 2/14 (14%) to epoch 5/14 (36%). CosineAnnealingLR T_max shrinks from 12 to 10.
+- **Status:** MERGED ✅ — new baseline 80.7014
+
+### Results
+
+| Split | Baseline (#1682) | 4-epoch warmup | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 99.310 | 97.712 | −1.61% |
+| val_geom_camber_rc | 95.316 | 94.420 | −0.94% |
+| val_geom_camber_cruise | 61.818 | **55.330** | **−10.50%** |
+| val_re_rand | 76.477 | 75.344 | −1.48% |
+| **val_avg/mae_surf_p** | **83.230** | **80.7014** | **−3.04%** |
+| **test_avg/mae_surf_p** | **73.513** | **71.9145** | **−2.17%** |
+
+**Metric artifacts:** `models/model-charliepai2g48h2-frieren-warmup-4-epochs-20260513-011736/metrics.jsonl`
+
+### Commentary
+
+All 4 val splits improve. The standout is val_cruise (−10.50%): the low-LR warmup phase stabilizes early gradient flow, and the smooth-pressure cruise cases benefit most from accurate late-epoch convergence. The model was descending monotonically to epoch 14/14 with best_epoch=14. Schedule shape insight: longer low-LR ramp before peak gives better model initialization → steeper but shorter cosine descent (T_max=10 vs 12) spends more epochs near peak LR before annealing.
+
+**First-epoch behavior confirmation:** training loss was higher than baseline (more conservative initial ramp), crossing over at ~epoch 4-5 as the new schedule catches up.
+
+**Canonical config now:** F.l1_loss + channel_weights=[1,1,3] + lr=7e-4 + **warmup_epochs=4** + CosineAnnealingLR(T_max=10) + grad_clip=1.0 + --epochs 14.
+
+---
+
+## 2026-05-13 02:00 — PR #1744: Gradient accumulation 4× (tanjiro) — CLOSED dead end
+
+- **Branch:** `charliepai2g48h2-tanjiro/grad-accum-4`
+- **Hypothesis:** ACCUM_STEPS=4 → effective batch 4→16, reduce gradient noise in late-epoch fine-tuning.
+- **Status:** CLOSED ❌ — +14.88% regression vs baseline 83.230 (now vs 80.7014: even larger)
+
+### Results
+
+| Metric | Baseline | grad-accum-4 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 83.230 | 95.6227 | +14.88% |
+| test_avg/mae_surf_p | 73.513 | 86.4421 | +17.59% |
+
+**Root cause:** 4× accumulation without LR scaling = 4× fewer optimizer updates (1316 vs 5250 over 14 epochs). Update-count-bounded, not gradient-noise-bounded. Goyal et al. 2017 linear scaling rule applies: without compensating LR, large-batch training is effectively shorter training. Per-epoch tail slope (−3.5%/epoch at ep14 vs −2.0% baseline) confirms model under-converged.
+
+---
+
+## 2026-05-13 02:00 — PR #1723: OneCycleLR pct_start=0.3 (askeladd, rebased) — CLOSED
+
+- **Branch:** `charliepai2g48h2-askeladd/onecycle-lr-pct03`
+- **Hypothesis:** OneCycleLR schedule (pct_start=0.3) stacks additively with pure-L1.
+- **Status:** CLOSED — near-tie (+0.37% worse on val_avg). Test improves (-1.29%), val_single regresses (+3.08%), val_cruise improves (−3.17%).
+
+### Results (rebased on pure-L1 HEAD)
+
+| Metric | pure-L1 baseline | OneCycleLR + pure-L1 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 83.230 | 83.539 | +0.37% |
+| test_avg/mae_surf_p | 73.513 | 72.568 | −1.29% |
+
+**Root cause:** OneCycleLR's near-zero tail LR (2.93e-9 at ep14) prevents pure-L1's "pressure to move" from executing in final epochs. val_single regresses (sensitive to fine late-epoch convergence) while val_cruise improves (was already near basin at ep12-13). Schedule-shape axis appears saturated after the T_max alignment win. Frieren's warmup-4 win (orthogonal: duration not shape) confirms this — the key was warmup duration, not schedule shape.
+
+---
+
+## 2026-05-13 02:00 — PR #1722: Smooth L1 β=0.05 (alphonse) — CLOSED
+
+- **Branch:** `charliepai2g48h2-alphonse/smooth-l1-beta-005`
+- **Hypothesis:** β=0.05 narrows the quadratic regime (β ladder: 0.1 → 0.05 → 0).
+- **Status:** CLOSED — +0.47% worse than pure-L1 baseline (83.621 vs 83.230).
+
+### Results
+
+| β | val_avg/mae_surf_p | vs. β=0.1 |
+|---|---|---|
+| β=0.1 (prior baseline) | 84.562 | — |
+| β=0.05 (this run) | 83.621 | −1.11% |
+| β=0 pure-L1 (canonical) | 83.230 | −1.58% |
+
+**Conclusion:** Monotone improvement as β→0 confirmed. β=0.05 lands between β=0.1 and β=0 as expected. The full L1 is the global minimum of this Smooth-L1 family. β axis fully exhausted.
+
+---
