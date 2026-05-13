@@ -213,11 +213,33 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class FourierFeatures(nn.Module):
+    """Expand (x, z) -> [x, z, sin(2 pi k pos), cos(2 pi k pos)] for k = 2^0 ... 2^(L-1).
+
+    NeRF-style log-scale positional encoding (Tancik et al. 2020). Output dim
+    = 2 + 4 * L. Frequencies are registered as a buffer so .to() moves them.
+    """
+
+    def __init__(self, L: int = 8):
+        super().__init__()
+        self.L = L
+        freqs = 2 ** torch.arange(L).float()
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, pos: torch.Tensor) -> torch.Tensor:
+        B, N, _ = pos.shape
+        scaled = pos.unsqueeze(-1) * self.freqs * 2 * torch.pi
+        sin_enc = scaled.sin()
+        cos_enc = scaled.cos()
+        enc = torch.stack([sin_enc, cos_enc], dim=-1).reshape(B, N, -1)
+        return torch.cat([pos, enc], dim=-1)
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, fourier_enc=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -248,8 +270,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if fourier_enc is not None:
+                pos_enc = fourier_enc(x_norm[:, :, :2])
+                x_in = torch.cat([pos_enc, x_norm[:, :, 2:]], dim=-1)
+            else:
+                x_in = x_norm
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_in})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -397,6 +424,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    fourier_L: int = 8  # log-scale Fourier positional encoding levels
 
 
 cfg = sp.parse(Config)
@@ -425,11 +453,15 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+L_fourier = cfg.fourier_L
+fourier_pos_dim = 2 + 4 * L_fourier
+fourier_enc = FourierFeatures(L=L_fourier).to(device)
+
 model_config = dict(
-    space_dim=2,
+    space_dim=fourier_pos_dim,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=192,
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -455,6 +487,8 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "fourier_L": L_fourier,
+        "fourier_pos_dim": fourier_pos_dim,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
@@ -497,8 +531,10 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            pos_enc = fourier_enc(x_norm[:, :, :2])
+            x_fourier = torch.cat([pos_enc, x_norm[:, :, 2:]], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_fourier})["preds"]
             sq_err = (pred - y_norm) ** 2
 
             vol_mask = mask & ~is_surface
@@ -524,7 +560,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -592,7 +628,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)

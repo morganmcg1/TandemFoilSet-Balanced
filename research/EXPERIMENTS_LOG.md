@@ -174,3 +174,175 @@ The hypothesis is correct in principle but tested on the wrong baseline. Polyak 
 - Hypothesis: EMA failure modes from #1578 are config-specific, not fundamental. Schedule-aligned baseline gives Polyak its proper conditions (low-LR oscillation), and Adam-style bias correction (`ema / (1 - decay^t)`) cancels random-init contamination.
 - Status: WIP (newly assigned)
 - Target: test_avg < 111.98.
+
+**Action**: Closed #1578. Reassigned tanjiro to PR #1664 — bias-corrected EMA on schedule-aligned baseline.
+
+## 2026-05-12 22:45 — PR #1664 (NEW, assigned): Bias-corrected Polyak EMA on schedule-aligned baseline
+- Branch: willowpai2g48h1-tanjiro/ema-bias-corrected
+- Hypothesis: EMA failure modes from #1578 are config-specific, not fundamental. Schedule-aligned baseline gives Polyak its proper conditions (low-LR oscillation), and Adam-style bias correction (`ema / (1 - decay^t)`) cancels random-init contamination.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.
+
+## 2026-05-13 00:10 — PR #1380: Higher surface weight surf_weight 10→25 (CLOSED)
+- Branch: willowpai2g48h1-frieren/surf-weight-25
+- Hypothesis: Reweight training objective toward surface terms to directly compress surface MAE (the primary metric).
+- W&B run: `5lmlsuai` — group `surf-weight-25`
+- Status: **CLOSED ✗**
+
+| Metric | surf_weight=25 | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 140.27 | 125.36 | +11.9% (worse) |
+| **test_avg/mae_surf_p** | **123.41** | 111.98 | **+10.2%** (worse) |
+| test_single_in_dist | 173.99 | 148.79 | +17% |
+| test_geom_camber_rc | 126.64 | 117.15 | +8.1% |
+| test_geom_camber_cruise | 80.13 | 77.85 | +2.9% |
+| test_re_rand | 112.90 | 104.13 | +8.4% |
+
+**Analysis**: Regression is uniform across all 4 splits — not a distribution-sensitivity issue, a global optimization effect. The loss is `vol_loss + surf_weight * surf_loss`; raising surf_weight from 10→25 scales the surface gradient 2.5× without rescaling lr, equivalent to a much hotter effective LR on surface-coupled parameters. Under 18-epoch cosine schedule there's no time to settle. Additionally, volume nodes are 97–99% of mesh points; de-emphasizing volume loss starves the shared encoder of the representation signal that surface decoding depends on. Training surf_loss dropped (model overfits surface targets) but val surf MAE rose — classic gradient-imbalance overfitting signature.
+
+The student's diagnostic pointed to the asymmetric question: if 25 hurts both surf and vol, maybe we're already over-weighting at 10. Worth testing the other direction.
+
+**Action**: Closed #1380. Assigned frieren to PR #1710 — surf_weight=5 (the other direction).
+
+## 2026-05-13 00:10 — PR #1710 (NEW, assigned): Surface weight 10→5
+- Branch: willowpai2g48h1-frieren/surf-weight-5
+- Hypothesis: surf_weight=10 may over-weight surface terms. Reducing to 5 gives the shared encoder richer volume gradient signal → better upstream representations → better surface predictions downstream.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.
+
+## 2026-05-13 01:10 — PR #1364: Deeper model n_layers 5→7 (CLOSED)
+- Branch: willowpai2g48h1-fern/deeper-7-layers
+- Hypothesis: More Transolver blocks → richer physics representations → better generalization, especially on OOD splits
+- W&B run: `r6vksjdm` — group `deeper-7-layers`
+- Status: **CLOSED ✗ — confounded by schedule misalignment, not a fair test**
+
+| Metric | n_layers=7 | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 12) | 146.46 | 125.36 | +16.8% (worse) |
+| **test_avg/mae_surf_p** | **132.06** | 111.98 | **+17.9%** (worse) |
+| test_single_in_dist | 161.05 | 148.79 | +8.2% |
+| test_geom_camber_rc | 150.73 | 117.15 | +28.6% |
+| test_geom_camber_cruise | 90.92 | 77.85 | +16.8% |
+| test_re_rand | 125.53 | 104.13 | +20.5% |
+| Epochs completed | 13/18 | 17/18 | — |
+| Epoch time | 146s | ~96s | +52% |
+| Peak GPU mem | 89.8 GB | 82.68 GB | — |
+
+**Analysis**: The regression is confounded, not an indictment of depth. At 146s/epoch (52% slower than baseline), the 30-min cap allowed only 13 of 18 scheduled epochs. The cosine schedule at epoch 13/18 has final LR ≈ 1.25e-4 (18% of peak 7e-4) — the low-LR refinement phase that produced baseline's entire win never happened. The model's val curve was still actively descending at the cutoff. This is a wall-clock budget failure, not a depth failure.
+
+Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoch cost. Architecture changes that increase epoch cost (deeper, wider-at-bs8) violate this assumption and need budget-aware re-alignment.
+
+**Action**: Closed #1364. Assigned fern to PR #1742 — n_layers=6 (~120s/epoch, fits ~15-16/18 epochs). Budget-safe depth test.
+
+## 2026-05-13 01:10 — PR #1742 (NEW, assigned): Depth n_layers 5→6, budget-safe
+- Branch: willowpai2g48h1-fern/n-layers-6
+- Hypothesis: n_layers=6 is the budget-safe depth increase — ~120s/epoch, fitting ~15-16 of 18 scheduled epochs, reaching the low-LR tail unlike n_layers=7.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.
+
+## 2026-05-13 02:00 — PR #1361 trial-5: Wider model n_hidden 192 on schedule-aligned baseline — MERGED ⭐ NEW BASELINE
+- Branch: willowpai2g48h1-askeladd/wider-hidden-192
+- Hypothesis: n_hidden 128→192 on top of PR #1591 schedule-aligned baseline. Width × schedule compounds.
+- W&B runs (3 seeds): `jvphwc6p`, `dcfy4v1z`, `9skp8i3k` — group `wider-hidden-192`
+- Status: **MERGED ✓ — new baseline test=99.69 (−10.97%)**
+
+| Metric | Mean (n=3) | Std | Best seed | Baseline (#1591) | Δ (mean) |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **111.32** | 2.87 | 108.42 | 125.36 | −11.51% |
+| **test_avg/mae_surf_p** | **99.69** | 3.16 | **96.19** | 111.98 | **−10.97%** |
+| test_single_in_dist | 116.57 | 4.13 | 110.92 | 148.79 | −21.6% |
+| test_geom_camber_rc | 108.61 | 2.54 | 105.65 | 117.15 | −7.3% |
+| test_geom_camber_cruise | 74.18 | 2.83 | 71.53 | 77.85 | −4.7% |
+| test_re_rand | 99.41 | 2.26 | 96.66 | 104.13 | −4.5% |
+| Epochs completed | 15-16 | — | — | 17/18 | — |
+| Epoch time | ~126s | — | — | ~96s | +31% |
+
+**Analysis**: The 3-seed accidental replication (entrypoint re-invoked 3×) gives free variance characterization: std=3.16 on test (~3% of mean), worst seed still beats baseline by 8.65%. Width × schedule compounded: trial-4 (un-aligned T_max=50) gave −4.93%; trial-5 (schedule-aligned T_max=18) gives −10.97% — the schedule fix acted as a force-multiplier for capacity. All 4 splits improve, with in_dist showing the largest absolute gain (−21.6%). n_hidden=192 + bs=8 + bf16 OOMs at ~94 GB; bs=4 fallback required as structural constraint.
+
+**Key insight**: Schedule alignment unlocks ~70% of the cumulative gain on top of width. Width alone was −4.93%; width + schedule = −10.97%. The lesson: always align T_max to realistic epoch budget first, then add capacity.
+
+**Action**: Merged as new baseline. Assigned askeladd to PR #1771 — schedule realignment for n_hidden=192 at bs=4 budget (epochs=14 aligns cosine T_max to actual 14 eps/30min).
+
+## 2026-05-13 02:00 — PR #1771 (NEW, assigned): Schedule realignment for n_hidden=192 (epochs=14)
+- Branch: willowpai2g48h1-askeladd/wider-192-schedule-realigned
+- Hypothesis: epochs=18 default was calibrated for n_hidden=128 at bs=8 (17-18 eps/30min). n_hidden=192 at bs=4 runs at ~126s/ep → 14 eps in 30min. At trial-5's cutoff (epoch 15), LR is at 4.7e-5 (6.7% of peak). Setting epochs=14 aligns T_max to actual budget → LR reaches 0 within budget. Same principle as PR #1591 (-7.67%).
+- Status: WIP (newly assigned)
+- Target: test_avg < 99.69.
+
+## 2026-05-13 03:00 — PR #1742: Depth n_layers 5→6, budget-safe (CLOSED)
+- Branch: willowpai2g48h1-fern/n-layers-6
+- W&B run: `uqrafwrn` — group `deeper-model`
+- Status: **CLOSED ✗ — fair test of depth at n_hidden=128, rejected**
+
+| Metric | n_layers=6 | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | 144.86 | 125.36 | +15.6% (worse) |
+| **test_avg/mae_surf_p** | **127.69** | 111.98 | **+14.0%** (worse) |
+| test_single_in_dist | 197.26 | 148.79 | +32.6% |
+| test_geom_camber_rc | 131.66 | 117.15 | +12.4% |
+| test_geom_camber_cruise | 75.47 | 77.85 | −3.1% (improved!) |
+| test_re_rand | 106.37 | 104.13 | +2.2% |
+| Epochs completed | 15/18 | 17/18 | — |
+| Epoch time | 126.5s | ~96s | +32% |
+| Peak GPU mem | 82.97 GB | 82.68 GB | — |
+
+**Analysis**: Unlike n_layers=7 (#1364), this is a fair test — schedule was healthy (15/18 epochs, final LR 4.7e-5, proper cosine coverage). Depth itself hurts at n_hidden=128. Key diagnostic: in_dist regression was worst (+33% on the easiest split), characteristic of training-bottleneck underfitting (not generalization failure). The wider model needs more training signal per epoch than the 18-epoch schedule provides with one extra layer. Cruise actually improved slightly (-3.1%) — depth may help extreme-OOD geometric interactions, but not enough to overcome in_dist and rc losses. **Depth direction dead at n_hidden=128.** Not tested at n_hidden=192 yet.
+
+**Action**: Closed. Assigned fern to PR #1796 — weight_decay 1e-4→1e-3. Wider model (1.47M params) may benefit from stronger regularization.
+
+## 2026-05-13 03:00 — PR #1664: Bias-corrected EMA (CLOSED)
+- Branch: willowpai2g48h1-tanjiro/ema-bias-corrected
+- W&B run: `xhyqauof` — group `ema-bias-corrected`
+- Status: **CLOSED ✗ — lag dominates, wrong regime for Polyak averaging**
+
+| Metric | EMA-BC | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 17) | 139.35 | 125.36 | +11.16% (worse) |
+| **test_avg/mae_surf_p** | **125.38** | 111.98 | **+11.97%** (worse) |
+| test_single_in_dist | 177.29 | 148.79 | +19.2% |
+| test_geom_camber_rc | 124.54 | 117.15 | +6.3% |
+| test_geom_camber_cruise | 83.52 | 77.85 | +7.3% |
+| test_re_rand | 116.17 | 104.13 | +11.6% |
+| Final EMA update_count | 2997 | — | — |
+| Final bias_correction | 0.950 | — | — |
+
+**Analysis**: Bias correction worked exactly as designed (val 397→139, -65% from trial-1 uncorrected). The (1-0.999^2997) = 0.95 divisor correctly cancelled random-init contamination. But lag remains the dominant failure mode: EMA val improved 3.3 points in the *final* epoch alone when LR was 5e-6 — EMA was still chasing live-weight gains the live model had already made epochs earlier. The model is still descending at end-of-run (not oscillating in a basin), which is the wrong regime for Polyak averaging. **EMA direction dead in this regime.** All 4 splits regressed 6-19%.
+
+**Action**: Closed. Assigned tanjiro to PR #1798 — gradient norm clipping (max_norm=1.0). Untested stability tool, potentially important for bf16 + n_hidden=192.
+
+## 2026-05-13 03:00 — PR #1796 (NEW): Weight decay 1e-4→1e-3 on wider-192 baseline
+- Branch: willowpai2g48h1-fern/weight-decay-1e-3
+- Hypothesis: n_hidden=192 (1.47M params, 2.2× more params) may benefit from stronger regularization. wd=1e-3 is 10× current, still modest by transformer standards (BERT: 0.01). Stronger wd → better cross-domain generalization.
+- Status: WIP (newly assigned). Target: test_avg < 99.69.
+
+## 2026-05-13 03:00 — PR #1798 (NEW): Gradient norm clipping max_norm=1.0
+- Branch: willowpai2g48h1-tanjiro/grad-norm-clip
+- Hypothesis: train.py has no grad clipping. Standard in transformer training (GPT, BERT). bf16 + wider model may have gradient spikes disrupting the low-LR refinement phase.
+- Status: WIP (newly assigned). Target: test_avg < 99.69.
+
+## 2026-05-13 02:30 — PR #1387: Fourier positional encoding L=8 (MERGED ✓)
+- Branch: willowpai2g48h1-nezuko/fourier-pos-features
+- Hypothesis: Raw (x,z) coordinates limit the model to low-frequency spatial representations. NeRF-style log-scale Fourier encoding (L=8, space_dim: 2→34) provides explicit high-frequency basis functions, helping the model learn fine-scale pressure gradients near foil leading/trailing edges.
+- W&B runs: `nh6alavj` (trial-5, canonical) + earlier trials `twpifp5a`/`111nh26k` (pre-rebase val-only signal)
+- Status: **MERGED ✓ — new baseline test=93.29**
+
+| Metric | Trial-5 (final) | Baseline (PR #1361) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | **103.29** | 111.32 ± 2.87 | **−7.21%** |
+| **test_avg/mae_surf_p** | **93.29** | 99.69 ± 3.16 | **−6.42%** |
+| test_single_in_dist | **97.57** | 116.57 | −16.30% |
+| test_geom_camber_rc | **106.32** | 108.61 | −2.11% |
+| test_geom_camber_cruise | **72.25** | 74.18 | −2.60% |
+| test_re_rand | **97.04** | 99.41 | −2.38% |
+| Epochs | 15/18 | 15-16/18 | — |
+| Peak GPU memory | 42.5 GB | ~30-40 GB | slight ↑ (space_dim 2→34) |
+| Params | ~1.49M | ~1.47M | +0.02M |
+
+**Analysis**: Fourier × width compounds cleanly. Round-1 val signal (trial-1: val=119.70 at n_hidden=128) carried through to the merged baseline. Rebasing onto n_hidden=192 + schedule-aligned cosine amplified the signal. All 4 splits improve — in_dist wins most (−16.3%) suggesting Fourier helps primarily with in-distribution fine-scale pressure patterns near the foil. OOD gains are more modest (−2 to −3%), consistent with the hypothesis that high-frequency basis helps geometry-specific learning more than Reynolds-number generalization. Model beat best single-seed baseline (96.19) by −3.02%. No NaN or inf in any split (cruise GT bug workaround in baseline handles this).
+
+**Action**: Merged as new baseline. Assigned nezuko to PR #1862 — n_layers=6 on Fourier+wider baseline. Prior depth dead ends (n_layers=6 +14%, n_layers=7 +18%) were at n_hidden=128; retesting at n_hidden=192+Fourier where model has richer per-epoch representations.
+
+## 2026-05-13 02:35 — PR #1862 (NEW): n_layers 5→6 on Fourier+wider-192 baseline
+- Branch: nezuko/n-layers-6-fourier-wider
+- Hypothesis: Depth failed at n_hidden=128 due to training bottleneck (in_dist regressed most). At n_hidden=192 + Fourier (richer residual streams and explicit positional encoding), an extra layer has more structure to compose. Deeper nets extract higher-order feature interactions when input encoding is expressive enough.
+- Status: WIP (newly assigned). Target: test_avg < 93.29.

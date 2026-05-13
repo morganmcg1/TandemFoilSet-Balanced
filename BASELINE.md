@@ -77,3 +77,87 @@ cd "target/" && python train.py \
 ```
 
 *(No `--epochs` flag needed — default is now 18. All other defaults: `lr=7e-4`, `batch_size=8`, bf16 autocast, scoring-bug workaround.)*
+
+## 2026-05-13 01:20 — PR #1361: Wider hidden n_hidden 128→192 (batch_size=4 fallback)
+
+**Changes merged:** `n_hidden=192` (was 128) in `model_config` in `train.py`. n_hidden=192 + bs=8 + bf16 OOMs at ~94 GB; batch_size must be set to 4 at runtime. All other config at schedule-aligned defaults.
+
+**Key finding:** Width × schedule alignment compounds. Trial-4 (un-aligned T_max=50 schedule) gave −4.93% test; trial-5 on the schedule-aligned baseline gives −10.97% test. The schedule fix is a force-multiplier for capacity.
+
+### Primary metrics (best val checkpoint, epoch 15 of 16, 3-seed mean)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **111.32 ± 2.87** (mean ± std, n=3) | −11.51% |
+| **test_avg/mae_surf_p** | **99.69 ± 3.16** (mean ± std, n=3) | **−10.97%** |
+
+Best single-seed test: **96.19** (W&B `jvphwc6p`). Worst single-seed: **102.30** — both beat baseline.
+
+### Per-split test MAE (surface pressure, 3-seed mean)
+
+| Split | mae_surf_p (mean) | Δ vs prev baseline |
+|---|---|---|
+| test_single_in_dist | 116.57 | −21.6% |
+| test_geom_camber_rc | 108.61 | −7.3% |
+| test_geom_camber_cruise | 74.18 | −4.7% |
+| test_re_rand | 99.41 | −4.5% |
+
+### Run info
+
+- **W&B runs (3 seeds):** `jvphwc6p`, `dcfy4v1z`, `9skp8i3k` — group `wider-hidden-192`
+- **Epochs:** 15–16 / 18 (30-min timeout, ~126 s/epoch at bs=4)
+- **Peak GPU memory:** ~30–40 GB estimated (bs=4 + bf16 + n_hidden=192; n_hidden=192 + bs=8 OOMs at ~94 GB)
+- **Model config:** n_hidden=**192**, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~1.47M params)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(Note: `--batch_size 4` is required — n_hidden=192 + bs=8 + bf16 OOMs at ~94 GB. All other defaults: lr=7e-4, epochs=18, bf16 autocast, scoring-bug workaround.)*
+
+## 2026-05-13 02:30 — PR #1387: Fourier positional encoding (L=8, NeRF-style)
+
+**Changes merged:** Added `FourierFeatures` nn.Module (NeRF-style log-scale, L=8). Positional dims (x,z) expanded from 2 → 34 (2 + 4×8). `space_dim` in `model_config` updated to 34. Encoding applied in both train loop and `evaluate_split` (via optional `fourier_enc` arg). One config param added: `fourier_L: int = 8`. Zero change to model architecture, optimizer, or schedule.
+
+**Key finding:** Fourier × width compounds cleanly. Raw (x,z) coordinates are the best-in-round-1 val signal (val=119.70 on n_hidden=128); stacking on n_hidden=192 delivers −6.42% test and −7.21% val. Largest gains on in_dist (−16.3%) — high-frequency spatial basis helps with near-foil pressure gradients.
+
+### Primary metrics (best val checkpoint, epoch 15 of 18)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **103.29** | −7.21% |
+| **test_avg/mae_surf_p** | **93.29** | **−6.42%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | Δ vs prev baseline |
+|---|---|---|
+| test_single_in_dist | 97.57 | −16.3% |
+| test_geom_camber_rc | 106.32 | −2.1% |
+| test_geom_camber_cruise | 72.25 | −2.6% |
+| test_re_rand | 97.04 | −2.4% |
+
+### Run info
+
+- **W&B run:** `nh6alavj` — group `fourier-pos-features`
+- **Epochs:** 15 / 18 (30-min timeout, ~126 s/epoch at bs=4)
+- **Peak GPU memory:** 42.5 GB (bs=4 + bf16 + n_hidden=192 + space_dim=34)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **space_dim=34** (~1.49M params)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(All defaults now include Fourier encoding with L=8. `--batch_size 4` required for n_hidden=192 + bf16.)*
