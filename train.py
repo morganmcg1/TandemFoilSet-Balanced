@@ -430,6 +430,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    coord_noise_sigma: float = 0.0  # gaussian σ added to normalized coords (train only); 0 = off
 
 
 cfg = sp.parse(Config)
@@ -551,7 +552,11 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            pos_enc = fourier_enc(x_norm[:, :, :2])
+            if model.training and cfg.coord_noise_sigma > 0.0:
+                coords = x_norm[:, :, :2] + torch.randn_like(x_norm[:, :, :2]) * cfg.coord_noise_sigma
+                pos_enc = fourier_enc(coords)
+            else:
+                pos_enc = fourier_enc(x_norm[:, :, :2])
             x_fourier = torch.cat([pos_enc, x_norm[:, :, 2:]], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_fourier})["preds"]
