@@ -23,7 +23,7 @@ winner sets the first numeric reference value.
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
 - **Gradient clipping**: `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)` immediately before `optimizer.step()`; the pre-clip total_norm is also logged to metrics.jsonl as `train/last_grad_norm` _(added 2026-05-12 by PR #1637)_
 - **Fourier coord positional encoding**: `FourierCoordEnc(n_freqs=6)` applied after `(x - x_mean)/x_std` normalization; replaces the 2 raw `(x, z)` coord dims with 24 Fourier features (`sin/cos` at frequencies `2^k · π`, `k=0..5`). `fun_dim = 4 * 6 + 22 - 2 = 44`. _(updated 2026-05-13 by PR #1772, was L=4 in #1548)_
-- **LayerScale**: per-channel learnable γ_l vectors `nn.Parameter(torch.ones(hidden_dim) * 0.1)` (init=0.1) on both attn and MLP residual branches in each `TransolverBlock`; `fx = γ_attn ⊙ attn(ln_1(fx)) + fx` and `fx = γ_mlp ⊙ mlp(ln_2(fx)) + fx`. CaiT-style (Touvron et al. 2021). _(added 2026-05-13 by PR #1799)_
+- **LayerScale**: per-channel learnable γ_l vectors `nn.Parameter(torch.ones(hidden_dim) * 0.05)` (**init=0.05**, down from 0.1) on both attn and MLP residual branches in each `TransolverBlock`; `fx = γ_attn ⊙ attn(ln_1(fx)) + fx` and `fx = γ_mlp ⊙ mlp(ln_2(fx)) + fx`. CaiT-style (Touvron et al. 2021). _(added 2026-05-13 by PR #1799, init lowered 0.1→0.05 by PR #1896)_
 - **Per-channel surf-loss weighting**: `surf_loss = mean([0.5, 0.5, 2.0] * |y_pred - y| / y_std)` — Ux and Uy weighted 0.5, pressure weighted 2.0 (4× ratio). Applied in both training loop and `evaluate_split`. `vol_loss` remains at implicit `[1, 1, 1]`. _(added 2026-05-13 by PR #1711)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
@@ -36,6 +36,28 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-13 07:05 — PR #1896 (`charliepai2g24h4-thorfinn/layerscale-init-0.05`)
+
+LayerScale init bracket: drop CaiT default init=0.1 → **init=0.05**. Single-line change to `layer_scale_init` default in `TransolverBlock.__init__`. The model compensates for lower residual amplitude by widening per-channel diversification (block-0 attn std/mean jumps 38.8% → 70.7%). 3/4 splits improve on both val and test; `single_in_dist` regresses +3.4% (likely interaction with #1711's pressure channel weighting). Mechanism is hybrid A/B: headline metrics improve at Outcome-A range, but γ_l means stay near init (Outcome-B signature) — confirming per-channel granularity is load-bearing.
+
+- **`val_avg/mae_surf_p`** = **74.476** (best @ epoch 14; −1.21% vs #1711)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **66.014** (−0.89% vs #1711)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 85.075 (+3.39% vs #1711 — only regressing split)
+  - `val_geom_camber_rc` = 82.764 (−3.35% vs #1711)
+  - `val_geom_camber_cruise` = 57.002 (−2.78% vs #1711)
+  - `val_re_rand` = 73.063 (−2.60% vs #1711)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 75.023 (+3.40% vs #1711 — only regressing split)
+  - `test_geom_camber_rc` = 73.975 (−0.32% vs #1711)
+  - `test_geom_camber_cruise` = 48.442 (−4.78% vs #1711)
+  - `test_re_rand` = 66.617 (−3.16% vs #1711)
+- **LayerScale γ_l mechanism** — final means (block 0→4): attn=[0.043, 0.041, 0.037, 0.033, 0.039], mlp=[0.063, 0.064, 0.055, 0.044, 0.047]. Depth-decreasing mlp trend preserved. Block-0 attn std/mean=70.7% (up from 38.8% at init=0.1) — per-channel diversification increases as amplitude decreases.
+- **Compound progress**: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→**#1896** → val_avg improved from 100.957 to **74.476** = **−26.2% over 9 merges**.
+- **Param count**: 669,271 (unchanged — zero new parameters; one-line change).
+- **Metric artifacts**: `models/model-charliepai2g24h4-thorfinn-layerscale-init-0.05-20260513-061249/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-thorfinn --experiment_name charliepai2g24h4-thorfinn/layerscale-init-0.05`
 
 ### 2026-05-13 05:57 — PR #1711 (`charliepai2g24h4-alphonse/surf-ch-weight-h18`)
 
