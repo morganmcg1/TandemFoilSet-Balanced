@@ -609,7 +609,9 @@ optimizer = torch.optim.AdamW(
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
+    betas=(0.9, 0.99),
 )
+print(f"[H66] AdamW betas: {optimizer.defaults['betas']}")
 print(
     f"[H54] Optimizer param groups: "
     f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
@@ -807,9 +809,28 @@ freqs_summary = {
     "final/freqs_abs_drift": freq_drift,
     "final/freqs_rel_drift": freq_rel_drift,
 }
+# H66: AdamW second-moment (exp_avg_sq) norm per param group at end of training.
+# group 0 = other_params, 1 = freqs, 2 = layer_scale. Tests whether β2=0.99
+# changes the second-moment magnitude landscape per group.
+group_names = ["other", "freqs", "layer_scale"]
+adamw_state_stats: dict[str, float] = {"final/adamw_betas_beta2": float(optimizer.defaults["betas"][1])}
+for gi, group in enumerate(optimizer.param_groups):
+    sq_sum = 0.0
+    avg_sum = 0.0
+    n_elems = 0
+    for p in group["params"]:
+        st = optimizer.state.get(p, {})
+        if "exp_avg_sq" in st:
+            sq_sum += float(st["exp_avg_sq"].pow(2).sum().item())
+            avg_sum += float(st["exp_avg"].pow(2).sum().item())
+            n_elems += st["exp_avg_sq"].numel()
+    if n_elems > 0:
+        adamw_state_stats[f"final/adamw_g{gi}_{group_names[gi]}_exp_avg_sq_rms"] = (sq_sum / n_elems) ** 0.5
+        adamw_state_stats[f"final/adamw_g{gi}_{group_names[gi]}_exp_avg_rms"] = (avg_sum / n_elems) ** 0.5
+        adamw_state_stats[f"final/adamw_g{gi}_{group_names[gi]}_n_elems"] = float(n_elems)
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **freqs_summary, **adamw_state_stats},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -825,6 +846,16 @@ for k in range(N_FREQS):
         f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
         f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
     )
+print(f"[H66] AdamW state norms (β2={optimizer.defaults['betas'][1]}, end of training):")
+for gi, name in enumerate(group_names):
+    key_v = f"final/adamw_g{gi}_{name}_exp_avg_sq_rms"
+    key_m = f"final/adamw_g{gi}_{name}_exp_avg_rms"
+    if key_v in adamw_state_stats:
+        print(
+            f"  group {gi} ({name}, {int(adamw_state_stats[f'final/adamw_g{gi}_{name}_n_elems'])} params): "
+            f"exp_avg_sq_rms={adamw_state_stats[key_v]:.3e} "
+            f"exp_avg_rms={adamw_state_stats[key_m]:.3e}"
+        )
 
 # --- Test evaluation + local summary ---
 if best_metrics:
