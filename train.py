@@ -381,6 +381,7 @@ class Config:
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
     surf_weight_warmup_epochs: int = 0  # epochs of linear ramp from surf_weight_init to surf_weight; 0 disables
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
+    slice_num: int = 64                 # number of semantic slice-attention slots in PhysicsAttention
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -436,7 +437,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
