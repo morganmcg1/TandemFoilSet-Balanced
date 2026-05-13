@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~11:15 UTC
+- **Date:** 2026-05-13 ~12:05 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -32,9 +32,9 @@
 | **#2216** | **frieren** | **Split loss on n_head=2: surf-MAE + vol-Huber (Arm1), surf-MAE + vol-MSE (Arm2)** | **WIP — new** |
 | **#2210** | **nezuko** | **surf_weight on n_head=2: sw=5 retest (Arm1), sw=7 midpoint (Arm2)** | **WIP — new** |
 | #2183 | edward | AdamW+EMA+MAE: lr=5e-4 (Arm1) + lr=2e-4 (Arm2) — fill missing 2×2 cell | WIP |
-| #2144 | askeladd | Lion β2 sweep: β2=0.995 (Arm1), β2=0.95 (Arm2) on Lion+MAE+lr=2e-4 | WIP |
+| #2144 | askeladd | Lion β2 sweep: β2=0.995 (Arm1), β2=0.95 (Arm2) on Lion+MAE+lr=2e-4 | WIP — β2=0.995 finished val=53.82/test=46.61 (beats old baseline); β2=0.95 regresses; replicate running |
 | #2167 | fern | Cosine T_max + eta_min tuning at lr=2e-4: T_max=16+eta_min=1e-5 (Arm1), T_max=50+eta_min=1e-5 (Arm2) | WIP |
-| #2131 | tanjiro | Dropout sweep on Lion+MAE+lr=2e-4: dropout=0.3 (Arm1), dropout=0.1 (Arm2) | WIP |
+| **#2251** | **tanjiro** | **lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) — lr×n_head interaction unexplored** | **WIP — new** |
 
 ## Closed experiments this round
 
@@ -44,6 +44,7 @@
 - **#2052 (frieren):** bs=8 — both arms regress (+7.9% / +18.4%). Step-count-limited regime; VRAM near limit. Closed; reassigned to #2216 (split-loss formulation).
 - **#2070 (edward):** Lion-no-EMA + AdamW-no-EMA ablation — both regress (+7.06 / +27.05). Mechanism reframed: Lion direction ~75%, EMA ~25%. Full-budget Lion-no-EMA = 62.47 (NOT 78 from truncated runs). Closed; reassigned to #2183 (fill AdamW+EMA+MAE 2×2 cell).
 - **#1999 (fern):** Cosine T_max=16 ± eta_min at lr=1e-4 — both regress (+11.9%/+7.5%). eta_min=0 strictly dominated by eta_min=1e-5. Closed; reassigned to #2167 at lr=2e-4.
+- **#2131 (tanjiro):** Dropout=0.3/0.1 on n_head=4 — **dropout=0.2 locally optimal** (0.3 mean val=55.49 ± 0.38 ≈ baseline 55.41 within noise; 0.1 regresses +4.3%). Under-reg signal from mlp_ratio=4 did NOT transfer to mlp_ratio=2. Closed; reassigned to #2251 (lr sweep on n_head=2).
 - **#2001 (askeladd):** Lion β1=0.95/β1=0.85 — regression both arms. Canonical β1=0.9 confirmed optimal. Closed.
 - **#1932 (thorfinn):** Lion lr=2e-4 — **MERGED** val=55.41, test=47.90.
 - **#1825 (askeladd):** MAE loss on Lion+EMA — **MERGED** val=56.58, test=48.82.
@@ -62,6 +63,8 @@
 9. **Lion β1=0.9 confirmed optimal (#2001):** β1=0.95 (+4.0%) and β1=0.85 (+6.4%) both regress; asymmetric — over-reactive hurts 2× more than over-inertial.
 10. **Batch size falsified (#2052):** bs=8 halves optimizer steps in same wall-clock; step-count-limited not gradient-noise-limited. VRAM near limit at bs=8.
 11. **BF16:** foundational (+4 epochs in 30-min window).
+12. **Dropout=0.2 confirmed locally optimal (#2131):** dropout=0.3 mean ≈ 0.2 within noise (±0.38 val), 0.1 regresses +4.3%. Under-regularization signal from mlp_ratio=4 (#1961) does NOT transfer to mlp_ratio=2; main-vs-EMA gap already moderate (~6–11) on this compound.
+13. **Lion β2=0.995 promising on OLD compound (#2144, pending terminal):** β2=0.995 best run val=53.82 (−2.9% vs old baseline 55.41); β2=0.95 regresses +15.7%. Asymmetric direction — longer momentum window helps on TandemFoilSet. Result on old compound; needs retest on n_head=2 to merge.
 
 ## Priority for current wave
 
@@ -80,13 +83,13 @@
 - Lion β2 sweep (#2144 askeladd) — last untested Lion parameter
 - AdamW+EMA+MAE 2×2 fill (#2183 edward) — completes mechanism table
 
-**Regularization:**
-- Dropout sweep (#2131 tanjiro) — under-regularization signal from mlp_ratio study
+**lr × architecture interaction:**
+- lr sweep on n_head=2 (#2251 tanjiro) — lr=2e-4 won at n_head=4, never retested on n_head=2; per-head dim doubled, optimal lr may have shifted
 
 ## Potential next directions (post-current-wave)
 
 - **n_head=1 (head_dim=128):** monotonic trend continued; may hit a "single global projection" regime
-- **lr sweep on n_head=2:** baseline used lr=1e-4; lr=2e-4 that won at n_head=4 may also win at n_head=2 (or the optimal may differ)
+- **Lion β2=0.995 on n_head=2 compound** — #2144 shows β2=0.995 wins on old n_head=4 compound (−2.9% val); asymmetric, strong signal → retest on n_head=2 once #2144 closes
 - **Longer training budget** — every win descending at cap; highest-EV change if wall-clock extended
 - **n_head=2 + n_hidden=192** — width expansion previously regressed at n_head=4; with larger per-head dim at n_head=2, may work differently
 - **EMA decay sweep on n_head=2** — EMA tuned for n_head=4 compound; new architecture may prefer different decay

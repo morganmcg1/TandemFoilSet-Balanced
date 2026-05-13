@@ -142,6 +142,39 @@
 
 ---
 
+## 2026-05-13 11:55 — PR #2131: Dropout sweep dropout=0.3 vs 0.1 on Lion+MAE+lr=2e-4 (tanjiro) — CLOSED, LOCALLY OPTIMAL AT 0.2
+
+- **Branch:** `willowpai2g24h5-tanjiro/dropout-lion-mae-lr2e-4`
+- **Hypothesis:** Under-regularization signal from #1961 (mlp_ratio=4 had main-vs-EMA gap ~22) should be present at mlp_ratio=2 too; dropout=0.2 may be below optimum.
+- **W&B runs:** `qtieg835` (dropout=0.3, winner), `jgcae86g` (dropout=0.3 replicate), `0zk2y6cj` (dropout=0.1), `y8oh2gxf` (baseline ref, dropout=0.2)
+
+| Arm | dropout | run_id | best_epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs old baseline (55.41) |
+|-----|---------|--------|------------|---------------------|----------------------|--------------------------|
+| Arm 1 winner | 0.3 | `qtieg835` | 16 | **55.10** | **47.83** | −0.56% / −0.15% |
+| Arm 1 replicate | 0.3 | `jgcae86g` | 16 | 55.87 | 48.09 | +0.83% / +0.40% |
+| Arm 2 | 0.1 | `0zk2y6cj` | 14 | 57.77 | 49.24 | +4.26% / +2.79% |
+| baseline ref | 0.2 | `y8oh2gxf` | 16 | 55.41 | 47.90 | — |
+
+**Dropout=0.3 mean:** val=55.49 ± 0.38, test=47.96 ± 0.13 — within noise of baseline 0.2 (55.41 / 47.90).
+
+**Main-vs-EMA gap diagnostics (epoch 16):**
+| dropout | run_id | ema_val | main_val | gap |
+|---------|--------|---------|----------|-----|
+| 0.1 | `0zk2y6cj` | 57.78 | 69.64 | +11.86 |
+| 0.2 | `y8oh2gxf` | 55.41 | 61.77 | +6.36 |
+| 0.3 | `qtieg835` | 55.10 | 61.89 | +6.79 |
+| 0.3 | `jgcae86g` | 55.87 | 67.02 | +11.15 |
+
+**Result:** CLOSED. Baseline note: n_head=2 merged (val=51.11) during these runs — neither arm can merge on new compound regardless. Key findings:
+1. **dropout=0.2 is locally optimal on Lion+MAE+lr=2e-4+n_head=4/mlp_ratio=2** — under-regularization signal from #1961 (mlp_ratio=4, gap≈22) did NOT transfer to mlp_ratio=2 (gap≈6–11).
+2. **dropout=0.3 ≈ 0.2 within seed noise** — best single 0.3 run wins old baseline by 0.31 val, but replicate loses by 0.46; mean is 0.08 worse.
+3. **dropout=0.1 clearly regresses** (+2.4 val / +1.3 test) — Lion's sign-update alone doesn't substitute for dropout regularization.
+4. Trajectory shapes confirm NOT converged at epoch 16; all arms still descending at cap.
+
+**Tanjiro reassigned:** PR #2251 — lr sweep on n_head=2 (lr=2e-4 vs lr=1.5e-4). The n_head=2 baseline (PR #2069) inherited lr=1e-4 from pre-merge compound; lr=2e-4 won at n_head=4 but was never tested at n_head=2. BASELINE.md itself noted "the lr × n_head interaction remains to be explored."
+
+---
+
 ## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`
