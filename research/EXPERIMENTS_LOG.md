@@ -2794,3 +2794,40 @@ Frieren independently noted clip_fraction=100% in baseline → corroborates edwa
 - **Single arm:** warmup_epochs=3, cosine T_max=12 over remaining epochs.
 - **Target:** val < 47.64. Builds directly on frieren's domain expertise from #2240 diagnostic.
 - Independent axis from tanjiro's #2342 (T_max sweep, no warmup) and edward's #2347 (drop grad-clip) — all three target the same lr-schedule region with different mechanisms.
+
+---
+## 2026-05-13 14:54 — PR #2354 CLOSED willowpai2g48h2-nezuko (Lion + n_hidden=192 on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-nezuko/lion-larger-model-hidden-192`
+- **Hypothesis:** Lion's capacity scaling (Chen 2023) should benefit 192-dim model on TandemFoilSet.
+- **Results (terminal, W&B run `fgm8dlln`):**
+
+| Metric | Lion baseline (SWA) | n_hidden=192 (BASE-BEST) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 47.64 | 53.58 | +12.5% regression |
+| test_avg/mae_surf_p | 40.57 | 44.11 | +8.7% regression |
+| params | 0.76M | 1.61M | +112% |
+| epochs in 30-min cap | 13 | 11 | −2 |
+| step time | ~138s | ~197s | +43% |
+| peak VRAM | ~45 GB | ~62 GB | well under cap |
+
+### Procedural failure: SWA never triggered
+
+With swa_start_epoch=11 (0-indexed) but only 11 epochs (0-indexed 0-10) running, **swa_active=0**. SWA AveragedModel was never updated → its eval returned garbage (val=415, test=397). Reported headline is BASE-BEST vs baseline's SWA-best — apples-to-oranges. Mechanism prediction (Lion scales with capacity) remains untested, not falsified.
+
+### Two banked findings
+
+1. **Kendall σ-collapse persists at 1.61M params (2.1× scale).** All 6 channels collapsed to identical −0.8364. **σ-collapse is structural** (sign-update + balanced sampler interaction), NOT capacity-driven. Confirms fern's #2311 hybrid-optimizer is the right fix — width scaling doesn't break the pathology.
+2. **Width-scaling capacity bumps are gated by SWA window in 30-min cap.** Any future capacity experiment must use either (a) lower swa_start_frac to fit SWA before timeout, OR (b) compute-frugal capacity dimension (depth or slice_num scale linearly, not quadratically).
+
+**n_hidden width-scaling axis CLOSED at this compute budget.** Cleaner test would need swa_start_frac lowered AND wall-clock relaxed, but per launch rules SENPAI_TIMEOUT_MINUTES=30 is fixed.
+
+---
+## 2026-05-13 14:57 — PR #2378 ASSIGNED willowpai2g48h2-nezuko (Lion + slice_num=96 on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-nezuko/lion-slice-num-96`
+- **Hypothesis:** slice_num is Transolver's geometric-token count for Physics-Attention. Increasing 64→96 adds capacity along the geometric inductive-bias axis with linear (not quadratic) compute cost — should fit in 30-min budget where n_hidden=192 didn't.
+- **Targets geom_camber_rc bottleneck** (val=62.86 — largest split gap). More physics tokens → richer geometric basis for novel camber profiles.
+- **Code change:** Add `--slice_num` CLI flag, wire into model_config.
+- **Predicted params:** ~1.07M (vs 0.76M baseline, 1.61M failed n_hidden=192). Slice_num scales linearly.
+- **Target:** val < 47.64. Bonus signal: if geom_camber_rc specifically improves >3 points even on close-call avg, banked even if not merged.

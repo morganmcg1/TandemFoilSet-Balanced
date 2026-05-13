@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 14:19 (closed #2240 frieren GC; assigned #2363 frieren Lion + warmup-3 — built on frieren's own early-oscillation diagnostic)
+- **Last updated:** 2026-05-13 14:57 (closed #2354 nezuko n_hidden=192 SWA starvation; assigned #2378 nezuko slice_num=96 compute-frugal capacity bump)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -58,7 +58,7 @@
 | #2270 | alphonse | wip | max_norm {0.75, 1.0} on β=0.3 | Needs rebase to Lion after finishing |
 | **#2342** | **tanjiro** | wip | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
 | **#2347** | **edward** | wip | max_norm ∈ {0.0, 2.0} on Lion stack | Drop/relax grad-clip — clip fires 74% under Lion sign-update |
-| **#2354** | **nezuko** | wip | n_hidden=192 (larger model) on Lion stack | Exploit Lion's capacity-scaling property |
+| **#2378** | **nezuko** | wip (new) | slice_num=96 on Lion stack | Compute-frugal capacity axis; target geom_camber_rc |
 | **#2363** | **frieren** | wip (new) | Lion + linear warmup 3 epochs | Fix early-epoch oscillation diagnosed in #2240; Lion paper recommends warmup |
 
 **⚠ Mixed rebase status:** Wave 11 has 6 direct-Lion experiments (#2297, #2311, #2342, #2347, #2354, #2363) and 2 remaining β=0.3-stack PRs needing eventual Lion rebase (#2168, #2270). Triage rule for legacy PRs: when result lands vs β=0.3 baseline 66.66, evaluate vs Lion baseline 47.64. If <47.64: merge directly. If 47.64-66.66: send back for Lion rebase. If ≥66.66: close.
@@ -76,6 +76,8 @@
 9. **RFF spectral-dim axis CLOSED at n=16** — n=32 (#2170) gave mixed val/test direction; banked SWA-window-gating mechanism (timeout limits useful averaging) directly feeds tanjiro's #2342.
 10. **Gradient Centralization axis CLOSED at small-data regime** — frieren #2240 cleanly disproved transfer from ImageNet (clip_fraction unchanged, SWA basin disrupted, OOD prediction direction opposite). Three banked findings inform follow-ups.
 11. **clip_fraction=100% under default max_norm=0.5** — corroborated by frieren #2240 and edward's planning for #2347. Strong evidence max_norm=0.5 is over-constraining (whether under AdamW or Lion).
+12. **σ-collapse under Lion is structural, NOT capacity-driven** — confirmed at 1.61M params (nezuko #2354). All 6 Kendall σ channels collapse identically. fern's #2311 hybrid optimizer is the right fix; width scaling cannot address it.
+13. **Width-scaling capacity bumps gated by SWA window in 30-min cap** — n_hidden=192 took 43% longer per step, killed SWA. Future capacity bumps need either (a) earlier swa_start_frac OR (b) linear-cost dimensions (depth, slice_num) like #2378.
 
 ## Key open bottlenecks
 
@@ -87,7 +89,7 @@
 
 1. **Lion + hybrid AdamW for Kendall σ heads** — restore per-channel σ differentiation. Separate param group with AdamW(lr=1e-3, wd=0) for log_σ, Lion for model. Could unlock another 2-5%.
 2. ~~Lion + drop grad-clip~~ — testing in #2347 (max_norm ∈ {0.0, 2.0})
-3. ~~Lion + larger model~~ — testing in #2354 (n_hidden=192)
+3. ~~Lion + n_hidden=192~~ — closed (SWA starvation in 30-min cap, σ-collapse persists at 2.1× params). Compute-frugal slice_num=96 in #2378.
 4. **Lion + T_max sweep** — currently testing in #2342 (T_max ∈ {10,12}). If T_max=10 wins, the schedule-shape lever is bankable; if T_max=12 wins, search continues toward intermediate values; if neither wins, the current T_max=15 is already optimal under Lion's convergence profile.
 5. **σ=0.5 on Lion stack** — if thorfinn's σ=0.5 shows promise on β=0.3, apply to Lion baseline too
 6. ~~EMA + Lion~~ — EMA decay=0.999 closed (#2285). If T_max sweep (#2342) succeeds, that subsumes the averaging-window question.
@@ -104,7 +106,7 @@
 - T_max cosine sweep on Lion (#2342 tanjiro) — schedule shape
 - Hybrid Lion+AdamW for Kendall σ (#2311 fern) — restore σ differentiation
 - Drop grad-clip on Lion (#2347 edward) — clip fires 74% under sign-update
-- Lion + n_hidden=192 (#2354 nezuko) — capacity scaling
+- Lion + slice_num=96 (#2378 nezuko) — compute-frugal capacity, targets geom_camber_rc
 - Lion + linear warmup 3 epochs (#2363 frieren) — fix early-oscillation
 - σ=0.5 on β=0.3 (#2168 thorfinn) — will need Lion rebase after completing
 - max_norm {0.75,1.0} (#2270 alphonse) — need Lion rebase when done
