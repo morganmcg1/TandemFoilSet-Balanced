@@ -139,7 +139,7 @@ class FourierCoordEnc(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    # H67: when True, the forward pass also computes the slice-to-slice
+    # H68: when True, the forward pass also computes the slice-to-slice
     # softmax weights explicitly and writes the mean / per-head min entropy
     # to ``self.last_attn_entropy_*`` for diagnostic logging. Default False
     # so the production path stays on F.scaled_dot_product_attention.
@@ -189,9 +189,9 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        # H67: fixed sharper temperature (factor of sqrt(2) sharper than the
+        # H68: even sharper temperature (factor of sqrt(3) sharper than the
         # default 1/sqrt(d_head) scale of F.scaled_dot_product_attention).
-        sharper_scale = 1.0 / math.sqrt(self.dim_head / 2.0)
+        sharper_scale = 1.0 / math.sqrt(self.dim_head / 3.0)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             scale=sharper_scale,
@@ -561,15 +561,15 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H67: fixed sharper attention temperature (factor sqrt(2) sharper than the
+# H68: even sharper attention temperature (factor sqrt(3) sharper than the
 # F.scaled_dot_product_attention default scale 1/sqrt(d_head)).
-_h67_dim_head = model_config["n_hidden"] // model_config["n_head"]
-_h67_sharper_scale = 1.0 / math.sqrt(_h67_dim_head / 2.0)
-_h67_default_scale = 1.0 / math.sqrt(_h67_dim_head)
+_h68_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h68_sharper_scale = 1.0 / math.sqrt(_h68_dim_head / 3.0)
+_h68_default_scale = 1.0 / math.sqrt(_h68_dim_head)
 print(
-    f"[H67] attention scale: {_h67_sharper_scale:.4f} "
-    f"(default would be {_h67_default_scale:.4f}, factor sqrt(2)={math.sqrt(2):.4f}, "
-    f"dim_head={_h67_dim_head}, slice_num={model_config['slice_num']}, "
+    f"[H68] attention scale: {_h68_sharper_scale:.4f} "
+    f"(default would be {_h68_default_scale:.4f}, factor sqrt(3)={math.sqrt(3):.4f}, "
+    f"dim_head={_h68_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
 
@@ -761,8 +761,8 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
-    # H67: probe slice-to-slice attention entropy at epochs 1, 6, 12 for
-    # comparison against the post-#2475 baseline (default scale 1/sqrt(32)).
+    # H68: probe slice-to-slice attention entropy at epochs 1, 6, 12 for
+    # comparison against the post-#2519 baseline (sharper scale sqrt(2)/sqrt(d_head)).
     if (epoch + 1) in (1, 6, 12):
         probe_loader = val_loaders["val_single_in_dist"]
         ent_means, ent_min_per_head = measure_attention_entropies(
@@ -779,7 +779,7 @@ for epoch in range(MAX_EPOCHS):
             "per_block_entropy_ratio": ent_ratios,
         })
         print(
-            f"    [H67] attn entropy (max=log(64)={max_entropy:.4f}): "
+            f"    [H68] attn entropy (max=log(64)={max_entropy:.4f}): "
             + " ".join(
                 f"b{i}={ent_means[i]:.4f}({ent_ratios[i]*100:.1f}%, min/head={ent_min_per_head[i]:.4f})"
                 for i in range(len(ent_means))
