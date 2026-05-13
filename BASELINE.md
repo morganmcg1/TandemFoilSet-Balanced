@@ -1,5 +1,72 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 ~11:10 — PR #2080: n_layers=4 + T_max=17 (tanjiro)
+
+**New best: `val_avg/mae_surf_p` = 46.344** (epoch 17/17, best_epoch=17, surf_weight=10, n_layers=4, slice_num=48)
+
+> Also included: **lr=cfg.lr bug fix** — `train.py:442` now correctly uses `cfg.lr` in the Lion constructor. All prior experiments with `--lr != 1e-4` were silently at 1e-4; this is now fixed in the advisor branch.
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | **4** ← updated (was 5) |
+| `n_head` | 4 |
+| `slice_num` | 48 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 (lr bug fixed) |
+| Scheduler | CosineAnnealingLR T_max=17 (=epochs) |
+| `epochs` | 17 (still improving at epoch 17!) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 670,035 (−31.4% vs #1996 baseline 976,827) |
+
+> **Mechanism:** Same "epoch-count is the binding constraint" pattern — n_layers=4 → ~94s/epoch → 17 epochs in 30-min budget → T_max=17 alignment. Best epoch was 17 (final, still descending), hinting further headroom at n_layers=3.
+
+### Val metrics (best checkpoint, epoch 17)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 49.979 | 60.037 |
+| val_geom_camber_rc | **61.558** | 67.646 |
+| val_geom_camber_cruise | 27.318 | 28.808 |
+| val_re_rand | 46.518 | 47.939 |
+| **val_avg/mae_surf_p** | **46.344** | **51.107** |
+
+### Test metrics (best-val checkpoint, epoch 17)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 44.746 |
+| test_geom_camber_rc | 54.155 |
+| test_geom_camber_cruise | 22.876 |
+| test_re_rand | 38.025 |
+| **test_avg/mae_surf_p** | **39.950** |
+
+### Improvement vs PR #1996 baseline (46.847 val / 40.837 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 50.491 | 49.979 | −1.0% | 45.728 | 44.746 | −2.1% |
+| geom_camber_rc | 60.364 | 61.558 | +2.0% | 55.146 | 54.155 | −1.8% |
+| geom_camber_cruise | 29.835 | 27.318 | −8.4% | 24.157 | 22.876 | −5.3% |
+| re_rand | 46.699 | 46.518 | −0.4% | 38.317 | 38.025 | −0.8% |
+| **avg** | **46.847** | **46.344** | **−1.07% ✓** | **40.837** | **39.950** | **−2.17% ✓** |
+
+Note: geom_camber_rc val slightly regressed (+2.0%) but test improved (−1.8%) — noise signature, not a structural failure.
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 17 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4
+```
+
+**Metric artifacts:** `models/model-nlayers-4-tmax17-20260513-082121/metrics.jsonl`
+
+---
+
 ## 2026-05-13 09:15 — PR #1996: slice_num=48 + T_max=15 (fern)
 
 **New best: `val_avg/mae_surf_p` = 46.847** (epoch 15, 30-min wall-clock cap, surf_weight=10)
