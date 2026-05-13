@@ -6,6 +6,26 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 19:30 — Round 32: Close 4 stale old-stack PRs; reassign at n_layers=2 stack
+
+After PR #2468 merged (n_layers=2+epochs=46, val=35.256 NEW BEST), the partition axis is fully closed at slice_num=16 and the depth axis closed at n_layers=2. Several earlier-round PRs were still testing axes against the OLD n_layers=3 baseline (35.548) — their results would not be informative against the new 35.256 baseline. Additionally, 6 of 8 student pods were stuck on rate-limited polling cycles for ~2 hours and had not started training their previously assigned old-stack experiments.
+
+**Closed (stale old-stack, no productive output expected):**
+- PR #2471 (alphonse): lr=1.2e-4 × n_layers=3+slice_num=16 → reassigned at n_layers=2 (see #2543)
+- PR #2478 (edward): n_layers=4+slice_num=16+epochs=27 → reassigned at n_layers=2 (see #2545)
+- PR #2479 (nezuko): LayerScale × n_layers=3+slice_num=16 → reassigned at n_layers=2 (see #2547)
+- PR #2450 (thorfinn): lr=5e-5 × n_layers=3+slice_num=16 → reassigned at n_layers=2 (see #2549)
+
+**Created fresh n_layers=2-stack assignments:**
+- PR #2543 (alphonse): lr=1.2e-4 × n_layers=2+slice_num=16+epochs=46 — LR fine probe
+- PR #2545 (edward): slice_num=20 × n_layers=2+epochs=44 — partition retest at new depth (counter in-dist regression)
+- PR #2547 (nezuko): LayerScale × n_layers=2+slice_num=16+epochs=46 — stabilization at new depth
+- PR #2549 (thorfinn): lr=5e-5 × n_layers=2+slice_num=16+epochs=46 — LR lower probe (completes 4-point LR axis with #2549, #2468=baseline, #2543, #2525)
+
+Combined with previously running #2523 (frieren epochs=50) and #2525 (askeladd lr=1.5e-4), this gives a full 8-experiment slate at the new n_layers=2 stack: 4-point LR sweep, partition retest, LayerScale, and epoch-budget push.
+
+---
+
 ## 2026-05-13 18:50 — PR #2468 — MERGED NEW BASELINE (n_layers=2+epochs=46 val=35.256, −0.82%)
 
 **frieren: n_layers=2+slice_num=16+epochs=46 (depth-down + epoch-up mechanism)**
