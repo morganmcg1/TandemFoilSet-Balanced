@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~14:55 — Closed #2293 wd-1e-3 (+1.27%, spike returns), #2257 foil-mirror-aug (+19.97% catastrophic, z=0 not a valid symmetry), #1817 charbonnier (stale 12h). Assigned alphonse #2364 tmax-14, frieren #2365 chan-weights-5, tanjiro #2366 asinh-gain-2. wd axis CLOSED at 1e-4; foil-mirror axis CLOSED.
+- **Last updated:** 2026-05-13 ~15:10 — Closed #1820 thorfinn wd-5e-3 (extrapolated dead; reassigned to #2373 beta1-0.95); sent #1815 askeladd back for rerun on current baseline (terminal result was on 12h-stale pre-RFF base). 7 in-flight PRs, zero idle students.
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -42,9 +42,9 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 | #2366 | tanjiro | `asinh-gain-2` | ASINH_GAIN 1.0→2.0; tighter pressure-outlier compression; orthogonal to loss-function axis | **WIP — just assigned** |
 | #2345 | nezuko | `batch-size-2` | bsz 4→2; gradient-noise regularization, 2× opt steps/epoch; targets OOD via flatter minima | **WIP — training** |
 | #2346 | fern | `slice-num-96` | Transolver slice_num 64→96 (+50% physics slices); +5K params; risk: ~35min for 14 epochs | **WIP — training** |
-| #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 50× (1e-4→5e-3); LIKELY DEAD — wd=1e-3 already +1.27%; close if no progress | **WIP — likely stale** |
+| #2373 | thorfinn | `beta1-0.95` | AdamW β1 0.9→0.95; symmetry with β2=0.99 (closed sweet spot) suggests untested β1 may also have sweet spot >0.9 | **WIP — just assigned** |
 | #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 vs 65.2170 baseline on PRE-clip=0.5 HEAD; sent back for rerun on clip=0.5 stack | **WIP — rerun requested** |
-| #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; rebasing/rerunning on RFF+clip=0.5 base | **WIP — rebasing** |
+| #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; ON OLD BASE val=79.8056 (−1.11% vs 80.7014); sent back for rerun on current canonical (RFF+clip=0.5 stack) | **WIP — rerun on new base** |
 
 ## Closed axes (exhausted)
 
@@ -85,10 +85,11 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 5. **Slice_num architecture** (#2346 fern slice-num-96): IN FLIGHT
 6. **surf_weight / channel structure** (#1421 edward surf-only): rerun on clip=0.5 stack
 7. **RFF on surface normals** (untested): add (n_x, n_z) channels to RFF positional encoding; targets rc/single geometry splits — high-value, more involved
-8. **AdamW β1** (untested): currently 0.9, try 0.85 or 0.95; β2 was non-monotone at 0.99, β1 may also have sweet spot
+8. **AdamW β1** (#2373 thorfinn beta1-0.95): IN FLIGHT — β1=0.9 untested, sweet spot may be above 0.9 by symmetry with β2
 9. **Warmup duration variations** (untested combos): warmup_epochs=2 paired with T_max=12 to maintain endpoint while extending peak-LR window
 10. **mlp_ratio probe** (untested): 2→4 doubles FFN width; +~150K params; tests if FFN is the bottleneck on convergence
 11. **n_layers depth probe** (untested): 5→6 deeper representation; +~140K params; some compute risk
+12. **RFF on surface normals** (untested): add (n_x, n_z) channels to RFF positional encoding; targets rc/single geometry splits
 
 ## Epoch budget arithmetic
 

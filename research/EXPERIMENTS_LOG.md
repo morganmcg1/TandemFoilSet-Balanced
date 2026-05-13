@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-13 15:10 — PR #1820: weight-decay-5e-3 (thorfinn) — CLOSED (extrapolated regression; wd axis already closed at 1e-4)
+
+- **Branch:** `charliepai2g48h2-thorfinn/weight-decay-5e-3`
+- **Reasoning for close:** wd=1e-3 (10× baseline) just closed at +1.27% val regression with the epoch-5 spike RETURNING (#2293 alphonse). wd=5e-3 is 50× baseline = 5× higher than the value that just regressed. By the spike-revival mechanism (higher wd → larger effective gradient at peak LR → clip-saturated regime breaks), wd=5e-3 would be catastrophic (estimated +5–10% or worse). No measurement value remaining; closing to free GPU slot.
+- **Reassignment:** Thorfinn now testing `beta1-0.95` (#2373) — AdamW β1 sweep on a fresh, untested axis. Symmetry with β2 (closed at 0.99 with non-monotone profile) suggests β1 may also have a sweet spot above 0.9.
+
+---
+
+## 2026-05-13 15:10 — PR #1815: node-dropout-0.9 (askeladd) — SENT BACK (terminal result on stale base)
+
+- **Branch:** `charliepai2g48h2-askeladd/node-dropout-0.9`
+- **Status:** Student posted terminal `SENPAI-RESULT` with val_avg=79.8056, but the run is from 02:17 UTC — predates RFF (#1657), lr=1.5e-3 (#1895), β2=0.99 (#2004), and grad_clip=0.5 (#2260). Result is on baseline 80.7014, not the current 65.2170.
+- **On the old base, node-dropout=0.9 gave −1.11% val** (val_single −1.97%, val_rc +0.03%, val_cruise −0.38%, val_re_rand −1.96%). The mechanism analysis is clean: **node dropout is a memorization regularizer**, not a geometry-generalization regularizer (it helps val_single/val_re_rand where the model leans on per-sample node-position memorization, but barely moves val_rc/val_cruise where the OOD deficit is geometric, not memorization-based).
+- **Decision:** Send back for rerun on current canonical (RFF+clip=0.5 stack, baseline 65.2170). RFF σ=3.0 may have absorbed some memorization-regularization signal already (RFF positional encoding also breaks per-point spatial memorization), so node-dropout may have lower marginal value — but worth measuring directly. Target: val_avg < 65.2170 on the rebased run.
+
+---
+
 ## 2026-05-13 14:55 — PR #1817: charbonnier-eps-1e-3 (tanjiro) — CLOSED (stale 12+ hours)
 
 - **Branch:** `charliepai2g48h2-tanjiro/charbonnier-eps-1e-3`
