@@ -431,6 +431,9 @@ class Config:
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
+    use_grad_noise: bool = False   # Add Gaussian noise to gradients pre-optimizer.step() (Neelakantan 2015).
+    grad_noise_eta: float = 0.01   # Initial noise magnitude; paper uses 0.01-1.0.
+    grad_noise_gamma: float = 0.55 # Decay exponent for sigma_t = eta / (1+t)^gamma.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -615,6 +618,14 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.use_grad_noise:
+            sigma_t = cfg.grad_noise_eta / (1.0 + global_step) ** cfg.grad_noise_gamma
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad.add_(torch.randn_like(p.grad) * sigma_t)
+            for p in surf_head.parameters():
+                if p.grad is not None:
+                    p.grad.add_(torch.randn_like(p.grad) * sigma_t)
         optimizer.step()
         global_step += 1
         if cfg.use_torch_compile and not compile_warmup_logged:
@@ -673,6 +684,10 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.use_grad_noise:
+        log_metrics["grad_noise/sigma_t"] = (
+            cfg.grad_noise_eta / (1.0 + global_step) ** cfg.grad_noise_gamma
+        )
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
