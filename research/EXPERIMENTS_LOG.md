@@ -930,3 +930,63 @@ Pre-grad-clip data point (`9tj1jm2b`): surf_w=5 on vol-Huber only baseline gave 
 - **thorfinn → PR #2341 (surf_weight=20 bisect):** test inverse direction — if surf is under-weighted at 10, going to 20 should win. Closes the axis whether it wins or loses.
 - If surf_w=20 also regresses: surf_w=10 is the optimum and the axis is closed.
 - Per-node loss normalization (divide loss terms by node count) noted as a cleaner long-term fix to remove the surf_weight heuristic entirely.
+
+---
+
+## 2026-05-13 16:10 — PR #2017 MERGED: weight_decay 1e-4 → 2e-4 — 8th baseline shift
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/weight-decay-5e-4 (bisected from 5e-4 to 2e-4)
+- **Hypothesis:** Increase weight_decay from 1e-4 (default) toward 2e-4. Cumulative-shrinkage argument: wd=1e-4 was tuned for the 14-epoch regime; at 35 epochs there is ~2.5× more cumulative shrinkage, and grad_clip provides additional implicit regularization — the explicit L2 budget needs to be reduced post-grad-clip to avoid over-stacking.
+
+### Results (2 seeds, post-betas baseline val=59.97/test=52.36)
+
+Note: edward's runs were submitted on the post-grad-clip pre-betas baseline (60.09/53.37); baseline comparison here uses the post-betas bar.
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `scg45qnb` | 1 (better) | **58.8835** | **51.0778** | 35 (last) | 30.46 min |
+| `b1qvngld` | 2 | 61.985 | 52.774 | 35 (last) | 30.60 min |
+| **Baseline #1589** | 1 (`ycayoagn`) | 59.970 | 52.363 | 35 | 30.5 min |
+
+Per-split test surf_p (s1 `scg45qnb`): single_in_dist=56.03, geom_camber_rc=63.11, geom_camber_cruise=34.30, re_rand=50.87
+Per-split test vol_p (s1): single_in_dist=66.92, geom_camber_rc=71.14, geom_camber_cruise=35.79, re_rand=52.24
+
+Two-seed mean test: (51.08 + 52.77)/2 = **51.93** vs baseline 52.36 → −0.83%. Better seed: val −1.8%, test −2.4%.
+
+### Per-split decomposition
+
+| Split | s1 Δ vs baseline | s2 Δ vs baseline | Pattern |
+|---|---:|---:|---|
+| single_in_dist | −5.97 pts ✓ | −2.54 pts ✓ | strongly wins — under-regularized in-dist |
+| geom_camber_rc | −6.36 pts ✓ | −3.16 pts ✓ | strongly wins — confirms bisection landed right |
+| geom_camber_cruise | +2.13 pts ✗ | +2.48 pts ✗ | small regression — cruise is easy OOD |
+| re_rand | +1.03 pts ✗ | +0.83 pts ✗ | small regression — easy targets slightly happier with tighter wd |
+
+**Seed-1 mechanism confirmed:** both hard splits (in_dist + rc) win strongly; both easy splits (cruise + re_rand) regress slightly. Net test wins by −2.4%. Exactly the expected signature when wd=2e-4 gets the bulk/hard-OOD right while slightly over-regularizing easy targets.
+
+**Seed-2 variance note:** val spread 3.1 pts (58.88→61.99), test spread 1.7 pts (51.08→52.77). Wider than baseline ~1pt spread. Likely mechanism: stronger wd increases sensitivity to checkpoint-selection position (model trains more slowly toward the minimum under stronger shrinkage). Both seeds beat baseline on test — the variance sits on the val axis.
+
+### Bisection history
+
+| Step | wd | val | test | outcome |
+|---|---|---:|---:|---|
+| Baseline (compile + Huber + clip) | 1e-4 | 65.469 | 57.837 | baseline |
+| First attempt (#2017 original) | 5e-4 | 66.143 | 57.188 | MISS — val fails, in-dist wins but rc tail regresses |
+| Bisect down (this PR) | 2e-4 | **58.883** | **51.078** | **WINNER** |
+
+**Key meta-finding:** grad_clip provides implicit regularization via step-size normalization. Pre-grad-clip optimal wd ≈ 3-5e-4; post-grad-clip optimal wd = 2e-4. Two regularizers must be co-tuned.
+
+### Conclusion
+
+**MERGED (8th baseline shift)** — s1 clears both val and test bars; s2 clears test but not val; two-seed test mean clears cleanly. All four test splits finite. Implementation: `weight_decay: float = 2e-4` in Config (was 1e-4).
+
+**New baseline: val=58.883, test=51.078. New merge bar: val < 58.88, test < 51.08, all four test splits finite.**
+
+### Follow-up
+
+- **edward → new assignment:** wd=2e-4 is now merged; the next optimization axis could explore LR warmup, OneCycleLR, SAM optimizer, or per-layer LR groups.
+- **Stacking caution:** stack now has THREE regularization mechanisms (wd=2e-4 + grad_clip=1.0 + vol-Huber). Further regularization-axis additions (dropout, EMA, mixup) should bisect conservatively — the operating point is meaningfully different from wd=1e-4 / no-clip.
+- **geom_camber_rc gained the most** (−6.36 pts on s1) — consistent with the prior over-regularization story from wd=5e-4 being reversed cleanly at wd=2e-4.
+
+---

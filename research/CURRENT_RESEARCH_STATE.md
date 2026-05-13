@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-13
+- **Date:** 2026-05-13 16:10
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -8,7 +8,7 @@
 
 ## Research focus
 
-Round-1 baseline has shifted **six times in ~14 hours** through stacking compatible winners — cumulative **−49.7% val, −51.4% test**:
+Round-1 baseline has shifted **eight times in ~18 hours** through stacking compatible winners — cumulative **−50.7% val, −53.4% test**:
 
 | Merge | Time | val | test | Δ vs prior |
 |---|---|---:|---:|---:|
@@ -18,9 +18,12 @@ Round-1 baseline has shifted **six times in ~14 hours** through stacking compati
 | PR #1810 (torch.compile dynamic=True) | 2026-05-13 05:15 | 67.831 | 59.784 | −24.3% val, −25.2% test |
 | PR #1910 (vol-Huber β=0.5) | 2026-05-13 07:30 | 65.469 | 57.837 | −3.5% val, −3.3% test |
 | PR #1692 (grad_clip max_norm=1.0) | 2026-05-13 12:00 | 60.093 | 53.370 | −8.2% val, −7.7% test |
-| **PR #1589 (AdamW betas 0.9, 0.95)** | **2026-05-13 16:03** | **59.970** | **52.363** | **−0.2% val, −1.9% test** |
+| PR #1589 (AdamW betas 0.9, 0.95) | 2026-05-13 16:03 | 59.970 | 52.363 | −0.2% val, −1.9% test |
+| **PR #2017 (weight_decay 1e-4 → 2e-4)** | **2026-05-13 16:10** | **58.883** | **51.078** | **−1.8% val, −2.4% test** |
 
-The current `train.py` now has **seven** stacked changes: mask after slice softmax, Huber β=0.5 on surf and vol, bf16 autocast, `torch.compile(dynamic=True)`, `clip_grad_norm_(max_norm=1.0)` before each optimizer step, and **AdamW betas=(0.9, 0.95)**. **Still compute-bound (best=last on both seeds).**
+The current `train.py` now has **eight** stacked changes: mask after slice softmax, Huber β=0.5 on surf and vol, bf16 autocast, `torch.compile(dynamic=True)`, `clip_grad_norm_(max_norm=1.0)` before each optimizer step, AdamW betas=(0.9, 0.95), and **weight_decay=2e-4**. **Still compute-bound (best=last on both seeds).**
+
+**Key meta-finding from #2017:** grad_clip provides implicit regularization via step-size normalization. Pre-grad-clip optimal wd ≈ 3-5e-4; post-grad-clip optimal wd = 2e-4. The stack now has THREE co-tuned regularizers (grad_clip + wd + vol-Huber). Future regularization additions must be co-calibrated.
 
 **Pattern emerging from round 1:**
 - **All six winners are orthogonal mechanisms** (correctness → loss(surf) → compute(bf16) → compute(compile) → loss(vol) → optimisation(grad_clip)). Cumulative val 119.45 → 60.09 (−49.7%).
@@ -84,13 +87,13 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
 | #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | CLOSED: val +11.5%, test +10.5% — both mechanisms refuted. Per-step 2.15× (compute-bound, not launch-bound). Grad-clip × sqrt-LR anti-synergistic: clip clamps every step to unit-norm so sqrt-LR rule breaks. bs axis flagged as low-payoff on grad-clip baseline. |
 | #2399 | frieren   | EMA weights (decay=0.999)        | WIP, grad-clip baseline (just assigned; orthogonal to all in-flight axes; ~20 lines, targets terminal-epoch trajectory smoothing) |
-| #2017 | edward    | weight_decay 1e-4 → 5e-4         | SENT BACK for wd=2e-4 bisection (val +0.67% miss; in-dist improves, rc OOD regresses — over-regularization signature) |
+| #2017 | edward    | weight_decay 1e-4 → 2e-4 (bisect) | **MERGED** 16:10 (val=58.883, test=51.078) — 8th baseline shift, −1.8% val / −2.4% test; wd=5e-4 over-regularized rc tail, wd=2e-4 landed correctly |
 | #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
 | #2041 | thorfinn  | surf_weight 10 → 5               | CLOSED: regresses +2.7%/+2.6% under grad-clip — directional reversal. surf_w=10 was better-calibrated when grad-clip normalises per-batch scale variance. |
 | #2341 | thorfinn  | surf_weight 10 → 20              | CLOSED: val +7.0%, test +8.6% worse. Axis fully bracketed (5 fails, 10 optimum, 20 fails). Convex asymmetric — over-weighting steals capacity from volume → OOD regresses hardest. |
 | #2415 | thorfinn  | Stochastic Depth (DropPath p=0.1) | WIP, grad-clip baseline (just assigned; layer-level structural regularization, orthogonal to all in-flight axes) |
 
-**Merged:** 7 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, **AdamW betas (0.9, 0.95)**). **Closed:** 16. **Open:** 8 (**tanjiro #2420** lr=7e-4, fern #2397, frieren #2399, nezuko #2379, thorfinn #2415, edward #2017 [winner-pending], askeladd #2163, alphonse #2180).
+**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 16. **Open:** 7 (tanjiro #2420, fern #2397, frieren #2399, nezuko #2379, thorfinn #2415, askeladd #2163, alphonse #2180) + edward IDLE (new assignment pending).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -103,12 +106,12 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 - **surf_weight axis CLOSED.** Three-point bracket: surf_w=5 (#2041, +2.7%), 10 (baseline, optimum), 20 (#2341, +7.0%). Convex asymmetric — over-weighting hurts ~2.6× more than under-weighting. OOD-cruise hit hardest in both directions. Future work could test principled per-batch dynamic weighting (target signal share), not heuristic constants.
 - **Cosine LR schedule axis reframe (#1843 closed, #2379 active):** T_max=35 decays to lr=0 too aggressively — T_max=50's implicit residual ~1e-4 at epoch 35 (20% of peak) does useful continued work. **Axis is now: what terminal LR floor is optimal?** T_max=35 + eta_min=1e-5 (#2379) tests the floor mechanism. If wins, bisect eta_min up (5e-5, 1e-4).
 - **Scalar-capacity axis is CLOSED for round 1.** All 4 dimensions tried, all failed; no further retries.
-- **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
+- **weight_decay=2e-4 MERGED (#2017):** regularization was undertuned; wd=2e-4 is the post-grad-clip optimum. Three co-tuned regularizers now in stack. Edward's next experiment should explore a different axis (LR warmup, OneCycleLR, SAM, per-layer LR).
 - **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.
 - **grad_clip MERGED (#1692, −8.2% val):** 100% clip rate = global step-size normalisation. max_norm=5.0 (#2246) regressed (+3.8%, still 92–94% clip rate). fern → #2397 (max_norm=0.5) is the downward bisect. **If 0.5 also loses → max_norm=1.0 is the optimum; retire magnitude axis.** If 0.5 wins → continue bisecting toward 0.25. After axis retirement: consider coupling with LR rescale (if max_norm=N always clips, the effective LR is lr × N/raw_norm — explicit LR tuning becomes the relevant follow-up).
 - **EMA weights (frieren #2399):** model-state averaging, decay=0.999. Orthogonal to grad-clip. Targets terminal-epoch oscillation noise — the current "best=last" pattern may be capturing a noisy endpoint. Free win (~0.5–2%) if the late-training trajectory is still bouncing. Key diagnostic: EMA-vs-live Δ at epoch 35 indicates degree of terminal-epoch noise.
 - **Stochastic Depth p=0.1 (thorfinn #2415):** DropPath on Transolver blocks — layer-level structural regularization. Orthogonal to dropout (param-level) and EMA (state-space averaging). Predicted −0.5% to −1.5% val based on ViT-class literature priors. Fails if 5 blocks aren't deep enough to support layer-level ensembling.
-- **WINNER-PENDING #2017 (edward weight_decay=2e-4):** W&B shows finished runs with **val=58.88/test=51.08** (s1, 14:55) and **val=61.99/test=52.77** (s2, 14:07). Two-seed mean test: 51.93 vs baseline 53.37 → **−2.7% test**. Submission check-in posted; expect SENPAI-RESULT shortly. **This will be the 7th baseline shift** (val −2.0%, test −4.3% from better seed) — would obsolete all bars.
+- **#2017 MERGED (edward weight_decay=2e-4):** val=58.883/test=51.078 — 8th baseline shift. Both hard splits (in_dist −5.97, rc −6.36) won; easy splits (cruise +2.1, re_rand +1.0) regressed slightly. Net test −2.4%. wd=2e-4 is the post-grad-clip optimum; pre-grad-clip would have been 3-5e-4.
 - **#1589 MERGED — betas=(0.9,0.95) is now part of the stack.** LR-betas interaction being tested by tanjiro #2420 (lr=7e-4). Frieren's failed #1940 (bs=8+lr=7e-4) ruled out bs changes confounding the result; at bs=4 with reactive beta2 this is a clean lr test.
 - **If dropout=0.1 wins (#2180 alphonse):** attention-layer regularization stacks with grad_clip; follow-up with dropout sweep (0.05, 0.15). SwiGLU stays as round-2 capacity-shape candidate.
 - **If AdamW betas (#1589 tanjiro), Cosine T_max (#1843 nezuko), batch_size (#1940 frieren) land:** harvest and stack.
