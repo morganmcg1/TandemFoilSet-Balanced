@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 14:30
+- **Date:** 2026-05-13 14:55
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -64,7 +64,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | frieren | #2160 | Weight decay 0 → 1e-5 — untested regularization axis on 13-compound stack | Optimization (regularization) | WIP | #2094 CLOSED (max_norm=2.0 val=53.11, +0.9% regression; soft shoulder, 2.5 optimum holds. Threshold scan now fully bracketed: 10/5/2.5(WIN)/2.0(soft)/1.5(FAIL)/1.0). Completely different axis from grad-clip work. Tests whether explicit L2 closes train/val gap on 1500-sample dataset with 1.26M params. Outcomes: (A) val<52.64 win; (B) wash, no overfit; (C) val>54 wd too strong |
 | nezuko | #2053 | mlp_ratio 2 → 3 — retest on current 13-compound stack | Architecture (FFN width) | WIP-RETEST | v1 ran at grad-clip=5.0 (protocol-stale by #1982). val=54.82 beat #1953 (−1.70%) but +4.13% vs current #1982. 3/4 OOD splits descended (camber_rc/cruise/re_rand all improve); in_dist neutral. Strong mechanism (FFN does more work at shallower n_layers=3) — needs retest at n_hidden=224 + grad-clip=2.5 |
 | tanjiro | #2066 | n_hidden=224 + grad-clip=2.5 compound confirmation (PRIORITY) | Architecture + Gradient stability | WIP | #1982 MERGED (12th compound winner, val=52.64, −5.60%). #2023 MERGED (n_hidden=224, val=53.25 at grad-clip=5.0 — combined state unmeasured). Directly measures the full 13-compound stack at n_hidden=224 + grad-clip=2.5 + T_max=50. Highest-expected-value run in pipeline |
-| thorfinn | #2068 | n_hidden=256 width push (scan step 3) | Architecture (width) | WIP | #1960 CLOSED (n_layers=2 val=56.96 — +8.2% regression vs current baseline; depth-floor confirmed closed at n_layers=2). Width scan: 192 WIN, 224 WIN → testing 256. Tests if width scaling continues or plateaus at 1500-sample dataset capacity |
+| thorfinn | #2186 | AdamW betas (0.9, 0.999) → (0.9, 0.95) — beta_2 reduction | Optimization (optimizer adaptation) | WIP | #2068 CLOSED (n_hidden=256 val=54.57 = +3.67%/test 47.48 = +5.55% regression on all 4 splits — mechanism: throughput-induced epoch deficit, run cut at 27/50 epochs by 30-min timeout, T_max=50 schedule never completes decay. Width axis bracketed at 224 within 30-min budget: 192/224(OPT)/256(runtime-fail)). beta_2 reduction makes second-moment estimate react ~50× faster — untested optimizer-tuning axis distinct from LR/grad-clip/wd axes. Outcomes: (A) WIN faster adaptation tracks grad-clip 98.9% saturation regime; (B) FAIL variance too noisy → late-training instability |
 
 **Baseline alert**: New baseline is PR #1953 (**val=55.7634, test=48.0960**). All future merges must beat this. WIP PRs running against the older PR #1930 baseline (val=63.48) MUST be rebased and retested with `--epochs 50` (T_max=50). The schedule fix alone is the dominant lift — any experiment without it cannot beat the new baseline.
 
@@ -134,24 +134,30 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ## Potential next directions
 
-### Active experiments (current 13-compound + T_max=50 stack; baseline val=52.64)
+### Active experiments (current 13-compound stack; baseline val=52.64, test=44.98)
 
-1. **PRIORITY — Combined state confirmation** — #2066 (tanjiro): n_hidden=224 + grad-clip=2.5 + T_max=50. Directly measures the compound of two fresh merges.
-2. **Grad-clip scan step 4** — #2067 (frieren): max_norm=1.5. Monotonically accelerating scan; brackets between last win (2.5) and known fail (1.0).
-3. **Width scan step 3** — #2068 (thorfinn): n_hidden=256. Continues 192→224 win trajectory.
-4. **T_max=80 schedule push** — #2000 (alphonse): direct follow-up to #1953.
-5. **EMA decay 0.999 → 0.998** — #2024 (edward): EMA-live gap closure.
-6. **mlp_ratio=3** — #2053 (nezuko): FFN capacity bracket on current stack.
-7. **β annealing retest** — #1805 (fern): needs rerun at val < 52.64 target with `--n_hidden 192 --n_layers 3 --epochs 50`.
-8. **slice_num=48 retest** — #1841 (askeladd): slice capacity-down on full stack.
+All 8 students assigned. Fleet 8/8 WIP.
+
+1. **PRIORITY — Combined state confirmation** — #2066 (tanjiro): n_hidden=224 + grad-clip=2.5 + T_max=50. Directly measures the compound of two fresh merges. **Stale-WIP risk: pinged at 10:13, no response yet — may need second ping or close next cycle.**
+2. **T_max=80 schedule push retest** — #2000 (alphonse): protocol-stale retest on grad-clip=2.5.
+3. **Peak LR 5e-4 → 7.5e-4** — #2159 (askeladd): amplitude-scaling axis, distinct from schedule extension.
+4. **EMA decay 0.999 → 0.998 retest** — #2024 (edward): protocol-stale retest on n_hidden=224 stack.
+5. **Huber β=0.25** — #2142 (fern): steady-state loss-shape axis at current grad-clip regime.
+6. **Weight decay 0 → 1e-5** — #2160 (frieren): untested regularization axis.
+7. **mlp_ratio=3 retest** — #2053 (nezuko): protocol-stale retest on n_hidden=224 stack.
+8. **AdamW betas (0.9, 0.95)** — #2186 (thorfinn): beta_2 reduction, untested optimizer-adaptation axis.
+
+### Closed (this cycle)
+- #2068 thorfinn n_hidden=256 (runtime-induced epoch deficit at 30-min budget; width axis bracketed at 224)
 
 ### Next after current round
-- **grad-clip=2.0** — if 1.5 fails, bracket between 1.5 and 2.5
-- **grad-clip=1.25 or 1.0** — if 1.5 wins, continue scan
-- **n_hidden=288 or 320** — if 256 wins, continue width scan
-- **n_hidden=224 + grad-clip=1.5** — compound after both axes confirmed
-- **batch_size=8** — with smaller model footprint, may free throughput
-- **LR=7e-4 retest** — on 13-compound stack with grad-clip=2.5
+- **AdamW eps=1e-8 → 1e-6** — if betas=0.95 works, test denominator stability
+- **AdamW betas=(0.85, 0.999) or (0.95, 0.999)** — beta_1 axis if beta_2 reduction wins
+- **EMA decay 0.997 or 0.995** — if edward's 0.998 wins, continue scan
+- **mlp_ratio=4** — if nezuko's 3 wins, push further
+- **Huber β=0.1** — if fern's 0.25 wins, continue tightening
+- **weight_decay=1e-4 or 3e-5** — if frieren's 1e-5 wins, continue scan
+- **Compound winners** — once individual axis wins land, test best-of-each compound
 
 ### Medium priority
 - **n_hidden=160 × n_layers=3** — bracket width from below; is 192 the sweet spot or above it?

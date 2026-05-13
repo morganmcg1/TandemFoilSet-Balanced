@@ -1572,3 +1572,48 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - **First task: verify current weight_decay value.** PyTorch AdamW default is 0.01, but the optimizer setup may explicitly set 0. Log the value before/after change.
 - **Three outcomes:** (A) val<52.64 win, weight_decay closes train/val gap; (B) wash, no overfit at this scale; (C) val>54 wd too strong, try 1e-6.
 - **Diagnostics:** train/val gap at ep 5/15/25/terminal (should narrow if overfitting is real), mean weight magnitude, clip rate (predict ~98.9% similar), per-split test, EMA-live gap.
+
+## 2026-05-13 14:55 — PR #2068: thorfinn n_hidden=256 width push — CLOSED (runtime ceiling at 30-min budget)
+
+- Branch: `willowpai2g48h5-thorfinn/n-hidden-256`
+- Hypothesis: Width scan step 3, continue 192 → 224 win trajectory to test if width scaling plateaus at 1500-sample dataset capacity.
+- W&B run: `bywj2855`
+
+| Metric | #2068 (n=256) | Baseline #1982+#2023 (n=224) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **54.5742** | 52.6406 | **+3.67% REGRESSION** |
+| test_avg/mae_surf_p | **47.4763** | 44.9791 | **+5.55% REGRESSION** |
+| Epochs reached | 27/50 | 50/50 | −46% |
+| Wall-clock | 31.3 min | ~28 min | +12% |
+| Param count | 1.64M | 1.27M | +29% |
+| Epoch time | 67.55s | ~62s | +9% |
+
+**All 4 test splits regress** (in_dist, camber_rc, camber_cruise, re_rand).
+
+**Mechanism — throughput-induced epoch deficit (not width ceiling):**
+- +29% params → +9% epoch time on the bottleneck
+- 30-min hard timeout (SENPAI_TIMEOUT_MINUTES=30) cuts training at 27/50 epochs (~54% of cosine schedule)
+- T_max=50 schedule never completes its decay → final LR is still high → final eval is off the convergence trajectory
+- The width itself may genuinely help with more epochs, but within the 30-min budget the wider model cannot match the better-converged 224 model
+
+**Width axis bracketed at n_hidden=224 within 30-min budget:**
+
+| n_hidden | val | test | Epochs | Verdict |
+|---|---|---|---|---|
+| 192 | 55.76 | 47.20 | 50/50 | pre-#2023 baseline |
+| **224** | **52.64** | **44.98** | 50/50 | **OPTIMUM** |
+| 256 | 54.57 | 47.48 | 27/50 | runtime ceiling |
+
+**Pattern match:** Identical failure mode to PR #2113 askeladd slice_num=96 (7% throughput penalty cut training to 27/50 epochs, +9.77%/+9.85% regression). Both show that within a fixed wall-clock budget, capacity-up only works when throughput-neutral.
+
+**Conclusion:** Width axis closed at n_hidden=224. Further width experiments only viable with throughput offset (e.g. n_layers=2 + n_hidden=256, but depth-floor closed at n_layers=3 by #1960).
+
+## 2026-05-13 14:55 — PR #2186: thorfinn assigned AdamW betas=(0.9, 0.999) → (0.9, 0.95) (untested optimizer axis)
+
+- Branch: `willowpai2g48h5-thorfinn/adamw-betas-0p9-0p95`
+- Hypothesis: beta_2 controls the second-moment EMA decay in AdamW; reducing 0.999 → 0.95 makes the variance estimate react ~50× faster (half-life 14 steps vs 693). This is the right adaptation when gradient statistics shift across training phases — we have a strong cosine LR decay + Huber β anneal/saturation interactions + grad-clip at 98.9% clip rate where the optimizer must escape saturation regimes.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50` + AdamW `betas=(0.9, 0.95)`.
+- Targets: val < 52.6406, test < 44.9791.
+- **Distinct from active optimization axes:** askeladd #2159 (peak LR amplitude), frieren #2160 (weight_decay), alphonse #2000 (schedule shape), grad-clip axis (closed at 2.5). beta_2 is the variance-tracking axis, untouched.
+- **Two outcomes:** (A) WIN ~1-3% val MAE reduction — faster adaptation tracks the high-clip-rate regime (98.9% saturation at grad-clip=2.5); (B) FAIL ~2-5% val MAE increase — variance estimate too noisy at beta_2=0.95 for small-batch mesh-node scale, late-training LR-effective instability.
+- **Diagnostics:** clip rate (predict similar 98.9%, beta_2 doesn't directly change grad magnitudes), val/train gap (predict slight widening if variance-tracking is noisier), EMA-live gap (predict similar −12 to −13 baseline).
