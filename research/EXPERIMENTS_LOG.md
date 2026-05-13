@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-05-13 15:30 — PR #2364: tmax-14 (alphonse) — CLOSED (+11.71% val regression; T_max axis CLOSED at 10)
+
+- **Branch:** `charliepai2g48h2-alphonse/tmax-14`
+- **Hypothesis:** Extend CosineAnnealingLR T_max=10→14 so the cosine spans all post-warmup epochs; final LR remains ~6.8e-4 (not 0). Address best_epoch=14/14 by preserving learning at end of schedule.
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-tmax-14-20260513-142753/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170; new baseline 63.1086 after #2345 merged)
+
+| Split | Baseline #2260 | T_max=14 | Δ vs #2260 |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | 81.5963 | +10.6% ❌ |
+| val_geom_camber_rc | 79.4389 | 95.2104 | +19.9% ❌ |
+| val_geom_camber_cruise | 42.8481 | 43.5742 | +1.7% ❌ |
+| val_re_rand | 64.8172 | 71.0564 | +9.6% ❌ |
+| **val_avg/mae_surf_p** | **65.2170** | **72.8593** | **+11.71%** ❌ |
+| **test_avg/mae_surf_p** | 56.4581 | 64.0616 | +13.47% ❌ |
+
+best_epoch=14/14. Run completed 14 epochs in 30.9 min (batch=4 baseline schedule).
+
+### Critical diagnostic — model is UNDER-CONVERGED at higher end-LR
+
+Per-epoch LR + val_avg trajectory:
+- Epoch 14: lr=4.246e-4, val_avg=72.859 — **still dropping ~5.7 units/epoch at termination**
+- Baseline at epoch 14: lr=3.68e-5 (~11.5× smaller), val_avg=65.22 — fully converged in the cosine-to-zero tail
+
+### Outcome
+
+**T_max axis CLOSED at 10.** The hypothesis was inverted: the cosine-to-zero tail is doing critical fine-tuning work, NOT redundant work. Truncating the fine-tuning phase costs far more than the extra mid-LR-time gains. The OOD-leaning splits (val_rc +19.9%, val_single +10.6%) take the worst hit; val_cruise (closer-to-train physics) is only +1.7%. **Hard splits depend critically on low-LR fine-tuning quality** — this is a research insight worth carrying forward.
+
+Cosine-to-zero with T_max=10 is firmly canonical.
+
+---
+
+## 2026-05-13 15:30 — PR #2366: asinh-gain-2 (tanjiro) — SENT BACK for batch=2 rerun (promising on batch=4 base)
+
+- **Branch:** `charliepai2g48h2-tanjiro/asinh-gain-2`
+- **Hypothesis:** Tighten asinh compression GAIN 1.0 → 2.0 (more aggressive outlier-pressure compression).
+- **Metric artifacts:** `models/model-charliepai2g48h2-tanjiro-asinh-gain-2-20260513-142658/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170) — but tested on batch=4, NEW baseline is 63.1086
+
+| Split | #2260 baseline (bsz=4) | GAIN=2 (bsz=4) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | 71.6206 | **−2.91%** ✓ |
+| val_geom_camber_rc | 79.4389 | 77.4532 | **−2.50%** ✓ |
+| val_geom_camber_cruise | 42.8481 | 42.8854 | +0.09% (tied) |
+| val_re_rand | 64.8172 | 64.2754 | −0.84% ✓ |
+| **val_avg/mae_surf_p** | **65.2170** | **64.0586** | **−1.78%** ✓ |
+| **test_avg/mae_surf_p** | 56.4581 | 55.8010 | −1.16% ✓ |
+
+**Per-split signature matches the hypothesis prediction exactly:** pressure-outlier compression specifically helps val_single (−2.91%) and val_rc (−2.50%) where the model was previously wasting capacity chasing pressure outliers from novel geometries. val_cruise (smooth pressure, fewest outliers) is unchanged. Ux/Uy MAE flat-to-slightly-better; mae_surf_p drives the entire gain. asinh round-trip max-err=2.38e-07 confirms clean compression+decompression.
+
+### Action
+
+**Sent back for rerun with batch_size=2** (#2345 baseline). Confidence is high that the axis is real and orthogonal to batch=2 — they target different mechanisms (compression reshapes the loss landscape; smaller batch adds gradient noise). Expected stacked result: ~62.0 or better val_avg if mechanisms are additive.
+
+---
+
 ## 2026-05-13 15:20 — PR #2345: batch-size-2 (nezuko) — MERGED ✅ NEW BEST: 63.1086
 
 - **Branch:** `charliepai2g48h2-nezuko/batch-size-2`

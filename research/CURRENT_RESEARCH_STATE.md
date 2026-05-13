@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~15:20 — MERGED #2345 batch-size-2 NEW BEST **63.1086** (−3.23% val, −2.62% test; all 8 splits improve; val_single −6.32%). Closed #2346 slice-num-96 (+11% timeout-truncated). Assigned nezuko #2387 batch-size-1, fern #2388 warmup-2-tmax-12. **canonical batch_size=2** from now on.
+- **Last updated:** 2026-05-13 ~15:30 — Closed #2364 alphonse tmax-14 (+11.71%, T_max axis closed at 10; hard splits need low-LR fine-tuning). Sent #2366 tanjiro asinh-gain-2 back for batch=2 rerun (val=64.0586 on batch=4 was −1.78% but new baseline is 63.1086). Assigned alphonse #2406 lr-1.25e-3 retest on batch=2 base.
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -40,14 +40,14 @@ Test: test_avg=54.9824 (test_single=62.4700, test_rc=69.6733, test_cruise=34.781
 |----|---------|------|------|---|
 | PR | Student | Slug | Axis | Status |
 |----|---------|------|------|---|
-| #2387 | nezuko | `batch-size-1` | bsz 2→1 (true SGD); probe if batch axis continues; may timeout at ep13-14 | **WIP — just assigned** |
-| #2388 | fern | `warmup-2-tmax-12` | warmup 4→2 + T_max 10→12; same cosine endpoint, more peak-LR time; batch_size=2 canonical | **WIP — just assigned** |
-| #2364 | alphonse | `tmax-14` | CosineAnnealing T_max 10→14; final LR ~6.8e-4 instead of 0; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — likely finishing** |
+| #2406 | alphonse | `lr-1p25e-3-bsz2` | lr 1.5e-3→1.25e-3 retest on batch=2 base; LR axis was closed pre-batch=2, may reopen | **WIP — just assigned** |
+| #2387 | nezuko | `batch-size-1` | bsz 2→1 (true SGD); probe if batch axis continues; may timeout at ep13-14 | **WIP — training** |
+| #2388 | fern | `warmup-2-tmax-12` | warmup 4→2 + T_max 10→12; same cosine endpoint, more peak-LR time; batch_size=2 canonical | **WIP — training** |
+| #2366 | tanjiro | `asinh-gain-2` (rerun bsz=2) | ASINH_GAIN 1.0→2.0; per-split signature matched hypothesis exactly on bsz=4 (val_single −2.91%, val_rc −2.50%, val_cruise tied); rerun with bsz=2 to test stacking | **WIP — rerun on bsz=2** |
 | #2365 | frieren | `chan-weights-5` | channel_weights [1,1,3]→[1,1,5]; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — likely finishing** |
-| #2366 | tanjiro | `asinh-gain-2` | ASINH_GAIN 1.0→2.0; tighter pressure-outlier compression; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — likely finishing** |
 | #2373 | thorfinn | `beta1-0.95` | AdamW β1 0.9→0.95; untested axis; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — training** |
-| #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 on PRE-clip=0.5 HEAD; sent back for rerun on current canonical | **WIP — rerun requested** |
-| #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; on OLD base val=79.8056 (−1.11% vs 80.7014); sent back for rerun on current stack | **WIP — rerun on new base** |
+| #1421 | edward | `surf-only-channel-weight` | val=64.2691 on PRE-clip=0.5 HEAD; sent back for rerun on current canonical | **WIP — rerun requested** |
+| #1815 | askeladd | `node-dropout-0.9` | on OLD base val=79.8056 (−1.11% vs 80.7014); sent back for rerun on current stack | **WIP — rerun on new base** |
 
 ## Closed axes (exhausted)
 
@@ -68,6 +68,7 @@ Test: test_avg=54.9824 (test_single=62.4700, test_rc=69.6733, test_cruise=34.781
 | foil-mirror-aug | **CLOSED** | +19.97% val / +21.97% test catastrophic; z=0 is NOT a valid symmetry for tandem-foil dataset (asymmetric flow direction → mirrored samples mis-labeled) |
 | slice_num | **CLOSED** at 64 | slice_num=96 gives +11.0% val (epoch-12, timeout); all splits regress uniformly; no physics-slice benefit; per-epoch overhead is the liability |
 | batch_size | **OPEN — 2 is current best** | batch=2 gives −3.23% val (NEW BEST 63.1086); val_single −6.32%; batch=1 probe in flight (#2387) |
+| T_max (schedule extension) | **CLOSED** at 10 | T_max=14 gives +11.71% val (val_rc +19.9% worst); model under-converged at epoch 14 (lr=4.25e-4, still dropping 5.7/epoch); **cosine-to-zero tail does critical fine-tuning** — truncating it costs more than mid-LR-time gains; hard splits depend critically on low-LR fine-tuning quality |
 
 ## Key research insights
 
