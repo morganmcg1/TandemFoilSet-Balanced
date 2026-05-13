@@ -393,6 +393,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     ema_decay: float = 0.999
+    mlp_ratio: int = 2
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -435,7 +436,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
