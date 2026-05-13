@@ -480,7 +480,50 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023): sign-based momentum updates.
+
+    Update: theta <- theta - lr * (sign(beta1 * m + (1-beta1) * g) + wd * theta)
+    Momentum: m <- beta2 * m + (1-beta2) * g
+    """
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group['lr']
+            beta1, beta2 = group['betas']
+            wd = group['weight_decay']
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if 'momentum' not in state:
+                    state['momentum'] = torch.zeros_like(p)
+                m = state['momentum']
+                if wd != 0:
+                    p.mul_(1 - lr * wd)
+                update = (beta1 * m + (1 - beta1) * g).sign_()
+                p.add_(update, alpha=-lr)
+                m.mul_(beta2).add_(g, alpha=1 - beta2)
+        return loss
+
+
+optimizer = Lion(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, 0.99),
+)
+print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -602,6 +645,25 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- Lion momentum diagnostic: sanity-check optimizer state at terminal ---
+_lion_total = 0
+_lion_nz = 0
+for _group in optimizer.param_groups:
+    for _p in _group['params']:
+        if _p in optimizer.state:
+            _m = optimizer.state[_p].get('momentum')
+            if _m is not None:
+                _lion_total += _m.numel()
+                _lion_nz += (_m.abs() > 1e-8).sum().item()
+_lion_nz_frac = _lion_nz / max(_lion_total, 1)
+print(f"Lion momentum non-zero fraction at terminal: {_lion_nz_frac:.4f} ({_lion_nz}/{_lion_total} elements)")
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "lion_momentum_diagnostic",
+    "nonzero_fraction": _lion_nz_frac,
+    "nonzero_count": _lion_nz,
+    "total_count": _lion_total,
+})
 
 # --- Test evaluation + local summary ---
 if best_metrics:
