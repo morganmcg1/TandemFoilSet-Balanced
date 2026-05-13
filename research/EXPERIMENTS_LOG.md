@@ -2,6 +2,54 @@
 
 ---
 
+## 2026-05-13 18:30 — PR #2400: n_layers=3 on n_head=2+slice32+Lion+MAE (askeladd) — MERGED, NEW BEST
+
+- **Branch:** `willowpai2g24h5-askeladd/n-layers-reduce-slice32`
+- **Hypothesis:** Speed-dividend thesis — shallower network is faster per epoch, enabling more gradient steps within 30-min wall-clock. n_layers=4 and n_layers=3 tested against n_layers=5 baseline on n_head=2+slice32 compound.
+- **W&B runs:** `sffg3j2n` (Arm 1: n_layers=4), `vagjp0kr` (Arm 2: n_layers=3)
+
+| Config | n_layers | val | test | Δ vs #2338 (46.67) | Epochs | s/ep |
+|--------|---------|-----|------|-------------------|--------|------|
+| Baseline #2338 | 5 (n_head=1) | **46.67** | **40.69** | — | 26 | 71.1 |
+| **Arm 2 (WINNER)** | **3** | **43.14** | **36.95** | **−7.6% / −9.2% ✓** | **34** | **53.1** |
+| Arm 1 | 4 | 46.30 | 38.88 | −0.8% / −4.4% ✓ | 27 | 67.3 |
+
+**Per-test-split (n_layers=3):** single_in_dist=39.31 (−9.6%), geom_camber_rc=51.74 (−7.3%), geom_camber_cruise=21.32 (−13.3%), re_rand=35.43 (−8.9%) — **all 4 splits improve massively**
+
+**Note on architecture:** n_layers=3 ran on **n_head=2** (not n_head=1 from #2338). New compound: n_head=2+slice32+n_layers=3. The n_head=1 compound (#2338) is superseded by this deeper speed-dividend gain.
+
+**Result:** MERGED. Speed-dividend confirmed decisively:
+1. **n_layers=3 → 53.1 s/ep → 34 epochs in 30 min** (vs 26 at n_layers=5+n_head=1 at 71.1 s/ep). 31% more gradient steps.
+2. **All 4 test splits improve by 7–13%** — model is strongly undertrained; shallow + fast > deep + slow at this budget.
+3. **n_layers=4 also beats baseline** (val=46.30) — monotonic signal: n_layers=3 < n_layers=4 < n_layers=5.
+4. **Val still descending at cap (epoch 34)** — even n_layers=3 is under-budget; n_layers=2 is the natural extension.
+5. Student exposed `--n_layers` as CLI flag (Config dataclass edit).
+
+**Askeladd reassigned:** PR to be assigned — n_layers=2 extension on new compound (does speed-dividend continue below n_layers=3?).
+
+---
+
+## 2026-05-13 18:30 — PR #2376: lr sweep on slice_num=32 (tanjiro) — CLOSED, LR=1.5E-4 REGRESSES ON SLICE32
+
+- **Branch:** `willowpai2g24h5-tanjiro/lr-sweep-slice32`
+- **Hypothesis:** Transfer lr=1.5e-4 win from slice_num=64 (#2251) to new slice_num=32 compound. Test lr=1.5e-4 (Arm 1) and lr=1.25e-4 (Arm 2) against baseline lr=1e-4.
+- **W&B run:** `szuo71ga` (Arm 1: lr=1.5e-4); Arm 2 not run per student recommendation.
+
+| Config | lr | val | test | Δ vs #2218 (49.86) |
+|--------|----|-----|------|-------------------|
+| Arm 1 | 1.5e-4 | 50.77 | 43.77 | +0.91 (+1.8%) ✗ |
+| Baseline #2218 | 1e-4 | 49.86 | 42.19 | — |
+
+**Result:** CLOSED per student pivot recommendation. Key findings:
+1. **lr transfer did NOT hold:** slice32 prefers lr≤1e-4 (opposite of slice64 which preferred 1.5e-4).
+2. **lr×slice_num interaction is real:** coarser slicing (fewer, larger tokens) changes gradient variance; slice32 with 32 tokens per head may produce lower-variance gradients that don't benefit from higher lr.
+3. **Arm 2 (lr=1.25e-4) skipped:** direction confirmed negative; #2218 baseline is already the lr floor.
+4. **Student pivot: correct.** Arm 2 would not recover the regression given the direction.
+
+**Tanjiro reassigned:** PR to be assigned — n_head=1 vs n_head=2 on n_layers=3 compound.
+
+---
+
 ## 2026-05-13 17:30 — PR #2416: n_head=1 + sw=5 interaction on slice32 (alphonse) — CLOSED, SW=5 ANTI-SYNERGISTIC AT N_HEAD=1
 
 - **Branch:** `willowpai2g24h5-alphonse/n-head-1-sw5`

@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| **#2338 n_head=1 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4** | **46.67** | **40.69** | −3.9% val / −1.9% test vs #2335; wins all 4 test splits; 26 epochs in 31 min (71.1s/ep) |
+| **#2400 n_layers=3 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4** | **43.14** | **36.95** | −7.6% val / −9.2% test vs #2338; wins all 4 test splits; 34 epochs in 30 min (53.1s/ep); speed-dividend |
+| #2338 n_head=1 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4 | 46.67 | 40.69 | −3.9% val / −1.9% test vs #2335; wins all 4 test splits; 26 epochs in 31 min (71.1s/ep) |
 | #2335 slice_num=32 + surf_weight=5 on n_head=2+Lion+MAE+lr=1e-4 | 48.57 | 41.48 | −2.59% val / −1.68% test vs #2218; synergistic: observed −2.54 val vs additive −1.45; 3/4 test splits improve; 22 epochs |
 | #2218 slice_num=32 on n_head=2+Lion+MAE+lr=1e-4 | 49.86 | 42.19 | −2.06% val / −3.40% test vs #2210 baseline; wins all 4 test splits; 23 epochs in budget |
 | #2210 sw=5 on n_head=2+Lion+MAE+lr=1e-4 | 50.91 | 43.68 | −0.39% val / −1.13% test vs n_head=2 baseline; wins 2/4 test splits (single_in_dist −2.81, re_rand −0.91) |
@@ -38,6 +39,20 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 18:30 — PR #2400: n_layers=3 on n_head=2+slice_num=32+Lion+MAE compound (askeladd)
+
+- **val_avg/mae_surf_p (best epoch 34):** 43.1408 — **−7.6% vs #2338 baseline (46.672)**
+- **test_avg/mae_surf_p:** 36.9506 — **−9.2% vs #2338 baseline (40.687)**
+- **Per-test-split:** single_in_dist=39.31 (−9.6%), geom_camber_rc=51.74 (−7.3%), geom_camber_cruise=21.32 (−13.3%), re_rand=35.43 (−8.9%) — **all 4 splits improve massively**
+- **Epochs completed:** 34 in ~30 min (53.1 s/ep); val still descending at cap — NOT converged
+- **W&B runs:** `vagjp0kr` (n_layers=3 winner), `sffg3j2n` (n_layers=4 also beats baseline: val=46.295, test=38.877)
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + **n_layers=3** + n_head=2 + slice_num=32 + surf_weight=10
+- **Reproduce:** `cd "target/" && python train.py --n_layers 3 --n_head 2 --slice_num 32 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99`
+
+**Key change:** n_layers 5 → 3. Student exposed `--n_layers` as a CLI flag. The **speed-dividend mechanism** dominates: n_layers=3 cuts per-epoch time from 71 s/ep to 53 s/ep, enabling 34 epochs in 30 min vs 26 (31% more gradient steps). Model is undertrained — fewer layers + more epochs beats deeper + fewer epochs. n_layers=3 curve still descending at cap, indicating even more headroom with extended budget. n_layers=4 also beats baseline (val=46.295), confirming monotonic signal toward shallower networks on this budget. Architecture reverts to n_head=2 (not n_head=1 from #2338) — compound: n_head=2+slice32+n_layers=3.
 
 ---
 
