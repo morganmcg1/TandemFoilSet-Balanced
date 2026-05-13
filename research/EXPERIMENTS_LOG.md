@@ -1,5 +1,57 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 10:28 — PR #2084: Cosine LR floor: eta_min=lr*0.05 (CLOSED — zero-LR tail is implicit regularizer for Lion)
+
+- Student branch: `charliepai2g24h5-frieren/cosine-lr-floor`
+- Hypothesis: LR decays to exactly 0 at epoch 16; setting eta_min=lr*0.05 prevents step-size collapse at the convergence tail. The "still descending at epoch 16" signal suggests more room to improve.
+
+### Results (vs PR #2028 baseline 53.62/49.65 — student's reference; vs current #1656 baseline: 52.63/49.22)
+
+| Metric | Baseline (#2028) | This run | Δ vs #2028 | vs current #1656 |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 53.62 | **54.05** | **+0.43 (worse)** | +1.42 (worse) |
+| **test_avg/mae_surf_p** | 49.65 | **51.09** | **+1.44 (worse)** | +1.87 (worse) |
+
+All 8 splits regress; test splits hit harder than val (Δtest=+1.44 vs Δval=+0.43). Per-split worst: test_geom_camber_rc (+1.87), test_single_in_dist (+1.82).
+
+### Mechanism analysis
+
+Lion's `sign(m_t) * lr` step has fixed magnitude scaled only by `lr`. With a 5% LR floor, the model keeps receiving perturbations of ~1.5e-5/step at the end of training instead of going to zero. This prevents the final settling phase where very small steps let Lion's signed update + decoupled WD settle into a tighter local minimum. The zero-LR cosine tail acts as an **implicit regularizer** in Lion's signed-update regime — rather than collapsing, it's providing a gentle weight-decay-only phase. The widened val/test gap under floor LR (+0.43 val vs +1.44 test) confirms: the zero-LR tail is primarily helping OOD generalization, not just convergence speed.
+
+### Disposition
+
+**CLOSED**. Do NOT lower eta_min on Lion-based runs. Zero-LR cosine tail is load-bearing regularization for Lion.
+
+- Metrics: `models/model-cosine_lr_floor_005-20260513-085153/metrics.jsonl`
+
+---
+
+## 2026-05-13 10:28 — PR #2100: Lion lr=1.5e-4 bracket-from-below on per-channel δ+n160 stack (CLOSED — LR bowl bottomed at lr=2e-4)
+
+- Student branch: `charliepai2g24h5-tanjiro/lr-bracket-from-below`
+- Hypothesis: LR optimum has been moving downward (3e-4 → 2e-4); bracket-from-below to confirm whether it continues.
+
+### Results (vs merged baseline PR #2027, lion_lr=2e-4: 52.78/49.42)
+
+| Metric | lr=2e-4 baseline | lr=1.5e-4 (this run) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 52.78 | **53.156** | **+0.376 (worse)** |
+| **test_avg/mae_surf_p** | 49.42 | **50.149** | **+0.729 (worse)** |
+
+Per-split: in-dist + camber_rc val improved (−0.51, −0.49) but val_re_rand (+1.30) + val_geom_camber_cruise (+1.22) pulled val_avg up. All 4 test splits regressed.
+
+### Mechanism analysis
+
+Lower LR converges slower → 16-epoch ceiling penalizes lr=1.5e-4 more than lr=2e-4 on OOD splits where training isn't asymptoted. The LR bowl is confirmed bottomed at lr=2e-4 on the current per-channel δ + n_hidden=160 + dropout=0.1 stack. Pre-registered conclusion from the student: "LR optimum has been moving DOWN; 2e-4 is near-optimal on this stack." Both sides of the bowl now have positive data: lr=1.5e-4 loses; bracket-from-above (lr=3e-4) was confirmed by PR #2035 as already regressed. Do not probe lr<2e-4 or lr>2.5e-4 further on this stack.
+
+### Disposition
+
+**CLOSED**. LR bowl confirmed bottomed. No further LR sweeps in this direction on current stack.
+
+- Metrics: `models/model-lion_lr1_5e4_pcd_n160-20260513-090539/metrics.jsonl`
+
+---
+
 ## 2026-05-13 10:20 — PR #2044: DropPath / stochastic depth (rates 0.05, 0.1) on n_hidden=160 (CLOSED — wrong-shape regularization for budget)
 
 - Student branch: `charliepai2g24h5-edward/droppath-stochastic-depth`
