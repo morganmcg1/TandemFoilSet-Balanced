@@ -178,9 +178,28 @@ class FourierCoordFeatures(nn.Module):
     buffer (frozen), since learning B causes spectral collapse (Tancik 2020).
     """
 
-    def __init__(self, coord_dim: int = 2, num_features: int = 16, sigma: float = 1.0):
+    def __init__(self, coord_dim: int = 2, num_features: int = 16, sigma=1.0):
         super().__init__()
-        B = torch.randn(coord_dim, num_features) * sigma
+        if isinstance(sigma, (list, tuple)):
+            sigmas = [float(s) for s in sigma]
+            # Tancik 2020 §5: partition columns of B into per-scale blocks; each
+            # block sampled from N(0, σⱼ²). Splits evenly with remainder going to
+            # the earlier blocks so total feature count is preserved.
+            base = num_features // len(sigmas)
+            extras = num_features % len(sigmas)
+            blocks = []
+            block_sizes = []
+            for i, s in enumerate(sigmas):
+                k = base + (1 if i < extras else 0)
+                blocks.append(torch.randn(coord_dim, k) * s)
+                block_sizes.append(k)
+            B = torch.cat(blocks, dim=1)
+            self.block_sigmas = sigmas
+            self.block_sizes = block_sizes
+        else:
+            B = torch.randn(coord_dim, num_features) * float(sigma)
+            self.block_sigmas = [float(sigma)]
+            self.block_sizes = [num_features]
         self.register_buffer("B", B)
         self.coord_dim = coord_dim
         self.num_features = num_features
@@ -273,6 +292,24 @@ class Transolver(nn.Module):
                         "min": rff.min().item(),
                         "max": rff.max().item(),
                     }
+                    B = self.fourier_coords.B
+                    # Per-column std across coord_dim — should ≈ σⱼ for each block
+                    # under Tancik 2020 §5 multi-scale construction.
+                    col_std = B.std(dim=0)
+                    self._rff_diag["B_col_std_min"] = col_std.min().item()
+                    self._rff_diag["B_col_std_max"] = col_std.max().item()
+                    self._rff_diag["B_col_std_mean"] = col_std.mean().item()
+                    # Per-block std (mean over each block's columns).
+                    block_sigmas = self.fourier_coords.block_sigmas
+                    block_sizes = self.fourier_coords.block_sizes
+                    offset = 0
+                    for i, (s, k) in enumerate(zip(block_sigmas, block_sizes)):
+                        block_cols = B[:, offset:offset + k]
+                        self._rff_diag[f"B_block{i}_sigma_target"] = s
+                        self._rff_diag[f"B_block{i}_size"] = k
+                        self._rff_diag[f"B_block{i}_std_mean"] = block_cols.std(dim=0).mean().item()
+                        self._rff_diag[f"B_block{i}_overall_std"] = block_cols.std().item()
+                        offset += k
             x = torch.cat([x, rff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Optional FiLM params [B, L, 2, H] — sliced per block as (gamma, beta) each [B, 1, H].
@@ -597,7 +634,7 @@ class Config:
     use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
-    fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    fourier_sigma: str = "1.0"  # Std of random B matrix; scalar (e.g. "0.5") or comma-separated multi-scale list (e.g. "0.5,0.1") per Tancik 2020 §5.
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
@@ -606,6 +643,15 @@ class Config:
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+# Parse fourier_sigma: scalar ("0.5") or comma-separated multi-scale ("0.5,0.1").
+# Per Tancik 2020 §5, mixing N(0, σⱼ²) blocks in B can capture both low- and
+# high-frequency content with a fixed total feature count.
+_fs_raw = str(cfg.fourier_sigma).strip()
+if "," in _fs_raw:
+    fourier_sigma_value = tuple(float(s.strip()) for s in _fs_raw.split(",") if s.strip())
+else:
+    fourier_sigma_value = float(_fs_raw)
 
 torch.manual_seed(cfg.seed)
 torch.cuda.manual_seed_all(cfg.seed)
@@ -660,15 +706,19 @@ model = FiLMTransolver(
     output_dims=model_config["output_dims"],
     fourier_features=cfg.fourier_features,
     fourier_num_features=cfg.fourier_num_features,
-    fourier_sigma=cfg.fourier_sigma,
+    fourier_sigma=fourier_sigma_value,
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
 print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K)")
 if cfg.fourier_features:
     print(
-        f"Fourier features: ON (num_features={cfg.fourier_num_features}, sigma={cfg.fourier_sigma}, "
+        f"Fourier features: ON (num_features={cfg.fourier_num_features}, sigma={fourier_sigma_value}, "
         f"input expanded by {2*cfg.fourier_num_features} channels)"
+    )
+    fc = model.transolver.fourier_coords
+    print(
+        f"  B-matrix blocks: sizes={fc.block_sizes}, target σ={fc.block_sigmas}"
     )
 
 # Kendall uncertainty heads — per-channel learnable log_sigma scalars (Kendall, Gal, Cipolla 2018).
@@ -764,6 +814,8 @@ run = wandb.init(
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "fourier_sigma_parsed": list(fourier_sigma_value) if isinstance(fourier_sigma_value, tuple) else fourier_sigma_value,
+        "fourier_sigma_is_multiscale": isinstance(fourier_sigma_value, tuple),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
