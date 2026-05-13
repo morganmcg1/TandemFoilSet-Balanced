@@ -6,6 +6,65 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~12:30 — PR #2134: lr=1.5e-4 on n_layers=4 stack — SENT BACK (compound test)
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/lr-1.5e-4-nlayers4
+- **Hypothesis:** lr=1.5e-4 (vs default 1e-4) with the lr=cfg.lr bug fix now in place.
+- **Result:** val=45.305 / test=39.115 — beat OLD baseline (#2080 = 46.344/39.950) by −2.24%/−2.09%, but does NOT beat NEW baseline (#2108 = 42.815/36.899; +5.81% val above).
+
+| Split | val (baseline #2080) | val (lr=1.5e-4) | Δ | test (baseline) | test (lr=1.5e-4) | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 49.979 | 48.002 | −3.95% | 44.746 | 41.894 | −6.37% |
+| geom_camber_rc | 61.558 | 57.678 | −6.30% | 54.155 | 51.837 | −4.28% |
+| geom_camber_cruise | 27.318 | 29.108 | +6.55% | 22.876 | 24.497 | +7.09% |
+| re_rand | 46.518 | 46.431 | −0.19% | 38.025 | 38.231 | +0.54% |
+| **avg** | **46.344** | **45.305** | **−2.24%** | **39.950** | **39.115** | **−2.09%** |
+
+- **LR axis confirmed:** Clear win over lr=1e-4 baseline (3/4 val splits improve; only geom_camber_cruise regressed slightly). best_epoch=17 still descending, model budget-limited.
+- **Why not merge:** Sits above the new baseline (slice_num=32 merged 30 min earlier).
+- **Action:** Sent back with instructions to test **lr=1.5e-4 + slice_num=32 + n_layers=4** compound. Mechanisms are orthogonal (LR axis vs epoch-budget axis), so compounding is very likely.
+- **Per-epoch LR was logged** for the first time — `metrics.jsonl` now includes `lr` per epoch. Useful for future LR variation experiments.
+
+---
+
+## 2026-05-13 ~12:30 — PR #2107: n_layers=3 + T_max=22 — SENT BACK (compound test)
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/nlayers-3
+- **Hypothesis:** n_layers=3 (continuing depth sweep step 3 after n_layers=4 win in PR #2080).
+- **Result:** val=43.026 / test=37.446 — beat OLD baseline (#2080 = 46.344/39.950) by −7.16%/−6.27%; sits +0.49% val / +1.48% test above NEW baseline (#2108 = 42.815/36.899). Extraordinarily close.
+
+| Split | val (baseline #2080) | val (n_layers=3) | Δ | test (baseline) | test (n_layers=3) | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 49.979 | 45.492 | −8.98% | 44.746 | 41.768 | −6.66% |
+| geom_camber_rc | 61.558 | 56.358 | −8.45% | 54.155 | 49.829 | −7.99% |
+| geom_camber_cruise | 27.318 | 26.307 | −3.70% | 22.876 | 21.784 | −4.78% |
+| re_rand | 46.518 | 43.946 | −5.53% | 38.025 | 36.402 | −4.27% |
+| **avg** | **46.344** | **43.026** | **−7.16%** | **39.950** | **37.446** | **−6.27%** |
+
+- **Diminishing-returns hypothesis FALSIFIED.** The depth sweep gain *increased* at n_layers=4→3 (−7.16%) compared to n_layers=5→4 (−1.07%). The n_layers=5→4 dip was a local quirk, not a saturation signal.
+- **best_epoch=22 STILL DESCENDING** (same pattern as all previous wins). Per-epoch time 66s (vs 75s predicted).
+- **n_params: 516,639** (vs baseline 670,035, −23%).
+- **Why not merge:** Sits +0.5% above the new baseline (slice_num=32 merged 30 min earlier; same epoch-budget mechanism on orthogonal axis).
+- **Action:** Sent back with instructions to test **n_layers=3 + slice_num=32 + T_max=27** compound. Both axes are orthogonal — depth vs slice partitioning — and almost certainly compound. Expected to give a meaningful new best.
+
+---
+
+## 2026-05-13 ~12:30 — PR #2062: n_layers=5 + slice_num=48 compound verification — CLOSED (superseded)
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/slice-num-48-nlayers5
+- **Hypothesis:** Verify n_layers=5 + slice_num=48 compound from earlier merge sequence.
+- **Result:** Stale WIP for 4+ hours, no comments, no committed metrics. Never started or never completed.
+- **Why closed:** Superseded twice in the merge sequence:
+  - PR #2080 (n_layers=4 + T_max=17): val=46.344 → baseline
+  - PR #2108 (slice_num=32 + n_layers=4): val=42.815 → baseline
+  - Even if PR #2062 had completed cleanly, n_layers=5 + slice_num=48 could not beat 42.815.
+- **Reassigned fern:** PR #2172 epochs=24 + T_max=24 + slice_num=32 (squeeze remaining epoch-budget headroom on new compact stack)
+
+---
+
 ## 2026-05-13 ~12:00 — PR #2108: slice_num=32 + n_layers=4 — MERGED (−7.6% val, −7.6% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-thorfinn

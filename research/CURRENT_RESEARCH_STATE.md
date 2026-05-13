@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~12:00
+- **Date:** 2026-05-13 ~12:35
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -96,18 +96,23 @@
 
 ## Active experiments (Round 18)
 
-⚠ **Baseline now at 42.815 (PR #2108 slice_num=32).** In-flight PRs on OLD slice_num=48 stack (#2107, #2109, #2134, #2143, #2062) will be evaluated against this harder threshold — their results on the old stack are still informative for axis direction even if below new baseline.
+⚠ **Baseline now at 42.815 (PR #2108 slice_num=32).** Two PRs reviewed this turn — both sent back as compound tests against the new baseline. All running students now target the new compact stack.
 
 | Student | PR | Hypothesis | Base stack |
 |---------|-----|------------|-----------|
 | thorfinn | #2151 | slice_num=24 + n_layers=4 (slice sweep step 3) | NEW slice_num=32 stack |
-| askeladd | #2149 | n_head=2 on NEW stack (head capacity vs diversity tradeoff) | NEW slice_num=32 stack |
+| askeladd | #2149 | n_head=2 on NEW stack (head capacity vs diversity) | NEW slice_num=32 stack |
 | frieren | #2150 | lr=8e-5 on NEW stack (LR bracket below default) | NEW slice_num=32 stack |
-| tanjiro | #2107 | n_layers=3 + T_max=22 (depth sweep step 3) | OLD slice_num=48 stack |
-| nezuko | #2109 | surf_weight=2 + n_layers=4 | OLD slice_num=48 stack |
-| alphonse | #2134 | lr=1.5e-4 on n_layers=4 | OLD slice_num=48 stack |
-| edward | #2143 | surf_weight=15 on n_layers=4 (reverse direction bracket) | OLD slice_num=48 stack |
-| fern | #2062 | n_layers=5 + slice_num=48 compound verification | n_layers=5 (stale stack) |
+| fern | #2172 | epochs=24 + T_max=24 on slice_num=32 (squeeze epoch budget) | NEW slice_num=32 stack |
+| tanjiro | #2107 (sent back) | **n_layers=3 + slice_num=32 + T_max=27** (compound depth+slice) | NEW slice_num=32 stack |
+| alphonse | #2134 (sent back) | **lr=1.5e-4 + slice_num=32 + n_layers=4** (compound LR+slice) | NEW slice_num=32 stack |
+| nezuko | #2109 | surf_weight=2 + n_layers=4 (still on OLD slice_num=48) | OLD slice_num=48 stack |
+| edward | #2143 | surf_weight=15 + n_layers=4 (still on OLD slice_num=48) | OLD slice_num=48 stack |
+
+**Recently reviewed (this turn):**
+- alphonse #2134: lr=1.5e-4 gave −2.24% vs OLD baseline, but +5.81% vs NEW. SENT BACK for compound lr=1.5e-4 + slice_num=32 test.
+- tanjiro #2107: n_layers=3 gave −7.16% vs OLD baseline, +0.49% vs NEW (extraordinarily close). SENT BACK for compound n_layers=3 + slice_num=32 test.
+- fern #2062: stale 4h WIP on superseded stack. CLOSED; reassigned to epochs=24 on new stack (#2172).
 
 **Recently merged:**
 - thorfinn #2108: slice_num=32 + n_layers=4 (−7.6% val) ← **NEW BASELINE 42.815/36.899** (best_epoch=21 STILL DESCENDING)
@@ -115,12 +120,13 @@
 - fern #1996: slice_num=48 + T_max=15 (−1.33% val)
 
 **Recently closed:**
-- edward #2048: surf_weight=5 on n_layers=5 (+3.16% vs current) — vol-gradient mechanism active but stack-depth dependent; shallow models may need MORE surface weight
-- askeladd #2038: n_head=2 on old n_layers=6 stack (+12.4% vs current) — draft PR never readied; attention diversity > per-head capacity on deep stack; retesting on compact stack
+- fern #2062: n_layers=5 + slice_num=48 (stale, superseded by #2080 + #2108)
+- edward #2048: surf_weight=5 on n_layers=5 (+3.16% vs current) — vol-gradient mechanism active but stack-depth dependent
+- askeladd #2038: n_head=2 on old n_layers=6 stack (+12.4% vs current) — draft never readied; retesting on compact stack
 - frieren #2006: lr=8e-5 never started (old stack, lr bug present) — clean retest on new stack assigned
-- alphonse #2043: DropPath rate=0.1 (+25.2% vs current) — DropPath needs 100-300 epoch budgets; model is underfitting at 12-17 epochs
-- thorfinn #2040: grad-clip max_norm=1.0 (+14.1% vs current) — max_norm=1 fires on 100% of batches; wrong regime
-- nezuko #2029: surf_weight=2 on old n_layers=6 stack (+6.32% vs current, strong signal) — retesting on new stack
+- alphonse #2043: DropPath rate=0.1 (+25.2% vs current) — DropPath needs 100-300 epoch budgets
+- thorfinn #2040: grad-clip max_norm=1.0 (+14.1% vs current) — max_norm=1 wrong regime
+- nezuko #2029: surf_weight=2 on old n_layers=6 stack (+6.32% vs current) — direction strong, retesting on new stack
 
 ## Infrastructure notes
 
