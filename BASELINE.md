@@ -8,6 +8,29 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 21:17 — PR #2192: n_head=2 (dim_head=64) + Lion optimizer (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **40.2741** (W&B run `gd934e9l`, best of 3 seeds) — **−6.78%** vs prior baseline 43.20
+- **`test_avg/mae_surf_p` (4-split, finite):** **33.6017** — **−6.04%** vs prior 35.76
+- **3-seed mean:** val 40.78 ± 0.44 / test 34.33 ± 0.64 (seeds: `gd934e9l`, `j598prwj`, `r00qdgp9`)
+- **Per-split val surface-p MAE (`gd934e9l`, best-val epoch 36):**
+  - val_single_in_dist: 35.836  (vs 41.63 → −13.9%) ✅
+  - val_geom_camber_rc: 53.495  (vs 56.63 → −5.5%) ✅
+  - val_geom_camber_cruise: 28.146  (vs 29.58 → −4.8%) ✅
+  - val_re_rand: 43.619  (vs 44.96 → −3.0%) ✅
+- **Per-split test surface-p MAE (`gd934e9l`):**
+  - test_single_in_dist: 30.586  (vs 34.16 → −10.5%) ✅
+  - test_geom_camber_rc: 45.363  (vs 47.74 → −5.0%) ✅
+  - test_geom_camber_cruise: 22.879  (vs 24.83 → −7.9%) ✅
+  - test_re_rand: 35.579  (vs 36.32 → −2.0%) ✅
+- **Mechanism:** n_head=2 gives dim_head=64 (vs 32 at n_head=4). Wider per-head attention capacity compounds with Lion's sign-momentum updates — each head attends to richer per-cluster geometry. Orthogonal to optimizer axis (both n_head=2 AdamW and n_head=2 Lion beat their respective n_head=4 baselines). All 4/4 val splits and 4/4 test splits improve. Strongest gain on single_in_dist (−13.9% val, −10.5% test). Best epoch = final epoch across all 3 seeds → still descending at 30-min cap; more training headroom exists.
+- **Compute:** 36 epochs, ~49.5 s/epoch, ~30 min, ~13.6 GB VRAM, 548,755 params (n_head=2 doesn't change param count — head split only).
+- **Merge bar update (vs val 40.27 / test 33.60):**
+  - ≤ 36.2 val → **merge** (≥10% gain)
+  - 36.2 – 40.3 → **second seed**
+  - ≥ 40.3 → **close**
+- **Reproduce:** `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4`
+
 ## 2026-05-13 19:10 — PR #2314: Lion optimizer (lr=1e-4) on full stack (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **43.1973** (W&B run `h2m396kw`) — **−19.8%** vs prior baseline 53.84
