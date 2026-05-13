@@ -457,6 +457,7 @@ class Config:
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
     optimizer: str = "adamw"   # "adamw" or "lion"
+    n_hidden: int = 128        # Transolver hidden dim (must be divisible by n_head=4)
 
 
 cfg = sp.parse(Config)
@@ -490,7 +491,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2 + fourier_extra,   # Fourier encoding adds 4L − 2 extra channels
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
