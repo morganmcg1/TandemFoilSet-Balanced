@@ -83,23 +83,23 @@ class MLP(nn.Module):
 
 
 class GeGLUMLP(nn.Module):
-    """MLP with GeGLU activation (Shazeer 2020).
+    """MLP with SwiGLU activation (Shazeer 2020).
 
-    fc1 output is split in half along the feature dim, GELU is applied to one
+    fc1 output is split in half along the feature dim, SiLU is applied to one
     half and elementwise-multiplied with the other. fc1 has the same params as
-    a GELU MLP with hidden=n_hidden; fc2 has half the input dim so half the
-    params of the GELU equivalent.
+    a SiLU MLP with hidden=n_hidden; fc2 has half the input dim so half the
+    params of the SiLU equivalent.
     """
 
     def __init__(self, n_input, n_hidden, n_output):
         super().__init__()
-        assert n_hidden % 2 == 0, f"GeGLU requires even n_hidden, got {n_hidden}"
+        assert n_hidden % 2 == 0, f"SwiGLU requires even n_hidden, got {n_hidden}"
         self.fc1 = nn.Linear(n_input, n_hidden)
         self.fc2 = nn.Linear(n_hidden // 2, n_output)
 
     def forward(self, x):
         x1, x2 = self.fc1(x).chunk(2, dim=-1)
-        return self.fc2(F.gelu(x1) * x2)
+        return self.fc2(F.silu(x1) * x2)
 
 
 class PhysicsAttention(nn.Module):
