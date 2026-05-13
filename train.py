@@ -611,6 +611,13 @@ with open(model_dir / "config.yaml", "w") as f:
 ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
 print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
 
+# Per-channel Huber δ: looser velocity (0.5) preserves the gradient on
+# large high-Re Ux/Uy residuals; tighter pressure (0.1) keeps the surface
+# pressure signal in the quadratic regime where small errors dominate.
+HUBER_DELTAS_VAL = [0.5, 0.5, 0.1]  # [Ux, Uy, p]
+huber_deltas = torch.tensor(HUBER_DELTAS_VAL, device=device).view(1, 1, 3)
+print(f"Per-channel Huber deltas (Ux, Uy, p): {HUBER_DELTAS_VAL}")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 slice_entropy_ep1: list[list[float]] | None = None
@@ -660,16 +667,18 @@ for epoch in range(MAX_EPOCHS):
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
 
-            # Huber-shaped per-node residuals in normalized space.
-            # Replaces the squared error in the relative-L2 numerator, combining
-            # per-sample relative scaling with per-node outlier capping.
-            HUBER_DELTA = 0.1
+            # Huber-shaped per-node residuals in normalized space, with
+            # per-channel δ (huber_deltas, shape [1,1,3]) broadcasting across
+            # the residual. Velocity channels use a looser δ=0.5 to preserve
+            # gradient on large high-Re Ux/Uy residuals; pressure uses the
+            # original δ=0.1 to keep surface-p in the quadratic regime.
             residual = pred - y_norm
             abs_residual = residual.abs()
+            d = huber_deltas.to(residual.dtype)
             sq_err = torch.where(
-                abs_residual <= HUBER_DELTA,
+                abs_residual <= d,
                 0.5 * residual ** 2,
-                HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
+                d * (abs_residual - 0.5 * d),
             )
             vol_mask = (mask & ~is_surface).unsqueeze(-1)
             surf_mask = (mask & is_surface).unsqueeze(-1)
@@ -693,12 +702,13 @@ for epoch in range(MAX_EPOCHS):
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
-        # and per-channel unweighted Huber loss (so we can compare the raw
-        # pressure-channel error signal against velocity channels).
+        # (per-channel δ broadcasts via huber_deltas) and per-channel
+        # unweighted Huber loss (so we can compare the raw pressure-channel
+        # error signal against velocity channels).
         with torch.no_grad():
             valid = mask.unsqueeze(-1).expand_as(abs_residual)
             n_valid = valid.sum().clamp(min=1)
-            n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
+            n_l2 = ((abs_residual <= d) & valid).sum()
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
             sq_err_f64 = sq_err.detach().to(torch.float64)
             surf_huber_per_ch_sum += (sq_err_f64 * surf_mask).sum(dim=(0, 1))
@@ -833,7 +843,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_huber_per_ch": surf_huber_per_ch,
         "train/vol_huber_per_ch": vol_huber_per_ch,
         "p_channel_weight": cfg.p_channel_weight,
-        "huber_delta": 0.1,
+        "huber_deltas": HUBER_DELTAS_VAL,
         "loss_type": "huber_relative_l2_channel_weighted",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
