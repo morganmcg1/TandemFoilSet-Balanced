@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 23)
+- **As of:** 2026-05-13 (updated cycle 26)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -42,14 +42,16 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 
 **Active directions:**
 
-1. **Decoupled LR extension** — merged at 5e-3 (−0.18%); trend not exhausted. Push to 7e-3/1e-2 with 2-epoch head warmup to tame late oscillation. #1949 thorfinn (WIP).
-2. **Weight decay re-tune** — current WD=1e-4 has been unchanged through all merged stages (BIVW → Huber → surf-head → decoupled-LR). Sweep {3e-5, 5e-4} to test if stale WD limits the new baseline. #2031 fern (NEW).
-3. **AdamW β2 sweep** — default β2=0.999 has ~700-step half-life, longer than our 5200-step training budget. Try {0.95, 0.98} for faster variance tracking, standard transformer best practice. #2015 askeladd (NEW).
-4. **BF16 capacity unlock** — #1572 frieren (WIP, stale).
-5. **Pressure-channel emphasis** — #1496 alphonse (WIP, stale).
-6. **Per-channel Huber delta** — δ_p vs δ_ux/uy. #1922 nezuko (WIP).
-7. **Encoder LR re-tune** — encoder LR was calibrated pre-Huber/pre-decoupled-head; re-sweep {3e-4, 7e-4} stacked on surf_head_lr=5e-3. #1974 edward (NEW).
-8. **LogCosh surface loss** — different loss family from Huber-δ; C²-smooth instead of Huber's C¹ kink. Tests if gradient smoothness at the δ boundary matters for Adam's variance tracking. #2013 tanjiro (NEW).
+1. **Weight decay re-tune** — current WD=1e-4 has been unchanged through all merged stages (BIVW → Huber → surf-head → decoupled-LR). Sweep {3e-5, 5e-4} to test if stale WD limits the new baseline. #2031 fern (WIP).
+2. **BF16 capacity unlock** — #1572 frieren (WIP, stale).
+3. **Pressure-channel emphasis** — #1496 alphonse (WIP, stale).
+4. **Per-channel Huber delta** — δ_p vs δ_ux/uy. #1922 nezuko (WIP).
+5. **Encoder LR re-tune** — encoder LR was calibrated pre-Huber/pre-decoupled-head; re-sweep {3e-4, 7e-4} stacked on surf_head_lr=5e-3. #1974 edward (WIP).
+6. **LogCosh surface loss** — different loss family from Huber-δ; C²-smooth instead of Huber's C¹ kink. Tests if gradient smoothness at the δ boundary matters for Adam's variance tracking. #2013 tanjiro (WIP).
+7. **Wider surf_head** — head hidden_dim sweep {128, 256} (currently 64); tests if surf_head capacity is the bottleneck now that LR axis is exhausted. Wall-clock-neutral. #2057 askeladd (NEW).
+8. **Per-group gradient clipping on surf_head** — per-group max_norm ∈ {0.5, 1.0} applied only to surf_head params; targets the late-epoch oscillation (epoch 12 spike) diagnosed across three PRs (#1795, #1949, #2015) as a sampler-variance-driven instability. #2058 thorfinn (NEW).
+
+**surf_head axis characterization (complete):** surf_head_lr=5e-3 is the local optimum. PR #1795 confirmed; PR #1949 (7e-3/1e-2 + warmup) both regressed. Oscillation is steady-state (sampler variance), not cold-start — warmup was the wrong axis. Now testing capacity (#2057) and stabilization (#2058) orthogonally.
 
 ## Key insights
 
@@ -59,6 +61,10 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 
 **Cycle 14 (PR #1627):** Huber delta sweep (δ=0.2, 0.3) both regress. At δ=0.5 only ~2% of residuals in the L1 regime; smaller deltas over-flatten mid-magnitude gradients that drive MAE. **Lesson:** δ=0.5 is a narrow sweet spot — do not re-sweep without changing other levers.
 
+**Cycles 25-26 (PRs #2015, #1949):** β2=0.999 is a structural stabilizer, not a tunable lag. The balanced sampler draws from 3 domains with heterogeneous mesh sizes (74K-242K nodes) and y-magnitudes (164-458 std), producing high per-batch variance. β2=0.999 low-passes this noise. β2=0.95 cut the EMA window to ~20 steps, amplifying the epoch-12 oscillation (155.90 vs 113.66). **Lesson:** β2 must be preserved at 0.999 unless the sampler is simultaneously redesigned.
+
+**Cycles 25-26 (PR #1949):** The late-epoch oscillation (e11 best, e12 spike, e14 recovery) is a *steady-state property* of the optimization landscape, not a cold-start artifact. Same signature confirmed at surf_head_lr 5e-3 (#1795), 7e-3, 1e-2 (#1949), and β2=0.95 (#2015). Warmup addresses the wrong mechanism. The spike is driven by sampler-variance as LR anneals late in training. **Lesson:** Any new stabilization approach must target steady-state gradient variance (e.g., per-group clipping #2058), not initialization.
+
 ## Live PRs
 
 | # | Student | Slug | Status | Notes |
@@ -66,11 +72,11 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 | 1496 | alphonse | pressure-channel-prioritized-loss | WIP | Huber default correction sent; use --huber_delta 0.5 |
 | 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
 | 1922 | nezuko | per-channel-huber-delta | WIP | δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}; tests if global δ over-flattens Ux/Uy distributions |
-| 1949 | thorfinn | surf-head-lr-warmup | WIP | surf_head_lr ∈ {7e-3, 1e-2} + 2-ep head warmup; extends PR #1795 trend |
 | 1974 | edward | encoder-lr-retune | WIP | Re-tune encoder LR {3e-4, 7e-4} stacked on surf_head_lr=5e-3; encoder LR stale since pre-Huber |
 | 2013 | tanjiro | logcosh-surface-loss | WIP | LogCosh C²-smooth alternative to Huber-δ kink. Arms: scale={1.0, 0.5} |
-| 2015 | askeladd | adamw-beta2-0.95 | WIP | AdamW β2 ∈ {0.95, 0.98}; default 0.999 too slow for 14-epoch budget |
-| 2031 | fern | weight-decay-sweep | WIP (NEW) | WD ∈ {3e-5, 5e-4}; current 1e-4 stale since pre-Huber. CLI-only. |
+| 2031 | fern | weight-decay-sweep | WIP | WD ∈ {3e-5, 5e-4}; current 1e-4 stale since pre-Huber. CLI-only. |
+| 2057 | askeladd | wider-surf-head | WIP (NEW) | surf_head hidden_dim ∈ {128, 256}; current 64 may be capacity bottleneck after LR axis exhausted |
+| 2058 | thorfinn | surf-head-grad-clip | WIP (NEW) | per-group grad clip max_norm ∈ {0.5, 1.0} on surf_head only; targets late-epoch oscillation |
 
 ## Working hypotheses
 
@@ -90,18 +96,21 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30% regression). +37% per-epoch cost → 10 vs 14 epochs. Fourth wall-clock-bound capacity failure. Pareto frontier confirmed: depth=5/14ep is optimal; all capacity expansions on depth+slice axes lose.
 11b. **Shallower depth (n_layers=4)** — **rejected** (PR #1881, +8.39% regression). −14% per-epoch cost gained 2 extra epochs (16 vs 14) but capacity loss from 1 fewer TransolverBlock dominated. Regression uniform across all 4 splits → pure underfitting. Depth=5/14ep is Pareto frontier — both perturbations on the depth axis confirm this.
 11c. **n_head 4→8** — **rejected** (PR #1924, +18.84% regression). Wall-clock overhead +31% (175 s vs 133 s per epoch) → lost 3 epochs (11 vs 14). Per-epoch quality was better at epoch 11 (−9.3%) but budget loss dominated. Fifth wall-clock-bound failure. Pareto frontier confirmed for all capacity-axis perturbations.
-11d. **Encoder LR re-tune** — testing (#1974 edward, NEW). Encoder LR stale at 5e-4 since pre-Huber era; sweep {3e-4, 7e-4} stacked on surf_head_lr=5e-3.
-16. **Per-channel Huber delta** — testing (#1922 nezuko, NEW). δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}. Tests if global δ=0.5 is over-flattening Ux/Uy mid-magnitude gradients that drive velocity MAE.
+11d. **Encoder LR re-tune** — testing (#1974 edward). Encoder LR stale at 5e-4 since pre-Huber era; sweep {3e-4, 7e-4} stacked on surf_head_lr=5e-3.
+16. **Per-channel Huber delta** — testing (#1922 nezuko). δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}. Tests if global δ=0.5 is over-flattening Ux/Uy mid-magnitude gradients that drive velocity MAE.
 12. **Warmup schedule** — **rejected** (PR #1497, +17.98% regression). Wall-clock-bound training (~14 epochs) makes warmup a liability — 5 warmup epochs consume the most productive early steps. The CosineAnnealingLR(T_max=50) baseline is effectively flat at lr=5e-4 for 14 epochs and wins. No instability observed in baseline; the hypothesis was wrong.
 13. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
 14. **EMA model weights** — **rejected** (PR #1808, +7.8-16.2% regression). 14-epoch budget too short; model in descent phase, not noisy-plateau. EMA window contaminates evaluation with early-training weights. Budget mismatch, not hypothesis failure.
-15. **Decoupled LR for surf_head vs encoder** — **confirmed** (PR #1795, −0.18%). surf_head_lr=5e-3 (10×encoder) is the winning arm; monotonic improvement trend across 1e-3→3e-3→5e-3 not yet exhausted. Extending: PR #1949 thorfinn tests 7e-3/1e-2 with warmup.
+15. **Decoupled LR for surf_head vs encoder** — **confirmed** (PR #1795, −0.18%). surf_head_lr=5e-3 (10×encoder) is the winning arm. **Fully characterized** (PR #1949 closed): 7e-3/1e-2 with warmup both regressed. LR axis exhausted at 5e-3. Next: head capacity (#2057) and grad-clip stabilization (#2058).
 16. **Adaptive Huber δ** — **rejected** (PR #1950, +2.25% regression). EMA δ collapsed to clamp floor (0.2) in 60 steps and stayed 88% of training — effectively fixed-δ=0.2. Decoupled-LR merger made δ landscape flatter (PR #1627 saw +17% at δ=0.2; this run only +2.25%). Direction exhausted at this baseline.
-17. **SWA late-epoch averaging** — **rejected** (PR #1951, +3.33% val, +0.99% test regression). SWA mechanism worked exactly as predicted: averaged checkpoint is 4 points better than best single epoch. But this run's trajectory landed ~8 points worse than baseline (best single epoch 105.63 vs 97.99) due to seed variance. The 4-point mechanism gain cannot bridge 8-point trajectory gap. Direction closed; mechanism would still help on a baseline-quality trajectory but cannot be reliably evaluated under our budget without paired-seed.
-18. **Stochastic Depth (DropPath)** — **rejected** (PR #1987, +3.31% val, +1.35% test). Mechanism worked exactly as predicted — baseline late-epoch oscillation (97.99→113.66→108.05→99.85) replaced by monotone (116.46→110.22→107.96→101.23) under DropPath. But convergence slowdown (~3 epochs behind baseline at same step) dominated under 30-min budget. Same wall-clock-bound failure mode as EMA (#1808) and n_head=8 (#1924) — regularization payback requires longer budget than we have.
-21. **Weight decay re-tune** — testing (#2031 fern, NEW). WD ∈ {3e-5, 5e-4}; current 1e-4 unchanged through all merged stages.
-19. **LogCosh surface loss** — testing (#2013 tanjiro, NEW). C²-smooth alternative to Huber's C¹ δ-kink. Tests if gradient smoothness affects Adam's variance tracking.
-20. **AdamW β2 sweep** — testing (#2015 askeladd, NEW). Default β2=0.999 has ~700-step half-life vs 5200-step total budget; try 0.95 (transformer standard) and 0.98.
+17. **SWA late-epoch averaging** — **rejected** (PR #1951, +3.33% val, +0.99% test regression). SWA mechanism worked exactly as predicted: averaged checkpoint is 4 points better than best single epoch. But this run's trajectory landed ~8 points worse than baseline (best single epoch 105.63 vs 97.99) due to seed variance. The 4-point mechanism gain cannot bridge 8-point trajectory gap. Direction closed.
+18. **Stochastic Depth (DropPath)** — **rejected** (PR #1987, +3.31% val, +1.35% test). Mechanism confirmed — oscillation smoothed away. But ~3-epoch convergence slowdown dominated under 14-epoch budget. Wall-clock-bound regularization failure (same pattern as EMA, n_head=8).
+19. **LogCosh surface loss** — testing (#2013 tanjiro). C²-smooth alternative to Huber's C¹ δ-kink.
+20. **AdamW β2 sweep** — **rejected** (PR #2015, +6.49% val, +6.80% test regression). β2=0.95 destructive because β2=0.999 IS a stabilizer against heteroscedastic balanced sampler, not a lag parameter. See key insight below. β2=0.999 REQUIRED.
+21. **Weight decay re-tune** — testing (#2031 fern). WD ∈ {3e-5, 5e-4}; current 1e-4 unchanged through all merged stages.
+22. **Decoupled LR + head warmup** — **rejected** (PR #1949, best arm +1.30% regression). Warmup damped cold-start but not steady-state oscillation. surf_head_lr=5e-3 confirmed as local optimum. LR axis exhausted.
+23. **Wider surf_head** — testing (#2057 askeladd). hidden_dim ∈ {128, 256}; current 64. First pure capacity test on the head.
+24. **Per-group surf_head gradient clipping** — testing (#2058 thorfinn). max_norm ∈ {0.5, 1.0} on surf_head params only; targets late-epoch oscillation confirmed as sampler-variance-driven.
 
 ## Closed / rejected hypotheses
 
@@ -124,6 +133,8 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 - **PR #1978** (Re-curriculum via loss multiplier) — +16.87% val, +15.13% test regression. Symmetric Re-tail × BIVW creates destructive interaction: low-Re double-up-weighted, mid-Re down-weighted, high-Re boost cancelled. Both symmetric Re-tail variants (sampler #1868 and loss #1978) closed.
 - **PR #1951** (SWA late-epoch averaging) — +3.33% val, +0.99% test regression. SWA mechanism worked (averaged ckpt 4 points better than best single epoch) but trajectory landed in worse basin than baseline (seed variance). Cannot reliably evaluate without paired-seed comparison under 30-min cap. Direction closed.
 - **PR #1987** (Stochastic Depth / DropPath on Transolver blocks) — +3.31% val, +1.35% test regression. Mechanism worked exactly as predicted (late-epoch oscillation smoothed away). But ~3-epoch convergence slowdown dominated under 14-epoch budget. Wall-clock-bound regularization failure pattern.
+- **PR #2015** (AdamW β2=0.95) — +6.49% val, +6.80% test regression. β2=0.999 is a structural stabilizer (not a lag parameter) against the balanced sampler's heteroscedastic per-batch variance. Epoch-12 spike WORSE under β2=0.95 (155.90 vs baseline 113.66). β2=0.999 is REQUIRED for stability — do not tune freely.
+- **PR #1949** (surf_head_lr warmup {7e-3, 1e-2}) — best arm +1.30% regression (Arm 2: +12.73%). Warmup addressed cold-start correctly but not the steady-state oscillation. surf_head_lr=5e-3 is confirmed local optimum; LR axis fully exhausted. Implementation insight: single LambdaLR composing cosine × warmup (not two chained schedulers, which is buggy).
 
 ## Potential next directions
 

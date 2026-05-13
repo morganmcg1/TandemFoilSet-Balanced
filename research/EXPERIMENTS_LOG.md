@@ -1070,3 +1070,83 @@ Test (arm 3): test 3-split mean 99.5856 (vs baseline 98.7537, +0.85 regression o
 **Key insight from half-decay comparison:** decay=0.995 (window ≈ 0.5 epochs) closes ~half the gap vs decay=0.999 (window ≈ 2.7 epochs). Extrapolating: decay < 0.98 (window ≈ 50 steps) should approach but not beat the live model. The variance-reduction benefit is real but requires late-training access.
 
 **Follow-up assigned:** SWA-style late-epoch averaging (#1951 askeladd) — average only last K checkpoints, avoids early-training bias entirely.
+
+## 2026-05-13 07:45 — PR #2015: AdamW β2=0.95 — monotone test on β2 axis
+
+- **Branch:** `willowpai2g48h4-askeladd/adamw-beta2-0.95` (CLOSED — regression, destructive interaction with balanced sampler)
+- **Student:** willowpai2g48h4-askeladd
+- **W&B run:** `xi1r1iqd`
+- **Hypothesis:** β2=0.999 (Adam default) maintains a long EMA of second moments. β2=0.95 (used in RoFormer, DeiT training) halves the EMA window, letting the optimizer respond faster to shifting gradient curvature. Predicted −0.5% to −2% from 97.9914.
+
+### Results
+
+| Metric | Baseline (β2=0.999) | β2=0.95 | Δ |
+|--------|---------------------|---------|---|
+| `val_avg/mae_surf_p` | 97.9914 | 104.3438 | **+6.49% regression** |
+| `test_avg/mae_surf_p` | 88.5311 | 94.5522 | **+6.80% regression** |
+| Best epoch | 11 | 8 | — |
+
+### Per-epoch trajectory
+
+| Epoch | Baseline | β2=0.95 |
+|-------|----------|---------|
+| 11 | **97.99** | 110.30 |
+| 12 | 113.66 | **155.90** (spike) |
+| 14 | 99.85 | 107.78 |
+| Best | e11: 97.99 | e8: 104.34 |
+
+### Analysis and Conclusions
+
+**Closed — β2=0.95 is a sampler stabilizer, not a lag parameter.**
+
+**Mechanism (student's insight, confirmed):** The balanced sampler draws from 3 domains with heterogeneous mesh sizes (74K-242K nodes) and y-magnitudes (164-458 std). Each step sees high batch-to-batch variance in gradient curvature. β2=0.999 acts as a low-pass filter against this noise — it accumulates a smooth estimate of the Hessian diagonal across many batches. β2=0.95 cuts the EMA window to ~20 steps, allowing per-domain curvature spikes to bleed through. The epoch-12 spike was WORSE under β2=0.95 (155.90 vs baseline 113.66), confirming the spike is driven by sampler variance, not by the optimizer's adaptation lag.
+
+**Key insight (preserved for the team):** β2=0.999 is REQUIRED for stability against the balanced sampler's per-batch variance. It is not a hyperparameter to tune freely — it is a structural stabilizer. Future optimizer experiments MUST preserve β2=0.999 unless they simultaneously redesign the balanced sampler.
+
+**Why student's follow-up directions were not pursued:** β2=0.9997 or β2=0.9995 would just move toward the current value; the direction is wrong. Per-domain adaptive β2 would require redesigning the sampler (out of scope for a single experiment). Mixing β2 + BIVW adjustment doubles the variables. All are more complex and less likely to yield a clean result than simply keeping β2=0.999.
+
+## 2026-05-13 08:10 — PR #1949: Decoupled LR + head warmup: push surf_head_lr to {7e-3, 1e-2}
+
+- **Branch:** `willowpai2g48h4-thorfinn/surf-head-lr-warmup` (CLOSED — both arms regressed, stability ceiling confirmed)
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `dn5s3kbs` (7e-3), `0kuym49t` (1e-2)
+- **Hypothesis:** surf_head_lr=5e-3 sweep (PR #1795) had not reversed at the winning arm — try pushing to {7e-3, 1e-2} with a 2-epoch linear warmup to damp cold-start overshoots. Predicted −0.5% to −2%.
+
+### Results
+
+| Arm | surf_head_lr | n_warmup | Best epoch | val_avg/mae_surf_p | Δ vs 97.9914 |
+|-----|-------------|----------|-----------|---------------------|-------------|
+| Baseline | 5e-3 | 0 | 11 | **97.9914** | — |
+| Arm 1 | 7e-3 | 2 | 14 | 99.2678 | +1.30% |
+| Arm 2 | 1e-2 | 2 | 14 | 110.4673 | +12.73% |
+
+### Per-split val MAE at best checkpoint
+
+| Split | Arm 1 (7e-3) | Arm 2 (1e-2) | Baseline |
+|-------|-------------|-------------|----------|
+| val_single_in_dist | 121.99 | 160.47 | 120.31 |
+| val_geom_camber_rc | 110.55 | 114.06 | **115.98** ← improved by 7e-3 |
+| val_geom_camber_cruise | 72.71 | 74.62 | **66.04** |
+| val_re_rand | 91.83 | 92.73 | **89.64** |
+| **val_avg** | 99.27 | 110.47 | **97.99** |
+
+### Analysis and Conclusions
+
+**Closed — surf_head_lr=5e-3 is the local optimum at our budget. All axes exhausted.**
+
+**Warmup correctness (student's implementation note):** Chaining two schedulers on the same optimizer is buggy — second .step() overwrites the first because both write to param_group['lr'] from the captured base_lr. Student correctly used a single LambdaLR composing cosine × warmup. This is the correct pattern for future per-group scheduling experiments.
+
+**Warmup damped cold-start but not late-epoch oscillation:** The spike pattern at epoch 12 persisted under both arms — same spike magnitude as baseline even with warmup. Warmup addresses the wrong mechanism (cold-start, not steady-state variance). Best epoch shifted 11→14 (warmup ate into early progress), confirming the tradeoff did not pay.
+
+**Third confirmation of steady-state oscillation principle:** Epochs 11→12 spike is present at 5e-3, 7e-3, AND 1e-2. This is independent of LR magnitude. The mechanism is the BIVW balanced sampler producing high per-batch variance late in training as the LR anneals. Confirmed across β2 sweep (#2015), warmup sweep (this PR), and previous LR sweep (#1795).
+
+**arm 1 shows partial per-split improvement:** val_geom_camber_rc improved −4.7% (110.55 vs 115.98 baseline). But geom_camber_cruise and re_rand regressed, netting a overall regression. This is consistent with higher head LR providing more expressivity for some splits but destabilizing the head on others.
+
+**Key insight: The surf_head optimization axis is exhausted.** Three PRs now confirm:
+- #1795: 5e-3 > 1e-3, 3e-3; best at this budget
+- #1949: 7e-3, 1e-2 with warmup: regression
+- Any further LR push faces the stability ceiling
+
+**Next directions:**
+- Wider surf_head (#2057, askeladd): head *capacity* axis (orthogonal to LR)
+- Per-group gradient clipping on surf_head (#2058, thorfinn): targets the late-epoch oscillation mechanism directly
