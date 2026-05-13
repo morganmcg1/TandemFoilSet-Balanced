@@ -179,21 +179,49 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+            # H24: replace shared output MLP with 3 per-channel non-linear heads
+            # (one each for Ux, Uy, p). Channel order matches data contract.
+            self.hidden_head = hidden_dim // 2
+            self.head_Ux = nn.Sequential(
+                nn.Linear(hidden_dim, self.hidden_head), nn.GELU(),
+                nn.Linear(self.hidden_head, 1),
             )
+            self.head_Uy = nn.Sequential(
+                nn.Linear(hidden_dim, self.hidden_head), nn.GELU(),
+                nn.Linear(self.hidden_head, 1),
+            )
+            self.head_p = nn.Sequential(
+                nn.Linear(hidden_dim, self.hidden_head), nn.GELU(),
+                nn.Linear(self.hidden_head, 1),
+            )
+
+    def init_output_heads(self):
+        """Conservative init for the per-channel head second linears. Call after
+        ``self.apply(_init_weights)`` so it isn't overwritten."""
+        if not self.last_layer:
+            return
+        std = 0.02 / (self.hidden_head ** 0.5)
+        for head in (self.head_Ux, self.head_Uy, self.head_p):
+            nn.init.zeros_(head[2].bias)
+            nn.init.normal_(head[2].weight, std=std)
+
+    def _decode(self, fx):
+        h = self.ln_3(fx)
+        y_Ux = self.head_Ux(h)
+        y_Uy = self.head_Uy(h)
+        y_p = self.head_p(h)
+        return torch.cat([y_Ux, y_Uy, y_p], dim=-1)
 
     def forward(self, fx):
         if self.training and self.stoch_depth_prob > 0.0:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
                 if self.last_layer:
-                    return self.mlp2(self.ln_3(fx))
+                    return self._decode(fx)
                 return fx
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            return self._decode(fx)
         return fx
 
 
@@ -229,6 +257,9 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Override the global init for per-channel output head second linears
+        for block in self.blocks:
+            block.init_output_heads()
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
