@@ -4,6 +4,27 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 07:30 — PR #1972: [batch-size-2] Halve batch size 4→2 (alphonse)
+
+- **`val_avg/mae_surf_p`:** **76.24** (best epoch 18/19)
+- **`test_avg/mae_surf_p`:** **66.85** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=81.78, geom_camber_rc=87.06, geom_camber_cruise=59.39, re_rand=76.74
+- **Per-split surface-p MAE (test):** single_in_dist=70.94, geom_camber_rc=77.56, geom_camber_cruise=50.63, re_rand=68.28
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=2, seed=42, SequentialLR(LinearLR(1ep warmup) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0), bf16, unified_pos=True, ref=8`
+- **Key change:** batch_size 4→2. n_batches_per_epoch doubled (375→750) — same wall-clock per epoch (~95s), 2x optimizer steps. VRAM halved (~17 GB). 19 epochs completed (vs 18 for bs=4).
+- **Improvement vs directly-comparable reference (#1812 lr-warmup-1ep, bs=4):** val −6.32 (−7.65%), test −7.28 (−9.82%)
+- **All 8 splits improved:** single_in_dist val −8.62 / test −10.02 (biggest), rc val −4.34 / test −4.48 (smallest)
+- **Metric artifacts:** `models/model-charliepai2g48h4-alphonse-batch-size-2-20260513-060609/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-alphonse --experiment_name "charliepai2g48h4-alphonse/batch-size-2"`
+
+**Open questions after this merge:**
+- Does lr=7e-4 (thorfinn #1968) still win on top of bs=2? Thorfinn's result (79.77) beat bs=4 baseline but not this new bs=2 baseline. Sent back to rerun with bs=2 + lr=7e-4.
+- Does lr=8e-4 (nezuko #2014 onecycle-lr) win? Both schedule shape and peak LR differ from current.
+- Does EMA (askeladd #1540) stack with bs=2? EMA currently training on bs=4 baseline. Results pending.
+- Optimal batch size bracket: bs=2 wins; bs=1 assigned to alphonse to probe lower.
+
+---
+
 ### 2026-05-13 06:00 — PR #1812: [lr-warmup-1ep] 1-epoch linear warmup + cosine annealing (thorfinn)
 
 - **`val_avg/mae_surf_p`:** **82.56** (best epoch 18/18)
