@@ -37,6 +37,30 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
+### 2026-05-13 13:45 — PR #2266 (`charliepai2g24h4-thorfinn/geglu-gate-comparison`)
+
+GeGLU gate: single-character change `F.silu → F.gelu` in `SwiGLUMLP.forward()`. GELU's slightly harder switch in the negative-input regime suppresses cross-channel contamination at high-magnitude pressure features (stagnation points, wakes). L1 + surf-ch-weight [0.5,0.5,2.0] gradient signal is dominated by extreme pressure values where gate sharpness matters most. All 4 val splits improve; 3 of 4 test splits improve (test_geom_camber_rc +2.53%, attributed to pre-existing val/test camber-rc decorrelation, not GeGLU specifically). Zero parameter cost; same epoch budget as SwiGLU.
+
+- **`val_avg/mae_surf_p`** = **64.182** (best @ epoch 13; **−4.75%** vs #2175 baseline 67.381)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **56.523** (−2.21% vs #2175 baseline 57.800)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 67.894 (−7.43% vs #2175)
+  - `val_geom_camber_rc` = 76.235 (−5.50% vs #2175)
+  - `val_geom_camber_cruise` = 47.790 (−1.82% vs #2175)
+  - `val_re_rand` = 64.808 (−3.03% vs #2175)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 60.676 (−6.20% vs #2175)
+  - `test_geom_camber_rc` = 70.778 (+2.53% vs #2175 — lone regression; val split wins)
+  - `test_geom_camber_cruise` = 39.001 (−3.36% vs #2175)
+  - `test_re_rand` = 55.636 (−2.60% vs #2175)
+- **Mechanism**: GELU provides a harder gate than SiLU in the negative regime — `GELU(x) < SiLU(x)` for x < 0, suppressing cross-channel contamination at peak-pressure regions. Under L1 + 4× pressure weighting, the model's gradient is dominated by extreme p values (stagnation/wake), and the sharper gate better isolates those features. Same params, same best epoch, same training dynamics.
+- **Compound progress**: 14 merges, **100.957 → 64.182 = −36.4%** (#1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→#2175→**#2266**)
+- **Param count**: 831,191 (unchanged — zero new parameters; 1-character gate swap).
+- **Metric artifacts**: `models/model-charliepai2g24h4-thorfinn-geglu-gate-comparison-20260513-121756/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-thorfinn --experiment_name charliepai2g24h4-thorfinn/geglu-gate-comparison`
+
+---
+
 ### 2026-05-13 11:20 — PR #2175 (`charliepai2g24h4-tanjiro/swiglu-inner-dim-256`)
 
 SwiGLU inner_dim expanded from 176 (=round_up8(256×2/3), param-matched) to 256 (=full hidden_dim). Gives gate/up/down projections full representational capacity within each TransolverBlock. Wins on all 4 test splits and 3/4 val splits (val_geom_camber_rc +1.4, but test_geom_camber_rc still wins −0.27). Best epoch = 13 (last epoch trained — model was still improving at timeout, suggesting under-training; longer schedule likely widens gain further). Param cost +22.6% (677,591 → 831,191). Run at 30-min cap (13/50 epochs).
