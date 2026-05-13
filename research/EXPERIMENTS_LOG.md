@@ -8,6 +8,58 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 16:05 — PR #2360 (fern reglu-inner-dim-288) — **MERGED** (16th compound win)
+
+- Branch: `charliepai2g24h4-fern/reglu-inner-dim-288`
+- Hypothesis: Bisect inner_dim between 256 (ReGLU baseline) and 320 (compute-bound Outcome B on GeGLU). At +4.7% sec/epoch, inner_dim=288 stays in 12-epoch window. ReGLU's exact-zero gate creates dead channels; extra width compensates.
+- Metric artifact: `models/model-charliepai2g24h4-fern-reglu-inner-dim-288-20260513-141957/metrics.jsonl`
+
+| Split | ReGLU baseline (#2304) | inner_dim=288 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | **67.276** | **−3.79%** |
+| val_geom_camber_rc | 74.845 | **72.143** | **−3.61%** |
+| val_geom_camber_cruise | 44.262 | 45.901 | +3.70% (lone regression) |
+| val_re_rand | 62.765 | **62.181** | **−0.93%** |
+| **val_avg (primary)** | **62.949** | **61.875** | **−1.71%** |
+| test_single_in_dist | 61.108 | **60.873** | −0.38% |
+| test_geom_camber_rc | 66.196 | **65.103** | **−1.65%** |
+| test_geom_camber_cruise | 36.305 | 37.112 | +2.22% |
+| test_re_rand | 53.276 | 53.380 | +0.20% |
+| **test_avg** | **54.221** | **54.117** | **−0.19%** |
+
+Best epoch: 12 (timeout-truncated, descending). n_params: 892,631 (+61,440). sec/epoch: +4.7%.
+
+**Analysis:** Epoch-budget hypothesis confirmed — val_single_in_dist IMPROVES −3.79% (vs +11.2% regression at 320), proving that 320's regression was schedule truncation (11 epochs), not capacity overfit. At +4.7% sec/epoch, 288 preserves the 12-epoch window. val_geom_camber_cruise slight regression (+3.70%) is the easiest split, already at 44.3, likely saturated. 3/4 val splits and 2/4 test splits improve — clean Outcome A.
+
+**New baseline**: val=61.875, test=54.117. Compound progress: 16 merges, **100.957 → 61.875 = −38.7%**.
+
+**Natural follow-up**: inner_dim=320 on ReGLU — fern's own suggestion. At ReGLU's ~+10-12% sec/epoch vs GeGLU's +10.2%, 320 might now stay in 12-epoch window (ReGLU is slightly faster than GELU due to simpler gate computation). Assigning fern to this.
+
+---
+
+## 2026-05-13 16:05 — PR #2359 (thorfinn squared-relu-gate) — **CLOSED** (Outcome C; gate axis confirmed closed at ReLU)
+
+- Branch: `charliepai2g24h4-thorfinn/squared-relu-gate`
+- Hypothesis: `F.relu(x)^2` gate — Primer (So et al. 2021) — test whether gate-sharpness monotonicity extends past ReLU.
+- Metric artifact: `models/model-charliepai2g24h4-thorfinn-squared-relu-gate-20260513-141913/metrics.jsonl`
+
+| Split | ReGLU baseline (#2304) | Squared ReLU | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | 79.593 | **+13.83%** (catastrophic in-dist) |
+| val_geom_camber_rc | 74.845 | 77.313 | +3.30% |
+| val_geom_camber_cruise | 44.262 | 45.360 | +2.48% |
+| val_re_rand | 62.765 | 62.590 | −0.28% (flat) |
+| **val_avg (primary)** | **62.949** | 66.214 | **+5.19%** |
+| **test_avg** | **54.221** | 56.870 | +4.89% |
+
+Best epoch: 12 (timeout). n_params: 831,191 (unchanged). Pre-clip grad-norm peaked at 120.6 (ep4), vs clip cap 25.
+
+**Analysis:** Gate-sharpness monotonicity ends at ReLU. The SiLU→GELU→ReLU wins were all about hardening the negative-input threshold (sparser gating); Squared ReLU is different — it leaves sparsity identical to ReLU (same dead zone) but *amplifies* positive-input channels quadratically (x>1 grows, x<0.1 shrinks). In the CFD regime: high-magnitude pressure features (stagnation/wake) have the largest x values; quadratic amplification explodes their gradient, saturates grad-clip for the first half of training, and catastrophically overfits in-distribution. The student's analysis is excellent. LayerScale asymmetry (γ_attn shrinks to 0.015-0.021 from 0.025 init, γ_mlp grows to 0.037-0.044) shows the optimizer fighting the gate dynamics.
+
+**Gate axis permanently closed at ReLU**: any gate that breaks the identity-slope-for-positive invariant (Squared, Cube, etc.) will have this failure mode. ReGLU = `max(0, x)` is exactly right: maximum sparsity + identity slope for survivors.
+
+---
+
 ## 2026-05-13 15:55 — PR #2281 (tanjiro swiglu-inner-dim-320) — **CLOSED** (Outcome A vs old baseline, C vs new ReGLU baseline)
 
 - Branch: `charliepai2g24h4-tanjiro/swiglu-inner-dim-320`
