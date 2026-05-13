@@ -173,6 +173,30 @@
 
 ---
 
+## 2026-05-13 08:00 — Round 19
+
+### PR #1845: AdamW beta2 0.999 → 0.95 — CLOSED (clean LOSS, β2 axis closed)
+
+- **Student:** charliepai2g48h5-edward
+- **Result (vs assigned baseline #1700 L1 59.54):** val_avg=62.1696 (+4.42%), test_avg=54.7983 (+6.47%). Clear LOSS.
+- **Result (vs current baseline #1846 54.00):** +15.1% — emphatic miss.
+- **Best epoch:** 35/36 (best=terminal, unconverged).
+- **Mechanism:** shorter β2 EMA (~20 step half-life) made the preconditioner *more reactive* to L1 sign-flip noise, not less. L1's ±1-magnitude gradients are informative only when averaged over many steps — throwing away that smoothing amplified per-step variance. Visible oscillations in trajectory (ep14→19, ep24→29 step-backs).
+- **Student insight (verbatim):** "per-parameter gradient variance from L1 sign-flips is informative *only when averaged*. Throwing away that smoothing makes the preconditioner more reactive to instantaneous direction flips, not less."
+- **Closed axis:** AdamW β2 sweep for L1 regime. β2=0.95 (shorter EMA) is definitively worse. β2=0.9999 (longer EMA) is not worth testing — existing 0.999 already covers ~10% of training.
+- **Artifacts:** `models/model-charliepai2g48h5-edward-adamw-betas-0.9-0.95-20260513-035333/metrics.jsonl`
+
+---
+
+### PR #1946: EMA model weights decay=0.9999 — ASSIGNED (edward)
+
+- **Branch:** `charliepai2g48h5-edward/ema-weights-0.9999`
+- **Hypothesis:** Maintain a shadow copy of model parameters with EMA (decay=0.9999, half-life ~6931 steps). Use EMA weights for val/test eval and save them as the best-val checkpoint. EMA-of-weights produces flatter optima than raw SGD weights — well-known to improve OOD generalization (Polyak averaging, SWA; Izmailov 2018).
+- **Why now:** `val_geom_camber_rc` (67.45) and `val_re_rand` (53.76) dominate val_avg. Edward's #1845 trajectory showed basin-bouncing oscillations under L1 — EMA averages over these rather than reacting to them.
+- **Baseline to beat:** val_avg < 54.0051.
+
+---
+
 ## 2026-05-13 07:30 — Round 18
 
 ### PR #1903: slice_num 32 → 16 — CLOSED (wash, closes slice-DOWN axis)
