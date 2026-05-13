@@ -265,11 +265,16 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            preprocess_in_dim = fun_dim + ref**3
+            self.preprocess = MLP(preprocess_in_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            preprocess_in_dim = fun_dim + space_dim
+            self.preprocess = MLP(preprocess_in_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
+        # H61: per-feature input gate, no-WD 10x lr group. Init=1.0 so ep-1 is identical to baseline.
+        self.input_gate = nn.Parameter(torch.ones(preprocess_in_dim))
+        self.input_gate_dim = preprocess_in_dim
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
@@ -296,6 +301,8 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # H61: per-feature input gate; broadcast [D_in] over [B, N, D_in]
+        x = x * self.input_gate.view(1, 1, -1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -578,17 +585,24 @@ print(
 # channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
 # scaling factors toward zero (init=0.025), fighting the model's learned per-channel
 # diversification, and default lr=5e-4 under-trains them.
+# H61: per-feature input_gate (46 params) added to the same no-WD 10x lr group.
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
 layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
-other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
+input_gate_params = [p for n, p in model.named_parameters() if "input_gate" in n]
+other_params = [
+    p for n, p in model.named_parameters()
+    if "layer_scale" not in n and "input_gate" not in n
+]
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
-# H54: param-group consistency check — every model param ends up in exactly one of
-# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
+# H61: every model param ends up in exactly one of (layer_scale_params, input_gate_params, other_params).
 all_model_p = {id(p): p for p in model.parameters()}
-all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
+all_assigned_p = {
+    id(p): p for group in [layer_scale_params, input_gate_params, other_params]
+    for p in group
+}
 assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
     f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
 )
@@ -598,7 +612,17 @@ assert n_layer_scale == expected_layer_scale, (
     f"Expected {expected_layer_scale} LayerScale params "
     f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
+n_input_gate = sum(p.numel() for p in input_gate_params)
+expected_input_gate = 4 * N_FREQS + (X_DIM - 2)  # = 46
+assert n_input_gate == expected_input_gate, (
+    f"Expected {expected_input_gate} input_gate params, got {n_input_gate}"
+)
+assert (
+    sum(p.numel() for p in freq_params)
+    + sum(p.numel() for p in layer_scale_params)
+    + sum(p.numel() for p in input_gate_params)
+    + sum(p.numel() for p in other_params)
+) == (
     sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
 )
 optimizer = torch.optim.AdamW(
@@ -606,6 +630,7 @@ optimizer = torch.optim.AdamW(
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
         {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
         {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": input_gate_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
@@ -617,7 +642,14 @@ print(
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
     f"({sum(p.numel() for p in freq_params)} params), "
     f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
-    f"({n_layer_scale} params, expected {expected_layer_scale})"
+    f"({n_layer_scale} params, expected {expected_layer_scale}), "
+    f"input_gate lr={optimizer.param_groups[3]['lr']:.2e} wd={optimizer.param_groups[3]['weight_decay']:.0e} "
+    f"({n_input_gate} params, expected {expected_input_gate})"
+)
+print(
+    f"[H61] input_gate shape={tuple(model.input_gate.shape)}, "
+    f"init mean={model.input_gate.mean().item():.4f}, "
+    f"std={model.input_gate.std().item():.4f}"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
@@ -807,9 +839,24 @@ freqs_summary = {
     "final/freqs_abs_drift": freq_drift,
     "final/freqs_rel_drift": freq_rel_drift,
 }
+# H61: final per-feature input_gate values vs init=1.0
+input_gate_values = model.input_gate.detach().cpu().tolist()
+input_gate_abs_drift = [v - 1.0 for v in input_gate_values]
+input_gate_rel_drift = [(v - 1.0) / 1.0 for v in input_gate_values]
+ig_tensor = model.input_gate.detach().cpu()
+input_gate_summary = {
+    "final/input_gate": input_gate_values,
+    "final/input_gate_abs_drift": input_gate_abs_drift,
+    "final/input_gate_rel_drift": input_gate_rel_drift,
+    "final/input_gate_mean": float(ig_tensor.mean().item()),
+    "final/input_gate_std": float(ig_tensor.std().item()),
+    "final/input_gate_min": float(ig_tensor.min().item()),
+    "final/input_gate_max": float(ig_tensor.max().item()),
+    "final/input_gate_dim": int(model.input_gate.shape[0]),
+}
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **freqs_summary, **input_gate_summary},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -825,6 +872,32 @@ for k in range(N_FREQS):
         f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
         f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
     )
+
+# H61: input_gate diagnostic. The 46-dim post-FourierCoordEnc layout is:
+#   dims 0..23  : 4*N_FREQS=24 Fourier features (sin/cos of x-coord and z-coord at freqs[0..5])
+#   dims 24..45 : 22 remaining raw normalized features = X_DIM[2..23]
+#                 saf (2 dims), dsdf (8 dims), is_surface, log(Re), AoA1, NACA1 (3),
+#                 AoA2, NACA2 (3), gap, stagger
+print("[H61] Final per-feature input_gate (init=1.0):")
+print(
+    f"  shape={tuple(model.input_gate.shape)}, "
+    f"mean={input_gate_summary['final/input_gate_mean']:.4f}, "
+    f"std={input_gate_summary['final/input_gate_std']:.4f}, "
+    f"min={input_gate_summary['final/input_gate_min']:.4f}, "
+    f"max={input_gate_summary['final/input_gate_max']:.4f}"
+)
+_idx_sorted = sorted(
+    range(len(input_gate_values)), key=lambda i: abs(input_gate_abs_drift[i]), reverse=True
+)
+print("  Top-10 channels by |drift|:")
+for i in _idx_sorted[:10]:
+    print(
+        f"    ch[{i:2d}]: init=1.0000 -> final={input_gate_values[i]:.4f} "
+        f"(drift {input_gate_abs_drift[i]:+.4f}, {input_gate_rel_drift[i]*100:+.2f}%)"
+    )
+print("  All 46 channels:")
+for i, (v, drift) in enumerate(zip(input_gate_values, input_gate_abs_drift)):
+    print(f"    ch[{i:2d}] = {v:+.4f}  (drift {drift:+.4f})")
 
 # --- Test evaluation + local summary ---
 if best_metrics:
