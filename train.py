@@ -411,7 +411,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4              # initial_lr (OneCycleLR starting point)
     max_lr: float = 2e-3          # peak LR for OneCycleLR
-    weight_decay: float = 1e-4
+    weight_decay: float = 2e-4
     batch_size: int = 4
     surf_weight: float = 10.0
     p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
