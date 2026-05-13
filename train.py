@@ -529,6 +529,11 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+GRAD_CLIP_MAX_NORM = 10.0
+grad_norm_history: list[float] = []
+clip_count_total = 0
+norm_max_global = 0.0
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -538,6 +543,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_clip_count = 0
+    epoch_norm_max = 0.0
+    epoch_norm_sum = 0.0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -559,6 +567,22 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # clip_grad_norm_ returns the pre-clip total grad norm, so we can also
+        # measure how often the clip threshold actually fires.
+        total_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_norm=GRAD_CLIP_MAX_NORM
+        )
+        total_norm_val = float(total_norm)
+        was_clipped = total_norm_val > GRAD_CLIP_MAX_NORM
+        if was_clipped:
+            epoch_clip_count += 1
+            clip_count_total += 1
+        if total_norm_val > epoch_norm_max:
+            epoch_norm_max = total_norm_val
+        if total_norm_val > norm_max_global:
+            norm_max_global = total_norm_val
+        epoch_norm_sum += total_norm_val
+        grad_norm_history.append(total_norm_val)
         optimizer.step()
         scheduler.step()
 
@@ -574,6 +598,8 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/lr": scheduler.get_last_lr()[0],
+            "train/grad_norm": total_norm_val,
+            "train/grad_clipped": float(was_clipped),
             "global_step": global_step,
         })
 
@@ -605,9 +631,17 @@ for epoch in range(MAX_EPOCHS):
     live_val_loss_mean = sum(m["loss"] for m in live_split_metrics.values()) / len(live_split_metrics)
     dt = time.time() - t0
 
+    epoch_clip_rate = epoch_clip_count / max(n_batches, 1)
+    epoch_norm_mean = epoch_norm_sum / max(n_batches, 1)
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_mean": epoch_norm_mean,
+        "train/grad_norm_epoch_max": epoch_norm_max,
+        "train/grad_clip_count_epoch": epoch_clip_count,
+        "train/grad_clip_rate_epoch": epoch_clip_rate,
+        "train/grad_clip_count_cumulative": clip_count_total,
+        "train/grad_norm_max_global": norm_max_global,
         "val/loss": val_loss_mean,
         "val_live/loss": live_val_loss_mean,
         "ema_decay": cfg.ema_decay,
@@ -658,6 +692,36 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+clip_summary: dict[str, float] = {}
+if grad_norm_history:
+    norms_tensor = torch.tensor(grad_norm_history, dtype=torch.float64)
+    n_steps = norms_tensor.numel()
+    clip_rate = clip_count_total / max(n_steps, 1)
+    pcts = torch.quantile(norms_tensor, torch.tensor([0.5, 0.9, 0.99, 0.999], dtype=torch.float64))
+    clip_summary = {
+        "grad_clip/max_norm_threshold": GRAD_CLIP_MAX_NORM,
+        "grad_clip/total_steps": float(n_steps),
+        "grad_clip/clipped_steps": float(clip_count_total),
+        "grad_clip/clip_rate": float(clip_rate),
+        "grad_clip/norm_max": float(norms_tensor.max()),
+        "grad_clip/norm_p50": float(pcts[0]),
+        "grad_clip/norm_p90": float(pcts[1]),
+        "grad_clip/norm_p99": float(pcts[2]),
+        "grad_clip/norm_p999": float(pcts[3]),
+        "grad_clip/norm_mean": float(norms_tensor.mean()),
+    }
+    print(
+        f"\nGradient clipping summary (threshold={GRAD_CLIP_MAX_NORM}): "
+        f"clipped {clip_count_total}/{n_steps} ({clip_rate*100:.3f}%)  "
+        f"norm[max={clip_summary['grad_clip/norm_max']:.3f} "
+        f"p99.9={clip_summary['grad_clip/norm_p999']:.3f} "
+        f"p99={clip_summary['grad_clip/norm_p99']:.3f} "
+        f"p90={clip_summary['grad_clip/norm_p90']:.3f} "
+        f"p50={clip_summary['grad_clip/norm_p50']:.3f} "
+        f"mean={clip_summary['grad_clip/norm_mean']:.3f}]"
+    )
+    wandb.summary.update(clip_summary)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
