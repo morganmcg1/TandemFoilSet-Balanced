@@ -37,6 +37,30 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
+### 2026-05-13 17:05 — PR #2370 (`charliepai2g24h4-frieren/learned-freqs-no-wd-10x-lr`)
+
+Learned Fourier frequencies (6 learnable params) with no weight-decay + 10× lr multiplier. The fixed dyadic init `[1,2,4,8,16,32]` was over-regularized by default WD=1e-4 and lr=5e-4 — freqs barely moved in the earlier #2312 attempt. This PR puts the freq vector in a separate AdamW param group: `weight_decay=0`, `lr=5e-3` (10×). Bottom 3 freqs (1,2,4) now shift 14–27% off init toward [0.75, 1.46, 3.44], capturing dominant pressure-gradient spatial bands. Top 3 freqs (8,16,32) remain pinned — gradient-magnitude limited even at 10× lr.
+
+- **`val_avg/mae_surf_p`** = **59.5645** (best @ epoch 12; **−3.73%** vs #2360 baseline 61.875)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **51.6141** (**−4.63%** vs #2360 baseline 54.117)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 70.235 (+0.44% vs #2360 — near-neutral)
+  - `val_geom_camber_rc` = 71.466 (−1.00% vs #2360)
+  - `val_geom_camber_cruise` = **39.185** (−14.62% vs #2360 — largest gain)
+  - `val_re_rand` = **57.372** (−7.73% vs #2360)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 60.940 (−0.27% vs #2360)
+  - `test_geom_camber_rc` = 64.131 (−1.49% vs #2360)
+  - `test_geom_camber_cruise` = **32.376** (−12.75% vs #2360)
+  - `test_re_rand` = **49.009** (−8.17% vs #2360)
+- **Mechanism**: removing WD on the 6-freq vector and boosting its lr to 5e-3 allows the Fourier frequencies to learn the dominant spatial bands present in this dataset's pressure fields. Bottom freqs adapt strongly (−25% to −14% drift toward lower frequencies), capturing the dominant low-frequency pressure envelope. Top freqs remain gradient-magnitude limited — the fine-grained mesh structure at the highest dyadic frequencies carries insufficient gradient signal. Orthogonal to MLP-capacity axis (#2360 inner_dim=288).
+- **Compound progress**: 17 merges, **100.957 → 59.5645 = −41.0%**
+- **Param count**: 831,197 (+6 over #2360 baseline 831,191; the 6 learnable freq params)
+- **Metric artifacts**: `models/model-charliepai2g24h4-frieren-learned-freqs-no-wd-10x-lr-20260513-151314/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-frieren --experiment_name charliepai2g24h4-frieren/learned-freqs-no-wd-10x-lr`
+
+---
+
 ### 2026-05-13 16:05 — PR #2360 (`charliepai2g24h4-fern/reglu-inner-dim-288`)
 
 ReGLU + inner_dim=256→288 bisect. Extra 32 gate/up/down channels in each SwiGLU block compensates for ReGLU's exact-zero dead channels in the gate-sparse regime. At +4.7% sec/epoch (vs +10.2% for 320), the experiment fits 12 epochs within the 30-min wall — the full schedule completes and val_single_in_dist IMPROVES −3.79% (vs the +11.2% regression at 320), confirming the epoch-budget hypothesis: the 320 regression was schedule-truncation, not capacity overfit.
