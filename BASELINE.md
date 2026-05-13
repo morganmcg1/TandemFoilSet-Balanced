@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| **#2400 n_layers=3 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4** | **43.14** | **36.95** | −7.6% val / −9.2% test vs #2338; wins all 4 test splits; 34 epochs in 30 min (53.1s/ep); speed-dividend |
+| **#2489 wd=3e-4 on n_head=2+slice_num=32+n_layers=3+Lion+MAE** | **42.00** | **35.96** | −2.64% val / −2.69% test vs #2400; wins all 4 test splits; 33 epochs in 30 min; regularization signal transfers from #2356 |
+| #2400 n_layers=3 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4 | 43.14 | 36.95 | −7.6% val / −9.2% test vs #2338; wins all 4 test splits; 34 epochs in 30 min (53.1s/ep); speed-dividend |
 | #2338 n_head=1 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4 | 46.67 | 40.69 | −3.9% val / −1.9% test vs #2335; wins all 4 test splits; 26 epochs in 31 min (71.1s/ep) |
 | #2335 slice_num=32 + surf_weight=5 on n_head=2+Lion+MAE+lr=1e-4 | 48.57 | 41.48 | −2.59% val / −1.68% test vs #2218; synergistic: observed −2.54 val vs additive −1.45; 3/4 test splits improve; 22 epochs |
 | #2218 slice_num=32 on n_head=2+Lion+MAE+lr=1e-4 | 49.86 | 42.19 | −2.06% val / −3.40% test vs #2210 baseline; wins all 4 test splits; 23 epochs in budget |
@@ -39,6 +40,20 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 19:45 — PR #2489: wd=3e-4 on n_head=2+slice_num=32+n_layers=3+Lion+MAE compound (edward)
+
+- **val_avg/mae_surf_p (best epoch 33):** 42.0040 — **−2.64% vs #2400 baseline (43.1408)**
+- **test_avg/mae_surf_p:** 35.9573 — **−2.69% vs #2400 baseline (36.9506)**
+- **Per-test-split:** single_in_dist=37.27 (−5.2%), geom_camber_rc=50.92 (−1.6%), geom_camber_cruise=20.96 (−1.7%), re_rand=34.69 (−2.1%) — **all 4 splits improve**
+- **Epochs completed:** 33 in ~30 min; val still descending at cap
+- **W&B run:** `vtewwalc` (wd=3e-4 winner); `h2h5d9cl` (wd=1e-3, essentially flat — arm 2)
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, **wd=3e-4**) + n_head=2 + slice_num=32 + n_layers=3 + surf_weight=10
+- **Reproduce:** `cd "target/" && python train.py --n_layers 3 --n_head 2 --slice_num 32 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 3e-4 --dropout 0.2 --ema_decay 0.99`
+
+**Key change:** weight_decay 1e-4 → 3e-4. Monotonic regularization signal from #2356 (n_layers=5) transfers cleanly to n_layers=3. wd=1e-3 (Arm 2) is flat (−0.07% val) with 3/4 OOD splits regressing — the shallower architecture is more sensitive to over-regularization. wd=3e-4 is confirmed as the operating point independent of depth.
 
 ---
 
