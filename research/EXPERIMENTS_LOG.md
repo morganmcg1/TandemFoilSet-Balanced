@@ -169,3 +169,55 @@ All four test splits finite — the mask plumbing from PR #1504 carried through 
 ### Follow-up
 
 Fern reassigned to PR #1692 (gradient clipping max_norm=1.0) — the last untested optimizer-side knob, pairs with the cruise-stability story (mask fix removed structural NaN source; grad clip is the dynamics-side complement).
+
+## 2026-05-13 00:00 — PR #1505 MERGED: Huber/SmoothL1 surface loss (β=0.5)
+
+- **Student:** willowpai2g48h3-askeladd
+- **Branch:** willowpai2g48h3-askeladd/huber-surface-loss
+- **Merge commit:** `bf0b93d`
+- **W&B run:** `ikjxaaze` (post-merge, on top of #1504 mask-aware baseline)
+
+### Final numbers vs PR #1504 baseline
+
+| Metric | Huber β=0.5 | #1504 baseline | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **113.794** | 119.450 | **−4.74%** |
+| `test_avg/mae_surf_p` | **101.782** | 109.669 | **−7.19%** |
+| `test_single_in_dist` | 118.85 | 123.97 | −4.13% |
+| `test_geom_camber_rc` | 111.21 | 121.92 | **−8.78%** |
+| `test_geom_camber_cruise` | 75.21 | 81.06 | −7.22% (finite) |
+| `test_re_rand` | 101.87 | 111.73 | **−8.83%** |
+
+Best epoch 13 of 50 (30-min wall-clock cap, ~14 epochs, 135s/epoch). Test gain exceeded predicted ceiling (−8%) on geom_camber_rc and re_rand — both heavy-tailed splits — consistent with Huber suppressing outlier errors that MSE was overweighting.
+
+### Implementation
+
+Surface loss only. `F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")` replaces MSE at both train (line 508) and eval (line 260). Volume term remains MSE. MAE accumulators unchanged (Huber is for training signal, not for metric).
+
+### Implications for round 1
+
+This is the **second baseline shift in 2 hours** (mask-aware merged at 21:52, Huber at 00:00). All 6 still-WIP PRs (#1506 edward, #1509 nezuko, #1511 thorfinn, #1589 tanjiro, #1623 alphonse, #1692 fern) are on the mask-aware-only baseline and need to rebase again to clear the new bar (val < 113.79, test < 101.78). Heads-up comment posted on all 6.
+
+### Follow-ups
+
+- **askeladd → PR #1712 (Huber β=0.25):** their own follow-up suggestion. Test gain at β=0.5 sat above the predicted ceiling → optimum likely at smaller β.
+- **frieren → PR #1715 (bf16 AMP):** different axis. Multiple round-1 hypotheses closed as "compute-bound undertraining" — bf16 attacks the wall-clock constraint directly without changing what we train.
+
+## 2026-05-13 00:01 — PR #1508 closed: surf_weight=25 (compute-bound)
+
+- **Student:** willowpai2g48h3-frieren
+- **Branch:** willowpai2g48h3-frieren/surf-weight-25
+- **W&B run:** `3z4g3o3c` (post-#1504 merge code; pre-#1505 Huber merge)
+
+### Results
+
+| Metric | sw=25 | #1504 baseline | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 138.638 | 119.450 | +16.07% |
+| `test_avg/mae_surf_p` | 125.137 | 109.669 | +14.10% |
+
+All 4 test splits finite (clean rebase). Underconverged at the 30-min cap (best epoch 13 of 50, val still descending at termination). Volume MAE moves in lockstep with surface — no "volume-for-surface tradeoff" signal; both terms are simply slower-converging under the heavier surface weight.
+
+### Conclusion
+
+**Closed — dead end on this axis at the 30-min wall-clock budget.** Frieren's mechanistic diagnosis (heavier surf weight slows convergence because the optimizer spends more effort on the smaller surface-node population whose pressure field is harder to fit) is correct. surf_weight=25 might be competitive at a 50-epoch budget but isn't inside the cap. Frieren reassigned to PR #1715 (bf16 AMP) on a different axis.
