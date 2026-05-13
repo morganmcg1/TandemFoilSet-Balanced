@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 07:20
+- 2026-05-13 07:30
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -41,7 +41,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 | SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
 | EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: early averaging always hurts |
 | n_hidden=192 confirmed dead (#1755 Arm B, lr=4e-4) | Budget cliff, grad_norm instability; 2× regression evidence |
-| Lion lr=2e-4 wins on Huber δ=0.5 stack (#1782, SENT BACK) | LR optimum shifted 2.5e-4→2e-4; needs re-run on new δ=0.3+n160 stack |
+| Lion lr=2e-4 wins on δ=0.5 stack but LOSES on δ=0.3 (#1782 final, CLOSED) | **LR optimum is non-monotone in δ**: MSE→δ=0.5 moved DOWN, δ=0.5→δ=0.3 reversed UP. Mechanism: more residuals enter quadratic regime → smaller per-step → need higher LR |
 | Dropout=0.1 → −5.7% val on OLD 66.32 baseline (#1656, SENT BACK) | Feature-level regularization works; needs re-run on δ=0.3 stack |
 | n_hidden=160 + δ=0.5 → val=57.34 (#1755, SENT BACK 4 times) | Width gain real; above new baselines each time; compound finally confirmed (MERGED) |
 | Huber δ=0.3+ep16 compound is the merged baseline (#1879, CLOSED) | Tanjiro's reproducibility run confirmed bit-identical to #1880; hypothesis absorbed by prior merge |
@@ -51,7 +51,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP | Beat 55.92 |
-| #1782 | frieren | Lion lr=2e-4 single-arm on δ=0.3+n128 stack | WIP (sent back 3rd time) | Beat 55.92 |
+| #2035 | frieren | Lion lr=3.5e-4 on n_hidden=160 (upward LR probe, mechanism-driven) | WIP — new | Beat 55.92 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP | Beat 55.92 |
 | #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 55.92 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP — new | Beat 55.92 |
@@ -68,7 +68,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 | #1880 | alphonse | **MERGED** | Huber δ=0.3 → baseline 56.90/53.20 (−14.2% val). δ=0.2 essentially tied. δ curve bottomed. |
 | #1639 | alphonse | **MERGED** | Huber δ=0.5 → baseline 66.32 (−9.3%). Uniformly better. δ curve not bottomed out at time. |
 | #1780 | tanjiro | **MERGED** | Lion+epochs=16 → baseline 66.44 (−9.2%). Epochs=16 now structural standard. |
-| #1782 (2nd) | frieren | SENT BACK | lr=2e-4 wins on δ=0.5 stack (val=58.00); above new baseline; needs δ=0.3+n160 re-run |
+| #1782 (3rd) | frieren | CLOSED | lr=2e-4 on δ=0.3 → val=58.82 (+1.92). LR optimum reversed direction (DOWN then UP); mechanism: δ-driven residual-regime shift |
 | #1656 | thorfinn | SENT BACK | Dropout=0.1 → val=62.52 on OLD baseline; above new 55.92; needs δ=0.3 stack re-run |
 | #1481 | nezuko | CLOSED | slice_num=128 → +22.5% regression; budget cliff (144s/epoch → 13 epochs only) |
 | #1463 | askeladd | CLOSED | SWA → val regression; SWALR fights Lion cosine |
@@ -77,7 +77,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 ## Open questions from active experiments
 
 1. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width at current baseline)
-2. **Does Lion lr=2e-4 beat lr=3e-4 on δ=0.3+n128 stack?** (#1782 frieren) — LR optimum shifted down before, may shift again
+2. **Does Lion lr=3.5e-4 beat lr=3e-4 on n_hidden=160?** (#2035 frieren) — LR optimum reversed direction on δ=0.3; probing upward
 3. **Does dropout=0.1 compose with δ=0.3+n160?** (#1656 thorfinn) — orthogonal regularization axes
 4. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
 5. **Does surf_weight shift from 10.0 under δ=0.3+Lion+n160?** (#2005 nezuko) — loss balance may have changed
@@ -98,7 +98,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 
 ### Currently active (don't duplicate)
 - #1979 alphonse: n_layers=6, epochs=14
-- #1782 frieren: lr=2e-4 on δ=0.3+n128 stack
+- #2035 frieren: lr=3.5e-4 on n_hidden=160 (upward LR probe)
 - #1844 askeladd: Lion β2=0.999, epochs=16
 - #1656 thorfinn: dropout=0.1 on δ=0.3 stack
 - #2005 nezuko: surf_weight sweep 15 vs 5 on δ=0.3+Lion+n160 stack
@@ -113,6 +113,6 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 3. **Activation sweep** — GELU → SwiGLU/SiLU on full combined stack.
 4. **Layer-wise LR decay** — different LR per Transolver layer.
 5. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages only the final stable checkpoints.
-6. **Lion lr=1.75e-4** — if tanjiro's (#2027) re-run confirms 2e-4 beats 3e-4 on n_hidden=160, probe further down the LR curve.
+6. **Lion lr=4e-4 on n_hidden=160** — if frieren's #2035 (lr=3.5e-4) wins, probe further up the LR curve.
 7. **n_layers=6 + n_hidden=160 compound** — test depth×width compound after alphonse's n_layers=6 result lands.
 8. **Cosine LR floor** — cosine to η_min=lr×0.05 instead of 0; prevents over-suppression at convergence tail.

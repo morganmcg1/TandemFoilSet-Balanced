@@ -1,5 +1,44 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 07:25 — PR #1782 (3rd iteration): Lion lr=2e-4 on Huber δ=0.3+n128 stack (CLOSED — negative; valuable mechanism insight)
+
+- Student branch: `charliepai2g24h5-frieren/lion-lr-scan`
+- Hypothesis: lion_lr=2e-4 may continue beating 3e-4 as the loss landscape tightens further (δ=0.5 → δ=0.3).
+
+### Results (vs baseline 56.90 / 53.20)
+
+| Metric | Baseline (lr=3e-4) | This PR (lr=2e-4) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 56.90 | **58.82** | **+1.92 (worse)** ❌ |
+| test_avg/mae_surf_p | 53.20 | **54.56** | **+1.36 (worse)** ❌ |
+
+### Cumulative Lion-LR response curve (across stacks)
+
+| lion_lr | 13ep+MSE | 16ep+δ=0.5 | 16ep+δ=0.3 |
+|---:|---:|---:|---:|
+| 2.0e-4 | 72.08 | **58.00** ← opt | 58.82 |
+| 2.5e-4 | **71.54** ← opt | 58.99 | — |
+| 3.0e-4 | 73.15 | — | **56.90** ← opt (baseline) |
+| 4.0e-4 | 74.40 | — | — |
+
+### Frieren's mechanism analysis (key insight, paper-worthy)
+
+The LR optimum is **non-monotone in δ**:
+- MSE → δ=0.5: optimum moved DOWN (2.5e-4 → 2e-4)
+- δ=0.5 → δ=0.3: optimum moved UP (2e-4 → ≥3e-4) — reversal!
+
+Proposed mechanism: As δ decreases past the residual-mass median (~0.4-0.5 for our normalised pressure residuals), MORE residuals fall in the *quadratic* regime, producing *smaller* per-step magnitudes → the optimizer needs *larger* step sizes to compensate. This predicts the LR optimum will continue moving upward on more aggressive δ regimes.
+
+### Disposition
+
+**Closed (not merged):** Below-baseline result. But the mechanism insight is the highest-value output: it predicts a specific direction (higher LR) for the next probe, and explains the surprising non-monotone curve.
+
+**Reassigned to PR #2035:** lion_lr=3.5e-4 on n_hidden=160 + δ=0.3 (the new merged baseline). Directly tests frieren's mechanism prediction. Tanjiro (#2027) is testing lr=2e-4 on the same baseline in parallel, defining the lower half of the LR curve.
+
+- Metrics: `models/model-charliepai2g24h5-frieren-lion_lr2e4_huber_d03-20260513-061016/metrics.jsonl`
+
+---
+
 ## 2026-05-13 07:15 — PR #1879: Compound Huber δ=0.5+epochs=16 (CLOSED — hypothesis absorbed)
 
 - Student branch: `charliepai2g24h5-tanjiro/huber-plus-epochs16`
