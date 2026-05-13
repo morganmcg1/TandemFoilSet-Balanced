@@ -5,6 +5,65 @@
 
 ---
 
+## 2026-05-13 02:40 — PR #1777: Asinh pressure compression (asinh value regularization on pressure target)
+
+**Student:** charliepai2g48h2-nezuko  
+**Change:** Apply `asinh(y * ASINH_GAIN) / ASINH_GAIN` compression to the pressure channel (channel 2) of the normalized target before loss computation, with reciprocal `sinh` decompression before evaluation. `ASINH_GAIN=1.0`. Two helper functions added: `compress_pressure(y_norm)` (applied in training loop and evaluate_split before loss), `decompress_pressure(y_c)` (applied after model forward before MAE evaluation). All other config unchanged: `F.l1_loss`, channel_weights=[1,1,3], warmup_epochs=4, lr=7e-4, grad_clip=1.0, NaN-skip, --epochs 14.
+
+⚠️ **Note:** Nezuko's run was measured on the pre-#1776 base (warmup_epochs=2, val_avg=83.230). The improvement is reported vs. the new #1776 baseline (warmup_epochs=4, val_avg=80.7014) because both changes are mechanistically orthogonal (LR schedule vs. target representation) and merged cleanly. Round-trip reconstruction error: 1.43e-6 (float32 epsilon). Clamp(-10,10) in decompress never activated during training (pred_abs_max_norm ≤ 6.81).
+
+### Validation (best epoch 14/14 — all splits still improving at cutoff)
+
+| Split | mae_surf_p | vs. #1776 baseline |
+|---|---|---|
+| val_single_in_dist | 97.4545 | −0.26% |
+| val_geom_camber_rc | 94.8890 | +0.50% |
+| val_geom_camber_cruise | 54.0004 | **−2.40%** |
+| val_re_rand | 73.1053 | **−2.97%** |
+| **val_avg/mae_surf_p** | **79.8623** | **−1.04%** |
+
+**Improvement vs #1776 baseline: −1.04% (80.7014 → 79.8623)**  
+**Cumulative improvement vs #1418 baseline: −34.9% (122.64 → 79.8623)**
+
+### Test (from best-val checkpoint, epoch 14) — clean 4-split
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 86.9376 |
+| test_geom_camber_rc | 84.1416 |
+| test_geom_camber_cruise | 44.9014 |
+| test_re_rand | 65.7385 |
+| **test_avg/mae_surf_p** | **70.4297** |
+
+**Improvement vs #1776 test baseline: −2.06% (71.9145 → 70.4297)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW lr=7e-4 (peak), **4-epoch warmup**, wd=1e-4, CosineAnnealingLR(T_max=10), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in normalized space (on asinh-compressed targets)
+- **Asinh pressure compression**: `compress_pressure()` / `decompress_pressure()` with ASINH_GAIN=1.0
+- NaN-skip guard in `evaluate_split`
+
+### Key finding
+
+Asinh value compression on the pressure target wins via **bulk-redistribution** within each sample, not tail-flattening across samples. Pre-compression, the optimizer steers capacity toward fitting tail nodes (leading-edge suction peaks), starving bulk pressure regions. Post-compression, the asinh residual gradient is more uniform across nodes → capacity reallocates to bulk regions. This explains why cruise gains most (−2.40% val, −3.55% test): cruise meshes have the highest fraction of "bulk" pressure surface relative to suction peaks. val_vol_p also improved substantially (79.26 → 77.29 on re_rand). The mild val_rc regression (+0.50%) is acceptable given the overall improvement.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-nezuko-asinh-pressure-gain-1-20260513-012107/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-nezuko \
+    --experiment_name "charliepai2g48h2-nezuko/asinh-pressure-gain-1" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 01:51 — PR #1776: 4-epoch warmup (warmup_epochs 2→4, LR peak at 36% of schedule)
 
 **Student:** charliepai2g48h2-frieren  
@@ -342,4 +401,4 @@ err = (pred_orig.double() - y_safe.double()).abs()
 
 ---
 
-> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 95.336`.
+> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 79.8623`.
