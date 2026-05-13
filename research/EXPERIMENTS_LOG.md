@@ -7,28 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
-## 2026-05-13 22:55 — PR #2593: n_head=1 isolation — CLOSED
-
-- `willowpai2g24h3-frieren/n-head-1-isolation`
-- **Hypothesis:** continue the n_head monotone trend (4→2 improves) down to n_head=1 (single 128-dim head). Predicted if monotone: small val gain. Predicted if non-monotone: regression on the in-dist split where head diversity matters most.
-- **Results (1 clean seed + 1 crash):**
-
-| Metric | n_head=1 (`x0o1lj5y`) | n_head=2 baseline (gd934e9l) | Δ |
-|---|---:|---:|---|
-| val_avg | 44.0769 | 40.2741 | **+9.44% ❌** |
-| test_avg | 36.5697 | 33.6017 | **+8.83% ❌** |
-| val_single_in_dist | 42.106 | 35.836 | **+17.50%** |
-| val_camber_rc | 57.623 | 53.495 | +7.72% |
-| val_camber_cruise | 30.794 | 28.146 | +9.41% |
-| val_re_rand | 45.785 | 43.619 | +4.97% |
-| test_single_in_dist | 34.925 | 30.586 | +14.19% |
-| Best epoch | 33/35 | 36/36 | (1 epoch shorter wall-clock; n_head=1 has slightly larger QKV per layer) |
-
-Second seed `7svginti` crashed at 10.5 min, val 108 mid-divergence.
-
-- **Analysis:** The n_head sweep is **non-monotone**. n_head=4 → n_head=2 improves, n_head=2 → n_head=1 regresses. Mechanism: PhysicsAttention benefits from at least 2 heads to represent inter-cluster vs intra-cluster patterns; a single 128-dim head loses pattern diversity even with richer per-head capacity. The largest regression is on val_single_in_dist (+17.5%) — the easiest split, where the wider single head should have been most helpful, is hurt the most. **n_head=2 confirmed as local optimum.** All 4/4 val and 4/4 test splits regress.
-- **Next experiment:** frieren reassigned to PR #2644 — **SwitchEMA** (periodic EMA-to-weights swap, interval=500 and 1000). Targets the gradient-step-bound observation with zero compute overhead.
-
 ## 2026-05-13 22:10 — PR #2596: n_layers=3 + n_head=2 + Lion — CLOSED
 
 - `willowpai2g24h3-edward/n-layers-3-n-head-2`
