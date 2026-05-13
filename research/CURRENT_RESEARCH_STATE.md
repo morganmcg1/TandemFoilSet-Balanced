@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 00:40 (post-#1618 close + #1739 alphonse reassignment — all 8 wave-6)
+- **Last updated:** 2026-05-13 01:30 (post triple-close #1733/#1732/#1600 + 3 fresh reassignments — regularization & SWA-window axes both closed; β-axis ported to FiLM)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -21,15 +21,15 @@
 ## 🔥 Hottest signals this session
 
 - **PR #1585 (askeladd, FiLM-on-Huber):** MERGED. Largest single-PR gain on this branch. val=80.82 (−15.6%) / test=71.30 (−17.3%) vs prior 95.75/86.17. Architecture-conditioning axis landed.
-- **Wave-5 negative results unlocked wave-6 mechanism refinement:**
-  - #1679 (tanjiro): SWA was *helping* val_geom_camber_rc by +10.2% — motivates earlier SWA start (#1732).
-  - #1642 (thorfinn): Re-weight curve is null under per-batch normalization — motivates value-level transform (#1734 asinh).
-  - #1680 (fern): drop_path = wrong axis at 5 layers — motivates finer-granularity regularization (#1733 attn-dropout).
-- **wave-6 portfolio is 7 orthogonal mechanism axes across 8 students** — broader coverage than any prior wave.
+- **Triple-close 2026-05-13 01:30:**
+  - #1733 fern (attn-dropout=0.1): val=83.86 (+3.76%) — 3rd consecutive regularization-axis close. Wave conclusion: this regime needs **more training signal, not less**.
+  - #1732 tanjiro (swa_start=0.65): val=84.06 (+4.01%) — SWA-window axis closed in both directions (removal +22.4%, enlargement +4.01%). swa_start_frac=0.75 is the narrow optimum.
+  - #1600 frieren (β-sweep on pre-FiLM stack): β=0.3 monotonic winner with **asymmetric test/val gain** (-7.4% test vs -5.0% val) and -10.4% on test_re_rand. **Strongest portable mechanism finding** — directly ported to #1757 on FiLM baseline.
+- **wave-6 portfolio refresh:** 8 distinct mechanism axes in flight on FiLM baseline. β-port (#1757) and grad-clip retest (#1731) are the two highest-probability landings.
 
 ## Most recent direction from human researcher team
 
-None received. Last issue check: 2026-05-13 00:30 UTC, zero open issues on this advisor branch.
+None received. Last issue check: 2026-05-13 01:25 UTC, zero open issues on this advisor branch.
 
 ## ✓ Merged improvements
 
@@ -44,28 +44,23 @@ None received. Last issue check: 2026-05-13 00:30 UTC, zero open issues on this 
 
 ### Wave 6 (in flight, on the merged FiLM baseline)
 
-All 7 PRs forked from the new baseline (alphonse #1739 added 00:40 UTC after closing #1618).
+All 7 PRs forked from the new baseline. 3 fresh assignments at 01:30 UTC after triple-close.
 
 | PR | Student | Slug | Mechanism axis | Predicted Δ vs. 80.82 |
 |---|---|---|---|---|
 | #1702 | askeladd | `per-channel-p-weight-on-filmed` | Per-channel pressure-loss weighting (`p_weight ∈ {2.0, 3.0}`, 2-arm) | −0.5 to −2% |
 | #1731 | nezuko | `grad-clip-on-filmed` | Gradient clipping (max_norm=1.0, 2 seeds) — retest of wave-3 win | −0.5 to −2% |
-| #1732 | tanjiro | `swa-start-0p65-on-filmed` | SWA window 3 → 5 epochs — follow-up to #1679 mechanism finding | −0.5 to −2% |
-| #1733 | fern | `attn-dropout-0p1-on-filmed` | Attention softmax dropout (token-level regularization) | −0.5 to −2% |
 | #1734 | thorfinn | `asinh-pressure-on-filmed` | Value-level pressure-target compression | −1 to −3% |
 | #1739 | alphonse | `surf-huber-vol-mse-on-filmed` | Loss-kind per domain (Huber on surf, MSE on vol) — retest of #1618 win | −1 to −3% |
+| #1757 | frieren | `beta-0p3-on-filmed` | **β=0.3 port from closed #1600** (single-arm composition test on FiLM stack) | −1 to −5% val / **−2 to −7% test** ← strongest expected mechanism gain |
+| #1758 | fern | `mesh-subsample-0p9-on-filmed` | **Random mesh-node subsampling** (data-side input augmentation; new mechanism family) | −0.5 to −2% |
+| #1760 | tanjiro | `film-mid-dim-128-on-filmed` | **FiLM mid_dim 64 → 128** (intra-FiLM capacity, NOT generic n_hidden/mlp_ratio) | −0.5 to −3% |
 
 ### Wave 5 (residual, single in-flight PR remaining)
 
 | PR | Student | Slug | Hypothesis | Status |
 |---|---|---|---|---|
 | #1691 | edward | `surf-weight-5-on-merged` | Halve `surf_weight` 10 → 5 (opposite direction from #1620) | WIP (running pre-FiLM-merge) |
-
-### Wave 3 residual (in flight)
-
-| PR | Student | Slug | Hypothesis | Status |
-|---|---|---|---|---|
-| #1600 | frieren | `beta-sweep-on-swa` | 3-arm Huber β ∈ {0.3, 1.0, 3.0} | **β=0.3 done (val=96.16), β=1.0 done (val=104.17), β=3.0 running** |
 
 ### Reframe decision rule (vs new 80.82 baseline)
 
@@ -84,15 +79,21 @@ All 7 PRs forked from the new baseline (alphonse #1739 added 00:40 UTC after clo
 - **#1679 (tanjiro, no-SWA):** val=98.96 (+22.4%). SWA helps val_geom_camber_rc; the schedule-displacement frame from #1645 was wrong. Motivates wave-6 #1732.
 - **#1642 (thorfinn, sqrt-Re-weight):** val=96.26 (+19.1%). Re-weight CURVE is null under per-batch normalization; DIRECTION is the lever. Motivates wave-6 #1734.
 - **#1618 (alphonse, surf-Huber/vol-MSE on SWA-on-Huber):** val=95.79 (+18.5%). Clean −3.3% / −3.9% on prior frame with uniform improvement across all 4 splits — mechanism is real but stack-stale. Reassigned to wave-6 #1739 (composition test on FiLM baseline).
+- **#1733 (fern, attn-dropout=0.1):** val=83.86 (+3.76%). Convergence-rate collapse (ep 1 val=228 vs ~85-90); 3rd regularization-axis closure (after drop_path, mlp_ratio). Reassigned to #1758 (mesh-subsample-0p9-on-filmed) — flipping signal axis from "less internal capacity" to "more input variability".
+- **#1732 (tanjiro, swa_start=0.65):** val=84.06 (+4.01%). Uniform regression across all splits; base reaches 99.15 at ep 9 vs ~90 baseline. **SWA-window axis closed both directions** (removal +22.4%, enlargement +4.01%); swa_start_frac=0.75 is the optimum. Reassigned to #1760 (film-mid-dim-128-on-filmed) — fresh axis.
+- **#1600 (frieren, β-sweep on SWA-on-Huber):** β=0.3 won at val=96.35 / test=84.76 on pre-FiLM frame (-2.74% val / -4.66% test on that frame). Doesn't beat current FiLM baseline directly, but **monotonic β response + asymmetric test/val gain** is the strongest portable mechanism from any closed PR this session. Reassigned to #1757 (beta-0p3-on-filmed) — single-arm composition test.
 
 ## ⚠ Active operational notes
 
 - **The GraphQL rate-limit pattern continues; pods recover automatically.** REST helpers preferred where possible.
-- **All 4 wave-6 PRs start from the merged FiLM baseline** — no rebase pain, clean composition tests.
-- **3 mechanism axes have been definitively closed on this dataset/scale:**
-  - Architecture-capacity (mlp_ratio, n_hidden bumps) — closed twice
-  - Block-level stochastic regularization (drop_path) — closed once
+- **All 7 wave-6 PRs start from the merged FiLM baseline** — no rebase pain, clean composition tests.
+- **5 mechanism axes have been definitively closed on this dataset/scale:**
+  - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
+  - Block-level stochastic regularization (drop_path=0.1) — closed once
+  - Token-level stochastic regularization (attention_dropout=0.1) — closed once (PR #1733)
   - Re-weight curve shape under per-batch normalization — closed once
+  - SWA-window size (both directions: removal, enlargement) — closed once (PR #1732)
+- **Regularization axis pattern (3 closures):** the consistent signal is that this 5-layer / 0.75M / ~1500-sample regime needs **more training signal, not less**. Wave-7 input-augmentation tests should explicitly INCREASE per-epoch input variability rather than reduce model capacity. This is the motivation for fern #1758 (mesh subsampling).
 - **3 axes have produced strong landings:**
   - Loss-shape: Huber (#1452 merged)
   - Loss-weighting: per-sample Re-weight (#1586 merged)
@@ -101,17 +102,19 @@ All 7 PRs forked from the new baseline (alphonse #1739 added 00:40 UTC after clo
 
 ## Mechanism-axis coverage (all 8 students, wave 6+)
 
-- **Loss-shape:** β-sweep (#1600 frieren wave-3 residual), surface-vs-volume split (#1618 alphonse wave-3 residual)
+- **Loss-shape (β):** **β=0.3 ported to FiLM stack (#1757 frieren)** ← wave-6 NEW, highest expected ROI
+- **Loss-shape (per-domain kind):** surface-Huber / volume-MSE (#1739 alphonse) ← wave-6
 - **Loss-weighting (sample-level):** surf_weight halve (#1691 edward wave-5 residual)
-- **Loss-weighting (channel-level):** **per-channel p-weight (#1702 askeladd)** ← wave-6
-- **Loss-weighting (value-level):** **asinh on pressure target (#1734 thorfinn)** ← wave-6
-- **Optimizer-stability:** **gradient clipping (#1731 nezuko)** ← wave-6
-- **Regularization:** **attention-softmax dropout (#1733 fern)** ← wave-6
-- **Schedule / SWA-window:** **SWA start 0.65 (#1732 tanjiro)** ← wave-6
-- **Architecture-conditioning:** FiLM — LANDED in baseline (#1585)
-- **Architecture-capacity:** definitively closed as wrong-axis
+- **Loss-weighting (channel-level):** per-channel p-weight (#1702 askeladd) ← wave-6
+- **Loss-weighting (value-level):** asinh on pressure target (#1734 thorfinn) ← wave-6
+- **Optimizer-stability:** gradient clipping (#1731 nezuko) ← wave-6
+- **Data-side input augmentation:** **mesh-node subsampling (#1758 fern)** ← wave-6 NEW, new mechanism family
+- **Architecture-conditioning (intra-FiLM):** **FiLM mid_dim 64→128 (#1760 tanjiro)** ← wave-6 NEW
+- **Architecture-conditioning (head):** FiLM — LANDED in baseline (#1585)
+- **Schedule / SWA-window:** definitively closed (both directions tested)
+- **Internal regularization (drop_path / attention_dropout / mlp_ratio):** definitively closed (3 sub-axes, 3 closures)
 
-7 orthogonal mechanism axes in flight or residual; 5 of those are wave-6 fresh tests on the new baseline.
+8 orthogonal mechanism axes in flight; 7 forked from the FiLM baseline directly.
 
 ## Potential next research directions (wave 7+)
 
@@ -120,11 +123,16 @@ Ranked by expected ROI on `val_avg/mae_surf_p` given the new FiLM baseline 80.82
 1. **Geometry-aware lever stacked with FiLM** — `val_geom_camber_rc=97.36` is the bottleneck FiLM left untouched. Top candidates:
    - **Geometry-conditioned FiLM** (per-token (γ,β) gated by `is_surface` and conditioned on NACA params)
    - Surface arc-length / dsdf positional encoding for surface nodes
-   - Slice_num bump (FiLM may have unlocked slice-capacity differently than n_hidden expansion did)
-2. **Compound stack tests of wave-6 winners** — if any wave-6 PRs land (high probability for grad-clip + asinh + SWA-window), compounding them is the next step. Plausible compound floor ~75 val / ~65 test.
-3. **More epochs on FiLM-merged baseline** — val curve was still descending at epoch 14 (−4.5% from epoch 12→14). 20-epoch run with adjusted cosine T_max likely +2-4 pts, but exceeds 30-min cap.
-4. **Per-channel β** — combine with #1702 winner if p-weight lands; uses different β for pressure vs velocities.
-5. **Test-focused β tuning** — exploit frieren #1600's β=0.3 test-only win.
+   - slice_num bump (would need careful framing — generic capacity is closed, but slice-count is a different parameter axis from n_hidden / mlp_ratio)
+2. **Compound stack tests of wave-6 winners** — if frieren #1757 lands AND grad-clip lands AND asinh lands, compounding them is the next step. Plausible compound floor ~74-76 val / ~63-66 test.
+3. **β-axis follow-ups (if #1757 lands):**
+   - β=0.1 to test continuation of the monotonic curve
+   - Per-channel β (surf-p gets lower β, Ux/Uy keep β=1.0) — exploits dataset's per-channel residual asymmetry
+4. **Mesh-augmentation follow-ups (if #1758 lands):**
+   - Subsample sweep (node_keep_prob ∈ {0.75, 0.5})
+   - Re-jitter (perturb per-sample Reynolds number — different input-augmentation family member)
+   - Position jitter (small Gaussian noise on mesh coordinates, non-boundary only)
+5. **More epochs on FiLM-merged baseline** — val curve was still descending at epoch 14 (−4.5% from epoch 12→14). 20-epoch run with adjusted cosine T_max likely +2-4 pts, but exceeds 30-min cap.
 6. **Hard-example mining / focal-loss-style sample weighting** — direct follow-up to thorfinn's #1642 finding that Re-weight curve is null under per-batch normalization.
 7. **Domain-adversarial training** — −3 to −8% on camber OOD specifically.
 
@@ -132,8 +140,10 @@ The researcher-agent's `RESEARCH_IDEAS_2026-05-12_round2.md` has H1–H10 (some 
 
 ## Open questions to revisit on next review
 
-- **Composition of wave-6 wins:** if grad-clip (#1731) AND SWA-window (#1732) AND asinh (#1734) all land independently, do they compose constructively? Each is theoretically orthogonal; empirical test needed.
+- **Composition of wave-6 wins:** if frieren #1757 (β=0.3) AND grad-clip #1731 AND asinh #1734 all land independently, do they compose constructively? Loss-shape × optimizer-stability × value-transform are theoretically orthogonal; empirical test needed.
 - **Per-channel weighting (askeladd #1702) × value-level transform (thorfinn #1734):** both target the pressure channel from different angles. May anti-compose if one already addresses what the other does.
-- **Attention dropout (fern #1733):** if it lands, suggests the regularization axis was about granularity-matching the layer count. If it doesn't, the regularization axis is fully closed on this scale.
-- **val_geom_camber_rc bottleneck:** none of the wave-6 PRs directly target this split. If wave-6 lands incremental wins but val_geom_camber_rc stays around 97, wave-7 must be geometry-axis.
-- **Wall-clock budget tightness:** the FiLM baseline already runs at ~32 min (cap=30); some wave-6 PRs may overrun slightly. Watch SENPAI-RESULT timings.
+- **β=0.3 composition (frieren #1757):** the strongest mechanism-port test of this session. Does the monotonic-β finding from pre-FiLM stack survive the FiLM composition? If yes, β follow-ups (β=0.1, per-channel β) become high-priority. If no, the FiLM modulation may already address the per-sample residual heterogeneity that β-tuning targets.
+- **Intra-FiLM capacity (tanjiro #1760):** if mid_dim=128 lands, FiLM head capacity was a separate lever from generic n_hidden. If it doesn't, FiLM at mid_dim=64 is at the optimum and we've fully exhausted the FiLM-axis until geometry-conditioning is added.
+- **Mesh subsampling (fern #1758):** first test of data-side input-augmentation on this stack. If it lands, opens an entirely new mechanism family. If it doesn't, the dataset is too small for subsample-augmentation and we must try alternative input-augmentation (Re-jitter, position-jitter).
+- **val_geom_camber_rc bottleneck:** none of the wave-6 PRs directly target this split. If wave-6 lands incremental wins but val_geom_camber_rc stays around 97, wave-7 must be geometry-axis (geometry-conditioned FiLM, surface arc-length encoding).
+- **Wall-clock budget tightness:** the FiLM baseline already runs at ~32 min (cap=30); some wave-6 PRs may overrun slightly. Watch SENPAI-RESULT timings; #1733 hit the cap at epoch 13/15.

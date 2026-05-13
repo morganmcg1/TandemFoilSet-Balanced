@@ -955,3 +955,60 @@ All 8 students now on wave-6 PRs (or just-assigned wave-6 fork from closed wave-
 | #1600 | frieren | β-sweep on SWA-on-Huber — residual from wave-3 |
 
 8 distinct mechanism axes in flight, 7 of those forked from the FiLM baseline directly.
+
+---
+
+## 2026-05-13 01:30 — Wave-6 triple-close + wave-6 refresh (3 idle students reassigned)
+
+Three review-ready PRs all regressed against the FiLM baseline. All closed per decision rule, all three students reassigned to fresh mechanism axes.
+
+### Closures
+
+| PR | Student | Slug | val (Δ vs 80.82) | test (Δ vs 71.30) | Mechanism finding |
+|---|---|---|---|---|---|
+| #1733 | fern | attn-dropout-0p1-on-filmed | **83.86 (+3.76%)** | **74.40 (+4.35%)** | Convergence-rate collapse (ep 1 val=228 vs ~85-90 baseline); val_geom_camber_rc only improved split (-1.07%). 3rd regularization-axis closure in this wave (after drop_path, mlp_ratio). |
+| #1732 | tanjiro | swa-start-0p65-on-filmed | **84.06 (+4.01%)** | **75.68 (+6.14%)** | Uniform regression across all 4 splits — opposite of predicted mechanism. At swa_start_frac=0.65, base reaches 99.15 at epoch 9 vs ~90 at epoch 11 in baseline; SWA can't recover. **SWA-window axis fully closed** (both directions tested: removal +22.4%, enlargement +4.01%). |
+| #1600 | frieren | beta-sweep-on-swa | β=0.3 won at 96.35/84.76 on **SWA-on-Huber frame** | -2.74% val / -4.66% test on that frame | Monotonic β response (lower β wins); asymmetric test/val gain (test improves more than val); largest test improvement on test_re_rand (-10.4%). **Doesn't beat current FiLM baseline directly, but mechanism is robust and stack-portable.** |
+
+### Cross-cutting closure analysis
+
+**Regularization axis fully exhausted on this stack (3 sub-axes, 3 closures):**
+- mlp_ratio=4 (PR #1621): +7.1% (capacity-up)
+- drop_path=0.1 (PR #1680): +14.4% (block-level reg)
+- attention_dropout=0.1 (PR #1733): +3.76% (token-level reg) — smallest regression of the three
+
+The consistent signal across all three: **this 5-layer / 0.75M-param / ~1500-sample regime needs MORE training signal, not less.** Wave-7 input-augmentation tests should explicitly increase per-epoch input variability rather than reduce model capacity or perturb internals.
+
+**SWA-window axis closed on this composition:**
+- swa_start_frac=1.0 (no SWA, #1679): +22.4% (much worse)
+- swa_start_frac=0.65 (5 averaged epochs, #1732): +4.01% (worse)
+- swa_start_frac=0.75 (3 averaged epochs, baseline): optimum
+
+The SWA-amenable parameter space is narrow on this composition; moving on from this axis is the right call.
+
+**β-axis is genuinely portable mechanism finding:**
+- frieren's monotonic-β + test-asymmetry result is the single strongest mechanism signal from any closed PR this session. The asymmetry (test gains > val gains) is also rare and paper-relevant. Directly portable to FiLM baseline as a single-arm composition test.
+
+### Reassignments (3 idle students → 3 new wave-6/7 PRs)
+
+| New PR | Student | Slug | Mechanism axis | Predicted Δ vs 80.82 |
+|---|---|---|---|---|
+| #1757 | frieren | beta-0p3-on-filmed | β=0.3 ported to FiLM stack (single arm, no re-sweep) | −1 to −5% val / −2 to −7% test |
+| #1758 | fern | mesh-subsample-0p9-on-filmed | Random mesh-node subsampling (data-side augmentation, 10% drop per epoch per sample). Fern's own #1733-closure suggestion. | −0.5 to −2% val / −1 to −3% test |
+| #1760 | tanjiro | film-mid-dim-128-on-filmed | FiLM mid_dim 64 → 128 (intra-FiLM capacity, mechanism-orthogonal to closed generic-capacity axes) | −0.5 to −3% val / −1 to −4% test |
+
+### Wave-6 portfolio (all 8 students on FiLM-baseline-forked PRs)
+
+| PR | Student | Slug | Mechanism axis |
+|---|---|---|---|
+| #1691 | edward | surf-weight-5-on-merged | Sample-domain loss weighting (surf_weight halve) — pre-FiLM-merge residual |
+| #1702 | askeladd | per-channel-p-weight-on-filmed | Per-channel pressure-loss weighting |
+| #1731 | nezuko | grad-clip-on-filmed | Optimizer stability (gradient clipping max_norm=1.0) |
+| #1734 | thorfinn | asinh-pressure-on-filmed | Value-level target compression |
+| #1739 | alphonse | surf-huber-vol-mse-on-filmed | Loss-kind per domain |
+| #1757 | frieren | beta-0p3-on-filmed | Loss-shape: β=0.3 (more L1-like) on FiLM stack — **strongest mechanism-port** |
+| #1758 | fern | mesh-subsample-0p9-on-filmed | Data-side input augmentation (new mechanism family) |
+| #1760 | tanjiro | film-mid-dim-128-on-filmed | Intra-FiLM capacity expansion (FiLM-axis) |
+
+**8 distinct mechanism axes in flight on the FiLM baseline. Three highest-probability landings: #1757 (β port has explicit prior data), #1731 (grad-clip retest of wave-3 win), #1734 (asinh on heavy-tailed pressure target).**
+
