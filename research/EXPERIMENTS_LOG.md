@@ -6,6 +6,44 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~17:20 — PR #2248 — CLOSED (sw=2 wins vs old baseline, loses vs new; vol-grad mechanism confirmed)
+
+**askeladd: surf_weight=2 on n_layers=3+slice_num=32+epochs=27**
+- val_avg: 38.534 vs OLD baseline (PR #2107: 39.143) → −1.56% (would have been a win)
+- val_avg: 38.534 vs NEW baseline (PR #2229: 37.366) → **+3.13% WORSE**
+- test_avg: 32.524 vs NEW baseline 31.371 → **+3.68% WORSE**
+
+| Split | val sw=2 | val baseline (new) | Δ |
+|---|---|---|---|
+| single_in_dist | 39.299 | 38.082 | +3.20% |
+| geom_camber_rc | 53.763 | 51.356 | +4.69% |
+| geom_camber_cruise | 21.513 | 20.702 | +3.92% |
+| re_rand | 39.562 | 39.325 | +0.60% |
+| **avg** | **38.534** | **37.366** | **+3.13%** |
+
+**Critical mechanism finding (per student diagnosis — excellent work):**
+- val mae_vol_p: **−18.08%** (vs sw=10 same stack)
+- test mae_vol_p: **−19.62%**
+- Surface mae_p also improved vs same-stack sw=10 (−1.56%) confirming **vol→surface coupling pathway is OPEN**
+
+But the surface improvement from vol-gradient mechanism (~1.5%) is LESS than the deficit vs the longer-budget baseline (~3%). On compact stack, the slice_num=24+epochs=33 mechanism dominates the vol-gradient mechanism.
+
+**SW axis at n_layers=3 is now closed:** sw=2 (+3.13%), sw=5 (+2.57%), sw=10 (baseline). All low-sw runs lose vs current baseline. (sw=3 still in flight — nezuko #2279 at slice_num=32, expected similar.)
+
+**Open future question:** Does the vol-gradient mechanism transfer better at slice_num=24 (richer attention)? Not worth investigating now — gain ceiling is small.
+
+**Metric artifacts:** `models/model-charliepai2g48h3-askeladd-surf-weight-2-nlayers3-slicenum32-20260513-130915/metrics.jsonl`
+
+**Reassignment:** askeladd → PR #2375 (slice_num=20+epochs=34) — fill partition sweep between current best 24 and active probe 16.
+
+---
+
+## 2026-05-13 ~17:00 — PR #2348 (alphonse slice_num=16) — PR body repaired, sent back to status:wip
+
+PR body contained wrong content (tanjiro's slice_num=12 hypothesis) due to sub-agent template mix-up at creation time. Title and branch were correct (slice_num=16, alphonse). Student detected the inconsistency and asked for clarification. Body now corrected; label swapped status:review→status:wip; student confirmed to proceed with slice_num=16.
+
+---
+
 ## 2026-05-13 ~16:50 — PR #2274 — CLOSED (WD=0 marginal loss vs new baseline)
 
 **frieren: weight_decay=0 on n_layers=3+slice_num=32+epochs=30**
