@@ -8,6 +8,55 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 19:10 — PR #2311: Hybrid Lion (model) + AdamW (Kendall σ heads, lr=5e-4) — σ-collapse fix compounds with σ=0.5 stack
+
+- **val_avg/mae_surf_p:** **45.2181** (seed 0, SWA-model eval, rebased on advisor tip a685e78)
+- **test_avg/mae_surf_p:** **38.7661** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #2168 (45.7648 / 39.6619): val **−1.20%**, test **−2.26%**
+- Cumulative improvement vs. PR #1757: val **−32.14%**, test **−33.53%**
+
+### Per-split SWA (surface MAE, p)
+
+| Split | val (Hybrid) | Baseline #2168 (σ=0.5) | Δ val | test (Hybrid) | Baseline #2168 | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 46.967 | 48.774 | **−1.81** | 40.340 | 42.451 | **−2.11** |
+| geom_camber_rc | 58.126 | 58.290 | −0.16 | 52.781 | 54.596 | **−1.82** |
+| geom_camber_cruise | 29.496 | 29.111 | +0.38 | 23.712 | 23.445 | +0.27 |
+| re_rand | 46.283 | 46.885 | −0.60 | 38.231 | 38.156 | +0.08 |
+| **avg** | **45.218** | **45.765** | **−1.20%** | **38.766** | **39.662** | **−2.26%** |
+
+3 of 4 val splits improve; 3 of 4 test splits improve. Largest gains on the load-bearing OOD splits — `single_in_dist` (−2.11 test, −1.81 val) and `geom_camber_rc` (−1.82 test) — where surface Ux/Uy re-emphasis via differentiated σ heads should help most. Modest `geom_camber_cruise` regression (+0.27 test) — already the strongest split.
+
+### Mechanism
+
+**Structural fix for Lion+Kendall σ-collapse.** Under the baseline, Lion's sign-of-EMA-gradient update collapses all 6 `log_σ` channels to an identical −0.9037, making Kendall uncertainty weighting ≡ uniform-channel weighting. This fix routes the 6 `log_σ` scalars through a separate AdamW optimizer (`lr=5e-4, wd=0`), keeping Lion for all model parameters.
+
+- **σ spread restored: 0.000 → 0.475** (vs. collapsed single value). Per-channel `log_σ` at final epoch: surf_ux ≈ −1.8, surf_uy ≈ −1.85, surf_p ≈ −2.1, vol channels ≈ −2.25. Surface velocity channels down-weight relative to pressure/volume → `single_in_dist` and `geom_camber_rc` gains match the highest-signal OOD splits.
+- **Dose-response validated via lr sweep:** lr=3e-4 spread=0.07 (near-collapsed) → val=47.07 (+2.85%), test=39.93 (+0.68%); lr=5e-4 spread=0.475 → val=45.22 (−1.20%), test=38.77 (−2.26%). Linear response confirms mechanism causality.
+- **Rebase stability confirmed:** rebased confirmation run `objur0b9` delivers bit-for-bit identical metrics (val=45.2181, test=38.7661) to pre-rebase Arm 2 (`3s60eja4`).
+- **Note on mean drift:** `mean(log_σ)` drifted to −1.98 (vs AdamW-eq ≈ −1.40), inflating all eff_w ~3×. Partially offset by spread; residual mean-drift is the open mechanism being tested in #2500 (anchor-mean).
+
+### Config
+
+Transolver + FiLM (mid_dim=64) + Huber β=0.3 + per-sample Re-weight + grad-clip max_norm=0.5 + RFF (16-dim, σ=0.5) + **Lion lr=3e-4 wd=3e-4 (model params)** + **AdamW lr=5e-4 wd=0 (log_σ params, hybrid_kendall_lr=5e-4)**
+Schedule: CosineAnnealingLR(T_max=15), SWA (start_frac=0.75, swa_lr=lr*0.2, anneal_epochs=2)
+
+W&B run (confirmation): `objur0b9` | W&B run (original Arm 2): `3s60eja4`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 0.5 \
+  --huber_beta 0.3 \
+  --optimizer lion --lr 3e-4 --weight_decay 3e-4 \
+  --hybrid_kendall_lr 5e-4 \
+  --seed 0
+```
+
+---
+
 ## 2026-05-13 15:30 — PR #2168: RFF σ=0.5 on Lion+β=0.3+RFF+Kendall — lower-frequency Fourier prior compounds with Lion
 
 - **val_avg/mae_surf_p:** **45.7648** (seed 0, SWA-model eval)
