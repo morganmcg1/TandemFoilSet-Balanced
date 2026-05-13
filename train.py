@@ -77,12 +77,17 @@ def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
 # Replace first 2 normalized (x,z) coordinate dims with a 64-dim RFF embedding
 # [cos(B x), sin(B x)] where B ~ N(0, σ²). Provides multi-scale spatial
 # frequency content to the input MLP, freeing it from learning sinusoidal
-# bases from scratch. B is fixed (no gradient) and initialized once.
+# bases from scratch.
+#
+# PR #2238: B is now a trainable nn.Parameter on the model (requires_grad=True),
+# initialized at σ=3.0 (the PR #1657 sweet spot). Discovered by model.parameters()
+# so AdamW trains it and it is saved in state_dict so the best-epoch B restores
+# at test time.
 # ---------------------------------------------------------------------------
 
-RFF_SIGMA = 3.0        # bandwidth — controls spatial frequency range
+RFF_SIGMA = 3.0        # bandwidth at init — controls spatial frequency range
 RFF_DIM = 64           # output embedding dim (32 cos + 32 sin)
-_rff_B = None          # initialized after device is known
+_rff_B = None          # initialized after model is constructed (alias to model.rff_B)
 
 
 def apply_rff(x_batch: torch.Tensor) -> torch.Tensor:
@@ -443,11 +448,18 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 # RFF projection matrix: [2, 32] maps (x,z) → 64-dim embedding (32 cos + 32 sin).
-# Seeded for reproducibility across runs; B is fixed (no gradient). (PR #1657)
+# Seeded for reproducibility across runs.
+# PR #1657: B was fixed (no gradient). PR #2238: B is now trainable; this seed +
+# randn block produces the same init as the σ=3.0 baseline so the experiment
+# tests incremental movement from the local optimum, not a fresh search.
 torch.manual_seed(42)
-_rff_B = torch.randn(2, RFF_DIM // 2, device=device) * RFF_SIGMA
-_rff_B.requires_grad_(False)
-print(f"RFF: B shape={tuple(_rff_B.shape)}, σ={RFF_SIGMA}, embed_dim={RFF_DIM}")
+_rff_B_init = torch.randn(2, RFF_DIM // 2, device=device) * RFF_SIGMA
+# Frozen snapshot for end-of-training drift diagnostic.
+_rff_B_init_frozen = _rff_B_init.detach().clone()
+print(
+    f"RFF: B shape={tuple(_rff_B_init.shape)}, σ_init={RFF_SIGMA}, embed_dim={RFF_DIM}, "
+    f"B_init.std()={_rff_B_init.std().item():.4f}"
+)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -482,8 +494,25 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+
+# PR #2238: Attach the RFF B matrix as a trainable Parameter on the model.
+# This makes it discoverable by model.parameters() (so AdamW updates it) and
+# part of state_dict (so the best-epoch B is restored at test time). We clone
+# the pre-seeded init so the model's B starts at exactly the σ=3.0 sweet spot.
+model.rff_B = nn.Parameter(_rff_B_init.clone())
+_rff_B = model.rff_B  # global alias used by apply_rff
+assert _rff_B.requires_grad, "RFF B should be trainable (PR #2238)"
+assert any(p is _rff_B for p in model.parameters()), "RFF B not discovered by model.parameters()"
+
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"Model: Transolver ({n_params/1e6:.2f}M params, {n_trainable} trainable)")
+print(
+    f"RFF B trainable: requires_grad={_rff_B.requires_grad}, "
+    f"shape={tuple(_rff_B.shape)}, "
+    f"numel={_rff_B.numel()}, "
+    f"in model.parameters()={any(p is _rff_B for p in model.parameters())}"
+)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
@@ -606,6 +635,14 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # PR #2238: track B drift each epoch so we can see how learnable frequencies
+    # move from the σ=3.0 init.
+    with torch.no_grad():
+        B_now = _rff_B.detach()
+        delta_rows = (B_now - _rff_B_init_frozen).norm(dim=0)  # per-frequency drift, [32]
+        rff_b_std = B_now.std().item()
+        rff_b_drift_mean = delta_rows.mean().item()
+        rff_b_drift_max = delta_rows.max().item()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -619,6 +656,9 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
+        "rff_B_std": rff_b_std,
+        "rff_B_drift_mean": rff_b_drift_mean,
+        "rff_B_drift_max": rff_b_drift_max,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
     pred_abs_max_norm_worst = max(m["pred_abs_max_norm"] for m in split_metrics.values())
@@ -635,6 +675,21 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# PR #2238: final B drift summary (uses the current/last-epoch B, not best-epoch).
+with torch.no_grad():
+    B_now = _rff_B.detach()
+    delta_rows_final = (B_now - _rff_B_init_frozen).norm(dim=0)
+    print(
+        f"\n[RFF B drift, end of training] "
+        f"B_init.std()={_rff_B_init_frozen.std().item():.4f}, "
+        f"B_final.std()={B_now.std().item():.4f}\n"
+        f"  per-frequency ||ΔB|| over 32 freqs: "
+        f"min={delta_rows_final.min().item():.4f} "
+        f"median={delta_rows_final.median().item():.4f} "
+        f"mean={delta_rows_final.mean().item():.4f} "
+        f"max={delta_rows_final.max().item():.4f}"
+    )
 
 # --- Test evaluation + local summary ---
 if best_metrics:
@@ -660,11 +715,31 @@ if best_metrics:
         print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+        # PR #2238: log best-epoch B drift (model state was restored from best ckpt).
+        with torch.no_grad():
+            B_best = _rff_B.detach()
+            delta_rows_best = (B_best - _rff_B_init_frozen).norm(dim=0)
+            rff_B_best = {
+                "std": B_best.std().item(),
+                "drift_min": delta_rows_best.min().item(),
+                "drift_median": delta_rows_best.median().item(),
+                "drift_mean": delta_rows_best.mean().item(),
+                "drift_max": delta_rows_best.max().item(),
+                "per_row_norms": delta_rows_best.tolist(),
+            }
+        print(
+            f"  [RFF B drift, best epoch {best_metrics['epoch']}] "
+            f"B.std()={rff_B_best['std']:.4f}, "
+            f"||ΔB|| per freq: min={rff_B_best['drift_min']:.4f} "
+            f"median={rff_B_best['drift_median']:.4f} "
+            f"max={rff_B_best['drift_max']:.4f}"
+        )
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "rff_B_best": rff_B_best,
         })
 
     write_experiment_summary(
