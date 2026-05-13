@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-05-14 03:15 UTC — Round 50
+
+Two review-ready LOSSes closed + 2 fresh hypotheses assigned (axes: attention-temperature, decoder-skip).
+
+### PR #2455 askeladd: MLP output dropout p=0.05 — CLOSED (3rd STOCHASTIC-REG CLOSURE)
+
+- **Branch:** charliepai2g48h5-askeladd/mlp-output-dropout-005
+- **Hypothesis:** `nn.Dropout(p=0.05)` after `fc2` in each TransolverBlock FFN; feature-level dropout distinct from closed attention-weight dropout.
+- **Metrics artifact:** `models/model-charliepai2g48h5-askeladd-mlp-output-dropout-005-20260513-171354/metrics.jsonl`
+
+| Metric | MLP-dropout | Baseline #2307 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **46.8749** | 42.3455 | **+10.69% (LOSS)** |
+| `test_avg/mae_surf_p` | **41.0065** | 38.5059 | **+6.49% (LOSS)** |
+| `val_single_in_dist` | 39.5185 | 35.4776 | +11.39% |
+| `val_geom_camber_rc` | 64.0977 | 60.8311 | +5.37% |
+| `val_geom_camber_cruise` | 33.2952 | 27.6517 | +20.41% |
+| `val_re_rand` | 50.5881 | 45.4214 | +11.38% |
+
+- **70/70 epochs terminal-best — convergence-bound regime confirmed.**
+- **DECISION: Close as LOSS.** 17th closed-axis: convergence-floor regime closes the stochastic-regularization class.
+- **MECHANISM:** 3rd independent stochastic-regularization closure (1: attention-weight dropout p=0.1; 2: DropPath 4-attempt jinx; 3: MLP-output dropout p=0.05). LayerScale γ (already a learnable per-channel scale on the same FFN residual branch) effectively SUBSUMES the gating role; stochastic dropout on top is destructive. Per-epoch cost of stochasticity > regularization benefit at 30-min cap.
+
+---
+
+### PR #2454 alphonse: AoA + y-coord reflection-aug — CLOSED (PHYSICAL-SYMMETRY HYPOTHESIS FALSIFIED)
+
+- **Branch:** charliepai2g48h5-alphonse/reflection-aug
+- **Hypothesis:** Reflect y-coord, AoA, gap, dsdf-rays, and Uy target with p=0.5 to enforce physical Navier-Stokes y-symmetry.
+- **Metrics artifact:** `models/model-charliepai2g48h5-alphonse-reflection-aug-20260513-170926/metrics.jsonl`
+
+| Metric | Reflection-aug | Baseline #2307 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **55.5301** | 42.3455 | **+31.1% (CATASTROPHIC LOSS)** |
+| `test_avg/mae_surf_p` | **48.0034** | 38.5059 | **+24.7% (LOSS)** |
+| `val_single_in_dist` | 51.5076 | 35.4776 | **+45.2%** |
+| `val_geom_camber_rc` | 74.5492 | 60.8311 | +22.6% |
+| `val_geom_camber_cruise` | 36.3625 | 27.6517 | +31.5% |
+| `val_re_rand` | 59.7012 | 45.4214 | +31.4% |
+
+- **70/70 terminal-best; epoch 1 val_avg=363 — convergence permanently disrupted by distribution doubling.**
+- **DECISION: Close as LOSS — physical reflection symmetry hypothesis FALSIFIED at the dataset level.**
+- **MECHANISM (student's rigorous analysis):** 68% of training corpus has half-space mesh y ∈ [0, ~10] with ground plane (raceCar single 38% + raceCar tandem 30%). Reflecting y → -y moves the entire raceCar mesh into NEGATIVE y space — the model never sees these coordinates in val/test. Only cruise tandem (~30%) has truly symmetric mesh y ∈ [-9.58, +9.55]. The 18th closed taxon: whole-corpus-reflection physical-symmetry hypothesis falsified by mesh-half-space structure. Student's follow-ups (cruise-only gated reflection, per-mesh-center reflection) preserved as possible future directions but lower priority.
+
+---
+
+### New Assignments (Round-50)
+
+| PR | Student | Hypothesis | Notes |
+|---|---|---|---|
+| #2502 | askeladd | PhysicsAttention temperature init τ=0.25 (sharper routing) | First temperature-axis probe; orthogonal to closed slice_num=24 (count vs sharpness); zero param change; trained τ diagnostic critical for closure |
+| #2503 | alphonse | Decoder residual skip: Linear(96,3) after ln_3 in last block | First decoder-skip probe; +291 params; output = mlp2(ln_3(fx)) + skip_proj(ln_3(fx)); composable with in-flight #2472 split-heads |
+
+---
+
 ## 2026-05-14 03:00 UTC — Round 49
 
 Three review-ready PRs closed + 3 new experiments assigned.
