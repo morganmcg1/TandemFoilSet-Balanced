@@ -33,7 +33,8 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 - **#2246 fern (grad-clip max_norm=5.0 bisect)**: on grad-clip baseline (just assigned; bisect clip threshold between 1.0 winner and unclipped)
 - **#2180 alphonse (dropout=0.1 in PhysicsAttention)**: on vol-Huber baseline, grad-clip heads-up posted
 - **#2163 askeladd (per-channel β: β_p=0.25)**: on vol-Huber baseline, grad-clip heads-up posted
-- **#2341 thorfinn (surf_weight 10 → 20)**: NEWLY ASSIGNED (14:00); bisect surf_weight upward — thorfinn's own analysis shows surf under-weighted under grad-clip at w=5, testing if w=20 over-corrects or wins
+- **#2379 nezuko (cosine T_max=35 + eta_min=1e-5)**: NEWLY ASSIGNED (15:00); floor residual LR to avoid over-annealing — directly follows #1843's finding that lr=0 at epoch 35 is too aggressive
+- **#2341 thorfinn (surf_weight 10 → 20)**: NEWLY ASSIGNED (14:00); bisect surf_weight upward
 - **#2017 edward (weight_decay → 2e-4)**: sent back for bisection, grad-clip heads-up posted
 - **#1940 frieren (batch_size=8 + sqrt-LR)**: on compile baseline, code committed (11:12), grad-clip heads-up posted
 - **#1843 nezuko (Cosine T_max=35)**: on compile baseline, code committed (09:21), grad-clip heads-up posted
@@ -72,7 +73,8 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | CLOSED (stuck — 22 pod restarts, 0 commits in 10h; reset, not verdict on SwiGLU) |
 | #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | WIP, vol-Huber baseline (just assigned; orthogonal to all in-flight) |
 | #1810 | frieren   | torch.compile (dynamic=True)     | **MERGED** 05:15 (val=67.83, test=59.78) — largest single-axis win of round 1 |
-| #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, bf16 baseline — heads-up to retarget T_max=35 on compile |
+| #1843 | nezuko    | Cosine T_max=35                  | CLOSED: val +3.1% worse. T_max=35 anneals to lr=0 too aggressively; T_max=50's implicit residual lr~1e-4 at epoch 35 does useful continued work. In-dist wins −7% but OOD regresses. |
+| #2379 | nezuko    | Cosine T_max=35 + eta_min=1e-5   | WIP, grad-clip baseline (just assigned 15:00); explicit LR floor tests residual-LR mechanism |
 | #1882 | askeladd  | Huber β=0.75 (β-tune from above) | CLOSED (+8.6% val, +10.0% test — β-axis fully bracketed: 0.25 fails, 0.5 optimum, 0.75 fails) |
 | #1910 | thorfinn  | Volume Huber β=0.5               | **MERGED** 07:30 (val=65.47, test=57.84) — OOD splits drove win; in-dist regressed slightly; zero compute overhead |
 | #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
@@ -82,7 +84,7 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #2041 | thorfinn  | surf_weight 10 → 5               | CLOSED: regresses +2.7%/+2.6% under grad-clip — directional reversal. surf_w=10 was better-calibrated when grad-clip normalises per-batch scale variance. |
 | #2341 | thorfinn  | surf_weight 10 → 20              | WIP, grad-clip baseline (just assigned 14:00; bisect upward per thorfinn's mechanism analysis) |
 
-**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 12 (+#2041 surf_w=5 directional reversal under grad-clip). **Open:** 8 (tanjiro #1589, frieren #1940, nezuko #1843, **thorfinn #2341**, edward #2017, askeladd #2163, alphonse #2180, fern #2246).
+**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 13 (+#1843 cosine T_max=35 val regresses, LR floor mechanism identified). **Open:** 8 (tanjiro #1589, frieren #1940, **nezuko #2379**, **thorfinn #2341**, edward #2017, askeladd #2163, alphonse #2180, fern #2246).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -93,6 +95,7 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 - **Compute is STILL binding at 35 epochs** (both #1910 vol-Huber seeds best=last, same as compile). Highest-EV remaining levers: lr-schedule alignment (#1843 nezuko T_max=35), batch-size scaling (#1940 frieren bs=8), possibly max-autotune compile mode.
 - **Loss-formulation wins have stacked:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) = −8% combined. The OOD splits continue to be where Huber suppression helps most. β=0.75 (#1882 askeladd) is in-flight as a tune above the β=0.5 optimum.
 - **surf_weight axis update:** surf_w=5 (#2041) REGRESSED under grad-clip (+2.7%). Mechanism: grad-clip absorbs per-batch scale variance; surf_w=10 was already appropriately calibrated, lowering it starved surface signal. **Next test: surf_w=20 (#2341 thorfinn)** — bisect the upward direction. If surf_w=20 also regresses, close the axis (surf_w=10 is optimal). If wins, bisect at 15.
+- **Cosine LR schedule axis reframe (#1843 closed, #2379 active):** T_max=35 decays to lr=0 too aggressively — T_max=50's implicit residual ~1e-4 at epoch 35 (20% of peak) does useful continued work. **Axis is now: what terminal LR floor is optimal?** T_max=35 + eta_min=1e-5 (#2379) tests the floor mechanism. If wins, bisect eta_min up (5e-5, 1e-4).
 - **Scalar-capacity axis is CLOSED for round 1.** All 4 dimensions tried, all failed; no further retries.
 - **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
 - **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.

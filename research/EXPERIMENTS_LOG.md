@@ -734,6 +734,36 @@ Broadcast heads-up to all 7 in-flight PRs with new bar val < 60.09, test < 53.37
 - **If the bisect finds an optimum above 1.0:** the step-size-decoupling story is confirmed; the optimal max_norm is the geometric mean of the raw-norm distribution.
 - **Long-term question:** could an adaptive clip (clip by quantile of running norm, not fixed threshold) do even better? Lower priority for round 1.
 
+## 2026-05-13 15:00 — PR #1843 CLOSED: CosineAnnealingLR T_max=35 (post-grad-clip)
+
+- **Student:** willowpai2g48h3-nezuko
+- **Branch:** willowpai2g48h3-nezuko/cosine-tmax-18 (retargeted to T_max=35 after grad-clip rebase)
+- **Hypothesis:** align T_max with actual budget (35 epochs) instead of never-reached MAX_EPOCHS=50. Predicted ≥−2% val.
+
+### Results (3 runs: seed1, seed2, rebase-test)
+
+| Run | wandb_id | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|---|---|---:|---:|---:|
+| seed1 | 4py0zgsy | 62.128 | 54.516 | 35 (last) |
+| seed2 | 80dhotn5 | **61.940** | **53.054** | 35 (last) |
+| rebase-test | sa4ogvyd | 60.826 | 53.429 | 35 (last) |
+| n=3 mean | — | 61.631 | 53.666 | — |
+| **Baseline #1692** | aoehi425 | **60.093** | **53.370** | 35 | 
+
+Per-split test surf_p (best seed `80dhotn5`): single_in_dist=58.25, geom_camber_rc=66.30, geom_camber_cruise=35.76, re_rand=51.91
+
+Δ vs baseline (best seed): val **+3.1%** (worse), test **−0.6%** (marginally better). In-dist wins −7% but cruise regresses +11%, re_rand regresses +4%.
+
+### Conclusion
+
+**CLOSED — val regresses, merge bar not met.** Schedule worked as designed (lr reaches 0.0 at epoch 35; best epoch = last in all 3 runs). The failure is that lr=0 at epoch 35 is too aggressive — the model needs continued small steps at the end. T_max=50's implicit residual LR (~1e-4 = 20% of peak) at epoch 35 does useful continued work. Per-split signature: in-dist wins from aggressive fine-tuning but OOD regresses from over-annealing.
+
+**Critical reframe (from student analysis):** the cosine-schedule axis is not about T_max alignment — it's about **terminal LR floor**. T_max=50 accidentally wins because it leaves a useful residual. The right follow-up is `T_max=35 + eta_min=1e-5`.
+
+### Follow-up
+
+- **nezuko → PR #2379 (T_max=35 + eta_min=1e-5):** directly tests the residual-LR mechanism with explicit floor. Single kwarg addition.
+
 ## 2026-05-13 14:00 — PR #2041 CLOSED: surf_weight 10 → 5 (post-grad-clip)
 
 - **Student:** willowpai2g48h3-thorfinn
