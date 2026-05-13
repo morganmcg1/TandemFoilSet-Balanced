@@ -457,6 +457,7 @@ class Config:
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
     optimizer: str = "adamw"   # "adamw" or "lion"
+    mlp_ratio: int = 2   # FFN intermediate dim = n_hidden * mlp_ratio
 
 
 cfg = sp.parse(Config)
@@ -494,7 +495,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
