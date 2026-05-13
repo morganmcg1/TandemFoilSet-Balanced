@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-14 03:50 UTC — Round 52
+
+One review-ready LOSS closed (20th closed taxon: per-group-LR axis closes BOTH directions; uniform-LR AdamW confirmed optimum on optimizer-group axis) + 1 fresh hypothesis assigned (axis: optimizer-family, Lion sign-based momentum).
+
+### PR #2497 edward: Layer-wise LR Decay (LLRD) decay=0.7^k from output to input — CLOSED (PER-GROUP-LR AXIS CLOSURE)
+
+- **Branch:** charliepai2g48h5-edward/llrd-decay07
+- **Hypothesis:** Per-parameter-group LR with decay=0.7^k from output to input (5 groups: preprocess @ lr×0.240, block_0 @ lr×0.343, block_1 @ lr×0.490, block_2 @ lr×0.700, block_3+decoder @ lr×1.0). Standard ViT/BERT LLRD recipe.
+- **Metrics artifact:** `models/model-charliepai2g48h5-edward-llrd-decay07-20260513-180911/metrics.jsonl`
+
+| Metric | LLRD decay=0.7 | Baseline #2307 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **47.7593** | 42.3455 | **+12.79% (LOSS)** |
+| `test_avg/mae_surf_p` | **41.4230** | 38.5059 | **+7.58% (LOSS)** |
+| `val_single_in_dist` | 42.0589 | 35.4776 | +18.55% |
+| `val_geom_camber_rc` | 65.8278 | 60.8311 | +8.21% |
+| `val_geom_camber_cruise` | 31.2243 | 27.6517 | +12.92% |
+| `val_re_rand` | 51.9261 | 45.4214 | +14.32% |
+
+- **70/70 epochs reached, best=terminal=ep70** — model monotonically descending, convergence-bound NOT plateaued (340 → 100 @ ep16 → 70 @ ep30 → 56 @ ep50 → 48 @ ep70).
+- **γ_mlp depth gradient at terminal:** block_0=0.008, block_1=0.029, block_2=0.041, block_3=0.050 — STEEP ramp vs uniform-LR baseline ~0.063-0.078 across all 4 blocks per PR #2195 → confirms early-block under-training.
+- **Per-group LR ratio preservation verified:** block_0/block_3 = 0.343 = 0.7^3 ✓, preprocess/block_3 = 0.240 = 0.7^4 ✓ through LinearLR×CosineAnnealingLR. No implementation bug.
+- **DECISION: Close as LOSS.** 20th distinct closed-axis taxon: layer-wise-LR-decay-downward in budget-bound regime.
+- **MECHANISM:** decay=0.7^4 = 0.24× preprocess + 0.343× block_0 starves early-layer optimizer work below the 70-epoch convergence floor. The 4-block-too-shallow wash prediction was FALSIFIED. Combined with #2457 (embed=2× UP destabilization), the **per-parameter-group-LR axis is FULLY CLOSED in BOTH directions** — uniform-LR AdamW is the local optimum on the optimizer-group axis.
+- **Cumulative optimizer-family closures in this launch (8 total):** AdamW (lr-UP/DOWN/β1=0.95/amsgrad), SGD-momentum, SAM ρ=0.05, per-group-LR embed-UP, LLRD-decay-DOWN.
+
+---
+
+### Assignment — Round 52
+
+#### PR #2524 edward: Lion optimizer (sign-based momentum) replaces AdamW
+- **Branch:** charliepai2g48h5-edward/lion-optimizer
+- **Hypothesis:** Replace AdamW with Lion (Chen et al. 2023, "Symbolic Discovery of Optimization Algorithms"). Lion uses `update = sign(β₁ * m + (1-β₁) * g)` — pure sign step replaces AdamW's 2nd-moment normalization. Hyperparameters: lr=1e-4 (1/5 AdamW), wd=3e-4 (3× AdamW), β2=0.99 (vs AdamW 0.999), β1=0.9. Zero param change; pure optimizer swap. 9th optimizer-family member tested in this launch.
+- **Rationale:** Fundamentally distinct from AdamW (no 2nd moment) and SGD (sign vs raw magnitude). Aligns with L1 sign-gradient regime: L1's gradient is essentially sign(error); AdamW's 2nd-moment normalization is near-identity for already-sign-based gradients. Lion cuts the overhead and commits to sign step directly. Also: bf16's 7-bit mantissa makes AdamW's v_hat tracking noisy; Lion's sign step is bf16-stable.
+- **Predicted:** -1% to -4% on val_avg if Lion's sign-step aligns with L1+bf16 regime; or wash if L1+AdamW already approximates sign-based at equilibrium.
+- **Critical risk:** Lion is LR-sensitive — if wrong, can diverge in first 5 epochs (val_avg > 200 at ep5). Flag for early termination.
+- **Diagnostic:** student must report Lion momentum non-zero fraction at terminal (sanity check on optimizer state).
+
+---
+
 ## 2026-05-14 03:30 UTC — Round 51
 
 One review-ready LOSS closed (19th closed taxon: FFN-gating axis) + 1 fresh hypothesis assigned (axis: input-encoding via Fourier features).
