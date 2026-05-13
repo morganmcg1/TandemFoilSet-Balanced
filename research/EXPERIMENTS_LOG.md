@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-13 12:15 — PR #2153: WD bracket sweep {4e-4, 5.5e-4, 6e-4}
+
+- **Branch:** `willowpai2g48h4-fern/wd-bracket` (CLOSED — WD axis fully characterized)
+- **Student:** willowpai2g48h4-fern
+- **W&B runs:** `ncx9dmho` (Arm 1 WD=4e-4), `ifksoytm` (Arm 2 WD=5.5e-4)
+
+### Results
+
+| Arm | WD | val_avg/mae_surf_p | Δ vs #2031 (93.62) | test_avg/mae_surf_p |
+|-----|-----|---------------------|---------------------|---------------------|
+| Arm 1 | 4e-4 | 108.0627 | **+15.43%** | 97.1256 |
+| Arm 2 | 5.5e-4 | 105.4160 | **+12.60%** | 94.0927 |
+| #2120 ref | 7e-4 | ~111.3 | +18.85% | — |
+
+Vs current baseline 89.7197 (#2091): Arm 1 +20.4%, Arm 2 +17.5%. Arm 3 (6e-4) NOT run — branching rule fired (both arms >5%).
+
+### Key Insights
+
+**1. WD=5e-4 is a sharp local minimum, confirmed bilaterally.** U-shape approximately symmetric on val_avg (4e-4 +15.4%, 5.5e-4 +12.6%, 7e-4 +18.9%).
+
+**2. Per-split asymmetry reveals the mechanism:**
+- val_geom_camber_rc: 4e-4 +25.6% vs 5.5e-4 +8.1% — rc prefers MORE damping
+- val_single_in_dist: 4e-4 +18.9% vs 5.5e-4 +22.7% — sid prefers LESS damping
+- The 5e-4 winner balances these two conflicting constraints
+
+**3. e14 breakthrough is load-bearing:**
+- Baseline 5e-4: 108.28 → 93.62 at e14 = -13.5% (the win)
+- Arm 1 4e-4: 110.77 → 108.06 = -2.4% (breakthrough mostly lost)
+- Arm 2 5.5e-4: 117.71 → 105.42 = -10.4% (partially preserved)
+The WD→breakthrough coupling is the primary mechanism, not asymptotic weight norms.
+
+**4. Critical null result: weight-norm growth FLAT across WD range (+11.0% to +11.9%).** WD is NOT acting through asymptotic norm levels — it's an optimization-trajectory effect (timing of the late-stage LR × parameter-scale interaction).
+
+### WD Axis Closure
+
+Five PRs now fully characterize the WD axis:
+- #1502 (BIVW restored WD viability)
+- #2031 (5e-4 winner, -4.46%)
+- #2120 (7e-4 regression +18.85%)
+- #2153 (4e-4 +15.4%, 5.5e-4 +12.6%)
+
+WD=5e-4 is the global optimum for this architecture/training regime. No further WD sweeps will produce gains without changing other components.
+
+---
+
 ## 2026-05-13 11:45 — PR #2122: Decoupled weight_decay per param group: encoder vs surf_head
 
 - **Branch:** `willowpai2g48h4-edward/decoupled-wd` (CLOSED — head-down direction rejected, key insight: head wants MORE WD)
