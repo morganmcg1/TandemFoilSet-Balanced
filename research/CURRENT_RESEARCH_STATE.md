@@ -60,6 +60,8 @@
 - **lr=2e-4 on RMSNorm stack**: +0.98% val (PR #1765 — RMSNorm tightened loss surface; lr=2e-4 overshoots on geom_camber_rc; test −1.23% ✓; pivot to lr=1.5e-4)
 - **mlp_ratio=8 + GeGLU**: +5.95% (PR #1872 — gating wins outright; fc2 capacity expansion beyond 256 channels adds noise pathways; mlp_ratio=4 optimal)
 - **CosineAnnealingLR eta_min=1e-5**: +12.05% vs current baseline (PR #1920 — LR floor above 0 conflicts with T_max=12 which cleanly decays to 0; T_max=12 strictly dominates)
+- **Lion WD=3e-2**: +0.06% (PR #1925 — WD valley confirmed flat [1e-4→3e-2]; WD=1e-1 bends up; entire WD axis exhausted on this stack)
+- **Lion 2-epoch warmup**: mechanism conflict with T_max=12 (PR #1790 — warmup costs 17% of 12-epoch budget; cold-start problem already addressed by T_max=12 cosine; student stale on rerun)
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
 - EMA decay=0.999: cold-start drag (+41% worse)
@@ -83,12 +85,12 @@
 |---------|-----|------------|--------|
 | alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR | WIP (rerun) |
 | askeladd | #1766 | Lion WD=1e-2: paper-recommended on full stack | WIP (stale) |
-| edward | #1925 | Lion WD=3e-2: bracket WD optimum between 1e-2 and 1e-1 | WIP |
-| fern | #1790 | Lion + 2-epoch cosine warmup (rerun on GeGLU+Lion stack) | WIP (pending rerun) |
+| edward | #1995 | n_layers=5: shallower model → ~15 epochs in 30-min budget | NEW |
+| fern | #1996 | slice_num=48: tighter PhysicsAttention → ~14 epochs in budget | NEW |
 | nezuko | #1956 | **T_max=12 + surf_weight=5 compound** | WIP |
 | thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | WIP |
-| frieren | #1983 | CosineAnnealingLR T_max=10: push cosine floor to epoch 10 | NEW |
-| tanjiro | #1984 | n_hidden=160: widen attention dim for richer aerodynamic features | NEW |
+| frieren | #1983 | CosineAnnealingLR T_max=10: push cosine floor to epoch 10 | WIP |
+| tanjiro | #1984 | n_hidden=160: widen attention dim for richer aerodynamic features | WIP |
 
 **Recently merged:**
 - nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test) ← NEW BASELINE 52.798/44.972
@@ -96,6 +98,8 @@
 - frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
 **Recently closed:**
+- edward #1925: WD=3e-2 (+0.06% on prior baseline; +19.4% vs current) — WD axis confirmed flat [1e-4→3e-2]; exhausted
+- fern #1790: Lion 2-epoch warmup — stale + mechanism conflicts with T_max=12 (warmup wastes 17% of budget when cosine already handles full decay)
 - frieren #1920: eta_min=1e-5 (+12.05% vs current baseline) — mechanism redundant with T_max=12; T_max=12 cleanly decays LR to 0, which is strictly better than a 1e-5 floor
 - tanjiro #1872: mlp_ratio=8 (+5.95%) — "gating wins outright"; fc2 capacity expansion adds noise pathways that gate doesn't fully suppress at 12 epochs
 - frieren #1890: n_layers=7 (+4.6%) — depth incompatible with budget

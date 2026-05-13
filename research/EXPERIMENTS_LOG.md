@@ -6,6 +6,47 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 06:45 — PR #1925: Lion WD=3e-2 — CLOSED (WD axis saturated, +0.06% on prior baseline)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/lion-wd-3e-2
+- **Hypothesis:** WD=3e-2 brackets WD optimum between in-flight WD=1e-2 (askeladd) and closed WD=1e-1 (PR #1889).
+- **Result:** val=63.054, test=55.573 (14 epochs, ~138s/epoch, best_epoch=13)
+- **Baseline used:** PR #1837 (val=63.017 / test=54.731; RMSNorm+GeGLU+Lion+WD=1e-4)
+
+| Split | val (WD=3e-2) | val (baseline) | Δ |
+|---|---|---|---|
+| single_in_dist | 75.347 | 76.710 | −1.78% |
+| geom_camber_rc | 76.040 | 73.930 | **+2.85%** |
+| geom_camber_cruise | 40.649 | 40.746 | −0.24% |
+| re_rand | 60.183 | 60.683 | −0.82% |
+| **avg** | **63.054** | **63.017** | **+0.06%** |
+
+- **Test:** 55.573 vs 54.731 = +1.54% (worse)
+- **WD bracket summary:** [WD=1e-4: 63.017 / WD=3e-2: 63.054 / WD=1e-1: 64.731] — flat valley from 1e-4→3e-2, bends up sharply at 1e-1
+- **Analysis:** WD=3e-2 is statistically tied with WD=1e-4 on val (well within seed noise). best_epoch=13 (same as baseline) confirms no over-regularization at this WD level. Test regression (+1.54%) suggests marginal overfitting risk without val benefit.
+- **Against current baseline (#1793 T_max=12, val=52.798):** +19.4% worse (baseline-drift effect only — measured on old stack)
+- **Dead end confirmed:** WD axis exhausted on Lion+RMSNorm+GeGLU stack. Further WD experiments will only refine a flat valley. WD=1e-2 (askeladd #1766) will confirm third bracket point.
+- **Student insight:** Correctly identified "throughput improvements" as higher leverage than WD tuning
+- **Reassigned edward:** PR #1995 n_layers=5 (shallower model → faster epochs → 3 extra epochs in budget)
+
+---
+
+## 2026-05-13 06:40 — PR #1790: Lion + 2-epoch cosine warmup — CLOSED (stale + mechanism conflicts with T_max=12)
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/lion-cosine-warmup-2ep
+- **Hypothesis:** 2-epoch linear warmup (1e-6→1e-4) stabilizes Lion's aggressive sign-based init before full cosine decay.
+- **Original result (PR #1725 baseline):** val=78.315 (−9.9% vs old baseline val=86.938) — positive
+- **Status:** Sent back for rerun on GeGLU+Lion stack (PR #1769 baseline val=64.918 at that time). No results produced in 2h+ after rerun request. Last branch commit at 04:05 UTC.
+- **Closure rationale:**
+  1. Baseline shifted twice since rerun request (→57.328 →52.798)
+  2. Mechanism conflict: 2-epoch warmup consumes 17% of 12-epoch budget; T_max=12 cleanly handles LR decay without needing warmup (cold-start instability addressed by cosine from epoch 1)
+  3. Student inactivity: 2h+ stale
+- **Reassigned fern:** PR #1996 slice_num=48 (throughput-focused; tighter PhysicsAttention → ~2 extra epochs)
+
+---
+
 ## 2026-05-13 06:20 — PR #1920: CosineAnnealingLR eta_min=1e-5 — CLOSED (+12.05% vs current baseline; mechanism redundant with T_max=12)
 
 - **Student:** charliepai2g48h3-frieren
