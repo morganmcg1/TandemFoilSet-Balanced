@@ -417,3 +417,36 @@ Per-split val (best arm, clip=10.0):
 **For future clip experiments:** if composing clip with Huber, use `grad_clip=10.0` (not 1.0). And note that the benefit case is weak — both are targeting the same gradient noise source.
 
 **Gotcha documented:** PR #1558 left dataclass `huber_delta: float = 1.0` but winning baseline used `--huber_delta 0.5`. All rebased PRs must pass explicit `--huber_delta 0.5`.
+
+---
+
+## 2026-05-13 01:48 — PR #1627: Huber delta sweep (CLOSED — both smaller deltas regressed)
+
+- **Branch:** `willowpai2g48h4-thorfinn/huber-delta-sweep`
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `j99e4mrg` (δ=0.3 canonical), `5rl1qqlh` (δ=0.2 canonical). Two duplicate runs `pyf40gvr` and `eawlb7mc` were terminated cleanly by thorfinn before final epoch — not in result count.
+- **Hypothesis:** Smaller Huber delta (0.2, 0.3) pushes more residuals into the L1 regime, further aligning loss with MAE objective.
+
+### Results
+
+| Arm | huber_delta | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p |
+|-----|-------------|--------------------|-----------|---------------------|
+| **Baseline (PR #1558)** | **0.5** | **98.1642** | — | 98.7537 (3-split) |
+| δ=0.3 | 0.3 | 113.4695 | **+15.6% ❌** | (regressed) |
+| δ=0.2 | 0.2 | 115.0398 | **+17.2% ❌** | (regressed) |
+| δ=1.0 (cycle 10 op note) | 1.0 | ~99.4 | +1.3% ❌ | — |
+
+### Analysis and Conclusions
+
+**Closed — δ=0.5 is at or near the local optimum.** Both smaller deltas regress significantly; δ=1.0 also regressed (from cycle 10 op notes); so δ=0.5 sits in a narrow sweet spot.
+
+**Mechanism (thorfinn's analysis, confirmed):** At δ=0.5, only ~2% of per-node residuals exceed the quadratic-linear breakpoint and fall in the L1 regime. Pushing δ down to 0.2/0.3 moves more residuals into L1 — but those mid-magnitude residuals are precisely the ones whose gradient drives MAE minimisation. Flattening their gradient to a constant ±1 strips information needed to discriminate "almost good" from "good enough", and the encoder loses its tuning signal on the bulk of the distribution.
+
+**Why δ=0.5 wins:** It targets only the true outlier tail (the 2% that introduce gradient spikes) while preserving full MSE-style scaling on the residuals that actually matter for the readout. Going either smaller (over-flatten) or larger (under-protect from outliers) both lose.
+
+**Principle established:** The Huber delta sweet spot for normalised CFD readouts at this scale is δ≈0.5 — narrow window, do not re-sweep without changing other levers.
+
+**Residual opportunities (not assigned):**
+- Per-channel Huber delta (different δ for p vs Ux/Uy) — channels have different residual distributions; one global δ may be suboptimal even if the mean is right.
+- Adaptive Huber (Truncated MSE-style cutoff at moving p95) — automatically tracks the outlier tail rather than fixing at normalised 0.5.
+Both deferred; not priority over orthogonal mechanisms still in flight.

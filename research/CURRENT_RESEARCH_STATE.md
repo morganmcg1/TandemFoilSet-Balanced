@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 (updated cycle 11)
+- **As of:** 2026-05-13 (updated cycle 14)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -20,18 +20,31 @@
 
 ## Current research focus
 
-**Cycle 11.** Three orthogonal mechanisms are now merged (BIVW + surf-head + Huber) giving 26% total improvement. The question now is what stacks on top of the Huber baseline:
+**Cycle 14.** Three orthogonal mechanisms are merged (BIVW + surf-head + Huber) giving 26% total improvement. Four "stack-on-Huber" attempts have now closed cleanly with consistent negative results:
 
-1. **Huber on volume** — surface Huber won by suppressing per-node outlier gradients; same problem exists on volume nodes. Testing now (#1650 tanjiro).
-2. **Huber delta sweep** — is δ=0.5 optimal or do δ=0.2/0.3 give further L1-regime benefit? Thorfinn running (#1627).
-3. **Grad-clip + higher LR on Huber base** — Huber already reduces gradient scale; does clip also help at batch level? Fern rebasing (#1499).
-4. **Capacity expansions rebased onto Huber** — slice_num=128 (#1501 nezuko), wider MLP (#1498 edward), BF16 (#1572 frieren) all need rebase.
-5. **LR schedule on Huber base** — warmup + cosine on new optimum (#1497 askeladd, rebasing).
-6. **Pressure-channel emphasis** — still recovering from rate-limit stall (#1496 alphonse).
+- **Smaller Huber delta** (PR #1627): δ=0.5 is the local optimum — δ=0.2/0.3 both regress >15%, δ=1.0 also regressed.
+- **Huber on volume** (PR #1650): all arms regressed +8.7% to +19.9%. Surface Huber + volume MSE is the correct recipe.
+- **Per-channel BIVW** (PR #1580): +29.6% regression. Scalar BIVW's p-dominated coupling is load-bearing.
+- **Grad-clip + higher LR** (PR #1499): +1.45% regression. Huber already compresses grad norms 5×; redundant.
 
-## Key insight from cycle 11
+These four closures collectively define a clear principle: **the Huber+BIVW+surf-head baseline is a tight local optimum**. New gains will require either (a) compositions that hit a different mechanism, (b) capacity unlocks, or (c) data-side levers.
 
-**Per-channel BIVW (PR #1580) failed badly (+29.6% regression).** Root cause: scalar BIVW was *implicitly* a p-variance-driven Re-curriculum (p dominates pooled variance). Per-channel decoupling removed this beneficial coupling and gave conflicting per-channel signals. Lesson: the scalar BIVW coupling across channels is load-bearing for `mae_surf_p` and must be preserved in any future reweighting work.
+**Active directions:**
+
+1. **Capacity expansions rebased onto Huber** — slice_num=128 (#1501 nezuko), wider MLP (#1498 edward), BF16 (#1572 frieren).
+2. **LR schedule on Huber base** — warmup + cosine on new optimum (#1497 askeladd, rebasing).
+3. **Pressure-channel emphasis** — still recovering from rate-limit stall (#1496 alphonse).
+4. **surf_weight retuning** — Huber lowered surface loss magnitude; the surf:vol ratio may have shifted. #1720 fern testing {5, 15, 30}.
+5. **Frozen p-variance stratified sampling** — makes BIVW's implicit Re-curriculum explicit at data-loader level. #1746 tanjiro testing.
+6. **Decoupled LR for surf_head vs encoder** — surf_head is 0.026M params with zero-init last layer; may benefit from higher LR than the encoder. #1765 thorfinn (NEW).
+
+## Key insights
+
+**Cycle 11 (PR #1580):** Per-channel BIVW failed (+29.6%). Scalar BIVW is *implicitly* a p-variance-driven Re-curriculum (p dominates pooled variance). Decoupling removes the beneficial coupling. **Lesson:** scalar BIVW coupling across channels is load-bearing for `mae_surf_p` — preserve in any reweighting work.
+
+**Cycle 13 (PR #1650):** Huber on volume regressed all arms. Surface and volume play different roles: surface is the evaluated readout; volume is the encoder's *supervisory signal*. Scale information in volume MSE is more valuable than outlier robustness. **Lesson:** surface Huber + volume MSE is the correct recipe.
+
+**Cycle 14 (PR #1627):** Huber delta sweep (δ=0.2, 0.3) both regress. At δ=0.5 only ~2% of residuals in the L1 regime; smaller deltas over-flatten mid-magnitude gradients that drive MAE. **Lesson:** δ=0.5 is a narrow sweet spot — do not re-sweep without changing other levers.
 
 ## Live PRs
 
@@ -42,9 +55,9 @@
 | 1498 | edward | wider-mlp-ratio (2 to 4) | WIP | Huber default correction sent |
 | 1501 | nezuko | more-slices (64 to 128) | WIP | Confirmed huber_delta=0.5 explicit; running |
 | 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
-| 1627 | thorfinn | huber-delta-sweep | WIP | delta=0.2 and 0.3 arms; no results yet |
 | 1720 | fern | surf-weight-tuning-on-huber | WIP | surf_weight ∈ {5, 15, 30} on Huber baseline |
-| 1746 | tanjiro | frozen-p-variance-stratified-sampling | WIP (NEW) | Pre-compute p-var weights over corpus; WeightedRandomSampler |
+| 1746 | tanjiro | frozen-p-variance-stratified-sampling | WIP | Pre-compute p-var weights over corpus; WeightedRandomSampler |
+| 1765 | thorfinn | decoupled-lr-surf-head | WIP (NEW) | surf_head_lr ∈ {2e-4, 1e-3, 3e-3}; encoder lr fixed at 5e-4 |
 
 ## Working hypotheses
 
@@ -54,13 +67,14 @@
 4. **Per-channel BIVW** — **rejected** (PR #1580, +29.6% regression). Scalar BIVW's p-dominated coupling is beneficial — do not break it.
 5. **Grad-clip + higher LR on Huber base** — **rejected** (PR #1499, +1.45% regression). Huber already compresses grad norms 5×; clip is redundant.
 6. **Huber on volume loss** — **rejected** (PR #1650, best +8.7% regression). Volume loss is the encoder's supervisory signal; Huber removes scale information the encoder needs. Surface Huber + volume MSE remains the correct recipe.
-7. **Smaller Huber delta** — testing (PR #1627). delta=0.2 and 0.3 arms still running.
+7. **Smaller Huber delta** — **rejected** (PR #1627). δ=0.3 (+15.6%) and δ=0.2 (+17.2%) both regress. δ=0.5 is a narrow local optimum.
 8. **surf_weight tuning on Huber baseline** — testing (PR #1720 fern). surf_weight ∈ {5, 15, 30}.
 9. **Frozen p-variance stratified sampling** — testing (PR #1746 tanjiro). Makes BIVW's implicit Re-curriculum explicit at data-loader level; removes within-batch estimation noise from batch-of-4 estimator.
-9. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
-10. **Capacity (MLP width, slices)** — WIP (#1498, #1501); on Huber base with explicit huber_delta=0.5.
-11. **Warmup schedule** — WIP (#1497); on Huber base.
-12. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
+10. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
+11. **Capacity (MLP width, slices)** — WIP (#1498, #1501); on Huber base with explicit huber_delta=0.5.
+12. **Warmup schedule** — WIP (#1497); on Huber base.
+13. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
+14. **Decoupled LR for surf_head vs encoder** — testing (PR #1765 thorfinn). surf_head_lr ∈ {2e-4, 1e-3, 3e-3}; encoder lr fixed at 5e-4. Hypothesis: zero-init surf_head head may benefit from higher LR than the encoder.
 
 ## Closed / rejected hypotheses
 
@@ -69,18 +83,19 @@
 - **PR #1580** (per-channel BIVW) — 29.6% regression. Scalar BIVW implicitly p-dominated; decoupling removed the Re-curriculum.
 - **PR #1499** (grad-clip + higher LR on Huber base) — 1.45% val regression. Huber already compresses grad norms; clip is redundant. Test marginal (3-split: −1.1%). Closed.
 - **PR #1650** (Huber on volume loss) — all arms regressed (+8.7% to +19.9%). Volume MSE is the encoder's supervisory signal; Huber removes needed scale information. Principle: surface Huber + volume MSE is the correct recipe. Closed.
+- **PR #1627** (Huber delta sweep δ=0.2, 0.3) — both arms regressed (+15.6%, +17.2%). With δ=1.0 also worse (+1.3%), δ=0.5 is a narrow local optimum. Principle: do not re-sweep delta without first changing other levers.
 
 ## Potential next directions
 
-- **Huber on surface and volume jointly** — if #1650 confirms, compose both (already in flight)
-- **Per-channel Huber delta** — different delta per channel (p vs Ux/Uy channels)
-- **Smaller Huber delta** (δ=0.1, 0.2, 0.3) — thorfinn sweeping now (#1627)
-- **Compose Huber + clip + LR** — if #1499 rebase beats 98.16
 - **Capacity scaling (n_hidden=256) + BF16 + Huber** — full composition when #1572 merges
-- **Re-bin stratified sampler** — make BIVW's implicit Re-curriculum explicit at data-loader level (pre-computed p-variance weights frozen over full corpus)
-- **surf_weight tuning** — with Huber active, optimal surf_weight may have shifted from 10
-- **LR schedule on Huber recipe** — warmup + cosine on the new optimum (#1497)
+- **Per-channel Huber delta** (different delta per channel for p vs Ux/Uy) — channels have different residual distributions; one global δ may be suboptimal
+- **Adaptive Huber** — set delta from a moving p95 quantile of residuals rather than fixed
 - **EMA per-channel variance** (tanjiro suggestion) — reduce within-batch noise for any per-channel weighting future attempt
+- **Per-node loss weighting by node curvature/geometry** — surface nodes near sharp leading/trailing edges may dominate MAE; weight by local curvature or distance-to-feature
+- **Test-time geometry augmentation** — multiple rotations/reflections averaged
+- **Heavier surface decoder** — currently single MLP; deeper surface-specific decoder atop encoder
+- **Re-examine encoder bottleneck** — if capacity scaling stalls, encoder representation may be the ceiling; consider attention head/dim sweep
+- **Cross-channel attention in surf_head** — current surf_head is channel-independent MLP; add cross-channel mixing
 
 ## Known issues
 
