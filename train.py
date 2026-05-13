@@ -84,7 +84,8 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 use_qk_norm=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -92,6 +93,14 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+
+        self.use_qk_norm = use_qk_norm
+        if use_qk_norm:
+            # Per-head learnable scale; init at sqrt(dim_head) so QK-norm scores
+            # match raw QK^T scale at step 0 (after SDPA's /sqrt(d_k)).
+            self.qk_scale = nn.Parameter(
+                torch.ones(1, heads, 1, 1) * (dim_head ** 0.5)
+            )
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -125,6 +134,10 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        if self.use_qk_norm:
+            q = F.normalize(q, p=2, dim=-1)
+            k = F.normalize(k, p=2, dim=-1)
+            q = q * self.qk_scale
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
@@ -138,13 +151,15 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_qk_norm=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            use_qk_norm=use_qk_norm,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -198,7 +213,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_qk_norm=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -219,6 +235,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_qk_norm=use_qk_norm,
             )
             for i in range(n_layers)
         ])
@@ -431,6 +448,7 @@ class Config:
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
+    use_qk_norm: bool = False  # If True, L2-normalize Q and K before attention scoring (Henry 2020).
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -476,9 +494,11 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_qk_norm=cfg.use_qk_norm,
 )
 
 model = Transolver(**model_config).to(device)
+_base_model = model  # uncompiled reference for direct param access (e.g. qk_scale logging)
 surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
 all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
@@ -678,6 +698,13 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if cfg.use_qk_norm:
+        for i, block in enumerate(_base_model.blocks):
+            qs = block.attn.qk_scale.detach()
+            log_metrics[f"qk_scale/block_{i}_mean"] = qs.mean().item()
+            log_metrics[f"qk_scale/block_{i}_std"] = qs.std().item() if qs.numel() > 1 else 0.0
+            log_metrics[f"qk_scale/block_{i}_min"] = qs.min().item()
+            log_metrics[f"qk_scale/block_{i}_max"] = qs.max().item()
     wandb.log(log_metrics)
 
     tag = ""
