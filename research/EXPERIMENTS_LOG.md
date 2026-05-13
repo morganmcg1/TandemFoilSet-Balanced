@@ -304,3 +304,31 @@ This is **the third baseline shift in round 1** (mask-aware 21:52, Huber 00:00, 
 - **frieren → PR #1810 (torch.compile + bf16):** their own follow-up suggestion #4. `torch.compile(model, dynamic=True)` after model construction. Orthogonal to bf16 (Inductor/Triton layer, not precision). Expected another 10-30% per-epoch speedup; trajectory still descending at epoch 17 of 18 means more epochs continue to pay metric. Single-line change in `train.py:449`.
 - **Compute-bound revisits queued for round 2** (after current round-1 PRs land): re-run #1511 (depth=7), #1623 (mlp_ratio=4), #1507 (slice=128) on the bf16 baseline. If any of them now beat val=89.60, they were genuinely compute-bound rather than fundamentally wrong axes.
 
+
+## 2026-05-13 03:00 — PR #1509 closed: LR warmup + lr=1e-3 (regression on bf16)
+
+- **Student:** willowpai2g48h3-nezuko
+- **Branch:** willowpai2g48h3-nezuko/warmup-lr-1e-3
+- **W&B run:** `oyguab6d` (rebased onto bf16 baseline #1715)
+
+### Results vs current baseline (#1715: val=89.60, test=79.91)
+
+| Metric | Warmup+lr=1e-3 | #1715 baseline | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.59 | 89.60 | +13.4% |
+| `test_avg/mae_surf_p` | 91.33 | 79.91 | +14.3% |
+
+All 4 test splits finite. Best epoch 17 of 18. Warmup curve was smooth (start_factor=1e-3 → 1.0 over 2 epochs, no NaN). The hypothesis just lost cleanly: lr=1e-3 is too high even with 2-epoch warmup — epoch 1 produced val=374 even at warmup mid-ramp.
+
+### Conclusion
+
+**Closed — but the diagnostic finding is the actual value.** Nezuko's analysis identified a separate, cleaner free-metric axis:
+
+> Schedule horizon, not peak LR, is the real lever. Set CosineAnnealingLR(T_max=reachable_epochs) instead of T_max=MAX_EPOCHS=50. At 30-min budget on bf16 we reach ~18 epochs; the baseline runs at full LR almost the whole time and never actually decays to 0.
+
+Verified math: with T_max=50 and the run ending at epoch 18, end-of-run lr ≈ 0.815 × peak = 4.07e-4 (81% of peak). The cosine never decays to its intended floor within the wall-clock budget. The small terminal regression visible in the bf16 baseline trajectory (best at epoch 17, slightly worse at epoch 18) is consistent with this — the LR remains too high for the final-epoch convergence regime.
+
+### Follow-up
+
+- **nezuko → PR #1843 (CosineAnnealingLR T_max=18, not 50):** their own suggested follow-up #1, isolated as a clean single-axis test. Keep lr=5e-4, no warmup, just shorten T_max to the bf16 reachable horizon. If schedule horizon is the lever, expected −1% to −4% val. If not, we've ruled out the schedule axis cleanly and can revisit peak-LR retesting (their suggestion #2 territory) on a properly-decayed baseline.
+

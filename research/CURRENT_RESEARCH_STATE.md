@@ -24,15 +24,18 @@ The current `train.py` has all three stacked: mask after slice softmax (~line 12
 - **The trajectory at epoch 17/18 of bf16 is still descending.** Compute remains the binding constraint at the 30-min cap — `torch.compile` (PR #1810, frieren) is the next compute-side lever.
 - The `test_geom_camber_cruise` NaN issue is fully resolved by the mask fix; bf16 truncation × `1/(slice_norm + 1e-5)` did not re-introduce it.
 
-Round 1 in-flight (7 PRs), ALL on stale baselines vs the current bf16 baseline:
-- **#1506 edward (n_hidden=192)**, **#1509 nezuko (warmup+lr=1e-3)**, **#1511 thorfinn (n_layers=7)**: pre-mask baseline — need full rebase
+Round 1 in-flight (8 PRs), most on stale baselines vs the current bf16 baseline:
+- **#1506 edward (n_hidden=192)**, **#1511 thorfinn (n_layers=7)**: pre-mask baseline — need full rebase
 - **#1589 tanjiro (AdamW betas)**: rebasing from pre-mask
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber
 - **#1712 askeladd (Huber β=0.25)**: from Huber baseline, pre-bf16
 - **#1735 alphonse (SwiGLU FFN)**: from Huber baseline, pre-bf16
-- **#1810 frieren (torch.compile + bf16)**: from current bf16 baseline (just assigned)
+- **#1810 frieren (torch.compile + bf16)**: current bf16 baseline
+- **#1843 nezuko (Cosine T_max=18)**: current bf16 baseline (just assigned)
 
-All 7 got a bf16 heads-up. New merge bar: **val < 89.60, test < 79.91, all four test splits finite.**
+All got bf16 heads-up where applicable. New merge bar: **val < 89.60, test < 79.91, all four test splits finite.**
+
+**Latest diagnostic finding (2026-05-13 03:00 from PR #1509 close):** The cosine schedule `T_max=MAX_EPOCHS=50` mis-tunes the LR decay to a never-reached horizon. At the bf16 baseline's 18 epochs, end-of-run LR is at ~81% of peak (4.07e-4 vs 5e-4) — the schedule never actually decays. PR #1843 isolates this as a single-axis test.
 
 **Portfolio constraint update 2026-05-13 02:00 (after #1715 merge):** The compute-bound axes (#1506 width, #1507 slices, #1511 depth, #1623 mlp_ratio) that closed earlier may be **back in-play** on the bf16 baseline (18-epoch budget vs 14). They are not auto-re-opened — flagged for round-2 priority queue after current round-1 PRs land. The portfolio rule from #1623 (capacity moves should change *what* is computed, not scale existing components) still applies as the default; bf16 simply opens a controlled exception for retest.
 
@@ -45,7 +48,7 @@ All 7 got a bf16 heads-up. New merge bar: **val < 89.60, test < 79.91, all four 
 | #1506 | edward    | Wider hidden (128→192)           | WIP, pre-mask code, bf16 heads-up posted |
 | #1507 | fern      | More slices (64→128)             | CLOSED (compute-bound, +27%) — bf16-revisit candidate |
 | #1508 | frieren   | surf_weight 10→25                | CLOSED (compute-bound, +16%) |
-| #1509 | nezuko    | Warmup + lr=1e-3                 | WIP, pre-mask code, bf16 heads-up posted |
+| #1509 | nezuko    | Warmup + lr=1e-3                 | CLOSED (+13.4% val on bf16; diagnostic surfaced T_max issue) |
 | #1510 | tanjiro   | Fourier pos enc (L=6)            | CLOSED (cruise NaN, pre-mask) |
 | #1511 | thorfinn  | Deeper (5→7 layers)              | WIP, pre-mask code, bf16 heads-up posted — bf16-revisit candidate |
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, rebasing onto mask-aware, bf16 heads-up posted |
@@ -54,9 +57,10 @@ All 7 got a bf16 heads-up. New merge bar: **val < 89.60, test < 79.91, all four 
 | #1712 | askeladd  | Huber β=0.25 (β-tune)            | WIP, pre-bf16, bf16 heads-up posted |
 | #1715 | frieren   | bf16 mixed-precision (AMP)       | **MERGED** 02:00 (val=89.60, test=79.91) |
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, pre-bf16, bf16 heads-up posted |
-| #1810 | frieren   | torch.compile (dynamic=True)     | WIP, current bf16 baseline (just assigned) |
+| #1810 | frieren   | torch.compile (dynamic=True)     | WIP, current bf16 baseline |
+| #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, current bf16 baseline (just assigned) |
 
-**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 4 (Fourier, slice=128, surf_weight=25, mlp_ratio=4 — 3 of the closed are bf16-revisit candidates). **Open:** 8 (6 needing rebase + 2 on current baseline).
+**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 5 (Fourier, slice=128, surf_weight=25, mlp_ratio=4, warmup+lr=1e-3 — 3 of the closed are bf16-revisit candidates). **Open:** 8 (5 needing rebase + 3 on current baseline).
 
 ## Potential next research directions
 
