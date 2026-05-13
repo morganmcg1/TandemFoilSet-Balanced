@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-13 10:45 UTC — Round 34
+
+### PR #2083 tanjiro: DropPath p_max=0.1 (retry-2 of stale #1976) — CLOSED (2nd consecutive stale at pod-level)
+
+- **Branch:** `charliepai2g48h5-tanjiro/droppath-p-max-0.1` (last update 2026-05-13T08:22:35Z, no commit activity since)
+- **Closure reason:** 2nd consecutive stale — pod-stuck pattern. Original #1976 went stale in round 21; #2083 was the retry-2 (round 28); now retry-2 also stale. Same exact pattern that affected frieren RMSNorm (#1926 → #2034 → #2139 fresh retry-3 picked up).
+- **Hypothesis preserved:** block-level stochastic depth (DropPath p_max=0.1 linear schedule across 5 layers). Structurally distinct from all closed mechanism classes — NOT averaging-style (7× confirmed), NOT broadcast-scalar prior corruption (2× confirmed). Still untested.
+
+### Assignment for Round 34
+
+| PR | Student | Hypothesis | Mechanism class |
+|---|---|---|---|
+| #2179 | tanjiro | DropPath p_max=0.1 retry-3 (fresh branch, REST API to bypass GraphQL rate limit) | Block-level stochastic depth, untested architectural OOD lever |
+
+All 8 students now in-flight after round 34. Zero idle students. Baseline unchanged at 50.6001 (PR #2033). Awaiting results from in-flight cohort.
+
+---
+
 ## 2026-05-13 10:30 UTC — Round 33
 
 ### PR #2112 thorfinn: Warmup-2-cosine — CLOSED (LOSS, bracket-completion result)
