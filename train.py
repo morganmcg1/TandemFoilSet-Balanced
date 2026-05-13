@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -426,6 +427,9 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    encoder_lr_boost_start: int = 0          # First epoch to boost encoder LR; 0 = disabled
+    encoder_lr_boost_end: int = 0            # Last epoch (exclusive) of boost; 0 = disabled
+    encoder_lr_boost_factor: float = 1.0     # Multiplicative boost on encoder LR during window
     use_torch_compile: bool = False    # JIT compile the model via torch.compile
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -499,7 +503,30 @@ optimizer = torch.optim.AdamW(
     ],
     weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+
+def _cosine_factor(epoch: int) -> float:
+    return 0.5 * (1.0 + math.cos(math.pi * epoch / MAX_EPOCHS))
+
+
+def _encoder_lr_lambda(epoch: int) -> float:
+    cosine = _cosine_factor(epoch)
+    if (cfg.encoder_lr_boost_start > 0
+            and cfg.encoder_lr_boost_end > cfg.encoder_lr_boost_start
+            and cfg.encoder_lr_boost_start <= epoch < cfg.encoder_lr_boost_end):
+        boost_mult = cfg.encoder_lr_boost_factor
+    else:
+        boost_mult = 1.0
+    return cosine * boost_mult
+
+
+def _head_lr_lambda(epoch: int) -> float:
+    return _cosine_factor(epoch)
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(
+    optimizer, lr_lambda=[_encoder_lr_lambda, _head_lr_lambda],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -524,6 +551,8 @@ for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 wandb.define_metric("lr_surf_head", step_metric="global_step")
+wandb.define_metric("train/lr_encoder", step_metric="global_step")
+wandb.define_metric("train/lr_surf_head", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -654,6 +683,8 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "lr_surf_head": scheduler.get_last_lr()[-1],
+        "train/lr_encoder": optimizer.param_groups[0]["lr"],
+        "train/lr_surf_head": optimizer.param_groups[1]["lr"],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
