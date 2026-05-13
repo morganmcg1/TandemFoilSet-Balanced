@@ -420,6 +420,7 @@ class Config:
     ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
     amp: bool = False  # bfloat16 mixed precision autocast for fwd + loss
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 = disabled)
+    re_loss_weight_temp: float = 0.0  # 0 → uniform; t>0 tilts per-sample loss toward high-Re (no sampler change)
 
 
 cfg = sp.parse(Config)
@@ -431,6 +432,40 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# Loss-level Re reweighting: tilt each sample's per-element loss by
+# exp(t*(log_re - log_re_mean)) with per-batch normalization. Mechanism
+# differs from sampler-level Re tilt (PR #1616): every sample still
+# contributes every epoch; only the gradient magnitude per sample shifts.
+log_re_train_mean = 0.0
+re_factor_diagnostic: dict[str, float] = {}
+if cfg.re_loss_weight_temp != 0.0:
+    log_re_per_sample = torch.tensor(
+        [float(train_ds[i][0][0, 13]) for i in range(len(train_ds))],
+        dtype=torch.float64,
+    )
+    log_re_train_mean = float(log_re_per_sample.mean())
+    re_factor_all = torch.exp(
+        cfg.re_loss_weight_temp * (log_re_per_sample - log_re_train_mean)
+    )
+    re_factor_diagnostic = {
+        "re_factor/min": float(re_factor_all.min()),
+        "re_factor/mean": float(re_factor_all.mean()),
+        "re_factor/max": float(re_factor_all.max()),
+        "re_factor/p99": float(torch.quantile(re_factor_all, 0.99)),
+        "re_factor/p01": float(torch.quantile(re_factor_all, 0.01)),
+        "re_factor/max_over_min": float(re_factor_all.max() / re_factor_all.min().clamp_min(1e-12)),
+        "re_loss_weight_temp": cfg.re_loss_weight_temp,
+        "log_re_train_mean": log_re_train_mean,
+    }
+    print(
+        f"re_loss_weight_temp={cfg.re_loss_weight_temp}  "
+        f"log_re_mean={log_re_train_mean:.4f}  "
+        f"factor[min={re_factor_diagnostic['re_factor/min']:.3f} "
+        f"mean={re_factor_diagnostic['re_factor/mean']:.3f} "
+        f"max={re_factor_diagnostic['re_factor/max']:.3f} "
+        f"max/min={re_factor_diagnostic['re_factor/max_over_min']:.2f}]"
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -512,6 +547,9 @@ for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
+if re_factor_diagnostic:
+    wandb.summary.update(re_factor_diagnostic)
+
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
@@ -557,6 +595,12 @@ for epoch in range(MAX_EPOCHS):
                 per_elem = torch.abs(pred - y_norm)
             else:
                 per_elem = (pred - y_norm) ** 2
+
+            if cfg.re_loss_weight_temp != 0.0:
+                log_re_batch = x[:, 0, 13].to(per_elem.dtype)
+                re_factor = torch.exp(cfg.re_loss_weight_temp * (log_re_batch - log_re_train_mean))
+                re_factor = re_factor / re_factor.mean().clamp_min(1e-12)
+                per_elem = per_elem * re_factor.view(-1, 1, 1)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
