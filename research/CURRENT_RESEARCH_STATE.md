@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~09:05
+- **Date:** 2026-05-13 ~09:20
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,20 +9,22 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 47.478** (n_layers=5 + T_max=14 + RMSNorm+GeGLU+Lion+surf_weight=10, PR #1995, epoch 14)
-**`test_avg/mae_surf_p` = 41.290**
+**`val_avg/mae_surf_p` = 46.847** (slice_num=48 + T_max=15, PR #1996 result; merged into n_layers=5 advisor code)
+**`test_avg/mae_surf_p` = 40.837**
+
+⚠ **Compound code/measurement mismatch:** PR #1996 result was on n_layers=6 + slice_num=48 + T_max=15. The advisor code now has n_layers=5 + slice_num=48. fern #2062 is verifying the actual compound.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 52.253 | 46.980 |
-| geom_camber_rc | **60.809** | 54.123 |
-| geom_camber_cruise | 29.174 | 24.263 |
-| re_rand | 47.675 | 39.794 |
-| **avg** | **47.478** | **41.290** |
+| single_in_dist | 50.491 | 45.728 |
+| geom_camber_rc | **60.364** | 55.146 |
+| geom_camber_cruise | 29.835 | 24.157 |
+| re_rand | 46.699 | 38.317 |
+| **avg** | **46.847** | **40.837** |
 
-**Reproduce:** `python train.py --epochs 14 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
+**Reproduce (what was actually measured):** `python train.py --epochs 15 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`  ← n_layers=6 in fern's config; advisor code is now n_layers=5
 
-> **surf_weight=5 NOT yet tested on n_layers=5 stack** — edward #2048 in flight. Expected to give another ~3-9% improvement.
+> **Current advisor code:** n_layers=5 + slice_num=48 + T_max=14 (default, may need update to T_max=15 or 16 for new epoch count). surf_weight=5 not yet tested on this stack.
 
 ## What we've learned
 
@@ -38,20 +40,22 @@
 9. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
 10. **T_max=12 + surf_weight=5 compound**: −3.33% val / −1.29% test (PR #1956) ← volume MAE −6% to −14% across all splits
 11. **n_layers=5 + T_max=14**: −6.98% val / −6.98% test (PR #1995) ← epoch count was binding constraint; 14 vs 12 epochs in 30-min budget; ALL 4 splits improved; −20% VRAM
+12. **slice_num=48 + T_max=15**: −1.33% val / −1.10% test (PR #1996) ← same mechanism; 15 epochs at ~123s each on n_layers=6; compound with n_layers=5 pending (fern #2062)
 
 ### Current stack (defaults + CLI overrides)
-- L1 (MAE) loss in normalized space, **surf_weight=10** (PR #1995; sw=5 compound pending edward #2048)
-- **n_layers=5** (PR #1995) ← updated; shallower enables 14 epochs in 30-min budget
+- L1 (MAE) loss in normalized space, **surf_weight=10** (sw=5 compound pending edward #2048)
+- **n_layers=5** (PR #1995) ← shallower enables more epochs in 30-min budget
+- **slice_num=48** (PR #1996) ← updated; fewer slices → further per-epoch speedup
 - **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
-- n_hidden=128, n_head=4, slice_num=64
+- n_hidden=128, n_head=4
 - Lion optimizer lr=1e-4, weight_decay=1e-4
-- **CosineAnnealingLR T_max=14 (epochs=14)** ← PR #1995, cosine fully decays to 0
+- **CosineAnnealingLR T_max=? (pending fern #2062)** — T_max=14 default; compound ~100-108s/epoch → 16-17 epochs possible
 - bf16 mixed precision (autocast)
-- **14 epochs in 30 min (~116s/epoch)**
-- n_params: 826,071 (−15.7% vs previous 979,995)
+- **~14-16 epochs in 30 min** (n_layers=5 + slice_num=48 untimed, pending fern #2062 verification)
+- n_params: 976,827 (slice_num doesn't change parameter count meaningfully)
 
-**Reproduce command:** `python train.py --epochs 14 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
+**Reproduce command (when compound verified by fern #2062):** `python train.py --epochs 15 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -88,28 +92,27 @@
 8. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc improved −17.2%; it remains the single highest-loss split at val=64.886.
 9. **geom_camber_rc (64.886 val) is the dominant bottleneck** — primary target for further improvement.
 
-## Active experiments (Round 15)
+## Active experiments (Round 16)
 
-⚠ **Baseline shifted:** PRs #1996, #2006, #2007, #2029, #2038, #2040, #2043 are all running on the OLD n_layers=6 + T_max=12 stack. Their results will need comparison against the NEW baseline (val=47.478). Most will likely produce val ~50-53 (worse than new baseline), but their relative improvements vs their starting stack (51.040) indicate whether those axes are worth compounding on the n_layers=5 + T_max=14 stack.
+⚠ **Baseline shifting rapidly:** Most in-flight PRs (#2006, #2007, #2029, #2038, #2040, #2043) are on OLD n_layers=6 + T_max=12 stack. Their results will likely be val ~50-53, worse than new baseline (46.847). Review strategy: note relative improvement for potential compound-stack re-test; close if they don't beat 46.847 and don't show unusual signal.
 
-| Student | PR | Hypothesis | Base stack | Expected vs new baseline |
-|---------|-----|------------|-----------|--------------------------|
-| edward | #2048 | surf_weight=5 on n_layers=5+T_max=14: compound gradient-budget win | NEW (n_layers=5) | ~43-46? |
-| fern | #1996 | slice_num=48 | OLD n_layers=6 | likely ~50-53 |
-| frieren | #2006 | Lion lr=8e-5 (⚠ apply lr=cfg.lr fix) | OLD n_layers=6 | likely ~50-53 |
-| tanjiro | #2007 | mlp_ratio=2 | OLD n_layers=6 | likely ~50-53 |
-| nezuko | #2029 | surf_weight=2 | OLD n_layers=6 | likely ~50-53 |
-| askeladd | #2038 | n_head=2 | OLD n_layers=6 | likely ~50-53 |
-| thorfinn | #2040 | grad-clip max_norm=1.0 | OLD n_layers=6 | likely ~50-53 |
-| alphonse | #2043 | DropPath rate=0.1 | OLD n_layers=6 | likely ~50-53 |
-
-**Review strategy for old-stack PRs:** Compare each against new baseline (47.478). Close if worse. Note any relative improvement for potential re-test on n_layers=5 stack.
+| Student | PR | Hypothesis | Base stack |
+|---------|-----|------------|-----------|
+| edward | #2048 | surf_weight=5 on n_layers=5+T_max=14 | NEW n_layers=5 |
+| fern | #2062 | n_layers=5 + slice_num=48 compound verification + T_max tuning | NEW compound |
+| frieren | #2006 | Lion lr=8e-5 (⚠ apply lr=cfg.lr fix) | OLD n_layers=6 |
+| tanjiro | #2007 | mlp_ratio=2 | OLD n_layers=6 |
+| nezuko | #2029 | surf_weight=2 | OLD n_layers=6 |
+| askeladd | #2038 | n_head=2 | OLD n_layers=6 |
+| thorfinn | #2040 | grad-clip max_norm=1.0 | OLD n_layers=6 |
+| alphonse | #2043 | DropPath rate=0.1 | OLD n_layers=6 |
 
 **Recently merged:**
-- edward #1995: n_layers=5 + T_max=14 (−6.98% val / −6.98% test) ← **NEW BASELINE 47.478/41.290**
-- nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val / −1.29% test)
+- fern #1996: slice_num=48 + T_max=15 (−1.33% val) ← **NEW BASELINE 46.847/40.837** (⚠ measured on n_layers=6)
+- edward #1995: n_layers=5 + T_max=14 (−6.98% val) 
+- nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val)
 
-**Recently closed (Rounds 13–14):**
+**Recently closed:**
 - alphonse #1765: Lion lr=1.5e-4 (+4.21% worse) — LR axis saturated
 - askeladd #1766: Lion WD=1e-2 rerun (+16.6% worse) — WD axis saturated
 - thorfinn #1948: surf_weight=3 stale draft
@@ -118,22 +121,26 @@
 
 `optimizer = Lion(model.parameters(), lr=1e-4, ...)` — `--lr` CLI flag silently ignored. Fix: `lr=cfg.lr`. **NOT yet in advisor branch.** Frieren #2006 (lr=8e-5) has been alerted. Any LR experiment with `--lr != 1e-4` must apply this fix first.
 
-## Depth sweep — key open question
+## The epoch-count mechanism: key insight and open questions
 
-PR #1995 shows: **n_layers=5 beats n_layers=6** when both fit the 30-min budget. Does this pattern continue?
-- n_layers=4 → ~100s/epoch → ~18 epochs → T_max=18? Peak capacity risk.
-- n_layers=3 → ~85s/epoch → ~21 epochs → probably too shallow.
+The dominant win pattern this session has been "make epochs faster → fit more epochs → align T_max → better convergence":
+- n_layers=5 → 116s/epoch → 14 epochs (PR #1995, val −6.98%)
+- slice_num=48 → 123s/epoch on n_layers=6 → 15 epochs (PR #1996, val −1.33%)
+- n_layers=5 + slice_num=48 → ~100-108s/epoch → 16-17 epochs (pending fern #2062)
 
-Test n_layers=4 + T_max=18 is the bold next move if edward #2048 (sw=5 compound) wins.
+**Key open questions:**
+1. Does n_layers=4 + T_max=~18 continue the pattern? (n_layers=4 → ~90-95s/epoch → 18-19 epochs)
+2. Does surf_weight=5 compound onto the new stack? (edward #2048, in flight)
+3. Is there a per-epoch floor? At some point adding epochs has diminishing returns even with T_max alignment.
 
-## Next queued ideas (for when Round 15 slots open up)
+## Next queued ideas (for when Round 16 slots open up)
 
-- **n_layers=4 + T_max=18**: continue depth sweep — does "shallower = more epochs" keep winning?
-- **surf_weight=5 on n_layers=5 + T_max=14**: edward #2048 in flight (HIGHEST PRIORITY)
-- **Any winning axis from old-stack screening** (n_head, grad-clip, droppath) re-tested on n_layers=5 + T_max=14
+- **n_layers=4 + T_max=18**: depth sweep — does "shallower = more epochs" keep winning?
+- **surf_weight=5 on n_layers=5+slice_num=48**: after fern #2062 verifies compound
+- **Any winning axis from old-stack screening** (n_head=2, grad-clip, droppath) re-tested on current compound stack
 - **Geometric data augmentation** (flip/scale) — targets geom_camber_rc OOD
 - **PINN-style auxiliary loss** (divergence/curl) — physics-informed volume regularization
-- **FNO-style global filter** — alternative to PhysicsAttention
+- **n_head=2 on new stack** — if askeladd #2038 shows improvement on old stack
 
 ## Key constraints
 

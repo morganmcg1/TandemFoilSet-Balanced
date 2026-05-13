@@ -1,5 +1,70 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 09:15 — PR #1996: slice_num=48 + T_max=15 (fern)
+
+**New best: `val_avg/mae_surf_p` = 46.847** (epoch 15, 30-min wall-clock cap, surf_weight=10)
+
+⚠ **Note:** fern's result was measured on `n_layers=6 + slice_num=48 + T_max=15`. The merged advisor code is now `n_layers=5 + slice_num=48` (n_layers=5 was already in the advisor from PR #1995). The compound (n_layers=5 + slice_num=48) has NOT been validated. fern is assigned PR #2050 to verify the compound baseline.
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 5 (merged from #1995; fern ran on n_layers=6) |
+| `n_head` | 4 |
+| `slice_num` | **48** ← updated |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR **T_max=15** (fern ran 15 epochs) |
+| `epochs` | 15 (fern) / 14 (current default from #1995) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 976,827 |
+
+> **Mechanism:** slice_num=48 reduces PhysicsAttention slice projections, speeding per-epoch time ~18% (~123s vs ~150s on n_layers=6 stack). This enables 15 epochs in 30-min budget vs 12. T_max=15 is aligned. Same "epoch-count was the constraint" mechanism as PR #1995. Both work independently; combined with n_layers=5 (which reaches 14 epochs), the actual compound is validated pending PR #2050.
+
+### Val metrics (best checkpoint, epoch 15/15) — measured on n_layers=6 + slice_num=48
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 50.491 | — |
+| val_geom_camber_rc | **60.364** | — |
+| val_geom_camber_cruise | 29.835 | — |
+| val_re_rand | 46.699 | — |
+| **val_avg/mae_surf_p** | **46.847** | — |
+
+### Test metrics (best-val checkpoint, epoch 15)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 45.728 |
+| test_geom_camber_rc | 55.146 |
+| test_geom_camber_cruise | 24.157 |
+| test_re_rand | 38.317 |
+| **test_avg/mae_surf_p** | **40.837** |
+
+### Improvement vs PR #1995 baseline (47.478 val / 41.290 test)
+
+| Split | Old val | New val | Δ val |
+|---|---|---|---|
+| single_in_dist | 52.253 | 50.491 | −3.4% |
+| geom_camber_rc | 60.809 | 60.364 | −0.7% |
+| geom_camber_cruise | 29.174 | 29.835 | +2.3% |
+| re_rand | 47.675 | 46.699 | −2.0% |
+| **avg** | **47.478** | **46.847** | **−1.33% ✓** |
+
+**Reproduce (fern's config — n_layers=6):**
+```bash
+cd target/ && python train.py --epochs 15 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10
+```
+
+**Metric artifacts:** `models/model-charliepai2g48h3-fern-slice-num-48-20260513-070845/metrics.yaml`
+
+---
+
 ## 2026-05-13 09:00 — PR #1995: n_layers=5 + T_max=14 (edward)
 
 **New best: `val_avg/mae_surf_p` = 47.478** (epoch 14, 30-min wall-clock cap, surf_weight=10)

@@ -6,6 +6,28 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 09:15 — PR #1996: slice_num=48 + T_max=15 — MERGED (−1.33% val, −1.10% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/slice-num-48
+- **Hypothesis:** Reducing slice_num 64→48 reduces per-epoch time ~18%, enabling 15 epochs in 30-min cap vs 12. Same "epoch count is the binding constraint" mechanism as PR #1995.
+- **Result:** val=46.847 / test=40.837 (best_epoch=15, n_layers=6, T_max=15, sw=10)
+
+| Split | val (PR #1995 baseline, n_layers=5) | val (slice_num=48, n_layers=6) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 52.253 | 50.491 | −3.4% | 45.728 |
+| geom_camber_rc | **60.809** | **60.364** | **−0.7%** | 55.146 |
+| geom_camber_cruise | 29.174 | 29.835 | +2.3% | 24.157 |
+| re_rand | 47.675 | 46.699 | −2.0% | 38.317 |
+| **avg** | **47.478** | **46.847** | **−1.33% ✓** | **40.837** |
+
+- **⚠ Stack mismatch:** PR was run on n_layers=6 (old stack); merged into advisor with n_layers=5 (from #1995). Current advisor code = n_layers=5 + slice_num=48, NOT validated yet. fern PR #2062 assigned to verify the compound.
+- **Per-epoch time:** ~123s (n_layers=6). Expected ~100-108s on n_layers=5 + slice_num=48.
+- **Metric artifacts:** `models/model-charliepai2g48h3-fern-slice-num-48-20260513-070845/metrics.yaml`
+- **Reassigned fern:** PR #2062 n_layers=5 + slice_num=48 compound verification
+
+---
+
 ## 2026-05-13 09:00 — PR #1995: n_layers=5 + T_max=14 — MERGED (−6.98% val, −6.98% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-edward
