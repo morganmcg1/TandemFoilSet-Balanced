@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 08:10 (close #1954 askeladd HEM [clean 5σ regression on Kendall, high-info finding: "loss-difficulty ≠ OOD-distance" on TandemFoilSet]; new assignment #2063 askeladd Lion-optimizer sweep — fresh optimizer-family axis, AdamW completely untouched on this stack)
+- **Last updated:** 2026-05-13 08:25 (close #1937 alphonse max-norm-tighten {0.25, 0.1} — clean negative + high-info clip_fraction-saturation finding: at max_norm=0.5 clip_fraction=99.2%, saturating to 100% at tighter thresholds → past 0.5 the knob is a uniform step-rescaler not a regularization mechanism, grad-clip-tighten axis closes; new assignment #2082 alphonse Fourier coordinate features [Tancik et al. 2020 RFF] sweep {σ=1.0, 4.0} — fresh input-encoding axis, mechanism-orthogonal to closed unified_pos #1454/#1551 [grid-based] vs RFF [representation prior])
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -24,6 +24,7 @@
 
 ## 🔥 Hottest signals this session
 
+- **PR #1937 (alphonse, max-norm tighten {0.25, 0.1}) CLOSED:** val=74.07 (best new arm, max_norm=0.1) / test=65.63 — clean negative vs pre-Kendall assignment baseline 73.81 (+0.35%/+0.91%) and even further from Kendall baseline 71.43. Non-monotonic ordering (0.1 < 0.25) within ~1σ of 2-seed variance. **High-info mechanism finding: clip_fraction saturation at max_norm=0.5.** Student's diagnostic: clip_fraction_mean = 99.2% at 0.5, **saturates to 100%** at both 0.25 and 0.1, while pre-clip grad_norm_mean stays stable (~5.0) across all three. **Past max_norm=0.5, the threshold is no longer a regularization knob — it's a uniform step-magnitude rescaler** (effectively a per-batch lr-cut on the already-clipped 99%+ fraction, compounding with cosine-anneal LR shrinkage → uniform underfitting). Grad-clip-tighten direction closes on optimizer-stability axis. Reassigned to #2082 Fourier coordinate features (Tancik 2020 RFF) — fresh input-encoding axis.
 - **PR #1954 (askeladd, HEM via EMA loss tracker) CLOSED:** val=75.80 / test=67.12 — clean +6.10% / +6.56% regression on Kendall (5σ above noise band). All 8 splits regress; **largest hit on in-dist splits (+7.94% val_single_in_dist) NOT OOD splits**. **High-info mechanism finding: "sample-loss-difficulty ≠ OOD-distance" on TandemFoilSet** — EMA loss tracker upweighted intrinsically hard fluid-dynamics configurations, causing model to overfit to those configurations across the board. Per-sample loss-magnitude-driven rebalancing axis closes on Kendall (joins #1691 surf_weight=5). Reassigned to #2063 Lion optimizer sweep — fresh optimizer-family axis.
 - **PR #1734 (thorfinn, asinh α=0.5 + Kendall) CLOSED:** val=79.12 / test=70.41 — **+10.76% / +11.78% regression** — LARGEST regression on the Kendall stack to date. All 8 splits regress 7-18%. **Mechanism finding:** Kendall self-adapts σ to asinh-transformed loss space (final log_σ_surf_p −1.500 vs baseline −1.408 → ~20% higher pressure-channel effective weight). Kendall + asinh compound and overshoot. **Value-compression-on-output × Kendall σ-adaptation is mechanism-incompatible.** General lesson: future output-side loss-space-reshape hypotheses must consider Kendall σ interaction. Reassigned to #2049 aux-log_re-prediction sweep.
 - **PR #1907 (edward, pos-jitter) CLOSED:** val=71.68 / test=63.11 (σ=0.05 + Kendall arm). Combined with σ=0.01 pre-Kendall arm (val=74.45/test=65.45), **two arms × two baselines give same regression direction at same approximate magnitude**. **Position-jitter axis closes.** Reassigned to #2021 OneCycleLR-with-warmup sweep (after withdrawing #2016 DropPath when #1680 closure audit revealed 15-epoch under-convergence pathology).
@@ -55,7 +56,7 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 |---|---|---|---|---|---|
 | #2063 ← NEW | askeladd | `lion-optimizer-on-kendall` | Lion optimizer (Chen et al. 2023) sweep {lr=1e-4 wd=1e-3, lr=3e-4 wd=3e-4} — fresh optimizer-family axis, AdamW completely untouched | 71.43 | best-arm val < 71.43 → merge |
 | #1981 ← NEW | nezuko | `wd-sweep-on-kendall` | AdamW weight decay sweep {3e-4, 1e-3} — classical OOD-regularization attack | 71.43 | best-arm val < 71.43 → merge |
-| #1937 | alphonse | `max-norm-tight-sweep-on-clipfilm` | Max-norm further-tighten 2-arm sweep {0.25, 0.1} — extends #1831 monotonic signal | 73.81 → reframe vs 71.43 | best-arm val < 71.43 → merge |
+| #2082 ← NEW | alphonse | `fourier-coord-features-on-kendall` | Random Fourier Features (Tancik 2020) on per-node coords, sweep {σ=1.0, 4.0} — fresh input-encoding axis (distinct from closed grid-based `unified_pos`) | 71.43 | best-arm val < 71.43 → merge; val_geom_camber_rc ≥4% improvement → 2nd-seed override |
 | #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token (is_surface-aware) FiLM — first structural FiLM change | 73.81 → reframe vs 71.43 | val < 71.43 → merge |
 | #2021 ← NEW | edward | `onecycle-lr-warmup-on-kendall` | OneCycleLR sweep {max_lr=5e-4, 1e-3} + 10% warmup — fresh schedule axis | 71.43 | best-arm val < 71.43 → merge |
 | #1873 | fern | `sdf-feature-on-clipfilm` | Per-node SDF as input feature (wave-7 geometry-axis) | 74.62 → reframe vs 71.43 | val < 71.43 → merge |
@@ -76,14 +77,14 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Wave-1/3 closures:** #1454, #1455, #1448, #1453, #1446, #1449, #1450, #1551, #1621, #1645, #1620
 - **Wave-5 closures:** #1617 (stale rebase), #1680 (drop_path=0.1), #1679 (no-SWA), #1642 (sqrt-Re-weight), #1618 (surf-Huber/vol-MSE on SWA-on-Huber), #1733 (attn-dropout=0.1), #1732 (swa_start=0.65), #1600 (β-sweep on SWA-on-Huber, β=0.3 best; reassigned), #1691 (surf_weight=5), #1739 (FiLM-absorbed per-domain loss), #1702 (per-channel p-up, diagnostic falsified premise)
 - **Wave-6 closures:** #1760 (FiLM mid_dim=128 — width direction closed), #1818 (slice_num=128 — wall-clock cap), #1758 (mesh-subsample Path B — bias contamination), #1838 (FiLM depth=3 — depth direction closed), #1821 (uxuy_weight=2.0 — per-channel weighting both directions closed), #1787 (Re-jitter σ=0.05 — conditioning-feature augmentation broadly closed)
-- **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed), #1908 (learnable per-block routing-temp — drift <10%, precondition self.temperature already present, routing-sharpness axis closed), #1907 (pos-jitter σ∈{0.01, 0.05} — 2-arm × 2-baseline same-direction regression, volume-coord noise jitter axis closed), #2016 (DropPath sweep — withdrawn before student start, #1680 audit revealed 15-epoch under-convergence pathology), #1734 (asinh α=0.5 + Kendall — +10.76% / +11.78% regression, Kendall × asinh σ-adaptation interaction overshoots, value-compression-on-output axis closed under Kendall), #1954 (HEM EMA-loss focal weighting — +6.10%/+6.56% regression, in-dist hit hardest, "loss-difficulty ≠ OOD-distance" finding, per-sample loss-magnitude rebalancing axis closes)
+- **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed), #1908 (learnable per-block routing-temp — drift <10%, precondition self.temperature already present, routing-sharpness axis closed), #1907 (pos-jitter σ∈{0.01, 0.05} — 2-arm × 2-baseline same-direction regression, volume-coord noise jitter axis closed), #2016 (DropPath sweep — withdrawn before student start, #1680 audit revealed 15-epoch under-convergence pathology), #1734 (asinh α=0.5 + Kendall — +10.76% / +11.78% regression, Kendall × asinh σ-adaptation interaction overshoots, value-compression-on-output axis closed under Kendall), #1954 (HEM EMA-loss focal weighting — +6.10%/+6.56% regression, in-dist hit hardest, "loss-difficulty ≠ OOD-distance" finding, per-sample loss-magnitude rebalancing axis closes), #1937 (max-norm-tighten {0.25, 0.1} — both arms regress, clip_fraction saturated at 99.2% already at 0.5 → 100% at tighter thresholds, grad-clip-tighten direction closes on optimizer-stability axis)
 - **Wave-7 merges:** #1906 (Kendall uncertainty — learned per-channel σ heads, val=71.43/test=62.99 new baseline)
 
 ## ⚠ Active operational notes
 
 - **GraphQL rate-limit pattern continues.** REST helpers preferred.
 - **Mixed-baseline portfolio cleanup:** #1856 needs rebase to new 73.81 baseline before 2nd seed run. #1757, #1734 still WIP on old baselines.
-- **23 mechanism axes definitively closed on this dataset/scale:**
+- **24 mechanism axes definitively closed on this dataset/scale:**
   - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
   - Block-level stochastic regularization (drop_path=0.1)
   - Token-level stochastic regularization (attention_dropout=0.1)
@@ -99,6 +100,7 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
   - **Slice-routing downward direction (slice_num 64→32, #1856 routing collapse) ← NEW**
   - Mesh-subsample Path B (zero-features + boolean mask, #1758 bias contamination)
   - Sample-level input-augmentation on FiLM-conditioning features (Re-jitter on log_re, #1787)
+  - **Grad-clip-tighten direction past max_norm=0.5 (#1937) ← NEW** — clip_fraction saturates at 99.2% at 0.5, no further regularization headroom
 - **6 axes have produced landings:**
   - Loss-shape: Huber (#1452 merged)
   - Loss-weighting: per-sample Re-weight (#1586 merged)
@@ -119,7 +121,8 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Loss-weighting (channel-level, fixed):** **CLOSED both directions** (#1702 p-up; #1821 uxuy-up)
 - **Loss-weighting (channel-level, learned σ — Kendall):** **LANDED #1906** ← NEW
 - **Loss-weighting (value-level):** asinh on pressure target (#1734 thorfinn) — rebase pending against new Kendall baseline
-- **Optimizer-stability (grad-clip max_norm):** **LANDED at 0.5 in baseline (#1831)** — further-tighten sweep {0.25, 0.1} in flight #1937 alphonse
+- **Optimizer-stability (grad-clip max_norm):** **LANDED at 0.5 in baseline (#1831)** — further-tighten direction **CLOSED #1937** (clip_fraction saturated at 99.2%, no headroom)
+- **Input-encoding (Random Fourier Features on coords):** in flight #2082 alphonse (Tancik 2020 RFF, σ-sweep — fresh axis; distinct from closed grid-based unified_pos #1454)
 - **Data-side input augmentation (node-level Path B):** **CLOSED** (#1758)
 - **Data-side input augmentation (sample-level conditioning feature):** **CLOSED** (#1787 Re-jitter)
 - **Data-side input augmentation (per-node non-conditioning):** in flight #1907 edward — rerun at σ=0.05 after coord-scale finding
@@ -136,7 +139,7 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Internal regularization:** definitively closed (3 sub-axes)
 - **Loss-weighting (channel-level, learned σ — Kendall):** **LANDED #1906** ← NEW
 
-**18 orthogonal mechanism axes — 6 landed (Huber, Re-weight, FiLM, grad-clip 1.0, grad-clip 0.5, Kendall), 15 closed, 7 pending (carry-over/rerun: SDF, routing-temp, pos-jitter rerun, β=0.3 rerun, asinh rebase, max-norm-tighter, per-token FiLM) + 1 NEW slot to fill for askeladd.**
+**Mechanism-axis coverage status: 6 landed (Huber, Re-weight, FiLM, grad-clip 1.0, grad-clip 0.5, Kendall) + 8 in-flight wave-7 PRs (#2063 Lion, #1981 wd-sweep, #2082 Fourier features ← NEW, #1938 per-token FiLM, #2021 OneCycleLR, #1873 SDF, #1757 β=0.3, #2049 aux-Re) + 24 axes closed.**
 
 **Mechanism findings from this batch:**
 1. **#1906 MERGE — Kendall lands:** Per-channel learned σ heads succeeded where fixed weighting failed (#1702, #1821). Near-uniform learned weighting (1.20× spread) **beats** the hand-set `surf_weight=10` baseline. Confirms principled task uncertainty estimation is the right lever.
@@ -176,7 +179,8 @@ Ranked by expected ROI on `val_avg/mae_surf_p` given the new max_norm=0.5+FiLM b
 - **#1873 SDF:** First geometry-aware lever — does it crack val_geom_camber_rc=88.09 on the new bar?
 - **#1907 Position-jitter (σ=0.05 rerun):** Does non-conditioning input augmentation at the corrected scale succeed where conditioning-feature augmentation failed? Key test of the diagnosis from #1787.
 - **#1908 Routing-temp:** Does explicit temperature parameterization help, or is it redundant with the projection-layer scale? Diagnostic-rich either way.
-- **#1937 max-norm-tight sweep {0.25, 0.1}:** Is the monotonic tighten-helps curve still descending past 0.5, or did 0.5 land at/near the optimum?
+- **#1937 max-norm-tight sweep {0.25, 0.1}:** CLOSED — 0.5 is at/near the optimum. Clip_fraction was already 99.2% at 0.5, saturates to 100% at tighter thresholds → no further regularization headroom on this lever. Reassigned to #2082 Fourier coord features (fresh input-encoding axis).
+- **#2082 Fourier coordinate features {σ=1.0, 4.0}:** Does the sin/cos representation prior (Tancik 2020) help Transolver learn the high-freq pressure spikes at foil leading edges? Particularly: does val_geom_camber_rc (88.09) crack ≥4% even if val_avg doesn't beat 71.43?
 - **#1938 per-token FiLM:** Do surface and volume tokens actually benefit from distinct modulation (cos(γ_surf, γ_vol) < 0.5)? Or is the FiLM head's bottleneck not structural after all (cos ≈ 1.0)?
 - **#1757 β=0.3 rerun:** Does β=0.3 compose with max_norm=0.5 + Kendall, or are these stability levers partially redundant?
 - **#1734 asinh rebase:** Does value-level pressure-target compression help on the new Kendall baseline?

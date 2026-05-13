@@ -1919,3 +1919,63 @@ If Lion lands → opens up grad-clip-off ablation (Lion's intrinsic bound may ma
 
 ---
 
+## 2026-05-13 08:25 — PR #1937 CLOSE willowpai2g48h2-alphonse (max-norm-tighten {0.25, 0.1} on grad-clip+FiLM): clean negative + clip_fraction-saturation finding
+
+- **Branch:** `willowpai2g48h2-alphonse/max-norm-tight-sweep-on-clipfilm`
+- **Hypothesis:** Further-tighten grad-clip from max_norm=0.5 to {0.25, 0.1} on pre-Kendall grad-clip+FiLM baseline (val=73.81, test=65.04). Predicted small additional win via cleaner step magnitudes for SWA averaging.
+- **Result (W&B `h12tbuku`, `v3m30b74`):**
+
+| Arm | W&B | val_avg | Δ vs 73.81 | test_avg | Δ vs 65.04 |
+|---|---|---:|---:|---:|---:|
+| max_norm=0.25 | h12tbuku | 74.7603 | **+1.29%** | 65.9491 | **+1.40%** |
+| max_norm=0.1  | v3m30b74 | **74.0664** | +0.35% | **65.6287** | +0.91% |
+
+Both arms regress vs the pre-Kendall baseline they were assigned against AND vs the merged Kendall baseline (val=71.43, test=62.99). Decision rule fires cleanly.
+
+### Decision: CLOSE
+
+- Best new arm (0.1) val=74.07 > pre-Kendall baseline 73.81 → "all arms regress" branch.
+- Non-monotonic ordering (0.1 < 0.25 on val) within ~1σ of 2-seed variance (0.86) — treating as noise.
+
+### High-info finding — clip_fraction saturation
+
+Student's diagnostic table is the key data:
+
+| Arm | grad_norm_mean (pre-clip) | clip_fraction_mean |
+|---|---:|---:|
+| baseline (0.5) | 4.999 | **99.2%** |
+| 0.25 | 5.0315 | **100%** |
+| 0.1 | 5.1916 | **100%** |
+
+**Past max_norm=0.5, the clip threshold is no longer a discriminative regularization knob — it's a uniform step-magnitude rescaler.** At 99.2% clip-fraction at 0.5, every step is already being clipped; tighter thresholds rescale every step by the same factor (pre-clip ~5/threshold), behaving as a per-batch lr-cut on the clipped fraction. Combined with cosine-anneal LR shrinkage, this produces uniform underfitting (both arms make per-epoch progress but converge to worse asymptotes).
+
+### Axis closure status
+
+- **Closes:** grad-clip-tightening direction on this stack. Optimizer-stability lever family is exhausted on the tighten direction (clip_fraction=99.2% at 0.5 is a saturation signal — no headroom).
+- **Remains open:** adaptive grad-clip (per-epoch percentile threshold) — mechanism-orthogonal continuation; not assigned today as the optimizer-family axis is being explored via #2063 Lion.
+- **Stack-relevance note:** student's runs were on pre-Kendall stack (config audit confirmed `use_kendall_uncertainty` absent from W&B configs — matches assignment-time baseline). Closure justified on either stack.
+
+### Reassignment to PR #2082 (Fourier coordinate features {sigma=1.0, 4.0} on Kendall) — fresh input-encoding axis
+
+Pivoting alphonse to **Random Fourier Features** (Tancik et al. 2020 "Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains", NeurIPS 2020). Input-encoding mechanism family is **untouched on this stack** — distinct from the closed `unified_pos` grid-based encoding axis (#1454/#1551), which was *positional injection* (redundant with normalized coords). RFF is a *representation prior* (sin/cos basis biases the network toward learning high-frequency functions on low-dim coord inputs).
+
+**Mechanism:**
+- Random matrix `B ∈ R^(2 × 16)` with `B_ij ~ N(0, σ²)`, frozen at init (registered buffer)
+- Encoding: `γ(x) = [sin(2π·B·x), cos(2π·B·x)] ∈ R^32` concatenated with existing input features
+- σ controls frequency bandwidth — Tancik et al. found σ has a Goldilocks zone
+
+**Why this axis now:**
+- Mechanism-orthogonal to all 8 in-flight + closed PRs (optimizer, schedule, arch, sample-rebal, aux-task, loss-shape, parameter-norm, geometry)
+- Strong theoretical backing — ReLU/GELU networks have low-freq bias on low-dim coords; pressure/velocity fields have inherent high-freq components near foil edges
+- Low complexity (~30 lines)
+- Directly targets `val_geom_camber_rc` (88.09 — highest-error camber split with sharp leading-edge gradients)
+
+**Arms:**
+- Arm 1: num_features=16, σ=1.0 (low-freq, conservative) — most-likely-to-land
+- Arm 2: num_features=16, σ=4.0 (moderate-freq) — higher-variance, brackets the optimum
+
+**Decision rule:** best-arm val < 71.43 → MERGE; all val > 72.5 → close (Transolver attention already captures high-freq adequately). Special-test override: val_geom_camber_rc improvement ≥4% even if val_avg doesn't beat baseline → 2nd seed.
+
+If σ=1.0 lands → opens compounding with next merged winner. If σ=4.0 lands → revisits the positional-encoding axis with the realization that RFF (representation) was a different mechanism from unified_pos (positional injection).
+
+---
