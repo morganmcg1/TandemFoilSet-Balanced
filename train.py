@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import subprocess
@@ -314,6 +315,7 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    swa_extras: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -341,6 +343,11 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+
+    if swa_extras:
+        # SWA fields (primary metrics in this experiment)
+        for k, v in swa_extras.items():
+            summary[k] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -559,6 +566,15 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# --- SWA late-start config ---
+SWA_START_EPOCH = 30
+SWA_EVERY = 5
+swa_state_dicts: list[dict] = []
+_expected_snaps = max(0, (MAX_EPOCHS - SWA_START_EPOCH)) // SWA_EVERY + (1 if MAX_EPOCHS >= SWA_START_EPOCH else 0)
+print(f"SWA late-start: SWA_START={SWA_START_EPOCH}, SWA_EVERY={SWA_EVERY}; "
+      f"expected snapshots (if all epochs run) = {_expected_snaps}; "
+      f"baseline to beat: val_avg/mae_surf_p < 36.3994 (Lion PR #2524)")
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -643,6 +659,23 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # --- SWA snapshot collection (1-indexed display epoch) ---
+    if (epoch + 1) >= SWA_START_EPOCH and ((epoch + 1) - SWA_START_EPOCH) % SWA_EVERY == 0:
+        _live = getattr(model, "_orig_mod", model)
+        snapshot = {k: v.detach().clone().cpu().float() for k, v in _live.state_dict().items()}
+        swa_state_dicts.append(snapshot)
+        print(f"[SWA] epoch={epoch+1} snapshot #{len(swa_state_dicts)} captured")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "swa_snapshot",
+            "epoch": epoch + 1,
+            "snapshot_idx": len(swa_state_dicts),
+        })
+
+# Capture terminal-live val for the 3-way comparison (last loop iteration values)
+terminal_live_val_avg = avg_surf_p if best_metrics else None
+terminal_live_split_metrics = split_metrics if best_metrics else None
+terminal_live_epoch = epoch + 1 if best_metrics else None
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -665,10 +698,100 @@ append_metrics_jsonl(metrics_jsonl_path, {
     "total_count": _lion_total,
 })
 
+# --- SWA: build averaged model from snapshots (while `model` still has terminal-live weights) ---
+swa_model = None
+swa_val_metrics = None
+swa_val_avg = None
+swa_extras: dict = {"n_swa_snapshots": len(swa_state_dicts)}
+
+if len(swa_state_dicts) > 0:
+    print(f"\n[SWA] averaging {len(swa_state_dicts)} snapshots...")
+    keys = list(swa_state_dicts[0].keys())
+    swa_avg_state: dict = {}
+    for k in keys:
+        stacked = torch.stack([sd[k] for sd in swa_state_dicts], dim=0)
+        swa_avg_state[k] = stacked.mean(dim=0)
+
+    # Build SWA model: deep-copy terminal-live then overwrite with averaged params
+    _live_inner = getattr(model, "_orig_mod", model)
+    swa_model = copy.deepcopy(_live_inner)
+    with torch.no_grad():
+        for name, p in swa_model.named_parameters():
+            if name in swa_avg_state:
+                p.data.copy_(swa_avg_state[name].to(p.dtype).to(p.device))
+        for name, b in swa_model.named_buffers():
+            if name in swa_avg_state:
+                b.data.copy_(swa_avg_state[name].to(b.dtype).to(b.device))
+    swa_model.eval()
+
+    # Drift diagnostic: SWA vs terminal-live (the live params are still on `model`)
+    diffs = []
+    norms = []
+    with torch.no_grad():
+        for p_swa, p_live in zip(swa_model.parameters(), _live_inner.parameters()):
+            diffs.append((p_swa.float() - p_live.float()).abs().mean().item())
+            norms.append(p_live.float().abs().mean().item())
+    mean_drift = sum(diffs) / max(len(diffs), 1)
+    mean_norm = sum(norms) / max(len(norms), 1)
+    drift_ratio = mean_drift / max(mean_norm, 1e-12)
+    print(f"[SWA] drift: mean(|p_swa - p_terminal_live|) = {mean_drift:.6f}, "
+          f"mean(|p_live|) = {mean_norm:.6f}, ratio = {drift_ratio:.4f}")
+
+    # Evaluate SWA model on val splits
+    print("[SWA] evaluating SWA-averaged model on val splits...")
+    swa_val_metrics = {
+        name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_agg = aggregate_splits(swa_val_metrics)
+    swa_val_avg = swa_val_agg["avg/mae_surf_p"]
+    print(f"[SWA] swa_val_avg/mae_surf_p = {swa_val_avg:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, swa_val_metrics[name])
+
+    swa_extras.update({
+        "swa_val_avg/mae_surf_p": swa_val_avg,
+        "swa_drift_mean": mean_drift,
+        "swa_norm_mean": mean_norm,
+        "swa_drift_ratio": drift_ratio,
+        "terminal_live_val_avg/mae_surf_p": terminal_live_val_avg,
+        "terminal_live_epoch": terminal_live_epoch,
+    })
+    for split_name, m in swa_val_metrics.items():
+        for k, v in m.items():
+            swa_extras[f"swa_val/{split_name}/{k}"] = v
+    if terminal_live_split_metrics is not None:
+        for split_name, m in terminal_live_split_metrics.items():
+            for k, v in m.items():
+                swa_extras[f"terminal_live_val/{split_name}/{k}"] = v
+
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "swa_val",
+        "n_snapshots": len(swa_state_dicts),
+        "drift_mean": mean_drift,
+        "norm_mean": mean_norm,
+        "drift_ratio": drift_ratio,
+        "swa_val_avg/mae_surf_p": swa_val_avg,
+        "swa_val_splits": swa_val_metrics,
+        "terminal_live_val_avg/mae_surf_p": terminal_live_val_avg,
+        "terminal_live_epoch": terminal_live_epoch,
+    })
+else:
+    print("\n[SWA] zero snapshots collected (did not reach SWA_START_EPOCH); skipping SWA.")
+    swa_extras.update({
+        "terminal_live_val_avg/mae_surf_p": terminal_live_val_avg,
+        "terminal_live_epoch": terminal_live_epoch,
+    })
+
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest live val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    if terminal_live_val_avg is not None:
+        print(f"Terminal live val: epoch {terminal_live_epoch}, val_avg/mae_surf_p = {terminal_live_val_avg:.4f}")
+    if swa_val_avg is not None:
+        print(f"SWA val: val_avg/mae_surf_p = {swa_val_avg:.4f} ({len(swa_state_dicts)} snapshots)")
 
+    # Load best-live checkpoint for LayerScale diagnostic + best-live test eval
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
@@ -694,8 +817,10 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    swa_test_metrics = None
+    swa_test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (best-live checkpoint)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -706,7 +831,7 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  BEST-LIVE TEST avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
@@ -715,6 +840,36 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+        if swa_model is not None:
+            print("\nEvaluating on held-out test splits (SWA-averaged model)...")
+            swa_test_metrics = {
+                name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  SWA TEST avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "swa_test",
+                "n_snapshots": len(swa_state_dicts),
+                "swa_test_avg": swa_test_avg,
+                "swa_test_splits": swa_test_metrics,
+            })
+            swa_extras["swa_test_avg/mae_surf_p"] = swa_test_avg["avg/mae_surf_p"]
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    swa_extras[f"swa_test/{split_name}/{k}"] = v
+
+    # Save SWA model as the final checkpoint (overwriting best-live) — per PR instructions.
+    # Load SWA params into the compiled wrapper first so the saved state_dict uses the
+    # same `_orig_mod.` key prefix convention as the rest of the codebase.
+    if swa_model is not None:
+        _inner_for_save = getattr(model, "_orig_mod", model)
+        _inner_for_save.load_state_dict(swa_model.state_dict())
+        torch.save(model.state_dict(), model_path)
+        print(f"\nSaved SWA-averaged model as final checkpoint to {model_path}")
 
     write_experiment_summary(
         model_path=model_path,
@@ -726,6 +881,7 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        swa_extras=swa_extras,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
