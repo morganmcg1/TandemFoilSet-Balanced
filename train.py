@@ -493,9 +493,23 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.we
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
 print(f"GRAD_CLIP max_norm: {GRAD_CLIP}")
 warmup_epochs = 4
+COSINE_T_MAX = 14
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=COSINE_T_MAX)
 scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+import math as _math
+_final_cos_step = max(MAX_EPOCHS - warmup_epochs - 1, 0)
+_final_cos_factor = (1 + _math.cos(_math.pi * min(_final_cos_step, COSINE_T_MAX) / COSINE_T_MAX)) / 2
+_expected_final_lr = cfg.lr * _final_cos_factor
+_post_step_cos = max(MAX_EPOCHS - warmup_epochs, 0)
+_post_step_factor = (1 + _math.cos(_math.pi * min(_post_step_cos, COSINE_T_MAX) / COSINE_T_MAX)) / 2
+_post_step_lr = cfg.lr * _post_step_factor
+print(
+    f"Scheduler: warmup_epochs={warmup_epochs}, CosineAnnealingLR(T_max={COSINE_T_MAX}, eta_min=0)  "
+    f"-> LR during epoch {MAX_EPOCHS} ≈ {_expected_final_lr:.3e} "
+    f"(peak={cfg.lr:.3e}, factor={_final_cos_factor:.3f}, cosine step {_final_cos_step}/{COSINE_T_MAX}); "
+    f"post-final scheduler.step LR ≈ {_post_step_lr:.3e} (cosine step {_post_step_cos}/{COSINE_T_MAX})"
+)
 
 channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
 
@@ -513,6 +527,8 @@ with open(model_dir / "config.yaml", "w") as f:
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
         "grad_clip": GRAD_CLIP,
+        "cosine_t_max": COSINE_T_MAX,
+        "warmup_epochs": warmup_epochs,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
@@ -644,6 +660,8 @@ for epoch in range(MAX_EPOCHS):
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
         "grad_clip": GRAD_CLIP,
+        "cosine_t_max": COSINE_T_MAX,
+        "warmup_epochs": warmup_epochs,
         "pre_clip_grad_norm": grad_norm_summary,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
