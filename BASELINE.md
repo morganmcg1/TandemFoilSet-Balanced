@@ -9,6 +9,38 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 14:00 — PR #2254: fern — grad_accum 2→1 (effective batch 2→1, true SGD per microbatch) (MERGED)
+
+**New best val and test. 12th consecutive compounding win: -7.49% val / -7.73% test. Largest single-experiment gain in the series.**
+
+- **val_avg/mae_surf_p:** 65.0842 (was 70.3559) — **-7.49%**
+- **test_avg/mae_surf_p:** **56.3434** (was 61.0663) — **-7.73%**
+- **W&B run:** `e7euiii7`
+- **Epochs:** 18 best (21 completed; timed out mid-epoch 22; best epoch 18)
+
+Per-split test `mae_surf_p` (run `e7euiii7`):
+
+| Split | test | vs prev baseline (#2203) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 59.0270 | 66.0608 | **-10.65%** |
+| `geom_camber_rc` | 71.5694 | 73.5254 | **-2.66%** |
+| `geom_camber_cruise` | 38.5177 | 43.1260 | **-10.69%** |
+| `re_rand` | 56.2596 | 61.5528 | **-8.60%** |
+
+Changes vs prior baseline (#2203):
+- `grad_accum=1` (was `2`); `batch_size=1` unchanged → effective batch 1 (was 2). The eff_batch trend (8→4→2→1) accelerated — this step was the LARGEST relative improvement (+7.49%) rather than diminishing. Bounded-gradient stack (smooth_l1 β=0.25 + grad_clip=1.0 + bf16) absorbs true SGD noise without instability. Training was fully stable (no spikes, no NaN, flat epoch_time_s). All four splits improved, with `single_in_dist` and `geom_camber_cruise` both at -10.65%/-10.69%.
+
+Stack: **batch_size=1 + grad_accum=1** + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+**Notes for students:** Current baseline is `val_avg/mae_surf_p = 65.0842`. To beat: val < 65.0842.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/grad-accum-1-eff1" --wandb_group "willow-r2-throughput"
+```
+
+---
+
 ## 2026-05-13 12:15 — PR #2203: fern — batch_size 2 → 1, grad_accum=2 (effective batch 4 → 2) (MERGED)
 
 **New best val and test. 11th consecutive compounding win: -3.84% val / -4.82% test.**
