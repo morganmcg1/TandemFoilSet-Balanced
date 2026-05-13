@@ -276,8 +276,13 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
-            scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            scale = rescale_head(log_re_norm)  # [B, 1, 2] for Uy, p
+            pred_raw = model({"x": x_norm})["preds"]  # [B, N, 3]
+            # Apply scale only to Uy (ch 1) and p (ch 2); Ux (ch 0) passes through.
+            pred = torch.cat(
+                [pred_raw[..., :1], pred_raw[..., 1:] * scale],
+                dim=-1,
+            )
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -452,7 +457,7 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
+rescale_head = ReScaleHead(hidden=32, out_channels=2).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params) + ReScaleHead ({n_params_head} params)")
@@ -519,11 +524,11 @@ for epoch in range(MAX_EPOCHS):
     vol_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
     surf_count_total = torch.zeros(1, dtype=torch.float64, device=device)
     vol_count_total = torch.zeros(1, dtype=torch.float64, device=device)
-    scale_sum = torch.zeros(3, dtype=torch.float64, device=device)
-    scale_sq_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    scale_sum = torch.zeros(2, dtype=torch.float64, device=device)
+    scale_sq_sum = torch.zeros(2, dtype=torch.float64, device=device)
     log_re_sum = 0.0
     log_re_sq_sum = 0.0
-    scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
+    scale_log_re_cross = torch.zeros(2, dtype=torch.float64, device=device)
     scale_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -536,8 +541,13 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
-            scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            scale = rescale_head(log_re_norm)  # [B, 1, 2] for Uy, p
+            pred_raw = model({"x": x_norm})["preds"]  # [B, N, 3]
+            # Apply scale only to Uy (ch 1) and p (ch 2); Ux (ch 0) passes through.
+            pred = torch.cat(
+                [pred_raw[..., :1], pred_raw[..., 1:] * scale],
+                dim=-1,
+            )
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
@@ -603,7 +613,7 @@ for epoch in range(MAX_EPOCHS):
         scaler.update()
 
         with torch.no_grad():
-            sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
+            sc = scale.squeeze(1).to(torch.float64)              # [B, 2] (Uy, p)
             lr = log_re_norm.squeeze(1).to(torch.float64)        # [B]
             scale_sum += sc.sum(dim=0)
             scale_sq_sum += (sc ** 2).sum(dim=0)
@@ -662,9 +672,9 @@ for epoch in range(MAX_EPOCHS):
             cov = scale_log_re_cross / scale_n - scale_mean_t * lr_mean
             corr = (cov / scale_std_t.clamp(min=1e-8) / lr_std).tolist()
         else:
-            corr = [0.0, 0.0, 0.0]
+            corr = [0.0, 0.0]
     else:
-        scale_mean = scale_std = corr = [0.0, 0.0, 0.0]
+        scale_mean = scale_std = corr = [0.0, 0.0]
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
@@ -716,7 +726,7 @@ for epoch in range(MAX_EPOCHS):
         f"Uy={vol_huber_per_ch[1]:.5f} p={vol_huber_per_ch[2]:.5f}]"
     )
     print(
-        f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
+        f"    ReScaleHead[Uy,p]  mean={[f'{v:.3f}' for v in scale_mean]}  "
         f"std={[f'{v:.3f}' for v in scale_std]}  "
         f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
     )
