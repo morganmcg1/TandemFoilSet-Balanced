@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -143,6 +144,13 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # H51: QK-normalization with log-scaled per-head temperature.
+        # Init log_temp = 0 (qk_scale = 1.0) — matches ViT-22B/DiT/SD3 standard.
+        # After F.normalize(q) and F.normalize(k), |QK| <= 1, so qk_scale=1 gives
+        # max logit ~= 1 (baseline-comparable magnitude). v1 used log(1/sqrt(d_k)) = -1.733
+        # which produced near-uniform attention at init (max logit 0.18), so the mechanism
+        # never activated. v2 fixes this.
+        self.qk_log_temperature = nn.Parameter(torch.zeros([1, heads, 1, 1]))
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -176,10 +184,17 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        # H51: QK-normalize and apply learnable per-head temperature.
+        # Bake the temperature into Q so SDPA's scale= can be a literal 1.0 (avoid
+        # double-scaling from SDPA's default 1/sqrt(d_k)).
+        q = F.normalize(q, dim=-1, p=2)
+        k = F.normalize(k, dim=-1, p=2)
+        qk_scale = self.qk_log_temperature.exp()  # (1, heads, 1, 1)
         out_slice = F.scaled_dot_product_attention(
-            q, k, v,
+            q * qk_scale, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,
+            scale=1.0,
         )
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
@@ -494,8 +509,30 @@ for i, b in enumerate(model.blocks):
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
+# H51: init sanity check — every block should print log_temp=0.0000, qk_scale=1.0000.
+for i, b in enumerate(model.blocks):
+    print(
+        f"[H51] block {i}: qk_log_temperature init avg={b.attn.qk_log_temperature.mean().item():.4f} "
+        f"(qk_scale={b.attn.qk_log_temperature.exp().mean().item():.4f})"
+    )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# H51: exclude qk_log_temperature from weight decay (literature consensus —
+# scale/temperature params should not have WD applied, same as LayerNorm gamma/beta).
+no_wd_params = []
+wd_params = []
+for name, p in model.named_parameters():
+    if 'qk_log_temperature' in name:
+        no_wd_params.append(p)
+    else:
+        wd_params.append(p)
+optimizer = torch.optim.AdamW(
+    [
+        {'params': wd_params, 'weight_decay': cfg.weight_decay},
+        {'params': no_wd_params, 'weight_decay': 0.0},
+    ],
+    lr=cfg.lr,
+)
+print(f"[H51] WD groups: wd_params={len(wd_params)}, no_wd_params={len(no_wd_params)} (qk_log_temperature)")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -598,6 +635,12 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
+    # H51: per-block qk_log_temperature mean/std (mechanism diagnostic).
+    qk_temp_epoch_stats: dict[str, float] = {}
+    for bi, blk in enumerate(model.blocks):
+        qlt = blk.attn.qk_log_temperature.detach().flatten()
+        qk_temp_epoch_stats[f"qk_log_temp/l{bi}_mean"] = float(qlt.mean().item())
+        qk_temp_epoch_stats[f"qk_log_temp/l{bi}_std"] = float(qlt.std().item()) if qlt.numel() > 1 else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -611,6 +654,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        **qk_temp_epoch_stats,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -638,6 +682,26 @@ for i in range(len(model.blocks)):
         f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+    )
+
+# H51: Final per-block/per-head qk_log_temperature stats.
+final_qk_temp_stats: dict[str, float] = {}
+for i, b in enumerate(model.blocks):
+    qlt = b.attn.qk_log_temperature.detach().flatten()
+    for hi, v in enumerate(qlt.tolist()):
+        final_qk_temp_stats[f"final/qk_log_temp_l{i}_h{hi}"] = v
+        final_qk_temp_stats[f"final/qk_scale_l{i}_h{hi}"] = float(math.exp(v))
+    final_qk_temp_stats[f"final/qk_log_temp_l{i}_mean"] = float(qlt.mean().item())
+    final_qk_temp_stats[f"final/qk_log_temp_l{i}_std"] = float(qlt.std().item()) if qlt.numel() > 1 else 0.0
+append_metrics_jsonl(metrics_jsonl_path, {"event": "final", **final_qk_temp_stats})
+print("Final qk_log_temperature stats (end-of-training):")
+for i in range(len(model.blocks)):
+    print(
+        f"  block {i}: qk_log_temp mean={final_qk_temp_stats[f'final/qk_log_temp_l{i}_mean']:.4f} "
+        f"std={final_qk_temp_stats[f'final/qk_log_temp_l{i}_std']:.4f} "
+        f"(per-head: " +
+        ", ".join(f"{final_qk_temp_stats[f'final/qk_log_temp_l{i}_h{hi}']:.3f}" for hi in range(model.blocks[i].attn.heads)) +
+        ")"
     )
 
 # --- Test evaluation + local summary ---
