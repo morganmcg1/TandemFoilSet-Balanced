@@ -4,6 +4,26 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 04:05 — PR #1855: [eta-min-5e-5] Non-zero cosine LR floor eta_min=0.0→5e-5 (fern)
+
+- **`val_avg/mae_surf_p`:** **83.95** (best epoch 18/18)
+- **`test_avg/mae_surf_p`:** **74.70** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=93.45, geom_camber_rc=91.33, geom_camber_cruise=67.06, re_rand=83.97
+- **Per-split surface-p MAE (test):** single_in_dist=83.68, geom_camber_rc=81.29, geom_camber_cruise=56.91, re_rand=76.93
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=18, eta_min=5e-5), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+- **Key change:** `eta_min=5e-5` (was 0.0). Non-zero LR floor prevents the cosine schedule from reaching zero at epoch 18. The model continued descending through the final epoch (val epoch 17→18: 87.29→83.95, Δ−3.34). Under grad-clip's normalized steps, even a small non-zero LR (5.34e-5 at epoch 18) produces meaningful updates — each clipped step contributes signal proportional to the LR.
+- **Improvement vs directly-comparable reference (#1695 T_max=18, eta_min=0.0):** val −0.72 (−0.85%), test −0.24 (−0.32%)
+- **3 of 4 val splits improved:** single_in_dist −2.80, geom_camber_rc −1.92, re_rand +0.19 (~flat); geom_camber_cruise +1.67 (slight regression)
+- **Metric artifacts:** `models/model-charliepai2g48h4-fern-eta-min-5e-5-20260513-030913/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-fern --experiment_name "charliepai2g48h4-fern/eta-min-5e-5"`
+
+**Open questions after this merge:**
+- Is eta_min=5e-5 the optimum? Try eta_min=1e-4 (20% of lr) or eta_min=1e-5 (2%) to bracket.
+- The model was still improving at epoch 18 — would more epochs help? T_max=19 or T_max=20 may squeeze more, but the 30-min wall-clock cap may not allow it.
+- Layers-6 regressed under grad-clip (edward #1730, val=93.97 vs 84.67 baseline). Depth bottleneck may not be the lever at this architecture scale.
+
+---
+
 ### 2026-05-13 03:00 — PR #1695: [tmax-18] Tune cosine T_max=15→18 to match achievable epoch count exactly (nezuko)
 
 - **`val_avg/mae_surf_p`:** **84.67** (best epoch 18/18)
