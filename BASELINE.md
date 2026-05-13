@@ -290,3 +290,46 @@ cd "target/" && python train.py \
 ```
 
 *(All defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18. `--grad_clip_max_norm 5.0` is the new required flag — value 0 (default) disables clipping.)*
+
+## 2026-05-13 11:30 — PR #2121: slice_num=48 + grad_clip=5.0 (capacity-down stacks with clip)
+
+**Changes merged:** `model_config["slice_num"] = 48` (was 64) in `train.py` — one-line change to the hardcoded model config dict. Combined with the existing `--grad_clip_max_norm 5.0` CLI flag from PR #2090.
+
+**Key finding:** Leaner slot partitioning (48 vs 64 Transolver slices) stacks super-additively with gradient clipping. clip=5.0 alone gave −15.5%; slice=48 alone gave −1.27%; combined gives −3.99% on top of clip, for −18.9% vs pre-clip baseline (super-additive: sum-of-marginals predicted −16.8%). Mechanism: slice_num=48 is a regularization gain (leaner slot partitioning generalizes better), not a capacity-floor effect — cruise (most slot-sensitive split) held flat while rc, in_dist, re_rand all improved. Fire rate diagnostics confirm clip remained active (100%→82% over epochs), fully orthogonal to slice reduction. Model converged within 16 epochs (best ep15, slight regression ep16), unlike round-1 where best was last-completed epoch.
+
+### Primary metrics (best val checkpoint, epoch 15 of 16)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **71.9613** | −5.12% |
+| **test_avg/mae_surf_p** | **65.3734** | **−3.99%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | Δ vs prev baseline (68.0957) |
+|---|---|---|
+| test_single_in_dist | 67.70 | −0.87% |
+| test_geom_camber_rc | 74.63 | −9.25% |
+| test_geom_camber_cruise | 51.29 | +1.14% (flat) |
+| test_re_rand | 67.87 | −4.59% |
+
+### Run info
+
+- **W&B run:** `vyjph01c` — group `slice-num-sweep`
+- **Epochs:** 16 / 18 (30-min timeout, ~118.8 s/epoch)
+- **Peak GPU memory:** ~40 GB (estimated, similar to round-1 ~40.3 GB)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, **slice_num=48**, mlp_ratio=2, space_dim=34 (Fourier L=8)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --accumulation_steps 2 \
+  --grad_clip_max_norm 5.0 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(Note: `slice_num=48` is hardcoded in `model_config` in `train.py` — not a CLI flag. Already merged into advisor branch via PR #2121. All other defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18.)*
