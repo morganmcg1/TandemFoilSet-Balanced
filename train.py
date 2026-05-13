@@ -236,6 +236,61 @@ class FourierFeatures(nn.Module):
         return torch.cat([pos, enc], dim=-1)
 
 
+class ModelEMA:
+    """Exponential moving average of model parameters.
+
+    Shadow accumulates in float32 even if the live model is bf16-autocast.
+    swap_in/swap_out lets us evaluate with EMA weights while preserving raw.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.95):
+        self.decay = decay
+        self.shadow = {
+            k: v.detach().clone().float()
+            for k, v in model.state_dict().items()
+        }
+        self._saved: dict | None = None
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        for k, v in model.state_dict().items():
+            shadow = self.shadow[k]
+            if v.dtype.is_floating_point:
+                shadow.mul_(self.decay).add_(v.detach().float(), alpha=1.0 - self.decay)
+            else:
+                shadow.copy_(v.detach())
+
+    @torch.no_grad()
+    def swap_in(self, model: nn.Module):
+        self._saved = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        ema_state = {k: v.to(self._saved[k].dtype) for k, v in self.shadow.items()}
+        model.load_state_dict(ema_state)
+
+    @torch.no_grad()
+    def swap_out(self, model: nn.Module):
+        if self._saved is None:
+            return
+        model.load_state_dict(self._saved)
+        self._saved = None
+
+    @torch.no_grad()
+    def diag_ratio(self, model: nn.Module) -> float:
+        """Global L2 ratio ||model - ema|| / ||model|| across all float params.
+
+        This is the diagnostic that flagged #2050 (decay=0.999) as lagging: the
+        ratio failed to plateau, ending at ~20% rather than the expected 1-3%.
+        """
+        diff_sq = 0.0
+        norm_sq = 0.0
+        for k, v in model.state_dict().items():
+            if v.dtype.is_floating_point:
+                vf = v.detach().float()
+                shadow = self.shadow[k]
+                diff_sq += (vf - shadow).pow(2).sum().item()
+                norm_sq += vf.pow(2).sum().item()
+        return (diff_sq / max(norm_sq, 1e-12)) ** 0.5
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -430,6 +485,8 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    use_ema: bool = True  # weight-averaged shadow used for val/test eval + best ckpt
+    ema_decay: float = 0.95  # half-life ~14 steps; #2050 used 0.999 which lagged the rapid descent
 
 
 cfg = sp.parse(Config)
@@ -479,6 +536,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema = ModelEMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
+if ema is not None:
+    print(f"EMA: enabled, decay={cfg.ema_decay} (half-life ~{0.6931 / -torch.log(torch.tensor(cfg.ema_decay)).item():.1f} steps)")
+else:
+    print("EMA: disabled")
+
 optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
@@ -511,6 +574,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("ema_diag/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -585,6 +649,8 @@ for epoch in range(MAX_EPOCHS):
 
             optimizer.step()
             optimizer.zero_grad()
+            if ema is not None:
+                ema.update(model)
             global_step += 1
             wandb.log({
                 "train/loss": accum_loss / max(n_micro_in_accum, 1),
@@ -606,10 +672,21 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
-        for name, loader in val_loaders.items()
-    }
+    # Primary val uses EMA weights when enabled (matches advisor's deliverable spec)
+    if ema is not None:
+        ema.swap_in(model)
+        try:
+            split_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+                for name, loader in val_loaders.items()
+            }
+        finally:
+            ema.swap_out(model)
+    else:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+            for name, loader in val_loaders.items()
+        }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
@@ -633,6 +710,11 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    if ema is not None:
+        diag = ema.diag_ratio(model)
+        log_metrics["ema_diag/l2_ratio"] = diag
+
     wandb.log(log_metrics)
 
     tag = ""
@@ -643,7 +725,18 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA weights as the canonical checkpoint when EMA is active so
+        # the end-of-run test eval uses EMA weights too.
+        if ema is not None:
+            ema.swap_in(model)
+            try:
+                torch.save(model.state_dict(), model_path)
+            finally:
+                ema.swap_out(model)
+            # Also save raw weights for the comparison reported in deliverables.
+            torch.save(model.state_dict(), model_dir / "checkpoint_raw.pt")
+        else:
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -671,10 +764,36 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
+    # Raw-vs-EMA val comparison at the best epoch — the advisor asked for this
+    # because #2050's raw val was healthier than the lagging EMA val. With
+    # decay=0.95 we expect the two to agree closely.
+    raw_ckpt_path = model_dir / "checkpoint_raw.pt"
+    if ema is not None and raw_ckpt_path.exists():
+        print("\nRe-evaluating raw (non-EMA) weights at best-val epoch...")
+        raw_state = torch.load(raw_ckpt_path, map_location=device, weights_only=True)
+        # Snapshot EMA weights so we can restore them for the test pass.
+        ema_state_dict = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(raw_state)
+        raw_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+            for name, loader in val_loaders.items()
+        }
+        raw_val_avg = aggregate_splits(raw_split_metrics)
+        raw_log = {"val_raw_avg/mae_surf_p": raw_val_avg["avg/mae_surf_p"]}
+        for split_name, m in raw_split_metrics.items():
+            for k, v in m.items():
+                raw_log[f"val_raw/{split_name}/{k}"] = v
+        wandb.summary.update(raw_log)
+        print(f"  raw val_avg/mae_surf_p = {raw_val_avg['avg/mae_surf_p']:.4f} "
+              f"(EMA = {best_avg_surf_p:.4f})")
+        # Restore EMA weights for test eval.
+        model.load_state_dict(ema_state_dict)
+
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (EMA weights)..." if ema is not None
+              else "\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
