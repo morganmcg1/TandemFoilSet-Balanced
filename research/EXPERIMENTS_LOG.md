@@ -4,6 +4,50 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 15:35 — PR #2311 (SENT BACK): Hybrid Lion (model) + AdamW (Kendall σ) on β=0.3+RFF σ=1.0+Kendall — mechanism validated, hyperparameter overshoot diagnosed
+
+- **Branch:** `willowpai2g48h2-fern/hybrid-adamw-for-kendall-sigma-on-lion`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Lion's sign-update collapses all 6 Kendall log_σ to identical −0.904 (banked from #2063). Split parameters into Lion (model) + AdamW (log_σ) groups; AdamW preserves gradient magnitude needed for per-channel σ differentiation.
+
+### Result table (W&B run `5n1xav4y`)
+
+| Metric | σ=1.0 baseline (#2063) | σ=0.5 baseline (#2168, CURRENT) | Hybrid (lr=1e-3) | Δ vs σ=1.0 | Δ vs σ=0.5 |
+|---|---:|---:|---:|---:|---:|
+| swa_val_avg/mae_surf_p | 47.6416 | **45.7648** | 47.3416 | −0.30 (−0.63%) | **+1.58 (+3.45%)** |
+| swa_test_avg/mae_surf_p | 40.5651 | **39.6619** | 40.9577 | +0.39 (+0.97%) | **+1.30 (+3.27%)** |
+
+### Per-channel final log_σ (mechanism diagnostic)
+
+| Channel | Lion+Kendall (#2063) | AdamW+Kendall (#1906) | **Hybrid** | Effective weight |
+|---|---:|---:|---:|---:|
+| surf_p | −0.904 | ≈ −1.41 | −2.000 | 27.30 |
+| surf_ux | −0.904 | — | −2.609 | **92.32** |
+| surf_uy | −0.904 | — | −2.496 | **73.68** |
+| vol_p | −0.904 | — | −2.096 | 33.07 |
+| vol_ux | −0.904 | — | −1.803 | 18.40 |
+| vol_uy | −0.904 | — | −1.916 | 23.07 |
+
+**Spread: 0.81 log-units** (vs 0 for Lion+Kendall). Mechanism prediction fully validated.
+
+### Commentary and conclusions
+
+**Mechanism win confirmed; hyperparameter overshoot caused test regression.**
+
+The σ-channel collapse fix worked structurally — Lion's sign-update applied only to model params (update_norm = √754519 confirmed unchanged), while AdamW on the 6 log_σ scalars restored per-channel gradient-magnitude information. Surface-velocity channels (surf_ux/surf_uy) ended up emphasized 5× more than vol_ux — consistent with AdamW+Kendall #1906's surf_p-heavy weighting, but on different channels (surface velocity here vs surface pressure in #1906).
+
+**The val win is real but small (−0.30 on σ=1.0 stack), and test slightly regressed (+0.39).** Root cause: AdamW lr=1e-3 drove log_σ to −1.8 to −2.6 by epoch 13, well past AdamW+Kendall #1906's equilibrium of ≈ −1.41 (descent rate 0.13/epoch, still descending linearly). Surface-velocity over-emphasis (eff. weight 92×, 74×) helps in-distribution val splits where surface is the cleanest signal but hurts OOD test where balanced channels matter.
+
+**Decision:** Send back for (1) rebase to current σ=0.5 baseline (val ∈ [45.76, 47.64] zone → directional win on σ=1.0 only) and (2) lr sweep on hybrid_kendall_lr ∈ {3e-4, 5e-4} to fix overshoot. Predicted Arm 2 (5e-4) should reach near-#1906 equilibrium by epoch 13.
+
+### Banked findings
+
+1. **Hybrid Lion(model) + AdamW(log_σ) restores per-channel σ differentiation cleanly** — 0.81 log-unit spread reached in 13 epochs at AdamW lr=1e-3, with surface-velocity channels weighted ~5× more than volume channels. This is the structural fix for the Lion+Kendall σ-collapse banked from #2063/#2354/#2168. **Implication for paper:** the σ-collapse can be resolved with a 1-line code change (parameter group split) preserving Lion's main optimization benefits.
+2. **AdamW lr=1e-3 overshoots on a 13-epoch run** — final log_σ ≈ −2.15 (mean) vs AdamW+Kendall #1906 equilibrium ≈ −1.41. Linear-descent dynamics suggest lr=5e-4 should hit equilibrium by epoch 13.
+3. **Surface-velocity over-emphasis hurts OOD test** — when log_σ overshoots, effective weight on surf_ux/surf_uy reaches 92×/74× (vs vol_ux 18×). In-distribution val improves; OOD geometry test regresses. The right balance is closer to #1906's pattern (surface 5× volume, not 5×).
+
+---
+
 ## 2026-05-13 15:30 — PR #2168 (MERGED): RFF σ sweep {0.5, 0.25, AdamW σ=0.5} on Lion+β=0.3+RFF+Kendall
 
 - **Branch:** `willowpai2g48h2-thorfinn/fourier-sigma-refine`

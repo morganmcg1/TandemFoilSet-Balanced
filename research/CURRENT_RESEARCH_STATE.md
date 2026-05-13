@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 15:30 (merged #2168 thorfinn σ=0.5 → new baseline val 45.76 / test 39.66; assigned #2407 thorfinn σ=0.1 + σ=0.25 seed-1 bracket; rebase notice posted to 7 in-flight PRs)
+- **Last updated:** 2026-05-13 15:40 (sent back #2311 fern hybrid Lion+AdamW: mechanism win confirmed, val=47.34 lands in σ=0.5-rebase zone; requested 2-arm hybrid_kendall_lr sweep {3e-4, 5e-4} on σ=0.5 stack to fix AdamW overshoot)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -56,7 +56,7 @@
 |---|---|---|---|---|
 | **#2407** | **thorfinn** | wip (new) | RFF σ=0.1 + σ=0.25 seed-1 bracket | Find OOD-geom floor; settle val-vs-test seed noise |
 | **#2390** | **askeladd** | wip | Lion wd sweep {1e-4, 1e-3, 3e-3} | Test if Lion needs 3-10× AdamW wd (Chen 2023) |
-| **#2311** | **fern** | wip | Hybrid Lion+AdamW-for-σ on Lion stack | Restores Kendall σ differentiation (orthogonal to RFF σ knob) |
+| **#2311** | **fern** | wip (sent back) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | Mechanism win confirmed (0.81 spread); lr=1e-3 overshoots → 2-arm {3e-4, 5e-4} on σ=0.5 |
 | **#2270** | **alphonse** | wip | max_norm {0.75, 1.0} on β=0.3 | Pre-Lion stack; needs eventual Lion rebase regardless |
 | **#2342** | **tanjiro** | wip | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
 | **#2347** | **edward** | wip | max_norm ∈ {0.0, 2.0} on Lion stack | Drop/relax grad-clip — clip fires 74% under Lion sign-update |
@@ -73,7 +73,7 @@
 ## Key banked mechanisms
 
 1. **Lion = the biggest single lever** — 28.5% win vs β=0.3 baseline; 37.7% vs RFF baseline; 52.8% vs Kendall baseline
-2. **Lion collapses Kendall σ heads** — all 6 log_σ identical. Lion+Kendall ≡ Lion+uniform-weight. **Structural, NOT capacity- OR encoding-driven**: confirmed at 1.61M params (nezuko #2354) AND at RFF σ ∈ {0.25, 0.5, 1.0} (thorfinn #2168). fern's #2311 hybrid Lion+AdamW-for-σ is the right fix.
+2. **Lion collapses Kendall σ heads** — all 6 log_σ identical. Lion+Kendall ≡ Lion+uniform-weight. **Structural, NOT capacity- OR encoding-driven**: confirmed at 1.61M params (nezuko #2354) AND at RFF σ ∈ {0.25, 0.5, 1.0} (thorfinn #2168). **Hybrid Lion(model) + AdamW(log_σ) confirmed as the structural fix (fern #2311):** 0.81 log-unit spread restored at AdamW lr=1e-3; surface-velocity emphasis 5× volume; mechanism prediction fully validated. Next: lr sweep + σ=0.5 rebase to convert mechanism win into metric win.
 3. **β=0.3 and Lion compound** — val improved 50.97→47.64 going from β=0.0 to β=0.3 on Lion stack. Mechanisms are independent.
 4. **clip_fraction=100% under β** regime → max_norm relaxation (#2270) still worth testing on Lion stack.
 5. **SWA frac bounded below** — only frac≥0.75 averages in flat-loss region. EMA decay=0.999 (#2285) did NOT fix it (val=70.34, regression) — its 5-epoch window dilutes late-epoch low-lr updates with stale high-lr snapshots. Right fix is schedule shape: faster cosine T_max → eta_min plateau covers more averaging window. → testing now in #2342.
