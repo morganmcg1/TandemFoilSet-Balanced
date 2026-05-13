@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-13 15:30 UTC — Round 37
+
+### PR #2139 frieren: RMSNorm replaces LayerNorm at all 3 TransolverBlock sites (retry-3) — CLOSED (LOSS, mild bimodal)
+
+- **Branch:** `charliepai2g48h5-frieren/rmsnorm-3sites-retry3`
+- **Hypothesis:** RMSNorm at all 3 sites (ln_1, ln_2, ln_3) — Pre-LN style (no mean-centering). Predicted small structural win or wash, NO bimodal signature (layer-level, not sample-level intervention).
+- **Results:**
+
+| Metric | RMSNorm | Old baseline #2033 | New baseline #2173 | Δ vs new |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **51.8784** | 50.6001 | 49.8053 | **+4.16% LOSS** |
+| `test_avg/mae_surf_p` | **44.7876** | 43.9680 | 43.5396 | **+2.87% LOSS** |
+
+| Split | RMSNorm val | #2033 val | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 46.9421 | 47.9418 | **−2.08% (BETTER)** |
+| `val_geom_camber_rc` | 69.9374 | 67.3675 | +3.81% |
+| `val_geom_camber_cruise` | 36.4811 | 34.3430 | +6.23% (worst) |
+| `val_re_rand` | 54.1531 | 52.7481 | +2.66% |
+
+- **Best epoch:** 45 of 47 possible (timeout, ~40.1 s/epoch)
+- **Metric artifacts:** `models/model-charliepai2g48h5-frieren-rmsnorm-3sites-retry3-20260513-101814/metrics.jsonl`
+
+**Analysis:** Both hypothesis predictions falsified — RMSNorm did NOT win structurally (close+LOSS), AND DID exhibit a mild bimodal pattern (in-dist WIN, OOD LOSS), even though it's a structural not stochastic/averaging change. **Mechanism hypothesis** (student's analysis): removing LayerNorm's mean-centering improves constant-zero feature directions for single-foil inputs (gap=0, stagger=0, AoA-2=0 zero-tail) while making the non-zero offset features in OOD camber/Re directions harder to learn — a structural variant of the bimodal pattern, smaller magnitude than the averaging-style canon. The pattern is small enough that single-seed noise can't be ruled out, but uniform signs across 3 OOD splits are suggestive. **The single-foil-only RMSNorm benefit (+2% in-dist) is a paper-level ablation observation** — even if val_avg doesn't beat baseline, this is interesting evidence about LayerNorm's mean-centering interaction with constant-zero feature directions. RMSNorm 3-site axis closed.
+
+---
+
+### PR #2138 nezuko: Translation augmentation σ=0.01 (channels 0-1) — CLOSED (stale ~6h, reassigned as #2235)
+
+- **Branch:** `charliepai2g48h5-nezuko/translation-aug-s0.01`
+- **State:** Stale WIP — no commits since 2026-05-13T09:27 UTC (~6 hours). Pod-stall pattern matching frieren RMSNorm (#1926→#2034 stale ×2 before #2139 picked up) and tanjiro DropPath (#1976→#2083 stale ×2 before #2179 picked up).
+- **Action:** Closed via `close_pr_with_comment`, reassigned same hypothesis on fresh branch via REST API as #2235 retry-2.
+- **Hypothesis preserved:** Per-sample rigid translation σ=0.01 on coord channels 0-1 — physical-symmetry data augmentation, structurally distinct from 8× averaging-style bimodal closures AND from 2× broadcast-scalar prior corruption closures. Critical diagnostic remains: if bimodal → pattern generalizes to physical-symmetry too; if uniform/OOD-favorable → first lever breaking bimodal trade-off.
+
+---
+
+### Round-37 Assignments
+
+| PR | Student | Hypothesis | Mechanism |
+|---|---|---|---|
+| #2234 | frieren | mlp_ratio 2→4 (FFN width 256→512) | Standard transformer FFN expansion, never tested at ratio=4 in this launch; complementary capacity axis to n_head=2 WIN; +50% params (708K → 1.04M) |
+| #2235 | nezuko | Translation aug σ=0.01 retry-2 | Reassignment of #2138 after 1st stale; fresh branch, same hypothesis, pod-unstick attempt |
+
+---
+
 ## 2026-05-13 15:00 UTC — Round 36
 
 ### PR #2173 thorfinn: n_head 4→2 (dim_head 32→64) — MERGED (**WIN**, new baseline)
