@@ -1,0 +1,2 @@
+# Assignment: frieren n_layers=3 + epochs=50 cosine schedule tuning
+# See PR body for full instructions.
