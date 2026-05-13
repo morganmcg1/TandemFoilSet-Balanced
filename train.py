@@ -418,7 +418,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 8
     surf_weight: float = 10.0
-    epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
+    epochs: int = 15  # realign T_max to actual ~30-min cap (was 18 but always times out at 15-16)
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
