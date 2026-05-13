@@ -409,7 +409,7 @@ class Config:
     # Applied linearly to per-element Huber output (after the Huber transform),
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
-    p_channel_weight: float = 5.0
+    p_channel_weight: float = 15.0
 
 
 cfg = sp.parse(Config)
