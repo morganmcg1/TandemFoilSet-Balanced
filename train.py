@@ -462,12 +462,12 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-# 1-epoch linear warmup followed by cosine annealing over the remaining epochs.
+# 1-epoch linear warmup followed by CosineAnnealingWarmRestarts (T_0=9ep, T_mult=2).
 # SequentialLR milestones are in scheduler steps, so we step per-batch and express
 # both schedulers in batch units. T_MAX_EPOCHS=18 matches the achievable epochs under
-# the 30-min cap (aligns with merged tmax-18 baseline); 1 warmup + 17 cosine = 18.
-# eta_min=5e-5 retains the merged eta-min-5e-5 (#1855) advantage so the warmup is
-# evaluated apples-to-apples against the current pure-cosine best (val=83.95).
+# the 30-min cap; warmup epoch 1, first cosine period epochs 2-10 (T_0=9ep),
+# restart at ep11 with second period of 18ep — wall-clock cuts ~ep17-18, leaving
+# LR near mid-range rather than stalled at eta_min.
 T_MAX_EPOCHS = 18
 n_batches_per_epoch = math.ceil(len(train_loader))
 warmup_sched = torch.optim.lr_scheduler.LinearLR(
@@ -476,14 +476,15 @@ warmup_sched = torch.optim.lr_scheduler.LinearLR(
     end_factor=1.0,
     total_iters=n_batches_per_epoch,
 )
-cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+cawr_sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
     optimizer,
-    T_max=(T_MAX_EPOCHS - 1) * n_batches_per_epoch,  # 17 epochs of cosine, in batch units
-    eta_min=5e-5,
+    T_0=9 * n_batches_per_epoch,  # first cosine period = 9 epochs (in batch units)
+    T_mult=2,                      # second period = 18 epochs
+    eta_min=5e-5,                  # same floor as baseline
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
-    schedulers=[warmup_sched, cosine_sched],
+    schedulers=[warmup_sched, cawr_sched],
     milestones=[n_batches_per_epoch],
 )
 
