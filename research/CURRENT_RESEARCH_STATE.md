@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 19:10 — MASSIVE PLATEAU SIGNAL. Closed 7 PRs in single review wave (all regressed): #2319 aoa-film, #2320 slice-32, #2321 llrd, #2322 geom-output-head, #2323 soap-precond-dim-128, #2325 pressure-laplacian, #2428 layerscale (both γ₀ arms). Plus earlier in this session: #2384 lookahead, #1467 slice-128. ALL conventional axes (HP, schedule, loss, FiLM/Scale expansion, slice-num, SOAP-HP, LayerScale, LLRD, trajectory smoothing, Laplacian) now exhausted. Researcher-agent dispatched for bold fresh ideas. #2324 tanjiro grad-accum still WIP (rate-limited token; resets 19:49).
+- **Date**: 2026-05-13 20:55 — PLATEAU CONTINUING. Round 19:30 plateau-breaking experiments all regressed (#2529 surf-vol-split +2.39%, #2535 mixup +52.7%, #2538 bernoulli +4.1%, #2532 drop-path +5.7%, #2537 derived-features +3.26%). Round 20:50 fresh assignments out: #2581 askeladd mlp-ratio-4, #2582 frieren droptoken. Plus from earlier this session: #2559 alphonse surface-embed-trunk, #2560 fern SAM, #2569 nezuko RMSNorm, #2539 thorfinn fourier-pos (sent back with σ=0.1), #2534 edward TTA (sent back for per-epoch + multi-seed). **Tanjiro #2324 pod stuck ~4 hours** on a pod-side secondary rate-limit death-spiral (gh CLI in pod hits 'API rate limit already exceeded' despite global rate_limit endpoint showing 4639/5000 GraphQL remaining; pod retries 6×/iter keep throttle hot). User declined to restart pod.
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 - **CRITICAL INFRA NOTE**: PR #2319-#2325 were originally created with short-form student labels (`student:alphonse` etc.) instead of full-form (`student:charliepai2g24h1-alphonse`). This made them invisible to student pod polling (which uses exact full-name label match per senpai-gh.sh:669). 3-hour stuck period until labels were patched at 17:01. All future `assign-experiment` calls MUST use full student name.
@@ -104,18 +104,18 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments (round 19:30 — bold post-plateau directions)
+## Active Experiments (round 20:50 — second-wave plateau-breaking)
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2529 | alphonse | `surf-vol-split-head` | WIP | **HIGH** | Two-headed output (surf vs vol) — hard inductive bias, ~6K params extra |
-| #2532 | askeladd | `drop-path-0p1` | WIP | **HIGH** | Stochastic Depth across 5 blocks (linear schedule 0→0.1) — only ViT regularizer untested |
-| #2534 | edward | `tta-re-bracket` | WIP | **HIGH** | TTA averaging at Re ± 5% log-space — zero training cost, pure scoring |
-| #2535 | fern | `mixup-scalar-alpha-0p4` | WIP | **HIGH** | Mixup on broadcast scalar features only (Re, AoA, gap, stagger, NACA) + targets |
-| #2537 | frieren | `derived-features-re2-aoa` | WIP | MEDIUM | Explicit log(Re)² + log(Re)×AoA1 input channels (24→26) |
-| #2538 | nezuko | `bernoulli-surface-loss` | WIP | MEDIUM | Bernoulli soft constraint on surface nodes (var(p+½U²)) at λ=0.01 |
-| #2539 | thorfinn | `fourier-pos-encoding` | WIP | MEDIUM | Frozen Gaussian Fourier features for (x,z) coords (num_freq=4, σ=1.0) |
-| #2324 | tanjiro | `grad-accum-batch8` | WIP (rate-limited) | MEDIUM | gradient accumulation steps=2 (effective batch 4→8); token resets 19:49 |
+| #2559 | alphonse | `surface-embed-trunk-token` | WIP | **HIGH** | Learned is_surface_emb[2,d] added to node tokens before block 0 — direct response to #2529 trunk-bottleneck finding |
+| #2560 | fern | `sam-rho-0p02-soap-wrap` | WIP | **HIGH** | SAM (Sharpness-Aware Min) wrapping SOAP, ρ=0.02 — explicit flat-minima search, 2× per-step compute |
+| #2569 | nezuko | `rmsnorm-replace-layernorm` | WIP | **HIGH** | RMSNorm drop-in for nn.LayerNorm in all blocks — preserves nonzero mean signal in residual stream |
+| #2581 | askeladd | `mlp-ratio-4-ffn-double` | WIP | **HIGH** | mlp_ratio 2→4 (canonical ViT choice, unexplored upward from baseline; closed list only sampled mlp_ratio=3) |
+| #2582 | frieren | `droptoken-volume-stratified-0p1` | WIP | **HIGH** | Stratified DropToken — 10% volume nodes masked, 0% surface (input-side regularization, distinct from #2532 DropPath) |
+| #2539 | thorfinn | `fourier-pos-encoding` | WIP (sent back) | MEDIUM | Re-run with σ=0.1 (sigma was mis-calibrated 4× too high; coord post-norm std≈4 not 1) |
+| #2534 | edward | `tta-re-bracket` | WIP (sent back) | MEDIUM | Per-epoch TTA-val for checkpoint selection + 2-seed run to bound variance (TTA arm-vs-arm mechanism validated) |
+| #2324 | tanjiro | `grad-accum-batch8` | WIP (pod-stuck) | LOW | Pod rate-limit death-spiral ~4 hours; correctly labeled but pod can't poll |
 
 ---
 
@@ -180,6 +180,11 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **geom-conditioned-output-head** (#2322): +3.79%; corr_logRe stayed +0.85 (Re-dominated); geom info already in 24-dim node features. Multi-channel ReScaleHead CLOSED.
 - **pressure-laplacian-loss** (#2325): +3.91%; kNN cdist overhead cost 2 epochs; M=1024 sampling acted as noise injection at λ=0.01; targeted VOLUME but ranks on SURFACE. Laplacian formulation CLOSED (alternative formulations still possible).
 - **layerscale-init-1e-4 + γ₀=0.1+nodecay** (#2428): +2.69% / +2.93%; mechanism works on retry but baseline isn't unstable, per-feature gating costs effective capacity. LayerScale residual axis FULLY CLOSED both regimes.
+- **surf-vol-split-head** (#2529): +2.39%; surf/vol head ratio on pressure channel = 1.02 (no specialization); bottleneck is in trunk shared representations, not head capacity. Multi-channel head expansion FULLY CLOSED. Follow-up #2559 tests trunk-level surface injection.
+- **mixup-scalar-alpha-0p4** (#2535): +52.7% catastrophic; mixing two NACA-4-digit airfoils linearly does not produce a valid airfoil — per-node features encode geometry A while targets are convex combinations of fields A and B. Mixup family ruled out for geometry-conditioned regression on this dataset.
+- **bernoulli-surface-loss** (#2538): +4.1%; TandemFoilSet is viscous (RANS) data, Bernoulli p+½ρ|U|² constraint does NOT hold across surface. ID-split degradation pattern + train/bernoulli_loss INCREASING over training confirms data violates the constraint. Physics-informed soft constraints on viscous data CLOSED (Bernoulli + Laplacian).
+- **drop-path-0p1** (#2532): +5.7% (both 0.1 and 0.05 arms); 5-block stack too shallow for branch-level stochastic depth (DeiT evidence relies on 12+ blocks for keep-rate compounding). Branch-level dropout on shallow physics-attention stacks CLOSED.
+- **derived-features-re2-aoa** (#2537): +3.26%; explicit polynomial features duplicate information that ReFiLM + ReScaleHead already extract through their nonlinearities. Cross-feature predicted-best splits (re_rand, camber_rc) regressed most. Tabular-ML feature engineering orthogonality argument doesn't transfer when explicit Re-conditioning hooks already exist.
 
 ---
 
