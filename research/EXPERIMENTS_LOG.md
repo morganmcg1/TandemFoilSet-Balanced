@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-05-13 13:20 — PR #2260: grad-clip-0p5 (nezuko) — MERGED ✅ NEW BEST: 65.2170
+
+- **Branch:** `charliepai2g48h2-nezuko/grad-clip-0p5`
+- **Hypothesis:** Tighten grad_clip 1.0 → 0.5 to dampen the +91-unit epoch-5 spike on RFF base. Spike is gradient-magnitude driven (not ε-driven as #2130 showed). Tighter clipping should reduce spike amplitude and improve late-epoch convergence quality.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-grad-clip-0p5-20260513-121601/metrics.jsonl`
+
+### Results vs. #1657 RFF baseline (65.3304)
+
+| Split | Baseline | clip=0.5 | Δ val | Δ test |
+|---|---|---|---|---|
+| val_single_in_dist | 72.691 | 73.7639 | +1.47% ❌ | — |
+| val_geom_camber_rc | 78.833 | 79.4389 | +0.77% ❌ | — |
+| val_geom_camber_cruise | 44.439 | 42.8481 | **−3.58%** ✓ | −3.13% |
+| val_re_rand | 65.359 | 64.8172 | −0.83% ✓ | −1.48% |
+| **val_avg/mae_surf_p** | **65.3304** | **65.2170** | **−0.17%** ✓ | — |
+| **test_avg/mae_surf_p** | 56.9425 | 56.4581 | — | **−0.85%** ✓ |
+
+**Merged. New canonical grad_clip=0.5. New baseline: 65.2170 (val), 56.4581 (test).**
+
+### Analysis
+
+The headline story is the epoch-5 spike:
+- clip=1.0: **+91-unit spike** at epoch 4→5 (as diagnosed by #2130)
+- clip=0.5: **−58-unit descent** at epoch 4→5 — completely eliminated and reversed
+
+Test improvement (−0.85%) much larger than val (−0.17%), consistent with spike elimination reducing overfitting near the epoch-5 basin. clip=0.5 helps cruise (−3.58% val) and re_rand (−0.54% val) — both smooth/lower-variance splits that benefit from tighter gradient control. Single and rc slightly regress (+1.07%, +0.61%) — complex geometry splits may need the larger gradient steps that clip=0.5 moderates.
+
+### Key insight
+
+Clip axis is **open**. Tighter clipping improves generalization (test) more than in-distribution (val). The question is whether clip=0.25 continues the trend (further cruise/re_rand improvement) or causes over-constraint (single/rc regression worsens). Next: nezuko #2291 clip=0.25.
+
+---
+
+## 2026-05-13 13:20 — PR #2265: lr-1p25e-3-rff (alphonse) — CLOSED (dead end, LR axis closed)
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-1p25e-3-rff`
+- **Hypothesis:** RFF base has sharper curvature near optimum; LR floor might have shifted downward from 1.5e-3.
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-lr-1p25e-3-rff-20260513-121548/metrics.jsonl`
+
+### Results vs. #1657 baseline (65.3304)
+
+| Split | Baseline | lr=1.25e-3 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 74.522 | +2.52% ❌ |
+| val_geom_camber_rc | 78.833 | 80.310 | +1.87% ❌ |
+| val_geom_camber_cruise | 44.439 | 45.439 | +2.25% ❌ |
+| val_re_rand | 65.359 | 66.169 | +1.24% ❌ |
+| **val_avg/mae_surf_p** | **65.3304** | **66.6101** | **+1.96%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 58.3067 | **+2.40%** ❌ |
+
+**Closed. LR axis FULLY CLOSED bilaterally at 1.5e-3.** Regression uniform across all splits (1.2–2.5%) — global undertraining penalty, not split-specific. Diagnostic: lr=1.25e-3 did reduce epoch-5 spike from +91 to +49 units (LR is proximate cause of spike), but the net training effect is negative (model needs the higher LR for productive gradient steps after spike).
+
+---
+
+## 2026-05-13 13:20 — PR #2238: rff-trainable-b (fern) — CLOSED (dead end, fixed B optimal)
+
+- **Branch:** `charliepai2g48h2-fern/rff-trainable-b`
+- **Hypothesis:** Allow gradient descent to fine-tune the RFF frequency matrix B (initialized at σ=3.0). B may self-organize toward task-optimal frequency coverage in 14 epochs.
+- **Metric artifacts:** `models/model-charliepai2g48h2-fern-rff-trainable-b-20260513-121815/metrics.jsonl`
+
+### Results vs. #1657 baseline (65.3304)
+
+| Split | Baseline | trainable-B | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 75.497 | +3.86% ❌ |
+| val_geom_camber_rc | 78.833 | 80.639 | +2.29% ❌ |
+| val_geom_camber_cruise | 44.439 | 44.447 | +0.02% ≈ |
+| val_re_rand | 65.359 | 65.670 | +0.48% ❌ |
+| **val_avg/mae_surf_p** | **65.3304** | **66.5632** | **+1.88%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 57.3451 | +0.71% ❌ |
+
+**Closed. Fixed B at σ=3.0 is optimal.** B drift trajectory showed slow convergence (B.std starts 2.95, drifts very gradually). Within 14 epochs, the gradient noise on B adds perturbation without sufficient benefit. Cruise nearly ties (0.02% regression) — frequencies optimal for cruise do not conflict with σ=3.0 prior; for single/rc, the B drift hurts. Fixed init provides a better prior than learned B within the 14-epoch budget. Frequency axis CLOSED.
+
+---
+
 ## 2026-05-13 12:30 — PR #2184: lr-2e-3-rff (alphonse) — CLOSED (dead end, LR ceiling locked across bases)
 
 - **Branch:** `charliepai2g48h2-alphonse/lr-2e-3-rff`
