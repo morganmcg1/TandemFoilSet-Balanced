@@ -28,10 +28,10 @@ Round 1 in-flight (8 PRs), most on stale baselines vs the current bf16 baseline:
 - **#1506 edward (n_hidden=192)**, **#1511 thorfinn (n_layers=7)**: pre-mask baseline — need full rebase
 - **#1589 tanjiro (AdamW betas)**: rebasing from pre-mask
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber
-- **#1712 askeladd (Huber β=0.25)**: from Huber baseline, pre-bf16
 - **#1735 alphonse (SwiGLU FFN)**: from Huber baseline, pre-bf16
 - **#1810 frieren (torch.compile + bf16)**: current bf16 baseline
-- **#1843 nezuko (Cosine T_max=18)**: current bf16 baseline (just assigned)
+- **#1843 nezuko (Cosine T_max=18)**: current bf16 baseline
+- **#1882 askeladd (Huber β=0.75)**: current bf16 baseline (just assigned, bounds β-axis from above)
 
 All got bf16 heads-up where applicable. New merge bar: **val < 89.60, test < 79.91, all four test splits finite.**
 
@@ -54,13 +54,14 @@ All got bf16 heads-up where applicable. New merge bar: **val < 89.60, test < 79.
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, rebasing onto mask-aware, bf16 heads-up posted |
 | #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) — bf16-revisit candidate |
 | #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask pre-Huber, bf16 heads-up posted |
-| #1712 | askeladd  | Huber β=0.25 (β-tune)            | WIP, pre-bf16, bf16 heads-up posted |
+| #1712 | askeladd  | Huber β=0.25 (β-tune)            | CLOSED (+6.6% val on bf16; bounds β from below) |
 | #1715 | frieren   | bf16 mixed-precision (AMP)       | **MERGED** 02:00 (val=89.60, test=79.91) |
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, pre-bf16, bf16 heads-up posted |
 | #1810 | frieren   | torch.compile (dynamic=True)     | WIP, current bf16 baseline |
-| #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, current bf16 baseline (just assigned) |
+| #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, current bf16 baseline |
+| #1882 | askeladd  | Huber β=0.75 (β-tune from above) | WIP, current bf16 baseline (just assigned) |
 
-**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 5 (Fourier, slice=128, surf_weight=25, mlp_ratio=4, warmup+lr=1e-3 — 3 of the closed are bf16-revisit candidates). **Open:** 8 (5 needing rebase + 3 on current baseline).
+**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 6 (Fourier, slice=128, surf_weight=25, mlp_ratio=4, warmup+lr=1e-3, β=0.25 — 3 of the closed are bf16-revisit candidates). **Open:** 8 (4 needing rebase + 4 on current baseline).
 
 ## Potential next research directions
 

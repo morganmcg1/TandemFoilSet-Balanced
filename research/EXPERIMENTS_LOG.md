@@ -332,3 +332,47 @@ Verified math: with T_max=50 and the run ending at epoch 18, end-of-run lr ≈ 0
 
 - **nezuko → PR #1843 (CosineAnnealingLR T_max=18, not 50):** their own suggested follow-up #1, isolated as a clean single-axis test. Keep lr=5e-4, no warmup, just shorten T_max to the bf16 reachable horizon. If schedule horizon is the lever, expected −1% to −4% val. If not, we've ruled out the schedule axis cleanly and can revisit peak-LR retesting (their suggestion #2 territory) on a properly-decayed baseline.
 
+
+## 2026-05-13 04:00 — PR #1712 closed: Huber β=0.25 (regression, β-axis bounded from below)
+
+- **Student:** willowpai2g48h3-askeladd
+- **Branch:** willowpai2g48h3-askeladd/huber-beta-0p25
+- **W&B runs:** `0b7iudhj` (seed 1), `06wfhjjd` (seed 2, BETTER) — both on bf16 baseline
+
+### Results vs current baseline (#1715: val=89.60, test=79.91)
+
+| Metric | β=0.25 seed 1 | β=0.25 seed 2 | #1715 baseline | Δ (better seed) |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | 99.18 | **95.53** | 89.60 | **+6.6%** |
+| `test_avg/mae_surf_p` | 87.58 | **87.43** | 79.91 | **+9.4%** |
+
+All 4 test splits finite. Best epoch shifted earlier (15-16 of 18, vs baseline 17/18) — consistent with weaker per-step learning signal on the bulk-error region.
+
+### Per-split test (seed 2 vs bf16 β=0.5 baseline)
+
+| Split | β=0.25 surf_p | β=0.5 baseline surf_p | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 116.36 | 91.40 | **+27.3%** |
+| geom_camber_rc | 92.41 | 89.33 | +3.4% |
+| geom_camber_cruise | 60.57 | 60.15 | +0.7% (≈ neutral) |
+| re_rand | 80.38 | 78.75 | +2.1% |
+
+Vol numbers stable (sanity check — surface-only loss change should not move vol much), confirming the change took effect only on surf gradients.
+
+### Conclusion — strong diagnostic value despite negative result
+
+The student's analysis identifies a sharp asymmetry: **in-distribution single_in_dist regresses 4-8× harder than the OOD splits**. This is direct evidence that more L1-like behavior starves the well-fit (smaller-error) samples of gradient signal, while only modestly affecting the heavy-tail OOD splits.
+
+Mechanism (verbatim from student):
+> With a tighter error distribution (bf16 baseline reaches better convergence than fp32 did), β=0.25 puts most errors in the linear (L1) regime. L1 has constant gradient magnitude, which slows fine-grained convergence on the well-behaved bulk and leaves systematic error on splits where every sample matters (single_in_dist).
+>
+> The "heavy tail" was partly an artifact of the fp32 baseline being undertrained. On the better-converged bf16 baseline, the gap between the easy and hard splits is much smaller — so the rationale for aggressive outlier suppression doesn't apply to the same degree.
+
+### Follow-up
+
+- **askeladd → PR #1882 (Huber β=0.75):** bounds the β-axis from above. Same single-axis two-line change. Three outcomes:
+  - **β=0.75 wins** → optimum has shifted upward with bf16; probe β=1.0 next.
+  - **β=0.75 loses by similar margin as β=0.25** → β=0.5 is the local optimum on bf16; close the β-axis and move on.
+  - **β=0.75 loses by a small margin** → β=0.5 is near-optimal; close the β-axis.
+- **Rule out β < 0.5** based on this PR's clean negative; no future PRs in [0.0, 0.5) territory until a heteroscedastic / per-channel β reformulation is proposed.
+
