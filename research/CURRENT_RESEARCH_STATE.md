@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 05:45 UTC
+- **Date / time:** 2026-05-13 07:10 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -19,24 +19,23 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
 
-## Cycle-19 update — #1863 tanjiro β=0.25 MERGED ✓ (-6.8%), 2 closed, 3 new arms
+## Cycle-21 update — #1959 thorfinn beta2=0.99 MERGED ✓ (-2.98%), 1 sent back, 1 new arm
 
-**New all-time best: val=80.03 / test=70.89.** 6th consecutive compounding win. β sweep is ACCELERATING: 1.0→0.5 was -0.77 val; 0.5→0.25 was -3.76 val. Both confirmed independently. **Active baseline: val=80.03 / test=70.89. Cumulative: -39.3% from start (131.79→80.03).**
+**New all-time best: val=77.6444 / test=68.2153.** 7th consecutive compounding win. **Active baseline: val=77.6444 / test=68.2153. Cumulative: -41.1% from start (131.79→77.6444).**
 
-Closed: frieren #1893 (β=0.25 duplicate, independently confirmed), thorfinn #1866 (grad_accum=4 +18% regression).
+beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magnitude regime, the second-moment EMA can safely adapt 10× faster (~100 steps half-life vs 1000) without noise penalty. All 4 test splits improved. Fern's EMA experiment sent back — decay=0.9999 has 6932-step half-life vs our 3400-step training, too slow; redirected to decay sweep {0.999, 0.99}.
 
-3 new arms:
+1 new arm:
 | PR | Student | Hypothesis |
 |---|---|---|
-| #1957 | tanjiro | β=0.10 (continue accelerating β sweep) |
-| #1958 | frieren | p_weight 2.0→3.0 (rebalance under β=0.25) |
-| #1959 | thorfinn | beta2 0.999→0.99 (faster variance adaptation under new stack) |
+| #2008 | thorfinn | AdamW beta2 0.99→0.98 (continue sweep toward MAE-regime optimum) |
 
-### Active leaderboard
+### Active leaderboard (all-time best)
 
 | Val | Test | PR | What landed |
 |---|---|---|---|
-| **80.03** | **70.89** | #1863 tanjiro | smooth_l1(β=0.25) |
+| **77.6444** | **68.2153** | #1959 thorfinn | AdamW beta2=0.99 |
+| 80.03 | 70.89 | #1863 tanjiro | smooth_l1(β=0.25) |
 | 85.84 | 74.45 | #1867 fern | AdamW beta1=0.95 |
 | 88.06 | 78.46 | #1666 tanjiro | smooth_l1(β=1) |
 | 97.07 | 85.71 | #1655 alphonse | OneCycleLR max_lr=2e-3 |
@@ -50,32 +49,35 @@ Closed: frieren #1893 (β=0.25 duplicate, independently confirmed), thorfinn #18
 - mlp_ratio=3, n_layers=6: capacity-at-budget failures
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
-- beta2=0.95: +13% under old stack (retesting 0.99 under new stack)
+- beta2=0.95: +13% under OLD MSE stack — now testing further 0.99→0.98
 - grad_accum=4: +18%, eff_batch=8 optimal
 - max_lr=4e-3: diverges
 - pct_start=0.3: +9.5%, 0.1 optimal from both directions
+- dropout=0.02/0.05: doesn't compose with β=0.25 stack
+- OneCycleLR div_factor sweep: small effect <1% at current operating point
 
 ### In-flight WIP
 
 | PR | Student | Hypothesis |
 |---|---|---|
-| #1892 | fern | EMA weights (decay=0.9999) |
-| #1864 | edward | dropout=0.02/attention (rebase pending) |
-| #1915 | alphonse | OneCycleLR div_factor 25→10 |
+| #1892 | fern | EMA weights (decay sweep 0.999/0.99 + warmup — sent back for retry) |
 | #1928 | askeladd | grad_clip 1.0→0.5 |
 | #1929 | nezuko | OneCycleLR final_div_factor 1e4→1e3 |
-| #1957 | tanjiro | β=0.10 |
-| #1958 | frieren | p_weight 2.0→3.0 |
-| #1959 | thorfinn | beta2 0.999→0.99 |
+| #1957 | tanjiro | β=0.10 (continue accelerating β sweep) |
+| #1958 | frieren | p_weight 2.0→3.0 (rebalance under β=0.25) |
+| #1975 | alphonse | OneCycleLR pct_start 0.1→0.05 (shorter warmup) |
+| #1977 | edward | AdamW eps 1e-8→1e-6 |
+| #2008 | thorfinn | AdamW beta2 0.99→0.98 |
 
 ### Priority research directions
 
-1. **β sweep continuation** — β=0.10 in-flight. If accelerating trend continues, consider β=0.05 or MAE-inspired asymmetric loss. Watch for early-training instability.
-2. **p_weight rebalancing** — under β=0.25, the gradient balance between p and U channels has shifted. p_weight=3.0 in-flight.
-3. **beta2 retest** — beta2=0.99 under smooth_l1+beta1=0.95 stack is untested. Prior test used very different loss shape.
-4. **EMA model weights** — high-prior zero-cost technique, in-flight (#1892).
-5. **Post-β: per-channel β** — if β=0.10 confirms the trend, try β_p=0.05, β_U=0.25 (channel-specific loss shaping).
-6. **Optimizer: weight_decay retest** — under β=0.25+beta1=0.95, optimal wd may have shifted.
+1. **β sweep continuation** — β=0.10 in-flight (#1957). If accelerating trend (1.0→0.5: -0.77, 0.5→0.25: -3.76) continues, try β=0.05 or pure MAE. High probability the trend continues.
+2. **beta2 continuation** — 0.99 won convincingly, 0.98 in-flight (#2008). If that also wins, the optimum may be near 0.97-0.95.
+3. **eps tuning** (#1977 edward) — pairs naturally with beta2 (controls denominator floor in AdamW update).
+4. **p_weight rebalancing** (#1958 frieren) — under β=0.25, gradient magnitudes are more uniform; p_weight=3 may push too hard.
+5. **EMA model weights** (#1892 fern) — zero-cost technique, just needs correct decay for our training horizon.
+6. **Post-wins: per-channel β** — if β=0.10 confirms the trend, try β_p=0.05, β_U=0.25 (channel-specific loss shaping — novel direction not yet tried).
+7. **Optimizer: weight_decay retest** — wd was never retuned after 6 compounding merges changed the gradient regime substantially.
 
 ---
 

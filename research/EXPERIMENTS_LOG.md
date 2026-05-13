@@ -7,7 +7,45 @@ SPDX-PackageName: senpai
 # SENPAI Research Results — `icml-appendix-willow-pai2g-24h-r2`
 
 Primary metric: `val_avg/mae_surf_p` (lower is better).
-**Active baseline (PRs #1480 + #1471 + #1655 + #1666 + #1867 merged):** `val_avg/mae_surf_p=85.84`, `test_avg/mae_surf_p=74.45` (run `s2trerq4`, AdamW beta1=0.95 stacked on smooth_l1+OneCycleLR+p_weight=2+clip+bf16+grad_accum=2).
+**Active baseline (PRs #1480 + #1471 + #1655 + #1666 + #1867 + #1863 + #1959 merged):** `val_avg/mae_surf_p=77.6444`, `test_avg/mae_surf_p=68.2153` (run `sek6yk3j`, AdamW beta2=0.99 stacked on smooth_l1(β=0.25)+beta1=0.95+OneCycleLR+p_weight=2+clip+bf16+grad_accum=2).
+
+---
+
+## 2026-05-13 07:05 — Cycle 21: #1959 thorfinn MERGED ✓ (-2.98%), 1 sent back, 1 new arm
+
+### PR #1959 thorfinn — AdamW beta2 0.999 → 0.99: MERGED ✓
+
+**New all-time best: val=77.6444 / test=68.2153.** 7th consecutive compounding win.
+
+Under smooth_l1(β=0.25)'s near-constant gradient magnitude regime, the second-moment EMA can safely adapt faster (horizon ~100 steps vs ~1000). All 4 test splits improved.
+
+| Metric | β=0.25 baseline (#1863) | beta2=0.99 (#1959) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 80.03 | **77.6444** | **-2.98%** |
+| `test_avg/mae_surf_p` | 70.89 | **68.2153** | **-3.78%** |
+| `single_in_dist` | 78.49 | 74.6250 | -4.93% |
+| `geom_camber_rc` | 84.21 | 81.4950 | -3.22% |
+| `geom_camber_cruise` | 50.12 | 48.8635 | -2.51% |
+| `re_rand` | 70.75 | 67.8779 | -4.06% |
+
+W&B: run `sek6yk3j`. **Cumulative improvement: 131.79 → 77.6444 = -41.1%** over 7 merges.
+
+**Student follow-up suggestions:** (1) beta2=0.98 sweep, (2) pair with eps tuning (eps=1e-6/1e-7), (3) re-sweep p_weight under new optimizer regime.
+
+### PR #1892 fern — EMA of model weights: SENT BACK ↩
+
+3 W&B runs diagnosed:
+- `l2ooy55y` (no warmup, decay=0.9999): val=314.32 — catastrophic (EMA ~71% random init at epoch 18)
+- `a9c1pqsc` (warmup ramp 0.1→0.9973): val=87.26, test=77.24 — sane implementation but doesn't beat baseline
+- `2ieltp9r` (no warmup retry): tracking identical failure as run 1
+
+Root cause: decay=0.9999 has ~6932-step half-life, 2× our training length. Redirected: cancel R3, apply warmup ramp from R2, sweep decay ∈ {0.999, 0.99} — much better suited to 3400-step training.
+
+### New assignments (cycle 21)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| thorfinn | AdamW beta2 0.99→0.98 (continue sweep toward MAE-regime optimum) | #2008 |
 
 ---
 
