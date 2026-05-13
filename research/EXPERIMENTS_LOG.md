@@ -7,6 +7,32 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 14:15 — PR #1747: slice_num=32 on Physics Attention (+ fourier_k=12 baseline) — MERGED
+
+- `willowpai2g24h3-alphonse/slice-num-sweep`
+- **Hypothesis:** Transolver's default `slice_num=64` may be overcomplete for Physics Attention with `n_hidden=128, dim_head=32`. Fewer slice tokens force denser slot packing and better node routing, especially on large cruise meshes (242K nodes).
+
+| Run | slice_num | val_avg | test_avg | Epochs | W&B |
+|-----|-----------|---------|----------|--------|-----|
+| Fourier-K12 baseline | 64 (default) | 73.16 | 63.89 | 19/50 | `osxp8woj` |
+| **slice_num=32 + fourier_k=12** | **32** | **65.40** | **56.11** | **23/50** | **`9sk1rwv1`** |
+
+Per-split val (`9sk1rwv1`):
+
+| split | baseline (slice=64) | slice=32 | Δ |
+|-------|---------------------|----------|---|
+| val_single_in_dist | 80.28 | 71.30 | −11.2% ✅ |
+| val_geom_camber_rc | 81.88 | 74.02 | −9.6% ✅ |
+| val_geom_camber_cruise | 57.96 | 49.63 | −14.4% ✅ |
+| val_re_rand | 72.52 | 66.63 | −8.1% ✅ |
+| **val_avg** | **73.16** | **65.40** | **−10.6% ✅** |
+
+Per-split test (`9sk1rwv1`): 59.73 / 65.09 / 41.08 / 58.54 → test_avg 56.11 (−12.2% vs 63.89).
+
+- **Merge decision:** val 65.40 clears merge bar ≤65.8 (≥10% gain over 73.16). All 4 splits improve on both val and test. MERGED as clean single-seed winner.
+- **Analysis:** Reducing slice tokens from 64→32 forces each token to aggregate a denser set of nodes. Default slice_num=64 was overcomplete relative to dim_head=32 — the in_project_slice Linear(32→64) produced too many near-empty token slots. Biggest gain on cruise (242K nodes, −14.4%) where routing overhead was highest. EMA contribution confirmed independent (test_no_ema=70.62 vs EMA=56.11, +20.5%). Val curve still monotonic at epoch 23 → cap is still binding constraint.
+- **New baseline:** val 65.40 / test 56.11. Reproduce: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32`
+
 ## 2026-05-13 14:05 — PR #1986: Fourier positional features for (x,z) node coordinates — MERGED
 
 - `willowpai2g24h3-tanjiro/fourier-positional-features`

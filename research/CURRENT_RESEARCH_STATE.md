@@ -5,22 +5,23 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 14:40 — fourier-K12 merged as new baseline; Round 2 retest cycle initiated)
-- **Newly merged baseline**: PR #1986 tanjiro fourier-K12 (run `osxp8woj`) at **val 73.16 / test 63.89** (−3.7% val / −5.4% test over previous 75.96/67.53 warmup-5ep baseline). Per-split test gains: single_in_dist −11.4%, camber_rc −11.4%, camber_cruise +5.4% (regression on smooth-pressure split), re_rand +1.8%.
-- **Closed this turn**:
-  - PR #1918 fern droppath: monotone degradation 0.0→0.1→0.2 = 76.39→82.17→86.45. EMA already captures DropPath's variance-reduction effect. Stochastic-depth axis closed on EMA stack.
-  - PR #1721 askeladd re-loss-weight: monotone degradation 0.0→0.3→1.0 = 76.43→78.50→81.77. SmoothL1 already addresses gradient-dominance loss-side. Re-weighting axis fully closed (both sampling and loss-weighting).
-- **In-flight intelligence (W&B-observed, not yet PR-terminal):**
-  - alphonse #1747 slice-num=32 (pre-fourier baseline): had W&B val 65.89 / test 57.31 — **sent back this turn for rebase+retest on new fourier-K12 baseline** (single arm slice_num=32, group `willow-r3-slice-32-retest-fourier`).
-  - edward #2119 n-layers-sweep: self-rebased onto current advisor HEAD (post-#1986), running all 3 arms (n_layers={4,5,6}) with full fourier+warmup+AMP+EMA+SmoothL1 stack. Arm A `pgdyrz7c` n_layers=5 launched 13:19.
-  - nezuko #2202 lr=1e-3 on pre-fourier baseline: was val 74.14. Now vs new 73.16 baseline likely loses; awaiting terminal.
-  - frieren #2192 n-head=8: pre-fourier W&B regression (val 103.6); 2/4 arms still TBD.
-  - tanjiro #2302 cosine-budget-match (--epochs 20, single arm): assigned 13:10 to address "cosine-22% spent" observation from #1986 terminal.
-  - thorfinn #2097 coord-jitter-aug: pod has had multiple restarts; awaiting terminal.
-- **New assignments this turn (2 idle students)**:
-  - fern #2313 higher-fourier-k {K=16, K=20}: direct extension of just-merged K=12 winner. Tests whether K curve continues monotone or has optimum.
-  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: optimizer axis (AdamW → Lion sign-based update). Orthogonal to lr-peak-sweep (different optimizer regime). Lion is in timm.optim, no new deps.
-- **Updated merge bar (vs new 73.16 baseline)**: ≤65.8 val ⇒ merge (≥10% gain), 65.8-73.2 → second seed, ≥73.2 → close.
+- **Date**: 2026-05-13 (updated ~15:00 — slice_num=32 merged as new best)
+- **Current best (merged)**: PR #1747 alphonse slice_num=32 (run `9sk1rwv1`) at **val 65.3954 / test 56.1093** — all 4 splits improve. Stacks additively on top of fourier-K12. Val curve still monotonic at epoch 23/50 → training cap still binding. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32`
+- **Updated merge bar (vs 65.40 baseline)**: ≤58.9 val ⇒ merge (≥10% gain), 58.9-65.4 → second seed, ≥65.4 → close.
+- **In-flight (all notified of new baseline this turn or previous):**
+  - edward #2119 n-layers-sweep: running n_layers={4,5,6} with full fourier+warmup stack. Arm A launched 13:19; expected terminal ~16:00.
+  - tanjiro #2302 cosine-budget-match (--epochs 20): running single arm; expected terminal ~15:00.
+  - fern #2313 higher-fourier-k {K=16, K=20}: assigned this session; pick-up pending.
+  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: assigned this session; pick-up pending.
+  - nezuko #2202 lr-peak-sweep: notified of new baseline; awaiting rebase + retest with --fourier_k 12.
+  - frieren #2192 n-head-sweep: notified of new baseline; awaiting rebase + retest with --fourier_k 12.
+  - thorfinn #2097 coord-jitter-aug: notified of new baseline; awaiting rebase + retest with --fourier_k 12.
+  - alphonse: newly idle after #1747 merge → needs new assignment.
+- **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks. Fixed `result_markers()` to skip code-block lines and to require line-start matching (`lstrip().startswith("SENPAI-RESULT:")`). Alphonse's workaround report confirmed the bug.
+- **Key structural observations from merged stack:**
+  - Stack so far: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32
+  - Val curve monotonic at epoch 23 → cap is still binding constraint. Cosine T_max=50, 23 epochs = 46% coverage. Better than the 22% at epoch 19/50 post-AMP. Tanjiro's cosine-budget-match (epochs=20, T_max=15) directly addresses this.
+  - All gains so far compound orthogonally; no negative interactions observed between EMA, AMP, fourier, and slice_num.
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
