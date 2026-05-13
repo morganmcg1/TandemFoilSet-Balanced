@@ -64,15 +64,15 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, bias=True):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
-        self.linear_post = nn.Linear(n_hidden, n_output)
+        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden, bias=bias), act_fn())
+        self.linear_post = nn.Linear(n_hidden, n_output, bias=bias)
         self.linears = nn.ModuleList(
-            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
+            [nn.Sequential(nn.Linear(n_hidden, n_hidden, bias=bias), act_fn()) for _ in range(n_layers)]
         )
 
     def forward(self, x):
@@ -94,14 +94,14 @@ class PhysicsAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
-        self.in_project_x = nn.Linear(dim, inner_dim)
-        self.in_project_fx = nn.Linear(dim, inner_dim)
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
+        self.in_project_x = nn.Linear(dim, inner_dim, bias=False)
+        self.in_project_fx = nn.Linear(dim, inner_dim, bias=False)
+        self.in_project_slice = nn.Linear(dim_head, slice_num, bias=False)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim, bias=False), nn.Dropout(dropout))
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -151,7 +151,7 @@ class TransolverBlock(nn.Module):
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, bias=False)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -457,6 +457,28 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+
+# --- Bias-free Linears diagnostic (LLaMA convention) ---
+bias_params_total = sum(p.numel() for n, p in model.named_parameters() if n.endswith(".bias"))
+print(f"Total bias params (expect LayerNorm betas + mlp2 biases + preprocess biases only): {bias_params_total}")
+for _i, _blk in enumerate(model.blocks):
+    _qkv_bias = _blk.attn.to_q.bias is not None
+    _proj_bias = _blk.attn.to_out[0].bias is not None
+    _inx_bias = _blk.attn.in_project_x.bias is not None
+    _inslice_bias = _blk.attn.in_project_slice.bias is not None
+    _mlp_w1_bias = _blk.mlp.linear_pre[0].bias is not None
+    _mlp_w2_bias = _blk.mlp.linear_post.bias is not None
+    print(
+        f"Block {_i}: attn.to_q.bias={_qkv_bias} attn.in_project_x.bias={_inx_bias} "
+        f"attn.in_project_slice.bias={_inslice_bias} attn.to_out.bias={_proj_bias} "
+        f"mlp.w1.bias={_mlp_w1_bias} mlp.w2.bias={_mlp_w2_bias}"
+    )
+print(f"Total params: {n_params}")
+print(
+    "Bias-free Linears (LLaMA convention): all per-block attention + MLP Linears use bias=False; "
+    "LayerNorm affine UNCHANGED; mlp2 output bias UNCHANGED; preprocess bias UNCHANGED; "
+    "baseline to beat: val_avg/mae_surf_p < 33.4935"
+)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
