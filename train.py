@@ -377,7 +377,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 1e-3
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 8
     surf_weight: float = 10.0
     epochs: int = 50
     eval_every_n_epochs: int = 3  # fp32 eval is ~45s/epoch overhead; eval less often to free epochs
@@ -445,6 +445,7 @@ model = torch.compile(model, mode="default", dynamic=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 steps_per_epoch = max(1, len(train_loader))
+print(f"steps_per_epoch (len(train_loader)): {steps_per_epoch}  | batch_size: {cfg.batch_size}")
 # Size OneCycleLR to the wall-clock-achievable budget under torch.compile (~29 epochs
 # in 30 min at slice_num=128) so the decay tail actually fires within the timeout —
 # the super-convergence mechanism depends on reaching it. Per advisor feedback on PR #1404.
@@ -477,6 +478,7 @@ run = wandb.init(
         "pct_start": 0.05,
         "div_factor": 10.0,
         "final_div_factor": 1e3,
+        "steps_per_epoch": steps_per_epoch,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
