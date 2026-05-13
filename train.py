@@ -392,7 +392,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
-    ema_decay: float = 0.999
+    ema_decay: float = 0.998
     n_layers: int = 5
     n_hidden: int = 128
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
