@@ -783,3 +783,72 @@ Per-split signs are uniformly bad (no compensating wins on any split), consisten
 - Branch: willowpai2g48h1-frieren/ema-weights-decay-0999
 - Hypothesis: Maintain a shadow copy of model weights updated as ema = 0.999*ema + 0.001*model per optimizer step; evaluate on the EMA copy. Averages over ~1000-step horizon (final ~40% of training) — recovers the trajectory center rather than the noisy late-cosine endpoint. Especially valuable under Lion's uniform-magnitude sign updates which produce endpoint variance even at the LR floor. ~6 MB memory overhead, zero compute overhead, orthogonal to every current lever.
 - Target: test_avg/mae_surf_p < 80.62
+
+---
+
+## 2026-05-13 08:30 — PR #2009: Grad accum=4 (eff_bs=16) — CLOSED (step starvation)
+- Branch: willowpai2g48h1-askeladd/grad-accum-4
+- Hypothesis: accum=4 further reduces padding noise vs accum=2; tests where gradient-quality saturates vs step-count starvation.
+- W&B run: tutefqn0 (askeladd, grad-accum-4-trial-1, group `gradient-accumulation`)
+- Config: bs=4, accum=4 (eff_bs=16), Lion lr=1.5e-4, all other defaults
+
+| Metric | accum=4 | accum=2 baseline (80.62) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **89.01** | **80.62** | **+10.40%** |
+| val_avg/mae_surf_p (best ep14) | 99.64 | 90.82 | +9.72% |
+| test_single_in_dist | 96.22 | 82.23 | +17.01% |
+| test_geom_camber_rc | 101.97 | 93.60 | +8.94% |
+| test_geom_camber_cruise | 66.28 | 61.57 | +7.65% |
+| test_re_rand | 91.59 | 85.06 | +7.67% |
+
+- 14 epochs (timeout-stopped, 127s/epoch); total optimizer steps **1316** (exact 2× fewer than accum=2's 2632 — same as failed bs=8 #1877)
+- Peak GPU **93.7 GB** (higher than predicted — variable-mesh padding scales with eff_bs)
+- Final LR: 2e-5 (cosine reached late-stage)
+
+**Analysis (student diagnosis adopted)**: Step-count starvation now dominates beyond accum=2. The gradient-quality benefit from accum saturated at eff_bs=8. accum=4 trades 50% of optimizer steps for cleaner gradients — and the trade is unfavorable. Per-split signature is roughly uniform (+7.6 to +17%), with in_dist hit hardest (matches step-starvation pattern: in-distribution benefits most from longer low-LR fine-tuning).
+
+Interesting datapoint: peak GPU 93.7 GB at accum=4 is much higher than expected from naive micro-batch view. Variable-mesh padding peaks must scale with grad accumulator state size. Parked as future investigation.
+
+**Gradient accumulation lever CLOSED at accum=2 (optimum).** accum=3 spot-check (eff_bs=12) would refine the bracket but is expected to be midway and not worth a slot.
+
+**Action**: Closed. Assigned askeladd lion-lr-2.1e-4-sqrt2-scaling (#2088): Lion lr 1.5e-4→2.1e-4 (sqrt(2) scaling per Lion-paper rule, untested in the grad-accum=2 stack).
+
+---
+
+## 2026-05-13 08:30 — PR #1798: Grad-norm-clip max_norm=1.0 — CLOSED (wrong baseline, re-test needed)
+- Branch: willowpai2g48h1-tanjiro/grad-norm-clip
+- Hypothesis: clip_grad_norm with max_norm=1.0 as tail stabilizer for n_hidden=192 + bf16 + cosine refinement.
+- W&B run: errhax66 (tanjiro, grad-norm-clip-trial-1, group `grad-norm-clip`)
+- Config: PR branch did NOT rebase before run → tested on **pre-Lion AdamW config** (lr=7e-4, accum=1), not current Lion+grad-accum stack.
+
+| Metric | clip=1.0 | OLD AdamW baseline (99.69) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **79.91** | **99.69** | **−19.8%** |
+| val_avg/mae_surf_p (best ep15) | 91.31 | 111.32 | −18.0% |
+| test_single_in_dist | 89.82 | 116.57 | −23.0% |
+| test_geom_camber_rc | 96.94 | 108.61 | −10.7% |
+| test_geom_camber_cruise | 54.62 | 74.18 | −26.4% |
+| test_re_rand | 78.26 | 99.41 | −21.3% |
+
+- 15/18 epochs at ~120s/epoch (timeout cap)
+- **Clip fired on 100% of batches** at all epochs (raw gradient norms 25-550 throughout)
+- Per-epoch grad diagnostics: mean‖g‖ from 76.67 (ep1) → 24.90 (ep15); max‖g‖ stayed 270-550
+
+**Analysis (mechanism diagnosis)**: With max_norm=1.0 firing 100% of batches at grad norms 25-550, AdamW becomes effectively **sign-of-gradient** — combining unit-norm gradients with AdamW's per-parameter adaptive scaling. This approximates Lion's sign-of-momentum mechanism via a different optimizer route, landing in the same ~80 test neighborhood. The result is genuinely interesting analytically (confirms that Lion's win is from the *normalization*, not the *symbolic search*) but **cannot be merged** — the branch is on the old AdamW config (lr=7e-4, no Lion, no grad-accum); merging would replace the entire current Lion+grad-accum stack.
+
+**Per-split sig** (uniform 10-26% gains across all splits including in_dist) confirms regularizer-not-stabilizer reading — but the *tail-stabilizer* hypothesis (the original intent) was not actually tested because clip=1.0 was orders of magnitude below natural norms.
+
+**Action**: Closed (merge-blocking conflict + wrong-baseline confound). Assigned tanjiro grad-norm-clip-5-on-lion-stack (#2090): grad_clip_max_norm=5.0 on current Lion+grad-accum=2 stack. clip=5.0 should fire ~10-15% of batches (rare-event "real" tail clipping), tests whether residual variance in Lion's late-cosine endpoint comes from outlier batches.
+
+---
+
+## 2026-05-13 08:30 — PR #2088 (NEW): Lion lr 1.5e-4 → 2.1e-4 (sqrt(2) scaling for eff_bs=8)
+- Branch: willowpai2g48h1-askeladd/lion-lr-2.1e-4-sqrt2-scaling
+- Hypothesis: Lion's original paper recommends lr scale as sqrt(batch_size). Going eff_bs 4→8 (via grad-accum=2 merge) → optimal lr should scale 1.5e-4 × sqrt(2) = 2.1e-4. Untested in current merged stack — lr was inherited from pre-grad-accum baseline. Zero overhead, single hyperparameter change.
+- References: Chen 2023 (Lion paper), McCandlish 2018 (critical batch size theory).
+- Target: test_avg/mae_surf_p < 80.62
+
+## 2026-05-13 08:30 — PR #2090 (NEW): Grad-norm-clip max_norm=5.0 on Lion+grad-accum stack
+- Branch: willowpai2g48h1-tanjiro/grad-norm-clip-5-on-lion-stack
+- Hypothesis: With max_norm=5.0 (vs Lion-implicit-normalized inputs), clipping fires on ~10-15% of batches — only genuine outlier-mesh-induced spikes. Tests the *original* tail-stabilizer mechanism that PR #1798's clip=1.0 over-aggressive setting couldn't actually probe. clip on *accumulated* gradient (post-accum, pre-Lion-momentum) so it intercepts spikes before sign-momentum absorbs them. Includes detailed per-epoch grad_norm diagnostics.
+- Target: test_avg/mae_surf_p < 80.62 (new baseline from #1980)

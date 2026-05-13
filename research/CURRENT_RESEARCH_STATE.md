@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 07:45 — willow-pai2g-48h-r1, round 2 continued. **CURRENT BEST: test=80.62 (PR #1980 grad-accum=2)**. Cumulative gain from PR #1391: 121.28 → 80.62 = −33.5%. Two PRs closed: #1945 (n_hidden=256 budget mismatch +28%) and #1887 (Fourier L=16 frequency aliasing +4.6%). Round 3 in motion with #2047 (alphonse n_hidden=224 rescaled) and #2050 (frieren EMA).
+- 2026-05-13 08:30 — willow-pai2g-48h-r1, round 2 continuing into round 3. **CURRENT BEST: test=80.62 (PR #1980 grad-accum=2)**. Cumulative gain from PR #1391: 121.28 → 80.62 = −33.5%. Two more closes this cycle: #2009 (grad-accum=4 +10.4% step starvation) and #1798 (clip=1.0 on pre-Lion AdamW config — interesting analytical result but cannot be merged). Round 3 reassignments: #2088 (askeladd Lion lr=2.1e-4 sqrt(2) scaling) and #2090 (tanjiro grad-clip=5.0 on Lion stack).
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #1980 merged — gradient accumulation accum=2)
@@ -27,7 +27,8 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 | askeladd | #1771 | schedule-realigned | **CLOSED** ✗ | T_max=14 worse than T_max=18. |
 | askeladd | #1877 | lion-bs-8-sqrt2-lr | **CLOSED** ✗ | +6.5% regression. Step-count starvation. |
 | askeladd | #1980 | gradient-accumulation | **MERGED** ✓ | test **80.62** (−3.77% vs 83.77). New best! in_dist −8.7%, rc −5.2%. |
-| askeladd | #2009 | grad-accum-4 | **wip** (new) | accum=4, eff_bs=16. Tests noise-vs-starvation limit at higher accumulation. |
+| askeladd | #2009 | grad-accum-4 | **CLOSED** ✗ | +10.4%. Step starvation dominates (1316 steps vs accum=2's 2632). |
+| askeladd | #2088 | lion-lr-2.1e-4-sqrt2-scaling | **wip** (new) | Lion lr 1.5e-4→2.1e-4 sqrt(2) scaling for eff_bs=8. |
 | edward | #1643 | mlp-ratio-4 | **CLOSED** ✗ | +10% regression. Per-epoch cost +11% → 13 epochs. |
 | edward | #1973 | cosine-eta-min | **CLOSED** ✗ | +2.94%. eta_min=lr/10 raised LR 75% higher than expected at ep14. |
 | edward | #2010 | swiglu-activation | **wip** (new) | GELU→SiLU in all MLP blocks. On grad-accum=2 stack. |
@@ -38,7 +39,8 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 | frieren | #2050 | ema-weights-decay-0999 | **wip** (new) | EMA decay=0.999 for eval. Trajectory-center smoother for Lion late-cosine bounce. |
 | nezuko | #1862 | n-layers-6-fourier-wider | **CLOSED** ✗ | +14.7%. Depth dead (horizon-vs-depth). |
 | nezuko | #1967 | slice-num-96 | **wip** | slice_num 64→96. In-flight (91 GB GPU). |
-| tanjiro | #1798 | grad-norm-clip | **wip** | max_norm=1.0. In-flight (65 GB GPU). |
+| tanjiro | #1798 | grad-norm-clip | **CLOSED** ✗ | test=79.91 vs OLD AdamW 99.69 (-19.8%). Branch never rebased; tested on pre-Lion config. Cannot merge — would replace Lion+grad-accum stack. Mechanism: clip=1.0 fires 100% of batches → AdamW≈Lion via different route. |
+| tanjiro | #2090 | grad-norm-clip-5-on-lion-stack | **wip** (new) | max_norm=5.0 on accumulated grad in Lion+grad-accum stack. Rare-event tail stabilizer test. |
 | thorfinn | #1395 | lion-optimizer | **MERGED** ✓ | test 83.77 (−10.2% vs Fourier baseline). |
 | thorfinn | #1876 | n-head-8 | **CLOSED** ✗ | +25.4%. head_dim<32 + per-epoch cost. |
 | thorfinn | #1971 | lion-beta2-0999 | **CLOSED** ✗ | +5.99%. Horizon (~1000 steps) exceeded training budget. |
@@ -63,6 +65,8 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 16. **Lion beta2 horizon lever CLOSED**: beta2=0.999 horizon (~1000 steps) exceeds our 1170-1316 step training budget. Buffer never equilibrates → sign-vote signal degradation across all splits. beta2=0.99 is well-matched to truncated training.
 17. **Width scaling has O(n_hidden^1.4) per-epoch cost**: n_hidden=256 broke the 30-min budget (153 s/epoch vs 96s at 192). Width experiments now require *co-tuned epochs/T_max* to be a fair test — pure swap-in cannot disentangle capacity from undertraining.
 18. **Fourier ceiling lever CLOSED at L=8**: L=16 produces frequency aliasing on irregular CFD mesh (sparse-region Nyquist limit exceeded). Per-axis Fourier L parked as future direction.
+19. **Gradient accumulation lever CLOSED at accum=2**: accum=4 (eff_bs=16) regresses +10.4% from step starvation (1316 steps, same as failed bs=8 #1877). Gradient-quality benefit saturates at eff_bs=8; further accumulation buys nothing on this budget.
+20. **Grad-clip=1.0 on AdamW ≈ Lion via different mechanism (analytical finding)**: With raw grad norms 25-550, clip=1.0 firing 100% of batches turns AdamW into sign-of-gradient with per-param scaling. Lands in same ~80 test neighborhood as Lion+grad-accum. Confirms that **normalization** (not Lion's symbolic search) is what drives the optimizer-class win. **Important nuance**: this was tested on stale branch (pre-Lion), so not a current-baseline result.
 
 ## Active hypotheses in-flight
 | PR | Student | Hypothesis | Status | Expected gain |
@@ -73,22 +77,25 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 | #1969 | fern | Decoupled weight decay | Training (94 GB) | −1% to −4% |
 | #1798 | tanjiro | Grad-norm-clip | Training (65 GB) | −1% to −3% |
 | #1971 | thorfinn | lion_beta2=0.999 | Training (94 GB) | −2% to −5% |
-| #2009 | askeladd | Grad-accum=4 (eff_bs=16) | Starting | win or informative loss |
 | #2010 | edward | SiLU activation (GELU→SiLU) | Starting | −0.5% to −2.5% |
 | #2030 | thorfinn | DropPath rate=0.1 linear schedule | Starting | −0.5% to −2.5% |
+| #2088 | askeladd | Lion lr=2.1e-4 (sqrt(2) scaling for eff_bs=8) | Starting | −0.5% to −2% |
+| #2090 | tanjiro | Grad-clip max_norm=5.0 on Lion+grad-accum stack | Starting | −0.5% to −2% |
 
 ## Key open questions
 1. **Does moderate width (n_hidden=224) compound with budget-aligned cosine (#2047)?** Tests whether ANY width gain fits in 30-min budget.
 2. **Does EMA weight averaging help under Lion (#2050)?** Tests endpoint smoothing for sign-momentum late-cosine bounce.
-3. **Do the in-flight PRs (#1967, #1969, #1798) beat the NEW grad-accum baseline?** They were assigned before the merge — their results vs old baseline (83.77) may need reinterpretation.
-4. **Grad-accum=4 saturation test (#2009)**: If accum=4 regresses, accum=2 is the optimal lever value.
+3. **Does Lion lr=2.1e-4 (sqrt(2) scaling) beat lr=1.5e-4 (#2088)?** Tests whether eff_bs=8 needs higher lr per Lion-paper rule.
+4. **Does grad-clip=5.0 on Lion stack compound (#2090)?** Tests rare-event tail stabilizer (Lion already sign-normalizes, so unclear if marginal).
 5. **Does DropPath (#2030) compose with Lion+grad-accum?** Pure structural regularizer test.
 6. **Does SiLU (#2010) beat GELU?** Free activation swap, well-validated in modern stacks.
+7. **Do still-in-flight #1967 (slice_num=96) and #1969 (decoupled-wd) beat the NEW grad-accum baseline?** Assigned before merge — results may need reinterpretation.
 
 ## Next milestones
 - n_hidden=224 with budget-aligned cosine (alphonse #2047) — width lever clean retest
 - EMA weights (frieren #2050) — orthogonal trajectory smoother
 - SiLU result (edward #2010) — fast, orthogonal
-- Grad-accum=4 saturation test (askeladd #2009)
 - DropPath stochastic depth (thorfinn #2030) — pure structural regularizer
-- Decoupled weight decay (fern #1969), slice_num=96 (nezuko #1967), grad-norm-clip (tanjiro #1798) — all in-flight
+- Lion lr=2.1e-4 sqrt(2) scaling (askeladd #2088) — most-anticipated optimizer retune
+- Grad-clip=5.0 on Lion (tanjiro #2090) — rare-event tail test
+- Decoupled weight decay (fern #1969), slice_num=96 (nezuko #1967) — both in-flight
