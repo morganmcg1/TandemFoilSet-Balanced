@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-14 05:30 UTC — Round 56
+
+One review-ready LOSS closed (24th closed taxon: input-encoding-noise interferes with slice-routing softmax) + 1 fresh hypothesis assigned (first slow-fast 2-loop meta-optimization probe).
+
+### PR #2509 frieren: Fourier feature encoding K=4 — CLOSED (INPUT-ENCODING AXIS)
+
+- **Branch:** charliepai2g48h5-frieren/fourier-features-k4
+- **Hypothesis:** NeRF-style Fourier features (sin/cos at frequencies [π, 2π, 4π, 8π]) on raw spatial coords (x, y); 16 extra channels concat to 24→40 preprocess input; targets val_geom_camber_rc OOD via high-frequency spatial basis.
+- **Metrics artifact:** `models/model-charliepai2g48h5-frieren-fourier-features-k4-20260513-184209/metrics.jsonl`
+
+| Metric | FF K=4 | Baseline #2307 (no FF) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **48.2424** | 42.3455 | **+13.94% (LOSS)** |
+| `test_avg/mae_surf_p` | **43.0564** | 38.5059 | **+11.81% (LOSS)** |
+| `val_single_in_dist` | 43.612 | 35.478 | **+22.93%** (WORST) |
+| `val_geom_camber_rc` | 64.437 | 60.831 | **+5.93%** (LEAST) |
+| `val_geom_camber_cruise` | 32.454 | 27.652 | +17.37% |
+| `val_re_rand` | 52.467 | 45.421 | +15.51% |
+
+- **54/70 epochs (timeout-capped), best=ep50**; trajectory ep49-54 plateau.
+- **DIAMETRIC OPPOSITE of predicted signature:** val_single_in_dist worst (+22.93%, predicted least), val_geom_camber_rc least (+5.93%, predicted best help). If FF unlocked high-frequency representation, camber_rc would have moved most. Instead in-dist regresses hardest — smoking gun for "added channels are noise, not signal."
+- **FF sanity diagnostic:** L2-per-node = √8 = 2.828 (matches sin²+cos² identity); FF values in [-1, 1]; implementation correct.
+- **Mechanism:** input dim 24→40 (+67%, not +40% as PR body estimated). The orthogonal-init `PhysicsAttention.in_project_slice` projection now routes 40-dim embeddings; the 16 new periodic channels don't correlate with geometric domain structure used for routing. The saf channels (2-3) and dsdf rays (4-11) already encode rich geometric info that subsumes NeRF-style coord encoding. The preprocess Linear was NOT the bottleneck — 4 TransolverBlocks already learn adequate spatial-frequency basis.
+- **24th distinct closed-axis taxon: input-encoding-noise interferes with slice-routing softmax.** Input-encoding axis closes at K=0 for this stack at 24-channel input width.
+- Student's insight: "slice-routing axis is more fertile" — `in_project_slice` is sensitive to input scale/structure. Future input-side probes should pair with frozen-routing diagnostic.
+
+### New assignment
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2550 | frieren | Lookahead(k=5, α=0.5) wraps AdamW: slow-fast 2-loop variance reduction; eval on slow weights (--epochs 70) | **First slow-fast meta-optimization probe**; Zhang et al. 2019 NeurIPS ~6000 cites; AdamW for k=5 inner steps then slow weights pull toward fast by α=0.5; cleanly distinct from in-flight EMA (continuous α=0.999, ~1000-step vs k=5), Lion (base-optimizer replacement), CLOSED SAM (gradient ascent), and 8 optimizer-family closures |
+
+---
+
 ## 2026-05-14 05:00 UTC — Round 55
 
 One review-ready LOSS closed (23rd taxon: auxiliary-objective with trivially-satisfied target — early-training inductive-bias damage) + 1 stale_wip closed and retried + 1 fresh hypothesis assigned (FIRST weight-averaging probe in launch).
