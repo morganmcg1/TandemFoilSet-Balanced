@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-05-13 [Round 65] UTC — Round 65
+
+### PR #2541 thorfinn: NormFormer Sandwich Norm RETRY-1 — CLOSED (2nd consecutive stale_wip; axis abandoned)
+
+- **Branch:** `charliepai2g48h5-thorfinn/normformer-sandwich-retry1`
+- **Hypothesis:** Add Pre-LN + Post-LN (sandwich norm) to each residual block; ln_post_attn + ln_post_mlp per block.
+- **History:** #2480 stale (round-54) → #2541 stale (round-55). Two non-starts.
+- **Result:** Not run. Only advisor placeholder commit on both attempts. ~10 rounds without pickup.
+
+**Analysis:** Following split-decoder precedent (3 stales → abandoned), NormFormer axis abandoned after 2 stales. The implementation requires careful ln insertion per block, which may be the pickup blocker. **Axis abandoned.**
+
+**Action:** Closed. Pivoted thorfinn to #2597 n_head=4 sweep — first attention-shape probe in this launch; single-value change; zero implementation complexity.
+
+---
+
 ## 2026-05-13 [Round 64] UTC — Round 64
 
 ### PR #2536 tanjiro: Split decoder (retry-2) — CLOSED (3rd consecutive stale_wip; axis abandoned)
