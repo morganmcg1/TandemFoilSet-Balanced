@@ -166,7 +166,7 @@ class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
                  stoch_depth_prob: float = 0.0,
-                 layer_scale_init: float = 0.1):
+                 layer_scale_init: float = 0.05):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
