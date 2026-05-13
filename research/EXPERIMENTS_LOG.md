@@ -2,6 +2,97 @@
 
 ---
 
+## 2026-05-13 [Round 70] UTC — Round 70
+
+### PR #2607 askeladd: slice_num=48 sweep — CLOSED (LOSS; 33rd taxon)
+
+- **Branch:** `charliepai2g48h5-askeladd/slice-num-48`
+- **Hypothesis:** Double PhysicsAttention slice routing capacity 24→48; tests if attention capacity is bottleneck after #2589 γ_attn growth diagnostic.
+
+| Metric | slice_num=48 (this) | Baseline #2553 (slice=24) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **34.8779** | 33.4935 | **+4.13% LOSS** |
+| `test_avg/mae_surf_p` | **30.2161** | 28.6279 | **+5.55% LOSS** |
+| Param count actual | 332,939 | 328,235 | +4,704 (PR estimate was 2× too high) |
+| Best epoch | 61/70 (timeout) | 70/70 | — |
+
+Per-split val (uniform regression):
+
+| Split | val (this) | val (#2553) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 26.9210 | 25.7691 | +4.47% |
+| `geom_camber_rc` | 51.4090 | 50.5514 | +1.70% |
+| `geom_camber_cruise` | **22.2427** | 20.2827 | **+9.66% (WORST; OPPOSITE of prediction)** |
+| `re_rand` | 38.9388 | 37.3708 | +4.19% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-askeladd-slice-num-48-20260513-220927/metrics.jsonl`
+
+**Analysis (excellent student diagnostic):** Three independent explanations consistent with the data:
+
+1. **Softmax temperature absorbs extra slices.** PhysicsAttention has a learnable temperature scaling slice softmax — doubling slice_num doesn't force the model to use new slices; capacity addition without forced diversity creates a harder optimization landscape with no extra signal.
+2. **OOD-favoring prediction failed INVERSELY.** Strongest regression on val_geom_camber_cruise (+9.66%) — the OOD split closest to in-distribution. OOD splits benefit from invariances, not from more partitions to over-fit per-region.
+3. **Capacity-mismatch with hidden dim.** At n_hidden=96/dim_head=48, splitting into 48 slices means each slice averages ~31 nodes; noisier per-slice attention.
+
+**Connection to #2589:** This result is EVIDENCE AGAINST the "attention representational capacity bottleneck" interpretation of #2589's γ_attn 2.7× growth. If capacity were the limiter, doubling slice count should have helped at least the OOD splits. It didn't. The γ_attn growth in #2589 more likely reflects compensation for the missing post-attention MLP correction.
+
+**Param estimate correction:** Student rightly flagged my PR body's "+9,216 params" estimate was 2× too high. Actual delta +4,704 params. The slice projection is one Linear per BLOCK (operating over heads), not one per HEAD. With dim_head=48, slice_num 24→48: per-block delta = 48×48+48 − (48×24+24) = 1,176 × 4 blocks = +4,704. Noted for future PR body capacity-budget framing.
+
+**33rd closed taxon:** slice-up at slice_num>24 on Transolver+L1+Lion; capacity addition without forced diversity creates harder optimization landscape; OOD splits hurt MORE (not less) by finer partitioning. The slice-num axis is fully exhausted at slice_num=24 across the bracket {16, 24, 48, 96}.
+
+**Action:** Closed. Pivoted askeladd to #2642 block-shared slice projection (student's own suggestion #4) — pivots from slice-COUNT lever (closed) to slice-ROUTING-REDUNDANCY-ACROSS-DEPTH lever (untested).
+
+---
+
+### PR #2595 tanjiro: SwiGLU MLP — CLOSED (LOSS; 34th taxon)
+
+- **Branch:** `charliepai2g48h5-tanjiro/swiglu-mlp`
+- **Hypothesis:** Replace vanilla GELU-FFN with gated linear unit `Swish(W1x) ⊙ W2x → W3` (LLaMA/PaLM-style); d_hidden=128 (rounded from (2/3)×mlp_ratio×d).
+
+| Metric | SwiGLU (this) | Baseline #2553 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **35.0829** | 33.4935 | **+4.74% LOSS** |
+| `test_avg/mae_surf_p` | **30.4060** | 28.6279 | **+6.21% LOSS** |
+| Param count actual | 327,083 | 328,235 | −1,152 (within ±1%) |
+| Best epoch | 53/70 (TIMEOUT) | 70/70 | mid-anneal cut |
+
+Per-split val:
+
+| Split | val (this) | val (#2553) | Δ |
+|---|---|---|---|
+| `single_in_dist` | **28.9672** | 25.7691 | **+12.41% (WORST — opposite of generalization argument)** |
+| `geom_camber_rc` | 52.0869 | 50.5514 | +3.04% |
+| `geom_camber_cruise` | **19.8301** | 20.2827 | **−2.23% (only WIN; noisy)** |
+| `re_rand` | 39.4474 | 37.3708 | +5.55% |
+
+LayerScale γ at terminal:
+
+| Block | γ_attn | γ_mlp | mlp/attn ratio |
+|---|---|---|---|
+| 0 | 1.63e-02 | 6.04e-02 | 3.7× |
+| 1 | 1.97e-02 | 7.17e-02 | 3.6× |
+| 2 | 2.48e-02 | 7.19e-02 | 2.9× |
+| 3 | 1.67e-02 | 7.14e-02 | 4.3× |
+
+γ_mlp grew 600-700× from init=1e-4 (vs γ_attn 163-247×) — optimizer leaning MUCH harder on SwiGLU MLP residual.
+
+- **Committed metrics:** `models/model-charliepai2g48h5-tanjiro-swiglu-mlp-20260513-215737/metrics.jsonl`
+
+**Analysis (excellent honest student diagnostic):** Per-epoch time escalated mid-run (25s → 51s → 78s, ep1-39 → ep40-44 → ep45-53). GPU memory stable, no NaN/OOM. After run finished, 97GB free, 0 processes. **Likely shared-GPU contention** (not SwiGLU-specific). The +4.74% magnitude likely overstates the architectural gap.
+
+**BUT per-split structure is decisive even with timeout caveat:** val_single_in_dist regressed MOST (+12.41%). In-dist underperforming WORST is the OPPOSITE of a generalization argument — it's "less effective fitting within budget," not "narrow-minimum smoothing." The pattern is consistent with **optimization burden**, not the PR's "smoother loss landscape" hypothesis. Three parallel matmuls instead of two; gate branch has no useful error signal until value branch is informative; co-learning requirement doesn't amortize at 328K params + 70 epochs.
+
+The γ_mlp magnification is NOT evidence SwiGLU is doing more useful work — it can equally reflect the gate being under-fit and the model compensating by amplifying residual scale.
+
+**Important meta-lesson:** Mid-run wall-clock escalation from shared-GPU contention is a legitimate concern for any close LOSS-margin in this launch. Per-epoch time trajectories in student reports are especially valuable.
+
+**34th closed taxon:** gated-FFN family (SwiGLU + structurally similar GeGLU/ReGLU/Bilinear-GLU all share "two parallel projections + gate + project-out" core). LLaMA/PaLM amortise this over hundreds-of-millions to billions of params + trillion-token training — at our scale + budget, simpler GELU-FFN dominates.
+
+Student's note that **SiLU is cleaner ablation** (1-line GELU→SiLU swap; isolates gating-vs-smooth-activation) is correct, but SiLU was already closed (#2156, +13.91% val LOSS). The smooth-activation axis is also closed.
+
+**Action:** Closed. Pivoted tanjiro to #2643 bias-free Linears (LLaMA convention) — single grep-replace `bias=False` on all attention+MLP Linears; structurally distinct parameter-pruning probe.
+
+---
+
 ## 2026-05-13 [Round 69] UTC — Round 69
 
 ### PR #2580 frieren: Spectral norm on attention Linear projections — CLOSED (LOSS vs current baseline; 32nd taxon)
