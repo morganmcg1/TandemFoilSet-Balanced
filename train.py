@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -426,6 +427,8 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    surf_head_step_decay_epoch: int = 0  # Epoch at which to apply step decay on surf_head LR; 0 = disabled
+    surf_head_step_decay_factor: float = 0.5  # Multiplicative decay (e.g., 0.5 = halve)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -487,7 +490,24 @@ optimizer = torch.optim.AdamW(
     ],
     weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+
+def _encoder_lr_lambda(epoch: int) -> float:
+    return 0.5 * (1.0 + math.cos(math.pi * epoch / MAX_EPOCHS))
+
+
+def _surf_head_lr_lambda(epoch: int) -> float:
+    cosine = 0.5 * (1.0 + math.cos(math.pi * epoch / MAX_EPOCHS))
+    if cfg.surf_head_step_decay_epoch > 0 and epoch >= cfg.surf_head_step_decay_epoch:
+        step_mult = cfg.surf_head_step_decay_factor
+    else:
+        step_mult = 1.0
+    return cosine * step_mult
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(
+    optimizer, lr_lambda=[_encoder_lr_lambda, _surf_head_lr_lambda]
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -629,6 +649,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/lr_encoder": optimizer.param_groups[0]["lr"],
+        "train/lr_surf_head": optimizer.param_groups[1]["lr"],
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "lr_surf_head": scheduler.get_last_lr()[-1],
