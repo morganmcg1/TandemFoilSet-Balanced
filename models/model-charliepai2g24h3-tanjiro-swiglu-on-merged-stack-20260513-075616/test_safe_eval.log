@@ -1,0 +1,12 @@
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+  test_single_in_dist             surf[p=72.9585 Ux=0.9048 Uy=0.4252]  vol[p=109.3370 Ux=3.7863 Uy=1.5707]  (n_surf_p=317003, n_vol_p=16894200)
+  test_geom_camber_rc             surf[p=74.4611 Ux=1.4627 Uy=0.5844]  vol[p=94.7252 Ux=4.4314 Uy=2.1025]  (n_surf_p=495325, n_vol_p=25625023)
+  test_geom_camber_cruise         surf[p=64.5343 Ux=0.7283 Uy=0.4218]  vol[p=71.4685 Ux=2.5976 Uy=1.0758]  (n_surf_p=648502, n_vol_p=40987314)
+  test_re_rand                    surf[p=63.7123 Ux=0.9785 Uy=0.4724]  vol[p=74.8069 Ux=3.1911 Uy=1.4169]  (n_surf_p=576126, n_vol_p=34085067)
+
+  TEST (safe 4-split)  avg_surf_p=68.9165
+                        avg_surf_Ux=1.0186  avg_surf_Uy=0.4759
+                        avg_vol_p=87.5844  avg_vol_Ux=3.5016  avg_vol_Uy=1.5415
+
+Wrote models/model-charliepai2g24h3-tanjiro-swiglu-on-merged-stack-20260513-075616/test_safe_eval.json
