@@ -212,7 +212,7 @@ class Transolver(nn.Module):
         # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
-        self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
+        self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=16)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
