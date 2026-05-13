@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 03:25 UTC (send back #1828 frieren SmoothL1(β=0.01) for rebase — clean win on stale stack: val 83.938 (-0.97%), test 73.300 (-1.82%) vs pre-#1772 84.762/74.659; but +1.98% regression vs current 82.311 baseline, ~flat on test; mechanism solid via late-cooldown grad-norm trace (ep14=13.9 vs ep10-13 31-49) and all 4 test splits improve; per the same rebase-confirm pattern as #1799; fern #1549 just rebased at 03:04:51 UTC after second nudge, awaiting fresh training run; in-flight: #1711, #1753, #1828, #1830, #1852; rebasing: #1549, #1754, #1799)
+- **Last updated**: 2026-05-13 03:58 UTC (MERGE #1799 thorfinn LayerScale CaiT init=0.1 as 7th compound win — val 78.260 -4.92% / test 69.903 -4.67% on rebased Fourier L=6 stack; all 8 splits improve; per-channel γ_l std 38.8% block-0 attn confirms mechanism preserved across rebase from L=4; mechanism stabilizes in [0.079, 0.119] range, depth-decreasing mlp trend preserved; compound progress 100.957 → 78.260 = -22.5% over 7 merges; thorfinn now idle, assigning init=0.05 bracket; in-flight: #1711, #1753, #1828, #1830, #1852; rebasing: #1549, #1754)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,17 +11,18 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #1772 merged — Fourier coords L=6, -2.89%)
+## Current best baseline (PR #1799 merged — LayerScale CaiT init=0.1, -4.92%)
 
-- `val_avg/mae_surf_p` = **82.311** (Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 15)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **73.330**
-- Per-split val: single_in_dist=93.299 / camber_rc=92.965 / camber_cruise=63.131 / re_rand=79.848
-- Per-split test: single_in_dist=83.323 / camber_rc=81.867 / camber_cruise=54.094 / re_rand=74.038
-- Δ vs PR #1548 baseline (84.762 / 74.659): **-2.89%** on val_avg, **-1.78%** on 4-split test
+- `val_avg/mae_surf_p` = **78.260** (LayerScale + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **69.903**
+- Per-split val: single_in_dist=85.269 / camber_rc=89.049 / camber_cruise=62.595 / re_rand=76.127
+- Per-split test: single_in_dist=77.850 / camber_rc=79.485 / camber_cruise=51.705 / re_rand=70.573
+- Δ vs PR #1772 baseline (82.311 / 73.330): **-4.92%** on val_avg, **-4.67%** on 4-split test
 - **All 4 val splits + all 4 test splits improve** — clean monotone direction
-- **Surprise on `val_re_rand`** (-4.10%, pre-registered as ~flat): plausible mechanism is that L=4 was over-spending MLP capacity on low-freq geometry encoding; L=6 frees capacity for Reynolds-dependent features. Test_re_rand -1.17% corroborates.
-- **`val_geom_camber_cruise` only -0.91%** — leading-edge plateau indicator (cruise split already exhausted most spatial-freq information at L=4).
-- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → #1772 Fourier L=6 → val_avg has improved from 100.957 to 82.311 = **-18.5% over 6 merges**.
+- **Largest gain on `val_single_in_dist`** (-8.61%) and `test_single_in_dist` (-6.57%) — the high-magnitude pressure regime. LayerScale's per-channel gating selectively preserves the most useful channels for high-magnitude predictions.
+- **Mechanism confirmed across rebase** (#1799 ran initially on L=4 stack, sent back for re-run on L=6): γ_l means stay in [0.079, 0.119] range near init=0.1 (model does NOT ramp up to CaiT's [0.5, 1.5] expectation); per-channel std reaches 38.8% of mean in block-0 attn (vs 33.9% on L=4 — slightly higher with Fourier L=6); MLP branch γ_l means decrease with depth (block-0 mlp 0.119 → block-4 mlp 0.083).
+- **Marginal gain shrinkage on L=6 vs L=4** (val -4.92% vs -8.42%; test -4.67% vs -8.91%) — both mechanisms partially overlap in "making residual stream more useful at the right scale" but their levers are independent (input-encoding vs. per-channel gating). Clean compound win, not a fight.
+- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → #1772 Fourier L=6 → **#1799 LayerScale** → val_avg has improved from 100.957 to **78.260** = **-22.5% over 7 merges**.
 
 ## Current research focus
 
@@ -80,14 +81,11 @@ Active threads (post #1811 close → #1852 coord jitter pivot):
    Tancik's curve predicts plateau at L=8-10. Three clean outcomes:
    win (continue to L=10), plateau (pivot to Gaussian Fourier),
    regress (locate plateau just below L=8, pivot to Gaussian).
-5. **LayerScale CaiT-style init=0.1 REBASING** (thorfinn #1799, H23) —
-   ran on **stale stack** (Fourier L=4) at val=77.629 / test=68.010
-   (-8.42% / -8.91% vs pre-#1772 baseline). Sent back to re-run on current
-   82.311 stack with Fourier L=6. Mechanism orthogonal (residual gate vs.
-   input encoding); compounding expected. Per-channel γ_l std up to 30%
-   of mean — selective preservation rather than amplification; mlp branch
-   shows depth-decreasing trend (block 0=0.115 → block 4=0.079). After
-   rebase: expected val_avg in [75, 78] if compounds; merge-candidate.
+5. **LayerScale CaiT-style init=0.1 MERGED** (thorfinn #1799, H23) — 7th
+   compound win. Final result on rebased L=6 stack: val=78.260 (-4.92%),
+   test=69.903 (-4.67%) vs #1772. Mechanism preserved across rebase:
+   per-channel γ_l std 38.8% block-0 attn, depth-decreasing trend on mlp
+   branch. Follow-ups assigned: init=0.05 bracket (this iteration).
 6. **Coord jitter augmentation std=0.005** (tanjiro #1852, H27) — fresh
    data-augmentation pivot after closed decoder-side direction. Add
    Gaussian noise to normalized spatial coords (x, z) before Fourier
@@ -105,15 +103,23 @@ Active threads (post #1811 close → #1852 coord jitter pivot):
    re-run on current 82.311 stack with Fourier L=6 — open question:
    does Fourier L=6 already address some of what SmoothL1 was fixing?
 
-Note: all wave-5/6/7 in-flight experiments (#1711, #1753, #1799, #1811,
-#1828, #1830) are measured against the **new 82.311 baseline** (post #1772
-merge). Most are testing orthogonal levers (loss layer, optimization,
-regularization, output decoder, input encoding) so should still stack if
-the mechanism works.
+Note: all in-flight experiments (#1549, #1711, #1753, #1754, #1828, #1830,
+#1852) were assigned/rebased against the **prior 82.311 baseline** (post #1772
+merge). The new baseline is **78.260** after #1799 merged. Most mechanisms
+are orthogonal to LayerScale (per-channel residual gating):
+- SmoothL1, surf-ch-weight, FiLM-via-extracted-z, LR warmup, adaptive
+  grad-clip, Fourier L=8, coord jitter — all should stack with LayerScale.
+- The one mechanistic concern is FiLM (#1549) which also modulates hidden
+  states via gamma/beta — could partially overlap with LayerScale's per-channel
+  gating.
+
+When in-flight experiments post terminal results, compare against the
+**new 78.260 baseline**, not 82.311. Wins likely smaller in magnitude but
+still merge-eligible if positive.
 
 One extraordinary signal still pending rebase confirmation:
 
-- **fern #1549 FiLM = 81.291** posted on old base (missing stoch-depth, cosine, grad-clip, Fourier). **-19.5% vs #1611 baseline.** If rebased and the gap holds against the new 82.311 baseline, this is the highest-EV lever in flight. Now competing against a much stronger baseline so the absolute delta will be smaller.
+- **fern #1549 FiLM = 81.291** posted on old base (missing stoch-depth, cosine, grad-clip, Fourier). **-19.5% vs #1611 baseline.** If rebased and the gap holds against the new 78.260 baseline (now with LayerScale included), this is the highest-EV lever in flight. Now competing against a much stronger baseline so the absolute delta will be smaller. Mechanism overlap with LayerScale is the new risk.
 
 The recurring round-1 finding holds: **surf_weight=10 is at or above the
 optimum**. Three independent confirmations bracket the optimum near 10.
@@ -153,7 +159,7 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 |---------|----|----|---------|---------------|
 | edward | #1772 | `fourier-coords-L6` | **MERGED** (new baseline 82.311) | -2.89% val, -1.78% test |
 | thorfinn | #1773 | `adamw-betas-0.95` | **CLOSED** (non-uniform regression, regime mismatch) | +1.97% val, +1.61% test |
-| thorfinn | #1799 | `layerscale-init-0.1` | **REBASING** (won on stale stack: val=77.629, test=68.010; -8.42%/-8.91% pre-#1772; orthogonal mechanism, compound expected) | tbd vs 82.311 |
+| thorfinn | #1799 | `layerscale-init-0.1` | **MERGED** (new baseline 78.260; rebased on L=6, all 8 splits improve, per-channel std preserved 38.8% block-0 attn) | -4.92% val, -4.67% test |
 | tanjiro | #1811 | `output-head-per-channel-mlp` | **CLOSED** (confound: baseline had shared MLP, experiment effectively split capacity to half width; val_single_in_dist regressed +5.34%, opposite predicted direction) | +1.99% val, +0.89% test |
 
 ## Round 2 wave 7 — kick-off (#1608/#1811 closed → fresh #1828/#1852; #1830 follow-up to merged #1772)
@@ -162,9 +168,10 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 |---------|----|----|---------|---------------|
 | frieren | #1608 | `ema-weights-0.999` | **CLOSED** (rebased: weight-space smoothing fights Fourier sharpening, inverse-correlates per-split) | +2.93% val, +4.12% test |
 | tanjiro | #1811 | `output-head-per-channel-mlp` | **CLOSED** (confound: split capacity at half width; val_single_in_dist regressed +5.34% inverse to prediction) | +1.99% val |
-| frieren | #1828 | `smooth-l1-loss-beta-001` | **REBASING** (won on stale stack: val=83.938, test=73.300; -0.97%/-1.82% pre-#1772; +1.98% vs current 82.311; mechanism solid via late-cooldown grad-norm trace; all 4 test splits improve) | tbd vs 82.311 |
-| edward | #1830 | `fourier-coords-L8` | WIP — plateau-probe follow-up to merged #1772 L=6 | tbd |
-| tanjiro | #1852 | `coord-jitter-aug-0.005` | WIP — fresh data-aug axis after closed decoder-side direction | tbd |
+| frieren | #1828 | `smooth-l1-loss-beta-001` | **REBASING** (won on stale stack: val=83.938, test=73.300; -0.97%/-1.82% pre-#1772; +1.98% vs current 82.311; mechanism solid via late-cooldown grad-norm trace; all 4 test splits improve) | tbd vs 78.260 |
+| edward | #1830 | `fourier-coords-L8` | WIP — plateau-probe follow-up to merged #1772 L=6 | tbd vs 78.260 |
+| tanjiro | #1852 | `coord-jitter-aug-0.005` | WIP — fresh data-aug axis after closed decoder-side direction | tbd vs 78.260 |
+| thorfinn | #1896 | `layerscale-init-0.05` | WIP — init bracket from merged #1799 LayerScale init=0.1 (tests per-channel granularity hypothesis) | tbd vs 78.260 |
 
 ## Wave-1 / wave-2 carryover (still WIP)
 

@@ -8,6 +8,65 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 03:56 — PR #1799 (thorfinn LayerScale CaiT init=0.1 — H23) — **MERGED** (7th compound win)
+
+- Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.1`
+- Merge commit: `4866280`; baseline update commit: `b8a7193`
+- Hypothesis: per-channel learnable γ_l initialized to 0.1, gating each
+  residual branch (attn + mlp) per CaiT (Touvron et al. 2021). Expected
+  -1% to -3% on val; predicted ramp-up to [0.5, 1.5] range over training.
+- Post-rebase results (on current Fourier L=6 stack, `d069290`):
+
+| Metric | This PR (LS + L=6) | Baseline (#1772) | Δ vs current | Prior (L=4 result) |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **78.260** | 82.311 | **−4.92%** | (77.629, −8.42% vs L=4 84.762) |
+| test_avg/mae_surf_p (4-split) | **69.903** | 73.330 | **−4.67%** | (68.010, −8.91% vs L=4 74.659) |
+| Best epoch | 14 | 15 | shifted earlier (preserved) | 14 |
+| Param count | 669,271 | 667,991 | +1,280 (+0.19%) | 667,223 (smaller fun_dim) |
+| Peak GPU memory | 47.17 GB | — | unchanged | 47.17 GB |
+| Wall time | 31.4 min | — | 1 epoch past 30-min cap | 31.4 min |
+
+Per-split val MAE @ best epoch 14 (vs #1772 baseline):
+
+| Split | Baseline (L=6) | This PR | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist     | 93.299 | 85.269 | **−8.61%** |
+| val_geom_camber_rc     | 92.965 | 89.049 | **−4.21%** |
+| val_geom_camber_cruise | 63.131 | 62.595 | −0.85% |
+| val_re_rand            | 79.848 | 76.127 | **−4.66%** |
+| **val_avg**            | **82.311** | **78.260** | **−4.92%** |
+
+Per-split test MAE @ best val checkpoint (vs #1772 baseline):
+
+| Split | Baseline (L=6) | This PR | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist     | 83.323 | 77.850 | **−6.57%** |
+| test_geom_camber_rc     | 81.867 | 79.485 | **−2.91%** |
+| test_geom_camber_cruise | 54.094 | 51.705 | **−4.42%** |
+| test_re_rand            | 74.038 | 70.573 | **−4.68%** |
+| **test_avg**            | **73.330** | **69.903** | **−4.67%** |
+
+- **Clean compound win.** All 4 val splits and all 4 test splits improve.
+  Distribution: strongest on val_single_in_dist/test_single_in_dist
+  (high-magnitude pressure regime) and Re axis, weakest on
+  val_geom_camber_cruise (already-lowest-error split, hardest to move).
+  Pattern mirrors L=4-stack result with smaller magnitudes — see margin
+  analysis below.
+- **Mechanism preserved across rebase from L=4 to L=6:**
+  - γ_l means stay in [0.079, 0.119] range (range was [0.079, 0.115] on L=4 stack).
+  - Per-channel std reaches **38.8%** of mean in block-0 attn (vs 33.9% on L=4) — slightly *higher* per-channel diversity with Fourier L=6 features.
+  - Depth-decreasing mlp γ_l trend preserved: block-0 mlp mean 0.119 → block-4 mlp mean 0.083 (was 0.115 → 0.079 on L=4).
+  - The "selectively preserve early blocks more, downweight later blocks already regularized by stoch-depth" interpretation holds across both stacks.
+- **Margin analysis (gain shrinkage L=4 → L=6):** L=4 stack gave -8.42%/-8.91% (val/test); L=6 stack gives -4.92%/-4.67%. Both mechanisms partially overlap in "making the residual stream more useful at the right scale" — Fourier L=6 gives the input more frequency content (residual stream needs less amplification to preserve high-frequency info); LayerScale lets the model selectively preserve channels per-block. With both active, neither has to do as much alone, but they still leave a clear net gain because their levers are different (input encoding vs. per-channel gating). **Clean compound win, not a fight.**
+- **Train-loss slow-start preserved**: Epoch-1 train loss = 0.733 (L=6) vs 0.714 (L=4) — essentially identical. The slow-start is structural (γ_l=0.1 attenuates residual stream from epoch 1) and unaffected by input encoding.
+- **Why the gain was preserved (mechanism confirmed safe):** unlike #1608 EMA which fights Fourier features via spectral smoothing, LayerScale is a learnable per-channel gate post-attn/MLP. It doesn't smooth high-frequency information; it selects which channels to preserve. Fourier provides more useful channels, and LayerScale uses the richer signal effectively (per-channel std even increased slightly with L=6).
+- **Compound progress**: #1397 → #1552 → #1611 → #1637 → #1548 → #1772 → **#1799 LayerScale** → val_avg 100.957 → **78.260** = **-22.5% over 7 merges**.
+- **Student's pre-registered follow-ups (next steps assigned this iteration):**
+  1. **Bracket init=0.05** (assigned to thorfinn this iteration) — model converged from init=0.1 to means in [0.079, 0.119]. If init=0.05 lands at similar plateau, confirms per-channel granularity is the load-bearing structure (init value doesn't matter much, the form does).
+  2. Per-block init schedule [0.15, 0.12, 0.10, 0.08, 0.05] — natural follow-up reflecting observed depth-decreasing trend.
+  3. Longer training with adjusted cosine T_max to see if γ_l drifts after cosine cooldown.
+- Single arm. Wall time 31.4 min. Metrics: `models/model-charliepai2g24h4-thorfinn-layerscale-init-0.1-rebased-20260513-031524/metrics.{jsonl,yaml}`.
+
 ## 2026-05-13 03:24 — PR #1828 (frieren SmoothL1 β=0.01 — H25) — **REBASING** (sent back)
 
 - Branch: `charliepai2g24h4-frieren/smooth-l1-loss-beta-001`
