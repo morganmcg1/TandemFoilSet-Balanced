@@ -1,5 +1,40 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 07:40 — PR #1470: Per-sample instance-norm loss (CLOSED — dead end with valuable root-cause)
+
+- Student branch: `charliepai2g24h5-edward/instance-norm-loss`
+- Hypothesis: Per-sample normalization `huber_err * (1/y_std_s)` equalises gradient magnitudes across Re domains.
+
+### Results (vs baseline 56.90 / 53.20 — n_hidden=128 reference; new baseline 55.92/51.92 on n160)
+
+| Metric | This PR (n128 + δ=0.3 + inst-norm) | Baseline n128 | Baseline n160 | Δ vs n128 | Δ vs n160 |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **59.02** | 56.90 | 55.92 | +2.12 (+3.7%) | +3.10 (+5.5%) ❌ |
+| test_avg/mae_surf_p | **56.14** | 53.20 | 51.92 | +2.94 (+5.5%) | +4.22 (+8.1%) ❌ |
+
+### Edward's root-cause analysis (paper-quality)
+
+The 1e-6 clamp permitted catastrophic amplification of degenerate samples:
+
+| Epoch | mean inst_scale | min | max |
+|---|---:|---:|---:|
+| 1 | 7.35 | 0.142 | **1342** |
+| 5 | 11.19 | 0.142 | 2230 |
+| 10 | 7.88 | 0.142 | 1299 |
+| 16 | 6.90 | 0.142 | 1271 |
+
+Max amplification was 1271-2230× (predicted ~12×). Root cause: nearly-uniform-field samples (very low-Re cruise) with per-sample y_std ≈ 4.5e-4 to 7.9e-4 in normalised space pass the 1e-6 clamp. Lion's sign-update mitigates magnitude but momentum still accumulates from scaled gradients → noisy convergence to worse optimum.
+
+### Disposition
+
+**Closed.** Literal hypothesis is broken at the data-distribution level. The principled fix (RevIN-style pre-residual normalization with `clamp(min=0.05)`) is queued for future exploration but unlikely to clear 55.92 since Huber already handles outliers at the per-element level.
+
+**Reassigned to PR #2044:** DropPath / stochastic depth on n_hidden=160 baseline. Diversifies the experiment portfolio (3 active PRs were Lion-LR variants).
+
+- Metrics: `models/model-charliepai2g24h5-edward-instance_norm_loss-20260513-065754/metrics.jsonl`
+
+---
+
 ## 2026-05-13 07:25 — PR #1782 (3rd iteration): Lion lr=2e-4 on Huber δ=0.3+n128 stack (CLOSED — negative; valuable mechanism insight)
 
 - Student branch: `charliepai2g24h5-frieren/lion-lr-scan`

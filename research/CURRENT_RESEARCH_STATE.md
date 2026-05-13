@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 07:30
+- 2026-05-13 07:45
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -55,7 +55,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP | Beat 55.92 |
 | #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 55.92 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP — new | Beat 55.92 |
-| #1470 | edward | Instance-norm loss, epochs=16 | WIP | Beat 55.92 |
+| #2044 | edward | DropPath / stochastic depth (rates 0.05, 0.1) on n_hidden=160 | WIP — new | Beat 55.92 |
 | #2027 | tanjiro | Lion lr=2e-4 on n_hidden=160+δ=0.3 baseline | WIP — new | Beat 55.92 |
 | #2028 | fern | Per-channel Huber δ (δ_p=0.2, δ_Ux/Uy=0.5) on n_hidden=160 | WIP — new | Beat 55.92 |
 
@@ -68,6 +68,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 | #1880 | alphonse | **MERGED** | Huber δ=0.3 → baseline 56.90/53.20 (−14.2% val). δ=0.2 essentially tied. δ curve bottomed. |
 | #1639 | alphonse | **MERGED** | Huber δ=0.5 → baseline 66.32 (−9.3%). Uniformly better. δ curve not bottomed out at time. |
 | #1780 | tanjiro | **MERGED** | Lion+epochs=16 → baseline 66.44 (−9.2%). Epochs=16 now structural standard. |
+| #1470 | edward | CLOSED | Instance-norm loss → val=59.02 (+3.7%). 1e-6 clamp let inst_scale reach 2230× on near-uniform low-Re samples |
 | #1782 (3rd) | frieren | CLOSED | lr=2e-4 on δ=0.3 → val=58.82 (+1.92). LR optimum reversed direction (DOWN then UP); mechanism: δ-driven residual-regime shift |
 | #1656 | thorfinn | SENT BACK | Dropout=0.1 → val=62.52 on OLD baseline; above new 55.92; needs δ=0.3 stack re-run |
 | #1481 | nezuko | CLOSED | slice_num=128 → +22.5% regression; budget cliff (144s/epoch → 13 epochs only) |
@@ -81,7 +82,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 3. **Does dropout=0.1 compose with δ=0.3+n160?** (#1656 thorfinn) — orthogonal regularization axes
 4. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
 5. **Does surf_weight shift from 10.0 under δ=0.3+Lion+n160?** (#2005 nezuko) — loss balance may have changed
-6. **Does instance-norm loss help val_re_rand?** (#1470 edward)
+6. **Does DropPath (0.05, 0.1) help generalisation on Transolver residual structure?** (#2044 edward) — orthogonal to dropout
 7. **Does Lion lr=2e-4 beat 3e-4 on n_hidden=160 baseline?** (#2027 tanjiro) — LR optimum on new wider model
 8. **Does per-channel Huber δ (δ_p=0.2, δ_Ux/Uy=0.5) beat uniform δ=0.3?** (#2028 fern) — decouple pressure vs velocity gradient capping
 
@@ -92,6 +93,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 - **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.
 - **n_hidden=192 (#1755 Arm B, lr=4e-4)**: Budget cliff + grad_norm instability at lr=4e-4. 2× regression evidence.
 - **Huber δ=0.1**: δ=0.3 and δ=0.2 essentially tied; further reduction into δ<0.2 will degrade cruise/re_rand splits due to over-saturation of low-std residuals into linear regime.
+- **Instance-norm loss with 1e-6 clamp (#1470)**: +3.7% val regression. Near-uniform low-Re samples (y_std ≈ 5e-4) got amplified 1000-2000×, destabilising training. Principled RevIN-fix queued but unlikely to clear 55.92.
 - **slice_num=128 (#1481)**: +22.5% val regression. 41% per-epoch slowdown (144s/epoch) → only 13 epochs in 30-min budget, losing cosine-tail. Even at matched epoch 13, no per-step improvement vs slice_num=64. Architecture already saturated on mesh resolution.
 
 ## Next hypotheses to queue (when students go idle)
@@ -102,14 +104,14 @@ cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-
 - #1844 askeladd: Lion β2=0.999, epochs=16
 - #1656 thorfinn: dropout=0.1 on δ=0.3 stack
 - #2005 nezuko: surf_weight sweep 15 vs 5 on δ=0.3+Lion+n160 stack
-- #1470 edward: instance-norm loss, epochs=16
+- #2044 edward: DropPath stochastic depth (rates 0.05, 0.1) on n_hidden=160
 - #2027 tanjiro: Lion lr=2e-4 on n_hidden=160 baseline
 - #2028 fern: per-channel Huber δ (δ_p=0.2, δ_Ux/Uy=0.5) on n_hidden=160
 
 ### Queued ideas (when students finish above)
 
 1. **batch=8 + Lion + epochs=13** — larger effective batch on n_hidden=160 baseline; ~30 min with batch=8.
-2. **DropPath / stochastic depth** — targeted at Transolver's residual structure; complements dropout.
+2. **Pre-residual RevIN normalization** — Huber on `(pred - y) / y_std_s.clamp(min=0.05)` (edward's principled fix to instance-norm failure). Likely small gain even if it works.
 3. **Activation sweep** — GELU → SwiGLU/SiLU on full combined stack.
 4. **Layer-wise LR decay** — different LR per Transolver layer.
 5. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages only the final stable checkpoints.
