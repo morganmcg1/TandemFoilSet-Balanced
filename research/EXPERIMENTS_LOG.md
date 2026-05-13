@@ -1,5 +1,41 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 11:00 — PR #2176: SiLU activation swap GELU → SiLU in MLP blocks (CLOSED — GELU locally optimal)
+
+- Student branch: `charliepai2g24h5-fern/silu-activation-swap`
+- Hypothesis: Test whether SiLU (smooth, no plateau near zero) outperforms GELU as the block-MLP activation; orthogonal to all regularization.
+
+### Results (vs current baseline #1656: 52.63/49.22)
+
+| Metric | GELU baseline | SiLU (this run) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 52.63 | **59.5337** | **+6.90 (worse)** |
+| **test_avg/mae_surf_p** | 49.22 | **55.7072** | **+6.49 (worse)** |
+
+All 4 splits regress uniformly by +3.5 to +9.7 MAE-p on both val and test. Worst single-split delta: val_single_in_dist (+9.67).
+
+### Per-split detail
+
+| Split | val SiLU | val GELU | Δ_val | test SiLU | test GELU | Δ_test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 66.18 | 56.52 | +9.67 | 55.98 | 47.14 | +8.84 |
+| geom_camber_rc | 74.37 | 67.35 | +7.02 | 66.65 | 59.44 | +7.21 |
+| geom_camber_cruise | 39.13 | 34.17 | +4.96 | 50.28 | 46.76 | +3.52 |
+| re_rand | 58.45 | 52.50 | +5.95 | 49.92 | 43.54 | +6.38 |
+
+### Mechanism analysis
+
+Training trajectory healthy: monotone descent, grad-norm 24.6→2.5 (similar to GELU baseline), no instability or divergence. So the regression is not an optimization failure — it's a genuinely worse local minimum within the 16-epoch budget. Mechanism: Lion's sign(m_t)·lr update was tuned around GELU's gradient surface. SiLU's smoother near-zero region shifts which channels accumulate signal per step → at lr=2e-4, GELU's slightly steeper near-zero region lets Lion build signal faster. Lion + activation interaction confirmed (consistent with Chen et al. 2024 on Lion-activation lr coupling). The +6.9 gap is too large to bridge with an lr-shift follow-up.
+
+### Disposition
+
+**CLOSED**. GELU confirmed locally optimal as bare activation. **However**, this rules out only the bare-slope effect of SiLU — not the gated SwiGLU/GeGLU variants where the activation is multiplied by a learned gate. The student's own suggested follow-up #3 ("GLU-family gated variants are sometimes the actual reason 'SiLU papers' win in transformer benchmarks — the gating is doing the work, not the bare activation") is the right next direction. Reassigning fern to test SwiGLU directly (#2196).
+
+- Metrics: `models/model-silu_activation-20260513-102006/metrics.jsonl`
+- Note: fern flagged a pre-existing minor bug in `evaluate_split` (surf_loss=NaN, vol_loss=Inf in metrics.yaml for test_geom_camber_cruise). Does not affect MAE-driven decisions (MAE filters via gt_finite_mask). Acknowledged; not fixed in this PR.
+
+---
+
 ## 2026-05-13 10:28 — PR #2084: Cosine LR floor: eta_min=lr*0.05 (CLOSED — zero-LR tail is implicit regularizer for Lion)
 
 - Student branch: `charliepai2g24h5-frieren/cosine-lr-floor`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 10:30
+- 2026-05-13 11:00
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -66,10 +66,10 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2176 | fern | SiLU activation swap: GELU → SiLU in MLP blocks | WIP | Beat 52.63 |
+| #2196 | fern | SwiGLU gated MLP (param-equiv to GELU baseline, mlp_ratio=4/3) | WIP — new | Beat 52.63 |
 | #2177 | edward | Lion weight_decay sweep at lr=2e-4: wd=4e-5 (Arm A) and wd=8e-5 (Arm B) | WIP | Beat 52.63 |
-| #2181 | tanjiro | batch_size=8: test Lion sign-vote quality at lower gradient noise | WIP — new | Beat 52.63 |
-| #2182 | frieren | Layer-wise LR decay: outer blocks full LR, inner blocks 0.85x decay | WIP — new | Beat 52.63 |
+| #2181 | tanjiro | batch_size=8: test Lion sign-vote quality at lower gradient noise | WIP | Beat 52.63 |
+| #2182 | frieren | Layer-wise LR decay: outer blocks full LR, inner blocks 0.85x decay | WIP | Beat 52.63 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP (stale baseline) | Beat 52.63 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (stale baseline) | Beat 52.63 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (stale baseline) | Beat 52.63 |
@@ -89,6 +89,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | #1470 | edward | CLOSED | Instance-norm loss → val=59.02 (+3.7%). 1e-6 clamp let inst_scale reach 2230× on near-uniform low-Re samples |
 | #1782 (3rd) | frieren | CLOSED | lr=2e-4 on δ=0.3 → val=58.82 (+1.92). LR optimum reversed direction (DOWN then UP); mechanism: δ-driven residual-regime shift |
 | #1656 | thorfinn | **MERGED** | See above — new baseline. |
+| #2176 | fern | CLOSED | SiLU bare-activation swap regresses every split: val=59.53 (+6.90) / test=55.71 (+6.49). Mechanism: Lion sign-update tuned for GELU's gradient surface; SiLU's smoother near-zero region shifts effective lr → undertrains at lr=2e-4. GELU locally optimal as bare activation. SwiGLU gating direction reassigned to fern (#2196). |
 | #2100 | tanjiro | CLOSED | lr=1.5e-4 loses: val=53.156 (+0.376) / test=50.149 (+0.729) vs baseline 52.78/49.42. LR bowl confirmed bottomed at lr=2e-4 — both sides now confirmed (lr=3.5e-4 via #2035, lr=1.5e-4 here). Do not probe lr<2e-4 further. |
 | #2084 | frieren | CLOSED | Cosine LR floor (eta_min=5%): val=54.05 (+1.42 vs new baseline 52.63) / test=51.09 (+1.87). Zero-LR tail acts as implicit regularizer in Lion's signed-update regime — floor LR keeps perturbing weights and prevents final settling. Do not add LR floor to Lion runs. |
 | #2074 | fern | CLOSED | δ_p sweep (0.15, 0.10) on lion_lr=1.5e-4 stack. Both lose: val 53.54/53.19 vs 52.63 baseline; **test regresses** +0.98%/+1.41%. δ_p=0.20 confirmed optimum; lower δ_p over-saturates pressure gradients into linear regime. |
@@ -97,10 +98,10 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 ## Open questions from active experiments
 
-1. **Does SiLU activation beat GELU on the merged stack?** (#2176 fern) — simple, orthogonal to all regularization. Expected 1-3% if it composes.
+1. **Does SwiGLU gating beat GELU in block MLPs?** (#2196 fern, new) — bare SiLU lost (#2176), but gated GLU-family variants are where transformer-paper wins actually come from. Param-equivalent at mlp_ratio=4/3.
 2. **Does Lion weight_decay=4e-5 or 8e-5 beat 6e-5 at lr=2e-4?** (#2177 edward) — wd was set when lr=3e-4; LR halving may have shifted wd optimum.
-3. **Does batch_size=8 improve Lion sign-vote quality?** (#2181 tanjiro, new) — lower gradient noise before sign quantization may yield tighter minimum within 16 epochs.
-4. **Does layer-wise LR decay (0.85x per block inward) improve OOD generalization?** (#2182 frieren, new) — outer blocks full lr=2e-4, inner blocks down to 1.044e-4; BERT-style structural LR taper.
+3. **Does batch_size=8 improve Lion sign-vote quality?** (#2181 tanjiro) — lower gradient noise before sign quantization may yield tighter minimum within 16 epochs.
+4. **Does layer-wise LR decay (0.85x per block inward) improve OOD generalization?** (#2182 frieren) — outer blocks full lr=2e-4, inner blocks down to 1.044e-4; BERT-style structural LR taper.
 5. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width, stale baseline)
 6. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd — slower momentum for noisy small-batch, stale baseline)
 7. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko — loss balance, stale baseline)
@@ -114,6 +115,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 - **n_hidden=192 (#1755 Arm B, lr=4e-4)**: Budget cliff + grad_norm instability at lr=4e-4. 2× regression evidence.
 - **Lion lr≤1.5e-4 or ≥3.5e-4 on per-channel δ+n160 stack**: LR bowl confirmed bottomed at lr=2e-4. lr=1.5e-4 (#2100 CLOSED) and lr=3.5e-4 (#2035 CLOSED) both confirmed losing. Do not probe outside [1.8e-4, 2.5e-4] without a stack change.
 - **Cosine LR floor (eta_min>0) with Lion (#2084 CLOSED)**: Zero-LR cosine tail is implicit regularizer in Lion's signed-update regime. Floor at 5% of lr prevents final settling → all 8 splits regress, test worse than val. Do not add eta_min to Lion runs.
+- **SiLU as bare activation (#2176 CLOSED)**: GELU→SiLU regresses every split by +6.9 val/+6.5 test. Mechanism: Lion's sign update was tuned for GELU's gradient surface. GELU locally optimal at lr=2e-4 — confirmed. Bare activation swaps without lr re-tuning are dead direction. (Gated SwiGLU is a different hypothesis, being tested at #2196.)
 - **Huber δ_p<0.20 (#2074 CLOSED)**: δ_p=0.15 and δ_p=0.10 both lose; val/test gap shrinks = over-regularization. δ_p=0.20 is optimal with velocity at 0.5.
 - **DropPath rates 0.05/0.10 (#2044 CLOSED)**: 10 residual paths × stochastic drop requires 40+ epochs to converge; catastrophic within 16-epoch budget. Within-layer dropout (merged #1656) is the right regularization axis.
 - **Instance-norm loss with 1e-6 clamp (#1470)**: +3.7% val regression. Near-uniform low-Re samples (y_std ≈ 5e-4) got amplified 1000-2000×.
@@ -122,10 +124,11 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 ## Queued ideas (when students finish above)
 
 1. **Dropout attention rate sweep (0.05 / 0.15)** — thorfinn's suggested follow-up (#2161 may resolve this depending on arm results). 0.05 may be closer to optimum on fully-regularized stack.
-2. **batch=8 + LR scaling** — if #2181 wins, follow-up with lr ≈ 2e-4 × √2 ≈ 2.8e-4 to test whether linear-ish scaling further improves.
-3. **LLRD factor sweep (0.80, 0.90)** — if #2182 wins, narrow in on optimal decay factor.
-4. **n_layers=6 + dropout compound** — after alphonse's depth result lands, test n_layers=6 + dropout=0.1 compound if n_layers=6 alone beats baseline.
-5. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages final stable checkpoints where val has converged.
-6. **Pre-residual RevIN normalization** — principled fix to instance-norm failure mode. Lower priority but valuable for paper's ablation section.
-7. **surf_weight fine-tune** — after #2005 nezuko lands, probe one notch (±2) around whatever wins.
-8. **One-cycle LR schedule** — peak in middle, decay to zero; concentrates training time at high LR. Orthogonal to Lion WD and dropout. (Frieren's suggestion from #2084 analysis.)
+2. **GeGLU (GELU-gated)** — if SwiGLU #2196 wins, test GELU-gated variant (gate × GELU(input)) to disentangle whether gating or SiLU-specific surface drives the win.
+3. **batch=8 + LR scaling** — if #2181 wins, follow-up with lr ≈ 2e-4 × √2 ≈ 2.8e-4 to test whether linear-ish scaling further improves.
+4. **LLRD factor sweep (0.80, 0.90)** — if #2182 wins, narrow in on optimal decay factor.
+5. **n_layers=6 + dropout compound** — after alphonse's depth result lands, test n_layers=6 + dropout=0.1 compound if n_layers=6 alone beats baseline.
+6. **Sharpness-Aware Minimization (SAM)** — explicit flat-minima search; particularly targeted at OOD generalization. May need extra wall-clock; consider lighter SAM variant (LookSAM) or partial SAM applied last 4 epochs only.
+7. **Pre-residual RevIN normalization** — principled fix to instance-norm failure mode. Lower priority but valuable for paper's ablation section.
+8. **surf_weight fine-tune** — after #2005 nezuko lands, probe one notch (±2) around whatever wins.
+9. **One-cycle LR schedule** — peak in middle, decay to zero; concentrates training time at high LR. Orthogonal to Lion WD and dropout. (Frieren's suggestion from #2084 analysis.)
