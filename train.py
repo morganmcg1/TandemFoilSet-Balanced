@@ -434,6 +434,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    ema_decay: float = 0.0   # EMA decay for model (encoder) weights. 0 = disabled.
+    ema_start_epoch: int = 0 # Epoch (0-indexed) from which to start accumulating EMA.
 
 
 cfg = sp.parse(Config)
@@ -538,6 +540,11 @@ train_start = time.time()
 compile_warmup_s = 0.0
 compile_warmup_logged = False
 
+# EMA state: stored as a dict of {param_name: fp32_tensor} on the same device.
+# Only covers model (Transolver encoder), not surf_head (different LR/init dynamics).
+ema_state: dict | None = None
+ema_step = 0  # number of EMA updates applied
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -604,6 +611,33 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
+
+        # --- EMA update (model / encoder only; not surf_head) ---
+        if cfg.ema_decay > 0.0 and epoch >= cfg.ema_start_epoch:
+            with torch.no_grad():
+                live_sd = model.state_dict()
+                if ema_state is None:
+                    # First EMA step: cold-start from current live weights.
+                    ema_state = {
+                        k: v.detach().float().clone()
+                        for k, v in live_sd.items()
+                        if torch.is_floating_point(v)
+                    }
+                    ema_step = 1
+                else:
+                    # Fixed decay: ema_t = decay * ema_{t-1} + (1 - decay) * live_t.
+                    # Init bias toward live_1 at step T = decay**(T-1); at 1974 EMA steps
+                    # this is 0.999**1973 ≈ 0.139 (arm 1) / 0.9995**1503 ≈ 0.470 (arm 2 if
+                    # start_epoch=5). We accept this bias to honour the user's choice of
+                    # effective EMA window (1/(1-decay)) instead of a warmup ramp that
+                    # would never reach the target decay within our 30-min budget.
+                    for k, v in live_sd.items():
+                        if k in ema_state and torch.is_floating_point(v):
+                            ema_state[k].mul_(cfg.ema_decay).add_(
+                                v.detach().float(), alpha=1.0 - cfg.ema_decay
+                            )
+                    ema_step += 1
+
         if cfg.use_torch_compile and not compile_warmup_logged:
             torch.cuda.synchronize()
             compile_warmup_s = time.time() - _warmup_t0
@@ -639,25 +673,81 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     surf_head.eval()
-    split_metrics = {
+
+    # Live-weights validation (always computed).
+    split_metrics_live = {
         name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    val_avg_live = aggregate_splits(split_metrics_live)
+    avg_surf_p_live = val_avg_live["avg/mae_surf_p"]
+    val_loss_mean_live = sum(m["loss"] for m in split_metrics_live.values()) / len(split_metrics_live)
+
+    # EMA-weights validation: swap in EMA weights, evaluate, restore live weights.
+    ema_active = cfg.ema_decay > 0.0 and ema_state is not None
+    if ema_active:
+        # Save live weights keyed only on EMA-tracked parameters (fp32 cast for dtype match).
+        backup = {k: v.detach().clone() for k, v in model.state_dict().items() if k in ema_state}
+        # Load EMA weights into model (strict=False: EMA only covers floating-point params;
+        # buffers like running stats that are integer/bool are left as-is).
+        # This does in-place copy_() into existing tensors — safe with torch.compile.
+        model.load_state_dict(ema_state, strict=False)
+        split_metrics_ema = {
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_ema = aggregate_splits(split_metrics_ema)
+        avg_surf_p_ema = val_avg_ema["avg/mae_surf_p"]
+        val_loss_mean_ema = sum(m["loss"] for m in split_metrics_ema.values()) / len(split_metrics_ema)
+        # Restore live weights for continued training.
+        model.load_state_dict(backup, strict=False)
+
+        # EMA diagnostic: mean L2 drift between EMA and live weights.
+        with torch.no_grad():
+            live_sd = model.state_dict()
+            total_drift = sum(
+                (ema_state[k].float() - live_sd[k].detach().float()).norm().item()
+                for k in ema_state
+            )
+            n_ema_params = sum(ema_state[k].numel() for k in ema_state)
+            ema_weight_drift = total_drift / max(n_ema_params, 1)
+
+        # Primary metric comes from EMA when active.
+        split_metrics = split_metrics_ema
+        val_avg = val_avg_ema
+        avg_surf_p = avg_surf_p_ema
+        val_loss_mean = val_loss_mean_ema
+    else:
+        split_metrics = split_metrics_live
+        val_avg = val_avg_live
+        avg_surf_p = avg_surf_p_live
+        val_loss_mean = val_loss_mean_live
+
     dt = time.time() - t0
 
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
+        "val/mae_surf_p_live": avg_surf_p_live,
         "lr": scheduler.get_last_lr()[0],
         "lr_surf_head": scheduler.get_last_lr()[-1],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
-    for split_name, m in split_metrics.items():
+    if ema_active:
+        log_metrics["val/mae_surf_p_ema"] = avg_surf_p_ema
+        log_metrics["val/ema_improvement"] = avg_surf_p_live - avg_surf_p_ema
+        log_metrics["train/ema_weight_drift"] = ema_weight_drift
+        log_metrics["train/ema_step"] = ema_step
+        log_metrics["train/ema_effective_decay"] = cfg.ema_decay
+        # Bias toward EMA initialization at end of run (= decay**(steps-1)).
+        log_metrics["train/ema_init_bias"] = cfg.ema_decay ** max(ema_step - 1, 0)
+        # Per-split EMA metrics.
+        for split_name, m in split_metrics_ema.items():
+            for k, v in m.items():
+                log_metrics[f"{split_name}/ema_{k}"] = v
+    for split_name, m in split_metrics_live.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
@@ -670,19 +760,29 @@ for epoch in range(MAX_EPOCHS):
         best_metrics = {
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
+            "val_avg/mae_surf_p_live": avg_surf_p_live,
             "per_split": split_metrics,
+            "ema_active": ema_active,
         }
-        torch.save(
-            {"model": model.state_dict(), "surf_head": surf_head.state_dict()},
-            model_path,
-        )
+        ckpt = {"model": model.state_dict(), "surf_head": surf_head.state_dict()}
+        if ema_active:
+            ckpt["ema_state"] = ema_state
+        torch.save(ckpt, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    if ema_active:
+        # Show both live and EMA; the prefix-less value is the *selected* primary metric.
+        val_tag = (
+            f"val_avg_surf_p={avg_surf_p:.4f}  "
+            f"(live={avg_surf_p_live:.4f} ema={avg_surf_p_ema:.4f} drift={ema_weight_drift:.2e})"
+        )
+    else:
+        val_tag = f"val_avg_surf_p={avg_surf_p:.4f}"
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"{val_tag}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -713,7 +813,13 @@ if best_metrics:
     })
 
     ckpt = torch.load(model_path, map_location=device, weights_only=True)
-    model.load_state_dict(ckpt["model"])
+    # If the best checkpoint was selected on EMA metric, load EMA weights into model.
+    # Fall back to live model weights if no EMA state was saved.
+    if "ema_state" in ckpt:
+        model.load_state_dict(ckpt["model"])   # restore live first (sets shapes/buffers)
+        model.load_state_dict(ckpt["ema_state"], strict=False)  # overwrite with EMA params
+    else:
+        model.load_state_dict(ckpt["model"])
     surf_head.load_state_dict(ckpt["surf_head"])
     model.eval()
     surf_head.eval()
