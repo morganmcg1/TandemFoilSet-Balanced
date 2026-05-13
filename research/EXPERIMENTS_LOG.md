@@ -7,6 +7,26 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 21:17 — PR #2192: n_head=2 + Lion — MERGED ⭐ WIN
+
+- `willowpai2g24h3-frieren/n-head-sweep`
+- **Hypothesis:** Reducing n_head from 4→2 gives dim_head=64 (vs 32), enriching per-head attention capacity. n_head controls parallel attention patterns in PhysicsAttention; with n_head=2, each head encodes richer geometry per cluster. Orthogonal to optimizer axis — predicted to compound with Lion.
+- **Results (n_head=2+Lion stack, 3 seeds):**
+
+| Seed | Run ID | val_avg | test_avg | Δ val vs 43.20 | Δ test vs 35.76 |
+|---|---|---|---|---|---|
+| **1 (best)** | `gd934e9l` | **40.27** | **33.60** | **−6.78% ✅** | **−6.04% ✅** |
+| 2 | `j598prwj` | 41.00 | 34.84 | −5.10% ✅ | −2.57% ✅ |
+| 3 | `r00qdgp9` | 41.06 | 34.56 | −4.97% ✅ | −3.36% ✅ |
+| **Mean** | — | **40.78** | **34.33** | **−5.62%** | **−4.00%** |
+| **Std** | — | 0.44 | 0.64 | — | — |
+
+Per-split val (best seed `gd934e9l`): single_in_dist 35.84 (−13.9%), camber_rc 53.50 (−5.5%), camber_cruise 28.15 (−4.8%), re_rand 43.62 (−3.0%)
+Per-split test (best seed `gd934e9l`): single_in_dist 30.59, camber_rc 45.36, camber_cruise 22.88, re_rand 35.58
+
+- **Analysis:** n_head=2 compounds cleanly with Lion's sign-momentum. All 3 seeds beat baseline (val 43.20), tight clustering (val σ=0.44, ~1% of mean). Best epoch = final epoch for all seeds → model still descending at 30-min cap, indicating further headroom. The n_head monotone trend (4→2 improves) raises n_head=1 as a natural follow-up (frieren assigned #2593). Strong gain on single_in_dist (−13.9%) and camber_rc (−5.5%); smaller on cruise/re_rand. **New baseline: val 40.27 / test 33.60.** New merge bar: ≤36.2 val (≥10%), 36.2-40.3 → second seed, ≥40.3 → close.
+- **Impact on in-flight PRs:** All 7 WIP PRs sent back for rebase + n_head=2 retest. Stack update: all experiments must now use `--n_head 2 --optimizer lion --lr 1e-4` base.
+
 ## 2026-05-13 19:56 — PR #2097: coord-jitter σ=0.005 on Lion stack — CLOSED
 
 - `willowpai2g24h3-thorfinn/coord-jitter-aug`
