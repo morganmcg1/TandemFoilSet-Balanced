@@ -452,3 +452,26 @@ cd "target/" && python train.py \
 ### Mechanism
 
 Post-LN keeps the residual-stream distribution stationary. At depth=5 this is not needed for stability (no divergence with pre-LN) but is decisive for convergence to a deeper minimum. Gain is uniform across IID and OOD splits — a representation-level effect, not the IID/OOD redistribution pattern. Sharp contrast with RMSNorm (#2425): placement-after-residual is the load-bearing lever; computation type is second-order. best_epoch=18 with loss still descending at schedule cutoff — minimum has more headroom.
+
+## 2026-05-13 19:15 — PR #2508: Cosine T_max extension under post-LN: T_max=20 vs T_max=18
+
+- **test_avg/mae_surf_p: 49.3466** (NEW BEST — −4.34% vs previous 51.5839)
+- **val_avg/mae_surf_p:** 56.5563 (best epoch 18/18)
+- **Per-split:** in_dist=50.894 (−1.4%), rc=61.814 (+0.7%), cruise=35.172 (−10.6%), re_rand=49.507 (−8.4%)
+- **W&B run:** i2pxi78b (postln-tmax-extension group)
+- **Config change:** `--t_max 20` (T_max: 18 → 20 in CosineAnnealingLR)
+- **Full config:** bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + β1=0.9 + β2=0.99 + wd=0 + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + post-LN + **t_max=20** + epochs=18
+- **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --t_max 20`
+
+### Per-split test mae_surf_p
+
+| Split | mae_surf_p | Δ vs prev baseline (51.5839) |
+|---|---|---|
+| test_single_in_dist | 50.894 | −1.34% |
+| test_geom_camber_rc | 61.814 | +0.72% (within noise) |
+| test_geom_camber_cruise | 35.172 | **−10.57%** |
+| test_re_rand | 49.507 | **−8.40%** |
+
+### Mechanism
+
+T_max=20 stretches the cosine schedule so the LR at epoch 18 is 3.67e-6 (vs ~0 with T_max=18). The crossover happens at epoch 16 and the improvement margin widens through epoch 18 (val Δ: −1.15 → −1.28 → −2.64). The load-bearing factor is the **extended tail LR** — not higher mid-training LR (epochs 9–12 were actually slightly worse with T_max=20). T_max=18 cut the cosine at exactly the moment the loss landscape still had productive gradient to follow; T_max=20 provided non-zero LR through the final epoch. Finding #47: T_max=18 was optimal for the pre-LN stack (Finding #26); post-LN's deeper convergence trajectory requires T_max=20. Constraint: T_max≤20 to stay below Finding #44's 1e-5 harm threshold.
