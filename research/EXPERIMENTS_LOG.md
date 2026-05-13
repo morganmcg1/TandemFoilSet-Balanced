@@ -2030,3 +2030,113 @@ Note: changed `--max_norm 1.0` → `0.5` to align with current baseline (which u
 If lands → opens composition with #2049 aux-Re prediction (geometry × Re-conditioning axes), learned-SDF embedding (SDF → MLP[1→4]), and surface arc-length encoding.
 
 ---
+
+---
+## 2026-05-13 11:45 — PR #2082 MERGE willowpai2g48h2-alphonse (RFF σ=1.0 on Kendall): new baseline val=70.63/test=62.09
+
+- **Branch:** `willowpai2g48h2-alphonse/fourier-coord-features-on-kendall`
+- **Hypothesis:** Random Fourier Features (Tancik 2020) on 2D coordinates (σ=1.0, num_features=16) — 32-dim sin/cos encoding concatenated to per-node input features, fresh input-encoding axis.
+- **W&B runs:** `2jqhk53m` (σ=1.0, **WIN**), `b424li5b` (σ=4.0, regression)
+
+### Results
+
+| Metric | σ=1.0 (WIN) | σ=4.0 (REG) | Baseline #1906 | Δ (σ=1.0) |
+|---|---:|---:|---:|---:|
+| swa_val_avg/mae_surf_p | **70.627** | 73.555 | 71.435 | **−1.13%** |
+| swa_test_avg/mae_surf_p | **62.091** | 64.690 | 62.987 | **−1.42%** |
+| val_geom_camber_rc | **84.063** | 88.407 | 88.087 | **−4.57%** |
+| test_geom_camber_rc | **75.741** | 77.721 | 79.950 | **−5.26%** |
+| val_single_in_dist | 78.743 | 81.494 | 79.177 | −0.54% |
+| test_single_in_dist | 69.239 | 72.922 | 68.638 | +0.60% |
+| val_geom_camber_cruise | 50.114 | 52.972 | 49.189 | +1.88% |
+| val_re_rand | 69.588 | 71.348 | 69.286 | +0.44% |
+
+### Analysis
+
+**σ=1.0 wins cleanly; σ=4.0 regresses uniformly.** The primary mechanism is selective improvement on `geom_camber_rc` — the persistent FiLM geometry bottleneck — with −4.57% val / −5.26% test. This is the strongest single-split improvement at this bottleneck since FiLM merged.
+
+**Mechanism:** At z-score-normalized coordinate scale (range ≈ [−7, +7], std ≈ 0.82), σ=1.0 nominal behaves like σ≈5 at unit-cube scale — low-frequency encoding that distinguishes global geometry patterns. σ=4.0 (≈σ≈20 effective) is too high-frequency and overfits.
+
+**Bradwidth finding:** monotonic lower-frequency wins. Follow-up should bracket σ=0.5 (thorfinn #2168) and test σ=2.0 to confirm the σ→gain curve shape.
+
+**Kendall stability confirmed:** log_σ values within ±0.02 of baseline — no collapse under +32 input channels.
+
+**Timeout caveat:** both arms hit 30-min cap at epoch 13/15 — SWA averaged over 2 epochs only. Win is likely conservative.
+
+### Decision: MERGED as new baseline (val=70.6271/test=62.0907)
+
+---
+## 2026-05-13 11:50 — PR #2049 CLOSE willowpai2g48h2-thorfinn (aux-Re prediction on Kendall): clean negative — FiLM already preserves Re
+
+- **Branch:** `willowpai2g48h2-thorfinn/aux-re-prediction-on-kendall`
+- **W&B runs:** `nrrd541j` (arm 1, 0.01), `oxczx0yj` (arm 2, 0.1)
+
+### Results
+
+| Arm | aux_re_weight | swa_val | swa_test | test_re_rand | Δ val |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 0.0 | 71.43 | 62.99 | 61.92 | — |
+| **Arm 1** | 0.01 | **73.93** | **64.74** | **63.35** | **+3.5%** |
+| **Arm 2** | 0.1 | **80.96** | **70.99** | **69.29** | **+13.4%** |
+
+Both arms regress. test_re_rand moves in the WRONG direction (+2.3%, +11.9%) — the special OOD override doesn't fire.
+
+### Analysis
+
+**High-info finding: FiLM already preserves Re information across all 5 blocks.** Aux-Re diagnostic shows per-block r≈0.94–0.97 by epoch 2, flat across depth — the model knows Re at every layer. The forced-bottleneck regularizer is solving a nonexistent problem; its gradients compete with the main task's per-token regression. Dose-response is monotonically unfavorable (0.01→0.1 makes things 4× worse).
+
+**Key implication for future work:** The test_re_rand OOD gap is NOT from Re info loss. It comes from Re-conditional feature *interactions* (geometry×Re crosses, attention slicing under shifted Re distribution). Future test_re_rand attacks should target these interactions, not Re scalar preservation.
+
+### Decision: CLOSED — axis closes cleanly
+
+---
+## 2026-05-13 11:52 — PR #1981 CLOSE willowpai2g48h2-nezuko (wd-sweep on Kendall): within noise + new baseline moved past it
+
+- **Branch:** `willowpai2g48h2-nezuko/wd-sweep-on-kendall`
+- **W&B runs:** `tslq8om2` (wd=3e-4), `qky28hu9` (wd=1e-3)
+
+### Results
+
+| Arm | wd | swa_val | swa_test | Δ val (vs Kendall #1906) |
+|---|---:|---:|---:|---:|
+| Baseline | 1e-4 | 71.435 | 62.987 | — |
+| **Arm 1** | 3e-4 | **71.352** | **62.902** | **−0.08 (within noise)** |
+| **Arm 2** | 1e-3 | 71.509 | 63.033 | +0.07 |
+
+After merging #2082 RFF, new baseline is val=70.63 — wd=3e-4 result of 71.35 is now a clear regression (+1.04%).
+
+### Analysis
+
+**wd is not biting at this run length.** Student's L2-norm diagnostics confirmed: total model L2 norm differs by only 0.043 (0.09%) between wd=3e-4 and wd=1e-3 over 13 epochs. Gradient updates dominate wd-driven shrinkage at lr=5e-4 and 13-epoch budget. SWA averaging further blurs the difference.
+
+**Kendall σ decoupled:** log_sigma values essentially identical between arms (designed behavior — log_sigma has weight_decay=0 in optimizer).
+
+### Decision: CLOSED — wd axis closes (not a lever at this scale/lr/budget)
+
+---
+## 2026-05-13 11:55 — PR #1757 SEND-BACK willowpai2g48h2-frieren (β=0.3 on RFF+Kendall): pre-Kendall run, needs rerun on full current stack
+
+- **Branch:** `willowpai2g48h2-frieren/beta-0p3-on-filmed`
+- **Result on grad-clip+FiLM stack (max_norm=1.0, NO Kendall, NO RFF):** swa_val=72.11, swa_test=62.91
+
+vs current baseline (PR #2082, val=70.63/test=62.09): val **+2.12% regress**, test **+1.32% regress**.
+
+### Context
+
+Student ran on the pre-Kendall stack (#1731 grad-clip+FiLM, max_norm=1.0). Since then, #1906 (Kendall) and #2082 (RFF) have both merged. Sent back with new reproduce command for the full stack:
+
+```bash
+cd target/ && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 1.0 \
+  --huber_beta 0.3 \
+  --seed 0 \
+  --agent willowpai2g48h2-frieren \
+  --wandb_name willowpai2g48h2-frieren/beta-0p3-on-rff-kendall \
+  --wandb_group beta-on-rff-kendall
+```
+
+The β=0.3 mechanism (monotonic improvement, test asymmetry, camber_rc / test_re_rand gain) is confirmed on older stacks. The question is whether it continues to compound on the current RFF+Kendall stack, which is more orthogonal. Alphonse's #2171 concurrently tests β=0.1 on the same stack.
+
+### Decision: SENT BACK for rerun on Kendall+RFF stack
+
