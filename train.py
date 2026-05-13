@@ -376,6 +376,9 @@ class Config:
     augment: bool = True
     aoa_jitter_rad: float = 0.00873  # std of Gaussian noise on AoA features (~ 0.5 deg)
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
+    use_focal_weight: bool = False   # focal-style per-sample loss reweighting (off → baseline)
+    focal_gamma: float = 1.0         # exponent on normalized per-sample loss
+    focal_eps: float = 1.0e-6        # numerical stability in mean division
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -509,6 +512,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_clip_fires = 0
+    epoch_w_min = float("inf")
+    epoch_w_max = float("-inf")
+    epoch_w_std_sum = 0.0
+    epoch_w_mean_sum = 0.0
+    epoch_eff_bs_sum = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -528,7 +536,27 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        if cfg.use_focal_weight:
+            # Per-sample MSE composed of surf-weighted vol + surf contributions,
+            # each normalized by that sample's valid node count × 3 channels.
+            sum_vol_ps = (sq_err * vol_mask.unsqueeze(-1)).sum(dim=(1, 2))
+            sum_surf_ps = (sq_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2))
+            n_vol_ps = vol_mask.sum(dim=1).clamp(min=1) * 3
+            n_surf_ps = surf_mask.sum(dim=1).clamp(min=1) * 3
+            per_sample_mse = sum_vol_ps / n_vol_ps + cfg.surf_weight * sum_surf_ps / n_surf_ps  # [B]
+            ps_detached = per_sample_mse.detach()
+            focal_weight = (ps_detached / (ps_detached.mean() + cfg.focal_eps)) ** cfg.focal_gamma
+            loss = (focal_weight * per_sample_mse).mean()
+            with torch.no_grad():
+                fw = focal_weight
+                epoch_w_min = min(epoch_w_min, fw.min().item())
+                epoch_w_max = max(epoch_w_max, fw.max().item())
+                epoch_w_std_sum += fw.std(unbiased=False).item()
+                epoch_w_mean_sum += fw.mean().item()
+                # Importance-sampling effective batch size: (sum w)^2 / sum w^2
+                epoch_eff_bs_sum += (fw.sum() ** 2 / (fw ** 2).sum().clamp(min=1e-12)).item()
+        else:
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -580,7 +608,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -595,7 +623,17 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "ema_decay": cfg.ema_decay,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
-    })
+    }
+    if cfg.use_focal_weight and n_batches > 0:
+        record.update({
+            "focal/gamma": cfg.focal_gamma,
+            "focal/weight_min": epoch_w_min,
+            "focal/weight_max": epoch_w_max,
+            "focal/weight_std_mean": epoch_w_std_sum / n_batches,
+            "focal/weight_mean_mean": epoch_w_mean_sum / n_batches,
+            "focal/effective_batch_size_mean": epoch_eff_bs_sum / n_batches,
+        })
+    append_metrics_jsonl(metrics_jsonl_path, record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
