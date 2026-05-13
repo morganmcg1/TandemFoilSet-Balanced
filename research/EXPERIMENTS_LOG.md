@@ -1,5 +1,43 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 13:45 — PR #2249: Lookahead wrapper around Lion (k=5, α=0.5 vs 0.8) (CLOSED — epoch-budget cliff; anchor lag costs too much convergence in ≤16 epochs)
+
+- Student branch: `charliepai2g24h5-thorfinn/lookahead-lion-wrapper`
+- Hypothesis: Lookahead (Zhang et al. 2019, k=5 inner steps, α∈{0.5,0.8} outer-loop interpolation) reduces Lion sign-update oscillation at batch=4 via outer-loop EMA snap-back. Two arms isolate lag vs stability tradeoff.
+
+### Results (vs baseline #2196: 47.43/45.01)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | Δval vs #2196 | Δtest vs #2196 |
+|---|---:|---:|---:|---:|
+| Baseline (#2196) | **47.43** | **45.01** | — | — |
+| Arm A (k=5, α=0.5) | 57.6092 | 54.4829 | +10.18 (+21.5% worse) | +9.47 (+21.0% worse) |
+| Arm B (k=5, α=0.8) | 53.4533 | 50.3188 | +6.02 (+12.7% worse) | +5.31 (+11.8% worse) |
+
+Also worse than old #1656 baseline (52.63/49.22): Arm A +9.5%/+10.7%, Arm B +1.6%/+2.2%.
+
+### Per-split (Arm B, best arm)
+
+| Split | Arm B val | Baseline val | Arm B test | Baseline test |
+|---|---:|---:|---:|---:|
+| single_in_dist | 57.86 | 52.19 | 49.26 | 43.52 |
+| geom_camber_rc | 67.42 | 59.75 | 59.97 | 53.81 |
+| geom_camber_cruise | 35.36 | 30.87 | 47.80 | 43.91 |
+| re_rand | 53.17 | 46.90 | 44.25 | 38.82 |
+
+### Mechanism
+
+Thorfinn's per-epoch curve is the smoking gun. At epoch 16:
+- Arm A slope: −1.11 val/epoch; Arm B slope: −0.75 val/epoch; Baseline slope: ~−0.27 val/epoch.
+Both Lookahead arms are **still falling steeply** at epoch 16 — the model is catching up, not converged. The slow-weight anchor (averaging fast weights back every k=5 steps) imposes a lag penalty proportional to how fast the fast weights are moving. Lion's aggressive sign-update moves weights quickly in early epochs; Lookahead drags these back toward the lagged interpolant, costing convergence speed. With 16-epoch hard cap the model never recoups the lost ground. α=0.8 (Arm B) lags less and predictably outperforms α=0.5 (Arm A).
+
+### Disposition
+
+**CLOSED.** Not a viable direction within the 16-epoch budget. This is a budget-cliff failure mode analogous to DropPath (#2044) and EMA (#1596) — all averaging-over-time mechanisms need more epochs than available to amortise the convergence cost. Add "Lookahead+Lion requires ≥30 epochs to amortise lag cost" to confirmed dead ends. Reassigned thorfinn to **RMSNorm vs LayerNorm** (#2315): scale-only normalisation, LLaMA-recipe co-change with SwiGLU.
+
+- Metrics: `models/model-lookahead_k5_a05-20260513-121250/metrics.jsonl`, `models/model-lookahead_k5_a08-20260513-124822/metrics.jsonl`
+
+---
+
 ## 2026-05-13 13:00 — PR #2182: Layer-wise LR decay (LLRD factor=0.85) (CLOSED — Lion + shallow stack + from-scratch training incompatible with LLRD)
 
 - Student branch: `charliepai2g24h5-frieren/layerwise-lr-decay`
