@@ -496,10 +496,12 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
 print(f"GRAD_CLIP max_norm: {GRAD_CLIP}")
-warmup_epochs = 4
+warmup_epochs = 2
+T_max = max(MAX_EPOCHS - warmup_epochs, 1)
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
 scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+print(f"LR schedule: warmup_epochs={warmup_epochs}  T_max={T_max}  MAX_EPOCHS={MAX_EPOCHS}  peak_lr={cfg.lr}")
 
 channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
 
@@ -517,6 +519,8 @@ with open(model_dir / "config.yaml", "w") as f:
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
         "grad_clip": GRAD_CLIP,
+        "warmup_epochs": warmup_epochs,
+        "cosine_T_max": T_max,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
@@ -648,6 +652,8 @@ for epoch in range(MAX_EPOCHS):
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
         "grad_clip": GRAD_CLIP,
+        "warmup_epochs": warmup_epochs,
+        "cosine_T_max": T_max,
         "pre_clip_grad_norm": grad_norm_summary,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
