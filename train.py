@@ -500,10 +500,9 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
-# Other params: lr=cfg.lr, wd=cfg.weight_decay; freqs: lr=10*cfg.lr, wd=0.
-# Rationale: default wd=1e-4 pulls freqs toward 0 each step, and the global lr=5e-4
-# was too small to move them off their dyadic init (top freqs essentially fixed in #2312).
+# H53: 50× lr for Fourier freqs (was 10×). Tests whether top freqs (8,16,32)
+# are strictly gradient-magnitude limited, or just lr-limited at 10×.
+# Clamp [0.1, 100] after each step provides safety bounds.
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
 other_params = list(model.parameters())
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
@@ -516,17 +515,18 @@ assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in other_params
 optimizer = torch.optim.AdamW(
     [
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
-        {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": freq_params, "lr": cfg.lr * 50.0, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
 print(
-    f"[H40] Optimizer param groups: "
+    f"[H53] Optimizer param groups: "
     f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e}, "
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
 )
-print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+# Expected: freqs lr=2.50e-02 (= 5e-4 * 50)
+print(f"[H53] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -571,6 +571,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    # H53: per-epoch clamp activation counter (one entry per freq).
+    freq_clamp_hits_low = [0] * N_FREQS
+    freq_clamp_hits_high = [0] * N_FREQS
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -601,7 +604,15 @@ for epoch in range(MAX_EPOCHS):
         )
         optimizer.step()
         # H40: keep freqs bounded after the update. Safety net for the higher freqs lr.
+        # H53: track which freqs hit the clamp boundary at each step.
         with torch.no_grad():
+            freqs_pre = fourier_enc.freqs.detach()
+            for fi in range(N_FREQS):
+                v = freqs_pre[fi].item()
+                if v < 0.1:
+                    freq_clamp_hits_low[fi] += 1
+                elif v > 100.0:
+                    freq_clamp_hits_high[fi] += 1
             fourier_enc.freqs.clamp_(0.1, 100.0)
         scheduler.step()
 
@@ -646,6 +657,8 @@ for epoch in range(MAX_EPOCHS):
         "train/current_lr": current_lr,
         "train/freqs_lr": freqs_lr,
         "train/freqs": freqs_now,
+        "train/freq_clamp_hits_low": freq_clamp_hits_low,
+        "train/freq_clamp_hits_high": freq_clamp_hits_high,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
@@ -662,6 +675,11 @@ for epoch in range(MAX_EPOCHS):
         f"    freqs (lr={freqs_lr:.2e}): "
         f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
     )
+    if any(freq_clamp_hits_low) or any(freq_clamp_hits_high):
+        print(
+            f"    [H53] clamp hits this epoch: "
+            f"low={freq_clamp_hits_low} high={freq_clamp_hits_high}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
