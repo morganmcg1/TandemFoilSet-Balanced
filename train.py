@@ -469,7 +469,7 @@ print(
     f"ema params: {sum(p.numel() for p in ema_model.parameters())}"
 )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, eps=1e-6)
 
 # Linear LR warmup over the first epoch, then cosine decay over the remaining
 # epochs. SequentialLR is stepped per *training step* (see scheduler.step below),
@@ -506,6 +506,7 @@ run = wandb.init(
         "torch_compile": compile_enabled,
         "torch_compile_mode": "default" if compile_enabled else None,
         "torch_compile_dynamic": True if compile_enabled else None,
+        "adamw_eps": 1e-6,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
