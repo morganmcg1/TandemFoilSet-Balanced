@@ -63,7 +63,7 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, dropout=0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
@@ -73,11 +73,14 @@ class MLP(nn.Module):
         self.linears = nn.ModuleList(
             [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
         )
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x):
-        x = self.linear_pre(x)
+        # Apply dropout after each activation (BERT/ViT FFN pattern).
+        x = self.dropout(self.linear_pre(x))
         for i in range(self.n_layers):
-            x = self.linears[i](x) + x if self.res else self.linears[i](x)
+            h = self.dropout(self.linears[i](x))
+            x = h + x if self.res else h
         return self.linear_post(x)
 
 
@@ -138,7 +141,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 mlp_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -148,7 +152,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, dropout=mlp_dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -169,7 +173,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 mlp_dropout=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +195,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                mlp_dropout=mlp_dropout,
             )
             for i in range(n_layers)
         ])
@@ -370,6 +376,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     lion_lr: float = 1.5e-4
     lion_weight_decay: float = 3e-5
+    dropout: float = 0.1
+    mlp_dropout: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -414,7 +422,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
-    dropout=0.1,
+    dropout=cfg.dropout,
+    mlp_dropout=cfg.mlp_dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
