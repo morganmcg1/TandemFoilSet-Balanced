@@ -139,3 +139,26 @@ Merged. bf16 mixed-precision training (`torch.amp.autocast(dtype=torch.bfloat16)
 - **W&B run:** `4hy79j91`
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
   (bf16 autocast and NaN workaround are now in the merged train.py; no extra flags needed)
+
+## 2026-05-13 02:00 — PR #1672: nezuko linear LR warmup 1 epoch v2
+
+**New best — 5th compound improvement**
+
+- **val_avg/mae_surf_p:** 85.0926 (↓ from 85.9197, −0.96%)
+- **test_avg/mae_surf_p:** 75.5171 (↓ from 76.5495, −1.35%)
+
+**Per-split test (all four improved):**
+
+| Split | mae_surf_p |
+|-------|----------:|
+| `test_single_in_dist` | 87.1000 |
+| `test_geom_camber_rc` | 84.5765 |
+| `test_geom_camber_cruise` | 55.4971 |
+| `test_re_rand` | 74.8950 |
+
+- **Config:** EMA decay=0.999, Huber β=0.5, bf16 autocast, lr=5e-4, batch_size=4, surf_weight=10, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, dropout=0.0, LR warmup 1 epoch (start_factor=0.2→1.0 over 375 steps, T_max=10875)
+- **Epochs:** 17 in 30 min (~110 s/epoch)
+- **EMA−Live gap:** −9.87 at epoch 17 (EMA −9.87 vs baseline −10.49)
+- **W&B run:** `1hn6ur4l`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
+  (warmup is now merged into train.py defaults; no extra flags needed)
