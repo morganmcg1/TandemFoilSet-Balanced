@@ -484,6 +484,20 @@ optimizer = torch.optim.AdamW(
     weight_decay=cfg.weight_decay,
     betas=(0.95, 0.98),
 )
+
+# Lookahead (Zhang et al. 2019): slow-weight dampening of AdamW's noisy
+# per-sample steps. Every LOOKAHEAD_K optimizer.step() calls the slow weights
+# move toward the fast weights by LOOKAHEAD_ALPHA, then the fast weights are
+# reset to the new slow weights. With grad_accum=1 each optimizer.step() is one
+# microbatch (true SGD), so the slow weights average a 5-step neighborhood of
+# noisy AdamW updates — approximates the center of the loss valley.
+LOOKAHEAD_K = 5
+LOOKAHEAD_ALPHA = 0.5
+slow_weights = {
+    n: p.data.clone() for n, p in model.named_parameters() if p.requires_grad
+}
+lookahead_counter = 0
+
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=cfg.max_lr,
@@ -516,6 +530,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("lookahead/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -580,6 +595,20 @@ for epoch in range(MAX_EPOCHS):
             clip_active = float(grad_norm.item() > 1.0)
             optimizer.step()
             optimizer.zero_grad()
+
+            # Lookahead slow-weight sync. Runs every LOOKAHEAD_K optimizer
+            # steps; AdamW's internal state (exp_avg, exp_avg_sq) is untouched
+            # so the inner fast-weight trajectory continues coherently.
+            lookahead_counter += 1
+            did_lookahead_sync = lookahead_counter % LOOKAHEAD_K == 0
+            if did_lookahead_sync:
+                with torch.no_grad():
+                    for n, p in model.named_parameters():
+                        if p.requires_grad:
+                            sw = slow_weights[n]
+                            sw.add_(LOOKAHEAD_ALPHA * (p.data - sw))
+                            p.data.copy_(sw)
+
             # OneCycleLR steps per optimizer step. Guard against overflow if
             # the run somehow exceeds the calibrated total_steps budget.
             if global_step < total_steps:
@@ -589,6 +618,8 @@ for epoch in range(MAX_EPOCHS):
                        "train/grad_norm": grad_norm.item(),
                        "train/grad_clip_active": clip_active,
                        "train/lr": scheduler.get_last_lr()[0],
+                       "lookahead/syncs": lookahead_counter // LOOKAHEAD_K,
+                       "lookahead/sync_event": float(did_lookahead_sync),
                        "global_step": global_step})
 
         epoch_vol += vol_loss.item()
