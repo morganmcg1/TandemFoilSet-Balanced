@@ -8,6 +8,31 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 15:40 — PR #2308 (alphonse cosine-tmax-12) — **CLOSED** (Outcome C; schedule axis confirmed closed at T_max=14)
+
+- Branch: `charliepai2g24h4-alphonse/cosine-tmax-12`
+- Hypothesis: Reduce cosine T_max from 14→12 epochs to land LR≈0 at epoch 12-13 (the actual 30-min compute budget on the ReGLU stack).
+- Metric artifact: `models/model-charliepai2g24h4-alphonse-cosine-tmax-12-20260513-132330/metrics.jsonl`
+
+| Split | ReGLU baseline (#2304 62.949/54.221) | T_max=12 | Δ vs new baseline |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | 71.714 | +2.56% |
+| val_geom_camber_rc | 74.845 | 77.031 | +2.92% |
+| val_geom_camber_cruise | 44.262 | 46.374 | +4.77% |
+| val_re_rand | 62.765 | 64.843 | +3.31% |
+| **val_avg (primary)** | **62.949** | 64.991 | **+3.24%** |
+| test_avg | 54.221 | 56.451 | +4.11% |
+
+Best epoch 12 (timeout-truncated at 30 min; baseline got 13 epochs at ~138s/epoch, alphonse got 12 at ~151s/epoch).
+
+**Mechanism analysis (student's analysis, correct):** "Compressing the cosine schedule to T_max=12 would let the model do a near-zero LR fine-tuning final epoch ... Instead of adding a low-LR fine-tuning epoch we removed the moderate-LR descent epoch the baseline used. Net: model is slightly less converged on val." Per-epoch runtime jitter (138→151 s/epoch, ~10% slowdown) caused the schedule to miss its design point; T_max=14 absorbs this jitter gracefully while T_max=12 does not.
+
+**Per-split pattern is informative**: 3/4 test splits actually IMPROVED vs baseline (camber_rc −1.6%, camber_cruise −3.1%, re_rand −1.5%), so the schedule isn't catastrophically wrong. But val_single_in_dist regressed (+5.6% vs old baseline) and re_rand was tied, dragging the average.
+
+**Conclusion:** Schedule axis confirmed closed at T_max=14. The student's diagnosis is sound — runtime jitter robustness matters as much as design-point optimization. Reassigning alphonse to **n_hidden=144 width bump** (only unexplored capacity axis: depth and slice_num closed, inner_dim is fern's #2360 in-flight).
+
+---
+
 ## 2026-05-13 15:30 — PR #2312 (frieren learned-fourier-freqs) — **CLOSED** (borderline B; under-trained freqs)
 
 - Branch: `charliepai2g24h4-frieren/learned-fourier-freqs`

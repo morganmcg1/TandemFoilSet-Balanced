@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 15:35 UTC (Wave 16: CLOSE #2312 borderline / #2309 σ=1.0 redundant / #2286 class falsified; assigning askeladd/edward/frieren follow-ups)
+- **Last updated**: 2026-05-13 15:45 UTC (Wave 16: CLOSE #2312/#2309/#2286/#2308; ASSIGN #2368 askeladd FiLM, #2369 edward hybrid-σ-3, #2370 frieren freqs-no-wd, #2371 alphonse n-hidden-144)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -30,7 +30,7 @@ The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). Three
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
 | tanjiro | #2281 | swiglu-inner-dim-320 | SwiGLU inner_dim 256→320 (pre-ReGLU branch; compare vs old SwiGLU baseline 67.381) | IN FLIGHT |
-| alphonse | #2308 | cosine-tmax-12 | T_max=14→12 cosine schedule recalibration | IN FLIGHT |
+| alphonse | #2371 | n-hidden-144 | n_hidden 128→144 width bump on ReGLU stack (replaces closed cosine-tmax-12) | ASSIGNED |
 | thorfinn | #2359 | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | IN FLIGHT |
 | fern | #2360 | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | IN FLIGHT |
 | nezuko | #2361 | stoch-depth-0.05-reglu | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | IN FLIGHT |
@@ -107,7 +107,7 @@ The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). Three
 4. **FiLM-style global conditioning** (askeladd, NEW): γ/β = MLP(log_Re,AoA0,AoA1) modulating block activations — proper mechanism for per-sample scalars
 5. **Hybrid Fourier σ=3.0** (edward, NEW): retest hybrid with the actual #2225 winning σ; high-freq RFF complement
 6. **Learned freqs no-wd + 10× lr** (frieren, NEW): unblock the under-trained 6-freq vector; let high-freq freqs actually move
-7. **Cosine T_max=12** (alphonse #2308 in-flight): schedule recalibration
+7. **n_hidden=144 width** (alphonse #2371 NEW): residual-stream width bump (was cosine T_max=12 closed; schedule axis confirmed closed at T_max=14)
 8. **SwiGLU inner_dim=320** (tanjiro #2281 in-flight): pre-ReGLU branch; compare vs old SwiGLU baseline 67.381
 9. **Harder gates**: Cube ReLU, or learned per-channel gate (nn.PReLU); only if Squared ReLU wins
 10. **Per-block learned freqs**: 5 × 6 = 30 freq params for spatial spectral carving — if frieren no-wd hits limits
