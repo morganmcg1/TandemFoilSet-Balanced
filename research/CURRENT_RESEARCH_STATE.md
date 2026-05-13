@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 02:30 UTC
+- **Date**: 2026-05-13 03:30 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -33,7 +33,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 | alphonse | #1736 | `huber-delta-smaller` | WIP — Huber δ sweep: 0.25 + 0.1 on merged stack. Should rebase on #1745 to test smaller δ on top of Huber+curriculum stack. |
 | askeladd | #1822 | `domain-oversample-racecar-single` | WIP (just assigned) — over-sample racecar_single domain 2x (Arm A) / 3x (Arm B) to target single_in_dist bottleneck (110.04). Different from focal weighting (per-domain sampling, not per-sample loss reweighting). |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
-| fern | #1770 | `n-layers-depth-scaling` | WIP — n_layers=6 (Arm A) / n_layers=7 (Arm B) on merged stack. Tests depth as third orthogonal scaling axis. |
+| fern | #1850 | `slice-num-sweep-96-128` | WIP — slice_num=96 (Arm A) / slice_num=128 (Arm B) on merged stack. Tests attention partitioning granularity. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP v3 — v2 PASSED (Arm B surface-only L=4: val 95.598 / test 89.895, beats #1686 by −2.07%/−2.23%). Sent back for v3 verification on full merged stack (Huber+curriculum+EMA). |
 | tanjiro | #1693 | `swiglu-ffn` | WIP v2 — v1 hit val 87.28 / test 82.24 (−10% vs #1686!) but merge conflicts + pre-#1484/#1686 base. Sent back for rebase + rerun on full merged stack (#1745 now baseline). |
@@ -61,6 +61,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 
 ### Closed (disproved — negative results)
 - **Focal per-sample loss weighting** (askeladd #1709): Both arms (γ=1.0, γ=2.0) regress +9-10% val / +10-12% test vs #1495 baseline. Effective batch-size collapse (eff_bs ≈ 1.65 at γ=2.0 out of B=4) was the dominant failure mode — not gradient signal weakness. Revised P3: focal weighting fails at B≤4 with high-y-variance regression. Per-domain sampling (askeladd #1822) is the orthogonal next test.
+- **n_layers depth scaling** (fern #1770): Both arms (n_layers=6/7) regress +13%/+22% vs #1745 baseline. Budget-cap binding: +20-40% sec/epoch reduces completed epochs, cosine schedule never anneals fully, LR still in steep-descent phase at termination. Split predicted to improve most (val_single_in_dist) regressed most (+19.7% at Arm A). New P7: under binding wall-clock cap, sec/epoch increases trade against schedule completion — prefer width/gating/loss axes over depth axis.
 
 ### Closed (disproved on fair comparison)
 - **FiLM Re-conditioning** (tanjiro #1494 v3): val_avg = 104.98 (+1.8% over 103.10 baseline) / test = 98.59 (+4.0% over 94.76 baseline) on cosine T_max=14 + augment + FiLM (exact #1495 protocol + FiLM only). val_re_rand WORSE under FiLM (+3.6%) — opposite of predicted direction. Root cause: log(Re) already at input dim 13 → FiLM adds redundant route; augmentation + FiLM compete on small dataset. v2's 100.99 was rebase artifact, not FiLM signal.
@@ -127,12 +128,26 @@ model's task-relevant input sensitivity. Rules out the entire family
 of "perturb a meaningful input axis at test time" approaches for
 surrogate models.
 
+**P7 (PR #1770): Under a binding wall-clock cap with cosine T_max=N,
+architectural changes that increase sec/epoch trade against schedule
+completion.** n_layers=6 (+20% sec/epoch) completed only 12/14 epochs;
+n_layers=7 (+40%) only 10/14 epochs. The cosine schedule never reached
+its annealing tail, leaving LR too high for fine-grained surface pressure
+learning. The predicted "val_single_in_dist benefits from depth" inverted:
+the most compute-hungry split (largest in-distribution gradients) regressed
+most when under-trained. Implication: in this budget regime, prefer axes
+that keep sec/epoch ≈ baseline (width, FFN gating, loss, slice_num) over
+axes that scale it (depth, attention resolution, mesh resolution). Depth
+scaling requires either a longer per-run budget or adaptive schedule
+matching epochs to available compute.
+
 ### Potential next directions (round 3+)
 - **Even smaller Huber δ** (alphonse #1736, in flight): δ=0.25 and δ=0.1 on #1745 merged stack (Huber+curriculum). Optimum may be below 0.5 now that curriculum handles the training-dynamic stability.
 - **surf_weight push** (thorfinn #1827, in flight): surf_weight=30/50 on #1745 stack. Directly tests whether optimal final weight > 20; expected gain from targeting val_single_in_dist bottleneck (110.04).
 - **Per-domain data curriculum** (askeladd #1822, in flight): over-sample racecar_single training domain 2x/3x. Direct orthogonal approach to single_in_dist bottleneck after focal weighting failure.
 - **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack.
 - **Fourier PE composability** (nezuko #1662 v3, in flight): ~−2% additional gain expected if v2 held on merged stack.
+- **slice_num sweep** (fern #1850, just assigned): slice_num=96/128 on #1745 merged stack. Tests attention partitioning granularity. Mechanically efficient (tiny extra compute). Targeting boundary-layer clustering under surf_weight=20 curriculum.
 - **Larger surf_weight ramp endpoint (100)** — only if thorfinn's 50 arm passes, test 100.
 - **Surface-only Huber**: apply Huber to surface nodes, MSE to volume. Different from whole-loss Huber; could help single_in_dist where surface-pressure-range is large.
 - **Mesh-aware positional encoding**: signed distance / arc length as Fourier features (nezuko #1662 v2 covers raw-coord; arc-length is the next step).

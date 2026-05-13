@@ -168,14 +168,26 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-13 01:05 — PR #1770: n_layers depth scaling 5→6/7 (fern) — WIP (assigned)
-**Branch:** `charliepai2g24h3-fern/n-layers-depth-scaling` | **Status: WIP**
+### 2026-05-13 03:10 — PR #1770: n_layers depth scaling 5→6/7 (fern) — **CLOSED (budget-cap constraint, not capacity)**
+**Branch:** `charliepai2g24h3-fern/n-layers-depth-scaling` | **Status: CLOSED**
 
-- **Hypothesis:** Of three orthogonal architecture-scaling axes (width n_hidden, FFN-width mlp_ratio, depth n_layers), depth is the only untested on this branch. Increasing depth gives more sequential receptive-field passes over slice-attention, which should help on the high-frequency surface pressure (val_single_in_dist is consistently worst). The Transolver paper sweeps n_layers and n=5 is at the smaller end.
-- **Arms:** Arm A (n_layers=6, +20% compute); Arm B (n_layers=7, +40% compute, risk of underfitting at 30-min cap).
-- **All other knobs at #1686 winning values:** cosine T_max=14, augment, grad_clip, wd=1e-3, surf_weight curriculum 1→20, EMA=0.999, MSE loss.
-- **Pass criterion:** val_avg/mae_surf_p < 97.62 AND test_avg/mae_surf_p (safe 4-split) < 91.947.
-- **Predicted Δ:** −1 to −3% val_avg. Largest gain on val_single_in_dist (114.69 currently — sharpest pressure gradients should benefit most from depth).
+- **Hypothesis:** Depth scaling (n_layers 5→6/7) would improve surface-pressure MAE by giving more sequential receptive-field passes over slice-attention, especially on val_single_in_dist (sharpest pressure gradients). n=5 is at the smaller end of the Transolver paper's sweep range.
+- **Arms:** Arm A (n_layers=6, +20% compute); Arm B (n_layers=7, +40% compute).
+- **All other knobs at #1686 winning values:** cosine T_max=14, augment, grad_clip, wd=1e-3, surf_weight curriculum 1→20, EMA=0.999.
+- **Results — both arms FAIL:**
+
+| Arm | n_layers | sec/epoch | epochs completed | val_avg/mae_surf_p | Δ vs #1745 |
+|---|---|---:|---:|---:|---:|
+| Baseline (#1745) | 5 | ~130 | 14/14 | **91.507** | — |
+| Arm A | 6 | ~157 | **12/14** | **103.644** | +13.3% |
+| Arm B | 7 | ~181 | **10/14** | **111.923** | +22.3% |
+
+- **Per-split test (Arm A vs #1745):** single=115.20 (+19.7%), rc=102.92 (+16.2%), cruise=82.48 (+6.9%), re_rand=90.83 (+13.0%). **The predicted "single_in_dist improves most" inverted** — it regressed most.
+- **Val trajectory smoking gun:** Arm A was still descending at >5 pt/epoch when cap fired at epoch 12. Arm B LR at epoch 10 termination was 9.4e-5 — well into the steep-descent phase, not in the polish tail. Both models were under-trained relative to a 14-epoch cosine schedule.
+- **Mechanism (budget cap binding):** Adding layers increases sec/epoch by ~20-40%, reducing completed epochs within the 30-min cap. cosine T_max=14 never finishes annealing → model is left in early-training LR territory → terminal epoch too high for surface precision. The quality ceiling is NOT the model's capacity — it is the schedule completeness.
+- **New universal principle (P7):** Under a binding wall-clock cap with cosine T_max=N, architectural changes that increase sec/epoch (depth, wide attention, mesh resolution) trade against schedule completion. The optimal axis is one that keeps sec/epoch ≈ baseline (width, FFN gating, loss reparameterisation) rather than one that increases it linearly.
+- **Follow-on assignment:** fern #1850 — slice_num sweep (96, 128). slice_num scales only the in_project_slice linear layer (tiny), keeping sec/epoch ≈ baseline. Tests attention granularity rather than depth.
+- **Artifacts:** `models/model-charliepai2g24h3-fern-n-layers-6-cosine14-20260513-011742/{metrics.jsonl,test_safe_eval.json}`, `models/model-charliepai2g24h3-fern-n-layers-7-cosine14-20260513-015555/{metrics.jsonl,test_safe_eval.json}`
 
 ---
 
