@@ -7,6 +7,28 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 22:10 — PR #2596: n_layers=3 + n_head=2 + Lion — CLOSED
+
+- `willowpai2g24h3-edward/n-layers-3-n-head-2`
+- **Hypothesis:** Combine the two strongest individual signals — n_head=2 (PR #2192) and n_layers=3 depth signal observed in `rxqavwx9` (val 39.84 at n_head=4) — predicted to compound additively on the merged n_head=2+Lion stack.
+- **Results (single seed, run `zmirxzq5`):**
+
+| Metric | n_layers=3+n_head=2+Lion (this) | Baseline n_layers=4+n_head=2+Lion (gd934e9l) | Δ |
+|---|---:|---:|---|
+| val_avg | 41.6177 | 40.2741 | **+3.34% ❌** |
+| test_avg | 35.0493 | 33.6017 | **+4.31% ❌** |
+| val_single_in_dist | 40.9411 | 35.836 | **+14.25%** |
+| val_geom_camber_rc | 53.7159 | 53.495 | +0.41% |
+| val_geom_camber_cruise | 29.1766 | 28.146 | +3.66% |
+| val_re_rand | 42.6373 | 43.619 | −2.25% |
+| Best epoch | 35/35 | 36/36 | (still descending at cap) |
+| Peak VRAM | 51.1 GiB | ~13.6 GiB | (model larger? — same n_hidden=128) |
+
+- **Analysis:** Depth and n_head do NOT compound additively on this stack. Edward's mechanism analysis: dim_head=64 (n_hidden=128 / n_head=2) needs 4 blocks of refinement to outperform; 3 blocks at dim_head=64 starves the per-block representational throughput. The reference data point `rxqavwx9` (n_layers=3 + n_head=4 + Lion = 39.84) has dim_head=32, where each block has 4 attention heads doing parallel mixing — so the per-block throughput is high enough that 3 blocks suffice. n_head=2's "richer per-head capacity" requires more iterative refinement passes to amortize across slices. The largest regression is val_single_in_dist (+14.25%), the largest and most homogeneous split — strongest signal that per-block representational quality, not gradient-step budget, is the binding constraint here. Closed per merge bar (val ≥ 40.3 → close).
+- **Operational flag:** Pod had 3 concurrent training processes (PIDs 138008, 141990, 142923). Student handled cleanly by reporting from the clean 21:27 run that had committed best-checkpoint artifacts before contention. Harness assignment issue worth investigating downstream — not a content issue.
+- **Banked lesson:** Depth axis (n_layers) and head-count axis (n_head) target different bottlenecks (compute-per-block vs per-slice capacity) and do not stack. n_layers=4 should be held fixed on the n_head=2+Lion stack going forward.
+- **Next experiment:** edward reassigned to EMA decay sweep (PR #2612, 0.9995 / 0.9999) targeting the "best_epoch == final_epoch, still descending" gradient-step-bound observation.
+
 ## 2026-05-13 21:17 — PR #2192: n_head=2 + Lion — MERGED ⭐ WIN
 
 - `willowpai2g24h3-frieren/n-head-sweep`

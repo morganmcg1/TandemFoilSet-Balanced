@@ -5,34 +5,38 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 ~21:20 — frieren #2192 n_head=2+Lion MERGED (val 40.27 / test 33.60, −6.78%/−6.04%, 3-seed confirmed). **New baseline: val 40.27 / test 33.60.** All 7 in-flight PRs sent back to rebase onto n_head=2+Lion stack.
+- **Date**: 2026-05-13 22:10 — edward #2596 (n_layers=3+n_head=2+Lion) CLOSED (val 41.62, +3.34% regress; +14.25% on single_in_dist confirms depth/head axes don't compound). Reassigned to **#2612 EMA decay sweep** (0.9995, 0.9999). Confirmed regressions on n_head=2+Lion stack so far: n_layers=3 (#2596 closed), n_head=1 (#2593 first seed 44.08, second crashed), wd=3e-4 (#2555 5xmshkwk 41.32). **Plateau-watch: 3 confirmed regressions, 2 more would trigger Plateau Protocol.**
 - **Current best (merged)**: PR #2192 frieren n_head=2+Lion (run `gd934e9l`) at **val 40.2741 / test 33.6017** — all 8 per-split metrics improve vs Lion-only baseline. 36 epochs (still descending at cap), 49.5 s/epoch, 548K params, ~13.6 GB VRAM. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4`
 - **Updated merge bar (vs 40.27 baseline)**: ≤36.2 val ⇒ merge (≥10% gain), 36.2-40.3 → second seed, ≥40.3 → close.
 - **Closed axes on Lion+n_head=2 stack:**
   - Input-space coord-jitter (#2097 thorfinn): Lion's sign-based updates amplify corrupted gradient direction → noise hurts more than AdamW.
   - cosine-tail shape (pre-Lion), width-up n_hidden=192 (pre-Lion), Lion lr=3e-4 (pre-n_head=2)
   - wd=3e-4 on n_head=4 stack: val 42.85 (now +6.4% regress vs new baseline 40.27)
+  - **n_layers=3 + n_head=2 + Lion (#2596 edward)**: val 41.62 +3.34%; +14.25% on single_in_dist confirms depth+head don't compound (dim_head=64 needs 4 blocks of refinement)
+  - **n_head=1 isolation (#2593 frieren, seed1 x0o1lj5y val 44.08)**: +9.5% regress, second seed crashed — confirms n_head=2 is the n_head sweet spot; trend is NOT monotone past 2
 - **Active research directions (all on n_head=2+Lion stack):**
-  1. **n_head=1 isolation** — frieren #2593 (**NEW**, monotone n_head trend test; single 128-dim head; merges if val ≤36.2, close if ≥40.3)
-  2. **Depth minimum** — edward #2596 (**NEW PR**, n_layers=3+n_head=2+Lion; rxqavwx9 got val 39.84 on old n_head=4 stack — strong signal, retesting on n_head=2 stack; #2462 closed by student after my rebase redirect)
-  3. **Fourier K continuation** — askeladd #2552 (K=16, K=20 on n_head=2+Lion stack; sent back to rebase)
-  4. **Lion weight_decay sweep** — thorfinn #2555 (wd=3e-4 and wd=1e-3 on n_head=2+Lion stack; sent back to rebase)
-  5. **Lion LR flank** — tanjiro #2449 (lr=5e-5 and lr=2e-4 on n_head=2+Lion; sent back to rebase)
-  6. **Batch-size bs=1** — nezuko #2421 (bs=1+n_head=2+Lion; sent back to rebase)
+  1. **EMA decay sweep** — edward #2612 (**NEW PR**, 0.9995 + 0.9999 on n_head=2+Lion; targets "gradient-step-bound, still descending at cap" observation; predicted 1-3% gain if slower EMA captures more of late-low-LR portion)
+  2. **n_head=1 isolation** — frieren #2593 (seed1 finished val 44.08, +9.5% regress; seed2 crashed; awaiting student terminal SENPAI-RESULT)
+  3. **Fourier K continuation** — askeladd #2552 (K=16 first run `ik2i80ar` crashed at val 44.02 mid-train; K=16 retry `y10si1ew` running 12 min; K=20 arm pending)
+  4. **Lion weight_decay sweep** — thorfinn #2555 (wd=3e-4 `5xmshkwk` finished at val 41.32 +2.6% regress; wd=1e-3 `d4dd5gd1` running 9.5 min)
+  5. **Lion LR flank** — tanjiro #2449 (lr=5e-5 and lr=2e-4 on n_head=2+Lion; rate-limited)
+  6. **Batch-size bs=1** — nezuko #2421 (bs=1+n_head=2+Lion; rate-limited)
   7. **Slice-num=16** — alphonse #2358 (slice=16+n_head=2+Lion; rate-limited, needs rebase)
-  8. **Width-down n_hidden=96** — fern #2464 (n_hidden=96+n_head=2+Lion; rate-limited, needs rebase)
-- **Student status (21:20 UTC):**
-  - alphonse #2358: rate-limited (GPU=0%), new baseline comment posted; has rebase+retest instructions
-  - askeladd #2552: sent back to rebase + K=16/K=20 on n_head=2 stack
-  - edward #2596: **NEW PR** — n_layers=3+n_head=2+Lion compound test (student closed #2462 after redirect; fresh assignment)
-  - fern #2464: rate-limited (GPU=0%), new baseline comment posted; has n_hidden=96+n_head=2 instructions
-  - frieren #2593: **NEW ASSIGNMENT** — n_head=1 isolation test
-  - nezuko #2421: sent back to rebase + bs=1+n_head=2+Lion
-  - tanjiro #2449: sent back to rebase + Lion lr-flank (5e-5/2e-4) on n_head=2 stack
-  - thorfinn #2555: sent back to rebase + wd sweep on n_head=2 stack
+  8. **Width-down n_hidden=96** — fern #2464 (n_hidden=96+n_head=2+Lion; rate-limited)
+- **Student status (22:10 UTC):**
+  - alphonse #2358: rate-limited (GPU=0% earlier), needs rebase
+  - askeladd #2552: K=16 first run crashed, retry running (12 min in, val 64 early)
+  - edward #2612: **NEW PR** — EMA decay sweep (0.9995, 0.9999) on n_head=2+Lion (after #2596 closed)
+  - fern #2464: rate-limited (GPU=0%), needs work
+  - frieren #2593: 1 finished bad, 1 crashed — needs terminal post and likely close (CLEAR REGRESSION)
+  - nezuko #2421: rate-limited, needs work
+  - tanjiro #2449: rate-limited, needs work
+  - thorfinn #2555: wd=3e-4 finished bad, wd=1e-3 still running (9.5 min in)
 - **KEY MECHANISM FINDINGS:**
-  - **n_head=2 win mechanism**: dim_head=64 (vs 32 at n_head=4) enriches per-head geometry encoding in PhysicsAttention. Compounds with Lion. Trend monotone 4→2 → n_head=1 pending. All seeds hit best_epoch=final_epoch → training still under-budgeted.
+  - **n_head=2 win mechanism**: dim_head=64 (vs 32 at n_head=4) enriches per-head geometry encoding in PhysicsAttention. Compounds with Lion. Trend NOT monotone — n_head=1 (#2593 seed1) regressed +9.5%, confirming n_head=2 is the local optimum (not a monotone-decrease axis). All seeds hit best_epoch=final_epoch → training still under-budgeted.
+  - **Depth/head axes are non-additive**: n_layers=3+n_head=2 (#2596) regressed +3.34% (and +14.25% on single_in_dist). dim_head=64 needs 4 blocks of iterative refinement; reducing depth starves per-block representational throughput. Depth axis (compute-per-block) and head-count axis (per-slice capacity) target different bottlenecks and don't stack.
   - **Lion+input-noise interaction**: Lion sign-updates amplify corrupted gradient direction. Coord-jitter was −3.1% on AdamW, +4.86% WORSE on Lion. Clean architectural/optimizer changes compound well; noisy augmentations invert.
+  - **Plateau-watch (n_head=2+Lion stack)**: 3 confirmed regressions to date (n_layers=3 +3.4%; n_head=1 +9.5%; wd=3e-4 +2.6%). If askeladd K=16/K=20, thorfinn wd=1e-3, frieren n_head=1 seed2 all also regress, that's 6 consecutive failures → escalate per Plateau Protocol. Bigger swings under consideration: loss reformulation, deeper architecture changes, hybrid optimizer phases.
 - **Key structural insight (Lion mechanism):**
   - Lion: `update = sign(β1*m + (1-β1)*g)`, where m is EMA of past gradients; every update ±lr
   - weight_decay term: `w -= lr × (sign(m) + wd × w)` — wd acts as constant-force L2 penalty
