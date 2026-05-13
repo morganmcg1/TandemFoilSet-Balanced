@@ -442,13 +442,15 @@ model_config = dict(
     n_hidden=96,
     n_layers=4,
     n_head=2,
-    slice_num=24,
+    slice_num=48,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
-print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(f"slice_num sweep: slice_num=48 (vs baseline 24); 2x slice routing capacity; "
+      f"expected param count ~337,451 (vs 328,235 baseline; +9,216 params from slice projection); "
+      f"baseline to beat: val_avg/mae_surf_p < 33.4935 (PR #2553 Lion lr=1.5e-4)")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
@@ -456,6 +458,7 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Actual total params: {n_params} (expected ~337,451 for slice_num=48; baseline 328,235 for slice_num=24)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
