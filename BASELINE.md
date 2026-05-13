@@ -1,6 +1,60 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1614 (per-channel-loss-weights)
+## Current Baseline — PR #2011 (film-re-attention)
+
+**val_avg/mae_surf_p = 28.8762** (epoch 28 of 28; 30-min cap) — **-1.17% vs previous 29.2179**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- **+ ReScaleHead** (3-channel, 163 params): learned Re→scale MLP applied to Transolver output
+- **+ per-channel loss weights**: `ch_weights=[1.0, 1.0, 5.0]` applied as linear multiplier post-Huber on per-element Huber output (p_channel_weight=5.0)
+- **+ ReFiLM**: FiLM Re-conditioning inside PhysicsAttention slice logits (+4,624 params, ~0.7% overhead). Shared module across all 5 blocks/4 heads; zero-init (γ=0, β=0); gate opens to |γ|max=0.70, |β|max=0.62 by epoch 28.
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`)
+- **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**
+- **`torch.compile(mode="default", dynamic=True)`**
+- **bf16 AMP**
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1)+rel-L2 with p post-Huber weight=5 in numerator; denominator unweighted
+- 28 epochs in ~30 min, peak GPU 27.79 GB (+3.9 GB vs prior baseline from FiLM intermediates)
+- Cumulative: **-75.3%** vs initial 117.17
+
+**Per-split val at best epoch (28):**
+
+| Split | mae_surf_p | vs baseline (#1614) |
+|-------|-----------|---------|
+| val_single_in_dist | **28.6013** | +0.039 (+0.14%) |
+| val_geom_camber_rc | **41.9483** | −0.741 (−1.73%) |
+| val_geom_camber_cruise | **14.1462** | +0.375 (+2.72%) |
+| val_re_rand | **30.8090** | −1.041 (−3.27%) |
+| **val_avg** | **28.8762** | **−0.342 (−1.17%)** |
+
+**Per-split test at best epoch (28):**
+
+| Split | mae_surf_p | vs baseline (#1614) |
+|-------|-----------|---------|
+| test_single_in_dist | **29.5300** | −0.605 (−2.01%) |
+| test_geom_camber_rc | **37.0266** | −1.913 (−4.91%) |
+| test_geom_camber_cruise | **11.0171** | +0.170 (+1.57%) |
+| test_re_rand | **22.4230** | −0.065 (−0.29%) |
+| **test_avg** | **24.9992** | **−0.603 (−2.36%)** |
+
+**Mechanism**: Re-conditioning of PhysicsAttention slice-logits via FiLM (γ(Re), β(Re)). With zero-init gates, the module trains from identity and opens monotonically — mean slice entropy drops 33% (4.153→2.759), confirming the model genuinely uses different slice subsets per Re value. Gains concentrate on Re-variable splits (re_rand −1.04 val) and hard OOD geometry (geom_camber_rc test −1.91). Flat/mildly negative on fixed-Re splits (single_in_dist, geom_camber_cruise).
+
+**Artifact**: `models/model-charliepai2g24h1-fern-film-re-attention-20260513-072042/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 SENPAI_MAX_EPOCHS=50 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# Stack: SOAP + bf16 + torch.compile(default, dynamic) + CosineAnnealingLR(T_max=28, eta_min=1e-5)
+# + ReScaleHead(hidden=32, out_channels=3) + p_channel_weight=5 (post-Huber)
+# + ReFiLM(Re) on slice logits (shared, zero-init)
+```
+
+**Key insight**: ReFiLM adds a 4,624-param Re-conditioned FiLM gate to slice selection inside PhysicsAttention. The gate opens monotonically during training (zero-init ensures stable early dynamics), enabling Re-dependent attention slice specialisation. Orthogonal to ReScaleHead (output rescaling) and p_channel_weight (loss reweighting). Best==last epoch (28) — schedule still potentially binding.
+
+---
+
+## Previous Baseline — PR #1614 (per-channel-loss-weights)
 
 **val_avg/mae_surf_p = 29.2179** (epoch 29 of 29; 30-min cap) — **-2.11% vs previous 29.8463**
 
@@ -455,6 +509,7 @@ cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
 
 | Date | PR | val_avg/mae_surf_p | test_avg | Notes |
 |------|----|--------------------|---------|-------|
+| 2026-05-13 | #2011 | **28.8762** | **24.9992** | film-re-attention (ReFiLM on slice logits); 28 epochs / 30 min; -1.17% |
 | 2026-05-13 | #1614 | **29.2179** | **25.6024** | per-channel-loss-weights p=5 post-Huber; 29 epochs / 30 min; -2.11% |
 | 2026-05-13 | #1599 | **29.8463** | **26.1005** | re-conditioned-scaling (ReScaleHead 3ch); 29 epochs / 30 min; -1.95% |
 | 2026-05-13 | #1794 | **30.4412** | **26.1013** | torch.compile(default,dynamic=True); 30 epochs / 30 min; -17.5% |
