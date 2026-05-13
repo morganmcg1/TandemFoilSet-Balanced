@@ -93,6 +93,22 @@ class SwiGLU(nn.Module):
         return self.w_out(F.gelu(self.w_in(x)) * self.w_gate(x))
 
 
+class RMSNorm(nn.Module):
+    """RMSNorm: scale-only normalisation, no mean-centering (Zhang & Sennrich 2019).
+
+    Defers to ``torch.nn.functional.rms_norm`` for the fused kernel and the same
+    BF16-autocast / fp32-accumulate semantics that ``nn.LayerNorm`` uses.
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.normalized_shape = (dim,)
+        self.eps = eps
+        self.scale = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        return F.rms_norm(x, self.normalized_shape, self.scale, self.eps)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -153,17 +169,17 @@ class TransolverBlock(nn.Module):
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         # SwiGLU: mlp_ratio=4/3 for param parity with standard MLP at mlp_ratio=2
         swiglu_hidden = ((hidden_dim * 4 // 3) + 7) // 8 * 8  # round up to multiple of 8: 216 for hidden_dim=160
         self.mlp = SwiGLU(hidden_dim, swiglu_hidden, hidden_dim)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -217,6 +233,8 @@ class Transolver(nn.Module):
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, RMSNorm):
+            nn.init.constant_(m.scale, 1.0)
 
     def forward(self, data, **kwargs):
         x = data["x"]
