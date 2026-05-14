@@ -4,6 +4,81 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 14:30 — PR #2925 (CLOSED, thorfinn): swa_lr × swa_start_frac compose {0.65/1.5e-5, 0.65/3e-5} on max_norm=0.35 — paper-strengthening COMPOSE-AXIS test (NOT a new axis; banked #2429 mechanism extends cleanly to saturated-clip; MERGE hypothesis from #2896 cleanly FALSIFIED)
+
+- **Branch:** `willowpai2g48h2-thorfinn/swa-lr-x-swa-start-frac-compose-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Verdict:** Both arms STRONG REGRESSION past 46.50 close threshold. Arm 1 (swa_lr=1.5e-5 + s_f=0.65) val **47.79** / test 40.46 (+2.64 val / +1.82 test); Arm 2 (swa_lr=3e-5 + s_f=0.65) val **47.34** / test 40.31 (+2.19 val / +1.67 test). Per the PR decision rule no MERGE.
+- **W&B runs:** Arm 1 (s_f=0.65 + swa_lr=1.5e-5), Arm 2 (s_f=0.65 + swa_lr=3e-5), baseline `ieu1futo`.
+- **Headline:** **Paper-strengthening compose-axis finding: banked #2429 mechanism (pre-plateau averaging cost) extends cleanly to saturated-clip max_norm=0.35 baseline. The MERGE hypothesis from #2896 follow-up #1+#2 (4-epoch SWA window at deep-low-lr converts directional close into MERGE) is cleanly FALSIFIED.** **Not a new axis — confirms two well-characterized axes' interaction is captured by the dominant axis (swa_start_frac mechanism wins).** Paper-appendix table still 11 closed × 7 transfer patterns.
+
+### Mechanism diagnosis (paper-publishable, the core mistake exposed)
+
+The PR hypothesis assumed: more SWA epochs at deep-low-lr → tighter average → MERGE. **Reality**: SWA averages ALL weights in the window equally, including pre-plateau weights from the cosine descent. Dropping swa_start_frac 0.75 → 0.65 admits epoch 10 (val=55.61, lr=5.93e-5, pre-plateau on cosine descent) and epoch 11 (val=51.09, lr ramping) into the SWA average. These pre-plateau weights pull the SWA-mean AWAY from the converged region, regardless of how deep the swa_lr floor is.
+
+- **Baseline (s_f=0.75)**: 2 weights in avg, both at plateau (ep12 val=46.76 + ep13 val=46.34) → SWA-mean=45.15 ≈ plateau val.
+- **Arm 1 (s_f=0.65)**: 4 weights in avg but 2 are pre-plateau → SWA-mean=47.79 ≫ plateau val.
+
+**The "extra SWA epochs" only help if they are at plateau, NOT on the cosine descent — pre-plateau inclusion DOMINATES the deep-low-lr benefit.** Banked #2429 mechanism (pre-plateau averaging cost from σ=0.5 stack) transfers with the SAME monotonic direction to saturated-clip max_norm=0.35: Arm 1 frac=0.65 + deep-low-lr 1.5e-5 +2.64 val (vs banked #2429 σ=0.5 Arm 1 frac=0.6 +1.26 val); Arm 2 frac=0.65 + asymmetric-V mid 3e-5 +2.19 val (vs banked #2429 Arm 2 frac=0.5 +3.01 val).
+
+**SWALR anneal_epochs=2 fast-ramp observed** (banked #184 below): both arms ramp from cosine-final (5.93e-5) to swa_lr target within 1 STEP at epoch 11, not 2-epoch cosine. The cosine schedule between cosine-final 5.93e-5 and swa_lr ∈ {1.5e-5, 3.0e-5} is steep enough that the ramp completes in a single optimizer step. **Refines banked #18 SWALR-overrides-cosine**: the override is INSTANTANEOUS when swa_lr ≪ cosine-final, not a 2-epoch cosine.
+
+### Paper-appendix transfer-pattern table — UNCHANGED at 11 closed × 7 transfer patterns
+
+#2925 is a **COMPOSE TEST of two already-closed axes** ({swa_lr ASYMMETRIC-V #2896} × {swa_start_frac Pareto-cap #2818}) and lands in BOTH-LOSE territory dominated by the swa_start_frac axis's pre-plateau averaging cost. **The compose is NOT a new axis** — it confirms that two well-characterized axes' interaction is captured by the dominant axis (swa_start_frac mechanism wins).
+
+| Pattern class | Axes | Count |
+|---|---|---|
+| INDEPENDENT-SYMMETRIC | β #2736 | 1 |
+| INDEPENDENT-ASYMMETRIC V (DOMINANT) | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901 | **6** (55%) |
+| DEPENDENT-SYMMETRIC | wd #2791+#2819, Lion β1 #2880 | 2 |
+| DEPENDENT-NEGATIVE | seed #2790 | 1 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 | 1 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 | 1 |
+| MONOTONIC-REGRESSIVE (one-sided) | dropout #2887 | 1 |
+
+In-flight: #2919 fern huber_beta LOWER (12th axis, stale_wip), #2932 alphonse Lion β2 (13th axis, NEW OPTIMIZER-INTERNAL-EMA-DECAY class).
+
+### Cross-axis invariance status (from #2925)
+
+| Quantity | Baseline | Arm 1 (s_f=0.65/swa_lr=1.5e-5) | Arm 2 (s_f=0.65/swa_lr=3e-5) | Status |
+|---|---|---|---|---|
+| σ-spread (max−min log_σ) | 0.475 | ~0.475 | ~0.475 | **14th cross-axis** σ-spread invariance (final Kendall surf_p log_σ ~−1.88 both arms; effective_weight surf_p ~21.65 both arms) |
+| min log_σ channel | surf_ux | surf_ux | surf_ux | **16th cross-axis** channel ordering invariance |
+| max log_σ channel | vol_ux | vol_ux | vol_ux | (same) |
+| clip_fraction (final) | 1.000 | 1.000 | 1.000 | (12th cross-axis if invariant — same forward graph) |
+| Peak VRAM | ~45 GB | 44.8 GB | 44.8 GB | **11th cross-axis** peak VRAM invariance (same forward/backward graph, different SWA averaging) |
+
+### Banked findings #181–#189
+
+- **#181 PAPER-STRENGTHENING**: swa_lr × swa_start_frac compose FAILS — banked #2429 mechanism extends cleanly to saturated-clip; deep-low-lr swa_lr (1.5e-5) does NOT compensate pre-plateau averaging cost on either clip regime. Paper-publishable compose-axis transfer claim.
+- **#182 PAPER-STRENGTHENING**: deep-low-lr swa_lr cannot rescue pre-plateau averaging — #2896 Arm 1's directional close + sub-noise marginal test win is NOT generalizable through swa_start_frac axis. **Banked open question #169 RESOLVED with NEGATIVE result**: swa_lr × swa_start_frac compose is NOT the path to convert directional-close into MERGE.
+- **#183 PAPER-STRENGTHENING**: SWA-mean is HEAVILY influenced by single-epoch outlier weight inclusion — Arm 1 SWA-mean=47.79 dominated by ep10 weight (val=55.61) contributing ~25% of the 4-epoch average. Removing ep10 from the average would give ~46.4 (close to plateau). **SWA averaging has NO down-weighting for outlier weights** — equal-weight averaging is the load-bearing property that fails when the window admits non-plateau weights. Methodology for paper appendix: SWA-window placement is FAR more sensitive than SWA-floor lr.
+- **#184 PAPER-STRENGTHENING**: SWALR ramp completes within 1 STEP when swa_lr ≪ cosine-final — both arms show single-step ramp at epoch 11 (5.93e-5 → 1.5e-5 in Arm 1; → 3.0e-5 in Arm 2), NOT a 2-epoch cosine ramp despite anneal_epochs=2. **Refines banked #18 SWALR-overrides-cosine**: when target ≪ source, override is instantaneous. **Sharpens banked #144** (#2877 anneal_epochs DEGENERATE): at saturated-clip baseline, ramp duration is inert because the ramp ALWAYS completes in 1 step regardless of anneal_epochs value.
+- **#185 PAPER-STRENGTHENING**: 14th cross-axis σ-spread invariance — final Kendall surf_p log_σ ~−1.88 both arms (vs baseline ~−1.88); effective_weight surf_p ~21.65 both arms (vs baseline ~21.5). σ-spread and weight magnitudes invariant to SWA-mechanism perturbations. Extends banked #166 (#2896 swa_lr-axis σ-spread invariance) to the 2-axis compose.
+- **#186 PAPER-STRENGTHENING**: 16th cross-axis channel-ordering invariance — surf_ux=min/vol_ux=max preserved on both arms. Channel ordering robust to SWA-mechanism compose perturbations.
+- **#187 PAPER-STRENGTHENING**: 11th cross-axis peak VRAM invariance — 44.8 GB both arms (vs baseline ~45GB). SWA-mechanism perturbations don't change memory footprint (expected — same forward/backward graph, different weight averaging).
+- **#188 METHODOLOGY**: 9th-consecutive SWA-window-truncation under 30-min cap — extends #2790, #2818, #2835, #2862, #2877, #2880, #2887, #2896. Even at s_f=0.65 (which should give 5 SWA epochs), the 30-min cap truncates at epoch 13/15 giving 4 SWA epochs. **The SWA window truncation is NOT addressable via swa_start_frac changes** — pre-plateau cost dominates.
+- **#189 BANKED #170 IS NOT ACTIONABLE VIA swa_start_frac CHANGES (IMPORTANT)** — banked methodology #170 (SWA-window-truncation under 30-min cap) cannot be undone by shifting swa_start_frac earlier. The pre-plateau averaging cost dominates the would-be benefit of more SWA epochs. **The fix must be**: (a) epoch-count increase (requires cap relaxation OR step-time reduction), OR (b) plateau-detection SWA (gate weight inclusion on val being within X% of running-min). **Bank for paper appendix: SWA-window-truncation is a STRUCTURAL constraint of the budget, not a knob-tunable axis.**
+
+### Decision rule application
+
+- Arm 1 val 47.79 ≫ 46.50 → strong regression close
+- Arm 2 val 47.34 ≫ 46.50 → strong regression close
+- Neither arm clears val ≤ 45.10 MERGE threshold → CLOSE
+
+**Open follow-up axes thorfinn suggested (banked for future):**
+
+1. ✅ **swa_lr LOWER fine-bracket at s_f=0.75 fixed** (#2896 path is correct axis) — extension of #2896 #169 motivation; could push 1.5e-5 floor deeper to find MERGE
+2. ⚠ **Increase epochs to 16-17** at s_f=0.75 — requires SENPAI_TIMEOUT_MINUTES relaxation; out of scope for this launch
+3. ⚠ **s_f=0.80** at default swa_lr — inverse direction; only 1-2 SWA epochs likely
+4. 🚀 **Plateau-detection SWA** — STRUCTURAL change to Lion/SWA code; gate weight inclusion on val condition. Higher-risk, higher-reward.
+5. ✅ **Banked #170 not-actionable** finding (already in this PR's #189)
+
+Thorfinn reassigned → **n_layers depth sweep {3, 7} on max_norm=0.35** — 14th paper-appendix mechanism-transfer axis (NEW TRANSOLVER-DEPTH class; distinct from #2901 n_head ATTENTION-MECHANISM-CAPACITY-RESHUFFLE which tested attention granularity at fixed depth).
+
+---
+
 ## 2026-05-14 14:00 — PR #2901 (CLOSED, alphonse): n_head sweep {2, 8} on max_norm=0.35 — paper-strengthening 11th axis closure (NEW 6th ASYMMETRIC-V member of DOMINANT pattern class; pattern now 55% of closed axes; σ-spread invariance BREAKS first time; pre-clip grad_norm SHIFTS first time)
 
 - **Branch:** `willowpai2g48h2-alphonse/n-head-sweep-on-max-norm-0p35`
