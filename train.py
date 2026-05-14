@@ -396,6 +396,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    swa_start: int = -1  # If >= 0, start SWA averaging at this epoch (0-indexed). -1 = disabled.
+    swa_lr: float = -1.0  # If > 0, override LR after swa_start (constant SWALR). -1 = keep cosine schedule.
 
 
 cfg = sp.parse(Config)
@@ -443,6 +445,15 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+swa_model = None
+swa_scheduler = None
+if cfg.swa_start >= 0:
+    from torch.optim.swa_utils import AveragedModel, SWALR
+    swa_model = AveragedModel(model)
+    if cfg.swa_lr > 0:
+        swa_scheduler = SWALR(optimizer, swa_lr=cfg.swa_lr, anneal_epochs=1, anneal_strategy="linear")
+    print(f"SWA enabled: start_epoch={cfg.swa_start} (0-indexed), swa_lr={cfg.swa_lr if cfg.swa_lr > 0 else 'cosine (no override)'}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -499,7 +510,14 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if swa_model is not None and epoch >= cfg.swa_start:
+        swa_model.update_parameters(model)
+        if swa_scheduler is not None:
+            swa_scheduler.step()
+        else:
+            scheduler.step()
+    else:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -576,6 +594,61 @@ if best_metrics:
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+        })
+
+    # --- SWA model evaluation (val + test) ---
+    swa_val_avg_p = None
+    swa_test_avg_p = None
+    if swa_model is not None:
+        n_averaged = int(swa_model.n_averaged.item())
+        print(f"\nEvaluating SWA model (n_averaged={n_averaged}, start_epoch={cfg.swa_start})...")
+        swa_model.eval()
+        swa_path = model_dir / "swa_checkpoint.pt"
+        torch.save({
+            "n_averaged": n_averaged,
+            "swa_start": cfg.swa_start,
+            "model_state_dict": swa_model.module.state_dict(),
+        }, swa_path)
+
+        swa_val_metrics = {
+            name: evaluate_split(swa_model.module, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_val_metrics)
+        swa_val_avg_p = swa_val_avg["avg/mae_surf_p"]
+        print(f"\n  SWA VAL  avg_surf_p={swa_val_avg_p:.4f} (best-epoch was {best_avg_surf_p:.4f}, "
+              f"delta={swa_val_avg_p - best_avg_surf_p:+.4f})")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_metrics[name])
+
+        swa_test_metrics = None
+        swa_test_avg = None
+        if not cfg.skip_test:
+            print("\nEvaluating SWA model on held-out test splits...")
+            swa_test_metrics = {
+                name: evaluate_split(swa_model.module, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            swa_test_avg_p = swa_test_avg["avg/mae_surf_p"]
+            print(f"\n  SWA TEST  avg_surf_p={swa_test_avg_p:.4f} (best-epoch test was "
+                  f"{test_avg['avg/mae_surf_p']:.4f}, delta={swa_test_avg_p - test_avg['avg/mae_surf_p']:+.4f})")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "swa",
+            "swa_start": cfg.swa_start,
+            "swa_lr": cfg.swa_lr,
+            "n_averaged": n_averaged,
+            "swa_val_avg/mae_surf_p": swa_val_avg_p,
+            "swa_val_splits": swa_val_metrics,
+            "swa_test_avg/mae_surf_p": swa_test_avg_p,
+            "swa_test_splits": swa_test_metrics,
+            "best_epoch_val_avg/mae_surf_p": best_avg_surf_p,
+            "best_epoch_test_avg/mae_surf_p": test_avg["avg/mae_surf_p"] if test_avg else None,
+            "swa_vs_best_val_delta": swa_val_avg_p - best_avg_surf_p,
+            "swa_vs_best_test_delta": (swa_test_avg_p - test_avg["avg/mae_surf_p"]) if test_avg else None,
         })
 
     write_experiment_summary(
