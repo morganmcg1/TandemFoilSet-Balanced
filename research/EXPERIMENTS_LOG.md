@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-14 [Round 138 close-19] UTC — PR #2975: volume-aux-at-block-1 — **CLOSED LOSS (+7.52% val vs NEW; 141st taxon; AUX-SUPERVISION AXIS COMPREHENSIVELY CLOSED)**
+
+- **Branch:** charliepai2g48h5-alphonse/volume-aux-at-block-1
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-volume-aux-at-block-1-20260514-175540/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2975 (vol aux block-1) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 32.2978 | **+7.52% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 27.2646 | **+8.15% LOSS** |
+| val_single_in_dist | 25.219 | 25.0703 | -0.59% (flat) |
+| val_geom_camber_rc | 43.929 | 48.8117 | +11.12% LOSS |
+| val_geom_camber_cruise | 16.265 | 18.2005 | +11.90% LOSS |
+| val_re_rand | 34.740 | 37.1086 | +6.82% LOSS |
+| Param count | 407,172 | 408,231 | +291 (matches #2952) |
+
+**Hypothesis:** TARGET INVERSION of #2952 — same block-1 placement, same α=0.1, same +291 params, but aux predicts VOLUME field instead of surface. Tests orthogonality interpretation: does aux mechanism work when target ALIGNS with dominant gradient direction?
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **ORTHOGONALITY HYPOTHESIS DECISIVELY FALSIFIED.** Aux/vol ratio stabilized at ~1.8× (predicted 0.5-1.0× alignment regime). aux loss is 1.6-2.0× the primary vol loss at convergence — aux is solving a HARDER problem than vol regression on the same target tokens.
+
+2. **||W_aux||/||W_primary|| = 2.18× vs #2952's 2.20×** — essentially IDENTICAL ratio across BOTH target populations (surf minority ~30% AND vol majority ~70%). The orthogonality signature is INVARIANT to target population.
+
+3. **Cosine similarities ~0 on ALL 3 channels** (Ux: +0.016, Uy: -0.017, p: +0.073). Statistically indistinguishable from orthogonal. The aux head learns a projection essentially orthogonal to primary REGARDLESS of target.
+
+4. **AUX-SUPERVISION AXIS COMPREHENSIVELY CLOSED.** Across the trio (#2952, #2961, #2975): ratios consistently 2.08-2.20×, cos sims always ~0, all LOSS. Three plausible deeper causes (none directly testable):
+   - Information-theoretic limit: mid-features not linearly mappable to ANY output target at full-pipeline accuracy
+   - Optimization conflict: +0.1 aux gradient fights primary at fixed fraction
+   - Capacity competition: aux forces block-1 to produce features useful for BOTH a Linear projection AND the deeper trunk
+
+5. **CRUISE WIN DOES NOT RECOVER WITH TARGET INVERSION.** #2952's -3.16% cruise WIN was tied to BUFFER-DEPENDENCE (2 post-aux blocks for smoothing), not aux mechanism. Confirmed broken across all aux variants — aux is NOT a path to the meta-signal.
+
+**141st taxon CLOSED:** AUX-SUPERVISION-COMPREHENSIVE / TARGET-AND-DEPTH-INVARIANT-ORTHOGONALITY. The aux head learns near-orthogonal projection at every depth (50%, 75%) and target (surf, vol). The orthogonality is the structural invariant.
+
+**Followup assigned:** #2988 alphonse per-block-scalar-gamma-init-1.0 (pivots off aux axis per student suggestion #5; completes 3-point ADAPTIVITY-GRANULARITY sweep — #2964 constant γ=1.0 WIN + #2977 nezuko per-channel γ in-flight + this PR per-block scalar γ; +8 params total; tests whether scalar block-level adaptivity suffices without per-channel; if both #2988 and #2977 LOSS → fixed γ=1.0 decisively optimum; if only one WINS → resolves granularity question).
+
+---
+
 ## 2026-05-14 [Round 138 close-18] UTC — PR #2974: adamw-optimizer-swap (lr=5e-4) — **CLOSED LOSS (+38.32% val vs NEW; 140th taxon partial — UNDERCALIBRATED LR; AXIS NOT YET CLOSED)**
 
 - **Branch:** charliepai2g48h5-thorfinn/adamw-optimizer-swap
