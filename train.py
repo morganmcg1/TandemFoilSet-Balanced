@@ -471,12 +471,38 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    aug_batches_with_cruise = 0
+    aug_cruise_sample_sum = 0.0
+    aug_cruise_sample_count = 0
+    aug_flipped_sample_sum = 0.0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # --- CRUISE-ONLY Z-FLIP AUGMENTATION ---
+        # Cruise tandem meshes span z∈[-9.5,+9.5]; raceCar meshes z∈[0,+9.6].
+        # Only flip samples whose mesh has at least one node at z<0 (cruise domain).
+        # Flip is performed in RAW space because x_mean[1] is non-zero — negating
+        # in normalized space would mirror about 2*x_mean, not about 0.
+        # Mask out padding when detecting cruise samples (padding x=0, not <0).
+        is_cruise = ((x[:, :, 1] < 0) & mask).any(dim=1)  # (B,) bool
+        flip_prob = torch.rand(x.size(0), device=x.device) < 0.5
+        flip_mask = is_cruise & flip_prob
+        aug_cruise_sample_sum += is_cruise.float().sum().item()
+        aug_cruise_sample_count += x.size(0)
+        aug_flipped_sample_sum += flip_mask.float().sum().item()
+        if flip_mask.any():
+            aug_batches_with_cruise += 1
+            x = x.clone()
+            y = y.clone()
+            x[flip_mask, :, 1] = -x[flip_mask, :, 1]    # flip mesh z-coord
+            x[flip_mask, :, 14] = -x[flip_mask, :, 14]  # negate AoA foil 1
+            x[flip_mask, :, 18] = -x[flip_mask, :, 18]  # negate AoA foil 2
+            y[flip_mask, :, 1] = -y[flip_mask, :, 1]    # negate Uy target
+        # --- END AUGMENTATION ---
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -533,6 +559,9 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
+    aug_cruise_frac = aug_cruise_sample_sum / max(aug_cruise_sample_count, 1)
+    aug_flipped_frac = aug_flipped_sample_sum / max(aug_cruise_sample_count, 1)
+    aug_batch_fire_frac = aug_batches_with_cruise / max(n_batches, 1)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -541,6 +570,9 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/lr_end_of_epoch": current_lr,
+        "train/aug_cruise_sample_frac": aug_cruise_frac,
+        "train/aug_flipped_sample_frac": aug_flipped_frac,
+        "train/aug_batch_fire_frac": aug_batch_fire_frac,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -548,6 +580,8 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"aug[cruise={aug_cruise_frac:.2f} flipped={aug_flipped_frac:.2f} "
+        f"batch_fire={aug_batch_fire_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
