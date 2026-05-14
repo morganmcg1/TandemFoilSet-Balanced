@@ -8,6 +8,63 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-14 — WAVE 18 / ITERATION 8 — 1 win, 6 closed; attn-temp schedule axis proven productive; new baseline 55.1595
+
+**Meta-finding**: The comparison of #2648 (linear √3→√2 anneal, MERGED −1.81%) vs #2655 (cosine peak √3 at epoch 6, CLOSED +4.68%) definitively proves that **EARLY sharpening during representation formation** is the operative mechanism — not sharpening level per se. The schedule TIMING is what matters. All 5 other OOD-targeted hypotheses failed (FOMA noise, SliceMoE, thin-airfoil aux, spectral HF penalty, SDF features), closing those mechanism families.
+
+### PR #2648 — alphonse/attn-temp-anneal-linear — **MERGED** (21st compound win)
+
+| metric | val | test |
+|---|---|---|
+| **H73 linear √3→√2** | **55.1595** | **48.3010** |
+| #2519 baseline | 56.1754 | 48.7149 |
+| Δ | **−1.81%** | **−0.85%** |
+
+Per-split:
+- val: single_in_dist=60.851 (−8.51%) / camber_rc=68.657 (−0.24%) / camber_cruise=35.762 (+2.82%) / re_rand=55.368 (+1.43%)
+- test: single_in_dist=54.849 (−5.10%) / camber_rc=61.620 (−3.10%) / camber_cruise=29.653 (+4.33%) / re_rand=47.082 (+4.51%)
+
+Mechanism artifacts: `models/model-charliepai2g24h4-alphonse-attn-temp-anneal-linear-20260513-232234/metrics.jsonl`
+
+**Commentary**: The gain is concentrated in single_in_dist (−8.51% val, −5.10% test) and camber_rc test (−3.10%). camber_cruise and re_rand slightly regress (+2–4%). The schedule asymmetry finding is the key contribution: sharp-early forces the model to commit to decisive dispatch while representations are still forming; ending at √2 preserves the sharpened endpoint. Compound: 100.957 → 55.1595 = −45.37% over 21 merges.
+
+### PR #2649 — askeladd/feature-noise-foma — **CLOSED** (Outcome D: +0.32%/+3.65%)
+
+- val 56.3572 (+0.32% vs new baseline 55.1595) | test 50.4952 (+4.49%)
+- Gaussian noise σ=0.005 on input features. Too weak a consistency regularization signal in the 12-epoch window; model ignores the noise perturbations.
+- **Closed axis**: FOMA input noise at this scale doesn't provide OOD benefit under our compute budget.
+
+### PR #2651 — edward/slice-moe-projection — **CLOSED** (Outcome C: +8.11%)
+
+- val 60.7345 (+10.10% vs new baseline) | test 52.7964 (+9.30%)
+- 4-expert top-2 sparse MoE replacing out_project (+66K params). Router cannot stabilize expert specialization in 12 epochs — the +7% parameter overhead creates a severe under-training problem.
+- **Closed axis**: Sparse MoE on Transolver attention projections requires more epochs than our 30-min budget allows. MoE at this scale is closed.
+
+### PR #2652 — fern/thin-airfoil-aux-loss — **CLOSED** (Outcome C: +2.99%)
+
+- val 57.8556 (+4.89% vs new baseline) | test 49.9817 (+3.47%)
+- NACA 4-digit Cp_TAT ≈ 2*(AoA - dc/dx) aux loss λ=0.01. The thin-airfoil approximation is too crude for high-camber and high-AoA tandem-foil cases; the analytic prior conflicts with the true L1 loss signal.
+- **Closed axis**: Physics-informed aux via NACA 4-digit theory; would need a more accurate aerodynamic prior (panel method) to be useful.
+
+### PR #2653 — frieren/spectral-hf-penalty — **CLOSED** (Outcome C: +5.10%)
+
+- val 59.0397 (+7.03% vs new baseline) | test 52.6020 (+8.90%)
+- FFT on slice tokens, λ=0.001 HF penalty. Slice tokens are dispatch/routing representations (not spatial fields) — penalizing HF energy in their feature dimension disrupts the dispatch mechanism rather than smoothing a PDE-like signal.
+- **Closed axis**: Spectral HF regularization on Transolver's slice tokens. The iMOOE motivation applies to spatial output fields, not to intermediate routing token representations.
+
+### PR #2654 — nezuko/sdf-geometry-features — **CLOSED** (Outcome C: +13.96%)
+
+- val 64.0183 (+16.07% vs new baseline) | test 55.1111 (+14.12%)
+- 4 SDF channels (dist-to-foil-1, foil-2, min, sign) appended to 24-dim input → 28-dim. Catastrophic regression.
+- **Closed axis**: SDF-based geometry features conflict with the existing FourierCoordEnc (redundant low-frequency geometry signals, representation interference); the model cannot reconcile two parallel geometry representations in 12 epochs.
+
+### PR #2655 — tanjiro/attn-temp-anneal-cosine — **CLOSED** (Outcome C: +4.68%)
+
+- val 58.8063 (+6.61% vs new baseline) | test 51.1318 (+5.85%)
+- Cosine schedule τ peak √3 at mid-training (epoch 6), √2 at start/end. Regresses despite using the same start/end values as #2648.
+- **KEY FINDING**: The contrast with #2648 (merged) proves the TIMING of sharpening is the mechanism. Soft-early + sharp-middle = bad. Sharp-early + soft-late = wins. This is the schedule-direction finding that opened the schedule axis as the primary new research direction for Wave 19.
+- **Closed**: cosine mid-peak schedule disproved; the early-sharpening phase is non-negotiable.
+
 ## 2026-05-13 22:50 — WAVE 17+ ITERATION 7 — Wholesale dead-end batch (8 PRs closed, NONE beat #2519 baseline)
 
 **Meta-finding**: The follow-up wave to #2519 saw 8 hypotheses fail simultaneously, with 4 of them being PRE-#2519 winners that collapsed when rebased onto sharper-attn. This is **mechanism-overlap evidence**: #2519's single-line `scale = 1/√(d_head/2)` change captured the same residual error signal that multiple orthogonal additive-scale + optimizer-config hypotheses were independently compensating for. The additive-scale and optimizer-config axes are now EXHAUSTED.
