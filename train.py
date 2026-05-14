@@ -35,6 +35,8 @@ from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
+from torch.optim.swa_utils import AveragedModel, update_bn
+
 from data import (
     TEST_SPLIT_NAMES,
     VAL_SPLIT_NAMES,
@@ -396,6 +398,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    swa_start: int = -1  # 1-indexed start epoch for SWA; -1 disables
 
 
 cfg = sp.parse(Config)
@@ -440,6 +443,11 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+swa_model: AveragedModel | None = None
+if cfg.swa_start >= 0:
+    swa_model = AveragedModel(model)
+    print(f"SWA enabled: swa_start={cfg.swa_start} (1-indexed); averaging epochs >= {cfg.swa_start}")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -503,6 +511,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # SWA: update averaged model after this epoch's weight step.
+    # swa_start is 1-indexed; current epoch is 0-indexed, printed as epoch+1.
+    if swa_model is not None and (epoch + 1) >= cfg.swa_start:
+        swa_model.update_parameters(model)
+
     # --- Validate ---
     model.eval()
     split_metrics = {
@@ -554,21 +567,74 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
+    # Persist SWA checkpoint before any further evaluation work in case we
+    # get cut off by the host timeout. update_bn is a no-op for RMSNorm.
+    swa_path = None
+    swa_n_averaged: int | None = None
+    if swa_model is not None:
+        swa_path = model_dir / "checkpoint_swa.pt"
+        swa_n_averaged = int(swa_model.n_averaged.item())
+        torch.save(swa_model.module.state_dict(), swa_path)
+        print(f"\nSWA: averaged {swa_n_averaged} iterates -> {swa_path}")
+        update_bn(train_loader, swa_model, device=device)
+        swa_model.eval()
+
     test_metrics = None
     test_avg = None
+    swa_val_metrics = swa_val_avg = swa_test_metrics = swa_test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+
+        # SWA eval first: this is the new experimental signal worth saving.
+        # Append JSONL after each eval so partial results survive timeouts.
+        if swa_model is not None:
+            print("\nEvaluating SWA model on val splits...")
+            swa_val_metrics = {
+                name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+            swa_val_avg = aggregate_splits(swa_val_metrics)
+            print(
+                f"\n  SWA VAL  avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f}  "
+                f"(best single-epoch: {best_avg_surf_p:.4f})"
+            )
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(name, swa_val_metrics[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "swa_val",
+                "swa_start": cfg.swa_start,
+                "swa_n_averaged": swa_n_averaged,
+                "swa_checkpoint": str(swa_path) if swa_path else None,
+                "swa_val_avg": swa_val_avg,
+                "swa_val_splits": swa_val_metrics,
+            })
+
+            print("\nEvaluating SWA model on test splits...")
+            swa_test_metrics = {
+                name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  TEST (SWA)  avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "swa_test",
+                "swa_test_avg": swa_test_avg,
+                "swa_test_splits": swa_test_metrics,
+            })
+
+        print("\nEvaluating best single-epoch on held-out test splits...")
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (best single-epoch)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
