@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 21:00
+- **Date:** 2026-05-14 21:15
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -66,7 +66,7 @@
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #2959 | alphonse | Per-block lr scaling: 1.5× 2-seed rerun on 15th-shift baseline | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
+| #3012 | alphonse | Per-block weight decay scan: 0.25×/4× on late blocks (γ_w_L2 specialization probe) | ASSIGNED 2026-05-14 21:15 |
 | #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged | ASSIGNED 2026-05-14 18:50 |
 | #2991 | thorfinn | Output decoder head MLP width scan: 2× (256) and 3× (384) | ASSIGNED 2026-05-14 19:25 |
 | #2965 | fern | Fourier-Re K=4: 2-seed rerun on 15th-shift baseline (compound with 2× γ width) | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
@@ -88,6 +88,7 @@
 - **#2972 (edward LayerScale)** — init=0.1: val +5.3%, test +6.0%; init=0.01: val +9.4%, test +9.8%. Near-identity residual init wastes early-epoch learning at 30-min cap. All 4 splits regress. Closed.
 - **#2971 (askeladd slice dropout)** — drop_p=0.1: test +3.41%; drop_p=0.2: test +5.53%. Monotonic OOD regression; IID improves (classic dropout-as-regularizer for in-dist). Four-axis routing pattern now complete. Closed.
 - **#2926 (nezuko DropPath)** — drop_path=0.1: val +3.65/test +4.70; drop_path=0.2: val +4.81/test +4.12. test_geom_camber_rc regress +11-13% (opposite of OOD-help hypothesis). 5-block Transolver too shallow for stochastic depth (literature regime depth ≥ 12). Closed.
+- **#2959 (alphonse per-block lr)** — Closed after 3 send-backs without successful rebase. Meta-finding #14 (OOD signal in early blocks) preserved; inverted-scaling follow-up axis now covered by askeladd #3002. Alphonse reassigned to per-block wd (#3012) — orthogonal optimizer-side axis on the same param-group split.
 
 ## Key meta-findings
 

@@ -3223,3 +3223,19 @@ Both arms miss 13th, 14th, and 15th shift bars by wide margins. `test_geom_cambe
 - Arms: tta_yflip=1 s1, tta_yflip=1 s2 (variance check)
 - Merge bar: mean val < 33.71, mean test < 28.65
 - Mesh y-symmetry and AoA range symmetry must be verified in debug pass first.
+
+---
+
+## 2026-05-14 21:15 — PR #2959: per-block lr alphonse (CLOSED — axis covered by askeladd #3002)
+- Branch: `willowpai2g48h3-alphonse/per-block-lr-scaling`
+- After 3 send-backs without a successful rebase + new-baseline rerun, axis closed because the natural follow-up (inverted scaling — late_block_lr_scale=0.7/0.5 with early at full base_lr) is now being tested directly by askeladd #3002. Reproducing the 1.5× rerun against the 15th-shift bar would teach less than askeladd's inverted test.
+- Meta-finding #14 (OOD signal lives in EARLY blocks) preserved. Implementation pattern (`blocks.{i}.` substring match with `_orig_mod.` prefix) preserved as institutional knowledge — reused in #3002 and #3012.
+
+---
+
+## 2026-05-14 21:15 — PR #3012: Per-block weight decay scan alphonse (ASSIGNED)
+- Branch: `willowpai2g48h3-alphonse/per-block-wd`
+- Hypothesis: Apply per-block weight decay split (early blocks 0-1 at base wd=2e-4, late blocks 2-4 at scaled wd). Tests two opposing hypotheses on the γ_w_L2 depth-monotone pattern (3.97→5.75 from #2948): (A) wd_late=0.5e-4 (0.25× — *protect* late-block γ specialization that uniform wd is undoing); (B) wd_late=8e-4 (4× — *regularize* over-specialized late-block γ_w). Orthogonal to lr-axis in optimizer space.
+- Arms: late_block_wd_scale=0.25 s1 (protect specialization), late_block_wd_scale=4.0 s2 (regularize specialization)
+- Merge bar: mean val < 33.71, mean test < 28.65
+- Reuses alphonse's param-group split infrastructure from #2959.
