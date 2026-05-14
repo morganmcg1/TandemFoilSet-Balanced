@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-05-14 [Round 76] UTC — Round 76
+
+### PR #2646 alphonse: Per-block FiLM (4 independent gates, one per block input) — CLOSED (LOSS; 41st taxon)
+
+- **Branch:** `charliepai2g48h5-alphonse/per-block-film`
+- **Hypothesis:** Replace single shared FiLM gate from merged #2614 with 4 independent FiLM gates (one Linear(3,96) zero-init per block input). 4× FiLM params (+1,536 total). Compounds on merged #2614 WIN if per-depth flow conditioning adds value over single shared gate. Mirrors conditional batchnorm in image GANs (Dumoulin 2017).
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | per-block FiLM | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **34.2522** | 33.3722 | **+2.64% LOSS** |
+| test_avg/mae_surf_p | ~29.15 | 28.3736 | ~+2.7% LOSS |
+
+Per-split val (uniform regression across all 4 splits):
+
+| Split | per-block FiLM | NEW baseline | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 26.29 | 25.3293 | +3.8% |
+| val_geom_camber_rc | 50.42 | 49.5771 | +1.7% |
+| val_geom_camber_cruise | 20.91 | 20.4181 | +2.4% |
+| val_re_rand | 39.27 | 38.1642 | +2.9% |
+
+- **Key diagnostic — per-block FiLM weight norms learned heterogeneously:**
+
+| Block | FiLM weight norm | Bias norm | Notes |
+|---|---|---|---|
+| block_0 | 1.52 | 0.42 | Lightest gating (closest to embedding) |
+| block_1 | 1.78 | 0.61 | |
+| block_2 | 2.04 | 0.78 | |
+| block_3 | 2.22 | 0.94 | Heaviest gating (deepest) |
+
+**Depth-varying flow conditioning signal IS REAL** — deeper blocks demanding stronger gating is consistent with the hypothesis that flow context becomes more useful at later representational stages. But aggregate 4-gate budget exceeded single-gate without improving outcome.
+
+- **Mechanism:** The residual stream never settles into flow-agnostic processing between blocks. Each block continuously re-modulated by Re/AoA disrupts what merged #2614 single pre-block-0 gate achieved with one-shot conditioning at stream entry. The 4 gates each commit modulation budget into the residual addition, perturbing the stream variance Transolver was optimized for (LayerScale γ=1e-4 + Pre-LN). Even with zero-init keeping initial behavior identical to baseline, training pulled all 4 gates away from identity simultaneously, never settling into a regime where deeper blocks could specialize.
+
+- **41st closed taxon: depth-distributed flow conditioning under residual-stream interruption — flow-conditioning meta-family fully mapped:**
+
+| Variant | PR | Status | Lesson |
+|---|---|---|---|
+| Single pre-block-0 gate (residual stream input) | #2614 | **MERGED** | OPTIMUM — one-shot conditioning at stream entry |
+| Per-block depth-distributed (4 gates) | #2646 | LOSS (41st taxon) | Stream interruption disrupts settling |
+| Output-side additive bias (flow_bias on mlp2) | #2531 | LOSS (27th taxon) | Decoder-fork interference |
+| Output-side multiplicative gate (1+gate(...)) | #2588 | LOSS (31st taxon) | Output-side meta-family closed |
+
+Flow conditioning works at residual-stream INPUT only; not depth-distributed, not output-side, not multiplicative-output.
+
+- **Action:** Closed. Pivoted alphonse to structurally distinct axis untouched by any conditioning variant.
+
+### PR #2675 alphonse: 2D coord-based RoPE on Q, K projections — ASSIGNED (Round-76)
+
+- **Branch:** `charliepai2g48h5-alphonse/2d-rope`
+- **Hypothesis:** Rotate Q, K post-projection using mesh (x, y) coords; V unchanged. Splits d_head=48 into 24 x-dim + 24 y-dim channels. Frequency buffers via `register_buffer`. Zero new parameters. First positional-embedding probe in launch — Transolver has been geometry-blind across all 41 closed taxa.
+- **Code pattern:**
+```python
+def apply_2d_rope(qk, coords):
+    # coords: (B, N, 2) — (x, y) per node
+    # Split d_head=48 into (24 x-dim, 24 y-dim)
+    # Rotate paired channels: (a, b) → (a·cos − b·sin, a·sin + b·cos)
+    ...
+q = apply_2d_rope(q, coords)
+k = apply_2d_rope(k, coords)
+# V unchanged
+```
+- **Predicted outcomes:**
+  - **WIN if positional bias helps:** camber_rc improves most (OOD coords benefit from explicit positional structure).
+  - **WASH if frequency encoding redundant:** d_sdf rays + saf channels already encode geometric position implicitly.
+  - **LOSS if coord distribution shift dominates:** OOD splits regress harder than in_dist.
+- **Structurally orthogonal:** to all closed flow/condition gates (residual stream perturbation) AND slice-routing softmax (over prototypes not positions).
+- **Baseline to beat:** val_avg/mae_surf_p < 33.3722.
+
+---
+
 ## 2026-05-14 [Round 75] UTC — Round 75
 
 ### PR #2647 nezuko: Lion β₂=0.999 long-horizon memory buffer sweep — CLOSED (CATASTROPHIC LOSS; 39th taxon)
