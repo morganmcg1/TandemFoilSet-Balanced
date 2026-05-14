@@ -573,11 +573,20 @@ class Config:
     use_geo_cross_attn: bool = False  # add cross-attention to global geometry/flow context (GeoTransolver H5)
     geo_cross_tokens: int = 4  # number of global context tokens (K_cross)
     geo_encoder_hidden: int = 64  # hidden dim of geometry encoder MLP
+    seed: int | None = None  # RNG seed for reproducible init + WeightedRandomSampler trajectory; None = non-deterministic
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed is not None:
+    import random as _py_random
+    _py_random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seed: {cfg.seed} (deterministic init + sampler)")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -592,7 +601,12 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler_gen = None
+    if cfg.seed is not None:
+        sampler_gen = torch.Generator()
+        sampler_gen.manual_seed(cfg.seed)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds),
+                                    replacement=True, generator=sampler_gen)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
