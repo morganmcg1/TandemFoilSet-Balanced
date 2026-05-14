@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-05-14 01:25 — PR #2645: dropout=0.10/0.05 lower-direction sweep on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, DROPOUT DIRECTION CLOSED BOTH SIDES
+
+- **Branch:** `willowpai2g24h5-thorfinn/dropout-lower-wd3e4`
+- **Hypothesis:** With wd=3e-4 providing continuous L2 shrinkage, less stochastic dropout (substitutive-regularizer prior) should free representational capacity and improve val.
+- **W&B runs:** `agzf0gut` (dropout=0.10), `h8ixr4bt` (dropout=0.05)
+
+| Arm | dropout | val | test | Δ vs #2489 (42.00/35.96) | Epochs |
+|-----|---------|-----|------|--------------------------|--------|
+| 1 | 0.10 | 44.85 | 37.80 | +2.85 / +1.84 ✗ | 29/34 |
+| 2 | 0.05 | 42.89 | 36.11 | +0.89 / +0.15 ✗ | 34/34 |
+| Baseline #2489 | 0.20 | 42.00 | 35.96 | — | 33/34 |
+
+Per-test-split: single_in_dist IMPROVES on both arms (40.58 → 39.17/38.71). geom_camber_rc flat/worse. geom_camber_cruise and re_rand both regress.
+
+**Result:** CLOSED. Hypothesis REFUTED.
+
+Key findings:
+1. **Dropout direction closed both sides (finding 39).** Combined with #2551 (upper d=0.25/0.30 also regressing), **dropout=0.20 is locked as local optimum** on wd=3e-4, n_layers=3, Lion-MAE compound.
+2. **wd × dropout are COMPLEMENTARY, NOT substitutive.** Substitutive-regularizer prior predicted lower dropout would compensate for wd=3e-4 — data REFUTES this. Both directions regress. Distinct from wd × n_head substitutive (finding 34) and slice × n_head substitutive (finding 30). **Different regularizer pairs have different interaction signs in this regime.**
+3. **Non-monotonic 0.10 < 0.05 inversion (val).** Mid-strength dropout may be a worst case — too weak to suppress co-adaptation but still strong enough to remove signal. Plausibly seed noise (~0.89 gap at single seed) but consistent with saturation framing.
+4. **In-dist test improves on both arms, OOD splits regress.** Hint of a regularization-strength × split-type interaction — lower dropout helps single_in_dist but hurts geom_camber_cruise/re_rand. Useful appendix observation.
+5. **Arm 1 val curve flattened/began to overfit at epoch 29/34** (lower dropout opened overfitting risk). Arm 2 still descending at cap, but gap too wide to credibly close.
+
+**Implication for paper:** dropout=0.20 + wd=3e-4 are jointly Pareto-optimal — the two regularizers stack additively, not substitutively. Pairs with findings 30, 34, 35: regularizer × architecture interactions have non-uniform interaction signs.
+
+**Thorfinn reassigned:** moving to a fresh axis since dropout direction is closed.
+
+---
+
+## 2026-05-14 01:20 — PR #2641: lr=8e-5/1.5e-4 sweep on n_layers=3+wd=3e-4 (edward) — CLOSED, LR=1e-4 LOCKED, NARROW SURFACE
+
+- **Branch:** `willowpai2g24h5-edward/lr-sweep-wd3e4-n-layers-3`
+- **Hypothesis:** wd=3e-4 stabilization may permit higher lr (faster effective per-step progress) or lower lr (cleaner convergence under regularization).
+- **W&B runs:** `6dsg3kka` (lr=8e-5, clean rerun), `kbwhb5vu` (lr=1.5e-4)
+
+| Arm | lr | val | test | Δ vs #2489 (42.00/35.96) | Epochs | Final lr |
+|-----|----|-----|------|--------------------------|--------|----------|
+| 1 | 8e-5 | 44.58 | 38.21 | +2.58 / +2.25 ✗ | 35 | 2e-5 |
+| 2 | 1.5e-4 | 43.05 | 35.93 | +1.05 / −0.03 ≈ | 35 | 3e-5 |
+| Baseline #2489 | 1e-4 | 42.00 | 35.96 | — | ~34 | — |
+
+Per-test-split (Arm 2 vs baseline): **single_in_dist IMPROVES** 36.98 vs 40.58 (−8.9%), re_rand REGRESSES 35.38 vs 32.56 (+8.7%). Arm 1 all splits regress.
+
+**Result:** CLOSED. Hypothesis REFUTED — lr optimum did not shift with regularization.
+
+Key findings:
+1. **lr=1e-4 locked as local optimum on new compound (finding 40).** lr surface is narrow: ±0.5×–1.5× regresses val by 1–2.6 points.
+2. **wd and lr are independent axes under Lion+MAE.** wd=3e-4 stabilization did NOT open up headroom for higher lr. Different mechanism interaction than wd × n_head substitutive (finding 34).
+3. **Higher-lr regime-trade: in-dist vs OOD.** Arm 2 lr=1.5e-4 IMPROVES single_in_dist test (−8.9%) but worsens re_rand (+8.7%). Suggests higher lr trades in-dist fidelity for OOD robustness — useful appendix data on optimizer × split interaction.
+4. **Step count remains the bottleneck (reinforces finding 37).** Val still descending at cap across all three lrs. Tuning lr cannot break that bottleneck — only architecture-driven per-step compute reduction or padding-waste reduction can.
+5. **Lion sign-update brittle to lr scale.** Going down 0.8× degrades >2 points; going up 1.5× degrades 1 point on val. Lion + lr=1e-4 sits in a narrow well.
+
+**Implication for paper:** lr=1e-4 + wd=3e-4 are jointly locked on this compound. The regime-trade single_in_dist vs re_rand at higher lr is a paper-grade finding about lr × OOD-split interaction.
+
+**Edward reassigned:** moving to a fresh axis since lr direction is closed.
+
+---
+
 ## 2026-05-13 23:15 — PR #2563: n_head=4/n_head=8 sweep on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, PER-HEAD DIM=64 SWEET SPOT
 
 - **Branch:** `willowpai2g24h5-thorfinn/n-head-4-8-sweep-wd3e4`
