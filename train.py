@@ -105,14 +105,20 @@ class SwiGLUMLP(nn.Module):
         return self.linear_out(gate * value)
 
 
+N_REGISTERS = 4
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 n_registers=N_REGISTERS):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
+        self.n_registers = n_registers
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -121,6 +127,13 @@ class PhysicsAttention(nn.Module):
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        # Register tokens (Darcet et al. 2024, ICLR "Vision Transformers Need
+        # Registers"): learnable extra K/V positions in slice-token self-
+        # attention. Output positions for registers are discarded — they serve
+        # as scratchpad K/V capacity for slice tokens.
+        self.registers = nn.Parameter(
+            torch.randn(n_registers, heads, dim_head) * 0.02
+        )
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -146,18 +159,69 @@ class PhysicsAttention(nn.Module):
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
-        q = self.to_q(slice_token)
-        k = self.to_k(slice_token)
-        v = self.to_v(slice_token)
-        out_slice = F.scaled_dot_product_attention(
+        # Append register tokens as additional K/V positions.
+        reg = self.registers.permute(1, 0, 2).unsqueeze(0).expand(B, -1, -1, -1)
+        slice_token_full = torch.cat([slice_token, reg], dim=2)
+
+        q = self.to_q(slice_token_full)
+        k = self.to_k(slice_token_full)
+        v = self.to_v(slice_token_full)
+        out_slice_full = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,
         )
+        # Drop register output positions; only route slice tokens back to mesh.
+        out_slice = out_slice_full[:, :, :self.slice_num, :]
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
         return self.to_out(out_x)
+
+    @torch.no_grad()
+    def get_register_attn_stats(self, x):
+        """Compute attention-weight mass FROM slice tokens TO register K/V
+        positions, on the input `x` that would be passed through forward().
+
+        Recomputes slice_token + attention logits explicitly to obtain the
+        softmax distribution (the fused F.scaled_dot_product_attention does
+        not expose it). Returns mass averaged over (batch, head, slice query).
+        """
+        B, N, _ = x.shape
+        fx_mid = (
+            self.in_project_fx(x)
+            .reshape(B, N, self.heads, self.dim_head)
+            .permute(0, 2, 1, 3)
+            .contiguous()
+        )
+        x_mid = (
+            self.in_project_x(x)
+            .reshape(B, N, self.heads, self.dim_head)
+            .permute(0, 2, 1, 3)
+            .contiguous()
+        )
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_norm = slice_weights.sum(2)
+        slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
+        slice_token = slice_token / (
+            (slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head)
+        )
+        reg = self.registers.permute(1, 0, 2).unsqueeze(0).expand(B, -1, -1, -1)
+        slice_token_full = torch.cat([slice_token, reg], dim=2)
+        q = self.to_q(slice_token_full).float()
+        k = self.to_k(slice_token_full).float()
+        scale = self.dim_head ** -0.5
+        attn_logits = torch.matmul(q, k.transpose(-2, -1)) * scale
+        attn = torch.softmax(attn_logits, dim=-1)
+        # Mass from slice-token queries (first slice_num rows) to register keys
+        # (last n_registers cols).
+        reg_mass = attn[:, :, :self.slice_num, self.slice_num:].sum(dim=-1)
+        return {
+            "attn_mass_to_reg_mean": float(reg_mass.mean()),
+            "attn_mass_to_reg_max": float(reg_mass.max()),
+            "attn_mass_to_reg_min": float(reg_mass.min()),
+            "attn_mass_to_reg_std": float(reg_mass.std()),
+        }
 
 
 class SqueezeExcitation(nn.Module):
@@ -566,6 +630,21 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# Register-tokens diagnostic (Darcet et al. 2024 ICLR "Vision Transformers Need
+# Registers"): per-block, per-head learnable K/V positions in slice-token
+# self-attention. Output for register positions is discarded — they serve as
+# scratchpad memory for slice tokens. Init std=0.02 (small but non-zero).
+_phys_attn_modules = [m for m in model.modules() if isinstance(m, PhysicsAttention)]
+_n_reg_params = sum(m.registers.numel() for m in _phys_attn_modules)
+_n_reg_per_block = _phys_attn_modules[0].n_registers if _phys_attn_modules else 0
+print(
+    f"Register tokens (Darcet 2024 ICLR): N_REGISTERS={_n_reg_per_block} per head per block; "
+    f"+{_n_reg_params} params across {len(_phys_attn_modules)} PhysicsAttention modules "
+    f"(shape [n_reg, heads, dim_head] = [{_n_reg_per_block}, {model_config['n_head']}, {model_config['n_hidden']//model_config['n_head']}] per block); "
+    f"appended as additional K/V positions in slice attention; output positions DROPPED before mesh route-back; "
+    f"init std=0.02; bar to beat: val_avg/mae_surf_p < 32.2477 (#2741 SwiGLU MLP)"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -730,6 +809,56 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # --- Per-epoch register-token diagnostics ---
+    # 1) Register parameter L2 norms per block, per head (independent of x).
+    # 2) Attention mass from slice-token queries to register keys, on a fixed
+    #    eval batch from val_single_in_dist. Uses uncompiled inner module so
+    #    forward-pre-hooks fire reliably.
+    _inner_diag = getattr(model, "_orig_mod", model)
+    _attn_input_cache: list[tuple[int, torch.Tensor]] = []
+
+    def _make_attn_pre_hook(block_idx: int):
+        def _hook(_module, args):
+            _attn_input_cache.append((block_idx, args[0].detach()))
+        return _hook
+
+    _diag_handles = [
+        _blk.attn.register_forward_pre_hook(_make_attn_pre_hook(_bi))
+        for _bi, _blk in enumerate(_inner_diag.blocks)
+    ]
+    try:
+        _diag_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+        with torch.no_grad():
+            _x_d, _y_d, _is_d, _m_d = next(iter(_diag_loader))
+            _x_d = _x_d.to(device, non_blocking=True)
+            _m_d = _m_d.to(device, non_blocking=True)
+            _x_d_norm = (_x_d - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner_diag({"x": _x_d_norm, "mask": _m_d})
+    finally:
+        for _h in _diag_handles:
+            _h.remove()
+
+    _reg_blocks_log = []
+    for _bi, _blk in enumerate(_inner_diag.blocks):
+        _reg = _blk.attn.registers.detach().float()  # [n_reg, H, D]
+        _per_head_norms = _reg.norm(dim=-1)  # [n_reg, H]
+        _block_entry = {
+            "block_idx": _bi,
+            "register_norm_mean": float(_per_head_norms.mean()),
+            "register_norm_max": float(_per_head_norms.max()),
+            "register_norm_min": float(_per_head_norms.min()),
+        }
+        # Per-head register norms (small; n_reg=4, heads=2 -> 8 values per block)
+        for _ri in range(_reg.shape[0]):
+            for _hi in range(_reg.shape[1]):
+                _block_entry[f"register_norm_r{_ri}_h{_hi}"] = float(_per_head_norms[_ri, _hi])
+        _block_entry.update(_blk.attn.get_register_attn_stats(
+            next((t for (bi2, t) in _attn_input_cache if bi2 == _bi)).float()
+        ))
+        _reg_blocks_log.append(_block_entry)
+    _attn_input_cache.clear()
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -743,6 +872,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "register_diagnostic": _reg_blocks_log,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -932,6 +1062,11 @@ if best_metrics:
                 }))
         return _hook
 
+    # _se_loader was previously defined in an older SE diagnostic that the
+    # SE block-3-only refactor (#2727) removed; the SwiGLU PR (#2741) added
+    # a use of the name without restoring the binding, which would NameError
+    # here. Re-define it locally for the SwiGLU diagnostic batch.
+    _se_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
                        for i, m in _swiglu_blocks]
     with torch.no_grad():
@@ -956,6 +1091,71 @@ if best_metrics:
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
+
+    # Register-tokens terminal diagnostic — register parameter stats, register
+    # collapse check (pairwise cosine similarity between register vectors),
+    # and KV attention mass on a fixed val batch.
+    print("\nRegister-tokens stats per block (best-checkpoint weights):")
+    _reg_term_log = {"event": "register_tokens_diagnostic",
+                     "epoch": int(best_metrics["epoch"]), "blocks": []}
+    # Capture PhysicsAttention inputs via forward-pre-hooks on a single
+    # val_single_in_dist batch.
+    _reg_attn_input_cache: list[tuple[int, torch.Tensor]] = []
+    def _make_reg_pre_hook(block_idx: int):
+        def _hook(_module, args):
+            _reg_attn_input_cache.append((block_idx, args[0].detach()))
+        return _hook
+    _reg_handles = [
+        _blk.attn.register_forward_pre_hook(_make_reg_pre_hook(_bi))
+        for _bi, _blk in enumerate(_inner.blocks)
+    ]
+    try:
+        with torch.no_grad():
+            _x_r, _y_r, _is_r, _m_r = next(iter(_se_loader))
+            _x_r = _x_r.to(device, non_blocking=True)
+            _m_r = _m_r.to(device, non_blocking=True)
+            _x_r_norm = (_x_r - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner({"x": _x_r_norm, "mask": _m_r})
+    finally:
+        for _h in _reg_handles:
+            _h.remove()
+
+    for _bi, _blk in enumerate(_inner.blocks):
+        _reg = _blk.attn.registers.detach().float()  # [n_reg, H, D]
+        _per_head_norms = _reg.norm(dim=-1)  # [n_reg, H]
+        # Pairwise cosine across registers per head — collapse check.
+        # Reshape to [H, n_reg, D] for per-head cosine.
+        _reg_hr = _reg.permute(1, 0, 2)  # [H, n_reg, D]
+        _reg_n = _reg_hr / (_reg_hr.norm(dim=-1, keepdim=True) + 1e-8)
+        _pair_cos = torch.matmul(_reg_n, _reg_n.transpose(-2, -1))  # [H, n_reg, n_reg]
+        # Take strict upper triangle (excluding diagonal) for mean/max.
+        _eye = torch.eye(_pair_cos.shape[-1], dtype=torch.bool, device=_pair_cos.device)
+        _off_diag = _pair_cos[:, ~_eye].reshape(_pair_cos.shape[0], -1)
+        _block_entry = {
+            "block_idx": _bi,
+            "register_norm_mean": float(_per_head_norms.mean()),
+            "register_norm_max": float(_per_head_norms.max()),
+            "register_norm_min": float(_per_head_norms.min()),
+            "pairwise_cosine_mean": float(_off_diag.mean()),
+            "pairwise_cosine_max": float(_off_diag.max()),
+            "pairwise_cosine_abs_mean": float(_off_diag.abs().mean()),
+        }
+        _x_attn_in = next((t for (bi2, t) in _reg_attn_input_cache if bi2 == _bi), None)
+        if _x_attn_in is not None:
+            _block_entry.update(_blk.attn.get_register_attn_stats(_x_attn_in.float()))
+        _reg_term_log["blocks"].append(_block_entry)
+        print(
+            f"  Register block[{_bi}]: norm mean={_block_entry['register_norm_mean']:.4f} "
+            f"max={_block_entry['register_norm_max']:.4f} | "
+            f"pairwise_cos mean={_block_entry['pairwise_cosine_mean']:.4f} "
+            f"max={_block_entry['pairwise_cosine_max']:.4f} "
+            f"abs_mean={_block_entry['pairwise_cosine_abs_mean']:.4f} | "
+            f"attn_mass_to_reg mean={_block_entry.get('attn_mass_to_reg_mean', float('nan')):.4f} "
+            f"max={_block_entry.get('attn_mass_to_reg_max', float('nan')):.4f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, _reg_term_log)
+    _reg_attn_input_cache.clear()
 
     test_metrics = None
     test_avg = None
