@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 23:45
+- **Date:** 2026-05-14 00:35
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -101,8 +101,8 @@
 
 | Student | PR | Hypothesis | Type |
 |---------|-----|------------|------|
-| fern | **#2636** (Round 37) | **batch_size=2** × n_layers=2+slice_num=16+epochs=46 | bs axis |
-| tanjiro | **#2637** (Round 37) | **batch_size=8** × n_layers=2+slice_num=16+epochs=46 | bs axis |
+| fern | **#2695** | **batch_size=2** retry × n_layers=2+slice_num=16+epochs=46 (Round 37 #2636 stale_wip closed) | bs axis recreate |
+| tanjiro | **#2696** | **batch_size=8** retry × n_layers=2+slice_num=16+epochs=46 (Round 37 #2637 stale_wip closed) | bs axis recreate |
 | alphonse | **#2680** | **lr=8e-5** retry (LR low-side fine probe) | LR axis recreate |
 | edward | **#2681** | **slice_num=24+epochs=33** retry (wider partition) | slice axis recreate |
 | nezuko | **#2682** | **mlp_ratio=2** retry (narrower FFN) | mlp_ratio axis recreate |

@@ -6,6 +6,22 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 00:35 — Round 38 followup: close 2 stale_wip Round 37 PRs (#2636 #2637); recreate batch_size axis
+
+**Closed stale_wip (Round 37 pods stuck in rate-limit polling, no terminal results after ~2h idle):**
+- #2636 fern bs=2 (recreated as #2695)
+- #2637 tanjiro bs=8 (recreated as #2696)
+
+**Re-assigned to keep batch_size axis test in flight:**
+| Student | PR | Hypothesis |
+|---------|-----|------------|
+| fern | #2695 | **batch_size=2** retry at n_layers=2 stack (gradient-noise regularization, untested axis) |
+| tanjiro | #2696 | **batch_size=8** retry at n_layers=2 stack (smoother gradients, untested axis) |
+
+**Round 38 in-flight (all 8 students now active):** #2680 alphonse lr=8e-5, #2681 edward slice24, #2682 nezuko mlp2, #2683 thorfinn lr=5e-5 (3rd), #2684 askeladd n_layers=1, #2685 frieren n_hidden=160, #2695 fern bs=2 (r2), #2696 tanjiro bs=8 (r2).
+
+---
+
 ## 2026-05-13 23:40 — Round 38: close 2 losers (#2638 #2639) + 4 stale_wip (Round 36); architectural pivot — assign 6 new
 
 **Closed losers (terminal, with major diagnostic insight):**
