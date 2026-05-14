@@ -39,10 +39,38 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **30.8909** | #2810 | Lion lr=1.5e-4 + FiLM + SE block-3-only **reduction=4 attn-pool** + SwiGLU MLP | ep64/65 (timeout-truncated); **−1.37% vs #2765** (31.3216); OOD splits WIN; 333,700 params |
-| `test_avg/mae_surf_p` | **26.1964** | #2810 | — | test from best-val checkpoint ep64; −1.17% vs #2765 (26.5067) |
+| `val_avg/mae_surf_p` | **30.5605** | #2879 | Lion lr=1.5e-4 + FiLM + SE block-3-only attn-pool + SwiGLU MLP + **mlp_ratio=3** | ep58/60 (timeout-truncated); **−1.07% vs #2810** (30.8909); in_dist -7.42% camber_rc +0.55% camber_cruise +6.07% re_rand -2.00%; 407,940 params |
+| `test_avg/mae_surf_p` | **26.5160** | #2879 | — | test from best-val checkpoint ep58; +1.22% regression vs #2810 (26.1964) — val improved, test regressed |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 30.8909` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 30.5605` to be merged.
+
+## 2026-05-14 [Round 118] — PR #2879: mlp_ratio=3 (SwiGLU wider MLP): val WIN −1.07% (NEW BEST)
+
+- **Student:** charliepai2g48h5-alphonse
+- **Best epoch:** 58 of 60 (hit SENPAI_TIMEOUT 30min at ep60; converged: ep58-60 plateau 30.56/30.79/30.96)
+- **Param count:** 407,940 (+74,240 vs #2810 333,700; +22.2%; SwiGLU intermediate 128→192 across 4 blocks; `2/3` factor in param-matching formula corrected from prediction)
+- **sec/epoch:** ~29.6 s (baseline ~27-28 s, +6% overhead modest)
+- **Key finding:** MLP-axis capacity strictly preferred over attention-axis capacity. #2879 (MLP +74k) beats #2869 (attn +87k) on every split. SwiGLU gate_zero_frac 1.0-1.6% — extra channels actively used (not dead-feature collapse). In-dist -7.42% re_rand -2.00%; camber_cruise +6.07% LOSS (camber plateau continues); camber_rc +0.55% flat. Test_avg 26.5160 (+1.22% vs #2810 26.1964) — test regressed while val improved; val-test gap narrowed (4.69 → 4.04). Plateau-breaking 21st winner after 16 consecutive LOSSes.
+- **SwiGLU diagnostics:** gate_zero_frac [0.0146, 0.0139, 0.0103, 0.0159] across blocks — all < 1.6%, well below the 50-77% dead-feature range seen in MishGLU/ReLU² experiments.
+
+| Split | val mae_surf_p | Δ vs #2810 (30.8909) |
+|---|---|---|
+| `val_single_in_dist` | **23.3997** | **−7.42% WIN** |
+| `val_geom_camber_rc` | 46.0708 | +0.55% flat |
+| `val_geom_camber_cruise` | 17.8657 | +6.07% LOSS |
+| `val_re_rand` | **34.9057** | **−2.00% WIN** |
+| **val_avg** | **30.5605** | **−1.07% WIN** |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | 23.3491 |
+| `test_geom_camber_rc` | 42.9018 |
+| `test_geom_camber_cruise` | 13.8565 (loss=NaN one sample; MAE valid) |
+| `test_re_rand` | 25.9567 |
+| **test_avg** | **26.5160** (+1.22% vs #2810) |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-mlp-ratio-3-20260514-100221/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-alphonse --experiment_name "charliepai2g48h5-alphonse/mlp-ratio-3" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`
 
 ## 2026-05-14 [Round 101] — PR #2810: SE block-3-only attn-pool: val WIN −1.37% (NEW BEST)
 
