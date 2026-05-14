@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 22:05
+- **Date:** 2026-05-14 22:25
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -62,7 +62,7 @@
 - **Slice softmax temperature (#2953 askeladd):** τ=0.5 (sharper) and τ=2.0 (smoother) on PhysicsAttention. Fundamental Transolver knob, never touched.
 - **DropPath (#2926 nezuko):** Stochastic depth (rates 0.1/0.2) as regularizer.
 
-## Active WIPs (8 students, 8 PRs, 0 idle)
+## Active WIPs (8 students, 8 PRs, 0 idle) — updated 2026-05-14 22:25
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
@@ -74,6 +74,7 @@
 | #3028 | askeladd | FiLM-Re γ at output decoder (Re-blind decoder injection, target: re_rand OOD) | ASSIGNED 2026-05-14 21:55 |
 | #3034 | frieren | Re-stratified mini-batch sampling by Re-bin (WeightedRandomSampler, K=4 quartiles) | ASSIGNED 2026-05-14 22:15 |
 | #3035 | thorfinn | FiLM-Re γ on PhysicsAttention routing layer (slice_proj logits — Re-conditional routing) | ASSIGNED 2026-05-14 22:15 |
+| #3038 | fern | slice_num bracket scan: 48 (0.75×) and 96 (1.5×) vs baseline 64 | ASSIGNED 2026-05-14 22:25 |
 
 **Closed this round (rounds 12–15):**
 - #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07.
@@ -93,6 +94,7 @@
 - **#3002 (askeladd inverted lr)** — 0.7×/0.5× late-block lr: val=35.19/36.59 (+4.4%/+8.6% REGRESS), test=29.61/30.92. γ_w_L2 inverted at 0.5× (late drops below early). Combined with #2959 boost results: geom_camber_rc monotone-bad in BOTH directions from 1.0×. Per-block lr fully retired. Meta-finding #14 ("early blocks drive OOD") RETRACTED (misattribution). Meta-finding #19 added. Askeladd reassigned to FiLM-Re decoder injection (#3028).
 - **#2984 (frieren input-only cond-mixup)** — α=0.2/0.4: val=55.95/58.79 (+66%/+74% REGRESS), test=50.19/52.87 (+75%/+85% REGRESS). All 4 splits catastrophic. Mechanism: per-batch λ + per-sample targets = conditioning label noise; model is forced to ignore conditioning. The 76-86% test_re_rand regression is the smoking gun (encoder learned to IGNORE Re). Meta-finding #20 added. Cond-mixup axis closed; clean alternative is single-sample Gaussian Re-jitter with target pairing preserved.
 - **#2991 (thorfinn head-decoder-width)** — 2×/3× head_hidden: val=36.22/36.08 (+7.4%/+7.0% REGRESS), test=30.83/30.23 (+7.6%/+5.5% REGRESS). All 4 splits uniformly regress (no OOD-selective signal). Mirror of edward's #2943 head-depth result. 128-d single-hidden-layer head is at capacity sweet spot. Meta-finding #21 added. Output decoder head capacity (width AND depth) fully retired as a free axis.
+- **#2965 (fern Fourier-Re K=4 on 15th-shift)** — K=4 compound with width=256 γ MLP: val=35.38/36.66 (+4.94%/+8.76% REGRESS), test=30.24/30.94 (+5.56%/+8.01% REGRESS). All 4 splits regress; test_single_in_dist worst at +14.5%. γ_w_L2 trajectory stays flat at ~4.2 (no further relief beyond what width=256 alone provides). Meta-finding #22 added. **Conditioning-encoder bottleneck-relief axes (γ-width, γ-depth, Fourier input) are NOT orthogonal — width=256 paid the bottleneck once and K=4 became redundant.** Fern reassigned to next plateau-protocol bet.
 
 ## Key meta-findings
 
@@ -117,6 +119,7 @@
 19. **Per-block lr scaling is fully retired — meta-finding #14 RETRACTED (#3002, #2959)** — both boost (1.5×/2.0×, #2959) and reduction (0.7×/0.5×, #3002) hurt all splits monotonically; geom_camber_rc is monotone-bad in BOTH directions from 1.0×. The per-block lr optimum is centered at 1.0× and any deviation hurts OOD. **Meta-finding #14 ("early blocks drive OOD signal") was a misattribution of confounded run variance.** γ_w_L2 depth-monotone diagnostic confirmed as health-signal: runs that fail to grow the early~4.2/late~5.6 pattern consistently regress (0.5× late-lr inverts pattern, maps perfectly to worst performance).
 20. **Per-batch λ Mixup on conditioning inputs without per-sample target preservation = conditioning label noise (#2984)** — α=0.2 and α=0.4 both regress >66% val, >75% test, all 4 splits catastrophic. Implementation samples one λ per batch and pairs `(x[perm[i]] cond, y[i] target)` for ~half of batches (Beta-bimodal mass at λ≈0/1). Model's optimal response: down-weight conditioning channels. test_re_rand +76-86% confirms encoder learned to IGNORE Re. **Conditioning Mixup has no clean variant on non-corresponding meshes.** Single-sample Gaussian Re-jitter with target pairing preserved is the clean replacement axis if conditioning-smoothing is desired (already-explored axis worth revisiting at 15th-shift with FiLM-Re in place).
 21. **Output decoder head capacity is fully retired (#2991 width, #2943 depth)** — 2×/3× head_hidden uniformly regresses 5-9% across all 4 test splits (no OOD trade-off); mirrors #2943 head-depth (depth=3 closed). At the 15th-shift basin, output head capacity is NOT orthogonal to trunk — additional head params rob optimization budget from trunk + γ-MLP within the 30-min/35-epoch cap. 128-d single-hidden-layer head sits at the capacity sweet spot. Future capacity moves: trunk-internal width, slice_num, or genuinely new injection points (e.g. #3028 decoder-FiLM-Re).
+22. **Conditioning-encoder bottleneck-relief axes are NOT orthogonal (#2965 K=4 Fourier on 15th-shift)** — γ-width (#2948 width=256), Fourier input expressivity (#2965 K=4), and γ-MLP depth (#2990) all relieve the same scalar→γ information bottleneck. γ_w_L2 trajectory flattens to ~4.2 with EITHER width=256 OR K=4-on-width=128; combining both gives flat ~4.2 too — no further relief. K=4 on 15th-shift baseline regresses 5-9% on all 4 splits (test_single_in_dist hit hardest at +14.5%, consistent with over-parameterized γ MLP memorizing IID patterns through redundant Fourier features). **Pay the bottleneck relief once at the cheapest axis** (γ-width was the winner). Further conditioning-encoder capacity expansion exhausted — gains must come from injection-point expansion (#3028 decoder, #3035 routing), conditioning surface area (#3019 joint Re+AoA), or data-side distribution levers (#3034 stratified sampling).
 
 ## Currently retired axes
 

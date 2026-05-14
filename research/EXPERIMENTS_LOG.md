@@ -3386,3 +3386,42 @@ Per-split test (uniform regression, no OOD trade-off): single_in_dist=35.05/33.6
 - Target: test_geom_camber_rc < 41.458, test_re_rand < 26.022
 - Arms: routing-FiLM s1, routing-FiLM s2 (seed=2)
 - Plateau-protocol bold bet: new injection point per meta-finding #21 ("future capacity moves should target genuinely new injection points")
+
+---
+
+## 2026-05-14 22:25 — PR #2965: Fourier-Re K=4 on 15th-shift baseline fern (CLOSED)
+- Branch: `willowpai2g48h3-fern/fourier-re-film`
+- Hypothesis: After K=4 won on width-128 baseline (`dkk00rpz` val=34.39 ✓), retest compound at 15th-shift baseline (width=256). Tests whether γ-width (#2948) and Fourier input expressivity are orthogonal capacity axes.
+
+### Results (2 seeds, 15th-shift baseline)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | 28.653 | — | — |
+| K=4 s1 `2i9ag66q` | hidden=256, K=4 | 35.375 | 30.242 | +4.94% ❌ | +5.56% ❌ |
+| K=4 s2 `byfqdiij` | hidden=256, K=4 | 36.662 | 30.945 | +8.76% ❌ | +8.01% ❌ |
+| **2-seed mean** | — | **36.019** | **30.593** | **+6.85% ❌** | **+6.79% ❌** |
+
+Per-split test (2-seed mean): single_in_dist=36.88 (+14.5% ❌), geom_camber_rc=43.02 (+3.8% ❌), geom_camber_cruise=15.73 (+5.5% ❌), re_rand=26.75 (+2.8% ❌). All 4 splits regress.
+
+**γ_w_L2 trajectory (key mechanism finding):**
+- 14th-shift width=128 K=0 (PR #2948 baseline): 3.4 → 5.2 (monotone increase with depth)
+- 14th-shift width=128 K=4 (prior `dkk00rpz`): flat at ~3.6 (input enrichment relieves late-block specialization)
+- **15th-shift width=256 K=0 (#2948 baseline):** approx flat at ~4.2 (width-256 alone relieves the bottleneck)
+- **15th-shift width=256 K=4 (this PR):** flat at ~4.2-4.3 (no further relief — bottleneck already paid)
+
+**Mechanism (student's analysis, confirmed):** Width-256 and K=4 Fourier are SUBSTITUTES, not complements. Both relieve the same scalar→γ information bottleneck. Once width-256 has flattened γ_w_L2 trajectory, adding K=4 Fourier is redundant capacity that the 35-ep / 30-min compute budget can't optimize. test_single_in_dist hit hardest (+14.5%) — consistent with over-parameterized γ MLP memorizing IID patterns through extra Fourier features rather than smooth interpolation.
+
+**Decision: CLOSED.** Mean test 30.59 ≫ 28.85 (decision-tree close threshold). Both arms regress 5-9%.
+
+**Meta-finding #22:** *Conditioning-encoder bottleneck-relief axes are NOT orthogonal. γ-width (#2948), Fourier input expressivity (#2965), and γ-MLP depth (#2990) all relieve the same scalar→γ information bottleneck. Pay it once at the cheapest axis (γ-width was the winner). Further conditioning expansion exhausted — gains must come from injection-point expansion (decoder #3028, routing #3035), conditioning surface area (joint Re+AoA #3019), or data-side distribution levers (#3034).*
+
+
+---
+
+## 2026-05-14 22:25 — PR #3038: slice_num bracket scan fern (ASSIGNED)
+- Branch: `willowpai2g48h3-fern/slice-num-scan`
+- Hypothesis: Bracket PhysicsAttention's slice_num at 96 (1.5×) and 48 (0.75×) of baseline=64. Meta-finding #21 calls out slice_num as remaining capacity lever. Pre-FiLM retirement (#1507) may no longer hold at 15th-shift basin where FiLM-Re provides Re-conditional routing features to in_project_slice. Bracket-scan approach (mirrors σ-axis): if both regress, slice_num=64 is locked at peak and provides a meta-finding; if one wins, 2-seed confirmation follows. Param delta: ±5K negligible. Compute impact at slice_num=96: ~15% slower per epoch, still ~30+ epochs in 30-min cap.
+- Complementary to thorfinn #3035 (routing-FiLM): fern tests codebook DIMENSIONALITY, thorfinn tests Re-CONDITIONING of the routing
+- Arms: slice_num=96 s1 (over-bracket), slice_num=48 s2 (under-bracket), single seed each
+
