@@ -200,7 +200,7 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1.0, use_se=True):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -532,7 +532,12 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"LayerScale: per-channel learnable gain init=1.0 (PR #2928, up from 1e-4) on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+# Startup diagnostic for PR #2928: verify init change landed
+print("LayerScale startup gammas (expected 1.0000 per block):")
+for _i, _blk in enumerate(model.blocks):
+    print(f"  block[{_i}] gamma_attn={_blk.gamma_attn.mean().item():.4f} "
+          f"gamma_mlp={_blk.gamma_mlp.mean().item():.4f}")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
     f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); "
@@ -740,6 +745,21 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+
+    # PR #2928: per-epoch LayerScale γ tracking (4 blocks x 2 gammas)
+    _inner_train = getattr(model, "_orig_mod", model)
+    _gamma_epoch_blocks = []
+    for _bi, _blk in enumerate(_inner_train.blocks):
+        _gamma_epoch_blocks.append({
+            "block_idx": _bi,
+            "gamma_attn_mean": _blk.gamma_attn.detach().float().mean().item(),
+            "gamma_mlp_mean": _blk.gamma_mlp.detach().float().mean().item(),
+        })
+    if (epoch + 1) in (1, 5, 30, 60):
+        _ga_str = " ".join(f"b{b['block_idx']}_a={b['gamma_attn_mean']:.4f}" for b in _gamma_epoch_blocks)
+        _gm_str = " ".join(f"b{b['block_idx']}_m={b['gamma_mlp_mean']:.4f}" for b in _gamma_epoch_blocks)
+        print(f"  [layerscale γ ep{epoch+1}] attn: {_ga_str} | mlp: {_gm_str}")
+
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +772,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "layerscale_gammas": _gamma_epoch_blocks,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
