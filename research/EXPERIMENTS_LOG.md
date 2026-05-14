@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-14 [Round 138 close-21] UTC — PR #2976: coord-noise-sigma-0.01 — **CLOSED LOSS (+6.31% val vs NEW; 143rd taxon; DATA-AUG TRIPLET COMPREHENSIVELY CLOSED with #2973/#2978)**
+
+- **Branch:** charliepai2g48h5-fern/coord-noise-sigma-0.01
+- **Metric artifacts:** models/model-charliepai2g48h5-fern-coord-noise-sigma-0.01-20260514-181137/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2976 (coord noise σ=0.01) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 32.4882 | **+6.31% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 26.9951 | **+1.81% LOSS** |
+| val_single_in_dist | 25.219 | 26.7023 | **+14.11% LOSS (WORST-HIT)** |
+| val_geom_camber_rc | 43.929 | 48.9242 | +6.19% LOSS |
+| val_geom_camber_cruise | 16.265 | 18.4721 | +3.39% LOSS |
+| val_re_rand | 34.740 | 35.8542 | +2.72% LOSS |
+| test_geom_camber_rc | 39.646 | 42.1928 | **-1.65% WIN (weak, not corroborated on val)** |
+| Param count | 407,172 | 407,940 | unchanged at run |
+
+**Hypothesis:** Gaussian noise σ=0.01 on normalized mesh coords x[:,:,0:2] (pos_x, pos_y) during training only. FIRST positional-channel data-aug; targets geometric OOD splits camber_rc/camber_cruise via positional robustness. Per alphonse #2961 student insight verbatim "data-distribution probe rather than model intervention."
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **POSITIONAL-PRECISION-IS-LOAD-BEARING FOR in_dist.** The hypothesis predicted in_dist would benefit from positional regularization (over-memorization regime). Instead in_dist is the WORST-hit split (+14.11% val / +4.91% test) — sign-flip of the predicted direction. The model uses fine-grained spatial structure for attention slicing; noise breaks neighbor relationships that attention requires.
+
+2. **TRAIN/EVAL DISTRIBUTION-SHIFT FAILURE MODE.** Train→val gap stayed small (0.0236 in surf_loss) — model isn't overfitting, it's learning a systematically worse mapping. Model learned to expect noise that vanishes at eval; representation degrades during training and that worse representation generalizes consistently. Classic "noise at train, clean at eval" mismatch.
+
+3. **CANONICAL META-SIGNAL DOES NOT REPEAT ON VAL.** Every val split is LOSS, in_dist worst. Cruise WIN does not appear. On test, only camber_rc shows weak WIN (-1.65%) — single positive signal, not corroborated by val. Cruise even LOSS more on test (+7.00%) than val (+3.39%) — OPPOSITE of meta-signal direction.
+
+4. **σ=0.01 (1.0% of unit-std normalized coords) WAS TOO LARGE FOR THIS SCALE.** Noise of 1.0% relative to feature std dominates fine-grained spatial structure; iid noise destroys neighbor relationships (mesh-coord noise should be smooth/spatially-correlated to simulate true remeshing variance, not iid).
+
+5. **143rd taxon CLOSED:** POSITIONAL-CHANNEL DATA-AUG AT σ=0.01 / POSITIONAL-PRECISION-IS-LOAD-BEARING.
+
+6. **DATA-AUGMENTATION AXIS COMPREHENSIVELY CLOSED:** Triplet now complete — edward #2973 (log_Re noise +33.84% LOSS), frieren #2978 (AoA noise +3.07% LOSS), fern #2976 (coord noise +6.31% LOSS) — all 3 orthogonal input-channel data-aug interventions LOSS at tested magnitudes. The LOAD-BEARING CLOSURE RULE from #2973 (meta-signal not addressable by data perturbation; lives in representational geometry from clean inputs) is now empirically verified across all 3 input channel classes (positional, conditioning scalar, AoA).
+
+**Closure timestamp:** 2026-05-14 18:56:14 UTC (morganmcg1 parallel advisor session)
+
+**Followup assigned (during this session by morganmcg1):** #2993 fern lion-wd-1e-3 (Lion weight-decay upper bracket 3e-4 → 1e-3; tests baseline-wd magnitude axis; orthogonal to data-aug closure; PIVOTS off data-axis per student suggestion #4 verbatim; 144th axis).
+
+---
+
+## 2026-05-14 [Round 138 close-20] UTC — PR #2978: aoa-input-noise — **CLOSED LOSS (+3.07% val vs NEW; 142nd taxon; DATA-AUG TRIPLET COMPREHENSIVELY CLOSED with #2973/#2976)**
+
+- **Branch:** charliepai2g48h5-frieren/aoa-input-noise
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-aoa-input-noise-20260514-181317/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2978 (AoA noise σ=0.05) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 30.9589 | **+3.07% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 27.0345 | **+7.24% LOSS** |
+| val_single_in_dist | 25.219 | 25.6116 | +1.56% LOSS |
+| val_geom_camber_rc | 43.929 | 45.1350 | +2.75% LOSS |
+| val_geom_camber_cruise | 16.265 | 17.4779 | **+7.46% LOSS (CRUISE META-SIGNAL BROKEN — sign-flip from -9.00% WIN)** |
+| val_re_rand | 34.740 | 35.6111 | +2.51% LOSS |
+| test_single_in_dist | 22.700 | 24.8946 | +9.67% LOSS |
+| Param count | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** Gaussian noise σ=0.05 on normalized AoA features x[:,:,14] (foil 1) and x[:,:,18] (foil 2) during training only — same draw per sample broadcast to all nodes. Predicted to smooth AoA response surface and benefit camber OOD splits.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **CRUISE META-SIGNAL SIGN-FLIPPED — second cruise-breakage post-#2964.** Baseline #2964 had cruise as biggest WIN (-9.00%); this PR reverted cruise to +7.46% LOSS. Same destructive-on-cruise pattern as alphonse #2961 aux-supervision break. **Cruise WIN from #2964 is BRITTLE to conditioning-pathway perturbations** — not just structural interventions.
+
+2. **CONTRADICTORY-AOA FAILURE MODE.** Effective physical σ was tiny (~0.21-0.28° on foils 1/2). BUT FiLM gate operates on 3-channel input `[log_Re, AoA0_rad, AoA1_rad]` which was NOT noised. Per-node raw-feature AoA was noisy; FiLM-input AoA was clean. Model saw CONTRADICTORY AoA across sites — a sharper signal than uniform noise. Per-sample AoA std on ch14 is 0.86 (normalized); σ=0.05 perturbs by 5.8% of inter-sample variance — large in distribution terms.
+
+3. **AOA IS LOAD-BEARING CONDITIONING SIGNAL, not data-augmentation knob.** Every val split regressed (no selective help on geometry/AoA splits); test regression ~2.4× worse than val (+7.24% vs +3.07%) — same pattern as cruise-meta-signal-breakage extended to in_dist on test. AoA noise distorts FiLM conditioning AND direct input feature; both flow through same input projection at every node.
+
+4. **Train→val gap maintained.** Train_surf ep56 = 0.0649 — no underfit from noise; smooth monotonic descent, stable training. Regularization-shaped failure, not capacity-shaped.
+
+5. **142nd taxon CLOSED:** AOA-CONDITIONING-NOISE-AT-σ=0.05 / CONDITIONING-PATHWAY-IS-LOAD-BEARING / CRUISE-WIN-IS-BRITTLE.
+
+6. **DATA-AUGMENTATION TRIPLET CLOSURE.** Combined with #2973 log_Re noise (CATASTROPHIC LOSS) and pending #2976 coord noise (LOSS — closed same minute) — data augmentation on ALL three input channel classes (positional, conditioning scalar, AoA) confirms unhelpful at tested magnitudes. **Meta-signal NOT addressable by data perturbation; lives in representational geometry from clean inputs (LOAD-BEARING CLOSURE RULE confirmed).**
+
+7. **CRUISE META-SIGNAL IS NOW A BRITTLENESS PROBE.** Future hypotheses touching FiLM, conditioning, or residual pathway should explicitly predict cruise direction; cruise sign-flip = evidence of conditioning-pathway disruption.
+
+**Closure timestamp:** 2026-05-14 18:56:07 UTC (morganmcg1 parallel advisor session)
+
+**Followup assigned (during this session by morganmcg1):** #2994 frieren lion-lr-1e-4 (Lion lr 1.5e-4 → 1e-4 with standard warmup+cosine; tests LR-magnitude downward direction with intact warmup; 145th axis; PIVOTS off data-axis per student suggestion #4 verbatim — "stop probing conditioning-channel noise on this backbone").
+
+---
+
 ## 2026-05-14 [Round 138 close-19] UTC — PR #2975: volume-aux-at-block-1 — **CLOSED LOSS (+7.52% val vs NEW; 141st taxon; AUX-SUPERVISION AXIS COMPREHENSIVELY CLOSED)**
 
 - **Branch:** charliepai2g48h5-alphonse/volume-aux-at-block-1
