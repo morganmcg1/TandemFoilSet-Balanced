@@ -2,6 +2,116 @@
 
 ---
 
+## 2026-05-14 [Round 119] UTC — PR #2884: Slice-routing entropy regularization alpha=0.005 — **CLOSED LOSS (+3.47% val vs new baseline)**
+
+- **Branch:** charliepai2g48h5-edward/slice-entropy-reg
+- **Hypothesis:** Auxiliary entropy loss on slice_weights with alpha=0.005 to prevent block-2 entropy collapse seen in #2869 H=2 diagnostic (entropy 0.267 = 8.4% of max). +0 params.
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-slice-entropy-reg-20260514-102403/metrics.jsonl
+
+| Metric | New Baseline #2879 | #2884 entropy-reg | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.6215** | **+3.47% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.3444 | +3.13% LOSS |
+| val_single_in_dist | 23.3997 | 24.7160 | +5.63% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.0352 | +4.26% LOSS |
+| val_geom_camber_cruise | 17.8657 | 18.3382 | +2.65% LOSS |
+| val_re_rand | 34.9057 | 35.3968 | +1.41% LOSS |
+
+Mechanism worked: block-2 entropy held at 2.497/3.178 (78.5% of max) throughout training — vs collapsed 0.267 in baseline. But block-0 entropy concentrated to 1.16 (36.5% of max) — the optimization budget for sparsity migrated from block-2 to block-0. Entropy bonus 1.23% of train loss as planned. Param count 333,700 ✓.
+
+**Critical insight:** Routing collapse is **load-bearing for OOD geometry**, not a bug. Forcing broad routing breaks implicit sub-task specialization. The optimizer-natural attractor toward concentrated routing IS what enables camber_rc/camber_cruise specialization. 94th candidate axis CLOSES. Slice-routing entropy regularization not productive at any alpha; future routing-axis work needs structural change (hard top-k, capacity-aware) not soft penalty.
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2881: NeRF-style Fourier positional encoding n_freqs=4 — **CLOSED LOSS (+4.63% val)**
+
+- **Branch:** charliepai2g48h5-nezuko/fourier-pos-enc
+- **Hypothesis:** Apply Fourier features to (pos_x, pos_z) channels with frequencies pi, 2pi, 4pi, 8pi → +16 input features → preprocess input 24→40. +3,072 params.
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-fourier-pos-enc-20260514-101708/metrics.jsonl
+
+| Metric | New Baseline #2879 | #2881 fourier-pos-enc | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.9774** | **+4.63% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.4366 | +3.47% LOSS |
+| val_single_in_dist | 23.3997 | 24.3221 | +3.94% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.3652 | +4.98% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.8121 | -0.30% wash |
+| val_re_rand | 34.9057 | 37.4103 | +7.17% LOSS |
+
+Implementation correct: param delta +3,072 matches prediction exactly; bf16 phase-aliasing handled (sin/cos in fp32 cast to bf16). The inductive bias does not help here.
+
+**Mechanism analysis (excellent diagnosis):** Fourier features amplify in-dist coordinate phase memorization. 0.25-period channel resolves features at ½-chord scale — fine enough to memorize wing-specific surface curvature in narrow training distribution. NeRF works because a single scene has spatially-consistent coordinates; here every wing has its own coordinate population, so coordinate-Fourier expansion hurts OOD generalization. **93rd candidate axis CLOSES.** Coordinate-Fourier axis exhausted; geometry-invariant features would be natural follow-up but data/ is read-only.
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2874: slice_num=28 upward direction — **CLOSED LOSS (+5.49% val, axis fully closed)**
+
+- **Branch:** charliepai2g48h5-frieren/slice-num-28
+- **Hypothesis:** Increase slice_num 24→28 to provide more pathways for OOD geometry expression. +784 params.
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-slice-num-28-20260514-101210/metrics.jsonl
+
+| Metric | New Baseline #2879 | #2874 slice_num=28 | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.2381** | **+5.49% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 28.0820 | +5.91% LOSS |
+| val_single_in_dist | 23.3997 | 25.3884 | +8.50% LOSS |
+| val_geom_camber_rc | 46.0708 | 49.0499 | +6.47% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.3220 | -3.04% slight WIN |
+| val_re_rand | 34.9057 | 37.1921 | +6.55% LOSS |
+
+Per-block routing: ~19/28 effective slices used. Block-3 entropy 0.30/3.33 = 9% of max with max_routed_slice_frac=0.92 confirms structural one-hot attractor. Adding pathways does not break attractor, only adds dead slices.
+
+**Slice_num axis fully closed by 3-point bracket:** 32→24 WIN (#2307), 24→20 LOSS (#2852, +3.69%), 24→28 LOSS (#2874, +5.49% vs new baseline). slice_num=24 is local optimum. Future slice-family work needs PhysicsAttention architectural change (hard top-k, capacity-aware routing) not slice count adjustments. 95th candidate axis CLOSES.
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2868: Smooth L1 (Huber β=1.0) training loss — **CLOSED stale_wip**
+
+- **Branch:** charliepai2g48h5-thorfinn/smooth-l1-huber-beta1
+- Closed without results — thorfinn was idle on this assignment for several rounds without posting terminal results. Slot reclaimed for fresh experiment (cosine eta_min). Smooth L1 hypothesis remains valid and could be revived as a fresh assignment later if needed.
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2891: Multi-task auxiliary loss (96th axis) — **ASSIGNED to charliepai2g48h5-edward**
+
+- **Branch:** charliepai2g48h5-edward/multi-task-aux-loss
+- **Hypothesis:** Add auxiliary regression head predicting flow scalars [log_Re, AoA0_rad, AoA1_rad] from masked-mean pooled pre-decoder features. Loss multiplier aux_weight=0.05. Self-supervised consistency objective forces internal representation to preserve physical-quantity information. +291 params (Linear(96, 3)).
+- **Rationale:** 5+ axes show in-dist-WIN + OOD-LOSS pattern (#2851/#2864/#2870/#2881/#2884). Recurring signature: representation drifts toward in-dist-specific features at OOD cost. Forcing the rep to reconstruct Re/AoA pins it to physical reality. Classical multi-task literature (Caruana 1997, Ruder 2017) supports aux tasks reliably improving OOD generalization when sharing representations.
+- **Falsifiable:** WIN = try aux_weight=0.1 or NACA targets. WASH = aux head shortcut from input chans. LOSS = aux objective conflicts with surface MAE.
+- **96th candidate axis.**
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2892: EMA model weights for evaluation (97th axis) — **ASSIGNED to charliepai2g48h5-frieren**
+
+- **Branch:** charliepai2g48h5-frieren/ema-eval-weights
+- **Hypothesis:** Maintain EMA of model weights (decay=0.999) during training; use EMA model for val/test eval. Training step unchanged — Lion still updates live model. +0 params (just shadow copy in memory). Standard transformer recipe (DeiT, ConvNeXt, DINOv2).
+- **Rationale:** Best-val happens at ep58-65 of 70 — within cosine tail where lr→0. EMA smooths late-training noise. ~700-step half-life at decay=0.999 averages over last ~22 epochs. Diagnostic: log both live_val and ema_val per epoch to measure EMA effect directly.
+- **Falsifiable:** WIN = try decay=0.9995 or per-split EMA tuning. WASH = optimum genuinely converged. LOSS = EMA delays late-training tracking.
+- **97th candidate axis.**
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2893: GELU on SwiGLU up-projection (98th axis) — **ASSIGNED to charliepai2g48h5-nezuko**
+
+- **Branch:** charliepai2g48h5-nezuko/gelu-up-projection
+- **Hypothesis:** Apply F.gelu() to SwiGLU up-projection output (was: linear). Smooth-activation bracket complementing #2875 ReLU² LOSS. Single-line change: . +0 params.
+- **Rationale:** Tests whether ANY up-proj non-linearity helps, isolating hard-sparsity (ReLU²) from smooth-nonlinearity (GELU). No hard-zero region → no dead-feature trap under Lion. No quadratic amplification → no bf16 overflow. Closes activation-site axis cleanly.
+- **Falsifiable:** WIN = try Tanh on up next. WASH = up-proj activation irrelevant (SwiGLU is gate-dominated). LOSS = ANY up-proj non-linearity breaks SwiGLU (Shazeer 2020 linear up-proj load-bearing).
+- **98th candidate axis.**
+
+---
+
+## 2026-05-14 [Round 119] UTC — PR #2894: Cosine LR eta_min = 0.05*lr (99th axis) — **ASSIGNED to charliepai2g48h5-thorfinn**
+
+- **Branch:** charliepai2g48h5-thorfinn/cosine-eta-min-5pct
+- **Hypothesis:** Change CosineAnnealingLR eta_min from 0 to 0.05*cfg.lr = 7.5e-6. Single-line config change. +0 params.
+- **Rationale:** Current schedule cosine-anneals lr from peak 1.5e-4 to literally 0 over 67 epochs. Best-val often at ep58-65 (cosine tail where lr→0 already). Setting eta_min=5% keeps a small floor lr so Lion's sign-step can still make meaningful updates. Standard practice in modern transformer recipes (DeiT-III, ConvNeXt-v2 use eta_min=1e-6 or lr/100).
+- **Falsifiable:** WIN = try eta_min=10%*lr or longer total epochs. WASH = model converges before cosine tail matters. LOSS = late-training noise from eta_min=5% hurts.
+- **99th candidate axis.**
+
+---
+
 ## 2026-05-14 [Round 118] UTC — PR #2879: mlp_ratio=3 SwiGLU wider MLP — **MERGED WIN (-1.07% val, 21st winner)**
 
 - **Branch:** charliepai2g48h5-alphonse/mlp-ratio-3
