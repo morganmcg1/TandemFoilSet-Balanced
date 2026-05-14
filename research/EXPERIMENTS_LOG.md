@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-05-14 [Round 133] UTC — PR #2920: per-step-linear-warmup-3ep → cosine 57ep — **CLOSED LOSS (+6.79% val; 111th taxon; PER-STEP WARMUP-FROM-ZERO AXIS CLOSED)**
+
+- **Branch:** charliepai2g48h5-frieren/linear-warmup-3-epochs
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-linear-warmup-3-epochs-20260514-130813/metrics.jsonl
+
+| Metric | Baseline #2879 | #2920 Linear warmup | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 32.6362 | **+6.79% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.5135 | +3.76% LOSS |
+| val_single_in_dist | 23.3997 | 25.8155 | +10.32% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.0303 | +4.25% LOSS |
+| val_geom_camber_cruise | 17.8657 | 18.4606 | +3.33% LOSS |
+| val_re_rand | 34.9057 | 38.2384 | +9.55% LOSS |
+| Param count | 407,940 | 407,940 | 0 |
+
+- **CRITICAL CORRECTION FROM STUDENT:** PR hypothesis framing was inaccurate. Current baseline #2879 ALREADY has per-epoch warmup: SequentialLR(LinearLR(start_factor=0.1, end_factor=1.0, total_iters=3), CosineAnnealingLR(T_max=57)). This experiment was 'per-step warmup from 0 vs per-epoch warmup from 0.1×peak', NOT 'warmup vs no warmup'. Per-step-from-zero variant starves Lion of high-LR steps in ep1-3 (LR rises continuously from 0 vs jumping to 1.5e-5 → 5e-5 → 1.05e-4 → 1.5e-4 in baseline per-epoch variant).
+- Closing 111th taxon: per-step-from-zero linear warmup axis. Student followup #1 (test pure cosine NO warmup) ASSIGNED to frieren as #2929.
+
+## 2026-05-14 [Round 133] UTC — PR #2918: input-mixup-α=0.2 — **CLOSED CATASTROPHIC LOSS (+21.16% val; 112th taxon; DATA-LEVEL MIXUP AXIS CLOSED)**
+
+- **Branch:** charliepai2g48h5-edward/input-mixup-alpha-0.2
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-input-mixup-alpha-0.2-20260514-130919/metrics.jsonl
+
+| Metric | Baseline #2879 | #2918 Input mixup α=0.2 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 37.0252 | **+21.16% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 32.3808 | +22.12% LOSS |
+| val_single_in_dist | 23.3997 | 28.0993 | +20.10% LOSS |
+| val_geom_camber_rc | 46.0708 | 51.7647 | +12.36% LOSS |
+| val_geom_camber_cruise | 17.8657 | 25.0643 | **+40.30% LOSS (reversed meta-signal — worst result in series)** |
+| val_re_rand | 34.9057 | 43.1724 | +23.68% LOSS |
+| Param count | 407,940 | 407,940 | 0 |
+
+- **Analysis:** Worst result in 12-experiment meta-signal series. Two failure modes:
+  1. Physical: Beta(0.2, 0.2) bimodal but ~30% of batches with strong mixing (λ≈0.5) create non-physical hybrid airfoils with hybrid pressure fields satisfying no PDE. Capacity wasted learning physically meaningless interpolations.
+  2. Implementation: Mask/is_surface mismatch — mixup permutes x and y across batch but model uses ANCHOR's mask/is_surface (not permuted sample's). Surface token at position i in anchor receives mixed prediction informed by non-surface token at position i in permuted sample. Destroys geometry-flow correspondence.
+- **KEY META-SIGNAL UPDATE — student insight:** "The cruise-improving meta-signal is NOT just any perturbation. The pattern is specific to interventions that SHIFT CAPACITY ALLOCATION. Future cruise-attacks should focus on capacity-routing mechanisms (MoE-style gates, per-split heads) rather than uniform regularization." This is the cleanest mechanistic statement yet, confirms #2911 + #2912 closures.
+- Closing 112th taxon: input-level mixup data-augmentation axis. Reassigning edward to head-zero-init (#2930).
+
+## 2026-05-14 [Round 133] UTC — PR #2876: fern batch_size_8 — **CLOSED stale_wip (12+ rounds dormant; batch-size axis remains untested)**
+
+- **Branch:** charliepai2g48h5-fern/batch-size-8
+- Stale WIP since Round 89 with no submitted results despite baseline-update reminder. fern's GPU idle for 12+ rounds — redeployed to fresh hypothesis (cosine-eta-min-1e-6, #2931). Batch_size=8 idea remains valid and could be revived later if a future student is available.
+
 ## 2026-05-14 [Round 132] UTC — PR #2911: nonlinear-additive-geo-FiLM — **CLOSED LOSS (+7.97% val; 109th taxon; GEO-FILM-CONDITIONER-CAPACITY AXIS CLOSED)**
 
 - **Branch:** charliepai2g48h5-askeladd/nonlinear-additive-geo-film
