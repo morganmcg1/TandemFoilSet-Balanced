@@ -5,13 +5,42 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Three winners merged.** PR #1405 (tanjiro, bf16 + OneCycle@25ep) is now the
-current baseline at `val_avg/mae_surf_p = 73.295` (-14.4% vs PR #1581).
-All subsequent experiments should use `--loss l1 --lr 2e-3 --epochs 25`
-with OneCycleLR scheduler + bf16 autocast enabled. VRAM footprint is ~33 GB
-(down from ~42 GB in fp32) due to bf16.
+**Four winners merged.** PR #2936 (askeladd, eval_every=2 flag) is now the
+current baseline at `val_avg/mae_surf_p = 72.694` (-0.82% vs PR #1405).
+All subsequent experiments should use `--loss l1 --lr 2e-3 --epochs 25 --eval_every 2`
+with OneCycleLR scheduler + bf16 autocast enabled. VRAM footprint is ~33 GB.
 
-## 2026-05-14 — PR #1405: bf16 autocast + OneCycleLR@25ep (tanjiro) ← CURRENT BEST
+## 2026-05-14 — PR #2936: eval_every=2 (askeladd) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **72.694**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **63.367**
+- **Improvement vs PR #1405:** -0.82% val / -0.85% test
+- **Best epoch:** 20 / 25 configured (30-min wall-clock cap; ~98 s/eval epoch, 20 realized)
+- **Key change:** `--eval_every 2` skips validation on odd epochs, saving ~7 s/epoch × 10
+  skips ≈ 70 s → 1 extra training epoch in the OneCycleLR tail.
+- **Per-split val breakdown (epoch 20):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 53.237 |
+| val_re_rand | 71.144 |
+| val_single_in_dist | 82.067 |
+| val_geom_camber_rc | 84.326 |
+| **val_avg** | **72.694** |
+
+- **Metric artifacts:** `models/model-eval-every-2-20260514-143831/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 25 --lr 2e-3 --loss l1 --eval_every 2 \
+  --agent charliepai2g48h1-askeladd --experiment_name eval-every-2
+```
+
+Note: `--eval_every 2` is the new default for this recipe. `should_eval` gate in
+`train.py` forces a validation pass on the last configured epoch regardless.
+
+## 2026-05-14 — PR #1405: bf16 autocast + OneCycleLR@25ep (tanjiro) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **73.295**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **63.911**
