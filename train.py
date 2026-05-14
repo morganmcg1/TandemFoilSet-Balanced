@@ -197,12 +197,35 @@ class SqueezeExcitation(nn.Module):
         return x * gate.unsqueeze(1)
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth — drops full residual branch with prob drop_prob during training.
+
+    At eval (self.training=False) and at drop_prob=0.0, forward is the identity, so the
+    deterministic forward path matches the baseline exactly. Implementation follows the
+    standard timm/DeiT convention: keep_prob rescaling on the active samples preserves
+    expected value of the residual branch.
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()  # binarize
+        return x.div(keep_prob) * random_tensor
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, drop_path_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
+        self.drop_path_rate = drop_path_rate
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -213,6 +236,8 @@ class TransolverBlock(nn.Module):
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
+        self.drop_path_attn = DropPath(drop_path_rate)
+        self.drop_path_mlp = DropPath(drop_path_rate)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -221,8 +246,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path_attn(self.gamma_attn * self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path_mlp(self.gamma_mlp * self.mlp(self.ln_2(fx))) + fx
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -251,12 +276,21 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Stochastic Depth / DropPath: linear schedule from 0 to max_drop_path_rate
+        # across the n_layers TransolverBlocks. For n_layers=4 this is
+        # [0.0, 0.033, 0.067, 0.1]. Stored for downstream diagnostics.
+        max_drop_path_rate = 0.1
+        drop_path_rates = [
+            max_drop_path_rate * i / max(1, n_layers - 1) for i in range(n_layers)
+        ]
+        self.drop_path_rates = drop_path_rates
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                drop_path_rate=drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -542,6 +576,16 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# Stochastic Depth (DropPath) diagnostic — linear schedule across blocks; eval is deterministic (identity)
+_inner_model = model
+_dp_rates = _inner_model.drop_path_rates if hasattr(_inner_model, "drop_path_rates") else []
+print(
+    f"DropPath: linear schedule 0.0 -> 0.1 across {model_config['n_layers']} blocks; "
+    f"per-block drop_path_rate={[round(r, 3) for r in _dp_rates]}; "
+    f"applied per-sample to LayerScale-weighted attn and mlp residual branches; "
+    f"+0 params; baseline to beat: val_avg/mae_surf_p < 30.8909 (#2810 R101)"
+)
+
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
@@ -673,6 +717,15 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+# Stochastic Depth schedule diagnostic (one-shot static record)
+_inner_model_for_dp = getattr(model, "_orig_mod", model)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "drop_path_schedule",
+    "max_drop_path_rate": 0.1,
+    "n_layers": model_config["n_layers"],
+    "drop_path_rates": list(getattr(_inner_model_for_dp, "drop_path_rates", [])),
+})
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -740,6 +793,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    epoch_total_loss = epoch_vol + cfg.surf_weight * epoch_surf
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -748,6 +802,7 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/total_loss": epoch_total_loss,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
