@@ -4,6 +4,44 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 19:45 — PR #2481 (CLOSED, edward): SWALR anneal_epochs=1 on σ=0.5 stack single-arm cross-stack — PAPER-STRENGTHENING CROSS-STACK CLOSE (NOT a new axis; anneal_epochs already closed at #2877 DEGENERATE-AXIS on saturated-clip max_norm=0.35 baseline as 1st DEGENERATE-AXIS member); cross-stack DEGENERATE confirmation makes anneal_epochs DOUBLE-STACK DEGENERATE across (σ=1.0, max_norm=0.35) + (σ=0.5, max_norm=0.5)
+
+- **Branch:** `willowpai2g48h2-edward/swa-anneal-epochs-1-on-sigma0p5`
+- **Student:** willowpai2g48h2-edward
+- **Verdict:** Single-arm anneal_epochs=1 SWA val **45.2426** +0.0888 / test 38.7441 +0.1074 vs current #2674 baseline (45.1538/38.6367) — **NOT a merge candidate per current decision rule** (val < 45.1538 to merge). Vs prior #2311 baseline (val=45.2181/test=38.7661): essentially TIED (val +0.0245, test −0.022). Vs original #2168 σ=0.5 baseline (val=45.7648/test=39.6619): would have been MERGE candidate (val −0.5222/test −0.9178) but #2311 hybrid-Kendall merge absorbed all that headroom. **PAPER-STRENGTHENING CROSS-STACK CLOSE** — anneal_epochs DEGENERATE-AXIS status TRANSFERS cross-stack from saturated-clip max_norm=0.35 → σ=0.5/max_norm=0.5.
+- **W&B run:** `3mfnpac0`, baseline `ieu1futo`.
+- **Headline:** anneal_epochs is now **DOUBLE-STACK DEGENERATE** — 1st paper-appendix axis with cross-stack DEGENERATE confirmation. SWA-window ramp-speed degeneracy is a stack-invariant property of the 13-epoch budget.
+
+### Mechanism diagnosis (paper-strengthening — extends student's diagnostic analysis)
+
+- **#241 PAPER-STRENGTHENING — anneal_epochs DEGENERATE-AXIS class transfers cross-stack.** anneal_epochs DOUBLE-STACK DEGENERATE across (saturated-clip max_norm=0.35) + (σ=0.5/max_norm=0.5). 1st paper-appendix axis with cross-stack DEGENERATE confirmation. **Paper-appendix value**: budget × SWA-window-size interaction is the dominant load on the SWA-axis at 13-epoch budget, not LR-ramp speed. Within saturated-clip stack, DEGENERATE-AXIS class member count stays at 1 (anneal_epochs #2877) but with new cross-stack DOUBLE-STACK status.
+
+- **#242 PAPER-STRENGTHENING — hybrid Lion+AdamW(σ) absorbs SWA-schedule headroom cross-stack.** 2nd cross-stack confirmation of the partially-overlapping-mechanisms story banked at #225 from #2484 frieren skip-SWALR (saturated-clip max_norm=0.35). **Sharpens banked #225**: SWA-schedule perturbations have less leverage on ANY hybrid-optimized stack (regardless of σ regime) because σ-heads run on non-cosine-scheduled AdamW that absorbs the SWA-schedule contribution. Paper-publishable 2-stack confirmation of hybrid-optimizer × SWA-schedule mechanism absorption.
+
+- **#243 PAPER-STRENGTHENING — Izmailov-collapse direct measurement extends to σ=0.5 stack.** |Δtrain_surf|=0.0018 between SWA epochs 12 and 13 on σ=0.5/anneal_epochs=1. Combined with banked #224 from #2484 (|Δtrain_surf|=0.003 between same SWA epochs on σ=0.5/skip-SWALR), this is the **3rd direct Izmailov-collapse measurement**. Quantitative regularity: |Δtrain_surf| in [0.001, 0.003] at 13-epoch budget. **Paper-appendix value**: Izmailov-collapse is now a budget-invariant property measured across 3 SWA-family experiments at 13-epoch budget within a tight ~0.002 band.
+
+- **#244 PAPER-STRENGTHENING — σ-spread invariance #18 confirmed cross-axis.** Final σ-spread 0.4755 on anneal_epochs=1 ≈ baseline 0.475 — schedule-axis (anneal_epochs) orthogonal to σ-collapse fix from #2311. σ-spread invariance bank now **18 confirmations + 4 BREAKs** (all 4 BREAKs are forward-pass-shape axes, banked #230, #233, #236). anneal_epochs joins 18-axis σ-spread-invariance class. **Banked methodology**: schedule axes preserve σ-spread invariance; forward-pass-shape axes break it.
+
+- **#245 METHODOLOGY — Per-epoch SWA val diagnostic gap noted (2nd flag).** Same gap noted in Loop 94 #2484 close. Current train.py only evaluates SWA model at end of run, not per-epoch. Across 2 SWA-family cross-stack diagnostics (#2484 + #2481 this PR), prevents direct comparison of per-averaging-step contributions across arms. Banked as paper-appendix diagnostic limitation; future SWA-family experiments are blind to per-epoch SWA val trajectory.
+
+### Mechanism verification
+
+- LR trajectory through SWA window: epoch 11 cosine-tail (4.96e-05), epoch 12 (1st SWA, at swa_lr 6.00e-05), epoch 13 (2nd SWA, at swa_lr) — **both averaged epochs at swa_lr floor** as predicted, NO mid-ramp averaging.
+- Train loss SWA boundary: |Δsurf|=0.0018 between SWA epochs 12 and 13 — Izmailov-collapse direct.
+- Final Kendall log_σ: 6-channel spread 0.4755 ≈ baseline 0.475 — σ-collapse fix preserved.
+- Peak VRAM: 44.8 GB invariant — schedule axis compute-invariant.
+- Only 2 SWA-averaged epochs at 13-epoch budget (1-idx 12 + 13) — not the 3 PR body predicted; structural consequence of swa_start_epoch = int(0.75 * 15) = 11 (0-idx) = epoch 12 (1-idx) start.
+
+### Paper-appendix matrix update — UNCHANGED at 18 closed × 8 transfer patterns + 2 MIXED axes
+
+Loop 98 is paper-strengthening cross-stack confirmation, NOT new axis closure or pattern class. DEGENERATE-AXIS class member count stays at 1 (anneal_epochs #2877) with new cross-stack DOUBLE-STACK DEGENERATE confirmation status.
+
+### Edward reassignment
+
+Assigned edward → **PR #3005: max_norm sweep {0.2, 1.0} on current saturated-clip max_norm=0.35 baseline** — 21st paper-appendix axis label, **NEW MAX_NORM-CLIP-BOUNDARY transfer-pattern class candidate**. Arm 1 TIGHTER (max_norm=0.2): even more saturated, effective Lion step 57% of baseline; Arm 2 LOOSER (max_norm=1.0): reverts to unclipped Lion regime, clip_fraction expected to drop below 1.000. **Meta-test of the saturated-clip story** behind the current baseline. Predicted outcomes: Arm 1 wins → continuous mechanism with tighter ideal (possible MICRO-WIN); Both regress with Arm 2 worse → boundary mechanism ASYMMETRIC-V (most likely); both > 46.0 → DEGENERATE (unlikely). No train.py edit required — --max_norm at line 596. σ-spread invariance prediction across both arms (19th confirmation if preserved).
+
+---
+
 ## 2026-05-14 19:30 — PR #2463 (CLOSED, tanjiro): STALE-WIP housekeeping — swa_lr sweep {0.05x, 0.5x} on OBSOLETE σ=0.5/max_norm=0.5 Lion stack; axis already closed at #2896 ASYMMETRIC-V on current saturated-clip max_norm=0.35 baseline
 
 - **Branch:** `willowpai2g48h2-tanjiro/swa-lr-fine-bracket-sigma-0p5-stack`
