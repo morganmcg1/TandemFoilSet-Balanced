@@ -4,6 +4,68 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 00:10 — PR #2674 (ASSIGNED, thorfinn): max_norm BRACKET LOW {0.25, 0.35} on merged hybrid — complete U-curve
+
+- **Branch:** `willowpai2g48h2-thorfinn/max-norm-bracket-low-on-hybrid`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Monotone-bad direction at max_norm 0.5→1.0→2.0 from #2606 indicates the optimum is at 0.5 OR below. Bracket below (0.35, 0.25) completes the U-curve. Per-split signature from #2606 (relaxation hurt geom_camber_rc most) suggests tight clip is OOD-friendly — tightening further may produce an OOD win.
+- **Decision rule:** val < 45.2181 AND test < 38.7661 → MERGE; both arms ≤ 46.10 (Arm 1 #2606) on val → axis fully bidirectionally closed; train-loss stall at 0.25 → starvation floor banked.
+- **Mechanism predictions:** (a) Both win → tighter compounds (compound merge); (b) Both regress → peak at 0.5; (c) Arm 1 only wins geom_camber_rc → tight-clip-OOD-asymmetry mechanism confirmed (matches σ-spread per-split asymmetry from #2500).
+- **Status:** Assigned; awaiting training.
+
+---
+
+## 2026-05-13 23:55 — PR #2606 (CLOSED, thorfinn): max_norm sweep {1.0, 2.0} on hybrid — clip ceiling found
+
+- **Branch:** `willowpai2g48h2-thorfinn/max-norm-sweep-on-hybrid`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Relax saturating clip (clip_fraction=1.0 from 4+ confirmations) to let more gradient direction through; test {1.0, 2.0}.
+
+### Result table (vs hybrid baseline #2311)
+
+| Arm | max_norm | W&B | val | test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline | 0.5 | `objur0b9` | 45.2181 | 38.7661 | — | — | — |
+| Arm 1 | 1.0 | `1glhy1gc` | 45.9466 | 39.3988 | +0.73 | +0.63 | regress |
+| Arm 2 | 2.0 | `cj1cnbvc` | 46.0924 | 39.2278 | +0.87 | +0.46 | regress |
+
+**Verdict:** clip-relaxation hurts monotonically; max_norm=0.5 is robust. Per the decision rule (val ≥ 45.50 on best arm) → no merge.
+
+### Per-split SWA val (the per-split mechanism signal)
+
+| Split | baseline (0.5) | arm1 (1.0) | arm2 (2.0) | Δ arm1 | Δ arm2 |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 46.967 | 47.483 | 48.026 | +0.516 | +1.059 |
+| **geom_camber_rc** | **58.126** | **59.744** | **59.568** | **+1.618** | **+1.443** |
+| geom_camber_cruise | 29.496 | 29.558 | 29.496 | +0.062 | +0.000 |
+| re_rand | 46.283 | 47.001 | 47.279 | +0.719 | +0.996 |
+
+**geom_camber_rc is the WORST-hit val split in both relaxation arms** — strong evidence that tight clip is OOD-friendly.
+
+### Per-step clip_fraction sampling (THE methodology finding)
+
+| max_norm | per-step clip_fraction | grad_norm median | grad_norm mean |
+|---:|---:|---:|---:|
+| 0.5 | ~99% | (~5.3) | (~18.3) |
+| 1.0 | 98.3% | 5.31 | 18.37 |
+| 2.0 | 82.0% | 5.29 | 18.26 |
+
+### Banked findings (8 total)
+
+1. **max_norm=0.5 is robust under hybrid stack** — monotone-bad on val going UP. The tightly-clipped sign-step regime is load-bearing for SWA convergence.
+2. **NEW (CRITICAL METHODOLOGY): "clip_fraction=1.000 every step" was a summary-key artifact, NOT per-step truth.** Retroactively corrects 13+ prior confirmations from #2168, #2363, #2407, #2512, #2540, #2604. Real per-step at max_norm=0.5 ≈ 99%. BASELINE.md's `clip_fraction ≈ 0.99` was correct all along. Paper-facing implication: any "every step clipped" claims need rewriting.
+3. **NEW: Per-split signature confirms "tight-clip is OOD-friendly"** — val_geom_camber_rc worst-hit in both relaxation arms (+1.62, +1.44). Connects to #2429: tight clip differentially protects the load-bearing OOD bottleneck.
+4. **NEW: max_norm × swa_lr co-tuning hypothesis** — banked open question whether (max_norm, swa_lr) joint sweep changes picture. swa_lr not a CLI flag — code change required.
+5. **NEW: Kendall σ orthogonality to max_norm confirmed** — both arms reproduce baseline σ structure within 0.01 (mean=−1.98, spread=0.475). hybrid_kendall_lr dynamics independent of max_norm ∈ [0.5, 2.0].
+6. **NEW: grad_norm distribution invariant to clip threshold** — median pre-clip ~5.3, mean ~18.3 across both arms. Pre-clip is a property of (model + data + loss), not a function of clip parameter.
+7. **NEW: grad_norm_max drops slightly with relaxation** (83→75 going 1.0→2.0). Outlier tail is NOT what's clipped at max_norm=0.5; it's the BULK distribution. Confirms "clip is a secondary lr, not stability mechanism."
+8. **NEW: Apples-to-apples timeout** — both arms hit 30.6 min at exactly epoch 13/15. Step time invariant to max_norm. Clean comparison.
+
+### Why this is a top-tier closing PR
+Per-step sampling methodology exposed a 13+-PR documentation error. Per-split mechanism analysis is paper-worthy. Closes the max_norm axis UP-direction decisively; opens DOWN-direction bracket via PR #2674.
+
+---
+
 ## 2026-05-13 23:55 — PR #2666 (ASSIGNED, fern): huber_beta LOW sweep {0.2, 0.15} on merged hybrid — test β-side of β–σ coupling
 
 - **Branch:** `willowpai2g48h2-fern/huber-beta-low-on-hybrid`
