@@ -4,6 +4,28 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 05:05 — PR #2791 (ASSIGNED, alphonse): Lion wd fine-bracket {1e-3, 3e-3} on max_norm=0.35 — wd × clip-saturation coupling (3rd axis after β/lr)
+
+- **Branch:** `willowpai2g48h2-alphonse/lion-wd-fine-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Tests whether banked #19 ("wd=3e-3 wins +0.56 val on σ=1.0 stack via NON-shrinkage channel") transfers to the new max_norm=0.35 saturated-clip regime. Under Lion's sign-update + saturated-clip regime, wd becomes a lr-multiplier-like axis (sets proportional shrinkage per step on top of constant sign-step magnitude). Parallel to #2731 (Lion-lr axis) and #2736 (β axis) — completing a 3-axis mechanism-transfer story under saturated-clip regime for the paper appendix.
+- **Two arms:** Arm 1 wd=1e-3, Arm 2 wd=3e-3 (baseline wd=3e-4).
+- **Decision rule:** val ≤ 45.10 (any arm) → MERGE + paper-strengthening wd-axis robustness story. val ∈ [45.15, 46.0] → directional close. val ≥ 46.0 → strong regression close.
+- **Status:** Assigned 2026-05-14 05:05 UTC; awaiting training.
+
+---
+
+## 2026-05-14 05:00 — PR #2790 (ASSIGNED, thorfinn): 2-seed confirmation on max_norm=0.35 baseline — cross-seed noise floor on CURRENT best baseline (parallel to #2701)
+
+- **Branch:** `willowpai2g48h2-thorfinn/seed-confirm-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Paper-strengthening cross-seed noise floor measurement on the NEW best baseline (max_norm=0.35, #2674), parallel to #2701 which measured on the OLD #2311 baseline (verdict: `Seed-sensitive baseline`, stdev=2.049, with ~40% of variance attributable to SWA-window truncation under 30-min cap). This PR tests whether the **saturated-clip regime (clip_fraction=1.000 per-step from #2731) regularizes the seed axis** by enforcing strict sign-step magnitude (less stochastic gradient flow → tighter SWA window).
+- **Two arms:** Arm 1 seed=1, Arm 2 seed=2. Combined with #2674 (seed=0, val=45.15) for cross-seed mean+stdev.
+- **Decision rule:** Compute cross-seed mean/stdev across {0, 1, 2}. stdev < 1.0 → `Seed-stable baseline` verdict (paper-strengthening: saturated-clip regularizes seed axis). stdev > 1.5 → `Seed-sensitive baseline` verdict (parallel to #2701). In-between → banked-finding.
+- **Status:** Assigned 2026-05-14 05:00 UTC; awaiting training.
+
+---
+
 ## 2026-05-14 04:25 — PR #2773 (ASSIGNED, fern): hybrid_kendall_lr fine-bracket on max_norm=0.35 — lr × clip-saturation coupling (parallel to #2736)
 
 - **Branch:** `willowpai2g48h2-fern/hybrid-kendall-lr-fine-bracket-on-max-norm-0p35`

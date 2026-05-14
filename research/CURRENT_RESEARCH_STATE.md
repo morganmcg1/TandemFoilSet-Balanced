@@ -61,8 +61,8 @@
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
 | **#2773** | **fern** | wip (training) | hybrid_kendall_lr fine-bracket on max_norm=0.35 baseline | Tests whether lr-driven σ-spread mechanism (banked #2604: spread→Kendall surf_ux CONCENTRATE) transfers cleanly to saturated-clip regime. Parallel robustness statement to β-side (#2736 closed). Single CLI flag. |
-| **#NEW-A** | **thorfinn** | wip (new, assigning) | 2-seed confirmation on max_norm=0.35 baseline | Paper-strengthening; cross-seed noise floor for the CURRENT best baseline (NOT #2311 which alphonse just measured). Tests whether seed-sensitivity finding from #2701 (cross-seed val stdev 2.05) transfers to the new saturated-clip baseline. Single CLI flag. |
-| **#NEW-B** | **alphonse** | wip (new, assigning) | Lion wd fine-bracket {1e-3, 3e-3} on max_norm=0.35 baseline | wd × saturated-clip coupling; tests whether banked #19 (wd=3e-3 wins +0.56 val on σ=1.0 stack via NON-shrinkage channel) transfers to saturated-clip regime. Single CLI flag. |
+| **#2790** | **thorfinn** | wip (training) | 2-seed confirmation on max_norm=0.35 baseline | Paper-strengthening; cross-seed noise floor for the CURRENT best baseline (NOT #2311 which alphonse just measured). Tests whether seed-sensitivity finding from #2701 (cross-seed val stdev 2.05) transfers to the new saturated-clip baseline. Single CLI flag. |
+| **#2791** | **alphonse** | wip (training) | Lion wd fine-bracket {1e-3, 3e-3} on max_norm=0.35 baseline | wd × saturated-clip coupling; tests whether banked #19 (wd=3e-3 wins +0.56 val on σ=1.0 stack via NON-shrinkage channel) transfers to saturated-clip regime. Single CLI flag. |
 | **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
 | **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |
 | **#2463** | **tanjiro** | wip (training done, pending API) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Baseline shift notice sent. SWA mechanism fully orthogonal to σ. |
@@ -221,8 +221,8 @@
 
 ### 🔬 In-flight (Wave 12 — post-Loop-50)
 - **hybrid_kendall_lr fine-bracket on max_norm=0.35 (#2773 fern)** — lr-driven σ-spread mechanism transfer test on saturated-clip baseline; parallel robustness to #2736 β-side
-- **2-seed confirmation on max_norm=0.35 baseline (NEW thorfinn, assigning)** — paper-strengthening; cross-seed noise floor on CURRENT best baseline (not #2311 which alphonse measured)
-- **Lion wd fine-bracket {1e-3, 3e-3} on max_norm=0.35 (NEW alphonse, assigning)** — wd × saturated-clip coupling; tests whether banked #19 wd=3e-3 win transfers
+- **2-seed confirmation on max_norm=0.35 baseline (#2790 thorfinn)** — paper-strengthening; cross-seed noise floor on CURRENT best baseline (not #2311 which alphonse measured)
+- **Lion wd fine-bracket {1e-3, 3e-3} on max_norm=0.35 (#2791 alphonse)** — wd × saturated-clip coupling; tests whether banked #19 wd=3e-3 win transfers
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — pending API recovery
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery
