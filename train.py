@@ -634,14 +634,71 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead wrapper (Zhang et al. 2019, arXiv:1907.08610).
+
+    Maintains slow weights phi; every k inner steps performs
+        phi <- phi + alpha * (theta_fast - phi)
+        theta_fast <- phi
+    The inner (fast) optimizer is driven normally; slow weights act as an
+    anchor that resists rapid drift into narrow loss basins.
+    """
+    def __init__(self, base_optimizer, k: int = 5, alpha: float = 0.5):
+        self.base_optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_counter = 0
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults = self.base_optimizer.defaults
+        self.slow_weights = []
+        for group in self.param_groups:
+            for p in group["params"]:
+                self.slow_weights.append(p.data.clone())
+
+    def step(self, closure=None):
+        loss = self.base_optimizer.step(closure)
+        self.step_counter += 1
+        if self.step_counter % self.k == 0:
+            i = 0
+            for group in self.param_groups:
+                for p in group["params"]:
+                    self.slow_weights[i].add_(p.data - self.slow_weights[i], alpha=self.alpha)
+                    p.data.copy_(self.slow_weights[i])
+                    i += 1
+        return loss
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        return {
+            "base": self.base_optimizer.state_dict(),
+            "step_counter": self.step_counter,
+            "slow_weights": self.slow_weights,
+        }
+
+    def load_state_dict(self, state):
+        self.base_optimizer.load_state_dict(state["base"])
+        self.step_counter = state["step_counter"]
+        self.slow_weights = state["slow_weights"]
+
+    @property
+    def state(self):
+        return self.base_optimizer.state
+
+
 optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(0.9, 0.99),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+optimizer = Lookahead(optimizer, k=5, alpha=0.5)
+print(f"Optimizer: Lion (Chen et al. 2023) + Lookahead(k=5, alpha=0.5) (Zhang et al. 2019) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99)")
+_slow_mb = sum(p.numel() for p in model.parameters()) * 4 / 1024**2
+_n_params = sum(p.numel() for p in model.parameters())
+print(f"Lookahead slow-weight buffer size: {_slow_mb:.1f} MB | Param count: {_n_params} (expect 407,940)")
+print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 30.5605")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
