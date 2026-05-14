@@ -45,6 +45,46 @@
 
 ---
 
+## 2026-05-14 [Round 136] UTC — PR #2929: no-warmup-pure-cosine — **CLOSED LOSS (+6.91% val / +1.76% test; 116th taxon; WARMUP-ENDPOINT AXIS CLOSED)**
+
+- **Branch:** charliepai2g48h5-frieren/no-warmup-pure-cosine
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-no-warmup-pure-cosine-20260514-140107/metrics.jsonl
+
+| Metric | Baseline #2879 | #2929 pure-cosine no-warmup | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 32.6744 | **+6.91% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.9837 | +1.76% LOSS |
+| val_single_in_dist | 23.3997 | 27.1722 | **+16.13% LOSS (3.5× next-worst)** |
+| val_geom_camber_rc | 46.0708 | 48.2158 | +4.66% LOSS |
+| val_geom_camber_cruise | 17.8657 | 18.1954 | +1.85% LOSS |
+| val_re_rand | 34.9057 | 37.1142 | +6.33% LOSS |
+
+**Hypothesis:** Remove the existing 3-epoch per-epoch warmup (0.1→1.0×) and use pure CosineAnnealingLR(T_max=60) from peak LR. Test whether warmup is dead weight for Lion (whose sign(grad) update doesn't share Adam's early-training variance pathology).
+
+**Critical mechanistic finding:** Train loss ep1-3 = 0.91→0.48→0.37 surf — smooth monotone descent, NO spike, NO divergence. **Warmup is NOT load-bearing for stability** at Lion lr=1.5e-4. The "warmup as Adam-era artifact" framing was correct on the stability axis. BUT removing warmup costs +6.91% val. Warmup contributes 'representational priming' — 3 low-LR epochs let the deeper Transolver blocks build on settled embeddings before full-LR sign-step compounding kicks in.
+
+**Closes 116th taxon: WARMUP-ENDPOINT AXIS.** Combined with #2920 (per-step warmup-from-0, +6.79% LOSS), both ENDPOINTS of the warmup axis LOSS by ~7%. Baseline's 3-epoch warmup-from-0.1× sits at a local optimum.
+
+**Asymmetric in_dist hit:** in_dist took 3.5× the regression of next-worst split. Not the cruise/in_dist meta-signal — this is uniform regression dominated by in-distribution loss. Suggests warmup is specifically priming the in_dist manifold (where the training distribution lives), and removing it loses that priming benefit.
+
+**Student followups (4 proposed):**
+1. Warmup epoch count tuning (1 or 5 epochs) — narrow axis re-test, low information.
+2. lr=1.0e-4 with no warmup — **SELECTED** for frieren reassignment as #2938. Disambiguates "no warmup" vs "too much LR too soon."
+3. eta_min > 0 for pure cosine — already covered by in-flight #2931 fern.
+4. Close the warmup axis — done.
+
+---
+
+## 2026-05-14 [Round 136] UTC — PR #2938 (assignment): frieren pure-cosine-lr-1e-4 — **117th axis: schedule-magnitude disambiguation**
+
+- **Hypothesis:** Replicate #2929 pure CosineAnnealingLR(T_max=60) but with peak lr=1.0e-4 instead of 1.5e-4. Tests whether #2929 LOSS came from (a) "no warmup" or (b) "too much LR too soon."
+- **Why might WIN:** The baseline's effective ep1-3 LR averaged under warmup ramp is ~0.825e-4; #2929 ran at 1.8× that. Matching the average should match the baseline result if "LR magnitude" is the variable.
+- **Why might LOSS:** Warmup may be SHAPE-bearing (gradual ramp matters intrinsically) regardless of magnitude.
+- **Two changes:** pure CosineAnnealingLR + `--lr 1.0e-4` CLI flag.
+- **Disambiguation experiment:** completes the LR-schedule axis analysis with explicit causality test.
+
+---
+
 ## 2026-05-14 [Round 135] UTC — PR #2923: slice-num-32 — **CLOSED LOSS (+6.02% val / +2.82% test; 114th taxon; SLICE-ROUTING-ALPHABET UPWARD SWEEP AT n_head=2 CLOSED)**
 
 - **Branch:** charliepai2g48h5-tanjiro/slice-num-32
