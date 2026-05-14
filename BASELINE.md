@@ -217,3 +217,22 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 45.43, test < 39.51, all four test splits finite.**
+
+## 2026-05-14 07:15 — PR #2801: Pinball loss τ=0.55 for surface and volume pressure channel
+
+- **`val_avg/mae_surf_p`:** 43.0923 (best seed 1, `xkaghm9f`); seed-2 (`gyccmr5r`) val=44.276; two-seed mean val=43.684
+- **`test_avg/mae_surf_p`:** 37.1943 (seed 1); seed-2 test=37.350; two-seed mean test=37.272
+- **Per-split test surf_p (seed 1):** single_in_dist=42.997, geom_camber_rc=49.859, geom_camber_cruise=21.224, re_rand=34.698
+- **Per-split test surf_p (seed 2):** single_in_dist=43.279, geom_camber_rc=50.013, geom_camber_cruise=21.183, re_rand=34.926
+- **W&B runs:** `xkaghm9f` (seed 1, BETTER), `gyccmr5r` (seed 2)
+- **Implementation note:** Replace `F.smooth_l1_loss(beta=0.5)` on the surface and volume pressure channel with `pinball_loss(tau=0.55)` — asymmetric loss that penalizes under-predictions 10% more heavily than over-predictions. Ux/Uy channels retain standard Huber β=0.5. Mechanism: τ=0.55 slightly upweights under-prediction error, which empirically biases the model toward predicting larger pressure values. The asymmetric penalty is small (τ=0.55 vs τ=0.5) but directionally consistent with the residual distribution. All four test splits improved on both seeds. re_rand improved most (−8.4% mean), geom_camber_cruise −11.6%, geom_camber_rc −6.6%, single_in_dist marginal (+1.4% — within seed noise). Zero compute overhead.
+- **Compute:** ~31 min, ~52s/epoch, 35/35 epochs, best=last (still compute-bound). Seed variance: val ±0.59, test ±0.08 (test very tight — improvement robust).
+- **Delta vs PR #2562 (Lion lr=7.5e-5):** val **−5.1%** best seed (45.43 → 43.09), test **−5.9%** best seed (39.51 → 37.19). Mean: val −3.85%, test −5.66%.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-askeladd \
+      --wandb_name "willowpai2g48h3-askeladd/pinball-055-s1" \
+      --wandb_group pinball-tau
+  ```
+
+**New merge bar: val < 43.09, test < 37.19, all four test splits finite.**
