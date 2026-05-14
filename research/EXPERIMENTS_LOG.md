@@ -128,6 +128,49 @@ Artifacts: `models/model-cruise-only-z-flip-20260514-153510/`, `models/model-cru
 
 ---
 
+## 2026-05-14 17:12 — PR #2954: torch.compile ✅ MERGED (new baseline, +9.3% win)
+
+- **Student branch:** `charliepai2g48h1-askeladd/torch-compile-throughput`
+- **Hypothesis:** `torch.compile(model, dynamic=True, mode="reduce-overhead")` reduces Python/kernel overhead, enabling all 25 epochs in the 30-min budget.
+
+### Result (vs baseline 72.694)
+
+| Arm | epochs | val_avg/mae_surf_p | test_avg | wall-clock | speedup |
+|-----|--------|-------------------|---------:|-----------:|---------|
+| **A: torch.compile** | **25/25** | **65.953** | **56.825** | **21.7 min** | **1.86×** |
+| B: no compile | 19/25 | 78.084 | 66.580 | 30 min | — |
+| **Baseline (#2936)** | 20 | **72.694** | 63.367 | 30 min | — |
+
+Per-split val (Arm A, epoch 25):
+
+| Split | Arm A | Baseline | Δ |
+|-------|-------|---------|---|
+| val_geom_camber_cruise | 49.899 | 53.237 | -3.34 |
+| val_re_rand | 64.475 | 71.144 | -6.67 |
+| val_single_in_dist | 70.437 | 82.067 | **-11.63** |
+| val_geom_camber_rc | 79.001 | 84.326 | -5.33 |
+
+Artifacts: `models/model-torch-compile-on-20260514-161231/metrics.jsonl`, `models/model-torch-compile-off-20260514-163656/metrics.jsonl`
+
+### Action: MERGED — new baseline val_avg=65.953
+
+**Mechanism confirmed:** compile cost ~14 s (paid back in epoch 1). Throughput 1.86× (49.2 s/train epoch vs 91.4 s). VRAM drops from 32.95 → 23.8 GB (Triton fused kernels). Full 25-epoch OneCycleLR schedule completes in 21.7 min with 8.3 min remaining. LR at best epoch = 8.07e-9 (full schedule consumed).
+
+**Critical note:** All future experiments MUST include `--compile_model`. Without it, only 19 epochs fit and results are meaningfully worse.
+
+**New assignment:** PR #2967 askeladd → OneCycleLR horizon extension (30/35 epochs compiled)
+
+---
+
+## 2026-05-14 17:15 — New assignment: PR #2967 askeladd → OneCycleLR horizon extension
+
+- **Student:** charliepai2g48h1-askeladd, branch `charliepai2g48h1-askeladd/onecycle-horizon-extension-compiled`
+- **Hypothesis:** With compile giving 50 s/epoch, 35 epochs fit in ~29.75 min. Extending OneCycleLR from 25→35 epochs stretches the LR curve: at ep 25, LR would be ~1.5e-4 (mid-tail) instead of 8e-9 (floor). More epochs in the generalization-optimal LR band.
+- **Arms:** `--epochs 35` (Arm A) and `--epochs 30` (Arm B), both with `--compile_model`
+- **Beat:** val_avg/mae_surf_p < 65.953
+
+---
+
 ## 2026-05-14 15:57 — New assignment: PR #2954 askeladd → torch.compile throughput
 
 - **Student:** charliepai2g48h1-askeladd, branch `charliepai2g48h1-askeladd/torch-compile-throughput`
