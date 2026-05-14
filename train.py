@@ -227,7 +227,8 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
-                 log_re_x_index: int = 13):
+                 log_re_x_index: int = 13,
+                 re_jitter_std: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -237,6 +238,7 @@ class Transolver(nn.Module):
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
         self.log_re_x_index = log_re_x_index
+        self.re_jitter_std = re_jitter_std
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -287,6 +289,12 @@ class Transolver(nn.Module):
             # All nodes in a sample share the same value, so node 0 is safe.
             # The film_gamma MLP can absorb the affine normalization.
             log_re = x[:, 0, self.log_re_x_index]
+            if self.training and self.re_jitter_std > 0:
+                # Re-jitter: perturb ONLY the local log_re fed to film_gamma.
+                # Crucially do NOT modify x — the trunk residual stream sees the
+                # unperturbed log_re feature, so the noise is isolated to the
+                # FiLM-Re γ path.
+                log_re = log_re + torch.randn_like(log_re) * self.re_jitter_std
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, mask=mask, log_re=log_re)
@@ -480,6 +488,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    re_jitter_std: float = 0.0  # std of Gaussian noise on FiLM-Re log_re input at train time only
 
 
 cfg = sp.parse(Config)
@@ -522,6 +531,7 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    re_jitter_std=cfg.re_jitter_std,  # FiLM-Re input jitter (PR #3041)
 )
 
 model = Transolver(**model_config).to(device)
@@ -529,6 +539,7 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+print(f"[init] Re-jitter: std={cfg.re_jitter_std}, training-only, FiLM-Re γ path only")
 
 optimizer = Lion(
     model.parameters(),
