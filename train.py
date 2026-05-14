@@ -518,13 +518,20 @@ model_config = dict(
     n_hidden=96,
     n_layers=4,
     n_head=2,
-    slice_num=24,
+    slice_num=32,
     mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
-print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(
+    f"slice_num=32 (was 24, +33% routing capacity); "
+    f"in_project_slice = Linear({model_config['n_hidden'] // model_config['n_head']}, {model_config['slice_num']}) per head — "
+    f"rectangular projection with {model_config['n_hidden'] // model_config['n_head'] - model_config['slice_num']} dims of headroom; "
+    f"total slice tokens per sample: {model_config['n_head'] * model_config['slice_num']} "
+    f"(vs 48 baseline slice_num=24); "
+    f"isolates slice-routing capacity axis without touching n_head/dim_head"
+)
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
@@ -837,6 +844,111 @@ if best_metrics:
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
+
+    # PhysicsAttention slice-routing entropy diagnostic — per-head, per-block at
+    # best-val checkpoint. Recomputes slice_weights = softmax(in_project_slice(x_mid)
+    # / temperature) deterministically using the same projection the forward used.
+    # Per-node entropy H_n = -sum_g w*log(w), aggregated over real (masked) nodes
+    # only. Higher entropy = more uniform routing; lower = sharper specialization.
+    # Per-head range across blocks compares against slice_num=24 baseline and #2906
+    # (n_head=4 block 3 had range 2.11 nats).
+    _phys_attn_mods = [(i, blk.attn) for i, blk in enumerate(_inner.blocks)]
+    _phys_per_split: dict[str, list[dict]] = {}
+
+    def _make_phys_attn_hook(block_idx: int, split_name: str, mask_t: torch.Tensor):
+        def _hook(module, args, kwargs, output):
+            with torch.no_grad():
+                x = args[0] if args else kwargs.get("x")  # post-ln (B, N, D)
+                B, N, _ = x.shape
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )  # (B, H, N, dim_head)
+                slice_weights = module.softmax(
+                    module.in_project_slice(x_mid) / module.temperature
+                )  # (B, H, N, G)
+                ent = -(slice_weights * (slice_weights + 1e-12).log()).sum(dim=-1)  # (B, H, N)
+                # Per-head stats over real (masked) nodes across the batch.
+                stats_per_head = []
+                for h in range(module.heads):
+                    ent_h = ent[:, h][mask_t]  # (n_real_total,)
+                    stats_per_head.append({
+                        "head": h,
+                        "ent_mean": float(ent_h.mean().item()),
+                        "ent_min": float(ent_h.min().item()),
+                        "ent_max": float(ent_h.max().item()),
+                        "ent_std": float(ent_h.std().item()),
+                    })
+                temp_per_head = (
+                    module.temperature.detach().float().view(module.heads).cpu().tolist()
+                )
+                _phys_per_split.setdefault(split_name, []).append({
+                    "block_idx": block_idx,
+                    "heads": stats_per_head,
+                    "temperature_per_head": temp_per_head,
+                    "slice_num": int(module.in_project_slice.out_features),
+                })
+        return _hook
+
+    _phys_diag_splits = [
+        "val_single_in_dist", "val_geom_camber_rc",
+        "val_geom_camber_cruise", "val_re_rand",
+    ]
+    for _split_name in _phys_diag_splits:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        with torch.no_grad():
+            _x_s, _y_s, _is_s, _m_s = next(iter(_ldr))
+            _x_s = _x_s.to(device, non_blocking=True)
+            _m_s = _m_s.to(device, non_blocking=True)
+            _phys_handles = [
+                mod.register_forward_hook(
+                    _make_phys_attn_hook(bi, _split_name, _m_s), with_kwargs=True
+                )
+                for bi, mod in _phys_attn_mods
+            ]
+            _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner({"x": _x_norm_s, "mask": _m_s})
+        for _h in _phys_handles:
+            _h.remove()
+
+    print("\nPhysicsAttention slice-routing entropy per split (best-checkpoint, slice_num=32):")
+    _phys_log = {
+        "event": "phys_attn_slice_entropy",
+        "epoch": int(best_metrics["epoch"]),
+        "slice_num": model_config["slice_num"],
+        "splits": {},
+    }
+    for _split_name, _blocks in _phys_per_split.items():
+        print(f"  Split: {_split_name}")
+        _split_entries = []
+        for _entry in sorted(_blocks, key=lambda d: d["block_idx"]):
+            _bi = _entry["block_idx"]
+            _per_head = _entry["heads"]
+            _means = [h["ent_mean"] for h in _per_head]
+            _range_across_heads = max(_means) - min(_means)
+            head_strs = "  ".join(
+                f"h{h['head']}[mean={h['ent_mean']:.4f} min={h['ent_min']:.4f} "
+                f"max={h['ent_max']:.4f} std={h['ent_std']:.4f}]"
+                for h in _per_head
+            )
+            print(
+                f"    block[{_bi}]: range_means={_range_across_heads:.4f}  {head_strs}  "
+                f"temp_per_head={[round(t, 4) for t in _entry['temperature_per_head']]}"
+            )
+            _split_entries.append({
+                "block_idx": _bi,
+                "head_entropy_range_means": _range_across_heads,
+                "heads": _per_head,
+                "temperature_per_head": _entry["temperature_per_head"],
+                "slice_num": _entry["slice_num"],
+            })
+        _phys_log["splits"][_split_name] = _split_entries
+    append_metrics_jsonl(metrics_jsonl_path, _phys_log)
 
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
     # split (in_dist vs OOD). Hook mirrors the SE forward — attention pool
