@@ -685,19 +685,26 @@ optimizer = Lion(
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
 warmup_epochs = 3
+decay_epochs = 10
+stable_epochs = max(MAX_EPOCHS - warmup_epochs - decay_epochs, 1)
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[
         torch.optim.lr_scheduler.LinearLR(
             optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
         ),
-        torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
+        torch.optim.lr_scheduler.ConstantLR(
+            optimizer, factor=1.0, total_iters=stable_epochs
+        ),
+        torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1.0, end_factor=0.1, total_iters=decay_epochs
         ),
     ],
-    milestones=[warmup_epochs],
+    milestones=[warmup_epochs, warmup_epochs + stable_epochs],
 )
-print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
+print(f"Scheduler: WSD = LinearLR(0.1->1.0 over {warmup_epochs} ep) -> ConstantLR(1.0 for {stable_epochs} ep) -> LinearLR(1.0->0.1 over {decay_epochs} ep)")
+print(f"WSD profile: warmup ep0-{warmup_epochs} | stable ep{warmup_epochs}-{warmup_epochs+stable_epochs} | decay ep{warmup_epochs+stable_epochs}-{MAX_EPOCHS}")
+print(f"Replaces cosine annealing (continuous decay from ep{warmup_epochs} to ep{MAX_EPOCHS}); WSD spends {stable_epochs}/{MAX_EPOCHS-warmup_epochs} of post-warmup epochs at full peak LR")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
