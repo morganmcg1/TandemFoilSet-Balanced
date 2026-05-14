@@ -67,6 +67,11 @@ class Lion(torch.optim.Optimizer):
                 if wd != 0.0:
                     p.data.mul_(1.0 - lr * wd)
                 grad = p.grad
+                # Gradient centralization (Yong et al. 2020): subtract mean over
+                # non-output dims so weight updates are zero-mean across columns.
+                # Bias terms (dim=1) are left unchanged.
+                if grad.dim() > 1:
+                    grad = grad - grad.mean(dim=list(range(1, grad.dim())), keepdim=True)
                 state = self.state[p]
                 if "exp_avg" not in state:
                     state["exp_avg"] = torch.zeros_like(p)
