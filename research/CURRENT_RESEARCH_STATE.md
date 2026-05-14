@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 03:10
+- **Date:** 2026-05-14 03:15
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -95,6 +95,14 @@
 **Gains are NOT diminishing.** The n_layers=3 step was the biggest single gain yet. best_epoch=final has held for 8+ consecutive experiments. The model is always budget-limited, never capacity-saturated.
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
+
+## Systemic pod issue (2026-05-14 03:15)
+
+**6 of 8 student pods rate-limit stuck.** Bot user 20516801 has exhausted GitHub GraphQL budget. Pods affected: alphonse, edward, nezuko, thorfinn (Round 39 followup just created — PRs #2744-2747), fern, tanjiro (Round 38 followup #2695, #2696). Only **askeladd (#2738) and frieren (#2737) are actually running training**.
+
+**Strategic decision: DO NOT close/recreate stale_wip PRs.** Closing and recreating consumes the same shared bot-account budget — that's what's making the problem worse round over round. The Round 38 and Round 39 followup hypotheses are all still valid; we just need the rate limit to clear. Estimated reset window: ~36-60 min cycles.
+
+**Round 39 capacity tests (askeladd #2738, frieren #2737) are the critical experiments** — disambiguating capacity vs information limit. The stuck pods are running lower-EV HP-axis fine probes anyway.
 
 ## Active experiments (Round 38 — architectural pivot; 8 PRs in flight)
 
