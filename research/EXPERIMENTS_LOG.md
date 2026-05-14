@@ -7,6 +7,48 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 00:00 — PR #2552: Fourier K continuation (K=16, K=20) on n_head=2+Lion — CLOSED
+
+- `askeladd/fourier-k-lion-sweep`
+- **Hypothesis:** Continue the AdamW-stack monotone K trend (K=4→8→12) up to K=16/K=20 on the n_head=2+Lion stack to find the new local optimum after Lion + n_head=2 merges.
+- **Results (Arm B clean; Arm A 5× crashes):**
+
+| Arm | K | Run | State | val_avg | test_avg | Δ val | Δ test |
+|---|---:|---|---|---:|---:|---:|---:|
+| B | 20 | `7qfg4u8k` | finished (30.4 min, cap) | **42.8227** | **35.4099** | **+6.33% ❌** | +5.38% ❌ |
+| A | 16 | `eqzo2qox` | crashed @ 27.5 min | 43.185 (mid) | — | (+7.2% trajectory) | — |
+| A | 16 | `ik2i80ar` | crashed @ 26.3 min | 44.023 (mid) | — | (+9.3% trajectory) | — |
+| A | 16 | `swth32k8` | crashed @ 19.3 min | 50.934 (mid) | — | — | — |
+| A | 16 | `y10si1ew` | crashed @ 16.0 min | 55.251 (mid) | — | — | — |
+| A | 16 | `lo8zls4m` | crashed @ 7.0 min | 88.708 (mid) | — | — | — |
+
+Baseline: 40.27 / 33.60 (`gd934e9l`, PR #2192).
+
+- **Analysis:** K=20 cleanly completes a 30.4-min run and regresses 6.3% val / 5.4% test — solidly over the 40.30 close bar. K=16 crashed 5/5 attempts with non-uniform durations (7.0 to 27.5 min) and absence of Python tracebacks (consistent with external SIGKILL, not in-process exceptions). Askeladd's crash diagnostic was thorough — non-uniform durations + clean K=20 completion argue against pure OOM (K=20 has slightly higher memory footprint than K=16). Plausible mechanism: K=16 hit transient gradient pathology on this stack triggering a process-fatal NaN before backward could log it. Even the best mid-run K=16 trajectory pointed to val ≥ 43, well into close territory regardless.
+- **Mechanism interpretation:** The merged n_head=2 win came from doubling `dim_head` (32 → 64), which enriched per-head capacity but halved parallel head count. Adding more Fourier modes (K=16/20) widens the positional input dimension into a model with reduced parallel attention capacity — model can't usefully exploit the extra positional features. The K axis interacts with the head count.
+- **Suggested follow-up (askeladd's):** Test K=8 and K=10 (downward) on n_head=2+Lion to find new local K optimum; current K=12 inherited from n_head=4 tuning may no longer be the right operating point. Assigned in **PR #2670 — Fourier K-down sweep**.
+
+## 2026-05-14 00:00 — PR #2612: EMA decay sweep (0.9995, 0.998) on n_head=2+Lion — CLOSED (both arms regress)
+
+- `willowpai2g24h3-edward/ema-decay-sweep`
+- **Hypothesis:** Test EMA decay flanks (slower 0.9995, then faster 0.998 after Arm A regressed) on n_head=2+Lion stack. Baseline uses 0.999. If gradient-step-bound regime is dominant, EMA window may be the binding constraint.
+- **Results (5 runs across both arms — duplicate-launch artifacts):**
+
+| Run | ema_decay | State | val_avg | Δ val |
+|---|---:|---|---:|---:|
+| `9ir26ul6` | 0.9995 | finished (clean) | 47.97 (best epoch summary) | **+19.1% ❌** |
+| `g5ndrcny` | 0.998 | finished (clean) | 42.92 (best epoch summary) | **+6.6% ❌** |
+| `dpejdw12` | 0.9995 | crashed mid | — | — |
+| `0bocvkzd` | 0.9995 | crashed mid | — | — |
+| `69p1wbb2` | 0.9995 | crashed mid | — | — |
+
+Baseline: 40.27 / 33.60.
+
+- **Analysis:** Both flanks regress; baseline 0.999 is the local optimum on this stack. **Slower EMA (0.9995) regresses much more (+19.1%)** — pulls EMA toward stale earlier-trajectory weights since training is monotonically descending (best_epoch == final_epoch). **Faster EMA (0.998) regresses smaller (+6.6%)** — loses variance-reduction benefit. Edward's terminal analysis: "The real lever is the trajectory itself, not the EMA window. Since training is gradient-step-bound, anything that gets the live weights to a lower-loss point at epoch 50 will translate directly into a lower-loss EMA." → assigned to warmup_epochs=10 follow-up (#2667).
+- **Operational flag:** Pod had 3 concurrent runs initially (`9ir26ul6`, `0bocvkzd`, `dpejdw12`); edward killed `dpejdw12` and `69p1wbb2` on advisor poke, did not relaunch 0.9999. Same harness duplicate-launch pattern as #2596 / #2555 / #2657.
+- **Banked lesson:** **EMA decay axis exhaustively closed**: 0.998 (-6.6%), 0.999 (baseline), 0.9995 (-19.1%) on n_head=2+Lion. Don't revisit. The mechanism inversion (slower = catastrophic) is intuitive once you recognize the gradient-step-bound regime — never the case when training is u-shaped, which it isn't here.
+- **Next experiment:** edward reassigned to **PR #2667 warmup_epochs=10** (shift LR peak later in 50-epoch budget; tests edward's own follow-up #2 from this terminal SENPAI-RESULT).
+
 ## 2026-05-13 23:13 — PR #2555: Lion wd sweep (3e-4, 1e-3) on n_head=2 — CLOSED
 
 - `willowpai2g24h3-thorfinn/weight-decay-lion-sweep`

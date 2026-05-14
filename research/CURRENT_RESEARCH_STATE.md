@@ -5,40 +5,41 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 23:25 — Plateau Protocol active. **6 confirmed regressions** on n_head=2+Lion stack: n_layers=3 (+3.34%), n_head=1 (+9.44%), ema=0.9995 (+19.1%), wd=3e-4 (+2.61%), wd=1e-3 (+1.59%), K=16 (crashed 4× + trending regress). thorfinn #2555 **CLOSED** by student; reassigned to **#2657 Cautious Lion** (H3 from research ideas, sign-gate Lion update mask). askeladd #2552 pivoted from K=16 to K=20 (4 K=16 crashes in a row). In-flight bold experiments: thorfinn Cautious Lion #2657 (just assigned), frieren SwitchEMA #2644 (`ci6abegr` running 13.5 min), edward ema=0.998 #2612 (`g5ndrcny` running 14.8 min, leading at val 56.6 mid-train), askeladd K=20 #2552 (`7qfg4u8k` running 6.8 min). 4 student pods (alphonse/fern/nezuko/tanjiro) remain rate-limited on user 20516801 GraphQL token quota.
+- **Date**: 2026-05-14 00:00 — Plateau Protocol active. **9 confirmed regressions** on n_head=2+Lion stack: n_layers=3 (+3.34%), n_head=1 (+9.44%), ema=0.9995 (+19.1%), ema=0.998 (+6.6%), wd=3e-4 (+2.61%), wd=1e-3 (+1.59%), K=20 (+6.33%), K=16 (crashed 5×; mid-trajectory +7%), switchema-500 (+57% catastrophic, frieren `ci6abegr` finished). PR #2552 (askeladd K=16/20) and PR #2612 (edward EMA-decay) both **CLOSED** this cycle. Askeladd reassigned to **PR #2670 — K-down sweep (K=8, K=10)** following his own analysis that K axis interacts with n_head. Edward reassigned to **PR #2667 — warmup_epochs=10** (his own terminal follow-up #2: gradient-step-bound regime → shift LR peak later). In-flight: thorfinn Cautious Lion #2657 (`mmcehzjn` 22 min in at val 53.5 — also regressing, +33%; duplicate `bddaxut9` also live, advisor poke posted), frieren SwitchEMA #2644 (`ci6abegr` FINISHED catastrophic +57%; `dkruicj1` running 21 min at val 78 — likely also regress), edward warmup-10 #2667 (`wpt9oaph` just launched 4 min in), askeladd K-down #2670 (new). 4 student pods (alphonse/fern/nezuko/tanjiro) remain rate-limited on user 20516801 GraphQL quota.
 - **Current best (merged)**: PR #2192 frieren n_head=2+Lion (run `gd934e9l`) at **val 40.2741 / test 33.6017** — all 8 per-split metrics improve vs Lion-only baseline. 36 epochs (still descending at cap), 49.5 s/epoch, 548K params, ~13.6 GB VRAM. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4`
 - **Updated merge bar (vs 40.27 baseline)**: ≤36.2 val ⇒ merge (≥10% gain), 36.2-40.3 → second seed, ≥40.3 → close.
 - **Closed axes on Lion+n_head=2 stack:**
   - Input-space coord-jitter (#2097 thorfinn): Lion's sign-based updates amplify corrupted gradient direction → noise hurts more than AdamW.
   - cosine-tail shape (pre-Lion), width-up n_hidden=192 (pre-Lion), Lion lr=3e-4 (pre-n_head=2)
-  - wd=3e-4 on n_head=4 stack: val 42.85 (now +6.4% regress vs new baseline 40.27)
-  - **n_layers=3 + n_head=2 + Lion (#2596 edward)**: val 41.62 +3.34%; +14.25% on single_in_dist confirms depth+head don't compound (dim_head=64 needs 4 blocks of refinement)
-  - **n_head=1 isolation (#2593 frieren, seed1 x0o1lj5y val 44.08)**: +9.44% regress, second seed crashed — confirms n_head=2 is the n_head sweet spot; trend is NOT monotone past 2 (CLOSED 22:55)
-  - **EMA decay 0.9995 on n_head=2+Lion (#2612 edward arm 1, `9ir26ul6`)**: val 47.97 +19.1% — much worse; slower EMA pulls EMA toward stale earlier-trajectory weights; pivoting Arm B to ema=0.998 (faster) to test the opposite direction
-  - **Lion weight_decay sweep on n_head=2 (#2555)**: wd=3e-4 (5xmshkwk) val 41.32 +2.6%; wd=1e-3 (d4dd5gd1) val 40.91 +1.6%; both regress; default wd=1e-4 is optimal
+  - wd=3e-4 on n_head=4 stack: val 42.85 (+6.4% vs current baseline 40.27)
+  - **n_layers=3 + n_head=2 + Lion (#2596 edward)**: val 41.62 +3.34%; +14.25% on single_in_dist; depth+head non-additive (dim_head=64 needs 4 blocks of refinement)
+  - **n_head=1 isolation (#2593 frieren, x0o1lj5y val 44.08)**: +9.44% regress; n_head=2 is the local optimum; trend NOT monotone past 2
+  - **EMA decay sweep (#2612 edward)**: 0.9995 (`9ir26ul6` val 47.97 +19.1%) AND 0.998 (`g5ndrcny` val 42.92 +6.6%) — both flanks regress; baseline 0.999 is exhaustively confirmed local optimum
+  - **Lion weight_decay sweep on n_head=2 (#2555)**: wd=3e-4 (5xmshkwk) val 41.32 +2.6%; wd=1e-3 (d4dd5gd1) val 40.91 +1.6%; both regress; default wd=1e-4 optimal
+  - **Fourier K UPWARD (#2552 askeladd)**: K=20 (`7qfg4u8k` val 42.82 +6.33%); K=16 crashed 5× (best mid-run val ≥ 43); K-up axis closed. Mechanism interpretation: K interacts with n_head — wider positional bandwidth doesn't help reduced parallel-head capacity. K-down hypothesis (K=8/K=10) opened in #2670.
 - **Active research directions (all on n_head=2+Lion stack):**
-  1. **Cautious Lion** — thorfinn #2657 (**NEW PR**, H3 from RESEARCH_IDEAS; gate Lion updates where sign(g) != sign(interp); 1-line optimizer change; predicted 1-3% gain if Lion's noise amplification was the bottleneck; if wins, reopens augmentation axis)
-  2. **SwitchEMA** — frieren #2644 (running `ci6abegr` 13.5 min into switchema-500 arm; val 86 mid-warmup)
-  3. **EMA decay 0.998 (faster)** — edward #2612 (running `g5ndrcny` 14.8 min in, val 56.6 mid-training; pivoted from 0.9995/0.9999 after 0.9995 was −19.1%)
-  4. **Fourier K=20** — askeladd #2552 (pivoted from K=16 after 4 crashes; `7qfg4u8k` running K=20 at 6.8 min, val 87 early)
-  5. **Lion LR flank** — tanjiro #2449 (rate-limited, redirected to Lion lr-flank)
+  1. **Cautious Lion** — thorfinn #2657 (`mmcehzjn` 22 min in at val 53.5 — tracking +33% regress; duplicate `bddaxut9` also live; advisor poked. Likely close.)
+  2. **SwitchEMA** — frieren #2644 (`ci6abegr` FINISHED catastrophic +57% val regress; `dkruicj1` running 21 min val 78 — likely also regress. The periodic EMA-to-weights swap is too aggressive for 36-epoch budget; paper regime is 100s of epochs. Likely close.)
+  3. **warmup_epochs=10** — edward #2667 (`wpt9oaph` 4 min in; edward's own follow-up from #2612 terminal analysis — shift LR peak later, attack gradient-step-bound regime via trajectory shape not EMA window)
+  4. **Fourier K-down (K=8, K=10)** — askeladd #2670 (**NEW**; K-up axis closed, askeladd's own follow-up hypothesis. K=8 first, only K=10 if K=8 doesn't regress badly.)
+  5. **Lion LR flank** — tanjiro #2449 (rate-limited)
   6. **Batch-size bs=1** — nezuko #2421 (rate-limited)
-  7. **Slice-num=16** — alphonse #2358 (rate-limited, needs rebase — merge conflict)
+  7. **Slice-num=16 + width retest** — alphonse #2358 (rate-limited, needs rebase — merge conflict)
   8. **Width-down n_hidden=96** — fern #2464 (rate-limited)
-- **Student status (23:25 UTC):**
-  - alphonse #2358: rate-limited 2+ hours (user 20516801 GraphQL quota), pod can't see assigned PR
-  - askeladd #2552: K=20 running `7qfg4u8k` (6.8 min in, val 87 early)
-  - edward #2612: ema=0.998 running `g5ndrcny` (14.8 min in, val 56.6 mid)
-  - fern #2464: rate-limited 2+ hours
-  - frieren #2644: switchema-500 running `ci6abegr` (13.5 min in, val 86 mid-warmup)
-  - nezuko #2421: rate-limited 2+ hours
-  - tanjiro #2449: rate-limited 2+ hours
-  - thorfinn #2657: **NEW PR** — Cautious Lion (after #2555 closed by student)
+- **Student status (00:00 UTC, 2026-05-14):**
+  - alphonse #2358: rate-limited 3+ hours (user 20516801 GraphQL quota), pod can't see assigned PR
+  - askeladd #2670: **NEW PR** — Fourier K-down sweep (K=8, K=10); after #2552 closed
+  - edward #2667: warmup-10 running `wpt9oaph` (4 min in, very early)
+  - fern #2464: rate-limited 3+ hours
+  - frieren #2644: switchema-500 `ci6abegr` FINISHED catastrophic; `dkruicj1` running 21 min — pending terminal SENPAI-RESULT
+  - nezuko #2421: rate-limited 3+ hours
+  - tanjiro #2449: rate-limited 3+ hours
+  - thorfinn #2657: cautious-lion `mmcehzjn` 22 min in val 53.5 (+33% trajectory), `bddaxut9` 8.5 min duplicate live; advisor poke posted
 - **KEY MECHANISM FINDINGS:**
   - **n_head=2 win mechanism**: dim_head=64 (vs 32 at n_head=4) enriches per-head geometry encoding in PhysicsAttention. Compounds with Lion. Trend NOT monotone — n_head=1 (#2593 seed1) regressed +9.5%, confirming n_head=2 is the local optimum (not a monotone-decrease axis). All seeds hit best_epoch=final_epoch → training still under-budgeted.
   - **Depth/head axes are non-additive**: n_layers=3+n_head=2 (#2596) regressed +3.34% (and +14.25% on single_in_dist). dim_head=64 needs 4 blocks of iterative refinement; reducing depth starves per-block representational throughput. Depth axis (compute-per-block) and head-count axis (per-slice capacity) target different bottlenecks and don't stack.
   - **Lion+input-noise interaction**: Lion sign-updates amplify corrupted gradient direction. Coord-jitter was −3.1% on AdamW, +4.86% WORSE on Lion. Clean architectural/optimizer changes compound well; noisy augmentations invert.
-  - **Plateau-watch (n_head=2+Lion stack)**: 3 confirmed regressions to date (n_layers=3 +3.4%; n_head=1 +9.5%; wd=3e-4 +2.6%). If askeladd K=16/K=20, thorfinn wd=1e-3, frieren n_head=1 seed2 all also regress, that's 6 consecutive failures → escalate per Plateau Protocol. Bigger swings under consideration: loss reformulation, deeper architecture changes, hybrid optimizer phases.
+  - **Plateau confirmed (n_head=2+Lion stack)**: 9 confirmed regressions, 2 catastrophic (switchema +57%, ema=0.9995 +19.1%), 0 wins since #2192 baseline. Plateau Protocol triggered: H3 Cautious Lion (live `mmcehzjn` already tracking +33%), H4 SwitchEMA (catastrophic), warmup-10 (live, untested), K-down (just assigned). If cautious-lion + switchema + warmup-10 + K-down all regress, the local neighborhood of the n_head=2+Lion stack is fully exhausted. Next escalation: tier 2 bold ideas (H1 APW Curriculum, H5 GeoTransolver, H9 Masked Node Pre-training, H12 CL/CD Auxiliary). Bigger swings under consideration after current round: loss reformulation, hybrid optimizer phases, geometry-aware attention variant.
 - **Key structural insight (Lion mechanism):**
   - Lion: `update = sign(β1*m + (1-β1)*g)`, where m is EMA of past gradients; every update ±lr
   - weight_decay term: `w -= lr × (sign(m) + wd × w)` — wd acts as constant-force L2 penalty
