@@ -387,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
 
 
 cfg = sp.parse(Config)
@@ -511,47 +512,70 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
-    model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    dt = time.time() - t0
-
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+    should_eval = ((epoch + 1) % cfg.eval_every == 0) or ((epoch + 1) == MAX_EPOCHS)
+    if should_eval:
+        model.eval()
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
         }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        dt = time.time() - t0
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    current_lr = optimizer.param_groups[0]["lr"]
-    append_metrics_jsonl(metrics_jsonl_path, {
-        "event": "epoch",
-        "epoch": epoch + 1,
-        "seconds": dt,
-        "peak_memory_gb": peak_gb,
-        "train/vol_loss": epoch_vol,
-        "train/surf_loss": epoch_surf,
-        "train/lr_end_of_epoch": current_lr,
-        "val_avg/mae_surf_p": avg_surf_p,
-        "val_splits": split_metrics,
-        "is_best": tag == " *",
-    })
-    print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
-    )
-    for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        tag = ""
+        if avg_surf_p < best_avg_surf_p:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            torch.save(model.state_dict(), model_path)
+            tag = " *"
+
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        current_lr = optimizer.param_groups[0]["lr"]
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "epoch",
+            "epoch": epoch + 1,
+            "seconds": dt,
+            "peak_memory_gb": peak_gb,
+            "train/vol_loss": epoch_vol,
+            "train/surf_loss": epoch_surf,
+            "train/lr_end_of_epoch": current_lr,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "val_splits": split_metrics,
+            "is_best": tag == " *",
+        })
+        print(
+            f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        )
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, split_metrics[name])
+    else:
+        # Skipped eval — log train-only metrics
+        dt = time.time() - t0
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        current_lr = optimizer.param_groups[0]["lr"]
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "epoch",
+            "epoch": epoch + 1,
+            "seconds": dt,
+            "peak_memory_gb": peak_gb,
+            "train/vol_loss": epoch_vol,
+            "train/surf_loss": epoch_surf,
+            "train/lr_end_of_epoch": current_lr,
+            "val_avg/mae_surf_p": None,  # skipped
+            "is_best": False,
+        })
+        print(
+            f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"[eval skipped]"
+        )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
