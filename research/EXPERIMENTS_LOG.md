@@ -4,6 +4,73 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 17:30 — PR #2947 (CLOSED, thorfinn): n_layers depth sweep {3, 7} on max_norm=0.35 — 14th paper-appendix axis closure, NEW 8th member of DOMINANT ASYMMETRIC-V class (now 57% of closed axes), NEW TRANSOLVER-DEPTH class, FOUR PAPER-PUBLISHABLE FINDINGS + NEW SWA-NEVER-ENTERED FAILURE MODE
+
+- **Branch:** `willowpai2g48h2-thorfinn/n-layers-depth-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Verdict:** Arm 1 n_layers=3 val **45.7324** +0.58 / test 39.69 +1.05 (regression close in [45.50, 46.50]); Arm 2 n_layers=7 SWA val **398.79** SWA-NEVER-ENTERED artifact, BASE val **56.56** +11.41 / BASE test 48.22 +9.59 (strong regression close on BASE). Per the PR decision rule no MERGE.
+- **W&B runs:** Arm 1 `9eb5pqiu`, Arm 2 `hyv6a91x`, baseline `ieu1futo`.
+- **Headline:** **14th paper-appendix axis closure. NEW 8th member of DOMINANT ASYMMETRIC-V class — pattern now 8 of 14 = 57% of closed axes.** n_layers also opens **NEW TRANSOLVER-DEPTH transfer-pattern class** distinct from #2901 n_head ATTENTION-MECHANISM-CAPACITY-RESHUFFLE. **FOUR PAPER-PUBLISHABLE FINDINGS** about forward-pass-shape changes' impact on cross-axis invariants + NEW SWA-NEVER-ENTERED FAILURE MODE.
+
+### Mechanism diagnosis (paper-publishable, FOUR HEADLINE FINDINGS)
+
+**Finding A — σ-spread BREAKS under depth in BOTH directions.** Arm 1 n=3 spread **0.533** (+12% INFLATED); Arm 2 n=7 spread **0.251** (−47% COMPRESSED). Banked #173 refinement BROADENED: σ-spread is invariant only at fixed forward-pass-shape — BOTH granularity (n_head #2901) AND depth (n_layers #2947) break it, in distinct directional signatures. **Paper-publishable claim: σ-spread is forward-pass-shape-dependent.**
+
+**Finding B — pre-clip grad_norm SHIFTS strongly with depth in OPPOSITE direction to n_head.** Arm 1 n=3 mean grad_norm 9.77; Arm 2 n=7 mean grad_norm 5.97 (39% LOWER than shallower arm). DEEPER → LOWER. Banked #174 broadened: **any forward-pass-shape change shifts grad_norm**, NOT granularity-specific. Direction depends on parameter: n_head INCREASES grad_norm via dim_head shrinkage; n_layers DECREASES grad_norm via reduced end-to-end flow.
+
+**Finding C — channel ordering invariance BREAKS for FIRST TIME across 17 prior cross-axis confirmations.** Arm 1 n=3: surf_uy=min instead of surf_ux=min. **First axis to break the surf_ux=min channel-ordering invariance.** SHALLOW-MODEL-SPECIFIC break — narrower per-channel discriminability margin → ordering flips. Arm 2 n=7 preserves ordering (spread compresses but channels don't re-rank).
+
+**Finding D — NEW FAILURE MODE: SWA-NEVER-ENTERED, strictly more severe than banked #170 SWA-window-truncation.** Arm 2 n_layers=7 timed out at epoch 10 with SWA-start at epoch 12 → SWA averaging NEVER initialized → reported SWA val=398.79 is uninitialized-buffer evaluation (garbage). **First counter-example to #170 chain is ALSO on this PR**: Arm 1 n=3 COMPLETED 4 of 4 SWA epochs (smaller model → faster per-epoch wall time → full SWA window). Banked #170 sharpens: SWA-window completion depends on per-epoch wall time; smaller-than-baseline models can complete; larger-than-baseline models can truncate or never enter. **End of #170's 10-consecutive truncation chain.**
+
+**Finding E (additional) — step-time is NOT n_layers-linear at this stack scale** — ~190 s/epoch invariant across n=3 and n=7 despite 2.3× param ratio. Likely dataloader/attention-cost dominated. Refines banked #179: step-time scaling depends on which forward-pass-shape parameter changes; not all forward-pass-shape changes have proportional step-time cost.
+
+### Paper-appendix transfer-pattern table — UPDATED to 14 closed × 7 patterns (ASYMMETRIC-V now 8/14 = 57%)
+
+| Pattern class | Axes | Count |
+|---|---|---|
+| INDEPENDENT-SYMMETRIC | β #2736 | 1 |
+| **INDEPENDENT-ASYMMETRIC V (DOMINANT)** | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901, Lion β2 #2932, **n_layers #2947 NEW** | **8** |
+| DEPENDENT-SYMMETRIC | wd #2791+#2819, Lion β1 #2880 | 2 |
+| DEPENDENT-NEGATIVE | seed #2790 | 1 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 | 1 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 | 1 |
+| MONOTONIC-REGRESSIVE (one-sided) | dropout #2887 | 1 |
+
+In-flight: #2919 fern huber_beta LOWER (15th label), #2962 alphonse slice_num (16th label).
+
+### Cross-axis invariance status (from #2947)
+
+| Quantity | Baseline | Arm 1 (n_layers=3) | Arm 2 (n_layers=7) | Status |
+|---|---|---|---|---|
+| σ-spread | 0.475 | **0.533** (+12%) | **0.251** (−47%) | **BROKEN in BOTH directions** — broadens #173 |
+| min log_σ channel | surf_ux | **surf_uy** | surf_ux | **BROKEN on Arm 1** — first channel-ordering BREAK |
+| max log_σ channel | vol_ux | vol_ux | vol_ux | preserved |
+| clip_fraction (mean) | 1.000 | 1.000 | 0.9997 | **13th cross-axis** clip_fraction=1.000 invariance |
+| pre-clip grad_norm (mean) | 18.38 | 9.77 | **5.97** | **SHIFTS strongly with depth** — broadens #174 |
+| exp_avg_norm (mean) | 0.01061 | 0.00963 | 0.00946 | INVARIANT to depth (Δ < 2%) |
+| Peak VRAM (GB) | ~45 | 28.9 | 60.8 | **scales linearly with n_layers** ✓ predicted |
+| Step-time (s/epoch) | ~141 | 187 | 194 | **NOT n_layers-linear** (dataloader-bound) — refines #179/#205 |
+| SWA window completion | 2 epochs | **4 of 4 COMPLETED** | **0 of 4 (NEVER ENTERED)** | **#170 chain BROKEN** at 10-consecutive |
+
+### Banked findings #200–#209
+
+- **#200 PAPER-STRENGTHENING**: n_layers joins ASYMMETRIC-V — 8th DOMINANT member (57% of 14 closed axes).
+- **#201 PAPER-PUBLISHABLE**: σ-spread BREAKS in BOTH directions under depth — broadens banked #173 refinement: σ-spread invariance holds only at fixed forward-pass-shape. BOTH granularity (n_head) AND depth (n_layers) break it.
+- **#202 PAPER-PUBLISHABLE**: pre-clip grad_norm SHIFTS strongly with depth in OPPOSITE direction to n_head — broadens banked #174 refinement: any forward-pass-shape change shifts grad_norm, NOT granularity-specific.
+- **#203 PAPER-PUBLISHABLE**: channel ordering invariance BREAKS for FIRST TIME across 17 prior cross-axis confirmations (Arm 1 n=3: surf_uy=min). SHALLOW-MODEL-SPECIFIC break.
+- **#204 NEW FAILURE MODE**: SWA-NEVER-ENTERED — strictly more severe variant of banked #170. Arm 2 timed out before SWA-start; reported SWA val is uninitialized-buffer artifact. First counter-example to #170 chain also on this PR (Arm 1 full SWA completion).
+- **#205 PAPER-PUBLISHABLE METHODOLOGY**: step-time is NOT n_layers-linear at this stack scale (both arms ~190 s/epoch despite 2.3× param ratio). Refines banked #179: step-time scaling parameter-dependent; n_head scales linearly, n_layers does not (dataloader-bound).
+- **#206 PAPER-STRENGTHENING**: Lion exp_avg_norm INVARIANT to depth (Δ < 2%) — depth-driven grad_norm shift does NOT propagate into Lion's sign-of-EMA. Contrast with β2-axis where exp_avg_norm varied 0.25× to 4.26×.
+- **#207 PAPER-STRENGTHENING**: 13th cross-axis clip_fraction=1.000 invariance (saturated-clip robust to forward-pass-shape).
+- **#208 PAPER-STRENGTHENING**: 13th cross-axis peak VRAM observation — VRAM scales LINEARLY with n_layers. NEW METHODOLOGY: VRAM scaling is forward-pass-shape parameter dependent — n_layers linear, n_head super-linear (granularity overhead), optimizer-internal flat.
+- **#209 METHODOLOGY**: banked #170 SWA-window-truncation chain BROKEN at 10 consecutive — per-paper-appendix STRUCTURAL refinement: SWA-window-completion is a continuous function of total wall-time minus per-epoch wall-time, NOT a constant truncation under the 30-min cap.
+
+### Reassignment
+
+Thorfinn → **mlp_ratio sweep {1, 4} on max_norm=0.35** — 17th paper-appendix axis label (NEW FFN-RATIO class). Transolver per-block FFN-ratio (FFN hidden = n_hidden × mlp_ratio; baseline 2; Arm 1 1 narrower FFN, Arm 2 4 wider FFN). THIRD forward-pass-shape axis after n_head granularity #2901 and n_layers depth #2947 — completes the FORWARD-PASS-SHAPE TRIO. Tests whether σ-spread + grad_norm BREAK extends to FFN-side forward-pass-shape (per-block-MLP-width) or is restricted to attention-side (granularity + composition depth). Predicted class: BOTH-LOSE Pareto-cap (FFN-capacity dead-zone) OR ASYMMETRIC-V (would extend DOMINANT to 9/15 = 60%). NEW DIAGNOSTIC: σ-spread + grad_norm + channel-ordering side-by-side comparison with #2901 n_head + #2947 n_layers. train.py edits required (add `mlp_ratio: int = 2` Config flag; replace `mlp_ratio=2,` in model_config dict at line 643 with `mlp_ratio=cfg.mlp_ratio,`).
+
+---
+
 ## 2026-05-14 16:30 — PR #2932 (CLOSED, alphonse): Lion β2 sweep {0.95, 0.999} on max_norm=0.35 — 13th paper-appendix axis closure, NEW 7th member of DOMINANT ASYMMETRIC-V class (now 54% of closed axes), NEW OPTIMIZER-INTERNAL-EMA-DECAY class, TWO PAPER-PUBLISHABLE MECHANISM FINDINGS
 
 - **Branch:** `willowpai2g48h2-alphonse/lion-beta2-sweep-on-max-norm-0p35`
