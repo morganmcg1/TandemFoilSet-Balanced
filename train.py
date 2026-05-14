@@ -82,6 +82,23 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class RMSNormWithBias(nn.Module):
+    """RMSNorm with a learnable per-channel bias (β) — LayerNorm without mean-subtraction.
+
+    Forward: y = (x / RMS(x)) * γ + β. Isolates the β-bias-removal effect from the
+    mean-subtraction effect (#2939 followup #1 disambiguation).
+    """
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))   # γ
+        self.bias = nn.Parameter(torch.zeros(dim))    # β
+
+    def forward(self, x):
+        norm = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return norm * self.weight + self.bias
+
+
 class SwiGLUMLP(nn.Module):
     """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * W_value x).
 
@@ -203,18 +220,18 @@ class TransolverBlock(nn.Module):
                  layerscale_init=1e-4, use_se=True):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNormWithBias(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNormWithBias(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNormWithBias(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -275,7 +292,7 @@ class Transolver(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
+        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d, RMSNormWithBias)):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
@@ -575,6 +592,28 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# RMSNorm + β diagnostic: count norm sites and verify β bias zero-init (#2939 followup #1)
+_rmsnorm_modules = [m for m in model.modules() if isinstance(m, RMSNormWithBias)]
+_n_rmsnorm = len(_rmsnorm_modules)
+_n_layernorm = sum(1 for m in model.modules() if isinstance(m, nn.LayerNorm))
+_rmsnorm_params = sum(p.numel() for m in _rmsnorm_modules for p in m.parameters())
+_beta_max_init = max((m.bias.abs().max().item() for m in _rmsnorm_modules), default=0.0)
+_gamma_min_init = min((m.weight.min().item() for m in _rmsnorm_modules), default=0.0)
+_gamma_max_init = max((m.weight.max().item() for m in _rmsnorm_modules), default=0.0)
+print(
+    f"RMSNorm+β (LN without mean-subtraction): replaced nn.LayerNorm at {_n_rmsnorm} sites "
+    f"(expect 9: 4x ln_1 + 4x ln_2 + 1x ln_3); residual nn.LayerNorm modules: {_n_layernorm}; "
+    f"forward: (x / RMS(x)) * γ + β; "
+    f"γ init=1.0 (verified min={_gamma_min_init:.4f} max={_gamma_max_init:.4f}); "
+    f"β init=0.0 (verified |β|_max={_beta_max_init:.6f}); "
+    f"RMSNormWithBias param total={_rmsnorm_params} "
+    f"(γ+β per site = 2*{model_config['n_hidden']} = {2*model_config['n_hidden']}; "
+    f"{_n_rmsnorm} sites * {2*model_config['n_hidden']} = {_n_rmsnorm * 2 * model_config['n_hidden']}); "
+    f"vs #2939 RMSNorm-only (407,076) +864 the 9 β biases restored; "
+    f"vs baseline LayerNorm (407,940) same count; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605; #2939 result: 32.7855 (+7.28% LOSS)"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -809,6 +848,51 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # RMSNorm+β diagnostic: per-site γ and β bias statistics at convergence
+    # (#2939 followup #1 disambiguation: if β values diverge significantly from 0,
+    # β was indeed absorbing structure; if ~0, β was unused).
+    _rms_log = {"event": "rmsnorm_beta_diagnostic", "epoch": int(best_metrics["epoch"]), "sites": []}
+    _all_beta_linf = []
+    _all_beta_mean_abs = []
+    print("\nRMSNormWithBias final diagnostics (best-checkpoint weights):")
+    for _i, _blk in enumerate(_inner.blocks):
+        for _slot_name, _mod in (("ln_1", _blk.ln_1), ("ln_2", _blk.ln_2),
+                                  ("ln_3", getattr(_blk, "ln_3", None))):
+            if _mod is None or not isinstance(_mod, RMSNormWithBias):
+                continue
+            _w = _mod.weight.detach().float()
+            _b = _mod.bias.detach().float()
+            _g_mean = _w.mean().item()
+            _g_std = _w.std().item()
+            _g_min = _w.min().item()
+            _g_max = _w.max().item()
+            _b_linf = _b.abs().max().item()
+            _b_mean_abs = _b.abs().mean().item()
+            _b_std = _b.std().item()
+            _all_beta_linf.append(_b_linf)
+            _all_beta_mean_abs.append(_b_mean_abs)
+            print(f"  block[{_i}].{_slot_name}: γ mean={_g_mean:.4f} std={_g_std:.4f} "
+                  f"range=[{_g_min:.4f},{_g_max:.4f}] | "
+                  f"β L∞={_b_linf:.4f} |β|_mean={_b_mean_abs:.4f} std={_b_std:.4f}")
+            _rms_log["sites"].append({
+                "block_idx": _i,
+                "slot": _slot_name,
+                "gamma_mean": _g_mean,
+                "gamma_std": _g_std,
+                "gamma_min": _g_min,
+                "gamma_max": _g_max,
+                "beta_linf": _b_linf,
+                "beta_mean_abs": _b_mean_abs,
+                "beta_std": _b_std,
+            })
+    _rms_log["overall_beta_linf_max"] = max(_all_beta_linf) if _all_beta_linf else 0.0
+    _rms_log["overall_beta_mean_abs_avg"] = (
+        sum(_all_beta_mean_abs) / max(len(_all_beta_mean_abs), 1)
+    )
+    print(f"  overall: max β L∞ across all sites = {_rms_log['overall_beta_linf_max']:.4f}; "
+          f"mean |β| averaged across sites = {_rms_log['overall_beta_mean_abs_avg']:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, _rms_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
