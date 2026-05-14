@@ -210,7 +210,7 @@ class TransolverBlock(nn.Module):
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.mish)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
@@ -570,7 +570,7 @@ _std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
     f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
     f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
-    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
+    f"act=Mish; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
