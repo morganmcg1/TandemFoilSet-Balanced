@@ -136,9 +136,21 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class LayerScale(nn.Module):
+    """Per-channel learnable residual scale (Touvron et al. 2021, CaiT)."""
+
+    def __init__(self, dim, init_value=1e-4):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
+
+    def forward(self, x):
+        return x * self.gamma
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_layerscale=False, layerscale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -149,6 +161,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.ls1 = LayerScale(hidden_dim, init_value=layerscale_init) if use_layerscale else nn.Identity()
+        self.ls2 = LayerScale(hidden_dim, init_value=layerscale_init) if use_layerscale else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -157,8 +171,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ls1(self.attn(self.ln_1(fx))) + fx
+        fx = self.ls2(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -198,7 +212,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_layerscale=False, layerscale_init=1e-4):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -219,6 +234,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_layerscale=use_layerscale, layerscale_init=layerscale_init,
             )
             for i in range(n_layers)
         ])
@@ -493,6 +509,8 @@ class Config:
     lion_wd_scale: float = 3.0  # Multiplier applied to weight_decay when use_lion=True (paper: ~3x)
     lion_beta1: float = 0.9   # Lion β1 (default per Chen 2023 Algorithm 2)
     lion_beta2: float = 0.99  # Lion β2 — NOT AdamW β2 (no v_t in Lion)
+    use_layerscale: bool = False  # LayerScale residual scaling (Touvron 2021 CaiT)
+    layerscale_init: float = 1e-4  # γ initial value; smaller = closer to identity at init
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -538,6 +556,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_layerscale=cfg.use_layerscale,
+    layerscale_init=cfg.layerscale_init,
 )
 
 model = Transolver(**model_config).to(device)
@@ -545,6 +565,12 @@ surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
 all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
+
+if cfg.use_layerscale:
+    print(f"[layerscale] init γ stats (expecting mean≈{cfg.layerscale_init:.0e}):")
+    for name, p in model.named_parameters():
+        if name.endswith(".gamma"):
+            print(f"  {name}: mean={p.mean().item():.3e} std={p.std().item():.3e}")
 
 if cfg.use_torch_compile:
     # Variable mesh sizes (74K-242K nodes) → use dynamic=True so we get a
@@ -788,6 +814,22 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+if cfg.use_layerscale:
+    print("[layerscale] final γ stats:")
+    gamma_summary: dict[str, float] = {}
+    for name, p in model.named_parameters():
+        if name.endswith(".gamma"):
+            gm = float(p.mean().item())
+            gs = float(p.std().item())
+            ga = float(p.abs().mean().item())
+            print(f"  {name}: mean={gm:+.3e} std={gs:.3e} |mean|={ga:.3e}")
+            short = name.replace(".gamma", "").replace("_orig_mod.", "")
+            gamma_summary[f"layerscale/{short}/mean"] = gm
+            gamma_summary[f"layerscale/{short}/std"] = gs
+            gamma_summary[f"layerscale/{short}/abs_mean"] = ga
+    if gamma_summary:
+        wandb.summary.update(gamma_summary)
 
 if cfg.use_torch_compile:
     try:
