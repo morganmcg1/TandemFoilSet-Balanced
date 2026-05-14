@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-14 [Round 124] UTC — PR #2892: EMA model weights eval (decay=0.999) — **SENT BACK (schedule confound; epochs=60 rerun requested)**
+
+- **Branch:** charliepai2g48h5-frieren/ema-eval-weights
+- **Original result:** val 31.6548 (+3.58% LOSS) / test 26.2169 (-1.13% WIN)
+- **Diagnosis:** SCHEDULE CONFOUND dominates val LOSS. --epochs 70 + 30min timeout → ep55 with 21% LR remaining. Baseline #2879 used epochs=60, reached ep58 in cosine tail. Not an EMA refutation.
+- **EMA-vs-live diagnostic (ep55):** EMA beats live by +0.91 val_avg. Gap was +5.23 at ep30, +3.45 at ep40. EMA is consistently AHEAD of live from epoch ~17 onward.
+- **Test result WIN:** test 26.2169 vs baseline 26.5160 = -1.13% — EMA-shadow generalizes better at test time.
+- **Action:** Sent back with instruction to change --epochs 70 → --epochs 60. Same EMA decay=0.999, same hyperparams. This removes the schedule confound and gives a fair cosine-tail comparison.
+
+---
+
+## 2026-05-14 [Round 124] UTC — PR #2891: Multi-task aux loss (predict Re/AoA0/AoA1) — **CLOSED LOSS (+6.17%; shortcut learned, 100th taxon)**
+
+- **Branch:** charliepai2g48h5-edward/multi-task-aux-loss
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-multi-task-aux-loss-20260514-111726/metrics.jsonl
+
+| Metric | #2879 Baseline | #2891 aux-loss | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.4465** | **+6.17% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.3251 | +3.05% LOSS |
+| val_single_in_dist | 23.3997 | 26.3747 | +12.71% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.1314 | +4.47% LOSS |
+| val_geom_camber_cruise | 17.8657 | 19.0933 | +6.87% LOSS |
+| val_re_rand | 34.9057 | 36.1864 | +3.67% LOSS |
+
+All 4 splits regress proportionally. Best ep60/70 (timeout). **Uniform regression — NOT split-pattern-reversal family.**
+
+**Critical diagnostic — shortcut confirmed:** log_Re reconstruction MSE = 0.00079 (essentially zero), aux_loss 0.91→0.005 (175× reduction). Aux head learned to copy input channels 13/14/18 directly. Zero representational pressure on trunk.
+
+**Why not just WASH despite tiny aux_weight=0.05:**
+- Lion sign-step makes tiny MSE term contribute meaningful sign-update direction
+- Mild representational misalignment: flow-scalar preservation ≠ surface-MAE optimization
+
+**Multi-task aux-regression axis CLOSES. 100th candidate taxon milestone.** Total closed: 100. Winners: 21.
+
+---
+
+## 2026-05-14 [Round 124] UTC — PR #2905: weight_decay 3e-4→5e-4 — **ASSIGNED to charliepai2g48h5-edward**
+
+- **Branch:** charliepai2g48h5-edward/weight-decay-5e-4
+- **Hypothesis:** Stronger L2 regularization (wd=5e-4, 1.67× increase from 3e-4) to address the recurring in-dist regression pattern from #2889/#2890. The regularization-strength axis has never been tested above wd=3e-4 in this programme.
+- **Rationale:** Three consecutive OOD-WIN+in-dist-LOSS experiments suggest model overfits in-dist training manifold. Weight decay is Lion's primary magnitude control (sign-step normalizes direction). Expected per-step decay: 7.5e-8 (vs 4.5e-8 at baseline). One-line change.
+- **Falsifiable:** WIN = try wd=7e-4 or combine with #2899/#2900 wins. WASH = axis flat near baseline, try 1e-3 bracket. LOSS = wd=5e-4 too strong, try 2e-4 downward.
+
+---
+
 ## 2026-05-14 [Round 123] UTC — PR #2893: GELU on SwiGLU up-projection — **CLOSED LOSS (+3.65%; activation-site axis FULLY CLOSED)**
 
 - **Branch:** charliepai2g48h5-nezuko/gelu-up-projection
