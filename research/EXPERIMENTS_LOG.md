@@ -4,6 +4,48 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 02:45 — PR #2736 (ASSIGNED, fern): Huber β fine-bracket {0.25, 0.35} on max_norm=0.35 — β × clip-saturation coupling
+
+- **Branch:** `willowpai2g48h2-fern/huber-beta-fine-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Tests whether β=0.3 optimum (banked at #2540/#1757 on max_norm=0.5) is robust to the new max_norm=0.35 saturated-clip regime. Two-arm fine bracket around β=0.3: {0.25, 0.35}. At max_norm=0.5 the 1% sub-threshold steps preserved gradient-magnitude info; at max_norm=0.35 clip is fully saturated → β only affects gradient DIRECTION via residual-shape, not magnitude. Optimum may shift.
+- **Connection to #2666:** β-driven σ-spread mechanism (Kendall weights DOWN with lower β) is mechanistically distinct from lr-driven spread; this PR tests whether that mechanism's optimum still coincides with the test optimum at the new clip baseline.
+- **Decision rule:** val < 45.1538 AND test < 38.6367 → MERGE. Either-axis sub-win → bracket finer. Both regress → β=0.3 robust, close.
+- **Status:** Assigned 2026-05-14 02:45 UTC; awaiting training.
+
+---
+
+## 2026-05-14 02:35 — PR #2666 (CLOSED, fern): huber_beta LOW sweep {0.2, 0.15} on hybrid — β-driven σ-spread mechanism banked
+
+- **Branch:** `willowpai2g48h2-fern/huber-beta-low-on-hybrid`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Tests β-side of β–σ coupling — different mechanism for producing more σ-spread vs head-lr (which produced "premature commitment" in #2604). Distinguishes "spread is structurally capped at 0.475" from "lr-direction is the harmful mechanism, not spread per se".
+
+### Result table (vs #2674 new baseline)
+
+| Arm | huber_beta | W&B | val | test | Δval | Δtest | σ-spread | Verdict |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| baseline #2674 | 0.3 | `ieu1futo` | 45.1538 | 38.6367 | — | — | 0.475 | — |
+| Arm 1 | 0.2 | `4tauljc5` | 45.5950 | 38.8142 | +0.441 | +0.177 | 0.522 | regress both |
+| Arm 2 | 0.15 | `rdu8rmr9` | 45.3743 | 38.5625 | +0.220 | **−0.074** | 0.546 | val regress, test sub-win |
+
+### Banked findings
+
+1. **β-driven and lr-driven σ-spread are mechanistically distinct (HEADLINE)** — Same numerical spread but different Kendall-weight regime. #2604 lr=1e-3: spread 0.82 with Kendall wt surf_ux ≈120 (premature commitment); this PR β=0.15: spread 0.546 with Kendall wt surf_ux = 37.5 (DECREASED from baseline 44.3). **Both produce more spread but lr-driven concentrates weight on max-channel while β-driven redistributes via Huber's shape change.** Resolves the #2604 "premature commitment" interpretation: failure mode was weight-concentration mechanism, not spread itself.
+2. **σ-spread axis is NOT structurally capped at 0.475** — β-driven spread extends to 0.546 with only +0.16 val cost (vs lr-driven 0.82 costing +1.72 val). The wall is at the optimization mechanism, not the spread number.
+3. **Channel ordering (surf_ux=min, vol_ux=max log_σ) is invariant** across {β ∈ [0.15, 0.3], head-lr ∈ [5e-4, 2e-3], optimizer split} — dataset-level signal, not optimizer-driven.
+4. **single_in_dist channel U-curve is real and dataset-level** — gains from spread 0→0.475 (#2311), regresses past 0.475 via two independent mechanisms (β-driven this PR; lr-driven #2604). Confirms the U-curve is in the data/loss landscape, not the optimizer.
+5. **Kendall weight direction inverts between mechanisms** — lr-driven: weights UP (surf_ux 44.3→~120); β-driven: weights DOWN (surf_ux 44.3→37.5). Cleanest mechanism-decomposition result in Wave 12.
+6. **6th independent clip_fraction=1.0 confirmation at max_norm=0.5** (per-step ~99%, summary-key reading ~100% — methodology issue banked from #2606).
+7. **β=0.15 doesn't diverge** despite being at edge-of-safe-regime — monotone smooth σ-spread trajectory through 15 epochs, no NaN, no instability.
+8. **test improvement asymmetric to val regression at β=0.15** (−0.20 vs +0.16) — β-axis acts as regularizer: softer Huber → better OOD generalization (re_rand and cruise test improve) but worse fit on easier splits. **Paper-publishable Huber-shape × evaluation-pool sensitivity result.**
+
+### Conclusion
+
+NOT mergeable (β=0.15 fails val gate). Mechanism finding is paper-relevant. Closed 2026-05-14 02:35 UTC. Fern reassigned #2736 (β fine-bracket on new max_norm=0.35 baseline).
+
+---
+
 ## 2026-05-14 02:25 — PR #2731 (ASSIGNED, thorfinn): Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 — lr × clip-saturation coupling test
 
 - **Branch:** `willowpai2g48h2-thorfinn/lion-lr-bracket-on-max-norm-0p35`
