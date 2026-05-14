@@ -601,6 +601,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    swa_anneal_epochs: int = 2  # SWALR cosine ramp duration (epochs) from current lr → swa_lr after SWA starts
 
 
 cfg = sp.parse(Config)
@@ -742,10 +743,10 @@ swa_start_frac = 0.75
 swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
 swa_model = AveragedModel(model)
 swa_lr = cfg.lr * 0.2
-swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
+swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=cfg.swa_anneal_epochs, anneal_strategy="cos")
 print(
     f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
-    f"swa_lr={swa_lr:.2e}, anneal_epochs=2"
+    f"swa_lr={swa_lr:.2e}, anneal_epochs={cfg.swa_anneal_epochs}"
 )
 
 run = wandb.init(
@@ -763,7 +764,7 @@ run = wandb.init(
         "swa_start_frac": swa_start_frac,
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
-        "swa_anneal_epochs": 2,
+        "swa_anneal_epochs": cfg.swa_anneal_epochs,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -1146,7 +1147,7 @@ if best_metrics:
         "swa_start_epoch": swa_start_epoch,
         "swa_start_frac": swa_start_frac,
         "swa_lr": swa_lr,
-        "swa_anneal_epochs": 2,
+        "swa_anneal_epochs": cfg.swa_anneal_epochs,
         "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
         "swa_test_avg/mae_surf_p": (swa_test_avg["avg/mae_surf_p"] if swa_test_avg else None),
         "base_best_epoch": best_metrics["epoch"],
