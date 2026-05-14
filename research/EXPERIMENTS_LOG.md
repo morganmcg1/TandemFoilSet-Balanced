@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-14 20:00 [Round 138 close-26] UTC — PR #2994: lion-lr-1e-4 — **CLOSED LOSS (+8.39% val vs NEW; 148th taxon; LION-LR-AXIS-CLOSED-IN-BOTH-DIRECTIONS)**
+
+- **Branch:** charliepai2g48h5-frieren/lion-lr-1e-4
+- **Metric artifacts:** target/models/model-charliepai2g48h5-frieren-lion-lr-1e-4-20260514-191725/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2994 (lr=1e-4, w/ warmup) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **32.5593** | **+8.39% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | **27.4533** | **+8.90% LOSS** |
+| val_single_in_dist | 25.219 | 26.7901 | +6.23% LOSS |
+| val_geom_camber_rc | 43.929 | 48.9043 | +11.32% LOSS |
+| val_geom_camber_cruise | 16.265 | **18.4282** | **+13.30% LOSS (CRUISE META-SIGNAL BROKEN — 5th post-#2964 inversion)** |
+| val_re_rand | 34.740 | 36.1148 | +3.96% LOSS |
+| best_epoch | 60/60 | **59/60** | best=last persists |
+| sec/epoch | ~29.2 | 29.11 | matched |
+| Param count | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** Reduce Lion lr from 1.5e-4 → 1e-4 (33% smaller step) with intact 3-epoch warmup + cosine — predicted to settle into tighter basin at the post-norm+γ=1.0 geometry, particularly benefiting OOD cruise/rc splits.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **HYPOTHESIS DECISIVELY FALSIFIED BY DIRECTIONAL INVERSION.** The hypothesis predicted OOD cruise/rc would benefit most from smaller lr (tighter basin). Instead they REGRESSED MOST (+13.30% cruise, +11.32% rc). Inverse direction = strong falsification signal.
+
+2. **`best=last` is a BUDGET SIGNATURE NOT STEPSIZE SIGNATURE.** lr=1e-4 also ends best=last (ep59) — confirming the recurring best=last pattern across recent runs reflects INSUFFICIENT TRAINING BUDGET at 60ep, not optimizer overshoot. Smaller lr cannot recover the 8.4% gap to baseline in remaining epoch.
+
+3. **OOD SPLITS WANT MORE GRADIENT SIGNAL NOT LESS.** In the post-norm + γ=1.0 geometry, OOD generalization benefits from LARGER steps (landscape exploration), not tighter convergence. This is a STRUCTURAL inversion of standard small-batch SGD intuition.
+
+4. **CRUISE META-SIGNAL BROKEN — 5th post-#2964 inversion.** Pattern: #2961 aux-supervision, #2978 AoA noise, #2986 AdamW @ 10×, #2988 scalar γ, #2994 lr=1e-4. Cruise WIN is structurally fragile to ANY substantive perturbation — including pure-LR-magnitude scans within the SAME optimizer.
+
+5. **LION LR-AXIS NOW DECISIVELY CLOSED IN BOTH DIRECTIONS** (60ep budget):
+   - 2e-4: LOSS (prior frieren #2950 wash-LOSS)
+   - 1.75e-4: marginal (prior)
+   - **1.5e-4: WIN baseline #2964**
+   - 1e-4: +8.39% LOSS (this PR — clean test with intact warmup+cosine)
+   - Bracket TIGHT; optimum at or near 1.5e-4 within 60ep budget.
+
+6. **148th taxon CLOSED:** LION-LR-AXIS-CLOSED-IN-BOTH-DIRECTIONS-AT-60EP / OOD-PREFERS-LARGER-STEPS-IN-POST-NORM-GEOMETRY.
+
+**Followup assigned:** #3010 frieren droppath-p-0.1 (FRESH STOCHASTIC-DEPTH AXIS — Huang 2016 / Swin / ViT / ConvNeXt standard recipe; zero new params; constant p_drop=0.1 across all 4 blocks; applied INSIDE residual `x = LN(x + DropPath(branch(x)))`; preserves post-norm + γ=1.0; per student suggestion that optimizer-family pivot is needed but optimizer-family axis ALREADY CLOSED (#2974/#2986); DropPath is the natural fresh-axis pivot orthogonal to all closed and in-flight axes; 151st axis; first stochastic-depth experiment in launch). Total closed: 148. Winners: 22. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-14 19:48 [Round 138 close-25] UTC — PR #2988: per-block-scalar-gamma-init-1.0 — **CLOSED LOSS (+4.91% val vs NEW; 147th taxon; γ-ADAPTIVITY AXIS DECISIVELY CLOSED ACROSS ALL 3 GRANULARITIES)**
 
 - **Branch:** charliepai2g48h5-alphonse/per-block-scalar-gamma-init-1.0
