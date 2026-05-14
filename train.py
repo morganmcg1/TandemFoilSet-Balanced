@@ -598,50 +598,16 @@ def amp_ctx_factory():
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
 
-class Lion(torch.optim.Optimizer):
-    """Lion optimizer (Chen et al. 2023): sign-based momentum updates.
-
-    Update: theta <- theta - lr * (sign(beta1 * m + (1-beta1) * g) + wd * theta)
-    Momentum: m <- beta2 * m + (1-beta2) * g
-    """
-    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
-        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
-        super().__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-        for group in self.param_groups:
-            lr = group['lr']
-            beta1, beta2 = group['betas']
-            wd = group['weight_decay']
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                g = p.grad
-                state = self.state[p]
-                if 'momentum' not in state:
-                    state['momentum'] = torch.zeros_like(p)
-                m = state['momentum']
-                if wd != 0:
-                    p.mul_(1 - lr * wd)
-                update = (beta1 * m + (1 - beta1) * g).sign_()
-                p.add_(update, alpha=-lr)
-                m.mul_(beta2).add_(g, alpha=1 - beta2)
-        return loss
-
-
-optimizer = Lion(
+optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
-    betas=(0.9, 0.99),
+    betas=(0.9, 0.999),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Optimizer: {optimizer.__class__.__name__} (replacing Lion; optimizer-family axis swap, PR #2974)")
+print(f"  lr={optimizer.param_groups[0]['lr']}, wd={optimizer.param_groups[0]['weight_decay']}, betas={optimizer.param_groups[0]['betas']}")
+print(f"  AdamW maintains 2 momentum buffers per param (exp_avg + exp_avg_sq); Lion maintained 1 (momentum). Expect ~+1.5MB optimizer state at 407,940 params.")
+print(f"  Baseline to beat: val_avg/mae_surf_p < 30.5605 (Lion lr=1.5e-4, wd=3e-4, PR #2879)")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -764,23 +730,48 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
-# --- Lion momentum diagnostic: sanity-check optimizer state at terminal ---
-_lion_total = 0
-_lion_nz = 0
+# --- AdamW state diagnostic: sanity-check exp_avg + exp_avg_sq at terminal ---
+_ea_total = _ea_nz = 0
+_eas_total = _eas_nz = 0
+_step_count_min = float('inf')
+_step_count_max = 0
+_param_state_count = 0
 for _group in optimizer.param_groups:
     for _p in _group['params']:
         if _p in optimizer.state:
-            _m = optimizer.state[_p].get('momentum')
-            if _m is not None:
-                _lion_total += _m.numel()
-                _lion_nz += (_m.abs() > 1e-8).sum().item()
-_lion_nz_frac = _lion_nz / max(_lion_total, 1)
-print(f"Lion momentum non-zero fraction at terminal: {_lion_nz_frac:.4f} ({_lion_nz}/{_lion_total} elements)")
+            _state = optimizer.state[_p]
+            _ea = _state.get('exp_avg')
+            _eas = _state.get('exp_avg_sq')
+            if _ea is not None:
+                _ea_total += _ea.numel()
+                _ea_nz += (_ea.abs() > 1e-12).sum().item()
+            if _eas is not None:
+                _eas_total += _eas.numel()
+                _eas_nz += (_eas.abs() > 1e-12).sum().item()
+            _step = _state.get('step')
+            if _step is not None:
+                _step_val = int(_step.item()) if hasattr(_step, 'item') else int(_step)
+                _step_count_min = min(_step_count_min, _step_val)
+                _step_count_max = max(_step_count_max, _step_val)
+            _param_state_count += 1
+_ea_nz_frac = _ea_nz / max(_ea_total, 1)
+_eas_nz_frac = _eas_nz / max(_eas_total, 1)
+_step_min_out = 0 if _step_count_min == float('inf') else _step_count_min
+print(f"AdamW state diagnostic at terminal:")
+print(f"  exp_avg     non-zero fraction: {_ea_nz_frac:.4f} ({_ea_nz}/{_ea_total} elements)")
+print(f"  exp_avg_sq  non-zero fraction: {_eas_nz_frac:.4f} ({_eas_nz}/{_eas_total} elements)")
+print(f"  param-state entries: {_param_state_count}; step range: [{_step_min_out}, {_step_count_max}]")
 append_metrics_jsonl(metrics_jsonl_path, {
-    "event": "lion_momentum_diagnostic",
-    "nonzero_fraction": _lion_nz_frac,
-    "nonzero_count": _lion_nz,
-    "total_count": _lion_total,
+    "event": "adamw_state_diagnostic",
+    "exp_avg_nonzero_fraction": _ea_nz_frac,
+    "exp_avg_nonzero_count": _ea_nz,
+    "exp_avg_total_count": _ea_total,
+    "exp_avg_sq_nonzero_fraction": _eas_nz_frac,
+    "exp_avg_sq_nonzero_count": _eas_nz,
+    "exp_avg_sq_total_count": _eas_total,
+    "param_state_count": _param_state_count,
+    "step_min": _step_min_out,
+    "step_max": _step_count_max,
 })
 
 # --- Test evaluation + local summary ---
