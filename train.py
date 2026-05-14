@@ -490,7 +490,7 @@ model_config = dict(
     n_layers=4,
     n_head=2,
     slice_num=24,
-    mlp_ratio=2,
+    mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -499,6 +499,7 @@ print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing 
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
+print(f"MLP ratio: {model_config['mlp_ratio']} (baseline was 2, now 3 — per-block MLP hidden = {model_config['n_hidden'] * model_config['mlp_ratio']}; capacity probe on MLP body, +~73K params expected; baseline to beat: val_avg/mae_surf_p < 32.4498 (SE block-3-only #2727))")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
