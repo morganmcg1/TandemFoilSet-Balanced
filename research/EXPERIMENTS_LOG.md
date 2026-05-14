@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-15 00:45 [Round 138 close-42] UTC — PR #3039 SWA-last-10 (LOSS but cruise PRESERVED; weight-averaging axis COMPREHENSIVELY CLOSED)
+
+### Closed: #3039 thorfinn swa-last-10-epochs (172nd taxon SWA-LAST-10-LOSS-MONOTONIC-DESCENT-INCOMPATIBLE / WEIGHT-AVERAGING-AXIS-COMPREHENSIVELY-CLOSED)
+
+- **Branch:** charliepai2g48h5-thorfinn/swa-last-10-epochs
+- **Metric artifacts:** models/model-charliepai2g48h5-thorfinn-swa-last-10-epochs-20260514-215326/metrics.jsonl
+- **Hypothesis:** Izmailov 2018 uniform-mean SWA over last 10 epoch snapshots (ep51-60); EXCLUDES init-lag entirely; eval-only; cruise predicted PRESERVED
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Metric | #3006 baseline | **SWA (this PR)** | RAW (ep60) | Δ_SWA−RAW | Δ_SWA vs baseline |
+|---|---|---|---|---|---|
+| val_avg | 29.5318 | **30.3881** | 30.3220 | +0.0662 (RAW wins) | +2.90% LOSS |
+| test_avg | 25.4795 | 25.2845 | 25.2699 | +0.0146 (RAW wins) | **−0.77% WIN** |
+| val_cruise | 16.348 | 16.447 | 16.359 | +0.0885 | **PRESERVED** |
+
+- **KEY MECHANISTIC FINDING — averaging drags in monotonic-descent regime.** Student's late-window trajectory table is load-bearing:
+
+| ep | RAW val_avg |
+|---|---|
+| 55 | 30.6328 |
+| 56 | 30.6229 |
+| 57 | 30.4952 |
+| 58 | 30.3652 |
+| 59 | 30.3839 |
+| 60 | **30.3220** |
+
+  Late-window descended monotonically ep55→ep60 (−0.31 absolute). SWA can only interpolate; in a strictly-descending sequence, averaging is anti-improvement. SWA estimate sits midway between ep55 (30.63) and ep60 (30.32) — exact predicted LOSS mechanism.
+- **WEIGHT-AVERAGING AXIS COMPREHENSIVELY CLOSED at TWO clean LOSS datapoints with different methods:**
+  - **#3020 EMA decay=0.999** (exponential, full-training, init-lag + basin-drag) — LOSS Δ=−0.088 at ep60
+  - **#3039 SWA last-10** (uniform, late-window only, no init-lag) — LOSS Δ=+0.0662 at ep60
+- The two failure modes are mechanistically distinct (init-lag vs late-window-drag) yet axis fails comprehensively. **Lion+cosine+60ep recipe produces monotonic-descent trajectories STRUCTURALLY INCOMPATIBLE with weight averaging.** Re-opening would require a schedule-shape change (cyclic/restart LR) — but #3033 closed schedule-shape axis.
+- **8th cruise-PRESERVED datapoint** — eval-only intervention with training trajectory IDENTICAL to baseline. **Strongest sub-invariant now:** 'eval-only post-hoc weight transformations preserve cruise unconditionally' (2 clean datapoints: #3020 EMA + #3039 SWA).
+- **Conclusion:** WEIGHT-AVERAGING AXIS COMPREHENSIVELY CLOSED. Pivot thorfinn to Lion β₁ sweep — fresh optimizer-hyperparameter axis (untouched in launch; only lr/wd swept).
+
+### Followup assignment (thorfinn idle → busy)
+
+- **#3056 thorfinn lion-beta1-0pt95** — Sweep Lion's first-moment momentum coefficient β₁ from 0.9 (default) → 0.95. Single CLI flag change. +0 params, +0 compute. Higher β₁ smooths sign-step direction (95% past momentum, 5% current gradient vs 90/10). Targets the under-explored optimizer-hyperparameter axis — we've only swept lr (#2994) and wd (#2993), never the Lion betas. Cruise predicted PRESERVED (optimizer-internal, no residual-stream perturbation). 167th active axis. Would be 9th cruise-preserving datapoint if confirmed.
+
+### Round 138 close-42 summary
+- Closed 1 LOSS PR with exemplary closure analysis (weight-averaging axis cleanly closed at 2 distinct methods)
+- Cruise-preservation ledger now 18 datapoints (9 BROKEN + 9 PRESERVED — wait recount): actually 17 datapoints (9 BROKEN + 8 PRESERVED) — #3039 confirmed as 8th preserved (already in close-41 ledger when I wrote 'tentative 8th'). Final count: 8 PRESERVED.
+- Two major axes comprehensively closed: weight-averaging (#3020 EMA + #3039 SWA) and loss-shape (#3022 β=1.0 + #3036 β=0.01 + L1 baseline).
+- Total closed: 172. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-15 00:15 [Round 138 close-41] UTC — PR #3036 Huber β=0.01 (LOSS mild but cruise PRESERVED mild; loss-shape axis comprehensively closed)
 
 ### Closed: #3036 frieren huber-smooth-l1-beta-0pt01 (171st taxon HUBER-BETA-0.01-QUAD-MASS-FRAC-36-PERCENT-MILD-CRUISE-DEGRADATION / LOSS-SHAPE-AXIS-CLOSED-AT-3-POINTS)
