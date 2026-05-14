@@ -1435,3 +1435,78 @@ Late-epoch trajectory of betas=0.95 (s2): lagged ~7-10 pts behind baseline at ev
 **CLOSED — clear regression, +14.8% val. Lion beta2 axis retired.** Keep (0.9, 0.99) as Lion paper recommends. Follow-up: Lion beta1 scan (prediction-term weight) is the more relevant knob; edward assigned PR #2633 (beta1=0.95, holding beta2=0.99).
 
 ---
+
+## 2026-05-14 00:30 — PR #2628 CLOSED: Lion lr 7.5e-5 → 1e-4 (LR scan overshoot)
+
+- **Student:** willowpai2g48h3-tanjiro
+- **Branch:** willowpai2g48h3-tanjiro/lion-lr-1e4
+- **Hypothesis:** Continue Lion LR scan upward — if 5e-5→7.5e-5 gave −9.5%, perhaps 1e-4 continues the trend.
+
+### Results (2 seeds, vs Lion lr=7.5e-5 val=45.433 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `76z01dfn` | 1 (better) | 46.306 | 39.495 | 35 (last) | 30.7 min |
+| `8p0t50ud` | 2 | 46.854 | 40.925 | 33 (NOT last) | 30.9 min |
+| **Baseline** | 2 (`srveevtx`) | 45.433 | 39.509 | 35 | 30.8 min |
+
+Both seeds miss val bar (+0.87 / +1.42 pt). s1 narrowly ties test (39.495 ≈ 39.509). Mean val=46.58, test=40.21.
+
+### Three decisive diagnostic signals
+
+1. **Ep-15 val did not improve** as predicted (s1: 73.4 ≈ baseline 73.6; s2: 76.3 > baseline). The proportional-shift extrapolation broke down between 7.5e-5 and 1e-4.
+2. **Final val regressed** on both seeds (s1: +0.87, s2: +1.42).
+3. **s2 destabilized at end of training** (best=ep33 at 46.85, ep35=49.78 → +2.9 pt regression in last 2 epochs). Classic overshoot signature.
+
+### Conclusion
+
+**CLOSED — clear regression on val, overshoot confirmed.** The mechanism story is clean: with `sign(m)` updates, LR controls step magnitude only — larger steps past stability ceiling produce oscillation rather than faster descent. **Lion LR sweet spot is at 7.5e-5**; further upward exploration retired.
+
+Per-split: s1 narrowly improves on geom_camber_rc (52.21 vs 53.48) and re_rand (37.47 vs 37.99), but the val signal makes the test gains incidental — not driven by the hypothesis mechanism, just within seed noise.
+
+### Follow-up
+
+- tanjiro → CosineAnnealingWarmRestarts T_0=12 (PR #2693) — schedule-axis fresh direction: 3 restart cycles in 35 epochs to escape local minima.
+
+---
+
+## 2026-05-14 00:30 — PR #2501 CLOSED: Per-channel Huber β_p=0.625 (per-channel β axis FULLY closed)
+
+- **Student:** willowpai2g48h3-askeladd
+- **Branch:** willowpai2g48h3-askeladd/huber-surf-bp-0625
+- **Hypothesis:** Upward bisection of per-channel Huber β for pressure (β_p=0.625 vs default 0.5). Mechanism: pressure outliers (stagnation/suction/separation) need more quadratic gradient, not less.
+
+### Results (2 seeds, vs Lion lr=7.5e-5 val=45.433 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch |
+|---|---|---:|---:|---:|
+| `d77619bt` | 1 (better) | **48.519** | **42.000** | 35 |
+| `o2dpygjy` | 2 | 49.243 | 43.122 | 35 |
+| **Baseline** | 2 | 45.433 | 39.509 | 35 |
+
+Regression: **+6.79% val, +6.31% test** (better seed). All four splits regress 4-14% — opposite of predicted "HARD wins, EASY flat" pattern.
+
+### Per-channel β axis FULLY CLOSED
+
+| Direction | Value | Baseline | val Δ | Verdict |
+|---|---|---|---:|---|
+| down (#2163) | β_p=0.25 | AdamW | +0.4% (HARD splits regressed) | CLOSED |
+| up (this PR) | β_p=0.625 | Lion lr=7.5e-5 | +6.8% (all splits regressed) | CLOSED |
+
+Both directions falsified across both optimizer baselines. Global β=0.5 from #1505/#1882 is robust.
+
+### Mechanism analysis (student's diagnosis, validated)
+
+1. **Lion's sign update collapses magnitude info.** Widening Huber quadratic region changes pre-clip gradient magnitude on outliers, which `sign(m)` then discards. The benefit channel is closed at the optimizer level — independent of which β is used.
+2. **Grad-clip saturation:** Higher outlier gradients shift more of the batch norm budget toward outlier nodes; global clip rescales non-outlier (well-fit) regions DOWN → uniform regression across all splits.
+3. **Stronger baseline regime:** Lion lr=7.5e-5 has already squeezed most pressure-outlier error; remaining residuals are diffuse, MSE-regime adds curvature without target.
+
+### Conclusion
+
+**CLOSED — clear regression, per-channel β axis fully closed.** Per-channel-loop refactor in train.py is now technical debt (no value, adds complexity). Recommend revert to single-line uniform Huber.
+
+### Follow-up
+
+- askeladd → Charbonnier loss ε=0.5 (PR #2694) — fundamental loss-family change (smooth L1 alternative); different gradient geometry than Huber, may compose better with Lion's sign update.
+
+---
