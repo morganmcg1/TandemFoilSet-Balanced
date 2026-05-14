@@ -178,6 +178,7 @@ class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
@@ -187,6 +188,14 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        # FiLM-Re conditioning: log(Re) -> (gamma, beta) per channel.
+        # Identity init (gamma=1, beta=0) is applied after Transolver.apply()
+        # in Transolver.__init__ so the trunc_normal_ pass does not stomp it.
+        self.film_mlp = nn.Sequential(
+            nn.Linear(1, hidden_dim * 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 2, hidden_dim * 2),
+        )
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -194,9 +203,13 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, log_re=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
+        if log_re is not None:
+            film_params = self.film_mlp(log_re)  # [B, 2*hidden_dim]
+            gamma, beta = film_params.chunk(2, dim=-1)
+            fx = gamma.unsqueeze(1) * fx + beta.unsqueeze(1)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -233,6 +246,15 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Identity init for FiLM MLPs: gamma=1, beta=0 at start.
+        # Done after apply() so trunc_normal_ does not overwrite it.
+        with torch.no_grad():
+            for block in self.blocks:
+                last = block.film_mlp[-1]
+                last.weight.zero_()
+                last.bias.zero_()
+                last.bias[:n_hidden].fill_(1.0)  # gamma init = 1
+                # bias[n_hidden:] stays at 0 -> beta init = 0
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -246,9 +268,13 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool or None
+        # Per-sample log(Re) conditioning for FiLM. Dim 13 of x is log(Re),
+        # constant across all nodes within a sample; pad_collate pads at the
+        # END so node 0 is always real.
+        log_re = x[:, 0:1, 13]  # [B, 1]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            fx = block(fx, mask=mask, log_re=log_re)
         return {"preds": fx}
 
 
@@ -625,6 +651,36 @@ with torch.no_grad():
     param_l2_final = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
+
+# FiLM-Re diagnostic: per-block bias stats (gamma/beta at log_re=0) and weight norms.
+# Init values were gamma_bias=1, beta_bias=0, both weights=0. Movement away from
+# these indicates FiLM is being used. Weight-norm stats indicate per-Re modulation.
+inner = model._orig_mod if hasattr(model, "_orig_mod") else model
+film_diag: dict[str, float] = {}
+with torch.no_grad():
+    for i, block in enumerate(inner.blocks):
+        last = block.film_mlp[-1]
+        gamma_bias = last.bias[: inner.n_hidden].detach()
+        beta_bias = last.bias[inner.n_hidden :].detach()
+        gamma_w = last.weight[: inner.n_hidden].detach()
+        beta_w = last.weight[inner.n_hidden :].detach()
+        film_diag[f"film_block{i}/gamma_bias_mean"] = gamma_bias.mean().item()
+        film_diag[f"film_block{i}/gamma_bias_std"] = gamma_bias.std().item()
+        film_diag[f"film_block{i}/beta_bias_mean"] = beta_bias.mean().item()
+        film_diag[f"film_block{i}/beta_bias_std"] = beta_bias.std().item()
+        film_diag[f"film_block{i}/gamma_w_abs_mean"] = gamma_w.abs().mean().item()
+        film_diag[f"film_block{i}/beta_w_abs_mean"] = beta_w.abs().mean().item()
+print("FiLM diagnostic (gamma_bias mean/std per block):")
+for i in range(len(inner.blocks)):
+    gm = film_diag[f"film_block{i}/gamma_bias_mean"]
+    gs = film_diag[f"film_block{i}/gamma_bias_std"]
+    bm = film_diag[f"film_block{i}/beta_bias_mean"]
+    bs = film_diag[f"film_block{i}/beta_bias_std"]
+    gw = film_diag[f"film_block{i}/gamma_w_abs_mean"]
+    bw = film_diag[f"film_block{i}/beta_w_abs_mean"]
+    print(f"  block{i}: gamma_bias={gm:.4f}±{gs:.4f}  beta_bias={bm:.4f}±{bs:.4f}  "
+          f"|gamma_w|={gw:.2e}  |beta_w|={bw:.2e}")
+wandb.summary.update(film_diag)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
