@@ -261,6 +261,10 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Deep-supervision aux head: project block-1 (50% depth in 4-block stack)
+        # features to (Ux, Uy, p) for an auxiliary L1 surface loss.
+        self.aux_block_idx = 1
+        self.aux_head_surf = nn.Linear(n_hidden, out_dim)
         self.apply(self._init_weights)
 
         # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
@@ -288,9 +292,13 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        aux_preds = None
+        for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
-        return {"preds": fx}
+            if i == self.aux_block_idx:
+                # Deep-supervision aux: project mid-block features to (Ux, Uy, p).
+                aux_preds = self.aux_head_surf(fx)
+        return {"preds": fx, "aux_preds": aux_preds}
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +447,10 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+# Deep-supervision auxiliary surface loss (PR #2952).
+AUX_WEIGHT = 0.1
+AUX_BLOCK_IDX = 1
+
 
 @dataclass
 class Config:
@@ -541,6 +553,21 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Deep-supervision aux head diagnostic
+_inner_for_diag = getattr(model, "_orig_mod", model)
+_aux_head = _inner_for_diag.aux_head_surf
+_aux_head_params = sum(p.numel() for p in _aux_head.parameters())
+print(
+    f"Deep supervision: aux_head_surf nn.Linear({_aux_head.in_features}, {_aux_head.out_features}) "
+    f"= {_aux_head_params} new params (~291 expected); "
+    f"applied AFTER block index {AUX_BLOCK_IDX} (50% depth in {model_config['n_layers']}-block stack); "
+    f"aux_weight={AUX_WEIGHT}; "
+    f"total loss = vol_loss + {cfg.surf_weight}*surf_loss + {AUX_WEIGHT}*aux_surf_loss; "
+    f"surface-only L1 aux supervision on mid-block features; "
+    f"structural/local depth-axis intervention paralleling head-axis #2946; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -684,7 +711,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_aux = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -696,14 +723,18 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            out = model({"x": x_norm, "mask": mask})
+            pred = out["preds"]
+            aux_pred = out["aux_preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            aux_sq_err = F.l1_loss(aux_pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            aux_loss = (aux_sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss + AUX_WEIGHT * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -711,12 +742,15 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_loss.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
+    epoch_aux_to_surf = epoch_aux / max(epoch_surf, 1e-12)
 
     # --- Validate ---
     model.eval()
@@ -748,6 +782,10 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_loss": epoch_aux,
+        "train/aux_to_surf_ratio": epoch_aux_to_surf,
+        "aux_weight": AUX_WEIGHT,
+        "aux_block_idx": AUX_BLOCK_IDX,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -755,7 +793,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux:.4f} aux/surf={epoch_aux_to_surf:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -809,6 +847,41 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Deep-supervision aux head diagnostic: weight/bias norms and similarity vs primary final head
+    _aux = _inner.aux_head_surf
+    _aux_w = _aux.weight.detach().float()  # (3, n_hidden)
+    _aux_b = _aux.bias.detach().float() if _aux.bias is not None else None
+    _aux_w_norm = _aux_w.norm().item()
+    _aux_b_norm = _aux_b.norm().item() if _aux_b is not None else 0.0
+    # Primary final head: blocks[-1].mlp2 = Linear(d, d) -> GELU -> Linear(d, 3)
+    _prim_head = _inner.blocks[-1].mlp2[2]
+    _prim_w = _prim_head.weight.detach().float()  # (3, n_hidden)
+    _prim_b = _prim_head.bias.detach().float() if _prim_head.bias is not None else None
+    _prim_w_norm = _prim_w.norm().item()
+    _prim_b_norm = _prim_b.norm().item() if _prim_b is not None else 0.0
+    # Channel-wise cosine similarity (aux row k vs primary final-Linear row k)
+    _cos = torch.nn.functional.cosine_similarity(_aux_w, _prim_w, dim=-1).cpu().tolist()
+    _cos_mean = float(sum(abs(c) for c in _cos) / max(len(_cos), 1))
+    print("\nDeep-supervision aux head diagnostic (best-checkpoint weights):")
+    print(f"  aux_head_surf.weight.norm:        {_aux_w_norm:.4f}  (shape {tuple(_aux_w.shape)})")
+    print(f"  aux_head_surf.bias.norm:          {_aux_b_norm:.4f}")
+    print(f"  primary final Linear.weight.norm: {_prim_w_norm:.4f}  (blocks[-1].mlp2[2])")
+    print(f"  primary final Linear.bias.norm:   {_prim_b_norm:.4f}")
+    print(f"  per-channel cosine sim (Ux,Uy,p): "
+          f"[{_cos[0]:+.4f}, {_cos[1]:+.4f}, {_cos[2]:+.4f}]  |abs mean|={_cos_mean:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "aux_head_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "aux_block_idx": AUX_BLOCK_IDX,
+        "aux_weight": AUX_WEIGHT,
+        "aux_head_weight_norm": _aux_w_norm,
+        "aux_head_bias_norm": _aux_b_norm,
+        "primary_final_weight_norm": _prim_w_norm,
+        "primary_final_bias_norm": _prim_b_norm,
+        "channel_cos_sim": {"Ux": _cos[0], "Uy": _cos[1], "p": _cos[2]},
+        "channel_cos_abs_mean": _cos_mean,
+    })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
