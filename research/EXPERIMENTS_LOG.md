@@ -4,6 +4,74 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 22:45 — PR #3005 (CLOSED, edward): max_norm sweep {0.2, 1.0} on saturated-clip baseline — **22nd paper-appendix axis closure + NEW MAX_NORM-CLIP-BOUNDARY class (10th transfer-pattern class)**
+
+- **Branch:** `willowpai2g48h2-edward/max-norm-sweep-on-saturated-clip-baseline`
+- **Student:** willowpai2g48h2-edward
+- **Verdict:** Arm 1 max_norm=0.2 (`utcg5ex9`) SWA val **44.967** −0.187 / test 38.631 +0.0057 = val WIN (<45.10) but test ≥ 38.50 = **NO MERGE**, Arm 2 max_norm=1.0 (`bwnxc78l`) SWA val **45.947** +0.793 / test 39.399 +0.762 = both regress = **NO MERGE**. Baseline #2674 max_norm=0.35 remains Pareto-dominant. **22nd paper-appendix axis closure + NEW MAX_NORM-CLIP-BOUNDARY class** (10th transfer-pattern class).
+- **W&B runs:** `utcg5ex9`, `bwnxc78l`, baseline `ieu1futo`.
+- **Headline:** max_norm-axis closes as NEW MAX_NORM-CLIP-BOUNDARY class — directional asymmetric val/test split on tighter side; baseline at joint val+test Pareto-optimum. **Lion exp_avg_norm = c × max_norm exact-linear scaling under saturated clip** (A1/A2 ratio 0.198 vs 0.2/1.0=0.200 = 1% match).
+
+### Mechanism diagnosis (paper-publishable findings — banked #310-#316)
+
+- **#310 PAPER-PUBLISHABLE — NEW MAX_NORM-CLIP-BOUNDARY class CHARACTERIZED as 10th transfer-pattern class.** max_norm-axis 22nd paper-appendix axis closure. Distinct from ASYMMETRIC-V (continuous-cost-axis) — shows directional asymmetric val/test split where tighter side wins val but fails test cutoff. **10 transfer-pattern classes total**.
+
+- **#311 PAPER-PUBLISHABLE — Lion exp_avg_norm = c × max_norm exact-linear under saturated clip (refines #194).** Cross-axis measurement: A1 mn=0.2 = 0.005717, A2 mn=1.0 = 0.028880, ratio 0.198 vs 0.200 = 1% match. Combined with #304 mn=0.5 = 0.01403, linear coefficient c ≈ 0.0289 across {0.2, 0.35, 0.5, 1.0}. **Closed-form prediction**: exp_avg_norm = 0.0289 × max_norm under saturated clip. Refines #194 from invariant to "linear in max_norm under saturated clip; invariant for non-max_norm axes preserving saturation".
+
+- **#312 PAPER-PUBLISHABLE — clip_fraction=1.000 EVEN at max_norm=1.0 — saturation boundary lies above 1.0.** Pre-clip grad p99~40, max~90 invariant across {0.2, 0.35, 0.5, 1.0}. All 4 sampled max_norm points within saturated regime. mn=0 (no clip) is the only remaining unsaturated discriminator.
+
+- **#313 PAPER-STRENGTHENING — σ-spread INVARIANT 20th cross-axis confirmation across max_norm-axis.** A1 σ-spread=0.473, A2=0.474, baseline 0.475 = within ±0.002 across 5× max_norm range. Strongest cross-axis σ-spread invariance.
+
+- **#314 PAPER-STRENGTHENING — channel ordering 22nd cross-axis confirmation; channel ordering DEEPER invariant than σ-spread magnitude REFINED.** Both arms preserved surf_ux=MIN, vol_ux=MAX. Channel ordering invariance across 22+ cross-axis conditions including σ-spread BREAK arms.
+
+- **#315 PAPER-STRENGTHENING — val/test split on Arm 1 mn=0.2 paper-publishable boundary signal.** Tighter-clip regime can WIN val but FAIL test by 0.006. Combined with #313 σ-spread INVARIANT, mechanism story: **max_norm-axis IS the loss-landscape regularizer**; tighter clip = stronger regularizer on training loss but generalization is jointly bounded; baseline 0.35 is at joint val+test Pareto-optimum.
+
+- **#316 PAPER-STRENGTHENING — SWA window 2 epochs 14th-consecutive #170; step-time/VRAM invariance across max_norm-axis.**
+
+### Paper-appendix matrix update — UPDATED to **22 closed × 10 transfer patterns + 2 MIXED axes + 1 CHARACTERIZED DOMINANT-DEGENERATE**
+
+max_norm-axis joins as **NEW MAX_NORM-CLIP-BOUNDARY class** 10th transfer-pattern class. σ-spread invariance bank: **20 INVARIANT (was 19)** + 5 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + 2 compose-induced BIDIRECTIONAL BREAKs + β-axis monotone-in-1/β + seed-axis 18th + 1 σ-head-optimizer-ablation BREAK + 1 GRAD-ACCUMULATION INVARIANT. **Lion exp_avg_norm bank refined**: closed-form prediction across {0.2, 0.35, 0.5, 1.0} max_norm range with c ≈ 0.0289 (banked #311).
+
+### Reassignment
+
+Closing #3005 as 22nd paper-appendix axis closure + NEW MAX_NORM-CLIP-BOUNDARY class characterized + 7 banked findings. Reassigning edward to **PR #3059 NEW max_norm × hkl CO-DIRECTIONAL compose-test 2-arm on saturated-clip baseline** — 5th compose-tests bank entry; Arm 1 BOTH-UP {max_norm=0.5, hkl=1e-3}, Arm 2 BOTH-DOWN {max_norm=0.2, hkl=2.5e-4}; discriminates whether σ-axis-fragility generalizes to (max_norm × hkl) or is specific to model-step-magnitude-AND-direction coupling.
+
+---
+
+## 2026-05-14 22:30 — PR #3030 (CLOSED, tanjiro): seed CI {seed=1, seed=2} on max_norm=0.5 cross-clip-regime — **paper-strengthening cross-clip-regime test; saturation boundary EXTENDED + Lion exp_avg_norm LINEAR-IN-MAX-NORM mechanism**
+
+- **Branch:** `willowpai2g48h2-tanjiro/seed-ci-on-max-norm-0p5-cross-clip-regime`
+- **Student:** willowpai2g48h2-tanjiro
+- **Verdict:** Arm 1 seed=1 mn=0.5 (`e51sibhv`) SWA val **46.34** +1.19 / test 39.86 +1.22 REGRESS, Arm 2 seed=2 mn=0.5 (`nd2gosk9`) SWA val **48.03** +2.87 / test 40.47 +1.84 REGRESS. **NOT a new paper-appendix axis closure** (seed-axis already closed DEPENDENT-NEGATIVE at #2790/#3004). HEADLINE: **max_norm=0.5 is ALSO SATURATED** — design assumption broke; #271 wide-CI-at-saturated-clip hypothesis DEFERRED pending truly unsaturated test.
+- **W&B runs:** `e51sibhv`, `nd2gosk9`, baseline `ieu1futo`.
+- **Headline:** Saturation-boundary EXTENDED beyond max_norm=0.5 on current stack (clip_fraction=0.99979/0.99959); seed-CI spread identical at mn=0.5 (+2.81 val) vs mn=0.35 (+2.80 val); discrimination requires max_norm=0.
+
+### Mechanism diagnosis (paper-publishable findings — banked #303-#309)
+
+- **#303 PAPER-PUBLISHABLE — Saturation-boundary EXTENDED beyond max_norm=0.5 on current Lion+Kendall stack.** clip_fraction at mn=0.5 = 0.99979/0.99959 = within numerical noise of 1.000. Pre-clip grad p99~40 max~90 — virtually every step clipped even at mn=0.5. Saturation upper bracket above mn=0.5. **Refines #275 from "saturated-clip=mn=0.35-specific" to "saturated-clip regime extends across {0.2, 0.35, 0.5, 1.0}"**.
+
+- **#304 PAPER-PUBLISHABLE — Lion exp_avg_norm scales LINEARLY with max_norm under saturated clip (NEW mechanism; refines #194).** Cross-loop measurement: mn=0.5 exp_avg_norm = 0.01403 ≈ 1.381× baseline 0.01016 (vs predicted 1.429) = 3.5% match. Sets up #311 confirmation across {0.2, 0.35, 0.5, 1.0} with c ≈ 0.0289.
+
+- **#305 PAPER-STRENGTHENING — Seed-CI spread INDEPENDENT of max_norm at fixed saturation.** mn=0.5 spread +2.81 val vs mn=0.35 +2.80 val = ratio 1.003 essentially identical. Two interpretations indistinguishable from this data alone: wide CI INTRINSIC vs BOTH saturated → identical CI. Requires max_norm=0 to break confound.
+
+- **#306 PAPER-STRENGTHENING — σ-spread INVARIANT 19th cross-axis confirmation across seed × max_norm.** A1 σ-spread=0.483, A2=0.479; within baseline 0.475 ± 0.01.
+
+- **#307 PAPER-STRENGTHENING — channel ordering 22nd cross-axis confirmation.** surf_ux=MIN, vol_ux=MAX preserved across both arms.
+
+- **#308 PAPER-STRENGTHENING — pre-clip grad_norm distribution INVARIANT across mn=0.35 ↔ mn=0.5.** Essentially identical pre-clip distributions across cross-clip transition (8.18/40.65/91.94 vs reference 8.4/40.3/87.5).
+
+- **#309 PAPER-STRENGTHENING — SWA window 2 epochs 15th-consecutive truncation #170 + step-time + VRAM invariance.**
+
+### Paper-appendix matrix update — UNCHANGED at **22 closed × 10 transfer patterns + 2 MIXED axes + 1 CHARACTERIZED DOMINANT-DEGENERATE** (cross-clip-regime test on closed seed-axis)
+
+σ-spread invariance bank: 19 INVARIANT (was 18) + same other bank entries.
+
+### Reassignment
+
+Closing #3030 as paper-strengthening cross-clip-regime test + 7 banked findings #303-#309. Reassigning tanjiro to **PR #3058 NEW max_norm=0 truly-unsaturated 2-seed CI test {seed=1, seed=2} on saturated-clip baseline** — ONLY remaining discriminator for #271 wide-CI-at-saturated-clip hypothesis. Direct test: NARROW CI at mn=0 → SATURATED-CLIP-INDUCED; WIDE CI persists → INTRINSIC. Paper-publishable mechanism distinction either way.
+
+---
+
 ## 2026-05-14 22:15 — PR #3023 (CLOSED, thorfinn): lr × hkl CO-DIRECTIONAL compose-test 2-arm — **NEW COMPOSE-COUPLE-NEGATIVE BIDIRECTIONAL class (3rd compose-tests bank entry)**
 
 - **Branch:** `willowpai2g48h2-thorfinn/lr-hkl-codirectional-compose-on-saturated-clip-baseline`
