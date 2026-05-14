@@ -7,6 +7,56 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 02:30 — Tier-1 stale-PR bulk close + tier-2 reassignment cycle
+
+**Action**: Closed 4 stale tier-1 PRs (#2358 alphonse, #2421 nezuko, #2449 tanjiro, #2464 fern) and assigned 4 fresh tier-2 hypotheses on the current n_head=2+Lion stack. No training data here — these were administrative closes, not experimental regressions.
+
+### Closures (all 4 PRs)
+
+| PR | Student | Original hypothesis | Reason for close |
+|---|---|---|---|
+| #2358 | alphonse | n_hidden=192 + slice_num=16 (width + slice extension) | Stale ~24h; baseline moved 3× (n_layers=4 → Lion → n_head=2); branch CONFLICTING (would require complex multi-step rebase); last student commit pre-Lion |
+| #2421 | nezuko | bs=1 (downward batch-size sweep) | Stale ~24h; baseline moved 2× since assignment; student acknowledged at 17:21Z but never produced commits — pod likely rate-limited on user 20516801 GraphQL quota |
+| #2449 | tanjiro | AdamW peak-LR sweep (lr=7e-4, lr=1e-3) | Stale ~24h; AdamW completely superseded by Lion+n_head=2 stack; original hypothesis is moot. Re-pivot to Lion lr-flank also went unrun |
+| #2464 | fern | n_hidden narrowing (96 then 64) | Stale ~24h; ZERO student activity ever; pod confirmed flagged as showing "No assigned PRs" at 19:14Z due to GitHub API rate limits |
+
+### Common pattern across all 4 stale PRs
+
+- All 4 received their final advisor instructions at ~21:23Z on 2026-05-13 (rebase + rerun on n_head=2 stack)
+- 24+ hours later: zero student commits on any of them
+- Root cause: pods rate-limited on user 20516801 GraphQL quota
+- Decision: rather than keep waiting (lose more GPU-hours), close + reassign fresh tier-2 hypotheses on the current stack. When the rate limit lifts, the students pick up FRESH PRs with no rebase friction
+
+### Fresh reassignments (4 PRs, all tier-2)
+
+| PR | Student | Hypothesis | Mechanism category |
+|---|---|---|---|
+| #2730 | alphonse | H10 Zone-Conditional Normalization | Architectural — per-zone (mean, std) normalization rebalances per-node loss contributions across the 3 zones |
+| #2732 | nezuko | H11 Continuity Equation Aux Loss | Physics-informed — ∇·u=0 finite-difference penalty on interior nodes; avoids Bernoulli coupling (velocity-only constraint) |
+| #2733 | tanjiro | H8 Lookahead Wrapper on Lion | Optimizer-axis — outer-loop slow-weights averaging at k=5/α=0.5; Lion noise-stabilization via averaging (vs Cautious Lion's failed gating) |
+| #2734 | fern | H2 Quantile Huber τ=0.6 | Loss reformulation — asymmetric residual weighting, underprediction penalty 1.5× harder; targets surface peak underestimation |
+
+### Tier-2 fleet snapshot (after this cycle)
+
+All 8 students are now running tier-2 hypotheses across 6 mechanism categories:
+- **Aux supervision**: #2698 frieren H12 CL/CD integrated, #2732 nezuko H11 ∇·u=0 per-node
+- **Representation init**: #2705 askeladd H9 masked SSL
+- **Attention**: #2709 thorfinn H5 global cross-attn, #2711 edward H6 local kNN merge
+- **Normalization**: #2730 alphonse H10 per-zone
+- **Optimizer**: #2733 tanjiro H8 Lookahead-Lion
+- **Loss reformulation**: #2734 fern H2 asymmetric quantile-Huber
+
+### Operational learning
+
+The harness re-poll race continues to hit students whose initial pod was rate-limited. Every fresh tier-2 PR body now includes:
+1. Pre-launch `pgrep -f "python train.py"` + `nvidia-smi --query-compute-apps=pid` check
+2. Per-PR pidfile (`logs/PR-<n>.pid`) written BEFORE backgrounding
+3. On re-invocation: check PID file first
+
+Watch for: pod polls but still gets "No assigned PRs" even with a fresh PR — would indicate the rate-limit is still active on user 20516801. If 4 fresh pods report this within 6 hours, the appropriate action is to escalate the rate-limit issue to the human team via GitHub issue (the advisor cannot adjudicate API quotas).
+
+---
+
 ## 2026-05-14 01:45 — PR #2691: warmup_epochs DOWN (warmup=2 Arm A) — CLOSED
 
 - `willowpai2g24h3-edward/warmup-epochs-down`
