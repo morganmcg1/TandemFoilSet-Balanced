@@ -2,6 +2,83 @@
 
 ---
 
+## 2026-05-14 [Round 82] UTC — Round 82
+
+### PR #2686 frieren: DyT (Dynamic Tanh) normalization — CLOSED (48th taxon, normalization-replacement fails at small width)
+
+- **Branch:** `charliepai2g48h5-frieren/dyt-alpha05`
+- **Hypothesis:** Liu, Ba et al. 2024 NeurIPS "Transformers without Normalization". Replace ALL 9 nn.LayerNorm sites with `DyT(d) = γ⊙tanh(α·x)+β`; α scalar per LN site init=0.5; +9 scalar params total.
+
+- **Results table:**
+
+| Metric | Value | vs Baseline 33.3722 | Direction |
+|---|---|---|---|
+| val_avg/mae_surf_p | **47.6230** | **+42.7%** | **CATASTROPHIC LOSS** |
+| test_avg/mae_surf_p | **39.5154** | **+39.3%** | **LOSS** |
+| val_single_in_dist | 41.3386 | +63.2% | LOSS (worst) |
+| val_geom_camber_rc | 65.0090 | +31.1% | LOSS (least) |
+| val_geom_camber_cruise | 32.6380 | +59.8% | LOSS |
+| val_re_rand | 51.5065 | +35.0% | LOSS |
+
+- **DyT α evolution (per LN site, init=0.5):**
+
+| Site | init | final (ep65) | interpretation |
+|---|---|---|---|
+| block[0].ln_1 (attn) | 0.500 | 0.4572 | mild saturation, near-identity |
+| block[0].ln_2 (mlp) | 0.500 | 1.0110 | aggressive saturation |
+| block[1].ln_1 (attn) | 0.500 | 0.6074 | mild saturation |
+| block[1].ln_2 (mlp) | 0.500 | 1.1332 | aggressive saturation |
+| block[2].ln_1 (attn) | 0.500 | 0.4797 | mild saturation |
+| block[2].ln_2 (mlp) | 0.500 | 1.0679 | aggressive saturation |
+| block[3].ln_1 (attn) | 0.500 | 0.4591 | mild saturation |
+| block[3].ln_2 (mlp) | 0.500 | 0.6608 | intermediate |
+| block[3].ln_3 (dec) | 0.500 | 0.6766 | intermediate |
+
+**Pattern:** ln_1 (pre-attention) → α ≈ 0.46-0.61 (near-identity); ln_2 (pre-MLP) → α ≈ 1.01-1.13 (aggressive saturation). 2× variation across sites — single learnable scalar cannot replicate per-token channel-wise statistical normalization.
+
+- **LayerScale compensation pattern** (γ at terminal vs baseline ~0.010-0.020):
+
+| Block | γ_attn abs_mean | γ_mlp abs_mean (baseline ~0.010-0.020) |
+|---|---|---|
+| 0 | 0.0473 | **0.1556** (6-8× larger) |
+| 1 | 0.0313 | **0.1235** (6-8× larger) |
+| 2 | 0.0419 | **0.1451** (6-8× larger) |
+| 3 | 0.0314 | 0.0635 (3× larger) |
+
+γ_mlp abs_mean ballooned from baseline ~0.010-0.020 to **0.06-0.16** — optimizer enlarging residual contribution to compensate for DyT's bounded tanh output, but cannot recover enough. This compensation pattern is itself evidence that channel-stat reduction was load-bearing.
+
+- **Conclusion / 48th taxon:** **Normalization-replacement at small width fails — LayerNorm's channel mean+variance reduction is load-bearing on this stack.** Three converging lines of evidence:
+  1. **Catastrophic convergence slowdown:** Best ep65/70 hit 30-min timeout still improving slowly at ~0.6/5 epochs — would need ≥50 more epochs to plausibly approach baseline. Per-epoch wall-clock identical (27.8s); tanh-saturated output not measurably faster than LN.
+  2. **LayerScale γ_mlp compensation:** abs_mean 6-8× larger than baseline; optimizer trying to push more signal through despite DyT's bounded output.
+  3. **Alpha divergence by site:** 2× per-site variation needed; single learnable scalar inadequate replacement for per-token channel statistics.
+
+  Combined with closed RMSNorm (15th taxon, mild bimodal LOSS — testing without mean centering) and closed NormFormer Sandwich (extra normalization didn't help), the **normalization-meta-axis is now mapped across 3 directions**:
+  - Add normalization (NormFormer Sandwich): LOSS
+  - Remove mean centering (RMSNorm): mild LOSS bimodal
+  - Remove all stats (DyT bounded tanh): catastrophic LOSS at this scale
+  - LN baseline is dual-optimum.
+
+  Frieren attention-internal/normalization meta-family is now fully closed across **4 distinct probes**: τ #2623 + spectral norm #2580 + QK-Norm #2661 + DyT #2686. Pivoting frieren entirely off this saturated meta-family.
+
+- **Decision:** Closed. Student-flagged follow-ups (mixed-norm probe with DyT only at ln_2, RMSNorm direction with higher LR for α) noted but axis decisively closed.
+
+### PR #2710 frieren: Gradient Centralization (Yong et al. 2020) — ASSIGNED
+
+- **Branch:** `charliepai2g48h5-frieren/grad-centralization`
+- **Hypothesis:** Yong et al. 2020 ECCV "Gradient Centralization: A New Optimization Technique for Deep Neural Networks". Apply `g - g.mean(dim=input)` to all rank-≥2 weight gradients between `loss.backward()` and `optimizer.step()`. For Linear weight `W ∈ R^{d_out × d_in}` with gradient `g`, replace with `g - g.mean(dim=1, keepdim=True)`. ZERO new params. ~3-line training-loop addition.
+- **Mechanism:** Restricts each weight row's gradient to be orthogonal to the all-ones direction in input space. Effectively removes a "uniform-input shift" degenerate mode from the update. Operates BEFORE Lion's sign-step.
+- **Structural orthogonality:** First gradient-transformation probe in launch. Structurally distinct from:
+  - fern in-flight #2677 gradient noise (ADDS Gaussian; GC SUBTRACTS mean)
+  - LLRD, embed-UP (per-group LR — closed)
+  - SAM (gradient ascent perturbation — closed catastrophic LOSS)
+  - Lookahead, EMA, SWA (parameter-space averaging — closed family)
+  - Spectral norm (weight matrix constraint — closed LOSS)
+- **Targets:** Lion narrow-basin tendency (closed taxa #30, #35) via removing degenerate uniform-input-shift mode.
+- **Predicted signatures:** WIN uniform → gradient regularization at source unlocks Lion sign-step; WIN OOD-favoring → centralized gradients find flatter minima; WASH → Lion's sign-step dominates GC's mean-subtraction; LOSS → GC removes signal Lion needed (close axis).
+- **Key diagnostic:** per-epoch `gc_norm_ratio_mean` = avg(||g_centralized|| / ||g||). Near 1.0 → GC inert (signal removed is tiny). 0.7-0.9 → GC active (significant uniform-input-shift was being subtracted).
+
+---
+
 ## 2026-05-14 [Round 81] UTC — Round 81
 
 ### PR #2675 alphonse: 2D coord-based RoPE on Q, K — CLOSED (46th taxon, positional-embedding meta-axis closed)
