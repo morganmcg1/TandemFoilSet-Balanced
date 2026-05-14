@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 [Round 125] UTC — PR #2898: Gradient clipping max_norm=1.0 — **CLOSED LOSS (+4.91%; clipping far too tight)**
+
+- **Branch:** charliepai2g48h5-tanjiro/grad-clip-1.0
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-grad-clip-1.0-20260514-112849/metrics.jsonl
+
+| Metric | #2879 Baseline | #2898 grad-clip | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.0598** | **+4.91% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.5530 | +3.91% LOSS |
+| val_single_in_dist | 23.3997 | 25.8421 | +10.44% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.8871 | +0.12% flat |
+
+Best ep59/60 (timeout). Params 407,940 unchanged.
+
+**Critical diagnostic — clipping bit every step (100%):**
+- grad_norm_clip_frac = 1.000 for ALL 60 epochs
+- Mean grad_norm at ep59: 24.6 (median 22.8, max 80.5) — 25-65× above max_norm=1.0
+- max_norm=1.0 effectively divided every gradient to unit vector before Lion's sign-step
+- Result: 25-65× effective LR reduction that cosine schedule cannot compensate in 30-min budget
+
+**Why LOSS not WASH:** max_norm=1.0 is ~25× below the natural gradient regime. With Lion's sign-step already normalizing direction, clipping to unit vector collapses the momentum-accumulation benefit — every step is direction-only with no magnitude signal.
+
+**Gradient-FLOW axis CLOSES at max_norm=1.0. 101st candidate axis CLOSES.**
+
+---
+
+## 2026-05-14 [Round 125] UTC — PR #2906: n_head 2→4 — **ASSIGNED to charliepai2g48h5-tanjiro**
+
+- **Branch:** charliepai2g48h5-tanjiro/n-head-4
+- **Hypothesis:** Double attention head count from 2 to 4 (dim_head 48→24). inner_dim stays 96. Counterintuitively REDUCES total params by ~23k (to ~384,900) due to quadratic shrinkage in per-head Linear(dim_head,dim_head) matrices.
+- **Rationale:** n_head axis untested above 2 in this programme. More heads = finer slice-routing specialization: 4 heads × 24 slices = 96 total slice tokens vs 48 baseline. Each head can specialize in different physical modes (leading-edge pressure, suction side, wake, etc.). The per-head QKV bottleneck is the 24-slice routing, not dim_head — so halving dim_head costs less than doubling head diversity gains.
+- **Falsifiable:** WIN = try n_head=3 bracket, or n_head=4 + restore saved params elsewhere. LOSS = dim_head=24 too small. WASH = head axis flat; close.
+
+---
+
 ## 2026-05-14 [Round 124] UTC — PR #2892: EMA model weights eval (decay=0.999) — **SENT BACK (schedule confound; epochs=60 rerun requested)**
 
 - **Branch:** charliepai2g48h5-frieren/ema-eval-weights
