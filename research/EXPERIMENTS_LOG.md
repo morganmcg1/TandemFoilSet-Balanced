@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-14 [Round 99] UTC — PR #2799: Long-range preprocess→block-3 skip (per-channel zero-init gate) — **CLOSED LOSS**
+
+- **Branch:** charliepai2g48h5-edward/longskip-layerscale-gate
+- **Hypothesis:** Add learnable `self.skip_gate = nn.Parameter(torch.zeros(n_hidden))` in Transolver.__init__. In forward, save `fx_input` post-FiLM and inject at block-3 input: `fx = fx + skip_gate.unsqueeze(0).unsqueeze(0) * fx_input`. Zero-init ensures identity at step 0; model learns to activate skip if it helps. +96 params. 64th candidate axis: input-to-final-block long-range residual.
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-longskip-layerscale-gate-20260514-053649/metrics.jsonl`
+
+| Split | Skip val | Baseline #2765 | Δ val | Skip test | Baseline test | Δ test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | **24.0608** | 24.9721 | **−3.65% WIN** (new best-ever) | 24.0123 | 24.0714 | −0.25% flat |
+| `geom_camber_rc` | **46.2634** | 46.9885 | **−1.54% WIN** | 42.8073 | 41.9406 | +2.07% mild loss |
+| `geom_camber_cruise` | **17.1796** | 17.7276 | **−3.09% WIN** | 14.0900 | 14.2400 | −1.05% mild win |
+| `re_rand` | 37.6451 | 35.5983 | **+5.75% LOSS** | 27.1396 | 25.7749 | **+5.30% LOSS** |
+| **val_avg** | **31.2873** | **31.3216** | **−0.11% (noise floor)** | | | |
+| **test_avg** | **27.0123** | **26.5067** | **+1.91% LOSS** | | | |
+
+- **Result:** NOT MERGED. val improvement 0.034 absolute (−0.11%) is well within run-to-run variance (~0.5%); test regresses +1.91% on paper-facing metric. 3-of-4 val splits WIN (in_dist new best-ever, rc, cruise improve) but re_rand crashes +5.75% val / +5.30% test — same direction on both val and test, not noise.
+- **Mechanism (LOSS scenario from PR predictions fired exactly — student's smoking-gun diagnostic):**
+  - Skip gate FULLY activated: 96/96 channels nonzero, abs_mean=0.057, balanced signs 45+/51−, skip/residual ratio ~4.6-5.6% — not inactive, doing measurable work.
+  - **SE block-3 gate_std drops 8-14% across EVERY split** vs baseline #2765:
+    - in_dist: 0.168 → 0.145 (−13.7%)
+    - camber_rc: 0.234 → 0.214 (−8.5%)
+    - camber_cruise: 0.269 → 0.241 (−10.3%)
+    - re_rand: 0.275 → 0.252 (−8.4%)
+  - The split that pays the biggest cost (re_rand +5.75%) had the LARGEST baseline SE gate_std (0.275). Block 3 is the focal point of FOUR per-channel mechanisms (LayerScale γ_attn/γ_mlp, SE gate, FiLM modulation at preprocess, skip_gate). Adding a fourth creates zero-sum capacity trade: SE sacrifices ~10% discriminative variance for skip's ~5% budget.
+  - Block-3 γ_attn flipped back from the strongly-negative-mean sign seen in #2765 — skip and γ_attn share modulation load at block 3.
+  - Run params confirmed at 333,699 (+96 vs baseline 333,603 ✓). Best epoch ep66/70.
+- **Taxonomic closure (67th taxon):** Long-range residual skip at SE-gated input-to-final-block location CLOSES. Combined with closed Deep Supervision (61st), DropPath (51st), Weight Standardization (59th), Mixup (49th), the gradient/feature-flow and skip-connection meta-axis is now densely mapped. Block 3 is over-allocated — future per-channel mechanisms should target blocks 0-2 or be structurally distinct from gating.
+- **Follow-up per plateau protocol:** Strategy-tier shift to training-procedure axis. Per student's Round 90 #2735 suggestion (decay=0.9999 better than 0.9995). New assignment: #2820 edward EMA-of-weights decay=0.9999.
+
+---
+
+## 2026-05-14 [Round 99] UTC — PR #2820: EMA-of-weights decay=0.9999 (Polyak averaging) — **ASSIGNED (69th candidate axis)**
+
+- **Branch:** charliepai2g48h5-edward/ema-weights-decay9999
+- **Hypothesis:** Maintain shadow state dict `θ_ema = 0.9999·θ_ema + 0.0001·θ_train` updated after every optimizer.step(). Eval the EMA-weighted model at each val pass. Select best-val epoch from EMA metric, evaluate test from EMA checkpoint. +0 trainable params, ~5MB RAM shadow. Effective averaging window ~10,000 steps = ~40 epochs. Strategy-tier shift from block-level architecture (5 consecutive LOSS rounds 95-99) to training-procedure axis. Lion optimizer known to converge to sharp minima; EMA is the canonical sharpness antidote (Izmailov 2018, Karras 2022).
+- **Connection to prior:** edward's Round 90 #2735 EMA run (decay=0.9995, askeladd) showed EMA-vs-raw ~-0.6% relative improvement but was overshadowed by SAM 2x-compute budget halving (effectively 35/70 epochs). Current assignment: pure EMA, no competing SAM, full 70 epochs, decay=0.9999 per student's suggestion in #2735 analysis.
+- **Param delta:** +0 (shadow is not a trainable parameter). Total: 333,603.
+- **Predicted mechanism:** Cosine decay collapses LR to ~0 by ep70; in final 10-15 epochs Lion steps are tiny but still noisy. EMA averages these tiny steps, cancelling noise while retaining converged location. OOD splits benefit most (re_rand, camber*) — sharper minima hurt OOD more than in_dist.
+- **Bar:** val_avg/mae_surf_p_ema < 31.3216.
+
+---
+
 ## 2026-05-14 [Round 98] UTC — PR #2798: SE reduction=2 (bottleneck width sweep) — **CLOSED LOSS (+2.56% val)**
 
 - **Branch:** charliepai2g48h5-tanjiro/se-reduction2
