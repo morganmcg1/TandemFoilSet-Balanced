@@ -329,10 +329,11 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            surf_denom = surf_mask.sum().clamp(min=1)
+            mae_Ux_surf = (sq_err[..., 0] * surf_mask).sum() / surf_denom
+            mae_Uy_surf = (sq_err[..., 1] * surf_mask).sum() / surf_denom
+            mae_p_surf = (sq_err[..., 2] * surf_mask).sum() / surf_denom
+            surf_loss_sum += ((mae_Ux_surf + mae_Uy_surf + 2 * mae_p_surf) / 4).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -673,6 +674,13 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+print("surf_loss form: MEAN (mae_Ux + mae_Uy + 2*mae_p)/4 — relative channel weights [0.25, 0.25, 0.5]")
+print("vs baseline sum (mae_Ux + mae_Uy + mae_p) — effective channel weights [0.33, 0.33, 0.33]")
+print("vs #2933 sum-form (mae_Ux + mae_Uy + 2*mae_p) — effective channel weights [0.25, 0.25, 0.5] BUT magnitude 1.33x")
+print("p RELATIVE weight: 50% (same as #2933)")
+print("p ABSOLUTE weight: 0.5 vs baseline 0.33 vs #2933 2.0 — magnitude preserved by /4 normalization")
+print(f"surf_weight (outer multiplier on surf_loss): {cfg.surf_weight} (effective unchanged from baseline)")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -685,6 +693,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_ux = epoch_surf_uy = epoch_surf_p = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -702,7 +711,11 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            surf_denom = surf_mask.sum().clamp(min=1)
+            mae_Ux_surf = (sq_err[..., 0] * surf_mask).sum() / surf_denom
+            mae_Uy_surf = (sq_err[..., 1] * surf_mask).sum() / surf_denom
+            mae_p_surf = (sq_err[..., 2] * surf_mask).sum() / surf_denom
+            surf_loss = (mae_Ux_surf + mae_Uy_surf + 2 * mae_p_surf) / 4
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -711,12 +724,18 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_ux += mae_Ux_surf.item()
+        epoch_surf_uy += mae_Uy_surf.item()
+        epoch_surf_p += mae_p_surf.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_ux /= max(n_batches, 1)
+    epoch_surf_uy /= max(n_batches, 1)
+    epoch_surf_p /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -748,6 +767,9 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/mae_surf_Ux_norm": epoch_surf_ux,
+        "train/mae_surf_Uy_norm": epoch_surf_uy,
+        "train/mae_surf_p_norm": epoch_surf_p,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -755,7 +777,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"Ux={epoch_surf_ux:.4f} Uy={epoch_surf_uy:.4f} p={epoch_surf_p:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
