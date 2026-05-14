@@ -121,6 +121,51 @@ Reassigning edward to a NEW representation-axis test (RMSNorm replacement) rathe
 
 ---
 
+## 2026-05-14 [Round 136] UTC — PR #2928: layerscale-gamma-1.0 — **CLOSED MIXED → not-merge LOSS (+1.26% val / -0.12% test; 118th taxon; γ_init=1.0 AXIS CLOSED with key diagnostic)**
+
+- **Branch:** charliepai2g48h5-nezuko/layerscale-gamma-1.0
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-layerscale-gamma-1.0-*/metrics.jsonl
+
+| Metric | Baseline #2879 | #2928 γ_init=1.0 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 30.9444 | **+1.26% LOSS (primary)** |
+| test_avg/mae_surf_p | 26.5160 | 26.4847 | -0.12% marginal WIN |
+| val_single_in_dist | 23.3997 | (per-split) | (mixed) |
+| val_geom_camber_rc | 46.0708 | (per-split) | (mixed) |
+| val_geom_camber_cruise | 17.8657 | (per-split) | (mixed) |
+| val_re_rand | 34.9057 | (per-split) | (mixed) |
+
+**Hypothesis:** Init LayerScale γ at 1.0 instead of baseline 1e-4. Test whether the conservative CaiT-style γ=1e-4 init wastes early-training budget on γ-convergence.
+
+**KEY DIAGNOSTIC FINDING (refutes original hypothesis direction):** γ values DRIFT DOWN from init=1.0 to converged ~0.85-0.95 over 60 epochs. The model **prefers a MUTED block contribution**, not full block contribution. This means:
+- γ_init=1e-4 (baseline) is on the CORRECT side of the natural operating value
+- γ_init=1.0 is on the WRONG side (over-shoots and forces convergence DOWN)
+- The optimal init likely lies between these two endpoints at the converged value itself
+
+**ASYMMETRIC OPERATING REGIME (most surprising signal):** γ_attn converges to ~0.86 and γ_mlp converges to ~0.93 — block-wise asymmetric AND attn/mlp asymmetric. Attention residuals are more strongly muted than MLP residuals at every block. This is the most interesting mechanistic finding of the round.
+
+**Per primary metric (val_avg/mae_surf_p), this is LOSS — NOT MERGE-ELIGIBLE.** Test marginal WIN -0.12% does not override primary val regression per advisor decision criteria.
+
+**Closes 118th taxon: γ_init=1.0 axis (single-point overshoot).** The γ-init axis remains live with the natural operating value 0.85-0.93 unexplored.
+
+**Student followups (4):**
+1. **Asymmetric γ_init** — γ_attn=0.85 / γ_mlp=0.93 (converged values) — **SELECTED** for nezuko reassignment as #2940. Directly motivated by the asymmetric operating regime diagnostic. Skips both the "growth from 1e-4" phase AND the "drift from 1.0" phase.
+2. γ_init=0.1 (between 1e-4 and 1.0) — informative but less direct than #1.
+3. Freeze γ at converged values — tests whether γ-learning is necessary at all.
+4. Per-block per-branch γ_init using observed block-wise converged values — most precise but complex.
+
+---
+
+## 2026-05-14 [Round 136] UTC — PR #2940 (assignment): nezuko layerscale-gamma-asymmetric — **119th axis: asymmetric converged-value LayerScale init**
+
+- **Hypothesis:** Initialize γ_attn at 0.85 and γ_mlp at 0.93 (the converged values from #2928 trajectory). Skips the γ-convergence budget cost AND matches the asymmetric attn/mlp operating regime the model learned to settle at.
+- **Why might WIN:** Saves the "growth from 1e-4 to 0.85-0.93" budget (under baseline) AND the "drift down from 1.0 to 0.85-0.93" budget (under #2928). All gradient signal goes to actual weights, not γ-equilibration.
+- **Why might LOSS:** Converged value is the EQUILIBRIUM — the model may need to PASS THROUGH a different γ regime during training (e.g., higher γ early for fast learning). Pre-init at equilibrium skips this trajectory.
+- **Two-line change:** `gamma_attn = nn.Parameter(torch.ones(n_hidden) * 0.85)` + `gamma_mlp = nn.Parameter(torch.ones(n_hidden) * 0.93)`.
+- **Direct student-of-#2928 followup #1.** Diagnostic-guided init — first time we're using a prior experiment's converged values as a new experiment's init.
+
+---
+
 ## 2026-05-14 [Round 136] UTC — PR #2939 (assignment): edward rmsnorm-replacement — **118th axis: normalization-scheme REPRESENTATION-axis**
 
 - **Hypothesis:** Replace all `nn.LayerNorm` instances in `TransolverBlock` with `RMSNorm`. Tests whether LayerNorm's mean-centering subtraction is load-bearing for CFD targets.
