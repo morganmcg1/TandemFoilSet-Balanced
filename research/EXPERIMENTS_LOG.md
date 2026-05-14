@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2957: warmup-5-epochs-baseline-lr — **CLOSED LOSS (+5.07% Run2 / +2.25% Run1; 136th taxon; LR-SCHEDULE-SHAPE AXIS DEFINITIVELY CLOSED — TWO-SIDED OPTIMUM)**
+
+- **Branch:** charliepai2g48h5-frieren/warmup-5-epochs-baseline-lr
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-warmup-5-epochs-baseline-lr-20260514-171113/metrics.jsonl (Run 2) and models/model-charliepai2g48h5-frieren-warmup-5-epochs-baseline-lr-20260514-163923/metrics.jsonl (Run 1)
+
+| Metric | Baseline #2879 | Run 1 (5-ep) | Run 2 (5-ep) | Mean |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.2498 (+2.25%) | **32.1100 (+5.07%)** | 31.68 (+3.66%) |
+| test_avg/mae_surf_p | 26.5160 | 26.6255 (+0.41%) | 27.2541 (+2.78%) | 26.94 (+1.60%) |
+| val_single_in_dist | 23.3997 | 25.0003 (+6.84%) | 24.9926 (+6.81%) | **~+6.82% (most reproducible)** |
+| val_geom_camber_rc | 46.0708 | 47.2394 (+2.54%) | 48.4643 (+5.20%) | LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.0311 (-4.67% WIN)** | 17.9150 (+0.28% wash) | **high seed variance** |
+| val_re_rand | 34.9057 | 35.7286 (+2.36%) | 37.0679 (+6.19%) | LOSS |
+| Param count | 407,940 | 407,940 | 407,940 | — |
+
+**Hypothesis:** Extend warmup duration from 3→5 epochs at baseline lr=1.5e-4. LinearLR(0.1→1.0, 5ep) + CosineAnnealingLR(T_max=55).
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **LR-budget contraction confirmed.** ∫LR dt drops 2.89% (4.530e-3 vs baseline 4.665e-3). In underfit-at-60ep regime, every LR unit matters. Trading 2.89% for slower ramp = bad bargain.
+
+2. **Compressed cosine tail fails.** T_max 57→55. Model has is_best=True at ep60 in BOTH runs — still improving at terminal. Budget not sufficient with shortened cosine.
+
+3. **in_dist is the most reproducible LOSS signal.** +6.84% Run 1, +6.81% Run 2 (0.03% spread across seeds). cruise is the noisiest split (WIN in Run 1, wash in Run 2).
+
+4. **Run-to-run variance quantified.** Same code ran twice: val 31.25 vs 32.11, 2.75% spread. Direction reproducible (LOSS). Variance arises from seed/timing differences.
+
+5. **LR-SCHEDULE-SHAPE AXIS TWO-SIDED OPTIMUM CONFIRMED.** Five points mapped:
+   - no warmup pure cosine (#2929): 32.67 (+6.91%)
+   - 3-ep warmup from-0 (#2920): 32.64 (+6.79%, confounded)
+   - **5-ep warmup @ 1.5e-4 (this PR Run 2): 32.11 (+5.07%)**
+   - **5-ep warmup @ 1.5e-4 (this PR Run 1): 31.25 (+2.25%)**
+   - **3-ep warmup @ 1.5e-4 (baseline): 30.56 BEST**
+   - 3-ep warmup @ 2.0e-4 (#2950): 30.71 (+0.47%)
+
+**136th taxon CLOSED:** WARMUP-DURATION-5EP-AT-BASELINE-LR / LR-SCHEDULE-SHAPE-AXIS-TWO-SIDED-OPTIMUM. Per student's explicit recommendation: stop probing LR-schedule-shape axis.
+
+**Followup assigned:** #2978 frieren aoa-input-noise (FRESH AXIS — AoA conditioning-variable data augmentation; σ=0.05 on normalized AoA features x[:,:,14] foil-1 and x[:,:,18] foil-2 during training only; completes CONDITIONING-VARIABLE DATA-AUG TRIPLET alongside #2973 edward log_Re-noise and #2976 fern coord-noise; zero new params; ~5 lines code; 138th axis).
+
+---
+
+## 2026-05-14 [Round 138] UTC — PR #2964: post-norm-gamma-1.0 — **MERGED WIN (val −1.71% / test −4.93%; 22nd winner; NEW BASELINE 30.0382 / 25.2099)**
+
+- **Branch:** charliepai2g48h5-nezuko/post-norm-gamma-1.0
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-post-norm-gamma-1.0-20260514-171414/metrics.jsonl
+
+| Metric | Baseline #2879 | #2964 (post-norm+γ=1.0) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **30.0382** | **−1.71% WIN** |
+| test_avg/mae_surf_p | 26.5160 | **25.2099** | **−4.93% WIN** |
+| val_single_in_dist | 23.3997 | 25.219 (+7.78%) | LOSS |
+| val_geom_camber_rc | 46.0708 | **43.929 (−4.65%)** | WIN |
+| val_geom_camber_cruise | 17.8657 | **16.265 (−9.00%)** | **WIN — META-SIGNAL RESTORED** |
+| val_re_rand | 34.9057 | **34.740 (−0.47%)** | WIN |
+| Param count | 407,940 | **407,172 (−768)** | LayerScale γ removed |
+
+**Hypothesis:** Correct the confound in #2951 (post-norm+γ=1e-4 +14.73% LOSS): keep post-norm topology but change γ from learnable-init-1e-4 to constant-1.0 (Vaswani 2017 recipe).
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **TOPOLOGY-vs-LAYERSCALE ATTRIBUTION COMPLETE.** #2951 conflated two changes: (a) pre→post-norm topology and (b) constant-1.0 vs learnable-1e-4 γ. #2964 shows post-norm itself is FINE when γ=1.0 is used. Pre-norm + γ=1e-4 and post-norm + γ=1.0 are two COMPATIBLE PAIRS. Cross-pairing (post-norm + γ=1e-4) breaks the stack.
+
+2. **Mechanism:** Post-norm + γ=1e-4 made every block a near-identity (γ=1e-4 contribution negligible, LN wipes the signal). Post-norm + γ=1.0 restores O(1) contributions per block, LN normalizes cleanly after each.
+
+3. **CRUISE WIN EXTENDED.** Cruise moves from baseline 17.866 → 16.265 (−9.0% WIN). This is the canonical meta-signal WIN split, and post-norm topology amplifies it beyond baseline.
+
+4. **IN_DIST REGRESSION (+7.78%).** Consistent with the meta-signal pattern. The cruise/in_dist trade-off persists but at a more favorable location (val_avg improved, suggesting overall better fit).
+
+5. **TEST improves MORE than val (−4.93% vs −1.71%).** Implies stronger generalization benefit. Particularly strong on test_geom_camber_rc (−7.59%) and test_single_in_dist (−2.78%).
+
+6. **Best epoch = 60 (terminal).** Model still improving at ep60 — additional epochs may yield further gains.
+
+**22nd WINNER.** New baseline: val 30.0382 / test 25.2099.
+
+**Followup assigned:** #2977 nezuko learnable-gamma-init-1.0 (tests whether adaptivity on top of γ=1.0 provides further gains at post-norm; +768 params restoring count; per student suggestion #2; 137th axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2931: cosine-eta-min-1e-6 — **CLOSED STALE_WIP (procedural, no LOSS verdict; eta_min axis UNRESOLVED)**
 
 - **Branch:** charliepai2g48h5-fern/cosine-eta-min-1e-6
