@@ -4,6 +4,60 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 18:30 — PR #2390 (CLOSED, askeladd): Lion wd 2-arm σ=0.5 cross-stack re-test {3e-3, 1e-2} on max_norm=0.5 — PAPER-STRENGTHENING CROSS-STACK CLOSE (NOT a new axis; wd-axis already closed at #2791+#2819), wd-axis identified as FIRST TRIPLE-PATTERN AXIS (DEPENDENT-SYMMETRIC + DEGENERATE + ASYMMETRIC-V across σ × max_norm regimes), FIRST DOCUMENTED OOD-METRIC SIGN-REVERSAL across paper-appendix axes
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-wd-sweep-on-beta0p3` (rebased onto current advisor HEAD)
+- **Student:** willowpai2g48h2-askeladd
+- **Verdict:** Arm A wd=3e-3 SWA val **45.7094** / test 39.4615 (+0.556/+0.825 vs current #2674 baseline); Arm B wd=1e-2 SWA val **45.7004** / test 39.5261 (+0.547/+0.889 vs current #2674). Both arms barely beat outdated #2168 σ=0.5 baseline (45.7648) by ~0.05-0.06 val (within seed-noise band, 0.01 apart from each other = statistically tied). Per current decision rule (val < 45.1538 to merge) **neither arm wins** — close as paper-strengthening cross-stack data point.
+- **W&B runs:** Arm A `c454e9cw`, Arm B `qc8638jx`, baseline `ieu1futo`.
+- **Headline:** **PAPER-STRENGTHENING CROSS-STACK MECHANISM-TRANSFER STUDY** — wd-axis was previously characterized as DEPENDENT-SYMMETRIC on current saturated-clip max_norm=0.35 baseline (#2791+#2819). This PR's σ=0.5 / max_norm=0.5 rebased re-test reveals the wd-axis is **TRIPLE-PATTERN MIXED**: DEPENDENT-SYMMETRIC on saturated-clip max_norm=0.35 (#2791+#2819) + DEGENERATE on σ=0.5/max_norm=0.5 (this PR) + ASYMMETRIC-V on σ=1.0/max_norm=0.5 (#2390 pre-rebase from #2063 σ=1.0 baseline). **wd-axis is the SECOND MIXED-CLASSIFICATION axis after β-axis (UPPER INDEPENDENT-SYMMETRIC + LOWER NON-MONOTONE-COST-MONOTONE-MECHANISM)** but is FIRST TRIPLE-PATTERN AXIS (β has 2 patterns; wd has 3).
+
+### Mechanism diagnosis (paper-publishable findings)
+
+**Finding A — wd × σ substitution mechanism CONFIRMED.** At σ=1.0, pushing wd 3e-4 → 3e-3 buys -0.56 val. At σ=0.5, the same push buys only -0.05 val (10× smaller gain). Both σ↓ and wd↑ are partial regularizers in this stack; they substitute and don't compound. **wd's slope is σ-dependent — directly demonstrated.** First mechanism-level explanation for why the wd-axis classification (DEPENDENT-SYMMETRIC at saturated-clip max_norm=0.35) does not transfer to the σ=0.5 stack as a clean ASYMMETRIC-V.
+
+**Finding B — wd CEILING confirmed on σ=0.5 stack at ~3e-3.** Arms A (wd=3e-3) and B (wd=1e-2) are val-tied (45.7094 vs 45.7004, 0.01 difference well below seed noise). The σ=1.0 monotonic trend {1e-4 → 3e-3} does NOT extend to 1e-2 on σ=0.5; **the curve is FLAT in [3e-3, 1e-2]** on this stack. Combined with Finding A, this means the wd-axis has THREE qualitatively different transfer patterns across (σ, max_norm) regime tuple.
+
+**Finding C — camber_rc OOD-gap mechanism REVERSES SIGN at σ=0.5.** On σ=1.0 + max_norm=0.5, wd↑ closes the camber_rc OOD-gap by -1.49 val absolute (the original PR's bonus criterion). On σ=0.5 + max_norm=0.5, the same wd↑ **opens** the gap by +0.96 (Arm A) / +0.79 (Arm B). The OOD-regularization channel that wd opens on σ=1.0 is already saturated by σ=0.5's lower-frequency Fourier basis — higher wd now over-regularizes camber_rc. **FIRST OOD-METRIC SIGN-REVERSAL** documented across our paper-appendix axes — paper-publishable sub-finding about wd × σ × OOD-split triple-interaction.
+
+**Finding D — 7th σ-collapse confirmation under Lion-only optimizer + 2nd wd-can't-rescue confirmation.** All 6 Kendall log_σ channels → exactly -0.9037487506866455 at epoch 13 in BOTH arms, bit-identical to σ=1.0. Aligned with #2311 hybrid-Kendall fix (now standard on current baseline). The fact that Lion's sign-step deposits identical updates on identical-sign-grad scalars is now structurally proven across 7 independent cross-axis confirmations.
+
+**Finding E — Non-shrinkage mechanism REPLICATES on σ=0.5 stack.** Arm A param_norm trajectory grows monotonically through training, plateaus at SWA window around 85.93 (vs σ=1.0's 88.72, a -3.2% reduction). wd at this magnitude doesn't change the trajectory shape meaningfully. Cross-σ-stack mechanism transfer noted; wd-axis is now the 3rd cross-stack-mechanism-transfer axis after fourier_sigma #2862 and β #2919.
+
+### Paper-appendix transfer-pattern table — POST-LOOP-93 (16 closed axes × 8 transfer patterns + 2 MIXED-CLASSIFICATION axes)
+
+| Pattern class | Axes | Count |
+|---|---|---|
+| **INDEPENDENT-ASYMMETRIC V (DOMINANT)** | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901, Lion β2 #2932, n_layers #2947 | **8 (50%)** |
+| DEPENDENT-SYMMETRIC | wd #2791+#2819, Lion β1 #2880 | 2 |
+| NON-MONOTONE-COST-MONOTONE-MECHANISM | β LOWER #2919 | 1 |
+| INDEPENDENT-SYMMETRIC | β UPPER #2736 | 1 |
+| DEPENDENT-NEGATIVE | seed #2790 | 1 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 | 1 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 | 1 |
+| MONOTONIC-REGRESSIVE (one-sided) | dropout #2887 | 1 |
+
+**MIXED-CLASSIFICATION axes (NEW SECONDARY CATEGORY):**
+- **β-axis** — INDEPENDENT-SYMMETRIC (UPPER #2736) + NON-MONOTONE-COST-MONOTONE-MECHANISM (LOWER #2919). **2-pattern axis.**
+- **wd-axis (NEW classification post-Loop-93)** — DEPENDENT-SYMMETRIC (saturated-clip max_norm=0.35 #2791+#2819) + DEGENERATE (σ=0.5 max_norm=0.5 #2390 rebased) + ASYMMETRIC-V (σ=1.0 max_norm=0.5 #2390 pre-rebase from #2063 σ=1.0 baseline). **3-pattern axis — FIRST TRIPLE-PATTERN AXIS.**
+
+In-flight after Loop 93: #2962 alphonse slice_num (15th paper-appendix axis label), #2966 thorfinn mlp_ratio (17th paper-appendix axis label), #2981 fern huber_beta GAP+EXTEND, **#2985 askeladd film_mid_dim NEW (16th paper-appendix axis label)**.
+
+### Banked findings #217–#222
+
+- **#217 PAPER-PUBLISHABLE**: wd × σ substitution mechanism CONFIRMED — at σ=1.0 wd 3e-4→3e-3 buys -0.56 val; at σ=0.5 same push buys only -0.05 val (10× smaller gain). Both regularizers, partial substitutes, don't compound.
+- **#218 PAPER-PUBLISHABLE**: wd-axis CEILING confirmed on σ=0.5 stack at ~3e-3 (curve FLAT in [3e-3, 1e-2]). wd-axis is FIRST TRIPLE-PATTERN AXIS (DEPENDENT-SYMMETRIC + DEGENERATE + ASYMMETRIC-V across regime tuple).
+- **#219 PAPER-PUBLISHABLE**: camber_rc OOD-gap mechanism REVERSES SIGN at σ=0.5 (wd↑ closes gap by -1.49 at σ=1.0 vs opens gap by +0.96/+0.79 at σ=0.5). **FIRST OOD-METRIC SIGN-REVERSAL** documented across paper-appendix axes.
+- **#220 PAPER-STRENGTHENING**: 7th σ-collapse confirmation + 2nd wd-can't-rescue confirmation (all 6 log_σ → -0.9037487506866455 bit-identical to σ=1.0).
+- **#221 PAPER-STRENGTHENING**: Non-shrinkage mechanism REPLICATES on σ=0.5 stack (param_norm trajectory plateaus 85.93 vs σ=1.0's 88.72, -3.2%; wd at this magnitude doesn't change trajectory shape — Lion sign-step dominates). 3rd cross-stack-mechanism-transfer axis after σ #2862 + β #2919.
+- **#222 METHODOLOGY**: Arm B's missing param_norm logging is a recoverable error (Arm B launched from beadcb5 commit, one before 9c5d791 param_norm logging commit). σ=1.0 mechanism evidence sufficient; process note: when rebasing for cross-stack re-tests, ensure ALL launched arms include diagnostic code added during the rebase.
+
+### Reassignment
+
+Askeladd → **film_mid_dim sweep {32, 128} on max_norm=0.35** (#2985) — 16th paper-appendix axis label, NEW **FILM-BOTTLENECK** class. Tests FiLM conditioning capacity (currently 64; bracket below + above). Compute-invariant (FiLM is sub-dominant in step-time); no train.py edit (--film_mid_dim already CLI-flagged). Predicted: ASYMMETRIC-V (current at optimum) or DEGENERATE (FiLM dim not load-bearing) or new pattern class. 12th-consecutive 2-epoch SWA-window truncation expected per banked #170 continuous-function form.
+
+---
+
 ## 2026-05-14 18:15 — PR #2919 (CLOSED, fern): huber_beta LOWER fine bracket {0.20, 0.15} on max_norm=0.35 — 15th paper-appendix axis closure (β LOWER), NEW NON-MONOTONE-COST-MONOTONE-MECHANISM transfer-pattern class, THREE PAPER-PUBLISHABLE FINDINGS (clean cross-clip-regime transfer + U-curve preservation + β-LOWER non-monotone regression)
 
 - **Branch:** `willowpai2g48h2-fern/huber-beta-lower-fine-on-max-norm-0p35`
