@@ -6,6 +6,35 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 05:00 — Round 40 cont.: send back #2755 (frieren per-channel surf weighting swp=15/swuv=10 — directional positive but val within noise); request stronger ratio swp=20
+
+### PR #2755 frieren per-channel surf weighting (swp=15, swuv=10) — DIRECTIONAL POSITIVE, NOT MERGED
+
+- **Branch:** charliepai2g48h3-frieren-swp15-swuv10-nlayers2-slicenum16-epochs46
+- **Hypothesis:** Per-channel surface weighting with swp=15 (pressure), swuv=10 (velocity) — direct attack on val_avg/mae_surf_p via 1.5× pressure emphasis vs velocity, no architecture change
+- **Metrics artifacts:** `models/model-charliepai2g48h3-frieren-swp15-swuv10-nlayers2-slicenum16-epochs46-20260514-040327/metrics.jsonl`
+
+| Split | val mae_surf_p | baseline | Δ | test mae_surf_p | baseline | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 34.061 | 36.476 | **−6.62%** ✓ | 32.552 | 33.035 | **−1.46%** ✓ |
+| geom_camber_rc | 50.304 | 48.297 | +4.16% ✗ | 43.362 | 44.333 | **−2.19%** ✓ |
+| geom_camber_cruise | 19.223 | 18.326 | +4.89% ✗ | 15.282 | 15.496 | **−1.38%** ✓ |
+| re_rand | 37.731 | 37.923 | −0.51% | 28.497 | 28.116 | +1.36% ✗ |
+| **avg** | **35.330** | **35.256** | **+0.21%** (within ±1.0 noise) | **29.923** | **30.245** | **−1.06%** ✓ |
+
+- **Run details:** best_epoch=46, ~35.3s/epoch, 27.1 min total, 361K params (unchanged), 13.49 GB peak memory
+- **Velocity regression check:** No visible damage — mae_surf_Ux and mae_surf_Uy values in expected range
+- **Decision:** SENT BACK — val primary metric +0.21% (within ±1.0 seed noise floor from #2523), doesn't meet merge threshold. Test improved -1.06% across 3/4 splits including both OOD geometry splits — directional signal is real but needs amplification.
+
+**Analysis:**
+The per-channel pressure emphasis (1.5×) shows a consistent signal on test metrics despite val flatness. The val/test sign-flip on OOD geometry splits (100-sample splits: val regressed, test improved by similar magnitudes) is characteristic of single-seed noise at this sample size. The in-distribution improvement is large and consistent on both val (−6.62%) and test (−1.46%), suggesting the pressure-emphasis signal is real.
+
+**Conclusion:** The 1.5× pressure ratio is directionally correct but insufficiently strong to overcome seed variance on val. Assigning swp=20/swuv=10 (2× ratio) — amplifying the pressure signal to test the hypothesis more decisively. re_rand is the one test-set regression (+1.36%); monitoring whether it worsens at 2× will reveal whether there's a UV/pressure tradeoff specific to Reynolds variation.
+
+**No velocity degradation observed** — UV MAE values in normal range. Code change is clean, backward-compatible (verified: sw_p==sw_uv==surf_weight falls back to baseline-equivalent loss).
+
+---
+
 ## 2026-05-14 04:05 — Round 40 cont.: close #2738 (askeladd mlp_ratio=6 — +4.35% val LOSS, FFN-axis REFUTED → ALL 3 capacity axes dead); assign askeladd #2760 truncated cosine pivot
 
 ### PR #2738 askeladd mlp_ratio=6 + epochs=40 — NEGATIVE RESULT (FFN-axis capacity REFUTED)

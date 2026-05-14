@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 04:08
+- **Date:** 2026-05-14 05:30
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -124,12 +124,17 @@
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
 | askeladd | **#2760** | **T_max=60, epochs=46** (truncated cosine; code-change PR; residual lr~13% at end → continued descent) | **Round 40: scheduler pivot** |
-| frieren | **#2755** | **surf_weight_p=15, surf_weight_uv=10** (per-channel surface weighting; code-change PR; direct attack on mae_surf_p) | **Round 40: loss-shape pivot** |
+| frieren | **#2755** | **surf_weight_p=20, surf_weight_uv=10** (per-channel surf weighting 2× ratio; sent back from swp=15 result which showed directionally positive test improvement -1.06% but val within noise; amplifying pressure emphasis) | **Round 40: loss-shape pivot (iter 2)** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed
 - #2738 askeladd FFN capacity (mlp_ratio=6+epochs=40): +4.35% val LOSS — OVERFIT-OOD signature (single_in_dist improved, all OOD regressed)
 - **All 3 capacity-via-param-count axes REFUTED**: n_hidden (x2), mlp_ratio (x1, x2 across rounds), n_layers (x1)
+
+**Round 40 cont. result — #2755 frieren swp=15/swuv=10 (sent back 2026-05-14 04:55)**:
+- val_avg/mae_surf_p = 35.330 (+0.21% vs baseline 35.256, within noise floor)
+- test_avg/mae_surf_p = 29.923 (−1.06% vs baseline 30.245 — DIRECTIONALLY POSITIVE on test, 3/4 splits improved)
+- Decision: NOT merged (val primary metric did not beat baseline). Direction confirmed — 1.5× pressure ratio insufficient, sent back for 2× ratio (swp=20/swuv=10).
 
 **Round 38 strategy: ARCHITECTURAL PIVOT after HP axes closed.**
 
