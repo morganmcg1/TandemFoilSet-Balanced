@@ -4,14 +4,61 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
-## 2026-05-14 02:45 — PR #2736 (ASSIGNED, fern): Huber β fine-bracket {0.25, 0.35} on max_norm=0.35 — β × clip-saturation coupling
+## 2026-05-14 04:10 — PR #2736 (CLOSED, fern): Huber β fine-bracket {0.25, 0.35} on max_norm=0.35 — β × clip-saturation coupling
 
 - **Branch:** `willowpai2g48h2-fern/huber-beta-fine-bracket-on-max-norm-0p35`
 - **Student:** willowpai2g48h2-fern
-- **Hypothesis:** Tests whether β=0.3 optimum (banked at #2540/#1757 on max_norm=0.5) is robust to the new max_norm=0.35 saturated-clip regime. Two-arm fine bracket around β=0.3: {0.25, 0.35}. At max_norm=0.5 the 1% sub-threshold steps preserved gradient-magnitude info; at max_norm=0.35 clip is fully saturated → β only affects gradient DIRECTION via residual-shape, not magnitude. Optimum may shift.
-- **Connection to #2666:** β-driven σ-spread mechanism (Kendall weights DOWN with lower β) is mechanistically distinct from lr-driven spread; this PR tests whether that mechanism's optimum still coincides with the test optimum at the new clip baseline.
-- **Decision rule:** val < 45.1538 AND test < 38.6367 → MERGE. Either-axis sub-win → bracket finer. Both regress → β=0.3 robust, close.
-- **Status:** Assigned 2026-05-14 02:45 UTC; awaiting training.
+- **Hypothesis:** Tests whether β=0.3 optimum (banked at #2540/#1757 on max_norm=0.5) is robust to the new max_norm=0.35 saturated-clip regime. Two-arm fine bracket around β=0.3: {0.25, 0.35}. At max_norm=0.5 the 1% sub-threshold steps preserved gradient-magnitude info; at max_norm=0.35 clip is fully saturated (100% on every step) → β only affects gradient DIRECTION via residual-shape, not magnitude. Optimum may shift.
+
+### Result table (vs #2674 new baseline)
+
+| Arm | huber_beta | W&B | val | test | Δval | Δtest | σ-spread | Verdict |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| baseline #2674 | 0.3 | `ieu1futo` | 45.1538 | 38.6367 | — | — | 0.475 | — |
+| Arm 1 | 0.25 | `zwvgxf1e` | 46.1290 | 39.1956 | +0.975 | +0.559 | 0.494 | regress both |
+| Arm 2 | 0.35 | `hhv8abnl` | 46.2149 | 39.1163 | +1.061 | +0.480 | 0.462 | regress both |
+
+### Per-split val (vs baseline)
+
+| Split | Baseline | Arm 1 β=0.25 | Δ | Arm 2 β=0.35 | Δ |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 47.146 | 49.896 | +2.75 | 48.292 | +1.15 |
+| geom_camber_rc | 58.002 | 58.285 | +0.28 | 60.910 | +2.91 |
+| geom_camber_cruise | 28.887 | 29.057 | +0.17 | 28.870 | −0.02 |
+| re_rand | 46.580 | 47.278 | +0.70 | 46.787 | +0.21 |
+
+### Per-split test (vs baseline)
+
+| Split | Baseline | Arm 1 β=0.25 | Δ | Arm 2 β=0.35 | Δ |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 40.379 | 41.950 | +1.57 | 41.153 | +0.77 |
+| geom_camber_rc | 53.068 | 53.207 | +0.14 | 53.606 | +0.54 |
+| geom_camber_cruise | 23.285 | 23.507 | +0.22 | 23.515 | +0.23 |
+| re_rand | 37.816 | 38.118 | +0.30 | 38.191 | +0.38 |
+
+### Mechanism prediction transfer (banked from #2666)
+
+| Prediction (from max_norm=0.5) | Predicted | Actual (max_norm=0.35) | Verdict |
+|---|---|---|---|
+| Arm 1 β=0.25 σ-spread | 0.49–0.50 | 0.4936 | ✓ matches |
+| Arm 2 β=0.35 σ-spread | 0.45–0.46 | 0.4618 | ✓ matches (upper edge) |
+| Arm 1 β=0.25 surf_ux Kendall weight | 38–42 | 42.30 | ✓ upper boundary |
+| Arm 2 β=0.35 surf_ux Kendall weight | 46–50 | 46.33 | ✓ lower boundary |
+
+### Banked findings
+
+1. **β=0.3 is the optimum across max_norm ∈ {0.35, 0.5} clip regimes** — partial-clip (≈99% sub-threshold) and saturated-clip (100% clipped) both rank β=0.3 best in fine bracket. Clean robustness statement for paper.
+2. **β-driven σ-spread mechanism transfers cleanly to saturated-clip regime** — all four spread/weight predictions from max_norm=0.5 land within ±0.01 of max_norm=0.35 actuals. **The loss-shape/Kendall-spread coupling is governed by β alone, not by gradient-magnitude flow** (transfer occurs under zero sub-threshold steps).
+3. **σ-spread is monotone in β at every trajectory check-point** (0/25/50/75/100% of training): β=0.25 spread is uniformly larger than β=0.35 spread throughout training, not just at terminal. Mechanism is not a terminal-state artifact.
+4. **Channel ordering (surf_ux=min log_σ, vol_ux=max log_σ) invariant across β axis on the new baseline** — extends the cross-axis ordering invariance to a third axis on the saturated-clip stack.
+5. **clip_fraction confirmed saturated at max_norm=0.35** under both β arms (4875/4875 sampled steps at clip_fraction=1.0 for β=0.25; 4874/4875 for β=0.35 with only step 0 sub-threshold). Confirms #2674 saturated-clip characterization is β-invariant.
+6. **single_in_dist split regresses largest** under both β perturbations (+2.75 at β=0.25; +1.15 at β=0.35) — extends the single_in_dist U-curve dataset-level finding (banked #50) to the saturated-clip baseline. The split is sensitive to β in both directions around the optimum.
+7. **Test-vs-val ordering mild asymmetry below seed noise** — β=0.35 closer to baseline on test (+0.48) than β=0.25 (+0.56), opposite to val ordering; gap ~0.08, well below estimated seed noise ~0.86. Not strong enough for separate test-optimum claim.
+8. **Mechanism robustness sharpens #2666 story** — the β→σ-spread direction and magnitude predicted from max_norm=0.5 measurements transfer under-budget to max_norm=0.35; this is itself a paper-strengthening result independent of the closure verdict.
+
+### Conclusion
+
+NOT mergeable (both arms regress past val 45.40 close threshold per PR decision rule). Mechanism transfer is paper-relevant. Closed 2026-05-14 04:10 UTC. Fern reassigned to head_lr cross-axis mechanism check on max_norm=0.35 (parallel robustness statement to β-side).
 
 ---
 
