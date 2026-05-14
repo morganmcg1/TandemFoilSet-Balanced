@@ -197,24 +197,29 @@ class SqueezeExcitation(nn.Module):
         return x * gate.unsqueeze(1)
 
 
+# RMSNorm replaces LayerNorm in TransolverBlock — drop mean-centering and
+# β-bias. eps=1e-5 matches the LayerNorm default for numerical parity.
+RMSNorm = lambda dim: nn.RMSNorm(dim, eps=1e-5)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
                  layerscale_init=1e-4, use_se=True):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -542,6 +547,18 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# RMSNorm diagnostic: ln_1/ln_2/ln_3 are nn.RMSNorm (Zhang & Sennrich 2019) —
+# no mean-centering, no β-bias. Expected ~864 fewer params vs LayerNorm baseline
+# (3 norms x 4 blocks - last block adds ln_3 = 9 norms... actually only ln_1,
+# ln_2 in non-last blocks + ln_1, ln_2, ln_3 in last = 9 norms x 96 = 864).
+_rmsnorm_modules = [m for m in model.modules() if isinstance(m, nn.RMSNorm)]
+print(
+    f"Normalization: RMSNorm (no mean-centering, no β-bias) — "
+    f"{len(_rmsnorm_modules)} nn.RMSNorm modules (eps=1e-5, dim={model_config['n_hidden']}); "
+    f"removed {len(_rmsnorm_modules) * model_config['n_hidden']} β-bias params vs LayerNorm baseline; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605 (#2879 LayerNorm)"
+)
+
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
@@ -809,6 +826,36 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # RMSNorm γ diagnostic: per-block weight norms at best-val checkpoint. If γ
+    # values saturate (very large or very small), the model is compensating for
+    # absent mean-centering — instability signal.
+    _rmsnorm_log = {"event": "rmsnorm_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    print("\nRMSNorm γ (weight) per-block stats (best-checkpoint weights):")
+    for _i, _blk in enumerate(_inner.blocks):
+        _norms_for_block = {}
+        for _name in ("ln_1", "ln_2", "ln_3"):
+            _mod = getattr(_blk, _name, None)
+            if _mod is None:
+                continue
+            _w = _mod.weight.detach().float()
+            _norms_for_block[_name] = {
+                "weight_norm": float(_w.norm().item()),
+                "weight_mean": float(_w.mean().item()),
+                "weight_abs_mean": float(_w.abs().mean().item()),
+                "weight_min": float(_w.min().item()),
+                "weight_max": float(_w.max().item()),
+            }
+        print(
+            f"  block[{_i}]: "
+            + " | ".join(
+                f"{k}: norm={v['weight_norm']:.4f} mean={v['weight_mean']:.4f} "
+                f"abs={v['weight_abs_mean']:.4f} min={v['weight_min']:.4f} max={v['weight_max']:.4f}"
+                for k, v in _norms_for_block.items()
+            )
+        )
+        _rmsnorm_log["blocks"].append({"block_idx": _i, **_norms_for_block})
+    append_metrics_jsonl(metrics_jsonl_path, _rmsnorm_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
