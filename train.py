@@ -251,6 +251,11 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.n_layers = n_layers
+        # Aux supervision capture point: features AFTER block index `aux_capture_idx`
+        # (= INPUT to the last block). For n_layers=4 -> idx 2 = 75% depth.
+        # 1-indexed terminology: "block-3 output / block-4 input".
+        self.aux_capture_idx = max(n_layers - 2, 0)
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -270,6 +275,13 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Aux deep-supervision head at 75% depth (block-3 input / block-2 output).
+        # Maps (B, N, n_hidden) -> (B, N, 3) for L1 loss on surface nodes only.
+        # Default trunc_normal_ init via _init_weights (applied above).
+        self.aux_head_surf = nn.Linear(n_hidden, out_dim)
+        trunc_normal_(self.aux_head_surf.weight, std=0.02)
+        nn.init.constant_(self.aux_head_surf.bias, 0)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -288,9 +300,15 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        mid_features = None
+        for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
-        return {"preds": fx}
+            if i == self.aux_capture_idx:
+                # 75% depth, n_layers=4 -> i==2: output of block index 2,
+                # input to last block index 3. Pre-head 96-d features.
+                mid_features = fx
+        aux_pred = self.aux_head_surf(mid_features) if mid_features is not None else None
+        return {"preds": fx, "aux_pred": aux_pred}
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +464,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    aux_weight: float = 0.1  # deep-supervision weight on aux surface L1 at 75% depth
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -528,6 +547,19 @@ print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing 
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
+_aux_capture_idx = max(model_config['n_layers'] - 2, 0)
+_aux_depth_pct = (_aux_capture_idx + 1) * 100 // model_config['n_layers']
+print(
+    f"Deep supervision: aux_head_surf at BLOCK-{_aux_capture_idx + 1} OUTPUT "
+    f"(0-indexed i=={_aux_capture_idx}, {_aux_depth_pct}% depth, input to last block); "
+    f"vs #2952 at i==1 (50% depth) — val +1.89% LOSS / test -1.26% slight WIN; "
+    f"aux_head_surf: nn.Linear({model_config['n_hidden']}, {model_config['out_dim']}) "
+    f"= {model_config['n_hidden'] * model_config['out_dim'] + model_config['out_dim']} new params; "
+    f"aux_weight={cfg.aux_weight}; "
+    f"total_loss = vol_loss + {cfg.surf_weight}*surf_loss + {cfg.aux_weight}*aux_surf_loss; "
+    f"hypothesis: deeper-block features more linearly mappable to surface output -> "
+    f"aux_loss / surf_loss ratio should be lower than #2952 (~1.0-1.5x vs 2.5-3.7x)"
+)
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
@@ -684,7 +716,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_aux = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -696,14 +728,20 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            out = model({"x": x_norm, "mask": mask})
+            pred = out["preds"]
+            aux_pred = out["aux_pred"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            # Aux surface loss: same masked-mean structure as surf_loss, so
+            # aux_loss / surf_loss is a clean magnitude ratio.
+            aux_sq_err = F.l1_loss(aux_pred, y_norm, reduction='none')
+            aux_loss = (aux_sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss + cfg.aux_weight * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -711,12 +749,15 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_loss.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
+    epoch_aux_surf_ratio = epoch_aux / max(epoch_surf, 1e-12)
 
     # --- Validate ---
     model.eval()
@@ -748,6 +789,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_loss": epoch_aux,
+        "train/aux_surf_ratio": epoch_aux_surf_ratio,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -755,7 +798,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux:.4f} "
+        f"aux/surf={epoch_aux_surf_ratio:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -790,8 +834,46 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
+    # Aux-vs-primary head divergence diagnostic (best-checkpoint weights).
+    # Compares aux_head_surf (operating on 75% depth features) vs primary head
+    # blocks[-1].mlp2[2] (operating on last-block features post-mlp2[0]/GELU
+    # bottleneck). L2 norms and per-channel cosine similarity (Ux, Uy, p).
     _inner = getattr(model, "_orig_mod", model)
+    _w_aux = _inner.aux_head_surf.weight.detach().float()          # (3, n_hidden)
+    _b_aux = _inner.aux_head_surf.bias.detach().float()            # (3,)
+    _w_primary = _inner.blocks[-1].mlp2[2].weight.detach().float() # (3, n_hidden)
+    _b_primary = _inner.blocks[-1].mlp2[2].bias.detach().float()   # (3,)
+    _w_aux_norm = _w_aux.norm().item()
+    _w_primary_norm = _w_primary.norm().item()
+    _channel_names = model_config["output_fields"]  # ["Ux", "Uy", "p"]
+    _cos_per_channel = {}
+    for _ci, _cname in enumerate(_channel_names):
+        _va = _w_aux[_ci]
+        _vp = _w_primary[_ci]
+        _denom = (_va.norm() * _vp.norm()).clamp(min=1e-12)
+        _cos_per_channel[_cname] = float((_va @ _vp / _denom).item())
+    print("\nAux-vs-primary head divergence diagnostic (best-checkpoint weights):")
+    print(f"  aux placement: block-{_inner.aux_capture_idx + 1} output (i=={_inner.aux_capture_idx}, "
+          f"{(_inner.aux_capture_idx + 1) * 100 // _inner.n_layers}% depth)")
+    print(f"  ||W_aux||={_w_aux_norm:.4f}  ||W_primary||={_w_primary_norm:.4f}  "
+          f"ratio={_w_aux_norm / max(_w_primary_norm, 1e-12):.4f}")
+    print(f"  cos_per_channel (aux vs primary): " +
+          ", ".join(f"{k}={v:.4f}" for k, v in _cos_per_channel.items()))
+    print(f"  bias_aux={_b_aux.tolist()}  bias_primary={_b_primary.tolist()}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "aux_head_divergence",
+        "epoch": int(best_metrics["epoch"]),
+        "aux_capture_idx": int(_inner.aux_capture_idx),
+        "aux_depth_pct": (_inner.aux_capture_idx + 1) * 100 // _inner.n_layers,
+        "w_aux_norm": _w_aux_norm,
+        "w_primary_norm": _w_primary_norm,
+        "w_ratio": _w_aux_norm / max(_w_primary_norm, 1e-12),
+        "cos_per_channel": _cos_per_channel,
+        "bias_aux": _b_aux.tolist(),
+        "bias_primary": _b_primary.tolist(),
+    })
+
+    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
     print("\nLayerScale final gammas (best-checkpoint weights):")
     for _i, _blk in enumerate(_inner.blocks):
