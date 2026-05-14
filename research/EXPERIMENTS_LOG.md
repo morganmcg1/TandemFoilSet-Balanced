@@ -7,6 +7,38 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 01:45 — PR #2691: warmup_epochs DOWN (warmup=2 Arm A) — CLOSED
+
+- `willowpai2g24h3-edward/warmup-epochs-down`
+- **Hypothesis:** Edward's natural mechanism inversion vs his closed #2667. warmup=10 hurt single_in_dist most (+12.6%) → "the flat-low LR region in epochs 0-10 under-trained the early descent phase" → predict warmup=2 should help by getting model to peak LR sooner. Decision rule: Arm A (warmup=2) first; if ≤ 40.30 run Arm B (warmup=0).
+- **Result (single clean seed `yn883ip1`, killed duplicate `oewh896e` on advisor poke):**
+
+| Metric | Arm A (warmup=2) | Baseline (warmup=5) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | **43.5044** | 40.2741 | **+8.02% ❌** |
+| test_avg/mae_surf_p (EMA) | **36.6179** | 33.6017 | **+8.98% ❌** |
+| test_avg/mae_surf_p (no-EMA) | 41.1315 | — | — |
+| best_epoch | 32/50 | 36/50 | -4 (early convergence) |
+| val_single_in_dist | **41.0864** | 35.84 | **+14.65%** (SAME split that hurt most at warmup=10) |
+| val_geom_camber_rc | 55.6148 | 53.50 | +3.95% |
+| val_geom_camber_cruise | 30.4256 | 28.15 | +8.08% |
+| val_re_rand | 46.8908 | 43.62 | +7.50% |
+
+- **Analysis (edward's terminal):** **Mechanism inversion did NOT hold. warmup-axis is bilateral.** Edward's three-row bracket:
+
+| warmup | val_avg | best_epoch | single_in_dist val |
+|---|---:|---:|---:|
+| **2** (Arm A this PR) | 43.50 | 32 | 41.09 |
+| 5 (baseline) | 40.27 | 36 | 35.84 |
+| 10 (PR #2667 closed) | 41.77 | 36 | 40.36 |
+
+**warmup=5 is a tight local optimum, not a saddle.** Both flanks regress and BOTH hurt single_in_dist the most. Edward inverted his own prior hypothesis — the correct mechanism is: "the cosine schedule's *late-stage* low-LR refinement is what single_in_dist needs, and any reduction in that phase (via either earlier convergence OR delayed peak) hurts disproportionately." warmup=2 reached its best at epoch 32 — schedule "ran out" sooner; peak LR spent before loss landscape well-explored; cosine decay had less wall-clock at fine-resolution low-LR phase. With Lion's sign-based updates, more time at peak LR is NOT equivalent to more useful learning.
+- **What this rules out:** **Schedule micro-tuning axis is now fully exhausted on this stack.** Bilateral closures match the K-axis (K=8/12/20 U) and EMA-decay axis (0.998/0.999/0.9995 U). The n_head=2+Lion stack appears to be at a **tight local optimum across multiple orthogonal axes** — every single-axis perturbation regresses.
+- **Banked lesson:** "Late-stage refinement matters disproportionately" mechanism is itself a *symptom* of the gradient-step-bound regime, not the bottleneck. Need to attack the regime from a different angle (capacity, init, attention structure).
+- **Operational forensics (edward's):** Two distinct invocations launched both `yn883ip1` (00:53Z) and `oewh896e` (01:00Z) within 7 min; different log filenames suggest harness re-polled before first pidfile was visible. Matches thorfinn's diagnosis on APW #2679. Per-PR pidfile (`logs/PR-<n>.pid`) is the right defensive measure. Edward will adopt going forward.
+- **Banked follow-ups (edward's suggestions):** longer T_max, WSD schedule, linear-then-cosine — all good but ALL target the same "late-stage refinement" mechanism that's a symptom not the cause. **NOT pursuing schedule further on this stack.**
+- **Next experiment:** edward reassigned to **PR #2711 Transolver++ Local Token Merging (H6)** — first architecture-tier assignment. kNN-based local node aggregation before slice routing; targets boundary-layer coherence and OOD geometry splits. Profile-first approach with zone-based fallback if kNN overhead >20%.
+
 ## 2026-05-14 01:30 — PR #2679: APW Curriculum (per-sample loss-EMA-weighted SmoothL1, α 0→0.5) — CLOSED
 
 - `willowpai2g24h3-thorfinn/apw-curriculum`
