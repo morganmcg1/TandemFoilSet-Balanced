@@ -177,10 +177,12 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False, film_re_hidden: int = 128):
+                 film_re=False, film_re_hidden: int = 128,
+                 film_re_decoder: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
+        self.film_re_decoder = film_re_decoder
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -205,6 +207,15 @@ class TransolverBlock(nn.Module):
                 nn.GELU(),
                 nn.Linear(film_re_hidden, hidden_dim),
             )
+        if self.last_layer and self.film_re and self.film_re_decoder:
+            # Decoder-side γ MLP — modulates fx immediately before mlp2 in the
+            # final block. Same architecture as the trunk film_gamma so it shares
+            # the identity-init pattern (last-linear weight=0, bias=1 → γ≡1).
+            self.film_gamma_decoder = nn.Sequential(
+                nn.Linear(1, film_re_hidden),
+                nn.GELU(),
+                nn.Linear(film_re_hidden, hidden_dim),
+            )
 
     def forward(self, fx, mask=None, log_re=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
@@ -215,7 +226,13 @@ class TransolverBlock(nn.Module):
             gamma = self.film_gamma(log_re.unsqueeze(-1)).unsqueeze(1)
             fx = gamma * fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            out = self.ln_3(fx)
+            if self.film_re and self.film_re_decoder and log_re is not None:
+                # Decoder-side γ_dec modulates the LN-normalized features right
+                # before mlp2 — the closest Re-conditional injection point to the loss.
+                gamma_dec = self.film_gamma_decoder(log_re.unsqueeze(-1)).unsqueeze(1)
+                out = gamma_dec * out
+            return self.mlp2(out)
         return fx
 
 
@@ -227,6 +244,7 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
+                 film_re_decoder: bool = False,
                  log_re_x_index: int = 13):
         super().__init__()
         self.ref = ref
@@ -236,6 +254,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
+        self.film_re_decoder = film_re_decoder
         self.log_re_x_index = log_re_x_index
 
         if self.unified_pos:
@@ -253,6 +272,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 film_re=film_re, film_re_hidden=film_re_hidden,
+                film_re_decoder=film_re_decoder,
             )
             for i in range(n_layers)
         ])
@@ -265,8 +285,12 @@ class Transolver(nn.Module):
             # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
             # γ ≡ 1 at epoch 0 → model exactly matches baseline initially.
             for block in self.blocks:
-                nn.init.zeros_(block.film_gamma[-1].weight)
-                nn.init.ones_(block.film_gamma[-1].bias)
+                if hasattr(block, "film_gamma"):
+                    nn.init.zeros_(block.film_gamma[-1].weight)
+                    nn.init.ones_(block.film_gamma[-1].bias)
+                if hasattr(block, "film_gamma_decoder"):
+                    nn.init.zeros_(block.film_gamma_decoder[-1].weight)
+                    nn.init.ones_(block.film_gamma_decoder[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -480,6 +504,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    film_re_decoder: bool = False  # Decoder-side FiLM-Re γ on final block (PR #3028)
 
 
 cfg = sp.parse(Config)
@@ -522,6 +547,7 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    film_re_decoder=cfg.film_re_decoder,  # decoder-side γ on final block (PR #3028)
 )
 
 model = Transolver(**model_config).to(device)
@@ -529,6 +555,9 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+# Decoder-side FiLM-Re γ (PR #3028): adds one extra γ MLP on the final block's
+# decoder (1×W + W×H + biases). At W=film_re_hidden=256, H=128 this is ~33K params.
+print(f"[init] FiLM-Re decoder γ: enabled={cfg.film_re_decoder}, hidden={cfg.film_re_hidden}")
 
 optimizer = Lion(
     model.parameters(),
@@ -730,6 +759,22 @@ if model_config.get("film_re"):
         gamma_diagnostics[f"film/block{i}/gamma_w_absmax"] = w_absmax
         print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
               f"{w_l2:>10.4f} {w_absmax:>12.4f}")
+    # Decoder-side γ diagnostics (PR #3028).
+    gamma_diagnostics["film/decoder_enabled"] = float(bool(cfg.film_re_decoder))
+    last_block = base_model.blocks[-1]
+    if hasattr(last_block, "film_gamma_decoder"):
+        dec_lin = last_block.film_gamma_decoder[-1]
+        db = dec_lin.bias.detach().float()
+        dw = dec_lin.weight.detach().float()
+        db_mean, db_std = db.mean().item(), db.std().item()
+        dw_l2 = dw.norm().item()
+        dw_absmax = dw.abs().max().item()
+        gamma_diagnostics["film/decoder/gamma_bias_mean"] = db_mean
+        gamma_diagnostics["film/decoder/gamma_bias_std"] = db_std
+        gamma_diagnostics["film/decoder/gamma_w_l2"] = dw_l2
+        gamma_diagnostics["film/decoder/gamma_w_absmax"] = dw_absmax
+        print(f"  {'decoder':<6s} {db_mean:>14.6f} {db_std:>12.6f} "
+              f"{dw_l2:>10.4f} {dw_absmax:>12.4f}")
     wandb.summary.update(gamma_diagnostics)
 
 # --- Test evaluation + artifact upload ---
