@@ -2673,3 +2673,38 @@ Strong mechanism. Mean is slightly better than edward FiLM-Re. BUT runs used σ=
 - Hypothesis: The current 2-layer output head (Linear(128,128)+GELU+Linear(128,out_dim)) may bottleneck the richer FiLM-Re feature manifold. Deepening to 3-layer and 4-layer decoder adds ~16K/32K params to the projection step, potentially improving OOD decoding (geom_camber_rc). Natural follow-up to edward's FiLM-Re win (#2865).
 - Arms: head_depth=3 (s1), head_depth=4 (seed 2)
 - Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 15:30 — PR #2908: σ interior scan (tanjiro, CLOSED)
+- Branch: `willowpai2g48h3-tanjiro/sigma-interior-scan`
+- Hypothesis: Test σ=0.06 and σ=0.09 around the σ=0.07 winner to bracket the init-std axis peak.
+
+### Results
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | vs 13th-shift bar (val<36.58) |
+|---|---|---:|---:|---:|
+| σ=0.06 (s1) | `nz1y6du8` | 42.85 | 36.97 | +17.1% / +20.7% |
+| σ=0.09 (s2) | `0wxyw1vk` | 42.49 | 37.20 | +16.2% / +21.4% |
+
+All 4 splits regress on both arms.
+
+Per-split test surf_p (σ=0.06 / σ=0.09 vs σ=0.07 baseline):
+- single_in_dist: 42.85 / 42.49 vs 35.87 (+19.5% / +18.5%)
+- geom_camber_rc: 53.08 / 50.45 vs 43.28 (+22.6% / +16.6%)
+- geom_camber_cruise: 20.77 / 21.17 vs 16.30 (+27.4% / +29.9%)
+- re_rand: 35.21 / 33.87 vs 27.12 (+29.9% / +24.9%)
+
+**Mechanism insight:** L2 norm trajectory monotone in σ (init L2: 61 → 68 → 82 → 89 for σ=0.06/0.07/0.09/0.10) BUT val loss sharply non-monotonic with peak at σ=0.07. This **rules out parameter-scale as the σ-axis mechanism**. σ=0.07 is a genuine optimum of the init basin, not a monotone slope.
+
+σ-axis fully characterized: σ=0.02 (41.13) → σ=0.05 (40.82) → **σ=0.07 (36.58, PEAK)** → σ=0.06 (42.85) → σ=0.09 (42.49). Student explicitly recommended close.
+
+**Status**: CLOSED 2026-05-14 15:30. σ-axis fully characterized at this baseline. Retired.
+
+---
+
+## 2026-05-14 15:32 — PR #2948: FiLM-Re γ MLP capacity scan (tanjiro, ASSIGNED)
+- Branch: `willowpai2g48h3-tanjiro/film-gamma-capacity-scan`
+- Hypothesis: Expand the just-merged FiLM-Re γ MLP width to test if γ-branch capacity is bottlenecking the conditioning mechanism. If γ MLP hidden ≈ 128 (inferred from 84K total / 5 blocks), doubling/quadrupling adds ~80K/240K params (~10-30% of trunk). Direct extension of the 14th-shift winning mechanism, orthogonal to all other in-flight axes.
+- Arms: γ MLP hidden=2× current (s1), 4× current (s2 seed=2)
+- Merge bar: mean val < 34.55, mean test < 28.95
