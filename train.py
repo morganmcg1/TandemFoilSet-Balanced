@@ -121,6 +121,15 @@ class PhysicsAttention(nn.Module):
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        # K-only LN (PR #3008): normalize ONLY the static slice basis (rows of
+        # in_project_slice.weight) along the dim_head axis BEFORE routing.
+        # Q (x_mid) is intentionally NOT normalized so its depth-stream
+        # magnitude growth remains intact (failure mode of #2983 QK-norm).
+        # +(2 * dim_head) params per block.
+        self.k_norm = nn.LayerNorm(dim_head)
+        # Diagnostic capture — set externally by capture_routing_diag.
+        self._diag_capture = False
+        self._last_diag: dict | None = None
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -141,7 +150,42 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # K-only LN: apply LayerNorm to slice-basis weight rows (dim_head axis).
+        k_normed = self.k_norm(self.in_project_slice.weight)
+        slice_logits = F.linear(x_mid, k_normed, self.in_project_slice.bias)
+        scaled_logits = slice_logits / self.temperature
+        slice_weights = self.softmax(scaled_logits)
+
+        if self._diag_capture:
+            with torch.no_grad():
+                w_raw = self.in_project_slice.weight
+                k_raw_norms = w_raw.float().norm(dim=-1)  # [slice_num]
+                k_normed_norms = k_normed.float().norm(dim=-1)  # [slice_num]
+                # Per-slice mean routing weight per head, averaged across batch.
+                sw_f = slice_weights.float()
+                per_slice_mean = sw_f.mean(dim=2)  # [B, H, slice_num]
+                dead_per_sample_head = (per_slice_mean < 0.01).float().sum(dim=-1)  # [B, H]
+                self._last_diag = {
+                    "q_raw_norm_mean": float(x_mid.float().norm(dim=-1).mean().item()),
+                    "q_raw_norm_max": float(x_mid.float().norm(dim=-1).max().item()),
+                    "k_raw_norm_mean": float(k_raw_norms.mean().item()),
+                    "k_raw_norm_min": float(k_raw_norms.min().item()),
+                    "k_raw_norm_max": float(k_raw_norms.max().item()),
+                    "k_normed_norm_mean": float(k_normed_norms.mean().item()),
+                    "logit_div_T_abs_max": float(scaled_logits.float().abs().max().item()),
+                    "logit_div_T_abs_mean": float(scaled_logits.float().abs().mean().item()),
+                    "entropy_slice_nats": float(
+                        (-(sw_f * sw_f.clamp(min=1e-12).log())).sum(-1).mean().item()
+                    ),
+                    "temperature_mean": float(self.temperature.float().mean().item()),
+                    "temperature_per_head": self.temperature.float().detach().flatten().cpu().tolist(),
+                    "dead_slice_count_mean": float(dead_per_sample_head.mean().item()),
+                    "dead_slice_count_max": float(dead_per_sample_head.max().item()),
+                    "k_norm_gamma_mean": float(self.k_norm.weight.float().mean().item()),
+                    "k_norm_gamma_std": float(self.k_norm.weight.float().std().item()),
+                    "k_norm_beta_abs_mean": float(self.k_norm.bias.float().abs().mean().item()),
+                }
+
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -557,6 +601,23 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# K-only LN in Physics_Attention (PR #3008) — apply LayerNorm to ONLY the slice
+# basis K (rows of in_project_slice.weight along dim_head) BEFORE the routing
+# softmax. Q (x_mid) is NOT normalized — preserves depth-stream magnitude
+# growth that #2983's QK-norm catastrophically over-normalized (logit/T 71→774
+# at deep blocks, entropy 0.103→0.007, 13-20/24 dead slices/block).
+# Per-block param add: 2 × dim_head (LN γ+β). Total: n_layers × 2 × dim_head.
+_dim_head_kln = model_config['n_hidden'] // model_config['n_head']
+_kln_param_add = model_config['n_layers'] * 2 * _dim_head_kln
+print(
+    f"K-only LN (PR #3008): LayerNorm({_dim_head_kln}) applied to slice-basis "
+    f"K rows in {model_config['n_layers']} PhysicsAttention blocks BEFORE routing. "
+    f"Q (x_mid) is NOT normalized — preserves depth-stream signal. "
+    f"+{_kln_param_add} params (expected: 4×2×48=384 for n_layers=4 dim_head=48). "
+    f"Topology: post-norm γ=1.0 + K-LN INSIDE attention (unchanged from #2964 outer). "
+    f"NEW baseline to beat: val_avg/mae_surf_p < 30.0382 (test 25.2099)."
+)
+
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
@@ -753,6 +814,65 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     return captured
 
 
+def capture_routing_diag(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
+    """Capture per-block routing diagnostics in PhysicsAttention (PR #3008).
+
+    For each PhysicsAttention module, log:
+      - ||Q||_raw, ||K||_raw, ||K||_normed (slice basis row norms)
+      - logit/T |max| (CRITICAL — should be O(10) not O(700) like #2983)
+      - slice entropy (nats), temperature, dead-slice count (mean weight <1%)
+      - LN(K) gamma/beta stats
+
+    Compare to #2983's catastrophic values (logit/T 71 → 774, entropy 0.103 → 0.007).
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    pa_blocks = [(bi, blk.attn) for bi, blk in enumerate(inner.blocks)
+                 if isinstance(blk.attn, PhysicsAttention)]
+
+    for _bi, pa in pa_blocks:
+        pa._diag_capture = True
+        pa._last_diag = None
+
+    model_obj.eval()
+    try:
+        with torch.no_grad():
+            x_b, _, _, mask_b = next(iter(loader))
+            x_b = x_b.to(device_, non_blocking=True)
+            mask_b = mask_b.to(device_, non_blocking=True)
+            x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+            with amp_ctx():
+                _ = inner({"x": x_norm, "mask": mask_b})
+    finally:
+        for _bi, pa in pa_blocks:
+            pa._diag_capture = False
+
+    print(f"\nRouting magnitude probe @ {epoch_tag} (Physics_Attention, K-only LN):")
+    rows = []
+    for bi, pa in pa_blocks:
+        d = pa._last_diag
+        if d is None:
+            continue
+        d = {"block_idx": bi, **d}
+        rows.append(d)
+        print(
+            f"  block[{bi}]: ‖Q‖_raw mean={d['q_raw_norm_mean']:.4f} max={d['q_raw_norm_max']:.4f}  "
+            f"‖K‖_raw mean={d['k_raw_norm_mean']:.4f}  "
+            f"‖K‖_normed mean={d['k_normed_norm_mean']:.4f}  "
+            f"|logit/T| max={d['logit_div_T_abs_max']:.2f} mean={d['logit_div_T_abs_mean']:.4f}  "
+            f"H_slice={d['entropy_slice_nats']:.4f}  "
+            f"T(per-head)={[round(t, 4) for t in d['temperature_per_head']]}  "
+            f"dead<1%(mean/max)={d['dead_slice_count_mean']:.2f}/{d['dead_slice_count_max']:.0f}  "
+            f"γ_K mean={d['k_norm_gamma_mean']:.4f} std={d['k_norm_gamma_std']:.4f} "
+            f"|β_K|mean={d['k_norm_beta_abs_mean']:.4f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "routing_diagnostic",
+        "epoch_tag": epoch_tag,
+        "blocks": rows,
+    })
+    return rows
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -848,6 +968,11 @@ for epoch in range(MAX_EPOCHS):
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+        # K-only LN routing diagnostic (PR #3008) — sanity check at ep1 that
+        # logit/T |max| is O(10) not O(700+) like #2983's QK-norm failure.
+        capture_routing_diag(
+            model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
+        )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
@@ -881,6 +1006,11 @@ if best_metrics:
     # Residual magnitude probe @ best-checkpoint (compare to ep1 capture).
     _probe_loader_end = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     capture_residual_magnitudes(
+        model, _probe_loader_end, stats, amp_ctx_factory, device,
+        epoch_tag=f"best_ep{best_metrics['epoch']}",
+    )
+    # K-only LN routing diagnostic @ best-checkpoint.
+    capture_routing_diag(
         model, _probe_loader_end, stats, amp_ctx_factory, device,
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
