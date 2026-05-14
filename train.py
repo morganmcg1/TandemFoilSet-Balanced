@@ -208,7 +208,10 @@ class TransolverBlock(nn.Module):
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
+            # 3-layer output head: 2 GELU nonlinearities + 96-dim bottleneck preserved
+            # +9,312 params vs 2-layer baseline (96*96 + 96)
             self.mlp2 = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
@@ -564,6 +567,16 @@ print(
     f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+)
+
+# mlp2 decoder-depth diagnostic (PR #2809): 2-layer -> 3-layer output head
+_mlp2_params = sum(p.numel() for m in model.blocks if m.last_layer for p in m.mlp2.parameters())
+_mlp2_layers = sum(1 for m in model.blocks if m.last_layer for c in m.mlp2 if isinstance(c, nn.Linear))
+print(
+    f"3-layer output head (mlp2): {_mlp2_layers} Linear layers + 2 GELU nonlinearities; "
+    f"total mlp2 params: {_mlp2_params} (+9,312 vs 2-layer baseline); "
+    f"applied at end of TransolverBlock {model_config['n_layers']-1} only; "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (#2765)"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
