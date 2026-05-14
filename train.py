@@ -273,6 +273,11 @@ class Transolver(nn.Module):
         self.film = nn.Linear(3, n_hidden)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
+        # FiLM-input dropout (PR #3014): Bernoulli dropout on the 3-channel
+        # conditioning vector [log_Re, AoA0_rad, AoA1_rad] BEFORE self.film.
+        # Per-sample dropout (shared across nodes via per-sample slice); at
+        # eval `self.training=False` makes this identity. Zero new params.
+        self.film_input_dropout = nn.Dropout(p=0.2)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -288,6 +293,7 @@ class Transolver(nn.Module):
         mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
+        flow_scalars = self.film_input_dropout(flow_scalars)       # PR #3014
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
@@ -554,6 +560,12 @@ print(
     f"residual-stream conditioning vs output-side (closed #2531+#2588); "
     f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
+)
+print(
+    "FiLM-input dropout (PR #3014): nn.Dropout(p=0.2) on the 3-channel conditioning vector "
+    "[log_Re, AoA0_rad, AoA1_rad] BEFORE self.film; per-sample Bernoulli zeroing "
+    "(zeros ~0.6 channels avg); identity at eval; +0 params; targeted intervention "
+    "for val_re_rand WIN per #2993 closure recommendation; NEW BASELINE to beat: val_avg/mae_surf_p < 30.0382"
 )
 print(f"Actual total params: {n_params}")
 
