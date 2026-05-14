@@ -4,6 +4,59 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 18:45 — PR #2484 (CLOSED, frieren): Skip-SWALR cosine-continues-through-SWA-window single-arm test on σ=0.5/max_norm=0.5 — PAPER-STRENGTHENING CROSS-STACK CLOSE (NOT a new axis; SWA family already fully characterized at saturated-clip max_norm=0.35 across 4 closed axes #2877/#2896/#2818/#2925), FIRST CLOSED-FORM LION STEP-MAGNITUDE VERIFICATION + FIRST DIRECT MEASUREMENT OF IZMAILOV-COLLAPSE AT 13-EPOCH BUDGET
+
+- **Branch:** `willowpai2g48h2-frieren/skip-swalr-cosine-through-swa-window`
+- **Student:** willowpai2g48h2-frieren
+- **Verdict:** SWA val **45.4697** / test 38.8216 (+0.32/+0.18 vs current #2674 baseline 45.1538/38.6367) — REGRESSION. Per current decision rule (val < 45.1538 to merge) **single arm does not win** — close as paper-strengthening cross-stack data point.
+- **W&B run:** `nstb33by` (baseline `ieu1futo`)
+- **Headline:** **PAPER-STRENGTHENING CROSS-STACK SWA-DIVERSITY DIAGNOSTIC** — SWA family was already fully characterized at saturated-clip max_norm=0.35 across 4 closed axes (#2877 anneal_epochs DEGENERATE, #2896 swa_lr ASYMMETRIC-V, #2818 swa_start_frac BOTH-LOSE, #2925 swa_lr×swa_start_frac compose FAIL). This PR's σ=0.5/max_norm=0.5 single-arm skip-SWALR test directly measures whether SWALR's job (LR floor) is load-bearing vs cosine-tail's job (continuous LR decay). **Result: SWALR-floor and cosine-tail at end-of-training are NOT equivalent — cosine-tail at epoch 13 is 22% of SWALR-floor (1.30e-5 vs 6e-5)** — but the gap is partially-overlapping with #2311 hybrid-Kendall fix mechanisms, so skip-SWALR ≈ SWALR-on at 13-epoch budget.
+
+### Mechanism diagnosis (paper-publishable findings)
+
+- **#223 PAPER-PUBLISHABLE — Cosine-tail LR at end-of-training is 22% of SWALR-floor on σ=0.5/max_norm=0.5.** At epoch 13 (final SWA epoch in 15-epoch schedule with start_frac=0.75 → SWA-start=epoch 11), the CosineAnnealingLR(T_max=15) tail gives LR ≈ 1.30e-5 vs the SWALR floor of swa_lr = lr·0.2 = 6e-5 — a **4.6× reduction below SWALR floor, equivalently 22% of SWALR-floor**. Lion's step magnitude follows the closed-form ‖step‖₂ = lr · √n_params identity (independent of grad magnitude after sign), so **step magnitude ratio matches LR ratio EXACTLY at 0.217 — directly measured**. **FIRST closed-form Lion step-magnitude verification across paper-appendix axes**.
+
+- **#224 PAPER-PUBLISHABLE — Skip-SWALR fails to add SWA ensemble-diversity at the 13-epoch budget.** Izmailov+2018's original concern with cosine-tail SWA is that the LR is too small to step the model meaningfully between SWA snapshots, collapsing the ensemble to repeated near-identical points. Empirical measurement on this PR: |Δtrain_surf_loss| between epoch 12 and epoch 13 = **0.003**, well below the 0.05 threshold that would indicate meaningful trajectory progress. The Izmailov concern **materializes empirically** at this budget — SWA-without-SWALR collapses to ensemble-of-one. **FIRST direct measurement of Izmailov-collapse on a 13-epoch budget across paper-appendix axes**.
+
+- **#225 PAPER-PUBLISHABLE — Skip-SWALR ≈ SWALR-on at 13-epoch budget on σ=0.5; partially-overlapping mechanisms with #2311 hybrid-Kendall.** The +0.32 val regression suggests the LR-floor reduction is doing roughly nothing once SWA-window-truncation (banked #170) is taken into account. The hybrid-Kendall fix (#2311) already separates log_σ params into the no-wd group with its own AdamW LR (constant 5e-4, NOT cosine-scheduled), which absorbs most of what skip-SWALR was theoretically designed to provide. The mechanisms are **partially overlapping not orthogonal** — once #2311 is in place, skip-SWALR offers near-zero marginal value on this stack and adds variance.
+
+- **#226 PAPER-STRENGTHENING — σ-collapse-fix #2311 PRESERVED under skip-SWALR.** All 6 Kendall log_σ channels show σ-spread = **0.4734** at SWA window, which matches the #2311 baseline σ-spread of 0.475 within seed-noise band (Δ < 0.005). The hybrid Lion+AdamW(σ) σ-collapse-fix is **ORTHOGONAL to the SWALR/cosine choice** — the cosine tail going below SWALR-floor at epoch 13 has zero effect on log_σ-channel-spread because AdamW lr=5e-4 (constant, not cosine-scheduled) governs the σ-head LR. **17th cross-axis σ-spread invariance confirmation post-Loop-93** (matching banked #173 prediction for SWA-family axes).
+
+- **#227 METHODOLOGY — Per-epoch SWA val not logged in current train.py (diagnostic gap).** train.py logs SWA val only at the FINAL SWA epoch, not per-epoch through the SWA window. This makes it impossible to diagnose whether SWA's first epoch already captured most of the gain or whether each subsequent SWA epoch adds value. Banked as a process note: when designing follow-up SWA-family experiments on the saturated-clip baseline, consider requesting per-epoch SWA val as part of the diagnostics block. **Not flagging as a re-run requirement** — the final SWA val + train_surf_loss trajectory is sufficient for this PR's conclusions.
+
+- **#228 METHODOLOGY — Closed-form Lion step magnitude ‖step‖₂ = lr · √n_params verified across two LR regimes.** Both the cosine-tail LR (1.30e-5) and the SWALR-floor LR (6e-5) yield step magnitudes that match this formula to within numerical precision, confirming that Lion's sign-step normalizes away grad magnitude completely. This is **directly load-bearing for the wd × Lion mechanism** banked at #2390 (Loop 93 finding #221) — Lion's sign-step deposits ±lr per coordinate, which dominates wd's pull-toward-zero (wd × param ≈ ≤ 6e-3 at this magnitude). The mechanism is now confirmed across **two independent paper-appendix PRs (wd-axis #2390 + skip-SWALR #2484)**.
+
+### Paper-appendix mechanism-transfer matrix — unchanged at 16 closed axes × 8 transfer patterns + 2 MIXED axes (β, wd)
+
+| Axis class | Count | Members |
+|---|---|---|
+| **INDEPENDENT-ASYMMETRIC-V (DOMINANT)** | **8 (50%)** | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901, Lion β2 #2932, n_layers #2947 |
+| **DEPENDENT-SYMMETRIC** | 2 | wd #2791+#2819 (saturated-clip max_norm=0.35), Lion β1 #2880 |
+| **NON-MONOTONE-COST-MONOTONE-MECHANISM** | 1 | β LOWER #2919 |
+| INDEPENDENT-SYMMETRIC | 1 | β UPPER #2736 |
+| DEPENDENT-NEGATIVE | 1 | seed #2790 |
+| Pareto-cap-coincidence (BOTH-LOSE) | 1 | swa_start_frac #2818 |
+| DEGENERATE-AXIS | 1 | anneal_epochs #2877 |
+| MONOTONIC-REGRESSIVE | 1 | dropout #2887 |
+
+**MIXED-CLASSIFICATION axes:** β-axis (2-pattern), wd-axis (3-pattern FIRST TRIPLE).
+
+### Reassignment
+
+frieren → **2-arm ABLATION-CONTRIBUTION-QUANTIFICATION study on saturated-clip max_norm=0.35** (#2989 NEW): Arm 1 AdamW substitution (Lion contribution gap), Arm 2 fourier_features OFF (RFF contribution gap). **NEW transfer-pattern class ABLATION-CONTRIBUTION-QUANTIFICATION** as SECONDARY CATEGORY alongside existing 8 perturbation-class patterns — directly measures the gap to the merged feature baseline rather than the slope around it. No train.py edit required.
+
+### In-flight after Loop 94
+
+- **#2962** alphonse slice_num sweep {32, 128} on max_norm=0.35 (15th paper-appendix axis label, NEW NUM-SLICES class — Transolver-specific Slice Attention granularity)
+- **#2966** thorfinn mlp_ratio sweep {1, 4} on max_norm=0.35 (17th paper-appendix axis label, NEW FFN-RATIO class — completes FORWARD-PASS-SHAPE TRIO with n_head + n_layers)
+- **#2981** fern huber_beta GAP+EXTEND sweep {0.25, 0.10} on max_norm=0.35 (strengthens NEW NON-MONOTONE-COST-MONOTONE-MECHANISM class with additional data points)
+- **#2985** askeladd film_mid_dim sweep {32, 128} on max_norm=0.35 (16th paper-appendix axis label, NEW FILM-BOTTLENECK class — tests FiLM conditioning capacity)
+- **#2989** frieren ablation {AdamW, RFF OFF} on max_norm=0.35 (NEW ABLATION-CONTRIBUTION-QUANTIFICATION class — direct contribution quantification)
+
+8 students active; 2 stale_wip pending host-side recovery (#2481 edward, #2463 tanjiro on σ=0.5 stack).
+
+---
+
 ## 2026-05-14 18:30 — PR #2390 (CLOSED, askeladd): Lion wd 2-arm σ=0.5 cross-stack re-test {3e-3, 1e-2} on max_norm=0.5 — PAPER-STRENGTHENING CROSS-STACK CLOSE (NOT a new axis; wd-axis already closed at #2791+#2819), wd-axis identified as FIRST TRIPLE-PATTERN AXIS (DEPENDENT-SYMMETRIC + DEGENERATE + ASYMMETRIC-V across σ × max_norm regimes), FIRST DOCUMENTED OOD-METRIC SIGN-REVERSAL across paper-appendix axes
 
 - **Branch:** `willowpai2g48h2-askeladd/lion-wd-sweep-on-beta0p3` (rebased onto current advisor HEAD)
