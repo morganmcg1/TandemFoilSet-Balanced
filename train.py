@@ -254,16 +254,23 @@ class Transolver(nn.Module):
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
+        self.n_layers = n_layers
         self.space_dim = space_dim
-        self.blocks = nn.ModuleList([
-            TransolverBlock(
-                num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
-                act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_se=(i == n_layers - 1),
-            )
-            for i in range(n_layers)
-        ])
+        # WEIGHT-TIED UNIVERSAL BLOCK: 1 shared TransolverBlock applied n_layers
+        # times (ALBERT / Universal Transformer recipe). Separate SE + final
+        # head modules are applied once after the last shared-block application
+        # so they don't accidentally couple to early passes (Option A in PR).
+        self.shared_block = TransolverBlock(
+            num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
+            act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
+            slice_num=slice_num, last_layer=False, use_se=False,
+        )
+        self.final_se = SqueezeExcitation(n_hidden, reduction=4)
+        self.final_ln = nn.LayerNorm(n_hidden)
+        self.final_head = nn.Sequential(
+            nn.Linear(n_hidden, n_hidden), nn.GELU(),
+            nn.Linear(n_hidden, out_dim),
+        )
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -283,7 +290,7 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, capture_per_pass: bool = False, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
@@ -292,9 +299,24 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
-            fx = block(fx, mask=mask)
-        return {"preds": fx}
+        pass_norms: list[dict] = []
+        for i in range(self.n_layers):
+            fx = self.shared_block(fx, mask=mask)
+            if capture_per_pass:
+                with torch.no_grad():
+                    pass_norms.append({
+                        "pass": i,
+                        "rms": fx.detach().float().pow(2).mean().sqrt().item(),
+                        "abs_max": fx.detach().float().abs().max().item(),
+                        "mean": fx.detach().float().mean().item(),
+                        "std": fx.detach().float().std().item(),
+                    })
+        fx = self.final_se(fx, mask=mask)
+        fx = self.final_head(self.final_ln(fx))
+        out: dict = {"preds": fx}
+        if capture_per_pass:
+            out["pass_norms"] = pass_norms
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -537,11 +559,18 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(
-    f"Block topology: POST-NORM (LN AFTER residual sum) at all {model_config['n_layers']}*2={model_config['n_layers']*2} per-block LN sites; "
-    f"final ln_3 retained in last block for output-head cleanup; "
-    f"forward: ln(gamma * f(x) + x) vs baseline pre-norm x + gamma * f(ln(x)); "
-    f"vs #2951 post-norm + LayerScale γ=1e-4: val 35.0624 (+14.73% LOSS), cruise +25.03% (worst). "
-    f"This PR isolates topology from LayerScale init."
+    f"WEIGHT-TIED UNIVERSAL BLOCK: 1 shared TransolverBlock applied n_layers={model_config['n_layers']} times "
+    f"(ALBERT 2020 / Universal Transformer 2018 recipe). "
+    f"Same compute per epoch; ~75% fewer block params. "
+    f"T (head-wise temperature) ALSO shared — 1 set of {model_config['n_head']} head-wise temperatures total "
+    f"(vs {model_config['n_layers']*model_config['n_head']} in baseline). "
+    f"Separate final SE + ln + head modules applied once after the last shared-block application. "
+    f"NEW BASELINE to beat: val_avg/mae_surf_p < 30.0382 (test 25.2099, PR #2964)."
+)
+print(
+    f"Block topology: POST-NORM (LN AFTER residual sum) — UNCHANGED from baseline; "
+    f"shared block: ln(gamma * attn(x) + x) -> ln(gamma * mlp(x) + x); gamma_attn = gamma_mlp = 1.0 constant; "
+    f"final head path: SE -> ln_final -> Linear(GELU)Linear -> [B,N,out_dim] applied ONCE after the loop."
 )
 print(
     f"LayerScale: REMOVED — γ_attn = γ_mlp = 1.0 constant (Python float, NOT nn.Parameter); "
@@ -557,37 +586,40 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
-# SE diagnostic: count modules and added params
+# SE diagnostic: count modules and added params (weight-tied: 1 final SE only)
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
 print(
-    f"Squeeze-Excitation with ATTENTION POOL (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
-    f"attention pool: Linear({model_config['n_hidden']},1) -> softmax over tokens (masked); "
-    f"fc1({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> GELU -> "
-    f"fc2({model_config['n_hidden']//4}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
-    f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
-    f"zero-init fc2 -> gate=0.5 uniform at step 0; "
-    f"attn_pool trunc_normal_ init (std=0.02) -> softmax over T~100K ~ uniform at step 0 (~mean pool baseline); "
-    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 mean pool #2765)"
+    f"Squeeze-Excitation with ATTENTION POOL (final-head SE, applied ONCE after last shared-block pass): "
+    f"{_n_se} SE module(s), +{_n_se_params} params (reduction=4); "
+    f"unchanged from baseline structurally (was block-3-only; now lifted out to final head)."
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
+# (weight-tied: 1 shared SwiGLU instance applied n_layers times)
 _swiglu_modules = [m for m in model.modules() if isinstance(m, SwiGLUMLP)]
 _swiglu_hidden = _swiglu_modules[0].hidden_swiglu if _swiglu_modules else 0
 _swiglu_params = sum(p.numel() for m in _swiglu_modules for p in m.parameters())
 _std_mlp_hidden = model_config['n_hidden'] * model_config['mlp_ratio']
 _std_mlp_params_per_block = (
-    model_config['n_hidden'] * _std_mlp_hidden + _std_mlp_hidden  # linear_pre
-    + _std_mlp_hidden * model_config['n_hidden'] + model_config['n_hidden']  # linear_post
+    model_config['n_hidden'] * _std_mlp_hidden + _std_mlp_hidden
+    + _std_mlp_hidden * model_config['n_hidden'] + model_config['n_hidden']
 )
-_std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
-    f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
-    f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
-    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
-    f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
-    f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+    f"SwiGLU MLP (Shazeer 2020) — WEIGHT-TIED: {len(_swiglu_modules)} unique SwiGLU instance applied "
+    f"{model_config['n_layers']}× (shares weights across depth); "
+    f"hidden_swiglu={_swiglu_hidden}; act=SiLU; SwiGLU params={_swiglu_params} "
+    f"(vs unique-per-block would be {_swiglu_params * model_config['n_layers']})."
+)
+
+# Param-reduction summary vs PR #2964 baseline (4 unique blocks: 407,172 params)
+_baseline_pr2964_params = 407_172
+_param_delta = n_params - _baseline_pr2964_params
+_param_reduction_pct = 100.0 * (_baseline_pr2964_params - n_params) / _baseline_pr2964_params
+print(
+    f"Param-count check: {n_params} (delta vs PR #2964 baseline {_baseline_pr2964_params}: "
+    f"{_param_delta:+d}, {_param_reduction_pct:+.1f}% reduction)."
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -689,17 +721,19 @@ with open(model_dir / "config.yaml", "w") as f:
     }, f, sort_keys=True)
 
 def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
-    """Probe pre/post-LN residual magnitudes per block on one val batch.
+    """Probe pre/post-LN residual magnitudes per pass on one val batch.
 
-    Logs |x| (RMS) before and after each LN site to distinguish post-norm
-    (capped by LN at every block) from pre-norm (residual stream grows with
-    depth). Run at ep1 + best-checkpoint for the topology-vs-LayerScale
-    attribution analysis required by the PR.
+    Weight-tied variant: hooks fire on the shared block's ln_1/ln_2 once per
+    application of the shared block, so each pass through the loop produces
+    one ln_1 + one ln_2 capture. We tag captures with their call order and
+    treat that as ``pass_idx`` (equivalent to block_idx in the original).
     """
     inner = getattr(model_obj, "_orig_mod", model_obj)
     captured: list[dict] = []
+    # Per-LN call counters so we tag captures with the pass index.
+    call_counters = {"ln_1": 0, "ln_2": 0, "ln_final": 0}
 
-    def make_hook(block_idx, ln_name):
+    def make_hook(ln_name):
         def hook(_module, args, output):
             with torch.no_grad():
                 x_in = args[0]
@@ -707,8 +741,10 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
                 post_rms = output.detach().float().pow(2).mean().sqrt().item()
                 pre_max = x_in.detach().float().abs().max().item()
                 post_max = output.detach().float().abs().max().item()
+                pass_idx = call_counters[ln_name]
+                call_counters[ln_name] += 1
                 captured.append({
-                    "block_idx": block_idx,
+                    "pass_idx": pass_idx,
                     "ln_name": ln_name,
                     "pre_ln_rms": pre_rms,
                     "post_ln_rms": post_rms,
@@ -717,12 +753,11 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
                 })
         return hook
 
-    handles = []
-    for bi, blk in enumerate(inner.blocks):
-        handles.append(blk.ln_1.register_forward_hook(make_hook(bi, "ln_1")))
-        handles.append(blk.ln_2.register_forward_hook(make_hook(bi, "ln_2")))
-        if getattr(blk, "last_layer", False) and hasattr(blk, "ln_3"):
-            handles.append(blk.ln_3.register_forward_hook(make_hook(bi, "ln_3")))
+    handles = [
+        inner.shared_block.ln_1.register_forward_hook(make_hook("ln_1")),
+        inner.shared_block.ln_2.register_forward_hook(make_hook("ln_2")),
+        inner.final_ln.register_forward_hook(make_hook("ln_final")),
+    ]
 
     model_obj.eval()
     with torch.no_grad():
@@ -730,14 +765,13 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
         x_b = x_b.to(device_, non_blocking=True)
         mask_b = mask_b.to(device_, non_blocking=True)
         x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
-        # Use inner (uncompiled) module so Python forward hooks fire reliably.
         with amp_ctx():
             _ = inner({"x": x_norm, "mask": mask_b})
 
     for h in handles:
         h.remove()
 
-    print(f"\nResidual magnitude probe @ {epoch_tag} (post-norm topology):")
+    print(f"\nResidual magnitude probe @ {epoch_tag} (weight-tied post-norm topology):")
     log_payload = {
         "event": "residual_magnitude",
         "epoch_tag": epoch_tag,
@@ -745,7 +779,7 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     }
     for site in captured:
         print(
-            f"  block[{site['block_idx']}].{site['ln_name']}: "
+            f"  pass[{site['pass_idx']}].{site['ln_name']}: "
             f"pre_LN rms={site['pre_ln_rms']:.4f} max={site['pre_ln_abs_max']:.3f} | "
             f"post_LN rms={site['post_ln_rms']:.4f} max={site['post_ln_abs_max']:.3f}"
         )
@@ -885,23 +919,54 @@ if best_metrics:
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
 
+    # Per-pass residual-stream diagnostic (CRITICAL for this PR):
+    # does each application of the shared block refine toward a converged
+    # state (iterative-refinement signature) or diverge?
+    _inner_pp = getattr(model, "_orig_mod", model)
+    _pp_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    _pp_log = {"event": "per_pass_residual",
+               "epoch": int(best_metrics["epoch"]),
+               "splits": {}}
+    print("\nPer-pass residual stream stats (best-checkpoint weights):")
+    for _split_name in ["val_single_in_dist", "val_geom_camber_rc",
+                        "val_geom_camber_cruise", "val_re_rand"]:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        with torch.no_grad():
+            _x_pp, _, _, _m_pp = next(iter(_ldr))
+            _x_pp = _x_pp.to(device, non_blocking=True)
+            _m_pp = _m_pp.to(device, non_blocking=True)
+            _x_norm_pp = (_x_pp - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _out_pp = _inner_pp({"x": _x_norm_pp, "mask": _m_pp}, capture_per_pass=True)
+            _norms = _out_pp["pass_norms"]
+        print(f"  Split: {_split_name}")
+        for _site in _norms:
+            print(f"    pass[{_site['pass']}]: ||x||_rms={_site['rms']:.4f}  "
+                  f"||x||_max={_site['abs_max']:.3f}  "
+                  f"mean={_site['mean']:.4f}  std={_site['std']:.4f}")
+        _pp_log["splits"][_split_name] = _norms
+    append_metrics_jsonl(metrics_jsonl_path, _pp_log)
+
     # LayerScale diagnostic: γ_attn = γ_mlp = 1.0 CONSTANT (no learnable Parameter).
-    # Report the constants for confirmation; per-block dynamics are inapplicable.
+    # Weight-tied: single shared block, so γ is shared across all passes.
     _inner = getattr(model, "_orig_mod", model)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]),
-                  "layerscale_mode": "constant_1.0_no_parameter", "blocks": []}
-    print("\nLayerScale final gammas (best-checkpoint weights, CONSTANT 1.0 — no learnable γ):")
-    for _i, _blk in enumerate(_inner.blocks):
-        _ga = float(_blk.gamma_attn) if not torch.is_tensor(_blk.gamma_attn) else float(_blk.gamma_attn.detach().float().mean().item())
-        _gm = float(_blk.gamma_mlp) if not torch.is_tensor(_blk.gamma_mlp) else float(_blk.gamma_mlp.detach().float().mean().item())
-        print(f"  block[{_i}]: gamma_attn={_ga:.6f} | gamma_mlp={_gm:.6f} (constant; no Parameter)")
-        _gamma_log["blocks"].append({
-            "block_idx": _i,
-            "gamma_attn_mean": _ga,
-            "gamma_attn_abs_mean": abs(_ga),
-            "gamma_mlp_mean": _gm,
-            "gamma_mlp_abs_mean": abs(_gm),
-        })
+                  "layerscale_mode": "constant_1.0_no_parameter",
+                  "weight_tied": True, "n_passes": _inner.n_layers, "blocks": []}
+    _blk = _inner.shared_block
+    _ga = float(_blk.gamma_attn) if not torch.is_tensor(_blk.gamma_attn) else float(_blk.gamma_attn.detach().float().mean().item())
+    _gm = float(_blk.gamma_mlp) if not torch.is_tensor(_blk.gamma_mlp) else float(_blk.gamma_mlp.detach().float().mean().item())
+    print("\nLayerScale final gammas (best-checkpoint weights, CONSTANT 1.0 — shared across all passes):")
+    print(f"  shared_block: gamma_attn={_ga:.6f} | gamma_mlp={_gm:.6f} (applied {_inner.n_layers}× per forward)")
+    _gamma_log["blocks"].append({
+        "block_idx": 0,
+        "gamma_attn_mean": _ga,
+        "gamma_attn_abs_mean": abs(_ga),
+        "gamma_mlp_mean": _gm,
+        "gamma_mlp_abs_mean": abs(_gm),
+    })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
@@ -932,11 +997,10 @@ if best_metrics:
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
 
-    # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
-    # split (in_dist vs OOD). Hook mirrors the SE forward — attention pool
-    # (softmax over masked tokens) then bottleneck MLP — so the captured gate
-    # and attn weights match the actual module behaviour.
-    _se_mods_with_idx = [(i, blk.se) for i, blk in enumerate(_inner.blocks) if blk.se is not None]
+    # Squeeze-Excitation diagnostic: gate + attention-pool stats per split
+    # (in_dist vs OOD). Weight-tied: SE is the final-head SE only (1 module),
+    # tagged with block_idx = n_layers-1 for log-format compat.
+    _se_mods_with_idx = [(_inner.n_layers - 1, _inner.final_se)]
     _se_per_split: dict[str, list[tuple[int, torch.Tensor]]] = {}
     _attn_pool_per_split: dict[str, list[dict]] = {}
 
@@ -1049,15 +1113,14 @@ if best_metrics:
                 "n_real_tokens": _ap["n_real_tokens_mean"],
             })
 
-    # SwiGLU gate diagnostic — capture per-block gate (silu(W_gate x)) and value
-    # (W_value x) statistics on a sample val batch, best-checkpoint weights.
-    # gate_zero_frac near 0 ≈ gate passing everything through (acts like a richer
-    # MLP); gate_zero_frac > 0.1 ≈ conditional channel suppression engaged.
-    _swiglu_blocks = [(i, blk.mlp) for i, blk in enumerate(_inner.blocks)
-                      if isinstance(blk.mlp, SwiGLUMLP)]
+    # SwiGLU gate diagnostic — weight-tied: 1 shared SwiGLU instance fires
+    # n_layers times per forward. Use a per-call counter to tag captures by pass.
+    _swiglu_blocks = ([("shared", _inner.shared_block.mlp)]
+                      if isinstance(_inner.shared_block.mlp, SwiGLUMLP) else [])
     _swiglu_captured: list[tuple[int, dict[str, float]]] = []
+    _swiglu_call_counter = {"n": 0}
 
-    def _make_swiglu_hook(idx: int):
+    def _make_swiglu_hook():
         def _hook(module, args, _output):
             x = args[0]
             with torch.no_grad():
@@ -1066,8 +1129,6 @@ if best_metrics:
                 value = module.linear_value(x).detach().float()
                 flat_g = gate_post.flatten()
                 flat_v = value.flatten()
-                # Correlation in a fixed-size random subsample to avoid GPU OOM
-                # on big meshes (242K nodes × 128 hidden = 31M elements).
                 n_sub = min(flat_g.numel(), 200_000)
                 if n_sub < flat_g.numel():
                     idx_sub = torch.randperm(flat_g.numel(), device=flat_g.device)[:n_sub]
@@ -1078,7 +1139,9 @@ if best_metrics:
                 corr = float(
                     torch.corrcoef(torch.stack([fg, fv]))[0, 1].cpu().item()
                 ) if fg.numel() > 1 else 0.0
-                _swiglu_captured.append((idx, {
+                pass_idx = _swiglu_call_counter["n"]
+                _swiglu_call_counter["n"] += 1
+                _swiglu_captured.append((pass_idx, {
                     "gate_mean": float(gate_post.mean().cpu()),
                     "gate_std": float(gate_post.std().cpu()),
                     "gate_abs_mean": float(gate_post.abs().mean().cpu()),
@@ -1088,8 +1151,8 @@ if best_metrics:
                 }))
         return _hook
 
-    _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
-                       for i, m in _swiglu_blocks]
+    _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook())
+                       for _, m in _swiglu_blocks]
     _swiglu_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     with torch.no_grad():
         _x_s, _y_s, _is_s, _m_s = next(iter(_swiglu_loader))
@@ -1101,17 +1164,18 @@ if best_metrics:
     for _h in _swiglu_handles:
         _h.remove()
 
-    print("\nSwiGLU gate stats per block (sample val batch, best-checkpoint weights):")
-    _swiglu_log = {"event": "swiglu_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    print("\nSwiGLU gate stats per pass (shared MLP, sample val batch, best-checkpoint weights):")
+    _swiglu_log = {"event": "swiglu_diagnostic", "epoch": int(best_metrics["epoch"]),
+                   "weight_tied": True, "blocks": []}
     for _idx, _stats in _swiglu_captured:
         print(
-            f"  SwiGLU block[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
+            f"  SwiGLU pass[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
             f"std={_stats['gate_std']:.4f}  abs_mean={_stats['gate_abs_mean']:.4f}  "
             f"zero_frac={_stats['gate_zero_frac']:.4f}  "
             f"value_abs_mean={_stats['value_abs_mean']:.4f}  "
             f"corr(gate,value)={_stats['gate_value_corr']:.4f}"
         )
-        _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
+        _swiglu_log["blocks"].append({"pass_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
 
     test_metrics = None
