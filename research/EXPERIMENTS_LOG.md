@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-14 20:55 [Round 138 close-30] UTC — PR #3003: sandwich-norm-magneto — **CLOSED LOSS (+4.22% val vs NEW; 152nd taxon; LN-PLACEMENT-AXIS-EXHAUSTED)** **🌟 BUT CRUISE ORDERING HELD — FIRST TIME POST-#2964 🌟**
+
+- **Branch:** charliepai2g48h5-thorfinn/sandwich-norm-magneto
+- **Metric artifacts:** models/model-charliepai2g48h5-thorfinn-sandwich-norm-magneto-*/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #3003 (sandwich-LN) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **31.3071** | **+4.22% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 26.6837 | +5.85% LOSS |
+| val_single_in_dist | 25.219 | 26.61 | +5.52% LOSS |
+| val_geom_camber_rc | 43.929 | 45.85 | +4.37% LOSS |
+| val_geom_camber_cruise | 16.265 | **17.75** | +9.13% absolute LOSS BUT **lowest split (basin preserved)** |
+| val_re_rand | 34.740 | 35.02 | +0.81% LOSS |
+| test_geom_camber_cruise | 13.776 | **14.70** | +6.70% absolute LOSS BUT **lowest test split (basin preserved)** |
+| epochs reached | 60/60 | **57/60 (LN tax)** | -3 epochs (per-block LN cost) |
+| best_epoch | 60/60 | 57/57 | terminal (budget-limited) |
+| Param count | 407,172 | **408,708 (+1,536)** | dual-LN per block |
+
+**Hypothesis:** Sandwich-LN / Magneto Sub-LN topology — `x = LN(x + LN(branch(LN(x))))` i.e. pre-LN at branch INPUT + post-LN at branch OUTPUT both retained. Predicted to combine pre-norm gradient flow (deep training stability) with post-norm output stability (#2964 WIN); +1,536 params.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **🌟 CRUISE META-SIGNAL ORDERING HELD (FIRST TIME POST-#2964 UNDER STRUCTURAL INTERVENTION).** Cruise remained the LOWEST val AND test split (17.75 / 14.70) — ordering preserved across all 4 splits. Absolute level worse than baseline, but the BASIN STRUCTURE held. This is the **FIRST post-#2964 intervention that did NOT invert cruise** (vs 7 prior consecutive inversions: #2961 aux, #2978 AoA, #2986 AdamW, #2988 γ, #2994 lr, #2995 T-warmstart, #2993 wd).
+
+2. **PRE-LN γ DRIFTS DOWN (model muting redundant pre-LN).** Pre-LN learnable γ migrated from 1.0 init DOWN to ~0.81-0.93 mean across 4 blocks. Model is signaling redundancy of pre-LN — at 4-block depth, pre-LN provides no learning-signal benefit on top of post-LN. Sandwich is OVER-NORMALIZED at this shallow depth.
+
+3. **LN-PLACEMENT AXIS EXHAUSTED AT 4-BLOCK DEPTH.** Tested: pre-norm (baseline pre-#2964), post-norm γ=1.0 (#2964 WIN), pre-norm + γ (variants), post-norm scalar γ #2988 LOSS, post-norm per-channel γ #2977 LOSS, sandwich-LN #3003 LOSS. **All LN-placement / γ-adaptivity variants now explored; #2964 post-norm γ=1.0 is the OPTIMUM in this family.**
+
+4. **LN COST IS REAL.** +1,536 params + per-block LN forward → -3 epochs reached at 30-min budget. LN tax dominates any theoretical stability benefit at 4-block depth.
+
+5. **NEW INSIGHT: TRAINING-TIME-PRESERVING INTERVENTIONS PRESERVE CRUISE BASIN.** All 7 prior post-#2964 LOSS interventions perturbed training dynamics (loss weights, input noise, optimizer family, optimizer step, lr, T-init, wd magnitude). Sandwich-LN perturbs FORWARD-PASS STRUCTURE but optimizer/loss/lr are baseline → cruise ordering held. **This signals weight-averaging / EMA (zero training perturbation, eval-only intervention) as the natural pivot.**
+
+6. **152nd taxon CLOSED:** SANDWICH-NORM-AT-4-BLOCK-DEPTH-IS-REDUNDANT / LN-PLACEMENT-AXIS-EXHAUSTED.
+
+**Followup assigned:** #3020 thorfinn ema-decay-0.999 (FRESH WEIGHT-AVERAGING AXIS — Polyak 1990 / SWA Izmailov 2018 recipe via `torch.optim.swa_utils.AveragedModel`; maintains shadow EMA buffer updated each opt step `ema = 0.999·ema + 0.001·w`; evaluates with EMA weights; ZERO training-time perturbation = should preserve cruise basin per finding #5; targets best=last pattern by collecting late-training quality; +0 trainable params; first weight-averaging experiment in launch; 155th axis). Total closed: 152. Winners: 22.
+
+---
+
 ## 2026-05-14 20:30 [Round 138 close-29] UTC — PR #2993: lion-wd-1e-3 — **CLOSED LOSS (+1.85% val vs NEW; 151st taxon; WD-AXIS-CLOSED-AT-3E-4)**
 
 - **Branch:** charliepai2g48h5-fern/weight-decay-1e-3
