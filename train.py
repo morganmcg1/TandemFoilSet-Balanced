@@ -47,6 +47,39 @@ from data import (
     pad_collate,
 )
 
+
+class EMAModel:
+    """Exponential Moving Average of model parameters.
+
+    Maintains a shadow copy of model parameters updated via:
+        ema_param = decay * ema_param + (1 - decay) * live_param
+
+    Use ``with ema.swap(model):`` to temporarily replace the model's
+    parameters with the EMA weights for evaluation, then automatically
+    restore the live weights afterwards.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for k, v in model.state_dict().items():
+            if v.is_floating_point():
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                self.shadow[k].copy_(v.detach())
+
+    @contextlib.contextmanager
+    def swap(self, model: nn.Module):
+        backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.shadow)
+        try:
+            yield
+        finally:
+            model.load_state_dict(backup)
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -588,6 +621,18 @@ except Exception as e:
     compile_error = repr(e)
     print(f"torch.compile: skipped ({compile_error})")
 
+# EMA for evaluation. decay=0.999 → ~700-step half-life.
+# Build EMA from the UNCOMPILED inner model so the shadow keys/shapes align
+# with state_dict load semantics under torch.compile.
+_inner = getattr(model, "_orig_mod", model)
+ema_decay = 0.999
+ema = EMAModel(_inner, decay=ema_decay)
+print(
+    f"EMA: decay={ema_decay} | shadow_tensors={len(ema.shadow)} | "
+    f"shadow_params={sum(v.numel() for v in ema.shadow.values())} | "
+    f"primary eval = EMA weights; live eval logged for comparison"
+)
+
 
 def amp_ctx_factory():
     if torch.cuda.is_available():
@@ -708,6 +753,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(_inner)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -720,12 +766,25 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
-    split_metrics = {
+    # Live weights eval (diagnostic)
+    live_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_avg_surf_p = live_val_avg["avg/mae_surf_p"]
+    # EMA weights eval (primary)
+    with ema.swap(_inner):
+        ema_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+            for name, loader in val_loaders.items()
+        }
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+    # Primary metric for checkpoint selection is the EMA val
+    split_metrics = ema_split_metrics
+    avg_surf_p = ema_avg_surf_p
+    ema_gap = live_avg_surf_p - ema_avg_surf_p  # positive => EMA is helping
     dt = time.time() - t0
 
     tag = ""
@@ -736,7 +795,13 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # checkpoint.pt holds the EMA shadow (consumed by final test eval).
+        torch.save(ema.shadow, model_path)
+        torch.save(ema.shadow, model_dir / "checkpoint_ema.pt")
+        torch.save(
+            {k: v.detach().clone() for k, v in _inner.state_dict().items()},
+            model_dir / "checkpoint_live.pt",
+        )
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -749,14 +814,20 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
+        "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+        "live_val_avg/mae_surf_p": live_avg_surf_p,
+        "ema_gap": ema_gap,
         "val_splits": split_metrics,
+        "live_val_splits": live_split_metrics,
+        "ema/decay": ema_decay,
         "is_best": tag == " *",
         "compile_active": compile_active,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"ema_val={ema_avg_surf_p:.4f} live_val={live_avg_surf_p:.4f} "
+        f"gap={ema_gap:+.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -787,11 +858,13 @@ append_metrics_jsonl(metrics_jsonl_path, {
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    # checkpoint.pt holds the EMA shadow saved with unprefixed keys (from
+    # _inner.state_dict()). Load via _inner so the keys line up (loading into
+    # the compiled wrapper would expect "_orig_mod." prefixed keys).
+    _inner.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
     # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
-    _inner = getattr(model, "_orig_mod", model)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
     print("\nLayerScale final gammas (best-checkpoint weights):")
     for _i, _blk in enumerate(_inner.blocks):
