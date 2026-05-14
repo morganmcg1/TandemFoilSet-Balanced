@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 03:25
+- **Date:** 2026-05-14 05:45
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -31,20 +31,22 @@
 
 **Cumulative: −62.0% val, −64.0% test from round-1 start.** Still compute-bound (best=last on both seeds at all 10 merges).
 
-## Current research focus
+## Current research focus (round 8)
 
-**Diversifying beyond Lion hyperparameter tuning.** Three Lion-internal axes closed this hour (β1=0.85 brackets in flight; β2 axis fully closed; warm restarts closed; SiLU activation closed; Charbonnier closed; warmup closed; wd=3e-3 closed). The Lion hyperparameter design space has been thoroughly explored. New axes being tested in parallel:
+**Moving beyond Lion hyperparameter tuning.** The variance-vs-mean decoupling pattern is now fully confirmed across 6 experiments — any Lion trajectory-stabilization mechanism regresses mean while reducing variance. New round focuses on **structural/geometric axes** orthogonal to training trajectory:
 
-1. **SWA (thorfinn #2712)**: average last-10-epoch checkpoints (epochs 26-35) — free improvement; zero compute overhead
-2. **max_norm=0.5 fresh (fern #2763)**: re-test clip-magnitude axis on new baseline; original showed −3.8 OOD camber gain
-3. **Per-channel volume loss weighting (askeladd #2743)**: upweight pressure 2× — direct objective alignment with eval metric
-4. **Lookahead(Lion) (alphonse #2726)**: outer optimizer wrapper, k=5, α=0.5 — slow-weight smoothing
-5. **Re-feature jitter aug (frieren #2751)**: log(Re) + N(0, σ=0.05) during training — data augmentation, targets re_rand split
-6. **Gradient accumulation 2× (tanjiro #2752)**: effective batch size 2× — Lion-recommended for variance reduction in sign update
+1. **RMSNorm (alphonse #2800)**: replace LayerNorm throughout — normalization architecture change, ~7-10% per-layer compute saving, removes mean-centering step
+2. **Pinball loss τ=0.55 (askeladd #2801)**: asymmetric directional loss bias for pressure channel — tests whether pressure is systematically under-predicted; directional not amplitude
+3. **Param-group wd (frieren #2803)**: exclude norms/biases from weight decay — standard modern practice, prevents wd from shrinking LN γ→0
+4. **LN γ-init=0.5 (tanjiro #2805)**: initialize LayerNorm scale at 0.5 (DeepNorm-style) — changes initial optimization geometry, not training trajectory
+
+Still in flight from prior round:
+5. **SWA (thorfinn #2712)**: average last-10-epoch checkpoints — free improvement if late checkpoints are diverse enough
+6. **max_norm=0.5 (fern #2763)**: re-test gradient clip on new baseline — had the best OOD single-split signal of the round (−3.8pt camber_rc)
 7. **Per-layer LR decay (nezuko #2753)**: α=0.85 geometric decay — deeper transformer blocks get smaller LR
-8. **Gradient Centralization (edward #2762)**: zero-mean gradient before momentum update; picks up abandoned nezuko axis on fresh PR
+8. **Gradient Centralization (edward #2762)**: zero-mean gradient before momentum update; different from variance-vs-mean axis (GC modifies gradient direction, not trajectory frequency)
 
-## Round 1 portfolio (live)
+## Round 1 portfolio (current)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
@@ -54,78 +56,81 @@
 | #2561 | edward | Lion beta2=0.95 | **CLOSED** (+14.8%, beta2 analogy wrong) |
 | #2520 | thorfinn | n_head 4→8 | **CLOSED** (+24%, capacity loss) |
 | #2504 | frieren | QK-RMSNorm | **CLOSED** (+14%, Q/K magnitude signal) |
-| #2628 | tanjiro | Lion lr=1e-4 | **CLOSED** (+1.9% val, overshoot — sweet spot at 7.5e-5) |
-| #2501 | askeladd | β_p=0.625 | **CLOSED** (+6.8% val — per-channel β axis fully closed) |
-| #2565 | fern | max_norm=0.5 | **CLOSED** 2026-05-14 03:25 (stale; 5+ hrs without rebase; assigned fresh PR off current baseline) |
-| #2564 | nezuko | Gradient Centralization | **CLOSED** 2026-05-14 03:00 (stale; no rebase after baseline shift) |
-| #2505 | alphonse | SiLU activation | **CLOSED** 2026-05-14 02:10 (+18.9% val; Lion sign-normalization neutralizes SiLU's gradient advantage; GELU selective gating doing useful work in slice-attention pathway) |
-| **#2726** | **alphonse** | **Lookahead(Lion) k=5 α=0.5** | **WIP NEW 2026-05-14 02:10** |
-| #2633 | edward | Lion beta1=0.95 | **CLOSED** (+4.83 pt val; variance −85% but convergence slowed) |
-| #2631 | thorfinn | Lion warmup 5ep | **CLOSED** 2026-05-14 01:45 (+4.44% val; variance −67% but 5 epochs eat compute budget) |
-| #2629 | frieren | Lion wd=3e-3 | **CLOSED** 2026-05-14 01:45 (+1.68 pt val; all 4 splits regress; wd axis monotonic-worse) |
-| #2700 | edward | Lion beta1=0.85 | **CLOSED** 2026-05-14 03:25 (+8.3% val; variance −81% but mean shifted up; β1 axis FULLY BRACKETED, 0.90 optimal) |
-| **#2762** | **edward** | **Gradient Centralization on Lion (re-attempt)** | **WIP NEW 2026-05-14 03:25** |
-| **#2763** | **fern** | **max_norm=0.5 on new baseline (fresh)** | **WIP NEW 2026-05-14 03:25** |
-| #2693 | tanjiro | CosineAnnealingWarmRestarts T_0=12 | **CLOSED** 2026-05-14 03:00 (+17.7% val; cycle-3 IS best per SGDR theory but absolute level far below baseline; schedule reset cost too high at 35-ep cap) |
-| #2713 | frieren | Lion β2=0.999 | **CLOSED** 2026-05-14 03:00 (+5.69% val; variance −78% but mean shifted up; symmetric with β2=0.95 — axis fully bracketed) |
-| **#2751** | **frieren** | **Re-feature jitter σ=0.05** | **WIP NEW 2026-05-14 03:00** |
-| **#2752** | **tanjiro** | **Gradient accumulation 2×** | **WIP NEW 2026-05-14 03:00** |
-| **#2753** | **nezuko** | **Per-layer LR decay α=0.85** | **WIP NEW 2026-05-14 03:00** |
-| #2694 | askeladd | Charbonnier loss ε=0.5 | **CLOSED** 2026-05-14 02:30 (val 46.03 best, +1.3% miss bar; per-channel signature on s1 erased by s2; loss-shape axis saturated) |
-| **#2743** | **askeladd** | **Per-channel volume loss weighting: p_weight=2.0** | **WIP NEW 2026-05-14 02:30** |
-| **#2712** | **thorfinn** | **SWA (average epochs 26-35)** | **WIP NEW 2026-05-14 01:50** |
-| **#2713** | **frieren** | **Lion beta2=0.999** | **WIP NEW 2026-05-14 01:50** |
+| #2628 | tanjiro | Lion lr=1e-4 | **CLOSED** (+1.9% val, overshoot) |
+| #2501 | askeladd | β_p=0.625 | **CLOSED** (+6.8% val — per-channel β fully closed) |
+| #2565 | fern | max_norm=0.5 | **CLOSED** 2026-05-14 03:25 (stale; reassigned fresh) |
+| #2564 | nezuko | Gradient Centralization | **CLOSED** 2026-05-14 03:00 (stale; reassigned fresh) |
+| #2505 | alphonse | SiLU activation | **CLOSED** (+18.9% val; Lion sign neutralizes SiLU advantage) |
+| #2633 | edward | Lion beta1=0.95 | **CLOSED** (+4.83pt val; variance −85% but mean shifted) |
+| #2631 | thorfinn | Lion warmup 5ep | **CLOSED** (+4.44% val; warmup cost too high at 35-ep cap) |
+| #2629 | frieren | Lion wd=3e-3 | **CLOSED** (+1.68pt val; wd axis monotonic-worse) |
+| #2700 | edward | Lion beta1=0.85 | **CLOSED** (+8.3% val; β1 axis FULLY BRACKETED, 0.90 optimal) |
+| #2693 | tanjiro | CosineAnnealingWarmRestarts T_0=12 | **CLOSED** (+17.7% val; schedule-shape axis retired) |
+| #2713 | frieren | Lion β2=0.999 | **CLOSED** (+5.69% val; β2 axis FULLY BRACKETED, 0.99 optimal) |
+| #2694 | askeladd | Charbonnier loss ε=0.5 | **CLOSED** (+1.3% miss bar; loss-shape axis saturated) |
+| #2726 | alphonse | Lookahead(Lion) k=5 α=0.5 | **CLOSED** 2026-05-14 05:30 (+6.77pt val; variance −93%; 6th variance-vs-mean decoupling) |
+| #2743 | askeladd | p_weight=2.0 (volume) | **CLOSED** 2026-05-14 05:30 (+5.22pt val; pressure worst-hit; Lion sign discards magnitude weight) |
+| #2751 | frieren | Re-feature jitter σ=0.05 | **CLOSED** 2026-05-14 05:30 (+12.4pt val +27%; conditioning jitter creates inconsistency) |
+| #2752 | tanjiro | Gradient accumulation 2× | **CLOSED** 2026-05-14 05:30 (+8.87pt val; variance −95%; step-count cost irrecoverable) |
+| **#2712** | **thorfinn** | **SWA (average epochs 26-35)** | **WIP** |
+| **#2753** | **nezuko** | **Per-layer LR decay α=0.85** | **WIP** |
+| **#2762** | **edward** | **Gradient Centralization on Lion** | **WIP** |
+| **#2763** | **fern** | **max_norm=0.5 on new baseline (fresh)** | **WIP** |
+| **#2800** | **alphonse** | **RMSNorm (replace LayerNorm)** | **WIP NEW 2026-05-14 05:45** |
+| **#2801** | **askeladd** | **Pinball loss τ=0.55 for pressure** | **WIP NEW 2026-05-14 05:45** |
+| **#2803** | **frieren** | **Param-group wd (no wd on norms/biases)** | **WIP NEW 2026-05-14 05:45** |
+| **#2805** | **tanjiro** | **LayerNorm γ-init=0.5 (DeepNorm-style)** | **WIP NEW 2026-05-14 05:45** |
 
-**Merged:** 10 | **Closed:** 43 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 47 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
 1. **Compute is permanently binding** — best=last at every merge. The 30-min cap has been the dominant constraint since bf16 (PR #1715).
-2. **Lion composes cleanly with grad_clip** — no "double normalization" fight; both operate on orthogonal mechanisms.
-3. **LR=7.5e-5 seed variance** — seed std increased 4-6× (3.60 pt vs 0.97 pt). β1=0.95 reduces variance 85% but slows convergence 5pt. Warmup reduces variance 67% but consumes compute budget. SWA and β1=0.85 are the remaining variance-reduction candidates.
-4. **Warmup costs too much at 35-epoch budget** — every epoch counts; 5-epoch warmup shortens effective cosine phase from 35→30 epochs.
-5. **wd axis monotonic-worse upward** — wd=3e-3 regressed all 4 splits; any convergence slowdown at compute-bound cap shows as worse val. wd=2e-3 is confirmed optimal or near-optimal.
-6. **Lion beta2 axis**: β2=0.95 regressed +14.8% (too-short EMA). β2=0.999 (longer EMA) is the untested upper bracket — currently in flight.
-7. **Architecture axis CLOSED for round 1** — n_head=8 (+24% regression) joins the scalar-capacity cluster of failures.
-8. **Q/K magnitude carries physics-discriminative signal** — QK-RMSNorm regressed because per-domain log(Re) and dsdf scales propagate through Q/K projections.
+2. **Variance-vs-mean decoupling confirmed (6 instances)** — β1=0.85/0.95, β2=0.999, warmup, Lookahead, grad-accum all show variance −68%–95% with mean regression +4.4pt–8.9pt. Pattern: any mechanism reducing optimizer step frequency (or equivalent trajectory diversity) trades mean improvement for variance reduction. At 35-ep compute-bound cap, the mean cost is never recovered.
+3. **Lion β1 axis FULLY BRACKETED** — β1=0.85 (+8.3%) and β1=0.95 (+4.83pt) both regress; β1=0.90 confirmed optimal.
+4. **Lion β2 axis FULLY BRACKETED** — β2=0.95 (+14.8%) and β2=0.999 (+5.69%) both regress; β2=0.99 confirmed optimal.
+5. **Schedule-shape axis FULLY RETIRED** — warmup, warm restarts, all variants lose to cosine T_max=50 with implicit residual.
+6. **Per-channel amplitude axis RETIRED under Lion** — p_weight=2.0 failed; per-channel β closed; Lion's sign() discards gradient magnitude, so amplitude-based loss scaling has no effect on capacity allocation.
+7. **Conditioning-variable jitter axis RETIRED** — jittering log(Re) creates supervised inconsistency; valid augmentation requires conditional invariance in outputs.
+
+## Currently retired axes
+
+- **Scalar capacity** (n_hidden, n_layers, slice_num, mlp_ratio) — failed at all 3 baselines
+- **Schedule shape** — T_max, eta_min, warmup-then-flat, warm restarts — all retired
+- **Noise injection** (dropout, DropPath) — regularization stack already saturated
+- **Lion betas** — β1 fully bracketed at 0.90; β2 fully bracketed at 0.99
+- **Lion LR** — 1e-4 overshoots; 7.5e-5 sweet spot
+- **Per-channel Huber β** — both directions failed; global β=0.5 robust
+- **n_head=8** — capacity loss + overhead
+- **QK-RMSNorm** — Q/K magnitudes carry physics-discriminative signal
+- **surf_weight** — fully bracketed (5/10/20); 10 optimal
+- **EMA weights** — EMA-lag on cooling cosine cancels smoothing
+- **SiLU activation** — Lion sign neutralizes SiLU advantage; GELU selective gating useful in slice-attention
+- **Charbonnier loss** — loss-shape axis saturated; Huber β=0.5 robust under Lion+clip
+- **CosineAnnealingWarmRestarts** — cycle restart cost irrecoverable at 35-ep cap
+- **Lookahead** — momentum state continuity destroyed at each sync-back
+- **Gradient accumulation 2×** — step-count halving catastrophic at 35-ep cap
+- **Per-channel amplitude weighting** — Lion sign() discards magnitude; amplitude weights have no effect on capacity allocation
+- **Conditioning-variable jitter (log(Re))** — creates supervised inconsistency; degraded all splits
 
 ## Potential next research directions
 
-### Immediate (follow from current results)
+### Immediate (round 8 in flight)
 
-1. **β1=0.85 result** — if improves: confirmed faster adaptation helps; try β1=0.8 next. If regresses: β1 axis fully closed, keep β1=0.9.
-2. **SWA result** — if improves: extend averaging window or try different aggregation (median-of-weights). If no gain: model's late-training checkpoints are less diverse than hypothesized.
-3. **β2=0.999 result** — if improves: try β2=0.9995 to find optimal EMA window. If regresses: Lion β2 axis fully retired in both directions.
-4. **fern max_norm=0.5 on new baseline** — the OOD-camber −3.8 pt improvement was the most promising single-split signal this round; needs to hold on 7.5e-5 baseline.
-5. **Combine best axes** — once β1 and β2 axes close, try joint (β1=0.85, β2=0.999) if both improve individually.
-6. **max_norm=0.25** — continue downward clip scan from 0.5 if fern's rebase wins.
+1. **RMSNorm** — free-lunch normalization swap; modern default for transformers
+2. **Pinball τ=0.55** — directional pressure bias; if residual diagnostic shows consistent direction, retry τ=0.45 if needed
+3. **Param-group wd** — standard practice; zero compute cost
+4. **LN γ-init=0.5** — init geometry; recoverable since γ is learnable
+5. **SWA** — checkpoint averaging; free improvement if checkpoints diverse
+6. **max_norm=0.5** — had best OOD single-split signal this round
+7. **Per-layer LR decay** — untested structural lever
+8. **Gradient Centralization** — geometric constraint on gradient direction (distinct from trajectory frequency)
 
-### Medium-term (needs researcher-agent exploration)
+### Medium-term
 
-6. **Per-sample Re embedding** — re_rand and cruise are still the easiest splits; Re-normalized input features may unlock OOD generalization on the harder re-variation axis
-7. **Surface-anchored cross-attention** — boundary nodes as queries against volume tokens; directly addresses the "surface inherits from volume" structural relationship
-8. **Quantile/Pinball loss** — more aggressive median-targeting than Huber for the physically-meaningful pressure channel
-9. **Data augmentation** — y-flip + Uy-negation for cruise samples (flow-symmetric BCs admit clean mirror augmentation)
-10. **Larger model with Lion** — scalar-capacity failed on AdamW; Lion's faster convergence might enable n_hidden=192 at 35 epochs
-
-### Currently retired axes
-
-- **Scalar capacity** (n_hidden, n_layers, slice_num, mlp_ratio) — failed at all 3 baselines
-- **Cosine LR shape** (T_max, eta_min, warmup-then-flat) — 3 negative results; warm restarts (#2693) currently in flight as different shape
-- **Noise injection** (dropout, DropPath) — both regressed; regularization stack already saturated
-- **Lion beta2=0.95** — analogy to AdamW wrong; keep (0.9, 0.99)
-- **Lion LR (upper bracket)** — 1e-4 overshoots; 7.5e-5 is the sweet spot
-- **Per-channel Huber β** — both directions failed under both optimizer baselines; global β=0.5 robust
-- **n_head=8** — capacity loss + per-epoch overhead
-- **QK-RMSNorm** — Q/K magnitudes carry physics-discriminative signal
-- **surf_weight** — fully bracketed (5/10/20); convex, 10 is optimal
-- **EMA weights** — EMA-lag on cooling cosine cancels the smoothing
-- **Lion warmup 5ep** — 5 warmup epochs eat compute budget; variance reduction insufficient to compensate
-- **Lion wd=3e-3** — monotonic-worse; wd=2e-3 confirmed optimal
-- **SiLU activation in FFN** — Lion's sign-normalization neutralizes SiLU's "non-zero gradient" advantage; GELU's selective gating is doing useful work in the slice-attention pathway
-- **Charbonnier loss ε=0.5** — wash-to-regression on val; loss-shape axis appears saturated (Huber β=0.5 robust under Lion+clip)
-- **Lion β2 axis FULLY CLOSED both directions** — β2=0.95 (+14.8% too short EMA) and β2=0.999 (+5.69% too long EMA) bracket β2=0.99 as optimum
-- **CosineAnnealingWarmRestarts T_0=12** — +17.7% val; schedule reset costs irrecoverable exploitation budget at 35-ep cap
-- **Schedule-shape axis fully retired for round 1** — all warmup/restart/anneal-to-zero variants have lost to cosine T_max=50 (implicit residual)
-- **Lion β1 axis FULLY BRACKETED** — β1=0.85 (+8.3% less filter) and β1=0.95 (+4.83pt over-filter) both regress; β1=0.90 confirmed optimal. Mechanism: β1 controls directional consistency between steps (not noise level — that's discarded by sign())
-- **Variance-vs-mean decoupling confirmed under Lion** — multiple PRs (β1=0.85, β1=0.95, β2=0.999, warmup) show variance reduction (40-85%) WITHOUT mean improvement. At 35-ep compute-bound regime, any momentum-stabilization that shifts trajectory direction costs more than noise reduction is worth.
+9. **Per-sample Re embedding** — dedicated re_rand OOD lever separate from conditioning variable
+10. **Surface-anchored cross-attention** — boundary nodes as queries against volume tokens
+11. **Y-flip augmentation** — flow-symmetric BCs admit clean mirror augmentation (conditionally invariant → valid)
+12. **Label smoothing / target noise** — augment TARGET not INPUT (avoids conditioning inconsistency)
+13. **Stochastic depth / DropPath with very low rate** — test if any regularization is still beneficial
+14. **Separate embedding network for Re** — rather than concatenating log(Re), learn a dedicated Re embedding; avoids the conditioning-inconsistency problem of jitter

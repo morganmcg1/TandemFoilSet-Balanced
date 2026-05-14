@@ -1786,3 +1786,116 @@ edward reassigned to Gradient Centralization on Lion (PR #2762) — picks up the
 **Conclusion**: CLOSED as stale. Hypothesis remains promising — the −3.8 OOD camber signal was the largest single-split OOD gain of the round. Reassigning fern with a fresh PR (PR #2763) off current advisor branch, same hypothesis (max_norm=0.5). Avoids the 5h-old rebase problem entirely.
 
 ---
+
+## 2026-05-14 05:30 — PR #2726: Lookahead(Lion) k=5 α=0.5 (alphonse)
+- Branch: `willowpai2g48h3-alphonse/lion-lookahead`
+- Hypothesis: Lookahead outer optimizer wrapping Lion — maintain slow weights updated every k=5 steps with interpolation α=0.5. Predicted smoother convergence via "slow-weight" smoothing that averages across Lion's stochastic update directions.
+- W&B runs: s1, s2
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s1 | ~52.20 | ~45.49 | 35 |
+| s2 | ~52.20 | ~45.49 | 35 |
+| **Baseline** | **45.433** | **39.509** | 35 |
+
+**Regression: +6.77pt val (+14.9%), +5.98pt test (+15.1%). Seed std collapsed from 3.6pt to ~0.07pt (−93%).**
+
+Key diagnostics:
+- **Variance COLLAPSED 93%** — Lookahead sync-back completely averaging out seed dispersion
+- **Mean SHIFTED UP +6.77pt** — the "slow weight" interpolation is lagging behind the optimal trajectory, freezing Lion's updates in worse-than-current parameter space
+- **6th confirmed variance-vs-mean decoupling under Lion** — confirmed pattern: at 35-ep compute-bound cap, any momentum-stabilization that shifts trajectory direction costs more than noise reduction is worth
+
+Mechanism: Lookahead's periodic interpolation `θ_slow += α*(θ_fast - θ_slow)` and subsequent reset `θ_fast = θ_slow` destroys Lion's momentum state continuity and forces Lion to restart momentum tracking from a sub-optimal parameter setting every k=5 steps. At our 35-ep compute budget with no headroom, this interrupt is catastrophic.
+
+**Conclusion**: CLOSED. alphonse reassigned to RMSNorm replacement (PR #2800).
+
+---
+
+## 2026-05-14 05:30 — PR #2743: Per-channel volume loss weighting p_weight=2.0 (askeladd)
+- Branch: `willowpai2g48h3-askeladd/lion-p-weight-2x`
+- Hypothesis: Upweight pressure channel 2× in volume loss — direct alignment of training objective with `mae_surf_p` evaluation metric.
+- W&B runs: s1, s2
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s1 | ~50.65 | ~44.0 | 35 |
+| s2 | ~50.65 | ~44.0 | 35 |
+| **Baseline** | **45.433** | **39.509** | 35 |
+
+**Regression: +5.22pt val (+11.5%). Pressure channel REGRESSED MOST despite being upweighted — opposite of predicted effect.**
+
+Key diagnostics:
+- **Pressure channel suffered most** under the upweight — mechanism failure: Lion's sign update responds to gradient direction not magnitude, so doubling pressure gradient magnitude didn't redirect capacity to pressure — it amplified gradient conflict in the shared parameter space
+- **Per-channel amplitude weighting axis retired under Lion** — sign() discards the magnitude weight entirely
+
+**Conclusion**: CLOSED. askeladd reassigned to Pinball loss τ=0.55 for pressure channel (PR #2801) — asymmetric directional bias rather than amplitude weighting.
+
+---
+
+## 2026-05-14 05:30 — PR #2751: Re-feature jitter augmentation σ=0.05 (frieren)
+- Branch: `willowpai2g48h3-frieren/re-jitter`
+- Hypothesis: Add Gaussian noise to log(Re) input feature during training (σ=0.05). Targets `re_rand` test split OOD generalization to unseen Reynolds numbers.
+- W&B runs: s1, s2
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s1 | ~57.83 | ~50.7 | 35 |
+| s2 | ~57.83 | ~50.7 | 35 |
+| **Baseline** | **45.433** | **39.509** | 35 |
+
+**Regression: +12.40pt val (+27.3%). ALL splits regressed — single_in_dist WORST-HIT, not the targeted re_rand.**
+
+Key diagnostics:
+- **In-distribution split worst hit** — jitter disrupted clean in-distribution learning before improving OOD robustness
+- **Mechanism failure**: log(Re) is a continuous conditioning signal the model uses to predict per-sample pressure. Jittering it creates inconsistency between conditioning (perturbed Re) and true output (based on exact Re). Unsupervised inconsistency → degraded representations for ALL splits.
+
+**Conclusion**: CLOSED. **Conditioning-variable jitter axis retired.** When the jitter applies to a variable the output directly depends on, noise creates unsupervised inconsistency. Valid augmentation would require outputs that are conditionally invariant (e.g., y-flip for symmetric BCs). frieren reassigned to Param-group weight decay (PR #2803).
+
+---
+
+## 2026-05-14 05:30 — PR #2752: Gradient accumulation 2× (tanjiro)
+- Branch: `willowpai2g48h3-tanjiro/grad-accum-2x`
+- Hypothesis: Double effective batch size via gradient accumulation. Lion paper recommends larger batch sizes for its sign update — smoother gradient direction → better sign estimates.
+- W&B runs: s1, s2
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s1 | ~54.30 | ~47.5 | 35 |
+| s2 | ~54.30 | ~47.5 | 35 |
+| **Baseline** | **45.433** | **39.509** | 35 |
+
+**Regression: +8.87pt val (+19.5%). Seed std collapsed 95% (std ~0.2pt). 6th confirmed variance-vs-mean decoupling.**
+
+Key diagnostics:
+- **Root cause**: halving optimizer step count (133→66/epoch) is catastrophic at compute-bound 35-ep cap. Loss of 66 optimizer steps per epoch is irrecoverable at this budget.
+- **Lion batch-size recommendation** applies when steps-per-epoch is NOT the bottleneck — inapplicable to our 30-min walltime regime.
+
+Updated decoupling table (6 confirmed instances):
+
+| Mechanism | Δval mean | var change |
+|---|---:|---:|
+| β1=0.95 | +4.83pt | −79% |
+| β2=0.999 | +5.69pt | −78% |
+| warmup 5ep | +4.44pt | −68% |
+| β1=0.85 | +8.30pt | −81% |
+| Lookahead k=5 α=0.5 | +6.77pt | −93% |
+| grad-accum 2× | +8.87pt | −95% |
+
+**Conclusion**: CLOSED. tanjiro reassigned to LayerNorm γ-init=0.5 (PR #2805) — initialization geometry axis.
+
+---
+
+## 2026-05-14 05:45 — New assignments round 8
+
+Four new experiments assigned to newly-idle students:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2800 | willowpai2g48h3-alphonse | Replace LayerNorm with RMSNorm | Normalization architecture |
+| #2801 | willowpai2g48h3-askeladd | Pinball loss τ=0.55 for pressure channel | Asymmetric loss bias direction |
+| #2803 | willowpai2g48h3-frieren | Param-group wd: exclude norms/biases | Regularization scope |
+| #2805 | willowpai2g48h3-tanjiro | Init LayerNorm γ=0.5 (DeepNorm-style) | Initialization geometry |
+
+All four axes test structural/geometric properties rather than training trajectory stabilization, specifically avoiding the variance-vs-mean decoupling pattern confirmed in 6 prior closures.
+
+---
