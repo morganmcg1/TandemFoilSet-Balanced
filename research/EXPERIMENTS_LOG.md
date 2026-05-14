@@ -4,6 +4,49 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 20:00 — PR #2985 (CLOSED, askeladd): film_mid_dim sweep {32, 128} on max_norm=0.35 — 19th paper-appendix axis closure, ASYMMETRIC-V (DOMINANT class 9th member, now 9/19=47%), FIRST conditioning-path-axis FiLM γ/β capacity-to-modulation scaling mechanism finding, NEW σ-spread NEARLY-INVARIANT-MONOTONE-TREND sub-classification, 5-axis pre-clip grad_norm direction fingerprint UPDATED
+
+- **Branch:** `willowpai2g48h2-askeladd/film-mid-dim-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-askeladd
+- **Verdict:** Arm 1 HALF (film_mid_dim=32, 6b407t99) SWA val **48.4749** +3.32 / test 40.8617 +2.22 STRONG-REGRESSION; Arm 2 DOUBLE (film_mid_dim=128, g3wvqbwh) SWA val **46.7537** +1.60 / test 39.7431 +1.11 REGRESSION vs current #2674 baseline (45.1538/38.6367). **Both arms regress with 2.08× val asymmetry favoring upper side → ASYMMETRIC-V close (NOT predicted NEW FILM-BOTTLENECK class).** film_mid_dim is the FIRST conditioning-path axis closed in the paper-appendix matrix; joins ASYMMETRIC-V (DOMINANT) class as its **9th member** — class now 9/19 = 47%.
+- **W&B runs:** Arm 1 `6b407t99`, Arm 2 `g3wvqbwh`, baseline `ieu1futo`.
+- **Headline:** 19th paper-appendix axis closure; **FiLM γ/β capacity-to-modulation scaling mechanism** (#246) — FIRST direct measurement of how a conditioning-path hyperparameter modulates the actual conditioning signal magnitude; **5-axis pre-clip grad_norm direction fingerprint** (#247) — 4 of 5 capacity axes show "↑→↓" direction, only n_head shows "↑→↑"; **NEW σ-spread NEARLY-INVARIANT-MONOTONE-TREND sub-classification** (#248) — FIRST conditioning-path axis observation distinct from both INVARIANT and BREAK.
+
+### Mechanism diagnosis (paper-publishable findings — extends and refines student's analysis)
+
+- **#246 PAPER-PUBLISHABLE — FiLM γ/β capacity-to-modulation scaling mechanism.** Student's diagnostic: 4× film_mid_dim → 3.68× β-magnitude and 2.63× γ-magnitude. β-scaling stronger than γ-scaling (β anchored at 0, γ anchored at 1 via (1+γ)·h). Depth pattern monotone: L4 > L0 in both arms — deeper blocks inject heavier conditioning. **FIRST mechanism finding to directly measure how a conditioning-path hyperparameter modulates the actual conditioning signal magnitude.** FiLM head USES extra capacity to produce larger conditioning signals; but val regresses → **stronger conditioning at film_mid_dim=128 is mild overfitting** rather than improved OOD generalization.
+
+- **#247 PAPER-PUBLISHABLE — pre-clip grad_norm direction fingerprint EXPANDED to 5 axes.** film_mid_dim ↑ → ↓ (capacity diffuses gradient). 5-axis fingerprint: n_head ↑→↑ (parallel attention paths), n_layers ↑→↓ (deeper at fixed shape), mlp_ratio ↑→↓ (wider FFN diffuses), slice_num HALF arm shows similar direction, **film_mid_dim ↑→↓ (NEW conditioning-path entry)**. Sharpens banked #237: **4 of 5 capacity axes show "↑→↓" direction; only n_head shows "↑→↑"** — DOMINANT pattern is capacity-diffuses-gradient. Mechanism: narrower FiLM forces backbone to compensate with larger gradient signal; wider FiLM dampens backbone gradient demand. Mean grad_norm Arm1/Arm2=1.19×, p99 ratio 1.37×, max ratio 1.42×.
+
+- **#248 PAPER-STRENGTHENING — NEW σ-spread NEARLY-INVARIANT-MONOTONE-TREND sub-classification.** Δσ-spread = −0.0204 at Arm 1, +0.0185 at Arm 2 — ~2× the "clean invariance" envelope but NOT a clean BREAK. **FIRST observation of small-monotone-shift σ-spread response.** σ-spread invariance bank now has 3 categories: 18 INVARIANT confirmations, 4 BREAKs (all forward-pass-shape), **1 NEARLY-INVARIANT-MONOTONE-TREND (film_mid_dim, NEW)**. Small-monotone-shift may be characteristic of conditioning-path perturbations.
+
+- **#249 PAPER-STRENGTHENING — Lion exp_avg_norm invariance #194 confirmed cross-axis.** Final 0.01137 (Arm 1) vs 0.01153 (Arm 2) = ~1% diff. Confirms Lion exp_avg L2 follows (1-β2)/(1+β2) theoretical form with β2=0.99 fixed → FiLM-dim-invariant. 2nd cross-axis confirmation of #194.
+
+- **#250 PAPER-STRENGTHENING — 5 banked-invariance confirmations preserved.** Channel ordering 18th confirmation (surf_ux=MIN, vol_ux=MAX); clip_fraction=1.000 invariance 15th confirmation; peak VRAM=44.8 GB invariance 15th confirmation; step-time per epoch invariant (FiLM sub-dominant compute); SWA-window 2-epoch truncation 12th-consecutive #170 confirmation (baseline-equivalent forward-pass shape).
+
+- **#251 PAPER-APPENDIX — film_mid_dim=64 at local optimum, 2.08× asymmetry.** FiLM bottleneck more load-bearing in compress direction. {32, 64, 128} bracket cleanly establishes 64 as locally-optimal — no fine-bracket follow-up needed.
+
+### Paper-appendix matrix update — 19 closed × 8 transfer patterns + 2 MIXED axes
+
+| Axis class | Count | Members |
+|---|---|---|
+| **INDEPENDENT-ASYMMETRIC-V (DOMINANT)** | **9 (47%) — UPDATED** | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901, Lion β2 #2932, n_layers #2947, **film_mid_dim #2985 (this PR)** |
+| Pareto-cap-coincidence (BOTH-LOSE) | 3 | swa_start_frac #2818, slice_num #2962, mlp_ratio #2966 |
+| DEPENDENT-SYMMETRIC | 2 | wd #2791+#2819, Lion β1 #2880 |
+| NON-MONOTONE-COST-MONOTONE-MECHANISM | 1 | β LOWER #2919 |
+| INDEPENDENT-SYMMETRIC | 1 | β UPPER #2736 |
+| DEPENDENT-NEGATIVE | 1 | seed #2790 |
+| DEGENERATE-AXIS | 1 (DOUBLE-STACK) | anneal_epochs #2877 + #2481 cross-stack |
+| MONOTONIC-REGRESSIVE | 1 | dropout #2887 |
+
+**σ-spread invariance bank UPDATED:** 18 INVARIANT + 4 BREAKs (all forward-pass-shape) + 1 NEARLY-INVARIANT-MONOTONE-TREND (film_mid_dim) — sub-classification introduced.
+
+### Askeladd reassignment
+
+Assigned askeladd → **PR #3011: n_hidden sweep {64, 192} on current saturated-clip max_norm=0.35 baseline** — **22nd paper-appendix axis label, COMPLETES the FORWARD-PASS-SHAPE QUINTET** (n_head ASYMMETRIC-V #2901, n_layers ASYMMETRIC-V #2947, slice_num BOTH-LOSE #2962, mlp_ratio BOTH-LOSE #2966, **n_hidden NEW**). Tests model width directly — the per-token feature dimension all 4 prior axes depend on. Mechanism-distinguishing test for pre-clip grad_norm direction fingerprint: if n_hidden ↑ → ↑ it matches n_head pattern (parallel paths), if ↑ → ↓ it matches mlp_ratio/n_layers pattern (capacity-diffuses-gradient). Requires train.py code edit to expose `n_hidden` as CLI flag (2 lines: add to Config + replace hardcoded value in model_config dict). Predictions: 5th σ-spread BREAK if mechanism transfers; ASYMMETRIC-V most likely on Arm 1 HALF, BOTH-LOSE with potential SWA-NEVER-ENTERED on Arm 2 LARGER.
+
+---
+
 ## 2026-05-14 19:45 — PR #2481 (CLOSED, edward): SWALR anneal_epochs=1 on σ=0.5 stack single-arm cross-stack — PAPER-STRENGTHENING CROSS-STACK CLOSE (NOT a new axis; anneal_epochs already closed at #2877 DEGENERATE-AXIS on saturated-clip max_norm=0.35 baseline as 1st DEGENERATE-AXIS member); cross-stack DEGENERATE confirmation makes anneal_epochs DOUBLE-STACK DEGENERATE across (σ=1.0, max_norm=0.35) + (σ=0.5, max_norm=0.5)
 
 - **Branch:** `willowpai2g48h2-edward/swa-anneal-epochs-1-on-sigma0p5`
