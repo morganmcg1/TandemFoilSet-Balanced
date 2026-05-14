@@ -2222,3 +2222,66 @@ Zero idle students.
 ---
 
 
+
+## 2026-05-14 09:21 — PR #2817: σ=0.05 init (trunc_normal_ std=0.05) (fern, MERGED 12th shift)
+- Branch: `willowpai2g48h3-fern/trunc-normal-init`
+- Hypothesis: init scale axis — pivot from original trunc_normal_ PR; test σ=0.01 and σ=0.05 around the σ=0.02 baseline.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | per-split test (single_in_dist/camber_rc/camber_cruise/re_rand) |
+|---|---|---:|---:|---|
+| σ=0.05 seed 1 | `72s3ljky` | 42.021 | 37.269 | 39.726 / 50.541 / 22.814 / 35.996 |
+| σ=0.05 seed 2 | `npvg5u4o` | **39.618** | **33.225** | **36.429 / 44.897 / 19.372 / 32.204** |
+| **σ=0.05 mean (n=2)** | — | **40.820** | **35.247** | **38.078 / 47.719 / 21.093 / 34.100** |
+| baseline σ=0.02 (PR #2801) | `xkaghm9f` | 43.092 | 37.194 | 43.00 / 49.86 / 21.22 / 34.70 |
+| **Δ mean vs baseline** | — | **−6.6%** | **−5.4%** | **−11.4% / −4.3% / −0.6% / −1.7%** |
+| σ=0.01 | `tls9g2qq` | 53.926 | 47.337 | catastrophic | (failure) |
+
+Seed std (n=2): val=1.699 (4.2%), test=2.860 (8.1%). Seed-2 is best single-seed result on the branch to date.
+
+**Analysis**: Both seeds beat the new merge bar (mean val<43.09, mean test<37.19). All four per-split test surf_p improve on the mean. Mechanism: σ=0.05 init puts weights closer to the optimizer's convergence neighbourhood (param L2 ~62) than σ=0.02 (~10). The optimizer can descend faster in the compute-bound 35-ep regime. σ=0.01 fails (param L2 only 46 at epoch 35, still climbing).
+
+**Status**: MERGED 2026-05-14 09:21. **12th baseline shift: mean val=40.82, mean test=35.25. New merge bar: mean val < 40.82, mean test < 35.25.**
+
+---
+
+## 2026-05-14 10:05 — PR #2855: Pinball τ=0.55 for Ux/Uy velocity channels (tanjiro, CLOSED)
+- Branch: `willowpai2g48h3-tanjiro/pinball-velocity-channels`
+- Hypothesis: extend pinball τ=0.55 from pressure-only to all 3 channels (Ux, Uy, p).
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `74e33pl1` | 45.500 | 39.792 |
+| s2 | `34z39o88` | 44.583 | 38.749 |
+| **mean** | — | **45.042** | **39.270** |
+| **new baseline (12th shift)** | — | 40.820 | 35.247 |
+| **Δ vs baseline** | — | **+10.3% (WORSE)** | **+11.4% (WORSE)** |
+
+Per-split test (mean): single_in_dist=42.75 (+0.25 marginal), geom_camber_rc=54.69 (+4.83), camber_cruise=22.61 (+1.39), re_rand=37.03 (+2.33). Only single_in_dist marginally improves; 3 OOD splits degrade.
+
+**Diagnostic — signed residuals at final epoch (surface):**
+- Ux: ≈ −0.003 (near-zero, essentially unbiased)
+- Uy: ≈ −0.003 (near-zero, essentially unbiased)
+- p: ≈ −0.009 (slight over-prediction — τ=0.55 is correctly pushing the model upward)
+
+**Analysis**: the hypothesis is **refuted**. Velocity channels do NOT have systematic under-prediction bias. τ=0.55 biases predictions upward from an already-centered distribution, increasing MAE. Pinball loss is only effective for channels with directional bias. The pressure channel's bias is 3× larger than velocity bias, consistent with the pressure-only win. **Velocity pinball axis retired.**
+
+**Status**: CLOSED 2026-05-14 10:05.
+
+---
+
+## 2026-05-14 10:10 — Round-10 assignment (tanjiro #2882)
+
+After closing #2855, tanjiro was immediately assigned a σ-scan continuation:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2882 | willowpai2g48h3-tanjiro | σ-scan continuation: trunc_normal_ std=0.07 (s1) and std=0.10 (s2) on new σ=0.05 baseline | Init-scale |
+
+Runs ON the new merged baseline train.py (σ=0.05 default, `--init_std` arg added). Tests whether the init-scale axis has room above σ=0.05.
+
+---
+

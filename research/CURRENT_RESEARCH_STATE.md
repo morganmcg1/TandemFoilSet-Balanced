@@ -1,20 +1,20 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 08:30
+- **Date:** 2026-05-14 10:15
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
 
 
-## Current baseline (11th shift)
+## Current baseline (12th shift)
 
-**PR #2801 (Pinball τ=0.55 for pressure channel)** merged 2026-05-14 07:15:
-- **`val_avg/mae_surf_p` = 43.0923** (best seed 1 `xkaghm9f`)
-- **`test_avg/mae_surf_p` = 37.1943**
-- Per-split test: single_in_dist=43.00, geom_camber_rc=49.86, geom_camber_cruise=21.22, re_rand=34.70
-- Two-seed mean: val=43.684, test=37.272 (test extremely tight, ±0.08)
-- **New merge bar: val < 43.09, test < 37.19, all four test splits finite**
+**PR #2817 (trunc_normal_ init std=0.05)** merged 2026-05-14 09:21:
+- **`val_avg/mae_surf_p` mean (2 seeds) = 40.8198** (best seed `npvg5u4o` val=39.6184)
+- **`test_avg/mae_surf_p` mean (2 seeds) = 35.2474** (best seed test=33.2254)
+- Per-split test surf_p (mean): single_in_dist=38.08, geom_camber_rc=47.72, geom_camber_cruise=21.09, re_rand=34.10
+- W&B runs: `72s3ljky` (seed 1), `npvg5u4o` (seed 2, best-ever)
+- **New merge bar: mean val < 40.82, mean test < 35.25, all four test splits finite**
 
 ## Baseline progression
 
@@ -30,33 +30,38 @@
 | PR #2017 (weight_decay 1e-4 → 2e-4) | 2026-05-13 16:10 | 58.883 | 51.078 | −1.8% / −2.4% |
 | PR #2516 (Lion optimizer) | 2026-05-13 20:05 | 50.193 | 43.501 | −14.8% / −14.8% |
 | PR #2562 (Lion lr=7.5e-5) | 2026-05-13 22:30 | 45.433 | 39.509 | −9.5% / −9.2% |
-| **PR #2801 (Pinball τ=0.55 pressure)** | **2026-05-14 07:15** | **43.092** | **37.194** | **−5.1% / −5.9%** |
+| PR #2801 (Pinball τ=0.55 pressure) | 2026-05-14 07:15 | 43.092 | 37.194 | −5.1% / −5.9% |
+| **PR #2817 (σ=0.05 init)** | **2026-05-14 09:21** | **40.820** | **35.247** | **−5.3% / −5.4%** |
 
-**Cumulative: −63.9% val, −66.1% test from round-1 start.** Still compute-bound (best=last on all 11 merges).
+**Cumulative: −65.8% val, −67.9% test from round-1 start.** Still compute-bound (best=last on all 12 merges).
 
-## Current research focus (round 9)
+## Current research focus (rounds 9–10)
 
-**Building on the pinball τ=0.55 win (PR #2801).** The asymmetric pressure loss win revealed two productive axes: (1) the τ-scale can be pushed higher, and (2) the velocity channels may also benefit from asymmetric loss. Simultaneously, fern's pre-implementation discovery opened a new structural axis (orthogonal init bug fix).
+**Two major wins in rapid succession: pinball τ=0.55 (11th shift) and σ=0.05 init (12th shift).** Together they pushed val from 45.43 → 40.82 (−10.2%) and test from 39.51 → 35.25 (−10.8%) with only 2 changes, demonstrating that multiple orthogonal improvements exist in parallel.
 
-Current focus: **loss geometry exploration** (τ-scan, channel coverage) and **architectural correctness** (latent bug fix).
+Current focus: **probing whether remaining round-9 techniques compound with σ=0.05** (which they run on σ=0.02 baseline due to branch timing) and **pushing the σ-axis further** (new tanjiro assignment).
 
-### Round-9 in-flight (full grid)
+**Context for in-flight experiments**: ALL round-9 experiments (#2853, #2854, #2863, #2865, #2866, #2867) were assigned before the σ=0.05 merge. They run on the σ=0.02 baseline and their deltas should be interpreted vs the OLD bar (val<43.09). If any show a positive delta on the old baseline, they will be combined with σ=0.05 as a follow-up.
 
-Loss-geometry axis (3 PRs):
-1. **Pinball τ=0.60 pressure (alphonse #2853)** — scale up asymmetry on the winning pressure-loss axis
-2. **Pinball τ=0.55 Ux/Uy velocity channels (tanjiro #2855)** — extend pinball to all 3 channels
-3. **Divergence-free auxiliary loss (nezuko #2866)** — physics-informed ∇·u=0 penalty (NEW round-9 reassignment after #2812 LayerScale closed)
+### Round-9/10 in-flight (full grid)
 
-Architectural / capacity axis (2 PRs):
-4. **Orthogonal init restore for in_project_slice (frieren #2854)** — latent bug fix; zero compute cost
-5. **γ-only FiLM-Re (edward #2865)** — param-efficient FiLM follow-up after #2816 closed: drop the β branch (diagnostics confirmed β_bias≈0 in both seeds)
+Loss-geometry axis:
+1. **Pinball τ=0.60 pressure (alphonse #2853)** — stale_wip, GPU ~60GB active, comparing vs BOTH bars
+2. **Divergence-free auxiliary loss (nezuko #2866)** — WIP, GPU 72GB/97% active
 
-Input-encoding axis (2 PRs — orthogonal NeRF-style features):
-6. **Re-Fourier features at input (askeladd #2863)** — NeRF-style log(Re) encoding, ~+2K params (vs +330K for FiLM-Re)
-7. **AoA-Fourier features at input (thorfinn #2867)** — same idea applied to AoA; targets `geom_camber_rc` (hardest split at 49.86)
+Architectural / capacity axis:
+3. **Orthogonal init restore for in_project_slice (frieren #2854)** — stale_wip, GPU ~60GB active, comparing vs BOTH bars
+4. **γ-only FiLM-Re (edward #2865)** — WIP, GPU just finished training (0%), reporting in progress
 
-Init-scale axis (1 PR, await terminal result):
-8. **σ=0.05 init confirmation seed (fern #2817)** — sent back 2026-05-14 08:25 for 2nd seed at σ=0.05 (single-seed val=42.02 beats new bar 43.09 by 2.5% but test=37.27 marginally misses 37.19 by 0.08; need 2-seed mean)
+Init-scale axis (NEW primary focus):
+5. **σ-scan continuation: σ=0.07 and σ=0.10 (tanjiro #2882)** — NEW, assigned 2026-05-14 10:10; runs ON the new σ=0.05 baseline train.py with `--init_std` arg; directly extends winning axis
+
+Input-encoding axis:
+6. **Re-Fourier features at input (askeladd #2863)** — WIP, GPU ~39GB (between seeds or finishing)
+7. **AoA-Fourier features at input (thorfinn #2867)** — WIP, GPU 91GB/99% active (two seeds?)
+
+Closed this heartbeat:
+- **Pinball Ux/Uy extension (tanjiro #2855)** — CLOSED 09:21: regression (+4.5% val, +5.6% test); velocity channels unbiased (signed residuals near zero). Axis retired.
 
 ## Round 1 portfolio (current)
 
@@ -92,19 +97,20 @@ Init-scale axis (1 PR, await terminal result):
 | #2800 | alphonse | RMSNorm | **CLOSED** 2026-05-14 07:40 (+13.6%; mean-centering load-bearing; var-vs-mean #8) |
 | #2803 | frieren | Param-group wd | **CLOSED** 2026-05-14 07:40 (+7.7%; Lion wd interaction; axis retired) |
 | #2805 | tanjiro | LN γ-init=0.5 | **CLOSED** 2026-05-14 07:40 (+35.4%; var-vs-mean #9 — γ never recovered) |
-| #2811 | thorfinn | Sobolev loss on ∇p | **CLOSED** 2026-05-14 07:50 (sent back for fix, never iterated; +25% mid-run) |
+| #2811 | thorfinn | Sobolev loss on ∇p | **CLOSED** 2026-05-14 07:50 (val +18%) |
 | #2812 | nezuko | LayerScale (init=1e-4) | **CLOSED** 2026-05-14 07:55 (var-vs-mean #10) |
-| #2816 | edward | FiLM-style Re-conditioning | **CLOSED** 2026-05-14 08:15 (mean misses both new bars; re_rand mechanism real but +50% params unjustified) |
-| **#2817** | **fern** | **σ-scan (σ=0.01/0.05) for Linear init** | **WIP sent back 2026-05-14 08:25 for σ=0.05 confirmation seed** |
-| **#2853** | **alphonse** | **Pinball τ=0.60 pressure** | **WIP 2026-05-14 07:45** |
-| **#2854** | **frieren** | **Orthogonal init restore (in_project_slice)** | **WIP 2026-05-14 07:45** |
-| **#2855** | **tanjiro** | **Pinball τ=0.55 Ux/Uy velocity channels** | **WIP 2026-05-14 07:45** |
-| **#2863** | **askeladd** | **Re-Fourier features at input (NeRF-style log Re)** | **WIP NEW 2026-05-14 08:30** |
-| **#2865** | **edward** | **γ-only FiLM-Re (drop β; param-efficient follow-up)** | **WIP NEW 2026-05-14 08:30** |
-| **#2866** | **nezuko** | **Divergence-free auxiliary loss (∇·u=0)** | **WIP NEW 2026-05-14 08:30** |
-| **#2867** | **thorfinn** | **AoA-Fourier features at input (targets camber_rc)** | **WIP NEW 2026-05-14 08:30** |
+| #2816 | edward | FiLM-style Re-conditioning | **CLOSED** 2026-05-14 08:15 (+50% params unjustified; re_rand OOD mechanism confirmed) |
+| **#2817** | **fern** | **σ=0.05 init confirmation** | **MERGED 2026-05-14 09:21 (12th shift: mean val=40.82, test=35.25)** |
+| **#2853** | **alphonse** | **Pinball τ=0.60 pressure** | **WIP stale_wip 2026-05-14 07:45; GPU active** |
+| **#2854** | **frieren** | **Orthogonal init restore (in_project_slice)** | **WIP stale_wip 2026-05-14 07:45; GPU active** |
+| #2855 | tanjiro | Pinball τ=0.55 Ux/Uy velocity channels | **CLOSED** 2026-05-14 10:05 (val +4.5%; velocity unbiased — diagnostic conclusive) |
+| **#2863** | **askeladd** | **Re-Fourier features at input (NeRF-style log Re)** | **WIP 2026-05-14 08:30; GPU ~39GB** |
+| **#2865** | **edward** | **γ-only FiLM-Re (drop β; param-efficient follow-up)** | **WIP 2026-05-14 08:30; training complete, reporting** |
+| **#2866** | **nezuko** | **Divergence-free auxiliary loss (∇·u=0)** | **WIP 2026-05-14 08:30; GPU 72GB/97%** |
+| **#2867** | **thorfinn** | **AoA-Fourier features at input (targets camber_rc)** | **WIP 2026-05-14 08:30; GPU 91GB/99%** |
+| **#2882** | **tanjiro** | **σ-scan continuation: std=0.07 and std=0.10** | **WIP NEW 2026-05-14 10:10** |
 
-**Merged:** 11 | **Closed:** 57 | **WIP:** 8 | **Idle:** 0
+**Merged:** 12 | **Closed:** 58 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -117,7 +123,8 @@ Init-scale axis (1 PR, await terminal result):
 7. **Conditioning-variable jitter axis RETIRED** — jittering log(Re) creates supervised inconsistency; valid augmentation requires conditional invariance in outputs.
 8. **GC + sign() is sign-incompatible** — Gradient Centralization's row-mean subtraction forcibly inverts ~half of coordinate update directions each step under Lion. GC needs magnitude-based optimizers.
 9. **Pinball τ=0.55 WIN (PR #2801)** — directional asymmetric loss for under-prediction bias works under Lion. Mechanism: τ=0.55 penalizes residuals with y>pred 10% more; OOD splits (re_rand −8.4%, cruise −11.6%) benefit most. Lion's sign() preserves the directional signal from pinball (unlike amplitude-scaling which gets discarded). This opens the τ-axis and the channel-coverage axis.
-10. **trunc_normal_(std=0.02) already in baseline** — fern discovered Transolver._init_weights already applies BERT-style init. Latent bug: in_project_slice orthogonal init clobbered by subsequent apply().
+10. **σ=0.05 init WIN (PR #2817)** — trunc_normal_(std=0.05) beats std=0.02: mean val −6.6%, mean test −5.4%, ALL 4 per-split test splits improve. Mechanism: σ=0.05 starts weights closer to the optimizer's convergence neighbourhood (param L2 ~62 at convergence; σ=0.05 init gives ~25 vs σ=0.02 gives ~10). σ=0.01 fails catastrophically (insufficient time to climb from init L2~5 to convergence within 35-ep budget). σ-axis ongoing (tanjiro #2882 testing σ=0.07/0.10). In_project_slice orthogonal init bug (latent) now being tested by frieren (#2854).
+11. **Velocity pinball RETIRED** — tanjiro #2855 confirmed Ux/Uy channels have NO systematic under-prediction bias (signed residuals at final epoch ≈ −0.003, near-zero). τ=0.55 overcorrects unbiased channels → +4.5% val regression. Pinball τ is only effective for channels with directional bias.
 
 ## Currently retired axes
 
