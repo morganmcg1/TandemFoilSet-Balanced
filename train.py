@@ -208,13 +208,14 @@ class TransolverBlock(nn.Module):
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        # POST-NORM topology + γ=1.0 constant (Vaswani 2017 recipe). LayerScale
-        # removed: γ is a plain Python float, not nn.Parameter — no learnable
-        # gain on residual branches. Saves 2×hidden_dim params per block.
-        self.gamma_attn = 1.0
+        # Per-block SCALAR learnable γ initialized at 1.0 (post-norm topology
+        # preserved from #2964 WIN). Shape (1,) — broadcasts across hidden dim
+        # at residual addition. Minimum-adaptivity granularity probe between
+        # constant γ=1.0 (#2964) and per-channel γ (#2977 nezuko).
+        self.gamma_attn = nn.Parameter(torch.ones(1))
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
-        self.gamma_mlp = 1.0
+        self.gamma_mlp = nn.Parameter(torch.ones(1))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -544,9 +545,10 @@ print(
     f"This PR isolates topology from LayerScale init."
 )
 print(
-    f"LayerScale: REMOVED — γ_attn = γ_mlp = 1.0 constant (Python float, NOT nn.Parameter); "
-    f"-{2 * model_config['n_layers'] * model_config['n_hidden']} params removed (was 8×{model_config['n_hidden']}=768 LayerScale γ params); "
-    f"restores Vaswani 2017 original Transformer recipe: standard residual without learnable per-channel gain on residual branch."
+    f"LayerScale: per-block SCALAR learnable γ init=1.0 (shape (1,) nn.Parameter per branch); "
+    f"+{2 * model_config['n_layers']} params (4 blocks × 2 branches × 1) vs #2964 constant γ=1.0; "
+    f"minimum-adaptivity granularity probe between constant γ (#2964 WIN) and per-channel γ (#2977 nezuko); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.0382 / test_avg/mae_surf_p < 25.2099 (PR #2964)"
 )
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -556,6 +558,14 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Per-block scalar learnable γ init=1.0 startup diagnostic.
+print(f"Per-block SCALAR learnable γ init=1.0 (this PR)")
+print(f"Topology: post-norm (unchanged from #2964)")
+print(f"γ shape: (1,) per block per branch — SCALAR, not per-channel")
+for _i, _blk in enumerate(model.blocks):
+    print(f"Block {_i}: γ_attn={_blk.gamma_attn.item():.6f}, γ_mlp={_blk.gamma_mlp.item():.6f}")
+print(f"NEW BASELINE: val 30.0382 / test 25.2099 (PR #2964)")
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -849,6 +859,28 @@ for epoch in range(MAX_EPOCHS):
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
 
+    # γ convergence diagnostic at ep1, 10, 30, 60 — track per-block scalar γ
+    # drift from init=1.0 and block-asymmetry/branch-asymmetry patterns.
+    if (epoch + 1) in (1, 10, 30, 60):
+        _inner_gamma = getattr(model, "_orig_mod", model)
+        _gamma_event = {
+            "event": "gamma_convergence",
+            "epoch": epoch + 1,
+            "gamma_mode": "per_block_scalar_learnable_init_1.0",
+            "blocks": [],
+        }
+        print(f"\nγ convergence @ ep{epoch+1} (per-block scalar learnable γ, init=1.0):")
+        for _bi, _blk in enumerate(_inner_gamma.blocks):
+            _ga_now = float(_blk.gamma_attn.detach().float().mean().item())
+            _gm_now = float(_blk.gamma_mlp.detach().float().mean().item())
+            print(f"  block[{_bi}]: γ_attn={_ga_now:.4f}, γ_mlp={_gm_now:.4f}")
+            _gamma_event["blocks"].append({
+                "block_idx": _bi,
+                "gamma_attn": _ga_now,
+                "gamma_mlp": _gm_now,
+            })
+        append_metrics_jsonl(metrics_jsonl_path, _gamma_event)
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -885,16 +917,17 @@ if best_metrics:
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
 
-    # LayerScale diagnostic: γ_attn = γ_mlp = 1.0 CONSTANT (no learnable Parameter).
-    # Report the constants for confirmation; per-block dynamics are inapplicable.
+    # LayerScale diagnostic: per-block SCALAR learnable γ, init=1.0.
+    # Report best-checkpoint γ values to compare against init and against
+    # #2964 fixed γ=1.0 / #2977 per-channel γ.
     _inner = getattr(model, "_orig_mod", model)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]),
-                  "layerscale_mode": "constant_1.0_no_parameter", "blocks": []}
-    print("\nLayerScale final gammas (best-checkpoint weights, CONSTANT 1.0 — no learnable γ):")
+                  "layerscale_mode": "per_block_scalar_learnable_init_1.0", "blocks": []}
+    print("\nLayerScale final gammas (best-checkpoint weights, per-block SCALAR learnable γ, init=1.0):")
     for _i, _blk in enumerate(_inner.blocks):
-        _ga = float(_blk.gamma_attn) if not torch.is_tensor(_blk.gamma_attn) else float(_blk.gamma_attn.detach().float().mean().item())
-        _gm = float(_blk.gamma_mlp) if not torch.is_tensor(_blk.gamma_mlp) else float(_blk.gamma_mlp.detach().float().mean().item())
-        print(f"  block[{_i}]: gamma_attn={_ga:.6f} | gamma_mlp={_gm:.6f} (constant; no Parameter)")
+        _ga = float(_blk.gamma_attn.detach().float().mean().item())
+        _gm = float(_blk.gamma_mlp.detach().float().mean().item())
+        print(f"  block[{_i}]: gamma_attn={_ga:.6f} | gamma_mlp={_gm:.6f}")
         _gamma_log["blocks"].append({
             "block_idx": _i,
             "gamma_attn_mean": _ga,
