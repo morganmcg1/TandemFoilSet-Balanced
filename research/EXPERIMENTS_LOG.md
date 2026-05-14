@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-05-14 [Round 87] UTC — Round 87
+
+### Merged PR #2727: SE block-3-only — **17th WINNER** (−1.73% val, −2.46% test, NEW BASELINE)
+- **Student:** charliepai2g48h5-tanjiro
+- **Branch:** charliepai2g48h5-tanjiro/se-block3-only
+- **Hypothesis:** Remove SE from blocks 0-2; keep only block 3 (deepest). Student tanjiro's #1 follow-up from #2692 — block 3 had highest gate engagement (std=0.076) while blocks 0-2 near-identity (std 0.022-0.034).
+
+| Metric | PR #2727 | #2692 baseline | Δ vs #2692 | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **32.4498** | 33.0195 | **−1.73%** | **WIN — NEW BASELINE** |
+| `test_avg/mae_surf_p` | **27.6573** | 28.3562 | **−2.46%** | WIN |
+| `val_single_in_dist` | **25.6532** | 26.4221 | **−2.91%** | WIN (in_dist regression ELIMINATED) |
+| `val_geom_camber_rc` | **47.2242** | 48.3191 | **−2.27%** | WIN |
+| `val_geom_camber_cruise` | **19.0752** | 20.2953 | **−6.01%** | WIN |
+| `val_re_rand` | 37.8467 | 37.0415 | +2.17% | mild regression |
+| `test_re_rand` | **27.7105** | 29.6808 | **−6.64%** | WIN |
+
+Param count: 331,031 (28,619 + 2,412 block-3 SE only; 7,236 less than #2692 4-block SE).
+
+**SE gate stats at terminal (best-val checkpoint ep66):**
+
+| Split | gate_mean | gate_std | gate_min | gate_max |
+|---|---|---|---|---|
+| `val_single_in_dist` | 0.4509 | 0.1503 | 0.1328 | 0.9453 |
+| `val_geom_camber_rc` | 0.4131 | 0.2152 | 0.0369 | 0.9844 |
+| `val_geom_camber_cruise` | 0.3937 | 0.2549 | 0.0159 | 0.9961 |
+| `val_re_rand` | 0.3852 | 0.2570 | 0.0186 | 0.9922 |
+
+Block-3 gate std grew **2-3.4× wider** than 4-block SE #2692 (std=0.076) with blocks 0-2 removed — block 3 absorbed the gating work the upstream SEs were diluting. OOD splits gate harder than in_dist (mean 0.39-0.41 OOD vs 0.45 in_dist), confirming SE is doing OOD adaptation. In-dist regression from #2692 (+4.31%) fully eliminated.
+
+**Key insight:** Removing the 3 near-identity upstream gates eliminated the initial 50% stream dampening (gate=sigmoid(0)=0.5) across 3 blocks, allowing the final block's gate to be more decisive and the stream to be less uniformly damped. Depth-selective SE is both more efficient (1/4 the SE params) and strictly better across 3/4 val splits.
+
+**Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-block3-only-20260514-020946/metrics.jsonl`
+
+### Closed PR #2710: Gradient Centralization — LOSS (54th closed taxon)
+- **Student:** charliepai2g48h5-frieren
+
+| Metric | GC | Baseline #2692 | Δ% | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 35.2214 | 33.0195 | +6.67% | **LOSS** |
+| `test_avg/mae_surf_p` | 29.5005 | 28.3562 | +4.04% | **LOSS** |
+| `val_single_in_dist` | 30.1068 | 26.4221 | +13.96% | LOSS (worst) |
+
+GC diagnostic: `gc_norm_ratio_mean ≈ 0.949` (stable from ep5 to ep69) — GC removes ~5.1% of gradient norm. Lion momentum non-zero fraction: **0.9977** (≡ baseline 0.998) — GC did NOT reduce Lion's sign-saturation profile. The ~5% gradient direction removed is genuinely signal: the uniform-input-shift direction (row-mean of Linear weights) corresponds to per-channel amplification in slice projections; zeroing it forces less-direct optimizer paths.
+
+Convergence slower: ep10 val=94.4 vs baseline trajectory ~35-40. No flat-minima OOD benefit emerged (camber_rc and re_rand both regressed — not the classic OOD-win + in_dist-wash signature of flatter basin).
+
+**54th taxon: gradient-transformation axis closed** (GC removed useful signal Lion needed; gradient-modification pre-Lion-step is structurally incompatible with sign-saturation semantics at this model size).
+
+**Metric artifacts:** `models/model-charliepai2g48h5-frieren-grad-centralization-20260514-020431/metrics.jsonl`
+
+### Closed PR #2677: Gradient noise injection — 2nd stale_wip event (axis abandoned)
+- **Student:** charliepai2g48h5-fern
+- Assigned 2026-05-14T00:23:15Z; pod alive (0 restarts) but never picked up assignment
+- Round 85: 1st stale event (left one more round)
+- Round 87: 2nd stale event → close per 2-stale launch convention
+- Note: Close is not a scientific judgment on gradient-noise; the hypothesis was never tested. Combined with GC #2710 (54th taxon), gradient-transformation family abandoned on this arm.
+
+### Assigned PR #2748: SE blocks 2+3 (tanjiro, idle after #2727 merge)
+- **Hypothesis:** Add SE to blocks 2 AND 3 (remove from 0-1 only). Direct follow-up to tanjiro's #1 suggestion from #2727 WIN — tests whether block 2 adds incremental gain beyond block 3 alone, or block-3-only is the minimal viable depth.
+- **Expected params:** ~333,443 (331,031 + 2 additional SE modules). 
+- **Key diagnostic:** gate_std for block 2 vs block 3 separately — did block 2 become decisive (std > 0.10) or stay low (std ≈ 0.030)?
+
+### Assigned PR #2749: MLP width-up mlp_ratio 2→3 (frieren, idle after #2710 close)
+- **Hypothesis:** 1-character change `mlp_ratio=2→3`; MLP body hidden 192→288 per block; +73,728 params total (~405K). Tests whether the model is under-parameterized in per-block MLP computation (standard ViT/BERT/GPT uses mlp_ratio=4; this launch has always used 2).
+
+### Assigned PR #2750: Output head width-up mlp2 hidden 96→192 (fern, idle after #2677 close)
+- **Hypothesis:** `Linear(96, 96) → GELU → Linear(96, 3)` to `Linear(96, 192) → GELU → Linear(192, 3)` in the last TransolverBlock's mlp2 head; +9,600 params (~340,631 total). Tests whether the decoder is the bottleneck (never probed previously; all prior winners improved encoder).
+- **Built-in diagnostic:** mlp2_grad_norm vs mlp_body_grad_norm at terminal.
+
+---
+
 ## 2026-05-14 [Round 86] UTC — Round 86
 
 ### Closed PR #2722: DropPath/Stochastic Depth — LOSS (51st closed taxon)
