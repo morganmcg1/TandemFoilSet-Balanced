@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -601,6 +602,12 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # SGDR-style cosine restart schedule: replace single long cosine cycle with
+    # two short cycles. Cycle 1 spans [0, t1) epochs; cycle 2 spans [t1, epochs)
+    # with peak LR scaled by lr2_scale. Stepped per-batch for smooth annealing.
+    cosine_restart: bool = False
+    cosine_restart_t1: int = 14
+    cosine_restart_lr2_scale: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -738,7 +745,76 @@ optimizer = SOAP(
     max_precond_dim=cfg.max_precond_dim,
 )
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
+SCHEDULER_ETA_MIN = 1e-5
+
+
+class CosineRestart2Cycle:
+    """SGDR-style two-cycle cosine annealing with per-cycle peak LR scaling.
+
+    Cycle 1: epochs [0, t1), lr peaks at lr_max, anneals to eta_min.
+    Cycle 2: epochs [t1, t1+t2), lr peaks at lr_max * lr2_scale, anneals to eta_min.
+    Stepped once per training batch via `step()`; current LR retrievable via
+    `get_last_lr()` (mirrors torch.optim.lr_scheduler interface).
+    """
+
+    def __init__(self, optimizer, lr_max: float, eta_min: float, t1: int, t2: int,
+                 lr2_scale: float, steps_per_epoch: int):
+        self.optimizer = optimizer
+        self.lr_max = float(lr_max)
+        self.eta_min = float(eta_min)
+        self.t1 = int(t1)
+        self.t2 = int(t2)
+        self.lr2_scale = float(lr2_scale)
+        self.steps_per_epoch = max(1, int(steps_per_epoch))
+        self.step_count = 0
+        # Initialize LR at step 0 (epoch 0, progress 0 → peak of cycle 1).
+        self._last_lr = self.lr_max
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = self.lr_max
+
+    def _compute_lr(self, step_count: int) -> float:
+        epoch_float = step_count / self.steps_per_epoch
+        if epoch_float < self.t1:
+            progress = epoch_float / max(self.t1, 1)
+            peak = self.lr_max
+        else:
+            progress = min(1.0, (epoch_float - self.t1) / max(self.t2, 1))
+            peak = self.lr_max * self.lr2_scale
+        return self.eta_min + 0.5 * (peak - self.eta_min) * (1.0 + math.cos(math.pi * progress))
+
+    def step(self):
+        self.step_count += 1
+        lr = self._compute_lr(self.step_count)
+        self._last_lr = lr
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = lr
+
+    def get_last_lr(self):
+        return [self._last_lr]
+
+
+if cfg.cosine_restart:
+    steps_per_epoch = len(train_loader)
+    t1 = cfg.cosine_restart_t1
+    t2 = MAX_EPOCHS - t1
+    if t2 < 1:
+        raise ValueError(f"cosine_restart_t1={t1} must be < epochs={MAX_EPOCHS}")
+    scheduler = CosineRestart2Cycle(
+        optimizer,
+        lr_max=cfg.lr,
+        eta_min=SCHEDULER_ETA_MIN,
+        t1=t1,
+        t2=t2,
+        lr2_scale=cfg.cosine_restart_lr2_scale,
+        steps_per_epoch=steps_per_epoch,
+    )
+    print(
+        f"Scheduler: CosineRestart2Cycle  t1={t1} t2={t2} "
+        f"lr_max={cfg.lr:.2e} lr2_scale={cfg.cosine_restart_lr2_scale} "
+        f"eta_min={SCHEDULER_ETA_MIN:.2e} steps_per_epoch={steps_per_epoch}"
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=SCHEDULER_ETA_MIN)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -775,6 +851,7 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    epoch_start_lr = scheduler.get_last_lr()[0]
     model.train()
     rescale_head.train()
     if output_bias is not None:
@@ -907,6 +984,8 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_clipped += 1
         scaler.step(optimizer)
         scaler.update()
+        if cfg.cosine_restart:
+            scheduler.step()
 
         with torch.no_grad():
             sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
@@ -969,7 +1048,9 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     current_lr = scheduler.get_last_lr()[0]
-    scheduler.step()
+    if not cfg.cosine_restart:
+        scheduler.step()
+    epoch_end_lr = scheduler.get_last_lr()[0]
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
@@ -1107,9 +1188,15 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
-        "scheduler": "cosine_annealing_lr",
+        "train/lr_epoch_start": epoch_start_lr,
+        "train/lr_epoch_end": epoch_end_lr,
+        "scheduler": "cosine_restart_2cycle" if cfg.cosine_restart else "cosine_annealing_lr",
         "scheduler_T_max": SCHEDULER_T_MAX,
-        "scheduler_eta_min": 1e-5,
+        "scheduler_eta_min": SCHEDULER_ETA_MIN,
+        "cosine_restart": cfg.cosine_restart,
+        "cosine_restart_t1": cfg.cosine_restart_t1 if cfg.cosine_restart else None,
+        "cosine_restart_t2": (MAX_EPOCHS - cfg.cosine_restart_t1) if cfg.cosine_restart else None,
+        "cosine_restart_lr2_scale": cfg.cosine_restart_lr2_scale if cfg.cosine_restart else None,
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
         "torch_compile_dynamic": torch_compile_dynamic,
