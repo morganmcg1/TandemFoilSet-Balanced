@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-14 22:00 [Round 138 close-37] UTC — PR #3022 Huber loss β=1.0 — **LARGE LOSS + CRUISE BROKE — REFINES INVARIANT 4th TIME (159th taxon)**
+
+### Closed: #3022 frieren huber-smooth-l1-beta-1.0
+
+- **Branch:** charliepai2g48h5-frieren/huber-smooth-l1-beta-1.0
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-huber-smooth-l1-beta-1.0-20260514-205056/metrics.jsonl
+- **Hypothesis:** Replace L1 with Smooth L1 (Huber) loss at β=1.0; predicted near-WASH vs L1 with potential WIN from quadratic-near-zero smoothing.
+
+| Metric | NEW baseline #3006 | #3022 | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **41.2850** | **+39.79% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 35.6987 | **+40.11% LOSS** |
+| Param count | 407,175 | 407,175 | UNCHANGED ✓ |
+
+**Per-split val (ep59):** in_dist 36.48 (+50%), rc 56.96 (+31%), **cruise 26.50 (+62% LOSS — basin DECISIVELY BROKEN)**, re_rand 45.20 (+33%). ALL splits LOSS.
+
+**KEY MECHANISTIC FINDING — β=1.0 IS EFFECTIVE L2 IN NORMALIZED SPACE:**
+- Training criterion runs in NORMALIZED residual space (residuals O(0.1)), not physical MAE units (~30)
+- β=1.0 puts loss in quadratic regime from very early training (Huber/L1 ratio drops to 0.14 by ep30 = deep quadratic = effective L2)
+- L1's sign-only-per-sample gradient is LOAD-BEARING for this Lion + 60ep + post-norm + γ=1.0 recipe
+- Lion's sign-step does NOT fully nullify Huber's effect because the surf-vs-vol gradient RATIO changes (surf is 10× amplified)
+
+**CRITICAL — REFINES THE REFINED INVARIANT (4th refinement):**
+- **Prior refinement (#3014 closure):** Cruise basin incompatible with RESIDUAL-STREAM perturbation; outside-block regularization does NOT count.
+- **This PR's evidence:** Huber loss is OUTSIDE-BLOCK (changes only the criterion AFTER forward pass), yet cruise broke DECISIVELY (+62% LOSS).
+- **NEW refinement:** **Cruise breaks under EITHER (a) residual-stream perturbation, OR (b) loss-curvature / gradient-shape change at the criterion level. Cruise is preserved ONLY when both the residual stream AND the per-sample gradient SHAPE/DIRECTION are left untouched.**
+- FiLM-input dropout (#3014) preserved cruise because the surviving gradients retain L1 sign-pattern despite stochastic zeroing. Huber β=1.0 changed gradient FROM L1 sign-pattern TO L2 magnitude-pattern → cruise broke.
+
+**Cruise-preservation ledger (post-#2964) updated to 13 datapoints:**
+- BROKEN (9): #2961, #2978, #2986, #2988, #2994, #2993, #3010, #3008-level, **#3022 (loss-shape)**
+- PRESERVED (4): #3003 ordering, #3006 α (WIN), #3008 K-only-LN mildest, #3014 FiLM-input-dropout
+
+**Taxon #159:** HUBER-SMOOTH-L1-AT-BETA-1.0-IS-EFFECTIVE-L2-IN-NORMALIZED-RESIDUAL-SPACE / LOSS-SHAPE-CHANGE-BREAKS-CRUISE.
+
+### Round 138 assignment (frieren idle slot cleared):
+
+- **#3036 frieren huber-smooth-l1-beta-0pt01:** Huber/Smooth-L1 at β=0.01 — properly calibrated to normalized residual scale. β=0.01 keeps training in L1 regime for all residuals > 0.01 (which is essentially everything throughout 60ep), with quadratic smoothing only for tail samples near convergence. **Per your own closure rec verbatim: "β=0.01 sweep ... gives a true Huber regime ... closest to the original hypothesis intent."** Predicted: WASH vs L1 baseline OR slight WIN from tail smoothing; **CRUISE PREDICTED TO BE PRESERVED** (gradient sign-pattern unchanged for residuals > 0.01) — **strongest test of the refined invariant since #3014.** 3-point loss-shape axis: L1 baseline (no smoothing) / β=0.01 (tail smoothing) / β=1.0 (effective L2 catastrophic). 162nd axis.
+
+**Total closed: 159. Winners: 23. 8/8 students busy. Zero idle GPUs.**
+
+---
+
 ## 2026-05-14 21:50 [Round 138 close-36] UTC — PR #3014 FiLM-input dropout p=0.2 — **LOSS, but cruise PRESERVED — refines outside-block invariant (158th taxon)**
 
 ### Closed: #3014 fern film-input-dropout-p-0.2
