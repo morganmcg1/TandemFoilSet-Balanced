@@ -215,18 +215,29 @@ class TransolverBlock(nn.Module):
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
+            # Shared trunk: Linear + GELU.
+            # Split output projection: head_surf for surface tokens (is_surface=1),
+            # head_vol for volume tokens. Routing combined inside forward via
+            # is_surface mask. Volume head is the fallback when is_surface=None.
+            self.mlp2_pre = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
             )
+            self.head_surf = nn.Linear(hidden_dim, out_dim)
+            self.head_vol = nn.Linear(hidden_dim, out_dim)
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, is_surface=None):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.mlp2_pre(self.ln_3(fx))
+            pred_surf = self.head_surf(h)
+            pred_vol = self.head_vol(h)
+            if is_surface is not None:
+                is_surf_f = is_surface.unsqueeze(-1).to(pred_surf.dtype)
+                return pred_surf * is_surf_f + pred_vol * (1.0 - is_surf_f)
+            return pred_vol
         return fx
 
 
@@ -282,6 +293,7 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
+        is_surface = data.get("is_surface")  # [B, N] bool, routes split output heads
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
@@ -289,7 +301,7 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            fx = block(fx, mask=mask, is_surface=is_surface)
         return {"preds": fx}
 
 
@@ -319,7 +331,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx_factory():
-                pred = model({"x": x_norm, "mask": mask})["preds"]
+                pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
             pred = pred.float()
 
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
@@ -546,6 +558,18 @@ print(f"Actual total params: {n_params}")
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
+_last_block = model.blocks[-1]
+_head_surf_p = sum(p.numel() for p in _last_block.head_surf.parameters())
+_head_vol_p = sum(p.numel() for p in _last_block.head_vol.parameters())
+print(
+    f"Split output heads: head_surf + head_vol, each nn.Linear({model_config['n_hidden']}, {model_config['out_dim']}); "
+    f"shared mlp2_pre = Linear({model_config['n_hidden']}, {model_config['n_hidden']}) -> GELU; "
+    f"routing: surface tokens (is_surface=1) -> head_surf, volume tokens -> head_vol; "
+    f"head_surf params={_head_surf_p}, head_vol params={_head_vol_p}; "
+    f"baseline: single Linear({model_config['n_hidden']}, {model_config['out_dim']}) = {model_config['n_hidden'] * model_config['out_dim'] + model_config['out_dim']} params; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
+
 print(
     f"Squeeze-Excitation with ATTENTION POOL (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
     f"attention pool: Linear({model_config['n_hidden']},1) -> softmax over tokens (masked); "
@@ -696,7 +720,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
@@ -809,6 +833,40 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Split-head divergence diagnostic: L2 norm of head_surf vs head_vol at best epoch.
+    # Near 0 -> two heads learned the same projection (intervention null).
+    # >= 0.5 -> heads diverged into specialized surface vs volume projections.
+    _last_blk = _inner.blocks[-1]
+    _hs_w = _last_blk.head_surf.weight.detach().float()
+    _hv_w = _last_blk.head_vol.weight.detach().float()
+    _hs_b = _last_blk.head_surf.bias.detach().float()
+    _hv_b = _last_blk.head_vol.bias.detach().float()
+    _w_diff_norm = (_hs_w - _hv_w).norm().item()
+    _b_diff_norm = (_hs_b - _hv_b).norm().item()
+    _hs_w_norm = _hs_w.norm().item()
+    _hv_w_norm = _hv_w.norm().item()
+    # Per-channel weight-row L2 (channel 0=Ux, 1=Uy, 2=p)
+    _per_chan_diff = (_hs_w - _hv_w).norm(dim=1).tolist()
+    _per_chan_surf = _hs_w.norm(dim=1).tolist()
+    _per_chan_vol = _hv_w.norm(dim=1).tolist()
+    print("\nSplit-head divergence diagnostic (best-checkpoint weights):")
+    print(f"  ||W_surf - W_vol|| = {_w_diff_norm:.4f}  ||b_surf - b_vol|| = {_b_diff_norm:.4f}")
+    print(f"  ||W_surf|| = {_hs_w_norm:.4f}  ||W_vol|| = {_hv_w_norm:.4f}")
+    print(f"  per-channel ||W_surf[c] - W_vol[c]||  Ux={_per_chan_diff[0]:.4f}  Uy={_per_chan_diff[1]:.4f}  p={_per_chan_diff[2]:.4f}")
+    print(f"  per-channel ||W_surf[c]||             Ux={_per_chan_surf[0]:.4f}  Uy={_per_chan_surf[1]:.4f}  p={_per_chan_surf[2]:.4f}")
+    print(f"  per-channel ||W_vol[c]||              Ux={_per_chan_vol[0]:.4f}  Uy={_per_chan_vol[1]:.4f}  p={_per_chan_vol[2]:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "head_divergence_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "head_weight_diff_norm": _w_diff_norm,
+        "head_bias_diff_norm": _b_diff_norm,
+        "head_surf_weight_norm": _hs_w_norm,
+        "head_vol_weight_norm": _hv_w_norm,
+        "per_channel_diff_norm": {"Ux": _per_chan_diff[0], "Uy": _per_chan_diff[1], "p": _per_chan_diff[2]},
+        "per_channel_surf_norm": {"Ux": _per_chan_surf[0], "Uy": _per_chan_surf[1], "p": _per_chan_surf[2]},
+        "per_channel_vol_norm":  {"Ux": _per_chan_vol[0],  "Uy": _per_chan_vol[1],  "p": _per_chan_vol[2]},
+    })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
