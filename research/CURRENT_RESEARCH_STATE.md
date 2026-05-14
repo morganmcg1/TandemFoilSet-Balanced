@@ -62,6 +62,7 @@
 |---|---|---|---|---|
 | **#2666** | **fern** | wip (stale_wip, pending API) | huber_beta LOW sweep {0.2, 0.15} on hybrid baseline | Test β-side of β–σ coupling — different mechanism for producing more spread vs head-lr push. Distinguishes spread-via-residual-shape from spread-via-head-lr. **U-curve test:** if β=0.2 spread>0.475 AND regresses, σ-spread axis closed at 0.475 via independent mechanism. **Comparison baseline shifts** — was vs #2311 (val 45.22), now vs #2674 (val 45.15) — should still beat both for merge. |
 | **#2701** | **alphonse** | wip (training) | second-seed confirmation {seeds 1, 2} on exact #2311 baseline command | Paper-strengthening experiment — confirms #2311 win magnitude is seed-robust. **Direct test of seed-noise concern** flagged in #2407 thorfinn (val noise estimate ~0.86, test seed gap 1.42); current val effect ~3.9% well above noise. Zero code change. **Note:** seeds 1, 2 on #2311 baseline (max_norm=0.5), NOT #2674. Banked baseline for #2311 robustness; not directly comparable to new baseline. |
+| **#2731** | **thorfinn** | wip (new, training) | Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 baseline | Tests lr × clip-saturation coupling. At max_norm=0.35 clip_fraction=1.000 (Lion+clip in strict constant-magnitude sign-step regime); lr=3e-4 optimum was validated at max_norm=0.5 (where 1% of steps preserved gradient-info). **Single CLI flag.** Note: swa_lr scales with lr (hardcoded coupling) — implicit swa_lr sweep too. |
 | **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
 | **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |
 | **#2463** | **tanjiro** | wip (training done, pending API) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Baseline shift notice sent. SWA mechanism fully orthogonal to σ. |
@@ -165,7 +166,7 @@
 8. **huber_beta LOW sweep {0.2, 0.15} on hybrid (#2666 fern)** — tests β-side of β–σ coupling; produces more spread via residual-shape mechanism rather than head-lr. **Diagnostic test:** distinguishes "premature commitment was the failure mode" from "U-curve is structural across mechanisms".
 9. ~~**max_norm BRACKET LOW {0.25, 0.35} on hybrid (#2674 thorfinn)**~~ — **MERGED ✓** (max_norm=0.35 beats baseline on both val −0.064 / test −0.129; test-side U-curve minimum closed at 0.35).
 9b. **second-seed confirmation {seeds 1, 2} on #2311 (#2701 alphonse)** — paper-strengthening; confirms #2311 win is seed-robust; addresses noise concerns banked from #2407.
-9c. **NEW thorfinn assignment (post-merge):** SWA co-tuning at max_norm=0.35 — joint (swa_lr × max_norm) or swa_start_frac × max_norm. Banked from #2606's max_norm × swa_lr co-tuning hypothesis; with clip axis now closed, SWA axis is next narrow lever.
+9c. **Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 (#2731 thorfinn NEW)** — lr × clip-saturation coupling test on new baseline; tests whether Lion lr=3e-4 optimum from #2297 shifts under saturated-clip regime. Single CLI flag. Note: swa_lr scales with lr (hardcoded), implicit coupled sweep.
 7. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro)** — averaging-lr level axis from #2342 mechanism finding.
 8. **SWA anneal_epochs=1 on σ=0.5 (#2481 edward)** — SWALR ramp speed; all 3 averaged epochs at swa_lr.
 9. **Skip-SWALR entirely on σ=0.5 (#2484 frieren)** — direct test of SWALR-overrides-cosine mental model; cosine-tail vs SWALR-floor averaging.
@@ -187,6 +188,7 @@
 1. Huber β=1.0 (#1452), 2. Per-sample Re-weight (#1586), 3. FiLM (#1585), 4. Grad-clip 1.0 (#1731), 5. Grad-clip 0.5 (#1831), 6. Kendall σ (#1906), 7. RFF σ=1.0 (#2082), 8. Huber β=0.3 (#1757), 9. Lion lr=3e-4 wd=3e-4 (#2063), 10. **RFF σ=0.5 (#2168)** ← CURRENT
 
 ### 🔬 In-flight (Wave 12 — post-Loop-39)
+- **Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 (#2731 thorfinn NEW)** — lr × clip-saturation coupling test on new baseline
 - **second-seed confirmation {seeds 1, 2} on #2311 baseline (#2701 alphonse)** — paper-strengthening; confirms #2311 win is seed-robust
 - **huber_beta LOW sweep {0.2, 0.15} on merged hybrid (#2666 fern, stale_wip pending student post-result)** — β-side of β–σ coupling; distinguishes premature-commitment from structural U-curve
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
@@ -194,7 +196,6 @@
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery
 - SWA anneal_epochs=1 on σ=0.5 (#2481 edward) — pending API recovery
 - Skip-SWALR entirely on σ=0.5 (#2484 frieren) — pending API recovery
-- **NEW thorfinn assignment (Loop 39)** — TBD this loop
 
 ### ⭐ Merged (Wave 12 winners)
 - hybrid Lion+AdamW for Kendall σ heads (#2311 fern, 2026-05-13 19:10): val 45.2181 / test 38.7661, −1.20% val / −2.26% test. σ-spread 0→0.475. Structural σ-collapse fix.

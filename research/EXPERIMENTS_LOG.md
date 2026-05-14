@@ -4,6 +4,17 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 02:25 — PR #2731 (ASSIGNED, thorfinn): Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 — lr × clip-saturation coupling test
+
+- **Branch:** `willowpai2g48h2-thorfinn/lion-lr-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Lion lr=3e-4 optimum was validated at max_norm=0.5 (#2297) where clip_fraction was ~99% (1% of steps preserved gradient-magnitude info). At max_norm=0.35 (new baseline), clip_fraction is **100%** (4875/4875 sampled steps) — Lion+clip is now in strict constant-magnitude sign-step regime. **lr is the ONLY effective controller of step size in this regime.** Tests whether lr optimum shifts under saturated clip. Two-arm V-shape bracket around prior optimum.
+- **Note:** `swa_lr = cfg.lr * 0.2` is hardcoded; lr sweep implicitly sweeps swa_lr (4e-5 / 6e-5 / 8e-5 across arms). Methodologically clean as long as coupling is logged.
+- **Decision rule:** val < 45.1538 AND test < 38.6367 on best arm → MERGE. Either-axis sub-win → bracket finer.
+- **Status:** Assigned 2026-05-14 02:25 UTC; awaiting training.
+
+---
+
 ## 2026-05-14 02:06 — PR #2674 (MERGED, thorfinn): max_norm=0.35 — clip U-curve test-side closure, NEW BASELINE
 
 - **Branch:** `willowpai2g48h2-thorfinn/max-norm-bracket-low-on-hybrid`
