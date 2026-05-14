@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 21:55
+- **Date:** 2026-05-14 22:05
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -67,13 +67,13 @@
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | #3012 | alphonse | Per-block weight decay scan: 0.25×/4× on late blocks (γ_w_L2 specialization probe) | ASSIGNED 2026-05-14 21:15 |
-| #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged | ASSIGNED 2026-05-14 18:50 |
-| #2991 | thorfinn | Output decoder head MLP width scan: 2× (256) and 3× (384) | ASSIGNED 2026-05-14 19:25 |
 | #2965 | fern | Fourier-Re K=4: 2-seed rerun on 15th-shift baseline (compound with 2× γ width) | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
 | #3007 | nezuko | Y-flip TTA at inference (paper-facing finishing move; 2× eval forward, avg in physical frame) | ASSIGNED 2026-05-14 21:00 |
 | #3001 | edward | FiLM-Re γ MLP init std scan: film_re_init_std=0.05/0.03 vs global 0.07 | ASSIGNED 2026-05-14 20:40 |
 | #3019 | tanjiro | FiLM-Re γ MLP joint [log_re, AoA_1, AoA_2] conditioning input (Re×AoA interaction surface) | ASSIGNED 2026-05-14 21:45 |
 | #3028 | askeladd | FiLM-Re γ at output decoder (Re-blind decoder injection, target: re_rand OOD) | ASSIGNED 2026-05-14 21:55 |
+| #3034 | frieren | Re-stratified mini-batch sampling by Re-bin (WeightedRandomSampler, K=4 quartiles) | ASSIGNED 2026-05-14 22:15 |
+| #3035 | thorfinn | FiLM-Re γ on PhysicsAttention routing layer (slice_proj logits — Re-conditional routing) | ASSIGNED 2026-05-14 22:15 |
 
 **Closed this round (rounds 12–15):**
 - #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07.
@@ -91,6 +91,8 @@
 - **#2959 (alphonse per-block lr)** — Closed after 3 send-backs without successful rebase. Meta-finding #14 (OOD signal in early blocks) preserved; inverted-scaling follow-up axis now covered by askeladd #3002. Alphonse reassigned to per-block wd (#3012) — orthogonal optimizer-side axis on the same param-group split.
 - **#2990 (tanjiro γ-MLP depth-2)** — depth-2 at width=256: val=33.7942 (+0.26% REGRESS), test=28.5276 (−0.44% pass). Primary metric fails merge bar. γ_w_L2 depth-monotone pattern FLATTENED (3.97→5.75 → ~4.1–4.6 flat). Seed variance widens to 1.68% (vs 0.4%). γ-MLP depth redistributes capacity at width=256 without adding it. Depth axis closed. Meta-finding #18 added. Tanjiro reassigned to joint Re+AoA γ-MLP input (#3019).
 - **#3002 (askeladd inverted lr)** — 0.7×/0.5× late-block lr: val=35.19/36.59 (+4.4%/+8.6% REGRESS), test=29.61/30.92. γ_w_L2 inverted at 0.5× (late drops below early). Combined with #2959 boost results: geom_camber_rc monotone-bad in BOTH directions from 1.0×. Per-block lr fully retired. Meta-finding #14 ("early blocks drive OOD") RETRACTED (misattribution). Meta-finding #19 added. Askeladd reassigned to FiLM-Re decoder injection (#3028).
+- **#2984 (frieren input-only cond-mixup)** — α=0.2/0.4: val=55.95/58.79 (+66%/+74% REGRESS), test=50.19/52.87 (+75%/+85% REGRESS). All 4 splits catastrophic. Mechanism: per-batch λ + per-sample targets = conditioning label noise; model is forced to ignore conditioning. The 76-86% test_re_rand regression is the smoking gun (encoder learned to IGNORE Re). Meta-finding #20 added. Cond-mixup axis closed; clean alternative is single-sample Gaussian Re-jitter with target pairing preserved.
+- **#2991 (thorfinn head-decoder-width)** — 2×/3× head_hidden: val=36.22/36.08 (+7.4%/+7.0% REGRESS), test=30.83/30.23 (+7.6%/+5.5% REGRESS). All 4 splits uniformly regress (no OOD-selective signal). Mirror of edward's #2943 head-depth result. 128-d single-hidden-layer head is at capacity sweet spot. Meta-finding #21 added. Output decoder head capacity (width AND depth) fully retired as a free axis.
 
 ## Key meta-findings
 
@@ -113,6 +115,8 @@
 17. **Block-level stochastic regularizers retired at depth=5 (#2926)** — DropPath at rates 0.1/0.2 over-regularizes a 5-block Transolver; literature regime is depth ≥ 12 (ViT-L, Swin-L, MAE). The depth-scaled per-block residual is doing structural work that random zeroing destroys faster than ensemble benefit can compensate. Combined with #11/#16, **only conditioning-capacity expansion has worked**. Two regularization tiers retired: block-level over-regularizes; routing-perturbation trades OOD/IID. Path forward: conditioning-capacity-side interventions only (γ width #2948, γ depth #2990, γ Fourier input #2965, γ component-init #3001).
 18. **γ-MLP depth does NOT add capacity at 35-ep compute-bound budget (#2990)** — depth-2 at width=256: γ_w_L2 depth-monotone pattern FLATTENS (3.97→5.75 → ~4.1–4.6 flat); depth redistributes the depth-dependent modulation from output-Linear weights into a new hidden-layer, without expanding what the model can express. Seed variance widens 4× (0.4%→1.68%). **Width=256 saturates the conditioning-capacity headroom at 35 epochs.** Further γ-MLP internal capacity expansion exhausted — gains must come from **input expressivity** (Fourier-Re #2965) or **conditioning surface area** (joint Re+AoA input #3019).
 19. **Per-block lr scaling is fully retired — meta-finding #14 RETRACTED (#3002, #2959)** — both boost (1.5×/2.0×, #2959) and reduction (0.7×/0.5×, #3002) hurt all splits monotonically; geom_camber_rc is monotone-bad in BOTH directions from 1.0×. The per-block lr optimum is centered at 1.0× and any deviation hurts OOD. **Meta-finding #14 ("early blocks drive OOD signal") was a misattribution of confounded run variance.** γ_w_L2 depth-monotone diagnostic confirmed as health-signal: runs that fail to grow the early~4.2/late~5.6 pattern consistently regress (0.5× late-lr inverts pattern, maps perfectly to worst performance).
+20. **Per-batch λ Mixup on conditioning inputs without per-sample target preservation = conditioning label noise (#2984)** — α=0.2 and α=0.4 both regress >66% val, >75% test, all 4 splits catastrophic. Implementation samples one λ per batch and pairs `(x[perm[i]] cond, y[i] target)` for ~half of batches (Beta-bimodal mass at λ≈0/1). Model's optimal response: down-weight conditioning channels. test_re_rand +76-86% confirms encoder learned to IGNORE Re. **Conditioning Mixup has no clean variant on non-corresponding meshes.** Single-sample Gaussian Re-jitter with target pairing preserved is the clean replacement axis if conditioning-smoothing is desired (already-explored axis worth revisiting at 15th-shift with FiLM-Re in place).
+21. **Output decoder head capacity is fully retired (#2991 width, #2943 depth)** — 2×/3× head_hidden uniformly regresses 5-9% across all 4 test splits (no OOD trade-off); mirrors #2943 head-depth (depth=3 closed). At the 15th-shift basin, output head capacity is NOT orthogonal to trunk — additional head params rob optimization budget from trunk + γ-MLP within the 30-min/35-epoch cap. 128-d single-hidden-layer head sits at the capacity sweet spot. Future capacity moves: trunk-internal width, slice_num, or genuinely new injection points (e.g. #3028 decoder-FiLM-Re).
 
 ## Currently retired axes
 

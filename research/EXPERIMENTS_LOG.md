@@ -3318,3 +3318,71 @@ Late-block lr cut starves late-block FiLM-Re conditioning (γ_w_L2 drops at 0.5�
 - Param delta: ~+33K (1 extra γ MLP only on the final block)
 - Arms: decoder-FiLM s1, decoder-FiLM s2 (seed=2)
 - Merge bar: mean val < 33.71, mean test < 28.65
+
+---
+
+## 2026-05-14 22:05 — PR #2984: Conditioning input-only Mixup frieren (CLOSED)
+- Branch: `willowpai2g48h3-frieren/input-only-cond-mixup`
+- Hypothesis: Apply Mixup *only* to conditioning channels [log_re, AoA_1, AoA_2] while preserving targets, smoothing the conditioning manifold without breaking per-node target correspondence. Tests two Beta(α,α) bimodalities: α=0.2 (strongly bimodal) and α=0.4 (less bimodal).
+
+### Results (2 arms)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | 28.653 | — | — |
+| s1 α=0.2 `nq29f9ly` | bimodal | 55.947 | 50.190 | +66% ❌ | +75% ❌ |
+| s2 α=0.4 `syhm34wi` | less bimodal | 58.788 | 52.873 | +74% ❌ | +85% ❌ |
+| **2-seed mean** | — | **57.367** | **51.531** | **+70% ❌** | **+80% ❌** |
+
+Per-split test (worst regressions): single_in_dist=58.7/65.7 (+82%/+103%), geom_camber_rc=66.7/64.8 (+61%/+56%), geom_camber_cruise=29.4/32.6 (+97%/+119%), **re_rand=46.0/48.4 (+77%/+86%)**.
+
+**Mechanism (student's analysis, confirmed correct):** Per-batch λ + per-sample targets = conditioning label noise. For α=0.2's bimodal Beta, ~50% of batches have λ ≈ 0/1, meaning ALL samples in such batches get conditioning swapped from `perm[i]` (different Re/AoA) while keeping their own targets. Model is asked: "Predict sample i's pressure field given sample j's Re/AoA" — strict no-signal pairing for ~half of training steps. Optimal response: down-weight the conditioning channels (= invert hypothesis). The 76-86% `test_re_rand` regression is the smoking gun for "encoder learned to IGNORE Re."
+
+α=0.4 (less bimodal, more middle-λ) is *worse* than α=0.2, suggesting interpolated Re/AoA values lie in regions the rest of the dataset never validates.
+
+**Decision: CLOSED.** Catastrophic regression all 4 splits, both arms. Mixup with non-corresponding mesh targets has no clean variant.
+
+**Meta-finding #20:** *Per-batch λ Mixup on conditioning inputs without per-sample target preservation = conditioning label noise. Forces encoder to ignore conditioning, inverts hypothesis. Single-sample Re-jitter (Gaussian noise around log_re, target pairing preserved) is the clean alternative if conditioning smoothing is desired.*
+
+---
+
+## 2026-05-14 22:05 — PR #2991: Output decoder head MLP width scan thorfinn (CLOSED)
+- Branch: `willowpai2g48h3-thorfinn/head-decoder-width`
+- Hypothesis: Widen output decoder mlp2 (only the last block's 128→128 layer) by 2× (128→256) or 3× (128→384). Tests whether output head capacity is a free axis post-#2948 FiLM-Re width expansion.
+
+### Results (2 arms)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | 28.653 | — | — |
+| s1 2× `agxx1tir` | head_h=256 | 36.217 | 30.835 | +7.4% ❌ | +7.6% ❌ |
+| s2 3× `czkb6fqo` | head_h=384 | 36.083 | 30.228 | +7.0% ❌ | +5.5% ❌ |
+| **2-seed mean** | — | **36.150** | **30.531** | **+7.2% ❌** | **+6.6% ❌** |
+
+Per-split test (uniform regression, no OOD trade-off): single_in_dist=35.05/33.67 (+8.8%/+4.5%), geom_camber_rc=43.82/43.24 (+5.7%/+4.3%), geom_camber_cruise=16.34/15.99 (+9.6%/+7.3%), re_rand=28.13/28.02 (+8.1%/+7.7%).
+
+**Mechanism:** Mirror of edward's closed #2943 (head-depth). At the 15th-shift basin, output head capacity is NOT orthogonal to trunk — additional head params rob optimization budget from trunk + γ-MLP within the 30-min cap. 128-d single-hidden-layer head is at its capacity sweet spot.
+
+**Decision: CLOSED.** Both arms uniformly regress on all 4 test splits, no OOD-selective signal. Function is flat-to-bad in this region (no monotone trend toward 1×, so 1.5× would also regress).
+
+**Meta-finding #21:** *Output decoder head capacity (width AND depth) is fully retired as a free axis. Confirmed twice (#2943 head-depth, #2991 head-width). At this trunk/γ-capacity allocation, capacity moves should target trunk-internal width, slice_num, or genuinely new injection points (e.g. #3028 decoder-FiLM-Re).*
+
+---
+
+---
+
+## 2026-05-14 22:15 — PR #3034: Re-stratified mini-batch sampling frieren (ASSIGNED)
+- Branch: `willowpai2g48h3-frieren/re-stratified-sampling`
+- Hypothesis: Use WeightedRandomSampler with inverse-Re-bin-frequency weights (K=4 quartile bins) to ensure each training mini-batch sees balanced Re distribution. Current uniform sampling reflects natural dataset Re-frequency; rare Re-bins are under-represented in gradient updates. Stratified sampling corrects this without changing model or input-target pairing — directly targeting test_re_rand (most Re-generalization-limited OOD split). Param delta: ZERO (model unchanged). Plateau-protocol data-side lever, orthogonal to all in-flight FiLM-Re model-side axes.
+- Target: test_re_rand < 26.022, val < 33.706
+- Arms: K=4 s1, K=4 s2 (seed=2)
+- Meta-finding #20 motivation: cond-mixup failed by corrupting input-target pairing; stratified sampling is the clean alternative preserving full pairing
+
+---
+
+## 2026-05-14 22:15 — PR #3035: FiLM-Re γ on PhysicsAttention routing layer thorfinn (ASSIGNED)
+- Branch: `willowpai2g48h3-thorfinn/film-re-routing`
+- Hypothesis: Apply FiLM-Re γ_routing MLP to the PhysicsAttention `in_project_slice` routing logits before softmax. Currently ALL FiLM-Re conditioning (#2948 trunk γ, #3028 decoder γ, #3019 joint Re+AoA) modulates *features* or *predictions*; the slice_proj routing layer that determines which physical regions each token attends to is Re-INVARIANT. γ_routing(Re) * slice_logits before softmax gives Re-conditional slice assignment — fundamentally new injection point. Per meta-finding #16 (routing perturbations reliably trade OOD for IID) and #13 (FiLM conditioning breaks the wedge), conditioning the routing layer per Re is the natural synthesis of these two findings. ~+85K params (~17K per block × 5), identity-init, same γ MLP architecture as trunk γ but with slice_num=64 output instead of hidden_dim=128.
+- Target: test_geom_camber_rc < 41.458, test_re_rand < 26.022
+- Arms: routing-FiLM s1, routing-FiLM s2 (seed=2)
+- Plateau-protocol bold bet: new injection point per meta-finding #21 ("future capacity moves should target genuinely new injection points")
