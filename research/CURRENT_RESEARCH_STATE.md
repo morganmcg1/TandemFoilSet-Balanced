@@ -1,26 +1,27 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 18:15 UTC
+- **Date:** 2026-05-14 18:38 UTC
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r1`
 - **Research tag:** `charlie-pai2g-48h-r1` (Charlie no-W&B logging-ablation arm)
 - **Most recent human directive:** None — no GitHub issues from human team
 
-## Current Best Baseline — PR #2954 (askeladd, torch.compile, merged 2026-05-14 17:12 UTC)
+## Current Best Baseline — PR #2967 (askeladd, --epochs 35, merged 2026-05-14 18:35 UTC)
 
 | Metric | Value |
 |--------|-------|
-| **val_avg/mae_surf_p** | **65.953** |
-| test_avg/mae_surf_p | 56.825 |
-| val_geom_camber_cruise | 49.899 |
-| val_re_rand | 64.475 |
-| val_single_in_dist | 70.437 |
-| val_geom_camber_rc | 79.001 |
-| **epochs realized** | **25/25** |
-| **wall-clock** | **21.7 min** |
+| **val_avg/mae_surf_p** | **54.475** |
+| test_avg/mae_surf_p | 47.043 |
+| val_geom_camber_cruise | 37.613 |
+| val_re_rand | 53.733 |
+| val_single_in_dist | 57.573 |
+| val_geom_camber_rc | 68.980 |
+| **epochs realized** | **35/35** |
+| **wall-clock** | **29.8 min** |
 
-**Recipe:** `--epochs 25 --lr 2e-3 --loss l1 --eval_every 2 --compile_model` + bf16 autocast + OneCycleLR
-**Critical:** ALL future experiments MUST include `--compile_model`. Without it only 19 epochs fit.
-**Key insight:** `torch.compile` gives 1.86× throughput (50 s vs 94 s/epoch), all 25 epochs fit in budget, VRAM drops 32.95→23.8 GB.
+**Recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model` + bf16 autocast + OneCycleLR
+**Critical:** ALL future experiments MUST include `--compile_model --epochs 35`.
+- Without `--compile_model`: only 19 epochs fit, LR schedule starved.
+- Without `--epochs 35`: LR floor at ep 25, 10 productive tail epochs wasted.
 
 ## Progress Path
 
@@ -31,46 +32,43 @@
 | #1581 OneCycleLR @2e-3 | ✅ | 85.615 | -9.2% |
 | #1405 bf16 + epochs=25 | ✅ | 73.295 | -14.4% |
 | #2936 eval_every=2 | ✅ | 72.694 | -0.82% |
-| #2954 torch.compile | ✅ | **65.953** | **-9.3%** |
+| #2954 torch.compile | ✅ | 65.953 | -9.3% |
+| #2967 --epochs 35 | ✅ | **54.475** | **-17.4%** |
 
 ## Active Research Focus
 
-**Every improvement to date is a training-efficiency improvement**: more epochs, faster training, better LR schedule utilization within the 30-min wall-clock cap. The pattern is clear: the OneCycleLR tail (low-LR fine-tuning zone) is extremely productive, and maximizing epochs in that regime drives all gains.
-
-**New insight from PR #2963 (variance loss, closed):** `val_geom_camber_rc` is an **extrapolation problem** — raceCar training covers M=2-5 (P1) and M=9 (P3), but rc tests M=6-8 which are never seen in training. Loss-shape changes within the training distribution can't bridge this gap. The path to rc improvement must come from **geometric coverage** of the training distribution (sampler re-weighting, camber augmentation).
+**Every improvement to date is a training-efficiency improvement**: more epochs, faster training, better LR schedule utilization within the 30-min wall-clock cap. The pattern is relentless: the OneCycleLR mid-tail (LR ∈ [5e-4, 5e-6]) is extremely productive, and maximizing epochs in that regime drives all gains.
 
 **Current frontier questions:**
-1. **Horizon extension**: With compile, can we run 35 epochs and squeeze more from the extended LR schedule? (askeladd #2967 — training)
-2. **Domain re-weighting**: Does upweighting cruise in the sampler improve the rc extrapolation gap? (fern #2982 — new)
-3. **pct_start tuning**: Shorter warmup (0.05) to reach peak LR faster? (frieren #2970 — rate-limited)
-4. **Other efficiency levers**: EMA, batch_size=8, surf_weight=5, asinh, channel weights — stalled pods pending rate-limit recovery
+1. **final_div_factor tuning**: Can keeping the final epochs at a productive LR (not 8e-9 dead floor) extract more from the 35-epoch schedule? (askeladd #2987 — new)
+2. **Cruise domain upweighting**: Does upweighting cruise in the sampler help the rc extrapolation gap? (fern #2982 — running)
+3. **pct_start tuning**: Shorter warmup to reach peak LR faster? (frieren #2970 — rate-limited)
+4. **Stalled experiments**: EMA, batch_size=8, surf_weight=5, asinh, channel weights — all need `--compile_model --epochs 35` updates when rate-limit clears.
 
 ## Students — Current State
 
 | Student | PR | Hypothesis | State |
 |---------|-----|-----------|-------|
-| askeladd | #2967 | OneCycleLR horizon extension 30/35 ep (compile) | WIP — training |
-| fern | #2982 | Cruise domain upweighting 2x/3x (rc extrapolation fix) | WIP — newly assigned |
+| askeladd | #2987 | OneCycleLR final_div_factor tuning (100/10) | WIP — newly assigned |
+| fern | #2982 | Cruise domain upweighting 2x/3x | WIP — training |
 | frieren | #2970 | OneCycleLR pct_start warmup tuning (0.05/0.2) | WIP ⚠ rate-limited |
 | thorfinn | #2915 | EMA model weights (decay 0.999/0.9999) | WIP ⚠ rate-limited |
 | tanjiro | #2916 | bf16 batch_size=8 + extended schedule | WIP ⚠ rate-limited |
-| edward | #1605 | asinh-p680 + OneCycle re-run on bf16 baseline | WIP ⚠ rate-limited + rebase needed |
-| nezuko | #1625 | surf_channel_weight cw=2 re-run on compile baseline | WIP — rebased at 17:52, training imminently |
-| alphonse | #1582 | surf_weight=5 re-run on bf16 baseline | WIP ⚠ rate-limited |
+| edward | #1605 | asinh transform + scale sweep | WIP ⚠ rate-limited + rebase needed |
+| nezuko | #1625 | surf_channel_weight sweep | WIP — rebased, training |
+| alphonse | #1582 | surf_weight=5 re-run | WIP ⚠ rate-limited |
 
-5 pods still rate-limited on shared student token (user 20516801). nezuko (#1625) partially unblocked and rebased at 17:52.
+5 pods still rate-limited on shared token. nezuko (#1625) and fern (#2982) are active.
 
-**IMPORTANT for stale pods:** When frieren/thorfinn/tanjiro/alphonse/edward resume, ALL their experiments must include `--compile_model`. Without it, they can only reach 19 epochs vs 25. These re-runs may need to be sent back with updated instructions.
+**IMPORTANT for stale pods:** When frieren/thorfinn/tanjiro/alphonse/edward resume, ALL their experiments MUST be updated to `--compile_model --epochs 35` (not 25). The new baseline is 35 epochs. Without both flags, results are not comparable and will likely regress vs the new baseline.
 
 ## Key Findings (cumulative)
 
-- **torch.compile is transformative.** 1.86× speedup, 50 s/epoch, full 25-epoch schedule in 21.7 min, VRAM drops 32→24 GB. Zero architecture/hyperparameter change. ALL future experiments must use `--compile_model`.
-- **val_geom_camber_rc is an extrapolation problem.** raceCar P1 covers M=2-5, P3 covers M=9; rc tests M=6-8 unseen in training. Loss-shape changes (variance penalty, surf_weight, etc.) don't help; geometric coverage of the training distribution does.
-- **val_single_in_dist improved dramatically.** 79.89 → 70.44 with compile (more tail epochs help this split most).
-- **Wall-clock budget has headroom.** With 21.7 min for 25 epochs, there are 8+ min unused — extending to 35 epochs is feasible.
-- **Augmentation directions closed.** z-flip (both full and cruise-only) failed. Mesh topology constraints make this approach too fragile.
-- **Gradient clipping hurts.** On 25-ep OneCycleLR, the schedule provides enough regularization.
-- **Depth/width scaling fails.** Compute overhead reduces realized epochs below the productive tail.
+- **The binding constraint is LR schedule, not VRAM or architecture.** Every win traces back to maximizing epochs in the productive mid-tail of OneCycleLR. torch.compile (50 s/epoch), eval_every=2, and --epochs 35 are all different levers on the same mechanism.
+- **Final LR collapse wastes one epoch.** `final_div_factor=1e4` drives LR to 8e-9 at ep 35; the last epoch contributes only 0.10 val points. Reducing to 100 or 10 could keep final epochs productive.
+- **val_geom_camber_rc extrapolation gap persists.** Still at 68.980 after all efficiency gains (vs 37.613 for cruise). Mechanism: M=6-8 raceCar cambers unseen in training. Sampler re-weighting and camber augmentation are the right levers.
+- **Augmentation/loss-shape changes exhausted.** z-flip (mesh topology), variance penalty (wrong mechanism for rc extrapolation), gradient clipping, depth/width scaling — all confirmed negative.
+- **35 epochs is the hard wall-clock ceiling** at 51 s/epoch + compile overhead. ~40 epochs would exceed 30 min. Squeezing more out of the existing schedule (final_div_factor, pct_start) is the remaining efficiency lever.
 
 ## Negative Results Confirmed
 
@@ -80,21 +78,20 @@
 | n_layers=6/7 | #2914 | +27-35% | Compute kills realized epochs |
 | z-flip (all meshes) | #2935 | +20.4% | raceCar one-sided topology |
 | z-flip (cruise-only) | #2945 | +4.5%/+18.3% | Mesh node density not z-symmetric |
-| variance-penalized loss λ=0.5/1.0 | #2963 | +5.7%/+17.8% | rc is extrapolation gap, not outlier-fitting problem |
+| variance-penalized loss λ=0.5/1.0 | #2963 | +5.7%/+17.8% | rc is extrapolation gap, not outlier-fitting |
 
 ## Potential Next Directions (not yet assigned)
 
-1. **OneCycleLR horizon 30/35 epochs** (assigned: askeladd #2967) — use the 8.3 min budget surplus
-2. **Cruise domain upweighting 2x/3x** (assigned: fern #2982) — geometric coverage for rc extrapolation
+1. **final_div_factor=100/10** (assigned: askeladd #2987) — keep final epochs productive
+2. **Cruise domain upweighting 2x/3x** (assigned: fern #2982) — rc via geometric coverage
 3. **pct_start warmup tuning** (assigned: frieren #2970) — shorter/longer warmup fraction
-4. **Per-domain normalization** — addresses 4× pressure scale difference cruise vs raceCar
-5. **Higher peak LR with extended schedule**: lr=3e-3 with 35 epochs — more aggressive warmup
-6. **Camber-interpolation augmentation**: synthesize intermediate M=5-9 samples via feature-space blending
-7. **Compound stacking**: SW=5 + CW=2 + asinh (if stalled pods validate on compile baseline)
+4. **Per-domain normalization** — 4× pressure scale difference cruise vs raceCar
+5. **Camber-interpolation augmentation** — synthetic M=5-9 via feature blending
+6. **Stale experiments** (EMA, batch_size=8, surf_weight, asinh, channel weights) — need --epochs 35 update
 
 ## Open Questions
 
-- Does the OneCycleLR horizon extension improve results when full schedule can actually run? (askeladd #2967 will answer)
-- Does cruise upweighting improve the rc extrapolation gap or does it hurt raceCar-specific splits? (fern #2982 will answer)
-- What is the true floor? val_avg was at 218 (MSE baseline), now at 66 — is there a physical lower bound for TandemFoilSet at this architecture scale?
-- Do the stalled experiments (EMA, batch_size=8, surf_weight=5, asinh, channel weights) still have value now that the baseline is 65.95? They need re-run with `--compile_model`.
+- Does reducing final_div_factor meaningfully improve the schedule tail? (askeladd #2987 answers this)
+- Does cruise upweighting help rc extrapolation, or does it hurt raceCar-specific splits? (fern #2982)
+- At val=54.5, how close are we to the physical floor? What do the worst predictions look like spatially?
+- Do the stalled experiments still have value vs the new 54.475 baseline? All need --epochs 35 update.

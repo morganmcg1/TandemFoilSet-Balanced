@@ -1,5 +1,42 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension (--epochs 30/35 with compile) ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-askeladd/onecycle-horizon-extension-compiled`
+- **Hypothesis:** Extending OneCycleLR horizon to 35 epochs keeps the schedule in the productive mid-tail for 10 more epochs vs the 25-epoch baseline where LR was already at the floor (8e-9) by the final epoch.
+
+### Result (vs PR #2954 compile baseline 65.953)
+
+| Arm | epochs realized | wall-clock | val_avg/mae_surf_p | test_avg/mae_surf_p | LR @ best ep | Δ val |
+|-----|-----------------|------------|---------------------|---------------------|--------------|-------|
+| **A: --epochs 35** | **35/35** | **29.8 min** | **54.475** | **47.043** | 8.04e-9 (floor) | **-17.4%** |
+| B: --epochs 30 | 30/30 | 25.7 min | 60.595 | 52.257 | 8.05e-9 (floor) | -8.1% |
+| **Baseline (#2954, 25ep)** | 25/25 | 21.7 min | **65.953** | **56.825** | — | — |
+
+Per-split val breakdown (Arm A, epoch 35):
+
+| Split | Arm A (ep 35) | Arm B (ep 30) | Baseline (ep 25) |
+|-------|---------------|---------------|------------------|
+| val_geom_camber_cruise | **37.613** | 43.752 | 49.899 |
+| val_re_rand | **53.733** | 60.395 | 64.475 |
+| val_single_in_dist | **57.573** | 64.581 | 70.437 |
+| val_geom_camber_rc | **68.980** | 73.651 | 79.001 |
+| **val_avg** | **54.475** | 60.595 | 65.953 |
+
+Artifacts: `models/model-onecycle-ep35-compiled-20260514-171905/metrics.jsonl`, `models/model-onecycle-ep30-compiled-20260514-175215/metrics.jsonl`
+
+### Action: MERGED (Arm A) — new baseline val_avg=54.475, test=47.043
+
+**Mechanism confirmed:** Under `--epochs 25` (old baseline), ep 25's LR was already at 8e-9 (floor) — the OneCycleLR schedule was fully consumed. Under `--epochs 35`, LR at epoch 25 is 4.57e-4 (productive mid-tail). Epochs 25–35 each yield 1.5–4 val points. The val trajectory is monotone-decreasing all the way to ep 35 with no plateaus — the schedule is the binding constraint.
+
+**Key engineering detail:** Arm A wall-clock = 29.8 min (under 30-min cap). The schedule can't go to 38+ epochs without violating the cap. 35 epochs is the maximum safe value.
+
+**Updated recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model`
+
+**New assignment:** #2983 askeladd → final_div_factor tuning (keep final LR productive instead of 8e-9 dead)
+
+---
+
 ## 2026-05-14 18:15 — PR #2963: Variance-penalized surface loss (mean + λ·std) ❌ CLOSED (negative)
 
 - **Student branch:** `charliepai2g48h1-fern/variance-penalized-surf-loss`
