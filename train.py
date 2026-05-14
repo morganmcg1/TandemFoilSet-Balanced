@@ -543,7 +543,8 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    # H85: slice_num=96 (+50% slice tokens, finer geometry partitioning)
+    slice_num=96,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -555,6 +556,7 @@ n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
 n_params = n_model_params + n_fourier_params  # includes 6 learnable freqs
 print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
 print(f"n_params (total trainable): {n_params}")
+print(f"[H85] slice_num={model_config['slice_num']}: n_params={n_params} (expected ~913,117 = 892,637 + 20,480)")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 # H39: ReGLU gate sanity check (ReLU = max(0,x))
@@ -820,7 +822,7 @@ for epoch in range(MAX_EPOCHS):
             "per_block_entropy_ratio": ent_ratios,
         })
         print(
-            f"    [H67] attn entropy (max=log(64)={max_entropy:.4f}): "
+            f"    [H67] attn entropy (max=log({model_config['slice_num']})={max_entropy:.4f}): "
             + " ".join(
                 f"b{i}={ent_means[i]:.4f}({ent_ratios[i]*100:.1f}%, min/head={ent_min_per_head[i]:.4f})"
                 for i in range(len(ent_means))
