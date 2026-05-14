@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-15 07:30 [Round 138 close-48] UTC — #3066 edward LayerScale LOSS-with-cruise-BROKEN; 182nd taxon; 11th BROKEN; 6TH-REFINEMENT-CRUISE-INVARIANT-SITE-STRUCTURALLY-LOAD-BEARING; α-modulation-axis comprehensively closed across 5 sub-axes
+
+### Closed: #3066 edward layerscale-branch-output (182nd taxon LAYERSCALE-PER-CHANNEL-BRANCH-OUTPUT-LOSS-WITH-CRUISE-BREAK-VIA-CROSS-SITE-ALPHA-GAMMA-COUPLING / 6TH-REFINEMENT-CRUISE-INVARIANT-SITE-STRUCTURALLY-LOAD-BEARING)
+
+- **Branch:** charliepai2g48h5-edward/layerscale-branch-output
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-layerscale-branch-output-20260514-231135/metrics.jsonl
+- **Hypothesis:** CaiT-style per-channel learnable γ at branch output, γ_init=1e-4; +768 params per design; cruise prediction UNCERTAIN (first non-residual-edge multiplicative site at scalar granularity, 6th-refinement test).
+- **Result:** val 34.4985 (+16.83% LOSS — second-largest regression of launch); test 29.0062 (+13.84% LOSS); **val_cruise 19.2906 BROKEN (+18.97% above 17.0 threshold)**; param +768 per design.
+- **Cruise: BROKEN** (11th BROKEN datapoint).
+- **Mechanistic findings (exemplary student write-up):**
+  - (1) **Small-init starvation FALSIFIED:** γ DID grow from init=1e-4. Lion's sign-step + β₁=0.9 momentum was sufficient. σ_mlp grew 30× (3.5e-3 → 1.0e-1), σ_attn grew 12× (3.3e-3 → 4.0e-2) from init.
+  - (2) **Per-channel chaos rules — σ >> |μ|:** at ep60 |μ_mlp|≈0.01-0.02 but σ_mlp≈0.10; channels split positive/negative. **Mirrors #3043 per-channel α LOSS finding — per-channel granularity adds idiosyncrasy on top of useful uniform scaling. Same finding at a NEW site.**
+  - (3) γ_mlp grew 2.5× more than γ_attn (σ_mlp=0.10 vs σ_attn=0.04 at ep60). MLP branches carry most modeled residual signal; attention branches stayed near identity. Asymmetric branch utilization.
+  - (4) **CRITICAL — α-γ CROSS-SITE COUPLING:** #3006 baseline alone → α mean ≈ 0.958 (slight uniform attenuation); with LayerScale γ added → α mean ≈ 0.833 (substantially MORE aggressive dampening). **Refutes "orthogonal-sites = no gradient steal" hypothesis verbatim.** Optimizer redistributes DOF between α (residual edge) and γ (branch output), but NOT orthogonally — BOTH knobs moved further from good operating points simultaneously. **Generalizes #3044 same-site α-β coupling (175th taxon) to cross-site α-γ coupling.** Shared residual stream is the coupling channel — any DOF interacting with that stream is coupled to any other DOF at any block-internal site.
+- **6TH-REFINEMENT OF CRUISE INVARIANT (explicit):** SITE structurally matters — branch-output is cruise-hostile in a way residual-edge is not, EVEN with same scalar/multiplicative mechanism. Prior refinements established granularity (#3043), mechanism (#3044), orthogonality-of-outside-block (#3014); 6th refinement adds: WHERE the modulation is applied inside a block dictates cruise survival, independent of mechanism/granularity.
+- **α-MODULATION-AXIS COMPREHENSIVELY CLOSED across 5 sub-axes:**
+  - #3006 WIN scalar α at residual edge (NEW baseline)
+  - #3021 LOSS 4-α DiT-style (4 scalars at residual edge)
+  - #3043 LOSS per-channel α (granularity-LOSS at residual edge)
+  - #3044 LOSS additive β at residual edge (α-β same-site coupling LOSS)
+  - #3066 LOSS LayerScale γ at branch output (α-γ cross-site coupling LOSS)
+- **Followup #3078 edward init-llama-trunc-normal-0pt02** — Fresh INITIALIZATION-SCHEME axis NEVER touched in launch. Single `_init_weights` function: `nn.init.trunc_normal_(weight, std=0.02)` for all nn.Linear weights, biases zeroed. Llama 1/2/3 universal init. Tests how Lion's sign-step interacts with 5× smaller initial weight magnitudes. Per-channel chaos finding at new site motivates pivot — initialization affects starting point only (no per-step residual stream perturbation), so cruise predicted PRESERVED (would be 15th datapoint). +0 params. 172nd active axis.
+
+### Round summary
+
+- Cruise-preservation ledger now **25 datapoints (11 BROKEN + 14 PRESERVED)**. Total closed: 182. Winners: 23.
+- **8 students all busy, zero idle GPUs.**
+- **In-flight axes (8):** #3065 askeladd DropPath p=0.05, #3068 fern Lion β₂=0.95, #3069 nezuko output-MLP-2layer, #3071 tanjiro attn-dropout p=0.05, #3075 frieren hybrid-LN-RMSNorm, #3076 alphonse slice_num=48, #3077 thorfinn MLP-dropout p=0.05, #3078 edward init-llama-trunc-normal-0.02.
+- α-modulation-axis comprehensively closed; pivot to genuinely-orthogonal axes (architecture, data, physics, init).
+
+---
+
 ## 2026-05-15 06:30 [Round 138 close-47] UTC — 2 closures: #3061 slice_num=12 LOSS-with-cruise-PRESERVED (180th taxon, 14th preserver) + #3056 Lion β₁=0.95 LOSS-with-cruise-BROKEN (181st taxon, 10th BROKEN — first optimizer-internal axis to break cruise)
 
 ### Closed: #3061 alphonse slice-num-12 (180th taxon SLICE-NUM-12-LOWER-BRACKET-LOSS-VIA-HEAD-SPECIALIZATION-COLLISION / SLICE-NUM-AXIS-CLOSED-AT-LOWER-BRACKET-24-LOAD-BEARING-MINIMUM)
