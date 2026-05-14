@@ -4,6 +4,18 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 10:00 — PR #2880 (ASSIGNED, alphonse): Lion β1 sweep {0.85, 0.95} on max_norm=0.35 — optimizer-internal-state axis (8th paper-appendix)
+
+- **Branch:** `willowpai2g48h2-alphonse/lion-beta1-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** 8th paper-appendix mechanism-transfer axis — Lion's β1 (momentum-EMA decay coefficient for the sign-update interpolation). This is the **OPTIMIZER-INTERNAL-STATE** axis class, never before tested under saturated-clip. Under saturated-clip every step is `sign(β1 * exp_avg + (1-β1) * grad)`; β1 modulates the SHAPE of the sign-update distribution itself, not just its magnitude. May open a 5th potential transfer pattern (or land in one of the 4 we've already characterized).
+- **Two arms:** Arm 1 β1=0.85 (faster EMA mix, more current-grad-driven), Arm 2 β1=0.95 (slower EMA mix, more memory). Baseline β1=0.9 (Chen 2023 default).
+- **Predictions:** σ-spread ≈ 0.475 (9th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (12th cross-axis if invariant); clip_fraction=1.000 (7th cross-axis if invariant). **NEW DIAGNOSTIC: Lion last_update_sq_norm and last_exp_avg_sq_norm trajectories** — β1 should change update statistics even if val doesn't move much.
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 10:00 UTC; awaiting training. **train.py edit required** (make lion_beta1, lion_beta2 Config flags; pattern from fern's #2818 swa_start_frac).
+
+---
+
 ## 2026-05-14 09:40 — PR #2877 (ASSIGNED, thorfinn): anneal_epochs sweep {1, 3} on max_norm=0.35 — SWALR ramp-speed axis under saturated-clip
 
 - **Branch:** `willowpai2g48h2-thorfinn/anneal-epochs-sweep-on-max-norm-0p35`

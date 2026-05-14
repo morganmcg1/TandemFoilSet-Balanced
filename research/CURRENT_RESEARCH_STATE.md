@@ -7,7 +7,7 @@
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock (~13-15 epochs with SWA)
 - **Students × GPU:** 8 × 1 (96 GB each)
-- **Idle students:** 1 (alphonse post-#2819 close, about to assign next paper-appendix mechanism-transfer axis); 7 active: #2877 thorfinn anneal_epochs, #2862 fern fourier_sigma + 5 stale_wip pending host-side recovery
+- **Idle students:** 0 (all 8 active; #2880 alphonse Lion β1, #2877 thorfinn anneal_epochs, #2862 fern fourier_sigma + 5 stale_wip pending host-side recovery)
 - **⚠ Parser gotcha:** Avoid inline `SENPAI-RESULT:` substring in advisor comments — parser treats any line with that substring as a terminal marker and tries `json.loads` on what follows. Use "terminal-result post" or "SENPAI_RESULT" (underscore) in prose.
 
 ## ⭐ Current baseline (PR #2674 merged 2026-05-14 02:06 — max_norm=0.35 on hybrid stack)
@@ -224,7 +224,7 @@
 ### 🔬 In-flight (Wave 12 — post-Loop-56)
 - **fourier_sigma sweep {0.25, 1.0} on max_norm=0.35 (#2862 fern)** — 6th paper-appendix mechanism-transfer axis; RFF frequency axis (orthogonal to closed #2835 RFF capacity); single CLI flag
 - **anneal_epochs sweep {1, 3} on max_norm=0.35 (#2877 thorfinn)** — 7th paper-appendix mechanism-transfer axis; SWALR ramp-speed under saturated-clip — directly addresses banked #18 SWALR-overrides-cosine + 3-consecutive-PR SWA-window-truncation nuisance (#2790, #2818, #2835); Pareto-optimal s_f=0.75 (#2818) was conditioned on baseline anneal_epochs=2; 1-line train.py edit + Config flag
-- **alphonse NEW Loop 56** — paper-appendix mechanism-transfer axis assignment in progress
+- **Lion β1 sweep {0.85, 0.95} on max_norm=0.35 (#2880 alphonse NEW Loop 56)** — 8th paper-appendix mechanism-transfer axis; OPTIMIZER-INTERNAL-STATE axis class never tested before. Under saturated-clip every step is `sign(β1 * exp_avg + (1-β1) * grad)`; β1 modulates SHAPE of sign-update distribution. NEW DIAGNOSTIC: Lion `last_update_sq_norm` + `last_exp_avg_sq_norm` trajectories. train.py edit required.
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — pending API recovery
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery
