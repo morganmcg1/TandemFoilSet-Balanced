@@ -625,23 +625,111 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
-optimizer = Lion(
+class SAM(torch.optim.Optimizer):
+    """Sharpness-Aware Minimization (Foret et al. 2021 ICLR).
+
+    Wraps a base optimizer. Two forward/backward passes per training step:
+      1. first_step: compute grad g at w, perturb w' = w + ρ · g / ||g||,
+         saving old weights for exact restoration.
+      2. second_step: restore w ← old_p, apply base optimizer update using
+         the gradient at the perturbed point.
+
+    Implementation notes:
+      * Saves a clone of original weights (``old_p``) rather than tracking
+        the perturbation vector ``e_w``; with bf16 mixed precision the
+        ``w + e_w - e_w`` round-trip is not exact for small parameters
+        (e.g. LayerScale γ near 1e-4), but ``p.data = old_p`` is exact.
+      * Global L2 grad norm is computed in float32 to avoid bf16 underflow.
+      * ``param_groups`` is delegated to ``base_optimizer.param_groups`` so
+        LR schedulers can drive the base optimizer transparently when
+        pointed at this wrapper.
+    """
+    def __init__(self, params, base_optimizer_cls, rho=0.05, **base_kwargs):
+        defaults = dict(rho=rho, **base_kwargs)
+        super().__init__(params, defaults)
+        self.base_optimizer = base_optimizer_cls(self.param_groups, **base_kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def _grad_norm(self):
+        # Cast each per-parameter grad to float32 before .norm to avoid
+        # bf16 mantissa underflow when many small grads are aggregated.
+        norms = [
+            p.grad.detach().float().norm(p=2)
+            for group in self.param_groups
+            for p in group["params"]
+            if p.grad is not None
+        ]
+        if not norms:
+            return torch.zeros((), device=self.param_groups[0]["params"][0].device)
+        return torch.norm(torch.stack(norms), p=2)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                # Exact restoration anchor — crucial under bf16 amp.
+                self.state[p]["old_p"] = p.data.clone()
+                e_w = (p.grad.float() * scale.to(p.grad.float())).to(p.dtype)
+                p.add_(e_w)
+        if zero_grad:
+            self.zero_grad()
+        return grad_norm
+
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        for group in self.param_groups:
+            for p in group["params"]:
+                old_p = self.state[p].pop("old_p", None)
+                if old_p is not None:
+                    p.data.copy_(old_p)
+        self.base_optimizer.step()
+        if zero_grad:
+            self.zero_grad()
+
+    def step(self, closure=None):
+        raise RuntimeError(
+            "SAM requires explicit first_step()/second_step() with two "
+            "forward/backward passes per training step. Do not call .step()."
+        )
+
+
+SAM_RHO = 0.05
+base_optimizer = SAM(
     model.parameters(),
+    base_optimizer_cls=Lion,
+    rho=SAM_RHO,
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(0.9, 0.99),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+# Alias: training loop refers to ``optimizer``; scheduler is pointed at the
+# inner Lion so existing scheduler primitives drive LR cleanly.
+optimizer = base_optimizer
+print(
+    f"Optimizer: SAM (Foret et al. 2021) wrapping Lion (Chen et al. 2023) | "
+    f"ρ={SAM_RHO} | lr={cfg.lr} | wd={cfg.weight_decay} | betas=(0.9, 0.99) | "
+    f"two forward/backward passes per step; perturbation L2-normed globally over all params"
+)
+print(
+    f"SAM probe: direct flat-minima minimizer. Hypothesis — Lion's sign-step converges to sharp minima; "
+    f"SAM computes ∇L at adversarial w + ρ·g/||g|| so Lion's sign descends along worst-case gradient. "
+    f"NEW bar: val_avg/mae_surf_p < 32.2477 (#2741 SwiGLU MLP)"
+)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
+    optimizer.base_optimizer,
     schedulers=[
         torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+            optimizer.base_optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
         ),
         torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
+            optimizer.base_optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
         ),
     ],
     milestones=[warmup_epochs],
@@ -676,6 +764,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    # SAM per-epoch diagnostic accumulators (averaged over batches at epoch end).
+    sam_gn1_sum = sam_gn2_sum = 0.0
+    sam_loss1_sum = sam_loss2_sum = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -684,30 +775,59 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+
+        # --- SAM first pass: gradient at w ---
+        optimizer.zero_grad()
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
-
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            pred1 = model({"x": x_norm, "mask": mask})["preds"]
+            sq_err1 = F.l1_loss(pred1, y_norm, reduction='none')
+            vol_loss = (sq_err1 * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err1 * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
-
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        sam_gn1 = optimizer.first_step(zero_grad=True)
+        sam_loss1_val = loss.detach().float().item()
+        sam_gn1_val = sam_gn1.detach().float().item()
 
-        epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
+        # --- SAM second pass: gradient at w' = w + ρ·g/||g|| ---
+        with amp_ctx_factory():
+            pred2 = model({"x": x_norm, "mask": mask})["preds"]
+            sq_err2 = F.l1_loss(pred2, y_norm, reduction='none')
+            vol_loss_p = (sq_err2 * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss_p = (sq_err2 * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss_perturbed = vol_loss_p + cfg.surf_weight * surf_loss_p
+        loss_perturbed.backward()
+        sam_gn2 = optimizer._grad_norm()
+        sam_gn2_val = sam_gn2.detach().float().item()
+        sam_loss2_val = loss_perturbed.detach().float().item()
+        # Restore weights and apply Lion update with gradient at w'.
+        optimizer.second_step(zero_grad=True)
+
+        # Track per-step metrics from the FIRST pass (canonical training loss
+        # at the actual model weights, not at the adversarial perturbation).
+        epoch_vol += vol_loss.detach().float().item()
+        epoch_surf += surf_loss.detach().float().item()
+        sam_gn1_sum += sam_gn1_val
+        sam_gn2_sum += sam_gn2_val
+        sam_loss1_sum += sam_loss1_val
+        sam_loss2_sum += sam_loss2_val
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    sam_gn1_mean = sam_gn1_sum / max(n_batches, 1)
+    sam_gn2_mean = sam_gn2_sum / max(n_batches, 1)
+    sam_loss1_mean = sam_loss1_sum / max(n_batches, 1)
+    sam_loss2_mean = sam_loss2_sum / max(n_batches, 1)
+    sam_loss_ratio = sam_loss2_mean / max(sam_loss1_mean, 1e-12)
+    sam_grad_norm_ratio = sam_gn2_mean / max(sam_gn1_mean, 1e-12)
+    sam_sharpness = (sam_loss2_mean - sam_loss1_mean) / max(sam_loss1_mean, 1e-12)
 
     # --- Validate ---
     model.eval()
@@ -743,11 +863,21 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "sam_grad_norm_first": sam_gn1_mean,
+        "sam_grad_norm_second": sam_gn2_mean,
+        "sam_grad_norm_ratio": sam_grad_norm_ratio,
+        "sam_loss_first": sam_loss1_mean,
+        "sam_loss_second": sam_loss2_mean,
+        "sam_loss_ratio": sam_loss_ratio,
+        "sam_sharpness_estimate": sam_sharpness,
+        "sam_rho": SAM_RHO,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  "
+        f"SAM[gn1={sam_gn1_mean:.3f} gn2={sam_gn2_mean:.3f} "
+        f"L1={sam_loss1_mean:.4f} L2={sam_loss2_mean:.4f} sharp={sam_sharpness:.4f}]"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -756,12 +886,15 @@ total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Lion momentum diagnostic: sanity-check optimizer state at terminal ---
+# Under SAM, Lion's momentum buffer lives on optimizer.base_optimizer.state,
+# not optimizer.state (which holds SAM's transient 'old_p' clones).
+_lion_state = optimizer.base_optimizer.state if hasattr(optimizer, "base_optimizer") else optimizer.state
 _lion_total = 0
 _lion_nz = 0
 for _group in optimizer.param_groups:
     for _p in _group['params']:
-        if _p in optimizer.state:
-            _m = optimizer.state[_p].get('momentum')
+        if _p in _lion_state:
+            _m = _lion_state[_p].get('momentum')
             if _m is not None:
                 _lion_total += _m.numel()
                 _lion_nz += (_m.abs() > 1e-8).sum().item()
@@ -934,8 +1067,12 @@ if best_metrics:
 
     _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
                        for i, m in _swiglu_blocks]
+    # Use val_single_in_dist as the canonical sample batch for the SwiGLU
+    # diagnostic (matches the in-dist sample used elsewhere). Falls back to
+    # any available val loader if missing.
+    _swiglu_diag_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     with torch.no_grad():
-        _x_s, _y_s, _is_s, _m_s = next(iter(_se_loader))
+        _x_s, _y_s, _is_s, _m_s = next(iter(_swiglu_diag_loader))
         _x_s = _x_s.to(device, non_blocking=True)
         _m_s = _m_s.to(device, non_blocking=True)
         _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
