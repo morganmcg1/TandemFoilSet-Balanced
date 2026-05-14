@@ -221,8 +221,10 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        # POST-NORM: LN applied AFTER residual add (was pre-norm: LN(x) -> sublayer -> add).
+        # ln_1 wraps the attn-residual; ln_2 wraps the mlp-residual.
+        fx = self.ln_1(fx + self.gamma_attn * self.attn(fx))
+        fx = self.ln_2(fx + self.gamma_mlp * self.mlp(fx))
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -532,6 +534,10 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Normalization site: POST-NORM (was pre-norm)")
+print(f"  ln_1 and ln_2 moved outside residual at all {model_config['n_layers']} TransolverBlocks: x = LN(x + gamma * sublayer(x))")
+print(f"  ln_3 (last_layer) unchanged; baseline to beat: val_avg/mae_surf_p < 30.8909 (#2810 Round 101)")
+print(f"  Param count: {n_params} (expected 333,700 unchanged — only LN site moves)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -809,6 +815,53 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Post-norm residual-stream diagnostic: hook on ln_2 (the MLP-residual post-LN)
+    # for all 4 blocks. Under post-norm, ln_2 output IS the block's exit residual
+    # stream (block-3 then routes through SE + mlp2, but ln_2 captures the residual
+    # state in a way comparable to blocks 0/1/2). Pre-norm baseline would yield
+    # unbounded RMS growth through depth; post-norm should keep RMS ~1.0 per-token.
+    _res_rms_log = {"event": "residual_rms", "epoch": int(best_metrics["epoch"]), "splits": {}}
+    _rms_captures: dict[str, dict[int, float]] = {}
+
+    def _make_rms_hook(idx: int, split_name: str):
+        def _hook(module, args, output):
+            with torch.no_grad():
+                # output: [B, N, D] — post-LN residual stream
+                rms = output.float().pow(2).mean().sqrt().item()
+                _rms_captures.setdefault(split_name, {})[idx] = rms
+        return _hook
+
+    _rms_diag_splits = ["val_single_in_dist", "val_geom_camber_rc",
+                        "val_geom_camber_cruise", "val_re_rand"]
+    for _split_name in _rms_diag_splits:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        _rms_handles = [
+            _inner.blocks[bi].ln_2.register_forward_hook(_make_rms_hook(bi, _split_name))
+            for bi in range(len(_inner.blocks))
+        ]
+        with torch.no_grad():
+            _x_s, _y_s, _is_s, _m_s = next(iter(_ldr))
+            _x_s = _x_s.to(device, non_blocking=True)
+            _m_s = _m_s.to(device, non_blocking=True)
+            _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner({"x": _x_norm_s, "mask": _m_s})
+        for _h in _rms_handles:
+            _h.remove()
+
+    print("\nPost-norm residual-stream RMS at ln_2 per block (best-checkpoint weights):")
+    for _split_name, _caps in _rms_captures.items():
+        _per_block = [_caps.get(_i, float("nan")) for _i in range(len(_inner.blocks))]
+        _mean_rms = sum(_per_block) / max(len(_per_block), 1)
+        print(f"  Split: {_split_name}  per_block_rms={['{:.4f}'.format(v) for v in _per_block]}  mean={_mean_rms:.4f}")
+        _res_rms_log["splits"][_split_name] = {
+            "per_block": _per_block,
+            "mean": _mean_rms,
+        }
+    append_metrics_jsonl(metrics_jsonl_path, _res_rms_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
