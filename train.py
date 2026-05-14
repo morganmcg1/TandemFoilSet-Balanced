@@ -556,6 +556,12 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Shape-bin oversampling — multiplicative on top of the existing
+    # domain-balanced sample weights. Oversample train samples with ch15
+    # (NACA camber M) >= 0.5 by shape_oversample_factor (default 3x).
+    # Densifies the train distribution near the rc OOD boundary at M=0.667.
+    shape_oversample_m05: bool = False
+    shape_oversample_factor: float = 3.0
 
 
 cfg = sp.parse(Config)
@@ -567,6 +573,44 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# Shape-bin oversampling: apply a multiplicative weight bump to train samples
+# whose ch15 (NACA camber amplitude M, broadcast same-value across nodes) is
+# >= 0.5. Acts on top of the domain-balance weights so within-domain selection
+# is biased toward high-camber samples without breaking domain balancing.
+shape_oversample_stats: dict | None = None
+if cfg.shape_oversample_m05:
+    t_m_start = time.time()
+    sample_m_values = torch.zeros(len(train_ds), dtype=torch.float32)
+    for i, f in enumerate(train_ds.files):
+        s = torch.load(f, weights_only=True)
+        sample_m_values[i] = s["x"][0, 15].item()
+    high_mask = sample_m_values >= 0.5
+    n_high = int(high_mask.sum().item())
+    m_multiplier = torch.where(
+        high_mask, cfg.shape_oversample_factor, 1.0,
+    ).to(sample_weights.dtype)
+    sample_weights = sample_weights * m_multiplier
+    norm_weights = sample_weights / sample_weights.sum()
+    p_high = float(norm_weights[high_mask].sum().item())
+    shape_oversample_stats = {
+        "shape_oversample_factor": cfg.shape_oversample_factor,
+        "n_train": len(train_ds),
+        "n_high_M": n_high,
+        "frac_high_M_raw": n_high / len(train_ds),
+        "frac_high_M_sampled": p_high,
+        "m_value_count": {
+            f"{v:.4f}": int(c)
+            for v, c in zip(*[t.tolist() for t in torch.unique(sample_m_values, return_counts=True)])
+        },
+        "compute_seconds": time.time() - t_m_start,
+    }
+    print(
+        f"Shape-bin oversampling: {n_high}/{len(train_ds)} samples with M>=0.5 "
+        f"(factor={cfg.shape_oversample_factor:.2f}, frac sampled→{p_high*100:.1f}% "
+        f"vs raw {n_high/len(train_ds)*100:.1f}%, "
+        f"setup took {time.time() - t_m_start:.1f}s)"
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -703,7 +747,14 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "shape_oversample_stats": shape_oversample_stats,
     }, f, sort_keys=True)
+
+if shape_oversample_stats is not None:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "shape_oversample_setup",
+        **shape_oversample_stats,
+    })
 
 ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
 print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
