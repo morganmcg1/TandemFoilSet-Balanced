@@ -263,6 +263,10 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Long-range skip: preprocess output -> last block input, per-channel
+        # zero-init gate (identity at step 0).
+        self.skip_gate = nn.Parameter(torch.zeros(n_hidden))
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -281,7 +285,13 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        fx_input = fx  # save FiLM-modulated preprocess output for long-range skip
+        n_blocks = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            if i == n_blocks - 1:
+                # Long-range skip: re-inject preprocess features at last block input,
+                # gated per-channel by zero-init learnable parameter.
+                fx = fx + self.skip_gate.unsqueeze(0).unsqueeze(0) * fx_input
             fx = block(fx, mask=mask)
         return {"preds": fx}
 
@@ -534,6 +544,14 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Long-range skip diagnostic at startup
+print(
+    f"Long-range skip: per-channel zero-init gate (n_hidden={model.n_hidden}), "
+    f"applied at last-block input (block {len(model.blocks) - 1}); "
+    f"+{model.skip_gate.numel()} params; "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216"
+)
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -827,6 +845,81 @@ if best_metrics:
         "film_weight_norm": _film_w_norm,
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+    })
+
+    # Long-range skip gate diagnostic: per-channel stats + skip-vs-residual ratio.
+    _skip_gate = _inner.skip_gate.detach().float().cpu()
+    _sg_mean = _skip_gate.mean().item()
+    _sg_std = _skip_gate.std().item()
+    _sg_abs_mean = _skip_gate.abs().mean().item()
+    _sg_max_abs = _skip_gate.abs().max().item()
+    _sg_nonzero = (_skip_gate.abs() > 1e-4).sum().item()
+    _sg_pos = (_skip_gate > 0).sum().item()
+    _sg_neg = (_skip_gate < 0).sum().item()
+    _sg_near_zero = (_skip_gate.abs() <= 1e-4).sum().item()
+    print("\nLong-range skip gate final diagnostics (best-checkpoint weights):")
+    print(f"  skip_gate: mean={_sg_mean:.6f}  std={_sg_std:.6f}  abs_mean={_sg_abs_mean:.6f}  "
+          f"max_abs={_sg_max_abs:.6f}  n_nonzero={_sg_nonzero}/{_skip_gate.numel()}")
+    print(f"  signs: pos={_sg_pos}  neg={_sg_neg}  near_zero={_sg_near_zero}")
+
+    # Skip-vs-residual ratio per split: hook the last block's input and compare
+    # the magnitude of (skip_gate * fx_input) to the pre-skip residual stream.
+    _skip_ratio_per_split: dict[str, dict[str, float]] = {}
+    _last_idx = len(_inner.blocks) - 1
+    _skip_diag_splits = ["val_single_in_dist", "val_geom_camber_rc",
+                         "val_geom_camber_cruise", "val_re_rand"]
+    for _split_name in _skip_diag_splits:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        with torch.no_grad():
+            _x_s, _y_s, _is_s, _m_s = next(iter(_ldr))
+            _x_s = _x_s.to(device, non_blocking=True)
+            _m_s = _m_s.to(device, non_blocking=True)
+            _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+            # Replicate forward up to last-block input to measure skip vs residual.
+            _flow_scalars_s = _x_norm_s[:, 0, [13, 14, 18]]
+            _film_scale_s = _inner.film(_flow_scalars_s).unsqueeze(1)
+            with amp_ctx_factory():
+                _fx_s = _inner.preprocess(_x_norm_s) + _inner.placeholder[None, None, :]
+                _fx_s = _fx_s * (1 + _film_scale_s)
+                _fx_input_s = _fx_s.clone()
+                for _i, _blk in enumerate(_inner.blocks):
+                    if _i == _last_idx:
+                        break
+                    _fx_s = _blk(_fx_s, mask=_m_s)
+            # Now _fx_s is the residual stream entering last block (pre-skip);
+            # _fx_input_s is the gated injection content.
+            _skip_contrib = _inner.skip_gate.unsqueeze(0).unsqueeze(0) * _fx_input_s
+            _mask_f = _m_s.unsqueeze(-1).to(_fx_s.dtype)
+            # L2 norm per token, averaged over real tokens.
+            _res_norm = ((_fx_s.float() * _mask_f).pow(2).sum(dim=-1).sqrt() *
+                         _m_s.float()).sum() / _m_s.float().sum().clamp(min=1)
+            _skip_norm = ((_skip_contrib.float() * _mask_f).pow(2).sum(dim=-1).sqrt() *
+                          _m_s.float()).sum() / _m_s.float().sum().clamp(min=1)
+            _ratio = (_skip_norm / _res_norm.clamp(min=1e-12)).item()
+            _skip_ratio_per_split[_split_name] = {
+                "residual_norm_mean": float(_res_norm.item()),
+                "skip_norm_mean": float(_skip_norm.item()),
+                "skip_over_residual": float(_ratio),
+            }
+        print(f"  {_split_name}: residual_norm={_skip_ratio_per_split[_split_name]['residual_norm_mean']:.4f}  "
+              f"skip_norm={_skip_ratio_per_split[_split_name]['skip_norm_mean']:.4f}  "
+              f"skip/res={_skip_ratio_per_split[_split_name]['skip_over_residual']:.4f}")
+
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "skip_gate_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "skip_gate_mean": _sg_mean,
+        "skip_gate_std": _sg_std,
+        "skip_gate_abs_mean": _sg_abs_mean,
+        "skip_gate_max_abs": _sg_max_abs,
+        "skip_gate_n_nonzero": int(_sg_nonzero),
+        "skip_gate_n_total": int(_skip_gate.numel()),
+        "skip_gate_pos": int(_sg_pos),
+        "skip_gate_neg": int(_sg_neg),
+        "skip_gate_near_zero": int(_sg_near_zero),
+        "skip_ratio_per_split": _skip_ratio_per_split,
     })
 
     # Squeeze-Excitation diagnostic: gate stats per block per split (in_dist vs OOD).
