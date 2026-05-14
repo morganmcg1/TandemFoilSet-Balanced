@@ -7,7 +7,7 @@
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock (~13-15 epochs with SWA)
 - **Students × GPU:** 8 × 1 (96 GB each)
-- **Idle students:** 0 (thorfinn just closed #2790 seed-confirm; about to assign RFF capacity sweep; #2818 fern swa_start_frac WIP; #2819 alphonse wd-LOW WIP)
+- **Idle students:** 0 (all 8 active; #2835 thorfinn fourier_num_features, #2818 fern swa_start_frac, #2819 alphonse wd-LOW assigned this loop + 5 stale_wip pending host-side recovery)
 - **⚠ Parser gotcha:** Avoid inline `SENPAI-RESULT:` substring in advisor comments — parser treats any line with that substring as a terminal marker and tries `json.loads` on what follows. Use "terminal-result post" or "SENPAI_RESULT" (underscore) in prose.
 
 ## ⭐ Current baseline (PR #2674 merged 2026-05-14 02:06 — max_norm=0.35 on hybrid stack)
@@ -62,7 +62,8 @@
 |---|---|---|---|---|
 | **#2818** | **fern** | wip (training) | swa_start_frac fine-bracket {0.6, 0.85} on max_norm=0.35 baseline | SWA-window axis 1st test under saturated-clip; addresses banked #2701 SWA-window-truncation finding (40% of seed variance); 1-line train.py edit + Config flag. |
 | **#2819** | **alphonse** | wip (training) | Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 baseline | wd U-curve lower-side completion (his own #2791 follow-up); tests whether wd-axis under saturated-clip is skewed toward smaller wd (parallel to #2731 Lion-lr V-shape finding). Single CLI flag. |
-| **#2790** | thorfinn | **CLOSED Loop 53** | 2-seed confirmation on max_norm=0.35 baseline | `Seed-sensitive baseline` (cross-seed swa_val stdev=2.54 > 1.5; HIGHER than #2701's 2.05 on OLD baseline — saturated-clip did NOT regularize seed axis); paper-publishable NEGATIVE result; 6 banked findings (#107-#112). thorfinn about to be reassigned. |
+| **#2790** | thorfinn | **CLOSED Loop 53** | 2-seed confirmation on max_norm=0.35 baseline | `Seed-sensitive baseline` (cross-seed swa_val stdev=2.54 > 1.5; HIGHER than #2701's 2.05 on OLD baseline — saturated-clip did NOT regularize seed axis); paper-publishable NEGATIVE result; 6 banked findings (#107-#112). thorfinn reassigned → #2835. |
+| **#2835** | **thorfinn** | wip (assigned) | fourier_num_features sweep {8, 32} on max_norm=0.35 baseline | RFF capacity axis (input encoding side) — 5th paper-appendix mechanism-transfer axis after {β/lr/seed/wd}. Tests whether RFF capacity interacts with σ-spread/channel-ordering/clip_fraction mechanisms. Arm 1 n=8 (half capacity), Arm 2 n=32 (double capacity). Single CLI flag. |
 | **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
 | **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |
 | **#2463** | **tanjiro** | wip (training done, pending API) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Baseline shift notice sent. SWA mechanism fully orthogonal to σ. |
@@ -222,7 +223,7 @@
 ### 🔬 In-flight (Wave 12 — post-Loop-52)
 - **swa_start_frac fine-bracket {0.6, 0.85} on max_norm=0.35 (#2818 fern)** — SWA-window axis 1st test under saturated-clip; addresses banked #2701 SWA-window-truncation finding
 - **Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 (#2819 alphonse)** — wd U-curve lower-side completion (alphonse's own follow-up from #2791)
-- **fourier RFF axis sweep on max_norm=0.35 (#2820 thorfinn NEW)** — 5th paper-appendix mechanism-transfer axis after {β/lr/seed/wd}; RFF capacity ∈ {8, 32}
+- **fourier_num_features sweep {8, 32} on max_norm=0.35 (#2835 thorfinn NEW)** — 5th paper-appendix mechanism-transfer axis after {β/lr/seed/wd}; RFF capacity axis (input encoding side) under saturated-clip; single CLI flag
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — pending API recovery
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery
