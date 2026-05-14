@@ -216,7 +216,7 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, mixup_state=None, **kwargs):
         x = data["x"]
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
@@ -224,7 +224,14 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        # Manifold Mixup hook (#2704): at most one mix per forward, at the input
+        # of the chosen TransolverBlock. mixup_state=None → no mixing (eval/val).
+        k_layer = mixup_state["k_layer"] if mixup_state is not None else -1
+        for k, block in enumerate(self.blocks):
+            if k == k_layer:
+                lam = mixup_state["lam"]
+                perm = mixup_state["perm"]
+                fx = lam * fx + (1.0 - lam) * fx[perm]
             fx = block(fx)
         return {"preds": fx}
 
@@ -561,6 +568,21 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
+# --- Manifold Mixup setup (PR #2704) ---
+# Verma et al. 2019 ICML: hidden-state interpolation at random TransolverBlock input.
+# Per batch: sample lam ~ Beta(alpha, alpha), k_layer uniform on {0..N-1}, perm = randperm(B).
+# Inject mix at the input of block[k_layer]; blend losses against (y, mask) and (y[perm], mask[perm]).
+# Variable-mesh -> compute two MASKED L1 terms (each with its own mask) then blend at loss level.
+mixup_alpha = 0.2
+mixup_n_layers = model_config['n_layers']  # 4
+mixup_beta = torch.distributions.Beta(mixup_alpha, mixup_alpha)
+print(
+    f"Manifold Mixup (PR #2704): alpha={mixup_alpha}; k_layer ~ Uniform{{0..{mixup_n_layers - 1}}}; "
+    f"lam ~ Beta({mixup_alpha}, {mixup_alpha}) per batch; training-mode only; "
+    f"loss = lam * L1(pred, y, mask) + (1-lam) * L1(pred, y[perm], mask[perm]); "
+    f"zero new params (n_params={n_params} unchanged); baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -589,6 +611,8 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_lams: list[float] = []
+    epoch_k_counts = [0] * mixup_n_layers
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -596,17 +620,46 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # Manifold Mixup sampling (single per-batch lam, k_layer, perm).
+        # lam_t is a 0-dim tensor on device so torch.compile guards on a tensor
+        # (no per-batch recompile from a varying Python float).
+        lam_py = float(mixup_beta.sample().item())
+        lam_t = torch.tensor(lam_py, device=device)
+        k_layer = int(torch.randint(0, mixup_n_layers, (1,)).item())
+        perm = torch.randperm(x.size(0), device=device)
+        mixup_state = {"lam": lam_t, "k_layer": k_layer, "perm": perm}
+        epoch_lams.append(lam_py)
+        epoch_k_counts[k_layer] += 1
+
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            pred = model({"x": x_norm}, mixup_state=mixup_state)["preds"]
 
+            # Original-target loss
+            sq_err = F.l1_loss(pred, y_norm, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_loss_orig = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss_orig = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss_orig = vol_loss_orig + cfg.surf_weight * surf_loss_orig
+
+            # Permuted-target loss (each term uses its own mask — see Verma et al. and
+            # researcher-agent note: blending masks is semantically meaningless on
+            # variable-mesh data; compute two separately-masked L1 terms then blend).
+            y_norm_perm = y_norm[perm]
+            mask_perm = mask[perm]
+            is_surface_perm = is_surface[perm]
+            sq_err_perm = F.l1_loss(pred, y_norm_perm, reduction='none')
+            vol_mask_perm = mask_perm & ~is_surface_perm
+            surf_mask_perm = mask_perm & is_surface_perm
+            vol_loss_perm = (sq_err_perm * vol_mask_perm.unsqueeze(-1)).sum() / vol_mask_perm.sum().clamp(min=1)
+            surf_loss_perm = (sq_err_perm * surf_mask_perm.unsqueeze(-1)).sum() / surf_mask_perm.sum().clamp(min=1)
+            loss_perm = vol_loss_perm + cfg.surf_weight * surf_loss_perm
+
+            loss = lam_py * loss_orig + (1.0 - lam_py) * loss_perm
+            vol_loss = lam_py * vol_loss_orig + (1.0 - lam_py) * vol_loss_perm
+            surf_loss = lam_py * surf_loss_orig + (1.0 - lam_py) * surf_loss_perm
 
         optimizer.zero_grad()
         loss.backward()
@@ -643,6 +696,15 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # Manifold Mixup per-epoch diagnostics
+    if epoch_lams:
+        lam_mean = sum(epoch_lams) / len(epoch_lams)
+        lam_sorted = sorted(epoch_lams)
+        lam_median = lam_sorted[len(lam_sorted) // 2]
+        lam_low_frac = sum(1 for l in epoch_lams if l < 0.1) / len(epoch_lams)
+        lam_high_frac = sum(1 for l in epoch_lams if l > 0.9) / len(epoch_lams)
+    else:
+        lam_mean = lam_median = lam_low_frac = lam_high_frac = 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -655,6 +717,12 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "mixup/lam_mean": lam_mean,
+        "mixup/lam_median": lam_median,
+        "mixup/lam_low_frac": lam_low_frac,
+        "mixup/lam_high_frac": lam_high_frac,
+        "mixup/k_counts": {str(k): c for k, c in enumerate(epoch_k_counts)},
+        "mixup/n_batches": len(epoch_lams),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
