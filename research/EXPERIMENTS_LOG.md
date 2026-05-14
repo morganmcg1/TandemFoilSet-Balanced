@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-05-15 05:00 [Round 138 close-46] UTC — #3054 frieren RMSNorm LOSS-with-cruise-PRESERVED + TEST WIN; 179th taxon; 13th cruise preserver; ledger 22 (9 BROKEN + 13 PRESERVED)
+
+### Closed: #3054 frieren rmsnorm-replace-layernorm (179th taxon RMSNORM-LOSS-LN-MEAN-SUBTRACTION-MILDLY-LOAD-BEARING / NORMALIZATION-TYPE-AXIS-CLOSED-AT-LN-WITH-POSITION-DEPENDENT-FOLLOWUP)
+
+- **Branch:** charliepai2g48h5-frieren/rmsnorm-replace-layernorm
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-rmsnorm-replace-layernorm-*/metrics.jsonl
+- **Hypothesis:** Replace every nn.LayerNorm with nn.RMSNorm (Llama-style); fresh normalization axis untested in launch; cruise predicted PRESERVED; +0 params except LN bias removal (−864 = 9 LN sites × 96 hidden).
+- **Result:** val 30.5392 (+3.41% LOSS vs #3006 29.5318); test 25.1858 (−1.15% WIN vs 25.4795); val_cruise 16.0530 PRESERVED (< 17.0); param Δ −864.
+- **Cruise: PRESERVED** (13th cruise-preserving datapoint; most aggressive in-block structural intervention to preserve cruise).
+- **Mechanistic findings (exemplary student write-up):**
+  - (1) LN mean-subtraction MILDLY load-bearing, metric-localized: val_in_dist +4-6% and val_geom_camber_rc +5-7% (worst-hit); val_cruise + val_re_rand essentially unaffected.
+  - (2) γ-DOWN compensation pattern at 8 in-block sites: mean γ drifts down 2-7% (mean 0.958); output-head γ drifts up +4% (1.040). Coherent compensation: network reduces magnification mid-stream to compensate for loss of centering, over-magnifies at output to recover scale.
+  - (3) Pre-norm RMS swings 0.66-1.25 (NOT zero-centered) — direct evidence residual streams carry non-zero means by design; RMSNorm preserves these, LN absorbs them.
+  - (4) #3006 α equilibrium PRESERVED: trajectory [0.913, 1.035, 0.972] same alternating pattern as #3006's [0.95, 0.97, 0.95]. α-axis × normalization-type axis confirmed orthogonal.
+- **Sub-invariant strengthened: "capacity-removal-preserves-cruise"** — 2nd datapoint (after #3049 bias-free Linear −3,772 params). Both inside-block, both cruise preservers.
+- **val/test divergence:** 4.6 percentage-point divergence is the largest this launch — likely checkpoint selection finds more regularized model with worse val but better test. Without a clean val win, not a baseline-merger.
+- **Followup #3075 frieren hybrid-ln-rmsnorm** — Position-dependent norm policy per student rec #2: keep LN at ln_1 (attention input, mean-subtraction load-bearing site per γ-DOWN signature) + RMSNorm at ln_2 (MLP input) and ln_3 (output head). Param Δ ≈ −480. Tests whether mean-subtraction is needed only at attention sites. Cruise predicted PRESERVED (would be 14th datapoint). 168th active axis.
+
+---
+
 ## 2026-05-15 03:30 [Round 138 close-45] UTC — 3 LOSS-with-cruise-PRESERVED PRs in one round (#3047 GeGLU + #3049 bias-free + #3050 grad-clip-1.0); 3 datapoints added; ledger 22 (9 BROKEN + 13 PRESERVED)
 
 ### Closed: #3050 fern grad-clip-1pt0 (176th taxon GRAD-CLIP-AT-MAX-NORM-1-DECOUPLES-FROM-STABILITY-INTO-GLOBAL-LR-MULTIPLIER / LION-SIGN-STEP-IS-SCALE-INVARIANT-UNDER-UNIFORM-BATCH-RESCALING)
