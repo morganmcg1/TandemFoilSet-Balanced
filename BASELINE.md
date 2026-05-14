@@ -1,6 +1,62 @@
 # Baseline Metrics
 
-## Current Baseline — PR #2011 (film-re-attention)
+## Current Baseline — PR #2650 (re-conditional-layernorm-affine)
+
+**val_avg/mae_surf_p = 28.2414** (epoch 28 of 28; 30-min cap) — **-2.20% vs previous 28.8762**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params + 13,872 new params ≈ 2% overhead)
+- **+ ReScaleHead** (3-channel, 163 params): learned Re→scale MLP applied to Transolver output
+- **+ per-channel loss weights**: `ch_weights=[1.0, 1.0, 5.0]` post-Huber (p_channel_weight=5.0)
+- **+ ReFiLM**: FiLM Re-conditioning inside PhysicsAttention slice logits (shared, hidden=8, zero-init)
+- **+ ReConditionalLayerNorm**: shared CIN/adaLN-Zero style Re-conditioning of all 3 LN roles (pre-attn ln_1, pre-FFN ln_2, pre-out ln_3) — log(Re)→γ_residual+β via Linear(1,8)→GELU→Linear(8, n_hidden), zero-init final layer. Bounded modulation (operates on normalized features, not raw residual stream). At ep28: ln_1 |γ_res|_max=2.34, |β|_max=1.22; corr(|γ_res|, logRe)=-0.77 — negative correlation confirms non-trivial Re-conditioning policy.
+- Optimizer: **SOAP** (`lr=1e-3, betas=(0.95,0.95), wd=1e-4, precondition_frequency=10, max_precond_dim=256`)
+- **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**
+- **`torch.compile(mode="default", dynamic=True)`**, **bf16 AMP**
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- 28 epochs in ~30 min, peak GPU 27.79 GB
+
+**Per-split val at best epoch (28):**
+
+| Split | mae_surf_p | vs PR #2011 |
+|-------|-----------|---------|
+| val_single_in_dist | **27.1740** | −1.4273 (−4.99%) |
+| val_geom_camber_rc | **42.2153** | +0.2670 (+0.64%) |
+| val_geom_camber_cruise | **13.6733** | −0.4729 (−3.34%) |
+| val_re_rand | **29.9031** | −0.9059 (−2.94%) |
+| **val_avg** | **28.2414** | **−0.6348 (−2.20%)** |
+
+**Per-split test at best epoch (28):**
+
+| Split | mae_surf_p | vs PR #2011 |
+|-------|-----------|---------|
+| test_single_in_dist | **27.6193** | −1.9107 (−6.47%) |
+| test_geom_camber_rc | **38.2108** | +1.1842 (+3.20%) |
+| test_geom_camber_cruise | **10.6390** | −0.3781 (−3.43%) |
+| test_re_rand | **21.4617** | −0.9613 (−4.29%) |
+| **test_avg** | **24.4827** | **−0.5165 (−2.07%)** |
+
+**Mechanism**: Re-conditioning of all 3 LayerNorm affine transforms (CIN / adaLN-Zero pattern). Zero-init gates open from identity; bounded by LN normalisation before γ/β applies — avoids the in-dist regression of residual-stream FiLM (#2585). Strongest conditioning at pre-attention LN (ln_1), consistent with ReFiLM's slice-routing specialisation.
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-re-conditional-layernorm-affine-20260513-234229/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --opt soap --lr 1e-3 --soap_b1 0.95 --soap_b2 0.95 --wd 1e-4 \
+  --soap_precond_freq 10 --soap_max_precond_dim 256 \
+  --n_hidden 128 --n_layers 5 --slice_num 64 --mlp_ratio 2 \
+  --huber_delta 0.1 --p_channel_weight 5 --surf_weight 10 \
+  --bf16 --compile --rescale_head --refilm \
+  --epochs 28 --lr_schedule cosine --eta_min 1e-5 \
+  --re_conditional_layernorm \
+  --agent <name> --experiment_name <name>
+```
+
+**Cumulative**: **-75.8%** vs initial 117.17
+
+---
+
+## Previous Baseline — PR #2011 (film-re-attention)
 
 **val_avg/mae_surf_p = 28.8762** (epoch 28 of 28; 30-min cap) — **-1.17% vs previous 29.2179**
 
