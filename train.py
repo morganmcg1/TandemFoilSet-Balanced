@@ -108,14 +108,14 @@ class SwiGLUMLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64, t_init: float = 0.5):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * t_init)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -200,13 +200,13 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, t_init: float = 0.5):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, t_init=t_init,
         )
         # POST-NORM topology + γ=1.0 constant (Vaswani 2017 recipe). LayerScale
         # removed: γ is a plain Python float, not nn.Parameter — no learnable
@@ -255,12 +255,19 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # PhysicsAttention temperature warm-start (#2995): per-block init at the
+        # optimizer-empirical equilibrium observed at ep60 of #2979 learnable-T
+        # with schedule init [1.0, 0.5, 0.5, 0.25]. Drift from defaults was large
+        # for B1-B3 (+21% / +46% / +77%), so starting at the equilibrium frees
+        # the 60-epoch budget for spatial-routing fine-tuning. T stays learnable.
+        T_WARM_START = [0.9357, 0.6049, 0.7296, 0.4429]
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                t_init=T_WARM_START[i] if i < len(T_WARM_START) else 0.5,
             )
             for i in range(n_layers)
         ])
@@ -536,6 +543,16 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+# PhysicsAttention temperature warm-start banner (#2995): confirm per-block init values.
+_t_warm_start_banner = []
+for _bi, _blk in enumerate(model.blocks):
+    _t_mean = float(_blk.attn.temperature.detach().float().mean().item())
+    _t_warm_start_banner.append(f"B{_bi}={_t_mean:.4f}")
+print(
+    "Physics_Attention temperature warm-start (#2995): per-block init at #2979 ep60 equilibrium — "
+    + ", ".join(_t_warm_start_banner)
+    + " (target schedule: B0=0.9357, B1=0.6049, B2=0.7296, B3=0.4429). T remains learnable."
+)
 print(
     f"Block topology: POST-NORM (LN AFTER residual sum) at all {model_config['n_layers']}*2={model_config['n_layers']*2} per-block LN sites; "
     f"final ln_3 retained in last block for output-head cleanup; "
@@ -687,6 +704,36 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+
+def log_per_block_temperatures(model_obj, epoch_tag) -> None:
+    """Snapshot Physics_Attention.temperature per block for warm-start drift tracking (#2995).
+
+    Records mean across heads and per-head values to JSONL and prints a one-line
+    summary. T was warm-started at #2979's ep60 equilibrium; this captures the
+    drift trajectory at ep1/10/30/60 to confirm whether the optimizer stays
+    near the equilibrium or migrates further.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    blocks_log: list[dict] = []
+    summary = []
+    for bi, blk in enumerate(inner.blocks):
+        t = blk.attn.temperature.detach().float().squeeze().cpu()
+        per_head = t.flatten().tolist() if t.ndim > 0 else [float(t)]
+        t_mean = float(t.mean().item()) if t.ndim > 0 else float(t)
+        blocks_log.append({
+            "block_idx": bi,
+            "t_mean": t_mean,
+            "t_per_head": per_head,
+        })
+        summary.append(f"B{bi}={t_mean:.4f}")
+    payload = {
+        "event": "physics_attention_temperatures",
+        "epoch_tag": epoch_tag,
+        "blocks": blocks_log,
+    }
+    append_metrics_jsonl(metrics_jsonl_path, payload)
+    print(f"Physics_Attention T @ {epoch_tag}: " + ", ".join(summary))
+
 
 def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
     """Probe pre/post-LN residual magnitudes per block on one val batch.
@@ -849,6 +896,10 @@ for epoch in range(MAX_EPOCHS):
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
 
+    # Per-block PhysicsAttention temperature drift tracking (#2995 warm-start).
+    if (epoch + 1) in (1, 10, 30, 60):
+        log_per_block_temperatures(model, epoch_tag=f"ep{epoch + 1}")
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -884,6 +935,9 @@ if best_metrics:
         model, _probe_loader_end, stats, amp_ctx_factory, device,
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
+
+    # PhysicsAttention temperature at best-checkpoint (#2995 warm-start drift report).
+    log_per_block_temperatures(model, epoch_tag=f"best_ep{best_metrics['epoch']}")
 
     # LayerScale diagnostic: γ_attn = γ_mlp = 1.0 CONSTANT (no learnable Parameter).
     # Report the constants for confirmation; per-block dynamics are inapplicable.
