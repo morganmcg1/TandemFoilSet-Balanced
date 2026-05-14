@@ -25,12 +25,15 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import math
+
 import simple_parsing as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from einops import rearrange
+from entmax import entmax15
 from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
@@ -83,7 +86,12 @@ class MLP(nn.Module):
 
 
 class PhysicsAttention(nn.Module):
-    """Physics-aware attention for irregular meshes."""
+    """Physics-aware attention for irregular meshes.
+
+    Slice-routing softmax over slice prototypes is UNCHANGED. The MHA over
+    slice tokens uses alpha-entmax(alpha=1.5) (Peters et al. 2019) instead of
+    softmax — sparse with row-sum=1 normalization preserved.
+    """
 
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
         super().__init__()
@@ -103,6 +111,11 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
+        # Diagnostic capture: when enabled, store last MHA attn weights for
+        # alpha-entmax sparsity inspection. Off by default (zero training cost).
+        self._capture_attn = False
+        self.last_attn_weights = None
+
     def forward(self, x):
         B, N, _ = x.shape
 
@@ -118,6 +131,7 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
+        # Slice-routing softmax — UNCHANGED (per-node assignment to G slices).
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
@@ -126,11 +140,19 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        out_slice = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            is_causal=False,
-        )
+
+        # MHA over slice tokens: alpha-entmax(1.5) replaces softmax in the
+        # attention reweighting. Compute in fp32 for entmax numerical stability,
+        # then cast back to the ambient (possibly bf16) value dtype before the
+        # value matmul. Library entmax15 carries a custom analytical backward.
+        scale = 1.0 / math.sqrt(q.size(-1))
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale  # [B, H, G, G]
+        attn_weights = entmax15(scores.float(), dim=-1).to(v.dtype)
+        if self.training and self.dropout.p > 0:
+            attn_weights = self.dropout(attn_weights)
+        if self._capture_attn:
+            self.last_attn_weights = attn_weights.detach()
+        out_slice = torch.matmul(attn_weights, v)
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -360,6 +382,79 @@ def write_experiment_summary(
     print(f"\nSaved experiment summary to {summary_path}")
 
 
+@torch.no_grad()
+def log_entmax_diagnostics(
+    model_for_diag: nn.Module,
+    sample_batch,
+    tag: str,
+    stats: dict,
+    amp_ctx_factory,
+    metrics_jsonl_path: Path | None = None,
+) -> list[dict]:
+    """Run one forward pass with attention capture and log alpha-entmax stats per block.
+
+    ``model_for_diag`` MUST be the uncompiled inner module (not the
+    torch.compile wrapper) so module-attribute assignment inside
+    PhysicsAttention.forward is not erased by graph capture.
+    """
+    was_training = model_for_diag.training
+    model_for_diag.eval()
+
+    attn_modules = []
+    for blk in model_for_diag.blocks:
+        blk.attn._capture_attn = True
+        blk.attn.last_attn_weights = None
+        attn_modules.append(blk.attn)
+
+    x, _y, _is_surface, _mask = sample_batch
+    x = x.to(next(model_for_diag.parameters()).device, non_blocking=True)
+    x_norm = (x - stats["x_mean"]) / stats["x_std"]
+    with amp_ctx_factory():
+        _ = model_for_diag({"x": x_norm})
+
+    per_block_stats = []
+    print(f"\n[{tag}] alpha-entmax(1.5) MHA diagnostics:")
+    print(f"{'Block':<6}{'Sparsity':>10}{'Top-1':>10}{'NonZero/G':>12}{'MaxProb':>10}")
+    for k, attn in enumerate(attn_modules):
+        w = attn.last_attn_weights  # [B, H, G, G] fp16/bf16 or fp32
+        if w is None:
+            continue
+        w_f = w.float()
+        nonzero = (w_f > 1e-8)
+        sparsity = 1.0 - nonzero.float().mean().item()
+        max_prob = w_f.max().item()
+        mean_max_per_row = w_f.max(dim=-1).values.mean().item()
+        nonzero_count_per_row = nonzero.float().sum(dim=-1).mean().item()
+        G = w.shape[-1]
+        print(
+            f"{k:<6}{sparsity:>10.3f}{mean_max_per_row:>10.4f}"
+            f"{nonzero_count_per_row:>8.2f}/{G:<3}{max_prob:>10.4f}"
+        )
+        per_block_stats.append({
+            "block_idx": k,
+            "sparsity": sparsity,
+            "top1_prob_mean": mean_max_per_row,
+            "nonzero_count_mean": nonzero_count_per_row,
+            "G": int(G),
+            "max_prob": max_prob,
+        })
+
+    for attn in attn_modules:
+        attn._capture_attn = False
+        attn.last_attn_weights = None
+
+    if metrics_jsonl_path is not None:
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "entmax15_diagnostic",
+            "tag": tag,
+            "blocks": per_block_stats,
+        })
+
+    if was_training:
+        model_for_diag.train()
+    return per_block_stats
+
+
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     print(
         f"    {split_name:<26s} "
@@ -476,6 +571,12 @@ print(
     f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
+print(
+    f"MHA attention shape: alpha-entmax(1.5) (Peters et al. 2019) replaces softmax "
+    f"over slice tokens; slice-routing softmax UNCHANGED. Sparse with row-sum=1; "
+    f"library `entmax.entmax15` with custom analytical backward; scores cast to "
+    f"fp32 for numerical stability under bf16 AMP."
+)
 print(f"Actual total params: {n_params}")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -578,6 +679,17 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+
+# --- alpha-entmax diagnostic at training START (untrained weights) ---
+_inner_for_diag = getattr(model, "_orig_mod", model)
+_first_val_loader = next(iter(val_loaders.values()))
+_first_batch = next(iter(_first_val_loader))
+log_entmax_diagnostics(
+    _inner_for_diag, _first_batch, tag="start",
+    stats=stats, amp_ctx_factory=amp_ctx_factory,
+    metrics_jsonl_path=metrics_jsonl_path,
+)
+
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -740,6 +852,14 @@ if best_metrics:
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
+
+    # alpha-entmax diagnostic at training END (best-checkpoint weights).
+    _end_batch = next(iter(_first_val_loader))
+    log_entmax_diagnostics(
+        _inner, _end_batch, tag=f"end_ep{best_metrics['epoch']}",
+        stats=stats, amp_ctx_factory=amp_ctx_factory,
+        metrics_jsonl_path=metrics_jsonl_path,
+    )
 
     test_metrics = None
     test_avg = None
