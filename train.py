@@ -346,6 +346,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "huber_delta": cfg.huber_delta,
         "epochs_configured": cfg.epochs,
     }
 
@@ -387,6 +388,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    huber_delta: float = -1.0   # If >0, use Huber/SmoothL1 loss with this delta instead of L1
     epochs: int = 50
     n_layers: int = 5
     n_head: int = 4
@@ -483,12 +485,18 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            abs_err = (pred - y_norm).abs()
+            if cfg.huber_delta > 0:
+                # Huber / SmoothL1: quadratic for |err|<delta, linear for |err|>=delta
+                elem_err = F.smooth_l1_loss(
+                    pred, y_norm, beta=cfg.huber_delta, reduction='none'
+                )
+            else:
+                elem_err = (pred - y_norm).abs()  # original L1 path
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (elem_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
