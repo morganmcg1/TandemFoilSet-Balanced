@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 11:05
+- **Date:** 2026-05-14 11:55
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -50,7 +50,7 @@ Loss-geometry axis:
 2. **Divergence-free auxiliary loss (nezuko #2866)** — WIP
 
 Architectural / capacity axis:
-3. **Orthogonal init restore for in_project_slice (frieren #2854)** — stale_wip, comparing vs BOTH bars
+3. **SwiGLU FFN (frieren #2902)** — NEW, assigned 2026-05-14 11:55; gated FFN replacing GELU+Linear; +25% params; tests whether FFN is saturation point. Uses `--init_std 0.05`.
 4. **γ-only FiLM-Re (edward #2865)** — CONFLICTING merge state; sent back for rebase 2026-05-14 10:33. Terminal results posted: mean val=41.13 (MISSES new bar by 0.31) but mean test=34.83 BEATS new bar by 1.19%. Strong re_rand −7.2% and cruise −9.6%; single_in_dist regresses +6.3%. Compound with σ=0.05 is the next test.
 
 Conditioning / OOD axis (NEW):
@@ -69,6 +69,7 @@ Regularization axis (NEW #2897):
 9. **Weight-decay scan on σ=0.05 baseline (alphonse #2897)** — NEW, assigned 2026-05-14 11:05; wd=5e-4 and wd=1e-3 vs current wd=2e-4; σ=0.05 init starts at higher L2, may be under-regularized. Uses `--init_std 0.05`.
 
 Closed this round:
+- **Orthogonal init restore (frieren #2854)** — CLOSED 2026-05-14 11:50: +4.5% val on old bar (+10.3% on new). Orthogonal element magnitudes ~9× surrounding trunc_normal_; sharp early slice softmax starves attention block. Best epoch 29-31 confirms slow recovery.
 - **AoA-Fourier features at input (thorfinn #2867)** — CLOSED 2026-05-14 10:35: +20.8% val regression. K=8 frequency ladder creates ~44 cycles across ±0.175 rad AoA range — high-frequency aliasing.
 - **Pinball τ=0.60 pressure (alphonse #2853)** — CLOSED 2026-05-14 11:00: +11.5% val regression. τ-axis single optimum at 0.55 confirmed; τ=0.60 overshoots to over-prediction bias. τ axis fully bracketed and retired.
 - **Pinball Ux/Uy extension (tanjiro #2855)** — CLOSED 09:21: regression (+4.5% val); velocity channels unbiased. Axis retired.
@@ -121,10 +122,12 @@ Closed this round:
 | **#2882** | **tanjiro** | **σ-scan continuation: std=0.07 and std=0.10** | **WIP 2026-05-14 10:10** |
 | **#2886** | **thorfinn** | **γ-only FiLM-AoA: per-block AoA conditioning (targets camber_rc OOD)** | **WIP 2026-05-14 10:45** |
 | #2853 | alphonse | Pinball τ=0.60 pressure | **CLOSED** 2026-05-14 11:00 (+11.5% — τ peak at 0.55, axis retired) |
-| **#2895** | **fern** | **Y-flip data augmentation (flow y-equivariance, 2× data free)** | **WIP NEW 2026-05-14 11:05** |
-| **#2897** | **alphonse** | **Weight-decay scan on σ=0.05: wd=5e-4 and wd=1e-3** | **WIP NEW 2026-05-14 11:05** |
+| **#2895** | **fern** | **Y-flip data augmentation (flow y-equivariance, 2× data free)** | **WIP 2026-05-14 11:05** |
+| **#2897** | **alphonse** | **Weight-decay scan on σ=0.05: wd=5e-4 and wd=1e-3** | **WIP 2026-05-14 11:05** |
+| #2854 | frieren | Orthogonal init for in_project_slice | **CLOSED** 2026-05-14 11:50 (+4.5% val on old bar; scale mismatch with surrounding init) |
+| **#2902** | **frieren** | **SwiGLU FFN: replace GELU+Linear with gated FFN** | **WIP NEW 2026-05-14 11:55** |
 
-**Merged:** 12 | **Closed:** 60 | **WIP:** 8 | **Idle:** 0
+**Merged:** 12 | **Closed:** 61 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 

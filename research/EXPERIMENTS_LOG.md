@@ -2383,6 +2383,48 @@ Best epoch: 29 (both seeds hit 30-min cap at ep 29; τ=0.55 baseline reached ep 
 
 ---
 
+## 2026-05-14 11:50 — PR #2854: Orthogonal init for in_project_slice (frieren, CLOSED)
+- Branch: `willowpai2g48h3-frieren/orthogonal-init-restore`
+- Hypothesis: restore orthogonal init for the `in_project_slice` weight (was being overwritten by `_init_weights`'s `trunc_normal_`). Original Transolver code intended ortho init for slice projection.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `ovo9qbjv` | 45.0991 | 38.7726 |
+| s2 | `qfn3r80k` | 44.9228 | 37.9854 |
+| **mean** | — | **45.011** | **38.379** |
+| **OLD baseline (11th shift, this assignment's bar)** | — | 43.09 | 37.19 |
+| **Δ vs OLD bar** | — | **+4.5% MISS** | **+3.2% MISS** |
+| **NEW baseline (12th shift σ=0.05 bar)** | — | 40.82 | 35.25 |
+| **Δ vs NEW bar** | — | **+10.3% MISS** | **+8.9% MISS** |
+
+Per-split test (mean): single_in_dist=43.93 (+0.93 vs old), geom_camber_rc=52.22 (+2.36), geom_camber_cruise=22.04 (+0.82), re_rand=35.33 (+0.63). All 4 splits regress.
+
+Seed std (n=2): val=0.125 — very low variance, signal is robust.
+
+Best epoch: 29-31 (late, near end-of-budget), consistent with "took longer to converge from this init."
+
+**Diagnostic (from student)**: nn.init.orthogonal_ produces element magnitude ~1/√64 ≈ 0.125 (column-normalized) vs surrounding trunc_normal_(std=0.02) magnitude ~0.02. The slice-projection weights start ~9× larger than other linears, sharpening the early slice softmax and starving the rest of the attention block of gradient signal. The "near-uniform but recoverable" pattern (small init) is better than "sharp-but-arbitrary at init" (orthogonal) under the compute-bound 35-ep cap.
+
+**Status**: CLOSED 2026-05-14 11:50. Per decision tree: val > 44.0 → "unexpected regression → close." 
+
+**Key lesson**: orthogonal init in isolation is not the right intervention for the slice-attention pathway in this architecture. The student's suggested follow-up (orthogonal_ with gain=0.4 to match σ=0.05 scale) is a valid future experiment but lower-priority than fresh axes.
+
+---
+
+## 2026-05-14 11:55 — Round-10 expansion: #2902 frieren SwiGLU FFN
+
+Following #2854 close, frieren immediately assigned:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2902 | willowpai2g48h3-frieren | SwiGLU FFN: replace GELU+Linear with gated FFN (PaLM/LLaMA pattern) | FFN architecture |
+
+Standard transformer FFN improvement. ~+25% total params (662K → 826K) but well-supported by literature. Uses `--init_std 0.05`. If per-epoch time exceeds 60s significantly, may need mlp_ratio adjustment.
+
+---
+
 ## 2026-05-14 11:05 — Round-10 expansion: #2895 fern + #2897 alphonse
 
 After closing #2853, alphonse became idle. Combined with fern (idle since #2817 merged), 2 new assignments:
