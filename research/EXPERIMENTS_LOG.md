@@ -1958,3 +1958,80 @@ Per-split test:
 - **Metrics JSONL**: `models/model-charliepai2g24h1-alphonse-re-conditional-layernorm-affine-20260513-234229/metrics.jsonl`
 
 **Programme learning**: **LN-affine injection point WINS where residual-stream injection point FAILED.** The CIN/adaLN-Zero pattern (Dumoulin et al. 2017, Peebles & Xie 2022) provides bounded Re-conditioning by operating on normalised features. This opens a new composition axis: combining ReCondLN with other stack components (per-channel heads, surface normal features) should be orthogonal. The rc mild regression (+0.64% val) is the new bottleneck to address. Student suggested: probe whether restricting ReCondLN to a subset of blocks would fix the rc regression without losing val_avg. Also suggests: the model is NOT converged at ep28 (best=last, still falling) — a T_max=35 re-run would likely push further.
+
+
+## 2026-05-14 00:45 — PR #2660: Surface-normal aux output head (Kendall multi-task, vol+surf nodes) — CLOSED
+- **Branch**: `charliepai2g24h1-nezuko/surface-normal-auxiliary-output-head`
+- **Hypothesis**: Aux head predicting nearest-surface (n_x, n_y) for every node forces shape-aware trunk via multi-task learning (Kendall/Gal/Cipolla 2017).
+- **Status**: **CLOSED — regression vs new baseline** val +3.13% (29.13 vs new 28.24)
+
+| Split | New baseline #2650 | This run | Δ |
+|---|---|---|---|
+| val_single_in_dist | 27.17 | 28.54 | +5.0% |
+| val_geom_camber_rc | 42.22 | 43.30 | +2.6% |
+| val_geom_camber_cruise | 13.67 | 13.83 | +1.2% |
+| val_re_rand | 29.90 | 30.86 | +3.2% |
+
+Comparing to old #2011 baseline (which student used): cruise -45.4% / rc +22.7% — **4th confirmation of cruise-WIN/rc-LOSS dichotomy**.
+
+- **Aux task health verified**: aux_loss 0.062, pred_magnitude 0.980 — the aux objective itself works. Failure is volume-node target inheritance pollution.
+- **Student's analysis**: "volume-node target imposes a 2-dim representation constraint on every volume node, but pressure prediction at volume nodes already requires representations encoding bulk flow features. Co-supervising the same representations may be locally inconsistent with the bulk-flow encoding the trunk would otherwise prefer."
+
+**Programme learning**: 4th independent confirmation of cruise/rc dichotomy. Reassigned to **#2688 surface-only-aux-normal-head** (student's suggested follow-up #1): drop volume-node target, keep only surface elements. Parallel to askeladd's #2671 surface-only INPUT normal feature.
+
+
+## 2026-05-14 00:45 — PR #2659: Sample-level focal-MAE (γ=1, no clamp) — CLOSED
+- **Branch**: `charliepai2g24h1-frieren/sample-level-focal-mae-gamma1`
+- **Hypothesis**: Per-sample focal weighting (γ=1, mean-normalized) on Huber-MAE — upweight hard SAMPLES (not elements), avoid heavy-tailed element saturation from #2622.
+- **Status**: **CLOSED — large regression** val +15.9% vs new baseline (+13.4% vs #2011)
+
+| Split | New baseline #2650 | This run | Δ |
+|---|---|---|---|
+| val_single_in_dist | 27.17 | 33.32 | +22.6% |
+| val_geom_camber_rc | 42.22 | 46.27 | +9.6% |
+| val_geom_camber_cruise | 13.67 | 16.68 | +22.0% |
+| val_re_rand | 29.90 | 34.68 | +16.0% |
+
+Comparing to #2011: cruise -34% / rc +31% — **5th cruise/rc dichotomy confirmation**.
+
+- **Student's analysis**: "'Hard sample within batch' is not the same as 'rc-distribution sample'". With batch=4, max-MAE sample is gradient noise not OOD signal. 800× sample weight ratio (~0.005 to ~3.9) collapsed effective batch size to 1-2.
+- **Sample-focal effective_loss_ratio** grew 1.21→1.46 over training — confirms reweighting was active but ineffective.
+
+**Programme learning**: **Focal-MAE FAMILY FULLY CLOSED** at all configurations: element-level γ=2 with clamp (#2622, +18.1%) AND sample-level γ=1 no clamp (#2659, +15.9%). Fundamentally incompatible with N=1499 / batch=4 / heavy-tailed pressure residuals. Reassigned to **#2689 shape-bin-oversampling-m05**: data-side intervention, oversample M≥0.5 train samples 3× to densify near rc OOD boundary on ch15.
+
+
+## 2026-05-14 00:45 — PR #2626: Per-channel heads kaiming-h128 re-run — CLOSED (axis fully closed)
+- **Branch**: `charliepai2g24h1-thorfinn/per-channel-separate-heads`
+- **Hypothesis (re-run)**: kaiming_normal init + head_hidden=128 fixes the under-convergence of the zero-init/h64 arm, allowing per-channel head specialization to beat baseline.
+- **Status**: **CLOSED — axis structurally closed across 2 arms**
+
+| Arm | val_avg | Δ vs #2011 | val_camber_rc | val_cruise | Pattern |
+|---|---|---|---|---|---|
+| zero-init/h64 | 29.86 | +0.98% | 42.87 (+21%) | 14.17 (-44%) | dichotomy |
+| **kaiming/h128** | **29.35** | **+1.63%** | **42.79 (+21%)** | **14.53 (-43%)** | **dichotomy preserved** |
+
+- **Student's structural diagnosis**: "the rc regression is not a convergence problem; it is a **specialization problem**: an independent per-channel projection is fundamentally worse at the rc regime than a shared projection. Independent per-channel projections lose the implicit cross-channel coupling (Ux/Uy/p coupled at sharp leading-edge gradients in rc samples)."
+- **Convergence WAS fixed by kaiming/h128**: ~0.9 MAE faster than zero-init at every epoch. But the architectural advantage of separate heads is net-negative on macro-avg.
+- **6th independent confirmation of cruise/rc dichotomy** (kaiming arm).
+
+**Programme learning**: **Per-channel-heads axis FULLY CLOSED** across 2 arms with convergence fix tested. Student's recommendation #5 "stop pursuing the 3-head variant" ratified. Reassigned to **#2690 re-conditional-output-bias**: 4th Re-conditioning hook (after ReFiLM, ReScaleHead, ReCondLN) at the output-bias injection point. Extends the proven-winning Re-conditioning axis to a new bounded injection point.
+
+### Round 00:45 Programme Summary
+
+**SIX independent confirmations of cruise-WIN / rc-LOSS structural dichotomy across 6 orthogonal interventions:**
+1. #2625 fern NACA-jitter (data-aug): cruise -43.7% / rc +24.2%
+2. #2626 thorfinn per-channel-heads zero-init (architecture): cruise -42.6% / rc +21.4%
+3. #2627 askeladd surface-normal volume (input feature): cruise -44.8% / rc +27.2%
+4. #2660 nezuko surface-normal aux output (multi-task): cruise -45.4% / rc +22.7%
+5. #2659 frieren sample-focal-MAE (loss reweighting): cruise -34.2% / rc +31.1%
+6. #2626 thorfinn per-channel-heads kaiming-h128 re-run (architecture+convergence-fix): cruise -42.7% / rc +21.2%
+
+The dichotomy is now a **first-class structural finding** about the trunk representation under N=1499 / 30-min / Transolver baseline. Any intervention that densifies in-dist neighborhood helps cruise (interpolation) and hurts rc (extrapolation beyond train cluster on ch15 M).
+
+**The winning mechanism (PR #2650 ReConditionalLayerNorm) is the ONLY known intervention that doesn't trigger the dichotomy**: val_geom_camber_rc only mildly regressed (+0.64% val) while ALL other splits improved. The winning axis is **Re-conditioning at bounded injection points** (ReFiLM, ReScaleHead, ReCondLN).
+
+Round 00:45 strategic priorities:
+- **Test if surface-only variants break the dichotomy** (#2671 askeladd input-side + #2688 nezuko output-side) — if both still show dichotomy, it's fully structural (independent of pollution).
+- **Test data-side approach** (#2689 frieren shape-bin oversampling) — qualitatively different from feature/loss/architecture; densifies train distribution near rc boundary.
+- **Test 4th Re-conditioning hook** (#2690 thorfinn output bias) — extends the only known winning axis.
+- **Test budget extension on winner** (#2678 alphonse T_max=35) — best=last in #2650, model still descending.
