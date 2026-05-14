@@ -4,6 +4,30 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 19:30 — PR #2463 (CLOSED, tanjiro): STALE-WIP housekeeping — swa_lr sweep {0.05x, 0.5x} on OBSOLETE σ=0.5/max_norm=0.5 Lion stack; axis already closed at #2896 ASYMMETRIC-V on current saturated-clip max_norm=0.35 baseline
+
+- **Branch:** `willowpai2g48h2-tanjiro/swa-lr-fine-bracket-sigma-0p5-stack`
+- **Student:** willowpai2g48h2-tanjiro
+- **Verdict:** **CLOSED as STALE-WIP + OBSOLETE-STACK + AXIS-ALREADY-CLOSED.** PR was assigned on the σ=0.5/max_norm=0.5 Lion stack BEFORE the #2311 hybrid Lion+AdamW merge (2026-05-13 19:10) and BEFORE the current saturated-clip max_norm=0.35 baseline #2674 (2026-05-14 02:06). PR was in status:wip with no progress since 2026-05-13T19:23 (>24h stale). No SENPAI-RESULT comment posted; pod-side process appears stuck. **swa_lr-axis was subsequently fully characterized at #2896 ASYMMETRIC-V on the current saturated-clip max_norm=0.35 baseline** as the 5th paper-appendix axis closure. Cross-stack re-test on the obsolete σ=0.5 stack would not add new information beyond what's banked.
+- **W&B runs:** None (process stuck before run start).
+- **Headline:** Housekeeping close — NOT a new paper-appendix axis closure since swa_lr-axis already fully characterized on current baseline at #2896. Paper-appendix table UNCHANGED at 18 closed × 8 transfer patterns + 2 MIXED axes. All 8 students now have an active in-flight PR; **all stale_wip resolved**.
+- **Decision rationale:**
+  1. **Obsolete source stack**: σ=0.5/max_norm=0.5 stack was deprecated when #2311 and #2674 merged. Current advisor baseline is val 45.1538 / test 38.6367 (W&B `ieu1futo`).
+  2. **Axis already closed on current stack**: swa_lr at #2896 classified as INDEPENDENT-ASYMMETRIC-V — 5th ASYMMETRIC-V member of DOMINANT class (now 8/18 = 44%).
+  3. **Stale_wip > 24h**: Pod-side process stuck; cannot resume host-side.
+  4. **Cross-stack data point would be paper-strengthening only**: Even if completed, result would be similar marginal-value to #2484 frieren skip-SWALR and #2390 askeladd Lion wd — both closed as paper-strengthening data points without merging.
+
+### Tanjiro reassignment
+
+Assigned tanjiro → **PR #3004: 3-seed CI confirmation on current #2674 baseline (seeds {1, 2})** on saturated-clip max_norm=0.35 Lion baseline. Establishes paper-relevant CI bounds for the headline val 45.1538 / test 38.6367 number; tests whether seed=0 result is within seed-noise of an unknown MICRO-WIN.
+
+- **NOT a new axis closure** — seed-axis already closed at #2790 DEPENDENT-NEGATIVE.
+- **Paper-strengthening CI confirmation** — adds a 2-extra-seed row to the paper-appendix headline.
+- **Decision rule**: Either arm < 45.10 val → MICRO-WIN candidate; both arms in [45.10, 45.30] → tight CI confirmed; both in [45.30, 45.80] → wider CI noted; either > 46.00 → high seed-variance flag.
+- **Predictions to test**: σ-spread invariance across seed (17th confirmation if preserved); channel-ordering invariance across seed (refines banked #203 across seed-axis); banked methodology #170 continuous-function form at baseline-equivalent shape (predicted clean 2-epoch SWA-window without truncation across both seeds).
+
+---
+
 ## 2026-05-14 19:15 — PR #2966 (CLOSED, thorfinn): mlp_ratio sweep {1, 4} on max_norm=0.35 — 18th paper-appendix axis closure, 3rd BOTH-LOSE Pareto-cap class member (FORWARD-PASS-SHAPE TRIO complete: attention-granularity + composition-depth + FFN-width all closed), 4th σ-spread BREAK (all on forward-pass-shape axes), 3rd SWA-NEVER-ENTERED failure mode
 
 - **Branch:** `willowpai2g48h2-thorfinn/mlp-ratio-sweep-on-max-norm-0p35`
