@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-05-14 [Round 91] UTC — Round 91
+
+### Closed PR #2739: edward Weight Standardization CATASTROPHIC LOSS (59th taxon — forward-time weight standardization)
+- **Student:** charliepai2g48h5-edward
+- **Branch:** charliepai2g48h5-edward/weight-standardization
+- **Hypothesis:** Weight Standardization (Qiao et al. 2019) — re-center+normalize the output rows of every nn.Linear weight to zero mean, unit std at forward time. Deterministic in-dist regularizer; zero new parameters. Arm 1: all Linear layers. Arm 2: skip the small-fan-in Linears (FiLM, mlp2 final).
+- **Results:** Both arms catastrophic LOSS:
+
+| Arm | val_avg/mae_surf_p | Δ vs baseline 32.2477 |
+|---|---|---|
+| Arm 1 (all Linear) | ~344 | ~10× degradation |
+| Arm 2 (skip small fan-in) | ~351 | ~10× degradation |
+
+- **Mechanism:** WS over-suppressed forward signal globally. Every Linear's weight matrix re-centered+normalized at every forward pass destroyed the LayerScale γ=1e-4 near-identity initialization advantage. LayerScale γ climbed 10× trying to compensate but couldn't escape collapse basin. Model collapsed to trivial attractors.
+- **Conclusion:** Forward-time weight standardization is incompatible with LayerScale-initialized Transolver at this scale. Combined with closed spectral norm (#2580) + L1+L2 regularization closures, the **weight-constraint regularizer axis** is now 3-direction exhaustive (no, OOD generalization is not unlocked via weight-constraint regularization).
+- **Taxon:** 59th closed; weight-constraint regularizer axis fully mapped.
+
+### Closed PR #2728: thorfinn SE near-identity init STALE_WIP (no taxon closed — slot redeployment)
+- **Student:** charliepai2g48h5-thorfinn
+- **Branch:** charliepai2g48h5-thorfinn/se-id-init
+- **Status:** Created 2026-05-14T02:03:35Z. Zero commits. Zero comments. ~2h14m without pickup despite thorfinn pod Running 1/1 ready, 0 restarts, 34h uptime.
+- **Action:** Closed as stale_wip; slot redeployed to fresh axis. SE near-identity init taxon remains open and can be re-tried later if a slot opens.
+- **No taxa closed** by this stale_wip closure.
+
+### Assigned PR #2778: edward Deep Supervision (60th candidate axis — gradient-pathway-multiplication)
+- **Student:** charliepai2g48h5-edward
+- **Branch:** charliepai2g48h5-edward/aux-deep-supervision
+- **Hypothesis:** Deep supervision (Lee, Xie, Gallagher, Zhang, Tu 2014). Add 3 auxiliary linear prediction heads after blocks 0, 1, 2 — each `Linear(96, 3)` producing intermediate mae_surf_p predictions. Auxiliary loss = same surf+vol weighted L1 as main loss on each aux prediction, averaged across 3 heads, scaled by aux_weight=0.1 and added to main loss.
+- **Param cost:** +873 params (+0.26% over 338,523 baseline). Negligible.
+- **Mechanism prediction:** auxiliary heads short-circuit gradient flow through 3+ residual blocks, accelerating early-block specialization. LayerScale γ in blocks 0-1 should rise faster than no-aux baseline. In-distribution val should improve via gradient richness.
+- **Structural orthogonality:** Not weight reg (closed: spectral norm, WS, L1+L2). Not stochastic perturbation (DropPath). Not optimizer-internal (closed: Lookahead+Lion, SGDR, SWA, EMA). Not normalization replacement (closed: DyT, LN-RMS, WS). Not architectural module (merged: SE block-3, SwiGLU MLP). Not loss-shape (closed: Huber, asinh, BerHu, focal). **Different axis: gradient-pathway multiplication.**
+- **Bar:** val_avg/mae_surf_p < 32.2477.
+
+### Assigned PR #2780: thorfinn Mish in mlp2 (61st candidate axis — output-head activation)
+- **Student:** charliepai2g48h5-thorfinn
+- **Branch:** charliepai2g48h5-thorfinn/mish-mlp2
+- **Hypothesis:** Mish activation (Misra 2019, `f(x) = x*tanh(softplus(x))`) replaces GELU in the output head `mlp2 = Linear(96, 96) + GELU + Linear(96, 3)`. Single 1-line change on train.py L212. Mish is smoother near zero than GELU and bounded below by ~-0.31 (vs GELU's -0.17), allowing slightly more negative output — may improve gradient flow into the final prediction layer.
+- **Param cost:** 0 delta (param-matched).
+- **Structural orthogonality:** SwiGLU acts on the intermediate residual stream with gating. Mish-in-mlp2 acts on the output decoding path (single non-gated activation, final layer only). Output-head activation has never been probed in this launch.
+- **Choice rationale:** thorfinn is a stall-prone pod (just closed #2728 stale_wip). Pick the simplest possible 1-line ablation to maximize pickup probability.
+- **Bar:** val_avg/mae_surf_p < 32.2477.
+
+### Round 91 summary
+- 2 closures + 2 assignments. Closed taxa total: **59** (added 59th forward-time weight standardization). Merged winners total: **18**. In-flight: 8/8 (zero idle GPUs).
+
+---
+
 ## 2026-05-14 [Round 90] UTC — Round 90
 
 ### Closed PR #2749: frieren mlp_ratio 2→3 LOSS (56th taxon — MLP-width upward axis)
