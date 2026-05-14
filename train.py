@@ -117,7 +117,8 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 slice_temperature: float = 1.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -125,6 +126,10 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # Fixed CLI-controlled scalar multiplier on the slice softmax temperature.
+        # Effective τ = self.temperature * slice_temperature. Default 1.0 preserves
+        # baseline; <1 sharpens slice assignment, >1 smooths it.
+        self.slice_temperature = float(slice_temperature)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -150,7 +155,9 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights = self.softmax(
+            self.in_project_slice(x_mid) / (self.temperature * self.slice_temperature)
+        )
         if mask is not None:
             # Zero out padded positions so they contribute nothing to slice_token / slice_norm.
             # We mask AFTER softmax: masking before with -inf produces all-(-inf) rows for
@@ -177,7 +184,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False):
+                 film_re=False, slice_temperature: float = 1.0):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -185,6 +192,7 @@ class TransolverBlock(nn.Module):
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            slice_temperature=slice_temperature,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -225,7 +233,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
-                 film_re=False, log_re_x_index: int = 13):
+                 film_re=False, log_re_x_index: int = 13,
+                 slice_temperature: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -234,6 +243,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.log_re_x_index = log_re_x_index
+        self.slice_temperature = float(slice_temperature)
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -249,7 +259,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                film_re=film_re,
+                film_re=film_re, slice_temperature=slice_temperature,
             )
             for i in range(n_layers)
         ])
@@ -257,6 +267,8 @@ class Transolver(nn.Module):
         self.n_linear_init = 0
         self.apply(self._init_weights)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
+        print(f"[init] slice softmax temperature multiplier = {self.slice_temperature} "
+              f"(applied on top of learnable per-head temperature init=0.5)")
         if self.film_re:
             # Identity-init the FiLM γ output linear AFTER apply() so it isn't
             # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
@@ -476,6 +488,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    slice_temperature: float = 1.0  # fixed multiplier on learnable per-head slice softmax τ (PR #2953)
 
 
 cfg = sp.parse(Config)
@@ -517,6 +530,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
+    slice_temperature=cfg.slice_temperature,  # PR #2953 slice softmax τ multiplier
 )
 
 model = Transolver(**model_config).to(device)
@@ -699,6 +713,31 @@ with torch.no_grad():
     param_l2_final = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
+
+# --- Slice softmax temperature diagnostics (PR #2953) ---
+# Log the learnable per-head temperature for each PhysicsAttention block, plus
+# the effective τ_eff = learnable_τ * slice_temperature. This shows how much the
+# learnable temperature compensated for (or amplified) the CLI multiplier.
+_base_model = getattr(model, "_orig_mod", model)
+slice_temp_diag: dict[str, float] = {}
+print("\nSlice softmax temperature diagnostics (final epoch):")
+print(f"  slice_temperature (CLI) = {cfg.slice_temperature}")
+print(f"  {'block':<6s} {'τ_learn_mean':>14s} {'τ_learn_min':>12s} "
+      f"{'τ_learn_max':>12s} {'τ_eff_mean':>12s}")
+for i, block in enumerate(_base_model.blocks):
+    t_learn = block.attn.temperature.detach().float().flatten()  # [heads]
+    t_learn_mean = t_learn.mean().item()
+    t_learn_min = t_learn.min().item()
+    t_learn_max = t_learn.max().item()
+    t_eff_mean = t_learn_mean * cfg.slice_temperature
+    slice_temp_diag[f"slice_temp/block{i}/tau_learn_mean"] = t_learn_mean
+    slice_temp_diag[f"slice_temp/block{i}/tau_learn_min"] = t_learn_min
+    slice_temp_diag[f"slice_temp/block{i}/tau_learn_max"] = t_learn_max
+    slice_temp_diag[f"slice_temp/block{i}/tau_eff_mean"] = t_eff_mean
+    print(f"  {i:<6d} {t_learn_mean:>14.6f} {t_learn_min:>12.6f} "
+          f"{t_learn_max:>12.6f} {t_eff_mean:>12.6f}")
+wandb.summary["slice_temperature_cli"] = cfg.slice_temperature
+wandb.summary.update(slice_temp_diag)
 
 # --- γ-only FiLM-Re diagnostics: per-block γ bias and weight L2 ---
 # Goal: compare to prior PR #2816 (γ+β FiLM-Re). Does γ drift more or less
