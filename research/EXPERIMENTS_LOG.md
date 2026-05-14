@@ -28,15 +28,65 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
-## 2026-05-14 08:45 — PR #2862 (ASSIGNED, fern): fourier_sigma sweep {0.25, 1.0} on max_norm=0.35 — RFF frequency axis under saturated-clip
+## 2026-05-14 10:35 — PR #2862 (CLOSED, fern): fourier_sigma sweep {0.25, 1.0} on max_norm=0.35 — 6th paper-appendix mechanism-transfer axis (TRANSFERS-CLEANLY, ASYMMETRIC-V class)
 
 - **Branch:** `willowpai2g48h2-fern/fourier-sigma-sweep-on-max-norm-0p35`
 - **Student:** willowpai2g48h2-fern
-- **Hypothesis:** 6th paper-appendix mechanism-transfer axis after {β #2736, lr #2731, seed #2790, wd #2791, fourier_num_features #2835 in-flight}. RFF frequency (random Fourier σ) is the orthogonal axis to #2835's RFF capacity. Tests whether σ=0.5 optimum (banked merged from #2168 + closed #2407 + closed #2512 on prior baselines) transfers to saturated-clip max_norm=0.35.
-- **Two arms:** Arm 1 fourier_sigma=0.25 (lower frequency, smoother — banked #29 single_in_dist regularizer), Arm 2 fourier_sigma=1.0 (higher frequency, finer-grained — banked #28 prior baseline).
-- **Predictions:** σ-spread ≈ 0.475 (orthogonality; 11th cross-axis if invariant), channel ordering surf_ux=min/vol_ux=max (11th cross-axis if invariant), clip_fraction=1.000 (7th cross-axis if invariant). Likely both arms regress on val with σ=0.5 baseline holding.
-- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
-- **Status:** Assigned 2026-05-14 08:45 UTC; awaiting training.
+- **Hypothesis:** 6th paper-appendix mechanism-transfer axis. RFF frequency (random Fourier σ) is the orthogonal axis to #2835's RFF capacity. Tests whether σ=0.5 optimum (banked merged from #2168 on prior baselines) transfers to saturated-clip max_norm=0.35.
+
+### Result table (vs #2674 baseline)
+
+| Arm | fourier_sigma | W&B | SWA val | SWA test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline #2674 | 0.5 | `ieu1futo` | 45.1538 | 38.6367 | — | — | — |
+| Arm 1 | 0.25 | `i1yulxqx` | **45.7100** | 39.3367 | +0.56 | +0.70 | directional close (in [45.50, 46.50]) |
+| Arm 2 | 1.0  | `4l7cnnjy` | **47.1036** | 40.2387 | +1.95 | +1.60 | strong regression close (≥46.50) |
+
+### Per-split SWA val/test diagnostics
+
+| Split | Arm 1 val Δ | Arm 1 test Δ | Arm 2 val Δ | Arm 2 test Δ |
+|---|---:|---:|---:|---:|
+| single_in_dist | +2.26 | +3.08 | +1.05 | +1.03 |
+| geom_camber_rc | +1.68 | **−0.05** (TIE) | +3.45 | +2.22 |
+| geom_camber_cruise | **−1.45** (win) | **−0.46** (win) | +0.93 | +0.99 |
+| re_rand | −0.26 | +0.23 | +2.37 | +2.17 |
+
+### Mechanism diagnosis (paper-strengthening)
+
+**σ-axis OPTIMUM TRANSFERS CLEANLY (σ=0.5 holds) AND lands in ASYMMETRIC-V transfer-pattern class.** Joins lr/hybrid_kendall_lr/RFF-capacity in ASYMMETRIC-V — now the DOMINANT pattern (4 of 6 closed axes). 3.5× asymmetric reach: ×0.5 hurts +0.56, ×2 hurts +1.95 under symmetric multiplicative bracket. Smoother RFF (σ=0.25) regularizes OOD-geometry: Arm 1 wins geom_camber_cruise on both val (−1.45) AND test (−0.46), ties on geom_camber_rc test (−0.05). Net regress due to +2.26 single_in_dist hit.
+
+### Updated paper-appendix transfer-pattern table (6 closed axes, 4 patterns)
+
+| Pattern class | Axes |
+|---|---|
+| Gradient-magnitude-flow-INDEPENDENT, SYMMETRIC | β #2736 |
+| Gradient-magnitude-flow-INDEPENDENT, ASYMMETRIC V | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, **fourier_sigma #2862** |
+| Gradient-magnitude-flow-DEPENDENT, SYMMETRIC | wd #2791+#2819 |
+| Gradient-magnitude-flow-DEPENDENT, NEGATIVE | seed #2790 |
+| Pareto-cap-coincidence | swa_start_frac #2818 |
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 | Arm 2 | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread | 0.484 | 0.480 | 0.475 | ✓ 11th cross-axis confirmation |
+| Channel ordering (surf_ux=min, vol_ux=max) | ✓ | ✓ | ✓ | ✓ 11th cross-axis confirmation |
+| clip_fraction=1.0 | 4875/4875 | 4875/4875 | 4875/4875 | ✓ 7th cross-axis confirmation |
+| Pre-clip grad_norm median | 5.63 | 5.42 | ≈5.30 | ✓ weak σ dependence, invariant |
+
+### Banked findings (#132–#139)
+
+132. **PAPER-STRENGTHENING: σ-axis OPTIMUM TRANSFERS CLEANLY under saturated-clip (#2862 fern)** — joins β-axis #2736 as the second TRANSFERS-CLEANLY axis on the paper-appendix table.
+133. **PAPER-STRENGTHENING: σ-axis 3.5× asymmetric reach** — ×0.5 hurts +0.56, ×2 hurts +1.95. Parallels lr-axis #2731 / hybrid_kendall_lr #2773 / RFF-capacity #2835 asymmetric-V geometry. ASYMMETRIC-V is the DOMINANT pattern class (4 of 6 closed axes).
+134. **PAPER-STRENGTHENING: σ-spread invariance preserved on σ-axis** — 0.484 / 0.480 vs baseline 0.475 (both within ±0.01). **11th cross-axis confirmation**.
+135. **PAPER-STRENGTHENING: channel ordering invariant on σ-axis** — surf_ux=min, vol_ux=max preserved on both arms. **11th cross-axis confirmation**.
+136. **PAPER-STRENGTHENING: clip_fraction=1.000 saturated invariance preserved on σ-axis** — 4875/4875 steps on both arms. **7th cross-axis confirmation**.
+137. **NEW FINDING: smoother RFF (σ=0.25) regularizes OOD-geometry** — wins geom_camber_cruise on both val (−1.45) AND test (−0.46), ties geom_camber_rc test (−0.05). Smoothness-prior signal on geometry-OOD splits; doesn't compensate single_in_dist regression under uniform split-averaging. Suggests split-reweighting strategies as future-work direction.
+138. **METHODOLOGY: pre-clip grad_norm shows weak σ dependence** — median 5.30 → 5.42 → 5.63 (baseline → σ=1.0 → σ=0.25). Smoother RFF produces slightly larger raw gradients before clip. Saturated-clip absorbs the spread (all well above max_norm=0.35).
+139. **METHODOLOGY: SWA-window truncation under 30-min cap repeats** — 4th consecutive PR (#2790, #2818, #2835, #2862) showing 2 SWA epochs out of planned 4. SWALR ramp-speed (#2877 thorfinn in-flight) directly tests whether this matters mechanistically.
+
+### Advisor verdict
+**CLOSED — paper-strengthening 6th axis closure with ASYMMETRIC-V pattern membership and TRANSFERS-CLEANLY classification.** σ=0.5 baseline holds under saturated-clip. Reassigning fern → huber_beta sweep on max_norm=0.35 (9th paper-appendix mechanism-transfer axis, LOSS-LANDSCAPE-CURVATURE class — never tested under saturated-clip).
 
 ---
 
