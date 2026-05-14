@@ -117,7 +117,8 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 slice_dropout_p: float = 0.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -125,6 +126,7 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.slice_dropout_p = slice_dropout_p
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -151,6 +153,17 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        if self.training and self.slice_dropout_p > 0:
+            # Per (batch, head, token, slice) Bernoulli mask: drop slices then
+            # renormalize so the remaining weights still sum to 1 (preserves the
+            # slice aggregation expectation). Each token sees a different subset.
+            keep = torch.bernoulli(
+                torch.full_like(slice_weights, 1.0 - self.slice_dropout_p)
+            )
+            slice_weights = slice_weights * keep
+            slice_weights = slice_weights / (
+                slice_weights.sum(dim=-1, keepdim=True) + 1e-8
+            )
         if mask is not None:
             # Zero out padded positions so they contribute nothing to slice_token / slice_norm.
             # We mask AFTER softmax: masking before with -inf produces all-(-inf) rows for
@@ -177,7 +190,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False):
+                 film_re=False, slice_dropout_p: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -185,6 +198,7 @@ class TransolverBlock(nn.Module):
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            slice_dropout_p=slice_dropout_p,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -225,7 +239,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
-                 film_re=False, log_re_x_index: int = 13):
+                 film_re=False, log_re_x_index: int = 13,
+                 slice_dropout_p: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -234,6 +249,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.log_re_x_index = log_re_x_index
+        self.slice_dropout_p = slice_dropout_p
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -249,7 +265,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                film_re=film_re,
+                film_re=film_re, slice_dropout_p=slice_dropout_p,
             )
             for i in range(n_layers)
         ])
@@ -476,6 +492,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    slice_dropout_p: float = 0.0  # PhysicsAttention slice-routing dropout (0=off, PR #2971)
 
 
 cfg = sp.parse(Config)
@@ -517,7 +534,9 @@ model_config = dict(
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
+    slice_dropout_p=cfg.slice_dropout_p,
 )
+print(f"[init] slice attention dropout p = {cfg.slice_dropout_p} (0.0 = off)")
 
 model = Transolver(**model_config).to(device)
 model = torch.compile(model, dynamic=True)
