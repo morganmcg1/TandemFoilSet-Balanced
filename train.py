@@ -226,7 +226,8 @@ class TransolverBlock(nn.Module):
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            # Return both pre-decoder features (for aux head) and the decoded preds.
+            return self.mlp2(self.ln_3(fx)), fx
         return fx
 
 
@@ -270,6 +271,15 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Multi-task auxiliary head: predict [log_Re, AoA0_rad, AoA1_rad] from
+        # mask-aware mean-pooled pre-decoder hidden state. Self-supervised
+        # consistency objective — input channels [13, 14, 18] already carry these
+        # scalars, so this constrains the internal representation to preserve
+        # physical-quantity information. Zero-init so step 0 prediction is 0.
+        self.aux_head = nn.Linear(n_hidden, 3)
+        nn.init.zeros_(self.aux_head.weight)
+        nn.init.zeros_(self.aux_head.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -288,9 +298,22 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
-            fx = block(fx, mask=mask)
-        return {"preds": fx}
+        pre_decoder = None
+        preds = None
+        n_blocks = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            if i == n_blocks - 1:
+                preds, pre_decoder = block(fx, mask=mask)
+            else:
+                fx = block(fx, mask=mask)
+        # Mask-aware mean pool over valid nodes (pre-decoder features)
+        if mask is not None:
+            mask_f = mask.unsqueeze(-1).to(pre_decoder.dtype)                       # [B, N, 1]
+            pooled = (pre_decoder * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1)
+        else:
+            pooled = pre_decoder.mean(dim=1)                                        # [B, n_hidden]
+        aux_preds = self.aux_head(pooled.float())                                   # [B, 3]
+        return {"preds": preds, "aux_preds": aux_preds, "flow_scalars": flow_scalars}
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +470,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    aux_weight: float = 0.05  # multi-task aux loss weight on flow scalar reconstruction
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -539,6 +563,15 @@ print(
     f"residual-stream conditioning vs output-side (closed #2531+#2588); "
     f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
+)
+# Multi-task aux loss diagnostic
+print(
+    f"Multi-task aux loss: F.mse_loss(aux_preds, flow_scalars), aux_weight={cfg.aux_weight}; "
+    f"aux_head: Linear({model_config['n_hidden']}, 3) zero-init; "
+    f"aux targets: [log_Re, AoA0_rad, AoA1_rad] from input channels [13, 14, 18] (normalized space); "
+    f"pre-decoder features mask-aware mean-pooled before aux_head; "
+    f"+{model_config['n_hidden'] * 3 + 3} params; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605"
 )
 print(f"Actual total params: {n_params}")
 
@@ -685,6 +718,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux = epoch_main = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -696,14 +730,22 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            out = model({"x": x_norm, "mask": mask})
+            pred = out["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Multi-task auxiliary loss: predict normalized flow scalars
+            # ([log_Re, AoA0_rad, AoA1_rad]) from pooled pre-decoder features.
+            aux_preds = out["aux_preds"]
+            aux_targets = out["flow_scalars"].to(aux_preds.dtype)
+            aux_loss = F.mse_loss(aux_preds, aux_targets)
+            loss = main_loss + cfg.aux_weight * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -711,12 +753,22 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_loss.item()
+        epoch_main += main_loss.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
+    epoch_main /= max(n_batches, 1)
+    epoch_aux_scaled = cfg.aux_weight * epoch_aux
+    epoch_aux_main_ratio = epoch_aux_scaled / max(epoch_main, 1e-12)
+    # Aux head weight norm tracks whether the head is learning meaningful weights
+    # (zero-init means it stays 0 if the gradient signal is absent).
+    _inner_aux = getattr(model, "_orig_mod", model)
+    aux_weight_norm = _inner_aux.aux_head.weight.detach().float().norm().item()
 
     # --- Validate ---
     model.eval()
@@ -748,6 +800,11 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_loss": epoch_aux,
+        "train/aux_loss_scaled": epoch_aux_scaled,
+        "train/main_loss": epoch_main,
+        "train/aux_main_ratio": epoch_aux_main_ratio,
+        "aux/weight_norm": aux_weight_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -755,7 +812,9 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"aux={epoch_aux:.4f} aux/main={epoch_aux_main_ratio:.4f} "
+        f"aux_w_norm={aux_weight_norm:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -809,6 +868,48 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Multi-task aux head diagnostic: terminal weight/bias norms and per-channel
+    # reconstruction MSE on a val_re_rand batch.
+    _aux = _inner.aux_head
+    _aux_w_norm = _aux.weight.detach().float().norm().item()
+    _aux_b_norm = _aux.bias.detach().float().norm().item()
+    print("\nMulti-task aux head terminal diagnostics (best-checkpoint weights):")
+    print(f"  aux_head.weight.norm: {_aux_w_norm:.4f}")
+    print(f"  aux_head.bias.norm:   {_aux_b_norm:.4f}")
+
+    _aux_mse_per_target = None
+    _aux_loader = val_loaders.get("val_re_rand")
+    if _aux_loader is not None:
+        with torch.no_grad():
+            _x, _y, _is_surface, _mask = next(iter(_aux_loader))
+            _x = _x.to(device, non_blocking=True)
+            _mask = _mask.to(device, non_blocking=True)
+            _x_norm = (_x - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _out = _inner({"x": _x_norm, "mask": _mask})
+            _aux_preds = _out["aux_preds"].float()
+            _aux_targets = _out["flow_scalars"].float()
+            _mse_per = ((_aux_preds - _aux_targets) ** 2).mean(dim=0).cpu().tolist()
+            _aux_mse_per_target = {
+                "log_Re": float(_mse_per[0]),
+                "AoA0_rad": float(_mse_per[1]),
+                "AoA1_rad": float(_mse_per[2]),
+            }
+        print(
+            f"  aux MSE on val_re_rand batch (normalized space): "
+            f"log_Re={_aux_mse_per_target['log_Re']:.4f}  "
+            f"AoA0={_aux_mse_per_target['AoA0_rad']:.4f}  "
+            f"AoA1={_aux_mse_per_target['AoA1_rad']:.4f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "aux_head_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "aux_head_weight_norm": _aux_w_norm,
+        "aux_head_bias_norm": _aux_b_norm,
+        "aux_mse_per_target_val_re_rand": _aux_mse_per_target,
+        "aux_weight": cfg.aux_weight,
+    })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
