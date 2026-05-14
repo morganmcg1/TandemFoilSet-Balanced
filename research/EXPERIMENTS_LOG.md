@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-14 [Round 126] UTC — PR #2899: Block-asymmetric mlp_ratio [3,3,4,4] — **CLOSED LOSS (+2.38% val; HYPOTHESIS FALSIFIED; deep-block width = OOD driver; test WIN -1.13%)**
+
+- **Branch:** charliepai2g48h5-alphonse/asym-mlp-ratio-3344
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-asym-mlp-ratio-3344-20260514-114312/metrics.jsonl
+
+| Metric | #2879 Baseline | #2899 asym[3,3,4,4] | vs Baseline | #2889 uniform[4,4,4,4] | vs uniform=4 |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.2869** | **+2.38% LOSS** | 31.4505 | -0.52% |
+| test_avg/mae_surf_p | 26.5160 | **26.2175** | **-1.13% WIN** | 26.6692 | -1.69% |
+| val_single_in_dist | 23.3997 | 25.8458 | **+10.45% LOSS** | 25.9467 | -0.39% |
+| val_geom_camber_rc | 46.0708 | 47.0941 | +2.22% LOSS | 45.7313 | +2.98% |
+| val_geom_camber_cruise | 17.8657 | **16.9728** | **-5.00% WIN (BIGGEST EVER!)** | 17.2232 | -1.45% |
+| val_re_rand | 34.9057 | 35.2351 | +0.94% flat | 36.9007 | -4.51% |
+
+Params 445,060. Best ep58/70 (timeout).
+
+**MAJOR FINDING — Shallow-block-protection hypothesis FALSIFIED:**
+- In_dist regression +10.45% with shallow blocks at mlp=3 (baseline) is essentially IDENTICAL to uniform=4's +10.88%
+- **Deep-block width is the OOD driver**, not shallow-block capacity
+- Re_rand RECOVERED to near-baseline (+0.94% vs +5.72% uniform=4) — confirms re_rand IS a shallow-block effect
+- camber_cruise WIN AMPLIFIED to -5.00% (biggest ever on val!) — confirms deep-block widening IS the camber_cruise driver
+
+**3-experiment structural matrix now complete:**
+| Config | in_dist | camber_cruise | val_avg |
+|---|---|---|---|
+| [3,3,3,3] baseline | 0 | 0 | 30.56 |
+| [3,3,4,4] asym | +10.45% ❌ | -5.00% ✓✓✓ | 31.29 |
+| [4,4,4,4] uniform | +10.88% ❌ | -3.60% ✓ | 31.45 |
+
+**MLP-asymmetric depth-capacity axis CLOSES (102nd taxon).** In_dist regression is intrinsic to deep-block capacity addition. Cannot exploit camber_cruise OOD via mlp_ratio alone. Parallel #2900 mult-geo-FiLM is the orthogonal architectural approach.
+
+---
+
+## 2026-05-14 [Round 126] UTC — PR #2910: surf_weight 10→20 — **ASSIGNED to charliepai2g48h5-alphonse**
+
+- **Branch:** charliepai2g48h5-alphonse/surf-weight-20
+- **Hypothesis:** Double surf_weight from 10 to 20 (CLI flag `--surf_weight 20`). No code change needed. Raises surface-to-volume gradient ratio from 10:1 to 20:1. Directly attacks primary metric (val_avg is 100% surface MAE).
+- **Rationale:** surf_weight axis never tested above 10 in 102 closed experiments. Three recent experiments showed test WIN while val LOST; architecture can achieve excellent surface predictions. Doubling surface gradient pressure tests whether the loss weighting is the bottleneck for further improvement.
+- **Falsifiable:** WIN = gradient alignment with metric was limiting; try surf_weight=30. WASH = axis flat. LOSS = volume regularization load-bearing; try surf_weight=5.
+
+---
+
 ## 2026-05-14 [Round 125] UTC — PR #2898: Gradient clipping max_norm=1.0 — **CLOSED LOSS (+4.91%; clipping far too tight)**
 
 - **Branch:** charliepai2g48h5-tanjiro/grad-clip-1.0
