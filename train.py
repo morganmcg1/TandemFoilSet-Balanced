@@ -463,6 +463,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    beta1: float = 0.95
+    beta2: float = 0.99
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -649,6 +651,11 @@ class Lion(torch.optim.Optimizer):
     def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
         defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
         super().__init__(params, defaults)
+        # Sign-step stability tracker. When enabled, accumulates fraction of
+        # update-sign components that match the previous step (#3056 diagnostic).
+        self.track_sign_stability = False
+        self._sign_match_count = 0
+        self._sign_total_count = 0
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -656,6 +663,8 @@ class Lion(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
+        match_count = 0
+        total_count = 0
         for group in self.param_groups:
             lr = group['lr']
             beta1, beta2 = group['betas']
@@ -671,19 +680,43 @@ class Lion(torch.optim.Optimizer):
                 if wd != 0:
                     p.mul_(1 - lr * wd)
                 update = (beta1 * m + (1 - beta1) * g).sign_()
+                if self.track_sign_stability:
+                    prev_sign = state.get('prev_update_sign')
+                    if prev_sign is not None:
+                        match_count += (update == prev_sign).sum().item()
+                        total_count += update.numel()
+                    state['prev_update_sign'] = update.clone()
                 p.add_(update, alpha=-lr)
                 m.mul_(beta2).add_(g, alpha=1 - beta2)
+        if self.track_sign_stability:
+            self._sign_match_count += match_count
+            self._sign_total_count += total_count
         return loss
+
+    def reset_sign_stability(self):
+        self._sign_match_count = 0
+        self._sign_total_count = 0
+        # Clear stored prev_update_sign tensors to free memory between tracking windows.
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state.get(p)
+                if state is not None and 'prev_update_sign' in state:
+                    del state['prev_update_sign']
+
+    def sign_stability_fraction(self):
+        if self._sign_total_count == 0:
+            return None
+        return self._sign_match_count / self._sign_total_count
 
 
 optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
-    betas=(0.9, 0.99),
+    betas=(cfg.beta1, cfg.beta2),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=({cfg.beta1}, {cfg.beta2}) | sign-based momentum update | replaces AdamW")
+print(f"Lion betas sweep (#3056): β₁={cfg.beta1} (default 0.9 → 0.95), β₂={cfg.beta2} (unchanged); higher β₁ smooths sign-step direction over past momentum; NEW baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006)")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -784,6 +817,8 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+SIGN_STAB_EPOCHS = (1, 10, 30, 59)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -793,6 +828,11 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+
+    sign_stab_this_epoch = (epoch + 1) in SIGN_STAB_EPOCHS
+    if sign_stab_this_epoch:
+        optimizer.reset_sign_stability()
+        optimizer.track_sign_stability = True
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -819,6 +859,12 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+    sign_stab_fraction = None
+    if sign_stab_this_epoch:
+        sign_stab_fraction = optimizer.sign_stability_fraction()
+        optimizer.track_sign_stability = False
+        optimizer.reset_sign_stability()
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
@@ -875,6 +921,19 @@ for epoch in range(MAX_EPOCHS):
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+
+    # Sign-step stability diagnostic (#3056): fraction of update-sign components
+    # that match the previous step's sign over the entire epoch's optimizer steps.
+    # Higher β₁ should produce HIGHER stability (smoother sign-step direction).
+    if sign_stab_this_epoch and sign_stab_fraction is not None:
+        print(f"  Lion sign-step stability @ ep{epoch+1}: {sign_stab_fraction:.6f} (β₁={cfg.beta1})")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "sign_step_stability",
+            "epoch": epoch + 1,
+            "beta1": cfg.beta1,
+            "beta2": cfg.beta2,
+            "sign_match_fraction": sign_stab_fraction,
+        })
 
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
     # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
