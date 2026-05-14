@@ -105,6 +105,27 @@ class SwiGLUMLP(nn.Module):
         return self.linear_out(gate * value)
 
 
+class DropPath(nn.Module):
+    """Stochastic Depth per-sample (Huang et al. 2016 ; Touvron et al. 2021 DeiT).
+
+    When training, drops the entire branch (returns 0) for a random subset of
+    samples in the batch with probability ``drop_prob``; survivors are scaled by
+    ``1 / keep_prob`` so expected output magnitude is preserved.
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        rand = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        rand.floor_()
+        return x.div(keep_prob) * rand
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -200,7 +221,7 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, drop_path: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -213,6 +234,8 @@ class TransolverBlock(nn.Module):
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
+        self.drop_path_attn = DropPath(drop_path)
+        self.drop_path_mlp = DropPath(drop_path)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -221,8 +244,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        fx = fx + self.drop_path_attn(self.gamma_attn * self.attn(self.ln_1(fx)))
+        fx = fx + self.drop_path_mlp(self.gamma_mlp * self.mlp(self.ln_2(fx)))
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -251,12 +274,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear DropPath schedule: 0 (block 0) -> 0.1 (block n_layers-1)
+        # Vision-transformer canonical anti-co-adaptation (DeiT, Swin, ConvNeXt).
+        drop_path_rates = [x.item() for x in torch.linspace(0.0, 0.1, n_layers)]
+        self.drop_path_rates = drop_path_rates
+        print(f"DropPath linear schedule (0 -> 0.1 across {n_layers} blocks): {drop_path_rates}")
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                drop_path=drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
