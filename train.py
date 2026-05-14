@@ -383,11 +383,50 @@ class ReFiLM(nn.Module):
         return gamma, beta
 
 
+class ReConditionalOutputBias(nn.Module):
+    """Re-conditional additive per-channel bias applied AFTER ReScaleHead.
+
+    Tiny MLP from log(Re) to a 3-channel additive bias that's broadcast over
+    all mesh nodes. Zero-init of the final layer makes the bias exactly 0 at
+    step 0, so the module reproduces the no-bias identity at init — the
+    conditioning gate must be actively opened by the optimiser.
+
+    This is the FiLM β-only analogue at the output injection point: the
+    multiplicative correction is owned by ReScaleHead (γ), this owns the
+    additive correction (β). FiLM (Perez 2018) shows γ and β are orthogonal
+    degrees of freedom — γ cannot represent a uniform additive offset, and β
+    cannot represent a magnitude rescaling. The composition
+    ``out = scale(Re) * f(x) + bias(Re)`` mirrors CIN (Dumoulin 2017),
+    where the additive shift captures per-style mean offsets that the scale
+    cannot.
+
+    References: Perez et al. 2018 (1709.07871, FiLM); Dumoulin et al. 2017
+    (1610.07629, CIN); Peebles & Xie 2022 (2212.09748, adaLN-Zero).
+    """
+
+    def __init__(self, n_out_channels: int = 3, hidden: int = 8):
+        super().__init__()
+        self.bias_mlp = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, n_out_channels),
+        )
+        nn.init.zeros_(self.bias_mlp[-1].weight)
+        nn.init.zeros_(self.bias_mlp[-1].bias)
+
+    def forward(self, x: torch.Tensor, log_re: torch.Tensor) -> torch.Tensor:
+        # x: [B, N, 3] — output after ReScaleHead's multiplicative correction.
+        # log_re: [B, 1] — per-sample normalized log Re.
+        bias = self.bias_mlp(log_re)  # [B, 3]
+        return x + bias.unsqueeze(1)  # broadcast over mesh elements
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, rescale_head, loader, stats, surf_weight, device,
+                   output_bias=None) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -419,6 +458,8 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
+            if output_bias is not None:
+                pred = output_bias(pred, log_re_norm)
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -556,6 +597,10 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Re-conditional additive output bias applied AFTER ReScaleHead. FiLM β-only
+    # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
+    # MLP with zero-init final layer. ~35 new params.
+    re_conditional_output_bias: bool = False
 
 
 cfg = sp.parse(Config)
@@ -601,6 +646,7 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
+output_bias = ReConditionalOutputBias(n_out_channels=3, hidden=8).to(device) if cfg.re_conditional_output_bias else None
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
 n_params_film = sum(p.numel() for p in model.re_film.parameters())
@@ -609,10 +655,12 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_2.parameters())
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
+n_params_out_bias = sum(p.numel() for p in output_bias.parameters()) if output_bias is not None else 0
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
     f"ReCondLN {n_params_re_ln}) "
     f"+ ReScaleHead ({n_params_head} params)"
+    + (f" + ReCondOutputBias ({n_params_out_bias} params)" if output_bias is not None else "")
 )
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
@@ -678,8 +726,11 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
+_opt_params = list(model.parameters()) + list(rescale_head.parameters())
+if output_bias is not None:
+    _opt_params += list(output_bias.parameters())
 optimizer = SOAP(
-    list(model.parameters()) + list(rescale_head.parameters()),
+    _opt_params,
     lr=cfg.lr,
     betas=(0.95, 0.95),
     weight_decay=cfg.weight_decay,
@@ -726,6 +777,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     rescale_head.train()
+    if output_bias is not None:
+        output_bias.train()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
@@ -759,6 +812,20 @@ for epoch in range(MAX_EPOCHS):
             "b_logre_cross": 0.0,
             "n": 0,
         } for role in ("attn", "ffn", "out")}
+    # ReConditionalOutputBias diagnostics — per-channel absmax / mean and
+    # per-sample |b| mean accumulators for correlation with log_Re.
+    re_out_bias_diag = None
+    if output_bias is not None:
+        re_out_bias_diag = {
+            "absmax": 0.0,                       # absmax across all channels
+            "per_ch_absmax": [0.0, 0.0, 0.0],    # per-channel absmax (Ux, Uy, p)
+            "per_ch_sum": torch.zeros(3, dtype=torch.float64, device=device),  # per-sample bias values (signed) summed
+            "abs_per_ch_sum": torch.zeros(3, dtype=torch.float64, device=device),  # |b| per channel summed
+            "abs_b_sum": 0.0,                    # Σ over samples of mean_ch(|b|)
+            "abs_b_sq_sum": 0.0,
+            "abs_b_logre_cross": 0.0,
+            "n": 0,
+        }
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -772,6 +839,8 @@ for epoch in range(MAX_EPOCHS):
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
+            if output_bias is not None:
+                pred = output_bias(pred, log_re_norm)
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
@@ -823,8 +892,11 @@ for epoch in range(MAX_EPOCHS):
         scaler.scale(loss).backward()
         if cfg.grad_clip > 0:
             scaler.unscale_(optimizer)
+            _clip_params = list(model.parameters()) + list(rescale_head.parameters())
+            if output_bias is not None:
+                _clip_params += list(output_bias.parameters())
             grad_norm = torch.nn.utils.clip_grad_norm_(
-                list(model.parameters()) + list(rescale_head.parameters()),
+                _clip_params,
                 cfg.grad_clip,
             )
             grad_norm_val = float(grad_norm)
@@ -870,6 +942,27 @@ for epoch in range(MAX_EPOCHS):
                     d["b_logre_cross"] += (b_per * lr).sum().item()
                     d["n"] += g_per.shape[0]
 
+            # ReConditionalOutputBias diagnostics — call the bias MLP directly
+            # to recover the per-sample bias [B, 3] for stat accumulation.
+            if re_out_bias_diag is not None:
+                bias_pred = output_bias.bias_mlp(log_re_norm).to(torch.float64)  # [B, 3]
+                abs_bias = bias_pred.abs()  # [B, 3]
+                d = re_out_bias_diag
+                # Absolute max overall and per-channel.
+                d["absmax"] = max(d["absmax"], abs_bias.max().item())
+                ch_absmax_batch = abs_bias.max(dim=0).values.tolist()  # [3]
+                for c in range(3):
+                    if ch_absmax_batch[c] > d["per_ch_absmax"][c]:
+                        d["per_ch_absmax"][c] = ch_absmax_batch[c]
+                # Per-sample mean |b| over channels — used for correlation with log_Re.
+                abs_b_per = abs_bias.mean(dim=-1)  # [B]
+                d["per_ch_sum"] += bias_pred.sum(dim=0)
+                d["abs_per_ch_sum"] += abs_bias.sum(dim=0)
+                d["abs_b_sum"] += abs_b_per.sum().item()
+                d["abs_b_sq_sum"] += (abs_b_per ** 2).sum().item()
+                d["abs_b_logre_cross"] += (abs_b_per * lr).sum().item()
+                d["n"] += abs_b_per.shape[0]
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
@@ -884,8 +977,11 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     rescale_head.eval()
+    if output_bias is not None:
+        output_bias.eval()
     split_metrics = {
-        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight,
+                             device, output_bias=output_bias)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -900,10 +996,10 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(
-            {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
-            model_path,
-        )
+        ckpt_payload = {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()}
+        if output_bias is not None:
+            ckpt_payload["output_bias"] = output_bias.state_dict()
+        torch.save(ckpt_payload, model_path)
         tag = " *"
 
     # Re-conditioned scale diagnostics (per-channel mean/std across epoch + corr w/ log(Re)).
@@ -963,6 +1059,31 @@ for epoch in range(MAX_EPOCHS):
                 "corr_beta_logre": float(b_corr),
             }
 
+    # ReConditionalOutputBias summary — absmax (overall + per-channel),
+    # per-channel mean (signed + |.|), and corr(|b|, log_re).
+    re_out_bias_summary: dict | None = None
+    if re_out_bias_diag is not None:
+        d = re_out_bias_diag
+        n = max(d["n"], 1)
+        per_ch_mean_signed = (d["per_ch_sum"] / n).tolist()
+        per_ch_mean_abs = (d["abs_per_ch_sum"] / n).tolist()
+        abs_b_mean = d["abs_b_sum"] / n
+        abs_b_var = max(d["abs_b_sq_sum"] / n - abs_b_mean ** 2, 0.0)
+        abs_b_std = abs_b_var ** 0.5
+        if scale_n > 0 and lr_std > 1e-8 and abs_b_std > 1e-12:
+            cov = d["abs_b_logre_cross"] / n - abs_b_mean * lr_mean
+            corr_abs_b_logre = cov / (abs_b_std * lr_std)
+        else:
+            corr_abs_b_logre = 0.0
+        re_out_bias_summary = {
+            "absmax": d["absmax"],
+            "per_ch_absmax": list(d["per_ch_absmax"]),
+            "per_ch_mean": per_ch_mean_signed,
+            "per_ch_mean_abs": per_ch_mean_abs,
+            "abs_b_mean": abs_b_mean,
+            "corr_abs_b_logre": float(corr_abs_b_logre),
+        }
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -1013,6 +1134,7 @@ for epoch in range(MAX_EPOCHS):
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
+        "re_cond_out_bias": re_out_bias_summary,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1048,6 +1170,14 @@ for epoch in range(MAX_EPOCHS):
                 f"beta[absmax={s['beta_absmax']:.4f}, mean|.|={s['beta_mean_abs']:.4f}]  "
                 f"corr(|γ|,logRe)={s['corr_gamma_logre']:+.3f}  corr(|β|,logRe)={s['corr_beta_logre']:+.3f}"
             )
+    if re_out_bias_summary is not None:
+        s = re_out_bias_summary
+        print(
+            f"    ReCondOutBias  |b|_absmax={s['absmax']:.5f}  "
+            f"per_ch_absmax=[Ux={s['per_ch_absmax'][0]:.5f} Uy={s['per_ch_absmax'][1]:.5f} p={s['per_ch_absmax'][2]:.5f}]  "
+            f"per_ch_mean=[Ux={s['per_ch_mean'][0]:+.5f} Uy={s['per_ch_mean'][1]:+.5f} p={s['per_ch_mean'][2]:+.5f}]  "
+            f"corr(|b|,logRe)={s['corr_abs_b_logre']:+.3f}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -1087,8 +1217,12 @@ if best_metrics:
     ckpt = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(ckpt["model"])
     rescale_head.load_state_dict(ckpt["rescale_head"])
+    if output_bias is not None and "output_bias" in ckpt:
+        output_bias.load_state_dict(ckpt["output_bias"])
     model.eval()
     rescale_head.eval()
+    if output_bias is not None:
+        output_bias.eval()
 
     test_metrics = None
     test_avg = None
@@ -1100,7 +1234,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight,
+                                 device, output_bias=output_bias)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
