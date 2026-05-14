@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -518,13 +519,13 @@ model_config = dict(
     n_hidden=96,
     n_layers=4,
     n_head=2,
-    slice_num=24,
+    slice_num=16,
     mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
-print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(f"slice_num: 16 (down from baseline 24) — routing-alphabet capacity downward sweep (PR #2934); complements #2923 (24→32 LOSS +6.02%); tests whether baseline 24 is above peak of capacity curve; entropy ceiling log(16)={math.log(16):.4f} nats (vs log(24)={math.log(24):.4f})")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
