@@ -520,6 +520,8 @@ model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
+ACCUM_STEPS = 2  # gradient accumulation: 2x effective batch size for Lion (Chen et al. 2023)
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
@@ -534,8 +536,16 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    optimizer_steps = 0
+    accum_loss_sum = 0.0
+    accum_count = 0
+    # Reset gradients at the start of each epoch so any trailing partial
+    # accumulation from the previous epoch is discarded cleanly.
+    optimizer.zero_grad()
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for i, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -553,20 +563,30 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-        global_step += 1
-        wandb.log({
-            "train/loss": loss.item(),
-            "train/grad_norm": grad_norm.item(),
-            "global_step": global_step,
-        })
+        # Scale loss by 1/ACCUM_STEPS so the accumulated gradient is a mean
+        # over the mini-batches (matches single-batch step scale).
+        (loss / ACCUM_STEPS).backward()
+        accum_loss_sum += loss.item()
+        accum_count += 1
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+        if (i + 1) % ACCUM_STEPS == 0:
+            # Clip on the accumulated (mean) gradient just before stepping.
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            optimizer.zero_grad()
+            optimizer_steps += 1
+            global_step += 1
+            wandb.log({
+                "train/loss": accum_loss_sum / max(accum_count, 1),
+                "train/grad_norm": grad_norm.item(),
+                "global_step": global_step,
+            })
+            accum_loss_sum = 0.0
+            accum_count = 0
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
@@ -586,6 +606,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/optimizer_steps_per_epoch": optimizer_steps,
+        "train/batches_per_epoch": n_batches,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
