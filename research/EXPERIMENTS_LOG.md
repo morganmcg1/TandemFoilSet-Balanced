@@ -121,6 +121,47 @@ Reassigning edward to a NEW representation-axis test (RMSNorm replacement) rathe
 
 ---
 
+## 2026-05-14 [Round 136] UTC — PR #2933: surf-p-channel-weight-2x — **CLOSED LOSS (+4.41% val / +0.15% test; 119th taxon; PER-CHANNEL p-WEIGHT 2× SUM-FORM CLOSED with self-acknowledged confound)**
+
+- **Branch:** charliepai2g48h5-alphonse/surf-p-channel-weight-2x
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-surf-p-channel-weight-2x-20260514-141807/metrics.jsonl
+
+| Metric | Baseline #2879 | #2933 surf p-weight 2× sum | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.9074 | **+4.41% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.5558 | +0.15% WASH |
+| val_single_in_dist | 23.3997 | 25.6454 | +9.60% LOSS |
+| val_geom_camber_rc | 46.0708 | 47.8205 | +3.80% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.6935 | **-0.96% WIN** |
+| val_re_rand | 34.9057 | 36.4701 | +4.48% LOSS |
+
+**Hypothesis:** Reweight surf_loss channels [Ux=1, Uy=1, p=2] within surf_loss (#2922 student's LOSS-FUNCTION axis recommendation). Test whether per-channel p-emphasis attacks val_avg (where p is the dominant term).
+
+**Result type:** LOSS on primary metric val_avg (+4.41%); test WASH. Meta-signal cruise-WIN / in_dist-LOSS pattern repeats — even under a loss-function intervention.
+
+**Self-acknowledged confound (student diagnostic):** Implementation used SUM-form `(mae_Ux + mae_Uy + 2*mae_p)` while baseline is also SUM-form `(mae_Ux + mae_Uy + mae_p)`. So this experiment's surf_loss magnitude is ~33% larger than baseline (4 weighted terms vs 3 unweighted). With total loss = `vol_loss + 10*surf_loss`, the effective surf_weight ≈ 13.3 instead of baseline 10. So the experiment tests TWO things at once: (a) p relative weight 1.5x within surf, (b) effective surf-vs-vol weight +33%. Cf. #2910 surf_weight=20 was +5.85% LOSS — partial bump consistent with the +4.41% seen here.
+
+**Train per-channel MAE shows no p-specific bottleneck:** all 3 surface channels drop monotonically together (Ux 0.96→0.016, Uy 0.21→0.021, p 0.51→0.029). Per-channel emphasis didn't change the channel-rate ordering.
+
+**Closes 119th taxon: PER-CHANNEL p-WEIGHT 2× SUM-FORM.** Per-channel WEIGHT axis (sum-form, magnitude-confounded) is closed. The mean-form disambiguation is the clean test — assigned as #2941.
+
+**Student followups (3):**
+1. **MEAN-form rerun** `(mae_Ux + mae_Uy + 2*mae_p) / 4` — **SELECTED** for alphonse reassignment as #2941. Cleanly isolates "p-weight only" from "effective surf_weight bump."
+2. Per-DOMAIN reweighting (boost in_dist sampling/loss weight) — attacks meta-signal directly. Deferred.
+3. Tighter p-only weights (1.25, 1.5) on /4 form — narrow continuation if #2941 is encouraging.
+
+---
+
+## 2026-05-14 [Round 136] UTC — PR #2941 (assignment): alphonse surf-p-weight-2x-mean-form — **120th axis: clean p-WEIGHT lever (mean-form disambiguation)**
+
+- **Hypothesis:** Re-test p-weight 2× using `surf_loss = (mae_Ux + mae_Uy + 2*mae_p) / 4` mean-form to preserve baseline surf_loss magnitude. Disambiguates the #2933 confound: was the +4.41% LOSS from (a) p-weight lever itself, (b) effective surf_weight bump from sum-form, or (c) both?
+- **Why might WIN:** Clean p-weight test in isolation. Baseline surf_loss magnitude preserved → effective surf_weight stays at 10. The cruise-WIN of #2933 (-0.96%) may persist while in_dist-LOSS (+9.60%) magnitude reduces — revealing what's purely the channel lever vs the magnitude bump.
+- **Why might LOSS:** If LOSS persists on /4 form, the per-channel p-reweighting lever ITSELF is bad regardless of surf_loss magnitude. Closes per-channel-WEIGHT axis cleanly. Train per-channel MAE shows no p-bottleneck — emphasis may not unlock anything.
+- **Direct student-of-#2933 followup #1.** Causality experiment isolating one mechanism.
+- **Important predictions:** WIN → tighter p-only weights next. WASH → confound was the entire story. LOSS → close mean-form WEIGHT axis, move to per-domain reweighting.
+
+---
+
 ## 2026-05-14 [Round 136] UTC — PR #2928: layerscale-gamma-1.0 — **CLOSED MIXED → not-merge LOSS (+1.26% val / -0.12% test; 118th taxon; γ_init=1.0 AXIS CLOSED with key diagnostic)**
 
 - **Branch:** charliepai2g48h5-nezuko/layerscale-gamma-1.0
