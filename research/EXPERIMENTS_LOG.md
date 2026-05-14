@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 [Round 105] UTC — PR #2829: Surface-aware LayerNorm at decoder ln_3 — **CLOSED LOSS (+8.34% val vs new baseline)**
+
+- **Branch:** charliepai2g48h5-frieren/surf-aware-ln3
+- **Hypothesis:** Add SurfaceAwareLN class (ln_3_surf + ln_3_vol, select per-token via is_surface mask) at decoder ln_3 site. +192 params. Surface tokens ~8% of mesh would get their own γ_surf/β_surf uncoupled from dominant volume statistics — targets frieren's own #2809 insight that model is "generalization-limited not capacity-limited" and primary metric is mae_surf_p.
+- **Metric artifacts:** `models/model-charliepai2g48h5-frieren-surf-aware-ln3-20260514-074XXX/metrics.jsonl`
+
+| Split | val | Baseline #2810 | Δ val | test |
+|---|---|---|---|---|
+| `single_in_dist` | 25.5+ | 23.59 | +8.3% LOSS | — |
+| `geom_camber_rc` | 35.0+ | 32.36 | +8.2% LOSS | — |
+| `geom_camber_cruise` | 36.1+ | 33.93 | +6.4% LOSS | — |
+| `re_rand` | 36.7+ | 33.81 | +8.6% LOSS | — |
+| **val_avg** | **33.4647** | **30.8909** | **+8.34% LOSS** | **28.0942 test (+5.99%)** |
+
+- **Result:** NOT MERGED. val_avg +6.85% vs old baseline 31.3216, **+8.34% vs new baseline 30.8909**. All 4 val splits regress 5.6-9.2% — no split benefits. Best ep66, timeout-truncated at 30-min cap; linear extrapolation suggests ~33.3 even at full 70 epochs = solid LOSS.
+- **Mechanism CONFIRMED (student exemplary diagnostic):**
+  - γ vectors DID diverge as predicted: `L2(γ_surf − γ_vol) = 2.67`, `cos(γ_surf, γ_vol) = 0.97` — both directions similar but magnitudes differ.
+  - **CRITICAL FAILURE:** `γ_surf std = 0.0715` is **3.4× SMALLER** than `γ_vol std = 0.2449` — γ_surf is **UNDER-TRAINED**.
+  - Surface tokens are ~8% of mesh = **12× less gradient signal per parameter** than volume tokens.
+  - The very split designed to help mae_surf_p ended up giving the surface-pressure-relevant normalization a noisy under-fit γ vector.
+- **Key insight:** Param-doubling at a normalization site only helps when both sub-populations receive comparable gradient mass. Token-frequency imbalance defeats the structural split. Reinforces #2809 frieren "generalization-limited not capacity-limited" thesis — adding surface-specific capacity at LN-level cannot rescue under-gradient training.
+- **73rd taxon: surface-aware LayerNorm CLOSES.** Combined with closed embed-LN #2808 (insertion), DyT #2686 (replacement), RMSNorm in-flight #2851 (parameter-stripping replacement) — **token-population-split sub-axis of normalization meta-axis CLOSES**. Surface-token specialization at intermediate-layer norm fails due to gradient-frequency asymmetry, not absence of structural utility.
+
+---
+
+## 2026-05-14 [Round 105] UTC — PR #2852: PhysicsAttention slice_num 24 → 20 — **ASSIGNED (78th candidate axis)**
+
+- **Branch:** charliepai2g48h5-frieren/slice-num-20
+- **Hypothesis:** Reduce `slice_num` from 24 to 20 in PhysicsAttention. Slice-routing-quality axis has two prior wins on this launch: PR #1846 (slice_num 64→32 WIN) and PR #2307 (slice_num 32→24 WIN). Pattern suggests over-parameterized slice routing hurts generalization, and tighter routing forces more concentrated information passage through fewer slice tokens. Round 104 diagnostic (#2828) confirmed slice attention is "information-routing not redundant feature-extraction" — each slice carries unique information. Question is whether all 24 are equally necessary or 20 is sufficient and forces better generalization. Model is generalization-limited (frieren #2809), not capacity-limited.
+- **Param impact:** +0 params (slice_num only affects slice_token init `nn.Parameter(torch.randn(1, slice_num, n_hidden))` size and routing matrix output dim — these are activation-shape changes, not parameter-count changes; slice_token tensor size scales but is small).
+- **Predicted mechanism (WIN scenario):** Tighter routing forces concentrated information passage; slice utilization more uniform; OOD splits benefit most (re_rand and camber_cruise).
+- **Predicted mechanism (LOSS scenario):** 20 slices is below routing-capacity threshold; in_dist regresses; data suggests next probe at slice_num=28 in the opposite direction.
+
+---
+
 ## 2026-05-14 [Round 104] UTC — PR #2828: Attention dropout p=0.05 in PhysicsAttention — **CLOSED LOSS (+3.77% val)**
 
 - **Branch:** charliepai2g48h5-askeladd/attn-dropout-p0.05
