@@ -1510,3 +1510,65 @@ Both directions falsified across both optimizer baselines. Global β=0.5 from #1
 - askeladd → Charbonnier loss ε=0.5 (PR #2694) — fundamental loss-family change (smooth L1 alternative); different gradient geometry than Huber, may compose better with Lion's sign update.
 
 ---
+
+## 2026-05-14 01:05 — PR #2633 CLOSED: Lion beta1=0.95 (variance reduced, convergence slowed)
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/lion-beta1-095
+- **Hypothesis:** Increase Lion beta1 from 0.9 → 0.95 (more conservative momentum) to reduce seed variance and improve OOD generalization stability at lr=7.5e-5.
+
+### Results (2 seeds, vs Lion lr=7.5e-5 val=45.433 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch |
+|---|---|---:|---:|---:|
+| `8efwwmsa` | 1 | 50.794 | 44.247 | 35 (last) |
+| `jbakv40o` | 2 (better) | **50.257** | **43.099** | 33 |
+| **Baseline (beta1=0.9)** | 2 | 45.433 | 39.509 | 35 |
+
+Regression: **+4.83 pt val, +3.59 pt test** (better seed). Both seeds miss bar.
+
+### Variance reduction: massive success (mechanism confirmed)
+
+| Metric | Baseline (β1=0.9) | β1=0.95 | Δ |
+|---|---:|---:|---:|
+| seed range (val) | 3.60 | **0.53** | **−85%** |
+| seed sample std (val) | 2.55 | 0.37 | **−85%** |
+
+**The variance-reduction half of the hypothesis is fully confirmed (7× tighter).** Mechanism: longer momentum memory (β1=0.95) deweights per-batch gradient noise in the sign update, exactly as predicted.
+
+### Per-split test surf_p (better seed s2)
+
+| Split | β1=0.95 | baseline | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 45.36 | 42.56 | +6.6% |
+| geom_camber_rc | 57.75 | 53.48 | +8.0% |
+| geom_camber_cruise | 27.26 | 24.00 | +13.6% |
+| re_rand | 42.03 | 37.99 | +10.6% |
+
+Convergence-rate cost is uniform across all splits — not a per-split mechanism failure.
+
+### Convergence trajectory analysis
+
+| Epoch | β1=0.95 val | baseline val | Δ |
+|---|---:|---:|---:|
+| 15 | ~83.2 | ~73.6 | +9.6 |
+| 25 | ~67 | ~55 | +12 |
+| 35 | 50.5 | 47.2 | +3.3 |
+
+Both seeds monotonically descending at 30-min cap. Convergence-rate regression, not stability problem.
+
+### Conclusion
+
+**CLOSED — clear regression on val, β1=0.95 retired.** The variance-reduction mechanism works but the cost (5 pt convergence slowdown) is too steep at fixed 30-min compute. Lion paper's β1=0.9 calibration validated.
+
+Useful pinned data point for future joint-axis experiments:
+- (lr=7.5e-5, β1=0.9): val=45.43, var=2.55
+- (lr=7.5e-5, β1=0.95): val=50.26, var=0.37
+- (lr=1e-4, β1=0.9): val=46.31, overshoot signature
+
+### Follow-up
+
+- edward → Lion β1=0.85 (PR #2700) — opposite direction; more aggressive momentum. Decisively brackets β1 axis at 0.9 if it also regresses.
+- Filed as future option if β1=0.85 fails: joint move lr=1e-4 + β1=0.95 (variance reduction creates LR slack hypothesis)
+
+---

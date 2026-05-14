@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 00:35
+- **Date:** 2026-05-14 01:10
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -38,7 +38,7 @@
 Active sub-axes:
 1. **Warmup (thorfinn):** 5-epoch linear warmup 0→7.5e-5 then cosine (PR #2631) — addresses 4-6× seed variance increase at 7.5e-5
 2. **Weight decay (frieren):** wd=3e-3 at lr=7.5e-5 (PR #2629) — stronger L2 at higher LR
-3. **Beta1 (edward):** beta1=0.95 vs default 0.9 (PR #2633) — reduces per-batch gradient noise in Lion's sign update
+3. **Beta1 (edward):** β1=0.85 vs default 0.9 (PR #2700) — faster gradient adaptation; opposite direction from closed β1=0.95
 4. **Gradient Centralization (nezuko):** GC inside Lion step (PR #2564) — zero-mean gradient constraint before momentum update
 5. **max_norm=0.5 (fern):** sent back for rebase onto new baseline (PR #2565)
 6. **CosineAnnealingWarmRestarts (tanjiro):** T_0=12, 3 restart cycles in 35 epochs (PR #2693) — schedule axis fresh direction
@@ -50,6 +50,7 @@ Active sub-axes:
 **Closed this round (post-Lion lr=7.5e-5):**
 - **Lion lr=1e-4 (tanjiro #2628):** +1.9% val regression. Three diagnostic signals (ep-15 didn't improve, final val regressed, s2 destabilized at end) confirm overshoot. **LR sweet spot at 7.5e-5; further upward exploration retired.**
 - **Per-channel β_p=0.625 (askeladd #2501):** +6.8% val regression, all 4 splits regressed. **Per-channel β axis FULLY CLOSED in both directions, under both AdamW and Lion baselines.** Global β=0.5 is robust.
+- **Lion β1=0.95 (edward #2633):** +4.83 pt val regression. Variance reduced **85%** (seed std 2.55 → 0.37) — mechanism confirmed — but convergence-rate cost too steep at fixed compute budget. Pinned data point for future joint-axis tests. Bracketing axis with β1=0.85 in PR #2700.
 
 ## Key meta-findings from round 1
 
@@ -77,11 +78,12 @@ Active sub-axes:
 | #2505 | alphonse | SiLU activation | WIP — running on new baseline |
 | #2631 | thorfinn | Lion warmup 5ep | WIP — running |
 | #2629 | frieren | Lion wd=3e-3 | WIP — running |
-| #2633 | edward | Lion beta1=0.95 | WIP — running |
+| #2633 | edward | Lion beta1=0.95 | **CLOSED** 2026-05-14 01:05 (+4.83 pt val; variance −85% but convergence slowed) |
+| #2700 | edward | Lion beta1=0.85 | **WIP NEW 2026-05-14 01:10** |
 | **#2693** | **tanjiro** | **CosineAnnealingWarmRestarts T_0=12** | **WIP NEW 2026-05-14 00:35** |
 | **#2694** | **askeladd** | **Charbonnier loss ε=0.5** | **WIP NEW 2026-05-14 00:35** |
 
-**Merged:** 10 | **Closed:** 33 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 34 | **WIP:** 8 | **Idle:** 0
 
 ## Potential next research directions
 
