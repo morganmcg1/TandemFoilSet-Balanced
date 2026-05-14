@@ -571,30 +571,33 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
-# N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
-# (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
-# per-epoch in the training loop.
-N_ANNEAL_EPOCHS = 12
-_h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
-_h73_init_factor = math.sqrt(3.0)
-_h73_final_factor = math.sqrt(2.0)
-_h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
-_h73_final_scale = _h73_final_factor / math.sqrt(_h73_dim_head)
-_h73_default_scale = 1.0 / math.sqrt(_h73_dim_head)
+# H83: per-layer attn-temp anneal — deep blocks stay sharp longer.
+# Each block linearly anneals sqrt(3) -> sqrt(2) over its own anneal_epoch_l
+# (= 3 + l*2 for l in 0..n_layers-1), then clamps at sqrt(2). All blocks reach
+# sqrt(2) by epoch 11; block 0 reaches it at epoch 3 (fastest); block 4 at
+# epoch 11 (slowest, deep-block specialization).
+_h83_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h83_init_factor = math.sqrt(3.0)
+_h83_final_factor = math.sqrt(2.0)
+_h83_init_scale = _h83_init_factor / math.sqrt(_h83_dim_head)
+_h83_final_scale = _h83_final_factor / math.sqrt(_h83_dim_head)
+_h83_default_scale = 1.0 / math.sqrt(_h83_dim_head)
+ANNEAL_EPOCHS_PER_BLOCK = [3 + l * 2 for l in range(len(model.blocks))]
 print(
-    f"[H73] attn-temp anneal: linear sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
-    f"over {N_ANNEAL_EPOCHS} epochs (then clamped at sqrt(2)); "
-    f"scale {_h73_init_scale:.4f} -> {_h73_final_scale:.4f} "
-    f"(default scale would be {_h73_default_scale:.4f}, "
-    f"dim_head={_h73_dim_head}, slice_num={model_config['slice_num']}, "
+    f"[H83] per-layer anneal: linear sqrt(3)={_h83_init_factor:.4f} -> sqrt(2)={_h83_final_factor:.4f}; "
+    f"per-block anneal_epochs={ANNEAL_EPOCHS_PER_BLOCK} "
+    f"(block 0 reaches sqrt(2) at epoch 3, block {len(model.blocks)-1} at epoch {ANNEAL_EPOCHS_PER_BLOCK[-1]}; deep stays sharp longer); "
+    f"scale {_h83_init_scale:.4f} -> {_h83_final_scale:.4f} "
+    f"(default scale would be {_h83_default_scale:.4f}, "
+    f"dim_head={_h83_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
-# H73: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
+# H83: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
 for i, b in enumerate(model.blocks):
     print(
-        f"[H73] block {i}: attn_sharpening_factor init = "
-        f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
+        f"[H83] block {i}: attn_sharpening_factor init = "
+        f"{float(b.attn.attn_sharpening_factor.item()):.4f} "
+        f"(anneal_epochs={ANNEAL_EPOCHS_PER_BLOCK[i]})"
     )
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
@@ -684,17 +687,25 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
-    # H73: linearly anneal sqrt(3) -> sqrt(2) over N_ANNEAL_EPOCHS, clamped at
-    # sqrt(2) afterward. Updated at the start of each epoch so the new factor
-    # applies to all batches in this epoch (and to validation immediately
-    # after).
-    anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
-    current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
-    for block in model.blocks:
-        block.attn.attn_sharpening_factor.fill_(current_attn_factor)
+    # H83: per-layer linear anneal. Each block l anneals sqrt(3) -> sqrt(2)
+    # over its own anneal_epoch_l = 3 + l*2, then clamps at sqrt(2). Updated
+    # at the start of each epoch so the new factor applies to all batches in
+    # this epoch (and to validation immediately after).
+    per_block_factors = []
+    per_block_fracs = []
+    for l, block in enumerate(model.blocks):
+        ann_ep = ANNEAL_EPOCHS_PER_BLOCK[l]
+        frac_l = min(1.0, epoch / max(1, ann_ep))
+        factor_l = math.sqrt(3.0) + frac_l * (math.sqrt(2.0) - math.sqrt(3.0))
+        block.attn.attn_sharpening_factor.fill_(factor_l)
+        per_block_factors.append(factor_l)
+        per_block_fracs.append(frac_l)
+    current_attn_factor = sum(per_block_factors) / len(per_block_factors)
+    anneal_frac = sum(per_block_fracs) / len(per_block_fracs)
     print(
-        f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
-        f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
+        f"[H83] Epoch {epoch+1}: per-block tau = "
+        + " ".join(f"b{i}={f:.4f}" for i, f in enumerate(per_block_factors))
+        + f" (mean={current_attn_factor:.4f}, target sqrt(2)={math.sqrt(2.0):.4f})"
     )
 
     t0 = time.time()
@@ -781,10 +792,13 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
-        # H73: log annealed sharpening factor at this epoch.
+        # H83: log per-block sharpening factors at this epoch (mean kept for
+        # back-compat with the H73 logging contract).
         "train/attn_sharpening_factor": current_attn_factor,
         "train/attn_anneal_frac": anneal_frac,
-        "train/attn_anneal_n_epochs": N_ANNEAL_EPOCHS,
+        "train/attn_sharpening_factor_per_block": per_block_factors,
+        "train/attn_anneal_frac_per_block": per_block_fracs,
+        "train/attn_anneal_epochs_per_block": ANNEAL_EPOCHS_PER_BLOCK,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
