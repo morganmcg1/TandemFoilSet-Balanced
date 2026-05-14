@@ -2,6 +2,89 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2949: rmsnorm-plus-beta — **CLOSED LOSS (+5.40% val / +1.58% test; 129th taxon; NORM-SHAPE AXIS DECISIVELY CLOSED — MEAN-SUBTRACTION-LOAD-BEARING-AT-74%)**
+
+- **Branch:** charliepai2g48h5-edward/rmsnorm-plus-beta
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-rmsnorm-plus-beta-20260514-154613/metrics.jsonl
+
+| Metric | Baseline LN #2879 | #2949 RMSNorm+β | #2939 RMSNorm-only | Recovery |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.2115 (+5.40% LOSS)** | 32.7855 (+7.28%) | **25.8%** of #2939 loss |
+| test_avg/mae_surf_p | 26.5160 | 26.9359 (+1.58% LOSS) | 28.4832 (+7.42%) | **78.7%** of #2939 loss |
+| val_single_in_dist | 23.3997 | 24.7821 (+5.91%) | — | — |
+| val_geom_camber_rc | 46.0708 | 49.4947 (+7.43%) | — | — |
+| val_geom_camber_cruise | 17.8657 | 17.9790 (+0.63% flat) | — | — |
+| val_re_rand | 34.9057 | 36.5903 (+4.83%) | — | — |
+| Param count | 407,940 | 407,940 (β bias restored, +864 vs #2939) | 407,076 | — |
+
+**Hypothesis:** Custom `RMSNormWithBias` (γ scale + β bias + no mean-subtraction) at all 9 LN sites. Restores β bias (+864 params) lost in #2939 to disambiguate β-removal vs mean-subtraction effects.
+
+**DECISIVE DISAMBIGUATION FINDINGS:**
+
+1. **β bias DID learn non-trivial values.** |β|_max up to **0.2196** (block 3.ln_1); mean |β| 0.0283 across 9 sites. β is being used, not pinned at zero. Deepest block has biggest β — consistent with end-of-residual-stream needing more DC correction.
+
+2. **Mean-subtraction is the BIGGER load-bearing piece.** β recovery:
+   - val_avg: 25.8% of #2939's loss recovered by restoring β → mean-subtraction handles ~74% of the val signal
+   - test_avg: 78.7% of #2939's loss recovered by restoring β → mean-subtraction handles ~21% of test signal
+
+3. **Mechanistic split: β vs mean-subtraction handle DIFFERENT components:**
+   - β absorbs **stationary cross-split DC** (constant per channel; mostly affects test generalization)
+   - Mean-subtraction handles **per-sample/batch-dependent DC** (Re/AoA-conditioned pressure DC offsets in CFD fields; primary load-bearing for val splits)
+   - Pressure fields have natural per-Reynolds DC offsets that LN strips explicitly; β alone CANNOT replace this at 407k param budget
+
+4. **Norm-shape axis DECISIVELY CLOSED.** Both #2939 (no β) and #2949 (with β) LOSS vs LN baseline. KEEP LayerNorm. No further normalization-shape experiments at this scale.
+
+5. **Same UNDERFIT at ep60** (still descending), consistent with cold-start handicap from removing mean-centering — implicit factoring is more expensive in optimization budget.
+
+**129th taxon CLOSED:** RMSNORM-WITH-BETA-AT-ALL-SITES. Mean-subtraction is the load-bearing 74% piece for val; β is the load-bearing 79% piece for test.
+
+**Followup assigned:** #2958 edward routing-weight-dropout-0.1 (NEW REPRESENTATION-axis: nn.Dropout(p=0.1) on slice_weights AFTER softmax, re-normalized; stochastic regularization on routing — different mechanism from temperature softening (#2944 LOSS) or entropy regularization (#2884 LOSS); preserves sharp routing at eval but adds train-time robustness; zero new params; 130th axis).
+
+---
+
+## 2026-05-14 [Round 138] UTC — PR #2950: lr-2e-4-with-warmup — **CLOSED LOSS (+0.47% val / -1.24% test WIN; 128th taxon; UPWARD LR-MAGNITUDE AXIS WITH WARMUP — FLATNESS-CLOSED)**
+
+- **Branch:** charliepai2g48h5-frieren/lr-2e-4-with-warmup
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-lr-2e-4-with-warmup-20260514-154510/metrics.jsonl
+
+| Metric | Baseline #2879 (lr=1.5e-4) | #2950 (lr=2.0e-4) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **30.7053** | **+0.47% LOSS** (not merge-eligible) |
+| test_avg/mae_surf_p | 26.5160 | **26.1866** | **-1.24% WIN** (secondary) |
+| val_single_in_dist | 23.3997 | 24.2737 (+3.74% LOSS) | val/test SIGN DIVERGENCE |
+| test_single_in_dist | 23.3491 | 22.6689 (-2.91% WIN) | val/test SIGN DIVERGENCE |
+| val_geom_camber_rc | 46.0708 | **44.8315 (-2.69% WIN)** | consistent val+test WIN |
+| test_geom_camber_rc | 42.9018 | 42.2626 (-1.49% WIN) | consistent val+test WIN |
+| val_geom_camber_cruise | 17.8657 | 18.1810 (+1.76% LOSS) | consistent val+test LOSS |
+| test_geom_camber_cruise | 13.8565 | 14.2057 (+2.52% LOSS) | consistent val+test LOSS |
+| val_re_rand | 34.9057 | 35.5349 (+1.80% LOSS) | val/test SIGN DIVERGENCE |
+| test_re_rand | 25.9567 | 25.6091 (-1.34% WIN) | val/test SIGN DIVERGENCE |
+| Param count | 407,940 | 407,940 (unchanged) | — |
+
+**Hypothesis:** Raise peak LR from 1.5e-4 → 2.0e-4 while keeping the load-bearing 3-epoch LinearLR(0.1→1.0×) warmup intact. Opposite direction of no-warmup axis closed by #2920/#2929/#2938.
+
+**LR schedule verified:** SequentialLR(LinearLR(0.1→1.0×, 3ep), CosineAnnealingLR(T_max=57)) with peak scaled by 1.33×. Schedule trajectory captured: ep3=2.0e-4 peak, ep30=1.08e-4 (close to baseline peak), ep60=0 endpoint. Total ∫LR(t) dt ≈ 5.9e-3 (+33% vs baseline).
+
+**DECISIVE FINDINGS:**
+
+1. **LR-magnitude axis FLATNESS-CLOSED, not stability-closed.** Lion is stable at lr=2.0e-4 (no NaN/Inf, monotonic descent). Predicted DIVERGE branch ruled out. Baseline lr=1.5e-4 is at/near the LR-magnitude optimum for this Lion+warmup recipe.
+
+2. **Symmetric closure of LR-magnitude axis.** Both directions closed:
+   - #2938: lr=1.0e-4 NO-warmup → +13.50% LOSS (confounded by no-warmup)
+   - #2950: lr=2.0e-4 WITH warmup → +0.47% LOSS (clean upward probe)
+
+3. **Surprising val/test sign DIVERGENCE on in_dist and re_rand:** higher LR shifts val-overfitting/test-generalization tradeoff. val splits regress; test splits IMPROVE.
+
+4. **Camber_rc consistently WINs across val AND test** (-2.69% val / -1.49% test). The geometric-OOD split with worst baseline (~46) is most LR-sensitive direction. Possible capacity-limited signal worth structural attack.
+
+5. **NOT canonical meta-signal.** Higher LR with preserved warmup acts as UNIFORM global re-shape of optimization trajectory — same trajectory shape, scaled magnitude. cruise↔in_dist trade-off NOT in LR-magnitude space.
+
+**128th taxon CLOSED:** UPWARD LR-MAGNITUDE WITH WARMUP. lr=1.5e-4 is at the optimum; axis is flat with mild upward regression to lr=2.0e-4.
+
+**Followup assigned:** #2957 frieren warmup-5-epochs-baseline-lr (warmup DURATION axis at baseline lr=1.5e-4; LinearLR total_iters: 3→5 with cosine T_max: 57→55; #2938 student first recommendation + #2950 student reinforcement; orthogonal to peak-MAGNITUDE axis; 129th axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2946: separate-surf-vol-heads — **CLOSED LOSS (+4.37% val / +0.56% test wash; 127th taxon; HEAD-ONLY SYMMETRIC SPLIT CLOSED; SHARED-HEAD-IS-REGULARIZER)**
 
 - **Branch:** charliepai2g48h5-askeladd/separate-surf-vol-heads
