@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-05-14 [Round 101] UTC — PR #2810: SE block-3-only attention-pool — **MERGED WIN (−1.37% val)**
+
+- **Branch:** charliepai2g48h5-alphonse/se-attn-pool
+- **Hypothesis:** Replace mean-pool in SqueezeExcitation with content-aware attention pool (`Linear(96,1)+softmax` over tokens) to learn which tokens are most informative for global channel gating. +97 params (+`Linear(96,1)` weight) → 333,700 total.
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-se-attn-pool-20260514-060932/metrics.jsonl`
+
+| Split | val | Baseline #2765 | Δ val | test | Baseline test | Δ test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | 25.2751 | 24.9721 | +1.21% mild | 23.4553 | 24.0714 | −2.55% WIN |
+| `geom_camber_rc` | **45.8179** | 46.9885 | **−2.49% WIN** | 41.1687 | 41.9406 | −1.84% WIN |
+| `geom_camber_cruise` | **16.8427** | 17.7276 | **−4.92% WIN** | 14.1435 | 14.2400 | −0.69% WIN |
+| `re_rand` | 35.6177 | 35.5983 | +0.05% flat | 25.9980 | 25.7749 | +0.93% mild |
+| **val_avg** | **30.8909** | **31.3216** | **−1.37% WIN** | | | |
+| **test_avg** | **26.1964** | **26.5067** | **−1.17% WIN** | | | |
+
+- **Result:** MERGED as 20th winner. New baseline: val 30.8909 / test 26.1964 / params 333,700.
+- **Mechanism:** Predicted mechanism (content-aware token-importance attention pool) did NOT activate — attn_pool weights remain near-uniform (max_w ~2-3× uniform, entropy within 2% of ln(T)). Real mechanism: +97 params perturb SE bottleneck dynamics, lifting gate_std +13-19% across ALL splits. SE gates wider distribution = more channel selectivity for OOD geometry/Re. The improvement is real but via gate-distribution expansion rather than token-content weighting. Key insight: even a small parameter perturbation that changes the SE bottleneck equilibrium can systematically improve OOD performance.
+
+---
+
+## 2026-05-14 [Round 101] UTC — PR #2813: Per-block FiLM at all 4 TransolverBlocks — **CLOSED LOSS (+0.81% val)**
+
+- **Branch:** charliepai2g48h5-nezuko/per-block-film
+- **Hypothesis:** Add FiLM modulation at every TransolverBlock (depth-progressive Re/AoA conditioning vs single embedding-stage FiLM in merged #2614). 4×384=+1,536 params → 335,139 total.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-per-block-film-20260514-065XXX/metrics.jsonl`
+
+| Split | val | Baseline #2765 | Δ val | test | Baseline test | Δ test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | 32.0436 | 24.9721 | +28.3% LOSS | 24.7500 | 24.0714 | +2.82% |
+| `geom_camber_rc` | 47.2146 | 46.9885 | +0.48% flat | 40.7888 | 41.9406 | −2.75% WIN |
+| `geom_camber_cruise` | 17.0456 | 17.7276 | −3.85% WIN | 13.3730 | 14.2400 | −6.09% WIN |
+| `re_rand` | 29.9949 | 35.5983 | −15.73% WIN | 23.1673 | 25.7749 | −10.12% WIN |
+| **val_avg** | **31.5747** | **31.3216** | **+0.81% LOSS** | | | |
+| **test_avg** | **25.7718** | **26.5067** | **−2.77% WIN** | | | |
+
+- **Result:** NOT MERGED. val_avg regresses +0.81% on primary metric. Large test-val divergence: test improves −2.77% across all 4 splits while in_dist val catastrophically regresses +28.3%.
+- **Mechanism confirmed:** depth-progressive FiLM scale growth: film_scale_abs_mean block 0→3 = 0.0762→0.1118 (+47%); weight_norm 1.49→2.07 (+39%). Optimizer used all 4 FiLM modules and grew them depth-progressively. However, per-block FiLM over-conditions intermediate representations on Re/AoA scalars — in-distribution training samples (most numerous) suffer most from this over-conditioning. The Re/AoA signal becomes a shortcut for in-dist pattern memorization rather than a generalization signal.
+- **70th taxon closure:** Per-block FiLM (4-way conditioning) CLOSES. Student recommendation: block-3-only FiLM is the motivated follow-up (targeted final-output conditioning at the deepest block without intermediate corruption).
+
+---
+
+## 2026-05-14 [Round 101] UTC — PR #2844: Block-3-only FiLM — **ASSIGNED (73rd candidate axis)**
+
+- **Branch:** charliepai2g48h5-nezuko/block3-film
+- **Hypothesis:** Apply FiLM conditioning at block 3 only (final TransolverBlock), after SE gate, before mlp2 decoder. Single `nn.Linear(3, 96)` zero-init. +384 params → 334,084 total. Targeted final-output conditioning without intermediate representation corruption observed in per-block FiLM (#2813).
+
+---
+
+## 2026-05-14 [Round 101] UTC — PR #2842: surf_weight=15.0 — **ASSIGNED (74th candidate axis)**
+
+- **Branch:** charliepai2g48h5-alphonse/surf-weight-15
+- **Hypothesis:** Increase surface pressure loss weighting from surf_weight=10.0 to 15.0 (+50%). surf_weight has NEVER been swept this launch despite 100+ rounds of improvements. +0 params. Hypothesis: stronger surface supervision directly targets primary metric; with current improved model (SwiGLU+SE+FiLM+LayerScale) the optimizer may leverage higher surface emphasis without destabilizing volume feature learning.
+
+---
+
 ## 2026-05-14 [Round 100] UTC — PR #2808: Pre-block-0 embedding LayerNorm — **CLOSED LOSS (+3.75% val)**
 
 - **Branch:** charliepai2g48h5-askeladd/embed-ln

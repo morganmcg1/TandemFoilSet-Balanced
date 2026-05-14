@@ -39,10 +39,39 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **31.3216** | #2765 | Lion lr=1.5e-4 + FiLM + SE block-3-only **reduction=4** + SwiGLU MLP | ep64/70 (timeout-truncated); **−2.87% vs #2741** (32.2477); all 4 val splits WIN; new best-ever in-dist 24.97 |
-| `test_avg/mae_surf_p` | **26.5067** | #2765 | — | test from best-val checkpoint ep64; −3.35% vs #2741 (27.4248) |
+| `val_avg/mae_surf_p` | **30.8909** | #2810 | Lion lr=1.5e-4 + FiLM + SE block-3-only **reduction=4 attn-pool** + SwiGLU MLP | ep64/65 (timeout-truncated); **−1.37% vs #2765** (31.3216); OOD splits WIN; 333,700 params |
+| `test_avg/mae_surf_p` | **26.1964** | #2810 | — | test from best-val checkpoint ep64; −1.17% vs #2765 (26.5067) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 31.3216` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 30.8909` to be merged.
+
+## 2026-05-14 [Round 101] — PR #2810: SE block-3-only attn-pool: val WIN −1.37% (NEW BEST)
+
+- **Student:** charliepai2g48h5-alphonse
+- **Best epoch:** 64 of 65 (timeout-truncated at 30 min)
+- **Param count:** 333,700 (+97 vs prior; Linear(96,1) attention pooling weight in SqueezeExcitation)
+- **sec/epoch:** ~27 s (negligible overhead from attn_pool Linear)
+- **SE attention-pool diagnostic:** attn_pool is approximately uniform (max_w ~2-3× uniform, entropy within 2% of ln(T)); gate_std +13-19% on ALL splits vs baseline (in_dist +13%, rc +16%, cruise +15%, re_rand +19%)
+- **Mechanism:** Replacing mean-pool with content-aware attention pool in SE block-3 did NOT activate as a discriminating token-importance mechanism (weights near-uniform). Instead, the +97-param perturbation shifted SE gate_std up 13-19%, pushing the gating toward a slightly wider distribution. This improved OOD splits via increased channel-selectivity range rather than token-content weighting.
+- **Key finding:** The benefit is real even when predicted mechanism (token-content awareness) doesn't engage. Gate_std expansion via parameter perturbation is the operative mechanism. The pool layer adds a trainable projection that slightly changes the SE bottleneck dynamics.
+
+| Split | val mae_surf_p | Δ vs #2765 (31.3216) |
+|---|---|---|
+| `val_single_in_dist` | 25.2751 | +1.21% mild regression |
+| `val_geom_camber_rc` | **45.8179** | **−2.49% WIN** |
+| `val_geom_camber_cruise` | **16.8427** | **−4.92% WIN** |
+| `val_re_rand` | 35.6177 | +0.05% flat |
+| **val_avg** | **30.8909** | **−1.37% WIN** |
+
+| Split | test mae_surf_p | Δ vs #2765 (26.5067) |
+|---|---|---|
+| `test_single_in_dist` | **23.4553** | **−2.55% WIN** |
+| `test_geom_camber_rc` | **41.1687** | **−1.84% WIN** |
+| `test_geom_camber_cruise` | **14.1435** | **−0.69% WIN** |
+| `test_re_rand` | **25.9980** | +0.93% mild |
+| **test_avg** | **26.1964** | **−1.17% WIN** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-se-attn-pool-20260514-060932/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-alphonse --experiment_name "charliepai2g48h5-alphonse/se-attn-pool" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`
 
 ## 2026-05-14 [Round 94] — PR #2765: SE block-3-only reduction=4: val WIN −2.87% (NEW BEST)
 
