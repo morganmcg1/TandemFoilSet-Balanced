@@ -465,6 +465,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 5e-4
+    lion_lr: float | None = None  # If set, override Lion lr directly (else use cfg.lr * 0.15 = 7.5e-5)
+    seed: int = 1
     weight_decay: float = 2e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -481,6 +483,9 @@ class Config:
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -524,9 +529,11 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+_lion_lr = cfg.lion_lr if cfg.lion_lr is not None else cfg.lr * 0.15  # default: 5e-4 * 0.15 = 7.5e-5
+print(f"Lion lr: {_lion_lr:.2e}")
 optimizer = Lion(
     model.parameters(),
-    lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
+    lr=_lion_lr,
     weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
     betas=(0.9, 0.99),       # Lion-paper default
 )
@@ -544,6 +551,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "lion_lr_actual": _lion_lr,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
