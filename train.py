@@ -203,7 +203,9 @@ class TransolverBlock(nn.Module):
                  layerscale_init=1e-4, use_se=True):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        # RMSNorm (Llama-style) replaces LayerNorm at every post-norm site.
+        # γ=1.0 init preserved by nn.RMSNorm default; bias (β) removed entirely.
+        self.ln_1 = nn.RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
@@ -212,12 +214,12 @@ class TransolverBlock(nn.Module):
         # removed: γ is a plain Python float, not nn.Parameter — no learnable
         # gain on residual branches. Saves 2×hidden_dim params per block.
         self.gamma_attn = 1.0
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = nn.RMSNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = 1.0
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = nn.RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -289,6 +291,10 @@ class Transolver(nn.Module):
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.RMSNorm):
+            # RMSNorm has only `weight` (no bias). γ=1.0 init preserved.
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
         x = data["x"]
@@ -549,11 +555,26 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(
-    f"Block topology: POST-NORM (LN AFTER residual sum) at all {model_config['n_layers']}*2={model_config['n_layers']*2} per-block LN sites; "
+    f"Block topology: POST-NORM (RMSNorm AFTER residual sum) at all {model_config['n_layers']}*2={model_config['n_layers']*2} per-block norm sites; "
     f"final ln_3 retained in last block for output-head cleanup; "
-    f"forward: ln(gamma * f(x) + x) vs baseline pre-norm x + gamma * f(ln(x)); "
+    f"forward: norm(gamma * f(x) + x) vs baseline pre-norm x + gamma * f(norm(x)); "
     f"vs #2951 post-norm + LayerScale γ=1e-4: val 35.0624 (+14.73% LOSS), cruise +25.03% (worst). "
     f"This PR isolates topology from LayerScale init."
+)
+# RMSNorm replacement diagnostic (#3054): every nn.LayerNorm → nn.RMSNorm.
+# RMSNorm = 1/√(mean(x²)) only — no mean subtraction, no learnable bias.
+# Default γ=1.0 init preserved (nn.RMSNorm default). Llama-style minimal change.
+_n_rmsnorm = sum(1 for _m in model.modules() if isinstance(_m, nn.RMSNorm))
+_n_layernorm = sum(1 for _m in model.modules() if isinstance(_m, nn.LayerNorm))
+_rmsnorm_param_total = sum(p.numel() for _m in model.modules() if isinstance(_m, nn.RMSNorm) for p in _m.parameters())
+print(
+    f"Normalization: RMSNorm (replaces nn.LayerNorm at all positions; Llama-style) — "
+    f"{_n_rmsnorm} RMSNorm sites, {_n_layernorm} remaining LayerNorm sites; "
+    f"removes LayerNorm bias (β) param; keeps γ scale at 1.0 init (nn.RMSNorm default); "
+    f"RMSNorm γ param count = {_rmsnorm_param_total} (one γ-vector of size {model_config['n_hidden']} per site); "
+    f"NEW BASELINE: val 29.5318 / test 25.4795 (PR #3006). "
+    f"Cruise prediction: PRESERVED (RMSNorm preserves per-token sign-pattern; residual stream structure unchanged at init). "
+    f"Δ vs #3006 baseline (407,175): {n_params - 407175} params"
 )
 print(
     f"LayerScale: REMOVED — γ_attn = γ_mlp = 1.0 constant (Python float, NOT nn.Parameter); "
@@ -894,6 +915,40 @@ for epoch in range(MAX_EPOCHS):
             "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
         })
 
+    # RMSNorm γ drift probe (#3054): log γ stats at each RMSNorm site at
+    # ep1/10/30/59 — answers whether the only learnable RMSNorm param drifts
+    # away from 1.0 init, and how strongly per position.
+    if (epoch + 1) in (1, 10, 30, 59, 60):
+        _inner_rms = getattr(model, "_orig_mod", model)
+        _rms_log: list[dict] = []
+        for _bi, _blk in enumerate(_inner_rms.blocks):
+            for _name in ("ln_1", "ln_2", "ln_3"):
+                _mod = getattr(_blk, _name, None)
+                if _mod is None or not isinstance(_mod, nn.RMSNorm):
+                    continue
+                _w = _mod.weight.detach().float().cpu()
+                _rms_log.append({
+                    "block_idx": _bi,
+                    "site": _name,
+                    "gamma_mean": float(_w.mean().item()),
+                    "gamma_std": float(_w.std().item()),
+                    "gamma_min": float(_w.min().item()),
+                    "gamma_max": float(_w.max().item()),
+                    "gamma_drift_from_1_abs_mean": float((_w - 1.0).abs().mean().item()),
+                })
+        print(
+            f"  RMSNorm γ drift @ ep{epoch+1}: "
+            + ", ".join(
+                f"b{r['block_idx']}.{r['site']} mean={r['gamma_mean']:.4f} drift={r['gamma_drift_from_1_abs_mean']:.4f}"
+                for r in _rms_log
+            )
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "rmsnorm_gamma",
+            "epoch": epoch + 1,
+            "sites": _rms_log,
+        })
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -948,6 +1003,39 @@ if best_metrics:
             "gamma_mlp_abs_mean": abs(_gm),
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # RMSNorm γ at best checkpoint — comprehensive final-state snapshot of the
+    # only learnable RMSNorm parameter, per site, per block. Compares to baseline
+    # LayerNorm γ convergence patterns.
+    _rms_best_log: list[dict] = []
+    print("\nRMSNorm γ at best checkpoint (per-site):")
+    for _bi, _blk in enumerate(_inner.blocks):
+        for _name in ("ln_1", "ln_2", "ln_3"):
+            _mod = getattr(_blk, _name, None)
+            if _mod is None or not isinstance(_mod, nn.RMSNorm):
+                continue
+            _w = _mod.weight.detach().float().cpu()
+            _entry = {
+                "block_idx": _bi,
+                "site": _name,
+                "gamma_mean": float(_w.mean().item()),
+                "gamma_std": float(_w.std().item()),
+                "gamma_min": float(_w.min().item()),
+                "gamma_max": float(_w.max().item()),
+                "gamma_drift_from_1_abs_mean": float((_w - 1.0).abs().mean().item()),
+            }
+            _rms_best_log.append(_entry)
+            print(
+                f"  block[{_bi}].{_name}: mean={_entry['gamma_mean']:.4f}  "
+                f"std={_entry['gamma_std']:.4f}  "
+                f"min={_entry['gamma_min']:.4f}  max={_entry['gamma_max']:.4f}  "
+                f"|γ−1|_mean={_entry['gamma_drift_from_1_abs_mean']:.4f}"
+            )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "rmsnorm_gamma_best",
+        "epoch": int(best_metrics["epoch"]),
+        "sites": _rms_best_log,
+    })
 
     # Cross-block α at best checkpoint — final values after loading best weights.
     _alpha_best = _inner.cross_block_alpha.detach().cpu().float().tolist()
