@@ -190,11 +190,13 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 input_noise_sigma: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.input_noise_sigma = input_noise_sigma
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -231,6 +233,8 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.training and self.input_noise_sigma > 0:
+            fx = fx + torch.randn_like(fx) * self.input_noise_sigma
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -391,6 +395,7 @@ class Config:
     n_layers: int = 5
     n_head: int = 4
     slice_num: int = 48
+    input_noise_sigma: float = 0.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -433,6 +438,7 @@ model_config = dict(
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
     mlp_ratio=4,
+    input_noise_sigma=cfg.input_noise_sigma,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
