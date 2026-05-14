@@ -32,6 +32,7 @@ import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.amp import GradScaler, autocast
+from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -556,6 +557,15 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Stochastic Weight Averaging (Izmailov et al., UAI 2018) on the final
+    # K epochs of training. Maintains a running mean of weights starting at
+    # swa_start_epoch (1-indexed). After training ends we evaluate BOTH the
+    # best-val regular checkpoint and the SWA averaged model so the advisor
+    # can compare them directly. No new parameters; the averaged model has
+    # identical structure to the trained one.
+    swa: bool = False
+    swa_start_epoch: int = 24  # 1-indexed; SWA active for (epoch+1) >= swa_start_epoch
+    swa_lr: float = 1e-4  # mid-range LR target for the SWA segment (1-step linear anneal)
 
 
 cfg = sp.parse(Config)
@@ -689,6 +699,24 @@ optimizer = SOAP(
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
+
+# SWA setup. AveragedModel wraps the *uncompiled* module — its .module attribute
+# holds an internal copy whose params are updated by update_parameters(). Each
+# update step computes mean_param = mean_param + (curr - mean_param) / (n+1).
+# We wrap rescale_head separately since it is a sibling module, not a sub-module.
+swa_model = None
+swa_rescale_head = None
+swa_scheduler = None
+if cfg.swa:
+    swa_model = AveragedModel(uncompiled_model)
+    swa_rescale_head = AveragedModel(rescale_head)
+    swa_scheduler = SWALR(
+        optimizer, anneal_strategy="linear", anneal_epochs=1, swa_lr=cfg.swa_lr,
+    )
+    print(
+        f"SWA enabled: start_epoch={cfg.swa_start_epoch} (1-indexed), "
+        f"swa_lr={cfg.swa_lr}, anneal_strategy=linear, anneal_epochs=1"
+    )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -875,8 +903,17 @@ for epoch in range(MAX_EPOCHS):
         epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
-    current_lr = scheduler.get_last_lr()[0]
-    scheduler.step()
+    # Use the optimizer's current LR (set during the just-completed epoch) rather
+    # than scheduler.get_last_lr(), which goes stale once swa_scheduler starts
+    # driving the optimizer in the SWA phase.
+    current_lr = optimizer.param_groups[0]["lr"]
+    in_swa = cfg.swa and (epoch + 1) >= cfg.swa_start_epoch
+    if in_swa:
+        swa_model.update_parameters(uncompiled_model)
+        swa_rescale_head.update_parameters(rescale_head)
+        swa_scheduler.step()
+    else:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
@@ -986,9 +1023,14 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
-        "scheduler": "cosine_annealing_lr",
+        "scheduler": "swa_lr" if in_swa else "cosine_annealing_lr",
         "scheduler_T_max": SCHEDULER_T_MAX,
         "scheduler_eta_min": 1e-5,
+        "swa_enabled": cfg.swa,
+        "swa_active": in_swa,
+        "swa_start_epoch": cfg.swa_start_epoch if cfg.swa else None,
+        "swa_lr": cfg.swa_lr if cfg.swa else None,
+        "swa_n_averaged": int(swa_model.n_averaged.item()) if swa_model is not None else 0,
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
         "torch_compile_dynamic": torch_compile_dynamic,
@@ -1081,6 +1123,7 @@ append_metrics_jsonl(metrics_jsonl_path, {
 })
 
 # --- Test evaluation + local summary ---
+test_loaders = None
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
@@ -1127,3 +1170,63 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
+
+# --- SWA evaluation (averaged model on val + test) ---
+if cfg.swa and swa_model is not None and int(swa_model.n_averaged.item()) > 0:
+    n_avg = int(swa_model.n_averaged.item())
+    print(f"\nEvaluating SWA averaged model (n_averaged={n_avg})...")
+    # Load SWA-averaged params into the compiled `model` (via uncompiled_model
+    # which shares parameter tensors with the compile wrapper). Transolver uses
+    # LayerNorm, so update_bn is not required — LN affine averages directly.
+    uncompiled_model.load_state_dict(swa_model.module.state_dict())
+    rescale_head.load_state_dict(swa_rescale_head.module.state_dict())
+    model.eval()
+    rescale_head.eval()
+
+    swa_val_metrics = {
+        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_val_metrics)
+    print(f"\n  SWA-VAL  avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, swa_val_metrics[name])
+
+    swa_test_metrics = None
+    swa_test_avg = None
+    if not cfg.skip_test and test_loaders is not None:
+        swa_test_metrics = {
+            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        swa_test_avg = aggregate_splits(swa_test_metrics)
+        print(f"\n  SWA-TEST  avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, swa_test_metrics[name])
+
+    swa_path = model_dir / "swa_checkpoint.pt"
+    torch.save({
+        "model": swa_model.module.state_dict(),
+        "rescale_head": swa_rescale_head.module.state_dict(),
+        "n_averaged": n_avg,
+        "swa_lr": cfg.swa_lr,
+        "swa_start_epoch": cfg.swa_start_epoch,
+    }, swa_path)
+    print(f"Saved SWA checkpoint to {swa_path}")
+
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "swa_eval",
+        "swa_start_epoch": cfg.swa_start_epoch,
+        "swa_lr": cfg.swa_lr,
+        "n_averaged": n_avg,
+        "last_completed_epoch": last_completed_epoch,
+        "val_avg": swa_val_avg,
+        "val_splits": swa_val_metrics,
+        "test_avg": swa_test_avg,
+        "test_splits": swa_test_metrics,
+        # Side-by-side comparison vs the best regular checkpoint:
+        "regular_best_val_avg_surf_p": best_avg_surf_p if best_metrics else None,
+        "regular_best_test_avg_surf_p": (
+            test_avg["avg/mae_surf_p"] if best_metrics and test_avg is not None else None
+        ),
+    })
