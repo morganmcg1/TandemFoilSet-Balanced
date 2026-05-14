@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-05-14 [Round 84] UTC — Round 84
+
+### Merged: PR #2692 tanjiro — Squeeze-Excitation per-block (Hu et al. 2018 CVPR) — 16th WINNER
+
+- **Branch:** charliepai2g48h5-tanjiro/se-r8
+- **Hypothesis:** Per-block channel gating from global masked average pool: mean_pool_over_tokens → Linear(96→12) → GELU → Linear(12→96) → sigmoid → broadcast multiply. Zero-init fc2 so gate=0.5 at step 0. SE applied at END of each of 4 TransolverBlocks. +9,648 params (+2.94%).
+- **Metrics (vs baseline #2614 val=33.3722, test=28.3736):**
+
+| Metric | SE-r8 | Baseline #2614 | Delta |
+|---|---|---|---|
+| val_avg/mae_surf_p | **33.0195** | 33.3722 | **−1.06% WIN** |
+| test_avg/mae_surf_p | 28.3562 | 28.3736 | −0.06% FLAT |
+| val_single_in_dist | 26.4221 | 25.3293 | **+4.31% REGRESSION** |
+| val_geom_camber_rc | 48.3191 | 49.5771 | −2.54% |
+| val_geom_camber_cruise | 20.2953 | 20.4181 | −0.60% |
+| val_re_rand | 37.0415 | 38.1642 | −2.94% |
+
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-se-r8-20260514-010915/metrics.jsonl
+- **Training:** best ep65/70 (timeout-truncated — 5 cosine epochs missing), ~28 s/epoch, 338,267 params (+9,648)
+- **SE gate diagnostics:** Block 3 engages most: gate std=0.076 (range 0.27–0.71); blocks 0-2 near-identity: std 0.022-0.034 (range 0.41-0.62). No saturation. LayerScale γ_mlp block 3 compressed to 0.051 vs baseline ~0.08: depth-progressive SE/LayerScale trade-off.
+- **Decision:** MERGED. val_avg improves −1.06% per primary metric. Test flat (−0.06%) — acceptable; primary metric is val_avg. Small improvements compound.
+- **Analysis:** SE finds useful signal at depth (block 3). Global-pool channel gating adds OOD-helpful inductive bias (suppresses decision-irrelevant channels for unfamiliar samples). in_dist regression (+4.31%) likely due to gate=0.5 initialization dampening stream magnitude across all 4 blocks. NEW BASELINE: val 33.0195, test 28.3562.
+- **NEW BASELINE: val 33.0195, test 28.3562.**
+
+### Closed: PR #2668 thorfinn — n_head=4 retry-1 (2nd STALE_WIP)
+
+- **Branch:** charliepai2g48h5-thorfinn/nhead-4-retry1
+- **Decision:** CLOSED — 2nd stale_wip event on n_head=4 axis (original: #2597 at Round 65, retry: #2668 at Round 74). Per launch convention: 2 consecutive stale events = axis abandoned. Zero pod activity on the branch across ~9 rounds. n_head=4 axis closed without result.
+
+### Assigned: PR #2727 tanjiro — SE block-3 only
+
+- **Branch:** charliepai2g48h5-tanjiro/se-block3-only
+- **Hypothesis:** Remove SE from blocks 0, 1, 2; keep SE only at the deepest block (block 3). From PR #2692 gate diagnostics: block 3 dominates SE engagement (std=0.076 vs 0.022-0.034 blocks 0-2). Depth-selective SE reduces +9,648 params to +2,412 and eliminates the 3× gate=0.5 initialization dampening penalty from shallow blocks.
+- **Why fresh:** Student tanjiro's #1 follow-up; directly tests whether block-3 SE is the minimum viable SE unit; orthogonal to thorfinn's init probe.
+
+### Assigned: PR #2728 thorfinn — SE near-identity init
+
+- **Branch:** charliepai2g48h5-thorfinn/se-id-init
+- **Hypothesis:** Change SE fc2.bias initialization from 0 (gate=0.5) to log(99)≈4.595 (gate≈0.99 ≈ identity) for all 4 blocks. 1-line change. Tests whether gate=0.5 initialization was responsible for the in_dist regression (+4.31%) by eliminating the initial 50% stream dampening.
+- **Why fresh:** Student tanjiro's #3 follow-up; orthogonal to depth-selective probe (tanjiro); tests initialization dimension of SE independently.
+
+---
+
 ## 2026-05-14 [Round 83] UTC — Round 83
 
 ### Closed: PR #2687 edward — Mixup alpha=0.2 (Zhang et al. 2018 ICLR)
