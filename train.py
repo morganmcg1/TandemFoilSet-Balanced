@@ -264,6 +264,13 @@ class Transolver(nn.Module):
             )
             for i in range(n_layers)
         ])
+        # Cross-block residual α: learnable scalar gain applied to each non-final
+        # block's output BEFORE the next block consumes it. n_layers-1 scalars
+        # (no α after the last block, whose output is already the head prediction).
+        # Init 1.0 -> identity at step 0. Scales AFTER the block's post-norm LN
+        # so non-1.0 α directly changes feature magnitudes flowing into the next
+        # block (LN cannot absorb the scale).
+        self.cross_block_alpha = nn.Parameter(torch.ones(n_layers - 1))
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -292,8 +299,13 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        n_blocks = len(self.blocks)
+        for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
+            # Apply cross-block α to non-final block outputs; the last block is
+            # the head (returns out_dim predictions) and must not be scaled.
+            if i < n_blocks - 1:
+                fx = self.cross_block_alpha[i] * fx
         return {"preds": fx}
 
 
@@ -556,6 +568,21 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Cross-block residual α diagnostic: between-block adaptivity at a fresh axis
+# (in-block γ closed at all granularities by #2940/#2964/#2977/#2988).
+# α scales each non-final block's output AFTER its post-norm LN — non-1.0
+# values directly modulate feature magnitudes into the next block. Last
+# block's head output is unscaled (no following block).
+_inner_for_alpha = getattr(model, "_orig_mod", model)
+_alpha_init = _inner_for_alpha.cross_block_alpha.detach().cpu().tolist()
+print(
+    f"Cross-block residual α (#3006): {_inner_for_alpha.cross_block_alpha.shape[0]} learnable scalars "
+    f"(+{_inner_for_alpha.cross_block_alpha.numel()} params) applied between adjacent TransolverBlocks; "
+    f"init={[f'{a:.4f}' for a in _alpha_init]} (all 1.0 — identity at step 0); "
+    f"in-block γ_attn / γ_mlp UNCHANGED (constant 1.0 from #2964); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.0382 (#2964 NEW baseline)"
+)
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -849,6 +876,24 @@ for epoch in range(MAX_EPOCHS):
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
 
+    # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
+    # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
+    if (epoch + 1) in (1, 10, 30, 60):
+        _inner_alpha = getattr(model, "_orig_mod", model)
+        _alphas = _inner_alpha.cross_block_alpha.detach().cpu().float().tolist()
+        print(
+            f"  cross-block α @ ep{epoch+1}: " + ", ".join(
+                f"α_{ai}={v:.4f}" for ai, v in enumerate(_alphas)
+            )
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "cross_block_alpha",
+            "epoch": epoch + 1,
+            "alpha_values": _alphas,
+            "alpha_mean": sum(_alphas) / max(len(_alphas), 1),
+            "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
+        })
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -903,6 +948,22 @@ if best_metrics:
             "gamma_mlp_abs_mean": abs(_gm),
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Cross-block α at best checkpoint — final values after loading best weights.
+    _alpha_best = _inner.cross_block_alpha.detach().cpu().float().tolist()
+    _alpha_best_log = {
+        "event": "cross_block_alpha_best",
+        "epoch": int(best_metrics["epoch"]),
+        "alpha_values": _alpha_best,
+        "alpha_mean": sum(_alpha_best) / max(len(_alpha_best), 1),
+        "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alpha_best) / max(len(_alpha_best), 1),
+    }
+    print(
+        "\nCross-block α at best checkpoint: "
+        + ", ".join(f"α_{ai}={v:.4f}" for ai, v in enumerate(_alpha_best))
+        + f" (mean={_alpha_best_log['alpha_mean']:.4f}, |Δ|/n={_alpha_best_log['alpha_abs_mean_deviation']:.4f})"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, _alpha_best_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
