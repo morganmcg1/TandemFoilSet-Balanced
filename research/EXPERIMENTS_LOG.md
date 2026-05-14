@@ -2,6 +2,89 @@
 
 ---
 
+## 2026-05-14 [Round 107] UTC — PR #2848: SE bottleneck post-GELU Dropout p=0.1 — **CLOSED LOSS (+1.31% val)**
+
+- **Branch:** charliepai2g48h5-tanjiro/se-bottleneck-dropout
+- **Hypothesis:** Insert `nn.Dropout(p=0.1)` between GELU and fc2 in SE bottleneck. Test the implicit-sparsification reading of #2814 (GELU hard-masking is beneficial regularization that dropout would stack on). +0 params.
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-bottleneck-dropout-20260514-073007/metrics.jsonl`
+
+| Split | val | Baseline #2810 | Δ val |
+|---|---|---|---|
+| `single_in_dist` | 26.2293 | 25.2751 | **+3.78% LOSS (WORST hit)** |
+| `geom_camber_rc` | 46.8036 | 45.8179 | +2.15% LOSS |
+| `geom_camber_cruise` | 17.0287 | 16.8427 | +1.10% LOSS |
+| `re_rand` | 35.1193 | 35.6177 | **−1.40% WIN (only)** |
+| **val_avg** | **31.2952** | **30.8909** | **+1.31% LOSS** |
+| **test_avg** | **26.4491** | **26.1964** | **+0.96% LOSS** |
+
+- **Result:** NOT MERGED. val +1.31% LOSS; test +0.96% LOSS. Param count unchanged at 333,700.
+- **Mechanism FALSIFIED — exemplary student diagnostic:**
+  - **gelu_zero_frac collapsed to 0.0 across all splits** vs expected 16-26% from PR #2759 GeGLU diagnostic. GELU's hard-masking is NOT a fixed intrinsic property — it's data-dependent on what fc1 produces.
+  - The optimizer **moved fc1's outputs into GELU's positive linear regime** to recover signal-to-noise from dropout noise. The two regularizers don't stack — they compete, and the network picks the lower-informational-cost one.
+  - **SE gate selectivity collapsed:** gate_std 0.20-0.34 → 0.045-0.132; gate_min 0.001-0.02 → 0.10-0.38. Gate became near-uniformly half-open (range 0.38-0.62 on in_dist) → SE doing almost no channel selection.
+  - Dropout zeroing fc1→fc2 paths during training penalizes sharp channel-conditional gates → optimizer converges to soft, robust, near-identity gate (the antithesis of SE's purpose).
+- **Re-interpretation of #2814 SE GELU→SiLU LOSS:** The right reading isn't "GELU's 16-26% sparsity is useful" — it's likely "GELU's smoother gradient near zero (vs SiLU) is what matters" OR "the gate range distribution shifts under SiLU in a way that hurts". Dropout doesn't recover the GELU advantage; it pushes the network in yet another direction.
+- **76th taxon: SE bottleneck channel dropout CLOSES.** Combined with closed DropPath #2722 (residual zeroing) and closed attention dropout #2828 (sdpa attn-prob + to_out), **stochastic-channel-zeroing meta-axis 3-direction CLOSED** across all major architectural sites.
+
+---
+
+## 2026-05-14 [Round 107] UTC — PR #2820: EMA-of-weights decay=0.9999 — **CLOSED LOSS (+6.46% val vs new baseline)**
+
+- **Branch:** charliepai2g48h5-edward/ema-weights-decay9999
+- **Hypothesis:** Maintain shadow state dict EMA of model weights with decay=0.9999, evaluate from EMA snapshot at best-val checkpoint and test. Mechanism: Polyak averaging smooths Lion+cosine trajectory; flat-minima generalize better OOD. +0 trainable params.
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-ema-weights-decay9999-20260514-072747/metrics.jsonl`
+
+Note: PR scoped against OLD baseline 31.3216 (PR #2765) before #2810 merged. New baseline is 30.8909.
+
+| Split | val_ema (ep60) | val_base (ep58, same run) | new baseline #2810 | EMA−base | Δ vs new baseline |
+|---|---|---|---|---|---|
+| `single_in_dist` | 26.7604 | 27.6099 | 25.2751 | −0.85 EMA WIN | +5.88% LOSS |
+| `geom_camber_rc` | 49.0434 | 49.1773 | 45.8179 | −0.13 EMA WIN | +7.04% LOSS |
+| `geom_camber_cruise` | 19.0128 | 19.3644 | 16.8427 | −0.35 EMA WIN | +12.88% LOSS |
+| `re_rand` | 36.7221 | 36.0171 | 35.6177 | +0.71 base wins | +3.10% LOSS |
+| **val_avg** | **32.8847** | **33.0422** | **30.8909** | **−0.16 EMA WIN** | **+6.46% LOSS** |
+| **test_avg** | **27.4119** | **28.0115** | **26.1964** | **−0.60 EMA WIN all 4 splits** | **+4.66% LOSS** |
+
+- **Result:** NOT MERGED. Mechanism worked but training-budget cost killed it.
+- **Mechanism WORKED — exemplary student diagnostic:**
+  - EMA descended monotonically from ep7; lapped base from ~ep10 with gap up to −27 in high-LR mid-training, shrinking to −0.5 to −1.7 in cosine endgame.
+  - Test EMA−base = −0.60 on ALL 4 splits = stronger than val (re_rand only val regress at +0.71 vs base).
+  - EMA-best ep60 vs base-best ep58 = +2 epochs later AS PREDICTED.
+- **CRITICAL: EMA-base L2 drift = 2.60%** vs predicted 5-15%. **Lion + cosine + 70 epochs at this model scale already produces a relatively flat trajectory** → EMA's headroom is structurally bounded.
+- **Training-budget cost killed it:** Each epoch ~30s vs baseline ~28s due to double-validation passes (base + EMA). Net = 4 lost epochs. Baseline reached 31.32 at ep64; this run capped at ep60 with val_ema still descending toward ~32.0-32.5. Per-epoch generalization gain < per-epoch training-budget cost.
+- **77th taxon: EMA-of-weights at decay=0.9999 CLOSES.** Combined with closed SWA #2567 (28th) + Lookahead #2740 (55th) + SAM #2761 (60th) + Mixup #2687 + DropPath #2722 + Weight Standardization #2739 + Deep Supervision #2778 + Gradient Centralization #2710 + prior closed EMA #2735 (different decay), **training-procedure / weight-averaging / flat-minima-escape meta-family COMPREHENSIVELY MAPPED on this codebase**.
+
+---
+
+## 2026-05-14 [Round 107] UTC — PR #2859: MishGLU (SwiGLU gate SiLU → Mish) — **ASSIGNED (81st candidate axis)**
+
+- **Branch:** charliepai2g48h5-tanjiro/mishglu
+- **Hypothesis:** Replace SiLU with Mish (Misra 2019) in the SwiGLU MLP gate. Mish = `x * tanh(softplus(x))`. 3rd direction in gate-activation sub-axis:
+  - GeGLU (gelu gate): CLOSED LOSS #2759 (gate_zero_frac 16-26% hard-masking)
+  - SwiGLU (silu gate): MERGED WIN #2741 (gate_zero_frac 1.3-2.4%)
+  - MishGLU (mish gate): this experiment, untested
+- **Predicted mechanism (WIN):** Mish's smoother gradient yields slightly better optimization; gate_zero_frac stays low; OOD splits benefit marginally.
+- **Predicted mechanism (LOSS):** Mish ≈ SiLU on this task; washes within noise; OR Mish's asymmetric negative-bump introduces regularization that hurts.
+- **Param impact:** +0 params (1-line `act_fn=F.silu` → `act_fn=F.mish`).
+- **Plateau-protocol pivot:** Tanjiro's SE-axis is fully closed (r=8/4/2 width + GELU/SiLU inner + attn-pool + GELU+dropout). MLP-body gate-activation is structurally distinct site.
+
+---
+
+## 2026-05-14 [Round 107] UTC — PR #2860: Gradient clipping max_norm=1.0 — **ASSIGNED (82nd candidate axis)**
+
+- **Branch:** charliepai2g48h5-edward/grad-clip-1
+- **Hypothesis:** Add `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` after `loss.backward()` and before `optimizer.step()`. NEVER tested in this launch.
+- **Sub-axis:** Numerical-stability within training-procedure family — distinct from EMA/SWA/Lookahead/SAM/Mixup/DropPath/WeightStandardization/DeepSupervision/GradientCentralization (all closed).
+- **Mechanism (Chen 2023 Lion paper recommendation):** Lion's sign-step gives implicit gradient regularization (each update bounded magnitude per dimension). Explicit gradient norm clipping is complementary — bounds the TOTAL update direction. Lion's exp_avg buffer accumulates gradient magnitudes, so per-step gradient outliers can perturb exp_avg in ways that flip its sign on subsequent steps. Clipping removes rare gradient spikes that perturb exp_avg.
+- **Edward's prior #2820 EMA diagnostic confirmed:** Lion + cosine produces 2.6% L2 drift = relatively flat trajectory. Clipping might further smooth.
+- **Predicted mechanism (WIN):** Spike clipping reduces rare exp_avg perturbations; val drops 0.3-1.0%. `clip_fired_frac` should be 1-10%.
+- **Predicted mechanism (WASH, most likely):** Clipping fires <2% of steps; minimal effect; val within ±0.3% of baseline.
+- **Predicted mechanism (LOSS):** Lion+cosine already smooth enough; clipping at 1.0 too aggressive; val regresses.
+- **Param impact:** +0 params, ~1-3ms/step overhead (negligible).
+- **Diagnostic to log:** `grad_norm_mean_train_epoch`, `grad_norm_max_train_epoch`, `clip_fired_frac_train_epoch` per training epoch.
+
+---
+
 ## 2026-05-14 [Round 106] UTC — PR #2844: Block-3-only FiLM (Re/AoA conditioning at final decoder block) — **CLOSED LOSS (+0.245% val)**
 
 - **Branch:** charliepai2g48h5-nezuko/block3-film
