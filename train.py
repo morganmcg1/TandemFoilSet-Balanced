@@ -177,7 +177,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False, film_re_hidden: int = 128):
+                 film_re=False, film_re_hidden: int = 128,
+                 film_re_depth: int = 1):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -200,11 +201,23 @@ class TransolverBlock(nn.Module):
             # Identity init (last-linear weight=0, bias=1) sets γ≡1 at epoch 0
             # so the model matches baseline exactly until γ drifts.
             # γ MLP hidden width = film_re_hidden (PR #2948 capacity scan).
-            self.film_gamma = nn.Sequential(
-                nn.Linear(1, film_re_hidden),
-                nn.GELU(),
-                nn.Linear(film_re_hidden, hidden_dim),
-            )
+            # film_re_depth = number of hidden layers (PR #2990 depth scan).
+            if film_re_depth == 1:
+                self.film_gamma = nn.Sequential(
+                    nn.Linear(1, film_re_hidden),
+                    nn.GELU(),
+                    nn.Linear(film_re_hidden, hidden_dim),
+                )
+            elif film_re_depth == 2:
+                self.film_gamma = nn.Sequential(
+                    nn.Linear(1, film_re_hidden),
+                    nn.GELU(),
+                    nn.Linear(film_re_hidden, film_re_hidden),
+                    nn.GELU(),
+                    nn.Linear(film_re_hidden, hidden_dim),
+                )
+            else:
+                raise ValueError(f"film_re_depth must be 1 or 2, got {film_re_depth}")
 
     def forward(self, fx, mask=None, log_re=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
@@ -227,6 +240,7 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
+                 film_re_depth: int = 1,
                  log_re_x_index: int = 13):
         super().__init__()
         self.ref = ref
@@ -236,6 +250,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
+        self.film_re_depth = film_re_depth
         self.log_re_x_index = log_re_x_index
 
         if self.unified_pos:
@@ -253,6 +268,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 film_re=film_re, film_re_hidden=film_re_hidden,
+                film_re_depth=film_re_depth,
             )
             for i in range(n_layers)
         ])
@@ -480,6 +496,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    film_re_depth: int = 1  # γ MLP number of hidden layers (default 1 = current; PR #2990 depth scan)
 
 
 cfg = sp.parse(Config)
@@ -522,13 +539,34 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    film_re_depth=cfg.film_re_depth,  # γ MLP depth (PR #2990 depth scan)
 )
 
 model = Transolver(**model_config).to(device)
 model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+# Per-block γ MLP param count: depth=1 → 2*Linear(1,H)+Linear(H,n_hidden);
+# depth=2 adds an extra Linear(H,H) hidden layer.
+_film_hidden = cfg.film_re_hidden
+_n_hidden = model_config["n_hidden"]
+if cfg.film_re_depth == 1:
+    _gamma_params_per_block = (
+        (1 * _film_hidden + _film_hidden)              # Linear(1, H): W + b
+        + (_film_hidden * _n_hidden + _n_hidden)       # Linear(H, n_hidden): W + b
+    )
+elif cfg.film_re_depth == 2:
+    _gamma_params_per_block = (
+        (1 * _film_hidden + _film_hidden)              # Linear(1, H): W + b
+        + (_film_hidden * _film_hidden + _film_hidden) # Linear(H, H): W + b
+        + (_film_hidden * _n_hidden + _n_hidden)       # Linear(H, n_hidden): W + b
+    )
+else:
+    _gamma_params_per_block = 0
+print(
+    f"[init] FiLM-Re γ MLP: hidden={cfg.film_re_hidden}, depth={cfg.film_re_depth}; "
+    f"total γ params per block = {_gamma_params_per_block}"
+)
 
 optimizer = Lion(
     model.parameters(),
