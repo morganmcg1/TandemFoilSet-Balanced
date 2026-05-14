@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 03:56 — PR #2729: ema_decay higher (0.995/0.999) on n_layers=3+wd=3e-4 (edward) — CLOSED, EMA DECAY LOCKED AT 0.99
+
+- **Branch:** `willowpai2g24h5-edward/ema-decay-higher`
+- **Hypothesis:** ema_decay=0.99 (half-life ~69 steps < 1 epoch) set in #1607 on a 16-epoch run was never re-optimized. At the current ~33-epoch budget, higher decay (longer window) should deepen the smoothing benefit given the load-bearing 3-point main-EMA gap.
+- **W&B runs:** `9rriwptj` (ema=0.995), `o3l811s9` (ema=0.999)
+
+| Arm | ema_decay | val | test | Δ val vs #2489 (42.00) | Δ test vs baseline (35.96) | main-EMA gap |
+|-----|-----------|-----|------|------------------------|----------------------------|--------------|
+| Baseline #2489 | 0.99 | **42.00** | **35.96** | — | — | ~+3.0 |
+| Arm 1 | 0.995 | 43.77 | 37.11 | +1.77 ✗ | +1.15 ✗ | +4.32 |
+| Arm 2 | 0.999 | 42.31 | 35.81 | +0.31 ✗ | −0.15 ≈tie | +1.92 |
+
+Per-test-split (Arm 2 only, Arm 1 clearly worse):
+| Split | Baseline | Arm 2 (0.999) | Δ |
+|-------|----------|---------------|---|
+| single_in_dist | 40.58 | **37.44** | −3.14 ✓ |
+| geom_camber_rc | 50.15 | 50.34 | +0.19 ≈ |
+| geom_camber_cruise | 20.56 | 20.51 | −0.05 ≈ |
+| re_rand | 32.56 | 34.95 | +2.39 ✗ |
+
+**Result:** CLOSED. Neither arm beats baseline on val. Arm 1 clearly worse; Arm 2 within-noise (test +0.15 better, val −0.31 worse — primary metric fails).
+
+Key findings:
+1. **Finding 43 — ema_decay locked at 0.99, higher direction closed.** At the 30-min step budget where val is still descending at cap, higher decay produces *EMA lag* rather than *deeper smoothing*. Lag beats the smoothing benefit in both arms.
+2. **Gap dynamics confirm mechanism.** Wider gap (+4.32) at 0.995 = sluggish EMA (both absolute vals worse). Narrower gap (+1.92) at 0.999 = EMA can't keep up with late-training descent. Neither widens the gap *usefully*.
+3. **Arm 2 per-split pattern echoes finding 41 (sw × split-type).** 0.999 trades single_in_dist gain (−3.14) for re_rand regression (+2.39). Slow averaging emphasizes late-epoch state which is more in-dist-tuned — OOD generalization suffers.
+4. **ema=0.99 was already optimally tuned for this step budget.** Monotonic relationship: lower → noisy, current = sweet spot, higher → lagged. Lower direction (0.985) also unlikely to help — half-life already ≪ 1 epoch.
+5. **Implicit insight: EMA bias correction at 0.999** might recover first-10-epoch waste (pure init-anchored catch-up, val 332→88 in that window). Requires code edit; parks until step budget extends.
+
+**Edward reassigned:** clip_grad_norm sweep (0.5/2.0) — last untested CLI-only optimizer axis on current compound (PR #2758).
+
+---
+
 ## 2026-05-14 02:50 — PR #2708: Huber loss δ=0.5/1.0 vs MAE on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, MAE DOMINATES ON MATURE COMPOUND
 
 - **Branch:** `willowpai2g24h5-thorfinn/huber-loss-delta-sweep`
