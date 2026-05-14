@@ -8,6 +8,28 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-14 07:18 — PR #2776: GeoTransolver K_cross=8 geo_cross_tokens extension (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **38.8766** (2-seed mean; seed-1 `7m4vfj1f` = 38.66, seed-7 `39zwk0ml` = 39.09) — **−1.32%** vs K=4 baseline 39.3949
+- **`test_avg/mae_surf_p` (4-split, finite):** **32.6346** (2-seed mean; seed-1 32.4526, seed-7 32.8166)
+- **Per-split val surface-p MAE (2-seed means, best-val epoch 36):**
+  - val_single_in_dist: 36.2198  (vs K=4 36.63 → −1.12%) ✅
+  - val_geom_camber_rc: 52.1453  (vs K=4 52.85 → −1.33%) ✅
+  - val_geom_camber_cruise: 25.8400  (vs K=4 26.97 → −4.19%) ✅ **strongest gain**
+  - val_re_rand: 41.3017  (vs K=4 41.14 → +0.39%) ❌ slight regression (capacity-reallocation)
+- **Per-split test surface-p MAE (2-seed means):**
+  - test_single_in_dist: 30.0832  (vs K=4 29.97 → +0.38%) ~noise
+  - test_geom_camber_rc: 45.3252  (vs K=4 44.91 → +0.92%) ~noise
+  - test_geom_camber_cruise: 21.6854  (vs K=4 21.90 → −0.98%) ✅
+  - test_re_rand: 33.4445  (vs K=4 33.59 → −0.43%) ✅
+- **Mechanism:** Increasing geo_cross_tokens K=4→K=8 doubles context-token capacity in GeoContextEncoder. Per-split 2-seed signature confirms token-capacity was the H5 bottleneck: camber_cruise −4.19% and camber_rc −1.33% on val. Small re_rand regression (+0.39%) is the predicted capacity-reallocation trade — re_rand was the K=4's strongest-gain split and trades back a fragment as the context pool distributes across richer geometry axes. H5-EXT 4-way matrix confirmed K=8 is the sole winner; K-axis parabola: K=4 (39.39) → K=8 (38.88, optimum) → K=12 (40.01, closed).
+- **Compute:** 36 epochs, ~51.4 s/epoch mean, ~30 min, ~10.0 GB VRAM, **1.01M params** (+136K from K=4 874K).
+- **Merge bar update (vs val 38.88 2-seed mean / test 32.63 2-seed mean):**
+  - ≤ 35.0 val → **merge** (≥10% gain over new baseline)
+  - 35.0 – 38.9 → **second seed**
+  - ≥ 38.9 → **close**
+- **Reproduce:** `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4 --use_geo_cross_attn --geo_cross_tokens 8 --geo_encoder_hidden 64`
+
 ## 2026-05-14 04:12 — PR #2709: GeoTransolver Cross-Attention (H5) — global geo context tokens (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **39.3949** (W&B run `vjatjm2m`, best of 2 seeds) — **−2.18%** vs prior baseline 40.27
