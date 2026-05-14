@@ -545,14 +545,18 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            # Huber β=0.5 for Ux/Uy (channels 0,1); pinball τ=0.55 for pressure (channel 2).
+            # Pinball τ=0.55 on all three channels (Ux, Uy, p).
             # Pinball: ρ_τ(r) = max(τ*r, (τ-1)*r) with r = y - ŷ.
-            # τ=0.55 biases the model toward over-predicting pressure when residuals are
-            # small (CFD pressure surrogates known to under-predict suction peaks).
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            # τ=0.55 puts 10% extra weight on positive residuals (under-prediction),
+            # biasing the model toward higher predictions. Extends PR #2801 (pressure
+            # only) to test whether velocity channels share the same directional bias.
+            residual_Ux = y_norm[..., 0] - pred[..., 0]
+            residual_Uy = y_norm[..., 1] - pred[..., 1]
             residual_p = y_norm[..., 2] - pred[..., 2]
+            pinball_Ux = torch.where(residual_Ux >= 0, 0.55 * residual_Ux, -0.45 * residual_Ux)
+            pinball_Uy = torch.where(residual_Uy >= 0, 0.55 * residual_Uy, -0.45 * residual_Uy)
             pinball_p = torch.where(residual_p >= 0, 0.55 * residual_p, -0.45 * residual_p)
-            err = torch.stack([huber_err[..., 0], huber_err[..., 1], pinball_p], dim=-1)
+            err = torch.stack([pinball_Ux, pinball_Uy, pinball_p], dim=-1)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -560,20 +564,23 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
-            # Diagnostic: signed residual mean for pressure on surface and volume
-            # nodes. If pinball τ=0.55 is shifting the bias as hypothesized, surf
-            # signed residual should drift toward small negative (over-prediction).
-            # Critical check given Lion's sign() update can wash out pinball's
-            # magnitude asymmetry — bias shift confirms the mechanism is alive.
+            # Diagnostic: signed residual mean per channel on surface and volume
+            # nodes. If τ=0.55 is correctly aligned with the bias direction, the
+            # signed residual should drift toward small negative (over-prediction)
+            # after training. A persistently positive sign means the channel still
+            # under-predicts — the asymmetry should help. A negative sign at start
+            # means the channel over-predicts — τ=0.55 is misaligned for that channel.
             with torch.no_grad():
                 vol_mask_f = vol_mask.float()
                 surf_mask_f = surf_mask.float()
-                p_signed_vol = (
-                    (residual_p * vol_mask_f).sum() / vol_mask_f.sum().clamp(min=1)
-                )
-                p_signed_surf = (
-                    (residual_p * surf_mask_f).sum() / surf_mask_f.sum().clamp(min=1)
-                )
+                vol_denom = vol_mask_f.sum().clamp(min=1)
+                surf_denom = surf_mask_f.sum().clamp(min=1)
+                ux_signed_vol = (residual_Ux * vol_mask_f).sum() / vol_denom
+                ux_signed_surf = (residual_Ux * surf_mask_f).sum() / surf_denom
+                uy_signed_vol = (residual_Uy * vol_mask_f).sum() / vol_denom
+                uy_signed_surf = (residual_Uy * surf_mask_f).sum() / surf_denom
+                p_signed_vol = (residual_p * vol_mask_f).sum() / vol_denom
+                p_signed_surf = (residual_p * surf_mask_f).sum() / surf_denom
 
         optimizer.zero_grad()
         loss.backward()
@@ -583,6 +590,10 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/ux_signed_residual_vol": ux_signed_vol.item(),
+            "train/ux_signed_residual_surf": ux_signed_surf.item(),
+            "train/uy_signed_residual_vol": uy_signed_vol.item(),
+            "train/uy_signed_residual_surf": uy_signed_surf.item(),
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
             "global_step": global_step,
