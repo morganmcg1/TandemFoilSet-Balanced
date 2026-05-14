@@ -5,13 +5,53 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Six winners merged.** PR #2967 (askeladd, OneCycleLR horizon extension --epochs 35) is the
-current baseline at `val_avg/mae_surf_p = 54.475` (-17.4% vs PR #2954).
-All subsequent experiments MUST use `--compile_model` and `--epochs 35`.
-Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model`
-VRAM footprint ~24 GB. Throughput: ~50 s/epoch. All 35 epochs fit in 29.8 min.
+**Seven winners merged.** PR #1582 (alphonse, surf_weight=5) is the
+current baseline at `val_avg/mae_surf_p = 53.482` (-1.82% vs PR #2967).
+Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5`
+VRAM footprint ~24 GB. Throughput: ~50.9 s/epoch. All 35 epochs fit in 29.7 min.
 
-## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension --epochs 35 (askeladd) ← CURRENT BEST
+## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline (alphonse) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **53.482**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **46.104**
+- **Improvement vs PR #2967:** -1.82% val / -2.00% test
+- **Best epoch:** 35/35 configured (all fit in 29.7 min)
+- **Key change:** `--surf_weight 5` reduces the surface:volume loss scalar from 10 to 5.
+  The default sw=10 was over-weighting the surface loss; sw=5 gives better surf:vol balance.
+  Effect survives migration from cosine/L1/15ep → OneCycleLR/L1/bf16/compile/35ep recipe.
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 37.156 |
+| val_re_rand | 53.973 |
+| val_single_in_dist | 56.283 |
+| val_geom_camber_rc | 66.515 |
+| **val_avg** | **53.482** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 30.178 |
+| test_re_rand | 46.258 |
+| test_single_in_dist | 47.954 |
+| test_geom_camber_rc | 60.027 |
+| **test_avg** | **46.104** |
+
+- **Metric artifacts:** `models/model-sw5-onecycle-ep35-compiled-20260514-184607/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 \
+  --agent charliepai2g48h1-alphonse --experiment_name sw5-onecycle-ep35-compiled
+```
+
+Note: `--surf_weight 5 --compile_model --epochs 35` is now the **required baseline recipe**.
+
+## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension --epochs 35 (askeladd) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **54.475**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **47.043**
