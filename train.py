@@ -79,6 +79,44 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+class Lookahead:
+    """Lookahead optimizer wrapper (Zhang et al., 2019).
+
+    Maintains slow weights that lag the inner optimizer's fast weights. Every k
+    inner steps the slow weights interpolate toward fast: slow += alpha*(fast - slow),
+    and fast is snapped back to slow. The inner optimizer's momentum buffers are
+    preserved across slow updates — only parameter values are reset.
+    """
+    def __init__(self, base_optimizer, k=5, alpha=0.5):
+        self.optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.slow_state = {}
+        for group in self.optimizer.param_groups:
+            for p in group["params"]:
+                self.slow_state[id(p)] = p.data.detach().clone()
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.optimizer.step(closure)
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            for group in self.optimizer.param_groups:
+                for p in group["params"]:
+                    slow = self.slow_state[id(p)]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none=True):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -483,13 +521,17 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = Lion(
+base_optimizer = Lion(
     model.parameters(),
     lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
     weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
     betas=(0.9, 0.99),       # Lion-paper default
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# Wrap Lion in Lookahead(k=5, alpha=0.5) for outer-loop variance reduction.
+optimizer = Lookahead(base_optimizer, k=5, alpha=0.5)
+# Scheduler points at the inner optimizer so the isinstance(Optimizer) check
+# passes; param_groups are shared with the wrapper so cosine LR updates flow.
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -503,6 +545,11 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "optimizer": "Lookahead(Lion)",
+        "lookahead_k": optimizer.k,
+        "lookahead_alpha": optimizer.alpha,
+        "lion_betas": (0.9, 0.99),
+        "lion_lr": cfg.lr * 0.15,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -590,6 +637,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "lookahead/step_count": optimizer.step_count,
+        "lookahead/slow_updates": optimizer.step_count // optimizer.k,
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
