@@ -103,7 +103,70 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+        # 2D coord-based RoPE buffers (zero params; precomputed frequency table).
+        # d_head=48 split axially: first 24 channels rotated by x-coord angle,
+        # last 24 by y-coord angle. Each half is 12 rotation pairs.
+        half_d = dim_head // 4  # 12 frequency pairs per axis
+        self.register_buffer(
+            "rope_freq_x",
+            10000.0 ** (-torch.arange(0, half_d, dtype=torch.float32) / half_d),
+        )
+        self.register_buffer(
+            "rope_freq_y",
+            10000.0 ** (-torch.arange(0, half_d, dtype=torch.float32) / half_d),
+        )
+
+    def apply_2d_rope(self, qk, slice_coords):
+        """Apply 2D coord-based RoPE to qk tensor of shape (B, H, G, d_head).
+
+        slice_coords: (B, H, G, 2) — per-head, per-slice (x, y) centers in
+        normalized coord space. Axial channel layout: first d_head/2 channels
+        rotated by x-coord angles, second d_head/2 by y-coord angles. Each
+        half is split into pairs (a, b) that rotate as
+            (a, b) -> (a*cos - b*sin, a*sin + b*cos).
+        """
+        B, H, G, d = qk.shape
+        half_d = d // 4  # 12 frequency pairs per axis
+
+        # Compute in float32 for sin/cos precision under bf16 autocast.
+        sc = slice_coords.float()
+        x_coords = sc[..., 0]                                # (B, H, G)
+        y_coords = sc[..., 1]
+        theta_x = x_coords.unsqueeze(-1) * self.rope_freq_x  # (B, H, G, half_d)
+        theta_y = y_coords.unsqueeze(-1) * self.rope_freq_y
+        cos_x, sin_x = torch.cos(theta_x), torch.sin(theta_x)
+        cos_y, sin_y = torch.cos(theta_y), torch.sin(theta_y)
+
+        # Split channels axially: first half x-rotation, second half y-rotation.
+        qk_f = qk.float()
+        qk_x = qk_f[..., : 2 * half_d]                       # (B, H, G, 24)
+        qk_y = qk_f[..., 2 * half_d :]
+
+        qk_x_pairs = qk_x.reshape(B, H, G, half_d, 2)
+        qk_x_a, qk_x_b = qk_x_pairs[..., 0], qk_x_pairs[..., 1]
+        qk_x_a_rot = qk_x_a * cos_x - qk_x_b * sin_x
+        qk_x_b_rot = qk_x_a * sin_x + qk_x_b * cos_x
+        qk_x_rot = torch.stack([qk_x_a_rot, qk_x_b_rot], dim=-1).reshape(
+            B, H, G, 2 * half_d
+        )
+
+        qk_y_pairs = qk_y.reshape(B, H, G, half_d, 2)
+        qk_y_a, qk_y_b = qk_y_pairs[..., 0], qk_y_pairs[..., 1]
+        qk_y_a_rot = qk_y_a * cos_y - qk_y_b * sin_y
+        qk_y_b_rot = qk_y_a * sin_y + qk_y_b * cos_y
+        qk_y_rot = torch.stack([qk_y_a_rot, qk_y_b_rot], dim=-1).reshape(
+            B, H, G, 2 * half_d
+        )
+
+        return torch.cat([qk_x_rot, qk_y_rot], dim=-1).to(qk.dtype)
+
+    def forward(self, x, coords, mask=None):
+        """coords: (B, N, 2) — normalized (x, y) per node with padded coords
+        already zeroed by the caller. mask: optional (B, N) bool, True for
+        real nodes. Used to derive each slice's center as the weighted mean
+        of node coords under slice_weights, with padded nodes excluded from
+        both numerator (via zeroed coords) and denominator (via masked
+        slice_weights sum)."""
         B, N, _ = x.shape
 
         fx_mid = (
@@ -123,9 +186,25 @@ class PhysicsAttention(nn.Module):
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
+        # Slice-center coords: weighted mean of node coords using slice_weights.
+        # coords already has padded positions zeroed in the caller.
+        if mask is not None:
+            # Exclude padded nodes from slice-coord denominator: scale weights
+            # by mask before summing so padded nodes don't inflate the norm.
+            mask_f = mask.to(slice_weights.dtype).unsqueeze(1).unsqueeze(-1)  # (B, 1, N, 1)
+            slice_weights_for_coords = slice_weights * mask_f
+            slice_norm_for_coords = slice_weights_for_coords.sum(2)
+        else:
+            slice_norm_for_coords = slice_norm
+        slice_coords = torch.einsum("bhng,bnc->bhgc", slice_weights, coords)
+        slice_coords = slice_coords / (slice_norm_for_coords.unsqueeze(-1) + 1e-5)
+
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        # 2D RoPE on Q, K (V unchanged) — spatial-aware slice attention.
+        q = self.apply_2d_rope(q, slice_coords)
+        k = self.apply_2d_rope(k, slice_coords)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
@@ -160,8 +239,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, coords, mask=None):
+        fx = self.gamma_attn * self.attn(self.ln_1(fx), coords, mask) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -218,6 +297,13 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # Normalized (x, y) coords per node from channels 0, 1. Zero out
+        # padded positions so they don't bias slice-center coordinates used by
+        # 2D RoPE inside PhysicsAttention.
+        coords = x[..., :2]
+        mask = data.get("mask")
+        if mask is not None:
+            coords = coords * mask.to(coords.dtype).unsqueeze(-1)
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
@@ -225,7 +311,7 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, coords, mask)
         return {"preds": fx}
 
 
@@ -255,7 +341,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx_factory():
-                pred = model({"x": x_norm})["preds"]
+                pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()
 
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
@@ -478,6 +564,52 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# 2D coord-based RoPE diagnostics (per #2675) ------------------------------
+# Verify each TransolverBlock attention has the expected freq buffers.
+for _i, _blk in enumerate(model.blocks):
+    _has_fx = hasattr(_blk.attn, "rope_freq_x") and isinstance(_blk.attn.rope_freq_x, torch.Tensor)
+    _has_fy = hasattr(_blk.attn, "rope_freq_y") and isinstance(_blk.attn.rope_freq_y, torch.Tensor)
+    print(f"  Block {_i}: rope_freq_x exists={_has_fx} ({_blk.attn.rope_freq_x.shape if _has_fx else None}) "
+          f"rope_freq_y exists={_has_fy}")
+# Print first block's freq values to verify formula.
+_fx0 = model.blocks[0].attn.rope_freq_x
+print(f"  rope_freq_x (block 0): {_fx0.tolist()}")
+
+# Verify coord range on first train batch.
+_sample_x, _sample_y, _sample_surf, _sample_mask = next(iter(train_loader))
+_sample_x = _sample_x.to(device)
+_sample_mask = _sample_mask.to(device)
+_sample_x_norm = (_sample_x - stats["x_mean"]) / stats["x_std"]
+_coords_norm = _sample_x_norm[..., :2]
+_real = _sample_mask
+print(
+    f"  Coord range (normalized, real nodes only): "
+    f"x in [{_coords_norm[..., 0][_real].min().item():.3f}, {_coords_norm[..., 0][_real].max().item():.3f}], "
+    f"y in [{_coords_norm[..., 1][_real].min().item():.3f}, {_coords_norm[..., 1][_real].max().item():.3f}]"
+)
+
+# Pre/post rotation diagnostic: confirm rotation actually occurs at non-zero
+# coords. Pass coord=0 (identity) and coord=1 (non-trivial rotation) through
+# apply_2d_rope and check the deltas.
+_blk0_attn = model.blocks[0].attn
+_qk_test = torch.randn(1, _blk0_attn.heads, 1, _blk0_attn.dim_head, device=device)
+_coord_zero = torch.zeros(1, _blk0_attn.heads, 1, 2, device=device)
+_coord_one = torch.ones(1, _blk0_attn.heads, 1, 2, device=device)
+_qk_zero = _blk0_attn.apply_2d_rope(_qk_test, _coord_zero)
+_qk_one = _blk0_attn.apply_2d_rope(_qk_test, _coord_one)
+_diff_zero = (_qk_test - _qk_zero).abs().mean().item()
+_diff_one = (_qk_test - _qk_one).abs().mean().item()
+print(
+    f"  RoPE rotation sanity: |qk - rope(qk, coord=0)|.mean = {_diff_zero:.6e} (should be ~0); "
+    f"|qk - rope(qk, coord=1)|.mean = {_diff_one:.6e} (should be > 0)"
+)
+print(
+    "  2D coord-based RoPE on Q, K: spatial-aware slice attention via per-block "
+    "slice-center (x, y) rotations; V unchanged; +0 params (just buffers); "
+    "axial channel layout (first d_head/2 by x, second d_head/2 by y); "
+    "baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -599,7 +731,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
