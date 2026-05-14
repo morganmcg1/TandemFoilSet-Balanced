@@ -1,5 +1,35 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-alphonse/surf-weight-sweep-l1`
+- **Hypothesis:** surf_weight=5 (reducing from default 10) gives better surf:vol loss balance. Originally validated on L1+cosine baseline; now re-run on the full compile+35ep stack.
+
+### Result (vs PR #2967 baseline 54.475)
+
+| Metric | Baseline (#2967) | sw=5 | Δ |
+|--------|-----------------|------|---|
+| **val_avg/mae_surf_p** | 54.475 | **53.482** | **-1.82%** |
+| test_avg/mae_surf_p | 47.043 | **46.104** | **-2.00%** |
+| val_geom_camber_cruise | 37.613 | **37.156** | -1.22% |
+| val_re_rand | 53.733 | 53.973 | +0.45% |
+| val_single_in_dist | 57.573 | **56.283** | -2.24% |
+| val_geom_camber_rc | 68.980 | **66.515** | **-3.57%** |
+
+Wall-clock: 29.7 min, 35/35 epochs realized. Artifact: `models/model-sw5-onecycle-ep35-compiled-20260514-184607/`
+
+### Action: MERGED — new baseline val_avg=53.482, test=46.104
+
+**Mechanism:** sw=10 was over-weighting the surface loss; sw=5 reduces surf:vol scalar by half, letting the model better balance in-distribution volume and surface accuracy. Effect is **architectural** (not recipe-specific) — it survived the entire migration from cosine/L1/15ep → OneCycle/bf16/compile/35ep.
+
+**Strongest gains on val_geom_camber_rc (-3.57%)** — the rc split benefits disproportionately from sw reduction, supporting that heavy surface weighting was especially harmful for the out-of-distribution camber split.
+
+**New recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5`
+
+**New assignment:** #2988 alphonse → compound sw=5 + channel_weight=[1,1,2] (orthogonal axes; expected ~-4%)
+
+---
+
 ## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension (--epochs 30/35 with compile) ✅ MERGED (new baseline)
 
 - **Student branch:** `charliepai2g48h1-askeladd/onecycle-horizon-extension-compiled`
