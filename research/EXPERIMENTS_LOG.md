@@ -2828,3 +2828,33 @@ Per-split test surf_p: single_in_dist −3.1% (wins), geom_camber_rc +0.8% (regr
 - Hypothesis: Mixup on (Re, AoA) conditioning variables AND targets simultaneously (λ~Beta(α,α)). Forces model to interpolate predictions over conditioning manifold rather than memorize discrete training points. Direct OOD regularizer targeting geom_camber_rc's unseen Re/AoA regime combinations.
 - Arms: α=0.2 (mild, s1), α=0.4 (moderate, s2, seed=2)
 - Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 17:10 — PR #2895: Y-flip compound (fern, CLOSED — FiLM-Re mechanism overlap)
+- Branch: `willowpai2g48h3-fern/yflip-augmentation`
+- Hypothesis: y-flip data aug (cruise-gated) compounds with σ=0.07+FiLM-Re baseline.
+
+### Results (σ=0.07 + FiLM-Re + y-flip compound, 2 seeds)
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 `u7ljvhr3` | — | 35.84 | 30.99 |
+| s2 `zf4jj3vu` | — | 34.97 | 30.73 |
+| **Mean** | — | **35.41** | **30.86** |
+| 14th-shift bar | — | 34.55 | 28.95 |
+
+Per-split test surf_p (mean, vs 14th-shift bar): single_in_dist=33.17 (+2.0%), **geom_camber_rc=41.72 (−0.6%)** ← only split that wins, **geom_camber_cruise=19.28 (+27%) ← DIRECTLY AUGMENTED, REGRESSES SHARPLY**, re_rand=29.29 (+12.3%).
+
+**Mechanism:** y-flip on σ=0.05 alone wins (−5.6% val, all 4 splits improve). On σ=0.07+FiLM-Re, y-flip HURTS, especially the directly-augmented cruise split. FiLM-Re's per-block γ(log Re) is already specialized; y-flipping cruise inputs forces same γ to handle two distinct input distributions, diluting specialization. Late-block γ_w_L2 → 4.4-4.9 amplifies feature-space perturbations from the flip.
+
+**Conclusion:** **Closed** — y-flip and FiLM-Re mechanisms overlap (both add "Re-regime feature diversity"). Y-flip training-time augmentation axis retired at FiLM-Re baseline. Student's TTA suggestion (apply y-flip at inference, average predictions) recorded as future paper-facing follow-up.
+
+---
+
+## 2026-05-14 17:15 — PR #2965: Fourier-encoded Re input to FiLM-Re γ MLP fern (ASSIGNED)
+- Branch: `willowpai2g48h3-fern/fourier-re-film`
+- Hypothesis: Replace scalar log(Re) input to FiLM-Re γ MLP with [log(Re), sin(2^k π z), cos(2^k π z) for k=0..K-1] Fourier features (z = normalized log Re). MLPs have low-frequency bias when fed scalar inputs; Fourier features let γ MLP express more rapidly-varying Re-dependent feature scalings. Late blocks (γ_w_L2 → 5.2 with depth) may be input-bottlenecked.
+- Arms: K=2 (s1, input dim=5), K=4 (s2, input dim=9, seed=2)
+- Orthogonal to tanjiro #2948 (which widens γ MLP at fixed input dim). Combined later if both win.
+- Merge bar: mean val < 34.55, mean test < 28.95

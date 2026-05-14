@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 16:45
+- **Date:** 2026-05-14 17:15
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -53,7 +53,7 @@
 - **Per-block lr scaling (#2959 alphonse):** Late blocks do OOD work (FiLM-Re γ_w_L2 grows with depth) — give them higher lr without overshooting IID. Direct resolution of the trade-off from #2942.
 - **Conditioning Mixup (#2960 frieren):** Interpolate (Re, AoA) + targets during training to regularize across conditioning manifold. Direct OOD gap attack — model never saw interpolated conditions during training.
 - **FiLM-AoA (#2886 thorfinn):** Sent back for σ=0.07+FiLM-Re compound. AoA-conditional γ_w permutation (uniform across blocks, different mechanism from FiLM-Re depth-monotone γ_bias). Orthogonal compound potential.
-- **Y-flip (#2895 fern):** Sent back for σ=0.07+FiLM-Re rerun. 2× effective data free.
+- **Fourier-Re-FiLM (#2965 fern):** Replace scalar log(Re) input to γ MLP with Fourier features (K=2, K=4) — combats MLP low-frequency bias on Re-conditioning. Orthogonal to tanjiro #2948 (capacity vs input information).
 - **Output head depth (#2943 edward):** 3-layer and 4-layer MLP head to decode richer FiLM-Re feature manifold.
 - **FiLM-Re γ MLP capacity (#2948 tanjiro):** 2× and 4× γ MLP hidden dim to test conditioning bottleneck.
 - **Slice softmax temperature (#2953 askeladd):** τ=0.5 (sharper) and τ=2.0 (smoother) on PhysicsAttention. Fundamental Transolver knob, never touched.
@@ -66,7 +66,7 @@
 | #2959 | alphonse | Per-block lr scaling: late blocks (2-4) get 1.5× or 2.0× lr | ASSIGNED 2026-05-14 16:40 |
 | #2960 | frieren | Conditioning-variable Mixup: α=0.2 (s1), α=0.4 (s2) | ASSIGNED 2026-05-14 16:45 |
 | #2886 | thorfinn | γ-only FiLM-AoA: per-block AoA conditioning (sent back for σ=0.07+FiLM-Re compound) | WIP (sent back) |
-| #2895 | fern | Y-flip data augmentation (flow y-equivariance, sent back) | WIP (sent back) |
+| #2965 | fern | Fourier-encoded Re input to FiLM-Re γ MLP (K=2, K=4) | ASSIGNED 2026-05-14 17:15 |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
 | #2943 | edward | Output head depth scan (head_depth=3/4) | WIP |
 | #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× and 4× γ width | WIP |
@@ -77,6 +77,7 @@
 - #2909 (askeladd PP-loss) — all 4 splits regress +11-29%. h⁴ weighting kills boundary-layer signal; +70% wall-clock overhead binding.
 - #2902 (frieren SwiGLU compound) — val=34.72 misses by +0.49%. NOT orthogonal to FiLM-Re; redundant conditioning path.
 - #2942 (alphonse Lion-lr) — lr=6e-5 ≈ baseline; lr=9e-5 trade-off (wins camber_rc, loses single_in_dist). lr=7.5e-5 confirmed optimal. Axis closed; motivates per-block lr.
+- #2895 (fern y-flip compound on σ=0.07+FiLM-Re) — val=35.41, test=30.86. NOT orthogonal: directly-augmented cruise split regresses +27% (15.19→19.28). FiLM-Re's per-sample γ specialization is diluted by mirrored cruise inputs. Y-flip training-time aug retired at FiLM-Re baseline.
 
 ## Key meta-findings
 
@@ -89,6 +90,7 @@
 7. **geom_camber_rc is structural OOD** — responds to conditioning + physical regularization axes; Re/AoA FiLM + conditioning Mixup are the two most promising direct interventions.
 8. **SwiGLU mechanism insight** — SwiGLU gained on σ=0.05 by compensating under-conditioning that FiLM-Re now provides. FFN-capacity axes not orthogonal when Re-conditioning is already rich.
 9. **Global lr cannot resolve OOD-vs-IID split trade-off** — lr=9e-5 wins geom_camber_rc but hurts single_in_dist. Per-block lr scaling is the natural resolution.
+10. **Mechanism overlap surfacing at 14th-shift basin** — both SwiGLU (#2902) and y-flip (#2895) helped on σ=0.05 but regress on σ=0.07+FiLM-Re. Both mechanisms add "Re-regime feature diversity" that FiLM-Re now provides explicitly. Pattern suggests aug/capacity axes that helped at σ=0.05 are increasingly likely to overlap with FiLM-Re at 14th shift; emphasis must shift to genuinely orthogonal axes (input enrichment, optimizer geometry, decoder capacity).
 
 ## Currently retired axes
 
@@ -122,9 +124,10 @@
 1. **FiLM dual conditioning (Re + AoA compound)** — natural compound if thorfinn #2886 (FiLM-AoA) wins; combine into single joint (Re, AoA) conditioning per block
 2. **Slice softmax temperature bracketing** — if #2953 wins at τ=0.5, try τ=0.3; if at τ=2.0, try τ=4.0
 3. **Per-block lr sharpening** — if #2959 wins, try late_block_start=3 (only block 4 boosted) for sharper targeting
-4. **Fourier Re embedding into γ MLP** — richer conditioning input for FiLM: log(Re) + sin/cos(πk·log(Re)) for K=4
-5. **SWA revisit at new baseline** — variance reduction may pair better with σ=0.07+FiLM-Re stronger base
-6. **Conditioning Mixup with geometric features** — extend cond-mixup to include foil shape parameters (camber, chord) to directly target geom_camber_rc
+4. ~~**Fourier Re embedding into γ MLP**~~ — ACTIVE as #2965 (fern)
+5. **Y-flip TTA at inference** — apply y-flip on eligible (cruise) test samples and average predictions in physical space. Free at training (training-time y-flip retired per #2895). Paper-facing finishing move.
+6. **SWA revisit at new baseline** — variance reduction may pair better with σ=0.07+FiLM-Re stronger base
+7. **Conditioning Mixup with geometric features** — extend cond-mixup to include foil shape parameters (camber, chord) to directly target geom_camber_rc
 
 ### Medium-term
 
