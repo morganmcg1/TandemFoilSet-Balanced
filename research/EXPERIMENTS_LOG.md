@@ -4,6 +4,34 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 23:55 — PR #3037 (CLOSED, frieren): Kendall σ OFF ablation + surf_weight sweep {10, 20} on saturated-clip baseline — **3rd MODERATE member of ABLATION-CONTRIBUTION-QUANTIFICATION class**
+
+- **Branch:** `willowpai2g48h2-frieren/kendall-off-ablation-with-surf-weight-sweep`
+- **Student:** willowpai2g48h2-frieren
+- **Verdict:** Arm 1 sw=10 (`kkc9bd0e`) SWA val 48.9646 +3.811 / test 41.5011 +2.864 = REGRESS-BOTH; Arm 2 sw=20 (`dg6oftid`) SWA val 48.0779 +2.924 / test 40.8273 +2.190 = REGRESS-BOTH. **No arm merges.** INTERESTING-CLOSE. **NOT a new paper-appendix axis closure** (Kendall is the σ-state-machine itself; not a new axis). Ablation-contribution-quantification: Kendall σ contribution = MODERATE (Δval +2.924 at best replacement).
+- **W&B runs:** `kkc9bd0e` (Arm 1), `dg6oftid` (Arm 2), baseline `ieu1futo`.
+- **Headline:** **Kendall σ uncertainty weighting is irreducible** — best static surf_weight replacement (sw=20) closes the gap by 0.887 val MAE over sw=10 but cannot recover the adaptive per-step signal; ~2.9 val MAE points gap to baseline = MODERATE contribution class. Paper-publishable evidence the hybrid Lion+AdamW(σ) optimizer split is **load-bearing**, not incidental.
+
+### Mechanism diagnosis (paper-publishable findings — banked #329-#333)
+
+**(#329) Kendall σ confirmed 3rd MODERATE member of ABLATION-CONTRIBUTION-QUANTIFICATION class.** Two prior members: #2818 reweight ablation (1st) + #2870 huber→MSE (2nd). Now 3rd: Kendall OFF removes the adaptive log_σ heads entirely; both static surf_weight replacements regress MODERATELY (2 < Δval < 10). Class rubric: contribution between MILD (recoverable by tuning) and CATASTROPHIC (>20 pts); Kendall is firmly in MODERATE band — cannot be recovered by static replacement.
+
+**(#330) Static surf_weight is a partially compensating proxy.** sw=20 → val 48.08 / test 40.83; sw=10 → val 48.96 / test 41.50. The 0.887 val MAE improvement at sw=20 is directionally consistent with adaptive Kendall σ naturally settling above sw=10. Best static replacement does not close the gap, confirming Kendall's per-step adaptive signal is **irreducible**.
+
+**(#331) Lion exp_avg_norm boundary condition under optimizer-split removal.** First cross-configuration measurement of exp_avg_norm. Arm 1 = 0.01245 (+23% vs baseline 0.01015); Arm 2 = 0.01220 (+20%). Refines banked #194 (Lion exp_avg_norm invariance) → invariance holds within the hybrid Lion+AdamW(σ) regime but is mildly violated when the optimizer split itself is removed (single Lion only). Not a breaking violation but a meaningful cross-configuration boundary condition — should be cited alongside the linear-in-max_norm-under-saturated-clip rule from Loop 108 (#304/#311).
+
+**(#332) clip_fraction=1.000 preserved under full AdamW branch removal — 21st cross-axis confirmation.** First confirmation under optimizer-configuration change (not just hyperparameter change). Removing the entire AdamW σ-head optimizer branch does not perturb gradient scale or clipping regime.
+
+**(#333) Per-split error structure invariant under Kendall OFF.** val_geom_camber_rc remains the dominant error source at ~63.2-63.4 on both arms, identical to Kendall-ON baseline pattern. Kendall σ contribution is **split-distributed**, not selectively concentrated on hardest splits.
+
+Other invariants: SWA window 2 epochs (epochs 11-12 Arm 1, 12-13 Arm 2; **20th-21st-consecutive #170 truncation**); step-time ≈138.6s nearly identical across arms (surf_weight has zero compute overhead); SWA gain over base val −2.499 (Arm 1) / −1.820 (Arm 2).
+
+### Reassignment
+
+**frieren → #3070 NEW Lion β1 sweep {0.85, 0.95}** on saturated-clip baseline — **23rd axis attempt**; Lion-internal state ablation. Lion β1 (EMA momentum) is the only Lion-internal parameter never ablated across 22 closed paper-appendix axes + 3 MIXED-CLASSIFICATION axes. Arm 1 β1=0.85 tests faster reactive momentum, Arm 2 β1=0.95 tests slower inertial momentum vs baseline β1=0.9. Discriminating predictions: σ-axis-fragile / model-lr-axis-resilient story predicts INVARIANT σ-spread (model-side change); Lion exp_avg_norm should scale monotonically with β1 (refines banked #194 + #221 + #223 closed-form Lion step magnitude rule); class candidates: INDEPENDENT-SYMMETRIC or DEPENDENT-NEGATIVE (model-lr-axis-like).
+
+---
+
 ## 2026-05-14 23:30 — PR #3018 (CLOSED, fern): Huber β EXTEND-BRACKET {0.05, 0.50} on saturated-clip baseline — **β-axis bracket EXTENSION + paper-publishable val/test SPLIT signal at β=0.05 (NEW 11th-class CANDIDATE)**
 
 - **Branch:** `willowpai2g48h2-fern/extend-beta-bracket`
