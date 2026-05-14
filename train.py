@@ -83,12 +83,15 @@ class MLP(nn.Module):
 
 
 class SwiGLUMLP(nn.Module):
-    """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * W_value x).
+    """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * up_act(W_up x)).
 
     Param-matched vs. MLP(d, d*mlp_ratio, d): hidden = round(d*mlp_ratio*2/3)
     snapped to a multiple of 8 for tensor-core alignment. 3 matrices of
     d*hidden_swiglu vs. 2 matrices of d*hidden_full keeps Linear param count
     near-identical (within ~0.2% at d=96, mlp_ratio=2).
+
+    Round 112 (#2875): Squared ReLU (Primer 2022) on up-projection. The linear
+    `value` path becomes `relu(W_up x).pow(2)`, complementing the SiLU gate.
     """
     def __init__(self, n_input, n_hidden_full, n_output, act_fn=F.silu):
         super().__init__()
@@ -101,8 +104,8 @@ class SwiGLUMLP(nn.Module):
 
     def forward(self, x):
         gate = self.act_fn(self.linear_gate(x))
-        value = self.linear_value(x)
-        return self.linear_out(gate * value)
+        up = F.relu(self.linear_value(x)).pow(2)
+        return self.linear_out(gate * up)
 
 
 class PhysicsAttention(nn.Module):
@@ -570,9 +573,10 @@ _std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
     f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
     f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
-    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
+    f"gate_act=SiLU; up_act=Squared ReLU (Primer 2022 #2875); "
+    f"total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
-    f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+    f"baseline to beat: val_avg/mae_surf_p < 30.8909"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -969,9 +973,11 @@ if best_metrics:
             with torch.no_grad():
                 gate_pre = module.linear_gate(x)
                 gate_post = module.act_fn(gate_pre).detach().float()
-                value = module.linear_value(x).detach().float()
+                value_pre = module.linear_value(x).detach().float()
+                # Round 112 (#2875): up-projection now uses Squared ReLU
+                up_post = F.relu(value_pre).pow(2)
                 flat_g = gate_post.flatten()
-                flat_v = value.flatten()
+                flat_v = up_post.flatten()
                 # Correlation in a fixed-size random subsample to avoid GPU OOM
                 # on big meshes (242K nodes × 128 hidden = 31M elements).
                 n_sub = min(flat_g.numel(), 200_000)
@@ -989,8 +995,12 @@ if best_metrics:
                     "gate_std": float(gate_post.std().cpu()),
                     "gate_abs_mean": float(gate_post.abs().mean().cpu()),
                     "gate_zero_frac": float((gate_post.abs() < 0.01).float().mean().cpu()),
-                    "value_abs_mean": float(value.abs().mean().cpu()),
+                    "value_abs_mean": float(up_post.abs().mean().cpu()),
                     "gate_value_corr": corr,
+                    "up_act_mean": float(up_post.mean().cpu()),
+                    "up_act_std": float(up_post.std().cpu()),
+                    "up_act_max": float(up_post.max().cpu()),
+                    "up_act_zero_frac": float((value_pre <= 0).float().mean().cpu()),
                 }))
         return _hook
 
@@ -1007,17 +1017,24 @@ if best_metrics:
     for _h in _swiglu_handles:
         _h.remove()
 
-    print("\nSwiGLU gate stats per block (sample val batch, best-checkpoint weights):")
+    print("\nSwiGLU gate + up-projection stats per block (sample val batch, best-checkpoint weights):")
     _swiglu_log = {"event": "swiglu_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    _max_up = 0.0
     for _idx, _stats in _swiglu_captured:
         print(
             f"  SwiGLU block[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
             f"std={_stats['gate_std']:.4f}  abs_mean={_stats['gate_abs_mean']:.4f}  "
             f"zero_frac={_stats['gate_zero_frac']:.4f}  "
-            f"value_abs_mean={_stats['value_abs_mean']:.4f}  "
-            f"corr(gate,value)={_stats['gate_value_corr']:.4f}"
+            f"up_act_mean={_stats['up_act_mean']:.4f}  "
+            f"up_act_std={_stats['up_act_std']:.4f}  "
+            f"up_act_max={_stats['up_act_max']:.4f}  "
+            f"up_act_zero_frac={_stats['up_act_zero_frac']:.4f}  "
+            f"corr(gate,up)={_stats['gate_value_corr']:.4f}"
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
+        _max_up = max(_max_up, _stats['up_act_max'])
+    if _max_up > 100.0:
+        print(f"  ⚠ up_act_max={_max_up:.2f} exceeds 100 — potential bf16 overflow risk")
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
 
     test_metrics = None
