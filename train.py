@@ -490,6 +490,40 @@ def measure_attention_entropies(
 # Training
 # ---------------------------------------------------------------------------
 
+
+def bernoulli_consistency_loss(
+    pred: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+) -> torch.Tensor:
+    """H93: soft Bernoulli total-head consistency on surface nodes.
+
+    In incompressible inviscid flow, ``q = p + 0.5*(Ux^2 + Uy^2)`` is
+    approximately constant along a streamline. On airfoil surfaces this
+    yields a per-sample physical anchor: penalise the per-sample variance
+    of ``q`` across valid surface nodes. Predictions are denormalised to
+    physical units before computing ``q`` so the constraint operates on
+    the conserved physical quantity, not its normalised image.
+
+    Returns the unweighted scalar penalty (mean over batch); the caller
+    multiplies by ``lambda_bern``.
+    """
+    pred_phys = pred * y_std + y_mean                      # [B, N, 3]
+    Ux = pred_phys[..., 0]
+    Uy = pred_phys[..., 1]
+    p = pred_phys[..., 2]
+    q = p + 0.5 * (Ux * Ux + Uy * Uy)                       # [B, N]
+
+    surf_mask = (is_surface & mask).to(q.dtype)            # [B, N]
+    denom = surf_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+    q_mean = (q * surf_mask).sum(dim=1, keepdim=True) / denom  # [B, 1]
+    q_diff = (q - q_mean) ** 2 * surf_mask
+    var_q = q_diff.sum(dim=1) / denom.squeeze(1)           # [B]
+    return var_q.mean()
+
+
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
@@ -505,6 +539,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # H93: Bernoulli consistency aux loss (physics-informed).
+    aux_loss: str = "none"          # "none" or "bernoulli"
+    lambda_bern: float = 0.02       # Bernoulli loss weight
 
 
 cfg = sp.parse(Config)
@@ -700,6 +737,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_bern = 0.0          # H93: raw (unweighted) Bernoulli variance, per-batch mean
+    epoch_bern_weighted = 0.0 # H93: lambda * raw, what's actually added to the loss
+    epoch_main = 0.0          # H93: vol + surf_weight * surf, what existed before H93
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -721,7 +761,19 @@ for epoch in range(MAX_EPOCHS):
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
         surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
         surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # H93: Bernoulli consistency aux loss (physics-informed).
+        if cfg.aux_loss == "bernoulli":
+            bern_raw = bernoulli_consistency_loss(
+                pred, is_surface, mask, stats["y_mean"], stats["y_std"],
+            )
+            bern_term = cfg.lambda_bern * bern_raw
+            loss = main_loss + bern_term
+            epoch_bern += float(bern_raw.detach().item())
+            epoch_bern_weighted += float(bern_term.detach().item())
+        else:
+            loss = main_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -737,10 +789,14 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_main += float(main_loss.detach().item())  # H93: track main-loss magnitude for ratio
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_bern /= max(n_batches, 1)
+    epoch_bern_weighted /= max(n_batches, 1)
+    epoch_main /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -768,6 +824,8 @@ for epoch in range(MAX_EPOCHS):
     freqs_lr = optimizer.param_groups[1]["lr"]
     layer_scale_lr = optimizer.param_groups[2]["lr"]
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
+    # H93: ratio of Bernoulli term to main loss for sanity-checking lambda.
+    bern_ratio = (epoch_bern_weighted / epoch_main) if epoch_main > 0.0 else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -785,6 +843,13 @@ for epoch in range(MAX_EPOCHS):
         "train/attn_sharpening_factor": current_attn_factor,
         "train/attn_anneal_frac": anneal_frac,
         "train/attn_anneal_n_epochs": N_ANNEAL_EPOCHS,
+        # H93: Bernoulli aux-loss diagnostics.
+        "train/aux_loss": cfg.aux_loss,
+        "train/lambda_bern": cfg.lambda_bern if cfg.aux_loss == "bernoulli" else 0.0,
+        "train/bern_raw": epoch_bern,
+        "train/bern_weighted": epoch_bern_weighted,
+        "train/main_loss": epoch_main,
+        "train/bern_to_main_ratio": bern_ratio,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -792,7 +857,9 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        + (f"bern[raw={epoch_bern:.4f} wt={epoch_bern_weighted:.4f} ratio={bern_ratio*100:.2f}%]  "
+           if cfg.aux_loss == "bernoulli" else "")
+        + f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
         f"    freqs (lr={freqs_lr:.2e}): "
