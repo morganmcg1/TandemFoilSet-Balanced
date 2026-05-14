@@ -520,7 +520,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=96,
-    n_layers=4,
+    n_layers=5,
     n_head=2,
     slice_num=24,
     mlp_ratio=3,
@@ -530,7 +530,7 @@ model_config = dict(
 print(f"slice_num: {model_config['slice_num']}")
 print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
-print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
+print(f"Depth: n_layers={model_config['n_layers']} (TransolverBlock x {model_config['n_layers']}) — depth-UP probe (PR #2997, +1 block from baseline #2964 n_layers=4); tests budget/capacity-limited hypothesis")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
 
 model = Transolver(**model_config).to(device)
