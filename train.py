@@ -101,6 +101,8 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        self.q_norm = nn.LayerNorm(dim_head)
+        self.k_norm = nn.LayerNorm(dim_head)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
     def forward(self, x):
@@ -123,8 +125,8 @@ class PhysicsAttention(nn.Module):
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
-        q = self.to_q(slice_token)
-        k = self.to_k(slice_token)
+        q = self.q_norm(self.to_q(slice_token))
+        k = self.k_norm(self.to_k(slice_token))
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
@@ -468,6 +470,18 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# --- QK-Norm verification: confirm per-block q_norm/k_norm presence ---
+for _i, _block in enumerate(model.blocks):
+    _has_q_norm = hasattr(_block.attn, 'q_norm') and isinstance(_block.attn.q_norm, nn.LayerNorm)
+    _has_k_norm = hasattr(_block.attn, 'k_norm') and isinstance(_block.attn.k_norm, nn.LayerNorm)
+    print(f"  Block {_i}: q_norm={_has_q_norm}, k_norm={_has_k_norm}")
+print(
+    f"QK-Norm: per-block LayerNorm(dim_head={model_config['n_hidden'] // model_config['n_head']}) on Q and K projections "
+    f"(V unchanged); +768 params over #2614 (328,619); targets Q·K magnitude drift / softmax saturation; "
+    f"baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -578,6 +592,60 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+
+
+def measure_qk_norms(model_ref, val_loader, stats_ref, device_ref, amp_ctx, tag: str) -> dict:
+    """Run one batch and capture per-block mean ||q||, ||k|| (pre-norm) via forward hooks.
+
+    Inputs to q_norm/k_norm are post-projection but pre-normalization, so they reflect
+    the magnitude that QK-Norm is stabilizing.
+    """
+    inner = getattr(model_ref, "_orig_mod", model_ref)
+    pre_q_means: list[float] = [0.0] * len(inner.blocks)
+    pre_k_means: list[float] = [0.0] * len(inner.blocks)
+    handles = []
+
+    def make_hook(idx: int, store: list):
+        def hook(_mod, inp, _out):
+            t = inp[0].detach().float()
+            store[idx] = t.norm(dim=-1).mean().item()
+        return hook
+
+    for i, blk in enumerate(inner.blocks):
+        handles.append(blk.attn.q_norm.register_forward_hook(make_hook(i, pre_q_means)))
+        handles.append(blk.attn.k_norm.register_forward_hook(make_hook(i, pre_k_means)))
+
+    model_ref.eval()
+    try:
+        with torch.no_grad():
+            x_b, _y_b, _is_b, _m_b = next(iter(val_loader))
+            x_b = x_b.to(device_ref, non_blocking=True)
+            x_norm = (x_b - stats_ref["x_mean"]) / stats_ref["x_std"]
+            with amp_ctx():
+                _ = model_ref({"x": x_norm})
+    finally:
+        for h in handles:
+            h.remove()
+
+    diag = {
+        "event": "qk_norm_diagnostic",
+        "tag": tag,
+        "blocks": [
+            {"block_idx": i, "pre_q_norm_mean": pre_q_means[i], "pre_k_norm_mean": pre_k_means[i]}
+            for i in range(len(inner.blocks))
+        ],
+    }
+    print(f"\nQK-Norm pre-norm magnitudes ({tag}):")
+    for i in range(len(inner.blocks)):
+        print(f"  block[{i}]: ||q||_mean={pre_q_means[i]:.4f}  ||k||_mean={pre_k_means[i]:.4f}")
+    return diag
+
+
+_qk_start_diag = measure_qk_norms(
+    model, val_loaders["val_re_rand"], stats, device, amp_ctx_factory, tag="train_start"
+)
+append_metrics_jsonl(metrics_jsonl_path, _qk_start_diag)
+
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -692,6 +760,13 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+
+    # QK-Norm end-of-training diagnostic on best checkpoint
+    _qk_end_diag = measure_qk_norms(
+        model, val_loaders["val_re_rand"], stats, device, amp_ctx_factory, tag="best_ckpt"
+    )
+    _qk_end_diag["epoch"] = int(best_metrics["epoch"])
+    append_metrics_jsonl(metrics_jsonl_path, _qk_end_diag)
 
     # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
     _inner = getattr(model, "_orig_mod", model)
