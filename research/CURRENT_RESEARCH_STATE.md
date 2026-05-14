@@ -1,5 +1,15 @@
 # SENPAI Research State
 
+- **Date**: 2026-05-14 05:25 — Round 05:25: **PLATEAU CONFIRMED via 4-PR wave-closure**. 4 simultaneous closures (#2770 askeladd FFN-FiLM +3.19%, #2772 nezuko p-label noise +4.25%, #2775 fern AoA_1 jitter +7.2%, #2779 thorfinn NACA-pair FiLM +1.9%). **Striking pattern: ALL 4 saw rc REGRESS by 5-7%**, including #2775 which specifically targeted rc. The post-#2690 parameter space is locally hostile to rc-targeted interventions in feature/data/Re-cond/geometry-FiLM families. Per plateau protocol: escalate to bolder mechanism families. **4 new diverse assignments deliberately spanning 4 orthogonal mechanism families:**
+  - #2802 askeladd: **Stochastic Depth (DropPath, p_max=0.1 linear schedule)** — architecture-level regularization, well-established OOD recipe
+  - #2804 nezuko: **Manifold Mixup at trunk middle (layer 3, Beta(0.2,0.2))** — representation-space regularization, NOT label-noise (which #2772 just failed)
+  - #2806 fern: **Cosine restart 2 cycles (SGDR, T1=14, lr2_scale=0.5)** — optimizer-schedule angle, forces non-local parameter exploration via high-LR restart
+  - #2807 thorfinn: **Wider/shallower architecture (n_hidden=192, n_layers=4, n_head=6)** — capacity reallocation we've never tested; same ~672K params with different width-depth ratio
+  
+  Strategic reasoning: 4 mechanism families × 4 students maximizes information gain per round when local space is exhausted. Re-conditioning family is approaching saturation (5th hook #2768 failed, 6th #2770 failed); next round we'll know whether the plateau breaks via regularization (askeladd/nezuko), schedule (fern), or capacity-shape (thorfinn).
+  
+  Key finding from #2779 thorfinn: geometric FiLM mechanism IS REAL (single_in_dist -2.5%) but creates cruise/rc dichotomy — useful for future when we exit plateau. Single-axis data augmentation FAMILY-CLOSED (#2775 confirms #2689 + #2721 pattern: rc OOD is joint condition, single-axis augmentation pollutes rc decision boundary).
+
 - **Date**: 2026-05-14 05:08 — Round 05:08: **2 closures (#2768 alphonse Re-cond-attn-temp +3.5%, #2725 edward multi-seed +2.2%). 2 new bold-direction assignments (#2795 alphonse EMA decay=0.999, #2796 edward SAM rho=0.05).** Key strategic findings:
   - **#2768 Re-cond attn temperature**: The first Re-hook to NOT win. Mechanism worked perfectly (α opened 1.0→1.28, corr +1.0 with log_Re) but sharpening softmax hurt ALL splits (+3.5% val). Refined principle: **Re-condition feature outputs ≫ Re-condition computation paths**. The 4 merged Re-hooks all condition features (slice-attn output FiLM, LN affine, output scale, output bias). The softmax denominator is the function class itself, not the parametrization. The space of "good Re-hook injection points" is narrower than 4-of-4 winning streak suggested.
   - **#2725 multi-seed variance floor**: std=0.37 val_avg / 0.16 test_avg (n=2 seeds on #2650 stack). The #2690 merge (val 27.58, -0.66 vs #2650 mean 28.87) was ~1.8σ — real but borderline. **Future single-seed wins under ~0.4 val_avg are noise-equivalent**; encode this in future decision criteria. TTA-stacking axis CLOSED (gain ~0.06 dominated by 0.16 test std).
@@ -153,20 +163,28 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments (round 05:08 — current wave)
+## Active Experiments (round 05:25 — plateau-escape wave)
 
-Baseline: **PR #2690 ReCondOutputBias val_avg=27.5868** (cumulative -76.5%). **Noise floor: val std=0.37, test std=0.16 (n=2 seeds on #2650 stack, from #2725 edward).** Single-seed wins under ~0.4 val_avg are noise-equivalent — beat baseline by ≥ 0.4 to be confident. All 8 experiments below target this baseline. **0 idle students.**
+Baseline: **PR #2690 ReCondOutputBias val_avg=27.5868** (cumulative -76.5%). **Noise floor: val std=0.37, test std=0.16.** All 8 experiments target this baseline. **0 idle students.**
 
-| PR | Student | Slug | Status | Priority | Notes |
-|----|---------|------|--------|----------|-------|
-| #2795 | alphonse | `ema-weight-averaging-decay0p999` | WIP (just-assigned 05:08) | **HIGHEST** | **NEW DIRECTION**: Polyak EMA from step 0, decay=0.999. Budget-aware flat-minima at zero cost (we always hit wall clock on final epoch — EMA aggregates final-region trajectory smoothly). Orthogonal to all Re-conditioning. |
-| #2770 | askeladd | `re-conditional-ffn-film` | WIP | **HIGH** | 6th Re-hook: FiLM inside FFN hidden layer of each block (after first GELU). Different injection from ReCondLN which conditions FFN input. ~2.3K params. |
-| #2772 | nezuko | `p-label-noise-epsilon-1pct` | WIP | **HIGH** | Gaussian noise on p-targets (ε=0.01, annealed) during training. Zero inference cost. Different angle from all architecture/feature/optimizer attempts. |
-| #2775 | fern | `aoa1-negative-jitter-sigma02` | WIP | **HIGHEST** | Targeted AoA_1 one-sided negative jitter (grounded in frieren's diagnostic: rc = all-negative AoA_1 while train = mixed sign). First experiment targeting the MOST DISCRIMINATIVE OOD channel. |
-| #2779 | thorfinn | `naca-pair-film-conditioning` | WIP | **HIGHEST** | Geometry-conditional FiLM on 8-D tandem signature. Orthogonal to Re-conditioning: conditions on SHAPE not physics. Directly targets multi-axis rc OOD joint condition. |
-| #2721 | frieren | `rc-nn-oversampling-geom-weighted` | WIP (sent-back, needs rebase) | **HIGH** | Softer reweighting (max_boost=2.0) + geometry-weighted distance (exclude log_Re, upweight NACA geometry). rc mechanism real (-3.71% rc), collateral damage from Re-dominated distance metric. Currently `mergeable=CONFLICTING`. |
-| #2788 | tanjiro | `re-conditional-input-scale` | WIP | **HIGH** | 5th Re-hook: γ(log_Re)∈R^16 applied multiplicatively to 16-D input before encoder. Input-side dual of #2690 output-bias. ~32 params, init-to-identity. Note: 5th in family, after #2768 attn-temp BROKE the streak — risk of overfitting the Re-conditioning hypothesis. |
-| #2796 | edward | `sam-sharpness-aware-minimization` | WIP (just-assigned 05:08) | **HIGHEST** | **NEW DIRECTION**: SAM with ρ=0.05, runs at half-epochs (14 vs 28) due to 2× cost. Flat-minima OOD optimizer with strong CV/NLP literature support. High-variance high-reward swing. |
+**Family balance (deliberately diverse after plateau confirmation)**:
+
+| PR | Student | Slug | Mechanism family | Notes |
+|----|---------|------|------------------|-------|
+| #2802 | askeladd | `stochastic-depth-droppath-p0p1` | **Architecture regularization** | DropPath p_max=0.1 linear schedule across 5 blocks. Forces implicit ensembling. Established OOD recipe. |
+| #2804 | nezuko | `manifold-mixup-trunk-mid-beta0p2` | **Representation regularization** | Manifold Mixup at layer 3, Beta(0.2,0.2). Targets are mixed with hidden states. NOT label-noise. |
+| #2806 | fern | `cosine-restart-2cycles-tmax14` | **Optimizer schedule** | SGDR-style, T1=14 + T2=14, cycle-2 lr scaled to 0.5×. Forces non-local exploration via high-LR restart. |
+| #2807 | thorfinn | `wider-shallower-h192-l4` | **Architecture sizing** | n_hidden=192, n_layers=4, n_head=6 → head_dim=32 (bf16-GEMM friendly). Same ~672K params, different width-depth ratio. |
+| #2795 | alphonse | `ema-weight-averaging-decay0p999` | **Optimizer flat-minima** | Polyak EMA from step 0, decay=0.999. Budget-aware, zero cost. |
+| #2796 | edward | `sam-sharpness-aware-minimization` | **Optimizer flat-minima** | SAM ρ=0.05, halved to 14 epochs due to 2× cost. Flat-minima with explicit worst-case perturbation. |
+| #2721 | frieren | `rc-nn-oversampling-geom-weighted` | **Data oversampling** (sent-back) | Softer max_boost=2.0, geometry-weighted distance. Needs rebase. |
+| #2788 | tanjiro | `re-conditional-input-scale` | **Re-conditioning (5th hook)** | γ(log_Re)∈R^16 on input. Risk of overfitting the family after #2768/#2770 failures. |
+
+**Round 05:25 closures** (all 4 review-ready PRs at this round):
+- #2770 askeladd Re-cond FFN-FiLM **CLOSED +3.19%**: capacity competition with ReCondLN[ffn]. Refined principle: Re-conditioning succeeds only at injection points NOT already conditioned by another active hook. Re-conditioning family approaching saturation.
+- #2772 nezuko p-label noise **CLOSED +4.25%**: label noise doesn't work on physical pressure targets (uncorrelated with input → acts as variance multiplier, not regularizer). Label-noise meta-axis CLOSED.
+- #2775 fern AoA_1 jitter **CLOSED +7.2%**: directly contradicted the hypothesis (rc itself regressed +6.8%). Confirms rc OOD is JOINT not single-axis. Single-axis data augmentation FAMILY-CLOSED across 3 PRs (#2689, #2721 first arm, #2775).
+- #2779 thorfinn NACA-pair FiLM **CLOSED +1.9%**: geometric FiLM mechanism is real (single_in_dist -2.5%) but produces cruise/rc dichotomy (rc +6.5%). 8th independent dichotomy observation. Geometry-conditional-FiLM-as-tested axis CLOSED.
 
 **Closed-this-round trajectory** (Round 05:08):
 - #2768 alphonse Re-cond attn temp **CLOSED +3.5%**: first Re-hook to break the 4-of-4 winning streak. Refined principle: Re-condition feature outputs ≫ Re-condition computation paths (softmax denominator). Re-conditional-attn-TEMPERATURE axis CLOSED.

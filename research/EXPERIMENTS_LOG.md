@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-05-14 05:25 — Round 05:25: PLATEAU CONFIRMED via 4-PR wave-closure
+
+Second wave of Round 02:28 assignments arrived. All 4 review-ready PRs regressed vs #2690 baseline. **Striking cross-PR pattern: all 4 saw rc REGRESS by 5-7%**, including the one that specifically targeted rc.
+
+### Cross-PR rc regression table
+
+| PR | Student | Mechanism | val_avg Δ | **rc Δ** | Other splits |
+|----|---------|-----------|----------:|---------:|-------------|
+| #2770 | askeladd | Re-cond FFN-FiLM | +3.19% | **+5.32%** | single +5.09%, cruise -1.22%, re_rand +0.60% |
+| #2772 | nezuko | p-label noise ε=0.01 | +4.25% | **+6.83%** | single +5.51%, cruise +1.86%, re_rand +0.74% |
+| #2775 | fern | AoA_1 jitter σ=0.02 | +7.2% | **+6.8%** | (all splits regressed) |
+| #2779 | thorfinn | NACA-pair FiLM | +1.9% | **+6.5%** | single -2.5% ✅, cruise -0.1%, re_rand +0.6% |
+
+**This is a plateau signal.** The post-#2690 parameter space is locally hostile to ANY rc-targeted intervention regardless of mechanism family (Re-cond, data-aug, geometry-cond, label-noise). The merged #2690 ReCondOutputBias absorbed all the easy rc gains, and the local neighborhood is exhausted.
+
+### Closures (4 PRs)
+
+**#2770 askeladd Re-cond FFN-FiLM (+3.19% val)**: Capacity competition with ReConditionalLayerNorm[ffn]. Both hooks read log_Re and condition the same FFN sub-block. ReCondLN[ffn] |γ_residual|_max dropped to 0.65 (slightly weaker than typical) while new FFN-FiLM picked up 1.03 — clean evidence of partial migration but worse final outcome. **Refined principle**: Re-conditioning succeeds only at injection points NOT already conditioned by another active hook.
+
+**#2772 nezuko p-label noise ε=0.01 (+4.25% val)**: Three failure-mode roots: (1) targets are physical (precise scalar pressure field, not categorical labels); (2) ε scaled by per-sample p-std may have been too aggressive; (3) rc gap is geometry-driven, not noise-tolerance-driven. Label noise acts as variance multiplier, not regularizer, on continuous physical targets. **Label-noise meta-axis CLOSED**.
+
+**#2775 fern AoA_1 jitter σ=0.02 (+7.2% val, rc +6.8%)**: Targeted intervention made target split WORSE. Critical finding: **AoA_1 coverage mismatch is NOT the dominant cause of the rc gap**. rc OOD is a JOINT condition — augmenting one axis breaks the joint correlation that defines real rc samples, polluting the rc decision boundary. **Third independent rc-targeted intervention to fail (after #2689, #2721 first arm)**. **Single-axis data augmentation FAMILY-CLOSED**.
+
+**#2779 thorfinn NACA-pair FiLM (+1.9% val, BUT single_in_dist -2.5%)**: Cruise/rc structural dichotomy reappears (8th independent observation). Geometric FiLM mechanism IS REAL — corr(|β|, log_Re)=0.13 (NOT Re-proxy), offset_absmax 0.21 grew from zero-init. Helps where geometry is shared (in-dist) hurts where geometry is novel (rc joint). Filing the mechanism for future use after plateau is broken. **Geometry-conditional-FiLM-as-tested axis CLOSED**.
+
+### New assignments (4 deliberately diverse mechanism families)
+
+Per plateau protocol: escalate to bolder mechanism families spanning the orthogonal directions we have NOT exhausted.
+
+**#2802 askeladd `stochastic-depth-droppath-p0p1`** (Architecture-level regularization)
+- DropPath with linear schedule (0 at block 0 → 0.1 at block 4). Standard recipe.
+- Forces implicit ensembling per Huang et al. 2016.
+- Zero new params; orthogonal to all current mechanisms.
+
+**#2804 nezuko `manifold-mixup-trunk-mid-beta0p2`** (Representation-space regularization)
+- Manifold Mixup at trunk middle layer (3 of 5), Beta(0.2, 0.2).
+- Mixes hidden states AND targets — NOT label noise (which #2772 just failed).
+- Targets representation-space smoothness for OOD interpolation.
+
+**#2806 fern `cosine-restart-2cycles-tmax14`** (Optimizer schedule)
+- SGDR-style: T1=14 + T2=14 cosine cycles with restart, lr2_scale=0.5.
+- Forces non-local parameter exploration via high-LR restart at epoch 15.
+- Plateau-breaking specifically: kicks out of cycle-1 local minimum.
+
+**#2807 thorfinn `wider-shallower-h192-l4`** (Architecture sizing)
+- n_hidden=192, n_layers=4, n_head=6 (head_dim=32, bf16-GEMM friendly).
+- Same ~672K params, different width-depth allocation.
+- Never tested. n_layers=6 failed earlier (+6.22%) — we've never tried SHALLOWER + wider.
+
+### Strategic frame for next round
+
+Round 05:25 spans 4 orthogonal mechanism families (regularization architecture, regularization representation, optimizer schedule, capacity sizing) plus the in-flight EMA/SAM optimizer-flat-minima pair (#2795/#2796) and oversampling (#2721 frieren). After this wave we'll have evidence on which family the plateau breaks in — or whether none of these work and we need to go even bolder (synthetic data, PINN losses, or backbone replacement).
+
+---
+
 ## 2026-05-14 05:08 — Round 05:08: 2 closures + 2 bold-direction assignments + noise floor calibration
 
 First wave of Round 02:28 assignments arrived. No winners — both review-ready PRs regressed vs the #2690 baseline. But the multi-seed PR delivered a critical noise-floor calibration that will shape all future merge decisions on this branch.
