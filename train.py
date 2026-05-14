@@ -545,13 +545,35 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
+            # Huber β=0.5 for Ux/Uy (channels 0,1); pinball τ=0.55 for pressure (channel 2).
+            # Pinball: ρ_τ(r) = max(τ*r, (τ-1)*r) with r = y - ŷ.
+            # τ=0.55 biases the model toward over-predicting pressure when residuals are
+            # small (CFD pressure surrogates known to under-predict suction peaks).
             huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            residual_p = y_norm[..., 2] - pred[..., 2]
+            pinball_p = torch.where(residual_p >= 0, 0.55 * residual_p, -0.45 * residual_p)
+            err = torch.stack([huber_err[..., 0], huber_err[..., 1], pinball_p], dim=-1)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Diagnostic: signed residual mean for pressure on surface and volume
+            # nodes. If pinball τ=0.55 is shifting the bias as hypothesized, surf
+            # signed residual should drift toward small negative (over-prediction).
+            # Critical check given Lion's sign() update can wash out pinball's
+            # magnitude asymmetry — bias shift confirms the mechanism is alive.
+            with torch.no_grad():
+                vol_mask_f = vol_mask.float()
+                surf_mask_f = surf_mask.float()
+                p_signed_vol = (
+                    (residual_p * vol_mask_f).sum() / vol_mask_f.sum().clamp(min=1)
+                )
+                p_signed_surf = (
+                    (residual_p * surf_mask_f).sum() / surf_mask_f.sum().clamp(min=1)
+                )
 
         optimizer.zero_grad()
         loss.backward()
@@ -561,6 +583,8 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/p_signed_residual_vol": p_signed_vol.item(),
+            "train/p_signed_residual_surf": p_signed_surf.item(),
             "global_step": global_step,
         })
 
