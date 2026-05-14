@@ -784,6 +784,19 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# SWA (Izmailov 2018) — uniform arithmetic mean of last K=10 epoch snapshots.
+# Pivots from #3020 EMA(decay=0.999) LOSS — that recipe accumulated init-lag
+# from ep1. SWA-last-K averages ONLY the late-training basin (ep51..60 for K=10
+# at 60ep schedule), excluding the rapid-descent regime entirely.
+SWA_K = 10
+SWA_START_EPOCH = max(0, MAX_EPOCHS - SWA_K)  # 0-indexed
+swa_snapshots: list[dict] = []
+print(
+    f"SWA: Izmailov 2018 — uniform arithmetic mean of last {SWA_K} epoch snapshots "
+    f"(start 0-idx ep{SWA_START_EPOCH} = 1-idx ep{SWA_START_EPOCH+1}..{MAX_EPOCHS}); "
+    f"snapshot RAM ≈ {n_params * 4 * SWA_K / 1024 / 1024:.1f} MB CPU"
+)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -894,6 +907,20 @@ for epoch in range(MAX_EPOCHS):
             "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
         })
 
+    # SWA snapshot capture (Izmailov 2018): at end of each of the last K epochs,
+    # deep-copy the full state_dict to CPU. state_dict() keys include the
+    # `_orig_mod.` prefix from torch.compile — preserved consistently across
+    # snapshot, save, and load_state_dict.
+    if epoch >= SWA_START_EPOCH:
+        snapshot = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        swa_snapshots.append(snapshot)
+        print(f"  SWA: captured snapshot at end of ep{epoch+1} (snapshot #{len(swa_snapshots)}/{SWA_K})")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "swa_snapshot",
+            "epoch": epoch + 1,
+            "snapshot_count": len(swa_snapshots),
+        })
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -915,6 +942,122 @@ append_metrics_jsonl(metrics_jsonl_path, {
     "nonzero_count": _lion_nz,
     "total_count": _lion_total,
 })
+
+# --- SWA: compute uniform arithmetic mean of last-K epoch snapshots ---
+# Evaluates RAW model (last-epoch weights) on val+test for the SWA-vs-raw delta
+# diagnostic FIRST, then averages snapshots into SWA state, saves SWA as the
+# primary checkpoint (overrides per-epoch best), loads SWA, and replaces
+# best_metrics so all downstream diagnostics + test eval run on SWA weights.
+raw_val_avg_log = None
+raw_val_splits_log = None
+raw_test_avg_log = None
+raw_test_splits_log = None
+delta_swa_raw_val_log = None
+
+if swa_snapshots:
+    n_snap = len(swa_snapshots)
+    snap_epoch_start = SWA_START_EPOCH + 1
+    snap_epoch_end = SWA_START_EPOCH + n_snap
+    print(f"\n=== SWA computation (Izmailov 2018) ===")
+    print(
+        f"SWA: averaging {n_snap} snapshots (uniform arithmetic mean) "
+        f"from epochs {snap_epoch_start}..{snap_epoch_end}"
+    )
+
+    # Raw eval on val (current model = last-epoch weights) for diagnostic.
+    model.eval()
+    raw_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        for name, loader in val_loaders.items()
+    }
+    raw_val_avg = aggregate_splits(raw_split_metrics)
+    print(f"\nRAW (last-epoch ep{snap_epoch_end}) val_avg/mae_surf_p = {raw_val_avg['avg/mae_surf_p']:.4f}")
+    for _name in VAL_SPLIT_NAMES:
+        print_split_metrics(f"RAW val/{_name}", raw_split_metrics[_name])
+    raw_val_splits_log = raw_split_metrics
+    raw_val_avg_log = raw_val_avg["avg/mae_surf_p"]
+
+    # Raw eval on test for diagnostic (if not skipping test).
+    if not cfg.skip_test:
+        print("\nEvaluating RAW (last-epoch) model on test splits...")
+        _raw_test_ds = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        _raw_test_loaders = {
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            for name, ds in _raw_test_ds.items()
+        }
+        raw_test_metrics_local = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+            for name, loader in _raw_test_loaders.items()
+        }
+        raw_test_avg = aggregate_splits(raw_test_metrics_local)
+        print(f"\nRAW (last-epoch) test_avg/mae_surf_p = {raw_test_avg['avg/mae_surf_p']:.4f}")
+        for _name in TEST_SPLIT_NAMES:
+            print_split_metrics(f"RAW test/{_name}", raw_test_metrics_local[_name])
+        raw_test_splits_log = raw_test_metrics_local
+        raw_test_avg_log = raw_test_avg["avg/mae_surf_p"]
+
+    # Compute SWA state_dict — uniform arithmetic mean of all snapshots.
+    # Float-cast for averaging, restore original dtype after; non-float buffers
+    # (e.g. int counters) get the most recent snapshot's value verbatim.
+    swa_state_dict_cpu: dict = {}
+    for key in swa_snapshots[0].keys():
+        tensor_0 = swa_snapshots[0][key]
+        if tensor_0.is_floating_point():
+            stacked = torch.stack([s[key].float() for s in swa_snapshots], dim=0)
+            swa_state_dict_cpu[key] = stacked.mean(dim=0).to(tensor_0.dtype)
+        else:
+            swa_state_dict_cpu[key] = swa_snapshots[-1][key].clone()
+
+    # Save SWA state as primary checkpoint (overrides per-epoch best).
+    torch.save(swa_state_dict_cpu, model_path)
+    print(f"\nSWA: saved averaged state to {model_path} (overrides per-epoch best checkpoint)")
+
+    # Load SWA state into model on device.
+    swa_state_dict_dev = {k: v.to(device) for k, v in swa_state_dict_cpu.items()}
+    model.load_state_dict(swa_state_dict_dev)
+    model.eval()
+
+    # Evaluate SWA model on val (primary metric).
+    swa_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_split_metrics)
+    swa_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+    print(f"\nSWA val_avg/mae_surf_p = {swa_avg_surf_p:.4f}")
+    for _name in VAL_SPLIT_NAMES:
+        print_split_metrics(f"SWA val/{_name}", swa_split_metrics[_name])
+
+    delta_swa_raw_val = swa_avg_surf_p - raw_val_avg["avg/mae_surf_p"]
+    delta_swa_raw_val_log = delta_swa_raw_val
+    print(
+        f"\nΔ SWA − RAW (val_avg/mae_surf_p) = {delta_swa_raw_val:+.4f} "
+        f"({'SWA WINS over RAW' if delta_swa_raw_val < 0 else 'RAW WINS over SWA'})"
+    )
+
+    # Override best_metrics: SWA is now the "best" checkpoint reported.
+    best_metrics = {
+        "epoch": MAX_EPOCHS,  # SWA spans last K epochs; report terminal epoch
+        "val_avg/mae_surf_p": swa_avg_surf_p,
+        "per_split": swa_split_metrics,
+    }
+    best_avg_surf_p = swa_avg_surf_p
+
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "swa_complete",
+        "swa_snapshot_count": n_snap,
+        "swa_start_epoch_1idx": snap_epoch_start,
+        "swa_end_epoch_1idx": snap_epoch_end,
+        "raw_val_avg/mae_surf_p": raw_val_avg_log,
+        "swa_val_avg/mae_surf_p": swa_avg_surf_p,
+        "delta_swa_raw_val": delta_swa_raw_val,
+        "raw_val_splits": raw_val_splits_log,
+        "swa_val_splits": swa_split_metrics,
+        "raw_test_avg/mae_surf_p": raw_test_avg_log,
+        "raw_test_splits": raw_test_splits_log,
+    })
+else:
+    print("\nWARNING: SWA produced no snapshots (training stopped before SWA_START_EPOCH). Falling back to per-epoch best checkpoint.")
 
 # --- Test evaluation + local summary ---
 if best_metrics:
