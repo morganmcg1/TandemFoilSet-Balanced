@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-14 [Round 110] UTC — PR #2858: PhysicsAttention temperature init 0.5→1.0 — **CLOSED CATASTROPHIC LOSS (+32.41% val, +32.57% test)**
+
+- **Branch:** charliepai2g48h5-nezuko/temperature-init-1
+- **Hypothesis:** Initialize PhysicsAttention slice-routing temperature at 1.0 (natural scale) instead of baseline 0.5 (2× sharper). Test whether sharper-than-default routing was an essential inductive bias or design choice never swept.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-temperature-init-1-20260514-081535/metrics.jsonl`
+
+| Val split | T=1.0 init | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | 34.9603 | 25.2751 | **+38.32% LOSS** |
+| `geom_camber_rc` | 56.3501 | 45.8179 | +22.99% LOSS |
+| `geom_camber_cruise` | 25.7488 | 16.8427 | **+52.88% LOSS** |
+| `re_rand` | 46.5296 | 35.6177 | +30.64% LOSS |
+| **val_avg** | **40.8972** | **30.8909** | **+32.41% LOSS** |
+| **test_avg** | **34.7288** | **26.1964** | **+32.57% LOSS** |
+
+- **Result:** NOT MERGED. All 4 val splits regress catastrophically; in_dist and cruise hit hardest.
+- **Mechanism — exemplary student diagnostic:**
+  - Per-block-per-head temperature trajectory showed **block-1 head-0 trained all the way to T=−1.88 by ep50** — sign-flipped negative temperature negates softmax logits causing geometric routing inversion. Block 0 sharpened to T=[+2.965, +1.864]; block 2 softened to T=[+0.747, +0.556]; block 3 sharpened to T=[+1.856, +2.295].
+  - Slice routing entropy collapsed to near-zero in 3/4 blocks: block-0 entropy=1.7e-23 (effectively one-hot), block-1 entropy=0.018 (one-hot but sign-inverted routing), block-2 entropy=0.0 (perfectly one-hot), block-3 entropy=1.019 (only block retaining meaningful spread).
+  - **Mechanism re-interpretation:** T=0.5 init was load-bearing NOT because of sharpness preference but as a **positive-basin attractor**. Starting at T=1.0 lets the optimizer freely cross zero into negative-T degenerate basin where 1/T→∞ amplifies gradients explosively, while the default-positive basin acts as an implicit attractor. This converts what looked like a hyperparameter choice into a structural property of the parameterization.
+  - OOD damage > in-dist damage on absolute scale (+38% in_dist, +53% cruise) — routing degeneracy hurts both generalization and capacity, consistent with #2809 frieren generalization-limited diagnosis.
+- **85th taxon: temperature_init upward direction CLOSES.** Reinforces #2828/#2848 thread: slice attention is structurally one-hot-attractor with limited OOD headroom; any relaxation of constraints accelerates degeneracy. Not pursuing student-suggested T=0.25 follow-up — moving nezuko to fresh axis (output-head residual gain).
+
+---
+
+## 2026-05-14 [Round 110] UTC — PR #2856: PhysicsAttention n_head 2→4 — **CLOSED LOSS (+3.71% val, +1.66% test)**
+
+- **Branch:** charliepai2g48h5-alphonse/n-head-4
+- **Hypothesis:** Test n_head=2→4 with dim_head auto-derived as 96/4=24. Predicted: per-head specialization may enable different physics scales (boundary-layer vs wake, surface vs volume routing patterns).
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-n-head-4-20260514-081344/metrics.jsonl`
+
+| Val split | n_head=4 | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | 27.3958 | 25.2751 | **+8.39% LOSS (worst hit)** |
+| `geom_camber_rc` | 46.9870 | 45.8179 | +2.55% LOSS |
+| `geom_camber_cruise` | 18.0142 | 16.8427 | +6.96% LOSS |
+| `re_rand` | 35.7499 | 35.6177 | +0.37% near-flat |
+| **val_avg** | **32.0367** | **30.8909** | **+3.71% LOSS** |
+| **test_avg** | **26.6328** | **26.1964** | **+1.66% LOSS** |
+
+- **Result:** NOT MERGED. Best ep60 (61/70 reached before 30-min timeout). Param count **310,668 = −23,032 (−6.9%)** — NOT the predicted ~0 change.
+- **Critical architectural insight:** Per-head `Linear(dim_head, dim_head)` construction in PhysicsAttention means doubling n_head 2→4 QUARTERS QKV params per block. So this was a CAPACITY-REDUCTION test (−23,032 params), NOT a head-parallelism test.
+- **Mechanism:**
+  - **Capacity-bottleneck signature:** in_dist +8.39% > cruise +6.96% > camber_rc +2.55% > re_rand +0.37% — the densely-supported distribution needs the lost representational rank most, OOD splits barely move (confirming attention rank IS in-dist capacity-bottlenecked at H=2).
+  - **No per-head specialization observed.** All 16 temperatures ended up tight in [0.42, 0.56] with per-block std 0.029-0.055. Block-3 (output block) showed LEAST divergence std=0.029 = heads don't specialize at deeper blocks. Falsifies "per-head temperature specialization" WIN-scenario mechanism.
+  - Final per-block-per-head temperatures (best ep60): block[0]: [0.559, 0.541, 0.434, 0.501]; block[1]: [0.509, 0.507, 0.425, 0.483]; block[2]: [0.476, 0.543, 0.449, 0.475]; block[3]: [0.473, 0.540, 0.501, 0.525].
+- **79th taxon: n_head=4 with current dim_head=n_hidden/n_head construction CLOSES at this magnitude.** Reinforces #2828/#2848 thread (slice attention structurally one-hot-attractor) and #2809 frieren (OOD generalization-limited not capacity-limited). Reassigning alphonse to student's preferred follow-up #2: n_head=1 with dim_head=96 (maximum per-head rank falsification test).
+
+---
+
+## 2026-05-14 [Round 110] UTC — PR #2869: n_head=1 dim_head=96 maximum per-head rank attention — **ASSIGNED (85th candidate axis)**
+
+- **Branch:** charliepai2g48h5-alphonse/n-head-1-max-rank
+- **Hypothesis:** Test n_head=1 with dim_head=96 (maximum per-head rank within current n_hidden=96 budget) — natural falsification of #2856 capacity-bottleneck hypothesis. Halves n_head 2→1, doubling dim_head 48→96 single-head MAX-rank attention.
+- **Why:** alphonse's #2856 diagnostic established attention rank IS in-dist capacity-bottlenecked at H=2. This experiment goes in OPPOSITE direction: maximum per-head rank, zero head-parallelism. Param expansion concentrated in attention where capacity needed: per-block to_q/k/v doubles from 6,912 → 27,648 (+20,736/block × 4 blocks = +82,944 attention params). Expected ~415,000 params = +25%.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): attention rank capacity-bottlenecked at H=2; H=1 max-rank breaks plateau; try as new architectural baseline.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): tradeoff between rank-gain and head-parallelism-loss balanced; close attention-rank axis.
+  3. **LOSS** (val > 30.8909 + 1%): multi-head parallelism was load-bearing; close H=1 direction; attention sweet spot is H=2.
+- Risk: with +25% params, sec/epoch may increase ~10-15%, monitor whether 70 epochs fits in 30-min cap.
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-alphonse --experiment_name "charliepai2g48h5-alphonse/n-head-1-max-rank" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`.
+
+---
+
+## 2026-05-14 [Round 110] UTC — PR #2870: Output-head residual gain (learnable scalar at output) — **ASSIGNED (86th candidate axis)**
+
+- **Branch:** charliepai2g48h5-nezuko/output-head-gain
+- **Hypothesis:** Add a single learnable scalar `output_gain = nn.Parameter(torch.tensor(1.0))` multiplied into final decoder output before loss. Tests whether output magnitude is uncalibrated after LayerScale residual-stream changes accumulated through `#2614 FiLM-embedding + LayerScale γ_attn=1e-4 / γ_mlp=1e-1 + SE-block3-attn-pool #2810` winners. +1 param total.
+- **Why this is a fresh axis:** Output-scale calibration is the only post-decoder learnable degree-of-freedom never tested this launch. Lion's sign-step normalizes gradient direction per parameter WITHIN block but cannot tune the final output scale through loss gradient. A 1-parameter scale-DoF lets the optimizer discover whether the head is systematically over- or under-emphasized.
+- **Why this is from Round 108 bold-swing queue (plateau-protocol):** Moving nezuko away from attention/routing area where they just had catastrophic #2858 LOSS. Output-head gain was one of 5 plateau-bold-swing candidates queued in Round 108 commit notes.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): gain learns meaningful non-trivial value; report whether <1 (head over-emphasized) or >1 (under-emphasized). Try per-channel output gain in follow-up.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): gain ≈ 1.0 throughout = decorative parameter; close 1-scalar direction; consider per-channel gain or pre-output-LN.
+  3. **LOSS** (val > 30.8909 + 1%): output-magnitude is calibrated as-is and learnable scalar destabilized training; close output-head gain axis.
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-nezuko --experiment_name "charliepai2g48h5-nezuko/output-head-gain" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`. Expected param count: 333,701 (= 333,700 + 1).
+
+---
+
 ## 2026-05-14 [Round 109] UTC — PR #2827: LayerScale γ init = 1e-3 — **CLOSED stale_wip (3rd pod-failure close, NOT falsified)**
 
 - **Branch:** charliepai2g48h5-thorfinn/layerscale-init-1e-3
