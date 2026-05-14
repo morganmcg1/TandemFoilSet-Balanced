@@ -200,7 +200,8 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, layerscale_init_attn=None,
+                 layerscale_init_mlp=None, use_se=True):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -208,10 +209,12 @@ class TransolverBlock(nn.Module):
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        _attn_init = layerscale_init_attn if layerscale_init_attn is not None else layerscale_init
+        _mlp_init = layerscale_init_mlp if layerscale_init_mlp is not None else layerscale_init
+        self.gamma_attn = nn.Parameter(_attn_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
-        self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.gamma_mlp = nn.Parameter(_mlp_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -234,6 +237,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 layerscale_init_attn=1e-4, layerscale_init_mlp=1e-4,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -256,6 +260,8 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                layerscale_init_attn=layerscale_init_attn,
+                layerscale_init_mlp=layerscale_init_mlp,
                 use_se=(i == n_layers - 1),
             )
             for i in range(n_layers)
@@ -520,6 +526,8 @@ model_config = dict(
     n_head=2,
     slice_num=24,
     mlp_ratio=3,
+    layerscale_init_attn=0.85,
+    layerscale_init_mlp=0.93,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -532,7 +540,14 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(
+    f"LayerScale ASYMMETRIC INIT (#2940): per-channel learnable gain "
+    f"gamma_attn init={model_config['layerscale_init_attn']} (attn converged ~0.86 in #2928), "
+    f"gamma_mlp init={model_config['layerscale_init_mlp']} (mlp converged ~0.93 in #2928); "
+    f"applied uniformly to all {model_config['n_layers']} TransolverBlocks; "
+    f"baseline init was 1e-4 (val 30.5605); #2928 init=1.0 LOSS (val 30.9444); "
+    f"hypothesis: starting AT converged regime saves the 'growth from 1e-4 to 0.85-0.93' budget phase"
+)
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
     f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); "
@@ -541,6 +556,14 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Pre-training LayerScale γ snapshot (#2940 asymmetric init verification).
+_inner_init = getattr(model, "_orig_mod", model)
+print("LayerScale init verification (step 0, all blocks):")
+for _bi, _blk_init in enumerate(_inner_init.blocks):
+    _ga0 = _blk_init.gamma_attn.detach().float().mean().item()
+    _gm0 = _blk_init.gamma_mlp.detach().float().mean().item()
+    print(f"  block[{_bi}]: gamma_attn={_ga0:.4f} | gamma_mlp={_gm0:.4f}")
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -753,6 +776,31 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "compile_active": compile_active,
     })
+
+    # Per-epoch LayerScale γ tracking (#2940 asymmetric init experiment).
+    # Log per-block mean γ_attn and γ_mlp at checkpoint epochs to track whether
+    # the model STAYS at the asymmetric init (0.85, 0.93) or DRIFTS away.
+    if (epoch + 1) in (1, 5, 10, 30, 60):
+        _inner_e = getattr(model, "_orig_mod", model)
+        _gamma_epoch_log = {
+            "event": "layerscale_gammas_epoch",
+            "epoch": epoch + 1,
+            "blocks": [],
+        }
+        _gamma_print_parts = [f"  γ-trajectory ep{epoch+1}:"]
+        for _bi, _blk_e in enumerate(_inner_e.blocks):
+            _ga_m = _blk_e.gamma_attn.detach().float().mean().item()
+            _gm_m = _blk_e.gamma_mlp.detach().float().mean().item()
+            _gamma_epoch_log["blocks"].append({
+                "block_idx": _bi,
+                "gamma_attn_mean": _ga_m,
+                "gamma_mlp_mean": _gm_m,
+            })
+            _gamma_print_parts.append(
+                f"b{_bi}[γa={_ga_m:.4f}/γm={_gm_m:.4f}]"
+            )
+        print(" ".join(_gamma_print_parts))
+        append_metrics_jsonl(metrics_jsonl_path, _gamma_epoch_log)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
