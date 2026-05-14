@@ -387,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    zflip_prob: float = 0.5  # per-sample probability of z-flip augmentation during training
 
 
 cfg = sp.parse(Config)
@@ -477,6 +478,19 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Stochastic z-flip augmentation (raw space, before normalization).
+        # 2D Navier-Stokes is invariant under z -> -z with AoA -> -AoA and Uy -> -Uy.
+        # Applied unconditionally with per-sample probability zflip_prob.
+        if cfg.zflip_prob > 0.0:
+            flip_mask = torch.rand(x.size(0), device=x.device) < cfg.zflip_prob
+            if flip_mask.any():
+                x = x.clone()
+                y = y.clone()
+                x[flip_mask, :, 1] = -x[flip_mask, :, 1]       # mesh z
+                x[flip_mask, :, 14] = -x[flip_mask, :, 14]     # AoA foil 0
+                x[flip_mask, :, 18] = -x[flip_mask, :, 18]     # AoA foil 1
+                y[flip_mask, :, 1] = -y[flip_mask, :, 1]       # Uy target
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
