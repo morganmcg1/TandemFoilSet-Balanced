@@ -527,6 +527,11 @@ model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
+with torch.no_grad():
+    param_l2_init = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
+print(f"Param L2 norm at init: {param_l2_init:.4f}")
+wandb.summary["param_l2_init"] = param_l2_init
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
@@ -614,9 +619,13 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    with torch.no_grad():
+        param_l2_epoch = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/param_l2": param_l2_epoch,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
