@@ -262,6 +262,52 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class EMA:
+    """Exponential moving average of model parameters (Polyak & Juditsky 1992).
+
+    Maintains shadow copies in fp32 regardless of model dtype. Buffers
+    (batchnorm stats, etc.) are not averaged — Transolver has none, included
+    for safety. After each optimizer.step():
+        theta_ema <- decay * theta_ema + (1 - decay) * theta
+    Evaluation uses shadow weights via apply_shadow / restore.
+    """
+    def __init__(self, model: nn.Module, decay: float = 0.9995):
+        self.decay = decay
+        self.shadow: dict[str, torch.Tensor] = {}
+        self.backup: dict[str, torch.Tensor] = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.detach().clone().float()
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.shadow[name].mul_(self.decay).add_(
+                    param.detach().float(), alpha=1.0 - self.decay
+                )
+
+    @torch.no_grad()
+    def apply_shadow(self, model: nn.Module):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.backup[name] = param.detach().clone()
+                param.data.copy_(self.shadow[name].to(param.dtype))
+
+    @torch.no_grad()
+    def restore(self, model: nn.Module):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.backup:
+                param.data.copy_(self.backup[name])
+        self.backup = {}
+
+    def state_dict(self) -> dict:
+        return {name: tensor.clone() for name, tensor in self.shadow.items()}
+
+    def load_state_dict(self, state_dict: dict):
+        self.shadow = {name: tensor.clone() for name, tensor in state_dict.items()}
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -421,6 +467,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    ema_decay: float = 0.9995  # EMA decay for Polyak averaging; eval uses shadow weights
 
 
 cfg = sp.parse(Config)
@@ -611,7 +658,13 @@ experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+ema_model_path = model_dir / "checkpoint_ema.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+
+EMA_DECAY = cfg.ema_decay
+ema = EMA(model, decay=EMA_DECAY)
+print(f"EMA (Polyak averaging): decay={EMA_DECAY}, effective averaging window ~{int(1/(1-EMA_DECAY))} steps; "
+      f"validation and test use EMA shadow weights; training/optimizer unchanged; baseline to beat: val_avg/mae_surf_p < 33.0195")
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
@@ -656,6 +709,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -666,14 +720,30 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate using EMA shadow weights ---
     model.eval()
+    ema.apply_shadow(model)
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+
+    # EMA drift diagnostic: L2 distance between EMA shadow and raw weights.
+    # Compute BEFORE restore so we use the same parameter tensors used during eval;
+    # since shadow weights were copied into params, we compare ema.shadow to ema.backup.
+    _ema_l2_drift = 0.0
+    _raw_l2 = 0.0
+    for name, _ in model.named_parameters():
+        if name in ema.shadow and name in ema.backup:
+            _diff = ema.shadow[name].float() - ema.backup[name].float()
+            _ema_l2_drift += _diff.pow(2).sum().item()
+            _raw_l2 += ema.backup[name].float().pow(2).sum().item()
+    _ema_l2_drift = _ema_l2_drift ** 0.5
+    _raw_l2 = _raw_l2 ** 0.5
+
+    ema.restore(model)
     dt = time.time() - t0
 
     tag = ""
@@ -685,6 +755,7 @@ for epoch in range(MAX_EPOCHS):
             "per_split": split_metrics,
         }
         torch.save(model.state_dict(), model_path)
+        torch.save(ema.state_dict(), ema_model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -700,6 +771,10 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "ema/decay": EMA_DECAY,
+        "ema/l2_drift": _ema_l2_drift,
+        "ema/raw_l2": _raw_l2,
+        "ema/drift_ratio": _ema_l2_drift / max(_raw_l2, 1e-12),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -733,9 +808,13 @@ append_metrics_jsonl(metrics_jsonl_path, {
 
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f} (EMA-applied)")
 
+    # Load raw best-val weights, then load + apply EMA shadow from the same epoch.
+    # Test eval thus matches validation protocol (EMA shadow weights).
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema.load_state_dict(torch.load(ema_model_path, map_location=device, weights_only=True))
+    ema.apply_shadow(model)
     model.eval()
 
     # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
@@ -862,6 +941,34 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+    # --- EMA vs RAW diagnostic: re-eval val splits with RAW best-val weights ---
+    # Critical interpretability output: positive ema_improvement proves EMA helped.
+    print("\nDiagnostic: re-evaluating val splits with RAW best-val weights (no EMA)...")
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    model.eval()
+    raw_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        for name, loader in val_loaders.items()
+    }
+    raw_val_avg_full = aggregate_splits(raw_split_metrics)
+    raw_val_avg_surf_p = raw_val_avg_full["avg/mae_surf_p"]
+    print(f"Raw weights val_avg/mae_surf_p = {raw_val_avg_surf_p:.4f}  "
+          f"(EMA was {best_avg_surf_p:.4f}, Δ_ema = {best_avg_surf_p - raw_val_avg_surf_p:+.4f}, "
+          f"EMA improvement = {raw_val_avg_surf_p - best_avg_surf_p:+.4f})")
+    for name in VAL_SPLIT_NAMES:
+        _r = raw_split_metrics[name]
+        _e = best_metrics["per_split"][name]
+        print(f"    {name:<26s}  RAW surf_p={_r['mae_surf_p']:.4f}  EMA surf_p={_e['mae_surf_p']:.4f}  Δ={_e['mae_surf_p'] - _r['mae_surf_p']:+.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "ema_raw_diagnostic",
+        "best_epoch": best_metrics["epoch"],
+        "ema_val_avg_surf_p": best_avg_surf_p,
+        "raw_val_avg_surf_p": raw_val_avg_surf_p,
+        "ema_improvement": raw_val_avg_surf_p - best_avg_surf_p,
+        "raw_per_split": raw_split_metrics,
+        "raw_val_avg": raw_val_avg_full,
+    })
 
     write_experiment_summary(
         model_path=model_path,
