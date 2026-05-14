@@ -2740,3 +2740,37 @@ Per-split test surf_p (mean): single_in_dist=39.20 (+20.5%), geom_camber_rc=46.8
 - Hypothesis: PhysicsAttention's slice partitioning uses implicit softmax temperature τ=1.0 (never tuned). Lower τ → sharper slice specialization (per-regime); higher τ → smoother slice mixing (more averaging). Slice partitioning is Transolver's core inductive bias — its temperature is plausibly high-leverage on top of 14th-shift baseline.
 - Arms: τ=0.5 (sharper, s1), τ=2.0 (smoother, s2 seed=2)
 - Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 16:20 — PR #2886: γ-only FiLM-AoA (thorfinn, SENT BACK for σ=0.07+FiLM-Re compound)
+- Branch: `willowpai2g48h3-thorfinn/film-gamma-only-aoa`
+- Hypothesis: γ-only FiLM-AoA per-block AoA conditioning (mirrors FiLM-Re mechanism), targeting geom_camber_rc OOD split.
+
+### Results (on σ=0.05 baseline — predates 14th shift)
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 `jrfd4ybp` | — | 35.75 | 30.95 |
+| s2 `mb2v0vd8` | — | 37.91 | 32.55 |
+| **Mean** | — | **36.83** | **31.75** |
+| OLD σ=0.05 bar | — | 40.82 | 35.25 |
+| 14th-shift bar | — | 34.55 | 28.95 |
+
+Per-split test surf_p (mean vs σ=0.05 bar):
+- single_in_dist: 37.13 (−2.5%)
+- geom_camber_rc: 44.11 (−7.6%) ← original target, real gain
+- geom_camber_cruise: 16.84 (−20.2%)
+- re_rand: 28.93 (−15.2%)
+
+ALL 4 splits beat OLD bar; mean −9.8% val / −9.9% test on old bar. **Misses 14th-shift bar by +6.6% val, +9.7% test.**
+
+**Mechanism (different from FiLM-Re):**
+- γ_bias drift ≤0.7% across all blocks (vs FiLM-Re: 0.995 → 0.987 monotone with depth)
+- γ_w_L2 uniform ~4.2-5.2 across blocks (vs FiLM-Re: 3.4 → 5.2 grows with depth)
+- AoA drives **per-channel weight permutation**, NOT global bias shift
+- OOD profile: cruise (−20%) and re_rand (−15%) benefit most, NOT camber_rc selectively — AoA acts as global regime signal
+
+**Implication:** FiLM-AoA mechanism plausibly **orthogonal** to FiLM-Re (γ_w-driven vs γ_bias-driven). Compound test is the right next step.
+
+**Status**: SENT BACK 2026-05-14 16:20. Rebase + rerun on σ=0.07 + FiLM-Re baseline (current default). Compound test: both FiLM-Re γ(Re) AND FiLM-AoA γ(AoA) per block. Bar: val<34.55, test<28.95.
