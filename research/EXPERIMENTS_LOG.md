@@ -4,6 +4,18 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 11:45 — PR #2901 (ASSIGNED, alphonse): n_head sweep {2, 8} on max_norm=0.35 — 11th paper-appendix mechanism-transfer axis (ATTENTION-MECHANISM-CAPACITY-RESHUFFLE class, NEW)
+
+- **Branch:** `willowpai2g48h2-alphonse/n-head-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** 11th paper-appendix mechanism-transfer axis — Transolver multi-head attention granularity (n_head). This is the **ATTENTION-MECHANISM-CAPACITY-RESHUFFLE** axis class, never before tested under saturated-clip. At fixed n_hidden=128, total QKV parameter count is invariant to n_head (W_{Q,K,V} are n_hidden×n_hidden regardless of n_head split); only per-head dimension dim_head = n_hidden/n_head changes.
+- **Two arms:** Arm 1 n_head=2 (dim_head=64, fewer larger heads), Arm 2 n_head=8 (dim_head=16, more smaller heads). Baseline n_head=4 (dim_head=32).
+- **Predictions:** Could land in ASYMMETRIC-V (dominant), SYMMETRIC basin, BOTH-LOSE Pareto-cap, or open NEW CAPACITY-RESHUFFLE pattern class if both lose by similar magnitude mechanistically neutral. σ-spread ≈ 0.475 (10th cross-axis); channel ordering surf_ux=min/vol_ux=max (14th); clip_fraction=1.000 (9th — n_head is first axis with mechanism to shift pre-clip grad_norm distribution via attention shape). **NEW DIAGNOSTIC**: pre-clip grad_norm distribution + step-time per arm.
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 11:45 UTC; awaiting training. **train.py edit required** (add `n_head: int = 4` Config field; replace `n_head=4,` in model_config dict with `n_head=cfg.n_head,` — single-line edit at line 641).
+
+---
+
 ## 2026-05-14 11:25 — PR #2896 (ASSIGNED, thorfinn): swa_lr sweep {1.5e-5, 1.5e-4} on max_norm=0.35 — 10th paper-appendix mechanism-transfer axis (SWA-FLOOR-LR decoupled from cosine-final-lr)
 
 - **Branch:** `willowpai2g48h2-thorfinn/swa-lr-sweep-on-max-norm-0p35`
@@ -25,6 +37,64 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 - **Predictions:** σ-spread ≈ 0.475 (12th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (12th cross-axis if invariant); clip_fraction = 1.000 (8th cross-axis if invariant — dropout DOES change pre-clip grad-norm distribution; **first axis with potential to break clip_fraction=1.0 invariance — paper-publishable distinct from 8 axes that all preserve it**). **NEW DIAGNOSTIC**: per-step clip_fraction distribution + pre-clip grad_norm shift. OOD-cruise prediction: dropout=0.05 may win cruise val/test (parallel to σ=0.25 banked #137 — different regularization channel).
 - **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
 - **Status:** Assigned 2026-05-14 10:50 UTC; awaiting training. **train.py edit required** (add `dropout: float = 0.0` Config field + pass `dropout=cfg.dropout` to FiLMTransolver instantiation; pattern from fern's #2862 fourier_sigma + prior swa_start_frac flag edits).
+
+---
+
+## 2026-05-14 11:35 — PR #2880 (CLOSED, alphonse): Lion β1 sweep {0.85, 0.95} on max_norm=0.35 — paper-strengthening 8th axis closure (DEPENDENT-SYMMETRIC class, joins wd)
+
+- **Branch:** `willowpai2g48h2-alphonse/lion-beta1-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** 8th paper-appendix mechanism-transfer axis — Lion's β1 (OPTIMIZER-INTERNAL-STATE axis class). May open a 5th transfer pattern or land in existing one.
+
+### Result table (vs #2674 baseline)
+
+| Arm | β1 | W&B | SWA val | SWA test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline β1=0.9 | 0.90 | `ieu1futo` | 45.1538 | 38.6367 | — | — | — |
+| Arm 1 β1=0.85 | 0.85 | `czhpq1ce` | **48.9168** | 41.2557 | **+3.76** | +2.62 | strong regression close (>46.50) |
+| Arm 2 β1=0.95 | 0.95 | `u51nemha` | **49.6483** | 42.4449 | **+4.49** | +3.81 | strong regression close (>46.50) |
+
+### Mechanism diagnosis (paper-strengthening DEPENDENT-SYMMETRIC class assignment)
+
+**LION β1 = 0.9 IS AT A SHARP VAL MINIMUM** — symmetric basin with VERY narrow width (±0.05 perturbation costs +3.76 to +4.49 val units). Under saturated-clip every step is `sign(β1 * exp_avg + (1-β1) * grad)`; β1 modulates the SHAPE of sign-update distribution itself but NOT magnitude (sign-vector L2 norm ≈ N_params regardless of β1). The hurt mechanism is **sign-sequence stationarity** — β1=0.9 happens to be a sweet spot where the EMA-smoothed gradient produces the most "useful" sign sequence for this loss surface. β1=0.95 (more memory) hurts slightly more than β1=0.85 (more responsive), suggesting local gradient distribution at this lr/clip regime is locally informative — too much momentum-memory dilutes the sign signal more than under-smoothing.
+
+**METHODOLOGY CRITIQUE (banked open question):** The PR-templated NEW DIAGNOSTIC `last_update_sq_norm` turned out to NOT discriminate β1 — sign-vector L2 norm ≈ N_params regardless of β1 (`sign_()` rarely outputs exact zero on float gradients). All 3 runs show 868.63 to 6 decimal places. The genuinely informative quantity is **sign-flip rate between consecutive steps** (not currently logged). The only diagnostic that distinguished the arms was `exp_avg_norm` (~7% higher for β1=0.95 vs 0.85), consistent with slower EMA decay producing more cumulative memory.
+
+### Updated paper-appendix transfer-pattern table (8 closed axes, 6 patterns — Lion β1 joins wd in DEPENDENT-SYMMETRIC class)
+
+| Pattern class | Axes |
+|---|---|
+| Gradient-magnitude-flow-INDEPENDENT, SYMMETRIC | β #2736 |
+| Gradient-magnitude-flow-INDEPENDENT, ASYMMETRIC V (DOMINANT) | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862 |
+| Gradient-magnitude-flow-DEPENDENT, SYMMETRIC (now 2 axes) | wd #2791+#2819, **Lion β1 #2880** |
+| Gradient-magnitude-flow-DEPENDENT, NEGATIVE | seed #2790 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 |
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 β1=0.85 | Arm 2 β1=0.95 | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread | 0.4791 | 0.4849 | 0.4748 | ✓ 9th cross-axis confirmation (Δ ≤ 0.01) |
+| Channel ordering (surf_ux=min, vol_ux=max) | ✓ | ✓ | ✓ | ✓ 13th cross-axis confirmation |
+| clip_fraction=1.0 (per-step) | 1.0000 | 0.9998 (1/4875 sub-threshold) | 1.0000 | ✓ 8th cross-axis confirmation |
+| best_epoch | 13 | 13 | 13 | ✓ invariant |
+| `last_update_sq_norm` mean | 868.63 | 868.63 | 868.63 | ⚠ DEGENERATE diagnostic (not β1-discriminating) |
+| `exp_avg_norm` mean | 0.0096 | 0.0104 | 0.0097 | ✓ discriminates β1 (~7% higher at β1=0.95) |
+
+### Banked findings (#147–#154)
+
+147. **PAPER-STRENGTHENING: Lion β1 axis lands in DEPENDENT-SYMMETRIC class (joins wd) on saturated-clip baseline (#2880 alphonse)** — both directions hurt val symmetrically. Mechanism is **sign-sequence stationarity** at β1=0.9, not update magnitude. 8th paper-appendix axis closure; **does NOT open a new transfer pattern** — collapses into existing wd-class. DEPENDENT-SYMMETRIC now has 2 axes.
+148. **METHODOLOGY CRITIQUE: `last_update_sq_norm` is NOT a useful per-step β1 discriminator under saturated-clip (#2880 alphonse)** — sign-vector L2 norm ≈ N_params regardless of β1. The genuinely informative quantity is **sign-flip rate between consecutive steps** (not currently logged). Banked NEW OPEN QUESTION for future Lion-optimizer-internal axis follow-up.
+149. **`exp_avg_norm` discriminates β1 (~7% higher mean for β1=0.95 vs 0.85) (#2880 alphonse)** — slower EMA decay produces more cumulative memory. The ONLY logged diagnostic that distinguishes the arms.
+150. **PAPER-STRENGTHENING: 9th cross-axis σ-spread invariance** — Δ ≤ 0.01 vs baseline 0.475.
+151. **PAPER-STRENGTHENING: 13th cross-axis channel-ordering invariance** — surf_ux=min, vol_ux=max preserved on both arms.
+152. **PAPER-STRENGTHENING: 8th cross-axis clip_fraction=1.000 invariance** — Arm 1 1.0000, Arm 2 0.9998. Saturated-clip robust to Lion β1.
+153. **Lion β1 = 0.9 is at a SHARP val minimum (#2880 alphonse, paper-publishable)** — symmetric basin with very narrow width. Sharpens "Chen 2023 β1=0.9 default is well-tuned" claim — validated at saturated-clip + Lion-only + hybrid-AdamW-σ stack.
+154. **METHODOLOGY: 6th-consecutive SWA-window-truncation under 30-min cap (#2790, #2818, #2835, #2862, #2877, #2880)** — 2 SWA epochs out of planned 4 across all 6 recent PRs. SWA window is structurally 2 epochs at SENPAI_TIMEOUT_MINUTES=30 cap.
+
+### Advisor verdict
+**CLOSED — paper-strengthening 8th axis closure with DEPENDENT-SYMMETRIC class assignment.** Reassigning alphonse → n_head sweep on max_norm=0.35 (NEW ATTENTION-MECHANISM-CAPACITY-RESHUFFLE axis class).
 
 ---
 
