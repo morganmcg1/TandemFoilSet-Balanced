@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-14 [Round 129] UTC — PR #2905: weight_decay 3e-4→5e-4 — **CLOSED LOSS (+0.74% val; 105th taxon; 5TH META-SIGNAL CONFIRMATION)**
+
+- **Branch:** charliepai2g48h5-edward/weight-decay-5e-4
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-weight-decay-5e-4-20260514-121305/metrics.jsonl
+
+| Metric | #2879 Baseline | **#2905 wd=5e-4** | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **30.7877** | **+0.74% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **26.9283** | +1.55% loss |
+| val_single_in_dist | 23.3997 | **24.4868** | **+4.65% LOSS** |
+| val_geom_camber_rc | 46.0708 | **46.5119** | +0.96% |
+| val_geom_camber_cruise | 17.8657 | **16.5755** | **-7.22% WIN** |
+| val_re_rand | 34.9057 | **35.5765** | +1.92% |
+
+Borderline LOSS/WASH (+0.74% > +0.5% WASH threshold). **5th consecutive confirmation of in_dist-LOSS + cruise-WIN meta-signal.** Stronger regularization produces the same pattern as capacity (#2889/#2899), geometry conditioning (#2890), and normalization (#2903) changes. Student correctly diagnosed: "Regularization strength is a third dial on the same trade-off axis, not an orthogonal regularizer." 105th taxon CLOSES: regularization-strength axis. Next attack: DATA-LEVEL via input-mixup (PR #2918).
+
+---
+
+## 2026-05-14 [Round 129] UTC — PR #2892: EMA eval decay=0.999 (fair 60ep re-run) — **CLOSED LOSS (+3.08% val; 106th taxon; EMA-EVAL AXIS CLOSED)**
+
+- **Branch:** charliepai2g48h5-frieren/ema-eval-weights
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-ema-eval-weights-60ep-20260514-121107/metrics.jsonl
+
+| Metric | #2879 Baseline | EMA 70ep (orig) | **EMA 60ep (fair)** | vs Baseline |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.6548 | **31.5008** | **+3.08% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.2169 | **27.2249** | **+2.67% LOSS** |
+
+EMA beats live every late epoch (gap +0.40 at ep55). Schedule confound fully resolved (final LR 2.83e-6 ≈ baseline's ~3e-6). **Mechanism intact but net-negative:** EMA overhead costs ~5%/epoch → ep55/60 reached vs baseline's ep58/60, ~3 epochs unrealized. EMA gain (+0.40) ≈ deep-tail descent rate × 3 epochs = exactly what was lost. Mathematically breaks even while adding complexity. Test WORSE on fair schedule (27.22 vs 26.22 on 70ep) — 70ep's longer decline averaged more diverse weight states. 106th taxon CLOSES: EMA-eval axis, net-negative in 30-min-budget regime. Next for frieren: LR warmup (PR #2920).
+
+---
+
+## 2026-05-14 [Round 129] UTC — PRs #2918, #2920: Fresh axis assignments
+
+- **#2918 edward input-mixup-alpha-0.2:** First DATA-LEVEL attack on the 5-confirmation over-specialization meta-signal. `λ ~ Beta(0.2, 0.2)`, 50% of batches, applied to x and y. ~5 lines of code, zero new params. If data interpolation breaks the coupling, confirms the signal is representational (not architectural). 106th axis.
+- **#2920 frieren linear-warmup-3-epochs:** First LR-schedule-shape test after 106+ experiments. 3-epoch linear warmup → 57-epoch cosine = 60 total. Standard recipe gap; all modern transformer baselines use warmup. 107th axis.
+
+---
+
 ## 2026-05-14 [Round 128] UTC — PR #2903: RMSNorm replaces LayerNorm — **CLOSED LOSS (+2.10% val; 104th taxon; NORMALIZATION-CHOICE AXIS CLOSED; β-bias load-bearing)**
 
 - **Branch:** charliepai2g48h5-nezuko/rmsnorm-replace-layernorm
