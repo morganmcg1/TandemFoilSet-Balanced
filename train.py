@@ -590,6 +590,51 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# EMA / Polyak weight averaging (Polyak 1990; Izmailov et al. 2018 "SWA";
+# Karras et al. 2023 "EDM"). Maintain a shadow copy of every floating-point
+# parameter/buffer updated each optimizer step:
+#     ema = decay · ema + (1 - decay) · w
+# At validation time, swap the model's params for the EMA shadow, evaluate,
+# and swap back so training continues from the raw trajectory. Training is
+# UNPERTURBED — EMA is purely an eval-time intervention with no gradient
+# impact. We keep `inner_model` as a stable alias to the uncompiled Transolver
+# so torch.compile's wrapper doesn't get in the way of state-dict swaps.
+EMA_DECAY = 0.999
+inner_model = model  # uncompiled Transolver; same object as model._orig_mod after compile
+_ema_state: dict[str, torch.Tensor] = {}
+for _k, _v in inner_model.state_dict().items():
+    if _v.is_floating_point():
+        _ema_state[_k] = _v.detach().clone()
+_ema_buffer_mb = sum(t.numel() * t.element_size() for t in _ema_state.values()) / 1024 / 1024
+print(
+    f"EMA: decay={EMA_DECAY} (effective averaging window ≈ {int(1/(1-EMA_DECAY))} steps); "
+    f"tracking {len(_ema_state)} floating-point tensors / "
+    f"{sum(t.numel() for t in _ema_state.values())} elements; "
+    f"+{_ema_buffer_mb:.2f} MB shadow buffer; "
+    f"Polyak averaging (eval-time only, training unperturbed); "
+    f"NEW baseline to beat: val_avg/mae_surf_p < 30.0382 (PR #2964)"
+)
+
+
+@torch.no_grad()
+def ema_update(inner_module, ema_state, decay):
+    """Polyak EMA update: ema ← decay · ema + (1 - decay) · w. Floating-point only."""
+    for name, param in inner_module.state_dict().items():
+        if name in ema_state:
+            ema_state[name].mul_(decay).add_(param.detach(), alpha=1 - decay)
+
+
+@torch.no_grad()
+def swap_state(target_state_dict, replacement_state_dict):
+    """Swap target's tensor VALUES with replacement (in-place); returns dict of cloned previous values."""
+    prev: dict[str, torch.Tensor] = {}
+    for name, tensor in target_state_dict.items():
+        if name in replacement_state_dict:
+            prev[name] = tensor.clone()
+            tensor.copy_(replacement_state_dict[name])
+    return prev
+
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -788,6 +833,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema_update(inner_model, _ema_state, EMA_DECAY)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -799,13 +845,43 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # Primary eval uses EMA weights (swap raw→EMA, evaluate, swap back so the
+    # training trajectory is unperturbed). Raw eval is computed at diagnostic
+    # epochs only (ep1, 10, 30, 60) to capture the EMA-vs-raw delta over time.
     model.eval()
+    _saved_raw = swap_state(inner_model.state_dict(), _ema_state)
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
     }
+    swap_state(inner_model.state_dict(), _saved_raw)
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+
+    # Diagnostic at ep1, 10, 30, 60: also evaluate the raw (non-EMA) model
+    # and log Δ = avg_raw - avg_ema. Predicts ep1-5 EMA > raw, ep30+ EMA < raw.
+    DIAGNOSTIC_EPOCHS = {1, 10, 30, 60}
+    diag_payload = None
+    if (epoch + 1) in DIAGNOSTIC_EPOCHS:
+        split_metrics_raw = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_raw = aggregate_splits(split_metrics_raw)
+        avg_surf_p_raw = val_avg_raw["avg/mae_surf_p"]
+        delta_raw_minus_ema = avg_surf_p_raw - avg_surf_p
+        diag_payload = {
+            "val_avg/mae_surf_p_raw": avg_surf_p_raw,
+            "val_avg/mae_surf_p_ema": avg_surf_p,
+            "delta_raw_minus_ema": delta_raw_minus_ema,
+            "raw_splits": split_metrics_raw,
+        }
+        print(
+            f"  EMA-vs-raw diagnostic ep{epoch+1}: "
+            f"raw={avg_surf_p_raw:.4f}  EMA={avg_surf_p:.4f}  "
+            f"Δ(raw-EMA)={delta_raw_minus_ema:+.4f} ({'EMA better' if delta_raw_minus_ema > 0 else 'raw better'})"
+        )
+
     dt = time.time() - t0
 
     tag = ""
@@ -816,11 +892,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA weights as the best checkpoint (these are what we evaluate at test)
+        torch.save(dict(_ema_state), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    _epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -832,11 +909,15 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
-    })
+        "ema_decay": EMA_DECAY,
+    }
+    if diag_payload is not None:
+        _epoch_record["ema_diagnostic"] = diag_payload
+    append_metrics_jsonl(metrics_jsonl_path, _epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p[EMA]={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -873,9 +954,16 @@ append_metrics_jsonl(metrics_jsonl_path, {
 
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val (EMA): epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    # Best checkpoint stores the EMA state dict directly. Load it back into the
+    # uncompiled inner module — the compiled `model` shares the same parameter
+    # tensors, so the compiled forward path also picks up the EMA weights.
+    best_ema_state = torch.load(model_path, map_location=device, weights_only=True)
+    with torch.no_grad():
+        for _k, _v in inner_model.state_dict().items():
+            if _k in best_ema_state:
+                _v.copy_(best_ema_state[_k])
     model.eval()
 
     # Residual magnitude probe @ best-checkpoint (compare to ep1 capture).
