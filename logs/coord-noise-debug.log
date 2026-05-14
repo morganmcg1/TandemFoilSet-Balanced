@@ -1,0 +1,84 @@
+Device: cuda [DEBUG]
+Train: 6, val_single_in_dist: 2, val_geom_camber_rc: 2, val_geom_camber_cruise: 2, val_re_rand: 2
+slice_num: 24
+slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)
+n_head: 2 (dim_head=48)
+Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic
+Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings
+Model: Transolver (0.41M params)
+LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all 4 TransolverBlocks
+Feature-stream FiLM gate: zero-init Linear(3, 96) applied before block 0; channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); residual-stream conditioning vs output-side (closed #2531+#2588); +~384 params; baseline to beat: val_avg/mae_surf_p < 33.4935
+Actual total params: 407940
+Squeeze-Excitation with ATTENTION POOL (block 3 only, deepest): added 1 SE modules, +4825 params (reduction=4); attention pool: Linear(96,1) -> softmax over tokens (masked); fc1(96->24) -> GELU -> fc2(24->96) -> sigmoid -> broadcast multiply; applied at END of TransolverBlock 3 only (blocks 0..2 carry no SE); zero-init fc2 -> gate=0.5 uniform at step 0; attn_pool trunc_normal_ init (std=0.02) -> softmax over T~100K ~ uniform at step 0 (~mean pool baseline); baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 mean pool #2765)
+SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in 4 TransolverBlocks; hidden_swiglu=192 (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden 288); act=SiLU; total SwiGLU params=223104 vs standard-MLP params=222720 (delta=+384, +0.17%); baseline to beat: val_avg/mae_surf_p < 33.0195
+torch.compile: enabled (dynamic=True)
+AMP: bfloat16
+Mesh coordinate noise: x_norm[..., 0:2] += N(0, 0.01^2) during training only (eval/test: no noise). Physical coord stats: x_mean[0,1]=(1.0927, 0.5351), x_std[0,1]=(1.6287, 1.4508). After normalization, channels 0,1 ~ N(0, 1). Noise σ=0.01 = 1.0% of unit-std positional scale.
+Optimizer: Lion (Chen et al. 2023) | lr=0.00015, wd=0.0003, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW
+Lion LR sweep: lr=0.00015 (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994
+Scheduler: LinearLR(0.1->1.0 over 3 epochs) -> CosineAnnealingLR(T_max=1)
+LR check ep0: 0.000015 (expect 0.000015)
+Epoch 1/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 1/3:  50%|█████     | 1/2 [00:09<00:09,  9.30s/it]Epoch 1/3: 100%|██████████| 2/2 [00:10<00:00,  4.82s/it]                                                        Epoch   1 (13s) [5.7GB]  train[vol=1.8392 surf=1.7940]  val_avg_surf_p=501.4819 *
+    val_single_in_dist         loss=35.4377  surf[p=1081.2998 Ux=27.3446 Uy=3.5685]  vol[p=908.7043 Ux=24.6738 Uy=8.1369]
+    val_geom_camber_rc         loss=24.9482  surf[p=579.8280 Ux=22.3127 Uy=3.7176]  vol[p=554.6179 Ux=16.4283 Uy=7.6297]
+    val_geom_camber_cruise     loss=16.0897  surf[p=230.3740 Ux=21.7500 Uy=1.3876]  vol[p=196.2545 Ux=15.1844 Uy=2.9489]
+    val_re_rand                loss=14.4935  surf[p=114.4256 Ux=22.6624 Uy=1.1639]  vol[p=116.2786 Ux=16.8364 Uy=2.5880]
+Epoch 2/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 2/3:  50%|█████     | 1/2 [00:00<00:00,  9.34it/s]                                                        Epoch   2 (0s) [5.7GB]  train[vol=1.6826 surf=1.6640]  val_avg_surf_p=498.7876 *
+    val_single_in_dist         loss=35.3162  surf[p=1078.6011 Ux=27.3345 Uy=3.4984]  vol[p=905.7506 Ux=24.7296 Uy=8.1036]
+    val_geom_camber_rc         loss=24.8244  surf[p=578.3107 Ux=22.2171 Uy=3.6648]  vol[p=553.4655 Ux=16.4188 Uy=7.6171]
+    val_geom_camber_cruise     loss=15.9432  surf[p=227.2863 Ux=21.6370 Uy=1.3411]  vol[p=195.8077 Ux=15.1640 Uy=2.9506]
+    val_re_rand                loss=14.2915  surf[p=110.9524 Ux=22.4585 Uy=1.1121]  vol[p=115.5975 Ux=16.7965 Uy=2.5758]
+Epoch 3/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 3/3: 100%|██████████| 2/2 [00:00<00:00, 17.69it/s]                                                        Epoch   3 (0s) [5.7GB]  train[vol=1.9588 surf=1.8642]  val_avg_surf_p=494.2072 *
+    val_single_in_dist         loss=35.0944  surf[p=1073.9153 Ux=27.3090 Uy=3.3724]  vol[p=900.3898 Ux=24.7820 Uy=8.0428]
+    val_geom_camber_rc         loss=24.6157  surf[p=575.5207 Ux=22.0803 Uy=3.5691]  vol[p=551.0462 Ux=16.4033 Uy=7.5944]
+    val_geom_camber_cruise     loss=15.7192  surf[p=222.2414 Ux=21.4789 Uy=1.2675]  vol[p=195.2627 Ux=15.1385 Uy=2.9550]
+    val_re_rand                loss=13.9790  surf[p=105.1512 Ux=22.1778 Uy=1.0229]  vol[p=114.3104 Ux=16.7403 Uy=2.5544]
+
+Training done in 0.2 min
+Lion momentum non-zero fraction at terminal: 0.5927 (241771/407940 elements)
+
+Best val: epoch 3, val_avg/mae_surf_p = 494.2072
+
+LayerScale final gammas (best-checkpoint weights):
+  block[0]: gamma_attn mean=0.000134 abs_mean=0.000291 | gamma_mlp mean=0.000088 abs_mean=0.000297
+  block[1]: gamma_attn mean=0.000126 abs_mean=0.000286 | gamma_mlp mean=0.000118 abs_mean=0.000303
+  block[2]: gamma_attn mean=0.000121 abs_mean=0.000309 | gamma_mlp mean=0.000115 abs_mean=0.000321
+  block[3]: gamma_attn mean=0.000111 abs_mean=0.000280 | gamma_mlp mean=0.000159 abs_mean=0.000334
+
+Feature-stream FiLM final diagnostics (best-checkpoint weights):
+  film.weight.norm: 0.0051
+  film.bias.norm:   0.0030
+  film_scale |1+gamma| mean on val_re_rand batch: 1.0000
+
+SE gate stats per split (best-checkpoint weights, block-3-only):
+  Split: val_single_in_dist
+    SE block[3]: gate mean=0.5000  std=0.0000  min=0.5000  max=0.5000
+  Split: val_geom_camber_rc
+    SE block[3]: gate mean=0.5000  std=0.0000  min=0.5000  max=0.5000
+  Split: val_geom_camber_cruise
+    SE block[3]: gate mean=0.5000  std=0.0000  min=0.5000  max=0.5000
+  Split: val_re_rand
+    SE block[3]: gate mean=0.5000  std=0.0000  min=0.5000  max=0.5000
+
+SE attention-pool stats per split (best-checkpoint weights):
+  Split: val_single_in_dist  SE block[3]: max_w_mean=0.0000  entropy_mean=11.3499  surface_frac_mean=0.0191  n_active(w>0.1)_mean=0.0  n_real_mean=84954
+  Split: val_geom_camber_rc  SE block[3]: max_w_mean=0.0000  entropy_mean=11.8309  surface_frac_mean=0.0194  n_active(w>0.1)_mean=0.0  n_real_mean=137747
+  Split: val_geom_camber_cruise  SE block[3]: max_w_mean=0.0000  entropy_mean=12.2593  surface_frac_mean=0.0154  n_active(w>0.1)_mean=0.0  n_real_mean=211128
+  Split: val_re_rand  SE block[3]: max_w_mean=0.0000  entropy_mean=11.7431  surface_frac_mean=0.0195  n_active(w>0.1)_mean=0.0  n_real_mean=126674
+
+SwiGLU gate stats per block (sample val batch, best-checkpoint weights):
+  SwiGLU block[0]: gate_mean=0.0087  std=0.0960  abs_mean=0.0765  zero_frac=0.0774  value_abs_mean=0.1538  corr(gate,value)=0.0459
+  SwiGLU block[1]: gate_mean=0.0088  std=0.0952  abs_mean=0.0754  zero_frac=0.0815  value_abs_mean=0.1517  corr(gate,value)=0.0035
+  SwiGLU block[2]: gate_mean=0.0112  std=0.1015  abs_mean=0.0800  zero_frac=0.0832  value_abs_mean=0.1507  corr(gate,value)=-0.0154
+  SwiGLU block[3]: gate_mean=0.0037  std=0.0936  abs_mean=0.0741  zero_frac=0.0845  value_abs_mean=0.1485  corr(gate,value)=0.0315
+
+Evaluating on held-out test splits...
+Test: test_single_in_dist: 2, test_geom_camber_rc: 2, test_geom_camber_cruise: 2, test_re_rand: 2
+
+  TEST  avg_surf_p=371.2544
+    test_single_in_dist        loss=17.7882  surf[p=288.6105 Ux=23.2698 Uy=1.2653]  vol[p=253.7149 Ux=19.0992 Uy=2.9973]
+    test_geom_camber_rc        loss=21.5937  surf[p=484.7303 Ux=22.1813 Uy=2.2095]  vol[p=471.0077 Ux=16.1527 Uy=5.5775]
+    test_geom_camber_cruise    loss=19.6804  surf[p=273.4773 Ux=27.0640 Uy=1.3294]  vol[p=256.8452 Ux=24.1281 Uy=3.6953]
+    test_re_rand               loss=21.2712  surf[p=438.1993 Ux=20.1069 Uy=3.5093]  vol[p=409.6354 Ux=13.6518 Uy=7.3852]
+
+Saved experiment summary to models/model-charliepai2g48h5-fern-coord-noise-debug-20260514-180358/metrics.yaml

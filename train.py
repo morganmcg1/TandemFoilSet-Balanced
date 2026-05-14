@@ -597,6 +597,20 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
+# Mesh coordinate Gaussian noise (training only) — channels 0, 1 of x_norm.
+# σ=0.01 in NORMALIZED space ≈ 1% of unit-std positional scale (a small mesh-
+# perturbation analog to remeshing variance). Eval/test never see noise.
+COORD_NOISE_SIGMA = 0.01
+_x_mean_pos = stats["x_mean"][:2].detach().cpu().tolist()
+_x_std_pos = stats["x_std"][:2].detach().cpu().tolist()
+print(
+    f"Mesh coordinate noise: x_norm[..., 0:2] += N(0, {COORD_NOISE_SIGMA}^2) during training only "
+    f"(eval/test: no noise). Physical coord stats: "
+    f"x_mean[0,1]=({_x_mean_pos[0]:.4f}, {_x_mean_pos[1]:.4f}), "
+    f"x_std[0,1]=({_x_std_pos[0]:.4f}, {_x_std_pos[1]:.4f}). "
+    f"After normalization, channels 0,1 ~ N(0, 1). Noise σ=0.01 = 1.0% of unit-std positional scale."
+)
+
 
 class Lion(torch.optim.Optimizer):
     """Lion optimizer (Chen et al. 2023): sign-based momentum updates.
@@ -695,6 +709,8 @@ for epoch in range(MAX_EPOCHS):
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # Coordinate noise (training only): channels 0,1 += N(0, σ²)
+            x_norm[..., :2] = x_norm[..., :2] + torch.randn_like(x_norm[..., :2]) * COORD_NOISE_SIGMA
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
@@ -752,6 +768,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "coord_noise_sigma": COORD_NOISE_SIGMA,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
