@@ -2097,13 +2097,127 @@ fern reassigned to **Truncated normal Linear init σ=0.02 (BERT/GPT-2 style, PR 
 
 ---
 
-## 2026-05-14 07:45 — Round-9 assignments
+## 2026-05-14 07:50 — PR #2811: Sobolev loss on ∇p (thorfinn, CLOSED)
+- Branch: `willowpai2g48h3-thorfinn/sobolev-p-grad`
+- Hypothesis: Auxiliary loss penalizing the finite-difference surface-pressure-gradient mismatch between prediction and target (physics-aware loss term, λ=0.1).
+
+### Results
+
+- Both seeds finished without NaN.
+- Mean val_avg/mae_surf_p = 50.77 vs new baseline 43.09 (**+17.8%**).
+- Mean test_avg/mae_surf_p = 44.08 vs new baseline 37.19 (**+18.5%**).
+- All 4 test splits regress (single_in_dist +7.83pt, camber_rc +4.31, cruise +2.14, re_rand +4.02).
+- Diagnostic: `sobolev_ratio` = 0.55–0.58% (PR predicted 5–20%) — finite-difference magnitudes in normalized pressure space are 10× smaller than the PR estimate.
+
+**Analysis**: even with tiny realized contribution at λ=0.1, the gradient-mismatch term still shifts the loss landscape enough to harm the optimization trajectory under Lion at the 35-ep compute-bound budget. Auxiliary physics-aware loss term on surface pressure gradient retired.
+
+**Status**: CLOSED 2026-05-14 07:50.
+
+---
+
+## 2026-05-14 07:55 — PR #2812: LayerScale (init=1e-4) (nezuko, CLOSED)
+- Branch: `willowpai2g48h3-nezuko/layerscale`
+- Hypothesis: CaiT-style per-block residual scalar gating `h + α·F(h)` with α init=1e-4 to ease residual training.
+
+### Results
+
+- Both seeds finished. Mean val = 50.30 (+10.7% vs new baseline 43.09); mean test = 44.87 (+13.6% vs new baseline 37.19).
+- All 4 splits regress: single_in_dist +10.4%, camber_rc +10.8%, cruise +21.1%, re_rand +16.3%.
+- Diagnostic α magnitudes DID move away from init: per-block mean reached 1e-3 to 1e-2 range with std ~5e-2 — channels diverged, so residual branches DID unlock.
+
+**Analysis**: 10th confirmed variance-vs-mean decoupling instance under Lion. Starting with α=1e-4 means the first 10–20 epochs effectively train as identity (residual branches contribute near zero). The 35-ep budget is insufficient to recover representational capacity even after α grows. Same family as LN γ=0.5, GC, grad-accum, etc. LayerScale axis retired.
+
+**Status**: CLOSED 2026-05-14 07:55.
+
+---
+
+## 2026-05-14 07:45 — Round-9 assignments (initial 3)
 
 | PR | Student | Hypothesis | Axis |
 |---|---|---|---|
 | #2853 | willowpai2g48h3-alphonse | Pinball τ=0.60 for pressure channel (stronger asymmetry) | τ-scan continuation |
 | #2854 | willowpai2g48h3-frieren | Restore orthogonal init for in_project_slice (latent bug fix) | Architectural correctness |
 | #2855 | willowpai2g48h3-tanjiro | Extend pinball τ=0.55 to Ux/Uy velocity channels | Loss channel coverage |
+
+---
+
+## 2026-05-14 08:15 — PR #2816: FiLM-style Re-conditioning (edward, CLOSED)
+- Branch: `willowpai2g48h3-edward/film-re`
+- Hypothesis: Per-block FiLM modulation `h_out = γ(log Re)·h + β(log Re)` to give every transformer block direct access to a Reynolds-conditioned scale/shift, targeting `test_re_rand` OOD.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | test_re_rand |
+|---|---|---:|---:|---:|
+| s1 | `1k0orcii` | 43.238 | 37.127 | 33.788 |
+| s2 | `drs7goph` | 45.581 | 38.953 | 37.461 |
+| **mean (n=2)** | — | **44.410** | **38.040** | **35.624** |
+| **new baseline (PR #2801)** | `xkaghm9f` | 43.093 | 37.194 | 34.698 |
+| **Δ mean vs baseline** | — | **+3.1%** | **+2.3%** | **+2.7%** |
+
+Per-split test (mean of 2 seeds):
+- single_in_dist=42.32 (−0.68 vs baseline 43.00)
+- geom_camber_rc=50.65 (+0.79 vs baseline 49.86)
+- geom_camber_cruise=23.57 (+2.35 vs baseline 21.22)
+- re_rand=35.62 (+0.92 vs baseline 34.70)
+
+Param cost: +0.33M params (+50% over baseline ~0.66M); +3–5% step time.
+
+**Diagnostic — γ/β trajectories**: across both seeds and all 5 blocks, `β_bias` mean stays in `[−0.001, +0.001]` — the shift component is essentially never used. `γ_bias` drifts away from init (1.0) with depth (block 4 γ ≈ 0.984 vs block 0 γ ≈ 1.005–1.008); `|γ_w|` and `|β_w|` grow with depth (block 0 ≈ 0.01–0.03 → block 4 ≈ 0.03–0.04). The model is learning to attenuate later-block activations slightly with Re-dependent modulation.
+
+**Analysis**: The Re-conditioning mechanism is real — `test_re_rand` improved on BOTH seeds vs the OLD baseline (val<45.43) and the model's diagnostics show coherent depth-graded γ usage. Mechanism for re_rand: per-block γ-modulation lets the model adjust feature norms based on Reynolds regime, which helps generalize across the held-out Re axis. However:
+1. Edward compared against the OLD merge bar (val<45.43, test<39.51) and concluded "clean win, merge." The advisor flagged that PR #2801 (pinball τ=0.55) merged 07:15 had tightened the bar to val<43.09, test<37.19.
+2. Vs the NEW bar: s1 marginal (val miss 0.15 within noise, test win 0.06); s2 clearly misses both. Mean misses both bars.
+3. Seed variance is high (val std=1.17), which is itself a problem for a +50%-param technique.
+4. The +0.33M param cost is hard to justify when the result doesn't beat the new bar.
+
+**Closed rather than send-back-for-seeds**: the cost-economy is wrong. β is doing nothing (β_bias ≈ 0); γ is doing the work. The right next step is param-efficient γ-only FiLM, assigned as a fresh PR (#2865) rather than dragging this PR through more seeds.
+
+**Status**: CLOSED 2026-05-14 08:15.
+
+---
+
+## 2026-05-14 08:25 — PR #2817: σ-scan for Linear init (fern, SENT BACK)
+- Branch: `willowpai2g48h3-fern/trunc-normal-init`
+- Hypothesis (pivoted from original "add trunc_normal_(σ=0.02)" — already in baseline): probe init-scale axis around the existing σ=0.02 baseline by scanning σ ∈ {0.01, 0.05}.
+
+### Results (single seed per arm)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | per-split test (single_in_dist / camber_rc / camber_cruise / re_rand) |
+|---|---|---:|---:|---|
+| σ=0.01 | `tls9g2qq` | **53.926** ✗ | **47.337** ✗ | 49.66 / 63.72 / 30.37 / 45.60 (catastrophic) |
+| σ=0.05 | `72s3ljky` | **42.021** ✓ | **37.269** ≈ | 39.73 / 50.54 / 22.81 / 36.00 |
+| baseline σ=0.02 (PR #2801) | `xkaghm9f` | 43.092 | 37.194 | 43.00 / 49.86 / 21.22 / 34.70 |
+| Δ σ=0.05 vs baseline | — | **−2.5%** | **+0.2% (within noise)** | single_in_dist −7.6%, others ±2-4% |
+
+**Param-norm analysis**: trained model L2 at best epoch was 61.97 for σ=0.05, 46.08 for σ=0.01, vs predicted init L2 of ~25 and ~5 respectively. σ=0.01's optimizer didn't have time to climb to the optimal trained scale within the 35-ep budget. σ=0.05 starts much closer to the trained-scale neighborhood, giving the optimizer an easier descent.
+
+**Analysis**: σ=0.05 clears val by 2.5% (clear win), misses test by 0.08 (within fern's own quoted seed-noise band 0.5–1.0). single_in_dist improves dramatically (−7.6%), but the 3 OOD splits all degrade slightly (+0.7 to +1.6). σ=0.01 catastrophic — confirms the model is genuinely compute-bound w.r.t. param L2 climb at smaller init.
+
+**Decision**: SEND BACK for one confirmation seed at σ=0.05. The single-seed result is suggestive of a real win but the test miss (0.08) is small enough that a second seed could flip it either way. Conservative scientific call.
+
+**Status**: SENT BACK 2026-05-14 08:25 — awaiting σ=0.05 seed-2 result. Merge if 2-seed mean clears val<43.09 AND test<37.19.
+
+---
+
+## 2026-05-14 08:30 — Round-9 reassignments (4 additional PRs)
+
+After closing #2811 (Sobolev), #2812 (LayerScale, var-vs-mean #10), and #2816 (FiLM-Re), all 4 freshly-idle students received new round-9 assignments:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2863 | willowpai2g48h3-askeladd | Re-Fourier features at input (NeRF-style log(Re) encoding, ~+2K params) | Input-encoding |
+| #2865 | willowpai2g48h3-edward | γ-only FiLM-Re (drop β branch; param-efficient FiLM follow-up) | Capacity, diagnostics-driven |
+| #2866 | willowpai2g48h3-nezuko | Divergence-free auxiliary loss (∇·u=0 with KNN gradient estimator) | Physics-informed loss |
+| #2867 | willowpai2g48h3-thorfinn | AoA-Fourier features at input (targets `geom_camber_rc`, hardest split) | Input-encoding |
+
+**Round-9 portfolio summary**: 8 active WIPs covering 4 orthogonal axes:
+- Loss geometry: τ=0.60 (#2853), pinball Ux/Uy (#2855), divfree aux (#2866)
+- Architectural / capacity: ortho-init restore (#2854), γ-only FiLM (#2865)
+- Input encoding: Re-Fourier (#2863), AoA-Fourier (#2867)
+- Init-scale (send-back): σ=0.05 confirmation (#2817)
+
+Zero idle students.
 
 ---
 

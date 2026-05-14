@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 07:50
+- **Date:** 2026-05-14 08:30
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -40,18 +40,23 @@
 
 Current focus: **loss geometry exploration** (τ-scan, channel coverage) and **architectural correctness** (latent bug fix).
 
-### Round-9 in-flight (newly assigned)
+### Round-9 in-flight (full grid)
 
-1. **Pinball τ=0.60 pressure (alphonse #2853)**: scale up asymmetry — test whether stronger directional bias helps further
-2. **Orthogonal init restore for in_project_slice (frieren #2854)**: fix the latent bug where trunc_normal_ clobbers the intended orthogonal init — zero compute cost, pure architectural correctness
-3. **Pinball τ=0.55 on Ux/Uy velocity channels (tanjiro #2855)**: extend the winning pressure loss to all 3 channels — test velocity field bias hypothesis
+Loss-geometry axis (3 PRs):
+1. **Pinball τ=0.60 pressure (alphonse #2853)** — scale up asymmetry on the winning pressure-loss axis
+2. **Pinball τ=0.55 Ux/Uy velocity channels (tanjiro #2855)** — extend pinball to all 3 channels
+3. **Divergence-free auxiliary loss (nezuko #2866)** — physics-informed ∇·u=0 penalty (NEW round-9 reassignment after #2812 LayerScale closed)
 
-### Round-8 WIPs still in flight
+Architectural / capacity axis (2 PRs):
+4. **Orthogonal init restore for in_project_slice (frieren #2854)** — latent bug fix; zero compute cost
+5. **γ-only FiLM-Re (edward #2865)** — param-efficient FiLM follow-up after #2816 closed: drop the β branch (diagnostics confirmed β_bias≈0 in both seeds)
 
-4. **Sobolev loss on pressure gradient (thorfinn #2811)**: physics-aware loss term (early val=60 mid-training, trending poor)
-5. **LayerScale (nezuko #2812)**: CaiT-style residual gating init=1e-4 (early val=52 mid-training, trending poor)
-6. **FiLM-style Re-conditioning (edward #2816)**: per-block Re conditioning (early val=83, very early/inconclusive)
-7. **σ-scan for Linear init (fern #2817)**: σ=0.01/0.05 scan after discovering trunc_normal_ σ=0.02 already in baseline
+Input-encoding axis (2 PRs — orthogonal NeRF-style features):
+6. **Re-Fourier features at input (askeladd #2863)** — NeRF-style log(Re) encoding, ~+2K params (vs +330K for FiLM-Re)
+7. **AoA-Fourier features at input (thorfinn #2867)** — same idea applied to AoA; targets `geom_camber_rc` (hardest split at 49.86)
+
+Init-scale axis (1 PR, await terminal result):
+8. **σ=0.05 init confirmation seed (fern #2817)** — sent back 2026-05-14 08:25 for 2nd seed at σ=0.05 (single-seed val=42.02 beats new bar 43.09 by 2.5% but test=37.27 marginally misses 37.19 by 0.08; need 2-seed mean)
 
 ## Round 1 portfolio (current)
 
@@ -87,20 +92,24 @@ Current focus: **loss geometry exploration** (τ-scan, channel coverage) and **a
 | #2800 | alphonse | RMSNorm | **CLOSED** 2026-05-14 07:40 (+13.6%; mean-centering load-bearing; var-vs-mean #8) |
 | #2803 | frieren | Param-group wd | **CLOSED** 2026-05-14 07:40 (+7.7%; Lion wd interaction; axis retired) |
 | #2805 | tanjiro | LN γ-init=0.5 | **CLOSED** 2026-05-14 07:40 (+35.4%; var-vs-mean #9 — γ never recovered) |
-| **#2811** | **thorfinn** | **Sobolev loss on ∇p** | **WIP 2026-05-14 05:55** |
-| **#2812** | **nezuko** | **LayerScale (init=1e-4)** | **WIP 2026-05-14 05:55** |
-| **#2816** | **edward** | **FiLM-style Re-conditioning** | **WIP 2026-05-14 06:30** |
-| **#2817** | **fern** | **σ-scan (σ=0.01/0.05) for Linear init** | **WIP 2026-05-14 06:30** |
-| **#2853** | **alphonse** | **Pinball τ=0.60 pressure** | **WIP NEW 2026-05-14 07:45** |
-| **#2854** | **frieren** | **Orthogonal init restore (in_project_slice)** | **WIP NEW 2026-05-14 07:45** |
-| **#2855** | **tanjiro** | **Pinball τ=0.55 Ux/Uy velocity channels** | **WIP NEW 2026-05-14 07:45** |
+| #2811 | thorfinn | Sobolev loss on ∇p | **CLOSED** 2026-05-14 07:50 (sent back for fix, never iterated; +25% mid-run) |
+| #2812 | nezuko | LayerScale (init=1e-4) | **CLOSED** 2026-05-14 07:55 (var-vs-mean #10) |
+| #2816 | edward | FiLM-style Re-conditioning | **CLOSED** 2026-05-14 08:15 (mean misses both new bars; re_rand mechanism real but +50% params unjustified) |
+| **#2817** | **fern** | **σ-scan (σ=0.01/0.05) for Linear init** | **WIP sent back 2026-05-14 08:25 for σ=0.05 confirmation seed** |
+| **#2853** | **alphonse** | **Pinball τ=0.60 pressure** | **WIP 2026-05-14 07:45** |
+| **#2854** | **frieren** | **Orthogonal init restore (in_project_slice)** | **WIP 2026-05-14 07:45** |
+| **#2855** | **tanjiro** | **Pinball τ=0.55 Ux/Uy velocity channels** | **WIP 2026-05-14 07:45** |
+| **#2863** | **askeladd** | **Re-Fourier features at input (NeRF-style log Re)** | **WIP NEW 2026-05-14 08:30** |
+| **#2865** | **edward** | **γ-only FiLM-Re (drop β; param-efficient follow-up)** | **WIP NEW 2026-05-14 08:30** |
+| **#2866** | **nezuko** | **Divergence-free auxiliary loss (∇·u=0)** | **WIP NEW 2026-05-14 08:30** |
+| **#2867** | **thorfinn** | **AoA-Fourier features at input (targets camber_rc)** | **WIP NEW 2026-05-14 08:30** |
 
-**Merged:** 11 | **Closed:** 54 | **WIP:** 7 | **Idle:** 0
+**Merged:** 11 | **Closed:** 57 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
 1. **Compute is permanently binding** — best=last at every merge. The 30-min cap has been the dominant constraint since bf16 (PR #1715).
-2. **Variance-vs-mean decoupling confirmed (9 instances)** — β1=0.85/0.95, β2=0.999, warmup, Lookahead, grad-accum, RMSNorm, grad-accum, LN γ-init=0.5 all show variance reduction with mean regression. Pattern: any mechanism reducing optimizer step frequency, representation capacity, or initial activation scale trades mean improvement for variance reduction. At 35-ep compute-bound cap, the mean cost is never recovered.
+2. **Variance-vs-mean decoupling confirmed (10 instances)** — β1=0.85/0.95, β2=0.999, warmup, Lookahead, grad-accum, RMSNorm, LN γ-init=0.5, LayerScale init=1e-4 all show variance reduction with mean regression. Pattern: any mechanism reducing optimizer step frequency, representation capacity, or initial activation scale trades mean improvement for variance reduction. At 35-ep compute-bound cap, the mean cost is never recovered.
 3. **Lion β1 axis FULLY BRACKETED** — β1=0.85 (+8.3%) and β1=0.95 (+4.83pt) both regress; β1=0.90 confirmed optimal.
 4. **Lion β2 axis FULLY BRACKETED** — β2=0.95 (+14.8%) and β2=0.999 (+5.69%) both regress; β2=0.99 confirmed optimal.
 5. **Schedule-shape axis FULLY RETIRED** — warmup, warm restarts, all variants lose to cosine T_max=50 with implicit residual.
@@ -134,22 +143,38 @@ Current focus: **loss geometry exploration** (τ-scan, channel coverage) and **a
 
 ## Potential next research directions
 
-### Immediate (round 9 in flight)
+### Immediate (round 9 in flight, 8 PRs)
 
-1. **Pinball τ=0.60 pressure (alphonse #2853)** — scan τ axis upward; if current τ=0.55 under-corrected the bias
-2. **Orthogonal init restore for in_project_slice (frieren #2854)** — zero-cost bug fix; potentially high impact on slice mechanism quality
-3. **Pinball τ=0.55 Ux/Uy velocity (tanjiro #2855)** — if velocity fields also have under-prediction bias, extending coverage may win
-4. **Sobolev loss on ∇p (thorfinn #2811)** — still running; early val high but may converge
-5. **LayerScale (nezuko #2812)** — still running; early val uncertain
-6. **FiLM-style Re-conditioning (edward #2816)** — still running
-7. **σ-scan for Linear init (fern #2817)** — σ=0.01/0.05
+**Loss geometry axis (3):**
+1. Pinball τ=0.60 pressure (alphonse #2853) — push asymmetry harder
+2. Pinball Ux/Uy extension (tanjiro #2855) — all-channel coverage
+3. Divergence-free auxiliary loss (nezuko #2866) — physics-informed ∇·u=0
 
-### Medium-term (if round-9 clears)
+**Architectural / capacity axis (2):**
+4. Orthogonal init restore (frieren #2854) — zero-cost latent bug fix
+5. γ-only FiLM-Re (edward #2865) — diagnostics-driven follow-up; halves FiLM params
 
-8. **Pinball τ=0.65 pressure** — if τ=0.60 wins, continue scan
-9. **Per-sample Re embedding (MLP-encoded)** — dedicated re_rand OOD lever; learn Re → embedding rather than raw log(Re) concat
-10. **Y-flip augmentation** — flow-symmetric BCs admit clean mirror augmentation (conditionally invariant → valid)
-11. **τ per-split tuning** — re_rand improved most; try separate τ for different geometry classes
-12. **Pinball τ < 0.5 for single_in_dist** — probe whether in-distribution has over-prediction bias (single_in_dist barely improved at τ=0.55)
-13. **Surface-anchored cross-attention** — boundary nodes as queries against volume tokens
-14. **Separate Re embedding network** — richer Re representation for the OOD split
+**Input-encoding axis (2 orthogonal arms):**
+6. Re-Fourier features at input (askeladd #2863) — NeRF-style log(Re); ~+2K params
+7. AoA-Fourier features at input (thorfinn #2867) — same idea for AoA; targets camber_rc
+
+**Init-scale axis (1, send-back):**
+8. σ=0.05 confirmation seed (fern #2817) — characterize seed variance; 1 more run
+
+### Medium-term (next 1-2 rounds)
+
+9. **Pinball τ=0.65 pressure** — if τ=0.60 wins, continue scan
+10. **Re-Fourier + AoA-Fourier combined** — if both win independently, test compound
+11. **Y-flip augmentation** — flow-symmetric BCs admit clean mirror augmentation
+12. **Pressure-Poisson auxiliary loss** — ∇²p coupling to velocity gradients (extends nezuko's divfree mechanism)
+13. **τ per-split tuning** — re_rand improved most under τ=0.55; try class-specific τ
+14. **Pinball τ < 0.5 for single_in_dist** — probe whether in-distribution has over-prediction bias
+15. **Surface-anchored cross-attention** — boundary nodes as queries against volume tokens
+16. **Fourier-encoded Re feeding into FiLM γ** — richer Re embedding as conditioning input (compound of arms 5 and 6)
+17. **GroupedFiLM** — share γ MLPs across 2 consecutive blocks (further param reduction)
+
+### Plateau-protocol escalations (if 5 consecutive misses arrive)
+
+18. **Token-mixing alternative** — replace PhysicsAttention with gated linear attention or MLP-mixer block
+19. **Hybrid loss: pinball + Charbonnier (smooth-MAE)** — Charbonnier-then-pinball or composite weighting
+20. **Pretrain-then-finetune at higher Re** — explicit OOD-targeted curriculum
