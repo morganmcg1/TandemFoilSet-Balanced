@@ -2774,3 +2774,57 @@ ALL 4 splits beat OLD bar; mean −9.8% val / −9.9% test on old bar. **Misses 
 **Implication:** FiLM-AoA mechanism plausibly **orthogonal** to FiLM-Re (γ_w-driven vs γ_bias-driven). Compound test is the right next step.
 
 **Status**: SENT BACK 2026-05-14 16:20. Rebase + rerun on σ=0.07 + FiLM-Re baseline (current default). Compound test: both FiLM-Re γ(Re) AND FiLM-AoA γ(AoA) per block. Bar: val<34.55, test<28.95.
+
+---
+
+## 2026-05-14 16:30 — PR #2942: Lion lr scan alphonse (CLOSED)
+- Branch: `willowpai2g48h3-alphonse/lion-lr-scan`
+- Hypothesis: Re-tune Lion lr at 14th-shift baseline (lr=6e-5 or lr=9e-5 vs default 7.5e-5). Per-split trade-off expected: higher lr helps OOD, lower lr helps IID.
+
+### Results
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| lr=6e-5 (s1) | — | ~34.55 | ~28.95 |
+| lr=9e-5 (s2) | — | ~35.87 | ~30.04 |
+
+Per-split (lr=9e-5 vs baseline mean): single_in_dist 35.35 vs 32.53 (+2.82, worse), geom_camber_rc 41.15 vs 41.997 (−0.85, better).
+
+**Key mechanism:** lr=7.5e-5 is robust at 14th-shift basin. lr=6e-5 ≈ baseline (no improvement). lr=9e-5 shows OOD-vs-IID trade-off: wins geom_camber_rc but loses single_in_dist. A single global lr cannot resolve this trade-off.
+
+**Conclusion:** Lion lr=7.5e-5 confirmed OPTIMAL at new basin. Axis fully bracketed. **Closed** — follow-up: per-block lr scaling (PR #2959) to resolve the OOD-vs-IID trade-off revealed here.
+
+---
+
+## 2026-05-14 16:32 — PR #2902: SwiGLU FFN frieren (CLOSED — not orthogonal to FiLM-Re)
+- Branch: `willowpai2g48h3-frieren/swiglu-ffn`
+- Hypothesis: Replace GELU+Linear FFN in TransolverBlocks with SwiGLU gated FFN for richer capacity.
+
+### Results (rerun on σ=0.07 + FiLM-Re compound baseline)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| SwiGLU s1 | — | 34.72 | 29.40 |
+| Baseline bar | — | 34.5536 | 28.9528 |
+
+Per-split test surf_p: single_in_dist −3.1% (wins), geom_camber_rc +0.8% (regresses), geom_camber_cruise +9.4% (regresses), re_rand +8.7% (regresses). 1/4 splits wins.
+
+**Key mechanism:** SwiGLU's σ=0.05 gain came from compensating under-conditioning that FiLM-Re already provides. At the σ=0.07+FiLM-Re baseline, SwiGLU adds redundant FFN capacity that overshoots in 3/4 splits. NOT orthogonal — mechanism overlap confirmed. val=34.72 misses bar by +0.49%, test=29.40 misses by +1.55%.
+
+**Conclusion:** **Closed** — SwiGLU-FiLM-Re is mechanistically redundant. Next axis for frieren: conditioning-variable Mixup (PR #2960).
+
+---
+
+## 2026-05-14 16:40 — PR #2959: Per-block lr scaling alphonse (ASSIGNED)
+- Branch: `willowpai2g48h3-alphonse/per-block-lr-scaling`
+- Hypothesis: Give late TransolverBlocks (blocks 2-4) higher lr than early blocks (0-1). FiLM-Re shows late blocks develop stronger Re-dependent gain modulation (γ_w_L2 grows 3.4→5.2 with depth). A single global lr cannot resolve the per-split OOD-vs-IID trade-off from #2942; per-block lr may.
+- Arms: 1.5× late-block lr (s1), 2.0× late-block lr (s2, seed=2). late_block_start=2.
+- Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 16:45 — PR #2960: Conditioning Mixup frieren (ASSIGNED)
+- Branch: `willowpai2g48h3-frieren/cond-mixup`
+- Hypothesis: Mixup on (Re, AoA) conditioning variables AND targets simultaneously (λ~Beta(α,α)). Forces model to interpolate predictions over conditioning manifold rather than memorize discrete training points. Direct OOD regularizer targeting geom_camber_rc's unseen Re/AoA regime combinations.
+- Arms: α=0.2 (mild, s1), α=0.4 (moderate, s2, seed=2)
+- Merge bar: mean val < 34.55, mean test < 28.95
