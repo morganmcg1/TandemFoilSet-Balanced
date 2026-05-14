@@ -191,12 +191,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 specialized_decoders: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.specialized_decoders = specialized_decoders
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -207,14 +209,27 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # When using specialized decoders, the trunk produces hidden features
+        # and the per-node-type decoders perform the final out projection. The
+        # last TransolverBlock therefore must NOT collapse to out_dim itself.
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_num,
+                last_layer=(i == n_layers - 1) and not specialized_decoders,
             )
             for i in range(n_layers)
         ])
+        if self.specialized_decoders:
+            self.surf_decoder = nn.Sequential(
+                nn.Linear(n_hidden, n_hidden), nn.GELU(),
+                nn.Linear(n_hidden, out_dim),
+            )
+            self.vol_decoder = nn.Sequential(
+                nn.Linear(n_hidden, n_hidden), nn.GELU(),
+                nn.Linear(n_hidden, out_dim),
+            )
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -233,6 +248,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
+        if self.specialized_decoders:
+            is_surface = data["is_surface"]
+            surf_pred = self.surf_decoder(fx)
+            vol_pred = self.vol_decoder(fx)
+            fx = torch.where(is_surface.unsqueeze(-1), surf_pred, vol_pred)
         return {"preds": fx}
 
 
@@ -273,7 +293,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -396,6 +416,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    specialized_decoders: bool = False
 
 
 cfg = sp.parse(Config)
@@ -435,6 +456,7 @@ model_config = dict(
     mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    specialized_decoders=cfg.specialized_decoders,
 )
 
 model = Transolver(**model_config).to(device)
@@ -482,7 +504,7 @@ for epoch in range(MAX_EPOCHS):
         with torch.autocast('cuda', dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
             abs_err = (pred - y_norm).abs()
 
             vol_mask = mask & ~is_surface
@@ -553,6 +575,38 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+
+    decoder_diag: dict | None = None
+    if cfg.specialized_decoders:
+        with torch.no_grad():
+            w_surf_final = model.surf_decoder[-1].weight.detach().float()
+            w_vol_final = model.vol_decoder[-1].weight.detach().float()
+            cos_final = F.cosine_similarity(
+                w_surf_final.flatten().unsqueeze(0),
+                w_vol_final.flatten().unsqueeze(0),
+                dim=1,
+            ).item()
+            w_surf_pre = model.surf_decoder[0].weight.detach().float()
+            w_vol_pre = model.vol_decoder[0].weight.detach().float()
+            cos_pre = F.cosine_similarity(
+                w_surf_pre.flatten().unsqueeze(0),
+                w_vol_pre.flatten().unsqueeze(0),
+                dim=1,
+            ).item()
+            decoder_diag = {
+                "decoder/cos_final": cos_final,
+                "decoder/cos_pre": cos_pre,
+                "decoder/l2_surf_final": w_surf_final.norm().item(),
+                "decoder/l2_vol_final": w_vol_final.norm().item(),
+            }
+        print(
+            "\nSpecialized decoder diagnostic (best checkpoint):"
+            f"\n  cos(surf,vol) final layer = {decoder_diag['decoder/cos_final']:.4f}"
+            f"\n  cos(surf,vol) pre layer   = {decoder_diag['decoder/cos_pre']:.4f}"
+            f"\n  L2 norm: surf={decoder_diag['decoder/l2_surf_final']:.4f}"
+            f"  vol={decoder_diag['decoder/l2_vol_final']:.4f}"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {"event": "decoder_diagnostic", **decoder_diag})
 
     test_metrics = None
     test_avg = None
