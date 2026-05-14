@@ -3,14 +3,46 @@
 Branch: `icml-appendix-charlie-pai2g-48h-r1`
 Research tag: `charlie-pai2g-48h-r1`
 
-## Status (2026-05-12)
+## Status (2026-05-14)
 
-**Two winners merged.** PR #1581 (frieren, L1 + OneCycleLR) is now the
-current baseline at `val_avg/mae_surf_p = 85.615` (-9.2% vs PR #1355).
-All subsequent experiments should use `--loss l1 --lr 2e-3 --epochs 14`
-with OneCycleLR scheduler enabled.
+**Three winners merged.** PR #1405 (tanjiro, bf16 + OneCycle@25ep) is now the
+current baseline at `val_avg/mae_surf_p = 73.295` (-14.4% vs PR #1581).
+All subsequent experiments should use `--loss l1 --lr 2e-3 --epochs 25`
+with OneCycleLR scheduler + bf16 autocast enabled. VRAM footprint is ~33 GB
+(down from ~42 GB in fp32) due to bf16.
 
-## 2026-05-12 22:55 — PR #1581: L1 + OneCycleLR@peak=2e-3 (frieren) ← CURRENT BEST
+## 2026-05-14 — PR #1405: bf16 autocast + OneCycleLR@25ep (tanjiro) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **73.295**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **63.911**
+- **Improvement vs PR #1581:** -14.4% val / -23.3% test
+- **Best epoch:** 19 / 25 configured (30-min wall-clock cap; ~97 s/epoch with bf16, ~33 GB peak VRAM)
+- **Key change:** bf16 autocast reduces per-epoch time, enabling more epochs within the 30-min cap;
+  `--epochs 25` sets OneCycleLR `total_steps = 25 × len(loader)` so LR stays meaningful through epoch 19.
+- **Per-split val breakdown (epoch 19):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 54.423 |
+| val_re_rand | 71.041 |
+| val_single_in_dist | 79.894 |
+| val_geom_camber_rc | 87.823 |
+| **val_avg** | **73.295** |
+
+- **Metric artifacts:** `models/model-amp-bf16-onecycle-25ep-20260512-233756/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 25 --lr 2e-3 --loss l1 \
+  --agent charliepai2g48h1-tanjiro --experiment_name amp-bf16-onecycle-25ep
+```
+
+Note: bf16 autocast is always-on after this merge (merged `train.py`). VRAM ~33 GB.
+Verify OneCycleLR completes: check `train/lr_end_of_epoch` — should be >1e-4 at epoch 14
+(meaning more training budget remains under the cap).
+
+## 2026-05-12 22:55 — PR #1581: L1 + OneCycleLR@peak=2e-3 (frieren) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **85.615**
 - **Paper-facing metric:** `test_avg/mae_surf_p_3of4_finite_splits` = **83.328**
@@ -74,7 +106,7 @@ cd target && python train.py --epochs 15 --loss l1 \
   - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
   - `space_dim=2, fun_dim=22 (= X_DIM - 2), out_dim=3`
   - ~1.1M params
-- **Training:** `batch_size=4`, fp32
+- **Training:** `batch_size=4`, **bf16 autocast** (merged PR #1405, VRAM ~33 GB)
   - `WeightedRandomSampler` for equal-weight domain sampling across the three
     training-domain groups (raceCar single, raceCar tandem, cruise tandem).
 - **Wall-clock cap:** `SENPAI_TIMEOUT_MINUTES=30` per training execution.
