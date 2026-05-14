@@ -1,5 +1,35 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-nezuko/surf-channel-weight-l1`
+- **Hypothesis:** Doubling the pressure (p) channel weight within the surface L1 loss (`cw=[1,1,2]`) while reducing sw from 10→5 focuses learning on pressure prediction at the expense of velocity channels.
+
+### Result (vs PR #1582 baseline 53.482 / test 46.104)
+
+| Metric | Baseline (#1582) | cw=2 (this PR) | Δ |
+|--------|-----------------|----------------|---|
+| **val_avg/mae_surf_p** | 53.482 | **53.352** | **-0.24%** |
+| test_avg/mae_surf_p | 46.104 | **45.747** | **-0.77%** |
+| val_geom_camber_cruise | 37.156 | **35.255** | -5.1% |
+| val_re_rand | 53.973 | 54.832 | +1.6% |
+| val_single_in_dist | 56.283 | **53.605** | -4.8% |
+| val_geom_camber_rc | 66.515 | 69.714 | +4.8% |
+
+Wall-clock: 30.1 min, 35/35 epochs realized. Artifact: `models/model-surf-cw2-sw5-onecycle-ep35-compiled-20260514-192707/`
+
+### Action: MERGED — new baseline val_avg=53.352, test=45.747
+
+**Mechanism:** Per-channel channel weight `[1,1,2]` boosts the pressure gradient within the surface loss. Val improvement is marginal (-0.24%) but the test improvement is cleaner (-0.77%). The effect shows a strong **within-distribution trade**: cruise and single_in_dist improve substantially (5% each), while val_geom_camber_rc (OOD extrapolation) regresses (+4.8%). Net val is near-neutral due to offsetting split changes.
+
+**Key insight from student:** The original L1+cosine/15ep result showed cw=2 gave -4.2% on val. On the new recipe (sw=5, 35ep, compile), the magnitude shrank by ~17× because the improved recipe already extracts much of the pressure signal available. cw=2 is now a rebalancing tool (cruise vs rc) rather than a pure improvement.
+
+**Implementation:** `--surf_channel_weight "1.0,1.0,2.0"` — single Config field + tensor multiply, minimal complexity.
+
+**New recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0"`
+
+---
+
 ## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline ✅ MERGED (new baseline)
 
 - **Student branch:** `charliepai2g48h1-alphonse/surf-weight-sweep-l1`

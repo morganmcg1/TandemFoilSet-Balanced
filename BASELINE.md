@@ -5,12 +5,54 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Seven winners merged.** PR #1582 (alphonse, surf_weight=5) is the
-current baseline at `val_avg/mae_surf_p = 53.482` (-1.82% vs PR #2967).
-Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5`
-VRAM footprint ~24 GB. Throughput: ~50.9 s/epoch. All 35 epochs fit in 29.7 min.
+**Eight winners merged.** PR #1625 (nezuko, surf_channel_weight=[1,1,2]) is the
+current baseline at `val_avg/mae_surf_p = 53.352` (-0.24% val / -0.77% test vs PR #1582).
+Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0"`
+VRAM footprint ~24 GB. Throughput: ~50.5 s/epoch. All 35 epochs fit in 30.1 min.
 
-## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline (alphonse) ← CURRENT BEST
+## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline (nezuko) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **53.352**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **45.747**
+- **Improvement vs PR #1582:** -0.24% val / -0.77% test
+- **Best epoch:** 35/35 configured (all fit in 30.1 min)
+- **Key change:** `--surf_channel_weight "1.0,1.0,2.0"` doubles the pressure (p) channel weight
+  within the surface L1 loss while halving velocity channels. Cruise (-5.1% val) and
+  single_in_dist (-4.8% val) improve; rc regressionally (+4.8% val). Net val marginal,
+  test cleaner (-0.77%).
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 35.255 |
+| val_re_rand | 54.832 |
+| val_single_in_dist | 53.605 |
+| val_geom_camber_rc | 69.714 |
+| **val_avg** | **53.352** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 28.214 |
+| test_re_rand | 45.032 |
+| test_single_in_dist | 47.359 |
+| test_geom_camber_rc | 62.383 |
+| **test_avg** | **45.747** |
+
+- **Metric artifacts:** `models/model-surf-cw2-sw5-onecycle-ep35-compiled-20260514-192707/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" \
+  --agent charliepai2g48h1-nezuko --experiment_name surf-cw2-sw5-onecycle-ep35-compiled
+```
+
+Note: `--surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --compile_model --epochs 35` is now the **required baseline recipe**. All future experiments MUST include these flags.
+
+## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline (alphonse) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **53.482**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **46.104**
@@ -245,7 +287,7 @@ cd target && python train.py --epochs 15 --loss l1 \
 
 - **Optimizer:** `AdamW(lr=2e-3, weight_decay=1e-4)` — updated from 5e-4 (PR #1581)
 - **Scheduler:** ~~CosineAnnealingLR(T_max=epochs)~~ → **OneCycleLR** (merged PR #1581), per-batch stepping, peak_lr=`lr` arg, total_steps=`epochs * len(loader)`
-- **Loss:** ~~MSE~~ → **Pure L1** in normalized space, `vol_loss + 10.0 * surf_loss` (merged PR #1355)
+- **Loss:** ~~MSE~~ → **Pure L1** in normalized space, `vol_loss + 5.0 * surf_loss` (merged PR #1355, sw tuned PR #1582). Surface L1 uses per-channel weighting `[1.0, 1.0, 2.0]` for `[Ux, Uy, p]` (merged PR #1625).
 - **Model:** Transolver
   - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
   - `space_dim=2, fun_dim=22 (= X_DIM - 2), out_dim=3`
