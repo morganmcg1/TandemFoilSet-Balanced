@@ -91,15 +91,18 @@ class GeGLUMLP(nn.Module):
     params of the GELU equivalent.
     """
 
-    def __init__(self, n_input, n_hidden, n_output):
+    def __init__(self, n_input, n_hidden, n_output, dropout: float = 0.0):
         super().__init__()
         assert n_hidden % 2 == 0, f"GeGLU requires even n_hidden, got {n_hidden}"
         self.fc1 = nn.Linear(n_input, n_hidden)
         self.fc2 = nn.Linear(n_hidden // 2, n_output)
+        self.dropout_p = dropout
 
     def forward(self, x):
         x1, x2 = self.fc1(x).chunk(2, dim=-1)
-        return self.fc2(F.gelu(x1) * x2)
+        h = F.gelu(x1) * x2
+        h = F.dropout(h, p=self.dropout_p, training=self.training)
+        return self.fc2(h)
 
 
 class PhysicsAttention(nn.Module):
@@ -121,7 +124,10 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        # to_out keeps its no-op residual-path Dropout slot so state_dict shape
+        # is identical to prior runs; the attention+FFN dropout test (PR #2917)
+        # explicitly excludes residual-path dropout, so this stays at 0.0.
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(0.0))
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -170,7 +176,7 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.RMSNorm(hidden_dim)
-        self.mlp = GeGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        self.mlp = GeGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, dropout=dropout)
         if self.last_layer:
             self.ln_3 = nn.RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -391,6 +397,7 @@ class Config:
     n_layers: int = 5
     n_head: int = 4
     slice_num: int = 48
+    dropout: float = 0.0  # attention-weights + FFN dropout; 0.0 matches prior baselines
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -432,6 +439,7 @@ model_config = dict(
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
+    dropout=cfg.dropout,
     mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
