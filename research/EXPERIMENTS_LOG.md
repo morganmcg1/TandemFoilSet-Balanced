@@ -1,5 +1,59 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 22:30 — PR #2970: OneCycleLR pct_start tuning (0.05/0.2) ✅ WINNER (pending rebase)
+
+- **Student branch:** `charliepai2g48h1-frieren/onecycle-pct-start-tuning`
+- **Hypothesis:** pct_start (warmup fraction) modulates how fast the LR ramps to peak; longer warmup (0.2) may give more stable bf16 training, shorter (0.05) may extract more productive tail.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | pct_start | val_avg | Δ val | test_avg | Δ test |
+|-----|----------:|--------:|------:|---------:|-------:|
+| A | 0.05 | 54.683 | +2.50% | 46.764 | +2.22% |
+| **B** | **0.2** | **51.817** | **−2.88%** ✅ | **44.616** | **−2.47%** ✅ |
+
+### Per-split val (Arm B vs baseline)
+
+| Split | Baseline | pct=0.2 | Δ |
+|-------|---------:|--------:|---|
+| val_geom_camber_cruise | 35.255 | **31.929** | −9.4% ✅ |
+| val_re_rand | 54.832 | **51.773** | −5.6% ✅ |
+| val_single_in_dist | 53.605 | 55.477 | +3.5% |
+| val_geom_camber_rc | 69.714 | **68.090** | −2.3% ✅ |
+
+3 of 4 splits improve, including the key OOD `val_geom_camber_rc`.
+
+### Action: SEND-BACK for clean rebase (mergeStateStatus=DIRTY)
+
+**Mechanism validated:** pct_start=0.2 wins on two compounding effects:
+1. **Stability gain in early bf16 training** — Arm A (0.05) shows a clear val regression spike at ep 10 (130 → 154), absent in Arm B. Hitting peak LR fast in bf16 generates gradient noise the model has to recover from.
+2. **Higher LR during productive cosine tail** — with pct_start=0.2, cosine decay starts later. During epochs 15–25 (highest-yield phase), Arm B runs ~30% higher LR. Crossover with Arm A happens at ep 28; Arm B finishes 2.85 ahead.
+
+**Blocker:** Branch was created before #1582/#1625 merged. Student copied train.py forward instead of git-rebasing, so PR diff includes surf_channel_weight code that conflicts with current advisor branch. Sent back for clean rebase (do NOT re-run; metric artifacts are valid).
+
+**Implication for research direction:** This is the first new merge in ~6 cw/sw experiments. Schedule axis (pct_start, final_div_factor) is back on the table as a productive lever. Once merged, baseline becomes 51.817 / 44.616 with pct_start=0.2 in the required recipe.
+
+## 2026-05-14 22:25 — PR #2916: bf16 batch_size=8 + extended schedule ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-tanjiro/bf16-batch8-extended-schedule`
+- **Hypothesis:** batch_size=8 halves `len(loader)`, allowing OneCycleLR to complete in 30 min with extended schedule; bf16 should keep VRAM in budget.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | config | realized | val_avg | Δ |
+|-----|--------|---------:|--------:|---|
+| Compile + bs=8 | OOM at 94GB VRAM | — | — | — |
+| A (nocompile, bs=8, ep25) | 18/25 | 79.998 | **+50%** |
+| B (nocompile, bs=8, ep35) | 18/35 | 88.147 | **+65%** |
+
+### Action: CLOSED — both execution paths failed
+
+**Why compile+bs=8 OOMs:** `torch.compile(mode='reduce-overhead', dynamic=True)` records CUDA graphs per distinct mesh shape; bs=8 doubles the shape combinatorics and each graph allocates ~8 GB in private pools. Hit 94 GB before completing epoch 1. The advisor's 48 GB prediction was wrong — variable mesh sizes (74K–242K nodes) inflate activation memory non-linearly with batch.
+
+**Why nocompile+bs=8 fails:** ~2× slower per epoch (101 s vs ~51 s with compile). Realized epochs collapse from 35 → 18. OneCycleLR cannot complete in 18 epochs — Arm B is still near peak LR at wall-clock cap.
+
+**Implication:** The compile speedup (~1.86×, PR #2954) is locked in. batch_size axis is closed for now; would require static-shape compile or `mode='default'` (engineering work for an axis already at local optimum).
+
 ## 2026-05-14 22:15 — PR #3027: MLP dropout sweep (0.05/0.10) ❌ CLOSED (negative on primary, positive on OOD)
 
 - **Student branch:** `charliepai2g48h1-thorfinn/dropout-mlp-sweep`
