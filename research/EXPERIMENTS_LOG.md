@@ -2,6 +2,86 @@
 
 ---
 
+## 2026-05-14 [Round 111] UTC — PR #2860: Gradient clipping max_norm=1.0 (Lion numerical stability) — **CLOSED LOSS (+4.54% val, +4.24% test)**
+
+- **Branch:** charliepai2g48h5-edward/grad-clip-1
+- **Hypothesis:** Add `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)` after `loss.backward()` before `optimizer.step()`. Tests whether Lion's exp_avg buffer accumulates magnitudes from rare gradient spikes, perturbing exp_avg sign on subsequent steps. Numerical-stability sub-axis within training-procedure family — never tested this launch.
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-grad-clip-1-20260514-083034/metrics.jsonl`
+
+| Val split | grad_clip=1.0 | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | 25.6419 | 25.2751 | +1.45% LOSS |
+| `geom_camber_rc` | 47.6635 | 45.8179 | +4.03% LOSS |
+| `geom_camber_cruise` | 18.7382 | 16.8427 | **+11.25% LOSS (worst)** |
+| `re_rand` | 37.1274 | 35.6177 | +4.24% LOSS |
+| **val_avg** | **32.2927** | **30.8909** | **+4.54% LOSS** |
+| **test_avg** | **27.3077** | **26.1964** | **+4.24% LOSS** |
+
+- **Result:** NOT MERGED. All 4 val splits regress; OOD splits hit hardest (cruise +11.25%); in_dist only +1.45% — opposite of predicted in_dist-hit-hardest.
+- **Critical diagnostic finding:** `clip_fired_frac_train_epoch = 1.0000` for ALL 62 epochs (100% clip fire rate). Pre-clip gradient norms were 22-72× the threshold throughout training: mean ep4 71.61 / ep62 22.97; max ep4 248 / ep62 61.52 — never approached 1.0 even at cosine tail LR ~6.6e-6.
+- **Mechanism re-interpretation:** Lion's sign-step is per-step scale-invariant (`sign(c·grad) = sign(grad)`), BUT Lion's exp_avg buffer accumulates magnitudes: `exp_avg_t = β1·exp_avg_{t-1} + (1-β1)·grad_t`. With 100% clipping, every step's contribution to exp_avg is scaled by `1.0/||grad_t||`, which ERASES the relative-magnitude signal between training steps. The "trust steps consistently large in the same direction" property of Lion is destroyed → model learns noisiest features at the same rate as most informative features, flattening Lion's effective trajectory.
+- **Mechanistically distinct from spike-clipping.** A true spike-clipping test (clip only rare 5-10% spike steps) would need max_norm in 50-100 range (≈ mean+2σ of pre-clip norms 22-72). Not pursued at this time.
+- **Important codebase finding:** Lion+L1+surf_weight=10 with this architecture produces gradient norms 20-70× of paper Lion expectations. Future numerical-stability proposals should anchor thresholds to actual observed grad norms in this codebase, not general ML defaults.
+- **87th taxon: gradient clipping max_norm=1.0 CLOSES.** Combined with closed EMA #2820, SWA, Lookahead, SAM, Mixup, DropPath, Weight Standardization, Deep Supervision, Gradient Centralization, prior EMA decay = training-procedure / numerical-stability meta-family COMPREHENSIVELY MAPPED.
+
+---
+
+## 2026-05-14 [Round 111] UTC — PR #2852: slice_num 24→20 (slice-routing-quality downward) — **CLOSED LOSS (+3.69% val, +6.16% test)**
+
+- **Branch:** charliepai2g48h5-frieren/slice-num-20-canonical
+- **Hypothesis:** Extend the slice_num downward trajectory (64→32 WIN #1846, 32→24 WIN #2307) by trying 24→20. Slice attention is information-routing (per #2828 diagnostic); fewer slices may either help generalization (less redundancy) or hurt (information bottleneck).
+- **Metric artifacts:** `models/model-charliepai2g48h5-frieren-slice-num-20-canonical-20260514-082913/metrics.jsonl`
+
+| Val split | slice_num=20 | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | 25.295 | 25.2751 | +0.08% near-flat |
+| `geom_camber_rc` | 47.495 | 45.8179 | +3.66% LOSS |
+| `geom_camber_cruise` | 18.621 | 16.8427 | **+10.56% LOSS (worst)** |
+| `re_rand` | 36.703 | 35.6177 | +3.05% LOSS |
+| **val_avg** | **32.029** | **30.8909** | **+3.69% LOSS** |
+| **test_avg** | **27.808** | **26.1964** | **+6.16% LOSS** |
+
+- **Result:** NOT MERGED. Param count 332,916 = −784 (slice_token + Project_To_Slices removal). Best ep57/70 timeout-truncated at 30 min cap.
+- **Important note on student analysis:** Student's per-split delta analysis used wrong reference baselines (cruise 33.93 vs actual #2810 cruise 16.84, in_dist 23.59 vs actual 25.28, camber_rc 32.36 vs actual 45.82, re_rand 33.81 vs actual 35.62). This led to a "striking camber-asymmetry: cruise WIN −45.13%, camber_rc LOSS +46.78%" narrative built on those wrong deltas. When recomputed against correct #2810 baseline (table above): all 4 splits LOSS — cruise is the WORST hit (+10.56%), NOT a win. The asymmetry-driven mechanism (high-camber needs more routing capacity, low-camber benefits from tighter routing) was artifact of the wrong reference values.
+- **Real signal:** uniform LOSS across all 4 splits at slice_num=20, with cruise most-sensitive. The slice_num trajectory 64→32 WIN, 32→24 WIN, 24→20 LOSS suggests 24 is at or near the optimum from the downward direction.
+- **Useful independent diagnostics:**
+  - SE block-3 gate stats per split: gate_std 0.15-0.27, gate_min 0.008-0.08 → gating active and healthy across splits.
+  - LayerScale γ_attn near-identity at terminal (block0/3 abs_mean ~0.015, weakly grown from 1e-4 init); γ_mlp dominant (block0/3 abs_mean ~0.06-0.07).
+  - SwiGLU gate stats: gate_mean 0.23-0.42, std 0.83-1.07, zero_frac <2% → gates active, no hard masking.
+  - FiLM (block-0) at val_re_rand: |1+γ| mean 0.965 → near-identity post-FiLM scaling.
+- **88th taxon: slice_num downward axis CLOSES at this magnitude.** Closing comment to student asked to anchor future split-comparisons to `BASELINE.md` exact reference numbers to avoid re-occurring baseline-confusion. Reassigning frieren to slice_num=28 (UPWARD direction, never tested this launch).
+
+---
+
+## 2026-05-14 [Round 111] UTC — PR #2873: Post-norm structural pivot (LN-outside-residual at ln_1/ln_2) — **ASSIGNED (87th candidate axis)**
+
+- **Branch:** charliepai2g48h5-edward/post-norm
+- **Hypothesis:** Replace pre-norm `x = x + γ*attn(LN(x))` with post-norm `x = LN(x + γ*attn(x))` at all 8 sites (ln_1 and ln_2 per block × 4 blocks). Keep `ln_3` (last_layer) unchanged. +0 params.
+- **Why:** Pre/post-norm structural choice has NEVER been tested in this launch. Liu et al. 2020 ("Understanding the Difficulty of Training Transformers") showed post-norm yields better final performance once stability is solved; original Transformer used post-norm; modern pre-norm became default for deep models (>30 layers). At 4 blocks with LayerScale γ=1e-4 init, post-norm should be stable from start (`LN(x + tiny·attn(x)) ≈ LN(x)`).
+- **OOD-bias hypothesis:** Post-norm's per-layer activation calibration may help generalization to OOD distributions by preventing in-dist DC-offset memorization in residual stream (similar mechanism diagnosis as #2851 mean-centering for OOD).
+- **Failure mode to watch:** FiLM at block 0 ln_1 site — pre-norm normalizes FiLM-modulated x before feeding to attn; post-norm feeds FiLM-modulated x DIRECTLY to attn (no normalization). May damage FiLM conditioning.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): post-norm activation calibration breaks plateau; try post-LN + ScaleNorm or per-block γ-init scaling as follow-ups.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): pre/post-norm sweet-spot locally flat at 4 blocks; close structural-norm-site axis.
+  3. **LOSS** (val > 30.8909 + 1%): pre-norm load-bearing; close post-norm direction; FiLM conditioning likely failure mode.
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-edward --experiment_name "charliepai2g48h5-edward/post-norm" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`. Expected param count 333,700 unchanged.
+
+---
+
+## 2026-05-14 [Round 111] UTC — PR #2874: slice_num=28 (upward direction test) — **ASSIGNED (88th candidate axis)**
+
+- **Branch:** charliepai2g48h5-frieren/slice-num-28
+- **Hypothesis:** Test slice_num=28 (UP one step from baseline 24). The slice_num trajectory 64→32 WIN, 32→24 WIN, 24→20 LOSS closes the downward direction. The upward direction has NEVER been tested in this launch — clean axis-direction test.
+- **Why:** +4 slices vs baseline 24 (+16.7% routing capacity); ~+800 params (~334,500 total). Tests whether the previous 32→24 step (#2307 WIN) was at the local optimum or whether further upward exploration was prematurely abandoned. OOD-pathway diversity hypothesis: more slice-routing pathways could give more pathway diversity for OOD geometries that don't fit in-dist routing patterns.
+- **Important assignment note:** Student #2852 used wrong reference baselines for per-split deltas — assignment explicitly asks anchoring to `BASELINE.md` exact reference values (in_dist 25.2751, camber_rc 45.8179, camber_cruise 16.8427, re_rand 35.6177) to prevent baseline-confusion artifacts.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): slice_num upward direction has headroom; try slice_num=32 next.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): slice_num=24 sweet spot locally flat; close slice_num axis comprehensively.
+  3. **LOSS** (val > 30.8909 + 1%): #2307 32→24 was the correct direction and going up reverses it; close slice_num upward direction.
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-frieren --experiment_name "charliepai2g48h5-frieren/slice-num-28" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`.
+
+---
+
 ## 2026-05-14 [Round 110] UTC — PR #2858: PhysicsAttention temperature init 0.5→1.0 — **CLOSED CATASTROPHIC LOSS (+32.41% val, +32.57% test)**
 
 - **Branch:** charliepai2g48h5-nezuko/temperature-init-1
