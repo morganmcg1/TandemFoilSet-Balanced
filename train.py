@@ -480,6 +480,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    film_re_init_std: float | None = None  # Override init std for FiLM-Re γ MLP HIDDEN layer (PR #3001). Output layer keeps identity init (γ ≡ 1) in either case. None → hidden inherits trunc_normal_(init_std).
 
 
 cfg = sp.parse(Config)
@@ -525,10 +526,57 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+
+# PR #3001: optional separate init std for FiLM-Re γ MLP HIDDEN-layer weights.
+# Applied AFTER the Transolver constructor, which has already set:
+#   film_gamma[0]: W ~ trunc_normal_(std=init_std), b = 0  (hidden)
+#   film_gamma[2]: W = 0, b = 1                            (output, identity init → γ ≡ 1)
+# We OVERRIDE only the hidden layer so the IDENTITY OUTPUT INIT IS PRESERVED.
+# Net effect at init: γ = W2·GELU(W1·log_re + b1) + b2 = 0 + 1 = 1 exactly, matching
+# baseline. Smaller W1 std → smaller |hidden| activations → smaller dγ/dW2 once
+# W2 starts to move, so γ drifts away from 1 more slowly ("soft-start conditioning").
+#
+# NOTE: the PR body's example code zeros ALL film_gamma biases (incl. the output b2=1),
+# which a debug run showed catastrophically attenuates the trunk (γ≈0 per block →
+# 0.08^5 ≈ 3e-6 attenuation → val MAE=492 at debug e1, vs advisor's expected 50-80).
+# The hypothesis itself ("γ = 1 + MLP(log_re)", "soft-starting", "1+ prevents near-zero
+# outputs") explicitly assumes γ ≡ 1 at init. So we preserve identity output init.
+if cfg.film_re_init_std is not None:
+    gamma_module_names = []
+    base_model_init_override = getattr(model, "_orig_mod", model)
+    for name, module in base_model_init_override.named_modules():
+        if "film_gamma" in name and isinstance(module, nn.Linear):
+            # Identify the output Linear of each film_gamma Sequential (the .2 sub-module)
+            # vs the hidden Linear (the .0 sub-module).
+            is_output_layer = name.endswith(".2")
+            if is_output_layer:
+                # Preserve identity init: W=0, b=1. γ ≡ 1 at epoch 0.
+                continue
+            # Hidden layer: re-init weights with the requested std; zero bias.
+            nn.init.normal_(module.weight, std=cfg.film_re_init_std)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+            gamma_module_names.append(name)
+    if gamma_module_names:
+        print(
+            f"[init] FiLM-Re γ MLP HIDDEN re-initialized: std={cfg.film_re_init_std} "
+            f"on {len(gamma_module_names)} Linear layers "
+            f"(main trunk init_std={cfg.init_std}); identity OUTPUT init preserved (γ ≡ 1 at init)"
+        )
+        print(f"[init] Re-init layers: {gamma_module_names}")
+    else:
+        print(
+            f"[WARNING] film_re_init_std={cfg.film_re_init_std} but no 'film_gamma' "
+            "hidden layers found. Check naming convention."
+        )
+
 model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+print(f"[init] FiLM-Re γ MLP hidden init std = "
+      f"{cfg.film_re_init_std if cfg.film_re_init_std is not None else f'inherit ({cfg.init_std} trunc_normal_)'}"
+      f"; output identity init preserved (γ ≡ 1)")
 
 optimizer = Lion(
     model.parameters(),
@@ -571,6 +619,31 @@ with torch.no_grad():
     param_l2_init = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at init: {param_l2_init:.4f}")
 wandb.summary["param_l2_init"] = param_l2_init
+
+# --- γ-only FiLM-Re per-block diagnostics at INIT (after any re-init override) ---
+# Mirrors the final-epoch diagnostic at the bottom so we can compare init→final
+# trajectory. PR #3001: with film_re_init_std set, γ_w_l2 starts at ~sqrt(fan_in*fan_out)*std
+# instead of 0 (identity init); γ_bias_mean starts at 0 instead of 1.
+if model_config.get("film_re"):
+    base_model_init = getattr(model, "_orig_mod", model)
+    init_gamma_diag: dict[str, float] = {}
+    print("\nγ-only FiLM-Re per-block diagnostics (init):")
+    print(f"  {'block':<6s} {'γ_bias_mean':>14s} {'γ_bias_std':>12s} "
+          f"{'γ_w_l2':>10s} {'γ_w_absmax':>12s}")
+    for i, block in enumerate(base_model_init.blocks):
+        last_lin = block.film_gamma[-1]
+        gb = last_lin.bias.detach().float()
+        gw = last_lin.weight.detach().float()
+        b_mean, b_std = gb.mean().item(), gb.std().item()
+        w_l2 = gw.norm().item()
+        w_absmax = gw.abs().max().item()
+        init_gamma_diag[f"film_init/block{i}/gamma_bias_mean"] = b_mean
+        init_gamma_diag[f"film_init/block{i}/gamma_bias_std"] = b_std
+        init_gamma_diag[f"film_init/block{i}/gamma_w_l2"] = w_l2
+        init_gamma_diag[f"film_init/block{i}/gamma_w_absmax"] = w_absmax
+        print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
+              f"{w_l2:>10.4f} {w_absmax:>12.4f}")
+    wandb.summary.update(init_gamma_diag)
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
