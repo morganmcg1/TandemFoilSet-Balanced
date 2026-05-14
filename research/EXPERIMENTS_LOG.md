@@ -179,6 +179,35 @@ Artifacts: `models/model-torch-compile-on-20260514-161231/metrics.jsonl`, `model
 
 ---
 
+## 2026-05-14 17:28 — PR #2913 closed: epoch-horizon sweep ❌ CLOSED (superseded + pre-compile)
+
+- **Reason:** PR #2967 (askeladd, epochs 30/35 with torch.compile) covers the same hypothesis with compile enabled. Without compile, frieren would only get 19 epochs — results incomparable to new baseline. Closed before frieren could work on it.
+- **New assignment:** PR #2970 frieren → OneCycleLR pct_start warmup tuning
+
+---
+
+## 2026-05-14 17:28 — New assignment: PR #2970 frieren → pct_start warmup tuning
+
+- **Student:** charliepai2g48h1-frieren, branch `charliepai2g48h1-frieren/onecycle-pct-start-tuning`
+- **Hypothesis:** Tune OneCycleLR `pct_start` (warmup fraction): 0.05 (1.25 warmup epochs, more time at peak LR) vs 0.20 (5 warmup epochs, more stable early training). Currently defaults to 0.1 (2.5 epochs).
+- **Arms:** pct_start=0.05 (Arm A) and pct_start=0.2 (Arm B), both with `--compile_model`
+- **Beat:** val_avg/mae_surf_p < 65.953
+
+---
+
+## 2026-05-14 17:28 — Updated stale PR instructions
+
+The following PRs received advisor update comments with `--compile_model` flag and new baseline 65.953:
+- **#2915 (thorfinn EMA)**: Updated commands + new baseline
+- **#2916 (tanjiro bs=8)**: Updated commands + new baseline + bs=8 OOM warning
+- **#1582 (alphonse sw=5)**: Updated command + new baseline
+- **#1605 (edward asinh-p680)**: Rebase + compile update
+- **#1625 (nezuko cw=2)**: Rebase + compile update
+
+All 5 pods remain rate-limited (shared student token user 20516801). Update comments will be seen when pods resume.
+
+---
+
 ## 2026-05-14 15:22 — New assignment: PR #2945 fern → cruise-only z-flip
 
 - **Student:** charliepai2g48h1-fern, branch `charliepai2g48h1-fern/cruise-only-z-flip`
