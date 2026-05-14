@@ -6,6 +6,34 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 08:00 — Round 41 cont.: close #2847 frieren Huber d=0.1 (+5.54% val MILD REGRESSION — loss-form axis CLOSED definitively); assign frieren #2857 SWA (Stochastic Weight Averaging, swa_start=30 — fresh post-hoc weight-averaging axis)
+
+### PR #2847 — frieren Huber d=0.1 (normalized-space corrected)
+- Branch: `charliepai2g48h3-frieren/huber-d0p1-nlayers2-slicenum16-epochs46`
+- Hypothesis: Properly-scaled Huber for normalized loss space (~90% of errors stay L1, only smallest ~10% get quadratic smoothing) — tests the actual Huber hypothesis that #2822 d=5.0 failed to test due to scale miscalibration
+- Artifacts: `models/model-huber_d0p1-nlayers2-slicenum16-epochs46-20260514-071631/metrics.jsonl`
+
+| Split | val mae_surf_p | baseline | Δval | test mae_surf_p | baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 37.7685 | 36.476 | +3.5% | 32.5053 | 33.035 | **−1.6%** |
+| geom_camber_rc | 51.0332 | 48.297 | +5.7% | 44.5835 | 44.333 | +0.6% |
+| geom_camber_cruise | 21.0607 | 18.326 | +14.9% | 16.8617 | 15.496 | +8.8% |
+| re_rand | 38.9749 | 37.923 | +2.8% | 29.5983 | 28.116 | +5.3% |
+| **avg** | **37.2093** | **35.256** | **+5.54%** | **30.8872** | **30.245** | **+2.12%** |
+
+**Sanity check at epoch 1:** val=173.65, inside predicted 167-180 L1-like band → calibration sound, no early divergence.
+**Best epoch:** 46 (final, still descending) → ceiling-limited, NOT a premature-stop artifact.
+
+**Analysis:** d=0.1 in normalized space means only the smallest ~10% of element-wise errors fall in the quadratic region. Implementation is correct; the hypothesis (smoothing the tiny-error tail nudges late-training convergence) is **refuted**. Lion uses sign-only updates so near-zero gradient magnitude carries little signal anyway, and the marginal loss-landscape change at the boundary of zero gradient is net-negative.
+
+**Conclusion: LOSS-FORM AXIS CLOSED.** Both Huber endpoints tested:
+- d=5.0 (#2822): +116% val CATASTROPHIC (delta in raw scale → MSE everywhere)
+- d=0.1 (#2847): +5.54% val MILD REGRESSION (calibrated, no divergence, but still net worse)
+
+L1 with surf_weight=10 is locally optimal for this configuration. Pivoting frieren to fresh axis — **SWA (Stochastic Weight Averaging)** — orthogonal to all prior axes (capacity, schedule, loss-weight, loss-form), exploits the still-descending epoch-46 trajectory to find a flatter minimum via late-stage weight averaging.
+
+---
+
 ## 2026-05-14 07:40 — Round 41: close #2824 askeladd AdamW lr=3e-4 (+29.6% val UNDER-CONVERGED — step-size mismatch); assign askeladd #2850 AdamW lr=1e-3 retry (10× Lion lr for step-size matching)
 
 ### PR #2824 — askeladd AdamW lr=3e-4 (Lion lr × 3 rule of thumb)
