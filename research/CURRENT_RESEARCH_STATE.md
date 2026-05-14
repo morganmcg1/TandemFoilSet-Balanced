@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 03:00
+- **Date:** 2026-05-14 03:25
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -35,14 +35,14 @@
 
 **Diversifying beyond Lion hyperparameter tuning.** Three Lion-internal axes closed this hour (β1=0.85 brackets in flight; β2 axis fully closed; warm restarts closed; SiLU activation closed; Charbonnier closed; warmup closed; wd=3e-3 closed). The Lion hyperparameter design space has been thoroughly explored. New axes being tested in parallel:
 
-1. **Beta1 sweep**: β1=0.85 (edward #2700) — bracketing β1 axis; β1=0.95 confirmed variance-reduction but slowed convergence
-2. **SWA (thorfinn #2712)**: average last-10-epoch checkpoints (epochs 26-35) — free improvement; zero compute overhead
-3. **max_norm=0.5 (fern #2565)**: rebasing onto new baseline (sent back); OOD camber improved −3.8 on old baseline
-4. **Per-channel volume loss weighting (askeladd #2743)**: upweight pressure 2× — direct objective alignment with eval metric
-5. **Lookahead(Lion) (alphonse #2726)**: outer optimizer wrapper, k=5, α=0.5 — slow-weight smoothing
-6. **Re-feature jitter aug (frieren #2751)**: log(Re) + N(0, σ=0.05) during training — data augmentation, targets re_rand split
-7. **Gradient accumulation 2× (tanjiro #2752)**: effective batch size 2× — Lion-recommended for variance reduction in sign update
-8. **Per-layer LR decay (nezuko #2753)**: α=0.85 geometric decay — deeper transformer blocks get smaller LR
+1. **SWA (thorfinn #2712)**: average last-10-epoch checkpoints (epochs 26-35) — free improvement; zero compute overhead
+2. **max_norm=0.5 fresh (fern #2763)**: re-test clip-magnitude axis on new baseline; original showed −3.8 OOD camber gain
+3. **Per-channel volume loss weighting (askeladd #2743)**: upweight pressure 2× — direct objective alignment with eval metric
+4. **Lookahead(Lion) (alphonse #2726)**: outer optimizer wrapper, k=5, α=0.5 — slow-weight smoothing
+5. **Re-feature jitter aug (frieren #2751)**: log(Re) + N(0, σ=0.05) during training — data augmentation, targets re_rand split
+6. **Gradient accumulation 2× (tanjiro #2752)**: effective batch size 2× — Lion-recommended for variance reduction in sign update
+7. **Per-layer LR decay (nezuko #2753)**: α=0.85 geometric decay — deeper transformer blocks get smaller LR
+8. **Gradient Centralization (edward #2762)**: zero-mean gradient before momentum update; picks up abandoned nezuko axis on fresh PR
 
 ## Round 1 portfolio (live)
 
@@ -56,14 +56,16 @@
 | #2504 | frieren | QK-RMSNorm | **CLOSED** (+14%, Q/K magnitude signal) |
 | #2628 | tanjiro | Lion lr=1e-4 | **CLOSED** (+1.9% val, overshoot — sweet spot at 7.5e-5) |
 | #2501 | askeladd | β_p=0.625 | **CLOSED** (+6.8% val — per-channel β axis fully closed) |
-| #2565 | fern | max_norm=0.5 | WIP — rebasing onto new baseline |
+| #2565 | fern | max_norm=0.5 | **CLOSED** 2026-05-14 03:25 (stale; 5+ hrs without rebase; assigned fresh PR off current baseline) |
 | #2564 | nezuko | Gradient Centralization | **CLOSED** 2026-05-14 03:00 (stale; no rebase after baseline shift) |
 | #2505 | alphonse | SiLU activation | **CLOSED** 2026-05-14 02:10 (+18.9% val; Lion sign-normalization neutralizes SiLU's gradient advantage; GELU selective gating doing useful work in slice-attention pathway) |
 | **#2726** | **alphonse** | **Lookahead(Lion) k=5 α=0.5** | **WIP NEW 2026-05-14 02:10** |
 | #2633 | edward | Lion beta1=0.95 | **CLOSED** (+4.83 pt val; variance −85% but convergence slowed) |
 | #2631 | thorfinn | Lion warmup 5ep | **CLOSED** 2026-05-14 01:45 (+4.44% val; variance −67% but 5 epochs eat compute budget) |
 | #2629 | frieren | Lion wd=3e-3 | **CLOSED** 2026-05-14 01:45 (+1.68 pt val; all 4 splits regress; wd axis monotonic-worse) |
-| #2700 | edward | Lion beta1=0.85 | **WIP** |
+| #2700 | edward | Lion beta1=0.85 | **CLOSED** 2026-05-14 03:25 (+8.3% val; variance −81% but mean shifted up; β1 axis FULLY BRACKETED, 0.90 optimal) |
+| **#2762** | **edward** | **Gradient Centralization on Lion (re-attempt)** | **WIP NEW 2026-05-14 03:25** |
+| **#2763** | **fern** | **max_norm=0.5 on new baseline (fresh)** | **WIP NEW 2026-05-14 03:25** |
 | #2693 | tanjiro | CosineAnnealingWarmRestarts T_0=12 | **CLOSED** 2026-05-14 03:00 (+17.7% val; cycle-3 IS best per SGDR theory but absolute level far below baseline; schedule reset cost too high at 35-ep cap) |
 | #2713 | frieren | Lion β2=0.999 | **CLOSED** 2026-05-14 03:00 (+5.69% val; variance −78% but mean shifted up; symmetric with β2=0.95 — axis fully bracketed) |
 | **#2751** | **frieren** | **Re-feature jitter σ=0.05** | **WIP NEW 2026-05-14 03:00** |
@@ -74,7 +76,7 @@
 | **#2712** | **thorfinn** | **SWA (average epochs 26-35)** | **WIP NEW 2026-05-14 01:50** |
 | **#2713** | **frieren** | **Lion beta2=0.999** | **WIP NEW 2026-05-14 01:50** |
 
-**Merged:** 10 | **Closed:** 41 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 43 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -125,3 +127,5 @@
 - **Lion β2 axis FULLY CLOSED both directions** — β2=0.95 (+14.8% too short EMA) and β2=0.999 (+5.69% too long EMA) bracket β2=0.99 as optimum
 - **CosineAnnealingWarmRestarts T_0=12** — +17.7% val; schedule reset costs irrecoverable exploitation budget at 35-ep cap
 - **Schedule-shape axis fully retired for round 1** — all warmup/restart/anneal-to-zero variants have lost to cosine T_max=50 (implicit residual)
+- **Lion β1 axis FULLY BRACKETED** — β1=0.85 (+8.3% less filter) and β1=0.95 (+4.83pt over-filter) both regress; β1=0.90 confirmed optimal. Mechanism: β1 controls directional consistency between steps (not noise level — that's discarded by sign())
+- **Variance-vs-mean decoupling confirmed under Lion** — multiple PRs (β1=0.85, β1=0.95, β2=0.999, warmup) show variance reduction (40-85%) WITHOUT mean improvement. At 35-ep compute-bound regime, any momentum-stabilization that shifts trajectory direction costs more than noise reduction is worth.

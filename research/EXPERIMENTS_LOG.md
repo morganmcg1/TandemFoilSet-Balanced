@@ -1741,3 +1741,48 @@ tanjiro reassigned to gradient accumulation 2x (PR #2752).
 nezuko reassigned to per-layer LR decay α=0.85 (PR #2753).
 
 ---
+
+## 2026-05-14 03:25 — PR #2700: Lion β1=0.85 vs baseline 0.90 (edward)
+- Branch: `willowpai2g48h3-edward/lion-beta1-085`
+- Hypothesis: β1=0.85 (more current-gradient weight, less momentum filtering) → faster early convergence + possibly higher variance from noisier sign updates
+- W&B runs: `pa3t9qt2` (s1), `k1darpqi` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s2 (best by val) | 49.1848 | 43.2065 | 35 |
+| s1 (best by test) | 49.8685 | 43.1066 | 35 |
+| **Baseline (β1=0.90)** | **45.433** | **39.509** | 35 |
+| Mean | 49.53 | 43.16 | |
+
+**Regression: +8.3% val, +9.4% test (best seed). All 4 splits regress 6-11% uniformly.**
+
+Key diagnostics:
+- **BOTH hypothesis predictions were wrong**:
+  - "More current-gradient weight → faster early convergence": FALSE. Epoch-15 val=78.08 mean (+6.1% vs baseline 73.6) — slower, not faster
+  - "Less filtering → more variance": FALSE. Seed std=0.48 pt (5.3× tighter than baseline 2.55) — variance collapsed
+- **Mean shifted upward despite variance reduction**: same pattern as β1=0.95 (#2633, variance −85% but mean +4.83pt)
+- **Both directions test the same axis**: β1=0.85 (less filter) and β1=0.95 (over-filter) both push trajectories to worse asymptotic basins
+
+### Mechanism (best inference after both bracket experiments)
+
+Lion's `sign(β1·m + (1-β1)·g)` discards gradient magnitude regardless of β1. What β1 actually controls is **directional consistency between steps** (not noise level). β1=0.90 is the sweet spot:
+- High enough that momentum filters noise (sign agrees across steps)
+- Low enough that new gradients pull updates toward local minimum
+- Both higher and lower push to **different asymptotic basins** (not just slower/faster trajectories)
+
+### Conclusion
+
+CLOSED. **Lion β1 axis now FULLY BRACKETED**: β1=0.85 (+8.3%) and β1=0.95 (+4.83pt) both regress; β1=0.90 confirmed optimal. **Decoupling between variance reduction and mean improvement is now a confirmed pattern under Lion at our 35-epoch budget** — any momentum-stabilization that shifts the trajectory direction costs more than the noise reduction is worth.
+
+edward reassigned to Gradient Centralization on Lion (PR #2762) — picks up the abandoned nezuko axis with fresh assignment.
+
+---
+
+## 2026-05-14 03:25 — PR #2565: max_norm=0.5 on Lion lr=5e-5 (fern, STALE)
+- Branch: `willowpai2g48h3-fern/lion-clip-05`
+- Status: STALE — 5+ hours since rebase request, no new commits or runs on Lion lr=7.5e-5 baseline
+- Original (Lion lr=5e-5 baseline) result was strong: val 49.976 < old bar 50.19, OOD camber_rc −3.80
+
+**Conclusion**: CLOSED as stale. Hypothesis remains promising — the −3.8 OOD camber signal was the largest single-split OOD gain of the round. Reassigning fern with a fresh PR (PR #2763) off current advisor branch, same hypothesis (max_norm=0.5). Avoids the 5h-old rebase problem entirely.
+
+---
