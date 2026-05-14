@@ -534,6 +534,7 @@ class Lion(torch.optim.Optimizer):
         super().__init__(params, defaults)
         self.last_update_sq_norm: torch.Tensor | None = None
         self.last_exp_avg_sq_norm: torch.Tensor | None = None
+        self.last_sign_flip_rate: torch.Tensor | None = None
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -543,6 +544,8 @@ class Lion(torch.optim.Optimizer):
                 loss = closure()
         update_sq_total: torch.Tensor | None = None
         exp_avg_sq_total: torch.Tensor | None = None
+        sign_flip_count_total: torch.Tensor | None = None
+        param_count_total: int = 0
         for group in self.param_groups:
             lr = group["lr"]
             wd = group["weight_decay"]
@@ -559,6 +562,15 @@ class Lion(torch.optim.Optimizer):
                 exp_avg = state["exp_avg"]
                 # Sign of (beta1 * m + (1-beta1) * g) — bounded magnitude update.
                 update = exp_avg.mul(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                # Sign-flip diagnostic: count params whose sign-update differs from prior step.
+                if "prev_update" in state:
+                    sign_flips = (update != state["prev_update"]).sum()
+                    sign_flip_count_total = (
+                        sign_flips if sign_flip_count_total is None
+                        else sign_flip_count_total + sign_flips
+                    )
+                    param_count_total += update.numel()
+                state["prev_update"] = update.clone()
                 p.add_(update, alpha=-lr)
                 # EMA update with separate beta2.
                 exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
@@ -568,6 +580,10 @@ class Lion(torch.optim.Optimizer):
                 exp_avg_sq_total = ema_sq if exp_avg_sq_total is None else exp_avg_sq_total + ema_sq
         self.last_update_sq_norm = update_sq_total.detach() if update_sq_total is not None else None
         self.last_exp_avg_sq_norm = exp_avg_sq_total.detach() if exp_avg_sq_total is not None else None
+        if sign_flip_count_total is not None and param_count_total > 0:
+            self.last_sign_flip_rate = (sign_flip_count_total.float() / param_count_total).detach()
+        else:
+            self.last_sign_flip_rate = None
         return loss
 
 
@@ -601,6 +617,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    lion_beta2: float = 0.99  # Lion EMA decay rate; Chen 2023 default 0.99
 
 
 cfg = sp.parse(Config)
@@ -684,8 +701,8 @@ def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
     name = name.lower()
     if name == "lion":
         if isinstance(param_groups, list):
-            return Lion(param_groups, lr=lr, betas=(0.9, 0.99))
-        return Lion(param_groups, lr=lr, weight_decay=default_wd, betas=(0.9, 0.99))
+            return Lion(param_groups, lr=lr, betas=(0.9, cfg.lion_beta2))
+        return Lion(param_groups, lr=lr, weight_decay=default_wd, betas=(0.9, cfg.lion_beta2))
     if name == "adamw":
         if isinstance(param_groups, list):
             return torch.optim.AdamW(param_groups, lr=lr)
@@ -896,6 +913,8 @@ for epoch in range(MAX_EPOCHS):
                 log_payload["train/optimizer_update_norm"] = optimizer.last_update_sq_norm.sqrt().item()
             if optimizer.last_exp_avg_sq_norm is not None:
                 log_payload["train/exp_avg_norm"] = optimizer.last_exp_avg_sq_norm.sqrt().item()
+            if optimizer.last_sign_flip_rate is not None:
+                log_payload["train/lion_sign_flip_rate"] = optimizer.last_sign_flip_rate.item()
         if cfg.use_kendall_uncertainty:
             with torch.no_grad():
                 ls = log_sigmas.detach()
