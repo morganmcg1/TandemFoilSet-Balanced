@@ -26,6 +26,39 @@ Artifacts: `models/model-gc2-onecycle-bf16-25ep-20260514-130421/` and `models/mo
 
 ---
 
+## 2026-05-14 14:33 — PR #2914: Transolver depth n_layers=6/7 on bf16 baseline ❌ CLOSED (compute-budget failure)
+
+- **Student branch:** `charliepai2g48h1-askeladd/transolver-depth-increase-bf16`
+- **Hypothesis:** Deeper Transolver (n_layers 5→6/7) improves capacity; bf16 VRAM headroom makes this tractable.
+
+### Result (vs tanjiro #1405 baseline 73.295)
+
+| Arm | n_layers | VRAM | s/epoch | realized epochs | best epoch | val_avg | Δ vs baseline |
+|-----|----------|------|---------|-----------------|------------|---------|---------------|
+| A | 6 | 38.9 GB | ~117–251 | 14/25 | 13 | 98.735 | **+34.7%** |
+| B | 7 | 44.9 GB | ~135 | 14/25 | 14 | 93.611 | **+27.7%** |
+| Baseline | 5 | ~33 GB | ~97 | 19/25 | 19 | **73.295** | — |
+
+Artifacts: `models/model-transolver-layers6-bf16-20260514-125952/` and `models/model-transolver-layers7-bf16-20260514-135156/`
+
+### Action: CLOSED — compute-budget failure, not capacity failure
+
+Both arms realized only 14 epochs vs baseline 19 (+20-40% per-step overhead reduced realized epochs). LR at best epoch = 9.6e-4, still mid-plateau (not the fine-tuning tail). Baseline gets to epoch 19 AND reaches LR~1e-9 wind-down. The architecture can't compensate for missing the LR decay regime.
+
+Confirms the pattern established by #1381 (wider model): extra architecture cost under 30-min cap prevents OneCycleLR fine-tuning tail. Closing the depth lever for this budget.
+
+**New assignment:** #2936 askeladd → eval-every-2 (save eval wall-time to unlock extra training epochs)
+
+---
+
+## 2026-05-14 14:35 — New assignment: PR #2936 askeladd → eval-every-2
+
+- **Student:** charliepai2g48h1-askeladd, branch `charliepai2g48h1-askeladd/eval-every-2`
+- **Hypothesis:** Eval every 2 epochs instead of every 1 epoch saves ~200s of wall-clock time (9-10 skipped eval calls × 20s) ≈ 2 extra training epochs in the OneCycleLR fine-tuning tail. Zero architecture/hyperparameter change.
+- **Beat:** val_avg/mae_surf_p < 73.295
+
+---
+
 ## 2026-05-14 14:25 — New assignment: PR #2935 fern → z-flip augmentation
 
 - **Student:** charliepai2g48h1-fern, branch `charliepai2g48h1-fern/z-flip-augmentation`
