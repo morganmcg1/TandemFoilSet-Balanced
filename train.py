@@ -658,6 +658,10 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
+GRAD_CLIP_MAX_NORM = 1.0
+print(f"Gradient clipping: max_norm={GRAD_CLIP_MAX_NORM} (applied before optimizer.step())")
+print(f"Will log: grad_norm_mean, _median, _max, _clip_frac per epoch")
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -686,6 +690,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norms: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -707,8 +712,10 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
 
+        grad_norms.append(grad_norm.item())
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -717,6 +724,15 @@ for epoch in range(MAX_EPOCHS):
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+
+    if grad_norms:
+        _gn = torch.tensor(grad_norms, dtype=torch.float64)
+        grad_norm_mean = _gn.mean().item()
+        grad_norm_median = _gn.median().item()
+        grad_norm_max = _gn.max().item()
+        grad_norm_clip_frac = (_gn > GRAD_CLIP_MAX_NORM).float().mean().item()
+    else:
+        grad_norm_mean = grad_norm_median = grad_norm_max = grad_norm_clip_frac = 0.0
 
     # --- Validate ---
     model.eval()
@@ -748,6 +764,11 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_median": grad_norm_median,
+        "train/grad_norm_max": grad_norm_max,
+        "train/grad_norm_clip_frac": grad_norm_clip_frac,
+        "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -756,6 +777,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"grad[mean={grad_norm_mean:.3f} med={grad_norm_median:.3f} max={grad_norm_max:.3f} clip_frac={grad_norm_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
