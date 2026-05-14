@@ -203,18 +203,20 @@ class TransolverBlock(nn.Module):
                  layerscale_init=1e-4, use_se=True):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        # RMSNorm replaces LayerNorm at all 3 sites (#2939 representation-axis probe).
+        # eps=1e-5 explicit (avoids PyTorch nn.RMSNorm bfloat16 default-eps downcast bug).
+        self.ln_1 = nn.RMSNorm(hidden_dim, eps=1e-5)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = nn.RMSNorm(hidden_dim, eps=1e-5)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = nn.RMSNorm(hidden_dim, eps=1e-5)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -275,8 +277,9 @@ class Transolver(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
-            nn.init.constant_(m.bias, 0)
+        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d, nn.RMSNorm)):
+            if getattr(m, "bias", None) is not None:
+                nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
@@ -532,6 +535,14 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+# RMSNorm replacement diagnostic (#2939): all nn.LayerNorm sites swapped for nn.RMSNorm
+_rmsnorm_sites = sum(1 for m in model.modules() if isinstance(m, nn.RMSNorm))
+_layernorm_sites = sum(1 for m in model.modules() if isinstance(m, nn.LayerNorm))
+print(
+    f"RMSNorm replacement: {_rmsnorm_sites} RMSNorm sites (eps=1e-5, no bias); "
+    f"{_layernorm_sites} LayerNorm sites remaining (should be 0); "
+    f"baseline LayerNorm version: 407,940 params; baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
