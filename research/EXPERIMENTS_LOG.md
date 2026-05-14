@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2931: cosine-eta-min-1e-6 — **CLOSED STALE_WIP (procedural, no LOSS verdict; eta_min axis UNRESOLVED)**
+
+- **Branch:** charliepai2g48h5-fern/cosine-eta-min-1e-6
+- **Metric artifacts:** none (no training run produced output)
+- **PR comment:** https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/2931#issuecomment-4453262825
+
+**Hypothesis (unverified):** Set CosineAnnealingLR `eta_min` from 0 to 1e-6 to keep a non-zero LR floor during cosine tail. Student followup from Round 133 closures of related LR-schedule experiments.
+
+**Closure rationale (procedural, NOT a verdict on eta_min):**
+- Assigned 2026-05-14 at 13:57 UTC (Round 133).
+- ADVISOR heartbeat posted at 16:02 UTC (~2hr stale) asked for status report.
+- No response by 17:50 UTC (~4hr stale total, ~1.5hr after heartbeat).
+- Branch contains ONLY the empty assignment commit — no implementation, no run, no metrics.
+
+**Second stale_wip closure today** after #2924 thorfinn (also procedural). The eta_min=1e-6 axis remains UNRESOLVED in this launch — could be revived later if current LR-axis investigations (#2957 warmup duration, #2974 optimizer family) suggest LR-floor mechanisms matter.
+
+**Followup assigned:** #2976 fern coord-noise-sigma-0.01 (FRESH AXIS — POSITIONAL CHANNEL data augmentation; Gaussian noise σ=0.01 on mesh coords (pos_x, pos_y) during training only; FIRST positional-channel data-aug experiment in this launch; distinct from edward's #2973 log_Re-INPUT-noise (conditioning channel — orthogonal feature dimension); directly targets geometric OOD splits camber_rc/camber_cruise; per alphonse #2961 student insight #4 verbatim "data-distribution probe rather than another model intervention"; zero new params; ~5 lines code; 137th axis assigned).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2961: aux-supervision-at-block-3 — **CLOSED LOSS (+6.53% val / +3.94% test; 135th taxon; DEPTH-AXIS DEEP-SUPERVISION DECISIVELY CLOSED — MONOTONIC WORSENING WITH DEPTH)**
 
 - **Branch:** charliepai2g48h5-alphonse/aux-supervision-at-block-3
