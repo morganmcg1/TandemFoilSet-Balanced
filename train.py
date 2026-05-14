@@ -271,6 +271,13 @@ class Transolver(nn.Module):
         # so non-1.0 α directly changes feature magnitudes flowing into the next
         # block (LN cannot absorb the scale).
         self.cross_block_alpha = nn.Parameter(torch.ones(n_layers - 1))
+        # Pre-block input β: learnable scalar gain applied at the INPUT of each
+        # TransolverBlock, BEFORE LN+branch+residual. n_layers scalars (one per
+        # block). Init 1.0 -> identity at step 0. Symmetric counterpart to α:
+        # α scales between blocks AFTER post-LN; β scales at block input BEFORE
+        # the block's first LN. The block's first LN partially absorbs β inside
+        # the branch path, but β survives via the residual addition.
+        self.pre_block_beta = nn.Parameter(torch.ones(n_layers))
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -301,6 +308,9 @@ class Transolver(nn.Module):
         fx = fx * (1 + film_scale)
         n_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
+            # Pre-block β: scale residual stream at block INPUT (before LN+branch).
+            # First LN inside block normalizes β·x, but β survives via residual.
+            fx = self.pre_block_beta[i] * fx
             fx = block(fx, mask=mask)
             # Apply cross-block α to non-final block outputs; the last block is
             # the head (returns out_dim predictions) and must not be scaled.
@@ -582,6 +592,19 @@ print(
     f"init={[f'{a:.4f}' for a in _alpha_init]} (all 1.0 — identity at step 0); "
     f"in-block γ_attn / γ_mlp UNCHANGED (constant 1.0 from #2964); "
     f"baseline to beat: val_avg/mae_surf_p < 30.0382 (#2964 NEW baseline)"
+)
+
+# Pre-block input β diagnostic (#3025): symmetric counterpart to #3006's α.
+# β scales x BEFORE block's LN+branch+residual; LN partially absorbs β inside
+# branch but β survives via residual addition. n_layers scalars (one per block).
+_beta_init = _inner_for_alpha.pre_block_beta.detach().cpu().tolist()
+print(
+    f"Pre-block input β (#3025): {_inner_for_alpha.pre_block_beta.shape[0]} learnable scalars "
+    f"(+{_inner_for_alpha.pre_block_beta.numel()} params) applied at INPUT of each TransolverBlock; "
+    f"init={[f'{b:.4f}' for b in _beta_init]} (all 1.0 — identity at step 0); "
+    f"symmetric counterpart to cross-block α (#3006 WIN); kept α (3 scalars) AND added β (4 scalars); "
+    f"total cross-block adaptive scalars: 7 (3α + 4β); "
+    f"NEW baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006)"
 )
 
 # SE diagnostic: count modules and added params
@@ -878,12 +901,19 @@ for epoch in range(MAX_EPOCHS):
 
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
     # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
+    # Pre-block β convergence probe at same epochs (#3025): does β drift like α?
     if (epoch + 1) in (1, 10, 30, 60):
         _inner_alpha = getattr(model, "_orig_mod", model)
         _alphas = _inner_alpha.cross_block_alpha.detach().cpu().float().tolist()
+        _betas = _inner_alpha.pre_block_beta.detach().cpu().float().tolist()
         print(
             f"  cross-block α @ ep{epoch+1}: " + ", ".join(
                 f"α_{ai}={v:.4f}" for ai, v in enumerate(_alphas)
+            )
+        )
+        print(
+            f"  pre-block β @ ep{epoch+1}: " + ", ".join(
+                f"β_{bi}={v:.4f}" for bi, v in enumerate(_betas)
             )
         )
         append_metrics_jsonl(metrics_jsonl_path, {
@@ -892,6 +922,13 @@ for epoch in range(MAX_EPOCHS):
             "alpha_values": _alphas,
             "alpha_mean": sum(_alphas) / max(len(_alphas), 1),
             "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
+        })
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "pre_block_beta",
+            "epoch": epoch + 1,
+            "beta_values": _betas,
+            "beta_mean": sum(_betas) / max(len(_betas), 1),
+            "beta_abs_mean_deviation": sum(abs(v - 1.0) for v in _betas) / max(len(_betas), 1),
         })
 
 total_time = (time.time() - train_start) / 60.0
@@ -964,6 +1001,22 @@ if best_metrics:
         + f" (mean={_alpha_best_log['alpha_mean']:.4f}, |Δ|/n={_alpha_best_log['alpha_abs_mean_deviation']:.4f})"
     )
     append_metrics_jsonl(metrics_jsonl_path, _alpha_best_log)
+
+    # Pre-block β at best checkpoint (#3025) — symmetric to α best-ckpt log.
+    _beta_best = _inner.pre_block_beta.detach().cpu().float().tolist()
+    _beta_best_log = {
+        "event": "pre_block_beta_best",
+        "epoch": int(best_metrics["epoch"]),
+        "beta_values": _beta_best,
+        "beta_mean": sum(_beta_best) / max(len(_beta_best), 1),
+        "beta_abs_mean_deviation": sum(abs(v - 1.0) for v in _beta_best) / max(len(_beta_best), 1),
+    }
+    print(
+        "\nPre-block β at best checkpoint: "
+        + ", ".join(f"β_{bi}={v:.4f}" for bi, v in enumerate(_beta_best))
+        + f" (mean={_beta_best_log['beta_mean']:.4f}, |Δ|/n={_beta_best_log['beta_abs_mean_deviation']:.4f})"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, _beta_best_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
