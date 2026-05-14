@@ -601,6 +601,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    n_layers: int = 5  # Transolver block depth; baseline 5
 
 
 cfg = sp.parse(Config)
@@ -637,7 +638,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
