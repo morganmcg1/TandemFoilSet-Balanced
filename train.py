@@ -167,7 +167,7 @@ class TransolverBlock(nn.Module):
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+        self.mlp = MLP(hidden_dim, int(hidden_dim * mlp_ratio), hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             if not re_conditional_layernorm:
@@ -601,6 +601,12 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Architecture sizing (Transolver trunk).
+    n_hidden: int = 128
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: float = 2.0
 
 
 cfg = sp.parse(Config)
@@ -633,16 +639,23 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
 )
+assert cfg.n_hidden % cfg.n_head == 0, (
+    f"n_hidden ({cfg.n_hidden}) must be divisible by n_head ({cfg.n_head})"
+)
+head_dim = cfg.n_hidden // cfg.n_head
+print(f"Arch sizing: n_hidden={cfg.n_hidden}, n_layers={cfg.n_layers}, "
+      f"n_head={cfg.n_head} (head_dim={head_dim}), "
+      f"slice_num={cfg.slice_num}, mlp_ratio={cfg.mlp_ratio}")
 
 model = Transolver(**model_config).to(device)
 rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
