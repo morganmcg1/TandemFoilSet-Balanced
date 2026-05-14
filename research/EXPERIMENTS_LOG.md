@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2958: routing-weight-dropout-0.1 — **CLOSED LOSS (+5.51% val / +2.61% test; 134th taxon; ROUTING-SOFTNESS/STOCHASTICITY AXIS DECISIVELY CLOSED)**
+
+- **Branch:** charliepai2g48h5-edward/routing-weight-dropout-0.1
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-routing-weight-dropout-0.1-20260514-164344/metrics.jsonl
+
+| Metric | Baseline #2879 | #2958 (dropout p=0.1) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.2440** | **+5.51% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **27.2092** | **+2.61% LOSS** |
+| val_single_in_dist | 23.3997 | 26.0922 (+11.51%) | **WORST split** |
+| val_geom_camber_rc | 46.0708 | 48.1291 (+4.47%) | LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.3179 (-3.07%)** | **WIN** (meta-signal) |
+| val_re_rand | 34.9057 | 37.4368 (+7.25%) | LOSS |
+| Param count | 407,940 | 407,940 (unchanged) | — |
+
+**Hypothesis:** Apply `nn.Dropout(p=0.1)` to slice_weights after softmax, re-normalize. Stochastic routing regularization preserving sharp eval-time routing.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **Eval-mode block-3 entropy SHIFTED FROM SHARP TO SOFT.** Baseline learnable T converges block-3 to 0.01-0.92 nats; under routing-dropout-0.1, eval-mode block-3 = 2.145 nats (frac 0.675). Same direction as #2944 (T=2.0 → 2.34-2.91 nats), milder magnitude.
+
+2. **Counter-intuitive train vs eval entropy.** Naive: dropout adds noise → train entropy HIGHER. Observed: train entropy SLIGHTLY LOWER (-0.002 to -0.106 nats). Mechanism: dropout+renorm REDISTRIBUTES mass to survivors after zeroing; when non-dominant slice zeroed, dominant slice grows → entropy DECREASES. Dropout+renorm is NOT entropy-INCREASING — it's a relative-magnitude sharpener during training, but stochastic perturbations prevent CONVERGENCE to maximally-sharp routing at eval.
+
+3. **DROPOUT-AT-EVAL FAILURE MODE:** dropout is identity at eval per `nn.Dropout` semantics → should keep sharp routing. But the converged WEIGHTS encode a model that can't achieve sharp routing because trained against stochastic perturbation. Softer routing was the robust equilibrium; eval-time dropout-off doesn't restore sharpness that was never learned.
+
+4. **Meta-signal repeats at #2944's magnitude direction:** cruise -3.07% WIN, in_dist +11.51% LOSS (worst). Two independent mechanisms (constant T softening vs stochastic routing) → same metric pattern. "Sharp block-3 is load-bearing" is the FUNDAMENTAL invariant, not the specific mechanism.
+
+5. **ROUTING-SOFTNESS / STOCHASTICITY AXIS DECISIVELY CLOSED — 5 LOSS closures**: #2884 entropy-reg, #2923 slice_num=32, #2934 slice_num=16, #2944 T=2.0, #2955 T=0.25, #2958 dropout-0.1. All LOSS. Only LEARNABILITY (per-head adaptive temperature, 8 params encoding per-depth schedule) survives. **Drop routing-softness lever entirely.**
+
+**134th taxon CLOSED:** ROUTING-WEIGHT-DROPOUT-0.1 / STOCHASTIC-ROUTING-REGULARIZATION.
+
+**Followup assigned:** #2973 edward log-re-input-noise (FRESH AXIS, completely orthogonal: Gaussian noise σ=0.05 on log_Re INPUT feature during training only; conditioning-variable data augmentation; targets in_dist over-specialization at the conditioning level; per student suggestion #4 verbatim "drop axis entirely"; zero new params; ~3 lines code; 135th axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2955: slice-routing-temperature-0.25 — **CLOSED LOSS (+3.40% val / +1.32% test; 133rd taxon; TEMPERATURE AXIS U-SHAPED / LEARNABILITY-IS-LOAD-BEARING)**
 
 - **Branch:** charliepai2g48h5-tanjiro/slice-routing-temperature-0.25
