@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-05-14 [Round 98] UTC — PR #2798: SE reduction=2 (bottleneck width sweep) — **CLOSED LOSS (+2.56% val)**
+
+- **Branch:** charliepai2g48h5-tanjiro/se-reduction2
+- **Hypothesis:** Extend SE bottleneck axis from r=4 (merged optimum) to r=2 (inner_dim 24→48). If r=4 was capacity-limited, r=2 should improve further; if r=4 is already optimum, r=2 should regress via lost regularization.
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-reduction2-20260514-053151/metrics.jsonl`
+
+| Split | r=2 val | Baseline #2765 (r=4) | Δ vs #2765 |
+|---|---|---|---|
+| `val_single_in_dist` | **23.3693** | 24.9721 | **−6.42% WIN** (new best-ever in-dist) |
+| `val_geom_camber_rc` | 50.0688 | 46.9885 | **+6.55% LOSS** |
+| `val_geom_camber_cruise` | 17.8757 | 17.7276 | +0.84% LOSS |
+| `val_re_rand` | 37.1777 | 35.5983 | **+4.44% LOSS** |
+| **val_avg** | **32.1229** | **31.3216** | **+2.56% LOSS** |
+| `test_avg/mae_surf_p` | **26.3402** | **26.5067** | −0.63% (test-val divergence) |
+
+- **Result:** val_avg LOSS on ranking metric closes axis per program.md. In-dist set best-ever (23.37 val, 23.22 test) but all 3 OOD splits regressed. test_avg improved -0.63% (interesting test-val divergence; in-dist test gains outweighed OOD test losses).
+- **Mechanism (student's diagnostic exemplary — smoking gun signature):**
+  - `gate_std` rose monotonically r=8→r=4→r=2 (+9-16% over r=4) — more bottleneck capacity gives finer discrimination, AS PREDICTED
+  - `gate_min` REVERSED direction r=4→r=2 on all 4 splits — aggressive veto pattern lost, AS PREDICTED for LOSS scenario
+  - Block 3 γ_attn FLIPPED BACK TO POSITIVE (+0.001401 vs r=4 negative) — SE has loosened, attention re-engages
+  - SE moved from "discriminator + sharp veto" mode → "averager + scaling" mode
+- **Taxonomic closure (66th taxon):** SE bottleneck dimension axis now exhaustively mapped: r=8 closed inner_dim=12 capacity-limited, **r=4 merged inner_dim=24 local optimum**, r=2 closed inner_dim=48 regularization-lost. Non-monotonic curve confirms the sweet spot. **r=4 is the SE local optimum for this scale.** Future SE work should hold r=4 fixed and vary other dimensions (depth, activation, init, pool function).
+- **Follow-up:** SE inner activation swap #2814 (tanjiro, 68th candidate axis) at r=4 fixed — student's #3 suggestion, motivated by orthogonal GeGLU LOSS evidence (hard-masking mechanism).
+
+---
+
+## 2026-05-14 [Round 98] UTC — PR #2814: SE inner activation GELU → SiLU — **ASSIGNED (68th candidate axis)**
+
+- **Branch:** charliepai2g48h5-tanjiro/se-silu-inner
+- **Hypothesis:** Replace SE bottleneck inner activation `F.gelu` → `F.silu` (1-line change in SqueezeExcitation.forward). Motivated by orthogonal evidence from just-closed GeGLU PR #2759 (64th taxon, gate_zero_frac 16-26% per block — GELU's symmetric near-zero collapse hard-masks ~20% of channels). If the same mechanism is active inside SE's inner_dim=24 bottleneck, GELU is effectively reducing capacity to ~19 channels. SiLU's asymmetric smoothness should preserve all 24 channels.
+- **Param delta:** +0 (same activation count, just different function).
+- **Predicted mechanism:** `silu_zero_frac` <<16% (no hard masking); `gate_std` rises beyond r=4 baseline; `gate_min` stays low (regularization-via-veto preserved at fixed r=4 width); OOD splits benefit from extra effective bottleneck capacity at unchanged width.
+- **Bar:** val_avg/mae_surf_p < 31.3216.
+
+---
+
 ## 2026-05-14 [Round 97] UTC — PR #2792: Register tokens N_REG=4 (Darcet 2024) — **CLOSED LOSS (+4.39% val)**
 
 - **Branch:** charliepai2g48h5-nezuko/register-tokens-4
