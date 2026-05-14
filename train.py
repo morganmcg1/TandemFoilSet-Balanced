@@ -177,7 +177,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False, film_re_hidden: int = 128):
+                 film_re=False, film_re_hidden: int = 128,
+                 head_hidden_mult: float = 1.0):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -190,10 +191,15 @@ class TransolverBlock(nn.Module):
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
+            # Output decoder head: hidden_dim -> head_hidden -> out_dim.
+            # head_hidden_mult scans capacity of the final decoder MLP (PR #2991);
+            # LayerNorm stays at hidden_dim so trunk feature stats are unchanged.
+            head_hidden = int(hidden_dim * head_hidden_mult)
+            self.head_hidden = head_hidden
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+                nn.Linear(hidden_dim, head_hidden), nn.GELU(),
+                nn.Linear(head_hidden, out_dim),
             )
         if self.film_re:
             # γ-only FiLM-Re: scale-only modulation from log(Re).
@@ -227,7 +233,8 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
-                 log_re_x_index: int = 13):
+                 log_re_x_index: int = 13,
+                 head_hidden_mult: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -237,6 +244,7 @@ class Transolver(nn.Module):
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
         self.log_re_x_index = log_re_x_index
+        self.head_hidden_mult = head_hidden_mult
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -253,6 +261,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 film_re=film_re, film_re_hidden=film_re_hidden,
+                head_hidden_mult=head_hidden_mult if i == n_layers - 1 else 1.0,
             )
             for i in range(n_layers)
         ])
@@ -480,6 +489,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    head_hidden_mult: float = 1.0  # Output decoder head MLP hidden = int(n_hidden * mult) (PR #2991)
 
 
 cfg = sp.parse(Config)
@@ -522,6 +532,7 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    head_hidden_mult=cfg.head_hidden_mult,  # Output decoder head width (PR #2991 scan)
 )
 
 model = Transolver(**model_config).to(device)
@@ -529,6 +540,10 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+# Output decoder head width log (PR #2991 scan). Resolve past torch.compile wrapper.
+_base = getattr(model, "_orig_mod", model)
+_head_hidden = _base.blocks[-1].head_hidden
+print(f"[init] output head: hidden_dim={model_config['n_hidden']}, head_hidden={_head_hidden} (mult={cfg.head_hidden_mult})")
 
 optimizer = Lion(
     model.parameters(),
@@ -571,6 +586,7 @@ with torch.no_grad():
     param_l2_init = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at init: {param_l2_init:.4f}")
 wandb.summary["param_l2_init"] = param_l2_init
+wandb.summary["head_hidden"] = _head_hidden
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
