@@ -102,6 +102,12 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        # Talking-Heads (Shazeer 2020): cross-head mixing of attention logits
+        # (pre-softmax) and probabilities (post-softmax). Weights are re-set to
+        # identity in Transolver.__init__ AFTER self.apply(self._init_weights)
+        # so the trunc_normal_ default doesn't overwrite identity init.
+        self.logits_mixing = nn.Linear(heads, heads, bias=False)
+        self.probs_mixing = nn.Linear(heads, heads, bias=False)
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -126,11 +132,14 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        out_slice = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            is_causal=False,
-        )
+        # Manual attention so Talking-Heads mixing can interleave with softmax.
+        logits = torch.matmul(q, k.transpose(-2, -1)) * (self.dim_head ** -0.5)
+        logits = torch.einsum("bhmn,Hh->bHmn", logits, self.logits_mixing.weight)
+        attn = logits.softmax(dim=-1)
+        if self.training and self.dropout.p > 0:
+            attn = F.dropout(attn, p=self.dropout.p)
+        attn = torch.einsum("bhmn,Hh->bHmn", attn, self.probs_mixing.weight)
+        out_slice = torch.matmul(attn, v)
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -206,6 +215,14 @@ class Transolver(nn.Module):
         self.film = nn.Linear(3, n_hidden)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
+
+        # Talking-Heads identity init AFTER self.apply(self._init_weights) so the
+        # default trunc_normal_(std=0.02) does not overwrite the identity. At init,
+        # the talking-heads forward path is therefore bit-identical to canonical MHA.
+        for _blk in self.blocks:
+            with torch.no_grad():
+                _blk.attn.logits_mixing.weight.copy_(torch.eye(n_head))
+                _blk.attn.probs_mixing.weight.copy_(torch.eye(n_head))
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -478,6 +495,23 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# Talking-Heads (Shazeer 2020) init verification — per-block 2x2 logits_mixing
+# + probs_mixing Linear modules, identity-init for step-0 baseline parity.
+_th_inner = model
+for _i, _blk in enumerate(_th_inner.blocks):
+    _has_lm = hasattr(_blk.attn, "logits_mixing") and isinstance(_blk.attn.logits_mixing, nn.Linear)
+    _has_pm = hasattr(_blk.attn, "probs_mixing") and isinstance(_blk.attn.probs_mixing, nn.Linear)
+    _lm = _blk.attn.logits_mixing.weight.detach().cpu().tolist()
+    _pm = _blk.attn.probs_mixing.weight.detach().cpu().tolist()
+    print(f"Block {_i}: logits_mixing={_has_lm}, probs_mixing={_has_pm} | init logits={_lm} probs={_pm}")
+print(
+    f"Talking-Heads attention: per-block {model_config['n_head']}x{model_config['n_head']} "
+    f"logits_mixing + {model_config['n_head']}x{model_config['n_head']} probs_mixing (identity-init); "
+    f"+{2 * model_config['n_head'] * model_config['n_head'] * model_config['n_layers']} params; "
+    f"cross-head linear mixing of attention logits and probs; "
+    f"baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -712,6 +746,28 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Talking-Heads diagnostic: terminal logits/probs mixing matrices per block.
+    # Identity baseline: [[1,0],[0,1]] — deviation means head-mixing engaged.
+    _th_log = {"event": "talking_heads_mixing", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    print("\nTalking-Heads terminal mixing matrices (best-checkpoint weights):")
+    for _i, _blk in enumerate(_inner.blocks):
+        _lm = _blk.attn.logits_mixing.weight.detach().float().cpu().tolist()
+        _pm = _blk.attn.probs_mixing.weight.detach().float().cpu().tolist()
+        _lm_dev = (_blk.attn.logits_mixing.weight.detach().float().cpu()
+                   - torch.eye(model_config["n_head"])).abs().mean().item()
+        _pm_dev = (_blk.attn.probs_mixing.weight.detach().float().cpu()
+                   - torch.eye(model_config["n_head"])).abs().mean().item()
+        print(f"  block[{_i}]: logits_mixing={_lm} (|dev_from_I|={_lm_dev:.4f}) | "
+              f"probs_mixing={_pm} (|dev_from_I|={_pm_dev:.4f})")
+        _th_log["blocks"].append({
+            "block_idx": _i,
+            "logits_mixing": _lm,
+            "probs_mixing": _pm,
+            "logits_dev_from_identity": _lm_dev,
+            "probs_dev_from_identity": _pm_dev,
+        })
+    append_metrics_jsonl(metrics_jsonl_path, _th_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
