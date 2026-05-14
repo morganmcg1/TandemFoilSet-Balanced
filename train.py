@@ -505,6 +505,92 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # H89: Sobolev surface loss — penalize mismatch in dp/ds along foil surface.
+    # Default 0.002 (≈ 50× below the PR pseudocode's 0.1). On this irregular
+    # mesh, |dp/ds| in normalized pressure space has mean=138 and max=8367 (probed
+    # on val sample 0): 40% of consecutive saf_0 pairs hit the ds_min floor and
+    # produce mesh-artifact gradients with no physical analogue the model can
+    # learn. At λ=0.1, the resulting sob_scaled ≈ 23 vs (surf_weight·surf_loss) ≈ 5,
+    # so the Sobolev term dominated the backward pass and the run regressed to
+    # val_avg=145 vs the 55.16 baseline at epoch 7. λ=0.002 holds the Sobolev
+    # contribution to ≈ 10% of the surface objective.
+    lambda_sob: float = 0.002
+
+
+def sobolev_surf_loss(
+    pred: torch.Tensor,
+    y_norm: torch.Tensor,
+    x: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    lambda_sob: float = 0.1,
+    ds_min: float = 1e-4,
+) -> torch.Tensor:
+    """H89: first-order Sobolev surface loss in normalized pressure space.
+
+    Penalize mismatch between predicted and true ∂p/∂s along the foil surface,
+    where s is the signed arc-length feature ``saf_0 = x[..., 2]``. Provides a
+    gradient-shape regularizer on top of the pointwise L1 surface loss.
+
+    Algorithm (deviations from the H89 PR pseudocode are noted inline):
+      1. Filter the ``saf_0 == saf_1 == 0`` cluster — these are overset-mesh
+         interfaces flagged ``is_surface=True`` but lacking meaningful arc-length
+         features (745/1608 on sample 0, 1086/2471 on a tandem sample). Sorting
+         them by saf_0 produces a large ds=0 cluster whose clamped dp/ds blows
+         up the loss without physical meaning.
+      2. Sort foil-surface nodes by saf_0. Replace non-foil saf with a *finite*
+         large constant (1e6), NOT +inf — sorting puts adjacent +inf values
+         next to each other, giving ``ds = inf - inf = NaN`` and contaminating
+         the whole batch even with adj_mask=0 (NaN * 0 = NaN in fp32).
+      3. Compute consecutive ``dp/ds`` in NORMALIZED pressure space. The PR
+         pseudocode denormalizes (× y_std[2] ≈ 679), but combined with
+         clamped ds ≈ 1e-4 that yields dp/ds magnitudes ≈ 6.8M and Sobolev
+         gradients per pred unit roughly 6 orders of magnitude larger than
+         the main L1 gradient. Working in normalized space keeps the loss at
+         the same order as the main loss for lambda_sob = 0.1.
+      4. Mask pairs with ``ds <= ds_min`` to skip duplicate-saf pairs, which
+         otherwise dominate the loss with inflated 1/ds_min gradients.
+
+    Args:
+        pred: [B, N, 3] model output in normalized space.
+        y_norm: [B, N, 3] normalized targets.
+        x: [B, N, 24] input feature tensor (uses saf_0=x[...,2], saf_1=x[...,3]).
+        is_surface, mask: [B, N] boolean tensors as produced by ``pad_collate``.
+        lambda_sob: weight multiplier on the loss term.
+        ds_min: minimum arc-length gap required for a pair to contribute.
+
+    Returns:
+        Scalar loss = lambda_sob * mean L1(dp_pred/ds − dp_true/ds) over valid pairs.
+    """
+    p_pred = pred[..., 2]
+    p_true = y_norm[..., 2]
+
+    saf_0 = x[..., 2]
+    saf_1 = x[..., 3]
+    real_foil_mask = ~((saf_0 == 0) & (saf_1 == 0))
+    surf_mask = (is_surface & mask & real_foil_mask).float()
+
+    LARGE = 1e6
+    s = torch.where(surf_mask > 0.5, saf_0, torch.full_like(saf_0, LARGE))
+    sorted_s, sort_idx = torch.sort(s, dim=1)
+
+    p_pred_sorted = torch.gather(p_pred, 1, sort_idx)
+    p_true_sorted = torch.gather(p_true, 1, sort_idx)
+    surf_mask_sorted = torch.gather(surf_mask, 1, sort_idx)
+
+    ds_raw = sorted_s[:, 1:] - sorted_s[:, :-1]
+    valid_pair_mask = (
+        (ds_raw > ds_min)
+        & (surf_mask_sorted[:, :-1] > 0.5)
+        & (surf_mask_sorted[:, 1:] > 0.5)
+    ).float()
+
+    ds = ds_raw.clamp(min=ds_min)
+    dp_pred = (p_pred_sorted[:, 1:] - p_pred_sorted[:, :-1]) / ds
+    dp_true = (p_true_sorted[:, 1:] - p_true_sorted[:, :-1]) / ds
+    grad_diff = (dp_pred - dp_true).abs() * valid_pair_mask
+    loss = grad_diff.sum() / valid_pair_mask.sum().clamp(min=1.0)
+    return lambda_sob * loss
 
 
 cfg = sp.parse(Config)
@@ -700,6 +786,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_sob = 0.0  # H89: track Sobolev surface loss magnitude per epoch.
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -721,7 +808,11 @@ for epoch in range(MAX_EPOCHS):
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
         surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
         surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        # H89: Sobolev surface loss (gradient matching on pressure).
+        sob_loss = sobolev_surf_loss(
+            pred, y_norm, x, is_surface, mask, lambda_sob=cfg.lambda_sob,
+        )
+        loss = vol_loss + cfg.surf_weight * surf_loss + sob_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -737,10 +828,12 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_sob += sob_loss.item()  # H89: scaled loss (already × lambda_sob).
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_sob /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -780,6 +873,8 @@ for epoch in range(MAX_EPOCHS):
         "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/sob_loss": epoch_sob,  # H89: scaled (× lambda_sob).
+        "train/lambda_sob": cfg.lambda_sob,
         "train/last_grad_norm": float(total_norm),
         # H73: log annealed sharpening factor at this epoch.
         "train/attn_sharpening_factor": current_attn_factor,
@@ -791,7 +886,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} sob={epoch_sob:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
