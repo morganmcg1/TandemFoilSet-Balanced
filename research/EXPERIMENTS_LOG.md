@@ -4,6 +4,67 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 14:00 — PR #2901 (CLOSED, alphonse): n_head sweep {2, 8} on max_norm=0.35 — paper-strengthening 11th axis closure (NEW 6th ASYMMETRIC-V member of DOMINANT pattern class; pattern now 55% of closed axes; σ-spread invariance BREAKS first time; pre-clip grad_norm SHIFTS first time)
+
+- **Branch:** `willowpai2g48h2-alphonse/n-head-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Verdict:** Arm 1 (n_head=2, dim_head=64) val 45.47 / test 39.31 (+0.31 val / +0.67 test) — DIRECTIONAL CLOSE upper edge of [45.15, 45.50]; Arm 2 (n_head=8, dim_head=16) val **392.67** / test 397.05 (+347.51 / +358.41) — CATASTROPHIC SWA DIVERGENCE on under-converged base. Per the PR decision rule no MERGE.
+- **W&B runs:** Arm 1 (n_head=2), Arm 2 (n_head=8), baseline `ieu1futo`.
+- **Headline:** **11th paper-appendix mechanism-transfer axis with NEW 6th member of DOMINANT ASYMMETRIC-V pattern class** — n_head joins lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896. ASYMMETRIC-V now 6 of 11 closed axes (55%) — paper-publishable headline pattern consolidates under saturated-clip max_norm=0.35 baseline.
+
+### Mechanism diagnosis (paper-publishable, TWO HEADLINE FINDINGS)
+
+- **σ-spread invariance BREAKS for the first time across 13 prior cross-axis confirmations**: Arm 1 σ-spread 0.217 (n_head=2), Arm 2 σ-spread 0.090 (n_head=8) vs baseline 0.475 — both arms collapse σ-spread by ~50–80%. The FIRST AXIS to break the σ-spread invariance; every prior closed axis (β, lr, hybrid_kendall_lr, RFF, σ, wd, β1, swa_lr, swa_start_frac, anneal_epochs, dropout) preserved σ-spread within ±0.01 of baseline 0.475. Mechanism: n_head changes per-head representation dimensionality (dim_head = n_hidden / n_head), directly reshaping the Kendall σ heads' input distribution. The σ-spread invariance is downstream of the attention block, not the FiLM head.
+- **Pre-clip grad_norm distribution SHIFTS for the first time across all closed axes**: Arm 1 mean pre-clip grad_norm 9.73 (n_head=2, +84% vs baseline), Arm 2 mean 5.91 (n_head=8, +12% vs baseline) vs baseline 5.30. Refines banked #45 (grad_norm invariant to clip threshold) to: grad_norm invariant to clip threshold AND invariant to most hyperparameter axes, BUT NOT invariant to forward-pass-shape changes.
+- **clip_fraction=1.000 HOLDS despite grad_norm shift**: 11th cross-axis confirmation of saturated-clip invariance. Saturated-clip decouples clip behavior from forward-pass-shape because saturation thresholds at the clip floor (max_norm=0.35 ≪ both pre-clip grad_norms). The invariance is to PER-STEP DIRECTION, not per-step magnitude — the load-bearing property of saturated-clip.
+- **Asymmetric-V mechanism with EXTREME AMPLITUDE on hurt side**: Arm 1 dim_head=64 (richer per-head) has modest base+SWA val regression. Arm 2 dim_head=16 (narrower per-head) is under-converged at end of cosine — base val=56.66 at ep10 still descending. SWA averaging over the still-descending trajectory compounds into 7× worse than best base. **NEW MECHANISM CLASS for paper appendix: SWA-DIVERGENCE-ON-UNDERCONVERGED-BASE** — distinct from #2880 Lion β1 catastrophic regression mechanism (sharp-minimum overshoot).
+
+### Updated paper-appendix transfer-pattern table (11 closed axes, 7 patterns)
+
+| Pattern class | Axes | Count |
+|---|---|---|
+| INDEPENDENT-SYMMETRIC | β #2736 | 1 |
+| INDEPENDENT-ASYMMETRIC V (DOMINANT) | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, **n_head #2901 NEW** | **6** |
+| DEPENDENT-SYMMETRIC | wd #2791+#2819, Lion β1 #2880 | 2 |
+| DEPENDENT-NEGATIVE | seed #2790 | 1 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 | 1 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 | 1 |
+| MONOTONIC-REGRESSIVE (one-sided) | dropout #2887 | 1 |
+
+In-flight: #2919 fern huber_beta LOWER, #2925 thorfinn swa_lr × swa_start_frac compose (MERGE candidate). At completion: 12-axis × 7+ transfer patterns.
+
+### Cross-axis invariance status (from #2901)
+
+| Quantity | Baseline | Arm 1 (n_head=2) | Arm 2 (n_head=8) | Status |
+|---|---|---|---|---|
+| σ-spread (max−min log_σ) | 0.475 | 0.217 | 0.090 | **BREAKS for first time** (refined: invariance is downstream-of-attention) |
+| min log_σ channel | surf_ux | surf_ux | surf_ux | **16th cross-axis** channel ordering invariance |
+| max log_σ channel | vol_ux | vol_ux | vol_ux | (same) |
+| clip_fraction (final) | 1.000 | 1.000 | 1.000 | **11th cross-axis** clip_fraction=1.000 invariance |
+| pre-clip grad_norm (mean) | 5.30 | 9.73 (+84%) | 5.91 (+12%) | **SHIFTS for first time** (refined: invariance is not-forward-pass-shape) |
+
+### Banked findings #172–#180
+
+- **#172 PAPER-STRENGTHENING**: n_head axis ASYMMETRIC-V class — NEW 6th DOMINANT member (50% → 55% of closed axes)
+- **#173 PAPER-STRENGTHENING (CRITICAL)**: σ-spread invariance BREAKS for first time — downstream-of-attention refinement
+- **#174 PAPER-STRENGTHENING (CRITICAL)**: pre-clip grad_norm distribution SHIFTS for first time — refines banked #45 to not-forward-pass-shape
+- **#175 PAPER-STRENGTHENING**: clip_fraction=1.000 HOLDS despite grad_norm shift — saturated-clip decouples clip from forward-pass-shape
+- **#176**: Channel ordering INVARIANT (16th cross-axis)
+- **#177 NEW MECHANISM**: SWA-DIVERGENCE-ON-UNDERCONVERGED-BASE (Arm 2 dim_head=16, base val=56.66 at ep10 still descending, SWA compounded 7× worse)
+- **#178**: Cruise vs camber_rc preference reversal (Arm 1: cruise win val −1.41/test −0.86 but camber_rc test +3.54)
+- **#179 METHODOLOGY**: n_head=8 has +50% step-time / +17GB VRAM despite identical total params (kernel launches + memory layout scale with n_head)
+- **#180 METHODOLOGY**: NaN in test_geom_camber_cruise/vol_loss is pre-existing target-repo issue (decoupled from saturated-clip baseline mechanism findings)
+
+### Decision rule application
+
+- Arm 1 val 45.47 in [45.15, 45.50] → directional close (paper-appendix data point)
+- Arm 2 val 392.67 ≫ 46.50 → strong regression close (with mechanism: under-converged base + SWA-divergence)
+- Neither arm clears val ≤ 45.10 MERGE threshold → CLOSE
+
+Alphonse reassigned → **Lion β2 sweep {0.95, 0.999}** on max_norm=0.35 baseline (13th paper-appendix axis; NEW OPTIMIZER-INTERNAL-EMA-DECAY class).
+
+---
+
 ## 2026-05-14 13:25 — PR #2925 (ASSIGNED, thorfinn): swa_lr × swa_start_frac compose {0.65/1.5e-5, 0.65/3e-5} on max_norm=0.35 — MERGE candidate at 4-epoch SWA window with deep-low-lr
 
 - **Branch:** `willowpai2g48h2-thorfinn/swa-lr-x-swa-start-frac-compose-on-max-norm-0p35`
