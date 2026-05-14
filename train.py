@@ -512,7 +512,7 @@ model_config = dict(
     n_layers=4,
     n_head=2,
     slice_num=24,
-    mlp_ratio=2,
+    mlp_ratio=1.5,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -552,12 +552,12 @@ print(
 _swiglu_modules = [m for m in model.modules() if isinstance(m, SwiGLUMLP)]
 _swiglu_hidden = _swiglu_modules[0].hidden_swiglu if _swiglu_modules else 0
 _swiglu_params = sum(p.numel() for m in _swiglu_modules for p in m.parameters())
-_std_mlp_hidden = model_config['n_hidden'] * model_config['mlp_ratio']
+_std_mlp_hidden = int(model_config['n_hidden'] * model_config['mlp_ratio'])
 _std_mlp_params_per_block = (
     model_config['n_hidden'] * _std_mlp_hidden + _std_mlp_hidden  # linear_pre
     + _std_mlp_hidden * model_config['n_hidden'] + model_config['n_hidden']  # linear_post
 )
-_std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
+_std_mlp_params_total = int(_std_mlp_params_per_block * len(_swiglu_modules))
 print(
     f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
     f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
@@ -934,13 +934,15 @@ if best_metrics:
 
     _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
                        for i, m in _swiglu_blocks]
-    with torch.no_grad():
-        _x_s, _y_s, _is_s, _m_s = next(iter(_se_loader))
-        _x_s = _x_s.to(device, non_blocking=True)
-        _m_s = _m_s.to(device, non_blocking=True)
-        _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
-        with amp_ctx_factory():
-            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+    _swiglu_sample_loader = val_loaders.get("val_single_in_dist")
+    if _swiglu_sample_loader is not None and _swiglu_blocks:
+        with torch.no_grad():
+            _x_s, _y_s, _is_s, _m_s = next(iter(_swiglu_sample_loader))
+            _x_s = _x_s.to(device, non_blocking=True)
+            _m_s = _m_s.to(device, non_blocking=True)
+            _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner({"x": _x_norm_s, "mask": _m_s})
     for _h in _swiglu_handles:
         _h.remove()
 
