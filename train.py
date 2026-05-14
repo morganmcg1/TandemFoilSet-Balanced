@@ -291,6 +291,78 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Data augmentation
+# ---------------------------------------------------------------------------
+
+# dsdf is 8 raycast distances in 8 angular directions (CCW from +x at 45° increments).
+# Empirically verified on cruise samples with near-symmetric setup: under y-mirror,
+# channel 0 (+x) and channel 4 (-x) are invariant; channels swap (1↔7, 2↔6, 3↔5).
+# Permutation indices map old dsdf → new dsdf: new[k] = old[DSDF_YFLIP_PERM[k]].
+# Within the global x feature vector, dsdf occupies indices 4..11, so the global
+# indices for the permuted dsdf are [4, 11, 10, 9, 8, 7, 6, 5] (= 4 + perm).
+DSDF_YFLIP_PERM_GLOBAL = (4, 11, 10, 9, 8, 7, 6, 5)
+
+
+def yflip_batch_(x: torch.Tensor, y: torch.Tensor, mask: torch.Tensor,
+                 p: float = 0.5) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply y-flip data augmentation in-place to a padded batch.
+
+    Under the y → -y physical symmetry of the 2D flow:
+      sign flip (per-sample): node_y (x[:,:,1]), saf1 (x[:,:,3]), AoA1 (x[:,:,14]),
+                              AoA2 (x[:,:,18]), gap (x[:,:,22]), Uy target (y[:,:,1])
+      dsdf permutation:       x[:,:,4:12] -> x[:,:,[4, 11, 10, 9, 8, 7, 6, 5]]
+      invariant:              node_x (0), saf0 (2), is_surface (12), log_Re (13),
+                              NACA1 (15-17), NACA2 (19-21), stagger (23)
+
+    Per-sample eligibility gate: only freestream cruise samples — those whose
+    node-y range is symmetric about 0 — are y-symmetric under the underlying
+    physics. RaceCar samples (~67% of training) sit above a ground plane at
+    y=0 (only positive y), so y-flip would produce non-physical "foil below
+    ground" configurations. We detect freestream samples via y_min < -1.0
+    (empirically: cruise y_min ≈ -9.6, raceCar y_min ≈ 0).
+
+    Padded positions (which carry zeros in all channels) are unaffected: 0 * ±1 = 0
+    and permuting zeros yields zeros, so no mask gating is required on the
+    flip operation itself; mask is used only for eligibility detection.
+
+    Returns (sign [B], eligible [B]): per-sample flip sign (-1=flipped, +1=kept)
+    and per-sample eligibility (True iff sample is in freestream regime).
+    """
+    B = x.shape[0]
+
+    # Per-sample eligibility: y_min < -1.0 → freestream (cruise), eligible to flip.
+    with torch.no_grad():
+        y_pos = x[:, :, 1]  # [B, N] node y-coordinate
+        y_for_min = torch.where(mask, y_pos, torch.full_like(y_pos, float("inf")))
+        y_min_per_sample = y_for_min.min(dim=1).values  # [B]
+        eligible = y_min_per_sample < -1.0  # [B] bool
+
+    flip_random = torch.rand(B, device=x.device) < p
+    flip_mask = flip_random & eligible  # only eligible samples can be flipped
+    sign = torch.where(
+        flip_mask,
+        torch.tensor(-1.0, dtype=x.dtype, device=x.device),
+        torch.tensor(1.0, dtype=x.dtype, device=x.device),
+    )  # [B], +1 keep / -1 flip
+    sign_b1 = sign.view(B, 1)  # broadcasts over N
+
+    # Apply sign flips on x channels
+    for idx in (1, 3, 14, 18, 22):
+        x[:, :, idx] = x[:, :, idx] * sign_b1
+    # Apply sign flip on Uy
+    y[:, :, 1] = y[:, :, 1] * sign_b1
+
+    # dsdf channel permutation (only for flipped samples)
+    if flip_mask.any():
+        dsdf = x[:, :, 4:12]  # [B, N, 8]
+        dsdf_perm = x[:, :, list(DSDF_YFLIP_PERM_GLOBAL)]  # [B, N, 8] permuted
+        flip_mask_b11 = flip_mask.view(B, 1, 1)  # broadcast to [B, N, 8]
+        x[:, :, 4:12] = torch.where(flip_mask_b11, dsdf_perm, dsdf)
+
+    return sign, eligible
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -476,14 +548,21 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    seed: int = 1  # global torch seed (RNG init, model init, sampler, y-flip)
+    yflip_prob: float = 0.5  # per-sample y-flip probability (0.0 = off)
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+torch.manual_seed(cfg.seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Seed={cfg.seed}, yflip_prob={cfg.yflip_prob}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -581,11 +660,25 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    epoch_flip_count = 0
+    epoch_eligible_count = 0
+    epoch_batch_samples = 0
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Y-flip augmentation (physics-correct mirror across x-axis).
+        # Applied per-sample with prob = cfg.yflip_prob, before normalization.
+        # Only freestream samples (cruise tandem) are eligible; raceCar samples
+        # have a ground plane at y=0 → flipping would produce non-physical inputs.
+        if cfg.yflip_prob > 0.0:
+            sign, eligible = yflip_batch_(x, y, mask, p=cfg.yflip_prob)
+            epoch_flip_count += int((sign < 0).sum().item())
+            epoch_eligible_count += int(eligible.sum().item())
+            epoch_batch_samples += x.shape[0]
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -664,6 +757,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "train/yflip_rate": (epoch_flip_count / epoch_batch_samples) if epoch_batch_samples > 0 else 0.0,
+        "train/yflip_eligible_rate": (epoch_eligible_count / epoch_batch_samples) if epoch_batch_samples > 0 else 0.0,
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
