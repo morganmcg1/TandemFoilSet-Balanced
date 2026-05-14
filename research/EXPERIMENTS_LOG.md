@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-14 [Round 122] UTC — PR #2890: Geometry-conditioned FiLM additive bias — **CLOSED LOSS (+3.09%; STRONGEST EVER camber_cruise -9.87% OOD signal)**
+
+- **Branch:** charliepai2g48h5-askeladd/geometry-film
+- **Hypothesis:** Additive geometry-FiLM: `fx = preprocess(x) + placeholder + geo_film(geo_features)` where geo_film=Linear(8,96) on NACA0+NACA1+gap+stagger. Zero-init. +864 params.
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-geometry-film-20260514-110510/metrics.jsonl
+
+| Metric | #2879 Baseline | #2890 geo-FiLM | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.5045** | **+3.09% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.7665 | +0.94% |
+| val_single_in_dist | 23.3997 | 27.3431 | **+16.85% LOSS** |
+| val_geom_camber_rc | 46.0708 | 45.5498 | -1.13% ✓ |
+| val_geom_camber_cruise | 17.8657 | **16.1031** | **-9.87% WIN (LARGEST EVER!)** |
+| val_re_rand | 34.9057 | 37.0220 | +6.06% LOSS |
+
+Best ep59/60 (timeout). Params 408,804 confirmed. geo_film weight_norm=1.95 (activated from 0).
+
+**KEY FINDING — THIRD CONFIRMATION of novel split-pattern reversal + STRONGEST CAMBER_CRUISE WIN EVER:**
+
+This is the THIRD experiment (after #2889 +capacity, #2890 +geo-bias) showing the same split-pattern reversal: geometric-OOD improves at in-dist cost. Camber_cruise -9.87% is the LARGEST single-split improvement ever observed (2.7× bigger than #2889's -3.60%).
+
+**Critical diagnostic:** geo_film output std was HIGHEST on val_geom_camber_cruise (0.22) — exactly matching the best improvement. The mechanism works. The site is wrong.
+
+**Mechanism diagnosis:** The additive bias on input embedding directly competes with preprocess MLP (which already has raw access to channels 15-17, 19-22). Even abs_mean ~0.15 disrupts well-tuned in-dist representation. Flow-FiLM succeeds as MULTIPLICATIVE; geometry-FiLM must also be multiplicative.
+
+**98th candidate axis (geometry-additive-FiLM-on-input) CLOSES.**
+
+**Follow-up assigned: #2900 askeladd multiplicative geo-FiLM** — parallel gate `fx = fx * (1 + film_scale + geo_film_scale)`. Same site as successful flow-FiLM, same parametrization, tests whether multiplicative composition fixes the in_dist regression.
+
+---
+
+## 2026-05-14 [Round 122] UTC — PR #2900: Multiplicative geo-FiLM parallel to flow-FiLM — **ASSIGNED to charliepai2g48h5-askeladd**
+
+- **Branch:** charliepai2g48h5-askeladd/multiplicative-geo-film
+- **Hypothesis:** Add geometry-conditioned FiLM as second multiplicative gate parallel to existing flow-FiLM: `fx = fx * (1 + film_scale + geo_film_scale)`. geo_film=Linear(8,96) on NACA0+NACA1+gap+stagger (ch[15,16,17,19,20,21,22,23]). Zero-init → identity at step 0. Same site that successfully hosts flow-FiLM (21st winner).
+- **Rationale:** Additive geo-FiLM (#2890) produced largest-ever camber_cruise WIN (-9.87%) but hurt in_dist +16.85%. The problem was the parametrization (additive bias fights preprocess MLP's learned basis). Multiplicative gate composes cleanly with existing flow-FiLM — both gates multiply together before applying. Zero-init ensures exact baseline training stability at step 0. +864 params, ~408,804 total.
+- **Falsifiable:** WIN = multiplicative composition fixes in_dist regression while preserving camber_cruise improvement. LOSS = the site itself (input embedding) is wrong regardless of parametrization; need to route geometry conditioning deeper.
+
+---
+
 ## 2026-05-14 [Round 121] UTC — PR #2889: mlp_ratio=4 uniform — **CLOSED LOSS (+2.91%; NOVEL OOD SIGNAL captured)**
 
 - **Branch:** charliepai2g48h5-alphonse/mlp-ratio-4
