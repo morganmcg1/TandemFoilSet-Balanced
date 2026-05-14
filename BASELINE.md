@@ -236,3 +236,22 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 43.09, test < 37.19, all four test splits finite.**
+
+## 2026-05-14 09:21 — PR #2817: trunc_normal_ init std=0.05 (σ=0.05 weight init)
+
+- **`val_avg/mae_surf_p`:** 39.6184 (best seed 2, `npvg5u4o`); seed-1 (`72s3ljky`) val=42.0212; **two-seed mean val=40.8198**
+- **`test_avg/mae_surf_p`:** 33.2254 (seed 2, `npvg5u4o`); seed-1 test=37.2694; **two-seed mean test=35.2474**
+- **Per-split test surf_p (seed 2, best):** single_in_dist=36.429, geom_camber_rc=44.897, geom_camber_cruise=19.372, re_rand=32.204
+- **Per-split test surf_p (mean of 2 seeds):** single_in_dist=38.078, geom_camber_rc=47.719, geom_camber_cruise=21.093, re_rand=34.100
+- **W&B runs:** `72s3ljky` (seed 1), `npvg5u4o` (seed 2, BETTER)
+- **Implementation note:** In `Transolver._init_weights`, changed `trunc_normal_(m.weight, std=0.02)` → `trunc_normal_(m.weight, std=0.05)` (via threaded `init_std` arg in Config → Transolver). The existing timm `trunc_normal_` with default bounds ±2σ is reused; 49 Linear modules re-init'd, 0 Embeddings. σ=0.05 starts closer to the trained-scale neighbourhood (param L2 ~62 at convergence) than σ=0.02: both seeds converge to param L2 ≈ 62.0-62.2, consistent with a better init for this compute budget. σ=0.01 failed catastrophically (val=53.93, param L2 only reached 46.08 in 35 ep — optimizer couldn't climb to trained scale). Mechanism: σ=0.05 initialization puts weights closer to the optimizer's eventual settled scale, enabling faster descent in the compute-bound 35-ep regime. Zero compute overhead (init only).
+- **Compute:** ~30.7 min (hits 30-min cap), ~52.6s/epoch, 35/35 epochs, best=last. Seed variance: val std=1.699 (4.2%), test std=2.860 (8.1%).
+- **Delta vs PR #2801 (pinball τ=0.55 baseline):** mean val **−6.6%** (43.684 → 40.820), mean test **−5.4%** (37.272 → 35.247). All four per-split test surf_p improve on mean: single_in_dist −11.4%, geom_camber_rc −4.3%, geom_camber_cruise −0.6%, re_rand −1.7%.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-fern --init_std 0.05 \
+      --wandb_name "willowpai2g48h3-fern/trunc-init-s05-seed2" --wandb_group trunc-init-scan
+  ```
+
+**New merge bar: val < 40.82 (mean), test < 35.25 (mean), all four test splits finite.**
+**Best single-seed bar: val < 39.62, test < 33.23.**
