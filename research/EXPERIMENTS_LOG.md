@@ -85,6 +85,53 @@
 
 ---
 
+## 2026-05-14 [Round 136] UTC — PR #2930: head-zero-init — **CLOSED LOSS (+8.46% val / +3.96% test; 117th taxon; ZERO-INIT-HEAD-UNDER-BUDGET-CONSTRAINT CLOSED)**
+
+- **Branch:** charliepai2g48h5-edward/head-zero-init
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-head-zero-init-20260514-140818/metrics.jsonl
+
+| Metric | Baseline #2879 | #2930 head zero-init | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 33.1466 | **+8.46% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.5669 | +3.96% LOSS |
+| val_single_in_dist | 23.3997 | 25.6849 | +9.77% LOSS |
+| val_geom_camber_rc | 46.0708 | 49.8453 | +8.19% LOSS |
+| val_geom_camber_cruise | 17.8657 | 18.7205 | +4.78% LOSS |
+| val_re_rand | 34.9057 | 38.3359 | +9.83% LOSS |
+
+**Hypothesis:** Zero-init the final output projection weights (the Linear that produces per-token surface/volume predictions). Pair with existing body LayerScale γ=1e-4 to test DiT/Fixup "warm-start" recipe gap.
+
+**Diagnostic confirms mechanism activated cleanly:**
+- Step-0 head weight/bias norm = exactly 0
+- Step-0 model output |·|.mean = exactly 0
+- Head weight norm grew 0 → 1.16 over 60 epochs, **monotonically asymptoting at cutoff** (NOT converged)
+- val_avg trajectory: ep1=365.68 → ep5=135.85 → ep30=50.50 → ep60=33.15 (still descending)
+
+**Result type:** CONVERGENCE-BUDGET failure (NOT representation failure). The 'DiT recipe' (zero-init head + body LayerScale γ=1e-4) is canonically sound but EXHAUSTS our 60-epoch / 30-min budget. The baseline's Kaiming head std≈0.144 is NOT 'wasting gradient' — it provides the initial output signal that the body's near-zero LayerScale γ=1e-4 residuals learn AGAINST. Removing that signal creates a **doubly under-initialized** network with no gradient drive in epochs 1-5.
+
+**Closes 117th taxon: zero-init-head-under-budget-constraint.** Under SENPAI_MAX_EPOCHS=60 cap, the DiT zero-init recipe is budget-incompatible. With a longer training schedule (90+ epochs) or higher peak LR, it might recover — but we don't have that budget.
+
+**Student followups (4):**
+1. Head-zero with LayerScale γ=1.0 — overlaps with in-flight #2928 nezuko (γ=1.0 in isolation), skip.
+2. Longer schedule (epochs=90) — VIOLATES SENPAI_MAX_EPOCHS=60 cap.
+3. Small-but-nonzero head init (std=1e-3) — narrow head-init axis continuation.
+4. Bias-only zero — too small an intervention.
+
+Reassigning edward to a NEW representation-axis test (RMSNorm replacement) rather than another head-init point — opens norm-axis recipe gap not yet explored.
+
+---
+
+## 2026-05-14 [Round 136] UTC — PR #2939 (assignment): edward rmsnorm-replacement — **118th axis: normalization-scheme REPRESENTATION-axis**
+
+- **Hypothesis:** Replace all `nn.LayerNorm` instances in `TransolverBlock` with `RMSNorm`. Tests whether LayerNorm's mean-centering subtraction is load-bearing for CFD targets.
+- **Why might WIN:** Lion's sign(grad) is mean-preserving by design; RMSNorm preserves mean (LayerNorm strips it). CFD pressure/velocity fields have natural baselines that vary by Re/AoA regime — RMSNorm preserves those, may better match Lion's behavior. Modern transformer default (LLaMA, T5, PaLM) — clean recipe gap.
+- **Why might LOSS:** LayerNorm's centering may be load-bearing for CFD where physical baselines need explicit factoring. Existing init was tuned for LayerNorm.
+- **Pattern change:** swap every LayerNorm site to a small RMSNorm module (`x / sqrt(mean(x²) + ε) · γ`).
+- **Param count change:** slightly lower (~few hundred params saved from removed β biases).
+- **Direct REPRESENTATION-axis test per #2922 student insight.**
+
+---
+
 ## 2026-05-14 [Round 135] UTC — PR #2923: slice-num-32 — **CLOSED LOSS (+6.02% val / +2.82% test; 114th taxon; SLICE-ROUTING-ALPHABET UPWARD SWEEP AT n_head=2 CLOSED)**
 
 - **Branch:** charliepai2g48h5-tanjiro/slice-num-32
