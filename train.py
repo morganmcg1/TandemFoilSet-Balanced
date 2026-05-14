@@ -205,13 +205,15 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 spectral_norm_mlp: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.spectral_norm_mlp = spectral_norm_mlp
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -246,6 +248,18 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+
+        # Spectral normalization on FFN MLP Linear layers inside each TransolverBlock.
+        # Applied AFTER self.apply(_init_weights) so trunc_normal_ writes into the raw
+        # weight Parameter; spectral_norm then registers weight_orig and the power-iter
+        # hook on those layers. Attention projections (in_project_x/fx/slice, to_q/k/v,
+        # to_out) and Re-conditioning modules (ReFiLM, ReConditionalLayerNorm) are
+        # intentionally left without spectral_norm so the effect is isolated to the FFN
+        # sub-block (Miyato et al. 2018, "Spectral Normalization for GANs", ICLR 2018).
+        if spectral_norm_mlp:
+            for block in self.blocks:
+                block.mlp.linear_pre[0] = nn.utils.spectral_norm(block.mlp.linear_pre[0])
+                block.mlp.linear_post = nn.utils.spectral_norm(block.mlp.linear_post)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -601,6 +615,16 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Apply torch.nn.utils.spectral_norm to both Linear layers inside each
+    # TransolverBlock's FFN MLP (linear_pre[0] and linear_post). Enforces a
+    # Lipschitz-1 bound per layer to smooth predictions in geometry space and
+    # target OOD camber splits. Adds 2 small power-iter buffers per layer; zero
+    # extra parameters; weight folding at inference makes forward equivalent to
+    # a plain Linear once converged.
+    spectral_norm_mlp: bool = False
+    # Disable torch.compile (escape hatch — spectral_norm's hook-based forward
+    # pre-hook may not be compile-friendly under some torch versions).
+    no_compile: bool = False
 
 
 cfg = sp.parse(Config)
@@ -642,6 +666,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    spectral_norm_mlp=cfg.spectral_norm_mlp,
 )
 
 model = Transolver(**model_config).to(device)
@@ -672,10 +697,13 @@ uncompiled_model = model
 # pad_collate yields variable per-batch shapes (mesh nodes 74K-242K, B=4), so
 # CUDA Graph modes ("reduce-overhead"/"max-autotune") would recompile per shape.
 # A single dynamic-shape graph is the only viable option here.
-torch_compile_mode = "default"
-torch_compile_dynamic = True
-print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
-model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
+if cfg.no_compile:
+    print("Skipping torch.compile (--no_compile)")
+else:
+    torch_compile_mode = "default"
+    torch_compile_dynamic = True
+    print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
+    model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
 
 
 def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
