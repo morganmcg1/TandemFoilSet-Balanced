@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 [Round 116] UTC — PR #2873: post-norm structural pivot (pre-LN → post-LN) — **CLOSED LOSS (+8.02% val)**
+
+- **Branch:** charliepai2g48h5-edward/post-norm
+- **Hypothesis:** Replace pre-norm (LN inside sublayer) with post-norm (LN outside residual) at all 8 ln_1/ln_2 sites across 4 blocks. Liu et al. 2020 argues post-norm can yield better final performance once stability solved. LayerScale γ=1e-4 init stabilizes.
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-post-norm-20260514-093042/metrics.jsonl`
+
+| Metric | Baseline #2810 | #2873 post-norm | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | **33.3698** | **+8.02% LOSS** |
+| test_avg/mae_surf_p | 26.1964 | **27.8986** | **+6.50% LOSS** |
+| val_single_in_dist | 25.2751 | **27.4661** | +8.67% |
+| val_geom_camber_cruise | 16.8427 | **19.3092** | +14.64% worst |
+| val_geom_camber_rc | 45.8179 | **48.6226** | +6.12% |
+| val_re_rand | 35.6177 | **38.0811** | +6.92% |
+
+Param count: 333,700 ✓ unchanged. Best ep65/67, timeout. sec/epoch ~26.7s, peak GPU 14.56 GB.
+
+Per-block residual-stream RMS at ln_2 (post-norm): all blocks ≈ 1.0 ± 2% across all splits — mechanism activated (bounded residual confirmed). LayerScale γ grew 2-3× (γ_attn 0.014-0.028 vs pre-norm 0.004-0.012) to compensate. No NaN, training stable.
+
+**Analysis:** DISTINCTIVE FAILURE MODE — all 8 splits regress (4 val + 4 test, no exception). Residual-RMS diagnostic confirmed post-norm mechanism IS active (RMS ≈ 1.0), but the effect is uniformly negative. Post-LN destroys useful magnitude information that pre-LN preserves: branches must "shout louder" (γ grows 2-3×) before post-LN flattens them. Pre-norm "naked residual highway" lets per-block signal propagate to depth. First experiment in recent batch WITHOUT in_dist WIN + OOD LOSS tradeoff — STRUCTURAL failure (gradient path), not regularization tradeoff. Pre-norm is load-bearing for FiLM + LayerScale + SE-block3 + SwiGLU + Lion stack.
+
+**88th taxon CLOSES. Plateau deepens to 15 LOSSes since #2810 merge.**
+
+---
+
+## 2026-05-14 [Round 116] UTC — PR #2884: Slice-routing entropy regularization (94th axis) — **ASSIGNED to charliepai2g48h5-edward**
+
+- **Branch:** charliepai2g48h5-edward/slice-entropy-reg
+- **Hypothesis:** Add auxiliary entropy loss on slice-routing softmax weights: `loss = data_loss - 0.005 * mean(H_block_i)` where `H_block_i = entropy(slice_weights_block_i)`. Encourages broader (higher-entropy) slice assignments, directly targeting block-2 routing collapse observed in #2869 (alphonse n_head=1, block-2 entropy=0.267, 8.4% of max). Alpha=0.005 ≈ 1.7% of typical loss magnitude. +0 params.
+- **Rationale:** 15 consecutive LOSSes, block-2 routing collapse is the clearest concrete failure signal observed. Optimizer naturally gravitates toward low-entropy routing (simpler regression targets within slices), which may reduce OOD generalization by over-specializing slice assignments to in-dist geometry.
+- **Falsifiable:** WIN = forced entropy broadens OOD coverage → try alpha=0.01. LOSS = natural sparsity load-bearing → close axis.
+- **94th candidate axis.**
+
+---
+
 ## 2026-05-14 [Round 115] UTC — PR #2870: output-head gain scalar (+1 param) — **CLOSED LOSS (+4.07% val)**
 
 - **Branch:** charliepai2g48h5-nezuko/output-head-gain
