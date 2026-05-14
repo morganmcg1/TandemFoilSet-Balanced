@@ -200,7 +200,7 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, film_block3=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -213,6 +213,13 @@ class TransolverBlock(nn.Module):
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
+        self.film_block3 = film_block3
+        if self.film_block3:
+            # Block-3-only FiLM: zero-init Linear(3, hidden) → identity at step 0.
+            # Applied AFTER SE gate, BEFORE mlp2/ln_3 projection.
+            self.film_b3 = nn.Linear(3, hidden_dim)
+            nn.init.zeros_(self.film_b3.weight)
+            nn.init.zeros_(self.film_b3.bias)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -220,11 +227,14 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, flow_scalars=None):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.se is not None:
             fx = self.se(fx, mask=mask)
+        if self.film_block3 and flow_scalars is not None:
+            film_scale = self.film_b3(flow_scalars)               # (B, C)
+            fx = fx * (1 + film_scale.unsqueeze(1))               # (B, N, C) × (B, 1, C)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -257,6 +267,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                film_block3=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
@@ -289,7 +300,7 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            fx = block(fx, mask=mask, flow_scalars=flow_scalars)
         return {"preds": fx}
 
 
@@ -557,6 +568,17 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 mean pool #2765)"
 )
 
+# Block-3-only FiLM diagnostic: zero-init Linear(3, hidden) at block n_layers-1,
+# after SE gate, before mlp2 projection. Stacks with embedding-side FiLM (#2614).
+_film_b3_params = 3 * model_config['n_hidden'] + model_config['n_hidden']  # 4 * n_hidden
+print(
+    f"Block-3-only FiLM (nezuko block3-film): zero-init Linear(3, {model_config['n_hidden']}) "
+    f"at block {model_config['n_layers']-1} AFTER SE gate, BEFORE mlp2/ln_3 projection; "
+    f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad]; "
+    f"+{_film_b3_params} params; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.8909"
+)
+
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
 _swiglu_modules = [m for m in model.modules() if isinstance(m, SwiGLUMLP)]
 _swiglu_hidden = _swiglu_modules[0].hidden_swiglu if _swiglu_modules else 0
@@ -739,6 +761,19 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # Block-3-only FiLM per-epoch diagnostic: weight/bias norms (cheap) +
+    # film_scale_abs_mean on a sample val batch (one extra micro-forward).
+    _inner_for_diag = getattr(model, "_orig_mod", model)
+    _film_b3_layer = _inner_for_diag.blocks[-1].film_b3
+    film_b3_w_norm = _film_b3_layer.weight.detach().float().norm().item()
+    film_b3_b_norm = _film_b3_layer.bias.detach().float().norm().item()
+    with torch.no_grad():
+        _sx, _, _, _ = next(iter(val_loaders["val_single_in_dist"]))
+        _sx = _sx.to(device, non_blocking=True)
+        _sx_norm = (_sx - stats["x_mean"]) / stats["x_std"]
+        _sflow = _sx_norm[:, 0, [13, 14, 18]].float()
+        film_scale_abs_mean = _film_b3_layer(_sflow).abs().mean().item()
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -752,6 +787,9 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "film_b3_weight_norm": film_b3_w_norm,
+        "film_b3_bias_norm": film_b3_b_norm,
+        "film_b3_scale_abs_mean": film_scale_abs_mean,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -836,6 +874,38 @@ if best_metrics:
         "film_weight_norm": _film_w_norm,
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+    })
+
+    # Block-3-only FiLM final diagnostic (best-checkpoint weights): zero-init
+    # Linear(3, hidden) at block n_layers-1, AFTER SE gate, BEFORE mlp2. Track
+    # how far it drifted from zero across all 4 val splits.
+    _film_b3 = _inner.blocks[-1].film_b3
+    _film_b3_w_norm = _film_b3.weight.detach().float().norm().item()
+    _film_b3_b_norm = _film_b3.bias.detach().float().norm().item()
+    print("\nBlock-3-only FiLM final diagnostics (best-checkpoint weights):")
+    print(f"  film_b3.weight.norm: {_film_b3_w_norm:.4f}  (zero-init)")
+    print(f"  film_b3.bias.norm:   {_film_b3_b_norm:.4f}  (zero-init)")
+    _film_b3_scale_per_split: dict[str, float] = {}
+    for _split_name in ["val_single_in_dist", "val_geom_camber_rc",
+                        "val_geom_camber_cruise", "val_re_rand"]:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        with torch.no_grad():
+            _x_b3, _, _, _m_b3 = next(iter(_ldr))
+            _x_b3 = _x_b3.to(device, non_blocking=True)
+            _x_norm_b3 = (_x_b3 - stats["x_mean"]) / stats["x_std"]
+            _flow_b3 = _x_norm_b3[:, 0, [13, 14, 18]].float()
+            _scale_b3 = _film_b3(_flow_b3)
+            _scale_abs_mean = _scale_b3.abs().mean().item()
+        _film_b3_scale_per_split[_split_name] = _scale_abs_mean
+        print(f"  film_b3_scale |gamma| mean on {_split_name}: {_scale_abs_mean:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "film_b3_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "film_b3_weight_norm": _film_b3_w_norm,
+        "film_b3_bias_norm": _film_b3_b_norm,
+        "film_b3_scale_abs_mean": _film_b3_scale_per_split,
     })
 
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
