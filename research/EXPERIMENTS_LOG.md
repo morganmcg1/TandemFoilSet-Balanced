@@ -4,6 +4,74 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 19:15 — PR #2966 (CLOSED, thorfinn): mlp_ratio sweep {1, 4} on max_norm=0.35 — 18th paper-appendix axis closure, 3rd BOTH-LOSE Pareto-cap class member (FORWARD-PASS-SHAPE TRIO complete: attention-granularity + composition-depth + FFN-width all closed), 4th σ-spread BREAK (all on forward-pass-shape axes), 3rd SWA-NEVER-ENTERED failure mode
+
+- **Branch:** `willowpai2g48h2-thorfinn/mlp-ratio-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Verdict:** Arm 1 NARROWER (mlp_ratio=1, xtmvryw4) SWA val **47.9168** +2.76 / test 40.4625 +1.83 — per-block FFN capacity insufficiency; Arm 2 WIDER (mlp_ratio=4, hn5jq4ch) SWA val 51.3211 +6.17 / test 43.2060 +4.57 — **SWA-NEVER-ENTERED at epoch 12, BASE val = SWA val 51.32 (zero SWA improvement)** vs current #2674 baseline (45.1538/38.6367). **Both arms regress > +2.0 val → BOTH-LOSE Pareto-cap close.**
+- **W&B runs:** Arm 1 `xtmvryw4`, Arm 2 `hn5jq4ch`, baseline `ieu1futo`.
+- **Headline:** **18th paper-appendix axis closure** — mlp_ratio joins BOTH-LOSE Pareto-cap class as its **3rd member** after swa_start_frac #2818 + slice_num #2962 — class now 3/18 = 17%. **FORWARD-PASS-SHAPE TRIO COMPLETE**: attention granularity (n_head #2901 ASYMMETRIC-V, slice_num #2962 BOTH-LOSE), composition depth (n_layers #2947 ASYMMETRIC-V), FFN width (mlp_ratio #2966 BOTH-LOSE). **EMERGING PATTERN: forward-pass-shape axes affecting per-block computational granularity (slice_num, mlp_ratio) land in BOTH-LOSE; axes affecting coarse-grain structure (n_layers depth, n_head count) land in ASYMMETRIC-V.**
+
+### Mechanism diagnosis (paper-publishable findings — extends and refines student's #207-#209)
+
+- **#235 PAPER-PUBLISHABLE — 3rd BOTH-LOSE Pareto-cap member confirms class spans full forward-pass-shape mechanism-family.** Class is structurally about wall-clock-budget × capacity-axis Pareto fronts. **2 of 3 members are forward-pass-shape capacity axes** (slice_num + mlp_ratio), 3rd is SWA-scheduling (orthogonal mechanism but same wall-clock-budget interaction). Strong predictive signal for future forward-pass-shape HALF+DOUBLE tests.
+
+- **#236 PAPER-PUBLISHABLE — σ-spread BREAK extends to FFN-side per-block sub-modules.** σ-spread invariance bank now 17 confirmations + **4 BREAKs**: n_head #2901, n_layers #2947 BOTH directions, slice_num #2962, mlp_ratio #2966 (this PR). **ALL 4 BREAKs are forward-pass-shape axes**, spanning all three Transolver per-block sub-modules. Direction: narrower FFN (mlp_ratio=1) INFLATES σ-spread +0.042; wider FFN (mlp_ratio=4) COMPRESSES σ-spread −0.112. **2nd direct INFLATE direction** observed on a forward-pass-shape axis (after slice_num HALF #2962). Sharpens banked #230: any forward-pass-shape change inside ANY Transolver sub-module shifts Kendall σ-heads' input distribution.
+
+- **#237 PAPER-PUBLISHABLE — pre-clip grad_norm direction is sub-module-specific (3-way comparison).** Naive "more params → more gradient" reasoning is wrong; only n_head follows it:
+  - **Attention granularity (n_head ↑ → ↑)**: more parallel attention paths = HIGHER grad_norm
+  - **Composition depth (n_layers ↑ → ↓)**: deeper at fixed per-block-shape = LOWER grad_norm (capacity-monotonic DOWN)
+  - **FFN width (mlp_ratio ↑ → ↓)**: wider FFN at fixed n_hidden = LOWER grad_norm (capacity diffuses gradient)
+  3-axis directional fingerprint diagnoses which sub-module dominates the gradient pathway under saturated-clip. **Most surprising single-arm finding**: mlp_ratio=1 NARROWER FFN gives **+47% grad_norm_max** — capacity-insufficient FFN saturates per-block representation, forcing larger raw gradients per step.
+
+- **#238 PAPER-PUBLISHABLE — channel ordering invariance is DEPTH-specific, not capacity-specific.** mlp_ratio NARROWER (=1) preserves min=surf_ux/max=vol_ux ordering, but n_layers SHALLOWER (=3, #2947 Arm 1) BROKE ordering at min=surf_uy. **Refinement of banked #203**: channel-ordering-break is depth-specific failure mode, NOT capacity-specific phenomenon at fixed depth. mlp_ratio=1 reduces FFN-per-block capacity comparably but at fixed depth (5) — capacity reduction without depth reduction preserves ordering. **Mechanism hypothesis**: channel ordering emerges from loss-surface geometry × depth-N composition; with sufficient depth, the channel ordering is robust to per-block capacity changes.
+
+- **#239 PAPER-STRENGTHENING — 3rd SWA-NEVER-ENTERED + per-axis step-time scaling fingerprint.** Banked methodology #170 confirmed across 3 independent forward-pass-shape axes (#2947 n_layers, #2962 slice_num, #2966 mlp_ratio DOUBLE). Per-axis step-time scaling:
+  - n_layers: dataloader-bound at low capacity (NOT layer-linear at low values)
+  - slice_num: sub-linear (1.50× across 4× change → 17% slice-routing fraction)
+  - mlp_ratio: NOT dataloader-bound at mlp_ratio=4 (+26% step-time, FFN compute dominates)
+  Multi-axis dataloader-vs-compute-bound classification is paper-publishable Transolver compute-fingerprint.
+
+- **#240 METHODOLOGY — Step-time scaling characterized across 3 forward-pass-shape sub-modules.** Dataloader-bound axes (n_layers at low capacity, slice_num at low slice-count) vs compute-bound axes (mlp_ratio at high width). Transolver compute-fingerprint quantifies which sub-modules contribute to per-step cost at which capacity regimes.
+
+### Paper-appendix mechanism-transfer matrix — 18 closed axes × 8 transfer patterns + 2 MIXED axes
+
+| Axis class | Count | Members |
+|---|---|---|
+| **INDEPENDENT-ASYMMETRIC-V (DOMINANT)** | **8 (44%)** | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901, Lion β2 #2932, n_layers #2947 |
+| **Pareto-cap-coincidence (BOTH-LOSE)** | **3 (17%) — UPDATED** | swa_start_frac #2818, slice_num #2962, **mlp_ratio #2966 (this PR)** |
+| **DEPENDENT-SYMMETRIC** | 2 | wd #2791+#2819, Lion β1 #2880 |
+| **NON-MONOTONE-COST-MONOTONE-MECHANISM** | 1 | β LOWER #2919 |
+| INDEPENDENT-SYMMETRIC | 1 | β UPPER #2736 |
+| DEPENDENT-NEGATIVE | 1 | seed #2790 |
+| DEGENERATE-AXIS | 1 | anneal_epochs #2877 |
+| MONOTONIC-REGRESSIVE | 1 | dropout #2887 |
+
+**MIXED-CLASSIFICATION axes:** β-axis (2-pattern), wd-axis (3-pattern TRIPLE).
+
+### FORWARD-PASS-SHAPE TRIO COMPLETE
+
+mlp_ratio closure completes the FORWARD-PASS-SHAPE TRIO — all three Transolver per-block sub-modules now characterized:
+- **Attention granularity (n_head, slice_num)**: 1× ASYMMETRIC-V, 1× BOTH-LOSE
+- **Composition depth (n_layers)**: ASYMMETRIC-V with BOTH-DIRECTIONS σ-spread BREAK
+- **FFN width (mlp_ratio)**: BOTH-LOSE with bidirectional σ-spread BREAK
+
+### Reassignment
+
+thorfinn → **lr × hybrid_kendall_lr counter-directional compose 2-arm test on max_norm=0.35** (#2996 NEW): Arm 1 model-DOWN/σ-UP (lr=1.5e-4, hybrid_kendall_lr=1e-3), Arm 2 model-UP/σ-DOWN (lr=6e-4, hybrid_kendall_lr=2.5e-4). **NEW transfer-pattern class COMPOSE-DECOMPOSE-vs-COUPLE** (or existing class if behavior fits). 2nd compose-test after #2925 swa_lr × swa_start_frac (BOTH-LOSE-COMPOSE-FAIL); FIRST compose-test of two ASYMMETRIC-V axes; FIRST counter-directional compose. No train.py edit required.
+
+### In-flight after Loop 96
+
+- **#2981** fern huber_beta GAP+EXTEND sweep {0.25, 0.10} on max_norm=0.35
+- **#2985** askeladd film_mid_dim sweep {32, 128} on max_norm=0.35 (19th paper-appendix axis label, NEW FILM-BOTTLENECK class)
+- **#2989** frieren ablation {AdamW, RFF OFF} on max_norm=0.35 (NEW ABLATION-CONTRIBUTION-QUANTIFICATION class)
+- **#2992** alphonse batch_size sweep {2, 8} on max_norm=0.35 (NEW BATCH-SIZE/GRADIENT-NOISE class)
+- **#2996** thorfinn lr × hybrid_kendall_lr counter-directional compose (NEW COMPOSE-DECOMPOSE-vs-COUPLE class)
+
+8 students active; 1 stale_wip pending host-side recovery (#2463 tanjiro on σ=0.5 stack).
+
+---
+
 ## 2026-05-14 19:00 — PR #2962 (CLOSED, alphonse): slice_num sweep {32, 128} on max_norm=0.35 — 17th paper-appendix axis closure, 2nd BOTH-LOSE Pareto-cap class member (cross-mechanism-family span: SWA-scheduling + forward-pass-shape), 2nd cross-axis σ-spread BREAK (both BREAKs are forward-pass-shape attention-granularity axes), 2nd SWA-NEVER-ENTERED failure mode
 
 - **Branch:** `willowpai2g48h2-alphonse/slice-num-sweep-on-max-norm-0p35`
