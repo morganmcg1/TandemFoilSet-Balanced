@@ -7,6 +7,36 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 01:30 — PR #2679: APW Curriculum (per-sample loss-EMA-weighted SmoothL1, α 0→0.5) — CLOSED
+
+- `willowpai2g24h3-thorfinn/apw-curriculum`
+- **Hypothesis (H1 from RESEARCH_IDEAS 2026-05-13_22:30):** Per-sample loss weighting `w_i = (ℓ̄_i / ℓ̄_mean)^α` with α linearly annealed 0→0.5 over first half of training. Targets sample-conditional gradient shaping axis (unexplored before this experiment). Implementation in `train.py`: per-sample SmoothL1 via reduction='none', EMA loss dict keyed by sample index, surf_weight preserved in vol+surf_weight*surf split, EMA updated AFTER optimizer step on detached loss.
+- **Result (single clean seed `l92tlhag` under GPU contention; 3 duplicate launches killed):**
+
+| Metric | APW α=0.5 (`l92tlhag`) | Baseline `gd934e9l` | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | **49.4218** | 40.2741 | **+22.7% ❌** |
+| test_avg/mae_surf_p | **41.5729** | 33.6017 | **+23.7% ❌** |
+| val_single_in_dist | 50.06 | 35.84 | +14.22 |
+| val_geom_camber_rc | 61.02 | 53.50 | **+7.52** (hardest split, was supposed to be helped) |
+| val_geom_camber_cruise | 35.19 | 28.15 | +7.04 |
+| val_re_rand | 51.41 | 43.62 | +7.79 |
+| best epoch | 25/50 | 36/50 | (timeout, -30% steps due to triple-launch contention) |
+| global_step | 18750 | ~27000 | -30% |
+| apw_alpha at best | 0.48 | — | (correct linear ramp 0→0.5 over first 50% epochs) |
+| apw_weight_min/max | 0.251 / 1.749 | — | (mean=1.0; reasonable spread, EMA loss heterogeneity is real) |
+
+- **Analysis (thorfinn's terminal):** Decisive regression on every split — including camber_rc which APW was *supposed to* help via up-weighting hard samples. Three sharp mechanism insights from thorfinn:
+  1. **SmoothL1 + surf_weight is already a structured per-element objective.** Per-sample renormalization (`÷ batch_mean`) distorts the gradient balance that surface-weighting was tuned for. The win from `surf_weight=10` came from amplifying *element-level* surface-pressure gradients — APW's per-sample renormalization actively works against that.
+  2. **Early EMA estimates are noisy AND alpha ramps in.** By the time per-sample weights have meaningful spread (α≈0.4-0.5 at epoch 18-25), the model's easy-split fit is already partly committed. Up-weighting hard samples then doesn't redirect learning — it adds noise to a partly-converged trajectory.
+  3. **Per-sample mean over vol+surf elements collapses spatial structure.** Baseline accumulates vol_loss and surf_loss as global means (independent scaling). Per-sample reduction-then-mean loses this dual-scale structure.
+- **What this rules out:** Sample-conditional gradient reweighting (whether by Re, camber, or running loss EMA) is **not the missing axis on this stack.** Combined with closed H3 Cautious Lion, this is the second independent negative on "any technique that selectively suppresses/amplifies updates based on per-sample or per-update heuristics." Rules out: APW/EMA-loss curriculum, focal-loss anchoring, hard-example mining, threshold-based weighting.
+- **Contention math:** epoch 25 vs baseline epoch 36 = ~30% step shortfall. Reference: pure under-budgeting on this stack costs ~3-5% val (cf. #2667 warmup-10 at +3.71% full budget, #2596 n_layers=3 at +3.34% full budget). Subtracting that from +22.7% leaves ~17-19% as the APW mechanism contribution — decisive close regardless. Thorfinn's clean-run prediction val ~46-48 is consistent. No second seed warranted.
+- **Banked lesson:** SmoothL1 + surf_weight is Pareto-optimal per-element on this stack. Modifications must be structurally different (e.g. additional aux terms like CL/CD that don't touch per-sample/per-element weighting).
+- **Operational diagnosis (thorfinn's forensics — valuable):** Duplicate-launch pattern root-caused: `nohup ... &` launch → harness re-invokes student loop → fresh invocation observes only "Assigned PRs (1): #2679" and re-enters implement/launch path without checking for running training. Pidfiles per-launch-named (`apw-alpha05.pid`), not per-PR. **Mitigation:** pre-launch `pgrep -f "python train.py"` + `nvidia-smi --query-compute-apps`; if any matching process exists, attach. Per-PR pidfiles `logs/PR-<n>.pid`. Has now hit 5 PRs in a row (#2657, #2670, #2679, #2691, #2644). Will relay to harness team.
+- **Banked follow-ups (thorfinn's suggestions):** Geometry-aware attention (coord-relative biases keyed by camber/Re), masked pre-training, split-aware loss heads — all already in flight on other students (frieren H12 #2698 CL/CD, askeladd H9 #2705 Masked Pre-training, edward warmup-DOWN #2691). Thorfinn's terminal directly teed up H5 GeoTransolver as the geometry-aware-attention candidate.
+- **Next experiment:** thorfinn reassigned to **PR #2709 GeoTransolver Cross-Attention (H5)** — architecture-tier escalation. Cross-attention branch reads from learned global geometry/flow context (Re, AoA, NACA codes, gap, stagger, surface-node summary) as K_cross/V_cross alongside the existing self-attention K_self/V_self. Direct attack on OOD geometry generalization (camber_rc and camber_cruise are hardest splits).
+
 ## 2026-05-14 00:15 — PR #2657: Cautious Lion on n_head=2+Lion — CLOSED
 
 - `willowpai2g24h3-thorfinn/cautious-lion`
