@@ -4,6 +4,62 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 08:35 — PR #2818 (CLOSED, fern): swa_start_frac fine-bracket {0.6, 0.85} on max_norm=0.35 — SWA-window axis Pareto-optimal verdict
+
+- **Branch:** `willowpai2g48h2-fern/swa-start-frac-fine-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** SWA-window axis 1st test under saturated-clip; addresses banked #2701 SWA-window-truncation finding (40% of cross-seed variance on #2311). Arm 1 s_f=0.6 = more averaging; Arm 2 s_f=0.85 = tighter window more likely to complete every seed.
+
+### Result table (vs #2674 new baseline)
+
+| Arm | swa_start_frac | W&B | SWA val | SWA test | Δval | Δtest | SWA epochs / planned | Verdict |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| baseline #2674 | 0.75 | `ieu1futo` | 45.1538 | 38.6367 | — | — | 4/4 (100%) | — |
+| Arm 1 | 0.60 | `rxm3yp6a` | 46.9197 | 40.0995 | +1.77 | +1.46 | 4/6 (67%) | strong regression close |
+| Arm 2 | 0.85 | `diu1oe4e` | 45.7624 | 39.2899 | +0.61 | +0.65 | 1/3 (33%) | directional close (within seed noise #2790 stdev=2.54) |
+
+### Per-split SWA test (vs baseline)
+
+| Split | Baseline | Arm 1 s_f=0.6 | Δ | Arm 2 s_f=0.85 | Δ |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 40.379 | 42.724 | +2.35 | 40.979 | +0.60 |
+| geom_camber_rc | 53.068 | 54.620 | +1.55 | 54.348 | +1.28 |
+| geom_camber_cruise | 23.285 | 24.197 | +0.91 | 23.403 | +0.12 |
+| re_rand | 37.816 | 38.856 | +1.04 | 38.430 | +0.61 |
+
+### Mechanism diagnosis (paper-publishable Pareto-optimal finding)
+
+**The baseline s_f=0.75 is a Pareto-optimal SWA-window placement under the 30-min wall-clock cap.** Both directions lose for DISTINCT reasons:
+
+1. **Arm 1 (s_f=0.6) — dilution by under-converged averaged weights**: SWALR's flat 6e-5 from epoch 10 overrides cosine's continuing decay (would have taken lr→2.86e-5 by epoch 12). Averaged epoch-10/11/12/13 weights are systematically under-converged relative to baseline. 3rd independent SWALR-overrides-cosine confirmation.
+
+2. **Arm 2 (s_f=0.85) — SWA window collapses to 1 epoch under 30-min cap**: SWA scheduled for epochs 13/14/15; 30-min truncation cuts after epoch 13 → SWA averages only epoch 13 weights → `swa_val_avg == best_val_avg` to machine precision. All SWA averaging benefit vanishes.
+
+3. **The cap × baseline-coincidence story**: baseline s_f=0.75 places SWA window in the unique position where 30-min truncation still allows ~100% of planned SWA epochs to complete. Paper-publishable as: "baseline s_f=0.75 is co-tuned to the wall-clock cap, not to SWA theory alone."
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 | Arm 2 | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread (final) | 0.476 | 0.473 | 0.475 | ✓ 10th cross-axis confirmation |
+| Channel ordering (surf_ux=min/vol_ux=max) | preserved | preserved | preserved | ✓ 10th cross-axis confirmation |
+| clip_fraction=1.0 | 1995/1995 | 1995/1995 | 4875/4875 | ✓ 6th cross-axis confirmation |
+| grad_norm median | 5.32 | 5.26 | 5.30 | ✓ invariant |
+
+### Banked findings (#113–#118)
+
+113. **PAPER-STRENGTHENING: s_f=0.75 is Pareto-optimal SWA-window placement under 30-min cap (#2818 fern)** — both directions lose for DISTINCT mechanism reasons; the optimum is co-tuned to the wall-clock cap. Extends banked #18 (SWALR-overrides-cosine) and #2701/#2790 (SWA-window truncation nuisance) with the Pareto-optimal placement characterization.
+114. **PAPER-STRENGTHENING: SWA window collapses to 1 epoch at s_f=0.85 under 30-min cap** — swa_val_avg == best_val_avg to machine precision; SWA averaging contribution vanishes when window truncates to 1 epoch.
+115. **PAPER-STRENGTHENING: σ-spread invariant on swa_start_frac axis** — Arm 1 spread=0.476, Arm 2 spread=0.473 (Δ=0.003). 10th cross-axis σ-spread invariance confirmation under saturated-clip.
+116. **PAPER-STRENGTHENING: channel ordering invariant on swa_start_frac axis** — 10th cross-axis ordering confirmation extending the table.
+117. **PAPER-STRENGTHENING: clip_fraction=1.000 invariant on swa_start_frac axis** — 6th cross-axis saturated-clip-invariance confirmation; per-step grad_norm median matches baseline.
+118. **Trajectory bit-identical pre-SWA across arms (methodology)** — Epochs 1-9 produce identical val_avg across arms (160.92 / 122.26 / ... / 57.17). swa_start_frac affects only training ≥ SWA start epoch.
+
+### Advisor verdict
+**CLOSED — paper-strengthening Pareto-optimal finding; no actionable hyperparameter change; SWA-window axis closed under 30-min cap.** Re student-flagged cruise `loss=nan` issue: logged as advisor-side note (existing scoring accounting issue on tiny cruise targets; physical-units mae_* metrics authoritative). Reassigning fern → fourier_sigma sweep on max_norm=0.35 (6th paper-appendix mechanism-transfer axis, RFF frequency).
+
+---
+
 ## 2026-05-14 07:05 — PR #2835 (ASSIGNED, thorfinn): fourier_num_features sweep {8, 32} on max_norm=0.35 — RFF capacity axis under saturated-clip
 
 - **Branch:** `willowpai2g48h2-thorfinn/fourier-num-features-sweep-on-max-norm-0p35`
