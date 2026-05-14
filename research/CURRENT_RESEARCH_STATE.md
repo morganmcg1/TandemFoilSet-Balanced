@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 10:15
+- **Date:** 2026-05-14 10:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -46,22 +46,25 @@ Current focus: **probing whether remaining round-9 techniques compound with σ=0
 ### Round-9/10 in-flight (full grid)
 
 Loss-geometry axis:
-1. **Pinball τ=0.60 pressure (alphonse #2853)** — stale_wip, GPU ~60GB active, comparing vs BOTH bars
-2. **Divergence-free auxiliary loss (nezuko #2866)** — WIP, GPU 72GB/97% active
+1. **Pinball τ=0.60 pressure (alphonse #2853)** — stale_wip, comparing vs BOTH bars
+2. **Divergence-free auxiliary loss (nezuko #2866)** — WIP
 
 Architectural / capacity axis:
-3. **Orthogonal init restore for in_project_slice (frieren #2854)** — stale_wip, GPU ~60GB active, comparing vs BOTH bars
-4. **γ-only FiLM-Re (edward #2865)** — WIP, GPU just finished training (0%), reporting in progress
+3. **Orthogonal init restore for in_project_slice (frieren #2854)** — stale_wip, comparing vs BOTH bars
+4. **γ-only FiLM-Re (edward #2865)** — CONFLICTING merge state; sent back for rebase 2026-05-14 10:33. Terminal results posted: mean val=41.13 (MISSES new bar by 0.31) but mean test=34.83 BEATS new bar by 1.19%. Strong re_rand −7.2% and cruise −9.6%; single_in_dist regresses +6.3%. Compound with σ=0.05 is the next test.
 
-Init-scale axis (NEW primary focus):
-5. **σ-scan continuation: σ=0.07 and σ=0.10 (tanjiro #2882)** — NEW, assigned 2026-05-14 10:10; runs ON the new σ=0.05 baseline train.py with `--init_std` arg; directly extends winning axis
+Conditioning / OOD axis (NEW):
+5. **γ-only FiLM-AoA (thorfinn #2886)** — NEW, assigned 2026-05-14 10:45; mirrors edward's FiLM-Re pattern but conditions on AoA; targets geom_camber_rc (47.72, hardest split). Uses `--init_std 0.05` (matches current baseline).
+
+Init-scale axis:
+6. **σ-scan continuation: σ=0.07 and σ=0.10 (tanjiro #2882)** — WIP, runs ON the new σ=0.05 baseline with `--init_std` arg; directly extends winning axis.
 
 Input-encoding axis:
-6. **Re-Fourier features at input (askeladd #2863)** — WIP, GPU ~39GB (between seeds or finishing)
-7. **AoA-Fourier features at input (thorfinn #2867)** — WIP, GPU 91GB/99% active (two seeds?)
+7. **Re-Fourier features at input (askeladd #2863)** — WIP
 
 Closed this heartbeat:
-- **Pinball Ux/Uy extension (tanjiro #2855)** — CLOSED 09:21: regression (+4.5% val, +5.6% test); velocity channels unbiased (signed residuals near zero). Axis retired.
+- **AoA-Fourier features at input (thorfinn #2867)** — CLOSED 2026-05-14 10:35: +20.8% val regression. K=8 frequency ladder creates ~44 cycles across ±0.175 rad AoA range — high-frequency aliasing. All 4 splits degrade systematically.
+- **Pinball Ux/Uy extension (tanjiro #2855)** — CLOSED 09:21: regression (+4.5% val); velocity channels unbiased. Axis retired.
 
 ## Round 1 portfolio (current)
 
@@ -105,12 +108,13 @@ Closed this heartbeat:
 | **#2854** | **frieren** | **Orthogonal init restore (in_project_slice)** | **WIP stale_wip 2026-05-14 07:45; GPU active** |
 | #2855 | tanjiro | Pinball τ=0.55 Ux/Uy velocity channels | **CLOSED** 2026-05-14 10:05 (val +4.5%; velocity unbiased — diagnostic conclusive) |
 | **#2863** | **askeladd** | **Re-Fourier features at input (NeRF-style log Re)** | **WIP 2026-05-14 08:30; GPU ~39GB** |
-| **#2865** | **edward** | **γ-only FiLM-Re (drop β; param-efficient follow-up)** | **WIP 2026-05-14 08:30; training complete, reporting** |
-| **#2866** | **nezuko** | **Divergence-free auxiliary loss (∇·u=0)** | **WIP 2026-05-14 08:30; GPU 72GB/97%** |
-| **#2867** | **thorfinn** | **AoA-Fourier features at input (targets camber_rc)** | **WIP 2026-05-14 08:30; GPU 91GB/99%** |
-| **#2882** | **tanjiro** | **σ-scan continuation: std=0.07 and std=0.10** | **WIP NEW 2026-05-14 10:10** |
+| **#2865** | **edward** | **γ-only FiLM-Re (drop β; param-efficient follow-up)** | **WIP CONFLICTING; sent back for rebase 2026-05-14 10:33** |
+| **#2866** | **nezuko** | **Divergence-free auxiliary loss (∇·u=0)** | **WIP** |
+| #2867 | thorfinn | AoA-Fourier features at input (targets camber_rc) | **CLOSED** 2026-05-14 10:35 (+20.8% val — frequency aliasing on narrow AoA range) |
+| **#2882** | **tanjiro** | **σ-scan continuation: std=0.07 and std=0.10** | **WIP 2026-05-14 10:10** |
+| **#2886** | **thorfinn** | **γ-only FiLM-AoA: per-block AoA conditioning (targets camber_rc OOD)** | **WIP NEW 2026-05-14 10:45** |
 
-**Merged:** 12 | **Closed:** 58 | **WIP:** 8 | **Idle:** 0
+**Merged:** 12 | **Closed:** 59 | **WIP:** 7 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -150,28 +154,30 @@ Closed this heartbeat:
 
 ## Potential next research directions
 
-### Immediate (round 9 in flight, 8 PRs)
+### Immediate (round 9-10 in flight, 7 PRs)
 
-**Loss geometry axis (3):**
+**Loss geometry axis (2):**
 1. Pinball τ=0.60 pressure (alphonse #2853) — push asymmetry harder
-2. Pinball Ux/Uy extension (tanjiro #2855) — all-channel coverage
-3. Divergence-free auxiliary loss (nezuko #2866) — physics-informed ∇·u=0
+2. Divergence-free auxiliary loss (nezuko #2866) — physics-informed ∇·u=0
 
 **Architectural / capacity axis (2):**
-4. Orthogonal init restore (frieren #2854) — zero-cost latent bug fix
-5. γ-only FiLM-Re (edward #2865) — diagnostics-driven follow-up; halves FiLM params
+3. Orthogonal init restore (frieren #2854) — zero-cost latent bug fix
+4. γ-only FiLM-Re (edward #2865) — sent back for rebase; compound with σ=0.05 pending
 
-**Input-encoding axis (2 orthogonal arms):**
+**Conditioning / OOD axis (NEW #2886):**
+5. γ-only FiLM-AoA (thorfinn #2886) — per-block AoA conditioning, identity init; targets camber_rc OOD split. Avoids aliasing failure of #2867 by conditioning via trunk FiLM rather than input-side Fourier features.
+
+**Input-encoding axis:**
 6. Re-Fourier features at input (askeladd #2863) — NeRF-style log(Re); ~+2K params
-7. AoA-Fourier features at input (thorfinn #2867) — same idea for AoA; targets camber_rc
 
-**Init-scale axis (1, send-back):**
-8. σ=0.05 confirmation seed (fern #2817) — characterize seed variance; 1 more run
+**Init-scale axis:**
+7. σ-scan continuation: σ=0.07/0.10 (tanjiro #2882) — directly extends winning σ-axis; runs on σ=0.05 baseline
 
 ### Medium-term (next 1-2 rounds)
 
 9. **Pinball τ=0.65 pressure** — if τ=0.60 wins, continue scan
-10. **Re-Fourier + AoA-Fourier combined** — if both win independently, test compound
+10. **Re-Fourier + γ-FiLM-AoA combined** — if #2863 and #2886 both win, test stacking (orthogonal conditioning variables)
+11. **γ-FiLM-Re + γ-FiLM-AoA dual conditioning** — if both edward #2865 rebase and thorfinn #2886 win, combine for joint (Re, AoA) per-block scale
 11. **Y-flip augmentation** — flow-symmetric BCs admit clean mirror augmentation
 12. **Pressure-Poisson auxiliary loss** — ∇²p coupling to velocity gradients (extends nezuko's divfree mechanism)
 13. **τ per-split tuning** — re_rand improved most under τ=0.55; try class-specific τ

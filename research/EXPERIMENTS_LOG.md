@@ -2285,3 +2285,73 @@ Runs ON the new merged baseline train.py (σ=0.05 default, `--init_std` arg adde
 
 ---
 
+## 2026-05-14 10:35 — PR #2867: AoA Fourier features at input (thorfinn, CLOSED)
+- Branch: `willowpai2g48h3-thorfinn/aoa-fourier-features`
+- Hypothesis: Add NeRF-style Fourier features of AoA (K=8 frequencies) to the node input embedding. Targets `geom_camber_rc` (hardest OOD split, 47.72 baseline MAE).
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `hhq9u85q` | 49.8645 | 43.6707 |
+| s2 (clean) | `dj65gwpw` | 48.7762 | 42.0909 |
+| **mean** | — | **49.32** | **42.88** |
+| **baseline (12th shift, old bar for this assignment)** | — | 43.09 | 37.19 |
+| **Δ vs old bar** | — | **+14.5% (WORSE)** | **+15.3% (WORSE)** |
+
+Per-split test (mean): single_in_dist=48.68 (+13.2%), geom_camber_rc=57.83 (+16.0% — TARGET SPLIT WORSE), geom_camber_cruise=24.42 (+15.1%), re_rand=40.60 (+17.0%). **All four splits regress systematically.**
+
+Seed variance: val std=0.54, test std=0.79.
+
+Note: Seed 1 had partial GPU contention (~9 min overlap with prior process) and reached only 28 epochs. Seed 2 was clean (34 epochs); both regressed — conclusion is robust.
+
+Param count: 662,359 → 666,455 (+4,096, +0.6%). Run config: Lion lr=7.5e-5, wd=2e-3 (note: student used wd=2e-3 not 2e-4), 50 ep nominal, 30-min cap.
+
+**Mechanistic analysis (from student)**: K=8 NeRF ladder reaches f=128 rad⁻¹. AoA spans only ~±0.175 rad → ~44 full cycles at highest frequency. High-frequency aliasing acts as noise that the trunk must filter out via the first Linear, reducing effective capacity. Compare to Re-Fourier where log(Re) ∈ [11.5, 15.4] (~4 natural-log-units, ~600× wider) — Re-Fourier's frequency bandwidth was well-matched; AoA Fourier's was not.
+
+**Status**: CLOSED 2026-05-14 10:35. Per decision tree: val > 44.0 → "Fourier features hurt — high-frequency aliasing on AoA distribution. Close axis."
+
+**Key lesson**: for narrow-range conditioning variables (like AoA in radians), NeRF-style K=8 encoding aliases badly. Per-block FiLM γ conditioning or range-scaled low-K encoding would avoid this.
+
+---
+
+## 2026-05-14 10:40 — #2865 edward γ-only FiLM-Re: diagnostic on new baseline
+
+Edward's branch is in status:review but DIRTY (CONFLICTING merge state) after #2817 σ=0.05 merges train.py. Student already posted terminal results on σ=0.02 baseline.
+
+### Results (σ=0.02 baseline — run BEFORE σ=0.05 merge)
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `4xpaexl7` | **40.8124** | **34.5671** |
+| s2 | `yv3itte9` | 41.4467 | 35.0904 |
+| **mean** | — | **41.130** | **34.829** |
+| **OLD baseline (11th shift, this assignment's bar)** | — | 43.09 | 37.19 |
+| **Δ vs OLD bar** | — | **−4.55% WINS** | **−6.34% WINS** |
+| **NEW baseline (12th shift σ=0.05 bar)** | — | 40.82 | 35.25 |
+| **Δ vs NEW bar** | — | **+0.76% MISSES** | **−1.19% BEATS** |
+
+Per-split test (mean): single_in_dist=40.49 (vs 38.08, +6.3% WORSE), geom_camber_rc=48.12 (vs 47.72, +0.83%), geom_camber_cruise=19.07 (vs 21.09, −9.6% WIN), re_rand=31.64 (vs 34.10, −7.2% WIN).
+
+γ-bias drift (final epoch): block 0 γ_bias≈1.007 → block 4 γ_bias≈0.986; γ_w_l2 grows with depth (3.94 → 5.85). Exact mirror of prior #2816 γ+β pattern — γ alone carries the signal.
+
+Param count: 662K → 752K (+90K, +14%). Per-epoch time: ~54s (+3.5%).
+
+**Assessment**: beats OLD bar cleanly (−4.55%/−6.34%). MISSES new val bar by 0.31 units but beats new test bar. re_rand and cruise wins are significant (+7-10%). However, single_in_dist regresses (+6.3%), which is concerning.
+
+**Action**: sent back for rebase onto σ=0.05 baseline (2026-05-14 10:33). The compound γ-only FiLM-Re × σ=0.05 is the next test. If single_in_dist regression persists, this axis may need `test_re_rand`-specific tuning.
+
+---
+
+## 2026-05-14 10:45 — Round-10 expansion: #2886 thorfinn γ-only FiLM-AoA
+
+Following #2867 close, thorfinn immediately assigned:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2886 | willowpai2g48h3-thorfinn | γ-only FiLM-AoA: per-block multiplicative AoA conditioning targeting `geom_camber_rc` | Conditioning / OOD |
+
+Mirrors edward's γ-only FiLM-Re pattern (same identity-init MLP architecture, same application point). AoA conditioning should help camber_rc where Re conditioning helped re_rand. Avoids aliasing of #2867 by conditioning the trunk directly rather than via input-side Fourier features. Uses `--init_std 0.05` to match current baseline.
+
+---
+
