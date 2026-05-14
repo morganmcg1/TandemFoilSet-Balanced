@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-14 [Round 131] UTC — PR #2906: n_head 2→4 — **CLOSED LOSS (+1.89% val; 108th taxon; ATTENTION-HEAD AXIS CLOSED; dim_head=24 too small)**
+
+- **Branch:** charliepai2g48h5-tanjiro/n-head-4
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-n-head-4-20260514-123153/metrics.jsonl
+
+| Metric | #2879 Baseline | **#2906 n_head=4** | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.1393** | **+1.89% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **26.3421** | -0.66% marginal WIN |
+| val_single_in_dist | 23.3997 | **24.7696** | **+5.85% LOSS** |
+| val_geom_camber_rc | 46.0708 | **46.6337** | +1.22% |
+| val_geom_camber_cruise | 17.8657 | **17.8031** | -0.35% ~flat |
+| val_re_rand | 34.9057 | **35.3508** | +1.28% |
+
+384,908 params (-23k vs baseline via quadratic qkv shrink). Best ep58/58 (timeout ep58). In_dist +5.85% (biggest hit). Camber_cruise flat (-0.35%).
+
+**Mechanistic diagnosis confirmed:** per-head entropy diagnostics show 4 heads DO specialize (block 3 range 2.11 nats — h0 entropy 0.82 vs h1-h3 ~2.9). BUT the binding constraint was NOT routing diversity — it was `in_project_slice = Linear(dim_head=24, slice_num=24)` becoming a rank-limited square projection. Baseline's `Linear(48, 24)` had 24 dims of headroom; that headroom was ACTIVE.
+
+**108th taxon CLOSES: attention-head count axis at n_head=2.** Next probe: isolate the slice-routing-capacity axis without touching dim_head (tanjiro PR #2923 slice_num=32 at n_head=2 → `Linear(48,32)` still rectangular with 16 dims headroom).
+
+---
+
+## 2026-05-14 [Round 131] UTC — PRs #2923, #2924: Fresh axis assignments
+
+- **#2923 tanjiro slice-num-32:** slice_num 24→32 at n_head=2, dim_head=48. `in_project_slice = Linear(48,32)` rectangular. Total slice tokens 2×32=64 (vs 48 baseline). ~+9k params → ~417k total. Same routing diversity goal as #2906 without the rank-limiting harm. 109th axis.
+- **#2924 thorfinn sam-rho-0.05:** SAM ρ=0.05 wrapping Lion. epochs=30 (SAM doubles compute ~60s/epoch). Directly attacks the 6-experiment in_dist over-specialization meta-signal via flatness regularization — finds minima flat in ALL gradient directions, known to generalize better to OOD. 110th axis.
+
+---
+
 ## 2026-05-14 [Round 130] UTC — PR #2910: surf_weight 10→20 — **CLOSED LOSS (+5.85% val; 107th taxon; BREAKS META-SIGNAL — UNIFORM LOSS NOT TRADE-OFF)**
 
 - **Branch:** charliepai2g48h5-alphonse/surf-weight-20
