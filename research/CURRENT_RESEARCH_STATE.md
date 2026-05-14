@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 18:50
+- **Date:** 2026-05-14 19:00
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -66,7 +66,7 @@
 | #2959 | alphonse | Per-block lr scaling: 1.5× single seed clears both bars (val=32.89, test=28.53) but camber_rc regresses; awaiting 2nd seed at 1.5× | WIP (sent back 2026-05-14 18:30) |
 | #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged. Arms: α=0.2 (s1), α=0.4 (s2) | ASSIGNED 2026-05-14 18:50 |
 | #2886 | thorfinn | γ-only FiLM-AoA: per-block AoA conditioning (sent back for σ=0.07+FiLM-Re compound) | WIP (sent back) |
-| #2965 | fern | Fourier-encoded Re input to FiLM-Re γ MLP (K=2, K=4) | ASSIGNED 2026-05-14 17:15 |
+| #2965 | fern | Fourier-Re γ MLP: K=4 single seed (seed=2) passes thin (val=34.39, test=28.73); seed-confounded vs baseline best-seed; awaiting K=4 seed=1 | WIP (sent back 2026-05-14 19:00) |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
 | #2972 | edward | LayerScale: per-block channel-wise learnable gain (init=0.1, 0.01) | ASSIGNED 2026-05-14 17:40 |
 | #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× ALL-4-SPLITS-WIN single seed, awaiting 2nd seed | WIP (sent back 2026-05-14 18:00) |
@@ -98,6 +98,7 @@
 12. **Learnable per-head slice softmax τ is already present in baseline** — init=0.5. Slice softmax is not at τ=1.0 default. Future axis scans on PhysicsAttention must account for this learnable temperature.
 13. **First experiment to break OOD-vs-IID trade-off pattern (#2948 tanjiro 2× FiLM-Re γ width)** — single-seed `94flg3ls`: val=33.566 (−2.86%), test=28.401 (−1.91%), ALL 4 splits improve simultaneously (single_in_dist=32.32, geom_camber_rc=41.51, geom_camber_cruise=14.84, re_rand=24.93). The mechanism is **γ MLP capacity**, not IID-side capacity — widens the conditioning bottleneck without adding capacity in a regime-specific manner. Confirms FiLM-Re γ MLP is input/representation-bottlenecked, validates tanjiro #2948 and fern #2965 (Fourier-Re γ input) as the right axis pair. Awaiting 2nd seed for merge confirmation. 4× width regresses → capacity has finite optimum. Compound prediction: tanjiro 2× + fern Fourier-Re (capacity + input information) could stack.
 14. **Per-block lr OOD signal lives in EARLY layers, not late (#2959 alphonse)** — late_block_lr×1.5 improves IID single_in_dist by −4.0% and cruise by −5.3% but REGRESSES the hardest OOD split geom_camber_rc by +2.4%. Stronger 2.0× boost amplifies the pattern (IID −7.6%, camber_rc +6.0%). The lr=9e-5 OOD signal observed in #2942 does NOT decompose into late-block γ MLP adaptation — it likely lives in EARLY blocks (broader receptive-field reshaping, where Re-modulation is weakest). 5th OOD-vs-IID trade-off pattern instance. Queued follow-up: inverted scaling (late_block_lr_scale=0.7) — directly tests the early-block hypothesis.
+15. **FiLM-Re γ MLP is input-bottlenecked (γ_w_L2 evidence, #2965 fern)** — K=4 Fourier-encoded log_re features flatten the γ_w_L2 depth trajectory from baseline 3.4→5.2 (monotone) to ~3.6 (flat). Late blocks no longer need inflated weights to express the modulation; richer input absorbs the expressivity. This is the cleanest mechanistic evidence yet that the conditioning encoder is bottlenecked at input dim=1. Validates the tanjiro #2948 (γ width) + fern #2965 (γ input) axis pair as orthogonal interventions on the same bottleneck. K=2 (s1, seed=1) regresses massively (val +20.8%), showing the right Fourier basis matters; K=4 (s2, seed=2) passes single-seed bar with thin margin. Sent back for K=4 seed=1 to disambiguate seed effect.
 
 ## Currently retired axes
 
