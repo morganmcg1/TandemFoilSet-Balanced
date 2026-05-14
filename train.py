@@ -205,13 +205,17 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 manifold_mixup_layer: int = 3):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        # 1-indexed split point — blocks[0:L] run pre-mix, blocks[L:] post-mix.
+        # Validity checked at the caller; the model only acts on the int.
+        self.manifold_mixup_layer = manifold_mixup_layer
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -259,20 +263,37 @@ class Transolver(nn.Module):
             if m.weight is not None:
                 nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, mixup_lam=None, mixup_perm=None, **kwargs):
         x = data["x"]
         # x is already in normalized space (caller normalises with stats), so x[:, 0, 13:14]
         # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        if self.re_conditional_layernorm:
-            for block in self.blocks:
+        # Two-loop split for Manifold Mixup: when mixup_lam is provided, run the
+        # first L blocks, apply h_mixed = λ·h + (1-λ)·h[perm], then run the rest.
+        # When mixup_lam is None, L = n_layers so the second loop is empty.
+        # The `is None` check is resolved at Python trace time → torch.compile
+        # produces one graph per call pattern (eval vs train+mixup).
+        L = self.manifold_mixup_layer if mixup_lam is not None else len(self.blocks)
+        for i in range(L):
+            block = self.blocks[i]
+            if self.re_conditional_layernorm:
                 fx = block(fx, gamma, beta, log_re=log_re,
                            rcln_1=self.re_ln_1, rcln_2=self.re_ln_2,
                            rcln_3=self.re_ln_3)
-        else:
-            for block in self.blocks:
+            else:
+                fx = block(fx, gamma, beta)
+        if mixup_lam is not None:
+            lam_t = mixup_lam.to(fx.dtype)
+            fx = lam_t * fx + (1.0 - lam_t) * fx[mixup_perm]
+        for i in range(L, len(self.blocks)):
+            block = self.blocks[i]
+            if self.re_conditional_layernorm:
+                fx = block(fx, gamma, beta, log_re=log_re,
+                           rcln_1=self.re_ln_1, rcln_2=self.re_ln_2,
+                           rcln_3=self.re_ln_3)
+            else:
                 fx = block(fx, gamma, beta)
         return {"preds": fx}
 
@@ -601,6 +622,14 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Manifold Mixup (Verma et al. 2019, arXiv:1806.05236). Mixes hidden states
+    # at a trunk middle layer with Beta(α, α) coefficient and a random batch
+    # permutation, and mixes targets symmetrically. 0 disables. 0.2 = U-shaped
+    # prior (most λ near 0 or 1). manifold_mixup_layer is 1-indexed: blocks
+    # [0..L-1] run pre-mix, then h_mixed = λ·h + (1-λ)·h[perm], then blocks
+    # [L..n_layers-1] run post-mix.
+    manifold_mixup_alpha: float = 0.0
+    manifold_mixup_layer: int = 3
 
 
 cfg = sp.parse(Config)
@@ -642,6 +671,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    manifold_mixup_layer=cfg.manifold_mixup_layer,
 )
 
 model = Transolver(**model_config).to(device)
@@ -726,6 +756,60 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
+
+def capture_mixup_norms(uncompiled, val_loader, stats_, device_, alpha: float, layer: int):
+    """One-shot pre/post-mix hidden-state norm sanity check.
+
+    Replicates the trunk forward on the uncompiled model, captures the mean
+    per-token L2 norm just before mixing, applies a Beta(α,α)-sampled lambda
+    plus a random permutation, then captures the post-mix norm. The ratio
+    post/pre confirms the mix is happening and not blowing up magnitudes.
+    """
+    if alpha <= 0 or layer <= 0 or layer >= len(uncompiled.blocks):
+        return None
+    was_training = uncompiled.training
+    uncompiled.eval()
+    captured = None
+    try:
+        with torch.no_grad():
+            for x, _y, _is_surface, _mask in val_loader:
+                x = x.to(device_, non_blocking=True)
+                x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
+                log_re = x_norm[:, 0, 13:14]
+                gamma, beta = uncompiled.re_film(log_re)
+                fx = uncompiled.preprocess(x_norm) + uncompiled.placeholder[None, None, :]
+                for i in range(layer):
+                    block = uncompiled.blocks[i]
+                    if uncompiled.re_conditional_layernorm:
+                        fx = block(fx, gamma, beta, log_re=log_re,
+                                   rcln_1=uncompiled.re_ln_1,
+                                   rcln_2=uncompiled.re_ln_2,
+                                   rcln_3=uncompiled.re_ln_3)
+                    else:
+                        fx = block(fx, gamma, beta)
+                norm_pre = fx.float().norm(dim=-1).mean().item()
+                B = fx.shape[0]
+                perm = torch.randperm(B, device=fx.device)
+                lam = float(torch.distributions.Beta(
+                    torch.tensor(alpha), torch.tensor(alpha)
+                ).sample().item())
+                fx_mixed = lam * fx + (1.0 - lam) * fx[perm]
+                norm_post = fx_mixed.float().norm(dim=-1).mean().item()
+                captured = {
+                    "norm_pre_mix": norm_pre,
+                    "norm_post_mix": norm_post,
+                    "ratio": norm_post / max(norm_pre, 1e-8),
+                    "lam_sampled": lam,
+                    "layer_1indexed": layer,
+                    "alpha": alpha,
+                }
+                break
+    finally:
+        if was_training:
+            uncompiled.train()
+    return captured
+
+
 _opt_params = list(model.parameters()) + list(rescale_head.parameters())
 if output_bias is not None:
     _opt_params += list(output_bias.parameters())
@@ -767,6 +851,28 @@ slice_entropy_last: list[list[float]] | None = None
 slice_entropy_film_stats_last: dict | None = None
 last_completed_epoch: int = 0
 diag_split_name = next(iter(val_loaders.keys()))  # use one val split as the diag batch source
+
+# Manifold Mixup: pre-construct the Beta distribution once. Sampling per batch
+# gives a 0-dim tensor on device; passing it as a tensor (not Python float)
+# avoids torch.compile recompilation on each value change.
+mixup_enabled = cfg.manifold_mixup_alpha > 0.0
+mixup_beta_dist = None
+if mixup_enabled:
+    if not (1 <= cfg.manifold_mixup_layer < model_config["n_layers"]):
+        raise ValueError(
+            f"manifold_mixup_layer must be in [1, {model_config['n_layers']-1}], "
+            f"got {cfg.manifold_mixup_layer}"
+        )
+    mixup_beta_dist = torch.distributions.Beta(
+        torch.tensor(cfg.manifold_mixup_alpha, device=device),
+        torch.tensor(cfg.manifold_mixup_alpha, device=device),
+    )
+    print(
+        f"Manifold Mixup: alpha={cfg.manifold_mixup_alpha}, "
+        f"layer={cfg.manifold_mixup_layer} (1-indexed, mix after block "
+        f"{cfg.manifold_mixup_layer} of {model_config['n_layers']})"
+    )
+
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -826,6 +932,18 @@ for epoch in range(MAX_EPOCHS):
             "abs_b_logre_cross": 0.0,
             "n": 0,
         }
+    # Manifold Mixup per-epoch lambda diagnostics.
+    mixup_diag = None
+    if mixup_enabled:
+        mixup_diag = {
+            "lam_sum": 0.0, "lam_sq_sum": 0.0,
+            "lam_min": 1.0, "lam_max": 0.0,
+            "n_high": 0,  # lam >= 0.9: near-identity (sample i dominant)
+            "n_low": 0,   # lam <= 0.1: near-swap (sample j dominant)
+            "n_mid": 0,   # 0.1 < lam < 0.9: meaningful mix
+            "valid_frac_sum": 0.0,
+            "n": 0,
+        }
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -833,28 +951,55 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # Manifold Mixup: sample lambda + permutation BEFORE autocast.
+        # lam is a 0-dim tensor (not Python float) so torch.compile doesn't
+        # specialize on the value (no recompile per batch).
+        mixup_lam_t = None
+        mixup_perm_t = None
+        if mixup_enabled:
+            mixup_lam_t = mixup_beta_dist.sample()
+            mixup_perm_t = torch.randperm(x.shape[0], device=device)
+
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model(
+                {"x": x_norm},
+                mixup_lam=mixup_lam_t,
+                mixup_perm=mixup_perm_t,
+            )["preds"] * scale
             if output_bias is not None:
                 pred = output_bias(pred, log_re_norm)
+
+            # Mix targets symmetrically with hidden states (Verma 2019). The
+            # post-mix forward also uses sample i's ReScaleHead / output_bias /
+            # ReConditionalLayerNorm conditioning — these per-sample affines act
+            # on the mixed feature. Padding/mask: intersect mask & mask[perm]
+            # because padding positions for sample perm[i] hold non-meaningful
+            # encoder output that would corrupt the mixed target at positions
+            # valid only in sample i (researcher gotcha #1, RegMix/C-Mixup-style).
+            if mixup_enabled:
+                y_target = mixup_lam_t * y_norm + (1.0 - mixup_lam_t) * y_norm[mixup_perm_t]
+                mix_valid = mask & mask[mixup_perm_t]
+            else:
+                y_target = y_norm
+                mix_valid = mask
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
             # per-sample relative scaling with per-node outlier capping.
             HUBER_DELTA = 0.1
-            residual = pred - y_norm
+            residual = pred - y_target
             abs_residual = residual.abs()
             sq_err = torch.where(
                 abs_residual <= HUBER_DELTA,
                 0.5 * residual ** 2,
                 HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
             )
-            vol_mask = (mask & ~is_surface).unsqueeze(-1)
-            surf_mask = (mask & is_surface).unsqueeze(-1)
+            vol_mask = (mix_valid & ~is_surface).unsqueeze(-1)
+            surf_mask = (mix_valid & is_surface).unsqueeze(-1)
 
             # Apply per-channel weights linearly to the per-element Huber output
             # (after Huber transform). This gives exact w× gradient amplification
@@ -866,10 +1011,12 @@ for epoch in range(MAX_EPOCHS):
             # ||y||^2 denominator). Each sample contributes Σ_ch w_ch · huber(pred - y)
             # / ||y||^2 — keeping the denominator unweighted preserves the
             # cross-sample relative scaling while amplifying the p gradient.
+            # With mixup active, use the mixed target's norm in the denominator
+            # (consistent scale with the mixed-target numerator).
             vol_sq = (sq_err_weighted * vol_mask).sum(dim=(1, 2))
-            vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+            vol_denom = (y_target ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
             surf_sq = (sq_err_weighted * surf_mask).sum(dim=(1, 2))
-            surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+            surf_denom = (y_target ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
             vol_loss = (vol_sq / vol_denom).mean()
             surf_loss = (surf_sq / surf_denom).mean()
             loss = vol_loss + cfg.surf_weight * surf_loss
@@ -878,7 +1025,7 @@ for epoch in range(MAX_EPOCHS):
         # and per-channel unweighted Huber loss (so we can compare the raw
         # pressure-channel error signal against velocity channels).
         with torch.no_grad():
-            valid = mask.unsqueeze(-1).expand_as(abs_residual)
+            valid = mix_valid.unsqueeze(-1).expand_as(abs_residual)
             n_valid = valid.sum().clamp(min=1)
             n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
@@ -887,6 +1034,23 @@ for epoch in range(MAX_EPOCHS):
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
+            if mixup_diag is not None:
+                lam_v = float(mixup_lam_t.item())
+                mixup_diag["lam_sum"] += lam_v
+                mixup_diag["lam_sq_sum"] += lam_v * lam_v
+                mixup_diag["lam_min"] = min(mixup_diag["lam_min"], lam_v)
+                mixup_diag["lam_max"] = max(mixup_diag["lam_max"], lam_v)
+                if lam_v >= 0.9:
+                    mixup_diag["n_high"] += 1
+                elif lam_v <= 0.1:
+                    mixup_diag["n_low"] += 1
+                else:
+                    mixup_diag["n_mid"] += 1
+                # Fraction of valid positions surviving the intersection — drops
+                # if the partner sample has many fewer real mesh nodes.
+                vf = mix_valid.float().mean().item()
+                mixup_diag["valid_frac_sum"] += vf
+                mixup_diag["n"] += 1
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -1084,6 +1248,28 @@ for epoch in range(MAX_EPOCHS):
             "corr_abs_b_logre": float(corr_abs_b_logre),
         }
 
+    # Manifold Mixup per-epoch summary — mean/std lambda, Beta U-shape diagnosis
+    # (high/mid/low bin counts), and mean valid-position fraction post-mask-AND.
+    mixup_summary: dict | None = None
+    if mixup_diag is not None and mixup_diag["n"] > 0:
+        n = mixup_diag["n"]
+        lam_mean = mixup_diag["lam_sum"] / n
+        lam_var = max(mixup_diag["lam_sq_sum"] / n - lam_mean ** 2, 0.0)
+        lam_std = lam_var ** 0.5
+        mixup_summary = {
+            "alpha": cfg.manifold_mixup_alpha,
+            "layer_1indexed": cfg.manifold_mixup_layer,
+            "lam_mean": lam_mean,
+            "lam_std": lam_std,
+            "lam_min": mixup_diag["lam_min"],
+            "lam_max": mixup_diag["lam_max"],
+            "frac_high_ge_0p9": mixup_diag["n_high"] / n,
+            "frac_low_le_0p1": mixup_diag["n_low"] / n,
+            "frac_mid": mixup_diag["n_mid"] / n,
+            "valid_frac_mean": mixup_diag["valid_frac_sum"] / n,
+            "n_batches": n,
+        }
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -1099,6 +1285,15 @@ for epoch in range(MAX_EPOCHS):
             slice_entropy_film_stats_ep1 = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
         slice_entropy_last = epoch_slice_entropy
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+
+    # Manifold Mixup norm sanity-check — only at epoch 1 (one-shot confirmation
+    # that magnitudes don't blow up when mixing the trunk hidden state).
+    mixup_norm_ep1 = None
+    if mixup_enabled and (epoch + 1) == 1:
+        mixup_norm_ep1 = capture_mixup_norms(
+            uncompiled_model, val_loaders[diag_split_name], stats, device,
+            cfg.manifold_mixup_alpha, cfg.manifold_mixup_layer,
+        )
     last_completed_epoch = epoch + 1
 
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -1135,6 +1330,8 @@ for epoch in range(MAX_EPOCHS):
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
         "re_cond_out_bias": re_out_bias_summary,
+        "manifold_mixup": mixup_summary,
+        "manifold_mixup_norm_check": mixup_norm_ep1,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1178,6 +1375,22 @@ for epoch in range(MAX_EPOCHS):
             f"per_ch_mean=[Ux={s['per_ch_mean'][0]:+.5f} Uy={s['per_ch_mean'][1]:+.5f} p={s['per_ch_mean'][2]:+.5f}]  "
             f"corr(|b|,logRe)={s['corr_abs_b_logre']:+.3f}"
         )
+    if mixup_summary is not None:
+        s = mixup_summary
+        print(
+            f"    ManifoldMixup  λ[mean={s['lam_mean']:.3f} std={s['lam_std']:.3f} "
+            f"min={s['lam_min']:.3f} max={s['lam_max']:.3f}]  "
+            f"bins[high≥0.9={s['frac_high_ge_0p9']:.2f} mid={s['frac_mid']:.2f} "
+            f"low≤0.1={s['frac_low_le_0p1']:.2f}]  "
+            f"valid_frac={s['valid_frac_mean']:.3f}"
+        )
+        if mixup_norm_ep1 is not None:
+            n = mixup_norm_ep1
+            print(
+                f"    ManifoldMixup norm-check  pre={n['norm_pre_mix']:.3f}  "
+                f"post={n['norm_post_mix']:.3f}  ratio={n['ratio']:.3f}  "
+                f"lam_sampled={n['lam_sampled']:.3f}"
+            )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
