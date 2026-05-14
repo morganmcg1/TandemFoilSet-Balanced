@@ -3651,5 +3651,51 @@ Joint input **flattens the depth-monotone γ_w_L2 ramp** (3.97→5.75 → 4.9–
 - Arms: s1 (default seed), s2 (seed=2) — 2-seed setup to directly measure variance vs #3019's seed fragility
 - Key diagnostic: per-block γ-MLP input col-L2 (does camber_1 show stronger depth-persistence than AoA_1?) and per-block γ_w_L2 flattening signature
 - Param delta: ~+2,560 (+512 per block × 5), same as #3019 — negligible
-- Merge bar: mean val < 33.71, mean test < 28.65
+- Merge bar: mean val < 33.71, mean test < 28.65 (NOTE: 16th-shift bar now applies: val < 33.13, test < 28.42)
+
+---
+
+## 2026-05-15 01:30 — PR #3028: FiLM-Re γ at output decoder askeladd (MERGED — 16th shift)
+- Branch: `willowpai2g48h3-askeladd/film-decoder`
+- Hypothesis: Add FiLM-Re γ MLP to the output decoder (mlp2 in final TransolverBlock). Currently all 5 trunk blocks have FiLM-Re γ; the output decoder is Re-blind. Adding decoder-FiLM tests if output-stage Re-conditioning is a new lever.
+
+### Results (2 seeds) — WINNER
+
+| Arm | W&B ID | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | — | 28.653 | — |
+| s1 | `nlxkthy2` | 33.0531 | −1.70% ✓ | 28.3997 | −1.24% ✓ |
+| s2 | `k6oy3ori` | 33.2098 | −1.48% ✓ | 28.4415 | −0.74% ✓ |
+| **2-seed mean** | — | **33.1315** | **−1.70% ✓** | **28.4206** | **−0.81% ✓** |
+
+Per-split test surf_p (mean vs 15th-shift baseline):
+- single_in_dist: 30.728 vs 32.221 (−4.63% ✓)
+- **geom_camber_rc: 42.553 vs 41.458 (+2.64% ❌ — mild regression)**
+- geom_camber_cruise: 14.242 vs 14.909 (−4.47% ✓)
+- re_rand: 26.159 vs 26.022 (+0.53% ≈)
+
+**Merge bar (mean val < 33.71 AND mean test < 28.65): PASS. MERGED as 16th shift.**
+
+### Mechanism diagnostic
+
+- Decoder γ_w_l2 = 6.378 (extends depth-monotone trend: trunk 3.70→4.31→4.61→5.24→5.49 → decoder **6.38**). NOT a no-op.
+- γ_bias_mean ≈ 0.989 (slight drift below 1.0, consistent across seeds).
+- Trunk block 0 γ_w_l2 dropped: 3.97 → 3.70 (decoder γ absorbed some Re-conditioning from trunk).
+- Surprise: gain concentrated on single_in_dist (−4.63%) and cruise (−4.47%), NOT re_rand (predicted target, +0.53%).
+- geom_camber_rc mild regression (+2.64%) — both seeds consistent.
+
+### Decision: MERGED (16th shift)
+
+**New merge bar (16th shift): mean val < 33.13, mean test < 28.42, all four test splits finite.**
+**geom_camber_rc now 42.55 (regressed from 41.46) — priority target.**
+
+---
+
+## 2026-05-15 01:30 — PR #3072: AoA-block-0-only FiLM gate askeladd (ASSIGNED)
+- Branch: `willowpai2g48h3-askeladd/aoa-block0-gate`
+- Hypothesis: Add a tiny AoA-conditional FiLM gate at block 0 ONLY (film_aoa0_hidden=32, ~4K params). Mechanistically grounded on #3019 per-block col-L2 diagnostic: AoA_1 dominates block 0 (1.27 vs log_re 0.97) but decays to 0.78 by block 3. Block-0-only restriction avoids the γ_w_L2 flattening (redistribute-not-add) that killed #3019. Separate multiplicative gate: `fx = γ_re * γ_aoa0 * fx` at block 0; blocks 1-4 pure Re-only (unchanged).
+- Key difference from closed #2886 (per-block FiLM-AoA): #2886 added AoA at ALL 5 blocks, hidden=128 (330K params). This PR: block-0-only, hidden=32 (~4K params). Mechanistically targeted.
+- Arms: s1 (default seed), s2 (seed=2) — 2-seed for variance comparison with #3019
+- Key diagnostic: γ_aoa0_w_L2 end-of-training (active or no-op?); depth-monotone Re γ_w_L2 preservation; geom_camber_rc delta vs 16th-shift baseline 42.553
+- Merge bar: mean val < 33.13, mean test < 28.42 (16th-shift bar)
 

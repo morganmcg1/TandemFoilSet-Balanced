@@ -1,21 +1,23 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-15 01:00
+- **Date:** 2026-05-15 01:30
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
 
 
-## Current baseline (15th shift) ← UPDATED
+## Current baseline (16th shift) ← UPDATED
 
-**PR #2948 (2× FiLM-Re γ MLP width, film_re_hidden=256)** merged 2026-05-14 19:15:
-- **`val_avg/mae_surf_p`** = 33.7062 (mean 2 seeds); best seed 33.5660 (s1 `94flg3ls`)
-- **`test_avg/mae_surf_p`** = 28.6525 (mean 2 seeds); best seed 28.4010 (s1 `94flg3ls`) — **NEW BEST**
-- Per-split test surf_p (mean): single_in_dist=32.221, geom_camber_rc=41.458, geom_camber_cruise=14.909, re_rand=26.022
-- Default: `--init_std 0.07 --film_re_hidden 256` (baked into trunk)
-- **New merge bar (15th shift): mean val < 33.71, mean test < 28.65, all four test splits finite**
+**PR #3028 (FiLM-Re γ at output decoder)** merged 2026-05-15 01:30:
+- **`val_avg/mae_surf_p`** = 33.1315 (mean 2 seeds); s1 `nlxkthy2`=33.0531, s2 `k6oy3ori`=33.2098
+- **`test_avg/mae_surf_p`** = 28.4206 (mean 2 seeds) — **NEW BEST**
+- Per-split test surf_p (mean): single_in_dist=30.728, **geom_camber_rc=42.553 ← REGRESSED (+2.64%) ⚠️**, geom_camber_cruise=14.242, re_rand=26.159
+- Default: `--init_std 0.07 --film_re_hidden 256 --film_re_decoder` (baked into 16th-shift trunk)
+- **New merge bar (16th shift): mean val < 33.13, mean test < 28.42, all four test splits finite**
+- **⚠️ geom_camber_rc regressed to 42.553 vs 15th-shift 41.458. Priority recovery target.**
 
+**Previous (15th shift, PR #2948 2× FiLM-Re γ MLP width):** val=33.706, test=28.653 — superseded.
 **Previous (14th shift, PR #2865 γ-only FiLM-Re + σ=0.07):** val=34.55, test=28.95 — superseded.
 
 ## Baseline progression
@@ -37,8 +39,10 @@
 | PR #2882 (σ=0.07 init) | 2026-05-14 12:15 | 36.575 | 30.644 | −10.4% / −13.1% |
 | **PR #2865 (FiLM-Re + σ=0.07)** | **2026-05-14 14:45** | **34.554** | **28.953** | **−5.4% / −5.6% ← 14th shift** |
 | **PR #2948 (2× FiLM-Re γ width)** | **2026-05-14 19:15** | **33.706** | **28.653** | **−2.45% / −1.04% ← 15th shift** |
+| **PR #3028 (FiLM-Re decoder γ)** | **2026-05-15 01:30** | **33.132** | **28.421** | **−1.70% / −0.81% ← 16th shift** |
 
-**Cumulative: −71.8% val, −73.9% test from round-1 start.** Still compute-bound (best=last on all 15 merges).
+**Cumulative: −72.2% val, −74.1% test from round-1 start.** Still compute-bound (best=last on all 16 merges).
+**⚠️ geom_camber_rc regressed to 42.55 in 16th shift (was 41.46 at 15th shift). Priority recovery target.**
 
 ## Current research focus (rounds 13–15)
 
@@ -62,15 +66,15 @@
 - **Slice softmax temperature (#2953 askeladd):** τ=0.5 (sharper) and τ=2.0 (smoother) on PhysicsAttention. Fundamental Transolver knob, never touched.
 - **DropPath (#2926 nezuko):** Stochastic depth (rates 0.1/0.2) as regularizer.
 
-## Active WIPs (8 students, 8 PRs) — updated 2026-05-15 01:00
+## Active WIPs (8 students, 8 PRs) — updated 2026-05-15 01:30
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | #3057 | alphonse | Gradient-clipping max_norm bracket scan (0.5/2.0 vs baseline 1.0) — only-affects-Lion-via-sign-flip axis | ASSIGNED 2026-05-15 00:30 |
 | #3042 | nezuko | Polyak weight averaging over last K epochs at eval time (K=5 and K=3) | ASSIGNED 2026-05-14 23:00 |
 | #3046 | edward | Full FiLM-Re (scale+shift): add additive β output alongside γ in film_gamma | ASSIGNED 2026-05-14 23:50 |
-| **#3067** | **tanjiro** | **FiLM-Re joint conditioning: camber channels [log_re, camber_1, camber_2] — direct attack on geom_camber_rc OOD split** | **ASSIGNED 2026-05-15 01:00** |
-| #3028 | askeladd | FiLM-Re γ at output decoder (Re-blind decoder injection, target: re_rand OOD) | ASSIGNED 2026-05-14 21:55 |
+| #3067 | tanjiro | FiLM-Re joint conditioning: camber channels [log_re, camber_1, camber_2] — direct attack on geom_camber_rc OOD split | ASSIGNED 2026-05-15 01:00 |
+| **#3072** | **askeladd** | **AoA-conditional FiLM gate at block 0 only (tiny 32-hidden MLP, ~4K params) — mechanistically grounded on #3019 col-L2 diagnostic** | **ASSIGNED 2026-05-15 01:30** |
 | #3041 | frieren | Re-jitter: Gaussian noise on FiLM-Re γ-MLP input at train time (σ=0.10/0.30) | ASSIGNED 2026-05-14 23:00 |
 | #3035 | thorfinn | FiLM-Re γ on PhysicsAttention routing layer (slice_proj logits — Re-conditional routing) | ASSIGNED 2026-05-14 22:15 |
 | #3038 | fern | slice_num bracket scan: 48 (0.75×) and 96 (1.5×) vs baseline 64 | ASSIGNED 2026-05-14 22:25 |
@@ -97,6 +101,7 @@
 - **#3001 (edward FiLM-Re γ MLP init std)** — film_re_init_std=0.05/0.03 (hidden W1 only; output identity preserved per student deviation correctly flagged): val=34.95/34.67 (+3.7%/+2.8% REGRESS), test=28.67/29.78 (+0.07%≈tie/+3.9% REGRESS). Both miss merge bar on val. s2 γ_w_L2 non-monotone (block 0=5.09 > block 1=4.73) — smaller W1 forces W2 over-travel at early blocks (degraded health signal). Meta-finding #25 added. **Identity output init (W2=0, b2=1) is at or near optimal at this basin** — hidden init scale is not a viable independent axis. Edward reassigned to full FiLM-Re scale+shift.
 - **#3012 (alphonse per-block wd 0.25×/4×)** — s1 (0.25× late): val=35.34 (+4.8% REGRESS), test=30.05 (+4.9% REGRESS); s2 (4× late): val=34.88 (+3.5% REGRESS), test=29.66 (+3.5% REGRESS). Clean IID-vs-OOD wedge (s1 hurts IID +10.3%, s2 hurts cruise +10.5%). **16× per-block wd ratio produces ≤0.15 L2 difference on late-block params under Lion** — Lion's sign() update neuters magnitude-based regularization. γ_w_L2 depth-monotone pattern is robust to 16× wd perturbation (block 4 ≈ 5.78 across all arms vs baseline 5.75). Meta-finding #26 added. **Per-block magnitude regularization (lr + wd) fully retired under Lion.** Alphonse reassigned to gradient-clip max_norm bracket-scan (the only remaining optimizer axis that does affect Lion's sign() via sign-flip on clipped grads).
 - **#3019 (tanjiro FiLM-Re joint [log_re, AoA_1, AoA_2])** — s1 (`mozcqjv2`): val=33.13 (−1.72% ✓), test=27.87 (−2.73% ✓), camber_rc=40.04 (−3.43% ✓) — clean win; s2 (`iqi0eqc4`): val=35.11 (+4.16% ❌), test=29.89 (+4.30% ❌) — clean loss. 2-seed mean: val=34.12 (+1.22% ❌), test=28.88 (+0.79% ❌), camber_rc=41.83 (+0.89% ❌). Variance-dominated (~2pt seed spread vs baseline ~0.4%). Per-block input-L2 diagnostic: AoA_1 dominates block 0 (1.27 vs log_re 0.97) but decays to 0.78 by block 3; log_re ramps monotonically (0.97→1.57). γ_w_L2 depth-monotone FLATTENED (same redistribute-not-add signature as #2990, #2965). Meta-finding #27 added. Conditioning-surface-area axis with AoA channels retired; camber channels ([log_re, camber_1, camber_2]) are the natural follow-up since geom_camber_rc is geometry-defined. Tanjiro reassigned to #3067.
+- **#3028 (askeladd FiLM-Re decoder γ)** — val=33.1315 (−1.70%), test=28.4206 (−0.81%). single_in_dist −4.63%, cruise −4.47% ✓; re_rand +0.53% ≈; **geom_camber_rc +2.64% ❌ (mild regression)**. Decoder γ_w_l2=6.378 extends depth-monotone trend. MERGED as 16th shift. geom_camber_rc regression is the critical follow-up signal.
 
 ## Key meta-findings
 
