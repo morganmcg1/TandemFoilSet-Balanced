@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -177,10 +178,16 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False, film_re_hidden: int = 128):
+                 film_re=False, film_re_hidden: int = 128,
+                 film_re_fourier_k: int = 0,
+                 log_re_std_min: float = -4.0194,
+                 log_re_std_max: float = 1.1093):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
+        self.film_re_fourier_k = film_re_fourier_k
+        self.log_re_std_min = log_re_std_min
+        self.log_re_std_max = log_re_std_max
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -200,11 +207,29 @@ class TransolverBlock(nn.Module):
             # Identity init (last-linear weight=0, bias=1) sets γ≡1 at epoch 0
             # so the model matches baseline exactly until γ drifts.
             # γ MLP hidden width = film_re_hidden (PR #2948 capacity scan).
+            # Optional Fourier-feature enrichment: input dim = 1 + 2K
+            # (raw standardized log_re + sin/cos at K geometric frequencies).
+            input_dim = 1 + 2 * film_re_fourier_k
             self.film_gamma = nn.Sequential(
-                nn.Linear(1, film_re_hidden),
+                nn.Linear(input_dim, film_re_hidden),
                 nn.GELU(),
                 nn.Linear(film_re_hidden, hidden_dim),
             )
+            if film_re_fourier_k > 0:
+                freqs = (2.0 ** torch.arange(film_re_fourier_k, dtype=torch.float32)) * math.pi
+                self.register_buffer("_fourier_freqs", freqs, persistent=False)
+
+    def _fourier_features(self, log_re):
+        # log_re: shape (B,), already standardized (raw - x_mean[13]) / x_std[13].
+        if self.film_re_fourier_k == 0:
+            return log_re.unsqueeze(-1)
+        # Map standardized log_re into [-1, 1] using training-set min/max.
+        z = 2.0 * (log_re - self.log_re_std_min) / (self.log_re_std_max - self.log_re_std_min) - 1.0
+        z = z.unsqueeze(-1)  # (B, 1)
+        angles = z * self._fourier_freqs.to(z.dtype)  # (B, K)
+        return torch.cat(
+            [log_re.unsqueeze(-1), torch.sin(angles), torch.cos(angles)], dim=-1
+        )  # (B, 1 + 2K)
 
     def forward(self, fx, mask=None, log_re=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
@@ -212,7 +237,8 @@ class TransolverBlock(nn.Module):
         if self.film_re and log_re is not None:
             # Post-residual γ modulation, after both attn and mlp residuals.
             # γ shape [B, 1, hidden_dim] broadcasts over node axis.
-            gamma = self.film_gamma(log_re.unsqueeze(-1)).unsqueeze(1)
+            feats = self._fourier_features(log_re)
+            gamma = self.film_gamma(feats).unsqueeze(1)
             fx = gamma * fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -227,7 +253,10 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
-                 log_re_x_index: int = 13):
+                 log_re_x_index: int = 13,
+                 film_re_fourier_k: int = 0,
+                 log_re_std_min: float = -4.0194,
+                 log_re_std_max: float = 1.1093):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -237,6 +266,7 @@ class Transolver(nn.Module):
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
         self.log_re_x_index = log_re_x_index
+        self.film_re_fourier_k = film_re_fourier_k
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -253,6 +283,9 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 film_re=film_re, film_re_hidden=film_re_hidden,
+                film_re_fourier_k=film_re_fourier_k,
+                log_re_std_min=log_re_std_min,
+                log_re_std_max=log_re_std_max,
             )
             for i in range(n_layers)
         ])
@@ -261,9 +294,15 @@ class Transolver(nn.Module):
         self.apply(self._init_weights)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
         if self.film_re:
+            input_dim = 1 + 2 * film_re_fourier_k
+            print(
+                f"[init] FiLM-Re Fourier K = {film_re_fourier_k}; γ MLP input dim = {input_dim}; "
+                f"log_re_std range = [{log_re_std_min:.4f}, {log_re_std_max:.4f}]"
+            )
             # Identity-init the FiLM γ output linear AFTER apply() so it isn't
             # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
-            # γ ≡ 1 at epoch 0 → model exactly matches baseline initially.
+            # γ ≡ 1 at epoch 0 → model exactly matches baseline initially
+            # (regardless of K, since output is zero·feats + ones = ones).
             for block in self.blocks:
                 nn.init.zeros_(block.film_gamma[-1].weight)
                 nn.init.ones_(block.film_gamma[-1].bias)
@@ -480,11 +519,18 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    film_re_fourier_k: int = 0  # K Fourier frequencies on standardized log(Re) input to FiLM-Re γ MLP (0 = scalar)
+    seed: int = 0  # >0 → torch.manual_seed; 0 leaves RNG unseeded (baseline behavior)
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed > 0:
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seeded torch RNG with {cfg.seed}")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -522,6 +568,7 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    film_re_fourier_k=cfg.film_re_fourier_k,  # 0 = scalar log(Re); K>0 enriches with sin/cos at K geometric freqs
 )
 
 model = Transolver(**model_config).to(device)
