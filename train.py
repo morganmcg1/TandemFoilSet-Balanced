@@ -488,6 +488,7 @@ class Config:
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
+    warmup_epochs: int = 0  # Linear LR warmup epochs before cosine restart (Chen 2023 §A.2 rec for Lion)
     use_lion: bool = False  # If True, replace AdamW with Lion (Chen et al. 2023, arXiv:2302.06675)
     lion_lr_scale: float = 0.2  # Multiplier applied to lr / surf_head_lr when use_lion=True (paper: ~1/5)
     lion_wd_scale: float = 3.0  # Multiplier applied to weight_decay when use_lion=True (paper: ~3x)
@@ -586,7 +587,7 @@ else:
         weight_decay=cfg.weight_decay,
     )
 if cfg.cosine_restart_T_0 > 0:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=cfg.cosine_restart_T_0,
         T_mult=cfg.cosine_restart_T_mult,
@@ -594,8 +595,24 @@ if cfg.cosine_restart_T_0 > 0:
     )
     print(f"[lr] CosineAnnealingWarmRestarts T_0={cfg.cosine_restart_T_0} T_mult={cfg.cosine_restart_T_mult} eta_min={cfg.cosine_restart_eta_min}")
 else:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
     print(f"[lr] CosineAnnealingLR T_max={MAX_EPOCHS}")
+
+if cfg.warmup_epochs > 0:
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-6,
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs],
+    )
+    print(f"[lr] LinearLR warmup {cfg.warmup_epochs} ep (start_factor=1e-6) -> handoff to cosine")
+else:
+    scheduler = cosine_scheduler
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
