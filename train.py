@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -106,9 +107,17 @@ class SwiGLUMLP(nn.Module):
 
 
 class PhysicsAttention(nn.Module):
-    """Physics-aware attention for irregular meshes."""
+    """Physics-aware attention for irregular meshes.
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    Slice-token self-attention uses Differential Attention (Ye et al. 2024,
+    "Differential Transformer", arXiv:2410.05258):
+        attn = (softmax(Q1 K1^T/sqrt(D)) - lambda * softmax(Q2 K2^T/sqrt(D)))
+               / (1 - lambda + eps)
+    where lambda is a learnable scalar per block clamped to [0, 0.999] and
+    initialized per the paper Eq. 4: lambda_init = 0.8 - 0.6 * exp(-0.3 * layer_idx).
+    """
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64, layer_idx=0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -124,6 +133,11 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        # Differential Attention: second Q/K projection pair
+        self.to_q2 = nn.Linear(dim_head, dim_head, bias=False)
+        self.to_k2 = nn.Linear(dim_head, dim_head, bias=False)
+        lambda_init = 0.8 - 0.6 * math.exp(-0.3 * layer_idx)
+        self.diff_lambda = nn.Parameter(torch.full([], lambda_init))
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
     def forward(self, x):
@@ -146,14 +160,22 @@ class PhysicsAttention(nn.Module):
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
-        q = self.to_q(slice_token)
-        k = self.to_k(slice_token)
+        # Differential Attention on slice tokens [B, H, G, D].
+        q1 = self.to_q(slice_token)
+        k1 = self.to_k(slice_token)
+        q2 = self.to_q2(slice_token)
+        k2 = self.to_k2(slice_token)
         v = self.to_v(slice_token)
-        out_slice = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            is_causal=False,
-        )
+
+        scale = math.sqrt(self.dim_head)
+        attn1 = self.softmax(torch.matmul(q1, k1.transpose(-2, -1)) / scale)
+        attn2 = self.softmax(torch.matmul(q2, k2.transpose(-2, -1)) / scale)
+
+        lam = torch.clamp(self.diff_lambda, min=0.0, max=0.999)
+        attn_diff = (attn1 - lam * attn2) / (1.0 - lam + 1e-6)
+        if self.training and self.dropout.p > 0.0:
+            attn_diff = F.dropout(attn_diff, p=self.dropout.p, training=True)
+        out_slice = torch.matmul(attn_diff, v)
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -200,13 +222,13 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, layer_idx=0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, layer_idx=layer_idx,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
@@ -256,7 +278,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_se=(i == n_layers - 1),
+                use_se=(i == n_layers - 1), layer_idx=i,
             )
             for i in range(n_layers)
         ])
@@ -532,6 +554,15 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(
+    f"Differential Attention enabled (Ye 2024): 4 Q/K projections + learnable lambda per block; "
+    f"slice-token attention replaced with attn=(softmax(Q1K1^T/sqrt(D)) - lambda*softmax(Q2K2^T/sqrt(D)))/(1-lambda+eps); "
+    f"lambda clamped to [0, 0.999]; expected ~370,568 params"
+)
+print("Differential Attention lambda init per block (Ye 2024 Eq. 4: 0.8 - 0.6*exp(-0.3*layer_idx)):")
+for _i, _blk in enumerate(model.blocks):
+    _lam_init = _blk.attn.diff_lambda.detach().item()
+    print(f"  block[{_i}]: lambda_init={_lam_init:.4f}")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -740,6 +771,11 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _inner_for_log = getattr(model, "_orig_mod", model)
+    diff_lambdas_epoch = [
+        float(torch.clamp(b.attn.diff_lambda.detach(), min=0.0, max=0.999).item())
+        for b in _inner_for_log.blocks
+    ]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +788,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "diff_lambda_per_block": diff_lambdas_epoch,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -790,8 +827,106 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
     _inner = getattr(model, "_orig_mod", model)
+
+    # Differential Attention lambda + per-head attention entropy at best-val
+    print("\nDifferential Attention lambda values at best-val (clamped to [0, 0.999]):")
+    _diff_log = {"event": "diff_attention_diagnostic", "epoch": int(best_metrics["epoch"]),
+                 "blocks": []}
+    for _i, _blk in enumerate(_inner.blocks):
+        _lam_raw = float(_blk.attn.diff_lambda.detach().item())
+        _lam_clamped = float(min(max(_lam_raw, 0.0), 0.999))
+        print(f"  block[{_i}]: lambda_raw={_lam_raw:.6f}  lambda_clamped={_lam_clamped:.6f}")
+        _diff_log["blocks"].append({
+            "block_idx": _i,
+            "lambda_raw": _lam_raw,
+            "lambda_clamped": _lam_clamped,
+        })
+    append_metrics_jsonl(metrics_jsonl_path, _diff_log)
+
+    # Per-head attention entropy for attn1 and attn2 on a held-out val batch
+    # (val_single_in_dist). Entropy is computed over the G dimension of the
+    # softmax attention map [B, H, G, G] -> entropy per (B, H, G_query).
+    _entropy_log = {
+        "event": "diff_attention_entropy",
+        "epoch": int(best_metrics["epoch"]),
+        "split": "val_single_in_dist",
+        "blocks": [],
+    }
+    _entropy_attn_blocks = [(i, blk.attn) for i, blk in enumerate(_inner.blocks)]
+    _entropy_captured: dict[int, dict[str, float]] = {}
+
+    def _make_entropy_hook(block_idx: int):
+        def _hook(module, args, _output):
+            x = args[0]
+            B_, N_, _ = x.shape
+            with torch.no_grad():
+                fx_mid = (
+                    module.in_project_fx(x)
+                    .reshape(B_, N_, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B_, N_, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                sw = module.softmax(module.in_project_slice(x_mid) / module.temperature)
+                sn = sw.sum(2)
+                st = torch.einsum("bhnc,bhng->bhgc", fx_mid, sw)
+                st = st / ((sn + 1e-5)[:, :, :, None].repeat(1, 1, 1, module.dim_head))
+                q1 = module.to_q(st)
+                k1 = module.to_k(st)
+                q2 = module.to_q2(st)
+                k2 = module.to_k2(st)
+                scale = math.sqrt(module.dim_head)
+                a1 = module.softmax(torch.matmul(q1, k1.transpose(-2, -1)) / scale).float()
+                a2 = module.softmax(torch.matmul(q2, k2.transpose(-2, -1)) / scale).float()
+                # Entropy along last dim (the key axis)
+                ent1 = (-(a1 * (a1 + 1e-12).log()).sum(dim=-1)).mean(dim=(0, 2))  # [H]
+                ent2 = (-(a2 * (a2 + 1e-12).log()).sum(dim=-1)).mean(dim=(0, 2))  # [H]
+                # Differential attention pre-renormalization signal sparsity
+                lam = torch.clamp(module.diff_lambda, min=0.0, max=0.999)
+                a_diff = (a1 - lam * a2) / (1.0 - lam + 1e-6)
+                a_diff_abs_mean = float(a_diff.abs().mean().item())
+                a_diff_neg_frac = float((a_diff < 0).float().mean().item())
+                _entropy_captured[block_idx] = {
+                    "attn1_entropy_per_head": ent1.detach().cpu().tolist(),
+                    "attn2_entropy_per_head": ent2.detach().cpu().tolist(),
+                    "attn_diff_abs_mean": a_diff_abs_mean,
+                    "attn_diff_neg_frac": a_diff_neg_frac,
+                }
+        return _hook
+
+    _entropy_handles = [
+        m.register_forward_hook(_make_entropy_hook(bi)) for bi, m in _entropy_attn_blocks
+    ]
+    _ent_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _x_e, _y_e, _is_e, _m_e = next(iter(_ent_loader))
+        _x_e = _x_e.to(device, non_blocking=True)
+        _m_e = _m_e.to(device, non_blocking=True)
+        _x_norm_e = (_x_e - stats["x_mean"]) / stats["x_std"]
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_e, "mask": _m_e})
+    for _h in _entropy_handles:
+        _h.remove()
+    print("\nDifferential Attention per-head entropy (val_single_in_dist batch, best-checkpoint):")
+    for _bi in sorted(_entropy_captured.keys()):
+        _ent = _entropy_captured[_bi]
+        ent1_str = ", ".join(f"{v:.4f}" for v in _ent["attn1_entropy_per_head"])
+        ent2_str = ", ".join(f"{v:.4f}" for v in _ent["attn2_entropy_per_head"])
+        print(
+            f"  block[{_bi}]: attn1_entropy=[{ent1_str}]  attn2_entropy=[{ent2_str}]  "
+            f"|diff|_mean={_ent['attn_diff_abs_mean']:.4f}  "
+            f"diff_neg_frac={_ent['attn_diff_neg_frac']:.4f}"
+        )
+        _entropy_log["blocks"].append({"block_idx": _bi, **_ent})
+    append_metrics_jsonl(metrics_jsonl_path, _entropy_log)
+
+    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
     print("\nLayerScale final gammas (best-checkpoint weights):")
     for _i, _blk in enumerate(_inner.blocks):
