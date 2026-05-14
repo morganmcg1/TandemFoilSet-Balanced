@@ -445,7 +445,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 15.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -455,6 +455,7 @@ class Config:
 
 
 cfg = sp.parse(Config)
+print(f"surf_weight: {cfg.surf_weight} (was 10.0 baseline; +50% surface pressure emphasis)")
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
