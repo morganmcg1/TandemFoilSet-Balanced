@@ -8,6 +8,29 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-14 04:12 — PR #2709: GeoTransolver Cross-Attention (H5) — global geo context tokens (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **39.3949** (W&B run `vjatjm2m`, best of 2 seeds) — **−2.18%** vs prior baseline 40.27
+- **`test_avg/mae_surf_p` (4-split, finite):** **32.5917** — **−3.01%** vs prior 33.60
+- **2-seed mean:** val 39.525 ± 0.130 / test 32.940 ± 0.349 (seed-1 `vjatjm2m`, seed-2 `9ysdp0vu`)
+- **Per-split val surface-p MAE (seed-1 `vjatjm2m`, best-val epoch 36):**
+  - val_single_in_dist: 36.627  (vs 35.84 → +2.20%) ❌ slight IID regression
+  - val_geom_camber_rc: 52.845  (vs 53.50 → −1.22%) ✅
+  - val_geom_camber_cruise: 26.971  (vs 28.15 → −4.18%) ✅
+  - val_re_rand: 41.136  (vs 43.62 → −5.71%) ✅ **strongest gain**
+- **Per-split test surface-p MAE (seed-1 `vjatjm2m`):**
+  - test_single_in_dist: 29.973  (vs 30.59 → −2.00%) ✅
+  - test_geom_camber_rc: 44.906  (vs 45.36 → −0.99%) ✅
+  - test_geom_camber_cruise: 21.895  (vs 22.88 → −4.32%) ✅
+  - test_re_rand: 33.592  (vs 35.58 → −5.60%) ✅ **strongest gain**
+- **Mechanism:** GeoTransolver adds a global geometry/flow context encoder: a per-sample summary feature vector (from surface geometry + freestream conditions) is projected to `geo_cross_tokens=4` learnable context tokens (dim=128), then used as K_cross/V_cross in a cross-attention layer within each Transolver block. Physics attention outputs Q_local, cross-attends against K_cross/V_cross, and concatenates for a residual. Effect: every slice token now has global context of the full geometry's shape and flow regime — directly conditioning the local slice routing on global aerodynamic state. Mechanism polarization: GLOBAL context wins (H5 −2.18%), LOCAL kNN aggregation loses (H6 +7.85%) — implies the bottleneck is missing whole-flow context, not local coherence. Val_re_rand improves −5.71% both seeds — the cleanest evidence of generalization to unseen Reynolds numbers via global flow conditioning.
+- **Compute:** 36 epochs, ~50.6 s/epoch, ~30 min, ~10.0 GB VRAM, **874,315 params** (+325K from geo encoder vs prior 548K).
+- **Merge bar update (vs val 39.39 best-seed / 39.53 mean):**
+  - ≤ 35.6 val → **merge** (≥10% gain)
+  - 35.6 – 39.5 → **second seed**
+  - ≥ 39.5 → **close**
+- **Reproduce:** `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4 --use_geo_cross_attn --geo_cross_tokens 4 --geo_encoder_hidden 64`
+
 ## 2026-05-13 21:17 — PR #2192: n_head=2 (dim_head=64) + Lion optimizer (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **40.2741** (W&B run `gd934e9l`, best of 3 seeds) — **−6.78%** vs prior baseline 43.20
