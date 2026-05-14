@@ -2,6 +2,97 @@
 
 ---
 
+## 2026-05-14 [Round 81] UTC — Round 81
+
+### PR #2675 alphonse: 2D coord-based RoPE on Q, K — CLOSED (46th taxon, positional-embedding meta-axis closed)
+
+- **Branch:** `charliepai2g48h5-alphonse/2d-rope`
+- **Hypothesis:** Su et al. 2021 RoFormer extended to 2D mesh — rotate Q and K post-projection using (x, y) coord-frequency products; split d_head=48 into 24 x-dim + 24 y-dim channels. Zero new params. First positional embedding probe in launch.
+
+- **Results table:**
+
+| Metric | Value | vs Baseline 33.3722 | Direction |
+|---|---|---|---|
+| val_avg/mae_surf_p | **34.4690** | **+3.29%** | **LOSS** |
+| test_avg/mae_surf_p | **29.8748** | **+5.29%** | **LOSS** |
+| val_single_in_dist | 27.9011 | **+10.15%** | **LOSS** (worst) |
+| val_geom_camber_rc | 50.5356 | +1.93% | mild LOSS |
+| val_geom_camber_cruise | 20.4974 | +0.39% | wash |
+| val_re_rand | 38.9419 | +2.04% | LOSS |
+
+- **Implementation adaptation:** Student adapted per-node RoPE prescription to slice-center RoPE since Transolver runs Q/K/V on G=24 slice tokens, not per-node features. Sound and necessary adaptation. Coords taken from slice centroid (weighted mean of node coords under slice_weights). Coord range: x ∈ [-6.5, 5.8], y ∈ [-0.35, 6.25].
+
+- **Mechanism:** Slice-routing softmax over G=24 prototypes ALREADY captures spatial structure adequately at this scale. RoPE-on-slice-centers is the wrong place to inject coords because:
+  1. Slice tokens are SEMANTIC prototypes, not spatial positions
+  2. Centroid is grad-coupled to routing → circular dependency
+  3. Per-split signature is **noise-on-easy-split** (in_dist worst-hit +10.15%) not **OOD-bias** (predicted scenario was OOD WIN, did not materialize)
+
+- **Student-flagged base mismatch:** Heo et al. ECCV 2024 "Rotary Position Embedding for Vision Transformer" recommend base=100 (not RoFormer's base=10000) for real-valued coord ranges. At base=10000 only ~4 of 12 frequencies are active for coord range [-6.5, 5.8]; bottom ~8 frequencies are effectively inert. However, even if base=100 activated all 12 frequencies, the structural issue (slice tokens are semantic, not spatial) would remain.
+
+- **Conclusion / 46th taxon:** **Positional-embedding meta-axis closes on this stack.** Fourier-features-preprocess (#2509, 24th taxon) + 2D-RoPE-slice-center (#2675, 46th) both LOSS confirms slice-routing softmax already captures spatial structure adequately. The model just doesn't need explicit positional encoding when it has slice prototypes.
+
+- **Decision:** Closed. Alphonse pivots from positional-embedding axis (now closed) and heavily-explored conditioning meta-family.
+
+### PR #2673 askeladd: Sigmoid Attention (Ramapuram et al. 2024) — CLOSED (47th taxon, non-softmax attention shape closed)
+
+- **Branch:** `charliepai2g48h5-askeladd/sigmoid-attn`
+- **Hypothesis:** Replace softmax(Q·K/√d_k) over slice tokens (G=24) with sigmoid(logits − log(N)). Slice-routing softmax UNCHANGED. Tests whether removing row-sum=1 normalization allows multi-position attention.
+
+- **Results table:**
+
+| Metric | Value | vs Baseline 33.3722 | Direction |
+|---|---|---|---|
+| val_avg/mae_surf_p | **33.6466** | **+0.82%** | borderline LOSS |
+| test_avg/mae_surf_p | **28.9979** | **+2.20%** | **LOSS** |
+| val_single_in_dist | 26.7279 | +5.52% | LOSS (worst) |
+| val_geom_camber_rc | 49.0242 | **−1.12%** | **WIN** (only) |
+| val_geom_camber_cruise | 20.4566 | +0.19% | wash |
+| val_re_rand | 38.3778 | +0.56% | wash |
+
+- **Mechanism diagnostic** (terminal per-block sigmoid attention stats):
+
+| Block | mean | std | max | row_sum |
+|---|---|---|---|---|
+| 0 | 0.0272 | 0.0108 | 0.0815 | **0.6521** |
+| 1 | 0.0167 | 0.0086 | 0.0391 | **0.4018** |
+| 2 | 0.0203 | 0.0190 | 0.1069 | **0.4875** |
+| 3 | 0.0403 | 0.0009 | 0.0518 | 0.9667 (near-uniform) |
+
+- **Mechanism reading:** Optimizer used sigmoid's freedom to **DOWN-WEIGHT EVERYTHING** (row_sums 0.40-0.65 in blocks 0-2, well BELOW softmax's 1.0), NOT to attend broadly. Block 3 collapsed to near-uniform 1/24 (std=0.0009), corroborated by smallest γ_attn=0.0117. Max attention probability ≤ 0.107 across all blocks — sigmoid never produced sharp concentration. The "multi-position simultaneously relevant" Ramapuram et al. claim does NOT realize at this scale.
+
+- **Conclusion / 47th taxon:** **Non-softmax attention shape at G=24 slice tokens fails — softmax row-normalization is a load-bearing inductive bias at this scale.** Combined with closed attention-internal 4-mechanism axis (τ #2623, spectral norm #2580, QK-Norm #2661, Talking-Heads #2669, all WASH/LOSS), the attention-mechanism axis is now closed across **5 distinct mechanisms within softmax framework + 1 first non-softmax replacement**.
+
+- **Decision:** Closed. Askeladd pivots to student's #3 follow-up recommendation: α-entmax (preserves row-sum=1 but allows exact zeros — isolates sparsity from normalization dimension).
+
+### PR #2704 alphonse: Manifold Mixup α=0.2 — ASSIGNED
+
+- **Branch:** `charliepai2g48h5-alphonse/manifold-mixup-a02`
+- **Hypothesis:** Verma et al. 2019 ICML "Manifold Mixup". Linear interpolation in HIDDEN feature space at random TransolverBlock input k uniform on {0,1,2,3}; per-batch λ ∼ Beta(0.2, 0.2); training-mode only. ZERO new params. ~10-line training-loop hook. FIRST hidden-state interpolation probe in launch.
+- **Structural orthogonality:** Distinct from edward in-flight #2687 input-space Mixup — Manifold Mixup operates at RANDOM HIDDEN LAYER not just input. Complementarity is a feature: if input Mixup LOSES but Manifold Mixup WINS, we learn where in the network linear interpolation is most effective. Hypothesis predicts hidden representations are more amenable to linear interpolation than raw inputs (Verma et al. claim — already-disentangled features).
+- **Targets:** in-dist overfitting bottleneck identified by Lion-WD closure 43rd taxon.
+- **Predicted signatures:** WIN uniform → vicinal hidden regularization works universally; WIN OOD-favoring → hidden-space mixing helps OOD geometry interpolation; WASH → matches input-space Mixup level; LOSS → slice-routing softmax can't tolerate linearly-mixed hidden states.
+- **Key diagnostic:** λ distribution histogram + k_layer mixing distribution + per-split signature.
+
+### PR #2706 askeladd: α-entmax α=1.5 attention — ASSIGNED
+
+- **Branch:** `charliepai2g48h5-askeladd/entmax15-attn`
+- **Hypothesis:** Peters et al. 2019 ACL "Sparse Sequence-to-Sequence Models". Replace softmax(Q·K/√d_k) over slice tokens with entmax15. α=1.5 produces sparse attention (exact zeros for low-relevance positions) while PRESERVING row-sum=1 normalization. Slice-routing softmax UNCHANGED. Student's #3 follow-up recommendation from closed #2673.
+
+- **Mechanism table** (compare softmax vs entmax-1.5 vs sigmoid):
+
+| Mechanism | Row-sum=1? | Allows exact zeros? | Result on this stack |
+|---|---|---|---|
+| Softmax (α=1) | ✓ | ✗ | Baseline |
+| α-entmax (α=1.5) | ✓ | ✓ | **THIS PROBE** |
+| Sparsemax (α=2) | ✓ | ✓ (sparser) | Untested |
+| Sigmoid | ✗ | trivially (sigmoid) | LOSS #2673 |
+
+- **Test:** Isolates sparsity from normalization. If softmax is optimal because of normalization, α-entmax should WIN/WASH. If softmax is optimal because of smooth competition, α-entmax should LOSS like sigmoid did. ZERO new params. ~3-line softmax → entmax15 swap.
+- **Predicted signatures:** WIN uniform → sparsity was missing ingredient (close attention-shape axis with new winner); WIN OOD-favoring → sparse routing helps geometric OOD; WASH sparsity-collapsed → α=1.5 not aggressive enough (could try sparsemax α=2); WASH sparsity-engaged → softmax was optimal (close axis with "smooth row-normalized" being load-bearing); LOSS → sparse routing breaks slice-prototype diversity.
+- **Key diagnostic:** sparsity per block + top-1 prob + nonzero count + per-split signature.
+
+---
+
 ## 2026-05-14 [Round 80] UTC — Round 80
 
 ### PR #2672 nezuko: Kendall heteroscedastic uncertainty-weighted multi-task loss — CLOSED (45th taxon, loss-balance meta-axis closed)
