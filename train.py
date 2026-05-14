@@ -154,9 +154,12 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        # FFN-only dropout (PR #2917 revision): omit dropout_p so SDPA can pick
+        # the flash/memory-efficient fast path. Attention dropout was dropped
+        # because the slow codepath added ~9% per-epoch overhead at the 30-min
+        # cap, costing 4 epochs of schedule. FFN dropout (in GeGLUMLP) is free.
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,
         )
 
@@ -397,7 +400,7 @@ class Config:
     n_layers: int = 5
     n_head: int = 4
     slice_num: int = 48
-    dropout: float = 0.0  # attention-weights + FFN dropout; 0.0 matches prior baselines
+    dropout: float = 0.0  # FFN dropout (PR #2917 revision); 0.0 matches prior baselines
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
