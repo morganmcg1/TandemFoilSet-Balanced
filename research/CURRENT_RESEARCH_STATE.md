@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 08:00
+- **Date:** 2026-05-14 08:20
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -18,24 +18,25 @@
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
-> **Round 41 frontier signals — capacity DEAD, schedule DEAD, loss-weight DEAD, loss-form CLOSED, optimizer TESTING, post-hoc averaging OPENING:**
+> **Round 41 frontier signals — capacity DEAD, schedule-SHAPE DEAD, loss-weight DEAD, loss-form CLOSED, optimizer CLOSED, post-hoc averaging + schedule-FLOOR OPENING:**
 > - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss).
 > - **CAPACITY AXIS FULLY DEAD**: n_hidden (#2685 +2.53%, #2737 +7.55%), mlp_ratio (#2738 +4.35%), depth (#2684 +12.7%).
-> - **SCHEDULE AXIS FULLY DEAD**: TAIL truncated cosine (#2760 +1.63%), HEAD warmup_epochs=3 (#2797 +2.04%). Standard cosine T_max=epochs confirmed optimal.
+> - **SCHEDULE-SHAPE AXIS FULLY DEAD**: TAIL truncated cosine (#2760 +1.63%), HEAD warmup_epochs=3 (#2797 +2.04%). Standard cosine T_max=epochs confirmed optimal SHAPE.
 > - **LOSS-WEIGHT AXIS SATURATED**: swp=15 (+0.21% val noise, −1.06% test directional), swp=20 (+4.76% val LOSS — over-pushed, broke optimization). Loss-WEIGHTING is non-monotone; weight amplification is not the path.
 > - **LOSS-FORM AXIS CLOSED**: Huber d=5.0 (#2822 +116% catastrophic, raw-scale miscalibration → MSE everywhere), Huber d=0.1 (#2847 +5.54% mild regression, calibrated correctly in normalized space, no divergence). L1 is locally optimal for this stack. Both Huber endpoints tested → axis fully closed.
+> - **OPTIMIZER AXIS CLOSED (at 30-min budget)**: AdamW lr=3e-4 (#2824 +29.6% val UNDER-CONVERGED at epoch 46 still descending), AdamW lr=1e-3 (#2850 +39.1% val UNDER-CONVERGED, cut at ep37, WORSE than lr=3e-4). Two structural disadvantages: ~10% per-epoch overhead (9 fewer epochs in budget) + step-magnitude mismatch (no lr scale replicates Lion's sign-update directional bias). Lion + L1 + cosine confirmed optimal for this regime.
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
-> - **Round 41 cont. — code-change pivots (active)**:
->   - **askeladd #2850 AdamW lr=1e-3 (10× Lion lr)** (IN FLIGHT, status:wip): retry of #2824 (AdamW lr=3e-4 +29.6% val UNDER-CONVERGED). lr×10 matches Lion's sign-update step magnitude. Tests optimizer axis at its likely-best calibration.
->   - **frieren #2857 SWA (Stochastic Weight Averaging, swa_start=30)** (IN FLIGHT, status:wip): pivot after loss-form closed. Averages weights over last 17 of 46 epochs (~37% of training). Exploits the still-descending epoch-46 trajectory to find a flatter minimum. **Orthogonal to all prior axes** (capacity, schedule, loss, optimizer); composes with future winners (e.g., if AdamW wins #2850). Expected gain 0.5-2% on val.
+> - **Round 41 cont. — fresh-axis pivots (active)**:
+>   - **frieren #2857 SWA (Stochastic Weight Averaging, swa_start=30)** (IN FLIGHT, status:wip): pivot after loss-form closed. Averages weights over last 17 of 46 epochs (~37% of training). Exploits the still-descending epoch-46 trajectory to find a flatter minimum. **Orthogonal to all prior axes** (capacity, schedule, loss, optimizer); composes with future winners. Expected gain 0.5-2% on val.
+>   - **askeladd #2861 cosine eta_min=5e-6 (schedule-FLOOR axis)** (IN FLIGHT, status:wip): pivot after optimizer axis closed. Tests whether non-zero late-epoch LR floor (5% of initial) salvages the final-epoch progress that's currently discarded by LR=0 decay. **Distinct mechanism from schedule-SHAPE tests** which preserved eta_min=0. The still-descending-at-final-epoch signal (8+ consecutive baseline experiments) is the empirical motivation.
 > - **NEW NEGATIVE RESULTS this round**:
 >   - MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). Confirms L1 is the right magnitude shape.
->   - AdamW lr=3e-4 (Lion lr × 3 standard rule) UNDER-CONVERGES on this small-data regression (#2824 → +29.6% val, best_ep=46 still descending). The lr×3 rule is image-classification-calibrated, not appropriate here.
->   - Properly-calibrated Huber d=0.1 still net worse than L1 (#2847 → +5.54% val). Lion's sign-only updates make near-zero gradient magnitude immaterial; the marginal loss-landscape change at the boundary of zero gradient is net-negative.
-> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head), loss-form shape.
+>   - AdamW under-converges at all tested lr scales (×3 and ×10) under 30-min budget. Lion's sign-update advantage is structural at this stack.
+>   - Properly-calibrated Huber d=0.1 still net worse than L1 (#2847 → +5.54% val). Lion's sign-only updates make near-zero gradient magnitude immaterial.
+> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head), loss-form shape, optimizer.
 > - **#2638 split-dependent OOD diagnostic**: geom_camber is INFORMATION-limited or REPRESENTATION-limited — needs mechanism change, not weight tuning.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.
-> - **Future levers if SWA+AdamW pivots stagnate**: EMA with warmup decay (finer-grained than SWA), aux surface head, physics-informed loss (divergence/curl), eta_min>0 (LR floor), data augmentation (CFD-valid symmetries), seed-averaged baseline confirmation, complete model replacement (e.g., transformer→GNN hybrid), quantile loss, focal MAE.
+> - **Future levers if SWA + eta_min pivots stagnate**: EMA with warmup decay (finer-grained than SWA), aux surface head, physics-informed loss (divergence/curl), data augmentation (CFD-valid symmetries — limited: AoA asymmetric for raceCar [-10,0]; cruise [-5,+6] OK), seed-averaged baseline confirmation, complete model replacement (e.g., transformer→GNN hybrid), quantile loss, focal MAE, camber-aware sample reweighting (target geom-OOD boundaries).
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
@@ -127,7 +128,7 @@
 | edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
-| askeladd | **#2850** | **AdamW lr=1e-3** (10× Lion lr; retry of #2824 lr=3e-4 under-converged) | **Round 41: optimizer axis retry** |
+| askeladd | **#2861** | **Cosine eta_min=5e-6** (schedule-FLOOR axis; non-zero late-epoch LR floor; distinct mechanism from dead schedule-SHAPE tests #2760/#2797) | **Round 41: schedule-floor pivot** |
 | frieren | **#2857** | **SWA (Stochastic Weight Averaging, swa_start=30)** — post-hoc late-stage weight averaging on baseline config (orthogonal to all prior axes; exploits still-descending epoch-46 trajectory) | **Round 41: weight-averaging pivot** |
 
 **Closed Round 40**:

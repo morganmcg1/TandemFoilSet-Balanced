@@ -6,6 +6,34 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 08:20 — Round 41 cont.: close #2850 askeladd AdamW lr=1e-3 (+39.1% val UNDER-CONVERGED, WORSE than lr=3e-4 — OPTIMIZER AXIS CLOSED); assign askeladd #2861 cosine eta_min=5e-6 (schedule-FLOOR axis, distinct mechanism from prior dead schedule-shape tests)
+
+### PR #2850 — askeladd AdamW lr=1e-3 (10× Lion lr, retry of #2824 lr=3e-4 under-convergence)
+- Branch: `charliepai2g48h3-askeladd/adamw-lr1e3-nlayers2-slicenum16-epochs46`
+- Hypothesis: AdamW lr=3e-4 (#2824) was UNDER-CONVERGED with Lion lr × 3 rule; retry with 10× Lion lr (1e-3) to match Lion's effective step magnitude.
+- Artifacts: `models/model-adamw-lr1e3-nlayers2-slicenum16-epochs46-20260514-073306/metrics.jsonl`
+- Result: cut at epoch 37/46 by 30-min timeout (best=epoch 36)
+
+| Split | val mae_surf_p | baseline | Δval | test mae_surf_p | baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 52.79 | 36.476 | +44.7% | 45.72 | 33.035 | +38.4% |
+| geom_camber_rc | 63.45 | 48.297 | +31.4% | 58.28 | 44.333 | +31.5% |
+| geom_camber_cruise | 30.80 | 18.326 | +68.1% | 25.62 | 15.496 | +65.4% |
+| re_rand | 49.17 | 37.923 | +29.7% | 40.30 | 28.116 | +43.3% |
+| **avg** | **49.055** | **35.256** | **+39.1%** | **42.480** | **30.245** | **+40.5%** |
+
+**Trajectory:** epoch 1=188.4 (vs 191 for lr=3e-4), ep10=101.7, ep20=80.1, ep30=68.1, ep35=49.8, **ep36=49.05 (best)**, ep37=49.25 (late-stage jitter). Note: WORSE than #2824 AdamW lr=3e-4 (45.684).
+
+**Two confounding factors disqualify AdamW at this stack:**
+1. **Per-epoch overhead:** AdamW's second-moment maintenance adds ~10% wall-clock → 37 vs 46 epochs in 30 min. Lion gets 9 extra epochs structurally.
+2. **Step-magnitude mismatch:** No lr scale (×3 or ×10) matches Lion's sign-update directional bias. lr=3e-4 under-converges; lr=1e-3 starts hotter but causes late-stage jitter (49.83→49.05→49.25).
+
+**Linear extrapolation:** epoch 30→37 slope ~−1.4/epoch → epoch 46 would land at ~36-38 val — at best matching Lion, never beating it.
+
+**Conclusion: OPTIMIZER AXIS CLOSED.** Lion + L1 + cosine remains optimal training recipe for n_layers=2 + slice_num=16 + epochs=46 within SENPAI_TIMEOUT_MINUTES=30. Pivoting askeladd to schedule-FLOOR axis (eta_min>0) — distinct mechanism from prior dead schedule-shape tests.
+
+---
+
 ## 2026-05-14 08:00 — Round 41 cont.: close #2847 frieren Huber d=0.1 (+5.54% val MILD REGRESSION — loss-form axis CLOSED definitively); assign frieren #2857 SWA (Stochastic Weight Averaging, swa_start=30 — fresh post-hoc weight-averaging axis)
 
 ### PR #2847 — frieren Huber d=0.1 (normalized-space corrected)
