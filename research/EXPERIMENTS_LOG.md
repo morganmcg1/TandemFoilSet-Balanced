@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-05-14 [Round 138 close-16] UTC — PR #2968: mlp2-differential-wd-10x — **CLOSED LOSS (+3.62%; 138th taxon; HEAD-AXIS COMPREHENSIVELY CLOSED)**
+
+- **Branch:** charliepai2g48h5-askeladd/mlp2-differential-wd-10x
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-mlp2-differential-wd-10x-*/metrics.jsonl
+
+| Metric | Baseline #2879 | #2968 (10× wd on mlp2) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | ~31.67 | **+3.62% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | — | LOSS |
+| Param count | 407,940 | 407,940 | unchanged |
+
+**Hypothesis:** Apply 10× weight decay (3e-3 vs baseline 3e-4) only to mlp2 (shared output head) to preserve co-adaptation pressure while constraining head drift. Direct followup to #2956 asymmetric-surf-correction-head LOSS.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **10× wd insufficient:** ||W_mlp2|| grew 3.7× during training despite 10× wd penalty. The optimizer (Lion) overwhelmed the regularization — the gradient signal pushing mlp2 to large norm was stronger than 10× wd could resist.
+
+2. **Even mild constraint disrupts co-adaptation.** The +3.62% regression is in the same ballpark as #2946 (+3.47%) and #2956 (+3.29%). Any intervention that constrains or modifies mlp2's learning trajectory causes consistent ~3-4% degradation.
+
+3. **Co-adaptation pressure is not just load-bearing — it is the mechanism.** mlp2 needs freedom to jointly learn from BOTH surface and volume pathways without any external constraint on its weight norm or trajectory.
+
+**138th taxon CLOSED:** HEAD-AXIS COMPREHENSIVELY CLOSED — 3 structural interventions (#2946 shared-head-removed, #2956 asymmetric-correction, #2968 differential-wd) ALL LOSS in +3-4% range. Bottleneck is NOT at the output head. Surface-targeting or co-adaptation-disrupting interventions at mlp2 systematically fail.
+
+**Followup assigned:** #2980 askeladd in-block-dropout-p0.1-post-norm (FRESH AXIS — body-side stochastic regularization; Vaswani 2017 full recipe test; dropout p=0.1 after attention and MLP branches in post-norm topology; completes the original Transformer regularization stack; zero new params).
+
+---
+
+## 2026-05-14 [Round 138 close-15] UTC — PR #2969: per-block-T-schedule — **CLOSED LOSS (+4.52%; 137th taxon; LEARNABILITY IS LOAD-BEARING)**
+
+- **Branch:** charliepai2g48h5-tanjiro/per-block-T-schedule
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-per-block-T-schedule-*/metrics.jsonl
+
+| Metric | Baseline #2879 | #2969 (fixed T schedule) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | ~31.94 | **+4.52% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | — | LOSS |
+| val_geom_camber_cruise | 17.8657 | WIN | cruise WIN present |
+| val_single_in_dist | 23.3997 | worse | in_dist LOSS |
+| Param count | 407,940 | 407,940 | T removed as Parameter |
+
+**Hypothesis:** Replace 8 learnable per-head temperatures with hardcoded per-block schedule T=[1.0, 0.5, 0.5, 0.25] matching the implicit depth gradient observed in baseline entropy diagnostics. Tests whether learnability can be replaced by a static schedule.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **Block-0 STILL COLLAPSED with T=1.0 fixed.** 16-17/24 slices dead (entropy < 0.01 nats) vs baseline ~3-4 dead slices. Fixing T=1.0 did NOT produce the broad-entropy routing that the learnable baseline achieves with T≈0.5.
+
+2. **Learnability is load-bearing, not just T values.** The slice projection weights (in_project, out_project) in Physics_Attention co-evolved with learnable T during baseline training. Forcing T=1.0 from scratch created entropy collapse because the projections hadn't co-adapted to that T value.
+
+3. **T values don't transfer.** The [1.0, 0.5, 0.5, 0.25] schedule inferred from baseline entropy diagnostics is a POST-HOC description of a co-adapted system, not a transferable prior.
+
+4. **WORSE than either T=2.0 (+4.43%) or T=0.25 (+3.40%).** The fixed schedule is +4.52%, suggesting that even a badly chosen FIXED temperature is better than a schedule of fixed temperatures — possibly because the schedule creates additional routing diversity loss.
+
+**137th taxon CLOSED:** FIXED-T-SCHEDULE / LEARNABILITY-LOAD-BEARING. T schedule as a FROZEN constraint fails. Only learnability (T as nn.Parameter) or LEARNABILITY WITH BETTER INIT remains to explore.
+
+**Followup assigned:** #2979 tanjiro learnable-T-init-schedule (T remains learnable; initialized at [1.0, 0.5, 0.5, 0.25] instead of uniform 0.5; schedule-as-prior not constraint; student suggestion #1 from #2969).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2957: warmup-5-epochs-baseline-lr — **CLOSED LOSS (+5.07% Run2 / +2.25% Run1; 136th taxon; LR-SCHEDULE-SHAPE AXIS DEFINITIVELY CLOSED — TWO-SIDED OPTIMUM)**
 
 - **Branch:** charliepai2g48h5-frieren/warmup-5-epochs-baseline-lr
