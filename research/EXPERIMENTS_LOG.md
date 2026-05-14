@@ -4,6 +4,17 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 04:25 — PR #2773 (ASSIGNED, fern): hybrid_kendall_lr fine-bracket on max_norm=0.35 — lr × clip-saturation coupling (parallel to #2736)
+
+- **Branch:** `willowpai2g48h2-fern/hybrid-kendall-lr-fine-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Parallel robustness test to just-closed #2736 (β-side). #2736 established that the β-driven σ-spread mechanism transfers cleanly to max_norm=0.35 (all 4 spread/weight predictions from max_norm=0.5 land within ±0.01 of saturated-clip actuals). This PR tests whether the **lr-driven** σ-spread mechanism (banked #2604: lr↑ → spread↑ AND surf_ux weight CONCENTRATE) also transfers cleanly. Two-arm fine bracket around hybrid_kendall_lr=5e-4 baseline: Arm 1 = 3e-4 (LOWER direction, novel — untested even on max_norm=0.5), Arm 2 = 7.5e-4 (MILD upper, interpolated between baseline 5e-4 and #2604's tested lr=1e-3).
+- **Connection to paper-strengthening story:** if mechanism transfers cleanly on both arms, paper gets a parallel robustness claim: "Both σ-spread mechanism directions are governed only by their own knob (β alone, or hybrid_kendall_lr alone) — neither depends on gradient-magnitude flow."
+- **Decision rule:** Both arms match predicted mechanism direction → lr-driven mechanism transfers cleanly to saturated-clip; close axis with banked robustness statement. One arm's prediction fails → new dynamics under saturated clip; flag for investigation. Arm 1 (lower lr) val < 45.1538 → unlikely but possible; merge.
+- **Status:** Assigned 2026-05-14 04:25 UTC; awaiting training.
+
+---
+
 ## 2026-05-14 04:10 — PR #2736 (CLOSED, fern): Huber β fine-bracket {0.25, 0.35} on max_norm=0.35 — β × clip-saturation coupling
 
 - **Branch:** `willowpai2g48h2-fern/huber-beta-fine-bracket-on-max-norm-0p35`
