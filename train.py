@@ -152,29 +152,49 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 re_conditional_layernorm: bool = False):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.re_conditional_layernorm = re_conditional_layernorm
+        # When re_conditional_layernorm is True, the LN affine is provided by
+        # shared ReConditionalLayerNorm modules owned by the parent Transolver;
+        # this block contributes no LN parameters. Otherwise, plain nn.LayerNorm.
+        if not re_conditional_layernorm:
+            self.ln_1 = nn.LayerNorm(hidden_dim)
+            self.ln_2 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            if not re_conditional_layernorm:
+                self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, gamma=None, beta=None):
-        fx = self.attn(self.ln_1(fx), gamma, beta) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+    def forward(self, fx, gamma=None, beta=None, log_re=None,
+                rcln_1=None, rcln_2=None, rcln_3=None):
+        if self.re_conditional_layernorm:
+            normed_1 = rcln_1(fx, log_re)
+        else:
+            normed_1 = self.ln_1(fx)
+        fx = self.attn(normed_1, gamma, beta) + fx
+        if self.re_conditional_layernorm:
+            normed_2 = rcln_2(fx, log_re)
+        else:
+            normed_2 = self.ln_2(fx)
+        fx = self.mlp(normed_2) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            if self.re_conditional_layernorm:
+                normed_3 = rcln_3(fx, log_re)
+            else:
+                normed_3 = self.ln_3(fx)
+            return self.mlp2(normed_3)
         return fx
 
 
@@ -183,12 +203,15 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 re_conditional_layernorm: bool = False,
+                 re_ln_hidden_film: int = 8):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.re_conditional_layernorm = re_conditional_layernorm
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -204,6 +227,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                re_conditional_layernorm=re_conditional_layernorm,
             )
             for i in range(n_layers)
         ])
@@ -213,6 +237,15 @@ class Transolver(nn.Module):
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
         self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
+        # Re-conditional LayerNorm γ/β at LN-affine injection point (CIN-style;
+        # Dumoulin et al. 2017, DiT adaLN-Zero). Three shared instances — one per
+        # LN role (pre-attn, pre-FFN, pre-out-mlp) — referenced by every block.
+        # Created AFTER self.apply so the zero-init of the FiLM MLP's final layer
+        # is preserved (apply would overwrite it with trunc_normal otherwise).
+        if re_conditional_layernorm:
+            self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+            self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+            self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -220,8 +253,11 @@ class Transolver(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
+            # Skip param-free LayerNorm (elementwise_affine=False has weight/bias None).
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
         x = data["x"]
@@ -230,8 +266,14 @@ class Transolver(nn.Module):
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx, gamma, beta)
+        if self.re_conditional_layernorm:
+            for block in self.blocks:
+                fx = block(fx, gamma, beta, log_re=log_re,
+                           rcln_1=self.re_ln_1, rcln_2=self.re_ln_2,
+                           rcln_3=self.re_ln_3)
+        else:
+            for block in self.blocks:
+                fx = block(fx, gamma, beta)
         return {"preds": fx}
 
 
@@ -260,6 +302,48 @@ class ReScaleHead(nn.Module):
         raw = self.mlp(log_re)
         scale = F.softplus(raw)
         return scale.unsqueeze(1)
+
+
+class ReConditionalLayerNorm(nn.Module):
+    """Re-conditional LayerNorm affine (Conditional Instance Norm / adaLN-Zero).
+
+    Wraps a param-free LayerNorm plus a small FiLM MLP from log(Re) to
+    (γ_residual, β). Applied as:  out = (1 + γ_residual) · LN(x) + β.
+
+    Zero-init of the final layer makes (γ_r, β) = (0, 0) at step 0, so the
+    module reproduces nn.LayerNorm(weight=1, bias=0) exactly at init — the
+    conditioning gate must be actively opened by the optimiser.
+
+    Designed to be SHARED across all TransolverBlocks for a given LN role
+    (e.g. one shared instance for pre-attn LN across every block). The
+    per-token LN is local (different x per block) but the affine (γ, β)
+    depends only on log_re, so the same affine is applied at every block
+    per sample.
+
+    References: Dumoulin et al. 2017 (1610.07629, CIN); Peebles & Xie 2022
+    (2212.09748, adaLN-Zero); Perez et al. 2018 (1709.07871, FiLM).
+    """
+
+    def __init__(self, n_hidden: int, hidden_film: int = 8):
+        super().__init__()
+        self.n_hidden = n_hidden
+        self.ln = nn.LayerNorm(n_hidden, elementwise_affine=False)
+        self.film_net = nn.Sequential(
+            nn.Linear(1, hidden_film),
+            nn.GELU(),
+            nn.Linear(hidden_film, 2 * n_hidden),
+        )
+        nn.init.zeros_(self.film_net[-1].weight)
+        nn.init.zeros_(self.film_net[-1].bias)
+
+    def forward(self, x: torch.Tensor, log_re: torch.Tensor) -> torch.Tensor:
+        # x: [B, N, n_hidden], log_re: [B, 1]
+        normed = self.ln(x)
+        film = self.film_net(log_re)  # [B, 2*n_hidden]
+        gamma_residual, beta = film.chunk(2, dim=-1)  # [B, n_hidden] each
+        gamma = (1.0 + gamma_residual).unsqueeze(1)  # [B, 1, n_hidden]
+        beta = beta.unsqueeze(1)  # [B, 1, n_hidden]
+        return gamma * normed + beta
 
 
 class ReFiLM(nn.Module):
@@ -467,6 +551,11 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Re-conditional LayerNorm affine (γ/β) at every block's LN injection point.
+    # Adds 3 shared FiLM(log Re) → (γ_residual, β) modules (~250 params each).
+    # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
+    re_conditional_layernorm: bool = False
+    re_ln_hidden_film: int = 8
 
 
 cfg = sp.parse(Config)
@@ -506,6 +595,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    re_conditional_layernorm=cfg.re_conditional_layernorm,
+    re_ln_hidden_film=cfg.re_ln_hidden_film,
 )
 
 model = Transolver(**model_config).to(device)
@@ -513,8 +604,14 @@ rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
 n_params_film = sum(p.numel() for p in model.re_film.parameters())
+n_params_re_ln = (
+    sum(p.numel() for p in model.re_ln_1.parameters())
+    + sum(p.numel() for p in model.re_ln_2.parameters())
+    + sum(p.numel() for p in model.re_ln_3.parameters())
+) if cfg.re_conditional_layernorm else 0
 print(
-    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
+    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
+    f"ReCondLN {n_params_re_ln}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
 
@@ -646,6 +743,22 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    # ReConditionalLayerNorm γ/β diagnostics (per-role: 'attn', 'ffn', 'out').
+    # Track absmax per role, plus per-sample |γ| mean / |β| mean accumulators
+    # for correlation with log_Re.
+    re_ln_diag = None
+    if cfg.re_conditional_layernorm:
+        re_ln_diag = {role: {
+            "gamma_absmax": 0.0,
+            "beta_absmax": 0.0,
+            "g_sum": 0.0,
+            "b_sum": 0.0,
+            "g_sq_sum": 0.0,
+            "b_sq_sum": 0.0,
+            "g_logre_cross": 0.0,
+            "b_logre_cross": 0.0,
+            "n": 0,
+        } for role in ("attn", "ffn", "out")}
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -733,6 +846,30 @@ for epoch in range(MAX_EPOCHS):
             scale_log_re_cross += (sc * lr.unsqueeze(1)).sum(dim=0)
             scale_n += sc.shape[0]
 
+            # ReConditionalLayerNorm γ/β diagnostics (call the FiLM MLP directly
+            # — same operation as inside the model forward; tiny extra compute).
+            if re_ln_diag is not None:
+                role_to_rcln = (
+                    ("attn", uncompiled_model.re_ln_1),
+                    ("ffn", uncompiled_model.re_ln_2),
+                    ("out", uncompiled_model.re_ln_3),
+                )
+                for role, rcln in role_to_rcln:
+                    film = rcln.film_net(log_re_norm)
+                    g_r, b_v = film.chunk(2, dim=-1)  # [B, n_hidden] each
+                    g_per = g_r.abs().mean(dim=-1).to(torch.float64)  # [B]
+                    b_per = b_v.abs().mean(dim=-1).to(torch.float64)  # [B]
+                    d = re_ln_diag[role]
+                    d["gamma_absmax"] = max(d["gamma_absmax"], g_r.abs().max().item())
+                    d["beta_absmax"] = max(d["beta_absmax"], b_v.abs().max().item())
+                    d["g_sum"] += g_per.sum().item()
+                    d["b_sum"] += b_per.sum().item()
+                    d["g_sq_sum"] += (g_per ** 2).sum().item()
+                    d["b_sq_sum"] += (b_per ** 2).sum().item()
+                    d["g_logre_cross"] += (g_per * lr).sum().item()
+                    d["b_logre_cross"] += (b_per * lr).sum().item()
+                    d["n"] += g_per.shape[0]
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
@@ -795,6 +932,37 @@ for epoch in range(MAX_EPOCHS):
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
 
+    # ReConditionalLayerNorm γ/β summary — absmax + correlation with log(Re).
+    re_ln_summary: dict | None = None
+    if re_ln_diag is not None:
+        re_ln_summary = {}
+        for role, d in re_ln_diag.items():
+            n = max(d["n"], 1)
+            g_mean = d["g_sum"] / n
+            b_mean = d["b_sum"] / n
+            g_var = max(d["g_sq_sum"] / n - g_mean ** 2, 0.0)
+            b_var = max(d["b_sq_sum"] / n - b_mean ** 2, 0.0)
+            g_std = g_var ** 0.5
+            b_std = b_var ** 0.5
+            if scale_n > 0 and lr_std > 1e-8 and g_std > 1e-12:
+                g_cov = d["g_logre_cross"] / n - g_mean * lr_mean
+                g_corr = g_cov / (g_std * lr_std)
+            else:
+                g_corr = 0.0
+            if scale_n > 0 and lr_std > 1e-8 and b_std > 1e-12:
+                b_cov = d["b_logre_cross"] / n - b_mean * lr_mean
+                b_corr = b_cov / (b_std * lr_std)
+            else:
+                b_corr = 0.0
+            re_ln_summary[role] = {
+                "gamma_residual_absmax": d["gamma_absmax"],
+                "beta_absmax": d["beta_absmax"],
+                "gamma_residual_mean_abs": g_mean,
+                "beta_mean_abs": b_mean,
+                "corr_gamma_logre": float(g_corr),
+                "corr_beta_logre": float(b_corr),
+            }
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -844,6 +1012,7 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "re_ln/per_role": re_ln_summary,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -870,6 +1039,14 @@ for epoch in range(MAX_EPOCHS):
                 f"    SliceEntropy(diag)  mean={mean_ent:.3f}  "
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
+            )
+    if re_ln_summary is not None:
+        for role, s in re_ln_summary.items():
+            print(
+                f"    ReCondLN[{role:<4s}]  "
+                f"gamma_res[absmax={s['gamma_residual_absmax']:.4f}, mean|.|={s['gamma_residual_mean_abs']:.4f}]  "
+                f"beta[absmax={s['beta_absmax']:.4f}, mean|.|={s['beta_mean_abs']:.4f}]  "
+                f"corr(|γ|,logRe)={s['corr_gamma_logre']:+.3f}  corr(|β|,logRe)={s['corr_beta_logre']:+.3f}"
             )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
