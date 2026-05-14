@@ -136,6 +136,92 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class SliceMoEProjection(nn.Module):
+    """H75: Sparse MoE replacement for the per-head ``out_project`` projection.
+
+    The PR ("slice-moe-projection") adds a new ``dim_head -> dim_head`` linear
+    on the slice-token output of ``PhysicsAttention`` (post-SDPA, pre slice-to-
+    node einsum). Replacing it with a 4-expert top-2 sparse MoE gives the model
+    direct regime-routing capacity: each slice token at each head picks its 2
+    most-relevant experts via a learned softmax router, then expert outputs are
+    weighted-summed by their (renormalized) routing probabilities.
+
+    Load balancing follows Switch Transformer (Fedus et al. 2022): the aux
+    scalar is ``aux_loss_weight * n_experts * sum_i(f_i * P_i)`` where ``f_i``
+    is the fraction of expert-slots assigned to expert ``i`` (no grad — from
+    hard top-k indices) and ``P_i`` is the mean router probability for expert
+    ``i`` (carries grad). This penalises imbalance via the router probs while
+    leaving the hard routing decisions intact.
+
+    ``record_routing`` is a class-level toggle that, when True, also stashes
+    the per-block router entropy and expert usage so a probe pass can collect
+    diagnostics without paying ``.item()``/``.cpu()`` overhead on the training
+    hot path.
+    """
+
+    record_routing: bool = False
+
+    def __init__(self, in_dim, out_dim, n_experts=4, top_k=2, aux_loss_weight=0.01):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.n_experts = n_experts
+        self.top_k = top_k
+        self.aux_loss_weight = aux_loss_weight
+        self.experts = nn.ModuleList([
+            nn.Linear(in_dim, out_dim, bias=False) for _ in range(n_experts)
+        ])
+        self.router = nn.Linear(in_dim, n_experts, bias=False)
+        self.last_aux_loss: torch.Tensor | float = 0.0
+        self.last_router_entropy: float | None = None
+        self.last_expert_usage: list[float] | None = None
+
+    def forward(self, x):
+        # x: (..., in_dim). For PhysicsAttention this is (B, heads, slice_num, dim_head).
+        original_shape = x.shape
+        x_flat = x.reshape(-1, self.in_dim)
+        N = x_flat.shape[0]
+
+        router_logits = self.router(x_flat)                               # (N, n_experts)
+        router_probs = F.softmax(router_logits, dim=-1)
+        top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
+        top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-9)
+
+        out = torch.zeros(N, self.out_dim, device=x.device, dtype=x.dtype)
+        for k in range(self.top_k):
+            idx_k = top_k_indices[:, k]
+            prob_k = top_k_probs[:, k:k + 1]
+            for e in range(self.n_experts):
+                mask_e = (idx_k == e)
+                if mask_e.any():
+                    expert_out = self.experts[e](x_flat[mask_e])
+                    out = out.index_add(
+                        0, mask_e.nonzero(as_tuple=True)[0],
+                        prob_k[mask_e] * expert_out,
+                    )
+
+        # Switch-Transformer load-balancing auxiliary loss.
+        mean_router_probs = router_probs.mean(dim=0)                      # (n_experts,)
+        expert_usage_frac = (
+            top_k_indices.flatten().eq(
+                torch.arange(self.n_experts, device=x.device).unsqueeze(1)
+            ).float().mean(dim=1)
+        )                                                                  # (n_experts,)
+        self.last_aux_loss = (
+            self.aux_loss_weight
+            * self.n_experts
+            * (expert_usage_frac * mean_router_probs).sum()
+        )
+
+        if SliceMoEProjection.record_routing:
+            with torch.no_grad():
+                entropy = -(mean_router_probs * (mean_router_probs + 1e-12).log()).sum()
+                self.last_router_entropy = float(entropy.item())
+                self.last_expert_usage = expert_usage_frac.detach().cpu().tolist()
+
+        return out.reshape(original_shape[:-1] + (self.out_dim,))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -161,6 +247,10 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        # H75: 4-expert top-2 MoE on per-head out_project (regime-routing capacity)
+        self.out_project = SliceMoEProjection(
+            dim_head, dim_head, n_experts=4, top_k=2, aux_loss_weight=0.01,
+        )
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
         self.last_attn_entropy_mean: float | None = None
@@ -209,6 +299,12 @@ class PhysicsAttention(nn.Module):
                 self.last_attn_entropy_per_head_min = float(
                     ent.mean(dim=(0, 2)).min().item()
                 )
+
+        # H75: per-head MoE projection on slice tokens, between SDPA and the
+        # slice-to-node scatter. Each (batch, head, slice_num) token picks 2
+        # of 4 experts via a learned router, allowing different experts to
+        # specialise for different physical regimes.
+        out_slice = self.out_project(out_slice)
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -440,6 +536,53 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     )
 
 
+def measure_moe_routing(
+    model, val_loader, stats, fourier_enc, device, n_batches: int = 4,
+) -> tuple[list[float], list[list[float]]]:
+    """H75: probe routing entropy + expert usage histogram per block.
+
+    Toggles ``SliceMoEProjection.record_routing`` on for the duration of
+    ``n_batches`` forward passes in eval mode (no_grad), then accumulates the
+    per-block ``last_router_entropy`` (scalar) and ``last_expert_usage``
+    (list of n_experts fractions). Returns the means across batches.
+
+    Uniform routing entropy = log(n_experts) = log(4) ≈ 1.3863; collapsed
+    routing entropy = 0.
+    """
+    was_training = model.training
+    model.eval()
+    SliceMoEProjection.record_routing = True
+    n_blocks = len(model.blocks)
+    n_experts = model.blocks[0].attn.out_project.n_experts
+    sum_entropy = [0.0] * n_blocks
+    sum_usage = [[0.0] * n_experts for _ in range(n_blocks)]
+    n = 0
+    with torch.no_grad():
+        for batch_idx, (x, _y, _is_surface, _mask) in enumerate(val_loader):
+            if batch_idx >= n_batches:
+                break
+            x = x.to(device, non_blocking=True)
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = fourier_enc(x_norm)
+            _ = model({"x": x_norm})
+            for i, block in enumerate(model.blocks):
+                ent = block.attn.out_project.last_router_entropy
+                usage = block.attn.out_project.last_expert_usage
+                if ent is not None:
+                    sum_entropy[i] += ent
+                if usage is not None:
+                    for e in range(n_experts):
+                        sum_usage[i][e] += usage[e]
+            n += 1
+    SliceMoEProjection.record_routing = False
+    if was_training:
+        model.train()
+    denom = max(n, 1)
+    mean_entropy = [s / denom for s in sum_entropy]
+    mean_usage = [[u / denom for u in usage_row] for usage_row in sum_usage]
+    return mean_entropy, mean_usage
+
+
 def measure_attention_entropies(
     model, val_loader, stats, fourier_enc, device, n_batches: int = 4,
 ) -> tuple[list[float], list[float]]:
@@ -545,6 +688,14 @@ n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
 n_params = n_model_params + n_fourier_params  # includes 6 learnable freqs
 print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
 print(f"n_params (total trainable): {n_params}")
+# H75: MoE param breakdown — per-block experts + router for SliceMoEProjection.
+n_moe_params = 0
+for block in model.blocks:
+    n_moe_params += sum(p.numel() for p in block.attn.out_project.parameters())
+print(
+    f"[H75] SliceMoE: 4 experts top-2 on out_project, {n_moe_params} MoE params total "
+    f"({n_moe_params // len(model.blocks)}/block across {len(model.blocks)} blocks)"
+)
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 # H39: ReGLU gate sanity check (ReLU = max(0,x))
@@ -662,10 +813,12 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_moe = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -674,6 +827,14 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # H75: reset per-block ``last_aux_loss`` to scalar 0.0 BEFORE the forward
+        # pass. Stochastic depth can skip ``attn()`` in a block (and thus its
+        # MoE forward), in which case ``last_aux_loss`` would otherwise carry a
+        # stale tensor from a previous batch whose autograd graph has been freed.
+        for block in model.blocks:
+            block.attn.out_project.last_aux_loss = 0.0
+
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
 
@@ -684,7 +845,27 @@ for epoch in range(MAX_EPOCHS):
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
         surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
         surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # H75: collect MoE load-balancing aux losses from every block (aux_loss_weight
+        # already applied inside SliceMoEProjection.forward). Sum across the 5 blocks.
+        # Blocks whose attn was dropped by stoch-depth contribute scalar 0.0.
+        moe_aux_loss = sum(
+            block.attn.out_project.last_aux_loss for block in model.blocks
+        )
+        loss = main_loss + moe_aux_loss
+        moe_aux_scalar = (
+            moe_aux_loss.detach().item() if isinstance(moe_aux_loss, torch.Tensor)
+            else float(moe_aux_loss)
+        )
+
+        if epoch == 0 and batch_idx == 0:
+            main_val = main_loss.item()
+            print(
+                f"[H75] ep1.b1: main_loss={main_val:.4f} "
+                f"moe_aux={moe_aux_scalar:.4f} total={loss.item():.4f} "
+                f"(aux/main={(moe_aux_scalar / max(main_val, 1e-6)) * 100:.2f}%)"
+            )
 
         optimizer.zero_grad()
         loss.backward()
@@ -700,10 +881,12 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_moe += moe_aux_scalar
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_moe /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -743,6 +926,7 @@ for epoch in range(MAX_EPOCHS):
         "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/moe_aux_loss": epoch_moe,
         "train/last_grad_norm": float(total_norm),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
@@ -750,7 +934,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} moe={epoch_moe:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
@@ -785,6 +969,32 @@ for epoch in range(MAX_EPOCHS):
                 for i in range(len(ent_means))
             )
         )
+
+        # H75: probe MoE routing entropy + expert usage per block.
+        moe_entropy, moe_usage = measure_moe_routing(
+            model, probe_loader, stats, fourier_enc, device, n_batches=4,
+        )
+        n_experts = model.blocks[0].attn.out_project.n_experts
+        max_router_entropy = math.log(n_experts)
+        moe_entropy_ratios = [e / max_router_entropy for e in moe_entropy]
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "moe_routing",
+            "epoch": epoch + 1,
+            "max_router_entropy": max_router_entropy,
+            "per_block_router_entropy": moe_entropy,
+            "per_block_router_entropy_ratio": moe_entropy_ratios,
+            "per_block_expert_usage": moe_usage,
+        })
+        print(
+            f"    [H75] MoE router entropy (max=log({n_experts})={max_router_entropy:.4f}): "
+            + " ".join(
+                f"b{i}={moe_entropy[i]:.4f}({moe_entropy_ratios[i]*100:.1f}%)"
+                for i in range(len(moe_entropy))
+            )
+        )
+        for i, usage in enumerate(moe_usage):
+            usage_str = " ".join(f"e{e}={usage[e]*100:.1f}%" for e in range(n_experts))
+            print(f"    [H75] block {i} expert usage: {usage_str}")
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
