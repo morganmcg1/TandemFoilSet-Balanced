@@ -1952,3 +1952,49 @@ These two PRs join the 4 round-8 assignments already in flight (#2800 RMSNorm, #
 
 ---
 
+## 2026-05-14 06:25 — PR #2762: Gradient Centralization on Lion (edward)
+- Branch: `willowpai2g48h3-edward/lion-gc`
+- Hypothesis: Zero-mean gradient (per-row) before Lion momentum update; expected orthogonal composition with Lion's sign() update.
+- W&B runs: `84djotd6` (s1), `n4rrlgrv` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | in_dist | camber_rc | camber_cruise | re_rand |
+|---|---:|---:|---:|---:|---:|---:|
+| s1 | 49.355 | 43.277 | 51.20 | 55.31 | 26.54 | 40.06 |
+| s2 | 47.313 | 41.946 | 46.82 | 55.52 | 25.20 | 40.26 |
+| **mean** | **48.334** | **42.611** | 49.01 | 55.41 | 25.87 | 40.16 |
+| **Baseline** | **45.433** | **39.509** | 42.56 | 53.48 | 24.00 | 37.99 |
+
+**Regression: +2.90pt val (+6.4%), +3.10pt test (+7.9%). ALL splits regress; single_in_dist worst-hit (+6.45pt).**
+
+Edward's mechanism analysis is sharp and publishable:
+- **GC + sign() over-constrains direction**: Lion's sign() update direction comes entirely from sign pattern. GC's row-mean subtraction shifts the gradient distribution so that ~half the coordinates flip sign relative to the raw gradient. Under Adam/SGD this re-centers the step; under Lion's sign(), it **forcibly inverts coordinate update directions** every step.
+- **GC + sign() is sign-incompatible** — not orthogonal compositions like Yong et al. (2020) reported with SGD/Adam/AdamW. This is novel evidence.
+- **ID hit > OOD hit**: single_in_dist regressed +6.45pt while camber_cruise only +1.87pt — consistent with **reduced fitting capacity** (not improved OOD generalization).
+
+**Conclusion**: CLOSED. **GC axis fully closed under Lion** (this PR + previous stale #2564). Mechanism is sign-incompatible. Edward's analysis is paper-relevant: novel observation that GC needs magnitude-based optimizers, not sign-based ones.
+
+edward reassigned to FiLM-style Re-conditioning on each transformer block (PR #2816) — directly targets re_rand OOD via per-layer Re modulation.
+
+---
+
+## 2026-05-14 06:25 — PR #2763: max_norm=0.5 on Lion lr=7.5e-5 (fern, STALE)
+- Branch: `willowpai2g48h3-fern/lion-clip05-v2`
+- Status: STALE — pod cycling through heartbeats with 97-98% GPU utilization and persistent local `M train.py` modifications, but NO commits to the branch and NO comments in 2+ hours since assignment.
+- This is the **second consecutive stale strike** on fern's slot (#2565 was also stale before this fresh assignment).
+
+**Conclusion**: CLOSED as stale. The max_norm=0.5 hypothesis remains valid — original (Lion lr=5e-5 baseline) result was the most promising single-split OOD signal of the round (camber_rc −3.80 pt). Pattern indicates a harness issue: training runs exceeding the per-iteration heartbeat budget (~180-240s) without proper background-launch handling.
+
+fern reassigned to **Truncated normal Linear init σ=0.02 (BERT/GPT-2 style, PR #2817)** — single-function override, ~10 lines, explicitly designed to fit within one Claude student instance lifetime. Includes warning about using `run_in_background` for long training runs.
+
+---
+
+## 2026-05-14 06:30 — Additional round-8 assignments
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2816 | willowpai2g48h3-edward | FiLM-style Re-conditioning on each block | Per-layer OOD conditioning |
+| #2817 | willowpai2g48h3-fern | Truncated normal Linear init σ=0.02 (BERT/GPT-2 style) | Linear weight initialization |
+
+---
+
+

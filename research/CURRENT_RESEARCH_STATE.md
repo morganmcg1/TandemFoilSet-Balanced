@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 05:55
+- **Date:** 2026-05-14 06:30
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -43,9 +43,9 @@
 5. **Sobolev loss on pressure gradient (thorfinn #2811)**: physics-aware loss term — penalize ∇p mismatch in addition to p mismatch
 6. **LayerScale (nezuko #2812)**: CaiT-style learnable residual scaling, init=1e-4 — per-channel gating on attention/FFN branch output
 
-Still in flight from prior round:
-7. **max_norm=0.5 (fern #2763)**: re-test gradient clip on new baseline — had the best OOD single-split signal of the round (−3.8pt camber_rc)
-8. **Gradient Centralization (edward #2762)**: zero-mean gradient before momentum update; different from variance-vs-mean axis (GC modifies gradient direction, not trajectory frequency)
+Replacing 2 closed PRs:
+7. **FiLM-style Re-conditioning (edward #2816)**: per-block scale+shift modulated by log(Re) — targets re_rand OOD via learned per-layer conditioning
+8. **Truncated normal Linear init σ=0.02 (fern #2817)**: BERT/GPT-2 standard init — simpler, contained task designed to fit single Claude instance lifetime after fern's harness issues
 
 ## Round 1 portfolio (current)
 
@@ -75,16 +75,18 @@ Still in flight from prior round:
 | #2752 | tanjiro | Gradient accumulation 2× | **CLOSED** 2026-05-14 05:30 (+8.87pt val; variance −95%; step-count cost irrecoverable) |
 | #2712 | thorfinn | SWA average epochs 26-35 | **CLOSED** 2026-05-14 05:50 (val 47.82 vs 45.43 bar; variance −74% val/−90% test characterized but mean still misses) |
 | #2753 | nezuko | Per-layer LR decay α=0.85 | **CLOSED** 2026-05-14 05:50 (stale; no commits in 2.5h+; second strike on nezuko slot) |
-| **#2762** | **edward** | **Gradient Centralization on Lion** | **WIP** |
-| **#2763** | **fern** | **max_norm=0.5 on new baseline (fresh)** | **WIP** |
+| #2762 | edward | Gradient Centralization on Lion | **CLOSED** 2026-05-14 06:25 (val 48.33 +6.4%; GC+sign() forcibly inverts coordinate signs each step — sign-incompatible) |
+| #2763 | fern | max_norm=0.5 on new baseline | **CLOSED** 2026-05-14 06:25 (stale; pod cycling with GPU active but no commits; second strike on fern slot; harness issue) |
 | **#2800** | **alphonse** | **RMSNorm (replace LayerNorm)** | **WIP NEW 2026-05-14 05:45** |
 | **#2801** | **askeladd** | **Pinball loss τ=0.55 for pressure** | **WIP NEW 2026-05-14 05:45** |
 | **#2803** | **frieren** | **Param-group wd (no wd on norms/biases)** | **WIP NEW 2026-05-14 05:45** |
 | **#2805** | **tanjiro** | **LayerNorm γ-init=0.5 (DeepNorm-style)** | **WIP NEW 2026-05-14 05:45** |
 | **#2811** | **thorfinn** | **Sobolev loss on surface ∇p** | **WIP NEW 2026-05-14 05:55** |
 | **#2812** | **nezuko** | **LayerScale on residual branches (init=1e-4)** | **WIP NEW 2026-05-14 05:55** |
+| **#2816** | **edward** | **FiLM-style Re-conditioning on each block** | **WIP NEW 2026-05-14 06:30** |
+| **#2817** | **fern** | **Truncated normal Linear init σ=0.02 (BERT/GPT-2)** | **WIP NEW 2026-05-14 06:30** |
 
-**Merged:** 10 | **Closed:** 49 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 51 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -116,6 +118,7 @@ Still in flight from prior round:
 - **Per-channel amplitude weighting** — Lion sign() discards magnitude; amplitude weights have no effect on capacity allocation
 - **Conditioning-variable jitter (log(Re))** — creates supervised inconsistency; degraded all splits
 - **SWA (last-10 ckpt averaging)** — variance reduction works (4-10× tighter std) but mean still misses bar at current baseline; pairs best with a stronger base run, revisit after future merges
+- **Gradient Centralization on Lion** — sign-incompatible: GC's row-mean subtraction forcibly inverts coordinate update directions when combined with sign() optimizer; GC needs Adam-style magnitude updates
 
 ## Potential next research directions
 
@@ -125,10 +128,10 @@ Still in flight from prior round:
 2. **Pinball τ=0.55 (#2801)** — directional pressure bias; if residual diagnostic shows consistent direction, retry τ=0.45 if needed
 3. **Param-group wd (#2803)** — standard practice; zero compute cost
 4. **LN γ-init=0.5 (#2805)** — init geometry; recoverable since γ is learnable
-5. **max_norm=0.5 (#2763)** — had best OOD single-split signal this round
-6. **Gradient Centralization (#2762)** — geometric constraint on gradient direction (distinct from trajectory frequency)
-7. **Sobolev loss on ∇p (#2811)** — physics-aware loss; targets aerodynamic-coefficient-relevant gradient match
-8. **LayerScale (#2812)** — learnable per-channel residual gating, init=1e-4 (CaiT-style)
+5. **Sobolev loss on ∇p (#2811)** — physics-aware loss; targets aerodynamic-coefficient-relevant gradient match
+6. **LayerScale (#2812)** — learnable per-channel residual gating, init=1e-4 (CaiT-style)
+7. **FiLM-style Re-conditioning (#2816)** — per-block scale+shift from log(Re); targets re_rand OOD
+8. **Truncated normal Linear init σ=0.02 (#2817)** — BERT/GPT-2 standard; simpler task for fern after harness issues
 
 ### Medium-term
 
