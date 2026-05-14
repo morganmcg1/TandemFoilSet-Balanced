@@ -203,7 +203,7 @@ class TransolverBlock(nn.Module):
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.gelu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=8) if use_se else None
         if self.last_layer:
@@ -559,11 +559,11 @@ _std_mlp_params_per_block = (
 )
 _std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
-    f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
+    f"GeGLU MLP (Shazeer 2020, gelu gate): replaced SwiGLU gate (silu->gelu) in {len(_swiglu_modules)} TransolverBlocks; "
     f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
-    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
+    f"act=GELU; total GLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
-    f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+    f"baseline to beat: val_avg/mae_surf_p < 32.2477 (SwiGLU PR #2741)"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -893,7 +893,7 @@ if best_metrics:
         _se_log["splits"][_split_name] = _split_log
     append_metrics_jsonl(metrics_jsonl_path, _se_log)
 
-    # SwiGLU gate diagnostic — capture per-block gate (silu(W_gate x)) and value
+    # GeGLU gate diagnostic — capture per-block gate (gelu(W_gate x)) and value
     # (W_value x) statistics on a sample val batch, best-checkpoint weights.
     # gate_zero_frac near 0 ≈ gate passing everything through (acts like a richer
     # MLP); gate_zero_frac > 0.1 ≈ conditional channel suppression engaged.
@@ -935,7 +935,8 @@ if best_metrics:
     _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
                        for i, m in _swiglu_blocks]
     with torch.no_grad():
-        _x_s, _y_s, _is_s, _m_s = next(iter(_se_loader))
+        _diag_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+        _x_s, _y_s, _is_s, _m_s = next(iter(_diag_loader))
         _x_s = _x_s.to(device, non_blocking=True)
         _m_s = _m_s.to(device, non_blocking=True)
         _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
@@ -944,11 +945,11 @@ if best_metrics:
     for _h in _swiglu_handles:
         _h.remove()
 
-    print("\nSwiGLU gate stats per block (sample val batch, best-checkpoint weights):")
-    _swiglu_log = {"event": "swiglu_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    print("\nGeGLU gate stats per block (sample val batch, best-checkpoint weights):")
+    _swiglu_log = {"event": "geglu_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
     for _idx, _stats in _swiglu_captured:
         print(
-            f"  SwiGLU block[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
+            f"  GeGLU block[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
             f"std={_stats['gate_std']:.4f}  abs_mean={_stats['gate_abs_mean']:.4f}  "
             f"zero_frac={_stats['gate_zero_frac']:.4f}  "
             f"value_abs_mean={_stats['value_abs_mean']:.4f}  "
