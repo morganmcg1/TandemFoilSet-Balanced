@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -643,20 +644,26 @@ optimizer = Lion(
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
 warmup_epochs = 3
-scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
-    schedulers=[
-        torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
-        ),
-        torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
-        ),
-    ],
-    milestones=[warmup_epochs],
+steps_per_epoch = len(train_loader)
+warmup_steps = warmup_epochs * steps_per_epoch
+total_steps = MAX_EPOCHS * steps_per_epoch
+
+
+def lr_lambda(current_step: int) -> float:
+    if current_step < warmup_steps:
+        return float(current_step) / float(max(1, warmup_steps))
+    progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+print(
+    f"LR schedule: linear warmup {warmup_epochs} epochs ({warmup_steps} steps, 0.0->1.0) "
+    f"-> cosine {MAX_EPOCHS - warmup_epochs} epochs (1.0->0.0), per-step stepping"
 )
-print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
-print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+print(f"steps_per_epoch={steps_per_epoch}, total_steps={total_steps}, peak_lr={cfg.lr}")
+print(f"Param count: {n_params}")
+print(f"LR check step0: {optimizer.param_groups[0]['lr']:.6e} (expect 0.0 before first scheduler.step())")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -708,12 +715,12 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -746,6 +753,7 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": lr_now,
+        "train/lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
