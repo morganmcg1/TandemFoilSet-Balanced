@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-14 [Round 138 close-17] UTC — PR #2973: log-re-input-noise — **CLOSED CATASTROPHIC LOSS (+31.56% val Run vs OLD #2879 / +33.84% vs NEW #2964; 139th taxon; CONDITIONING-VARIABLE-NOISE AXIS CLOSED; DATA-AXIS META-SIGNAL INVARIANCE FINDING)**
+
+- **Branch:** charliepai2g48h5-edward/log-re-input-noise
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-log-re-input-noise-20260514-173719/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2973 (log_Re noise σ=0.05) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 40.2067 | **+33.84% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 33.8947 | **+34.45% LOSS** |
+| val_single_in_dist | 25.219 | 39.6419 | **+57.18% LOSS (WORST-HIT, mechanism INVERTED)** |
+| val_geom_camber_rc | 43.929 | 55.0852 | +25.40% LOSS |
+| val_geom_camber_cruise | 16.265 | 23.9862 | +47.47% LOSS |
+| val_re_rand | 34.740 | 42.1134 | +21.22% LOSS |
+| Param count | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** Add Gaussian noise σ=0.05 to log_Re input feature (channel 13) during training only. Predicted to regularize in_dist over-specialization at the conditioning-variable level and help re_rand split.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional analysis):**
+
+1. **HYPOTHESIS FALSIFIED BY DIRECTIONAL INVERSION.** in_dist (predicted MOST-improved) is WORST-hit at +69.41% val (vs old baseline). re_rand (predicted second-best beneficiary) is +20.65% — second-mildest LOSS but still LOSS. Mechanism inverted, not just magnitude wrong.
+
+2. **log_Re is a LOAD-BEARING CONDITIONING IDENTIFIER, not a tunable regularization knob.** Coherent per-sample noise broadcast across all nodes prevents the model from locking onto a stable Re→representation mapping. Every Re-conditioned pathway (FiLM, slice-routing, conditioning) gets perturbed in lockstep, compounding through depth (4 blocks × ~7% perturbation → O(30%) effective).
+
+3. **Effective normalized σ=0.0656 (6.6% of normalized log_Re std).** Non-trivial perturbation that drives O(7%) change through every FiLM/embedding multiplier. After 4 blocks of compounding → O(30%) regression matches observed val_avg.
+
+4. **Training stable but stuck in worse optimum.** No NaN/Inf; ep1=349 (vs baseline ~80-100, massive early divergence); slow recovery to ep59=40.21 still descending. Cosine LR tapering → no further convergence expected.
+
+5. **CRITICAL META-INSIGHT: 3 DATA-AXIS INTERVENTIONS IN A ROW LOSS** (#2918 input-mixup +21.16%, routing perturbations #2884/#2958, #2973 conditioning noise +33.84%). **The cruise-WIN / in_dist-LOSS meta-signal is NOT addressable by perturbing training data or conditioning inputs.** It must be a property of the *representational geometry* the model learns from clean inputs.
+
+**139th taxon CLOSED:** CONDITIONING-VARIABLE-NOISE / LOG_RE-INPUT-PERTURBATION / DATA-AXIS-META-SIGNAL-INVARIANCE. The meta-signal lives in representation space, not data space. Stop probing data/input-perturbation axes — this is now a load-bearing closure rule for the remainder of the launch.
+
+**Caveat re: in-flight experiments:** Two more input-noise experiments will run to terminal (different channels):
+- #2978 frieren AoA input noise σ=0.05 (CONDITIONING — AoA channels)
+- #2976 fern coord noise σ=0.01 (POSITIONAL — pos_x/pos_y)
+Per the closure rule, both are likely LOSS. Will close the data-perturbation cluster comprehensively when terminal.
+
+**Followup assigned:** #2983 edward qk-norm-physics-attention (FRESH AXIS — representation-level normalization per student insight #5; nn.LayerNorm(dim_head) on Q and K in Physics_Attention BEFORE routing dot-product; Llama-3 / MAGNETO recipe; decouples routing from magnitude — only direction matters; compatible with #2964 post-norm WIN; +768 params; targets representation geometry NOT data perturbation).
+
+---
+
 ## 2026-05-14 [Round 138 close-16] UTC — PR #2968: mlp2-differential-wd-10x — **CLOSED LOSS (+3.62%; 138th taxon; HEAD-AXIS COMPREHENSIVELY CLOSED)**
 
 - **Branch:** charliepai2g48h5-askeladd/mlp2-differential-wd-10x
