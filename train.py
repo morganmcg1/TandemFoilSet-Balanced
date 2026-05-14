@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -476,11 +478,20 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    seed: int = 1  # RNG seed for torch/numpy/random
+    cond_mixup_alpha: float = 0.0  # Beta(α, α) parameter for conditioning Mixup (PR #2960). 0.0 = off.
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+print(f"[init] seed = {cfg.seed}")
+print(f"[init] conditioning Mixup alpha = {cfg.cond_mixup_alpha} (0.0 = off)")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -587,6 +598,35 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # Conditioning Mixup (PR #2960): interpolate Re, AoA1, AoA2 and targets
+        # across the batch with the same λ. Re mixed on raw scale then logged
+        # (PR-prescribed: linear in physical Re space). Targets only mixed at
+        # positions valid in BOTH samples to avoid the lam*y_i bias that would
+        # arise from y_j=0 at padded positions.
+        mixup_lam = 1.0
+        if cfg.cond_mixup_alpha > 0:
+            B = x.shape[0]
+            mixup_lam = float(np.random.beta(cfg.cond_mixup_alpha, cfg.cond_mixup_alpha))
+            perm = torch.randperm(B, device=x.device)
+            # Sample-level conditioning lives at position 0 (replicated across all valid nodes).
+            log_re = x[:, 0, 13]
+            aoa1 = x[:, 0, 14]
+            aoa2 = x[:, 0, 18]
+            re_mixed = mixup_lam * torch.exp(log_re) + (1.0 - mixup_lam) * torch.exp(log_re[perm])
+            log_re_mixed = torch.log(re_mixed)
+            aoa1_mixed = mixup_lam * aoa1 + (1.0 - mixup_lam) * aoa1[perm]
+            aoa2_mixed = mixup_lam * aoa2 + (1.0 - mixup_lam) * aoa2[perm]
+            # Broadcast mixed scalars back across nodes; keep 0 at padded positions.
+            mask_f = mask.to(x.dtype)
+            x = x.clone()
+            x[..., 13] = log_re_mixed[:, None] * mask_f
+            x[..., 14] = aoa1_mixed[:, None] * mask_f
+            x[..., 18] = aoa2_mixed[:, None] * mask_f
+            # Mask-guarded target mix: interpolate only where both samples have
+            # real data at this array index; preserve y_i where j is padded.
+            both_valid = (mask & mask[perm]).unsqueeze(-1)
+            y = torch.where(both_valid, mixup_lam * y + (1.0 - mixup_lam) * y[perm], y)
+
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -626,13 +666,16 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
             "global_step": global_step,
-        })
+        }
+        if cfg.cond_mixup_alpha > 0:
+            log_payload["train/mixup_lam"] = mixup_lam
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
