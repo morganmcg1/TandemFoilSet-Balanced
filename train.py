@@ -505,14 +505,27 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # H86: training-loss formulation. "l1" = baseline normalized-space L1.
+    # "relative_l1" = per-sample magnitude-normalized L1 in physical units
+    # (each sample's contribution divided by the mean |y_gt| over its own
+    # valid surf/vol nodes, equalizing gradient signal across Re regimes).
+    loss: str = "l1"
+    # H86: floor for the per-sample denominator (physical units). 1.0 protects
+    # against div-by-zero on near-zero samples; raise to e.g. 5.0 if early-epoch
+    # loss spikes appear (stability guard recommended by advisor).
+    rel_loss_denom_floor: float = 1.0
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+assert cfg.loss in ("l1", "relative_l1"), f"--loss must be l1 or relative_l1, got {cfg.loss!r}"
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"[H86] Training loss: {cfg.loss}"
+      + (f" (denom_floor={cfg.rel_loss_denom_floor})" if cfg.loss == "relative_l1" else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -702,6 +715,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    # H86: per-epoch denominator diagnostics for relative_l1 (averaged over batches).
+    epoch_denom_surf_min = float("inf")
+    epoch_denom_surf_max = 0.0
+    epoch_denom_vol_min = float("inf")
+    epoch_denom_vol_max = 0.0
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -712,15 +731,50 @@ for epoch in range(MAX_EPOCHS):
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         # H18: per-channel surf-loss weighting. Mass-preserving (sum = 3.0).
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
-        surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
-        surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_ch_weights = pred.new_tensor([0.5, 0.5, 2.0])
+        if cfg.loss == "relative_l1":
+            # H86: per-sample magnitude-normalized L1 in physical units.
+            # Each sample's per-channel absolute error is divided by the mean
+            # |y_gt| over that sample's own valid surf/vol nodes — so high-Re
+            # samples (large pressure ranges) no longer dominate the gradient.
+            pred_phys = pred * stats["y_std"] + stats["y_mean"]
+            # y is already in physical units (no normalization applied to y).
+            err_phys = (pred_phys - y).abs()
+
+            denom_floor = cfg.rel_loss_denom_floor
+
+            # surf: denom uses surf nodes only; vol_ch_weights implicit = [1,1,1]
+            surf_mask_e = surf_mask.unsqueeze(-1).float()  # [B, N, 1]
+            denom_surf = (y.abs() * surf_mask_e).sum(dim=1, keepdim=True) / \
+                         surf_mask_e.sum(dim=1, keepdim=True).clamp(min=1.0)  # [B, 1, C]
+            denom_surf = denom_surf.clamp(min=denom_floor)
+            surf_terms = (err_phys / denom_surf) * surf_mask_e * surf_ch_weights.view(1, 1, -1)
+            surf_loss = surf_terms.sum() / (surf_mask.sum() * surf_ch_weights.numel()).clamp(min=1)
+
+            vol_ch_weights = pred.new_tensor([1.0, 1.0, 1.0])
+            vol_mask_e = vol_mask.unsqueeze(-1).float()  # [B, N, 1]
+            denom_vol = (y.abs() * vol_mask_e).sum(dim=1, keepdim=True) / \
+                        vol_mask_e.sum(dim=1, keepdim=True).clamp(min=1.0)  # [B, 1, C]
+            denom_vol = denom_vol.clamp(min=denom_floor)
+            vol_terms = (err_phys / denom_vol) * vol_mask_e * vol_ch_weights.view(1, 1, -1)
+            vol_loss = vol_terms.sum() / (vol_mask.sum() * vol_ch_weights.numel()).clamp(min=1)
+
+            with torch.no_grad():
+                # log denom range (after floor, valid samples only): min p-channel value tells us
+                # how often the floor kicks in; max tells us peak per-sample magnitude.
+                epoch_denom_surf_min = min(epoch_denom_surf_min, float(denom_surf.min().item()))
+                epoch_denom_surf_max = max(epoch_denom_surf_max, float(denom_surf.max().item()))
+                epoch_denom_vol_min = min(epoch_denom_vol_min, float(denom_vol.min().item()))
+                epoch_denom_vol_max = max(epoch_denom_vol_max, float(denom_vol.max().item()))
+        else:
+            abs_err = (pred - y_norm).abs()
+            vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -768,7 +822,7 @@ for epoch in range(MAX_EPOCHS):
     freqs_lr = optimizer.param_groups[1]["lr"]
     layer_scale_lr = optimizer.param_groups[2]["lr"]
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
-    append_metrics_jsonl(metrics_jsonl_path, {
+    record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -785,10 +839,19 @@ for epoch in range(MAX_EPOCHS):
         "train/attn_sharpening_factor": current_attn_factor,
         "train/attn_anneal_frac": anneal_frac,
         "train/attn_anneal_n_epochs": N_ANNEAL_EPOCHS,
+        "train/loss_type": cfg.loss,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if cfg.loss == "relative_l1":
+        # H86: per-epoch denominator diagnostics — see surf/vol denom range across all batches.
+        record["train/rel_denom_surf_min"] = epoch_denom_surf_min
+        record["train/rel_denom_surf_max"] = epoch_denom_surf_max
+        record["train/rel_denom_vol_min"] = epoch_denom_vol_min
+        record["train/rel_denom_vol_max"] = epoch_denom_vol_max
+        record["train/rel_denom_floor"] = cfg.rel_loss_denom_floor
+    append_metrics_jsonl(metrics_jsonl_path, record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
