@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-05-14 [Round 136] UTC — PR #2927: per-block-flow-film — **CLOSED LOSS (+4.51% val / +2.32% test; 115th taxon; FILM-PATHWAY-CAPACITY AXIS CLUSTER CLOSED)**
+
+- **Branch:** charliepai2g48h5-askeladd/per-block-flow-film
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-per-block-flow-film-20260514-135344/metrics.jsonl
+
+| Metric | Baseline #2879 | #2927 per-block FiLM | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.9400 | **+4.51% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.1303 | +2.32% LOSS |
+| val_single_in_dist | 23.3997 | 23.9599 | +2.39% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.5716 | +5.43% LOSS |
+| val_geom_camber_cruise | 17.8657 | 18.1706 | +1.71% LOSS |
+| val_re_rand | 34.9057 | 37.0581 | +6.17% LOSS |
+
+**Hypothesis:** Replace single initial flow-FiLM with 4 per-block flow-FiLM modules (`Linear(3, 96)` zero-init per block, applied multiplicatively before each block). Tests whether distributing geometry-conditioning capacity across depth can break the structural cruise/in_dist trade-off.
+
+**Result:** LOSS uniform across all 4 splits including cruise (+1.71% LOSS), breaking the asymmetric cruise WIN observed in #2890/#2900 single-site additive variants. Crucially: per-block FiLM mechanism IS engaging as designed (weight norm grows 1.37× from block 0→3; OOD splits use 50% more conditioning than in_dist at every block) — yet val regresses on every split.
+
+**FiLM-axis 5-experiment sweep summary:**
+- Baseline #2879 (single mult flow-FiLM): reference
+- #2890 additive geo-FiLM: val +3.09%, in_dist +16.85%, cruise -9.87% WIN (single-site additive)
+- #2900 mult-parallel geo-FiLM: val +3.32%, in_dist +5.88%, cruise -1.80% WIN
+- #2911 nonlinear geo-FiLM: val +7.97%, uniform LOSS (109th taxon)
+- #2927 per-block flow-FiLM: val +4.51%, uniform LOSS including cruise
+
+**Conclusion:** FiLM-pathway-capacity axis closed as 115th taxon. Cruise WINs in #2890/#2900 were NOT from capacity reallocation — they were from specific ADDITIVE/PARALLEL topology favoring low-Re tandem flow regimes. Per-block multiplicative reproduces topology but at 4 sites; result regresses uniformly. Reinforces #2922 student insight: cruise↔in_dist trade-off lives in LOSS LANDSCAPE / REPRESENTATION, NOT in FiLM-pathway capacity.
+
+**Student diagnostic insight:** "OOD splits use ~50% more conditioning magnitude than in_dist at every block. The model is trying to push OOD samples back into training manifold via flow conditioning — and clearly failing on OOD splits. The mechanism is doing what it was designed to do; the inductive bias just isn't useful here."
+
+**Student followups:** (1) Move on from FiLM-pathway-capacity axis — SELECTED for askeladd reassignment to a different loss-axis. (2) Investigate gated additive FiLM (too complex). (3) Synthetic OOD via AoA noise injection (data-augmentation axis; deferred — see #2918 mixup closure).
+
+---
+
+## 2026-05-14 [Round 136] UTC — PR #2937 (assignment): askeladd huber-loss-delta-0.5 — **116th axis: gradient-shape LOSS-axis**
+
+- **Hypothesis:** Replace L1 loss with SmoothL1/Huber loss at β=δ=0.5 on both surf_loss and vol_loss. Tests the gradient-SHAPE axis of the loss function — ORTHOGONAL to #2933 alphonse's per-channel-WEIGHT axis (which is currently in-flight).
+- **Why might WIN:** Lion's sign(grad) is doubly coarse with L1; Huber near 0 gives Lion a SMOOTH gradient to take sign of, carrying magnitude information up to ±δ. Could unlock fine-tuning that L1+Lion cannot capture.
+- **Why might LOSS:** Train/eval mismatch — eval metric is L1 (MAE), train would be Huber. The cruise/in_dist trade-off is structural per #2922 insight.
+- **Single-line change:** `(pred - y).abs()` → `F.smooth_l1_loss(pred, y, beta=0.5, reduction='none')`
+- **Direct test of #2922 student LOSS-FUNCTION axis recommendation**, complementary to #2933 per-channel reweighting.
+
+---
+
 ## 2026-05-14 [Round 135] UTC — PR #2923: slice-num-32 — **CLOSED LOSS (+6.02% val / +2.82% test; 114th taxon; SLICE-ROUTING-ALPHABET UPWARD SWEEP AT n_head=2 CLOSED)**
 
 - **Branch:** charliepai2g48h5-tanjiro/slice-num-32
