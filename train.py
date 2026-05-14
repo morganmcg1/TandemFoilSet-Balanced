@@ -642,21 +642,11 @@ optimizer = Lion(
 )
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
-warmup_epochs = 3
-scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
-    schedulers=[
-        torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
-        ),
-        torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
-        ),
-    ],
-    milestones=[warmup_epochs],
-)
-print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
-print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+print(f"Scheduler: pure CosineAnnealingLR(T_max={MAX_EPOCHS}) — NO WARMUP, peak={optimizer.param_groups[0]['lr']:.4e}")
+print(f"vs #2929 pure cosine at 1.5e-4 peak: {(cfg.lr / 1.5e-4) * 100:.0f}% of #2929's peak ({cfg.lr / 1.5e-4 - 1:+.1%})")
+print(f"vs baseline warmup-from-0.1x schedule at peak=1.5e-4 (avg ep1-3 LR ~0.825e-4): cold-start ratio {cfg.lr / 0.825e-4:.2f}x")
+print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6e} (expect {cfg.lr:.6e}, no warmup)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -672,6 +662,16 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "schedule_config",
+    "scheduler": "CosineAnnealingLR",
+    "warmup": "none",
+    "peak_lr": cfg.lr,
+    "t_max": MAX_EPOCHS,
+    "ratio_vs_2929_peak_1.5e-4": cfg.lr / 1.5e-4,
+    "ratio_vs_baseline_warmup_ep13_avg_0.825e-4": cfg.lr / 0.825e-4,
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
