@@ -270,6 +270,12 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Geometry-conditioned FiLM — zero-init for identity at step 0.
+        # Channels [15:18] = NACA0(3), [19:22] = NACA1(3), [22] = gap, [23] = stagger.
+        self.geo_film = nn.Linear(8, n_hidden)
+        nn.init.zeros_(self.geo_film.weight)
+        nn.init.zeros_(self.geo_film.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -288,6 +294,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
+        # Geometry-conditioned FiLM (additive bias, zero-init -> identity at step 0)
+        # Channels [15, 16, 17] = NACA0, [19, 20, 21] = NACA1, [22] = gap, [23] = stagger.
+        geo_scalars = x[:, 0, [15, 16, 17, 19, 20, 21, 22, 23]]    # [B, 8]
+        geo_film_bias = self.geo_film(geo_scalars).unsqueeze(1)    # [B, 1, n_hidden]
+        fx = fx + geo_film_bias
         for block in self.blocks:
             fx = block(fx, mask=mask)
         return {"preds": fx}
@@ -575,6 +586,17 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# Geometry-conditioned FiLM diagnostic (PR #2890): second FiLM branch, additive bias.
+_geo_film = getattr(getattr(model, '_orig_mod', model), 'geo_film', None)
+if _geo_film is not None:
+    _geo_film_params = sum(p.numel() for p in _geo_film.parameters())
+    print(
+        f"Geo-FiLM (PR #2890): Linear(8, {model_config['n_hidden']}) additive bias on input embedding; "
+        f"+{_geo_film_params} params; zero-init -> identity at step 0; "
+        f"channels [15,16,17]=NACA0, [19,20,21]=NACA1, [22]=gap, [23]=stagger; "
+        f"baseline to beat: val_avg/mae_surf_p < 30.5605"
+    )
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -837,6 +859,46 @@ if best_metrics:
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
+
+    # Geometry-conditioned FiLM diagnostic (PR #2890): weight/bias norms +
+    # output magnitude on the OOD-geometry val splits the branch is meant to help.
+    _geo_film_inner = getattr(_inner, "geo_film", None)
+    if _geo_film_inner is not None:
+        _gf_w_norm = _geo_film_inner.weight.detach().float().norm().item()
+        _gf_b_norm = _geo_film_inner.bias.detach().float().norm().item()
+        print("\nGeometry-conditioned FiLM final diagnostics (best-checkpoint weights):")
+        print(f"  geo_film.weight.norm: {_gf_w_norm:.4f} (should grow from 0 if mechanism activated)")
+        print(f"  geo_film.bias.norm:   {_gf_b_norm:.4f}")
+
+        # Output magnitude on the two OOD-geometry val splits (camber_rc, camber_cruise)
+        # — the splits the geo FiLM is explicitly meant to help. Falls back to the
+        # full set of val splits to surface activation magnitude under each regime.
+        _geo_per_split: dict[str, dict[str, float]] = {}
+        for _split_name, _loader in val_loaders.items():
+            with torch.no_grad():
+                _x, _y, _is_surface, _mask = next(iter(_loader))
+                _x = _x.to(device, non_blocking=True)
+                _x_norm = (_x - stats["x_mean"]) / stats["x_std"]
+                _geo_scalars = _x_norm[:, 0, [15, 16, 17, 19, 20, 21, 22, 23]].float()
+                _geo_out = _geo_film_inner(_geo_scalars)  # [B, n_hidden]
+                _geo_per_split[_split_name] = {
+                    "output_mean": _geo_out.mean().item(),
+                    "output_std": _geo_out.std().item(),
+                    "output_abs_mean": _geo_out.abs().mean().item(),
+                }
+            print(
+                f"  geo_film output on {_split_name}: "
+                f"mean={_geo_per_split[_split_name]['output_mean']:.4f}  "
+                f"std={_geo_per_split[_split_name]['output_std']:.4f}  "
+                f"abs_mean={_geo_per_split[_split_name]['output_abs_mean']:.4f}"
+            )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "geo_film_diagnostic",
+            "epoch": int(best_metrics["epoch"]),
+            "geo_film_weight_norm": _gf_w_norm,
+            "geo_film_bias_norm": _gf_b_norm,
+            "geo_film_output_per_split": _geo_per_split,
+        })
 
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
     # split (in_dist vs OOD). Hook mirrors the SE forward — attention pool
