@@ -571,11 +571,12 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
-# N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
-# (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
-# per-epoch in the training loop.
-N_ANNEAL_EPOCHS = 12
+# H80: fast linear attention-temperature anneal sqrt(3) -> sqrt(2) completing
+# at epoch N_ANNEAL_EPOCHS (=6), then held fixed at sqrt(2) for the remainder.
+# Same schedule shape as #2648 but compresses the anneal into the first half
+# of training to test whether the sharp-early phase needs the full 12 epochs
+# or whether reaching sqrt(2) by epoch 6 is sufficient.
+N_ANNEAL_EPOCHS = 6
 _h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
 _h73_init_factor = math.sqrt(3.0)
 _h73_final_factor = math.sqrt(2.0)
@@ -583,17 +584,17 @@ _h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
 _h73_final_scale = _h73_final_factor / math.sqrt(_h73_dim_head)
 _h73_default_scale = 1.0 / math.sqrt(_h73_dim_head)
 print(
-    f"[H73] attn-temp anneal: linear sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
-    f"over {N_ANNEAL_EPOCHS} epochs (then clamped at sqrt(2)); "
+    f"[H80] fast anneal: sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
+    f"over {N_ANNEAL_EPOCHS} epochs, then fixed at sqrt(2); "
     f"scale {_h73_init_scale:.4f} -> {_h73_final_scale:.4f} "
     f"(default scale would be {_h73_default_scale:.4f}, "
     f"dim_head={_h73_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
-# H73: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
+# H80: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
 for i, b in enumerate(model.blocks):
     print(
-        f"[H73] block {i}: attn_sharpening_factor init = "
+        f"[H80] block {i}: attn_sharpening_factor init = "
         f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
     )
 
@@ -684,16 +685,16 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
-    # H73: linearly anneal sqrt(3) -> sqrt(2) over N_ANNEAL_EPOCHS, clamped at
-    # sqrt(2) afterward. Updated at the start of each epoch so the new factor
-    # applies to all batches in this epoch (and to validation immediately
-    # after).
-    anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
+    # H80: fast linear anneal sqrt(3) -> sqrt(2) reaching sqrt(2) at epoch
+    # N_ANNEAL_EPOCHS (=6) and held fixed thereafter. Updated at the start of
+    # each epoch so the new factor applies to all batches in this epoch (and
+    # to validation immediately after).
+    anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS))
     current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
     for block in model.blocks:
         block.attn.attn_sharpening_factor.fill_(current_attn_factor)
     print(
-        f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
+        f"[H80] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
         f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
     )
 
