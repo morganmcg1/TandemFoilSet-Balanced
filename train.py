@@ -556,6 +556,13 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Asymmetric one-sided positive jitter on NACA channel 15 (front-foil camber M).
+    # Half-normal noise (|N(0, sigma)|) added per-sample to ch15 only, broadcast
+    # across all real mesh nodes, then clamped to the valid [0, 1] range. Pushes
+    # training samples OUTWARD toward the rc OOD slice (M=0.778, 0.889) without
+    # pulling cruise samples (M∈{0.222, 0.333, 0.444}) outside their training cluster.
+    # 0.0 disables. Training only.
+    naca_jitter_asymmetric_ch15_sigma: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -614,6 +621,12 @@ print(
     f"ReCondLN {n_params_re_ln}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
+
+if cfg.naca_jitter_asymmetric_ch15_sigma > 0:
+    print(
+        f"NACA ch15 asymmetric jitter: sigma={cfg.naca_jitter_asymmetric_ch15_sigma}, "
+        f"half-normal one-sided positive, clipped to [0, 1], per-sample, training only"
+    )
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
 # (slice entropy capture). Diagnostics toggle a Python flag that would otherwise
@@ -765,6 +778,15 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Asymmetric one-sided positive jitter on ch15 (front-foil camber M).
+        # Half-normal noise per-sample, broadcast across real mesh nodes; padding
+        # left untouched. Clamped to [0, 1] (valid NACA-normalized range).
+        if cfg.naca_jitter_asymmetric_ch15_sigma > 0:
+            sigma = cfg.naca_jitter_asymmetric_ch15_sigma
+            noise = torch.randn(x.shape[0], 1, device=x.device, dtype=x.dtype).abs() * sigma
+            ch15 = x[..., 15]
+            x[..., 15] = torch.where(mask, (ch15 + noise).clamp(0.0, 1.0), ch15)
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -1003,6 +1025,7 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "naca_jitter_asymmetric_ch15_sigma": cfg.naca_jitter_asymmetric_ch15_sigma,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
