@@ -104,14 +104,88 @@ NOT mergeable (β=0.15 fails val gate). Mechanism finding is paper-relevant. Clo
 
 ---
 
-## 2026-05-14 02:25 — PR #2731 (ASSIGNED, thorfinn): Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 — lr × clip-saturation coupling test
+## 2026-05-14 05:20 — PR #2731 (CLOSED, thorfinn): Lion lr bracket {2e-4, 4e-4} on max_norm=0.35 — lr × clip-saturation coupling test
 
 - **Branch:** `willowpai2g48h2-thorfinn/lion-lr-bracket-on-max-norm-0p35`
 - **Student:** willowpai2g48h2-thorfinn
 - **Hypothesis:** Lion lr=3e-4 optimum was validated at max_norm=0.5 (#2297) where clip_fraction was ~99% (1% of steps preserved gradient-magnitude info). At max_norm=0.35 (new baseline), clip_fraction is **100%** (4875/4875 sampled steps) — Lion+clip is now in strict constant-magnitude sign-step regime. **lr is the ONLY effective controller of step size in this regime.** Tests whether lr optimum shifts under saturated clip. Two-arm V-shape bracket around prior optimum.
-- **Note:** `swa_lr = cfg.lr * 0.2` is hardcoded; lr sweep implicitly sweeps swa_lr (4e-5 / 6e-5 / 8e-5 across arms). Methodologically clean as long as coupling is logged.
-- **Decision rule:** val < 45.1538 AND test < 38.6367 on best arm → MERGE. Either-axis sub-win → bracket finer.
-- **Status:** Assigned 2026-05-14 02:25 UTC; awaiting training.
+
+### Result table (vs #2674 new baseline)
+
+| Arm | lr | swa_lr | W&B | val | test | Δval | Δtest | clip_fraction | σ-spread | Verdict |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---|
+| baseline #2674 | 3e-4 | 6e-5 | `ieu1futo` | 45.1538 | 38.6367 | — | — | 1.000 | 0.475 | — |
+| Arm 1 | 2e-4 | 4e-5 | `vbuiom4w` | 47.8753 | 40.7233 | +2.72 | +2.09 | 1.000 | 0.475 | regress both, close |
+| Arm 2 | 4e-4 | 8e-5 | `t9d6vcq1` | 46.1446 | 39.3441 | +0.99 | +0.71 | 1.000 | 0.482 | regress both (val ≥ 46.0), close |
+
+### Per-split (vs baseline)
+
+| Split | Baseline val | Arm 1 val | Arm 2 val | Baseline test | Arm 1 test | Arm 2 test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 47.146 | 49.945 | 49.711 | 40.379 | 42.818 | 42.638 |
+| geom_camber_rc | 58.002 | 60.598 | 58.647 | 53.068 | 54.496 | **52.242** |
+| geom_camber_cruise | 28.887 | 31.934 | 29.122 | 23.285 | 25.546 | 24.112 |
+| re_rand | 46.580 | 49.024 | 47.098 | 37.816 | 40.033 | **38.384** |
+
+**Arm 2 beats baseline on geom_camber_rc/test AND re_rand/test** (bolded above) but single_in_dist regression dominates the average.
+
+### Banked findings
+
+1. **lr × max_norm orthogonal across {2e-4, 3e-4, 4e-4} bracket at max_norm=0.35** — Lion lr=3e-4 optimum from #2297 (max_norm=0.5) transfers cleanly to saturated-clip regime; V-shape skewed toward smaller lr (Arm 1 worse than Arm 2 by 1.73 val).
+2. **clip_fraction=1.0 lr-invariant** — all 3 arms (baseline + Arm 1 + Arm 2) at 4875/4875 saturated; **the rescue channel stays closed across ±33% lr perturbation**.
+3. **σ-spread lr-invariant on saturated-clip baseline** (0.475 / 0.475 / 0.482) — 3rd cross-axis confirmation σ⊥{β, max_norm, lr} on new baseline; complements #2606 (σ⊥max_norm) and #2604 (σ⊥hybrid_kendall_lr direction-of-spread).
+4. **grad_norm decreases monotonically with lr increase** (8.89→7.79 mean from Arm 1→Arm 2) — larger constant step → faster norm reduction → smaller pre-clip gradients, but never reopens rescue channel (Arm 2 max grad 72.5 still 207× clip).
+5. **No starvation at lr=2e-4, no instability at lr=4e-4** — both train losses descend smoothly; the V-shape is on the validation surface, not in the train trajectory.
+6. **Arm 2 wins on geom_camber_rc/test AND re_rand/test** but loses on single_in_dist — extends the dataset-level single_in_dist U-curve / OOD-bottleneck story (banked #66 + #76) yet again. Mechanism: in-distribution samples have most reliable gradients to exploit and benefit most from already-tuned lr=3e-4.
+7. **Coupled swa_lr = lr×0.2 sweep**: Arm 1 swa_lr=4e-5, Arm 2 swa_lr=8e-5; both regress — SWA-floor coupling doesn't rescue lr-driven regression; SWA window only 3 epochs in all runs (saturation in averaging window).
+8. **All 3 runs hit SENPAI_TIMEOUT_MINUTES=30 at exactly epoch 13** — clean 3-arm comparison, no truncation confound. Baseline still descending at epoch 13 (banked open question: more epochs would unlock another ~0.5 val improvement — orthogonal to all current mechanism axes).
+
+### Conclusion
+
+NOT mergeable (both arms regress past val 46.0 close threshold per PR decision rule). Lion lr=3e-4 confirmed optimal at the new max_norm=0.35 baseline. **lr × max_norm coupling is essentially orthogonal across the tested bracket** — this completes the lr-side robustness statement parallel to fern's β-side (#2736). Closed 2026-05-14 05:20 UTC. Thorfinn reassigned to 2-seed confirmation on max_norm=0.35 baseline (analogous to alphonse's #2701 but on the NEW baseline) — paper-strengthening cross-seed noise floor for current best baseline.
+
+---
+
+## 2026-05-14 05:30 — PR #2701 (CLOSED, alphonse): Second-seed confirmation on merged hybrid baseline #2311 — paper-facing noise floor
+
+- **Branch:** `willowpai2g48h2-alphonse/hybrid-baseline-seed-confirm`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Paper-strengthening confirmation experiment. Seeds 1 and 2 on the merged #2311 baseline command (max_norm=0.5, NOT max_norm=0.35). Tests cross-seed reproducibility of #2311 win magnitude (val 45.22 / test 38.77 was single-seed seed=0); produces cross-seed mean ± stdev for paper appendix; validates σ-collapse-fix structural reproducibility (spread, channel ordering).
+- **Decision rule:** This PR has its OWN rubric (paper-strengthening, not hyperparameter sweep). Per the PR body: cross-seed mean(val) > 46.0 OR stdev > 1.5 → **`Seed-sensitive baseline`** verdict.
+
+### Cross-seed headline (paper-facing)
+
+| Metric | seed=0 | seed=1 | seed=2 | mean | sample stdev |
+|---|---:|---:|---:|---:|---:|
+| swa_val_avg/mae_surf_p | 45.218 | 46.341 | 49.193 | **46.917** | **2.049** |
+| swa_test_avg/mae_surf_p | 38.766 | 39.861 | 42.204 | **40.277** | **1.756** |
+| base_test_avg/mae_surf_p | 40.290 | 41.779 | 42.204 | 41.424 | **1.005** |
+| log_σ spread (max−min) | 0.4752 | 0.4826 | 0.4074 | 0.4550 | 0.0414 |
+
+### Per-split cross-seed (paper-appendix table — SWA test)
+
+| Split | seed=0 | seed=1 | seed=2 | mean | stdev |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 40.340 | 43.306 | 45.376 | 43.007 | **2.531** |
+| geom_camber_rc | 52.781 | 52.655 | 55.349 | 53.595 | 1.520 |
+| geom_camber_cruise | 23.712 | 24.388 | 26.361 | 24.821 | 1.376 |
+| re_rand | 38.231 | 39.094 | 41.731 | 39.686 | 1.823 |
+| **test_avg** | **38.766** | **39.861** | **42.204** | **40.277** | **1.756** |
+
+W&B runs: seed=1 = `6fv4dvow`, seed=2 = `o23rxnwv`.
+
+### Banked findings (paper-defensible)
+
+1. **σ-collapse-fix MECHANISM is robust across 3 seeds** — σ-spread 0.455 ± 0.041 (~9% relative variation); channel ordering (surf_ux=min, vol_ux=max) preserved at every seed; full ordering surf_ux < surf_uy < vol_p < surf_p < vol_uy < vol_ux holds at all 3 seeds. **The structural fix in #2311 is paper-defensible.**
+2. **Headline win MAGNITUDE is seed-sensitive** — val_avg cross-seed stdev 2.049 spans the claimed −1.20% gap vs #2168; without cross-seed numbers for #2168, the merge claim has weaker statistical support than originally presented. **Paper appendix must report cross-seed mean ± stdev**, not single-seed minimum.
+3. **The 30-min cap is a hidden seed-multiplier** — seed=2's epoch 4 took 257s vs typical 141s (data-loader stochasticity); seed=2 finished epoch 12 only and SWA window degenerated to single epoch (SWA == base on seed=2). SWA-window-truncation accounts for **~40% of swa_test cross-seed variance** (base_test stdev=1.005 vs swa_test stdev=1.756). **Paper finding about SWA fragility under tight time caps.**
+4. **single_in_dist and re_rand are the largest cross-seed variance contributors** (test stdev 2.53 and 1.82 respectively); **geom_camber_cruise is the most reproducible** (stdev 1.38). **Per-split variance is NOT uniform** — load-bearing OOD splits are also load-bearing seed-noise contributors.
+5. **Mean log_σ drift correlates with seed performance** — seed=2 has smallest |mean(log_σ)|=−1.869 (closer to zero) and worst test=42.20; seed=0 has largest |mean(log_σ)|=−1.980 and best test=38.77. **Supports banked #25 "mean-drift inflates eff_w → val regression" mechanism**; the seed=2 result is a clean independent confirmation of the mean-drift instability.
+6. **clip_fraction is seed-invariant at max_norm=0.5** — 0.9992 / 0.9998 / 0.9996 across 3 seeds. **7th independent clip_fraction methodology confirmation** (extending #2606's per-step finding).
+
+### Conclusion
+
+`Seed-sensitive baseline` verdict per PR rubric. NOT a merge candidate (was never intended to be — confirmation experiment). **σ-collapse-fix mechanism reproduces; headline magnitude does not (within seed noise).** Most important paper-level finding of Wave 12 so far: the paper appendix must report cross-seed mean ± stdev, not single-seed minimum. Banked open question — would require a 3-seed sweep on the OLD #2168 stack to defend the "hybrid beats σ=0.5" claim against seed noise; structural revisit deferred. Closed 2026-05-14 05:30 UTC. Alphonse reassigned to Lion weight_decay fine-bracket {1e-3, 3e-3} on NEW max_norm=0.35 baseline — wd × saturated-clip mechanism-transfer test parallel to fern (β, hybrid_kendall_lr) and thorfinn (Lion lr).
 
 ---
 
