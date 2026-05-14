@@ -136,6 +136,128 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+# H77: SDF geometry features. Append 4 channels per node giving distance to the
+# nearest foil surface (in unsigned chord-units), log1p compression, distance to
+# the OTHER foil cluster (2-means on surface coords for tandem; same as
+# d_nearest for single-foil), and the asymmetry (d_other - d_nearest >= 0).
+# Computed on the RAW unnormalized (x, z) coords (dim 0:2 of x) so the model
+# sees physical chord-unit distances.
+N_SDF_CHANNELS = 4
+SDF_GAP_COL = 22  # dim 22 of x is gap_between_foils (0 for single-foil)
+# Per PR #2654 Outcome C: cap surface anchor count at 500 to keep cdist within
+# the per-epoch wall-clock budget. Surfaces have ~1300-3300 dense points along
+# the foil perimeter; a 500-point linspace stride preserves geometric coverage
+# while cutting per-batch cdist cost by ~5x (S=2300 -> 500).
+SDF_MAX_ANCHORS = 500
+
+
+def compute_sdf_features(
+    coords: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    gap_per_sample: torch.Tensor,
+    chunk_size: int = 8192,
+    max_anchors: int = SDF_MAX_ANCHORS,
+) -> torch.Tensor:
+    """Compute 4 SDF feature channels per node (batched, chunked cdist).
+
+    Args:
+        coords: [B, N, 2] raw (unnormalized) (x, z) coords.
+        is_surface: [B, N] bool surface mask.
+        mask: [B, N] bool valid (non-pad) mask.
+        gap_per_sample: [B] gap value per sample (>0 ⇒ tandem).
+        chunk_size: cdist chunk size in query-node dim.
+
+    Returns:
+        sdf: [B, N, 4]
+            ch 0: d_nearest — min distance to any surface point.
+            ch 1: log1p(d_nearest) — boundary-layer-sensitive compression.
+            ch 2: d_other   — distance to the other surface cluster
+                              (=d_nearest for single-foil).
+            ch 3: d_other - d_nearest — asymmetry (>=0; 0 for single-foil).
+    """
+    B, N, _ = coords.shape
+    device, dtype = coords.device, coords.dtype
+    sdf = torch.zeros(B, N, N_SDF_CHANNELS, device=device, dtype=dtype)
+    inf_val = torch.tensor(float("inf"), device=device, dtype=dtype)
+
+    for b in range(B):
+        is_surf_b = is_surface[b]
+        mask_b = mask[b]
+        if not is_surf_b.any() or not mask_b.any():
+            continue
+        coords_b = coords[b]
+        surf_idx = is_surf_b.nonzero(as_tuple=True)[0]
+        S = int(surf_idx.shape[0])
+        if S < 2:
+            continue
+        # Cap anchor count for cdist budget. Linspace stride preserves the
+        # foil-contour ordering (surface points are stored along the perimeter).
+        if S > max_anchors:
+            stride_idx = torch.linspace(0, S - 1, max_anchors, dtype=torch.long, device=device)
+            surf_idx = surf_idx[stride_idx]
+            S = max_anchors
+        surf_coords = coords_b[surf_idx]  # [S, 2]
+
+        # 2-means clustering for tandem decomposition (gap != 0).
+        foil1_mask = torch.ones(S, dtype=torch.bool, device=device)
+        foil2_mask = torch.zeros(S, dtype=torch.bool, device=device)
+        if bool(gap_per_sample[b].abs().item() > 1e-6) and S >= 4:
+            # Init centroids with the farthest pair among a 64-point subsample.
+            n_sample = min(64, S)
+            sample_idx = torch.linspace(0, S - 1, n_sample, dtype=torch.long, device=device)
+            sample_pts = surf_coords[sample_idx]
+            pair_d = torch.cdist(sample_pts.unsqueeze(0), sample_pts.unsqueeze(0)).squeeze(0)
+            far_flat = int(pair_d.argmax().item())
+            c0 = sample_pts[far_flat // n_sample]
+            c1 = sample_pts[far_flat % n_sample]
+            centroids = torch.stack([c0, c1])  # [2, 2]
+            assignments = None
+            for _ in range(8):
+                dd = torch.cdist(surf_coords.unsqueeze(0), centroids.unsqueeze(0)).squeeze(0)
+                assignments = dd.argmin(dim=-1)  # [S]
+                m0 = assignments == 0
+                m1 = assignments == 1
+                if bool(m0.any().item()) and bool(m1.any().item()):
+                    centroids = torch.stack([surf_coords[m0].mean(0), surf_coords[m1].mean(0)])
+                else:
+                    break
+            if assignments is not None:
+                foil1_mask = assignments == 0
+                foil2_mask = assignments == 1
+            # If 2-means collapsed (all in one cluster) fall back to single-foil mode.
+            if not bool(foil1_mask.any().item()) or not bool(foil2_mask.any().item()):
+                foil1_mask = torch.ones(S, dtype=torch.bool, device=device)
+                foil2_mask = torch.zeros(S, dtype=torch.bool, device=device)
+
+        has_both = bool(foil1_mask.any().item()) and bool(foil2_mask.any().item())
+
+        # Chunked cdist over the valid query nodes only.
+        valid_idx = mask_b.nonzero(as_tuple=True)[0]
+        Nv = int(valid_idx.shape[0])
+        valid_coords = coords_b[valid_idx]
+        for start in range(0, Nv, chunk_size):
+            end = min(start + chunk_size, Nv)
+            chunk = valid_coords[start:end]
+            d = torch.cdist(chunk.unsqueeze(0), surf_coords.unsqueeze(0)).squeeze(0)  # [C, S]
+            if has_both:
+                d_f1 = torch.where(foil1_mask[None, :], d, inf_val)
+                d_f2 = torch.where(foil2_mask[None, :], d, inf_val)
+                min_f1 = d_f1.min(dim=-1).values
+                min_f2 = d_f2.min(dim=-1).values
+                d_nearest = torch.minimum(min_f1, min_f2)
+                d_other = torch.maximum(min_f1, min_f2)
+            else:
+                d_nearest = d.min(dim=-1).values
+                d_other = d_nearest
+            glob = valid_idx[start:end]
+            sdf[b, glob, 0] = d_nearest
+            sdf[b, glob, 1] = torch.log1p(d_nearest)
+            sdf[b, glob, 2] = d_other
+            sdf[b, glob, 3] = d_other - d_nearest
+    return sdf
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -325,8 +447,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # H77: SDF features computed on RAW (unnormalized) coords.
+            gap_per_sample = x[:, 0, SDF_GAP_COL]
+            sdf = compute_sdf_features(x[..., 0:2], is_surface, mask, gap_per_sample)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_enc(x_norm)
+            x_norm = torch.cat([x_norm, sdf], dim=-1)  # H77: [B, N, 46+4]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -462,8 +589,15 @@ def measure_attention_entropies(
             if batch_idx >= n_batches:
                 break
             x = x.to(device, non_blocking=True)
+            _is_surface = _is_surface.to(device, non_blocking=True)
+            _mask = _mask.to(device, non_blocking=True)
+            # H77: SDF features must be appended for the model's preprocess
+            # MLP to see the right input dim.
+            gap_per_sample = x[:, 0, SDF_GAP_COL]
+            sdf = compute_sdf_features(x[..., 0:2], _is_surface, _mask, gap_per_sample)
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_enc(x_norm)
+            x_norm = torch.cat([x_norm, sdf], dim=-1)
             _ = model({"x": x_norm})
             for i, block in enumerate(model.blocks):
                 sum_mean[i] += block.attn.last_attn_entropy_mean or 0.0
@@ -528,7 +662,9 @@ fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    # H77: +N_SDF_CHANNELS=4 extra input channels from `compute_sdf_features`,
+    # appended after the FourierCoordEnc output before the preprocess MLP.
+    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2 + N_SDF_CHANNELS,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -571,6 +707,19 @@ print(
     f"(default would be {_h67_default_scale:.4f}, factor sqrt(2)={math.sqrt(2):.4f}, "
     f"dim_head={_h67_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
+)
+
+# H77: SDF geometry features verification.
+_h77_input_dim = model_config["fun_dim"] + model_config["space_dim"]
+_h77_input_dim_no_sdf = _h77_input_dim - N_SDF_CHANNELS
+_h77_extra_input_params = N_SDF_CHANNELS * (model_config["n_hidden"] * 2)
+print(
+    f"[H77] SDF features: appending {N_SDF_CHANNELS} channels "
+    f"(d_nearest, log1p(d_nearest), d_other, d_other-d_nearest) "
+    f"-> preprocess input dim {_h77_input_dim_no_sdf} -> {_h77_input_dim} "
+    f"(+{_h77_extra_input_params} params in preprocess.linear_pre[0]); "
+    f"surface clustering: 2-means when gap (x[..., {SDF_GAP_COL}]) != 0; "
+    f"surface anchors subsampled to max {SDF_MAX_ANCHORS} (linspace stride)"
 )
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
@@ -671,8 +820,13 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # H77: SDF features computed on RAW (unnormalized) coords.
+        gap_per_sample = x[:, 0, SDF_GAP_COL]  # gap is sample-constant
+        sdf = compute_sdf_features(x[..., 0:2], is_surface, mask, gap_per_sample)
+
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
+        x_norm = torch.cat([x_norm, sdf], dim=-1)  # H77: [B, N, 46+4]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
@@ -807,9 +961,35 @@ freqs_summary = {
     "final/freqs_abs_drift": freq_drift,
     "final/freqs_rel_drift": freq_rel_drift,
 }
+
+# H77: L1 norm of preprocess.linear_pre[0] weights per input column. Compare the
+# mean column-L1 over the 4 SDF channels (last 4 cols) vs the mean over the 46
+# pre-SDF channels (first 46 cols) to test whether the model uses SDF signal.
+preprocess_w = model.preprocess.linear_pre[0].weight.detach()
+input_proj_l1_per_col = preprocess_w.abs().sum(dim=0).cpu().tolist()
+sdf_start_col = len(input_proj_l1_per_col) - N_SDF_CHANNELS
+sdf_col_l1 = input_proj_l1_per_col[sdf_start_col:]
+non_sdf_col_l1 = input_proj_l1_per_col[:sdf_start_col]
+sdf_diag = {
+    "final/input_proj_l1_per_col": input_proj_l1_per_col,
+    "final/input_proj_l1_sdf_cols": sdf_col_l1,
+    "final/input_proj_l1_sdf_mean": float(sum(sdf_col_l1) / max(len(sdf_col_l1), 1)),
+    "final/input_proj_l1_non_sdf_mean": float(sum(non_sdf_col_l1) / max(len(non_sdf_col_l1), 1)),
+    "final/input_proj_l1_sdf_to_non_sdf_ratio": float(
+        (sum(sdf_col_l1) / max(len(sdf_col_l1), 1))
+        / max(sum(non_sdf_col_l1) / max(len(non_sdf_col_l1), 1), 1e-12)
+    ),
+}
+
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **freqs_summary, **sdf_diag},
+)
+print(
+    f"[H77] input_proj L1: non-SDF cols mean={sdf_diag['final/input_proj_l1_non_sdf_mean']:.4f} "
+    f"vs SDF cols mean={sdf_diag['final/input_proj_l1_sdf_mean']:.4f} "
+    f"(ratio={sdf_diag['final/input_proj_l1_sdf_to_non_sdf_ratio']:.3f}x); "
+    f"per-SDF-col L1=[{', '.join(f'{v:.4f}' for v in sdf_col_l1)}]"
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
