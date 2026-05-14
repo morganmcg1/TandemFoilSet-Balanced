@@ -491,6 +491,11 @@ optimizer = Lion(
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+# Per-channel loss weighting: upweight pressure (channel index 2) for objective alignment
+# with the primary metric val_avg/mae_surf_p. Applied to both surface and volume Huber.
+P_WEIGHT = 2.0
+channel_weights = torch.tensor([1.0, 1.0, P_WEIGHT], device=device).view(1, 1, 3)
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -533,6 +538,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_per_ch = torch.zeros(3, dtype=torch.float64)
+    epoch_surf_per_ch = torch.zeros(3, dtype=torch.float64)
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -546,11 +553,15 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
             huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            # Upweight pressure channel for objective alignment with mae_surf_p.
+            huber_weighted = huber_err * channel_weights
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_count = vol_mask.sum().clamp(min=1)
+            surf_count = surf_mask.sum().clamp(min=1)
+            vol_loss = (huber_weighted * vol_mask.unsqueeze(-1)).sum() / vol_count
+            surf_loss = (huber_weighted * surf_mask.unsqueeze(-1)).sum() / surf_count
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -558,19 +569,28 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
+
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
         })
 
+        # Per-channel diagnostics (unweighted Huber, so we can see pressure vs velocity behavior).
+        with torch.no_grad():
+            vol_per_ch = (huber_err * vol_mask.unsqueeze(-1)).sum(dim=(0, 1)) / vol_count
+            surf_per_ch = (huber_err * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / surf_count
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_vol_per_ch += vol_per_ch.detach().double().cpu()
+        epoch_surf_per_ch += surf_per_ch.detach().double().cpu()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol_per_ch /= max(n_batches, 1)
+    epoch_surf_per_ch /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -586,6 +606,12 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_loss_Ux": epoch_vol_per_ch[0].item(),
+        "train/vol_loss_Uy": epoch_vol_per_ch[1].item(),
+        "train/vol_loss_p":  epoch_vol_per_ch[2].item(),
+        "train/surf_loss_Ux": epoch_surf_per_ch[0].item(),
+        "train/surf_loss_Uy": epoch_surf_per_ch[1].item(),
+        "train/surf_loss_p":  epoch_surf_per_ch[2].item(),
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
