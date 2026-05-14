@@ -161,9 +161,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 specialized_decoders=False):
         super().__init__()
         self.last_layer = last_layer
+        self.specialized_decoders = bool(last_layer and specialized_decoders)
         self.ln_1 = nn.RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -173,16 +175,36 @@ class TransolverBlock(nn.Module):
         self.mlp = GeGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.RMSNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            if self.specialized_decoders:
+                # Per-node-type decoders: surface nodes use surf_decoder,
+                # volume nodes use vol_decoder. Routing is mask-gated so
+                # each decoder receives gradient only from its own node type.
+                self.surf_decoder = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+                self.vol_decoder = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+            else:
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
-    def forward(self, fx):
+    def forward(self, fx, is_surface=None):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            if self.specialized_decoders:
+                surf_pred = self.surf_decoder(h)
+                vol_pred = self.vol_decoder(h)
+                surf_m = is_surface.unsqueeze(-1).to(h.dtype)
+                vol_m = (~is_surface).unsqueeze(-1).to(h.dtype)
+                return surf_pred * surf_m + vol_pred * vol_m
+            return self.mlp2(h)
         return fx
 
 
@@ -191,12 +213,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 specialized_decoders: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.specialized_decoders = specialized_decoders
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -212,6 +236,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                specialized_decoders=specialized_decoders,
             )
             for i in range(n_layers)
         ])
@@ -230,9 +255,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, is_surface=is_surface)
         return {"preds": fx}
 
 
@@ -273,7 +299,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -396,6 +422,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    specialized_decoders: bool = False  # separate surf/vol decoders
 
 
 cfg = sp.parse(Config)
@@ -435,6 +462,7 @@ model_config = dict(
     mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    specialized_decoders=cfg.specialized_decoders,
 )
 
 model = Transolver(**model_config).to(device)
@@ -482,7 +510,7 @@ for epoch in range(MAX_EPOCHS):
         with torch.autocast('cuda', dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
             abs_err = (pred - y_norm).abs()
 
             vol_mask = mask & ~is_surface
@@ -576,6 +604,28 @@ if best_metrics:
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+        })
+
+    if cfg.specialized_decoders:
+        last_block = model.blocks[-1]
+        surf_w = last_block.surf_decoder[-1].weight.detach().float()
+        vol_w = last_block.vol_decoder[-1].weight.detach().float()
+        surf_l2 = surf_w.norm().item()
+        vol_l2 = vol_w.norm().item()
+        cos_sim = F.cosine_similarity(
+            surf_w.flatten().unsqueeze(0), vol_w.flatten().unsqueeze(0)
+        ).item()
+        print(
+            f"\nDecoder weight diagnostics (best checkpoint):\n"
+            f"  surf_decoder final-layer L2: {surf_l2:.4f}\n"
+            f"  vol_decoder  final-layer L2: {vol_l2:.4f}\n"
+            f"  final-layer cosine similarity: {cos_sim:.4f}"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "decoder_diagnostics",
+            "surf_final_l2": surf_l2,
+            "vol_final_l2": vol_l2,
+            "final_layer_cosine_similarity": cos_sim,
         })
 
     write_experiment_summary(
