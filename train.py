@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing as mp
 import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -32,13 +34,15 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
     TEST_SPLIT_NAMES,
     VAL_SPLIT_NAMES,
     X_DIM,
+    SplitDataset,
+    TestDataset,
     accumulate_batch,
     aggregate_splits,
     finalize_split,
@@ -46,6 +50,192 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# H78: Laplacian eigenvector positional encoding from KNN graph.
+# ---------------------------------------------------------------------------
+
+H78_K_NEIGHBORS = 8
+H78_N_EIG = 8
+H78_CACHE_DIR = Path("data/lappe_cache")
+
+
+def compute_laplacian_pe_np(coords_np: np.ndarray, k: int = H78_K_NEIGHBORS,
+                            n_eig: int = H78_N_EIG) -> np.ndarray:
+    """Compute Laplacian eigenvector PE on a KNN graph over node coords.
+
+    L_sym = I - D^(-1/2) A D^(-1/2), then bottom n_eig+1 eigenpairs via
+    shift-invert ARPACK (``eigsh(..., which='LM', sigma=0.0)``), trivial
+    eigenvector dropped. Output is per-sample standardised to zero-mean /
+    unit-std per PE dim so its scale is invariant to N.
+    """
+    import scipy.sparse as sp
+    from scipy.sparse.csgraph import connected_components
+    from scipy.sparse.linalg import eigsh
+    from scipy.spatial import cKDTree
+
+    N = coords_np.shape[0]
+    tree = cKDTree(coords_np)
+    _, nbr = tree.query(coords_np, k=k + 1, workers=1)
+    nbr = nbr[:, 1:]  # drop self
+    rows = np.repeat(np.arange(N, dtype=np.int64), k)
+    cols = nbr.ravel().astype(np.int64)
+    A = sp.csr_matrix((np.ones(N * k, dtype=np.float64), (rows, cols)), shape=(N, N))
+    A = A.maximum(A.T)
+
+    n_comp, labels = connected_components(A, directed=False)
+    if n_comp > 1:
+        # Chain-connect one node per component so the Laplacian is irreducible.
+        comp_first = np.array([np.where(labels == c)[0][0] for c in range(n_comp)],
+                              dtype=np.int64)
+        extra_rows = comp_first[1:]
+        extra_cols = np.full(n_comp - 1, comp_first[0], dtype=np.int64)
+        extra_data = np.ones(n_comp - 1, dtype=np.float64)
+        A_extra = sp.csr_matrix((extra_data, (extra_rows, extra_cols)), shape=(N, N))
+        A = A + A_extra + A_extra.T
+        A.data = np.minimum(A.data, 1.0)
+
+    deg = np.asarray(A.sum(axis=1)).ravel()
+    d_inv = 1.0 / np.sqrt(np.maximum(deg, 1e-9))
+    D = sp.diags(d_inv)
+    L = sp.eye(N) - D @ A @ D
+    L = 0.5 * (L + L.T)
+
+    try:
+        evals, evecs = eigsh(L.tocsc(), k=n_eig + 1, which="LM", sigma=0.0,
+                             tol=1e-6, maxiter=3000)
+        order = np.argsort(evals)
+        evecs = evecs[:, order]
+        pe = evecs[:, 1:n_eig + 1]
+    except Exception as exc:  # pragma: no cover — eigsh fallback
+        print(f"[H78] eigsh failed at N={N} ({exc!s}); using zero PE")
+        pe = np.zeros((N, n_eig), dtype=np.float64)
+
+    # Per-sample standardisation: scale invariant to N.
+    pe = pe - pe.mean(axis=0, keepdims=True)
+    pe = pe / (pe.std(axis=0, keepdims=True) + 1e-8)
+    return pe.astype(np.float32)
+
+
+def _precompute_worker(args):
+    src_path, cache_path, k, n_eig = args
+    if cache_path.exists():
+        return cache_path, 0.0, True
+    s = torch.load(src_path, weights_only=True)
+    coords = s["x"][:, :2].numpy().astype(np.float64)
+    t0 = time.time()
+    pe_np = compute_laplacian_pe_np(coords, k=k, n_eig=n_eig)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(torch.from_numpy(pe_np), cache_path)
+    return cache_path, time.time() - t0, False
+
+
+def precompute_lappe(splits_dir: Path, k: int, n_eig: int, n_workers: int,
+                     val_names: list[str], test_names: list[str],
+                     debug: bool = False, debug_per_split: int = 4) -> None:
+    """Parallel precompute of LapPE for every train/val/test sample.
+
+    Cache files live at ``H78_CACHE_DIR/<split>/<sample>.pt`` keyed by the
+    underlying sample filename (matches the sorted-glob order used by
+    ``SplitDataset`` and ``TestDataset``).
+    """
+    tasks: list[tuple[Path, Path, int, int]] = []
+    train_files = sorted((splits_dir / "train").glob("*.pt"))
+    if debug:
+        train_files = train_files[:debug_per_split + 2]
+    for f in train_files:
+        tasks.append((f, H78_CACHE_DIR / "train" / f.name, k, n_eig))
+    for name in val_names + test_names:
+        files = sorted((splits_dir / name).glob("*.pt"))
+        if debug:
+            files = files[:debug_per_split]
+        for f in files:
+            tasks.append((f, H78_CACHE_DIR / name / f.name, k, n_eig))
+
+    pending = [t for t in tasks if not t[1].exists()]
+    print(
+        f"[H78] LapPE precompute: {len(tasks)} samples (k={k}, n_eig={n_eig}), "
+        f"{len(tasks) - len(pending)} cached, {len(pending)} pending, "
+        f"n_workers={n_workers}"
+    )
+    if not pending:
+        return
+
+    t0 = time.time()
+    # Fork ctx: children inherit the loaded module without re-running its
+    # top-level setup (which would itself call precompute_lappe -> fork bomb).
+    # Safe here because no CUDA context exists yet at this point.
+    with mp.get_context("fork").Pool(n_workers) as pool:
+        for i, (cache_path, elapsed, _) in enumerate(
+            pool.imap_unordered(_precompute_worker, pending, chunksize=1)
+        ):
+            if (i + 1) % 50 == 0 or (i + 1) == len(pending):
+                rate = (i + 1) / max(time.time() - t0, 1e-6)
+                eta = (len(pending) - (i + 1)) / max(rate, 1e-6)
+                print(
+                    f"[H78] precompute {i+1}/{len(pending)} "
+                    f"({rate:.2f}/s, eta {eta:.0f}s)"
+                )
+    print(f"[H78] LapPE precompute done in {time.time() - t0:.0f}s")
+
+
+class LapPEDataset(Dataset):
+    """Wrap a SplitDataset/TestDataset and append cached LapPE columns to x.
+
+    Returns ``(x_aug, y, is_surface)`` where ``x_aug = cat([x, pe], -1)`` is
+    ``[N, X_DIM + n_eig]``. We rely on ``data.pad_collate`` which infers the
+    feature dim from ``xs[0].shape[1]`` — padding regions therefore get zero
+    PE entries, matched by the existing mask.
+    """
+
+    def __init__(self, base_ds, cache_dir: Path, n_eig: int, k: int,
+                 preload: bool = True):
+        self.base_ds = base_ds
+        self.cache_dir = Path(cache_dir)
+        self.n_eig = n_eig
+        self.k = k
+        # Mirror SplitDataset / TestDataset filename ordering.
+        if hasattr(base_ds, "files"):
+            self.files = list(base_ds.files)
+        else:
+            self.files = list(base_ds.x_files)
+
+        # Preload all PE tensors into memory in the parent process. With the
+        # Linux fork-based DataLoader workers, the tensor data buffers stay
+        # shared via copy-on-write — we don't pay 4× the memory or the disk
+        # I/O cost on every __getitem__. Each PE tensor is small (N×8 fp32),
+        # so total memory is on the order of a few GB across all splits.
+        self._pe_cache: list[torch.Tensor | None] = []
+        if preload:
+            for f in self.files:
+                pe_path = self.cache_dir / f.name
+                if pe_path.exists():
+                    self._pe_cache.append(
+                        torch.load(pe_path, weights_only=True).float()
+                    )
+                else:
+                    self._pe_cache.append(None)
+
+    def __len__(self):
+        return len(self.base_ds)
+
+    def __getitem__(self, idx):
+        x, y, sf = self.base_ds[idx]
+        pe = self._pe_cache[idx] if idx < len(self._pe_cache) else None
+        if pe is None:
+            pe_path = self.cache_dir / self.files[idx].name
+            if pe_path.exists():
+                pe = torch.load(pe_path, weights_only=True).float()
+            else:
+                # Fallback: compute lazily (slow). Happens only if precompute
+                # missed this sample, e.g. debug mode subsampling vs cache gap.
+                coords = x[:, :2].numpy().astype(np.float64)
+                pe = torch.from_numpy(
+                    compute_laplacian_pe_np(coords, k=self.k, n_eig=self.n_eig)
+                )
+                pe_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(pe, pe_path)
+        return torch.cat([x, pe], dim=-1), y, sf
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -306,6 +496,23 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def prepare_input(x: torch.Tensor, stats, fourier_enc, sign_flip: bool) -> torch.Tensor:
+    """H78 input pipeline. Loader feeds [B, N, X_DIM + n_eig]; split into the
+    raw 24-dim feature vector + cached 8-dim LapPE, normalize and Fourier-encode
+    the raw block, optionally sign-flip each PE dim per sample (train only),
+    then concatenate. Padding stays as zero in PE columns.
+    """
+    x_raw = x[..., :X_DIM]
+    pe = x[..., X_DIM:X_DIM + H78_N_EIG]
+    x_norm = (x_raw - stats["x_mean"]) / stats["x_std"]
+    x_norm = fourier_enc(x_norm)
+    if sign_flip:
+        flip = (torch.randint(0, 2, (pe.shape[0], 1, pe.shape[-1]),
+                              device=pe.device, dtype=pe.dtype) * 2 - 1)
+        pe = pe * flip
+    return torch.cat([x_norm, pe], dim=-1)
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -325,10 +532,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
+            x_in = prepare_input(x, stats, fourier_enc, sign_flip=False)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_in})["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -462,9 +668,8 @@ def measure_attention_entropies(
             if batch_idx >= n_batches:
                 break
             x = x.to(device, non_blocking=True)
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
-            _ = model({"x": x_norm})
+            x_in = prepare_input(x, stats, fourier_enc, sign_flip=False)
+            _ = model({"x": x_in})
             for i, block in enumerate(model.blocks):
                 sum_mean[i] += block.attn.last_attn_entropy_mean or 0.0
                 sum_min[i] += block.attn.last_attn_entropy_per_head_min or 0.0
@@ -504,8 +709,29 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+# H78: precompute Laplacian eigenvector PE for every sample (cached on disk).
+# 15 CPU cores available; leave 1 for the main process. Precompute happens
+# before CUDA init, so workers don't compete with dataloader CPU workers.
+n_precompute_workers = max(1, min(14, (os.cpu_count() or 8) - 1))
+precompute_lappe(
+    splits_dir=Path(cfg.splits_dir),
+    k=H78_K_NEIGHBORS,
+    n_eig=H78_N_EIG,
+    n_workers=n_precompute_workers,
+    val_names=VAL_SPLIT_NAMES,
+    test_names=TEST_SPLIT_NAMES,
+    debug=cfg.debug,
+)
+
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# H78: wrap datasets so __getitem__ appends [N, n_eig] PE columns to x.
+train_ds = LapPEDataset(train_ds, H78_CACHE_DIR / "train", n_eig=H78_N_EIG, k=H78_K_NEIGHBORS)
+val_splits = {
+    name: LapPEDataset(ds, H78_CACHE_DIR / name, n_eig=H78_N_EIG, k=H78_K_NEIGHBORS)
+    for name, ds in val_splits.items()
+}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -526,9 +752,10 @@ val_loaders = {
 N_FREQS = 6
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
+# H78: +n_eig dims for Laplacian eigenvector PE appended after fourier_enc.
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2 + H78_N_EIG,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -555,6 +782,15 @@ print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 
 print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
 print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")  # should print 288
 print(f"[H46] n_params: {n_params}")  # should print ~892,631
+# H78: Laplacian PE verification — input dim widened by n_eig, preprocess +n_eig*2*n_hidden params.
+_h78_input_dim = model_config["space_dim"] + model_config["fun_dim"]
+_h78_preprocess_added = H78_N_EIG * (model_config["n_hidden"] * 2)
+print(
+    f"[H78] Laplacian PE: KNN k={H78_K_NEIGHBORS}, n_eig={H78_N_EIG}, "
+    f"input dim {_h78_input_dim - H78_N_EIG} -> {_h78_input_dim} "
+    f"(preprocess MLP gains +{_h78_preprocess_added} params); "
+    f"n_params now {n_params}"
+)
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
@@ -671,10 +907,9 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        x_norm = fourier_enc(x_norm)
+        x_in = prepare_input(x, stats, fourier_enc, sign_flip=True)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_in})["preds"]
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
@@ -826,6 +1061,39 @@ for k in range(N_FREQS):
         f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
     )
 
+# H78: input_proj weight L1 norms — raw feature columns vs Laplacian PE columns.
+# preprocess.linear_pre[0] is the first Linear in the model; its weight is
+# [hidden*2, fun_dim+space_dim]. PE occupies the last n_eig columns; raw
+# (fourier-encoded coords + remaining features) occupies the rest.
+_h78_weight = model.preprocess.linear_pre[0].weight.detach()  # [hidden*2, in_dim]
+_h78_in_dim = _h78_weight.shape[1]
+_h78_raw_dim = _h78_in_dim - H78_N_EIG
+_h78_col_l1 = _h78_weight.abs().sum(dim=0).cpu()  # per-input-column L1 across output neurons
+_h78_raw_per_col = _h78_col_l1[:_h78_raw_dim]
+_h78_pe_per_col = _h78_col_l1[_h78_raw_dim:]
+h78_diag = {
+    "h78/in_dim": _h78_in_dim,
+    "h78/raw_dim": int(_h78_raw_dim),
+    "h78/pe_dim": H78_N_EIG,
+    "h78/raw_col_l1_mean": float(_h78_raw_per_col.mean()),
+    "h78/raw_col_l1_std": float(_h78_raw_per_col.std()),
+    "h78/pe_col_l1_mean": float(_h78_pe_per_col.mean()),
+    "h78/pe_col_l1_std": float(_h78_pe_per_col.std()),
+    "h78/pe_to_raw_l1_ratio": float(_h78_pe_per_col.mean() / max(_h78_raw_per_col.mean(), 1e-9)),
+    "h78/pe_col_l1_per_dim": _h78_pe_per_col.tolist(),
+    "h78/raw_col_l1_min_max": [float(_h78_raw_per_col.min()), float(_h78_raw_per_col.max())],
+}
+append_metrics_jsonl(metrics_jsonl_path, {"event": "h78_weight_diag", **h78_diag})
+print(
+    f"[H78] input_proj weight L1: "
+    f"raw cols (n={int(_h78_raw_dim)}) mean={h78_diag['h78/raw_col_l1_mean']:.4f} "
+    f"+/- {h78_diag['h78/raw_col_l1_std']:.4f}, "
+    f"PE cols (n={H78_N_EIG}) mean={h78_diag['h78/pe_col_l1_mean']:.4f} "
+    f"+/- {h78_diag['h78/pe_col_l1_std']:.4f} "
+    f"(PE/raw ratio={h78_diag['h78/pe_to_raw_l1_ratio']:.3f})"
+)
+print(f"  per-PE-dim L1: {[f'{v:.3f}' for v in h78_diag['h78/pe_col_l1_per_dim']]}")
+
 # --- Test evaluation + local summary ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
@@ -838,6 +1106,11 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        # H78: wrap test datasets with the same PE-cache lookup.
+        test_datasets = {
+            name: LapPEDataset(ds, H78_CACHE_DIR / name, n_eig=H78_N_EIG, k=H78_K_NEIGHBORS)
+            for name, ds in test_datasets.items()
+        }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()

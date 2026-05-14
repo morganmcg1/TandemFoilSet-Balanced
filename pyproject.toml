@@ -17,6 +17,7 @@ dependencies = [
     "tqdm",
     "rich",
     "pyyaml",
+    "scipy>=1.15.3",
 ]
 
 [build-system]
