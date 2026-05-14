@@ -178,11 +178,14 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, return_features=False):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            main = self.mlp2(self.ln_3(fx))
+            if return_features:
+                return main, fx
+            return main
         return fx
 
 
@@ -191,7 +194,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 aux_surf_head: bool = False, aux_surf_hidden: int = 64):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -216,6 +220,15 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+
+        self.aux_surf_head_enabled = aux_surf_head
+        if aux_surf_head:
+            self.aux_surf_decoder = nn.Sequential(
+                nn.Linear(n_hidden, aux_surf_hidden),
+                nn.GELU(),
+                nn.Linear(aux_surf_hidden, out_dim),
+            )
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -231,9 +244,15 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        if not self.aux_surf_head_enabled:
+            for block in self.blocks:
+                fx = block(fx)
+            return {"preds": fx}
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return {"preds": fx}
+        main_pred, h = self.blocks[-1](fx, return_features=True)
+        aux_pred = self.aux_surf_decoder(h)
+        return {"preds": main_pred, "aux_preds": aux_pred}
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +366,9 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "aux_surf_head": cfg.aux_surf_head,
+        "aux_surf_weight": cfg.aux_surf_weight,
+        "aux_surf_hidden": cfg.aux_surf_hidden,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -396,6 +418,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    aux_surf_head: bool = False
+    aux_surf_weight: float = 1.0
+    aux_surf_hidden: int = 64
 
 
 cfg = sp.parse(Config)
@@ -435,6 +460,8 @@ model_config = dict(
     mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    aux_surf_head=cfg.aux_surf_head,
+    aux_surf_hidden=cfg.aux_surf_hidden,
 )
 
 model = Transolver(**model_config).to(device)
@@ -471,6 +498,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux_surf = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -482,7 +510,8 @@ for epoch in range(MAX_EPOCHS):
         with torch.autocast('cuda', dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm})
+            pred = out["preds"]
             abs_err = (pred - y_norm).abs()
 
             vol_mask = mask & ~is_surface
@@ -491,17 +520,30 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
+            aux_surf_loss = None
+            if cfg.aux_surf_head and "aux_preds" in out:
+                aux_pred = out["aux_preds"]
+                aux_abs_err = (aux_pred - y_norm).abs()
+                aux_surf_loss = (
+                    (aux_abs_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                )
+                loss = loss + cfg.aux_surf_weight * aux_surf_loss
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        if aux_surf_loss is not None:
+            epoch_aux_surf += aux_surf_loss.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux_surf /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -525,7 +567,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -535,10 +577,14 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if cfg.aux_surf_head:
+        epoch_record["train/aux_surf_loss"] = epoch_aux_surf
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
+    aux_msg = f"  aux_surf={epoch_aux_surf:.4f}" if cfg.aux_surf_head else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]{aux_msg}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
