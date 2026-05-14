@@ -588,6 +588,63 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
+# ---------------------------------------------------------------------------
+# EMA-of-weights (Polyak averaging): maintain shadow state dict for evaluation
+# ---------------------------------------------------------------------------
+# State-dict shadow (vs. deep-copy of model) to avoid torch.compile interactions.
+# Only float tensors are averaged; integer buffers (e.g. num_batches_tracked)
+# are kept identical to the live model when EMA is swapped in.
+#
+# Decay schedule (canonical timm/BYOL/MoCo formulation):
+#     decay_t = min(decay_target, (1 + step) / (warmup_factor + step))
+# This is required for short trainings: with target=0.9999 and only ~22k
+# optimizer steps, a fixed decay would leave ~10% of the *random* init in the
+# EMA shadow at end of training (0.9999^22500 = 0.105), producing nonsense val
+# metrics. The warmup-schedule formula starts effectively at decay~0.1 at
+# step 1 and ramps up smoothly toward target, so initial weights are washed
+# out within ~100 steps while the asymptotic behavior matches the target.
+ema_decay_target = 0.9999
+ema_warmup_factor = 10  # standard timm constant
+ema_state = {
+    k: v.detach().clone()
+    for k, v in model.state_dict().items()
+    if v.dtype.is_floating_point
+}
+ema_n_params = sum(v.numel() for v in ema_state.values())
+global_step = 0  # number of optimizer.step() calls; advances EMA decay schedule
+
+
+def ema_decay_t(step: int) -> float:
+    """Time-varying EMA decay with warmup ramp (timm-style)."""
+    return min(ema_decay_target, (1.0 + step) / (ema_warmup_factor + step))
+
+
+print(
+    f"EMA-of-weights: target_decay={ema_decay_target} | warmup_factor={ema_warmup_factor} "
+    f"| {len(ema_state)} float tensors ({ema_n_params} params shadowed) | "
+    f"asymptotic effective window 1/(1-decay)={int(1.0 / (1.0 - ema_decay_target))} steps "
+    f"(short training: actual end-of-run decay will be < target due to warmup ramp)"
+)
+
+
+def _swap_in_state(state_subset: dict[str, torch.Tensor]) -> None:
+    """Load a subset of float tensors into the live model via state_dict.
+
+    Uses strict=False because integer buffers are not in ``state_subset``.
+    Works through ``torch.compile`` wrapping (load_state_dict forwards to the
+    underlying module).
+    """
+    model.load_state_dict({**model.state_dict(), **state_subset}, strict=False)
+
+
+def _snapshot_float_state() -> dict[str, torch.Tensor]:
+    """Snapshot only the float tensors of the live model (matches ema_state keys)."""
+    return {
+        k: v.detach().clone()
+        for k, v in model.state_dict().items()
+        if k in ema_state
+    }
+
 
 class Lion(torch.optim.Optimizer):
     """Lion optimizer (Chen et al. 2023): sign-based momentum updates.
@@ -653,7 +710,8 @@ experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
 model_dir.mkdir(parents=True, exist_ok=True)
-model_path = model_dir / "checkpoint.pt"
+model_path = model_dir / "checkpoint.pt"           # EMA-best (primary for test eval)
+model_path_base = model_dir / "checkpoint_base.pt"  # base-best (for comparison)
 metrics_jsonl_path = model_dir / "metrics.jsonl"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
@@ -662,10 +720,14 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_decay_target": ema_decay_target,
+        "ema_warmup_factor": ema_warmup_factor,
     }, f, sort_keys=True)
 
-best_avg_surf_p = float("inf")
-best_metrics: dict = {}
+best_avg_surf_p = float("inf")        # tracks EMA val_avg/mae_surf_p (PRIMARY)
+best_metrics: dict = {}               # tracks EMA best-val record
+best_avg_surf_p_base = float("inf")   # tracks BASE val_avg/mae_surf_p (comparison)
+best_metrics_base: dict = {}          # tracks BASE best-val record
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -700,6 +762,18 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        # EMA update with warmup-ramp decay schedule:
+        #   theta_ema <- decay_t * theta_ema + (1 - decay_t) * theta_train
+        # decay_t ramps from ~0.1 at step 1 toward target; ensures EMA forgets
+        # the random init within ~100 steps for short trainings.
+        global_step += 1
+        _decay_t = ema_decay_t(global_step)
+        _one_minus_decay = 1.0 - _decay_t
+        with torch.no_grad():
+            for _k, _v in model.state_dict().items():
+                if _k in ema_state:
+                    ema_state[_k].mul_(_decay_t).add_(_v.data, alpha=_one_minus_decay)
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -709,28 +783,63 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate base (live training weights) ---
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    avg_surf_p_base = val_avg["avg/mae_surf_p"]
+
+    # --- Validate EMA (Polyak-averaged weights) ---
+    # Snapshot live float tensors, swap EMA in, eval, restore.
+    _live_backup = _snapshot_float_state()
+    _swap_in_state(ema_state)
+    model.eval()
+    split_metrics_ema = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        for name, loader in val_loaders.items()
+    }
+    val_avg_ema = aggregate_splits(split_metrics_ema)
+    avg_surf_p_ema = val_avg_ema["avg/mae_surf_p"]
+    # Restore live training weights so the next epoch trains from the right state
+    _swap_in_state(_live_backup)
+    del _live_backup
+
     dt = time.time() - t0
 
+    # --- Best-checkpoint selection ---
+    # PRIMARY: best EMA val_avg/mae_surf_p; save EMA-weight-filled state dict.
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
+    if avg_surf_p_ema < best_avg_surf_p:
+        best_avg_surf_p = avg_surf_p_ema
         best_metrics = {
             "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+            "val_avg/mae_surf_p": avg_surf_p_ema,  # EMA value under standard key for summary
+            "val_avg/mae_surf_p_ema": avg_surf_p_ema,
+            "val_avg/mae_surf_p_base_at_same_epoch": avg_surf_p_base,
+            "per_split": split_metrics_ema,         # EMA splits under standard key
+            "per_split_base_at_same_epoch": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save full state dict with EMA float tensors swapped in (preserves int buffers).
+        torch.save({**model.state_dict(), **ema_state}, model_path)
         tag = " *"
 
+    # COMPARISON: best base val_avg/mae_surf_p; save live model state dict.
+    tag_base = ""
+    if avg_surf_p_base < best_avg_surf_p_base:
+        best_avg_surf_p_base = avg_surf_p_base
+        best_metrics_base = {
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": avg_surf_p_base,
+            "per_split": split_metrics,
+        }
+        torch.save(model.state_dict(), model_path_base)
+        tag_base = " b*"
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _ema_decay_now = ema_decay_t(global_step)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -739,18 +848,24 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
-        "val_avg/mae_surf_p": avg_surf_p,
+        "val_avg/mae_surf_p": avg_surf_p_base,
+        "val_avg/mae_surf_p_ema": avg_surf_p_ema,
+        "val_avg/ema_minus_base": avg_surf_p_ema - avg_surf_p_base,
         "val_splits": split_metrics,
-        "is_best": tag == " *",
+        "val_splits_ema": split_metrics_ema,
+        "is_best_ema": tag == " *",
+        "is_best_base": tag_base == " b*",
         "compile_active": compile_active,
+        "global_step": global_step,
+        "ema_decay_t": _ema_decay_now,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_base={avg_surf_p_base:.4f}{tag_base}  val_ema={avg_surf_p_ema:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        print_split_metrics(name, split_metrics_ema[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
@@ -772,6 +887,62 @@ append_metrics_jsonl(metrics_jsonl_path, {
     "nonzero_fraction": _lion_nz_frac,
     "nonzero_count": _lion_nz,
     "total_count": _lion_total,
+})
+
+# --- EMA-vs-base parameter L2 drift at terminal ---
+# Computes sqrt(sum((p_ema - p_train)**2)) over all shared float tensors.
+# Live model still holds training weights here (last per-epoch loop restored them).
+_l2_sq_diff = 0.0
+_l2_sq_live = 0.0
+_l2_sq_ema = 0.0
+_n_drift_elems = 0
+with torch.no_grad():
+    _live_state = model.state_dict()
+    for _k, _v_ema in ema_state.items():
+        _v_live = _live_state[_k]
+        _diff = (_v_ema.detach().float() - _v_live.detach().float())
+        _l2_sq_diff += float(_diff.pow(2).sum().cpu())
+        _l2_sq_live += float(_v_live.detach().float().pow(2).sum().cpu())
+        _l2_sq_ema += float(_v_ema.detach().float().pow(2).sum().cpu())
+        _n_drift_elems += _v_ema.numel()
+_ema_l2_drift = _l2_sq_diff ** 0.5
+_live_l2 = _l2_sq_live ** 0.5
+_ema_l2 = _l2_sq_ema ** 0.5
+_drift_rel = _ema_l2_drift / max(_live_l2, 1e-12)
+print(f"\nEMA-vs-base parameter L2 drift at terminal:")
+print(f"  ||theta_ema - theta_train||_2 = {_ema_l2_drift:.6f}")
+print(f"  ||theta_train||_2             = {_live_l2:.6f}")
+print(f"  ||theta_ema||_2               = {_ema_l2:.6f}")
+print(f"  relative drift                = {_drift_rel * 100:.2f}% of live weight norm")
+print(f"  (over {_n_drift_elems} float elements across {len(ema_state)} shared tensors)")
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "ema_drift_diagnostic",
+    "ema_minus_base_l2": _ema_l2_drift,
+    "live_l2_norm": _live_l2,
+    "ema_l2_norm": _ema_l2,
+    "relative_drift": _drift_rel,
+    "n_shared_elements": _n_drift_elems,
+    "n_shared_tensors": len(ema_state),
+    "ema_decay_target": ema_decay_target,
+    "ema_warmup_factor": ema_warmup_factor,
+    "ema_final_step": global_step,
+    "ema_final_decay_t": ema_decay_t(global_step),
+})
+
+# --- Best-epoch comparison: EMA vs base ---
+print(
+    f"\nBest-epoch comparison: "
+    f"EMA best @ epoch {best_metrics.get('epoch', 'n/a')} (val_avg/mae_surf_p_ema={best_avg_surf_p:.4f}); "
+    f"BASE best @ epoch {best_metrics_base.get('epoch', 'n/a')} (val_avg/mae_surf_p={best_avg_surf_p_base:.4f}); "
+    f"EMA-best is {best_metrics.get('epoch', 0) - best_metrics_base.get('epoch', 0):+d} epochs vs base-best"
+)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "best_epoch_comparison",
+    "ema_best_epoch": best_metrics.get("epoch"),
+    "ema_best_val_avg_surf_p": best_avg_surf_p,
+    "base_best_epoch": best_metrics_base.get("epoch"),
+    "base_best_val_avg_surf_p": best_avg_surf_p_base,
+    "ema_minus_base_avg_surf_p": best_avg_surf_p - best_avg_surf_p_base,
 })
 
 # --- Test evaluation + local summary ---
@@ -960,27 +1131,58 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_metrics_base = None
+    test_avg_base = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits from EMA-best checkpoint...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+        # EMA-best test eval (model already holds EMA-best weights)
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (EMA-best)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
+            "checkpoint": "ema_best",
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+        # BASE-best test eval (load base-best checkpoint, eval, restore EMA-best)
+        if best_metrics_base and model_path_base.exists():
+            print("\nEvaluating on held-out test splits from BASE-best checkpoint (comparison)...")
+            model.load_state_dict(
+                torch.load(model_path_base, map_location=device, weights_only=True)
+            )
+            model.eval()
+            test_metrics_base = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+                for name, loader in test_loaders.items()
+            }
+            test_avg_base = aggregate_splits(test_metrics_base)
+            print(f"\n  TEST (BASE-best)  avg_surf_p={test_avg_base['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_metrics_base[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "test",
+                "checkpoint": "base_best",
+                "best_epoch": best_metrics_base["epoch"],
+                "test_avg": test_avg_base,
+                "test_splits": test_metrics_base,
+            })
+            # Restore EMA-best weights (so model_dir state matches the primary checkpoint)
+            model.load_state_dict(
+                torch.load(model_path, map_location=device, weights_only=True)
+            )
 
     write_experiment_summary(
         model_path=model_path,
@@ -993,5 +1195,35 @@ if best_metrics:
         n_params=n_params,
         model_config=model_config,
     )
+
+    # Append EMA-specific summary fields next to the existing yaml.
+    _summary_path = model_dir / "metrics.yaml"
+    if _summary_path.exists():
+        with open(_summary_path) as _f:
+            _summary = yaml.safe_load(_f) or {}
+        _summary["ema_decay_target"] = ema_decay_target
+        _summary["ema_warmup_factor"] = ema_warmup_factor
+        _summary["ema_final_step"] = global_step
+        _summary["ema_final_decay_t"] = ema_decay_t(global_step)
+        _summary["ema_best_epoch"] = best_metrics.get("epoch")
+        _summary["ema_best_val_avg/mae_surf_p"] = best_avg_surf_p
+        _summary["base_best_epoch"] = best_metrics_base.get("epoch") if best_metrics_base else None
+        _summary["base_best_val_avg/mae_surf_p"] = (
+            best_avg_surf_p_base if best_metrics_base else None
+        )
+        _summary["ema_minus_base_l2"] = _ema_l2_drift
+        _summary["ema_minus_base_l2_relative"] = _drift_rel
+        if test_avg_base is not None and "avg/mae_surf_p" in test_avg_base:
+            _summary["test_avg/mae_surf_p_base"] = test_avg_base["avg/mae_surf_p"]
+            if test_metrics_base is not None:
+                for _split_name, _m in test_metrics_base.items():
+                    for _k, _v in _m.items():
+                        _summary[f"test_base/{_split_name}/{_k}"] = _v
+        if best_metrics_base:
+            for _split_name, _m in best_metrics_base["per_split"].items():
+                for _k, _v in _m.items():
+                    _summary[f"best_val_base/{_split_name}/{_k}"] = _v
+        with open(_summary_path, "w") as _f:
+            yaml.safe_dump(_summary, _f, sort_keys=True)
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
