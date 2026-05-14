@@ -601,6 +601,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    n_head: int = 4  # Transolver multi-head attention heads (n_hidden=128 → dim_head=n_hidden/n_head)
 
 
 cfg = sp.parse(Config)
@@ -638,7 +639,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -664,7 +665,8 @@ model = FiLMTransolver(
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
-print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K)")
+dim_head = model_config["n_hidden"] // model_config["n_head"]
+print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K, n_head={model_config['n_head']}, dim_head={dim_head})")
 if cfg.fourier_features:
     print(
         f"Fourier features: ON (num_features={cfg.fourier_num_features}, sigma={cfg.fourier_sigma}, "
