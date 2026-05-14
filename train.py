@@ -313,6 +313,222 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# H92: SE(2)-equivariant Transolver
+#
+# Decomposes node features into invariant scalars (Re, NACA, arc-length, AoA,
+# etc.) and a small bank of equivariant 2D vector channels (initialized from
+# centred positions). Pressure is predicted from invariants (scalar field);
+# velocity is predicted from the vector channels (equivariant 2-vector field).
+#
+# Equivariance principles followed:
+#   * VectorLinear has bias=False; same weight matrix applied to x,z components
+#   * Vector features only mixed via scalar gates or linear combos between channels
+#   * Invariants extracted from vectors as ||v||^2 (rotation-invariant)
+#   * Per-sample centroid subtracted for translation invariance (masked mean)
+#   * No FourierCoordEnc on positions (sin/cos of absolute coords is not equivariant)
+#   * Positions scaled by a fixed characteristic length (preserves rotation under scaling)
+# ---------------------------------------------------------------------------
+
+
+class VectorLinear(nn.Module):
+    """Linear projection between equivariant vector channels.
+
+    For v of shape ``[..., in_channels, 2]``, computes
+    ``out_i = sum_j W_ij * v_j`` applied identically to each spatial component.
+    Equivariant under SO(2): if v' = R @ v (per channel), output' = R @ output.
+    No bias (a bias would be a fixed 2D vector, breaking equivariance).
+    """
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.weight = nn.Parameter(
+            torch.randn(out_channels, in_channels) / math.sqrt(in_channels)
+        )
+
+    def forward(self, v: torch.Tensor) -> torch.Tensor:
+        # v: [..., C_in, 2] -> [..., C_out, 2]
+        return torch.einsum("oi,...id->...od", self.weight, v)
+
+
+class SE2EquivariantBlock(nn.Module):
+    """One scalar+vector update block.
+
+    Scalar branch:
+        s' = s + LayerScale_attn * PhysicsAttention(LN(s) + W_v_norm * ||v||^2)
+        s'' = s' + LayerScale_mlp * SwiGLU(LN(s'))
+
+    Vector branch (equivariant residual update):
+        v' = v + LayerScale_v * (VectorLinear(v) * gate(s'')[..., None])
+
+    Stochastic depth, when triggered, skips the entire block (identity for s, v).
+    """
+
+    def __init__(self, d_s: int, d_v: int, n_head: int, slice_num: int,
+                 mlp_ratio: int = 2, dropout: float = 0.0,
+                 stoch_depth_prob: float = 0.0, layer_scale_init: float = 0.1):
+        super().__init__()
+        self.d_s = d_s
+        self.d_v = d_v
+        self.stoch_depth_prob = stoch_depth_prob
+
+        # Scalar branch
+        self.ln_s1 = nn.LayerNorm(d_s)
+        self.v_norm_inject = nn.Linear(d_v, d_s, bias=False)
+        # Reuse the well-tuned PhysicsAttention from the baseline (includes
+        # attn_sharpening_factor buffer for per-epoch temperature anneal).
+        self.scalar_attn = PhysicsAttention(
+            d_s, heads=n_head, dim_head=d_s // n_head,
+            dropout=dropout, slice_num=slice_num,
+        )
+        self.ln_s2 = nn.LayerNorm(d_s)
+        self.mlp = SwiGLUMLP(d_s, d_s * mlp_ratio)
+
+        self.layer_scale_attn = nn.Parameter(torch.ones(d_s) * layer_scale_init)
+        self.layer_scale_mlp = nn.Parameter(torch.ones(d_s) * layer_scale_init)
+
+        # Vector branch (equivariant pointwise update)
+        # gate: invariant scalar per vector channel, derived from updated s
+        self.v_gate = nn.Sequential(
+            nn.Linear(d_s, d_v),
+            nn.GELU(),
+            nn.Linear(d_v, d_v),
+        )
+        self.v_proj = VectorLinear(d_v, d_v)
+        self.layer_scale_v = nn.Parameter(torch.ones(d_v) * layer_scale_init)
+
+    def forward(self, s: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.training and self.stoch_depth_prob > 0.0:
+            if torch.rand(1, device=s.device).item() < self.stoch_depth_prob:
+                return s, v
+
+        v_norms_sq = (v * v).sum(dim=-1)  # [B, N, d_v] — invariant
+
+        # Scalar attention with v-invariants injected post-LN.
+        s_in = self.ln_s1(s) + self.v_norm_inject(v_norms_sq)
+        s = s + self.layer_scale_attn * self.scalar_attn(s_in)
+
+        # Scalar MLP.
+        s = s + self.layer_scale_mlp * self.mlp(self.ln_s2(s))
+
+        # Equivariant vector residual: linear combo (in channels) scaled by gate(s).
+        gate = self.v_gate(s)  # [B, N, d_v]
+        v_new = self.v_proj(v) * gate.unsqueeze(-1)  # [B, N, d_v, 2]
+        v = v + self.layer_scale_v.unsqueeze(-1) * v_new
+
+        return s, v
+
+
+class SE2EquivariantTransolver(nn.Module):
+    """SE(2)-equivariant Transolver for tandem-foil CFD.
+
+    Inputs (passed via data dict):
+        ``invariants``: [B, N, 22] — already-normalized non-position features.
+        ``pos``:        [B, N, 2]  — RAW (un-normalized) node positions.
+        ``mask``:       [B, N]     — True for real nodes, False for padding.
+
+    Outputs:
+        preds: [B, N, 3] in NORMALIZED target space (Ux, Uy, p) matching the
+               existing train/eval contract. The (Ux, Uy) pair forms an SO(2)-
+               equivariant 2-vector in normalized space.
+
+    Equivariance contract: rotating ``pos`` by R produces
+        * pressure (channel 2) unchanged,
+        * velocity (channels 0-1) rotated by R,
+    in normalized output space.
+    """
+
+    def __init__(self, d_s: int = 128, d_v: int = 4, n_layers: int = 5,
+                 n_head: int = 4, slice_num: int = 64, mlp_ratio: int = 2,
+                 dropout: float = 0.0, fun_dim: int = 22,
+                 pos_scale: float = 1.54):
+        super().__init__()
+        self.d_s = d_s
+        self.d_v = d_v
+        self.n_layers = n_layers
+        self.fun_dim = fun_dim
+
+        # Fixed positional scale (preserves rotation; scalar so no anisotropy).
+        self.register_buffer("pos_scale", torch.tensor(float(pos_scale)))
+
+        # Scalar preprocess: invariants + initial v_norms = (fun_dim + d_v + 1)
+        # Extra +1: ||pos_rel||^2 added as an extra invariant scalar.
+        self.s_preprocess = MLP(
+            fun_dim + d_v + 1, d_s * 2, d_s,
+            n_layers=0, res=False, act="gelu",
+        )
+        self.placeholder = nn.Parameter((1.0 / d_s) * torch.rand(d_s))
+
+        # Initial vector gates (invariant scalars → d_v channels).
+        self.v_init_gates = nn.Linear(d_s, d_v, bias=False)
+
+        # Stack of equivariant blocks.
+        self.blocks = nn.ModuleList([
+            SE2EquivariantBlock(
+                d_s=d_s, d_v=d_v, n_head=n_head, slice_num=slice_num,
+                mlp_ratio=mlp_ratio, dropout=dropout,
+                stoch_depth_prob=0.1 * (i / max(n_layers - 1, 1)),
+            )
+            for i in range(n_layers)
+        ])
+
+        # Output heads.
+        self.ln_s_out = nn.LayerNorm(d_s)
+        self.p_head = nn.Sequential(
+            nn.Linear(d_s, d_s), nn.GELU(), nn.Linear(d_s, 1),
+        )
+        # Velocity head: combine d_v vector channels into a single 2-vector.
+        self.uv_head = VectorLinear(d_v, 1)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, data: dict, **kwargs) -> dict:
+        invariants = data["invariants"]  # [B, N, fun_dim]
+        pos = data["pos"]                # [B, N, 2] — RAW
+        mask = data["mask"]              # [B, N]
+
+        # Translation-invariant relative positions via masked centroid.
+        mask_f = mask.unsqueeze(-1).to(pos.dtype)
+        denom = mask_f.sum(dim=1, keepdim=True).clamp(min=1.0)
+        centroid = (pos * mask_f).sum(dim=1, keepdim=True) / denom
+        pos_rel = (pos - centroid) / self.pos_scale  # equivariant 2-vector
+
+        # Initial invariants: also include ||pos_rel||^2 as a scalar feature.
+        pos_norm_sq = (pos_rel * pos_rel).sum(dim=-1, keepdim=True)  # [B, N, 1]
+
+        # Bootstrap v_norms (we don't have v yet at preprocess; use zeros).
+        B, N, _ = invariants.shape
+        v_norms_init = pos_norm_sq.new_zeros(B, N, self.d_v)
+        v_norms_init[..., 0] = pos_norm_sq.squeeze(-1)  # seed channel 0 with ||pos||^2
+
+        s_input = torch.cat([invariants, v_norms_init, pos_norm_sq], dim=-1)
+        s = self.s_preprocess(s_input) + self.placeholder[None, None, :]
+
+        # Initial vector field: per-node, per-channel scalar gate × pos_rel.
+        # gates are invariant → v is equivariant.
+        v_gates = self.v_init_gates(s)  # [B, N, d_v]
+        v = v_gates.unsqueeze(-1) * pos_rel.unsqueeze(-2)  # [B, N, d_v, 2]
+
+        for block in self.blocks:
+            s, v = block(s, v)
+
+        s_final = self.ln_s_out(s)
+        p = self.p_head(s_final)                         # [B, N, 1]   invariant
+        uv = self.uv_head(v).squeeze(-2)                 # [B, N, 2]   equivariant
+
+        preds = torch.cat([uv, p], dim=-1)               # [B, N, 3]
+        return {"preds": preds}
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -335,10 +551,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # H92 (SE2): pass raw pos (un-normalized) and normalized invariants.
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({
+                "invariants": x_norm[..., 2:],
+                "pos": x[..., 0:2],
+                "mask": mask,
+            })["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -451,7 +671,7 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 def measure_attention_entropies(
-    model, val_loader, stats, fourier_enc, device, n_batches: int = 4,
+    model, val_loader, stats, device, n_batches: int = 4,
 ) -> tuple[list[float], list[float]]:
     """Measure mean and per-head-min slice-to-slice attention entropy per block.
 
@@ -459,6 +679,9 @@ def measure_attention_entropies(
     ``val_loader`` in eval mode (no_grad), accumulates the per-block
     ``last_attn_entropy_*`` scalars, then disables recording. Cheap enough
     to invoke once per probe epoch.
+
+    Reads attention entropy from each block's ``scalar_attn`` (PhysicsAttention)
+    sub-module — the H92 SE(2)-equivariant block stores its slice attention there.
     """
     was_training = model.training
     model.eval()
@@ -468,16 +691,20 @@ def measure_attention_entropies(
     sum_min = [0.0] * n_blocks
     n = 0
     with torch.no_grad():
-        for batch_idx, (x, _y, _is_surface, _mask) in enumerate(val_loader):
+        for batch_idx, (x, _y, _is_surface, mask) in enumerate(val_loader):
             if batch_idx >= n_batches:
                 break
             x = x.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
-            _ = model({"x": x_norm})
+            _ = model({
+                "invariants": x_norm[..., 2:],
+                "pos": x[..., 0:2],
+                "mask": mask,
+            })
             for i, block in enumerate(model.blocks):
-                sum_mean[i] += block.attn.last_attn_entropy_mean or 0.0
-                sum_min[i] += block.attn.last_attn_entropy_per_head_min or 0.0
+                sum_mean[i] += block.scalar_attn.last_attn_entropy_mean or 0.0
+                sum_min[i] += block.scalar_attn.last_attn_entropy_per_head_min or 0.0
             n += 1
     PhysicsAttention.record_entropy = False
     if was_training:
@@ -533,42 +760,35 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-N_FREQS = 6
-fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+# H92: SE(2)-equivariant Transolver — replaces baseline Transolver + FourierCoordEnc.
+# Positions are equivariant 2-vectors handled inside the model (no Fourier features).
+# pos_scale = mean(x_std[0], x_std[1]) provides scalar (isotropic) positional scaling
+# so rotations are preserved.
+pos_scale_value = float((stats["x_std"][0].item() + stats["x_std"][1].item()) / 2.0)
 
 model_config = dict(
-    space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
-    out_dim=3,
-    n_hidden=128,
+    d_s=128,
+    d_v=4,
     n_layers=5,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
-    output_fields=["Ux", "Uy", "p"],
-    output_dims=[1, 1, 1],
+    fun_dim=X_DIM - 2,  # 22 invariant features (dims 2..23)
+    pos_scale=pos_scale_value,
 )
 
-model = Transolver(**model_config).to(device)
-n_model_params = sum(p.numel() for p in model.parameters())
-n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
-n_params = n_model_params + n_fourier_params  # includes 6 learnable freqs
-print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
+model = SE2EquivariantTransolver(**model_config).to(device)
+n_params = sum(p.numel() for p in model.parameters())
+print(f"Model: SE2EquivariantTransolver ({n_params/1e6:.3f}M params)")
 print(f"n_params (total trainable): {n_params}")
+print(f"[H92] d_s={model_config['d_s']}, d_v={model_config['d_v']}, pos_scale={pos_scale_value:.4f}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
-print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
-# H39: ReGLU gate sanity check (ReLU = max(0,x))
-_h39_test_x = torch.tensor([-1.0, 0.0, 1.0])
-print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 0.0000)")
-print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
-print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
-print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
-print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")  # should print 288
-print(f"[H46] n_params: {n_params}")  # should print ~892,631
+print(f"[H92] SwiGLU inner_dim: {swiglu_inner_dim}")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
-        f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
+        f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}, "
+        f"layer_scale_v init avg={b.layer_scale_v.mean().item():.4f}"
     )
 
 # H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
@@ -576,7 +796,7 @@ for i, b in enumerate(model.blocks):
 # (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
 # per-epoch in the training loop.
 N_ANNEAL_EPOCHS = 12
-_h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h73_dim_head = model_config["d_s"] // model_config["n_head"]
 _h73_init_factor = math.sqrt(3.0)
 _h73_final_factor = math.sqrt(2.0)
 _h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
@@ -594,56 +814,43 @@ print(
 for i, b in enumerate(model.blocks):
     print(
         f"[H73] block {i}: attn_sharpening_factor init = "
-        f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
+        f"{float(b.scalar_attn.attn_sharpening_factor.item()):.4f}"
     )
 
-# H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
-# H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
-# channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
-# scaling factors toward zero (init=0.025), fighting the model's learned per-channel
-# diversification, and default lr=5e-4 under-trains them.
-freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
+# H92 (SE2): no FourierCoordEnc — freqs group removed. Two AdamW groups:
+#   * other: model params except layer_scale, regular lr + WD
+#   * layer_scale: 10x lr, no WD (H54 mechanism retained)
+# layer_scale params now include layer_scale_v (vector branch residual gate)
+# in addition to the scalar branch's layer_scale_attn / layer_scale_mlp.
 layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
 other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
-assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
-    f"Expected 1 freq tensor with {N_FREQS} elems, "
-    f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
-)
-# H54: param-group consistency check — every model param ends up in exactly one of
-# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
 all_model_p = {id(p): p for p in model.parameters()}
 all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
 assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
     f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
 )
 n_layer_scale = sum(p.numel() for p in layer_scale_params)
-expected_layer_scale = 2 * len(model.blocks) * model_config["n_hidden"]
+# Each block: layer_scale_attn (d_s) + layer_scale_mlp (d_s) + layer_scale_v (d_v).
+expected_layer_scale = len(model.blocks) * (2 * model_config["d_s"] + model_config["d_v"])
 assert n_layer_scale == expected_layer_scale, (
     f"Expected {expected_layer_scale} LayerScale params "
-    f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
-)
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
-    sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
+    f"({len(model.blocks)} blocks x (2*{model_config['d_s']} + {model_config['d_v']})), got {n_layer_scale}"
 )
 optimizer = torch.optim.AdamW(
     [
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
-        {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
         {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
 print(
-    f"[H54] Optimizer param groups: "
+    f"[H92] Optimizer param groups: "
     f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
     f"({sum(p.numel() for p in other_params)} params), "
-    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
-    f"({sum(p.numel() for p in freq_params)} params), "
-    f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
+    f"layerscale lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
     f"({n_layer_scale} params, expected {expected_layer_scale})"
 )
-print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -675,6 +882,78 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+# H92: SE(2)-equivariance sanity check on randomly-initialized weights.
+# Rotates one mini-batch's raw positions by an arbitrary angle and verifies
+# that pressure prediction is INVARIANT and velocity prediction is EQUIVARIANT
+# (i.e. R @ pred_velocity matches velocity-of-rotated-input) in normalized
+# output space. This catches structural breaks (bias in vector layers, leaked
+# coord components, etc.) BEFORE expensive training. Tolerance is generous
+# because float32 accumulation in attention can introduce a few ULPs.
+print("\n[H92] Running SE(2)-equivariance sanity check on initialized model...")
+model.eval()
+with torch.no_grad():
+    _check_batch = next(iter(val_loaders["val_single_in_dist"]))
+    _x_chk, _y_chk, _is_surf_chk, _mask_chk = _check_batch
+    _x_chk = _x_chk.to(device); _mask_chk = _mask_chk.to(device)
+    _x_norm_chk = (_x_chk - stats["x_mean"]) / stats["x_std"]
+
+    _theta = 1.234
+    _R = torch.tensor(
+        [[math.cos(_theta), -math.sin(_theta)],
+         [math.sin(_theta),  math.cos(_theta)]],
+        device=device, dtype=_x_chk.dtype,
+    )
+    _pos_raw = _x_chk[..., 0:2]
+    _pos_rot = _pos_raw @ _R.T
+
+    _pred = model({
+        "invariants": _x_norm_chk[..., 2:],
+        "pos": _pos_raw,
+        "mask": _mask_chk,
+    })["preds"]
+    _pred_rot = model({
+        "invariants": _x_norm_chk[..., 2:],
+        "pos": _pos_rot,
+        "mask": _mask_chk,
+    })["preds"]
+
+    # Pressure invariance: predicted p (channel 2) should be unchanged.
+    _p_err = (_pred[..., 2] - _pred_rot[..., 2])[_mask_chk].abs().max().item()
+    # Velocity equivariance: R @ vel(original input) should match vel(rotated input).
+    _uv = _pred[..., 0:2]                       # [B, N, 2] equivariant 2-vector
+    _uv_rotated = _uv @ _R.T                    # apply R to predicted velocity
+    _uv_of_rot = _pred_rot[..., 0:2]            # velocity on rotated input
+    _uv_err = (_uv_rotated - _uv_of_rot)[_mask_chk].abs().max().item()
+    _ref_scale = max(_pred[..., 0:2].abs().max().item(), 1e-6)
+    print(
+        f"[H92] equivariance check (theta={_theta:.3f} rad):\n"
+        f"        pressure invariance max-err = {_p_err:.3e}\n"
+        f"        velocity equivariance max-err = {_uv_err:.3e} (ref scale {_ref_scale:.3e})\n"
+        f"        relative velocity err = {_uv_err / _ref_scale:.3e}"
+    )
+    _eq_pressure_ok = _p_err < 1e-3
+    _eq_velocity_ok = (_uv_err / _ref_scale) < 1e-3
+    print(
+        f"[H92] PASS' so far: pressure_invariant={_eq_pressure_ok}  "
+        f"velocity_equivariant={_eq_velocity_ok}"
+    )
+    if not (_eq_pressure_ok and _eq_velocity_ok):
+        print(
+            "[H92] WARNING: equivariance check FAILED at init. "
+            "Implementation likely has a bug — proceeding with training anyway "
+            "but results may not reflect the intended SE(2) inductive bias."
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "equivariance_check_init",
+        "theta_rad": _theta,
+        "pressure_invariance_max_err": _p_err,
+        "velocity_equivariance_max_err": _uv_err,
+        "velocity_ref_scale": _ref_scale,
+        "velocity_rel_err": _uv_err / _ref_scale,
+        "pressure_passes": bool(_eq_pressure_ok),
+        "velocity_passes": bool(_eq_velocity_ok),
+    })
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -691,7 +970,7 @@ for epoch in range(MAX_EPOCHS):
     anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
     current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
     for block in model.blocks:
-        block.attn.attn_sharpening_factor.fill_(current_attn_factor)
+        block.scalar_attn.attn_sharpening_factor.fill_(current_attn_factor)
     print(
         f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
         f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
@@ -708,10 +987,14 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # H92 (SE2): pass raw pos (un-normalized) and normalized invariants.
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({
+            "invariants": x_norm[..., 2:],
+            "pos": x[..., 0:2],
+            "mask": mask,
+        })["preds"]
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
@@ -725,14 +1008,11 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        # H40: clip both model and fourier_enc params together (freqs included).
+        # H92 (SE2): no fourier_enc params — clip model only.
         total_norm = torch.nn.utils.clip_grad_norm_(
-            list(model.parameters()) + list(fourier_enc.parameters()), max_norm=25.0
+            model.parameters(), max_norm=25.0
         )
         optimizer.step()
-        # H40: keep freqs bounded after the update. Safety net for the higher freqs lr.
-        with torch.no_grad():
-            fourier_enc.freqs.clamp_(0.1, 100.0)
         scheduler.step()
 
         epoch_vol += vol_loss.item()
@@ -765,9 +1045,7 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
-    freqs_lr = optimizer.param_groups[1]["lr"]
-    layer_scale_lr = optimizer.param_groups[2]["lr"]
-    freqs_now = fourier_enc.freqs.detach().cpu().tolist()
+    layer_scale_lr = optimizer.param_groups[1]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -775,9 +1053,7 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "lr": current_lr,
         "train/current_lr": current_lr,
-        "train/freqs_lr": freqs_lr,
         "train/layer_scale_lr": layer_scale_lr,
-        "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
@@ -794,10 +1070,6 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
-    print(
-        f"    freqs (lr={freqs_lr:.2e}): "
-        f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
-    )
     print(f"    layer_scale (lr={layer_scale_lr:.2e})")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -807,7 +1079,7 @@ for epoch in range(MAX_EPOCHS):
     if (epoch + 1) in (1, 6, 12):
         probe_loader = val_loaders["val_single_in_dist"]
         ent_means, ent_min_per_head = measure_attention_entropies(
-            model, probe_loader, stats, fourier_enc, device, n_batches=4,
+            model, probe_loader, stats, device, n_batches=4,
         )
         max_entropy = math.log(model_config["slice_num"])
         ent_ratios = [e / max_entropy for e in ent_means]
@@ -837,20 +1109,12 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-# H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
-final_freqs = fourier_enc.freqs.detach().cpu().tolist()
-init_freqs = [2.0**k for k in range(N_FREQS)]
-freq_drift = [f - i for f, i in zip(final_freqs, init_freqs)]
-freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, init_freqs)]
-freqs_summary = {
-    "final/freqs": final_freqs,
-    "final/freqs_init": init_freqs,
-    "final/freqs_abs_drift": freq_drift,
-    "final/freqs_rel_drift": freq_rel_drift,
-}
+    # H92: vector-branch LayerScale (residual gate on equivariant v update).
+    final_layer_scale_stats[f"final/layer_scale_v_l{i}_mean"] = float(b.layer_scale_v.mean().item())
+    final_layer_scale_stats[f"final/layer_scale_v_l{i}_std"] = float(b.layer_scale_v.std().item())
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -858,13 +1122,9 @@ for i in range(len(model.blocks)):
         f"  block {i}: attn mean={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
-        f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
-    )
-print("[H40] Final learned freqs vs dyadic init:")
-for k in range(N_FREQS):
-    print(
-        f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
-        f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
+        f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}  "
+        f"v mean={final_layer_scale_stats[f'final/layer_scale_v_l{i}_mean']:.4f} "
+        f"std={final_layer_scale_stats[f'final/layer_scale_v_l{i}_std']:.4f}"
     )
 
 # --- Test evaluation + local summary ---
