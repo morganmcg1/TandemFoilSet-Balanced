@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-14 [Round 109] UTC — PR #2827: LayerScale γ init = 1e-3 — **CLOSED stale_wip (3rd pod-failure close, NOT falsified)**
+
+- **Branch:** charliepai2g48h5-thorfinn/layerscale-init-1e-3
+- **Hypothesis:** Increase LayerScale γ initialization from 1e-4 → 1e-3 (10× larger). Test residual gain init sensitivity. At 1e-4 init, residual stream is near-identity → maybe under-utilizing the sublayer signals from the start.
+- **Status:** **CLOSED — stale_wip, pod failure to pick up.** Created 2026-05-14T06:47:08Z, 0 commits and 0 comments beyond initial assignment, thorfinn pod persistently failing to poll. Per Round 91/99/100/103 convention, this is the 3rd pod-failure close — NOT experimental falsification. Axis UNTESTED.
+- **Disposition:** May re-assign LayerScale γ-init=1e-3 to a different student in a future round if it remains a high-value swing.
+- Reassigned thorfinn to #2868 Smooth L1 (Huber) loss-shape pivot — minimally simple per Round 103 #2849 strategy to maximize pickup probability for stall-prone pod.
+
+---
+
+## 2026-05-14 [Round 109] UTC — PR #2868: Smooth L1 (Huber β=1.0) training loss — **ASSIGNED (84th candidate axis)**
+
+- **Branch:** charliepai2g48h5-thorfinn/smooth-l1-huber-beta1
+- **Hypothesis:** Replace L1 training loss with Smooth L1 (Huber) at β=1.0 for both volume and surface terms, keeping `surf_weight=10`. **Critically: keep validation/test reporting metrics as L1 (MAE)** — only the training objective changes, so val/test results remain directly comparable to baseline `30.8909` / `26.1964`.
+- **Why:** Loss-shape axis (training loss SHAPE not WEIGHTING) has NEVER been tested this launch. Surf_weight upward (#2842 LOSS) tested weighting; this tests the underlying error-function shape. Smooth L1 has smooth gradient through origin (quadratic for |r|<1, linear for |r|≥1) vs L1's discontinuous ±1 at zero. May improve cosine-tail convergence where the loss landscape becomes shallow and Lion's sign-step benefits from richer near-zero gradient structure that exp_avg integrates. OOD outlier behavior unchanged (large residuals identical to L1).
+- **Diagnostics requested:** Per-step gap between SmoothL1 and L1 measurements (if zero, change was operationally invisible); residual histogram at best-val ckpt across 4 bins to determine quadratic-vs-linear mass distribution.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): smooth-near-zero matters for cosine-tail + Lion → try β=0.5 next.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): residual distribution dominated by linear regime, β=1.0 too large → try β=0.1 next.
+  3. **LOSS** (val > 30.8909 + 1%): small-residual smoothing hurts Lion's late-training updates → loss-shape axis CLOSES at this magnitude.
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-thorfinn --experiment_name "charliepai2g48h5-thorfinn/smooth-l1-huber-beta1" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`. Expected param count: 333,700 unchanged.
+
+---
+
 ## 2026-05-14 [Round 108] UTC — PR #2851: RMSNorm replacement of LayerNorm at all 9 sites — **CLOSED LOSS (+1.67% val, +3.83% test)**
 
 - **Branch:** charliepai2g48h5-askeladd/rmsnorm-replace
