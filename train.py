@@ -455,6 +455,13 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+# Global-norm gradient clipping threshold (PR #3050 — fresh stability axis).
+# max_norm=1.0 is the Llama / PaLM / GPT default. Inserted between
+# loss.backward() and optimizer.step() so Lion's EMA buffer consumes the
+# clipped gradient. Sign-step (Lion update) and post-norm γ=1.0 + cross-block α
+# baseline (#3006) UNCHANGED — clipping is the only intervention.
+GRAD_CLIP_MAX_NORM = 1.0
+
 
 @dataclass
 class Config:
@@ -684,6 +691,14 @@ optimizer = Lion(
 )
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(
+    f"Gradient clipping (PR #3050): ENABLED, global max_norm={GRAD_CLIP_MAX_NORM}; "
+    f"clip_grad_norm_ inserted between loss.backward() and optimizer.step(); "
+    f"Lion's EMA m_t consumes clipped gradient (caps outlier-batch contamination); "
+    f"per-batch raw_norm logged and aggregated per epoch (mean/std/max + clip_fraction); "
+    f"all other settings UNCHANGED from #3006 baseline (post-norm γ=1.0, 3 cross-block α, SwiGLU, FiLM, SE, Lion 1.5e-4 wd 3e-4); "
+    f"baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006)"
+)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -793,6 +808,15 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    # Grad-clip diagnostic accumulators — track raw global-norm distribution
+    # to characterize where the clip threshold sits relative to the natural
+    # gradient distribution. Per #3050 hypothesis: Goldilocks zone is
+    # clip_fraction ~5-30% (clips only outlier batches, leaves typical ones
+    # untouched). High clip_fraction = clip too aggressive (effective LR drop).
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_sqsum = 0.0
+    epoch_grad_norm_max = 0.0
+    epoch_clip_fires = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -814,16 +838,35 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # Global-norm gradient clipping (PR #3050). Returns the raw (pre-clip)
+        # total norm — clipping fires whenever raw_norm > GRAD_CLIP_MAX_NORM.
+        # Inserted BETWEEN backward and step so Lion's EMA `m_t` consumes the
+        # clipped gradient, not the raw one.
+        raw_grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_norm=GRAD_CLIP_MAX_NORM
+        )
+        raw_gn_val = float(raw_grad_norm.item()) if torch.is_tensor(raw_grad_norm) else float(raw_grad_norm)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_grad_norm_sum += raw_gn_val
+        epoch_grad_norm_sqsum += raw_gn_val * raw_gn_val
+        if raw_gn_val > epoch_grad_norm_max:
+            epoch_grad_norm_max = raw_gn_val
+        if raw_gn_val > GRAD_CLIP_MAX_NORM:
+            epoch_clip_fires += 1
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    # Grad-clip per-epoch summary (PR #3050)
+    grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
+    grad_norm_var = max(epoch_grad_norm_sqsum / max(n_batches, 1) - grad_norm_mean ** 2, 0.0)
+    grad_norm_std = grad_norm_var ** 0.5
+    clip_fraction = epoch_clip_fires / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -859,11 +902,24 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        # Grad-clip diagnostics (PR #3050)
+        "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_std": grad_norm_std,
+        "train/grad_norm_max": epoch_grad_norm_max,
+        "train/clip_fraction": clip_fraction,
+        "train/clip_fires": epoch_clip_fires,
+        "train/n_batches": n_batches,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    )
+    print(
+        f"  grad-clip: raw_norm mean={grad_norm_mean:.4f} std={grad_norm_std:.4f} "
+        f"max={epoch_grad_norm_max:.4f} | clip_fraction={clip_fraction:.4f} "
+        f"({epoch_clip_fires}/{n_batches} steps clipped @ max_norm={GRAD_CLIP_MAX_NORM})"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
