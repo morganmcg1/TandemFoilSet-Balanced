@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-14 [Round 100] UTC — PR #2808: Pre-block-0 embedding LayerNorm — **CLOSED LOSS (+3.75% val)**
+
+- **Branch:** charliepai2g48h5-askeladd/embed-ln
+- **Hypothesis:** Insert `nn.LayerNorm(96)` between FiLM modulation and block-0 input. Premise: preprocess+placeholder+FiLM stream has drifted from unit variance, destabilizing block-0's LayerScale γ=1e-4. +192 params.
+- **Metric artifacts:** `models/model-charliepai2g48h5-askeladd-embed-ln-20260514-055416/metrics.jsonl`
+
+| Split | val | Baseline #2765 | Δ val | test | Baseline test | Δ test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | 24.4414 | 24.9721 | −0.53 (better) | — | 24.0714 | — |
+| `geom_camber_rc` | 48.8325 | 46.9885 | +1.84 (worse) | 43.7700 | 41.9406 | +4.1% |
+| `geom_camber_cruise` | 19.1793 | 17.7276 | +1.45 (worse) | — | 14.2400 | — |
+| `re_rand` | 37.5343 | 35.5983 | +1.94 (worse) | — | 25.7749 | — |
+| **val_avg** | **32.4969** | **31.3216** | **+3.75% LOSS** | | | |
+| **test_avg** | **28.5529** | **26.5067** | **+7.72% LOSS** | | | |
+
+- **Result:** NOT MERGED. Hypothesis premise falsified by diagnostic.
+- **Mechanism:** Pre-LN `input_var = 0.9737` — the embedding stream is ALREADY at near-unit variance before the LN. `preprocess` MLP (Linear→ReLU→Linear, default init) + zero-init FiLM (`|film_scale|≈0.975` at convergence, multiplicative factor stays in benign range 1±0.975) + tiny placeholder (1/96 init) collectively produce near-unit variance. The LN weight (mean=0.9931, std=0.0705) and bias (mean=−0.0021, std=0.0271) barely drifted from identity init — LN is effectively inert. The +192 params act as small optimization noise, hurting OOD splits where every gradient step matters.
+- **68th taxon closure:** LN-site insertion at post-FiLM-pre-block-0 empirically falsified. Normalization-meta-axis now mapped across REPLACEMENT (DyT 48th, RMSNorm 15th), GRANULARITY (GroupNorm 62nd), and SITE-INSERTION (embed-ln 68th) dimensions. Key diagnostic insight: pre-block-0 stream is already at unit variance — future LN-site probes should target locations with actual drift (e.g., post-SE-output at block 3 where sigmoid gating may compress scale).
+
+---
+
+## 2026-05-14 [Round 100] UTC — PR #2809: 3-layer output head mlp2 (decoder-depth probe) — **CLOSED LOSS (+5.17% val)**
+
+- **Branch:** charliepai2g48h5-frieren/mlp2-deeper
+- **Hypothesis:** Replace `mlp2 = Linear(96,96)→GELU→Linear(96,3)` with `Linear(96,96)→GELU→Linear(96,96)→GELU→Linear(96,3)`. Decoder-depth probe: 2 nonlinearities vs 1. +9,312 params → 342,915 total.
+- **Metric artifacts:** `models/model-charliepai2g48h5-frieren-mlp2-deeper-20260514-055019/metrics.jsonl`
+
+| Split | val | Baseline #2765 | Δ val | test | Baseline test | Δ test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | **24.4354** | 24.9721 | **−2.15% WIN** | 23.9450 | 24.0714 | −0.52% flat |
+| `geom_camber_rc` | 50.7865 | 46.9885 | **+8.08% LOSS** | 43.6636 | 41.9406 | +4.11% |
+| `geom_camber_cruise` | 18.9893 | 17.7276 | **+7.12% LOSS** | 14.9132 | 14.2400 | +4.73% |
+| `re_rand` | 37.5450 | 35.5983 | **+5.47% LOSS** | 26.8510 | 25.7749 | +4.18% |
+| **val_avg** | **32.9390** | **31.3216** | **+5.17% LOSS** | | | |
+| **test_avg** | **27.3432** | **26.5067** | **+3.16% LOSS** | | | |
+
+- **Result:** NOT MERGED. in_dist improves marginally; all 3 OOD splits regress 4-8%.
+- **Mechanism:** Terminal-head overfitting without residual bound. The mlp2 decoder has no LayerScale γ, no skip connection — every added parameter directly shifts prediction capacity toward in-distribution fitting. 6,400 training meshes + surf_weight=10 + extra head capacity = generalization tax on geometry-OOD and Re-OOD. LayerScale γ_attn_block3=0.00561 and γ_mlp_block3=0.0802 did NOT collapse (decoder did not absorb block-3 work; PR mechanism prediction refuted). Mechanism predictions (b) and (c) refuted; terminal-head-overfitting mechanism (d) confirmed.
+- **Key insight from student:** "The model is currently **generalization-limited, not capacity-limited**." in_dist improves under extra capacity while OOD regresses — clean signature. Probes that add OOD generalization WITHOUT adding net capacity are higher-yield.
+- **69th taxon closure:** Decoder-depth axis saturated at 2 layers. Combined with stale #2750 fern mlp2-wide192, decoder modification meta-axis mapped — baseline 2-layer 96-hidden head is correctly sized. Future decoder probes should be non-capacity modifications (normalization, activation type, input enrichment).
+
+---
+
+## 2026-05-14 [Round 100] UTC — PR #2780: Mish activation in mlp2 — **CLOSED stale_wip (axis untested)**
+
+- 2nd consecutive stale_wip event. Created 2026-05-14T04:22:02Z, 0 commits, 0 comments ~2h17m. Pod alive 1/1 but hitting GitHub API rate limits per heartbeat logs (GraphQL quota exceeded, retry loop failed). Pod-failure close per Round 91 #2728 convention. Mish-mlp2 AXIS UNTESTED (not falsified) — may retry in future launch.
+
+---
+
+## 2026-05-14 [Round 100] UTC — PR #2829: Surface-aware LN at decoder ln_3 — **ASSIGNED (70th candidate axis)**
+
+- **Branch:** charliepai2g48h5-frieren/surf-aware-ln3
+- **Hypothesis:** `SurfaceAwareLN` class with `ln_3_surf` + `ln_3_vol` modules; per-token selection via `is_surface` mask. +192 params (= 333,795 total). Responsive to frieren's "generalization-limited not capacity-limited" insight — gives surface tokens their own γ_surf/β_surf at the decoder's normalization site. Thread is_surface through 2 model-call sites + Transolver.forward + TransolverBlock.forward.
+
+---
+
+## 2026-05-14 [Round 100] UTC — PR #2828: Attention dropout p=0.05 — **ASSIGNED (71st candidate axis)**
+
+- **Branch:** charliepai2g48h5-askeladd/attn-dropout-p0.05
+- **Hypothesis:** Set Transolver `dropout` kwarg from 0 to 0.05. Propagates to PhysicsAttention SDPA `dropout_p` + `to_out` Dropout. Standard transformer regularization NEVER tested in this launch. +0 params. Targets generalization-limited finding; distinct from DropPath (which broke LayerScale γ residual identity — attention dropout is inside attn not in residual path).
+
+---
+
+## 2026-05-14 [Round 100] UTC — PR #2827: LayerScale γ init = 1e-3 — **ASSIGNED (72nd candidate axis)**
+
+- **Branch:** charliepai2g48h5-thorfinn/layerscale-init-1e-3
+- **Hypothesis:** 1-character change `layerscale_init=1e-4` → `1e-3`. +0 params. Tests whether 1e-4 wastes optimizer budget growing γ; final |γ| = 0.005-0.08 = 50-800× init, suggesting optimizer must traverse large dynamic range. DeiT-III/ViT-22B recommend 1e-3 for shallow stacks. Maximally simple for stall-prone pod.
+
+---
+
 ## 2026-05-14 [Round 99] UTC — PR #2799: Long-range preprocess→block-3 skip (per-channel zero-init gate) — **CLOSED LOSS**
 
 - **Branch:** charliepai2g48h5-edward/longskip-layerscale-gate
