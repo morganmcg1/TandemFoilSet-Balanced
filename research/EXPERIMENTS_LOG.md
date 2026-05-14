@@ -6,6 +6,40 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 12:15 — Round 42 cont.: close #2888 askeladd SWA (neutral on both schedules — SWA AXIS FULLY CLOSED; reveals seed variance dominates at this stack); assign askeladd EMA-decay-0.999-from-e30 (#2907) as continuous-smoothing alternative
+
+### PR #2888 — askeladd SWA from epoch 47 on epochs=50 stack (CLOSED, axis fully refuted)
+- Branch: `charliepai2g48h3-askeladd/swa47-epochs50-nlayers2-slicenum16`
+- Hypothesis: SWA over the e47-50 plateau (confirmed flat in #2872) finds a wider basin center than any single epoch's iterate.
+- Artifacts:
+  - `models/model-swa47-epochs50-nlayers2-slicenum16-20260514-105701/metrics.jsonl` (Run 1)
+  - `models/model-swa47-epochs50-nlayers2-slicenum16-20260514-113044/metrics.jsonl` (Run 2)
+
+| Run / Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| **#2872 baseline** | **34.544** | **29.916** |
+| Run 1 best single-epoch (e50) | 35.414 | 29.563 |
+| Run 1 SWA (4-epoch tail) | 35.483 (+0.07 vs best) | 29.582 (+0.02 vs best) |
+| Run 2 best single-epoch (e50) | 35.697 | 29.525 |
+| Run 2 SWA (4-epoch tail) | 35.678 (−0.02 vs best) | 29.504 (−0.02 vs best) |
+
+**SWA verdict:** sign flips between runs, |Δ| ≤ 0.07 val and ≤ 0.03 test — comfortably below seed variance. **SWA axis CLOSED for both 46-epoch (#2857) AND 50-epoch schedules.** Mechanism failure: askeladd's trajectory was still mildly descending through e50 (e47-50 mean slope ~−0.1/epoch, vs #2872's +0.02/epoch true plateau), so SWA's uniform tail average pulls toward worse earlier iterates ≈ neutralizes.
+
+**BIGGER FINDING — seed variance is the dominant uncertainty source at this stack:**
+- Three same-config runs (n_layers=2 + slice_num=16 + epochs=50 + surf_weight=10 + Lion + L1 + cosine) gave **val [34.544 (#2872), 35.414, 35.697]**, sample std ≈ 0.605, range 1.153 val units (3.3% relative)
+- All test_avg results landed [29.916, 29.563, 29.525] — sample std ≈ 0.22 (test is more stable)
+- **Implication: PR #2872's val 34.544 was 1-2σ lucky.** True mean of this config is ~35.2.
+- **Re-interprets frieren #2883 (val 35.140):** within seed-noise of the true mean rather than a clear regression. Test improvement on all 4 splits is the more robust signal.
+- **Trajectory shape itself is seed-dependent:** #2872 plateaued by e47; #2888 runs both still descending at e50. Same config, different convergence paths.
+
+**Implication for advisor strategy:** Single-seed comparisons of small tweaks (<2% delta) are below the noise floor at this stack. Future experiments need either (a) ≥3-seed runs, (b) target large mechanism gains (≥3-5%), or (c) test mechanisms that should be robust across seeds (regularization, smoothing, augmentation).
+
+### Round 42 cont. assignment: askeladd #2907 EMA-decay-0.999-from-e30
+- Hypothesis: EMA continuously integrates over the trajectory with exponential decay; unlike SWA's uniform tail, EMA's most-recent weights dominate but maintain regularization from earlier good iterates. Could capture late-epoch oscillation smoothing even when trajectory is descending (SWA's failure mode).
+- Implementation: `torch.optim.swa_utils.AveragedModel(model, avg_fn=ema_avg)` with decay=0.999 from epoch 30.
+- Per-epoch overhead: negligible (~one tensor copy/blend per epoch).
+- Decision threshold: |Δ| > 0.5 val between EMA vs best-single-epoch in the same run = clear effect.
+
 ## 2026-05-14 12:00 — Round 42 cont.: close #2883 frieren specialized surf/vol decoders (+1.73% val vs NEW BASELINE — mechanism validated but val regression; compound with epochs=50 assigned)
 
 ### PR #2883 — frieren specialized surf/vol decoders (n_layers=2+slice_num=16+epochs=46) — CLOSED, compounded

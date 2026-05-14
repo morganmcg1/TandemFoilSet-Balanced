@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 12:00
+- **Date:** 2026-05-14 12:15
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -15,7 +15,9 @@
 > **EPOCH-BUDGET WIN (Round 42).** epochs=50 (T_max=50) vs epochs=46 (T_max=46): the cosine's extended decay captured one more productive descent step at e46→e47 (slope −0.452, largest in final tail). Val −2.02%, test −1.09%. E47-50 is flat plateau [34.54-34.79] — epoch-budget axis saturated at e47 for this stack. BOTH val and test improved; confirmed above seed-variance floor.
 > **Previous baseline (PR #2468):** val=35.256, test=30.245 (n_layers=2+slice_num=16+epochs=46).
 
-> **SWA REOPENED** under new conditions: SWA was closed for epochs=46 (trajectory still descending, no flat region). With epochs=50, plateau confirmed at e47-50 (3 flat epochs). This is EXACTLY the regime where SWA should work. Assigning askeladd epochs=50 + SWA from e47.
+> **SWA AXIS FULLY CLOSED (both schedules)** — #2888 askeladd epochs=50 + SWA-from-e47 (2 independent runs): SWA Δ vs best single-epoch sign-flips between runs (|Δ| ≤ 0.07 val, ≤ 0.03 test), comfortably below seed variance. Reason for closure: askeladd's two runs both still mildly descending through e50 (mean slope ~−0.1/epoch, vs #2872's true plateau +0.02/epoch). The "plateau premise" was config-and-seed specific to #2872 — same config, different seeds produced different trajectory shapes. SWA closed for both 46-epoch (still-descending, #2857) AND 50-epoch (variable plateau, #2888) regimes.
+>
+> **MAJOR INSIGHT — seed variance dominates at this stack** (from #2888): three same-config runs gave val [34.544, 35.414, 35.697], sample std 0.605, range 1.153 (3.3% relative). PR #2872's val=34.544 was 1-2σ lucky; true mean ~35.2. **This re-interprets:** (a) frieren #2883 (val 35.140) was within seed-noise of true mean, NOT a clear regression — test wins on all 4 splits are the more robust signal; (b) future experiments need ≥3 seeds for small-delta comparisons OR target ≥3-5% mechanism gains OR test variance-robust mechanisms (smoothing, regularization, augmentation). Single-seed <2% delta comparisons are below the noise floor.
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
@@ -136,7 +138,7 @@
 | edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
-| askeladd | **#2888** | **SWA from e47 on epochs=50 stack** — compound on confirmed plateau (e47-50 flat [34.54-34.79]); reopens SWA axis (was closed for e46 still-descending trajectory) | **Round 42: SWA on plateau compound** |
+| askeladd | **#2907** | **EMA decay=0.999 from e30** — continuous smoothing alternative to SWA (uniform window). Tests whether exponential decay can capture smoothing benefit when trajectory descending (SWA's failure mode). | **Round 42: EMA smoothing** |
 | frieren | **#2904** | **Specialized decoders + epochs=50 COMPOUND** — stacks validated mechanism from #2883 (cos sim 0.04 orthogonal, +4.7% params, all 4 test splits improved at e46) with the new baseline epoch-budget (#2872). Two orthogonal mechanisms. | **Round 42: orthogonal compound** |
 
 **Closed Round 40**:
