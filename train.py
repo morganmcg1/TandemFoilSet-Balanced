@@ -161,7 +161,8 @@ class PhysicsAttention(nn.Module):
 
 
 class SqueezeExcitation(nn.Module):
-    """Squeeze-Excitation channel gate with content-aware attention pool.
+    """Squeeze-Excitation channel gate with content-aware attention pool +
+    bottleneck dropout post-GELU pre-fc2 (PR #2848).
 
     Replaces SE's standard mean-pool with a learned single-head attention pool
     (Lin et al. 2017 "Structured Self-Attentive Sentence Embedding"; Lee et al.
@@ -174,12 +175,18 @@ class SqueezeExcitation(nn.Module):
     sharpen the pool toward informative tokens (surface, wake, boundary).
 
     Zero-init fc2 so gate = sigmoid(0) = 0.5 uniformly at step 0.
+
+    Bottleneck dropout (p=0.1) applied AFTER GELU and BEFORE fc2 tests the
+    implicit-sparsification hypothesis from PR #2814 — GELU's 16-26% hard-masking
+    appears to act as beneficial regularization, so explicit dropout on the same
+    24-channel bottleneck may stack additively. +0 params.
     """
-    def __init__(self, dim: int, reduction: int = 8):
+    def __init__(self, dim: int, reduction: int = 8, bottleneck_dropout_p: float = 0.1):
         super().__init__()
         d_hidden = max(1, dim // reduction)
         self.attn_pool = nn.Linear(dim, 1, bias=True)
         self.fc1 = nn.Linear(dim, d_hidden, bias=True)
+        self.bottleneck_dropout = nn.Dropout(p=bottleneck_dropout_p)
         self.fc2 = nn.Linear(d_hidden, dim, bias=True)
         with torch.no_grad():
             self.fc2.weight.zero_()
@@ -192,7 +199,7 @@ class SqueezeExcitation(nn.Module):
             attn_logits = attn_logits.masked_fill(~mask.unsqueeze(-1), -1e9)
         attn_weights = torch.softmax(attn_logits, dim=1)  # (B, N, 1)
         s = (x * attn_weights).sum(dim=1)  # (B, D)
-        s = self.fc2(F.gelu(self.fc1(s)))
+        s = self.fc2(self.bottleneck_dropout(F.gelu(self.fc1(s))))
         gate = torch.sigmoid(s)
         return x * gate.unsqueeze(1)
 
@@ -546,15 +553,18 @@ print(f"Actual total params: {n_params}")
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
+_se_dropout_p = _se_modules[0].bottleneck_dropout.p if _se_modules else 0.0
 print(
-    f"Squeeze-Excitation with ATTENTION POOL (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
+    f"Squeeze-Excitation with ATTENTION POOL + BOTTLENECK DROPOUT (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
     f"attention pool: Linear({model_config['n_hidden']},1) -> softmax over tokens (masked); "
     f"fc1({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> GELU -> "
+    f"Dropout(p={_se_dropout_p}) post-GELU pre-fc2 -> "
     f"fc2({model_config['n_hidden']//4}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
     f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
     f"attn_pool trunc_normal_ init (std=0.02) -> softmax over T~100K ~ uniform at step 0 (~mean pool baseline); "
-    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 mean pool #2765)"
+    f"PR #2848 tests implicit-sparsification hypothesis from PR #2814; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.8909 (SE attn-pool #2810)"
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
@@ -676,6 +686,16 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+_dropout_train_check_done = False
+_dropout_eval_check_done = False
+
+# Locate SE bottleneck dropout via uncompiled module for diagnostic-mode checks.
+_inner_for_dropout = getattr(model, "_orig_mod", model)
+_se_dropouts = [
+    blk.se.bottleneck_dropout
+    for blk in _inner_for_dropout.blocks
+    if blk.se is not None
+]
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -688,6 +708,14 @@ for epoch in range(MAX_EPOCHS):
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        if not _dropout_train_check_done:
+            for _di, _d in enumerate(_se_dropouts):
+                print(
+                    f"SE bottleneck_dropout[{_di}] first-train-step: "
+                    f"training={_d.training}, p={_d.p} "
+                    f"(model.training={model.training}) — dropout ACTIVE expected"
+                )
+            _dropout_train_check_done = True
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -720,6 +748,14 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    if not _dropout_eval_check_done:
+        for _di, _d in enumerate(_se_dropouts):
+            print(
+                f"SE bottleneck_dropout[{_di}] first-eval-pass: "
+                f"training={_d.training}, p={_d.p} "
+                f"(model.training={model.training}) — dropout INACTIVE expected"
+            )
+        _dropout_eval_check_done = True
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
@@ -845,6 +881,7 @@ if best_metrics:
     _se_mods_with_idx = [(i, blk.se) for i, blk in enumerate(_inner.blocks) if blk.se is not None]
     _se_per_split: dict[str, list[tuple[int, torch.Tensor]]] = {}
     _attn_pool_per_split: dict[str, list[dict]] = {}
+    _gelu_pre_dropout_per_split: dict[str, list[dict]] = {}
 
     def _make_se_hook(block_idx: int, split_name: str, is_surface_t: torch.Tensor):
         def _hook(module, args, kwargs, output):
@@ -856,6 +893,17 @@ if best_metrics:
                     attn_logits = attn_logits.masked_fill(~m.unsqueeze(-1), -1e9)
                 attn_w = torch.softmax(attn_logits, dim=1)  # (B, N, 1)
                 s = (x * attn_w).sum(dim=1)  # (B, D)
+                # Capture pre-dropout GELU activations (eval mode -> dropout is
+                # identity, but explicit pre-dropout pass keeps the diagnostic
+                # robust if the hook is ever re-used during train).
+                gelu_out = F.gelu(module.fc1(s)).detach().float()  # (B, d_hidden)
+                _gelu_pre_dropout_per_split.setdefault(split_name, []).append({
+                    "block_idx": block_idx,
+                    "gelu_zero_frac": float((gelu_out.abs() < 1e-4).float().mean().cpu()),
+                    "gelu_post_act_mean": float(gelu_out.mean().cpu()),
+                    "gelu_post_act_std": float(gelu_out.std().cpu()),
+                    "gelu_post_act_abs_mean": float(gelu_out.abs().mean().cpu()),
+                })
                 s = module.fc2(F.gelu(module.fc1(s)))
                 gate = torch.sigmoid(s).detach().float().cpu()
                 _se_per_split.setdefault(split_name, []).append((block_idx, gate))
@@ -928,6 +976,31 @@ if best_metrics:
             })
         _se_log["splits"][_split_name] = _split_log
     append_metrics_jsonl(metrics_jsonl_path, _se_log)
+
+    # SE bottleneck-GELU pre-dropout diagnostic (PR #2848): confirms GELU's
+    # implicit hard-masking rate (~16-26% per PR #2759). gelu_zero_frac near
+    # this band means SiLU-style replacement would erase the implicit
+    # sparsification that dropout is designed to stack on top of.
+    print("\nSE bottleneck-GELU pre-dropout stats per split (best-checkpoint weights):")
+    for _split_name, _ge_list in _gelu_pre_dropout_per_split.items():
+        for _ge in _ge_list:
+            print(
+                f"  Split: {_split_name}  SE block[{_ge['block_idx']}]: "
+                f"gelu_zero_frac={_ge['gelu_zero_frac']:.4f}  "
+                f"gelu_post_act_mean={_ge['gelu_post_act_mean']:.4f}  "
+                f"gelu_post_act_std={_ge['gelu_post_act_std']:.4f}  "
+                f"gelu_post_act_abs_mean={_ge['gelu_post_act_abs_mean']:.4f}"
+            )
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "se_gelu_pre_dropout_diagnostic",
+                "epoch": int(best_metrics["epoch"]),
+                "split": _split_name,
+                "block_idx": _ge["block_idx"],
+                "gelu_zero_frac": _ge["gelu_zero_frac"],
+                "gelu_post_act_mean": _ge["gelu_post_act_mean"],
+                "gelu_post_act_std": _ge["gelu_post_act_std"],
+                "gelu_post_act_abs_mean": _ge["gelu_post_act_abs_mean"],
+            })
 
     # SE attention-pool diagnostic: how concentrated is the pool? How much
     # weight on surface tokens vs uniform reference (~surface_frac=0.05-0.3
