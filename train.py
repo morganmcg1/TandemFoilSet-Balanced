@@ -427,6 +427,119 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CL/CD auxiliary loss
+# ---------------------------------------------------------------------------
+
+def compute_clcd_loss(
+    x: torch.Tensor,
+    pred: torch.Tensor,
+    y_norm: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    stats: dict,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Path-integral CL/CD auxiliary loss using node positions.
+
+    For a closed surface contour C, the pressure force (per unit span) is
+    ``F = -∮ p · n ds``. Parameterising by arc-length and using the
+    relation ``n ds = (dz, -dx)`` for a CCW contour, the components reduce
+    to pure path integrals over the contour:
+
+        F_z (lift)  =  ∮ p dx
+        F_x (drag)  = -∮ p dz
+
+    The path-integral form avoids any explicit surface-normal / orientation
+    computation: the only requirement is that surface nodes be sequentially
+    ordered along the contour (verified by inspection of the dataset). The
+    sign convention may flip per sample depending on whether the stored node
+    order is CW or CCW, but |pred - gt| is sign-agnostic because both use
+    the same tangent direction.
+
+    Note: dims 2-3 of ``x`` (``saf``) were *not* usable as a tangent feature:
+    inspection showed they contain frequent zeros and oscillate locally,
+    yielding contour arclengths roughly 1/3 of the true perimeter. Using the
+    node positions (dims 0-1) directly is correct and stable.
+
+    Tandem samples have two surface contours stored as two contiguous index
+    ranges separated by a large jump. Contributions are restricted to nodes
+    whose immediate neighbours in ``N`` are *also* surface nodes (``surf3``),
+    so the contour-boundary edges contribute zero — this both avoids spurious
+    long-edge contributions and means tandem CL/CD sums correctly across the
+    two foils.
+
+    Args:
+        x:          [B, N, 24] raw (unnormalized) input features.
+        pred:       [B, N, 3]  model output in normalized space.
+        y_norm:     [B, N, 3]  target in normalized space.
+        is_surface: [B, N]     bool, True for surface nodes.
+        mask:       [B, N]     bool, True for real nodes (not padding).
+        stats:      unused (kept for API consistency); integration is performed
+                    in normalized pressure space.
+
+    Returns:
+        aux_loss: scalar tensor (mean of |CL_err| + |CD_err| over batch).
+        cl_err:   [B] absolute CL error per sample.
+        cd_err:   [B] absolute CD error per sample.
+    """
+    pos_x = x[..., 0]   # [B, N]
+    pos_z = x[..., 1]   # [B, N]
+
+    # Integrate in NORMALIZED pressure space. The path integral of a constant
+    # offset on a closed contour is zero, so ``∮ ((p - p_mean) / p_std) dx``
+    # differs from the physical-space integral only by a constant factor of
+    # ``1/p_std`` (≈ 1/680 here). Working in normalized space keeps
+    # ``aux_loss`` at O(1), matching the scale of ``main_loss`` and making
+    # ``cfg.clcd_aux_weight`` directly comparable to other ratios in the
+    # training loss (without the ~680× overshoot that physical-space gives).
+    p_pred = pred[..., 2].float()
+    p_gt   = y_norm[..., 2].float()
+
+    surf = mask & is_surface  # [B, N]
+
+    # Restrict to nodes whose ±1 neighbours are also surface, so finite
+    # differences across the contour boundary / padding contribute zero.
+    surf_next = torch.roll(surf, -1, dims=1)
+    surf_prev = torch.roll(surf,  1, dims=1)
+    valid = (surf & surf_next & surf_prev).float()  # [B, N]
+
+    # Central-difference along the (sequentially-ordered) contour.
+    pos_x_next = torch.roll(pos_x, -1, dims=1)
+    pos_x_prev = torch.roll(pos_x,  1, dims=1)
+    pos_z_next = torch.roll(pos_z, -1, dims=1)
+    pos_z_prev = torch.roll(pos_z,  1, dims=1)
+    dx = 0.5 * (pos_x_next - pos_x_prev)  # [B, N]
+    dz = 0.5 * (pos_z_next - pos_z_prev)  # [B, N]
+
+    # Closed-contour path integrals (same orientation for pred and gt).
+    # CL ∝ ∮ p dx,  CD ∝ -∮ p dz. The minus sign on CD is a convention only
+    # and cancels in |CL_pred - CL_gt|, so we keep both consistent.
+    CL_pred = (p_pred * dx * valid).sum(dim=1)  # [B]
+    CL_gt   = (p_gt   * dx * valid).sum(dim=1)
+    CD_pred = -(p_pred * dz * valid).sum(dim=1)
+    CD_gt   = -(p_gt   * dz * valid).sum(dim=1)
+
+    # Normalize by per-sample chord (streamwise extent of all surface nodes;
+    # for tandem this is the foil-pair envelope, which is a consistent
+    # per-sample scale for both pred and gt).
+    large = 1e6
+    surf_f = surf.float()
+    pos_x_surf_max = (pos_x - large * (1.0 - surf_f)).amax(dim=1)
+    pos_x_surf_min = (pos_x + large * (1.0 - surf_f)).amin(dim=1)
+    chord = (pos_x_surf_max - pos_x_surf_min).clamp(min=1e-6)  # [B]
+
+    CL_pred = CL_pred / chord
+    CL_gt   = CL_gt   / chord
+    CD_pred = CD_pred / chord
+    CD_gt   = CD_gt   / chord
+
+    cl_err = (CL_pred - CL_gt).abs()  # [B]
+    cd_err = (CD_pred - CD_gt).abs()  # [B]
+    aux_loss = (cl_err + cd_err).mean()
+
+    return aux_loss, cl_err.detach(), cd_err.detach()
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -458,6 +571,7 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    clcd_aux_weight: float = 0.0  # auxiliary CL/CD integration loss weight (0 = disabled)
 
 
 cfg = sp.parse(Config)
@@ -635,6 +749,19 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
+            # --- CL/CD auxiliary loss ---
+            clcd_loss_val = torch.tensor(0.0, device=device)
+            cl_err_val = torch.tensor(0.0, device=device)
+            cd_err_val = torch.tensor(0.0, device=device)
+            if cfg.clcd_aux_weight > 0:
+                clcd_aux, cl_err_b, cd_err_b = compute_clcd_loss(
+                    x, pred, y_norm, is_surface, mask, stats
+                )
+                clcd_loss_val = clcd_aux
+                cl_err_val = cl_err_b.mean()
+                cd_err_val = cd_err_b.mean()
+                loss = loss + cfg.clcd_aux_weight * clcd_aux
+
         optimizer.zero_grad()
         loss.backward()
         clip_value = cfg.grad_clip if cfg.grad_clip > 0 else float('inf')
@@ -650,6 +777,9 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/clcd_aux_loss": clcd_loss_val.item(),
+            "train/CL_err": cl_err_val.item(),
+            "train/CD_err": cd_err_val.item(),
             "global_step": global_step,
         })
 
