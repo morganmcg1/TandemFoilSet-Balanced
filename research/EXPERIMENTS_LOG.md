@@ -2,6 +2,72 @@
 
 ---
 
+## 2026-05-14 [Round 77] UTC — Round 77
+
+### PR #2615 fern: Stochastic Depth / DropPath p=0.1 — CLOSED (1st stale_wip → axis non-retried)
+
+- **Branch:** `charliepai2g48h5-fern/drop-path-p01`
+- **Hypothesis (preserved):** Per-block per-branch residual zeroing at p=0.1 (CaiT-style; Touvron 2021); 4 blocks × 2 branches = 2^8=256 implicit sub-network ensemble; zero params; orthogonal to LayerScale γ damping.
+- **Status:** Closed as 1st stale_wip. PR created 2026-05-13T22:16:56Z, last updated 2026-05-13T22:16:57Z (advisor placeholder commit only). Zero pod activity for ~24h+ across rounds 68 through 76.
+
+**fern pod stall history this launch:**
+
+| PR | Hypothesis | Stall # | Outcome |
+|---|---|---|---|
+| #2496 | per-channel-surf-p3 | 1st | Retried as #2557 |
+| #2557 | per-channel-surf-p3 retry-1 | 2nd | Axis abandoned |
+| #2615 | DropPath p=0.1 | 1st | **Axis not retried this launch** |
+
+**Multi-launch precedent:** DropPath was also abandoned in a prior launch after 4 consecutive stalls (round-39 of that launch). The implementation pattern — per-block per-branch random residual zeroing with training/eval mode handling — appears to systematically not get picked up by this pod across launches. Rather than continue the abandon-after-N-retries cycle, pivot fern to a structurally distinct, implementation-light axis.
+
+- **Action:** Closed. Pivoted fern to maximally implementation-light optimization-internal probe never tried in launch.
+
+### PR #2677 fern: Gradient Noise Injection (Neelakantan 2015) — ASSIGNED (Round-77)
+
+- **Branch:** `charliepai2g48h5-fern/grad-noise-eta003`
+- **Hypothesis:** Add annealed Gaussian noise to gradients between `loss.backward()` and `optimizer.step()`. Schedule: σ_t = η / (1 + t)^γ with η=0.03, γ=0.55. Targets escape from Lion narrow minimum via early-epoch saddle-point perturbation; noise anneals automatically with step count so late-stage cosine cooldown is unimpeded.
+
+- **Code pattern (3-line addition):**
+```python
+loss.backward()
+# NEW:
+noise_eta = 0.03
+noise_gamma = 0.55
+sigma_t = noise_eta / (1.0 + global_step) ** noise_gamma
+with torch.no_grad():
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.add_(torch.randn_like(p.grad), alpha=sigma_t)
+# END NEW
+optimizer.step()
+optimizer.zero_grad()
+global_step += 1
+```
+
+- **Schedule preview:**
+
+| Step | σ_t |
+|---|---|
+| 0 | 0.0300 |
+| 100 (~ep2) | 0.00408 |
+| 1000 (~ep20) | 0.00118 |
+| 3500 (~ep70 terminal) | 0.00048 |
+
+Meaningful noise only in first ~5-10 epochs, fading naturally without manual scheduling.
+
+- **Predicted outcomes:**
+  - **WIN (val < 33.37):** Early-stage noise breaks Lion narrow-minimum tendency (consistent with closed 30th β₁=0.95 LOSS + 35th β₁=0.85 LOSS evidence that Lion sits in narrow basin). Pushes optimization toward flatter basin with better OOD generalization. Best case −0.5% to −2%; per-split camber_rc and re_rand improve most.
+  - **WASH (33.37–33.7):** Noise too small to perturb Lion sign-step meaningfully; no effect. Confirms narrow minimum is intrinsic and not addressable by gradient noise. Consider higher η in follow-up.
+  - **LOSS (>33.7):** Noise destabilizes early epochs; Lion sign-step amplifies noise-induced sign flips. Close axis at η=0.03.
+
+- **Structurally orthogonal:** to all 41 closed taxa AND all 7 in-flight WIP. Modifies gradient signal BEFORE optimizer-internal momentum/sign logic — distinct from Lion-internal closures (β₁/β₂/LR), per-group LR (LLRD/embed-UP), weight averaging (EMA/SWA), and meta-optimizer wrappers (Lookahead/SAM). Zero structural model change preserves all closed-axis insights.
+
+- **Why fern:** Implementation-light maximizes pickup probability after 3 consecutive stalls (#2496, #2557, #2615). 3-line training-loop addition vs DropPath's per-block module wrapping.
+
+- **Baseline to beat:** val_avg/mae_surf_p < 33.3722.
+
+---
+
 ## 2026-05-14 [Round 76] UTC — Round 76
 
 ### PR #2646 alphonse: Per-block FiLM (4 independent gates, one per block input) — CLOSED (LOSS; 41st taxon)
