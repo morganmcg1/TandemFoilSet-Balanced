@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 20:40
+- **Date:** 2026-05-14 21:00
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -70,7 +70,7 @@
 | #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged | ASSIGNED 2026-05-14 18:50 |
 | #2991 | thorfinn | Output decoder head MLP width scan: 2× (256) and 3× (384) | ASSIGNED 2026-05-14 19:25 |
 | #2965 | fern | Fourier-Re K=4: 2-seed rerun on 15th-shift baseline (compound with 2× γ width) | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
-| #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP (GPU-active, pod iter 12 @ 98%) |
+| #3007 | nezuko | Y-flip TTA at inference (paper-facing finishing move; 2× eval forward, avg in physical frame) | ASSIGNED 2026-05-14 21:00 |
 | #3001 | edward | FiLM-Re γ MLP init std scan: film_re_init_std=0.05/0.03 vs global 0.07 | ASSIGNED 2026-05-14 20:40 |
 | #2990 | tanjiro | FiLM-Re γ MLP depth-2 at width=256 (extend #2948 win) | ASSIGNED 2026-05-14 19:20 |
 | #3002 | askeladd | Inverted late-block lr: 0.7×/0.5× reduction tests early-block OOD signal | ASSIGNED 2026-05-14 20:40 |
@@ -87,6 +87,7 @@
 - #2943 (edward head-depth) — depth=3 single_in_dist −6.90% but all OOD splits regress. 4th OOD-vs-IID trade-off.
 - **#2972 (edward LayerScale)** — init=0.1: val +5.3%, test +6.0%; init=0.01: val +9.4%, test +9.8%. Near-identity residual init wastes early-epoch learning at 30-min cap. All 4 splits regress. Closed.
 - **#2971 (askeladd slice dropout)** — drop_p=0.1: test +3.41%; drop_p=0.2: test +5.53%. Monotonic OOD regression; IID improves (classic dropout-as-regularizer for in-dist). Four-axis routing pattern now complete. Closed.
+- **#2926 (nezuko DropPath)** — drop_path=0.1: val +3.65/test +4.70; drop_path=0.2: val +4.81/test +4.12. test_geom_camber_rc regress +11-13% (opposite of OOD-help hypothesis). 5-block Transolver too shallow for stochastic depth (literature regime depth ≥ 12). Closed.
 
 ## Key meta-findings
 
@@ -106,6 +107,7 @@
 14. **Per-block lr OOD signal lives in EARLY layers, not late (#2959 alphonse)** — late_block_lr×1.5 improves IID by −4.0% but regresses geom_camber_rc by +2.4%; 2.0× amplifies (+6.0% on camber_rc). 5th OOD-vs-IID instance. Inverted scaling (late_block_lr_scale=0.7/0.5) is now the active test (askeladd #3002).
 15. **FiLM-Re γ MLP is input-bottlenecked (γ_w_L2 evidence, #2965 fern)** — K=4 Fourier input flattens γ_w_L2 depth gradient (3.4→5.2 monotone → ~3.6 flat). Validates the capacity+input-expressivity axis pair. Now being retested on 15th-shift baseline (compound with 2× γ width).
 16. **Slice routing perturbation reliably trades OOD for IID (four-axis closed)** — sharpen τ (#2953), soften τ, slice dropout (#2971), late-block lr boost (#2959) all show the same OOD-IID wedge. Only conditioning-capacity expansion (FiLM-Re γ width) breaks the wedge. Future routing-layer interventions expected to show the same pattern.
+17. **Block-level stochastic regularizers retired at depth=5 (#2926)** — DropPath at rates 0.1/0.2 over-regularizes a 5-block Transolver; literature regime is depth ≥ 12 (ViT-L, Swin-L, MAE). The depth-scaled per-block residual is doing structural work that random zeroing destroys faster than ensemble benefit can compensate. Combined with #11/#16, **only conditioning-capacity expansion has worked**. Two regularization tiers retired: block-level over-regularizes; routing-perturbation trades OOD/IID. Path forward: conditioning-capacity-side interventions only (γ width #2948, γ depth #2990, γ Fourier input #2965, γ component-init #3001).
 
 ## Currently retired axes
 

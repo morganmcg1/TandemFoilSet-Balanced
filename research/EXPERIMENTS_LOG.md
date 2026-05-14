@@ -3193,3 +3193,33 @@ Perturbing the routing decision reliably trades OOD for IID. Expanding condition
 - Arms: late_block_lr_scale=0.7 s1 (mild: late=5.25e-5, early=7.5e-5), late_block_lr_scale=0.5 s2 (strong: late=3.75e-5)
 - Merge bar: mean val < 33.71, mean test < 28.65
 - The per-block lr implementation must be built independently (alphonse's #2959 branch not merged).
+
+---
+
+## 2026-05-14 20:55 — PR #2926: DropPath stochastic depth nezuko (CLOSED)
+- Branch: `willowpai2g48h3-nezuko/droppath-stochastic-depth`
+- Hypothesis: Per-block stochastic depth (depth-scaled linear rates 0.1/0.2) as implicit ensemble regularizer; predicted to help OOD by training a distribution of effective sub-networks.
+
+### Results (2 arms, σ=0.07 baseline comparison)
+
+| Arm | drop_path | W&B ID | val_avg | test_avg | sid | rc | cruise | re_rand | Δ val | Δ test |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Baseline #2882 (σ=0.07) | 0.0 | `gj8qijiv` | 36.575 | 30.644 | 35.87 | 43.28 | 16.30 | 27.12 | — | — |
+| s1 dp=0.1 | 0.1 | `tyxnm2ox` | 40.229 | 35.342 | 42.15 | 48.68 | 19.06 | 31.47 | +3.65 | +4.70 |
+| s2 dp=0.2 | 0.2 | `9e4ocu5u` | 41.380 | 34.762 | 37.24 | 48.26 | 19.41 | 34.14 | +4.81 | +4.12 |
+
+Both arms miss 13th, 14th, and 15th shift bars by wide margins. `test_geom_camber_rc` regresses +11-13% on both arms — the *opposite* of the OOD-help hypothesis.
+
+**Root cause (student diagnosis, elevated to meta-finding):** DropPath benefits scale with depth. Literature regime: ViT-L=24, Swin-L=24, MAE=24+. Transolver here has only 5 blocks — per-block residual is doing structural work that zeroing destroys faster than it adds ensemble benefit.
+
+**Decision: CLOSED.** Block-level stochastic regularizers are now retired at Transolver depth=5. Combined with the four-axis routing-perturbation pattern, two regularization tiers are retired: block-level (DropPath) over-regularizes; slice-routing perturbation (τ, dropout, late-block lr) trades OOD for IID. **Only conditioning-capacity expansion (FiLM-Re γ width) has worked.**
+
+---
+
+## 2026-05-14 21:00 — PR #3007: Y-flip TTA at inference nezuko (ASSIGNED)
+- Branch: `willowpai2g48h3-nezuko/yflip-tta`
+- Hypothesis: At val/test, forward each sample twice (original + y-flipped with AoA→−AoA and Uy→−Uy reflection), average predictions in physical frame. Decouples FiLM-Re γ specialization (preserved at per-forward-pass level) from ensemble averaging (output level only). Avoids the #2895 training-time-aug failure mode.
+- Training is unchanged; only eval is augmented. Paper-facing finishing move.
+- Arms: tta_yflip=1 s1, tta_yflip=1 s2 (variance check)
+- Merge bar: mean val < 33.71, mean test < 28.65
+- Mesh y-symmetry and AoA range symmetry must be verified in debug pass first.
