@@ -137,6 +137,36 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class SqueezeExcitation(nn.Module):
+    """Squeeze-Excitation channel gate (Hu et al. 2018 CVPR) — masked global
+    average pool over tokens, bottleneck MLP, sigmoid gate, broadcast multiply.
+
+    Mask is threaded through forward to exclude padded mesh nodes from the
+    global pool (TandemFoilSet meshes range 74K-242K nodes; padding fraction up
+    to ~70% within a batch makes unmasked pool biased on small-mesh samples).
+    Zero-init fc2 so gate = sigmoid(0) = 0.5 uniformly at step 0.
+    """
+    def __init__(self, dim: int, reduction: int = 8):
+        super().__init__()
+        d_hidden = max(1, dim // reduction)
+        self.fc1 = nn.Linear(dim, d_hidden, bias=True)
+        self.fc2 = nn.Linear(d_hidden, dim, bias=True)
+        with torch.no_grad():
+            self.fc2.weight.zero_()
+            self.fc2.bias.zero_()
+
+    def forward(self, x, mask=None):
+        # x: (B, N, D); mask: (B, N) bool, True for real nodes
+        if mask is not None:
+            mask_f = mask.unsqueeze(-1).to(x.dtype)
+            s = (x * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1)
+        else:
+            s = x.mean(dim=1)
+        s = self.fc2(F.gelu(self.fc1(s)))
+        gate = torch.sigmoid(s)
+        return x * gate.unsqueeze(1)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
@@ -153,6 +183,7 @@ class TransolverBlock(nn.Module):
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.se = SqueezeExcitation(hidden_dim, reduction=8)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -160,9 +191,10 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, mask=None):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        fx = self.se(fx, mask=mask)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -218,6 +250,7 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
@@ -225,7 +258,7 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, mask=mask)
         return {"preds": fx}
 
 
@@ -255,7 +288,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx_factory():
-                pred = model({"x": x_norm})["preds"]
+                pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()
 
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
@@ -478,6 +511,18 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# SE diagnostic: count modules and added params
+_se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
+_n_se = len(_se_modules)
+_n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
+print(
+    f"Squeeze-Excitation (Hu et al. 2018): added {_n_se} SE modules, +{_n_se_params} params (reduction=8); "
+    f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//8}) -> GELU -> "
+    f"fc({model_config['n_hidden']//8}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
+    f"applied at END of each TransolverBlock; zero-init fc2 -> gate=0.5 uniform at step 0; "
+    f"baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -599,7 +644,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
@@ -740,6 +785,59 @@ if best_metrics:
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
+
+    # Squeeze-Excitation diagnostic: gate stats per block on a sample val batch.
+    # Hook each SE module to capture its gate; one forward pass populates them.
+    _se_mods = [m for m in _inner.modules() if isinstance(m, SqueezeExcitation)]
+    _se_captured: list[tuple[int, torch.Tensor]] = []
+
+    def _make_se_hook(idx: int):
+        def _hook(module, args, kwargs, output):
+            with torch.no_grad():
+                x = args[0] if args else kwargs.get("x")
+                m = kwargs.get("mask")
+                if m is not None:
+                    mf = m.unsqueeze(-1).to(x.dtype)
+                    s = (x * mf).sum(dim=1) / mf.sum(dim=1).clamp(min=1)
+                else:
+                    s = x.mean(dim=1)
+                s = module.fc2(F.gelu(module.fc1(s)))
+                gate = torch.sigmoid(s).detach().float().cpu()
+                _se_captured.append((idx, gate))
+        return _hook
+
+    _se_handles = [m.register_forward_hook(_make_se_hook(i), with_kwargs=True)
+                   for i, m in enumerate(_se_mods)]
+
+    _se_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _x_s, _y_s, _is_s, _m_s = next(iter(_se_loader))
+        _x_s = _x_s.to(device, non_blocking=True)
+        _m_s = _m_s.to(device, non_blocking=True)
+        _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+        # Route through uncompiled module so Python-level hooks fire
+        # (torch.compile bypasses hooks registered after compile).
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+    for _h in _se_handles:
+        _h.remove()
+
+    print("\nSE gate stats per block (sample val batch, best-checkpoint weights):")
+    _se_log = {"event": "se_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    for _idx, _gate in _se_captured:
+        _gm = _gate.mean().item()
+        _gs = _gate.std().item()
+        _gmin = _gate.min().item()
+        _gmax = _gate.max().item()
+        print(f"  SE block[{_idx}]: gate mean={_gm:.4f}  std={_gs:.4f}  min={_gmin:.4f}  max={_gmax:.4f}")
+        _se_log["blocks"].append({
+            "block_idx": _idx,
+            "gate_mean": _gm,
+            "gate_std": _gs,
+            "gate_min": _gmin,
+            "gate_max": _gmax,
+        })
+    append_metrics_jsonl(metrics_jsonl_path, _se_log)
 
     test_metrics = None
     test_avg = None
