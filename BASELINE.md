@@ -5,14 +5,182 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Five winners merged.** PR #2954 (askeladd, torch.compile) is now the
-current baseline at `val_avg/mae_surf_p = 65.953` (-9.3% vs PR #2936).
-All subsequent experiments MUST use `--compile_model` flag.
-Recipe: `--loss l1 --lr 2e-3 --epochs 25 --eval_every 2 --compile_model`
-VRAM footprint ~24 GB (down from ~33 GB — compile fuses kernels).
-Throughput: ~50 s/epoch (was ~94 s). All 25 epochs fit in 21.7 min.
+**Nine winners merged.** PR #2970 (frieren, pct_start=0.2) is the
+current baseline at `val_avg/mae_surf_p = 51.817` (-2.88% val / -2.47% test vs PR #1625).
+Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2`
+VRAM footprint ~24 GB. Throughput: ~50.5 s/epoch. All 35 epochs fit in ~29 min.
 
-## 2026-05-14 — PR #2954: torch.compile (askeladd) ← CURRENT BEST
+## 2026-05-14 22:34 — PR #2970: OneCycleLR pct_start=0.2 (frieren) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **51.817**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **44.616**
+- **Improvement vs PR #1625:** -2.88% val / -2.47% test
+- **Best epoch:** 35/35 configured (all fit in ~29 min)
+- **Key change:** `--pct_start 0.2` extends OneCycleLR warmup from 3.5 ep (default 0.1) to 7 ep.
+  Two compounding effects: (1) avoids bf16 gradient instability spike seen at ep 10 with fast warmup
+  (0.05 arm shows val 130 → 154 at ep 10, absent in 0.2 arm); (2) keeps ~30% higher LR during
+  productive cosine tail (epochs 15–25). Crossover with short-warmup arm at ep 28; Arm B finishes
+  2.85 ahead.
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 31.929 |
+| val_re_rand | 51.773 |
+| val_single_in_dist | 55.477 |
+| val_geom_camber_rc | **68.090** |
+| **val_avg** | **51.817** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 26.711 |
+| test_re_rand | 42.358 |
+| test_single_in_dist | 49.047 |
+| test_geom_camber_rc | 60.347 |
+| **test_avg** | **44.616** |
+
+- **Metric artifacts:**
+  - Arm A (pct_start=0.05): `models/model-charliepai2g48h1-frieren-pct-start-0.05-compiled-ep35-20260514-210436/metrics.jsonl`
+  - Arm B (pct_start=0.2, winner): `models/model-pct-start-0.2-compiled-ep35-20260514-214148/metrics.jsonl`
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2 \
+  --agent charliepai2g48h1-frieren --experiment_name pct-start-0.2-compiled-ep35
+```
+
+Note: `--pct_start 0.2 --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --compile_model --epochs 35` is now the **required baseline recipe**. All future experiments MUST include these flags.
+
+## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline (nezuko) [previous best]
+
+- **Primary metric:** `val_avg/mae_surf_p` = **53.352**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **45.747**
+- **Improvement vs PR #1582:** -0.24% val / -0.77% test
+- **Best epoch:** 35/35 configured (all fit in 30.1 min)
+- **Key change:** `--surf_channel_weight "1.0,1.0,2.0"` doubles the pressure (p) channel weight
+  within the surface L1 loss while halving velocity channels. Cruise (-5.1% val) and
+  single_in_dist (-4.8% val) improve; rc regressionally (+4.8% val). Net val marginal,
+  test cleaner (-0.77%).
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 35.255 |
+| val_re_rand | 54.832 |
+| val_single_in_dist | 53.605 |
+| val_geom_camber_rc | 69.714 |
+| **val_avg** | **53.352** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 28.214 |
+| test_re_rand | 45.032 |
+| test_single_in_dist | 47.359 |
+| test_geom_camber_rc | 62.383 |
+| **test_avg** | **45.747** |
+
+- **Metric artifacts:** `models/model-surf-cw2-sw5-onecycle-ep35-compiled-20260514-192707/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" \
+  --agent charliepai2g48h1-nezuko --experiment_name surf-cw2-sw5-onecycle-ep35-compiled
+```
+
+Note: `--surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --compile_model --epochs 35` is now the **required baseline recipe**. All future experiments MUST include these flags.
+
+## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline (alphonse) [previous best]
+
+- **Primary metric:** `val_avg/mae_surf_p` = **53.482**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **46.104**
+- **Improvement vs PR #2967:** -1.82% val / -2.00% test
+- **Best epoch:** 35/35 configured (all fit in 29.7 min)
+- **Key change:** `--surf_weight 5` reduces the surface:volume loss scalar from 10 to 5.
+  The default sw=10 was over-weighting the surface loss; sw=5 gives better surf:vol balance.
+  Effect survives migration from cosine/L1/15ep → OneCycleLR/L1/bf16/compile/35ep recipe.
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 37.156 |
+| val_re_rand | 53.973 |
+| val_single_in_dist | 56.283 |
+| val_geom_camber_rc | 66.515 |
+| **val_avg** | **53.482** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 30.178 |
+| test_re_rand | 46.258 |
+| test_single_in_dist | 47.954 |
+| test_geom_camber_rc | 60.027 |
+| **test_avg** | **46.104** |
+
+- **Metric artifacts:** `models/model-sw5-onecycle-ep35-compiled-20260514-184607/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 \
+  --agent charliepai2g48h1-alphonse --experiment_name sw5-onecycle-ep35-compiled
+```
+
+Note: `--surf_weight 5 --compile_model --epochs 35` is now the **required baseline recipe**.
+
+## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension --epochs 35 (askeladd) [previous best]
+
+- **Primary metric:** `val_avg/mae_surf_p` = **54.475**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **47.043**
+- **Improvement vs PR #2954:** -17.4% val / -17.2% test
+- **Best epoch:** 35/35 configured (all fit in 29.8 min at ~51 s/epoch avg)
+- **Key change:** `--epochs 35` extends the OneCycleLR horizon; LR at ep 25 is now 4.57e-4
+  (productive mid-tail) vs the old baseline where LR was already at the floor (8e-9) by ep 25.
+  Val still improving at ep 35 (monotone decline ep 2–35) — schedule is the binding constraint.
+  VRAM and throughput identical to PR #2954 (same compile kernel fusion).
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 37.613 |
+| val_re_rand | 53.733 |
+| val_single_in_dist | 57.573 |
+| val_geom_camber_rc | 68.980 |
+| **val_avg** | **54.475** |
+
+- **Per-split test breakdown (epoch 35 checkpoint):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 30.375 |
+| test_re_rand | 46.455 |
+| test_single_in_dist | 49.797 |
+| test_geom_camber_rc | 61.544 |
+| **test_avg** | **47.043** |
+
+- **Metric artifacts:** `models/model-onecycle-ep35-compiled-20260514-171905/metrics.jsonl`
+  and `models/model-onecycle-ep35-compiled-20260514-171905/metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --agent charliepai2g48h1-askeladd --experiment_name onecycle-ep35-compiled
+```
+
+Note: `--epochs 35` is now the **required** baseline recipe. Wall-clock 29.8 min (under 30 min cap).
+All future experiments MUST use `--compile_model --epochs 35`. Without `--epochs 35`, the LR
+schedule is exhausted by ep 25 and 10 productive tail epochs are wasted.
+
+## 2026-05-14 — PR #2954: torch.compile (askeladd) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **65.953**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **56.825**
@@ -163,7 +331,7 @@ cd target && python train.py --epochs 15 --loss l1 \
 
 - **Optimizer:** `AdamW(lr=2e-3, weight_decay=1e-4)` — updated from 5e-4 (PR #1581)
 - **Scheduler:** ~~CosineAnnealingLR(T_max=epochs)~~ → **OneCycleLR** (merged PR #1581), per-batch stepping, peak_lr=`lr` arg, total_steps=`epochs * len(loader)`
-- **Loss:** ~~MSE~~ → **Pure L1** in normalized space, `vol_loss + 10.0 * surf_loss` (merged PR #1355)
+- **Loss:** ~~MSE~~ → **Pure L1** in normalized space, `vol_loss + 5.0 * surf_loss` (merged PR #1355, sw tuned PR #1582). Surface L1 uses per-channel weighting `[1.0, 1.0, 2.0]` for `[Ux, Uy, p]` (merged PR #1625).
 - **Model:** Transolver
   - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
   - `space_dim=2, fun_dim=22 (= X_DIM - 2), out_dim=3`

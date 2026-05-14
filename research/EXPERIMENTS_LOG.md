@@ -1,5 +1,276 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 22:38 — PR #2970: OneCycleLR pct_start tuning (0.05/0.2) ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-frieren/onecycle-pct-start-tuning`
+- **Hypothesis:** pct_start (warmup fraction) modulates how fast the LR ramps to peak; longer warmup (0.2) may give more stable bf16 training, shorter (0.05) extracts more productive tail.
+- **Result:** val_avg **51.817** (−2.88% vs 53.352), test_avg **44.616** (−2.47%). Winner: pct_start=0.2. Arm 0.05 regressed (+1.33). 3 of 4 splits improve; single_in_dist +3.5%.
+- **New baseline recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2`
+
+---
+
+## 2026-05-14 22:30 — PR #2970: OneCycleLR pct_start tuning (0.05/0.2) ✅ WINNER (pending rebase)
+
+- **Student branch:** `charliepai2g48h1-frieren/onecycle-pct-start-tuning`
+- **Hypothesis:** pct_start (warmup fraction) modulates how fast the LR ramps to peak; longer warmup (0.2) may give more stable bf16 training, shorter (0.05) may extract more productive tail.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | pct_start | val_avg | Δ val | test_avg | Δ test |
+|-----|----------:|--------:|------:|---------:|-------:|
+| A | 0.05 | 54.683 | +2.50% | 46.764 | +2.22% |
+| **B** | **0.2** | **51.817** | **−2.88%** ✅ | **44.616** | **−2.47%** ✅ |
+
+### Per-split val (Arm B vs baseline)
+
+| Split | Baseline | pct=0.2 | Δ |
+|-------|---------:|--------:|---|
+| val_geom_camber_cruise | 35.255 | **31.929** | −9.4% ✅ |
+| val_re_rand | 54.832 | **51.773** | −5.6% ✅ |
+| val_single_in_dist | 53.605 | 55.477 | +3.5% |
+| val_geom_camber_rc | 69.714 | **68.090** | −2.3% ✅ |
+
+3 of 4 splits improve, including the key OOD `val_geom_camber_rc`.
+
+### Action: SEND-BACK for clean rebase (mergeStateStatus=DIRTY)
+
+**Mechanism validated:** pct_start=0.2 wins on two compounding effects:
+1. **Stability gain in early bf16 training** — Arm A (0.05) shows a clear val regression spike at ep 10 (130 → 154), absent in Arm B. Hitting peak LR fast in bf16 generates gradient noise the model has to recover from.
+2. **Higher LR during productive cosine tail** — with pct_start=0.2, cosine decay starts later. During epochs 15–25 (highest-yield phase), Arm B runs ~30% higher LR. Crossover with Arm A happens at ep 28; Arm B finishes 2.85 ahead.
+
+**Blocker:** Branch was created before #1582/#1625 merged. Student copied train.py forward instead of git-rebasing, so PR diff includes surf_channel_weight code that conflicts with current advisor branch. Sent back for clean rebase (do NOT re-run; metric artifacts are valid).
+
+**Implication for research direction:** This is the first new merge in ~6 cw/sw experiments. Schedule axis (pct_start, final_div_factor) is back on the table as a productive lever. Once merged, baseline becomes 51.817 / 44.616 with pct_start=0.2 in the required recipe.
+
+## 2026-05-14 22:25 — PR #2916: bf16 batch_size=8 + extended schedule ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-tanjiro/bf16-batch8-extended-schedule`
+- **Hypothesis:** batch_size=8 halves `len(loader)`, allowing OneCycleLR to complete in 30 min with extended schedule; bf16 should keep VRAM in budget.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | config | realized | val_avg | Δ |
+|-----|--------|---------:|--------:|---|
+| Compile + bs=8 | OOM at 94GB VRAM | — | — | — |
+| A (nocompile, bs=8, ep25) | 18/25 | 79.998 | **+50%** |
+| B (nocompile, bs=8, ep35) | 18/35 | 88.147 | **+65%** |
+
+### Action: CLOSED — both execution paths failed
+
+**Why compile+bs=8 OOMs:** `torch.compile(mode='reduce-overhead', dynamic=True)` records CUDA graphs per distinct mesh shape; bs=8 doubles the shape combinatorics and each graph allocates ~8 GB in private pools. Hit 94 GB before completing epoch 1. The advisor's 48 GB prediction was wrong — variable mesh sizes (74K–242K nodes) inflate activation memory non-linearly with batch.
+
+**Why nocompile+bs=8 fails:** ~2× slower per epoch (101 s vs ~51 s with compile). Realized epochs collapse from 35 → 18. OneCycleLR cannot complete in 18 epochs — Arm B is still near peak LR at wall-clock cap.
+
+**Implication:** The compile speedup (~1.86×, PR #2954) is locked in. batch_size axis is closed for now; would require static-shape compile or `mode='default'` (engineering work for an axis already at local optimum).
+
+## 2026-05-14 22:15 — PR #3027: MLP dropout sweep (0.05/0.10) ❌ CLOSED (negative on primary, positive on OOD)
+
+- **Student branch:** `charliepai2g48h1-thorfinn/dropout-mlp-sweep`
+- **Hypothesis:** MLP dropout 0.05/0.10 reduces co-adaptation and should improve OOD splits (val_geom_camber_rc especially), where the model overfits in-distribution geometry.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | dropout | val_avg | Δ val | test_avg | Δ test |
+|-----|--------:|--------:|------:|---------:|-------:|
+| A | 0.05 | 56.967 | +6.78% | 48.749 | +6.56% |
+| B | 0.10 | 54.211 | +1.61% | 47.180 | +3.13% |
+
+### Per-split val (Arm B vs baseline)
+
+| Split | Baseline | d=0.10 | Δ |
+|-------|---------:|-------:|---|
+| **val_geom_camber_rc** ← key OOD | 69.714 | **66.166** | **−5.1%** ✅ |
+| val_geom_camber_cruise | 35.255 | 38.367 | +8.8% |
+| val_re_rand | 54.832 | 54.925 | +0.2% |
+| val_single_in_dist | 53.605 | 57.385 | +7.1% |
+
+### Test (Arm B) — `test_geom_camber_rc` also improves: 62.383 → 60.660 (−2.8%) ✅
+
+### Action: CLOSED — net regression on primary metric, but mechanism validated cleanly
+
+**Mechanism validated:** Dropout=0.10 *does* improve geometry OOD extrapolation (rc: −5.1% val, −2.8% test). This is the textbook story — dropout reduces co-adaptation and helps unseen-geometry generalization. The signal is consistent across val and test, not noise.
+
+**Why it fails on primary:** ID/cruise splits regress significantly (single_in_dist +7.1%, cruise +8.8%). Dropout slows per-step convergence; OneCycleLR cooldown can't compensate under 30-min/35-epoch cap. Both arms still monotonically descending at ep35. Arm A (0.05) is strictly worse than Arm B (0.10) — mild dropout is the worst of both worlds.
+
+**Implication:** `val_geom_camber_rc` is responsive to capacity-restriction regularizers. Lower-cost regularizers (weight decay — continuous, no per-step slowdown) or targeted ones (DropPath, deeper-block-only dropout) may capture the rc benefit without paying the ID cost. Thorfinn's own follow-ups: weight decay sweep (5e-4 / 1e-3), stochastic depth, deeper-block-only dropout, camber augmentation. **Assigning weight decay sweep to thorfinn next.**
+
+## 2026-05-14 22:08 — PR #3017: cw=[1,1,1.5]/[1,1,1.25] sweep ❌ CLOSED unexpectedly (pre-execution)
+
+- **Student branch:** `charliepai2g48h1-nezuko/surf-channel-weight-15-125-sweep`
+- **State:** PR was CLOSED at 2026-05-14T22:08:31Z with no comments and no SENPAI-RESULT (likely auto-closed by harness or branch lifecycle issue). No experiment was reported.
+- **Action:** Re-assigning the same hypothesis to nezuko on a fresh branch — cw axis below cw=2 is still high-value (cw=3 regressed, cw=2 is local optimum but rc regresses; cw<2 may preserve cruise/single gains while reducing rc penalty).
+
+## 2026-05-14 20:52 — PR #3000: cw=[1,1,3] (compound sw=5 + cw=3) ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-alphonse/surf-weight-channel-weight-compound`
+- **Hypothesis:** stronger pressure-channel weight (cw=3) compounded with sw=5 might further improve val_avg, or specifically recover val_geom_camber_rc.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Metric | Baseline | cw=3 | Δ |
+|--------|---------:|-----:|---|
+| **val_avg/mae_surf_p** | 53.352 | 55.386 | **+3.81%** |
+| test_avg/mae_surf_p | 45.747 | 47.341 | +3.48% |
+| val_geom_camber_cruise | 35.255 | 36.755 | +4.26% |
+| val_re_rand | 54.832 | 55.735 | +1.65% |
+| val_single_in_dist | 53.605 | 58.367 | **+8.88%** (worst) |
+| val_geom_camber_rc | 69.714 | 70.686 | +1.39% (no recovery) |
+
+### Action: CLOSED — clear negative result
+
+**Mechanism:** The channel-weight axis is now confirmed inverted-U: cw=2 is the local optimum, cw=3 and cw=5 (from prior PR #1625 cw sweep) both regress. The largest regression hits `val_single_in_dist` (+8.88%), suggesting the loss redistribution forces the model to sacrifice Ux/Uy structure that was supporting good p predictions downstream.
+
+**The rc split does NOT recover at higher cw.** This confirms the rc bottleneck is geometry/extrapolation (unseen M=6-8 cambers), not channel-balance in the loss. Loss-tuning has limited remaining headroom on rc.
+
+**Implication for research direction:** The cw axis is exhausted on the high side. nezuko #3017 covering cw=1.25/1.5 on the low side is the right play. Future improvements likely come from other axes (regularization, augmentation, architecture, schedule tail).
+
+## 2026-05-14 20:44 — PR #2915: EMA model weights (decay 0.999/0.9999) ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-thorfinn/ema-model-weights-onecycle`
+- **Hypothesis:** EMA-smoothed weights might give better generalization than online weights, especially in late training where the model oscillates around a good solution.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | ema_decay | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (val) |
+|-----|----------:|-------------------:|-------------------:|--------------------:|
+| A | 0.999 | 55.626 | 47.839 | **+4.3%** |
+| B | 0.9999 | 187.551 | 174.236 | **+251%** (catastrophic) |
+
+### Action: CLOSED — clear negative result
+
+**Mechanism:** EMA's premise (smooth out late-training noise around a converged solution) does not match OneCycleLR's cooldown. The LR cooldown (5e-4 → 4e-6 over the last 8 epochs) makes those epochs **meaningful descent**, not noise to filter. EMA's lag (averaging over ~2.7 epochs of older weights) cannot keep up, and EMA val ends +1.15 points worse than online val at epoch 32.
+
+The decay=0.9999 catastrophic failure is a separate lesson: with half-life ≈ 7000 steps but only ~13K total steps realized, EMA is still ~27% weighted on random-init by the end. This decay rate is mismatched to a 35-epoch budget.
+
+**Implication:** Schedule-tail tuning (askeladd #2987 final_div_factor) is partially exploring the related question of whether the LR tail is too aggressive. The right intervention there is on the schedule, not on weight averaging.
+
+## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-nezuko/surf-channel-weight-l1`
+- **Hypothesis:** Doubling the pressure (p) channel weight within the surface L1 loss (`cw=[1,1,2]`) while reducing sw from 10→5 focuses learning on pressure prediction at the expense of velocity channels.
+
+### Result (vs PR #1582 baseline 53.482 / test 46.104)
+
+| Metric | Baseline (#1582) | cw=2 (this PR) | Δ |
+|--------|-----------------|----------------|---|
+| **val_avg/mae_surf_p** | 53.482 | **53.352** | **-0.24%** |
+| test_avg/mae_surf_p | 46.104 | **45.747** | **-0.77%** |
+| val_geom_camber_cruise | 37.156 | **35.255** | -5.1% |
+| val_re_rand | 53.973 | 54.832 | +1.6% |
+| val_single_in_dist | 56.283 | **53.605** | -4.8% |
+| val_geom_camber_rc | 66.515 | 69.714 | +4.8% |
+
+Wall-clock: 30.1 min, 35/35 epochs realized. Artifact: `models/model-surf-cw2-sw5-onecycle-ep35-compiled-20260514-192707/`
+
+### Action: MERGED — new baseline val_avg=53.352, test=45.747
+
+**Mechanism:** Per-channel channel weight `[1,1,2]` boosts the pressure gradient within the surface loss. Val improvement is marginal (-0.24%) but the test improvement is cleaner (-0.77%). The effect shows a strong **within-distribution trade**: cruise and single_in_dist improve substantially (5% each), while val_geom_camber_rc (OOD extrapolation) regresses (+4.8%). Net val is near-neutral due to offsetting split changes.
+
+**Key insight from student:** The original L1+cosine/15ep result showed cw=2 gave -4.2% on val. On the new recipe (sw=5, 35ep, compile), the magnitude shrank by ~17× because the improved recipe already extracts much of the pressure signal available. cw=2 is now a rebalancing tool (cruise vs rc) rather than a pure improvement.
+
+**Implementation:** `--surf_channel_weight "1.0,1.0,2.0"` — single Config field + tensor multiply, minimal complexity.
+
+**New recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0"`
+
+---
+
+## 2026-05-14 19:23 — PR #1582: surf_weight=5 on compile+35ep baseline ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-alphonse/surf-weight-sweep-l1`
+- **Hypothesis:** surf_weight=5 (reducing from default 10) gives better surf:vol loss balance. Originally validated on L1+cosine baseline; now re-run on the full compile+35ep stack.
+
+### Result (vs PR #2967 baseline 54.475)
+
+| Metric | Baseline (#2967) | sw=5 | Δ |
+|--------|-----------------|------|---|
+| **val_avg/mae_surf_p** | 54.475 | **53.482** | **-1.82%** |
+| test_avg/mae_surf_p | 47.043 | **46.104** | **-2.00%** |
+| val_geom_camber_cruise | 37.613 | **37.156** | -1.22% |
+| val_re_rand | 53.733 | 53.973 | +0.45% |
+| val_single_in_dist | 57.573 | **56.283** | -2.24% |
+| val_geom_camber_rc | 68.980 | **66.515** | **-3.57%** |
+
+Wall-clock: 29.7 min, 35/35 epochs realized. Artifact: `models/model-sw5-onecycle-ep35-compiled-20260514-184607/`
+
+### Action: MERGED — new baseline val_avg=53.482, test=46.104
+
+**Mechanism:** sw=10 was over-weighting the surface loss; sw=5 reduces surf:vol scalar by half, letting the model better balance in-distribution volume and surface accuracy. Effect is **architectural** (not recipe-specific) — it survived the entire migration from cosine/L1/15ep → OneCycle/bf16/compile/35ep.
+
+**Strongest gains on val_geom_camber_rc (-3.57%)** — the rc split benefits disproportionately from sw reduction, supporting that heavy surface weighting was especially harmful for the out-of-distribution camber split.
+
+**New recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5`
+
+**New assignment:** #2988 alphonse → compound sw=5 + channel_weight=[1,1,2] (orthogonal axes; expected ~-4%)
+
+---
+
+## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension (--epochs 30/35 with compile) ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-askeladd/onecycle-horizon-extension-compiled`
+- **Hypothesis:** Extending OneCycleLR horizon to 35 epochs keeps the schedule in the productive mid-tail for 10 more epochs vs the 25-epoch baseline where LR was already at the floor (8e-9) by the final epoch.
+
+### Result (vs PR #2954 compile baseline 65.953)
+
+| Arm | epochs realized | wall-clock | val_avg/mae_surf_p | test_avg/mae_surf_p | LR @ best ep | Δ val |
+|-----|-----------------|------------|---------------------|---------------------|--------------|-------|
+| **A: --epochs 35** | **35/35** | **29.8 min** | **54.475** | **47.043** | 8.04e-9 (floor) | **-17.4%** |
+| B: --epochs 30 | 30/30 | 25.7 min | 60.595 | 52.257 | 8.05e-9 (floor) | -8.1% |
+| **Baseline (#2954, 25ep)** | 25/25 | 21.7 min | **65.953** | **56.825** | — | — |
+
+Per-split val breakdown (Arm A, epoch 35):
+
+| Split | Arm A (ep 35) | Arm B (ep 30) | Baseline (ep 25) |
+|-------|---------------|---------------|------------------|
+| val_geom_camber_cruise | **37.613** | 43.752 | 49.899 |
+| val_re_rand | **53.733** | 60.395 | 64.475 |
+| val_single_in_dist | **57.573** | 64.581 | 70.437 |
+| val_geom_camber_rc | **68.980** | 73.651 | 79.001 |
+| **val_avg** | **54.475** | 60.595 | 65.953 |
+
+Artifacts: `models/model-onecycle-ep35-compiled-20260514-171905/metrics.jsonl`, `models/model-onecycle-ep30-compiled-20260514-175215/metrics.jsonl`
+
+### Action: MERGED (Arm A) — new baseline val_avg=54.475, test=47.043
+
+**Mechanism confirmed:** Under `--epochs 25` (old baseline), ep 25's LR was already at 8e-9 (floor) — the OneCycleLR schedule was fully consumed. Under `--epochs 35`, LR at epoch 25 is 4.57e-4 (productive mid-tail). Epochs 25–35 each yield 1.5–4 val points. The val trajectory is monotone-decreasing all the way to ep 35 with no plateaus — the schedule is the binding constraint.
+
+**Key engineering detail:** Arm A wall-clock = 29.8 min (under 30-min cap). The schedule can't go to 38+ epochs without violating the cap. 35 epochs is the maximum safe value.
+
+**Updated recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model`
+
+**New assignment:** #2983 askeladd → final_div_factor tuning (keep final LR productive instead of 8e-9 dead)
+
+---
+
+## 2026-05-14 18:15 — PR #2963: Variance-penalized surface loss (mean + λ·std) ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-fern/variance-penalized-surf-loss`
+- **Hypothesis:** Penalize the std of per-node surface absolute errors (λ=0.5, 1.0) to up-weight the high-error nodes that dominate val_geom_camber_rc.
+
+### Result (vs PR #2936 baseline 72.694, pre-compile)
+
+| Arm | epochs | val_avg | test_avg | val_geom_camber_rc | Δ val |
+|-----|--------|---------|----------|---------------------|-------|
+| A: λ=0.5 | 18 | 76.869 | 66.646 | 89.522 (+5.2) | +4.18 (+5.7%) |
+| B: λ=1.0 | 19 | 85.604 | 77.060 | 97.316 (+13.0) | +12.91 (+17.8%) |
+| **Baseline (#2936)** | 20 | **72.694** | **63.367** | 84.326 | — |
+| **Compile baseline (#2954)** | 25 | **65.953** | **56.825** | 79.001 | — |
+
+Artifacts: `models/model-var-loss-lambda0.5-20260514-170005/metrics.jsonl`, `models/model-var-loss-lambda1.0-20260514-173415/metrics.jsonl`
+
+### Action: CLOSED — clear dead-end on the target split
+
+- **Targeted split worsened.** rc split (target of hypothesis) got worse in both arms: +5.2 / +13.0 pts.
+- **Monotonic worsening with λ.** No sweet-spot interior to (0, 1] — extrapolating to lower λ won't recover baseline.
+- **Mechanism:** Variance penalty pulls gradient capacity toward easy-but-extreme training-set nodes (bulk raceCar surface peaks), de-prioritizing the bulk pressure shape. The mean term gets traded away. The rc split, which requires clean *interpolation* to unseen cambers M=6-8, is most sensitive to this regression.
+- **Key reframe of rc problem:** rc is an **extrapolation problem** (raceCar P1 covers M=2-5, P3 covers M=9; rc tests M=6-8 — never seen in training), not an outlier-fitting problem on training data. Loss-shape changes within the training distribution cannot bridge this gap. Future rc-targeted work should attack the *geometric coverage* of the training distribution (sampler re-weighting, camber augmentation, geometry-conditioned features) not the loss shape.
+- **Note:** student did not include --compile_model, so realized 18-19 epochs instead of 25. Even adding compile would not change the negative direction given the monotonic worsening with λ.
+
+### Negative-result value
+
+The rc-as-extrapolation reframe is the actionable insight. Documented for future hypothesis generation. **New assignment:** #2972 fern → domain re-weighting (cruise upweighted in WeightedRandomSampler) targeting same rc split via geometric-coverage mechanism.
+
+---
+
 ## 2026-05-14 14:23 — PR #1602: grad_clip=2.0 on bf16+OneCycle@25ep baseline ❌ CLOSED (negative)
 
 - **Student branch:** `charliepai2g48h1-fern/grad-clip-l1`

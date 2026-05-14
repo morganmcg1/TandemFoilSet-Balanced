@@ -339,8 +339,12 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_channel_weight": cfg.surf_channel_weight,
+        "loss": cfg.loss,
+        "pct_start": cfg.pct_start,
         "epochs_configured": cfg.epochs,
         "cruise_weight": cfg.cruise_weight,
+        "single_weight": cfg.single_weight,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -381,6 +385,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    surf_channel_weight: str = "1.0,1.0,1.0"  # comma-separated per-channel weights for [Ux, Uy, p]
     epochs: int = 50
     loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -390,7 +395,9 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
     compile_model: bool = False   # torch.compile the model for throughput
+    pct_start: float = 0.1  # OneCycleLR warmup fraction (default 0.1 = 10% of total_steps)
     cruise_weight: float = 1.0  # multiplier on cruise-domain sample weights in WeightedRandomSampler
+    single_weight: float = 1.0  # multiplier on raceCar-single sample weights in WeightedRandomSampler
 
 
 cfg = sp.parse(Config)
@@ -399,6 +406,12 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+surf_channel_weight = torch.tensor(
+    [float(x) for x in cfg.surf_channel_weight.split(",")],
+    device=device,
+).view(1, 1, 3)
+print(f"surf_channel_weight: {surf_channel_weight.view(-1).tolist()}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -410,12 +423,16 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    if cfg.cruise_weight != 1.0:
+    if cfg.cruise_weight != 1.0 or cfg.single_weight != 1.0:
         with open(Path(cfg.splits_dir) / "meta.json") as _mf:
             _meta = json.load(_mf)
-        _cruise_idx = torch.tensor(_meta["domain_groups"]["cruise"], dtype=torch.long)
         sample_weights = sample_weights.clone()
-        sample_weights[_cruise_idx] *= cfg.cruise_weight
+        if cfg.cruise_weight != 1.0:
+            _cruise_idx = torch.tensor(_meta["domain_groups"]["cruise"], dtype=torch.long)
+            sample_weights[_cruise_idx] *= cfg.cruise_weight
+        if cfg.single_weight != 1.0:
+            _single_idx = torch.tensor(_meta["domain_groups"]["racecar_single"], dtype=torch.long)
+            sample_weights[_single_idx] *= cfg.single_weight
         _group_totals = {
             name: sample_weights[torch.tensor(idxs, dtype=torch.long)].sum().item()
             for name, idxs in _meta["domain_groups"].items()
@@ -423,7 +440,7 @@ else:
         _total = sum(_group_totals.values())
         _pct = {k: 100.0 * v / _total for k, v in _group_totals.items()}
         print(
-            f"cruise_weight={cfg.cruise_weight}: sampling shares "
+            f"cruise_weight={cfg.cruise_weight} single_weight={cfg.single_weight}: sampling shares "
             + ", ".join(f"{k}={p:.1f}%" for k, p in _pct.items())
         )
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
@@ -463,7 +480,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=cfg.lr,
     total_steps=MAX_EPOCHS * len(train_loader),
-    pct_start=0.1,
+    pct_start=cfg.pct_start,
     anneal_strategy="cos",
     div_factor=25.0,
     final_div_factor=1e4,
@@ -521,7 +538,10 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            weighted_surf_sq = sq_err * surf_channel_weight
+            surf_loss = (weighted_surf_sq * surf_mask.unsqueeze(-1)).sum() / (
+                surf_mask.sum() * surf_channel_weight.mean()
+            ).clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
