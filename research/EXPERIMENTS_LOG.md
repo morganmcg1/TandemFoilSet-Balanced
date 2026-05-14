@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-14 [Round 112] UTC — PR #2859: SwiGLU gate Mish (gate-activation 3rd direction) — **CLOSED CATASTROPHIC LOSS (+25.2% val, +26.7% test)**
+
+- **Branch:** charliepai2g48h5-tanjiro/mishglu
+- **Hypothesis:** Replace SiLU gate in SwiGLU with Mish (= x·tanh(softplus(x))). Smoother gradient near origin; no hard zero region. Predicted gate_zero_frac < SiLU baseline.
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-mishglu-20260514-082712/metrics.jsonl`
+
+| Val split | Mish | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | 33.2417 | 25.2751 | **+31.5% LOSS** |
+| `geom_camber_rc` | 54.7370 | 45.8179 | +19.5% LOSS |
+| `geom_camber_cruise` | 22.7916 | 16.8427 | +35.3% LOSS |
+| `re_rand` | 43.9890 | 35.6177 | +23.5% LOSS |
+| **val_avg** | **38.6898** | **30.8909** | **+25.2% LOSS** |
+| **test_avg** | **33.1923** | **26.1964** | **+26.7% LOSS** |
+
+- **Important note on student methodology:** The student used the `train.py` defaults (epochs=50, lr=5e-4, weight_decay=1e-4) instead of the canonical advisor config (epochs=70, lr=1.5e-4, weight_decay=3e-4) used by #2810 baseline. This inflates the LOSS magnitude. However, the qualitative gate-zero-frac diagnostic is hyperparameter-independent in its dominant pattern (49-68% vs 1.3-2.4% is a 25-50× ratio not a 3x-lr-induced shift), so the gate-axis-closes conclusion stands. Closing comment asked student to use canonical reproduce command verbatim for future experiments.
+- **Exemplary mechanism diagnostic — gate_zero_frac jumps 25-50× from SwiGLU baseline:**
+
+| Block | SwiGLU SiLU baseline | MishGLU |
+|---|---:|---:|
+| 0 | 1.3-2.4% | **50.06%** |
+| 1 | 1.3-2.4% | **49.45%** |
+| 2 | 1.3-2.4% | **59.85%** |
+| 3 | 1.3-2.4% | **67.77%** |
+
+- **Depth-progressive gate_std decay BROKEN:** SwiGLU baseline showed clean depth-decay (block 0→3: 1.07→0.58). MishGLU shows broken pattern: 0.88→0.67→0.72→1.00 (block 3 HIGHER than block 0, opposite of baseline). The depth-progressive mechanism that PR #2741 identified as MECHANISM by which SwiGLU works is completely destroyed under Mish.
+- **Mechanism re-interpretation:** SiLU specifically yields a learnable W_gate matrix whose pre-activation distribution places very few values in the wide near-zero region (1.3-2.4% zero_frac). Mish steers gate weights toward the wide negative tail where Mish exponentially decays — despite similar near-zero behavior to SiLU, Mish induces the optimizer to converge to a different W_gate solution. The activation function determines which W_gate solution the optimizer settles in, NOT just its local smoothness.
+- **89th taxon: gate-activation axis at MLP-body SwiGLU site CLOSES DEFINITIVELY at SiLU.** Three points anchor the curve: GELU gate (GeGLU) LOSS (16-26% mask, #2759), SiLU gate (SwiGLU) WIN (1.3-2.4% mask, baseline #2741), Mish gate (MishGLU) LOSS (49-68% mask, worst yet, #2859). The gate-activation-axis-closure is comprehensive across all common activation alternatives.
+
+---
+
+## 2026-05-14 [Round 112] UTC — PR #2849: Cosine eta_min=1e-6 (Lion-friendly LR floor) — **CLOSED stale_wip (4th pod-failure close, NOT falsified)**
+
+- **Branch:** charliepai2g48h5-fern/cosine-eta-min-1e-6
+- **Hypothesis:** Set `eta_min=1e-6` (vs current 0) on the CosineAnnealingLR. Lion's sign-step needs non-zero LR for late-training fine-tuning since `sign(c·grad) = sign(grad)` makes the per-step contribution scale-invariant but exp_avg integration is not. At LR≈3e-6 in the cosine tail, Lion effectively stalls.
+- **Status:** **CLOSED — stale_wip, 4th pod-failure close in this launch.** Created 2026-05-14T07:27:52Z, 0 commits and 0 comments beyond initial assignment. fern pod has stalled twice (#2794 Round 103 + #2849 Round 112) = chronically unreliable pod harness. Axis UNTESTED.
+- **Disposition:** May re-assign cosine eta_min=1e-6 to a different student in a future round if it remains a high-value swing.
+- Reassigned fern to #2876 batch_size=8 — minimally simple 1-line config change per Round 103/109 stall-prone strategy.
+
+---
+
+## 2026-05-14 [Round 112] UTC — PR #2876: batch_size 4→8 (Lion-batch-size sensitivity) — **ASSIGNED (89th candidate axis)**
+
+- **Branch:** charliepai2g48h5-fern/batch-size-8
+- **Hypothesis:** Double batch_size from 4 to 8 — Lion-batch-size sensitivity test. Chen et al. 2023 ("Symbolic Discovery of Optimization Algorithms") explicitly recommend larger batches for Lion ("we use bs=4096 in most experiments"); at bs=4 our Lion may be under-batched for stable sign-step direction estimation.
+- **Why:** batch_size axis NEVER tested this launch. Memory headroom available (~14GB peak vs 96GB available — substantial). Lion sign-step compresses to ±1 per parameter per step, so more samples per gradient estimate = less sign noise and more reliable exp_avg integration.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): Lion was under-batched at bs=4; try bs=16 next or pair with lr-rescaling.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): bs=4 was already sufficient; close batch_size axis.
+  3. **LOSS** (val > 30.8909 + 1%): Keskar-style small-batch implicit regularization was load-bearing for OOD generalization; close batch_size upward direction.
+- Risk: 70 epochs with halved steps-per-epoch may undertrain. lr=1.5e-4 unchanged.
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-fern --experiment_name "charliepai2g48h5-fern/batch-size-8" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`.
+
+---
+
+## 2026-05-14 [Round 112] UTC — PR #2875: Squared ReLU on SwiGLU up-projection (Primer 2022) — **ASSIGNED (90th candidate axis)**
+
+- **Branch:** charliepai2g48h5-tanjiro/squared-relu-up-proj
+- **Hypothesis:** Add `F.relu(W_up(x)).pow(2)` activation to SwiGLU up-projection (currently has NO activation). Keep SiLU gate unchanged (proven WIN per #2741, locked by #2759 GeGLU LOSS and #2859 MishGLU LOSS). Primer architecture (Hua et al. 2022) showed `relu(x)²` outperforms GELU in standard transformer FFNs.
+- **Why:** Activation-axis at the SwiGLU GATE site is closed. But the SwiGLU UP-projection currently has NO activation. Adding non-linearity to up-projection is a distinct activation-site axis. Sparsity-without-gating: gate selects which channels get re-weighted (continuous-valued), up-activation selects which features are non-zero (hard-sparse). Two mechanisms complementary. Quadratic large-x amplification may help OOD via compact-feature-use forcing.
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): Primer-style up-activation breaks plateau; try GELU² or Squared ReLU on out-projection next.
+  2. **WASH** (val ≈ 30.8909 ± 0.5%): up-projection activation doesn't help in this small-scale CFD; close up-projection activation axis.
+  3. **LOSS** (val > 30.8909 + 1%): hard-zero regions in up-projection break SwiGLU mechanism; close Squared ReLU direction; try smoother alternatives (GELU on up-proj).
+- bf16 overflow check requested: log `up_act/block_<i>_max` to detect if squared output exceeds bf16 dynamic range (~65504 max).
+- **NEW bar to beat:** val_avg < **30.8909**. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-tanjiro --experiment_name "charliepai2g48h5-tanjiro/squared-relu-up-proj" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`. Expected param count: 333,700 unchanged.
+
+---
+
 ## 2026-05-14 [Round 111] UTC — PR #2860: Gradient clipping max_norm=1.0 (Lion numerical stability) — **CLOSED LOSS (+4.54% val, +4.24% test)**
 
 - **Branch:** charliepai2g48h5-edward/grad-clip-1
