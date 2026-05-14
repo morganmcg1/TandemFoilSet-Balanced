@@ -64,6 +64,23 @@ ACTIVATION = {
 }
 
 
+def drop_path(x: torch.Tensor, drop_prob: float = 0.0, training: bool = True) -> torch.Tensor:
+    """Stochastic Depth (Huang et al. 2016, 1603.09382): drop a residual
+    contribution with probability ``drop_prob`` per-sample (one Bernoulli per
+    batch element). Returns x scaled by 1/(1-p) on kept samples and zeros on
+    dropped samples, so the expected output equals x and no rescaling is needed
+    at inference time. Bypassed entirely when ``drop_prob == 0`` or ``training``
+    is False (e.g. during val/test)."""
+    if drop_prob == 0.0 or not training:
+        return x
+    keep_prob = 1.0 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # broadcast over all dims except batch
+    mask = x.new_empty(shape).bernoulli_(keep_prob)
+    if keep_prob > 0.0:
+        mask = mask.div(keep_prob)
+    return x * mask
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -176,19 +193,33 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
+        # Diagnostic capture (uncompiled-model only). When True, stores per-node
+        # L2 norms (over hidden dim) of attn(...) and mlp(...) residual contributions
+        # for one batch — used to monitor whether DropPath equalises block magnitudes.
+        self._diag_capture_magnitudes = False
+        self._last_attn_norm: torch.Tensor | None = None
+        self._last_mlp_norm: torch.Tensor | None = None
 
     def forward(self, fx, gamma=None, beta=None, log_re=None,
-                rcln_1=None, rcln_2=None, rcln_3=None):
+                rcln_1=None, rcln_2=None, rcln_3=None, drop_prob: float = 0.0):
         if self.re_conditional_layernorm:
             normed_1 = rcln_1(fx, log_re)
         else:
             normed_1 = self.ln_1(fx)
-        fx = self.attn(normed_1, gamma, beta) + fx
+        attn_out = self.attn(normed_1, gamma, beta)
+        if self._diag_capture_magnitudes:
+            with torch.no_grad():
+                self._last_attn_norm = attn_out.detach().to(torch.float32).norm(dim=-1)
+        fx = drop_path(attn_out, drop_prob, self.training) + fx
         if self.re_conditional_layernorm:
             normed_2 = rcln_2(fx, log_re)
         else:
             normed_2 = self.ln_2(fx)
-        fx = self.mlp(normed_2) + fx
+        mlp_out = self.mlp(normed_2)
+        if self._diag_capture_magnitudes:
+            with torch.no_grad():
+                self._last_mlp_norm = mlp_out.detach().to(torch.float32).norm(dim=-1)
+        fx = drop_path(mlp_out, drop_prob, self.training) + fx
         if self.last_layer:
             if self.re_conditional_layernorm:
                 normed_3 = rcln_3(fx, log_re)
@@ -205,7 +236,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 droppath_max: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -231,6 +263,13 @@ class Transolver(nn.Module):
             )
             for i in range(n_layers)
         ])
+        # Stochastic Depth schedule (Huang et al. 2016). Linear from 0 at block 0
+        # to ``droppath_max`` at the last block — published practice keeps early
+        # blocks (feature extractors) intact and ramps drop probability deeper.
+        self.droppath_max = droppath_max
+        self.drop_probs: list[float] = [
+            droppath_max * (i / max(1, n_layers - 1)) for i in range(n_layers)
+        ]
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
         # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
@@ -267,13 +306,14 @@ class Transolver(nn.Module):
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         if self.re_conditional_layernorm:
-            for block in self.blocks:
+            for i, block in enumerate(self.blocks):
                 fx = block(fx, gamma, beta, log_re=log_re,
                            rcln_1=self.re_ln_1, rcln_2=self.re_ln_2,
-                           rcln_3=self.re_ln_3)
+                           rcln_3=self.re_ln_3,
+                           drop_prob=self.drop_probs[i])
         else:
-            for block in self.blocks:
-                fx = block(fx, gamma, beta)
+            for i, block in enumerate(self.blocks):
+                fx = block(fx, gamma, beta, drop_prob=self.drop_probs[i])
         return {"preds": fx}
 
 
@@ -601,6 +641,10 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Stochastic Depth (DropPath, Huang et al. 2016) max probability at the last
+    # block. Linear schedule from 0 at block 0 to ``droppath_max`` at block n-1.
+    # 0 disables the regulariser entirely; bypassed at val/test via self.training.
+    droppath_max: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -642,6 +686,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    droppath_max=cfg.droppath_max,
 )
 
 model = Transolver(**model_config).to(device)
@@ -661,6 +706,10 @@ print(
     f"ReCondLN {n_params_re_ln}) "
     f"+ ReScaleHead ({n_params_head} params)"
     + (f" + ReCondOutputBias ({n_params_out_bias} params)" if output_bias is not None else "")
+)
+print(
+    f"DropPath schedule (max={cfg.droppath_max}): "
+    f"per-block drop_probs = [{', '.join(f'{p:.4f}' for p in model.drop_probs)}]"
 )
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
@@ -726,6 +775,56 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
+
+def capture_block_magnitudes(uncompiled, val_loader, stats_, device_):
+    """Capture per-block L2 norms of attn(...) and mlp(...) residual contributions
+    on one val batch (eval mode → DropPath bypassed).
+
+    Returns: list[dict] — one entry per block with attn_l2_mean/std and
+    mlp_l2_mean/std summarised over valid (non-padding) mesh nodes. Used to
+    monitor whether the linear DropPath schedule equalises block contribution
+    magnitudes across the trunk.
+    """
+    blocks = list(uncompiled.blocks)
+    for b in blocks:
+        b._diag_capture_magnitudes = True
+        b._last_attn_norm = None
+        b._last_mlp_norm = None
+    was_training = uncompiled.training
+    uncompiled.eval()
+    summary: list[dict] = []
+    try:
+        with torch.no_grad():
+            for x, _y, _is_surface, mask in val_loader:
+                x = x.to(device_, non_blocking=True)
+                mask = mask.to(device_, non_blocking=True)
+                x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
+                _ = uncompiled({"x": x_norm})
+                for b in blocks:
+                    a_n = b._last_attn_norm
+                    m_n = b._last_mlp_norm
+                    if a_n is None or m_n is None:
+                        summary.append({})
+                        continue
+                    valid = mask  # [B, N]
+                    a_vals = a_n[valid].to(torch.float64)
+                    m_vals = m_n[valid].to(torch.float64)
+                    summary.append({
+                        "attn_l2_mean": float(a_vals.mean().item()),
+                        "attn_l2_std": float(a_vals.std().item()) if a_vals.numel() > 1 else 0.0,
+                        "mlp_l2_mean": float(m_vals.mean().item()),
+                        "mlp_l2_std": float(m_vals.std().item()) if m_vals.numel() > 1 else 0.0,
+                    })
+                break
+    finally:
+        for b in blocks:
+            b._diag_capture_magnitudes = False
+            b._last_attn_norm = None
+            b._last_mlp_norm = None
+        if was_training:
+            uncompiled.train()
+    return summary
+
 _opt_params = list(model.parameters()) + list(rescale_head.parameters())
 if output_bias is not None:
     _opt_params += list(output_bias.parameters())
@@ -765,6 +864,8 @@ slice_entropy_ep1: list[list[float]] | None = None
 slice_entropy_film_stats_ep1: dict | None = None
 slice_entropy_last: list[list[float]] | None = None
 slice_entropy_film_stats_last: dict | None = None
+block_magnitudes_ep1: list[dict] | None = None
+block_magnitudes_last: list[dict] | None = None
 last_completed_epoch: int = 0
 diag_split_name = next(iter(val_loaders.keys()))  # use one val split as the diag batch source
 train_start = time.time()
@@ -1090,15 +1191,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_slice_entropy: list[list[float]] | None = None
     epoch_gamma_stats: dict | None = None
     epoch_beta_stats: dict | None = None
+    epoch_block_magnitudes: list[dict] | None = None
     if (epoch + 1) == 1 or (epoch + 1) >= max(SCHEDULER_T_MAX - 2, 1):
         epoch_slice_entropy, epoch_gamma_stats, epoch_beta_stats = capture_slice_entropy(
+            uncompiled_model, val_loaders[diag_split_name], stats, device,
+        )
+        epoch_block_magnitudes = capture_block_magnitudes(
             uncompiled_model, val_loaders[diag_split_name], stats, device,
         )
         if (epoch + 1) == 1:
             slice_entropy_ep1 = epoch_slice_entropy
             slice_entropy_film_stats_ep1 = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+            block_magnitudes_ep1 = epoch_block_magnitudes
         slice_entropy_last = epoch_slice_entropy
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+        block_magnitudes_last = epoch_block_magnitudes
     last_completed_epoch = epoch + 1
 
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -1135,6 +1242,9 @@ for epoch in range(MAX_EPOCHS):
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
         "re_cond_out_bias": re_out_bias_summary,
+        "droppath/max": cfg.droppath_max,
+        "droppath/per_block_probs": list(uncompiled_model.drop_probs),
+        "droppath/block_magnitudes": epoch_block_magnitudes,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1178,6 +1288,17 @@ for epoch in range(MAX_EPOCHS):
             f"per_ch_mean=[Ux={s['per_ch_mean'][0]:+.5f} Uy={s['per_ch_mean'][1]:+.5f} p={s['per_ch_mean'][2]:+.5f}]  "
             f"corr(|b|,logRe)={s['corr_abs_b_logre']:+.3f}"
         )
+    if epoch_block_magnitudes is not None:
+        per_block = [
+            (m.get("attn_l2_mean", 0.0), m.get("mlp_l2_mean", 0.0))
+            for m in epoch_block_magnitudes
+        ]
+        attn_str = "[" + ", ".join(f"{a:.3f}" for a, _ in per_block) + "]"
+        mlp_str = "[" + ", ".join(f"{m:.3f}" for _, m in per_block) + "]"
+        print(
+            f"    DropPath(p_max={cfg.droppath_max})  "
+            f"attn_l2_mean_per_block={attn_str}  mlp_l2_mean_per_block={mlp_str}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -1193,6 +1314,9 @@ if last_completed_epoch > 0 and last_completed_epoch != 1:
     )
     slice_entropy_last = _ent
     slice_entropy_film_stats_last = {"gamma": _g, "beta": _b}
+    block_magnitudes_last = capture_block_magnitudes(
+        uncompiled_model, val_loaders[diag_split_name], stats, device,
+    )
 
 # Persist epoch-1 vs last-epoch slice-entropy comparison as a single record so it's
 # easy to surface in the results comment.
@@ -1208,6 +1332,17 @@ append_metrics_jsonl(metrics_jsonl_path, {
         "slice_entropy_per_head": slice_entropy_last,
         "film_stats": slice_entropy_film_stats_last,
     },
+})
+
+# Persist epoch-1 vs last-epoch block-magnitude comparison — used to confirm
+# whether the linear DropPath schedule equalised per-block contributions.
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "droppath_summary",
+    "droppath_max": cfg.droppath_max,
+    "per_block_drop_probs": list(uncompiled_model.drop_probs),
+    "ep1_block_magnitudes": block_magnitudes_ep1,
+    "last_block_magnitudes": block_magnitudes_last,
+    "last_epoch": last_completed_epoch,
 })
 
 # --- Test evaluation + local summary ---
