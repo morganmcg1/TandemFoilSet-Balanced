@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-14 00:30 — Plateau Protocol active. **11 confirmed regressions** on n_head=2+Lion stack: n_layers=3 (+3.34%), n_head=1 (+9.44%), ema=0.9995 (+19.1%), ema=0.998 (+6.6%), wd=3e-4 (+2.61%), wd=1e-3 (+1.59%), K=20 (+6.33%), K=16 (crashed 5×; mid-trajectory +7%), switchema-500 arm-1 (+57% catastrophic), switchema-500 arm-2 (+57% catastrophic), cautious-lion (+13.32%), warmup-10 (+3.71% — smallest regression of round; +2.67% test). **PR #2657 cautious-lion** and **PR #2552 K-up** CLOSED this cycle. **PR #2679 thorfinn APW Curriculum (H1)** newly assigned — first sample-conditional gradient-shaping test. In-flight: edward warmup-10 #2667 FINISHED (val 41.77 / test 34.50; terminal SENPAI-RESULT pending; will close on receipt, then assign edward warmup-DOWN — natural mechanism inversion since longer-warmup regressed → shorter warmup may shift LR peak earlier and give more time at peak), frieren SwitchEMA #2644 (`nr58ovpo` switchema-1000 still running 17 min in at val 67 — catastrophic trajectory, will close on terminal), askeladd K-down #2670 (`bcarbo2u` K=8 running 24 min val 45.99; `sggs2zta` crashed at step 103). 4 student pods (alphonse/fern/nezuko/tanjiro) remain rate-limited on user 20516801 GraphQL quota.
+- **Date**: 2026-05-14 00:50 — Plateau Protocol active. **13 confirmed regressions** on n_head=2+Lion stack (sorted asc by val Δ%): K=8 (+3.55%), n_layers=3 (+3.34%), warmup-10 (+3.71%), wd=1e-3 (+1.59%), wd=3e-4 (+2.61%), K=20 (+6.33%), ema=0.998 (+6.6%), K=16 (5× crashed; mid-trajectory +7%), n_head=1 (+9.44%), cautious-lion (+13.32%), ema=0.9995 (+19.1%), switchema-1000 (+30.4%), switchema-500 (×2 +57% catastrophic). **PR #2667 warmup-10 CLOSED** this cycle. **PR #2691 edward warmup-DOWN sweep (warmup=2, then 0)** assigned — natural mechanism inversion (longer warmup hurt → shorter should help). In-flight: askeladd K=8 #2670 FINISHED (`bcarbo2u` val 41.70 / **test 34.10 — smallest test regression of round**, +1.5%; terminal SENPAI-RESULT pending; duplicate `qoj7jme2` running), thorfinn APW #2679 running 6 min in early warmup (`l92tlhag`), frieren switchema #2644 all 3 arms finished catastrophic (`nr58ovpo` interval=1000 val 52.52 best of three; advisor poke posted re duplicate `uhs8fq7x`). edward warmup-DOWN #2691 newly assigned (not yet started). 4 student pods (alphonse/fern/nezuko/tanjiro) remain rate-limited on user 20516801 GraphQL quota.
 - **Current best (merged)**: PR #2192 frieren n_head=2+Lion (run `gd934e9l`) at **val 40.2741 / test 33.6017** — all 8 per-split metrics improve vs Lion-only baseline. 36 epochs (still descending at cap), 49.5 s/epoch, 548K params, ~13.6 GB VRAM. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --n_head 2 --optimizer lion --lr 1e-4`
 - **Updated merge bar (vs 40.27 baseline)**: ≤36.2 val ⇒ merge (≥10% gain), 36.2-40.3 → second seed, ≥40.3 → close.
 - **Closed axes on Lion+n_head=2 stack:**
@@ -18,28 +18,28 @@ SPDX-License-Identifier: Apache-2.0
   - **Lion weight_decay sweep on n_head=2 (#2555)**: wd=3e-4 (5xmshkwk) val 41.32 +2.6%; wd=1e-3 (d4dd5gd1) val 40.91 +1.6%; both regress; default wd=1e-4 optimal
   - **Fourier K UPWARD (#2552 askeladd)**: K=20 (`7qfg4u8k` val 42.82 +6.33%); K=16 crashed 5× (best mid-run val ≥ 43); K-up axis closed. Mechanism interpretation: K interacts with n_head — wider positional bandwidth doesn't help reduced parallel-head capacity. K-down hypothesis (K=8/K=10) opened in #2670.
 - **Active research directions (all on n_head=2+Lion stack):**
-  1. **APW Curriculum (H1, per-sample loss-EMA-weighted SmoothL1, α 0→0.5 ramp)** — thorfinn #2679 (**NEW**; first sample-conditional gradient-shaping test; cautious-lion closed @ +13.3%)
-  2. **SwitchEMA (H4, periodic EMA→weights swap)** — frieren #2644 (`ci6abegr` arm-1 FINISHED +57% catastrophic; `dkruicj1` arm-2 FINISHED +57% catastrophic; `nr58ovpo` interval=1000 arm running 17 min at val 67 — also tracking catastrophic. Periodic swap too aggressive for 36-epoch budget; paper regime is 100s of epochs. Close on terminal.)
-  3. **warmup_epochs=10** — edward #2667 (`wpt9oaph` FINISHED val 41.77 / test 34.50 — smallest regression of round; pending SENPAI-RESULT)
-  4. **Fourier K-down (K=8, K=10)** — askeladd #2670 (`bcarbo2u` K=8 running 24 min val 45.99 +14%; still descending; one more crashed `sggs2zta` step 103)
+  1. **APW Curriculum (H1, per-sample loss-EMA-weighted SmoothL1, α 0→0.5 ramp)** — thorfinn #2679 (running `l92tlhag` 6 min in, early warmup val 109)
+  2. **SwitchEMA (H4, periodic EMA→weights swap)** — frieren #2644 (all 3 arms FINISHED catastrophic; interval=1000 best at +30%; advisor poke re duplicate `uhs8fq7x`; CLOSE imminent)
+  3. **warmup_epochs=2 / 0 (mechanism inversion)** — edward #2691 (**NEW**; natural mechanism inversion vs #2667 close — longer warmup hurt, so shorter should help)
+  4. **Fourier K-down (K=8)** — askeladd #2670 (`bcarbo2u` K=8 FINISHED val 41.70 / **test 34.10 smallest test regress of round**; terminal SENPAI-RESULT pending; per decision rule will close since val > 40.30; duplicate `qoj7jme2` running)
   5. **Lion LR flank** — tanjiro #2449 (rate-limited)
   6. **Batch-size bs=1** — nezuko #2421 (rate-limited)
   7. **Slice-num=16 + width retest** — alphonse #2358 (rate-limited, needs rebase — merge conflict)
   8. **Width-down n_hidden=96** — fern #2464 (rate-limited)
-- **Student status (00:30 UTC, 2026-05-14):**
-  - alphonse #2358: rate-limited 3.5+ hours (user 20516801 GraphQL quota)
-  - askeladd #2670: K-down `bcarbo2u` K=8 running 24 min val 45.99
-  - edward #2667: warmup-10 `wpt9oaph` FINISHED val 41.77/test 34.50; awaiting terminal SENPAI-RESULT
-  - fern #2464: rate-limited 3.5+ hours
-  - frieren #2644: switchema both 500-arms catastrophic; `nr58ovpo` 1000-arm running val 67
-  - nezuko #2421: rate-limited 3.5+ hours
-  - tanjiro #2449: rate-limited 3.5+ hours
-  - thorfinn #2679: **NEW PR** — APW Curriculum (sample-conditional curriculum, H1 from RESEARCH_IDEAS)
+- **Student status (00:50 UTC, 2026-05-14):**
+  - alphonse #2358: rate-limited 4+ hours (user 20516801 GraphQL quota)
+  - askeladd #2670: K=8 `bcarbo2u` FINISHED val 41.70 / test 34.10; awaiting terminal SENPAI-RESULT
+  - edward #2691: **NEW PR** — warmup-DOWN sweep (warmup=2, then 0); after #2667 closed
+  - fern #2464: rate-limited 4+ hours
+  - frieren #2644: all 3 switchema arms finished catastrophic; advisor poke re duplicate
+  - nezuko #2421: rate-limited 4+ hours
+  - tanjiro #2449: rate-limited 4+ hours
+  - thorfinn #2679: APW Curriculum running `l92tlhag` 6 min in
 - **KEY MECHANISM FINDINGS:**
   - **n_head=2 win mechanism**: dim_head=64 (vs 32 at n_head=4) enriches per-head geometry encoding in PhysicsAttention. Compounds with Lion. Trend NOT monotone — n_head=1 (#2593 seed1) regressed +9.5%, confirming n_head=2 is the local optimum (not a monotone-decrease axis). All seeds hit best_epoch=final_epoch → training still under-budgeted.
   - **Depth/head axes are non-additive**: n_layers=3+n_head=2 (#2596) regressed +3.34% (and +14.25% on single_in_dist). dim_head=64 needs 4 blocks of iterative refinement; reducing depth starves per-block representational throughput. Depth axis (compute-per-block) and head-count axis (per-slice capacity) target different bottlenecks and don't stack.
   - **Lion+input-noise interaction**: Lion sign-updates amplify corrupted gradient direction. Coord-jitter was −3.1% on AdamW, +4.86% WORSE on Lion. Clean architectural/optimizer changes compound well; noisy augmentations invert.
-  - **Plateau confirmed (n_head=2+Lion stack)**: 9 confirmed regressions, 2 catastrophic (switchema +57%, ema=0.9995 +19.1%), 0 wins since #2192 baseline. Plateau Protocol triggered: H3 Cautious Lion (live `mmcehzjn` already tracking +33%), H4 SwitchEMA (catastrophic), warmup-10 (live, untested), K-down (just assigned). If cautious-lion + switchema + warmup-10 + K-down all regress, the local neighborhood of the n_head=2+Lion stack is fully exhausted. Next escalation: tier 2 bold ideas (H1 APW Curriculum, H5 GeoTransolver, H9 Masked Node Pre-training, H12 CL/CD Auxiliary). Bigger swings under consideration after current round: loss reformulation, hybrid optimizer phases, geometry-aware attention variant.
+  - **Plateau deepens (n_head=2+Lion stack)**: 13 confirmed regressions across optimizer-axis (Cautious Lion +13.3%), schedule-axis (warmup-10 +3.7%, ema-decay both flanks), Fourier-K axis (both flanks; K=8 closest at +3.55% val / +1.5% test), wd (both flanks), n_head (both flanks past 2), depth (n_layers=3), switchema (catastrophic). **Three regressions cluster at ~+3-4% val (K=8, warmup-10, n_layers=3) — within ~1% of each other**, suggesting we've found a soft floor for "single-axis variations from current baseline." Plateau Protocol now in tier-2 phase: H1 APW (in-flight on thorfinn), H4 SwitchEMA (closing). Next tier-2 ideas queued: H12 CL/CD Auxiliary (frieren next), H9 Masked Pre-training, H5 GeoTransolver. Warmup-DOWN (#2691 edward) and APW (#2679 thorfinn) are the live bets to break this floor. If both regress >3.5%, all remaining single-axis ideas converge to "+3-4% irreducible local plateau" and we MUST shift to architectural / multi-stage methods.
 - **Key structural insight (Lion mechanism):**
   - Lion: `update = sign(β1*m + (1-β1)*g)`, where m is EMA of past gradients; every update ±lr
   - weight_decay term: `w -= lr × (sign(m) + wd × w)` — wd acts as constant-force L2 penalty

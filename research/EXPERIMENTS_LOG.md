@@ -35,20 +35,66 @@ Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 - **Next experiment:** thorfinn reassigned to **PR #2679 APW Curriculum** (H1; per-sample loss-EMA-weighted SmoothL1 with α 0→0.5 ramp; first sample-conditional gradient shaping test on this stack).
 - **Banked lesson:** Cautious Optimizers' paper-regime is multi-day LLM training. Don't assume "optimizer-level interventions" port to 30-min CFD surrogates without verifying convergence regime overlap.
 
-## 2026-05-14 00:30 — PR #2667: warmup_epochs=10 on n_head=2+Lion — RUNNING (terminal pending)
+## 2026-05-14 00:45 — PR #2667: warmup_epochs=10 on n_head=2+Lion — CLOSED
 
 - `willowpai2g24h3-edward/warmup-epochs-10`
 - **Hypothesis:** Edward's own follow-up #2 from #2612 terminal SENPAI-RESULT: "Since training is gradient-step-bound, anything that gets the live weights to a lower-loss point at epoch 50 will translate directly into a lower-loss EMA. Longer warmup (5→10 epochs) delays the LR peak and shifts more 'useful refinement' into the late phase the EMA actually captures."
-- **Result (single seed `wpt9oaph`, finished):**
+- **Result (single clean seed `wpt9oaph`, finished 30.6 min cap):**
 
 | Metric | warmup=10 (this run) | Baseline (gd934e9l) | Δ |
 |---|---:|---:|---|
 | val_avg/mae_surf_p | **41.7675** | 40.2741 | **+3.71% ❌** |
 | test_avg/mae_surf_p | **34.4976** | 33.6017 | **+2.67% ❌** |
-| Step count | 27000 (final) | ~27000 | (both hit cap) |
-| Elapsed | 30.8 min | ~30 min | |
+| val_single_in_dist | **40.351** | 35.836 | **+12.6%** — biggest hit |
+| val_geom_camber_rc | 54.319 | 53.495 | +1.5% |
+| val_geom_camber_cruise | 28.957 | 28.146 | +2.9% |
+| val_re_rand | 43.443 | 43.619 | −0.4% — tied |
+| best epoch | 36/50 | 36/50 | (cap binding in both) |
 
-- **Analysis (pending terminal SENPAI-RESULT from edward):** This is the smallest val/test regression we've seen on the n_head=2+Lion stack since #2192 baseline merged. Val 41.77 (+3.71%) is over close bar (40.30) but tighter than every other regression this round. **Test +2.67% is the smallest test regression of any run in the plateau period**. Interpretation: shifting LR peak later does pull terminal weights slightly *worse*, suggesting the model needs MORE time at peak LR, not less. The mechanism inversion implies the natural follow-up: **shorter warmup** (warmup_epochs=2 or 0) — let the model spend more time at high LR before cosine decay starts. Pending edward's SENPAI-RESULT to confirm direction and queue this as his next assignment.
+- **Analysis (edward's terminal):** Per merge bar (val ≥ 40.3), CLOSE. But this is the **smallest regression of the plateau period** in BOTH val (+3.7%) and test (+2.7%). Three sharp mechanism insights from edward:
+  1. **Single_in_dist took +12.6% hit while OOD splits barely moved** — signature of LR-schedule mis-tuning. Easy in-dist data wants the model at peak LR refining; OOD splits are at their irreducible-error floors and barely register schedule changes.
+  2. **Best epoch 36/50 in both runs** — schedule shape changed but binding constraint (30-min cap) didn't. Same step budget, different LR distribution, slightly worse terminal state.
+  3. **Mechanism diagnosed:** "The flat-low LR region in epochs 0-10 *under-trained* the early descent phase. The model never recovered the in-distribution refinement it gets when LR ramps to peak by epoch 5."
+- **Banked follow-ups (edward's suggestions):**
+  - **warmup_epochs=2 (or 0)** — symmetric mechanism inversion test. Pulls peak LR earlier; lets model spend more steps at peak. **Picked as next assignment (#2691).**
+  - Non-cosine schedule (linear, WSD, or cosine with T_max=80) — current cosine bottoms at ~32% of peak by epoch 36; flatter T_max keeps LR higher throughout.
+  - Snapshot non-EMA checkpoints at epochs 30/33/36 — diagnostic test of "trajectory time vs schedule shape" as binding constraint.
+- **Next experiment:** edward reassigned to **PR #2691 warmup-DOWN sweep (warmup_epochs=2, then 0)** — mechanism inversion. If Arm A (warmup=2) regresses, close axis and shift to architecture tier.
+
+## 2026-05-14 00:50 — PR #2644: SwitchEMA (intervals 500, 1000) on n_head=2+Lion — TERMINAL PENDING (CLOSE imminent)
+
+- `willowpai2g24h3-frieren/switchema`
+- **Hypothesis:** Periodic EMA→live-weights swap every K steps (per arxiv 2402.09240). Targets "gradient-step-bound" regime by reset-then-continue-from-flat-basin cycling. Zero-FLOP exploration-exploitation.
+- **Results (3 finished runs, all 3 catastrophic, all 3 arms tested):**
+
+| Run | Arm | State | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---:|---:|---:|---:|
+| `ci6abegr` | interval=500 | finished | 63.26 | 54.83 | +57.1% | +63.2% |
+| `dkruicj1` | interval=500 (rep) | finished | 63.33 | 55.19 | +57.2% | +64.3% |
+| `nr58ovpo` | interval=1000 | finished | **52.52** | **44.15** | **+30.4%** | **+31.4%** |
+| `uhs8fq7x` | interval=500 (3rd, dup) | running 2min | — | — | — | (advisor poke to kill) |
+
+Baseline: 40.27 / 33.60.
+
+- **Analysis (pending student terminal SENPAI-RESULT):** SwitchEMA closes catastrophic at every interval tested. Interval=1000 (less aggressive cycling) is meaningfully better than interval=500 (about half the regression), but still +30% — well into close territory. Mechanism: in a 36-epoch budget, every switch event resets the live weights to a smoothed-EMA point that hasn't accumulated enough live-trajectory descent. The paper's gains assume 100s of epochs where momentum and EMA decouple meaningfully — at our cap, live-weights and EMA-weights are still in the same loss basin, so the swap costs the live weights' fine-grained descent without giving them a better basin to start from.
+- **Operational flag:** Frieren has had 3 separate launches of interval=500 (duplicate-launch pattern; same harness issue as edward/askeladd/thorfinn this round). Advisor posted poke asking to kill `uhs8fq7x` and submit terminal.
+- **Banked lesson:** SwitchEMA paper-regime is multi-day training where momentum stabilizes. Don't port to short-budget CFD surrogates without first validating that EMA and live weights are in *different* basins at convergence.
+- **Next experiment for frieren (after close):** **H12 CL/CD Auxiliary** (aerodynamic-quantity auxiliary loss targeting OOD-camber splits — the interval=1000 arm's best splits may reveal which OOD geometry benefited most, useful for designing the aux-loss formulation).
+
+## 2026-05-14 00:50 — PR #2670: Fourier K-down sweep (K=8) on n_head=2+Lion — TERMINAL PENDING
+
+- `willowpai2g24h3-askeladd/fourier-k-down-sweep`
+- **Hypothesis:** Test K=8 (lower Fourier modes; askeladd's own #2552 terminal follow-up). Rationale: n_head=2 has reduced per-head capacity; narrower positional spectrum may improve since model can't usefully exploit extra positional features.
+- **Result (Arm A `bcarbo2u`, finished 30.7 min cap; duplicate `qoj7jme2` running):**
+
+| Metric | K=8 (this run) | Baseline (gd934e9l) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | **41.70** | 40.27 | **+3.55% ❌** |
+| test_avg/mae_surf_p | **34.10** | 33.60 | **+1.50% ❌** (smallest test regression of round) |
+
+- **Analysis (pending askeladd's terminal):** Per merge bar (val ≥ 40.3) and PR decision rule ("if K=8 val > 40.30 → skip Arm B, close K axis"), this CLOSES. But **test 34.10 is the smallest test regression of the entire plateau period** (vs edward's warmup-10 test 34.50, n_layers=3 test 35.05, K=20 test 35.41). The test/val regression ratio (1.50/3.55 = 0.42) means test scales sub-linearly with val — interesting hint at generalization differential. Pending askeladd's per-split breakdown to confirm interpretation.
+- **Operational flag:** Duplicate launch `qoj7jme2` started 13 min ago. Advisor will address in follow-up.
+- **Next experiment for askeladd (after close):** likely tier-2 hypothesis (H9 Masked Node Pre-training or H5 GeoTransolver Cross-Attn from RESEARCH_IDEAS) — once we exhaust the hyperparameter axes around K-axis, time for architecture-tier ideas.
 
 ## 2026-05-14 00:00 — PR #2552: Fourier K continuation (K=16, K=20) on n_head=2+Lion — CLOSED
 
