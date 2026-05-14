@@ -1,5 +1,35 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 18:15 — PR #2963: Variance-penalized surface loss (mean + λ·std) ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-fern/variance-penalized-surf-loss`
+- **Hypothesis:** Penalize the std of per-node surface absolute errors (λ=0.5, 1.0) to up-weight the high-error nodes that dominate val_geom_camber_rc.
+
+### Result (vs PR #2936 baseline 72.694, pre-compile)
+
+| Arm | epochs | val_avg | test_avg | val_geom_camber_rc | Δ val |
+|-----|--------|---------|----------|---------------------|-------|
+| A: λ=0.5 | 18 | 76.869 | 66.646 | 89.522 (+5.2) | +4.18 (+5.7%) |
+| B: λ=1.0 | 19 | 85.604 | 77.060 | 97.316 (+13.0) | +12.91 (+17.8%) |
+| **Baseline (#2936)** | 20 | **72.694** | **63.367** | 84.326 | — |
+| **Compile baseline (#2954)** | 25 | **65.953** | **56.825** | 79.001 | — |
+
+Artifacts: `models/model-var-loss-lambda0.5-20260514-170005/metrics.jsonl`, `models/model-var-loss-lambda1.0-20260514-173415/metrics.jsonl`
+
+### Action: CLOSED — clear dead-end on the target split
+
+- **Targeted split worsened.** rc split (target of hypothesis) got worse in both arms: +5.2 / +13.0 pts.
+- **Monotonic worsening with λ.** No sweet-spot interior to (0, 1] — extrapolating to lower λ won't recover baseline.
+- **Mechanism:** Variance penalty pulls gradient capacity toward easy-but-extreme training-set nodes (bulk raceCar surface peaks), de-prioritizing the bulk pressure shape. The mean term gets traded away. The rc split, which requires clean *interpolation* to unseen cambers M=6-8, is most sensitive to this regression.
+- **Key reframe of rc problem:** rc is an **extrapolation problem** (raceCar P1 covers M=2-5, P3 covers M=9; rc tests M=6-8 — never seen in training), not an outlier-fitting problem on training data. Loss-shape changes within the training distribution cannot bridge this gap. Future rc-targeted work should attack the *geometric coverage* of the training distribution (sampler re-weighting, camber augmentation, geometry-conditioned features) not the loss shape.
+- **Note:** student did not include --compile_model, so realized 18-19 epochs instead of 25. Even adding compile would not change the negative direction given the monotonic worsening with λ.
+
+### Negative-result value
+
+The rc-as-extrapolation reframe is the actionable insight. Documented for future hypothesis generation. **New assignment:** #2972 fern → domain re-weighting (cruise upweighted in WeightedRandomSampler) targeting same rc split via geometric-coverage mechanism.
+
+---
+
 ## 2026-05-14 14:23 — PR #1602: grad_clip=2.0 on bf16+OneCycle@25ep baseline ❌ CLOSED (negative)
 
 - **Student branch:** `charliepai2g48h1-fern/grad-clip-l1`
