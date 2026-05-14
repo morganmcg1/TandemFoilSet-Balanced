@@ -61,7 +61,7 @@ Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
   - Snapshot non-EMA checkpoints at epochs 30/33/36 — diagnostic test of "trajectory time vs schedule shape" as binding constraint.
 - **Next experiment:** edward reassigned to **PR #2691 warmup-DOWN sweep (warmup_epochs=2, then 0)** — mechanism inversion. If Arm A (warmup=2) regresses, close axis and shift to architecture tier.
 
-## 2026-05-14 00:50 — PR #2644: SwitchEMA (intervals 500, 1000) on n_head=2+Lion — TERMINAL PENDING (CLOSE imminent)
+## 2026-05-14 01:05 — PR #2644: SwitchEMA (intervals 500, 1000) on n_head=2+Lion — CLOSED
 
 - `willowpai2g24h3-frieren/switchema`
 - **Hypothesis:** Periodic EMA→live-weights swap every K steps (per arxiv 2402.09240). Targets "gradient-step-bound" regime by reset-then-continue-from-flat-basin cycling. Zero-FLOP exploration-exploitation.
@@ -76,25 +76,44 @@ Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
 Baseline: 40.27 / 33.60.
 
-- **Analysis (pending student terminal SENPAI-RESULT):** SwitchEMA closes catastrophic at every interval tested. Interval=1000 (less aggressive cycling) is meaningfully better than interval=500 (about half the regression), but still +30% — well into close territory. Mechanism: in a 36-epoch budget, every switch event resets the live weights to a smoothed-EMA point that hasn't accumulated enough live-trajectory descent. The paper's gains assume 100s of epochs where momentum and EMA decouple meaningfully — at our cap, live-weights and EMA-weights are still in the same loss basin, so the swap costs the live weights' fine-grained descent without giving them a better basin to start from.
-- **Operational flag:** Frieren has had 3 separate launches of interval=500 (duplicate-launch pattern; same harness issue as edward/askeladd/thorfinn this round). Advisor posted poke asking to kill `uhs8fq7x` and submit terminal.
+- **Analysis (frieren's terminal SENPAI-RESULT):** Frieren's mechanism breakdown is the sharpest of this round:
+  1. **EMA effective horizon ≈ 1/(1-decay) = 1000 steps.** With ~750 steps/epoch, interval=500 fires *before* EMA buffer fills its averaging window. Swap-target is itself a partial noisy average — pulling live weights back to *less-converged* checkpoints, twice per epoch. Both seeds replicated to within 0.07 val (decisive, not noise).
+  2. **interval=1000 lets EMA reach averaging window before swap.** Damage bounded to "live optimizer's fine-grained descent post-swap is lost" not "swap-target is itself partial." Result: roughly half the damage (+30% vs +57%).
+  3. **Decoupling assumption fails at 36-epoch budget.** Live and EMA trajectories still in same loss basin (confirmed by #2612 EMA-decay sweep both flanks). SwitchEMA assumes trajectories decouple — only true at multi-hundred-epoch regimes.
+  4. **OOD-camber_rc smallest regression** (+20.5%) — implies camber_rc's loss landscape is partly insensitive to weight-trajectory smoothing → there's residual structure in camber_rc objective that local-MAE isn't capturing. Strong signal for **integrated-physics aux loss as next direction**.
+- **What this rules out:** Weight-space exploration cycling is NOT the bottleneck. The plateau is gradient-step-bound and gradient-direction-bound, not weight-space-trajectory-bound. Per frieren: "remaining axes that could matter at 30-min budget: (a) inductive bias / architecture changes that compress required descent steps, (b) loss landscape engineering (regularization, label smoothing, sharpness penalties that flatten the basin without requiring decoupling)."
+- **Operational flag:** 3 separate launches of interval=500 (duplicate-launch pattern again). Frieren killed `uhs8fq7x` on advisor poke; clean terminal posted.
 - **Banked lesson:** SwitchEMA paper-regime is multi-day training where momentum stabilizes. Don't port to short-budget CFD surrogates without first validating that EMA and live weights are in *different* basins at convergence.
-- **Next experiment for frieren (after close):** **H12 CL/CD Auxiliary** (aerodynamic-quantity auxiliary loss targeting OOD-camber splits — the interval=1000 arm's best splits may reveal which OOD geometry benefited most, useful for designing the aux-loss formulation).
+- **Banked follow-ups (frieren's suggestions):** H12 CL/CD aux (assigned next), SAM/ASAM sharpness-aware, divergence penalty on velocity field in decoder.
+- **Next experiment:** frieren reassigned to **PR #2698 CL/CD Auxiliary Loss (H12)** — aerodynamic-quantity aux loss targeting the gradient-step-bound regime via "denser signal per step." The OOD-camber_rc smallest-regress observation is the direct motivation.
 
-## 2026-05-14 00:50 — PR #2670: Fourier K-down sweep (K=8) on n_head=2+Lion — TERMINAL PENDING
+## 2026-05-14 01:15 — PR #2670: Fourier K-down sweep (K=8) on n_head=2+Lion — CLOSED
 
 - `willowpai2g24h3-askeladd/fourier-k-down-sweep`
 - **Hypothesis:** Test K=8 (lower Fourier modes; askeladd's own #2552 terminal follow-up). Rationale: n_head=2 has reduced per-head capacity; narrower positional spectrum may improve since model can't usefully exploit extra positional features.
-- **Result (Arm A `bcarbo2u`, finished 30.7 min cap; duplicate `qoj7jme2` running):**
+- **Results (3 K=8 runs across 2 launches — clean replication):**
 
-| Metric | K=8 (this run) | Baseline (gd934e9l) | Δ |
-|---|---:|---:|---|
-| val_avg/mae_surf_p | **41.70** | 40.27 | **+3.55% ❌** |
-| test_avg/mae_surf_p | **34.10** | 33.60 | **+1.50% ❌** (smallest test regression of round) |
+| Run | Arm | State | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---:|---:|---:|---:|
+| `bcarbo2u` | K=8 | finished 30.7 min cap | **41.70** | **34.10** | +3.55% | **+1.50%** (smallest test regress of plateau) |
+| `qoj7jme2` | K=8 (dup) | finished 30.5 min cap | 41.77 | 34.99 | +3.71% | +4.13% |
+| `sggs2zta` | K=8 | crashed step 102 | — | — | — | — |
 
-- **Analysis (pending askeladd's terminal):** Per merge bar (val ≥ 40.3) and PR decision rule ("if K=8 val > 40.30 → skip Arm B, close K axis"), this CLOSES. But **test 34.10 is the smallest test regression of the entire plateau period** (vs edward's warmup-10 test 34.50, n_layers=3 test 35.05, K=20 test 35.41). The test/val regression ratio (1.50/3.55 = 0.42) means test scales sub-linearly with val — interesting hint at generalization differential. Pending askeladd's per-split breakdown to confirm interpretation.
-- **Operational flag:** Duplicate launch `qoj7jme2` started 13 min ago. Advisor will address in follow-up.
-- **Next experiment for askeladd (after close):** likely tier-2 hypothesis (H9 Masked Node Pre-training or H5 GeoTransolver Cross-Attn from RESEARCH_IDEAS) — once we exhaust the hyperparameter axes around K-axis, time for architecture-tier ideas.
+Baseline: 40.2741 / 33.6017 (`gd934e9l`, PR #2192).
+
+Askeladd's terminal SENPAI-RESULT (run `qoj7jme2`, 41.7684 / 34.9908):
+- Per-split val (best epoch 36/50, EMA): single_in_dist 39.57 (+10.41%), camber_rc 53.66 (+0.30%), camber_cruise 29.93 (+6.36%), re_rand 43.92 (+0.68%)
+- Per-split test: single_in_dist 32.58 (+6.53%), camber_rc 46.67 (+2.89%), camber_cruise 24.66 (+7.77%), re_rand 36.05 (+1.33%)
+- 4/4 val splits and 4/4 test splits regress (no per-split rescue)
+- Per PR decision rule (K=8 ≥ 40.30 → close, skip Arm B), K=10 NOT run
+
+- **Analysis:** K-axis on n_head=2+Lion is now exhaustively closed. Clean U-shape: K=8 (+3.55-3.71% val) ← K=12 baseline → K=16 (5× crashed) → K=20 (+6.33% val). K=10 would interpolate inside the U at +1.5-2.5% (still well over merge bar). The K-axis is **symmetric** on this stack — K=8 regresses at roughly half the magnitude of K=20, confirming K=12 is the local optimum (not a monotone-decrease axis past K=8). Bright spot: `bcarbo2u`'s test 34.10 was the smallest test regression of the entire plateau period (vs edward's warmup-10 test 34.50, n_layers=3 35.05, K=20 35.41), but +3.55% val is still over the merge bar regardless. Replication of both K=8 arms (val 41.70 vs 41.77, 0.07 spread) also gives a clean K=8 seed-variance baseline of ~0.07 val / ~0.89 test — useful as a future calibration anchor.
+- **Mechanism interpretation:** Symmetric regression on both K-flanks (K=8 +3.55%, K=20 +6.33%) confirms K=12 is the optimal positional bandwidth on this stack. K interacts with n_head — n_head=2's higher per-head capacity (dim_head=64) does not benefit from narrower positional spectrum; the larger heads can extract sufficient positional signal from the existing K=12 modes.
+- **Operational flag:** Duplicate-launch pattern continues (sggs2zta crashed, bcarbo2u + qoj7jme2 both finished). Askeladd handled cleanly — reported all 3 run IDs in terminal SENPAI-RESULT.
+- **Banked follow-ups (askeladd's suggestions, not assigning):**
+  - K=10 single arm (would close the interpolation gap) — but decision rule precludes, no compute justification
+  - Re-test K=16 with reduced learning rate to identify the crash mechanism — diagnostic-only, no merge value
+- **Next experiment:** askeladd reassigned to **PR #2705 Masked Node Pre-training (H9)** — tier-2 architectural escalation. 3-epoch masked-feature reconstruction pre-training (40% mask) before standard supervised training. Directly targets OOD geometry splits (camber_rc, camber_cruise) and is orthogonal to all 3 in-flight tier-2 experiments (thorfinn H1 APW, frieren H12 CL/CD aux, edward warmup-DOWN).
 
 ## 2026-05-14 00:00 — PR #2552: Fourier K continuation (K=16, K=20) on n_head=2+Lion — CLOSED
 
