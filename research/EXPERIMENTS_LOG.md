@@ -7,6 +7,32 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 04:14 — PR #2709 MERGED: H5 GeoTransolver Cross-Attn — new baseline val 39.39
+
+**Squash-merged to `icml-appendix-willow-pai2g-24h-r3`.** 2-seed confirmed win.
+
+| Seed | W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val% | Δ test% |
+|---|---|---|---|---|---|
+| Seed 1 (default) | `vjatjm2m` | **39.3949** | **32.5917** | **-2.18%** | **-3.01%** |
+| Seed 2 (--seed 7) | `9ysdp0vu` | 39.6553 | 33.2889 | -1.54% | -0.93% |
+| Both-seed mean | — | **39.525** | **32.940** | **-1.86%** | **-1.97%** |
+| Prior baseline | `gd934e9l` | 40.2741 | 33.6017 | — | — |
+
+**Per-split analysis (seed-1, best-val epoch 36):**
+
+| split | baseline | seed-1 | seed-2 | 2-seed mean Δ% |
+|---|---|---|---|---|
+| val_single_in_dist | 35.84 | 36.63 | 36.36 | +1.83% ❌ (IID regression) |
+| val_geom_camber_rc | 53.50 | 52.85 | 53.15 | -0.94% ✅ |
+| val_geom_camber_cruise | 28.15 | 26.97 | 27.13 | -3.90% ✅ |
+| val_re_rand | 43.62 | 41.14 | 41.97 | -4.73% ✅ **strongest** |
+
+**Mechanism**: Cross-attention to global geometry encoder tokens (4 context vectors, dim 128) conditions every Transolver slice on whole-flow aerodynamic state. OOD-generalization-driven win — model now has access to freestream Re / camber regime during local pressure field prediction. IID val slightly regresses but OOD gains dominate the average.
+
+**Pattern established**: GLOBAL context conditioning wins (H5); LOCAL kNN aggregation loses (H6 +7.85%). Whole-flow context is the productive axis.
+
+**New baseline**: val 39.3949 / test 32.5917. New merge bar: ≤35.6 → merge, 35.6-39.5 → 2nd seed, ≥39.5 → close. All 7 remaining WIP PRs notified.
+
 ## 2026-05-14 03:30 — Tier-2 cycle: FIRST WIN + 3 close-and-reassigns
 
 **Headline**: thorfinn #2709 H5 GeoTransolver Cross-Attn landed **val 39.3949 (-2.18%) / test 32.5917 (-3.01%)** — first tier-2 win this round. Sent back for 2nd-seed (`--seed 7`) confirmation. Clear merge candidate if 2nd seed reproduces.
