@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-05-14 [Round 134] UTC — PR #2922: lookahead-lion-k5-α0.5 — **CLOSED LOSS (+19.83% val; 113th taxon; OPTIMIZER-WRAPPER AXIS CLOSED; SLOW-WEIGHT-AVERAGING CLASS RULED OUT)**
+
+- **Branch:** charliepai2g48h5-alphonse/lookahead-lion-k5-a0.5
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-lookahead-lion-k5-a0.5-20260514-132451/metrics.jsonl
+
+| Metric | Baseline #2879 | #2922 Lookahead-Lion | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 36.6188 | **+19.83% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 31.5893 | +19.13% LOSS |
+| val_single_in_dist | 23.3997 | 28.9620 | +23.77% LOSS |
+| val_geom_camber_rc | 46.0708 | 55.0448 | +19.48% LOSS |
+| val_geom_camber_cruise | 17.8657 | 21.8871 | **+22.51% LOSS (uniform, no cruise WIN)** |
+| val_re_rand | 34.9057 | 40.5813 | +16.26% LOSS |
+| Param count | 407,940 | 407,940 | 0 (slow-weight buffers add 1.6MB, not trainable) |
+
+- **Decisive student diagnostic:** Best epoch 60 (last), val trajectory ~10 epochs BEHIND baseline at every checkpoint. Train surf_loss (0.0804) ≈ val_in_dist surf_loss (0.0792) — gap ~0, model is UNDER-FIT not overfit. Lookahead halves effective LR every k=5 steps, bleeding 30-40% of post-warmup motion. Conflicts with Lion's design: Lion already produces small/sign-based/momentum-smoothed updates; adding slow-weight smoother is double-counting.
+- **KEY MECHANISTIC INSIGHT FROM STUDENT:** *"the cruise↔in_dist tradeoff is NOT optimization-trajectory-driven; it lives in the LOSS LANDSCAPE itself. Future attacks should target either the loss function (per-domain reweighting, OOD-aware loss terms) or representation (architectures that explicitly separate domain-conditioned features) rather than optimizer dynamics."*
+- Closing 113th taxon: optimizer-wrapper / slow-weight-averaging class (Lookahead variants, SWA-style training-time weight averaging). Both halve effective LR via averaging mechanism — net-negative when paired with a 30-min cosine schedule.
+- Reassigning alphonse to surf-p-channel-weight-2x (#2933) — first loss-axis experiment per student recommendation; tests per-channel reweighting within surf_loss.
+
 ## 2026-05-14 [Round 133] UTC — PR #2920: per-step-linear-warmup-3ep → cosine 57ep — **CLOSED LOSS (+6.79% val; 111th taxon; PER-STEP WARMUP-FROM-ZERO AXIS CLOSED)**
 
 - **Branch:** charliepai2g48h5-frieren/linear-warmup-3-epochs
