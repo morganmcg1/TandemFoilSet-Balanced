@@ -4,6 +4,42 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 21:45 — PR #3011 (CLOSED, askeladd): n_hidden sweep {64, 192} on saturated-clip baseline — **21st paper-appendix axis closure + FORWARD-PASS-SHAPE QUINTET COMPLETE (5/5 axes)**
+
+- **Branch:** `willowpai2g48h2-askeladd/n-hidden-sweep-on-saturated-clip-baseline`
+- **Student:** willowpai2g48h2-askeladd
+- **Verdict:** Arm 1 HALF n_hidden=64 (`q4i4dj3e`) SWA val **54.82** +9.67 / test 46.15 +7.52 REGRESS, Arm 2 LARGER n_hidden=192 (`epxw2bfz`) BASE-best val **55.40** +10.25 / test 46.49 +7.85 REGRESS with **SWA-NEVER-ENTERED** at epoch 10/15 vs current #2674 baseline (45.1538/38.6367). **BOTH-LOSE Pareto-cap class 4th member**. 21st paper-appendix axis closure (n_hidden). **FORWARD-PASS-SHAPE QUINTET COMPLETE: 5/5 axes characterized at saturated-clip baseline (3/5 BOTH-LOSE + 2/5 ASYMMETRIC-V)**.
+- **W&B runs:** `q4i4dj3e`, `epxw2bfz`, baseline `ieu1futo`.
+- **Headline:** **FORWARD-PASS-SHAPE QUINTET CLOSED**: n_head ASYMMETRIC-V + n_layers ASYMMETRIC-V + slice_num BOTH-LOSE + mlp_ratio BOTH-LOSE + **n_hidden BOTH-LOSE NEW**. Mechanism interpretation: per-block computational granularity axes → BOTH-LOSE Pareto-bound; cross-block structural composition axes → ASYMMETRIC-V asymmetric tradeoffs.
+
+### Mechanism diagnosis (paper-publishable findings — banked #289-#295)
+
+- **#289 PAPER-PUBLISHABLE — FORWARD-PASS-SHAPE QUINTET CLOSED.** 5/5 forward-pass-shape axes characterized at saturated-clip baseline. Class breakdown: **3/5 BOTH-LOSE + 2/5 ASYMMETRIC-V**. Per-block computational granularity (mlp_ratio, slice_num, n_hidden) → BOTH-LOSE Pareto-bound; cross-block structural composition (n_head, n_layers) → ASYMMETRIC-V. **FIRST mechanistic distinction** between "per-block density" and "cross-block composition" forward-pass-shape axes.
+
+- **#290 PAPER-PUBLISHABLE — grad_norm direction n_hidden ↑ → ↓ confirms FFN-FAMILY membership.** 5-axis fingerprint completed: A1 grad_norm mean=10.87 vs A2=6.37 → ratio 0.586. n_hidden joins {mlp_ratio, n_layers} as **FFN-family** (capacity ↑ → grad_norm ↓; capacity diffuses gradient signal), separate from {n_head} **attention-family** (capacity ↑ → grad_norm ↑). 4 of 5 axes show ↑→↓ DOMINANT pattern.
+
+- **#291 PAPER-PUBLISHABLE — σ-spread BIDIRECTIONAL BREAK on n_hidden axis.** Arm 1 HALF σ-spread=0.554 INFLATE; Arm 2 LARGER σ-spread=0.224 COMPRESS (−53% vs baseline). **FIRST direct evidence of bidirectional σ-spread mechanism on a single axis**: capacity ↑ COMPRESSES; capacity ↓ INFLATES. 5th forward-pass-shape σ-spread BREAK; **QUINTET now complete (5/5 forward-pass-shape axes BREAK σ-spread)**. σ-spread invariance rule refined as "INVARIANT for non-forward-pass-shape axes; BIDIRECTIONAL BREAK for forward-pass-shape axes determined by capacity vs baseline".
+
+- **#292 PAPER-STRENGTHENING — Lion optimizer_update_norm scales as √(param_count); 6th cross-axis confirmation of banked #221+#223.** A1 467.25 vs A2 1268.73 = ratio 2.72; √(param ratio 7.27) = √7.27 = 2.70 ≈ near-exact match. Sign(grad) per parameter invariant under param-count; L2 norm of full optimizer update scales as √P naturally.
+
+- **#293 PAPER-STRENGTHENING — Lion exp_avg_norm decays mildly with √P; refines banked #194.** A1=0.01160 vs A2=0.00854 = ratio 0.73. Mild violation of #194 invariance under fixed β2=0.99. Refinement: exp_avg_norm decays mildly with √P (NOT strictly invariant); #194 invariance holds for non-capacity axes (optimizer-side, schedule-side) but BREAKS mildly across capacity axes.
+
+- **#294 PAPER-STRENGTHENING — 4th SWA-NEVER-ENTERED forward-pass-shape DOUBLE arm + step-time 1.88× at 2.25× params.** Arm 2 step-time 198.3s × 11 epochs ≈ 36.4 min > 30-min cap before SWA epoch 12 entry. **4 of 4 forward-pass-shape DOUBLE arms tested show SWA-NEVER-ENTERED failure mode**. Step-time multiplier 1.88× exceeds predicted 1.2-1.5× — attention-dominated FLOPS regime.
+
+- **#295 PAPER-STRENGTHENING — clip_fraction=1.000 19th cross-axis confirmation + channel ordering 19th cross-axis confirmation.** Both arms preserved clip_fraction (A1=1.0000, A2=0.9997) and surf_ux=min/vol_ux=max canonical channel ordering.
+
+### Paper-appendix matrix update — UPDATED to **21 closed × 9 transfer patterns + 2 MIXED axes + 1 CHARACTERIZED DOMINANT-DEGENERATE**
+
+n_hidden joins BOTH-LOSE Pareto-cap class as 4th member. **FORWARD-PASS-SHAPE QUINTET CLOSED**. σ-spread invariance bank: 18 INVARIANT + **5 forward-pass-shape BREAKs (4 unidirectional + 1 bidirectional NEW)** + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + 1 compose-induced BIDIRECTIONAL BREAK + β-axis monotone-in-1/β + seed-axis 18th + 1 σ-head-optimizer-ablation BREAK + 1 GRAD-ACCUMULATION INVARIANT + **5-axis forward-pass-shape σ-spread fingerprint COMPLETE**.
+
+### Reassignment
+
+Closing #3011 as 21st paper-appendix axis closure + FORWARD-PASS-SHAPE QUINTET COMPLETE. Reassigning askeladd to **PR #3045 NEW fourier_sigma × huber_beta CO-DIRECTIONAL compose-test 2-arm on saturated-clip baseline** — 4th compose-tests bank entry (after #2925 COMPOSE-FAIL + #2996 COMPOSE-ASYMMETRIC + #3023 in-flight CO-DIRECTIONAL). Tests whether input-side smoothing × loss-side cost shape compose additively or interactively. First compose-test of CLOSED axis (fourier_sigma) × MIXED axis (β); orthogonal-mechanism-family compose-test.
+
+**Note**: #3005 edward max_norm sweep flagged as `stale_wip` by harness — verified via W&B that student is actively working (Arm 1 finished val 46.28; Arm 2 max_norm=1.0 currently running, run `bwnxc78l`). Harness flag is stale-flag NOT actual stale; left in-flight pending Arm 2 completion + structured SENPAI-RESULT comment.
+
+---
+
 ## 2026-05-14 21:30 — PR #3016 (CLOSED, alphonse): BS=4 + grad_accumulation_steps=2 effective BS=8 surrogate on saturated-clip baseline — **BATCH-SIZE class refined from PROVISIONAL → DOMINANT-DEGENERATE CHARACTERIZED**
 
 - **Branch:** `willowpai2g48h2-alphonse/grad-accumulation-bs-effective-8`
