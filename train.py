@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -206,6 +207,15 @@ class Transolver(nn.Module):
         self.film = nn.Linear(3, n_hidden)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
+
+        # Kendall heteroscedastic uncertainty weighting (Kendall, Gal & Cipolla 2018).
+        # Learnable log-variance scalars; s = log(sigma^2). Effective per-task weight
+        # becomes 0.5 * exp(-s); +0.5*s acts as the log(sigma) regularizer that
+        # prevents the trivial sigma -> inf solution.
+        # Init: s_surf = log(1/10) ≈ -2.3 reproduces fixed surf_weight=10 effective
+        # weight of 5 (= 10/2). s_vol = 0 matches fixed vol weight 1 (effective 0.5).
+        self.s_surf = nn.Parameter(torch.tensor(-2.3))
+        self.s_vol = nn.Parameter(torch.tensor(0.0))
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -545,6 +555,21 @@ optimizer = Lion(
 )
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+
+# Kendall heteroscedastic uncertainty weighting (Kendall, Gal & Cipolla 2018).
+# Capture inner model reference once so attribute access remains compile-safe.
+_uncert_module = getattr(model, "_orig_mod", model)
+print(
+    f"Kendall uncertainty weighting: s_surf={_uncert_module.s_surf.item():.4f} "
+    f"(init=-2.3 ≈ log(1/10)), s_vol={_uncert_module.s_vol.item():.4f} (init=0 ≈ log(1)); "
+    f"effective surf weight = {0.5*math.exp(-_uncert_module.s_surf.item()):.4f}, "
+    f"effective vol weight = {0.5*math.exp(-_uncert_module.s_vol.item()):.4f}"
+)
+print(
+    f"Kendall uncertainty-weighted multi-task loss: learnable log-variance s_surf, s_vol "
+    f"balance surf vs vol loss; baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -606,7 +631,16 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            # Kendall heteroscedastic uncertainty-weighted multi-task loss:
+            #   L = (1/2)*exp(-s_surf)*surf_loss + (1/2)*s_surf
+            #     + (1/2)*exp(-s_vol )*vol_loss  + (1/2)*s_vol
+            # where s = log(sigma^2) and the +0.5*s terms regularize sigma -> inf.
+            s_surf = _uncert_module.s_surf
+            s_vol = _uncert_module.s_vol
+            loss = (
+                0.5 * torch.exp(-s_surf) * surf_loss + 0.5 * s_surf
+                + 0.5 * torch.exp(-s_vol) * vol_loss + 0.5 * s_vol
+            )
 
         optimizer.zero_grad()
         loss.backward()
@@ -643,6 +677,8 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _s_surf_now = _uncert_module.s_surf.detach().float().item()
+    _s_vol_now = _uncert_module.s_vol.detach().float().item()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -655,6 +691,10 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "kendall/s_surf": _s_surf_now,
+        "kendall/s_vol": _s_vol_now,
+        "kendall/eff_w_surf": 0.5 * math.exp(-_s_surf_now),
+        "kendall/eff_w_vol": 0.5 * math.exp(-_s_vol_now),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -684,6 +724,31 @@ append_metrics_jsonl(metrics_jsonl_path, {
     "nonzero_fraction": _lion_nz_frac,
     "nonzero_count": _lion_nz,
     "total_count": _lion_total,
+})
+
+# --- Kendall uncertainty-weighting diagnostic: terminal log-variance scalars ---
+_s_surf_final = _uncert_module.s_surf.detach().float().item()
+_s_vol_final = _uncert_module.s_vol.detach().float().item()
+_eff_w_surf_final = 0.5 * math.exp(-_s_surf_final)
+_eff_w_vol_final = 0.5 * math.exp(-_s_vol_final)
+print(
+    f"Terminal s_surf={_s_surf_final:.4f} (effective surf weight = {_eff_w_surf_final:.4f}), "
+    f"s_vol={_s_vol_final:.4f} (effective vol weight = {_eff_w_vol_final:.4f})"
+)
+print(
+    f"Baseline-equivalent: effective surf weight = 5 (s_surf init=-2.3), "
+    f"effective vol weight = 0.5 (s_vol init=0)"
+)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "kendall_diagnostic",
+    "s_surf_final": _s_surf_final,
+    "s_vol_final": _s_vol_final,
+    "s_surf_init": -2.3,
+    "s_vol_init": 0.0,
+    "eff_w_surf_final": _eff_w_surf_final,
+    "eff_w_vol_final": _eff_w_vol_final,
+    "eff_w_surf_baseline_equiv": 5.0,
+    "eff_w_vol_baseline_equiv": 0.5,
 })
 
 # --- Test evaluation + local summary ---
