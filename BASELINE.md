@@ -5,14 +5,56 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Five winners merged.** PR #2954 (askeladd, torch.compile) is now the
-current baseline at `val_avg/mae_surf_p = 65.953` (-9.3% vs PR #2936).
-All subsequent experiments MUST use `--compile_model` flag.
-Recipe: `--loss l1 --lr 2e-3 --epochs 25 --eval_every 2 --compile_model`
-VRAM footprint ~24 GB (down from ~33 GB — compile fuses kernels).
-Throughput: ~50 s/epoch (was ~94 s). All 25 epochs fit in 21.7 min.
+**Six winners merged.** PR #2967 (askeladd, OneCycleLR horizon extension --epochs 35) is the
+current baseline at `val_avg/mae_surf_p = 54.475` (-17.4% vs PR #2954).
+All subsequent experiments MUST use `--compile_model` and `--epochs 35`.
+Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model`
+VRAM footprint ~24 GB. Throughput: ~50 s/epoch. All 35 epochs fit in 29.8 min.
 
-## 2026-05-14 — PR #2954: torch.compile (askeladd) ← CURRENT BEST
+## 2026-05-14 18:35 — PR #2967: OneCycleLR horizon extension --epochs 35 (askeladd) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **54.475**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **47.043**
+- **Improvement vs PR #2954:** -17.4% val / -17.2% test
+- **Best epoch:** 35/35 configured (all fit in 29.8 min at ~51 s/epoch avg)
+- **Key change:** `--epochs 35` extends the OneCycleLR horizon; LR at ep 25 is now 4.57e-4
+  (productive mid-tail) vs the old baseline where LR was already at the floor (8e-9) by ep 25.
+  Val still improving at ep 35 (monotone decline ep 2–35) — schedule is the binding constraint.
+  VRAM and throughput identical to PR #2954 (same compile kernel fusion).
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 37.613 |
+| val_re_rand | 53.733 |
+| val_single_in_dist | 57.573 |
+| val_geom_camber_rc | 68.980 |
+| **val_avg** | **54.475** |
+
+- **Per-split test breakdown (epoch 35 checkpoint):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 30.375 |
+| test_re_rand | 46.455 |
+| test_single_in_dist | 49.797 |
+| test_geom_camber_rc | 61.544 |
+| **test_avg** | **47.043** |
+
+- **Metric artifacts:** `models/model-onecycle-ep35-compiled-20260514-171905/metrics.jsonl`
+  and `models/model-onecycle-ep35-compiled-20260514-171905/metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --agent charliepai2g48h1-askeladd --experiment_name onecycle-ep35-compiled
+```
+
+Note: `--epochs 35` is now the **required** baseline recipe. Wall-clock 29.8 min (under 30 min cap).
+All future experiments MUST use `--compile_model --epochs 35`. Without `--epochs 35`, the LR
+schedule is exhausted by ep 25 and 10 productive tail epochs are wasted.
+
+## 2026-05-14 — PR #2954: torch.compile (askeladd) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **65.953**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **56.825**
