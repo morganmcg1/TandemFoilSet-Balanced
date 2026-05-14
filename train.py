@@ -388,7 +388,8 @@ def write_experiment_summary(
         "pct_start": cfg.pct_start,
         "epochs_configured": cfg.epochs,
         "asinh_p_scale": cfg.asinh_p_scale,
-        "loss": cfg.loss,
+        "cruise_weight": cfg.cruise_weight,
+        "single_weight": cfg.single_weight,
     }
     if recomputed_p_stats is not None:
         summary["recomputed_p_stats"] = recomputed_p_stats
@@ -443,6 +444,8 @@ class Config:
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
     compile_model: bool = False   # torch.compile the model for throughput
     pct_start: float = 0.1  # OneCycleLR warmup fraction (default 0.1 = 10% of total_steps)
+    cruise_weight: float = 1.0  # multiplier on cruise-domain sample weights in WeightedRandomSampler
+    single_weight: float = 1.0  # multiplier on raceCar-single sample weights in WeightedRandomSampler
 
 
 cfg = sp.parse(Config)
@@ -495,6 +498,26 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
+    if cfg.cruise_weight != 1.0 or cfg.single_weight != 1.0:
+        with open(Path(cfg.splits_dir) / "meta.json") as _mf:
+            _meta = json.load(_mf)
+        sample_weights = sample_weights.clone()
+        if cfg.cruise_weight != 1.0:
+            _cruise_idx = torch.tensor(_meta["domain_groups"]["cruise"], dtype=torch.long)
+            sample_weights[_cruise_idx] *= cfg.cruise_weight
+        if cfg.single_weight != 1.0:
+            _single_idx = torch.tensor(_meta["domain_groups"]["racecar_single"], dtype=torch.long)
+            sample_weights[_single_idx] *= cfg.single_weight
+        _group_totals = {
+            name: sample_weights[torch.tensor(idxs, dtype=torch.long)].sum().item()
+            for name, idxs in _meta["domain_groups"].items()
+        }
+        _total = sum(_group_totals.values())
+        _pct = {k: 100.0 * v / _total for k, v in _group_totals.items()}
+        print(
+            f"cruise_weight={cfg.cruise_weight} single_weight={cfg.single_weight}: sampling shares "
+            + ", ".join(f"{k}={p:.1f}%" for k, p in _pct.items())
+        )
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
