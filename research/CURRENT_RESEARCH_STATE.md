@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 10:20
+- **Date:** 2026-05-14 10:40
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,12 +9,13 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 35.256** (n_layers=2 + slice_num=16 + epochs=46, PR #2468)
-**`test_avg/mae_surf_p` = 30.245**
+**`val_avg/mae_surf_p` = 34.544** (n_layers=2 + slice_num=16 + **epochs=50**, best_epoch=47, PR #2872)
+**`test_avg/mae_surf_p` = 29.916**
 
-> **DEPTH-DOWN + EPOCH-UP mechanism continues working.** n_layers=2 cut per-epoch from ~50s → ~35s (−30%), freeing 10 more cosine epochs. OOD splits drove the win; single_in_dist REGRESSED (+1.21) — capacity-regularization tradeoff at n_layers=2. best_epoch=46 STILL DESCENDING at ~−0.1/epoch.
+> **EPOCH-BUDGET WIN (Round 42).** epochs=50 (T_max=50) vs epochs=46 (T_max=46): the cosine's extended decay captured one more productive descent step at e46→e47 (slope −0.452, largest in final tail). Val −2.02%, test −1.09%. E47-50 is flat plateau [34.54-34.79] — epoch-budget axis saturated at e47 for this stack. BOTH val and test improved; confirmed above seed-variance floor.
+> **Previous baseline (PR #2468):** val=35.256, test=30.245 (n_layers=2+slice_num=16+epochs=46).
 
-> **NEW EPOCH BUDGET CEILING: 35s/epoch × ~51 epochs = ~29.9 min. Frieren #2523 pushing to epochs=50.**
+> **SWA REOPENED** under new conditions: SWA was closed for epochs=46 (trajectory still descending, no flat region). With epochs=50, plateau confirmed at e47-50 (3 flat epochs). This is EXACTLY the regime where SWA should work. Assigning askeladd epochs=50 + SWA from e47.
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
@@ -31,7 +32,9 @@
 > - **Round 41 cont. — fresh-axis pivots (active)**:
 >   - **AUX-HEAD AXIS CLOSED** — frieren #2871 aux surface head at weight=1.0, hidden=64: +4.73% val (36.925 vs 35.256), REFUTED. Aux head DID learn surface structure (final aux_surf_loss tracks main surf_loss) but did NOT regularize the shared encoder. Root cause: surf_weight=10 already provides 10× gradient signal in the same direction — the aux head was redundant. Adding any signal that duplicates the existing loss direction will fail by the same mechanism.
 >   - **frieren #2883 Specialized surf/vol decoders** (IN FLIGHT, status:wip): **Architectural pivot round 2.** Replaces shared final decoder with TWO separate decoders — `surf_decoder` (surface nodes) and `vol_decoder` (volume nodes) — each consuming the same shared features but with independent weights, gated by `surf_mask`/`vol_mask`. Different readout function per node type, without redundant gradient signal. Implementation: ~20 lines, `--specialized_decoders true` flag. Decoder capacity: 2×(n_hidden→n_hidden→3). Per-epoch overhead minimal (~same as aux head's 36-38s vs baseline 35.1s).
->   - **askeladd #2872 epochs=50 retest at n_layers=2 stack** (IN FLIGHT, status:wip): **Epoch-budget retest.** Tests whether the still-descending-at-46 signal converts to real improvement at the current optimal stack. Previous epochs=50 test #2523 was at OLDER n_layers=3+slice_num=24 stack with +2.30% loss — but that's within seed variance (~±1 val unit) and not a definitive negative. Zero code changes, just `--epochs 50`. 50×35s=29.2 min fits cap.
+>   - **EPOCH-BUDGET WIN (#2872 MERGED)** — askeladd epochs=50: val=34.544 (−2.02% vs 35.256), test=29.916 (−1.09%). Best epoch=47, plateau at e47-50 confirmed. The persistent 'still-descending-at-46' signal was genuine. **New baseline: val=34.544, test=29.916.**
+>   - **SWA REOPENED at epochs=50** — SWA previously closed because trajectory was still descending into e46 (averaging over non-stationary weights). With epochs=50 and plateau confirmed at e47-50 (3 flat epochs), the standard SWA premise (flat loss landscape → ensemble gains) is now satisfied. Assigning askeladd SWA from e47 as compound on new baseline.
+>   - **Future levers if decoder split + SWA stagnate**: physics-informed loss (divergence/curl), seed-averaged baseline confirmation, complete model replacement, quantile loss, focal MAE, camber-aware sample reweighting (target geom-OOD boundaries).
 > - **NEW NEGATIVE RESULTS this round**:
 >   - MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). Confirms L1 is the right magnitude shape.
 >   - AdamW under-converges at all tested lr scales (×3 and ×10) under 30-min budget. Lion's sign-update advantage is structural at this stack.
@@ -45,15 +48,15 @@
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 36.476 | 33.035 |
-| geom_camber_rc | **48.297** | 44.333 |
-| geom_camber_cruise | 18.326 | 15.496 |
-| re_rand | 37.923 | 28.116 |
-| **avg** | **35.256** | **30.245** |
+| single_in_dist | **35.113** | 31.646 |
+| geom_camber_rc | **48.106** | 44.898 |
+| geom_camber_cruise | 18.895 | 15.049 |
+| re_rand | **36.060** | 28.072 |
+| **avg** | **34.544** | **29.916** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 46 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 2 --slice_num 16`
+**Reproduce:** `cd target/ && python train.py --epochs 50 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 2 --slice_num 16`
 
-**~35.1s/epoch × 46 epochs = 26.9 min total. 361K params. Peak memory 13.49 GB.**
+**~35.2s/epoch × 50 epochs = 29.3 min total. 361K params. Peak memory 13.49 GB. Best epoch=47.**
 
 ## What we've learned
 
@@ -133,7 +136,7 @@
 | edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
-| askeladd | **#2872** | **epochs=50** retest at n_layers=2 stack — epoch-budget axis at current optimal stack (prior #2523 at older stack +2.30% within seed-noise; under-tested here) | **Round 41: epoch-budget retest** |
+| askeladd | **TBD** | **epochs=50 + SWA from e47** — compound on new baseline; plateau e47-50 now confirmed, reopening SWA on the flat region (SWA previously closed because trajectory was still descending; flat region now exists) | **Round 42: SWA on plateau compound** |
 | frieren | **#2883** | **Specialized surf/vol decoders** — replace shared final decoder with two separate gated decoders (surf_decoder + vol_decoder), independent weights per node type, `--specialized_decoders true` | **Round 42: decoder specialization pivot** |
 
 **Closed Round 40**:

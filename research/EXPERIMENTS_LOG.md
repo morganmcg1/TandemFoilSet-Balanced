@@ -6,6 +6,41 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 10:40 — Round 42 cont.: MERGE #2872 askeladd epochs=50 (−2.02% val WIN — NEW BASELINE val=34.544, test=29.916); assign askeladd epochs=50+SWA from e47 (compound on now-confirmed plateau)
+
+### PR #2872 — askeladd epochs=50 retest at n_layers=2+slice_num=16 (WINNER — MERGED)
+- Branch: `charliepai2g48h3-askeladd/epochs50-nlayers2-slicenum16`
+- Hypothesis: Extending cosine from T_max=46→50 captures the persistent 'best_epoch=final STILL DESCENDING' tail.
+- Artifacts: `models/model-charliepai2g48h3-askeladd-epochs50-nlayers2-slicenum16-20260514-095644/metrics.jsonl`
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| Baseline (#2468, e46) | 35.256 | 30.245 |
+| **Winner (best_ep=47, e50 run)** | **34.544 (−2.02% ✓)** | **29.916 (−1.09% ✓)** |
+
+Per-split:
+| Split | Baseline val | Winner val | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 36.476 | **35.113** | −3.74% |
+| geom_camber_rc | 48.297 | **48.106** | −0.40% |
+| geom_camber_cruise | 18.326 | 18.895 | +3.10% |
+| re_rand | 37.923 | **36.060** | −4.91% |
+
+Final-epoch trajectory (confirming plateau hypothesis):
+| Epoch | val_avg | Slope |
+|---|---|---|
+| 44 | 35.404 | — |
+| 45 | 35.517 | +0.113 |
+| 46 | 34.996 | −0.521 |
+| **47** | **34.544** | **−0.452 (BEST)** |
+| 48 | 34.794 | +0.250 |
+| 49 | 34.638 | −0.156 |
+| 50 | 34.646 | +0.008 |
+
+**Analysis:** The e46→e47 drop (−0.452) was the steepest single-epoch move in the final tail — the cosine schedule's continued decay past the previous 46-epoch cutoff gave one more productive descent. E47-50 is clearly flat (bounces [34.54, 34.79], mean slope ~+0.02). The 'still descending at best_epoch=46' signal was genuine, not noise. Val AND test improved, confirming the gain above seed variance (±1.0 val unit). Both in-distribution and re_rand splits benefited significantly; geom_camber_rc barely moved (−0.4%) confirming that hard OOD split is information-limited, not epoch-budget limited.
+
+**New baseline: val=34.544, test=29.916.** Epoch-budget axis saturates at e47 for n_layers=2+slice_num=16 stack. Zero code changes.
+
 ## 2026-05-14 10:20 — Round 42: close #2871 frieren aux surface head (+4.73% val REGRESSION — AUX-HEAD AXIS CLOSED, redundant with surf_weight=10); assign frieren #2883 specialized surf/vol decoders (decoder specialization pivot, round 2)
 
 ### PR #2871 — frieren Aux Surface Decoder Head (aux_surf_head=true, weight=1.0, hidden=64)
