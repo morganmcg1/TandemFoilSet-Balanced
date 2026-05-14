@@ -2,6 +2,110 @@
 
 ---
 
+## 2026-05-14 [Round 79] UTC — Round 79
+
+### PR #2669 tanjiro: Talking-Heads Attention — CLOSED (44th taxon, cross-head mixing at H=2 saturates)
+
+- **Branch:** `charliepai2g48h5-tanjiro/talking-heads-attn`
+- **Hypothesis:** Shazeer 2020 Talking-Heads — 2×2 logits_mixing + 2×2 probs_mixing Linear modules per block (identity-init); +32 params total; cross-head linear mixing pre- and post-softmax. Compounds with QK-Norm if both win.
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | Talking-Heads | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **34.5351** | 33.3722 | **+3.48% LOSS** |
+| test_avg/mae_surf_p | **28.8990** | 28.3736 | **+1.85% LOSS** |
+
+Per-split val (uniform regression):
+
+| Split | Talking-Heads | NEW baseline | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 27.3990 | **25.3293** | **+8.17% WORST** |
+| val_geom_camber_rc | 51.0271 | **49.5771** | +2.92% |
+| val_geom_camber_cruise | 20.9950 | **20.4181** | +2.83% |
+| val_re_rand | 38.7193 | **38.1642** | +1.45% |
+
+Per-split test (best-val ep66 checkpoint):
+
+| Split | test mae_surf_p |
+|---|---|
+| test_single_in_dist | 25.0414 |
+| test_geom_camber_rc | 44.1284 |
+| test_geom_camber_cruise | 17.0733 |
+| test_re_rand | 29.3528 |
+
+- **Run characteristics:** Best ep=66/70 (timeout at 30.7min). +0.3s/epoch overhead. +32 params (+0.01% matches spec). Peak GPU 14.0 GB.
+
+- **Mechanism diagnostic — mixing matrices ENGAGED but failed:**
+
+| Block | `logits_mixing` |dev_from_I| | `probs_mixing` |dev_from_I| |
+|---|---|---|
+| 0 | **0.2121** | 0.0807 |
+| 1 | 0.1372 | 0.0862 |
+| 2 | 0.1583 | 0.0529 |
+| 3 | 0.2012 | 0.0175 |
+
+Full terminal matrices show diagonals shrinking BELOW 1.0 (0.58-0.94) — heads were ABSORBING each other's logits, down-weighting each head's own pattern. Pre-softmax mixing (logits) is 2-10× stronger than post-softmax (probs).
+
+- **Mechanism:** At H=2, "sharing" between heads homogenizes them rather than expanding pattern diversity. Talking-Heads is theoretically more useful at H≥4-8 where head specialization is stronger. With H=2, each head's own logit pattern gets contaminated by the other's, reducing effective attention pattern diversity. The identity-init wasn't sufficient — the optimizer actively moved the mixing matrices toward a regime that hurt performance.
+
+- **44th closed taxon: cross-head attention mixing at H=2 closed.**
+
+**Attention-internal axis now COMPREHENSIVELY closed across 4 distinct mechanisms:**
+
+| Mechanism | PR | Status | Year |
+|---|---|---|---|
+| Post-softmax shape (τ temperature) | #2623 | LOSS (37th) | Closed |
+| Weight Lipschitz (spectral norm) | #2580 | LOSS (32nd) | Closed |
+| Score stabilization (QK-Norm) | #2661 | WASH/LOSS (42nd) | Closed |
+| Cross-head mixing (Talking-Heads) | #2669 | LOSS (44th) | Closed |
+
+Four independent mechanisms — pre-softmax shape (logits_mixing), per-row normalization (τ), constraint (spectral), and post-projection (QK-Norm) — all fail to move val. **Attention-internal stabilization is NOT the bottleneck on this stack at H=2.**
+
+In-flight attention-adjacent probes remain (#2673 Sigmoid Attention non-softmax, #2675 2D RoPE positional embedding); these test fundamentally different attention angles.
+
+- **Action:** Closed. Pivoted tanjiro to structurally distinct architectural probe.
+
+---
+
+### PR #2692 tanjiro: Squeeze-Excitation per-block (Hu et al. 2018) — ASSIGNED (Round-79)
+
+- **Branch:** `charliepai2g48h5-tanjiro/se-r8`
+- **Hypothesis:** Add SE module at end of each TransolverBlock — global average pool over tokens → Linear(96→12) → GELU → Linear(12→96) → sigmoid → broadcast channel multiply. Hu, Shen & Sun 2018 CVPR (SENet — ImageNet 2017 winner). Per-channel gating CONDITIONED on global stream content; orthogonal to per-token attention, per-channel LayerScale (constant), and input-conditioned FiLM.
+
+- **Code pattern:**
+```python
+class SqueezeExcitation(nn.Module):
+    def __init__(self, dim, reduction=8):
+        super().__init__()
+        d_hidden = max(1, dim // reduction)
+        self.fc1 = nn.Linear(dim, d_hidden, bias=True)
+        self.fc2 = nn.Linear(d_hidden, dim, bias=True)
+        with torch.no_grad():
+            self.fc2.weight.zero_()
+            self.fc2.bias.zero_()
+    def forward(self, x):
+        s = x.mean(dim=1)                           # (B, D)
+        s = self.fc2(F.gelu(self.fc1(s)))          # (B, D)
+        gate = torch.sigmoid(s)                     # (B, D)
+        return x * gate.unsqueeze(1)
+# Apply at end of each TransolverBlock.forward()
+```
+
+- **Predicted outcomes:**
+  - **WIN — channel gating:** Global content gating adds inductive bias that LayerScale (constant) and FiLM (input-only) can't capture. Per-split: re_rand and camber_cruise improve most. Best case −0.5% to −2%.
+  - **WASH:** sigmoid gates converge near 0.5–0.7 with minor variation; SE adds no signal beyond LayerScale + FiLM.
+  - **LOSS:** Gates collapse to extremes; OR multiplicative cascade with LayerScale destabilizes stream variance.
+
+- **Why structurally fresh:** FIRST channel-wise gating CONDITIONED ON GLOBAL STREAM CONTENT in launch. Distinct from LayerScale (per-channel constant gain), FiLM (input-conditioned not content-conditioned), attention (per-token not global), and slice routing (per-prototype not per-channel).
+
+- **Param overhead:** +9,648 params (+2.9%). Compute ~+1-3% per epoch (mean pool + tiny MLP per block).
+
+- **Init detail:** zero-init `fc2` → gate = sigmoid(0) = 0.5 uniformly at start. Residual stream halved initially; LayerScale γ has flexibility to grow γ to compensate. Meaningful initial perturbation but doesn't break the network.
+
+- **Baseline to beat:** val < 33.3722.
+
+---
+
 ## 2026-05-14 [Round 78] UTC — Round 78
 
 ### PR #2661 frieren: QK-Norm — CLOSED (42nd taxon, attention-internal trio saturated)
