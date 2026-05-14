@@ -190,6 +190,25 @@ class SqueezeExcitation(nn.Module):
         return x * gate.unsqueeze(1)
 
 
+class SurfaceAwareLN(nn.Module):
+    """LayerNorm with separate gamma/beta for surface vs volume tokens.
+
+    Two nn.LayerNorm(dim) modules (ln_surf, ln_vol) sharing nothing but the
+    normalization statistic recipe (mean/var over channel dim per token).
+    Selection is per-token via is_surface mask. +2*dim params vs vanilla LN.
+    """
+    def __init__(self, dim: int):
+        super().__init__()
+        self.ln_surf = nn.LayerNorm(dim)
+        self.ln_vol = nn.LayerNorm(dim)
+
+    def forward(self, x, is_surface=None):
+        if is_surface is None:
+            return self.ln_vol(x)
+        mask = is_surface.unsqueeze(-1).to(x.dtype)
+        return self.ln_surf(x) * mask + self.ln_vol(x) * (1.0 - mask)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
@@ -207,19 +226,19 @@ class TransolverBlock(nn.Module):
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = SurfaceAwareLN(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, is_surface=None):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            return self.mlp2(self.ln_3(fx, is_surface=is_surface))
         return fx
 
 
@@ -275,6 +294,7 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
+        is_surface = data.get("is_surface")  # [B, N] bool, threaded to surface-aware ln_3
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
@@ -282,7 +302,7 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            fx = block(fx, mask=mask, is_surface=is_surface)
         return {"preds": fx}
 
 
@@ -312,7 +332,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx_factory():
-                pred = model({"x": x_norm, "mask": mask})["preds"]
+                pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
             pred = pred.float()
 
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
@@ -535,6 +555,18 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# SurfaceAwareLN diagnostic: confirm the +2*n_hidden parameter delta at ln_3
+_saln_modules = [m for m in model.modules() if isinstance(m, SurfaceAwareLN)]
+_saln_params = sum(p.numel() for m in _saln_modules for p in m.parameters())
+_saln_extra = _saln_params - (2 * model_config['n_hidden']) * len(_saln_modules)
+print(
+    f"Surface-aware ln_3: separate gamma/beta for surface vs volume tokens at decoder LN; "
+    f"{len(_saln_modules)} SurfaceAwareLN module(s) at last_layer=True block(s); "
+    f"params per SAL N = {2 * 2 * model_config['n_hidden']} (ln_surf gamma+beta {2*model_config['n_hidden']} + ln_vol gamma+beta {2*model_config['n_hidden']}); "
+    f"+{2 * model_config['n_hidden']} params vs vanilla LN baseline (#2765) = +192 expected at n_hidden=96; "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216"
+)
+
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
@@ -687,7 +719,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
@@ -957,6 +989,56 @@ if best_metrics:
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
+
+    # Surface-aware ln_3 gamma/beta diagnostic: did surf vs vol LN params diverge?
+    print("\nSurface-aware ln_3 gamma/beta stats (best-checkpoint weights):")
+    _saln_log = {"event": "surface_aware_ln_diagnostic",
+                 "epoch": int(best_metrics["epoch"]), "blocks": []}
+    for _i, _blk in enumerate(_inner.blocks):
+        if not getattr(_blk, "last_layer", False):
+            continue
+        _ln = _blk.ln_3
+        if not isinstance(_ln, SurfaceAwareLN):
+            continue
+        _gs = _ln.ln_surf.weight.detach().float()
+        _bs = _ln.ln_surf.bias.detach().float()
+        _gv = _ln.ln_vol.weight.detach().float()
+        _bv = _ln.ln_vol.bias.detach().float()
+        _gamma_l2 = (_gs - _gv).norm().item()
+        _beta_l2 = (_bs - _bv).norm().item()
+        _gamma_cos = float(
+            torch.dot(_gs, _gv) / (_gs.norm() * _gv.norm() + 1e-12)
+        )
+        _row = {
+            "block_idx": _i,
+            "ln_3_surf_gamma_mean": _gs.mean().item(),
+            "ln_3_surf_gamma_std": _gs.std().item(),
+            "ln_3_surf_beta_mean": _bs.mean().item(),
+            "ln_3_surf_beta_std": _bs.std().item(),
+            "ln_3_vol_gamma_mean": _gv.mean().item(),
+            "ln_3_vol_gamma_std": _gv.std().item(),
+            "ln_3_vol_beta_mean": _bv.mean().item(),
+            "ln_3_vol_beta_std": _bv.std().item(),
+            "gamma_l2_dist": _gamma_l2,
+            "beta_l2_dist": _beta_l2,
+            "gamma_cosine": _gamma_cos,
+        }
+        print(
+            f"  block[{_i}] ln_3.ln_surf: gamma mean={_row['ln_3_surf_gamma_mean']:.4f} "
+            f"std={_row['ln_3_surf_gamma_std']:.4f}  beta mean={_row['ln_3_surf_beta_mean']:.4f} "
+            f"std={_row['ln_3_surf_beta_std']:.4f}"
+        )
+        print(
+            f"  block[{_i}] ln_3.ln_vol : gamma mean={_row['ln_3_vol_gamma_mean']:.4f} "
+            f"std={_row['ln_3_vol_gamma_std']:.4f}  beta mean={_row['ln_3_vol_beta_mean']:.4f} "
+            f"std={_row['ln_3_vol_beta_std']:.4f}"
+        )
+        print(
+            f"  block[{_i}] L2(gamma_surf-gamma_vol)={_gamma_l2:.4f}  "
+            f"L2(beta_surf-beta_vol)={_beta_l2:.4f}  cos(gamma_surf,gamma_vol)={_gamma_cos:.6f}"
+        )
+        _saln_log["blocks"].append(_row)
+    append_metrics_jsonl(metrics_jsonl_path, _saln_log)
 
     test_metrics = None
     test_avg = None
