@@ -2,6 +2,115 @@
 
 ---
 
+## 2026-05-14 20:30 [Round 138 close-29] UTC — PR #2993: lion-wd-1e-3 — **CLOSED LOSS (+1.85% val vs NEW; 151st taxon; WD-AXIS-CLOSED-AT-3E-4)**
+
+- **Branch:** charliepai2g48h5-fern/weight-decay-1e-3
+- **Metric artifacts:** models/model-charliepai2g48h5-fern-weight-decay-1e-3-20260514-191435/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2993 (wd=1e-3) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **30.5954** | **+1.85% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 26.0329 | +3.26% LOSS |
+| val_single_in_dist | 25.219 | 27.1223 | **+7.55% LOSS (WORST-HIT)** |
+| val_geom_camber_rc | 43.929 | 44.8360 | +2.07% LOSS |
+| val_geom_camber_cruise | 16.265 | 16.7972 | **+3.27% LOSS (7th post-#2964 cruise breakage)** |
+| val_re_rand | 34.740 | **33.6259** | **-3.21% WIN (SOLE SPLIT-LEVEL IMPROVEMENT)** |
+| best_epoch | 60/60 | 60/60 | terminal (budget-limited) |
+| Param count | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** Increase Lion weight_decay 3e-4 → 1e-3 (3.3× stronger L2 regularization) testing upper bracket of wd-magnitude axis. Predicted to improve OOD splits via implicit Bayesian prior.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **WD-AXIS BRACKETING COMPLETE & TIGHT:** 5e-5 (too weak) / **3e-4 WIN baseline #2964** / 1e-3 +1.85% LOSS. Optimum at 3e-4 within explored range. wd-magnitude axis CLOSED.
+
+2. **CAPACITY-LIMITED NOT REG-LIMITED.** best=last at ep60 + uniform regression on 3/4 splits under stronger wd confirms model is bias-limited at 407k params; adding regularization hurts more than helps generalization.
+
+3. **CRUISE META-SIGNAL BROKEN 7TH TIME post-#2964** (pattern: #2961 aux, #2978 AoA, #2986 AdamW, #2988 γ, #2994 lr, #2995 T-warmstart, #2993 wd). The cruise basin is structurally fragile to ANY perturbation — including pure-magnitude scans within established axes. Pattern accelerates.
+
+4. **RE_RAND SOLE WIN SIGNAL (-3.21%)** — Re-randomized split is the only one that benefits from stronger regularization. This is a TARGETED-INTERVENTION signal: the model over-fits Re-conditioning patterns. Points to **Re-channel-specific FiLM regularization** as the natural pivot.
+
+5. **151st taxon CLOSED:** WD-MAGNITUDE-AXIS-CLOSED-AT-3E-4 / RE_RAND-WANTS-MORE-CONDITIONING-REGULARIZATION.
+
+**Followup assigned:** #3014 fern film-input-dropout-p-0.2 (FRESH AXIS — nn.Dropout(p=0.2) on FiLM conditioning vector [log_Re, AoA0, AoA1] BEFORE film_mlp; targets re_rand failure mode (Re-conditioning overfit) without globally regularizing other splits; zero new params; orthogonal to data-aug closures (input-channel noise was per-NODE not per-SAMPLE-condition); 153rd axis; first FiLM-internal stochastic regularization in launch). Total closed: 151. Winners: 22.
+
+---
+
+## 2026-05-14 20:25 [Round 138 close-28] UTC — PR #2995: learnable-T-warm-start-0.94-0.60-0.73-0.44 — **CLOSED LOSS (+3.42% val vs NEW; 150th taxon; T-AXIS COMPREHENSIVELY CLOSED)**
+
+- **Branch:** charliepai2g48h5-tanjiro/learnable-T-warm-start-0.94-0.60-0.73-0.44
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-learnable-T-warm-start-0.94-0.60-0.73-0.44-20260514-192544/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2995 (warm-start T) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **31.0655** | **+3.42% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 26.2443 | +4.10% LOSS |
+| val_single_in_dist | 25.219 | 26.280 | +4.21% LOSS |
+| val_geom_camber_rc | 43.929 | 46.753 | +6.43% LOSS |
+| val_geom_camber_cruise | 16.265 | 16.877 | **+3.76% LOSS (6th post-#2964 cruise breakage)** |
+| val_re_rand | 34.740 | 34.352 | -1.12% WIN (sole) |
+| best_epoch | 60/60 | 60/60 | budget-limited |
+| Param count | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** Initialize learnable T at #2979's terminal values [0.94, 0.60, 0.73, 0.44] instead of uniform 0.5 — predicted to free 60-epoch budget for spatial routing fine-tuning rather than coarse T migration.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **CROSS-ARCHITECTURE WARM-START DOES NOT TRANSFER.** T values migrated 8-40% per block from warm-start init to NEW equilibrium [0.86, 0.81, 0.80, 0.62] within first 30 epochs. Drift magnitudes comparable to uniform-init drift — warm-start premise (drift <5% if attractor) FAILED.
+
+2. **T MIGRATED UP NOT STABLE.** B1 (+33.9%), B3 (+40.2%) drifted UP from warm-start. Inverse of premise.
+
+3. **POST-NORM+γ=1.0 EQUILIBRIUM IS FLATTER & WARMER**: span 0.24, mean 0.77 (vs warm-start span 0.50 / mean 0.68). Post-norm narrows residual magnitudes → reduces logit dynamic range → pushes T toward unity.
+
+4. **T-AXIS COMPREHENSIVELY CLOSED ACROSS ALL VARIANTS:** per-block schedule LOSS #2969, T=2.0 LOSS #2944, T=0.25 LOSS #2955, dropout-on-routing LOSS #2958, warm-start LOSS this PR. T-LEARNABILITY with init=0.5 is the final operating point.
+
+5. **CRUISE META-SIGNAL BROKEN 6TH TIME post-#2964** — pattern continues.
+
+6. **150th taxon CLOSED:** T-WARM-START-CROSS-ARCHITECTURE-NO-TRANSFER / T-AXIS-COMPREHENSIVELY-CLOSED.
+
+**Followup assigned:** #3015 tanjiro fourier-pe-l6 (FRESH INPUT-REPRESENTATION AXIS — NeRF-style Fourier positional encoding on mesh coords; L=6 frequencies × 2 spatial dims × 2 sin/cos = +24 input channels; +2,304 params at input projection; preserves raw coords by augmentation not replacement to respect #2976 closure of "coord precision is load-bearing"; first input-representation experiment in launch; 154th axis; per student closure recommendation to pivot off T-axis entirely). Total closed: 150. Winners: 22.
+
+---
+
+## 2026-05-14 20:20 [Round 138 close-27] UTC — PR #2997: n_layers=5 (interpreted from "n_layers=6") — **CLOSED LOSS (+2.77% val vs NEW; 149th taxon; DEPTH-CAPACITY BUDGET-CAPPED AT 30MIN)**
+
+- **Branch:** charliepai2g48h5-askeladd/n-layers-5-from-baseline-4
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-n-layers-5-from-baseline-4-20260514-192234/metrics.jsonl
+
+| Metric | NEW Baseline #2964 (n=4) | #2997 (n=5) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **30.8711** | **+2.77% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 26.7141 | +5.97% LOSS |
+| val_single_in_dist | 25.219 | 26.716 | +5.94% LOSS |
+| val_geom_camber_rc | 43.929 | 45.647 | +3.91% LOSS |
+| val_geom_camber_cruise | 16.265 | 16.360 | +0.59% (basin held weakly) |
+| val_re_rand | 34.740 | 34.761 | +0.06% (wash) |
+| test_single_in_dist | 22.700 | 25.995 | **+14.51% LOSS (WORST-HIT)** |
+| epochs reached | 60/60 | **51/60 (30-min cap fired)** | -9 epochs |
+| best_epoch | 60/60 | 51/51 | terminal (still budget-limited) |
+| Param count | 407,172 | 499,358 | +22.6% (+92,186) |
+| sec/epoch | ~30s | 34.5s | +15% |
+
+**Hypothesis:** Increase model depth n_layers=4 → 5 (one additional TransolverBlock) under #2964 post-norm+γ=1.0 topology — predicted to ease persistent best=last underfitting signature.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **CAPACITY IS NOT THE BOTTLENECK UNDER 30-MIN BUDGET.** Added +92k params; per-epoch wall grew +15%; budget cap fired at ep51 (vs ep60 baseline) before extra capacity could amortize. Net: +2.77% LOSS.
+
+2. **PER-EPOCH WALL-CLOCK GROWS LINEARLY WITH BLOCKS.** Each added block costs ~15% per-epoch. Capacity-axis is BUDGET-CAPPED at 30min/60ep; deeper models REACH FEWER EPOCHS, dominating any per-epoch improvement.
+
+3. **OOD SPLITS BARELY MOVED.** cruise +0.59%, re_rand +0.06% — extra capacity went mostly to in_dist regression (+5.94% val / +14.51% test). Wide-vs-deep separation: depth alone doesn't help OOD generalization at this scale.
+
+4. **best_epoch=51=terminal** — same underfit signature as baseline, just shifted earlier on epoch axis. The model is in identical regime, just with worse trajectory due to budget cap.
+
+5. **off-by-one CLARIFICATION:** Original PR title said "n_layers=6" but baseline is actually n=4 (not n=5 as PR body stated). Student correctly interpreted intent as "+1 block" = n=5 and ran that cleanly; verified by metrics.yaml confirming n_layers=4 baseline.
+
+6. **149th taxon CLOSED:** DEPTH-CAPACITY-AT-N_LAYERS-5 / BUDGET-CAPPED-AT-30MIN. Adding depth to baseline cannot WIN within 30-min/60-ep cap; either need budget extension OR same-compute capacity expansion.
+
+**Followup assigned:** #3013 askeladd weight-tied-universal-block (FRESH AXIS — Universal Transformer / ALBERT recipe; 1 unique TransolverBlock applied 4 times sequentially instead of 4 unique blocks; -74% block params (407k → ~107k); SAME compute per epoch; SAME wall-clock budget; tests "parameter sharing as implicit regularization + iterative refinement" hypothesis; per student suggestion #4 verbatim "Per-block parameter sharing — share n_layers blocks across two passes. Same param count, same per-epoch cost, but effective depth doubles. Cleaner separation of 'more capacity' vs 'more compute' axes"; 152nd axis; first weight-sharing experiment in launch). Total closed: 149. Winners: 22.
+
+---
+
 ## 2026-05-14 20:00 [Round 138 close-26] UTC — PR #2994: lion-lr-1e-4 — **CLOSED LOSS (+8.39% val vs NEW; 148th taxon; LION-LR-AXIS-CLOSED-IN-BOTH-DIRECTIONS)**
 
 - **Branch:** charliepai2g48h5-frieren/lion-lr-1e-4
