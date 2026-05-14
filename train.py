@@ -197,24 +197,43 @@ class SqueezeExcitation(nn.Module):
         return x * gate.unsqueeze(1)
 
 
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (Zhang & Sennrich 2019).
+
+    Normalizes by RMS magnitude only; no mean centering, no bias parameter.
+    Used by LLaMA, T5, Mistral, PaLM-2.
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x):
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return self.weight * (x / rms)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, is_first_block=False):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.is_first_block = is_first_block
+        # Hybrid normalization: keep LayerNorm at block0_ln1 (post-FiLM-injection
+        # γ-active site per #2851 diagnostic); RMSNorm everywhere else.
+        self.ln_1 = nn.LayerNorm(hidden_dim) if is_first_block else RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -257,6 +276,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                is_first_block=(i == 0),
             )
             for i in range(n_layers)
         ])
@@ -277,6 +297,8 @@ class Transolver(nn.Module):
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
@@ -575,6 +597,22 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+_inner_model = getattr(model, "_orig_mod", model)
+_ln_sites_count = sum(1 for m in _inner_model.modules() if isinstance(m, nn.LayerNorm))
+_rmsnorm_sites_count = sum(1 for m in _inner_model.modules() if isinstance(m, RMSNorm))
+_rmsnorm_params = sum(p.numel() for m in _inner_model.modules() if isinstance(m, RMSNorm) for p in m.parameters())
+_ln_params = sum(p.numel() for m in _inner_model.modules() if isinstance(m, nn.LayerNorm) for p in m.parameters())
+print(
+    f"Hybrid normalization (#2864): LayerNorm at block0_ln1 (post-FiLM γ-active site per #2851 diagnostic), "
+    f"RMSNorm at 8 other sites (ln_2 + ln_3 + block1..3 ln_1); "
+    f"LN sites={_ln_sites_count} ({_ln_params} params γ+β); "
+    f"RMSNorm sites={_rmsnorm_sites_count} ({_rmsnorm_params} params γ only); "
+    f"saves 768 params vs full LN baseline (8 sites × 96-dim β removed); "
+    f"expected param count: 332,932 = 333,700 − 768; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.8909"
+)
+print(f"  param count: {n_params}")
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -677,6 +715,27 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+
+def _hybrid_norm_gamma_stats() -> dict[str, float]:
+    """Collect γ (and β at block0_ln1 LN) mean/std across all 9 normalization sites."""
+    out: dict[str, float] = {}
+    _inner = getattr(model, "_orig_mod", model)
+    for _i, _blk in enumerate(_inner.blocks):
+        for _name, _norm in (("ln1", _blk.ln_1), ("ln2", _blk.ln_2)):
+            _w = _norm.weight.detach().float()
+            out[f"block{_i}_{_name}_gamma_mean"] = _w.mean().item()
+            out[f"block{_i}_{_name}_gamma_std"] = _w.std().item()
+            if isinstance(_norm, nn.LayerNorm):
+                _b = _norm.bias.detach().float()
+                out[f"block{_i}_{_name}_beta_mean"] = _b.mean().item()
+                out[f"block{_i}_{_name}_beta_std"] = _b.std().item()
+        if getattr(_blk, "last_layer", False) and hasattr(_blk, "ln_3"):
+            _w = _blk.ln_3.weight.detach().float()
+            out[f"block{_i}_ln3_gamma_mean"] = _w.mean().item()
+            out[f"block{_i}_ln3_gamma_std"] = _w.std().item()
+    return out
+
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -752,6 +811,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        **_hybrid_norm_gamma_stats(),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -809,6 +869,81 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Hybrid normalization diagnostic (#2864): per-site γ stats (and β at block0_ln1 LN),
+    # plus per-token RMS magnitude at block0_ln1 (LN output) and block1_ln1 (RMSNorm output)
+    # for direct comparison of the kept-LN vs swapped-RMSNorm sites.
+    _hybrid_sites: list[tuple[str, nn.Module]] = []
+    for _i, _blk in enumerate(_inner.blocks):
+        _hybrid_sites.append((f"block{_i}_ln1", _blk.ln_1))
+        _hybrid_sites.append((f"block{_i}_ln2", _blk.ln_2))
+        if getattr(_blk, "last_layer", False) and hasattr(_blk, "ln_3"):
+            _hybrid_sites.append((f"block{_i}_ln3", _blk.ln_3))
+    _hybrid_log = {"event": "hybrid_norm_gammas", "epoch": int(best_metrics["epoch"]), "sites": []}
+    print("\nHybrid normalization final γ/β (best-checkpoint weights):")
+    for _name, _mod in _hybrid_sites:
+        _kind = "LN" if isinstance(_mod, nn.LayerNorm) else "RMSNorm"
+        _w = _mod.weight.detach().float()
+        _entry = {
+            "site": _name,
+            "kind": _kind,
+            "gamma_mean": _w.mean().item(),
+            "gamma_std": _w.std().item(),
+            "gamma_min": _w.min().item(),
+            "gamma_max": _w.max().item(),
+        }
+        _msg = (f"  {_name} [{_kind}]: γ mean={_entry['gamma_mean']:.6f} "
+                f"std={_entry['gamma_std']:.6f} min={_entry['gamma_min']:.6f} max={_entry['gamma_max']:.6f}")
+        if isinstance(_mod, nn.LayerNorm):
+            _b = _mod.bias.detach().float()
+            _entry["beta_mean"] = _b.mean().item()
+            _entry["beta_std"] = _b.std().item()
+            _entry["beta_min"] = _b.min().item()
+            _entry["beta_max"] = _b.max().item()
+            _msg += (f" | β mean={_entry['beta_mean']:.6f} std={_entry['beta_std']:.6f} "
+                     f"min={_entry['beta_min']:.6f} max={_entry['beta_max']:.6f}")
+        print(_msg)
+        _hybrid_log["sites"].append(_entry)
+    append_metrics_jsonl(metrics_jsonl_path, _hybrid_log)
+
+    # Per-token RMS magnitude post-norm at block0_ln1 (LN) vs block1_ln1 (RMSNorm)
+    # on a val_single_in_dist batch.
+    _rms_captured: dict[str, dict[str, float]] = {}
+
+    def _make_rms_hook(site_name: str):
+        def _hook(_module, _args, output):
+            with torch.no_grad():
+                rms_per_token = output.float().pow(2).mean(dim=-1).sqrt()
+                _rms_captured[site_name] = {
+                    "rms_mean": float(rms_per_token.mean().cpu()),
+                    "rms_std": float(rms_per_token.std().cpu()),
+                }
+        return _hook
+
+    _rms_handles = [
+        _inner.blocks[0].ln_1.register_forward_hook(_make_rms_hook("block0_ln1_LN")),
+        _inner.blocks[1].ln_1.register_forward_hook(_make_rms_hook("block1_ln1_RMSNorm")),
+    ]
+    _rms_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _xr, _yr, _isr, _mr = next(iter(_rms_loader))
+        _xr = _xr.to(device, non_blocking=True)
+        _mr = _mr.to(device, non_blocking=True)
+        _xr_norm = (_xr - stats["x_mean"]) / stats["x_std"]
+        with amp_ctx_factory():
+            _ = _inner({"x": _xr_norm, "mask": _mr})
+    for _h in _rms_handles:
+        _h.remove()
+    print("\nPer-token RMS magnitude post-norm (best-checkpoint, val_single_in_dist):")
+    for _site, _vals in _rms_captured.items():
+        print(f"  {_site}: rms_mean={_vals['rms_mean']:.4f}  rms_std={_vals['rms_std']:.4f}")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "hybrid_norm_per_token_rms",
+            "epoch": int(best_metrics["epoch"]),
+            "site": _site,
+            "rms_mean": _vals["rms_mean"],
+            "rms_std": _vals["rms_std"],
+        })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
