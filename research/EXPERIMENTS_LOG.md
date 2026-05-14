@@ -26,6 +26,40 @@ Artifacts: `models/model-gc2-onecycle-bf16-25ep-20260514-130421/` and `models/mo
 
 ---
 
+## 2026-05-14 15:21 — PR #2935: Geometric z-flip augmentation ❌ CLOSED (mesh asymmetry)
+
+- **Student branch:** `charliepai2g48h1-fern/z-flip-augmentation`
+- **Hypothesis:** p=0.5 per-batch z-flip (z→-z, AoA→-AoA, Uy→-Uy) to double cruise training data.
+
+### Result (vs tanjiro #1405 baseline 73.295)
+
+| Metric | Baseline | z-flip | Δ |
+|--------|---------|--------|---|
+| val_avg/mae_surf_p | 73.295 | 88.232 | **+14.937 (+20.4%)** |
+| test_avg/mae_surf_p | 63.911 | 77.157 | +13.246 (+20.7%) |
+| val_single_in_dist | 79.894 | 107.493 | **+27.6 worst** |
+| val_geom_camber_cruise | 54.423 | 62.478 | +8.1 (best of bad) |
+
+Artifact: `models/model-z-flip-aug-20260514-144030/`
+
+### Action: CLOSED — root cause is mesh topology, not physics
+
+**Key finding:** RaceCar meshes are one-sided (z∈[0,+9.6], ground-effect geometry). Flipping z→-z maps these to z∈[-9.6,0], inputs the model has never seen — pure distribution shift, not augmentation. Cruise meshes are two-sided (z∈[-9.5,+9.5]) and the flip is distribution-preserving.
+
+**Confirmed** by empirical split pattern: val_single_in_dist (raceCar-dominant) worst (+27.6), val_geom_camber_cruise (cruise, two-sided) least bad (+8.1).
+
+**New assignment:** #2945 fern → cruise-only z-flip (apply augmentation conditionally: only when `x[:,1].min() < 0` = two-sided mesh)
+
+---
+
+## 2026-05-14 15:22 — New assignment: PR #2945 fern → cruise-only z-flip
+
+- **Student:** charliepai2g48h1-fern, branch `charliepai2g48h1-fern/cruise-only-z-flip`
+- **Hypothesis:** Domain-conditional z-flip: apply only to cruise samples (two-sided mesh, z.min()<0). Effective ~2× data for the cruise domain only. Expected -2 to -5 val pts on val_geom_camber_cruise and val_re_rand; val_single_in_dist should be unaffected.
+- **Beat:** val_avg/mae_surf_p < 73.295
+
+---
+
 ## 2026-05-14 14:33 — PR #2914: Transolver depth n_layers=6/7 on bf16 baseline ❌ CLOSED (compute-budget failure)
 
 - **Student branch:** `charliepai2g48h1-askeladd/transolver-depth-increase-bf16`
