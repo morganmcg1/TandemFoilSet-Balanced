@@ -63,15 +63,15 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, dropout=0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
+        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn(), nn.Dropout(dropout))
         self.linear_post = nn.Linear(n_hidden, n_output)
         self.linears = nn.ModuleList(
-            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
+            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn(), nn.Dropout(dropout)) for _ in range(n_layers)]
         )
 
     def forward(self, x):
@@ -142,13 +142,14 @@ class TransolverBlock(nn.Module):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
+        # Keep attention deterministic (no softmax-output dropout) — PR #3027.
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=0.0, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, dropout=dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -341,6 +342,7 @@ def write_experiment_summary(
         "surf_weight": cfg.surf_weight,
         "surf_channel_weight": cfg.surf_channel_weight,
         "loss": cfg.loss,
+        "dropout": cfg.dropout,
         "epochs_configured": cfg.epochs,
     }
 
@@ -392,6 +394,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
     compile_model: bool = False   # torch.compile the model for throughput
+    dropout: float = 0.0  # MLP/FFN dropout rate (0.0 = baseline, no dropout)
 
 
 cfg = sp.parse(Config)
@@ -435,6 +438,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
