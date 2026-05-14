@@ -1,5 +1,14 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 22:38 — PR #2970: OneCycleLR pct_start tuning (0.05/0.2) ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-frieren/onecycle-pct-start-tuning`
+- **Hypothesis:** pct_start (warmup fraction) modulates how fast the LR ramps to peak; longer warmup (0.2) may give more stable bf16 training, shorter (0.05) extracts more productive tail.
+- **Result:** val_avg **51.817** (−2.88% vs 53.352), test_avg **44.616** (−2.47%). Winner: pct_start=0.2. Arm 0.05 regressed (+1.33). 3 of 4 splits improve; single_in_dist +3.5%.
+- **New baseline recipe:** `--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2`
+
+---
+
 ## 2026-05-14 22:30 — PR #2970: OneCycleLR pct_start tuning (0.05/0.2) ✅ WINNER (pending rebase)
 
 - **Student branch:** `charliepai2g48h1-frieren/onecycle-pct-start-tuning`
