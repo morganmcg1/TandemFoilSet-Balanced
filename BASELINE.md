@@ -39,10 +39,53 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **33.3722** | #2614 | Lion lr=1.5e-4 + FiLM feature-stream gate (Linear(3,96) zero-init, applied pre-blocks); all other params from #2553 unchanged | ep70/70 (best=terminal); **−0.36% vs #2553** (33.4935); val WIN 3/4 splits; uniform test WIN all 4 splits; mechanism: Re/AoA flow conditioning aids geometric extrapolation (rc +1.93%); val_re_rand mild regression (+2.12%) but test_re_rand improves (−1.16%) — noise on n=100 val |
-| `test_avg/mae_surf_p` | **28.3736** | #2614 | — | test from best-val checkpoint ep70; **−0.89% vs #2553** (28.6279); all 4 test splits improve uniformly |
+| `val_avg/mae_surf_p` | **33.0195** | #2692 | Lion lr=1.5e-4 + FiLM + SE per-block (reduction=8, zero-init fc2); all other params from #2614 unchanged | ep65/70 (timeout-truncated, 5 epochs missing); **−1.06% vs #2614** (33.3722); val OOD splits WIN 3/4; in_dist regresses +4.31%; test essentially flat (−0.06%) |
+| `test_avg/mae_surf_p` | **28.3562** | #2692 | — | test from best-val checkpoint ep65; essentially flat −0.06% vs #2614 (28.3736) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 33.3722` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 33.0195` to be merged.
+
+## 2026-05-14 [Round 84] — PR #2692: Squeeze-Excitation per-block: val OOD WIN −1.06% (NEW BEST)
+
+- **Student:** charliepai2g48h5-tanjiro
+- **Best epoch:** 65 of 70 (timeout-truncated at 30 min; 5 cosine epochs missing)
+- **Epochs reached:** 65 (~28 s/epoch; +1-2 s vs baseline due to SE compute)
+- **Peak GPU memory:** 15.5 GB (slight increase from 14 GB baseline)
+- **Param count:** 338,267 (328,619 baseline + 9,648 SE = +2.94%)
+- **SE gate stats (terminal, sample batch):** Block 3 engages most — std=0.076, range 0.27–0.71; blocks 1-2 near identity (std ~0.022-0.030); no saturation observed
+- **LayerScale γ (terminal):** γ_attn ~0.008-0.020, γ_mlp ~0.051-0.078 — depth-progressive compression at block 3 indicating SE/LayerScale depth trade-off
+
+| Split | val mae_surf_p | Δ vs #2614 (33.3722) |
+|---|---|---|
+| `val_single_in_dist` | 26.4221 | **+4.31%** REGRESSION |
+| `val_geom_camber_rc` | **48.3191** | **−2.54%** |
+| `val_geom_camber_cruise` | **20.2953** | **−0.60%** |
+| `val_re_rand` | **37.0415** | **−2.94%** |
+| **val_avg** | **33.0195** | **−1.06%** |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | 24.7135 |
+| `test_geom_camber_rc` | 42.9508 |
+| `test_geom_camber_cruise` | 16.0798 |
+| `test_re_rand` | 29.6808 |
+| **test_avg** | **28.3562** |
+
+- **Mechanism:** SE finds useful signal at depth (block 3 std 0.076 >> blocks 1-2 std 0.022-0.030). Global-pool gating suppresses decision-irrelevant channels for OOD samples; mildly harmful for in-dist where features are already well-routed. Depth-progressive: deeper blocks lean on SE, shallower on LayerScale (γ_mlp block 3 = 0.051 vs typical ~0.08).
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-tanjiro-se-r8-20260514-010915/metrics.jsonl`
+  `models/model-charliepai2g48h5-tanjiro-se-r8-20260514-010915/metrics.yaml`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-tanjiro \
+      --experiment_name "charliepai2g48h5-tanjiro/se-r8" \
+      --lr 1.5e-4 \
+      --weight_decay 3e-4 \
+      --epochs 70
+  ```
+  (SE module now on advisor branch — stacks with FiLM + LayerScale + all prior wins)
+
+---
 
 ## 2026-05-14 00:00 — PR #2614: FiLM feature-stream gate: uniform test WIN −0.89% (NEW BEST)
 
