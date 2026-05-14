@@ -322,7 +322,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
                 pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()
 
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=HUBER_BETA, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -458,8 +458,13 @@ cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+HUBER_BETA = 0.5  # PR #2937: Huber (SmoothL1) replaces L1 at delta=0.5 for both surf_loss and vol_loss.
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Loss function: SmoothL1 (Huber) beta={HUBER_BETA} instead of L1 (.abs())")
+print(f"Huber transition: residuals |r| < {HUBER_BETA} use 0.5*r^2/beta (L2-like)")
+print(f"                  residuals |r| >= {HUBER_BETA} use |r| - 0.5*beta (L1-like, shifted)")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -685,6 +690,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_l2_regime_count = 0
+    epoch_total_resid_count = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -697,7 +704,7 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=HUBER_BETA, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -709,6 +716,12 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        with torch.no_grad():
+            abs_resid = (pred.detach().float() - y_norm).abs()
+            _l2_mask = (abs_resid < HUBER_BETA) & mask.unsqueeze(-1)
+            epoch_l2_regime_count += _l2_mask.sum().item()
+            epoch_total_resid_count += (mask.unsqueeze(-1).expand_as(abs_resid)).sum().item()
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -717,6 +730,7 @@ for epoch in range(MAX_EPOCHS):
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_l2_regime_frac = epoch_l2_regime_count / max(epoch_total_resid_count, 1)
 
     # --- Validate ---
     model.eval()
@@ -748,6 +762,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/huber_l2_regime_frac": epoch_l2_regime_frac,
+        "huber_beta": HUBER_BETA,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -756,6 +772,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"huber_l2_frac={epoch_l2_regime_frac:.4f}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
