@@ -388,6 +388,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
+    compile_model: bool = False   # torch.compile the model for throughput
 
 
 cfg = sp.parse(Config)
@@ -432,6 +433,12 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+if cfg.compile_model:
+    import torch._dynamo
+    torch._dynamo.reset()
+    model = torch.compile(model, dynamic=True, mode="reduce-overhead")
+    print("torch.compile enabled: dynamic=True, mode='reduce-overhead'")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
