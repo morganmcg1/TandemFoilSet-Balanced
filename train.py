@@ -422,6 +422,69 @@ class ReConditionalOutputBias(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# EMA (Polyak weight averaging)
+# ---------------------------------------------------------------------------
+
+
+class EMA:
+    """Polyak weight averaging across one or more nn.Modules.
+
+    Maintains a shadow copy of each module's float-typed state_dict entries
+    (parameters + float buffers). Updated as
+        shadow := decay * shadow + (1 - decay) * live
+    at every optimizer step.
+
+    Evaluation (val + test) is done with EMA weights via apply_to() /
+    restore(); training uses live weights. EMA weights tend to find flatter
+    minima, smooth out late-epoch noise, and are budget-aware on
+    timeout-cut runs where best_epoch == last_epoch.
+
+    Compiled-model note: torch.compile shares parameters with the original
+    module, so the same state_dict tensors are reached via either reference.
+    Initialise EMA with the same module reference (compiled or not) that the
+    save/load checkpointing uses to keep keys consistent.
+    """
+
+    def __init__(self, modules: list[nn.Module], decay: float = 0.999):
+        self.decay = decay
+        self.modules = modules
+        self.shadow_per_module: list[dict[str, torch.Tensor]] = [
+            {k: v.detach().clone() for k, v in m.state_dict().items()
+             if v.dtype.is_floating_point}
+            for m in modules
+        ]
+
+    @torch.no_grad()
+    def update(self) -> None:
+        for shadow, m in zip(self.shadow_per_module, self.modules):
+            sd = m.state_dict()
+            for k, v in sd.items():
+                if k in shadow:
+                    shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+
+    def apply_to(self) -> list[dict[str, torch.Tensor]]:
+        """Swap each module's float state with EMA shadow. Returns the full
+        original state_dict per module (including non-float entries) so the
+        caller can restore() AND so the live state can be persisted to a
+        checkpoint for end-of-training diagnostic comparisons."""
+        originals_per_module = []
+        for shadow, m in zip(self.shadow_per_module, self.modules):
+            sd = m.state_dict()
+            orig = {k: v.detach().clone() for k, v in sd.items()}
+            for k in shadow:
+                sd[k].copy_(shadow[k])
+            originals_per_module.append(orig)
+        return originals_per_module
+
+    def restore(self, originals_per_module: list[dict[str, torch.Tensor]]) -> None:
+        for orig, m in zip(originals_per_module, self.modules):
+            sd = m.state_dict()
+            for k, v in orig.items():
+                if k in sd:
+                    sd[k].copy_(v)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -521,6 +584,8 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    val_avg_no_ema: dict | None = None,
+    ema_weight_diff_overall: float | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -538,6 +603,7 @@ def write_experiment_summary(
         "surf_weight": cfg.surf_weight,
         "p_channel_weight": cfg.p_channel_weight,
         "epochs_configured": cfg.epochs,
+        "ema_decay": cfg.ema_decay,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -549,6 +615,13 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+    if val_avg_no_ema is not None and "avg/mae_surf_p" in val_avg_no_ema:
+        summary["val_avg_no_ema/mae_surf_p"] = val_avg_no_ema["avg/mae_surf_p"]
+        summary["val_delta_ema_minus_no_ema"] = (
+            best_avg_surf_p - val_avg_no_ema["avg/mae_surf_p"]
+        )
+    if ema_weight_diff_overall is not None:
+        summary["ema_weight_diff_overall_rel"] = ema_weight_diff_overall
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -601,6 +674,11 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # EMA (Polyak weight averaging) decay. 0 disables (default). 0.999 = standard
+    # from BYOL/SWA/Adan. Maintains a shadow copy of weights updated as
+    # theta_ema := decay * theta_ema + (1 - decay) * theta at every optimizer
+    # step. Evaluation (val + test) uses EMA weights; training uses live weights.
+    ema_decay: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -740,6 +818,16 @@ optimizer = SOAP(
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
+
+# EMA (Polyak weight averaging). Tracks all trainable modules (Transolver +
+# ReScaleHead + optional ReConditionalOutputBias). Use the compiled `model`
+# reference (with `_orig_mod.` key prefix) so the EMA's keying matches what
+# torch.save({"model": model.state_dict()}) uses — keeps load symmetry intact.
+ema_modules: list[nn.Module] = [model, rescale_head]
+if output_bias is not None:
+    ema_modules.append(output_bias)
+ema = EMA(ema_modules, decay=cfg.ema_decay) if cfg.ema_decay > 0 else None
+print(f"EMA: enabled={ema is not None}, decay={cfg.ema_decay}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -907,6 +995,8 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_clipped += 1
         scaler.step(optimizer)
         scaler.update()
+        if ema is not None:
+            ema.update()
 
         with torch.no_grad():
             sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
@@ -975,32 +1065,53 @@ for epoch in range(MAX_EPOCHS):
     epoch_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
+    # When EMA is enabled, swap to EMA weights for val/test eval, slice-entropy
+    # diagnostic, and checkpoint save (so the saved checkpoint contains EMA
+    # weights to be used at final test eval). We also stash the live weights
+    # ("originals") inside the same checkpoint so the val_no_ema diagnostic at
+    # end-of-training can compare EMA vs live at the SAME (best) epoch.
     model.eval()
     rescale_head.eval()
     if output_bias is not None:
         output_bias.eval()
-    split_metrics = {
-        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight,
-                             device, output_bias=output_bias)
-        for name, loader in val_loaders.items()
-    }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    dt = time.time() - t0
-
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+    ema_originals: list[dict[str, torch.Tensor]] | None = ema.apply_to() if ema is not None else None
+    try:
+        split_metrics = {
+            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight,
+                                 device, output_bias=output_bias)
+            for name, loader in val_loaders.items()
         }
-        ckpt_payload = {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()}
-        if output_bias is not None:
-            ckpt_payload["output_bias"] = output_bias.state_dict()
-        torch.save(ckpt_payload, model_path)
-        tag = " *"
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        dt = time.time() - t0
+
+        tag = ""
+        if avg_surf_p < best_avg_surf_p:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            ckpt_payload = {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()}
+            if output_bias is not None:
+                ckpt_payload["output_bias"] = output_bias.state_dict()
+            if ema_originals is not None:
+                # Persist live (non-EMA) state at the same best epoch so we can
+                # quantify the EMA contribution at end of training without doing
+                # a per-epoch second val pass.
+                ckpt_payload["model_live"] = ema_originals[0]
+                ckpt_payload["rescale_head_live"] = ema_originals[1]
+                if output_bias is not None:
+                    ckpt_payload["output_bias_live"] = ema_originals[2]
+            torch.save(ckpt_payload, model_path)
+            tag = " *"
+    finally:
+        # Always restore live weights before continuing — leaving EMA applied
+        # would corrupt the next training step (and pull the EMA shadow toward
+        # itself on the subsequent ema.update()).
+        if ema_originals is not None:
+            ema.restore(ema_originals)
 
     # Re-conditioned scale diagnostics (per-channel mean/std across epoch + corr w/ log(Re)).
     if scale_n > 0:
@@ -1249,6 +1360,77 @@ if best_metrics:
             "test_splits": test_metrics,
         })
 
+    # --- EMA diagnostic ---
+    # When EMA is enabled, ckpt["model_live"] contains the live (non-EMA) state
+    # at the same best epoch. Reload to compute (a) val_avg_no_ema and (b)
+    # per-tensor ||θ - θ_ema|| / ||θ||, confirming EMA produced a meaningfully
+    # different snapshot than the live weights.
+    val_avg_no_ema = None
+    val_metrics_no_ema = None
+    ema_weight_diff_overall = None
+    ema_weight_diff_highlighted: dict[str, dict[str, float]] = {}
+    if "model_live" in ckpt:
+        print("\nEvaluating val splits with LIVE (non-EMA) weights for EMA diagnostic...")
+        model.load_state_dict(ckpt["model_live"])
+        rescale_head.load_state_dict(ckpt["rescale_head_live"])
+        if output_bias is not None and "output_bias_live" in ckpt:
+            output_bias.load_state_dict(ckpt["output_bias_live"])
+        model.eval()
+        rescale_head.eval()
+        if output_bias is not None:
+            output_bias.eval()
+        val_metrics_no_ema = {
+            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight,
+                                 device, output_bias=output_bias)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_no_ema = aggregate_splits(val_metrics_no_ema)
+        print(f"  VAL (live) avg_surf_p={val_avg_no_ema['avg/mae_surf_p']:.4f}  "
+              f"(EMA: {best_avg_surf_p:.4f}, Δ={best_avg_surf_p - val_avg_no_ema['avg/mae_surf_p']:+.4f})")
+
+        # Per-tensor weight diff: ||theta - theta_ema|| / ||theta||.
+        ema_state = ckpt["model"]
+        live_state = ckpt["model_live"]
+        diff_sq_total = 0.0
+        live_sq_total = 0.0
+        # Highlighted tensors: one attn weight, one FFN weight, one output head.
+        highlight_suffixes = (
+            "blocks.0.attn.in_project_x.weight",
+            "blocks.0.mlp.linear_pre.0.weight",
+            f"blocks.{model_config['n_layers']-1}.mlp2.2.weight",
+        )
+        for k in live_state:
+            v_live = live_state[k]
+            if not v_live.dtype.is_floating_point or k not in ema_state:
+                continue
+            v_ema = ema_state[k]
+            diff_norm = (v_live - v_ema).norm().item()
+            live_norm = v_live.norm().item()
+            diff_sq_total += diff_norm ** 2
+            live_sq_total += live_norm ** 2
+            if any(k.endswith(suffix) for suffix in highlight_suffixes) and live_norm > 0:
+                ema_weight_diff_highlighted[k] = {
+                    "diff_l2": diff_norm,
+                    "live_l2": live_norm,
+                    "rel_diff": diff_norm / live_norm,
+                }
+        ema_weight_diff_overall = (diff_sq_total / max(live_sq_total, 1e-12)) ** 0.5
+        print(f"  EMA divergence: overall ||θ-θ_ema|| / ||θ|| = {ema_weight_diff_overall:.6f}")
+        for k, d in ema_weight_diff_highlighted.items():
+            print(f"    {k}: rel_diff={d['rel_diff']:.6f}")
+
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "ema_diagnostic",
+            "ema_decay": cfg.ema_decay,
+            "best_epoch": best_metrics["epoch"],
+            "val_avg_ema": best_avg_surf_p,
+            "val_avg_no_ema": val_avg_no_ema["avg/mae_surf_p"],
+            "val_delta_ema_minus_no_ema": best_avg_surf_p - val_avg_no_ema["avg/mae_surf_p"],
+            "val_splits_no_ema": val_metrics_no_ema,
+            "weight_diff_overall_rel": ema_weight_diff_overall,
+            "weight_diff_highlighted": ema_weight_diff_highlighted,
+        })
+
     write_experiment_summary(
         model_path=model_path,
         model_dir=model_dir,
@@ -1259,6 +1441,8 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        val_avg_no_ema=val_avg_no_ema,
+        ema_weight_diff_overall=ema_weight_diff_overall,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
