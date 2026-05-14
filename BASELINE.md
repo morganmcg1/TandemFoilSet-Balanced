@@ -298,3 +298,28 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
 **New merge bar (14th shift): mean val < 34.55, mean test < 28.95, all four test splits finite.**
 **Best single-seed bar: val < 33.56, test < 28.23.**
 **Note: 2 seeds, mean-based bar. Orientation: geom_camber_rc (mean=42.00, best=40.59) remains hardest split.**
+
+## 2026-05-14 19:15 — PR #2948: 2× FiLM-Re γ MLP width (film_re_hidden=256) — 15th shift
+
+- **`val_avg/mae_surf_p`:** 33.7062 (mean 2 seeds); s1 `94flg3ls` = 33.566, s2 `oy7xe8t3` = 33.847
+- **`test_avg/mae_surf_p`:** 28.6525 (mean 2 seeds); s1 `94flg3ls` = 28.401, s2 `oy7xe8t3` = 28.904 — **NEW BEST TEST MEAN**
+- **Per-split test surf_p (2-seed mean):** single_in_dist=32.221, geom_camber_rc=41.458, geom_camber_cruise=14.909, re_rand=26.022
+- **Per-split test surf_p (best s1 `94flg3ls`):** single_in_dist=31.66, geom_camber_rc=41.76, geom_camber_cruise=14.71, re_rand=25.48
+- **W&B runs:** `94flg3ls` (s1, val=33.566, test=28.401), `oy7xe8t3` (s2, val=33.847, test=28.904)
+- **Seed variance:** val σ=0.14 (0.4%), test σ=0.25 (0.9%). Tight.
+- **Mechanism:** Widened FiLM-Re γ MLP hidden dim from 128 → 256 (`--film_re_hidden 256`). Adds +83K params (+11%). γ_w_L2 depth-monotone pattern grows relative to baseline (3.97→5.75 for s1). ALL 4 test splits improve on 2-seed mean (no OOD-vs-IID trade-off). γ_bias_mean still drifts depth-monotonically (0.995→0.988) — mechanism intact.
+- **Key finding:** 4× width (film_re_hidden=512) REGRESSES (val 34.82, test 29.44) — 2× is the sweet spot.
+- **Init:** `--init_std 0.07 --film_re_hidden 256`
+- **Runtime:** ~53s/epoch, ~34 epochs both seeds (hits 30-min cap); best=last. Peak VRAM ~24 GB.
+- **Delta vs PR #2865 (14th shift):** mean val **−2.45%** (34.55 → 33.71), mean test **−1.04%** (28.95 → 28.65). All four splits improve: single_in_dist −0.95%, geom_camber_rc −1.28%, geom_camber_cruise −1.85%, re_rand −0.26%.
+- **Reproduce (best seed s1):**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-tanjiro --init_std 0.07 \
+      --film_re_hidden 256 \
+      --wandb_name "willowpai2g48h3-tanjiro/film-gamma-2x-s1" \
+      --wandb_group film-gamma-capacity
+  ```
+
+**New merge bar (15th shift): mean val < 33.71, mean test < 28.65, all four test splits finite.**
+**Best single-seed bar: val < 33.57, test < 28.40.**
+**Note: 2 seeds, mean-based bar. Hardest split remains geom_camber_rc (mean=41.46, best=41.76).**
