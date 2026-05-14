@@ -213,7 +213,7 @@ class TransolverBlock(nn.Module):
         # gain on residual branches. Saves 2×hidden_dim params per block.
         self.gamma_attn = 1.0
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.gelu)
         self.gamma_mlp = 1.0
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
@@ -610,11 +610,11 @@ _std_mlp_params_per_block = (
 )
 _std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
-    f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
+    f"GeGLU MLP (Shazeer 2020; SwiGLU→GeGLU): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
     f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
-    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
+    f"act=GELU (PR #3047: SiLU→GELU gate); total GLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
-    f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+    f"baseline to beat: val_avg/mae_surf_p < 29.5318 (PR #3006)"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -1122,7 +1122,7 @@ if best_metrics:
         def _hook(module, args, _output):
             x = args[0]
             with torch.no_grad():
-                gate_pre = module.linear_gate(x)
+                gate_pre = module.linear_gate(x).detach().float()
                 gate_post = module.act_fn(gate_pre).detach().float()
                 value = module.linear_value(x).detach().float()
                 flat_g = gate_post.flatten()
@@ -1140,10 +1140,14 @@ if best_metrics:
                     torch.corrcoef(torch.stack([fg, fv]))[0, 1].cpu().item()
                 ) if fg.numel() > 1 else 0.0
                 _swiglu_captured.append((idx, {
+                    "gate_pre_mean": float(gate_pre.mean().cpu()),
+                    "gate_pre_std": float(gate_pre.std().cpu()),
+                    "gate_pre_negfrac": float((gate_pre < 0).float().mean().cpu()),
                     "gate_mean": float(gate_post.mean().cpu()),
                     "gate_std": float(gate_post.std().cpu()),
                     "gate_abs_mean": float(gate_post.abs().mean().cpu()),
                     "gate_zero_frac": float((gate_post.abs() < 0.01).float().mean().cpu()),
+                    "gate_negfrac": float((gate_post < 0).float().mean().cpu()),
                     "value_abs_mean": float(value.abs().mean().cpu()),
                     "gate_value_corr": corr,
                 }))
@@ -1162,13 +1166,15 @@ if best_metrics:
     for _h in _swiglu_handles:
         _h.remove()
 
-    print("\nSwiGLU gate stats per block (sample val batch, best-checkpoint weights):")
+    print("\nGeGLU gate stats per block (sample val batch, best-checkpoint weights):")
     _swiglu_log = {"event": "swiglu_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
     for _idx, _stats in _swiglu_captured:
         print(
-            f"  SwiGLU block[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
-            f"std={_stats['gate_std']:.4f}  abs_mean={_stats['gate_abs_mean']:.4f}  "
-            f"zero_frac={_stats['gate_zero_frac']:.4f}  "
+            f"  GeGLU block[{_idx}]: gate_pre[mean={_stats['gate_pre_mean']:.4f} "
+            f"std={_stats['gate_pre_std']:.4f} negfrac={_stats['gate_pre_negfrac']:.4f}]  "
+            f"gate_post[mean={_stats['gate_mean']:.4f} std={_stats['gate_std']:.4f} "
+            f"abs_mean={_stats['gate_abs_mean']:.4f} zero_frac={_stats['gate_zero_frac']:.4f} "
+            f"negfrac={_stats['gate_negfrac']:.4f}]  "
             f"value_abs_mean={_stats['value_abs_mean']:.4f}  "
             f"corr(gate,value)={_stats['gate_value_corr']:.4f}"
         )
