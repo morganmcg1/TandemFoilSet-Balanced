@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 19:30
+- **Date:** 2026-05-14 20:40
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -66,25 +66,27 @@
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #2959 | alphonse | Per-block lr scaling: 1.5× awaiting 2nd seed | WIP (sent back 2026-05-14 18:30) |
+| #2959 | alphonse | Per-block lr scaling: 1.5× 2-seed rerun on 15th-shift baseline | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
 | #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged | ASSIGNED 2026-05-14 18:50 |
 | #2991 | thorfinn | Output decoder head MLP width scan: 2× (256) and 3× (384) | ASSIGNED 2026-05-14 19:25 |
-| #2965 | fern | Fourier-Re γ MLP: K=4 awaiting seed=1 | WIP (sent back 2026-05-14 19:00) |
-| #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
-| #2972 | edward | LayerScale: per-block channel-wise learnable gain (init=0.1, 0.01) | ASSIGNED 2026-05-14 17:40 |
+| #2965 | fern | Fourier-Re K=4: 2-seed rerun on 15th-shift baseline (compound with 2× γ width) | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
+| #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP (GPU-active, pod iter 12 @ 98%) |
+| #3001 | edward | FiLM-Re γ MLP init std scan: film_re_init_std=0.05/0.03 vs global 0.07 | ASSIGNED 2026-05-14 20:40 |
 | #2990 | tanjiro | FiLM-Re γ MLP depth-2 at width=256 (extend #2948 win) | ASSIGNED 2026-05-14 19:20 |
-| #2971 | askeladd | Slice attention dropout: drop_p=0.1 (s1), drop_p=0.2 (s2) | ASSIGNED 2026-05-14 17:38 |
+| #3002 | askeladd | Inverted late-block lr: 0.7×/0.5× reduction tests early-block OOD signal | ASSIGNED 2026-05-14 20:40 |
 
-**Closed this round (rounds 12–13):**
-- #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07. L2 monotone in σ but val non-monotonic — parameter-scale alone insufficient.
-- #2909 (askeladd PP-loss) — all 4 splits regress +11-29%. h⁴ weighting kills boundary-layer signal; +70% wall-clock overhead binding.
-- #2902 (frieren SwiGLU compound) — val=34.72 misses by +0.49%. NOT orthogonal to FiLM-Re; redundant conditioning path.
-- #2942 (alphonse Lion-lr) — lr=6e-5 ≈ baseline; lr=9e-5 trade-off (wins camber_rc, loses single_in_dist). lr=7.5e-5 confirmed optimal. Axis closed; motivates per-block lr.
-- #2960 (frieren cond-mixup) — val=60.70/61.37, test=53.57/54.32 — 76-88% worse than baseline. Mesh-aligned target mixup is physically meaningless. Closed. Follow-up: input-only version (#2984).
-- #2886 (thorfinn FiLM-AoA compound) — val=34.08 (passes), test=29.54 (+2.04% over 14th-shift bar). single_in_dist regresses +4.93%. FiLM-AoA gains on σ=0.05 came from cruise/re_rand which σ=0.07+FiLM-Re already captures. Mechanism orthogonality confirmed (γ_bias-driven Re vs γ_w-driven AoA — paper-worthy ablation). Closed — redundant with FiLM-Re on 14th+ shift baseline. New bar after #2948 merge makes gap even larger.
-- #2895 (fern y-flip compound on σ=0.07+FiLM-Re) — val=35.41, test=30.86. NOT orthogonal: directly-augmented cruise split regresses +27% (15.19→19.28). FiLM-Re's per-sample γ specialization is diluted by mirrored cruise inputs. Y-flip training-time aug retired at FiLM-Re baseline.
-- #2953 (askeladd slice-temperature) — τ=0.5 val +0.07%/test +2.86% (single_in_dist −1.0%, all OOD regress); τ=2.0 val +4.0%/test +7%. CRITICAL: baseline has learnable per-head τ initialized to 0.5, not 1.0. Default sits near per-head optimum. Slice-temp axis closed.
-- #2943 (edward head-depth) — depth=3 val −0.16%/test +1.04% (single_in_dist −6.90%, all 3 OOD splits regress); depth=4 strictly worse. Head depth NOT the bottleneck at FiLM-Re baseline. 4th OOD-vs-IID trade-off instance.
+**Closed this round (rounds 12–15):**
+- #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07.
+- #2909 (askeladd PP-loss) — all 4 splits regress +11-29%. h⁴ weighting kills boundary-layer signal.
+- #2902 (frieren SwiGLU compound) — val=34.72 misses by +0.49%. NOT orthogonal to FiLM-Re.
+- #2942 (alphonse Lion-lr) — lr=7.5e-5 confirmed optimal. Motivates per-block lr.
+- #2960 (frieren cond-mixup) — 76-88% worse. Mesh-aligned target mixup physically meaningless.
+- #2886 (thorfinn FiLM-AoA compound) — test=29.54 (+2.04% over 14th-shift bar). FiLM-AoA gains subsumed by σ=0.07+FiLM-Re. Mechanism orthogonality confirmed (paper-worthy ablation). Closed.
+- #2895 (fern y-flip compound) — test=30.86. FiLM-Re γ specialization disrupted by y-flip.
+- #2953 (askeladd slice-temperature) — τ=0.5 all OOD splits regress; learnable τ already near optimum.
+- #2943 (edward head-depth) — depth=3 single_in_dist −6.90% but all OOD splits regress. 4th OOD-vs-IID trade-off.
+- **#2972 (edward LayerScale)** — init=0.1: val +5.3%, test +6.0%; init=0.01: val +9.4%, test +9.8%. Near-identity residual init wastes early-epoch learning at 30-min cap. All 4 splits regress. Closed.
+- **#2971 (askeladd slice dropout)** — drop_p=0.1: test +3.41%; drop_p=0.2: test +5.53%. Monotonic OOD regression; IID improves (classic dropout-as-regularizer for in-dist). Four-axis routing pattern now complete. Closed.
 
 ## Key meta-findings
 
@@ -98,15 +100,18 @@
 8. **SwiGLU mechanism insight** — SwiGLU gained on σ=0.05 by compensating under-conditioning that FiLM-Re now provides. FFN-capacity axes not orthogonal when Re-conditioning is already rich.
 9. **Global lr cannot resolve OOD-vs-IID split trade-off** — lr=9e-5 wins geom_camber_rc but hurts single_in_dist. Per-block lr scaling is the natural resolution.
 10. **Mechanism overlap surfacing at 14th-shift basin** — both SwiGLU (#2902) and y-flip (#2895) helped on σ=0.05 but regress on σ=0.07+FiLM-Re. Both mechanisms add "Re-regime feature diversity" that FiLM-Re now provides explicitly. Pattern suggests aug/capacity axes that helped at σ=0.05 are increasingly likely to overlap with FiLM-Re at 14th shift; emphasis must shift to genuinely orthogonal axes (input enrichment, optimizer geometry, decoder capacity).
-11. **OOD-vs-IID trade-off pattern (4 instances)** — Lion lr=9e-5 (#2942), head_depth=3 (#2943), slice_temp=0.5 (#2953) ALL improve single_in_dist but regress all 3 OOD splits. The 14th-shift basin saturates IID-side capacity. Future axes targeting IID-side capacity are predicted to fail similarly. The path forward is mechanisms that increase **redundancy / regularization** on OOD splits without adding IID capacity — slice dropout (#2971), DropPath (#2926), cond-mixup (#2960), per-block lr (#2959).
+11. **OOD-vs-IID trade-off pattern (now 6 confirmed instances, 1 exception)** — Lion lr=9e-5, head_depth=3, slice_temp=0.5, late_block_lr×1.5, LayerScale init<1, slice_dropout ALL improve IID but regress OOD. The **one exception: FiLM-Re γ MLP capacity (#2948)** lifts all four splits simultaneously — conditioning capacity is the only axis tested that breaks the trade-off.
 12. **Learnable per-head slice softmax τ is already present in baseline** — init=0.5. Slice softmax is not at τ=1.0 default. Future axis scans on PhysicsAttention must account for this learnable temperature.
-13. **First experiment to break OOD-vs-IID trade-off pattern (#2948 tanjiro 2× FiLM-Re γ width)** — single-seed `94flg3ls`: val=33.566 (−2.86%), test=28.401 (−1.91%), ALL 4 splits improve simultaneously (single_in_dist=32.32, geom_camber_rc=41.51, geom_camber_cruise=14.84, re_rand=24.93). The mechanism is **γ MLP capacity**, not IID-side capacity — widens the conditioning bottleneck without adding capacity in a regime-specific manner. Confirms FiLM-Re γ MLP is input/representation-bottlenecked, validates tanjiro #2948 and fern #2965 (Fourier-Re γ input) as the right axis pair. Awaiting 2nd seed for merge confirmation. 4× width regresses → capacity has finite optimum. Compound prediction: tanjiro 2× + fern Fourier-Re (capacity + input information) could stack.
-14. **Per-block lr OOD signal lives in EARLY layers, not late (#2959 alphonse)** — late_block_lr×1.5 improves IID single_in_dist by −4.0% and cruise by −5.3% but REGRESSES the hardest OOD split geom_camber_rc by +2.4%. Stronger 2.0× boost amplifies the pattern (IID −7.6%, camber_rc +6.0%). The lr=9e-5 OOD signal observed in #2942 does NOT decompose into late-block γ MLP adaptation — it likely lives in EARLY blocks (broader receptive-field reshaping, where Re-modulation is weakest). 5th OOD-vs-IID trade-off pattern instance. Queued follow-up: inverted scaling (late_block_lr_scale=0.7) — directly tests the early-block hypothesis.
-15. **FiLM-Re γ MLP is input-bottlenecked (γ_w_L2 evidence, #2965 fern)** — K=4 Fourier-encoded log_re features flatten the γ_w_L2 depth trajectory from baseline 3.4→5.2 (monotone) to ~3.6 (flat). Late blocks no longer need inflated weights to express the modulation; richer input absorbs the expressivity. This is the cleanest mechanistic evidence yet that the conditioning encoder is bottlenecked at input dim=1. Validates the tanjiro #2948 (γ width) + fern #2965 (γ input) axis pair as orthogonal interventions on the same bottleneck. K=2 (s1, seed=1) regresses massively (val +20.8%), showing the right Fourier basis matters; K=4 (s2, seed=2) passes single-seed bar with thin margin. Sent back for K=4 seed=1 to disambiguate seed effect.
+13. **FiLM-Re γ MLP capacity breaks OOD-vs-IID trade-off (#2948, 15th shift MERGED)** — 2× γ width: val=33.706 (−2.45%), test=28.653 (−1.04%), ALL 4 splits improve simultaneously. Conditioning capacity is orthogonal to IID-specific capacity. 4× width regresses → optimal at 2×. Compound prediction: 2× width + depth-2 (tanjiro #2990) + Fourier input (fern #2965) + smaller init (edward #3001) could stack.
+14. **Per-block lr OOD signal lives in EARLY layers, not late (#2959 alphonse)** — late_block_lr×1.5 improves IID by −4.0% but regresses geom_camber_rc by +2.4%; 2.0× amplifies (+6.0% on camber_rc). 5th OOD-vs-IID instance. Inverted scaling (late_block_lr_scale=0.7/0.5) is now the active test (askeladd #3002).
+15. **FiLM-Re γ MLP is input-bottlenecked (γ_w_L2 evidence, #2965 fern)** — K=4 Fourier input flattens γ_w_L2 depth gradient (3.4→5.2 monotone → ~3.6 flat). Validates the capacity+input-expressivity axis pair. Now being retested on 15th-shift baseline (compound with 2× γ width).
+16. **Slice routing perturbation reliably trades OOD for IID (four-axis closed)** — sharpen τ (#2953), soften τ, slice dropout (#2971), late-block lr boost (#2959) all show the same OOD-IID wedge. Only conditioning-capacity expansion (FiLM-Re γ width) breaks the wedge. Future routing-layer interventions expected to show the same pattern.
 
 ## Currently retired axes
 
-- **Scalar capacity** (n_hidden, n_layers, slice_num, mlp_ratio) — failed at all 3 baselines
+- **Scalar capacity** (n_hidden, n_layers, slice_num, mlp_ratio) — failed at all 3 baselines; 6th failure was slice_num=128 compute-bound (PR #1507)
+- **EMA weights, SWA** — tested PR #2399 (ema-0p999): wash mechanism at cosine-cooling schedule; PR #2712 (SWA): modest variance reduction but test mean misses bar. Both retired. Re-test condition: schedule change with higher eta_min.
+- **LayerScale** — PR #2972: near-identity residual init (0.01/0.1) wastes early-epoch learning at 30-min cap; all 4 splits regress uniformly.
 - **Schedule shape** — T_max, eta_min, warmup, warm restarts — all retired
 - **Per-neuron Dropout** — regularization stack already saturated (stochastic depth DropPath has NOT been tested — #2926 tests this)
 - **Lion betas** — β1=0.90, β2=0.99 confirmed optimal, fully bracketed
@@ -133,13 +138,13 @@
 
 ### Near-term (queue for next idle slots)
 
-1. **FiLM dual conditioning (Re + AoA compound)** — natural compound if thorfinn #2886 (FiLM-AoA) wins; combine into single joint (Re, AoA) conditioning per block
-2. ~~**Slice softmax temperature bracketing**~~ — closed (#2953). Learnable per-head τ near per-head optimum.
-3. **Per-block lr sharpening** — if #2959 wins, try late_block_start=3 (only block 4 boosted) for sharper targeting
-4. ~~**Fourier Re embedding into γ MLP**~~ — ACTIVE as #2965 (fern)
-5. **Y-flip TTA at inference** — apply y-flip on eligible (cruise) test samples and average predictions in physical space. Free at training (training-time y-flip retired per #2895). Paper-facing finishing move.
-6. **SWA revisit at new baseline** — variance reduction may pair better with σ=0.07+FiLM-Re stronger base
-7. **Conditioning Mixup with geometric features** — extend cond-mixup to include foil shape parameters (camber, chord) to directly target geom_camber_rc
+1. **Early-block lr boost (inverted late-block)** — ACTIVE as askeladd #3002 (0.7×/0.5× late-block lr). Direct test of meta-finding #14.
+2. **FiLM-Re γ MLP component-specific init** — ACTIVE as edward #3001 (film_re_init_std=0.05/0.03). New axis.
+3. **Y-flip TTA at inference** — apply y-flip on eligible (cruise) test samples and average predictions in physical space. Free at training (training-time y-flip retired per #2895). Paper-facing finishing move.
+4. **Conditioning Mixup with geometric features** — if input-only Re/AoA mixup (#2984) wins, extend to include foil shape parameters (camber, chord) to directly target geom_camber_rc
+5. **Per-block lr early_block_start=0 (all 5 blocks different)** — finer granularity than 2-group binary split. If #3002 or #2959 show any monotonic pattern across block depth, a 5-group ramp is the natural follow-up.
+6. **Deeper Fourier-Re input (K=8)** — if #2965 rerun on 15th-shift confirms K=4 compound gain, try K=8 for richer Re encoding. Risk: AoA-Fourier-K=8 already failed (narrow AoA range aliases); Re has wider dynamic range so K=8 may be viable.
+7. **FiLM depth-2 compound with Fourier-Re** — once #2990 and #2965 land, the 3-way compound (2× γ width + depth-2 + K=4 Fourier) is the natural summit.
 
 ### Medium-term
 

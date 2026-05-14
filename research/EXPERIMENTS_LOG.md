@@ -3116,3 +3116,80 @@ Two PRs were sent back for 2nd-seed confirmation BEFORE the 15th-shift merge of 
 
 **Both PRs now WIP again, awaiting rerun results against 15th-shift bar.**
 - Merge bar: mean val < 33.71, mean test < 28.65
+
+---
+
+## 2026-05-14 20:15 — PR #2972: LayerScale edward (CLOSED)
+- Branch: `willowpai2g48h3-edward/layerscale`
+- Hypothesis: Per-block channel-wise learnable gain on residuals (CaiT-style). Tested init=0.1 (s1) and init=0.01 (s2).
+
+### Results
+
+| Arm | layerscale_init | W&B ID | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---:|---:|---:|---:|
+| Baseline (14th shift, PR #2865) | — | — | 34.5536 | 28.9528 | — | — |
+| s1 | 0.1 | `5064v02x` | 36.3996 | 30.6937 | +5.3% ❌ | +6.0% ❌ |
+| s2 | 0.01 | `iu1w5zgb` | 37.7999 | 31.7958 | +9.4% ❌ | +9.8% ❌ |
+
+All four test splits regress uniformly on both arms. Epoch-1 val=187/205 (vs baseline ~80–100) confirms the "wasted early-epoch compute" failure mode.
+
+**Root cause:** At the 30-min/~33-epoch cap, the near-identity residual init attenuates early learning before gains can recover. s2 (init=0.01): ls_ffn grew 5× (0.01→0.05) by epoch 33 — optimizer is trying to recover but runs out of time. No depth-monotone pattern in ls_attn/ls_ffn across blocks 0–4.
+
+**Decision: CLOSED** (>5% regression on both arms, all splits).
+
+---
+
+## 2026-05-14 20:15 — PR #2971: Slice attention dropout askeladd (CLOSED)
+- Branch: `willowpai2g48h3-askeladd/slice-dropout`
+- Hypothesis: Random slice masking during training forces per-slice redundancy, improving OOD routing.
+
+### Results
+
+| Arm | drop_p | W&B ID | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---:|---:|---:|---:|
+| Baseline (14th shift, PR #2865) | 0.0 | — | 34.5536 | 28.9528 | — | — |
+| s1 | 0.1 | `ueuregbg` | 35.2874 | 29.9407 | +2.12% ❌ | +3.41% ❌ |
+| s2 | 0.2 | `yl8zuum4` | 36.0201 | 30.5550 | +4.24% ❌ | +5.53% ❌ |
+
+**Monotonic regression with drop_p.** Only `single_in_dist` improves on s1 (−2.78% IID) — all three OOD splits regress on both arms.
+
+**Key finding (four-axis routing pattern confirmed):**
+
+| Axis | OOD effect | IID effect |
+|---|---|---|
+| Sharpen routing (τ↓ #2953) | hurts | helps |
+| Soften routing (τ↑) | helps slightly | hurts slightly |
+| Routing noise (dropout #2971) | hurts | helps |
+| FiLM-Re γ width (#2948) | helps | helps (broke pattern!) |
+
+Perturbing the routing decision reliably trades OOD for IID. Expanding conditioning capacity feeding the routing decision lifts all boats.
+
+**Decision: CLOSED** (>3% test regression, monotonic with drop_p, mechanism inverted vs hypothesis).
+
+---
+
+## 2026-05-14 20:20 — PR #2998: Weight EMA edward (CLOSED IMMEDIATELY — erroneous assignment)
+- Branch: `willowpai2g48h3-edward/ema-weights`
+- Reason: EMA is a retired axis. PR #2399 (frieren, ema-0p999) tested EMA=0.999 on the wd=2e-4 baseline; EMA smoothed terminal noise by ~3pt but EMA-lag penalty exactly cancelled the benefit ("wash mechanism"). The schedule hasn't changed; the analysis generalizes. Closed immediately without running.
+
+## 2026-05-14 20:20 — PR #2999: slice_num scan askeladd (CLOSED IMMEDIATELY — erroneous assignment)
+- Branch: `willowpai2g48h3-askeladd/slice-num-scan`
+- Reason: slice_num is the 6th retired scalar-capacity axis. PR #1507 (fern, slice-num-128) established this as compute-bound: doubling slice_num costs +50% per-epoch wall-clock (10 epochs instead of 14-16 at the time). At current 54s/epoch, slice_num=128 would give ~22 epochs (vs ~33 baseline) — still compute-bound. Closed immediately without running.
+
+---
+
+## 2026-05-14 20:40 — PR #3001: FiLM-Re γ MLP init std scan edward (ASSIGNED)
+- Branch: `willowpai2g48h3-edward/film-re-init-std`
+- Hypothesis: Apply separate, smaller init std to FiLM-Re γ MLP weights (film_re_init_std=0.05 and 0.03 vs global init_std=0.07). After 15th-shift 2× γ-MLP width, the wider conditioning MLP could over-condition early training with global 0.07 init. Smaller γ-specific init → trunk bootstraps first, conditioning adjusts from stable base.
+- Arms: film_re_init_std=0.05 s1, film_re_init_std=0.03 s2
+- Merge bar: mean val < 33.71, mean test < 28.65
+- This is the **first component-specific init override** tested in this codebase.
+
+---
+
+## 2026-05-14 20:40 — PR #3002: Inverted late-block lr scale askeladd (ASSIGNED)
+- Branch: `willowpai2g48h3-askeladd/inverted-late-lr`
+- Hypothesis: Reduce late-block (2-4) lr to 0.7× or 0.5× while keeping early blocks (0-1) at base_lr=7.5e-5. Direct corollary of meta-finding #14 (alphonse #2959): boosting late-block lr hurts geom_camber_rc OOD monotonically; if OOD signal lives in early blocks, reducing late-block lr should bias gradient budget toward early-block OOD features.
+- Arms: late_block_lr_scale=0.7 s1 (mild: late=5.25e-5, early=7.5e-5), late_block_lr_scale=0.5 s2 (strong: late=3.75e-5)
+- Merge bar: mean val < 33.71, mean test < 28.65
+- The per-block lr implementation must be built independently (alphonse's #2959 branch not merged).
