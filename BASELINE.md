@@ -1,6 +1,64 @@
 # Baseline Metrics
 
-## Current Baseline — PR #2650 (re-conditional-layernorm-affine)
+## Current Baseline — PR #2690 (re-conditional-output-bias)
+
+**val_avg/mae_surf_p = 27.5868** (epoch 28 of 28; 30-min cap) — **-2.32% vs previous 28.2414**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (676K+ params)
+- **+ ReScaleHead**: learned Re→scale MLP applied to Transolver output
+- **+ per-channel loss weights**: `p_channel_weight=5`, `surf_weight=10`
+- **+ ReFiLM**: FiLM Re-conditioning inside PhysicsAttention slice logits (shared, hidden=8, zero-init)
+- **+ ReConditionalLayerNorm**: CIN/adaLN-Zero Re-conditioning of all 3 LN roles (pre-attn, pre-FFN, pre-out)
+- **+ ReConditionalOutputBias**: additive per-channel bias after ReScaleHead, conditioned on log(Re). Bias b(Re) = linear MLP applied per sample, zero-init. Ux dominates (absmax 0.73 vs Uy 0.024, p 0.154); corr(|b|, log_Re) = -0.640 (larger correction at low Re — absorbs viscous boundary-layer offsets).
+- Optimizer: **SOAP** (`lr=1e-3, betas=(0.95,0.95), wd=1e-4, precondition_frequency=10, max_precond_dim=256`)
+- **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**
+- **`torch.compile(mode="default", dynamic=True)`**, **bf16 AMP**
+- `grad_clip=1.0`, `batch_size=4`
+- 28 epochs in ~30 min
+
+**Per-split val at best epoch (28):**
+
+| Split | mae_surf_p | vs PR #2650 |
+|-------|-----------|---------|
+| val_single_in_dist | **27.2278** | +0.0538 (+0.20%) |
+| val_geom_camber_rc | **39.8226** | −2.3927 (−5.67%) ✅ |
+| val_geom_camber_cruise | **13.3872** | −0.2861 (−2.09%) ✅ |
+| val_re_rand | **29.9096** | +0.0065 (+0.02%) |
+| **val_avg** | **27.5868** | **−0.6546 (−2.32%)** |
+
+**Per-split test at best epoch (28):**
+
+| Split | mae_surf_p | vs PR #2650 |
+|-------|-----------|---------|
+| test_single_in_dist | **27.8682** | — |
+| test_geom_camber_rc | **36.9633** | — |
+| test_geom_camber_cruise | **10.2260** | — |
+| test_re_rand | **21.3648** | — |
+| **test_avg** | **24.1056** | **−0.3771 (−1.54%)** |
+
+**Mechanism**: 4th Re-conditioning hook — additive output bias conditioned on log(Re), injected after ReScaleHead. Ux dominates by ~30× (val_rc -5.67% = largest per-split gain), consistent with Ux being systematically offset by viscous effects at low Re. Negative corr(|b|, log_Re) = -0.640 means the model applies larger corrections at low-Re regimes (thick boundary layers, high viscous drag). Orthogonal injection point from existing 3 hooks (slice-logit, output-scale, LN-affine).
+
+**Artifact**: `models/model-re-conditional-output-bias-20260514-010240/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --opt soap --lr 1e-3 --soap_b1 0.95 --soap_b2 0.95 --wd 1e-4 \
+  --soap_precond_freq 10 --soap_max_precond_dim 256 \
+  --n_hidden 128 --n_layers 5 --slice_num 64 --mlp_ratio 2 \
+  --huber_delta 0.1 --p_channel_weight 5 --surf_weight 10 \
+  --bf16 --compile --rescale_head --refilm \
+  --re_conditional_layernorm \
+  --re_conditional_output_bias \
+  --epochs 28 --lr_schedule cosine --eta_min 1e-5 \
+  --agent <name> --experiment_name <name>
+```
+
+**Cumulative**: **-76.5%** vs initial 117.17 (-2.32% vs #2650)
+
+---
+
+## Previous Baseline — PR #2650 (re-conditional-layernorm-affine)
 
 **val_avg/mae_surf_p = 28.2414** (epoch 28 of 28; 30-min cap) — **-2.20% vs previous 28.8762**
 
@@ -565,6 +623,8 @@ cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
 
 | Date | PR | val_avg/mae_surf_p | test_avg | Notes |
 |------|----|--------------------|---------|-------|
+| 2026-05-14 | #2690 | **27.5868** | **24.1056** | re-conditional-output-bias (4th Re-hook, additive bias after ReScaleHead); 28 epochs / 30 min; **-2.32%** |
+| 2026-05-14 | #2650 | **28.2414** | **24.4827** | re-conditional-layernorm-affine (3rd Re-hook, CIN/adaLN-Zero on all 3 LN roles); 28 epochs / 30 min; -2.20% |
 | 2026-05-13 | #2011 | **28.8762** | **24.9992** | film-re-attention (ReFiLM on slice logits); 28 epochs / 30 min; -1.17% |
 | 2026-05-13 | #1614 | **29.2179** | **25.6024** | per-channel-loss-weights p=5 post-Huber; 29 epochs / 30 min; -2.11% |
 | 2026-05-13 | #1599 | **29.8463** | **26.1005** | re-conditioned-scaling (ReScaleHead 3ch); 29 epochs / 30 min; -1.95% |
