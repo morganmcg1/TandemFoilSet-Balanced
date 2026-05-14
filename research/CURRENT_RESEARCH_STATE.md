@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 05:30
+- **Date:** 2026-05-14 05:40
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -18,19 +18,21 @@
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
-> **Round 40 frontier signals — ALL 3 capacity-via-param-count axes REFUTED, pivoting to scheduler + loss-shape:**
+> **Round 40 frontier signals — capacity DEAD, scheduler-shape DEAD, loss-shape directional positive:**
 > - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss).
 > - **CAPACITY HYPOTHESIS NOW DEAD**:
 >   - n_hidden axis: #2685 +2.53%, #2737 +7.55% (REFUTED TWICE)
 >   - mlp_ratio axis: #2738 +4.35% (also #2278 +5.4% at n_layers=3)
 >   - depth axis: #2684 +12.7% (n_layers=1 catastrophic)
-> - **OVERFIT-OOD signature in #2738**: extra FFN width helped only single_in_dist (-2.12% val) and hurt all OOD splits (+8.31%, +9.87%, +2.88%). Confirms that bottleneck for camber-OOD is NOT capacity.
-> - **Round 40 cont. pivot — TWO orthogonal code-change PRs in flight**:
->   - **frieren #2755**: per-channel surface weighting (swp=15, swuv=10) — direct attack on val_avg/mae_surf_p without compute cost
->   - **askeladd #2760**: truncated cosine T_max=60 + epochs=46 — keep LR alive past end (best_epoch=final still descending → scheduler-bound, not capacity-bound)
-> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight (uniform), n_head, depth, slice_num, all 3 capacity axes saturated/refuted.
-> - **#2638 split-dependent OOD diagnostic NOW REINTERPRETED**: re_rand is regularization-friendly; geom_camber is NOT capacity-limited (3 capacity tests refute) — likely **INFORMATION-limited** (no M=2-4 cruise camber in training data) OR **representation-limited** (model can't represent the right inductive bias regardless of capacity).
-> - **Future levers if Round 40 code-change PRs fail**: aux surface head, physics-informed loss (divergence/curl), lr warmup, drop_path/stochastic depth, data augmentation (CFD-valid symmetries), seed-averaged baseline confirmation, complete model replacement (e.g., point-cloud transformer, graph neural net).
+> - **SCHEDULER-SHAPE HYPOTHESIS REFUTED (#2760)**: truncated cosine T_max=60+epochs=46 → +1.63% val LOSS. KEY DIAGNOSTIC: "still descending at final epoch" does NOT mean scheduler-bound. Standard cosine's polish phase at very low LR helps generalization; stretching the schedule HURTS by oversteering on OOD. Model is training-time-limited but needs more EPOCHS, not stretched schedule.
+> - **LOSS-SHAPE direction shows real signal (#2755 swp=15/swuv=10)**: val flat (+0.21%, within noise), **test -1.06%** consistently across 3/4 splits including BOTH OOD geometry splits. Sent back for stronger swp=20 retry — first signal of OOD improvement in Round 38-40.
+> - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
+> - **Round 40 cont. — TWO new code-change pivots in flight**:
+>   - **frieren #2755 swp=20 retry**: amplified pressure ratio (2× vs 1.5×) for stronger signal
+>   - **askeladd #2797 warmup_epochs=3**: schedule HEAD complement to #2760 TAIL probe (gentler early gradients)
+> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight (uniform), n_head, depth, slice_num, all 3 capacity axes saturated/refuted, scheduler tail refuted.
+> - **#2638 split-dependent OOD diagnostic NOW REINTERPRETED**: re_rand is regularization-friendly; geom_camber is NOT capacity-limited — likely **INFORMATION-limited** OR **representation-limited**. Per-channel loss weighting (frieren #2755 swp=15) is the FIRST mechanism to give OOD test improvement.
+> - **Future levers if Round 40 pivots stagnate**: aux surface head, physics-informed loss (divergence/curl), eta_min>0 (LR floor), drop_path/stochastic depth, data augmentation (CFD-valid symmetries), seed-averaged baseline confirmation, complete model replacement.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.
 
 | Split | val mae_surf_p | test mae_surf_p |
@@ -123,13 +125,15 @@
 | edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
-| askeladd | **#2760** | **T_max=60, epochs=46** (truncated cosine; code-change PR; residual lr~13% at end → continued descent) | **Round 40: scheduler pivot** |
+| askeladd | **#2797** | **warmup_epochs=3 + standard cosine** (schedule HEAD test; complement to refuted #2760 TAIL test) | **Round 40: warmup pivot** |
 | frieren | **#2755** | **surf_weight_p=20, surf_weight_uv=10** (per-channel surf weighting 2× ratio; sent back from swp=15 result which showed directionally positive test improvement -1.06% but val within noise; amplifying pressure emphasis) | **Round 40: loss-shape pivot (iter 2)** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed
 - #2738 askeladd FFN capacity (mlp_ratio=6+epochs=40): +4.35% val LOSS — OVERFIT-OOD signature (single_in_dist improved, all OOD regressed)
+- #2760 askeladd truncated cosine (T_max=60+epochs=46): +1.63% val LOSS — schedule-TAIL hypothesis refuted, polish phase matters
 - **All 3 capacity-via-param-count axes REFUTED**: n_hidden (x2), mlp_ratio (x1, x2 across rounds), n_layers (x1)
+- **Scheduler TAIL hypothesis REFUTED** (#2760)
 
 **Round 40 cont. result — #2755 frieren swp=15/swuv=10 (sent back 2026-05-14 04:55)**:
 - val_avg/mae_surf_p = 35.330 (+0.21% vs baseline 35.256, within noise floor)

@@ -6,6 +6,43 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 05:35 — Round 40 cont.: close #2760 (askeladd truncated cosine T_max=60 — +1.63% val LOSS, scheduler-bound hypothesis REFUTED); assign askeladd #2797 lr warmup pivot
+
+### PR #2760 askeladd truncated cosine T_max=60 + epochs=46 — NEGATIVE RESULT (BUT EXCELLENT DIAGNOSTIC)
+
+- **Branch:** charliepai2g48h3-askeladd-tmax60-nlayers2-slicenum16-epochs46
+- **Hypothesis:** Best_epoch=final STILL DESCENDING → model is scheduler-bound (lr→0 at epoch 46 prematurely terminates). Truncated cosine T_max=60 leaves residual lr ≈ 1.46e-5 (14.6% of peak) at final epoch — should enable continued descent.
+- **Result: SOLIDLY NEGATIVE** — val +1.63%, test +1.28%, OOD splits hurt most
+
+| Split | val baseline | val tmax60 | Δ | test baseline | test tmax60 | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 36.476 | 36.496 | +0.020 (≈same) | 33.035 | 33.065 | +0.030 (≈same) |
+| geom_camber_rc | 48.297 | 49.500 | **+1.203** ✗ | 44.333 | 45.435 | **+1.102** ✗ |
+| geom_camber_cruise | 18.326 | 19.444 | **+1.118** ✗ | 15.496 | 15.778 | +0.282 ✗ |
+| re_rand | 37.923 | 37.885 | −0.038 (≈same) | 28.116 | 28.254 | +0.138 (≈same) |
+| **avg** | **35.256** | **35.831** | **+0.575** ✗ | **30.245** | **30.633** | **+0.388** ✗ |
+
+**LR profile (confirmed truncated correctly)**: Epoch 1→1.00e-4, Epoch 30→5.26e-5, Epoch 40→2.73e-5, Epoch 46→**1.46e-5** (14.6% of peak, vs ~0 in baseline).
+
+**KEY DIAGNOSTIC — refutes "scheduler-bound" interpretation**:
+1. **Schedule SHAPE matters more than tail height.** Truncated cosine spends MORE time at mid LR (5.26e-5 at epoch 30 vs ~3e-5 in baseline) and LESS time at very low LR. Standard cosine's brief polish phase at very low LR in final ~5 epochs apparently helps generalization — eliminating it caused **OOD oversteering** (camber_rc +1.20, camber_cruise +1.12 val).
+2. **OOD splits hurt most** — opposite of the hypothesis prediction.
+3. **In-distribution unchanged** (single_in_dist Δ≈0, re_rand Δ≈0) — schedule perturbation is harmless on ID, harmful on OOD.
+4. **Train loss already plateauing at epoch 46** (train surf_loss 0.0864). So "still descending" in VAL is NOT from premature LR termination — it's continued asymptotic generalization improvement that requires *more* epochs, not stretched schedule on same budget.
+5. **Best_epoch=46 (still descending)** in BOTH baseline and tmax60. Same pattern.
+
+**CONCLUSION**: The model is training-time-limited (still descending at final epoch) but stretching the schedule alone doesn't help — it would need actual additional epochs. Within 30-min budget, baseline (~35s × 46 = 27 min) and budget cap (~30 min) only leave room for ~5 more epochs maximum.
+
+**Round 40 cont. pivot — askeladd #2797 (lr warmup 3 epochs + standard cosine)**:
+- Code-change PR (add --warmup_epochs CLI arg, LinearLR + CosineAnnealingLR via SequentialLR)
+- Hypothesis: schedule HEAD complement to TAIL test. Epoch 1 val=167.978 (chaotic initial phase from peak lr=1e-4 immediately) — 3-epoch linear warmup from lr/10 to lr should give gentler initial gradients and possibly better minima.
+- Empirically validated in transformer literature; 3/46=6.5% warmup is standard.
+- No compute cost change.
+
+**Still in flight**: frieren swp=20 retry (stronger 2× pressure ratio after swp=15 showed directional positive on test).
+
+---
+
 ## 2026-05-14 05:00 — Round 40 cont.: send back #2755 (frieren per-channel surf weighting swp=15/swuv=10 — directional positive but val within noise); request stronger ratio swp=20
 
 ### PR #2755 frieren per-channel surf weighting (swp=15, swuv=10) — DIRECTIONAL POSITIVE, NOT MERGED
