@@ -117,11 +117,13 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 film_re_routing=False, film_re_hidden=128):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -135,7 +137,20 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x, mask=None):
+        # FiLM-Re routing γ: per-Re scale on slice routing logits (pre-softmax).
+        # γ_r MLP: log_Re → film_re_hidden → slice_num. Identity-init (last weight=0,
+        # bias=1) → γ_r≡1 at epoch 0; logits unchanged, softmax invariant to ×1 →
+        # matches baseline exactly. Multiplicative pre-softmax = per-slice temperature
+        # scaling; expert-collapse risk if γ_r grows large.
+        self.film_re_routing = film_re_routing
+        if film_re_routing:
+            self.film_gamma_routing = nn.Sequential(
+                nn.Linear(1, film_re_hidden),
+                nn.GELU(),
+                nn.Linear(film_re_hidden, slice_num),
+            )
+
+    def forward(self, x, mask=None, log_re=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -150,7 +165,12 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_logits = self.in_project_slice(x_mid)  # [B, heads, N, slice_num]
+        if self.film_re_routing and log_re is not None:
+            # γ_r shape: [B, slice_num] → broadcast over heads and N tokens.
+            gamma_r = self.film_gamma_routing(log_re.unsqueeze(-1))
+            slice_logits = slice_logits * gamma_r[:, None, None, :]
+        slice_weights = self.softmax(slice_logits / self.temperature)
         if mask is not None:
             # Zero out padded positions so they contribute nothing to slice_token / slice_norm.
             # We mask AFTER softmax: masking before with -inf produces all-(-inf) rows for
@@ -177,7 +197,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False, film_re_hidden: int = 128):
+                 film_re=False, film_re_hidden: int = 128,
+                 film_re_routing: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -185,6 +206,7 @@ class TransolverBlock(nn.Module):
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            film_re_routing=film_re_routing, film_re_hidden=film_re_hidden,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -207,7 +229,7 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None, log_re=None):
-        fx = self.attn(self.ln_1(fx), mask=mask) + fx
+        fx = self.attn(self.ln_1(fx), mask=mask, log_re=log_re) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.film_re and log_re is not None:
             # Post-residual γ modulation, after both attn and mlp residuals.
@@ -227,6 +249,7 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
+                 film_re_routing: bool = False,
                  log_re_x_index: int = 13):
         super().__init__()
         self.ref = ref
@@ -236,6 +259,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
+        self.film_re_routing = film_re_routing
         self.log_re_x_index = log_re_x_index
 
         if self.unified_pos:
@@ -253,6 +277,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 film_re=film_re, film_re_hidden=film_re_hidden,
+                film_re_routing=film_re_routing,
             )
             for i in range(n_layers)
         ])
@@ -267,6 +292,12 @@ class Transolver(nn.Module):
             for block in self.blocks:
                 nn.init.zeros_(block.film_gamma[-1].weight)
                 nn.init.ones_(block.film_gamma[-1].bias)
+        if self.film_re_routing:
+            # Same identity-init pattern for routing γ_r: γ_r≡1 at epoch 0 →
+            # slice_logits × 1 unchanged → softmax invariant → baseline at step 0.
+            for block in self.blocks:
+                nn.init.zeros_(block.attn.film_gamma_routing[-1].weight)
+                nn.init.ones_(block.attn.film_gamma_routing[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -480,6 +511,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    film_re_routing: bool = False  # FiLM-Re γ_r on PhysicsAttention slice routing logits (PR #3035)
 
 
 cfg = sp.parse(Config)
@@ -522,6 +554,7 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    film_re_routing=cfg.film_re_routing,  # FiLM-Re γ_r on slice routing logits (PR #3035)
 )
 
 model = Transolver(**model_config).to(device)
@@ -529,6 +562,19 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+if cfg.film_re_routing:
+    base_for_count = getattr(model, "_orig_mod", model)
+    per_block_routing_params = sum(
+        p.numel() for p in base_for_count.blocks[0].attn.film_gamma_routing.parameters()
+    )
+    total_routing_params = per_block_routing_params * len(base_for_count.blocks)
+    print(
+        f"[init] FiLM-Re routing γ: enabled=True, "
+        f"per-block γ_r MLP params={per_block_routing_params}, "
+        f"total={total_routing_params}"
+    )
+else:
+    print("[init] FiLM-Re routing γ: enabled=False")
 
 optimizer = Lion(
     model.parameters(),
@@ -731,6 +777,132 @@ if model_config.get("film_re"):
         print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
               f"{w_l2:>10.4f} {w_absmax:>12.4f}")
     wandb.summary.update(gamma_diagnostics)
+
+# --- Routing FiLM-Re diagnostics: per-block γ_r weight L2 and bias stats ---
+# Goal: detect whether γ_r drifts from identity (1.0) across training, and
+# whether deeper blocks specialise routing differently. If γ_r ≡ 1 everywhere,
+# the mechanism has no gradient signal (slow-start failure). If any |γ_r| >> 1,
+# expert collapse is plausible — pair with slice-entropy check below.
+if model_config.get("film_re_routing"):
+    base_model = getattr(model, "_orig_mod", model)
+    routing_diagnostics: dict[str, float] = {}
+    print("\nFiLM-Re routing γ_r per-block diagnostics (final epoch):")
+    print(f"  {'block':<6s} {'γ_r_bias_mean':>16s} {'γ_r_bias_std':>14s} "
+          f"{'γ_r_w_l2':>10s} {'γ_r_w_absmax':>14s} {'γ_r_bias_min':>14s} "
+          f"{'γ_r_bias_max':>14s}")
+    for i, block in enumerate(base_model.blocks):
+        last_lin = block.attn.film_gamma_routing[-1]
+        rb = last_lin.bias.detach().float()
+        rw = last_lin.weight.detach().float()
+        rb_mean, rb_std = rb.mean().item(), rb.std().item()
+        rb_min, rb_max = rb.min().item(), rb.max().item()
+        rw_l2 = rw.norm().item()
+        rw_absmax = rw.abs().max().item()
+        routing_diagnostics[f"film/routing/block{i}/gamma_r_bias_mean"] = rb_mean
+        routing_diagnostics[f"film/routing/block{i}/gamma_r_bias_std"] = rb_std
+        routing_diagnostics[f"film/routing/block{i}/gamma_r_bias_min"] = rb_min
+        routing_diagnostics[f"film/routing/block{i}/gamma_r_bias_max"] = rb_max
+        routing_diagnostics[f"film/routing/block{i}/gamma_r_w_l2"] = rw_l2
+        routing_diagnostics[f"film/routing/block{i}/gamma_r_w_absmax"] = rw_absmax
+        print(f"  {i:<6d} {rb_mean:>16.6f} {rb_std:>14.6f} "
+              f"{rw_l2:>10.4f} {rw_absmax:>14.4f} {rb_min:>14.6f} "
+              f"{rb_max:>14.6f}")
+    routing_diagnostics["film/routing_enabled"] = 1.0
+    wandb.summary.update(routing_diagnostics)
+
+    # Slice-entropy collapse check: run one val batch and capture per-block
+    # mean-over-(B,heads,real_tokens) entropy of slice_weights. Uniform = log(64)
+    # ≈ 4.158; near-zero entropy means expert collapse (one slice winning).
+    print("\nFiLM-Re routing slice-entropy diagnostic (one val_single_in_dist batch):")
+    base_model = getattr(model, "_orig_mod", model)
+    captured: dict[int, dict] = {}
+
+    def make_hook(block_idx):
+        def hook(module, args, kwargs, output):
+            # Re-run the slice computation manually to capture entropy.
+            # output is the to_out result; we need slice_weights — easier to
+            # store via a forward-pre-hook approach. See actual hooks below.
+            pass
+        return hook
+
+    # Monkey-patch each PhysicsAttention to capture slice_weights once.
+    saved_forwards = {}
+    for i, block in enumerate(base_model.blocks):
+        saved_forwards[i] = block.attn.forward
+        def make_wrapper(idx, orig_forward, attn_mod):
+            def wrapped_forward(x, mask=None, log_re=None):
+                # Replicate the early path of PhysicsAttention.forward to get
+                # slice_weights before consuming them.
+                B, N, _ = x.shape
+                x_mid = (
+                    attn_mod.in_project_x(x)
+                    .reshape(B, N, attn_mod.heads, attn_mod.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                slice_logits = attn_mod.in_project_slice(x_mid)
+                if attn_mod.film_re_routing and log_re is not None:
+                    gamma_r = attn_mod.film_gamma_routing(log_re.unsqueeze(-1))
+                    slice_logits = slice_logits * gamma_r[:, None, None, :]
+                slice_weights = attn_mod.softmax(slice_logits / attn_mod.temperature)
+                if mask is not None:
+                    sw_for_entropy = slice_weights * mask[:, None, :, None].to(slice_weights.dtype)
+                else:
+                    sw_for_entropy = slice_weights
+                # Entropy per (B, heads, N): H = -Σ sw * log(sw + eps)
+                eps = 1e-12
+                ent = -(sw_for_entropy * (sw_for_entropy + eps).log()).sum(dim=-1)
+                # Average over real tokens only.
+                if mask is not None:
+                    mask_bn = mask[:, None, :].expand_as(ent).float()
+                    mean_ent = (ent * mask_bn).sum() / mask_bn.sum().clamp(min=1)
+                    if attn_mod.film_re_routing and log_re is not None:
+                        captured[idx] = {
+                            "mean_entropy": mean_ent.item(),
+                            "gamma_r_min": gamma_r.min().item(),
+                            "gamma_r_max": gamma_r.max().item(),
+                            "gamma_r_mean": gamma_r.mean().item(),
+                            "gamma_r_std": gamma_r.std().item(),
+                        }
+                    else:
+                        captured[idx] = {"mean_entropy": mean_ent.item()}
+                return orig_forward(x, mask=mask, log_re=log_re)
+            return wrapped_forward
+        block.attn.forward = make_wrapper(i, saved_forwards[i], block.attn)
+
+    try:
+        single_in_dist_loader = val_loaders.get("val_single_in_dist")
+        if single_in_dist_loader is not None:
+            with torch.no_grad():
+                for x, y, is_surface, mask_b in single_in_dist_loader:
+                    x = x.to(device, non_blocking=True)
+                    mask_b = mask_b.to(device, non_blocking=True)
+                    with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                        # Call base_model (uncompiled) so monkey-patched forwards run.
+                        _ = base_model({"x": x_norm, "mask": mask_b})
+                    break  # one batch suffices
+        uniform_ent = float(torch.log(torch.tensor(model_config["slice_num"], dtype=torch.float32)).item())
+        print(f"  (uniform max entropy = log({model_config['slice_num']}) = {uniform_ent:.4f})")
+        print(f"  {'block':<6s} {'mean_entropy':>14s} {'γ_r_mean':>12s} "
+              f"{'γ_r_min':>10s} {'γ_r_max':>10s} {'γ_r_std':>10s}")
+        entropy_diagnostics: dict[str, float] = {}
+        for i in sorted(captured.keys()):
+            c = captured[i]
+            entropy_diagnostics[f"film/routing/block{i}/slice_entropy"] = c["mean_entropy"]
+            if "gamma_r_mean" in c:
+                entropy_diagnostics[f"film/routing/block{i}/gamma_r_eval_mean"] = c["gamma_r_mean"]
+                entropy_diagnostics[f"film/routing/block{i}/gamma_r_eval_min"] = c["gamma_r_min"]
+                entropy_diagnostics[f"film/routing/block{i}/gamma_r_eval_max"] = c["gamma_r_max"]
+                entropy_diagnostics[f"film/routing/block{i}/gamma_r_eval_std"] = c["gamma_r_std"]
+                print(f"  {i:<6d} {c['mean_entropy']:>14.4f} {c['gamma_r_mean']:>12.4f} "
+                      f"{c['gamma_r_min']:>10.4f} {c['gamma_r_max']:>10.4f} {c['gamma_r_std']:>10.4f}")
+            else:
+                print(f"  {i:<6d} {c['mean_entropy']:>14.4f}")
+        wandb.summary.update(entropy_diagnostics)
+    finally:
+        for i, block in enumerate(base_model.blocks):
+            block.attn.forward = saved_forwards[i]
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
