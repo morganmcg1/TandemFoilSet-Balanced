@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-05-14 [Round 89] UTC — Round 89
+
+### Closed PR #2740: Lookahead+Lion CATASTROPHIC LOSS (55th taxon)
+- **Student:** charliepai2g48h5-nezuko
+- **Branch:** charliepai2g48h5-nezuko/lookahead-k5-a05
+- **Hypothesis:** Lookahead (Zhang 2019) wraps Lion as base optimizer; k=5 fast steps, α=0.5 slow-weight commit interpolation. Targets narrow-basin escape via slow-weight commitment vs LR shock (failed SGDR #2697) or trajectory averaging (failed SWA #2567).
+
+| Metric | PR #2740 Lookahead+Lion | Old baseline #2692 | New baseline #2741 | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **41.3670** | 33.0195 | 32.2477 | **+25.27% vs old / +28.28% vs new — CATASTROPHIC LOSS** |
+| `test_avg/mae_surf_p` | **35.1124** | 28.3562 | 27.4248 | **+28.05% LOSS** |
+| `val_single_in_dist` | 34.6179 | 26.4221 | 25.5303 | **+31.03% LOSS** |
+| `val_geom_camber_rc` | 58.0233 | 48.3191 | 47.4674 | +22.24% LOSS |
+| `val_geom_camber_cruise` | 27.5244 | 19.5170 | 19.1621 | **+43.64% LOSS — worst** |
+| `val_re_rand` | 45.3023 | 37.5198 | 36.8311 | +23.00% LOSS |
+| Best epoch | 64/70 | 65/70 | 63/70 | similar (timeout) |
+| ep1 val_avg | **366.66** | ~70 | ~70 | **5× typical Lion ep1** |
+
+**Mechanism diagnostic (exemplary from student):**
+1. Lion's update rule: `lr · sign(β₁m + (1-β₁)g)` — uniform-magnitude, sign-only direction.
+2. Lookahead reset every k=5 steps: `fast ← 0.5·(slow + fast)` halves last 5 steps' net displacement.
+3. **CRITICAL:** Lion's momentum buffer survives the reset. After weight rollback, exp_avg still reflects pre-reset gradient history. Subsequent sign-updates are oriented from stale momentum → optimizer/weight inconsistency.
+4. For magnitude-aware optimizers (AdamW, SGD with Nesterov), this matters less because step magnitude adapts (Adam) or momentum is direction-only (SGD-Nesterov). Lion's sign-step + persistent momentum makes the stale-momentum→sign-flip chain dominate.
+
+**Secondary diagnostics:**
+- Lion momentum 99.95% nonzero (healthy, not collapsed) — momentum buffer is the problem, not momentum saturation
+- SE block-3 gate std ~0.02 (vs baseline 0.076) — SE never specialized because optimizer never converged to SE-relevant regime
+- LayerScale γ matched baseline magnitudes — architecture unaffected, only optimizer dynamics
+- A/B diagnostic structurally degenerate: 375 batches/epoch ÷ k=5 = 75 syncs/epoch, save points align with sync points, fast===slow at every checkpoint
+
+**Conclusion:** 55th taxon: Lookahead × Lion sign-momentum incompatibility at this stack scale. Combined with closed SGDR #2697 (LR-shock 52nd taxon) and SWA #2567 (post-hoc averaging 28th taxon), the narrow-basin-escape meta-axis is now 3-direction closed via fast-cycle restart, slow-weight commit, and trajectory averaging. Only eval-time EMA #2735 askeladd remains in the weight-averaging family.
+
+### Assigned PR #2761: SAM (Sharpness-Aware Minimization, Foret 2021 ICLR) wrapped around Lion
+- **Student:** nezuko (continuation of narrow-basin-escape research arc)
+- **Hypothesis:** Direct flat-minima probe. SAM does 2 forward/backward passes per step — compute gradient g, perturb adversarially w' = w + ρ·g/||g||, compute gradient g' at w', update Lion using g'. Standard ρ=0.05.
+- **Why now:** Your prior SGDR/SWA/Lookahead all attacked sharpness indirectly (via optimizer trajectory). SAM directly perturbs the loss landscape to find sharpness. Foret theorem: SAM update minimizes the maximum loss in a ρ-ball around current weights. The Lion sign-step is preserved — SAM only changes which gradient Lion's sign operates on.
+- **Cost:** 2× per-step compute. Expected ~57 s/epoch vs ~28 s baseline; reaches ~30 epochs in 30-min timeout (vs 65 baseline). Hypothesis: SAM converges to flatter basin *faster per epoch*; 30 SAM epochs may outperform 65 Lion epochs especially on OOD splits.
+- **NEW bar:** val < 32.2477 (SwiGLU baseline).
+
+### Label hygiene
+- Fixed `student:alphonse` → `student:charliepai2g48h5-alphonse` on PR #2759 (assign-experiment skill emitted the wrong label format)
+
+---
+
 ## 2026-05-14 [Round 88] UTC — Round 88
 
 ### Merged PR #2741: SwiGLU MLP activation (Shazeer 2020) — **18th WINNER** (−0.62% val, −0.84% test, NEW BASELINE)
