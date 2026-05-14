@@ -263,12 +263,16 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
-        # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
+        # Per-block flow-FiLM gates — zero-init both weight AND bias for identity at step 0.
         # Applied AFTER _init_weights so it overrides the trunc_normal_ init.
         # Channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531 instrumentation).
-        self.film = nn.Linear(3, n_hidden)
-        nn.init.zeros_(self.film.weight)
-        nn.init.zeros_(self.film.bias)
+        # One FiLM per TransolverBlock distributes geometry-conditioning capacity across depth.
+        self.block_films = nn.ModuleList([
+            nn.Linear(3, n_hidden) for _ in range(n_layers)
+        ])
+        for film in self.block_films:
+            nn.init.zeros_(film.weight)
+            nn.init.zeros_(film.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -284,11 +288,12 @@ class Transolver(nn.Module):
         mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
-        film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        # Feature-stream FiLM: zero-init -> identity at step 0
-        fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        # Per-block flow-FiLM: distribute conditioning capacity across depth.
+        # Multiplicative composition fx * (1 + film_scale) — zero-init -> identity at step 0.
+        for i, block in enumerate(self.blocks):
+            film_scale = self.block_films[i](flow_scalars).unsqueeze(1)  # [B, 1, n_hidden]
+            fx = fx * (1 + film_scale)
             fx = block(fx, mask=mask)
         return {"preds": fx}
 
@@ -533,12 +538,20 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+_inner_model = getattr(model, "_orig_mod", model)
+_block_films = _inner_model.block_films
+_n_block_films = len(_block_films)
+_film_in = _block_films[0].in_features
+_film_out = _block_films[0].out_features
+_film_params = sum(p.numel() for m in _block_films for p in m.parameters())
 print(
-    f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
+    f"Per-block flow-FiLM: {_n_block_films} modules, each Linear({_film_in}, {_film_out}); "
+    f"applied multiplicatively `fx * (1 + film_scale)` BEFORE each TransolverBlock; "
     f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); "
-    f"residual-stream conditioning vs output-side (closed #2531+#2588); "
-    f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
-    f"baseline to beat: val_avg/mae_surf_p < 33.4935"
+    f"zero-init weight+bias -> identity at step 0; "
+    f"+{_film_params} FiLM params (vs single-FiLM baseline {3 * _film_out + _film_out}); "
+    f"distributes geometry-conditioning capacity across depth (DiT/BigGAN/AdaIN-style); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605 (PR #2879, Round 118)"
 )
 print(f"Actual total params: {n_params}")
 
@@ -740,6 +753,14 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # Per-block FiLM weight norms — confirms learning across depth.
+    _inner_for_log = getattr(model, "_orig_mod", model)
+    _block_film_weight_norms = [
+        _f.weight.detach().float().norm().item() for _f in _inner_for_log.block_films
+    ]
+    _block_film_bias_norms = [
+        _f.bias.detach().float().norm().item() for _f in _inner_for_log.block_films
+    ]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +773,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "block_film_weight_norms": _block_film_weight_norms,
+        "block_film_bias_norms": _block_film_bias_norms,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -810,32 +833,40 @@ if best_metrics:
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
 
-    # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
-    _film = _inner.film
-    _film_w_norm = _film.weight.detach().float().norm().item()
-    _film_b_norm = _film.bias.detach().float().norm().item()
-    print("\nFeature-stream FiLM final diagnostics (best-checkpoint weights):")
-    print(f"  film.weight.norm: {_film_w_norm:.4f}")
-    print(f"  film.bias.norm:   {_film_b_norm:.4f}")
+    # Per-block flow-FiLM diagnostic: weight/bias norms per block, and per-split
+    # per-block ||film_scale|| means (does conditioning magnitude grow with depth?
+    # does cruise have larger mag at deep blocks?).
+    _block_films_eval = _inner.block_films
+    _film_w_norms = [_f.weight.detach().float().norm().item() for _f in _block_films_eval]
+    _film_b_norms = [_f.bias.detach().float().norm().item() for _f in _block_films_eval]
+    print("\nPer-block flow-FiLM final diagnostics (best-checkpoint weights):")
+    for _i, (_wn, _bn) in enumerate(zip(_film_w_norms, _film_b_norms)):
+        print(f"  block_films[{_i}].weight.norm={_wn:.4f}  bias.norm={_bn:.4f}")
 
-    # Modulation magnitude on a val_re_rand batch (highest-OOD split for Re).
-    _film_scale_mag = None
-    _val_re_rand_loader = val_loaders.get("val_re_rand")
-    if _val_re_rand_loader is not None:
-        with torch.no_grad():
-            _x, _y, _is_surface, _mask = next(iter(_val_re_rand_loader))
+    # Per-split per-block |film_scale| mean across one batch from each val split.
+    # Captures: (1) does conditioning magnitude grow with depth?
+    # (2) do cruise/OOD splits have larger mag than in_dist at deep blocks?
+    _per_split_film_scale: dict[str, list[float]] = {}
+    print("\nPer-split per-block |film_scale| mean (one batch per split):")
+    with torch.no_grad():
+        for _split_name, _loader in val_loaders.items():
+            _x, _y, _is_surface, _mask = next(iter(_loader))
             _x = _x.to(device, non_blocking=True)
             _x_norm = (_x - stats["x_mean"]) / stats["x_std"]
-            _flow_scalars = _x_norm[:, 0, [13, 14, 18]]
-            _film_scale = _film(_flow_scalars.float()).unsqueeze(1)
-            _film_scale_mag = (1 + _film_scale).abs().mean().item()
-        print(f"  film_scale |1+gamma| mean on val_re_rand batch: {_film_scale_mag:.4f}")
+            _flow_scalars = _x_norm[:, 0, [13, 14, 18]].float()
+            _block_mags = []
+            for _f in _block_films_eval:
+                _scale = _f(_flow_scalars)
+                _block_mags.append(_scale.abs().mean().item())
+            _per_split_film_scale[_split_name] = _block_mags
+            _mag_str = "  ".join(f"b{_i}={_m:.4f}" for _i, _m in enumerate(_block_mags))
+            print(f"  {_split_name:<26s} {_mag_str}")
     append_metrics_jsonl(metrics_jsonl_path, {
-        "event": "film_diagnostic",
+        "event": "block_film_diagnostic",
         "epoch": int(best_metrics["epoch"]),
-        "film_weight_norm": _film_w_norm,
-        "film_bias_norm": _film_b_norm,
-        "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+        "block_film_weight_norms": _film_w_norms,
+        "block_film_bias_norms": _film_b_norms,
+        "per_split_block_film_scale_abs_mean": _per_split_film_scale,
     })
 
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
