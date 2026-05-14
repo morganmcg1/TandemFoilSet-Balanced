@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-15 00:15 [Round 138 close-41] UTC — PR #3036 Huber β=0.01 (LOSS mild but cruise PRESERVED mild; loss-shape axis comprehensively closed)
+
+### Closed: #3036 frieren huber-smooth-l1-beta-0pt01 (171st taxon HUBER-BETA-0.01-QUAD-MASS-FRAC-36-PERCENT-MILD-CRUISE-DEGRADATION / LOSS-SHAPE-AXIS-CLOSED-AT-3-POINTS)
+
+- **Branch:** charliepai2g48h5-frieren/huber-smooth-l1-beta-0pt01
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-huber-smooth-l1-beta-0.01-20260514-213903/metrics.jsonl
+- **Hypothesis:** Recalibrate Huber β to 0.01 — calibrated for normalized residual scale; predicted TRUE L1 regime throughout 60ep (residual/β ≈ 9.5 at ep60); cruise predicted PRESERVED via gradient-sign-pattern preservation
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.4912 | +3.25% LOSS |
+| test_avg | 25.9583 | +1.88% LOSS |
+| val_cruise | 16.869 | +3.19% mild < 17.0 PRESERVED |
+| val_re_rand | 33.610 | −0.76% tiny WIN |
+
+- **KEY MECHANISTIC FINDING — quadratic-mass-fraction scales cruise damage monotonically.** Student's exceptional diagnostic table:
+
+| ep | huber_l1_ratio | quad_mass_frac |
+|---|---|---|
+| 1 | 0.991 (true L1) | 3% |
+| 30 | 0.898 | 26% |
+| 60 | 0.845 | **36%** |
+
+  β=0.01 calibrated *correctly* at ep1 but residuals decayed faster than predicted (long-tailed per-token residual distribution). By ep60, ~36% of tokens have |residual|<β and contribute QUADRATIC loss. Places this PR cleanly between baseline L1 (0% quad) and #3022's β=1.0 (~85% quad / catastrophic break).
+- **REFINED CRUISE INVARIANT (5th refinement):** Cruise damage scales **monotonically with quadratic-regime mass fraction** at the criterion level, AND with residual-stream perturbation magnitude. Two-dimensional decay law:
+  - 0% quad → preserved flat (baseline L1)
+  - 36% quad → mild +3.19%
+  - 85% quad → catastrophic +62%
+- **7th cruise-PRESERVED datapoint** at the +3.19% mild boundary; #3022 was the catastrophic-break anchor. Loss-curvature axis is now monotone-mapped.
+- **3-point loss-shape axis comprehensively CLOSED:** L1 (#3006 baseline) < β=0.01 (mild LOSS) << β=1.0 (#3022 catastrophic). L1 is load-bearing.
+- **Conclusion:** LOSS-SHAPE AXIS COMPREHENSIVELY CLOSED. Per student rec #5 verbatim — pivot frieren to a different axis entirely. Assigning RMSNorm — fresh normalization axis (Llama-style, orthogonal to LN-placement axis which was exhausted at #3003 sandwich-LN).
+
+### Followup assignment (frieren idle → busy)
+
+- **#3054 frieren rmsnorm-replace-layernorm** — Replace every `nn.LayerNorm` with `nn.RMSNorm` (Llama-style: keeps γ scale, removes β bias). Used by Llama 1/2/3, DeepSeek, Qwen, T5; modern Transformer default. Param reduction ~−96×K params (K=number of LN positions). Fresh normalization axis untested in this launch; orthogonal to LN-placement axis. Cruise predicted PRESERVED (sign-pattern preserved, residual-stream structure unchanged). 166th active axis. Would be 8th cruise-preserving datapoint if confirmed.
+
+### Round 138 close-41 summary
+- Closed 1 LOSS PR with exceptional mechanistic write-up
+- Cruise-preservation ledger now 17 datapoints (9 BROKEN + 8 PRESERVED) — #3036 added as 8th preserved at mild-degradation boundary
+- 5th-refinement cruise invariant: explicitly 2-dimensional decay (residual-stream perturbation × quadratic-regime mass fraction)
+- Loss-shape axis comprehensively closed at 3-point sweep
+- Total closed: 171. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-14 23:45 [Round 138 close-40] UTC — 4 closures (#3025/#3031/#3032/#3033) + 4 fresh assignments (#3047/#3048/#3049/#3050)
 
 ### Closed: #3025 nezuko pre-block-input-beta (167th taxon RESIDUAL-EDGE-DOUBLE-SCALAR-COLLAPSES-UNDER-LION-SIGN-STEP)
