@@ -137,10 +137,34 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+def drop_path(x, drop_prob: float = 0., training: bool = False):
+    """Per-sample stochastic depth (DeiT/Swin standard implementation).
+
+    Zeros out the residual branch for a random fraction of samples in the
+    batch, with inverse-keep-prob rescaling so expected output is unchanged.
+    """
+    if drop_prob == 0. or not training:
+        return x
+    keep_prob = 1. - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+    random_tensor.floor_()
+    return x.div(keep_prob) * random_tensor
+
+
+class DropPath(nn.Module):
+    def __init__(self, drop_prob: float = 0.):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4):
+                 layerscale_init=1e-4, drop_path_prob=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -149,10 +173,12 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.drop_path_attn = DropPath(drop_path_prob)
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.drop_path_mlp = DropPath(drop_path_prob)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -161,8 +187,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path_attn(self.gamma_attn * self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path_mlp(self.gamma_mlp * self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -189,11 +215,20 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+
+        # DropPath linear schedule (Huang 2016 stochastic depth, DeiT/Swin standard).
+        # Per-block drop probability scales 0 -> drop_path_max across n_layers.
+        drop_path_max = 0.1
+        dpr = [x.item() for x in torch.linspace(0., drop_path_max, n_layers)]
+        self.drop_path_max = drop_path_max
+        self.drop_path_schedule = dpr
+
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_prob=dpr[i],
             )
             for i in range(n_layers)
         ])
@@ -477,6 +512,13 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+print(
+    f"DropPath (Huang 2016): linear schedule 0 -> {model.drop_path_max} across "
+    f"n_layers={model_config['n_layers']}; per-sample residual-branch zeroing "
+    f"on BOTH attn AND mlp branches; training-mode only; zero new params"
+)
+print(f"  per-block drop_prob: {[round(p, 4) for p in model.drop_path_schedule]}")
+print(f"  per-block keep_prob: {[round(1.0 - p, 4) for p in model.drop_path_schedule]}")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -575,6 +617,15 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+
+# Log DropPath schedule to JSONL for downstream analysis.
+_inner_for_log = getattr(model, "_orig_mod", model)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "droppath_schedule",
+    "drop_path_max": _inner_for_log.drop_path_max,
+    "drop_path_schedule": _inner_for_log.drop_path_schedule,
+    "keep_prob_schedule": [1.0 - p for p in _inner_for_log.drop_path_schedule],
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -702,10 +753,13 @@ if best_metrics:
         _ga_abs = _blk.gamma_attn.detach().float().abs().mean().item()
         _gm_mean = _blk.gamma_mlp.detach().float().mean().item()
         _gm_abs = _blk.gamma_mlp.detach().float().abs().mean().item()
-        print(f"  block[{_i}]: gamma_attn mean={_ga_mean:.6f} abs_mean={_ga_abs:.6f} | "
+        _dpr_i = float(_blk.drop_path_attn.drop_prob)
+        print(f"  block[{_i}]: dpr={_dpr_i:.4f}  "
+              f"gamma_attn mean={_ga_mean:.6f} abs_mean={_ga_abs:.6f} | "
               f"gamma_mlp mean={_gm_mean:.6f} abs_mean={_gm_abs:.6f}")
         _gamma_log["blocks"].append({
             "block_idx": _i,
+            "drop_path_prob": _dpr_i,
             "gamma_attn_mean": _ga_mean,
             "gamma_attn_abs_mean": _ga_abs,
             "gamma_mlp_mean": _gm_mean,
