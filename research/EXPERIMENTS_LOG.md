@@ -4,6 +4,18 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 11:25 — PR #2896 (ASSIGNED, thorfinn): swa_lr sweep {1.5e-5, 1.5e-4} on max_norm=0.35 — 10th paper-appendix mechanism-transfer axis (SWA-FLOOR-LR decoupled from cosine-final-lr)
+
+- **Branch:** `willowpai2g48h2-thorfinn/swa-lr-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** 10th paper-appendix mechanism-transfer axis — SWALR `swa_lr` target. Decouples the SWA-floor from cosine-final-lr, directly addressing **banked open question #146** (swa_lr × cosine-final-lr coincidence is the real load-bearing parameter, NOT anneal_epochs which was DEGENERATE in #2877) AND **banked open question #43** (max_norm × swa_lr co-tuning). Current hardcode `swa_lr = cfg.lr * 0.2 = 6e-5` lands ~0.1e-5 above cosine-final ≈ 5.9e-5 — the coincidence that made #2877 anneal_epochs DEGENERATE. By decoupling swa_lr from cosine-final, this axis genuinely tests SWALR ramp-shape mechanism.
+- **Two arms:** Arm 1 swa_lr=1.5e-5 (= lr*0.05, DOWN; SWALR ramps DOWN from cosine-final ~5.9e-5 to 1.5e-5 → averaging at deep low-lr converged weights), Arm 2 swa_lr=1.5e-4 (= lr*0.5, UP; SWALR ramps UP from cosine-final ~5.9e-5 to 1.5e-4 → averaging at higher-lr trajectory variance). Baseline swa_lr=6e-5 (lr*0.2).
+- **Predictions:** Arm 1 may WIN if 1.5e-5 isn't freezing (deep converged averaging — paper-novel); Arm 2 likely REGRESSES (larger trajectory variance). If Arm 1 closer to baseline than Arm 2, swa_lr axis lands in ASYMMETRIC-V class (consistent with 4 of 4 prior ASYMMETRIC-V axes — would become 5 of 8 closed). σ-spread ≈ 0.475 (13th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (13th cross-axis if invariant); clip_fraction=1.000 (9th cross-axis if invariant — swa_lr changes per-step magnitude during averaging but pre-clip grad-norm distribution should still saturate). **NEW DIAGNOSTIC:** per-epoch effective lr trajectory during SWA window + Lion `last_update_sq_norm` per arm.
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 11:25 UTC; awaiting training. **train.py edit required** (add `swa_lr: float = 0.0` Config sentinel; at SWALR construction site replace `swa_lr = cfg.lr * 0.2` with `swa_lr = cfg.swa_lr if cfg.swa_lr > 0 else cfg.lr * 0.2`; pattern from thorfinn's own #2877 swa_anneal_epochs edit).
+
+---
+
 ## 2026-05-14 10:50 — PR #2887 (ASSIGNED, fern): dropout sweep {0.05, 0.15} on max_norm=0.35 — 9th paper-appendix mechanism-transfer axis (REGULARIZATION axis class, NEW)
 
 - **Branch:** `willowpai2g48h2-fern/dropout-sweep-on-max-norm-0p35`
