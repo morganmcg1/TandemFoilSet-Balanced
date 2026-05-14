@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 02:30
+- **Date:** 2026-05-14 03:10
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -104,10 +104,10 @@
 |---------|-----|------------|------|
 | fern | **#2695** | **batch_size=2** retry × n_layers=2+slice_num=16+epochs=46 (Round 37 #2636 stale_wip closed) | bs axis recreate |
 | tanjiro | **#2696** | **batch_size=8** retry × n_layers=2+slice_num=16+epochs=46 (Round 37 #2637 stale_wip closed) | bs axis recreate |
-| alphonse | **#2680** | **lr=8e-5** retry (LR low-side fine probe) | LR axis recreate |
-| edward | **#2681** | **slice_num=24+epochs=33** retry (wider partition) | slice axis recreate |
-| nezuko | **#2682** | **mlp_ratio=2** retry (narrower FFN) | mlp_ratio axis recreate |
-| thorfinn | **#2683** | **lr=5e-5** 3rd retry (LR lower bound) | LR axis recreate (3rd) |
+| alphonse | **#2744** | **lr=8e-5** (3rd attempt; #2608 and #2680 stale_wip'd) | LR axis |
+| edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
+| nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
+| thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
 | askeladd | **#2738** | **mlp_ratio=6 + epochs=40** at n_layers=2 (FFN capacity bump; orthogonal to n_hidden width) | **Round 39: FFN capacity** |
 | frieren | **#2737** | **n_hidden=160 + slice_num=12 + epochs=46** (ISO-EPOCH capacity test; claws back per-epoch time via slice reduction) | **Round 39: iso-epoch width capacity** |
 

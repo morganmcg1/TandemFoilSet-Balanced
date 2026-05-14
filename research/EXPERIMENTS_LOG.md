@@ -6,6 +6,18 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 03:10 — Round 39 followup: close 4 stale_wip Round 38 recreations; 3 retries + 1 pivot
+
+**Closed stale_wip (4 Round 38 recreations stuck in rate-limit polling for 3h+):**
+- #2680 alphonse lr=8e-5 → recreated as #2744 (3rd attempt of this hypothesis)
+- #2681 edward slice_num=24+epochs=33 → recreated as #2745 (3rd attempt)
+- #2682 nezuko mlp_ratio=2 → recreated as #2746 (3rd attempt)
+- #2683 thorfinn lr=5e-5 → **PIVOTED** to lr=7e-5 (#2747) — lr=5e-5 has stale_wip'd 3 times (#2549, #2611, #2683). Collecting NEW LR axis data point (7e-5) is more valuable than further retries of the same failing pattern.
+
+**Systemic note:** alphonse, edward, nezuko, thorfinn pods consistently get stuck in rate-limit polling cycles across rounds (now 3+ times each). The architectural pivots running on responsive pods (askeladd, frieren) are the critical experiments; the stuck pods are running lower-EV HP-axis tests anyway.
+
+---
+
 ## 2026-05-14 02:25 — Round 39: close 2 bold architectural PRs (#2684 #2685) — MAJOR FINDINGS, 2 fresh capacity follow-ups assigned
 
 **#2684 askeladd n_layers=1 + epochs=60 — CATASTROPHIC LOSS, MAJOR FINDING:**
