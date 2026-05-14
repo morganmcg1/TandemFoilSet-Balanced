@@ -7,6 +7,37 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 04:42 — Post-merge cycle: 3 closes (DropPath, LayerScale, SAM) + 4-way H5-ext capacity matrix launched
+
+**Headline**: three tier-2 regularization/residual-scaling closures (frieren DropPath, edward LayerScale, askeladd SAM) confirm the **compute-limited/parameter-starved regime** of TandemFoilSet at 30-min cap. Reassigned the freed slots to complete a 4-way **H5-EXT capacity ablation matrix** isolating each capacity axis of the merged H5 GeoTransolver mechanism.
+
+### Closes (terminal regression on new H5 baseline val 39.3949)
+
+| PR | Student | Hypothesis | Val (Δ vs H5) | Test (Δ vs H5) | W&B | Mechanism reading |
+|---|---|---|---|---|---|---|
+| #2757 | frieren | DropPath / Stochastic Depth (Huang 2016, linear 0→0.1) | **44.0059 (+9.27%)** | _36.34 (+11.5%)_ | `frieren-droppath` | Val curve still monotonically descending at epoch 36 (best=35) → TandemFoilSet at 30-min cap is in *underfit* regime, never reaches the overfit phase DropPath targets. 6.9% per-epoch overhead. **Stochastic-residual axis closed.** |
+| #2756 | edward | LayerScale γ on Transolver residuals (Touvron 2021 CaiT, init=1e-4) | **42.5978 (+8.13%)** | **35.5480 (+9.07%)** | `kavqo3r4` | γ_mlp (~0.07-0.09) >> γ_attn (~0.007-0.018) at every layer — *mechanistically valuable diagnostic*: MLP sub-blocks carry 5-10× more residual signal than PhysicsAttention. But γ never reaches effective scale at 1e-4 init under Lion + 30-min cap (would need CaiT-scale 1000s of epochs). **Deterministic-residual-scaling axis closed at this budget.** |
+| #2754 | askeladd | SAM-Lion (Foret et al. 2021, two-pass perturbation, ρ=0.05) | **68.2002 (+73.1%)** | **60.1160 (+84.5%)** | `oheipc12` | Mechanism activated correctly (98 s/ep ≈ 2× baseline) but 2× wall-clock halved epoch budget 36→19 while T_max=50 schedule was unchanged → model spent entire budget in high-LR descent phase, never entered cosine-decay refinement (LR still 85% of peak at epoch 19). **Sharpness-aware loss-landscape axis closed at this schedule/budget.** Schedule-mismatch diagnosis is the key finding. |
+
+**Common-mode diagnosis across 3 closures**: All three techniques trade gradient steps or weight magnitudes for "regularization" benefit. All three regress. Independent confirmation that **the stack is in the parameter-starved/compute-limited regime where the productive direction is *more capacity per gradient step*, not *better optimization landscape per step***. This validates the H5-EXT capacity-matrix follow-up strategy.
+
+### 4-way H5-EXT capacity ablation matrix (all single-flag probes on merged H5 baseline)
+
+The merged H5 GeoTransolver (PR #2709) added global geometry context tokens but **only moved val_geom_camber_rc by -0.94%** (vs -4.73% on val_re_rand, the strongest gain). The remaining bottleneck on camber_rc could be in any of 4 capacity axes — all 4 are now under probe in parallel:
+
+| PR | Student | Probe | Single flag change | Probes which axis? |
+|---|---|---|---|---|
+| #2776 | thorfinn | geo_cross_tokens=8 | `--geo_cross_tokens 4 → 8` | Geo encoder **token count** |
+| #2782 | frieren | geo_encoder_hidden=128 | `--geo_encoder_hidden 64 → 128` | Geo encoder **MLP width** |
+| #2786 | edward | fourier_k=20 | `--fourier_k 12 → 20` | **Input spatial encoding** (4 more octaves of pos features) |
+| #2787 | askeladd | slice_num=48 | `--slice_num 32 → 48` | **Local physics-token count** (Transolver slice attention) |
+
+**Strategic value**: this 4-axis sweep on the same backbone yields a publication-quality ablation table for the appendix. Whichever wins reveals the true bottleneck dimension; combined together they reveal whether the H5 mechanism has a single capacity axis or whether 2+ axes need scaling simultaneously. Same `wandb_group: willow-r3-geotransolver-cross-attn-h5` across all 4 for direct W&B comparison.
+
+**Diagnostic primary target across all 4 probes**: `val_geom_camber_rc 52.85` — the H5-baseline split where H5 itself failed to move.
+
+---
+
 ## 2026-05-14 04:14 — PR #2709 MERGED: H5 GeoTransolver Cross-Attn — new baseline val 39.39
 
 **Squash-merged to `icml-appendix-willow-pai2g-24h-r3`.** 2-seed confirmed win.
