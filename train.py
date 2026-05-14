@@ -96,7 +96,7 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="silu", res=True):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
@@ -175,7 +175,7 @@ class PhysicsAttention(nn.Module):
 
 
 class TransolverBlock(nn.Module):
-    def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
+    def __init__(self, num_heads, hidden_dim, dropout, act="silu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
         super().__init__()
         self.last_layer = last_layer
@@ -204,7 +204,7 @@ class TransolverBlock(nn.Module):
 
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
-                 n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
+                 n_head=8, act="silu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
