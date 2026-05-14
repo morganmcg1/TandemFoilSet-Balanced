@@ -264,13 +264,12 @@ class Transolver(nn.Module):
             )
             for i in range(n_layers)
         ])
-        # Cross-block residual α: learnable scalar gain applied to each non-final
-        # block's output BEFORE the next block consumes it. n_layers-1 scalars
-        # (no α after the last block, whose output is already the head prediction).
-        # Init 1.0 -> identity at step 0. Scales AFTER the block's post-norm LN
-        # so non-1.0 α directly changes feature magnitudes flowing into the next
-        # block (LN cannot absorb the scale).
-        self.cross_block_alpha = nn.Parameter(torch.ones(n_layers - 1))
+        # Cross-block residual α: learnable scalar gain applied to EVERY block's
+        # output (DiT-style 4-α, extends #3006 from n_layers-1 to n_layers).
+        # The last α scales the prediction head's output directly; the model's
+        # mlp2 weights jointly retune to compensate. Init 1.0 -> identity at
+        # step 0.
+        self.cross_block_alpha = nn.Parameter(torch.ones(n_layers))
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -299,13 +298,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        n_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
-            # Apply cross-block α to non-final block outputs; the last block is
-            # the head (returns out_dim predictions) and must not be scaled.
-            if i < n_blocks - 1:
-                fx = self.cross_block_alpha[i] * fx
+            # DiT-style: scale ALL block outputs, including the last (whose
+            # output is the prediction); head mlp2 retunes to absorb scale.
+            fx = self.cross_block_alpha[i] * fx
         return {"preds": fx}
 
 
@@ -569,19 +566,17 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
-# Cross-block residual α diagnostic: between-block adaptivity at a fresh axis
-# (in-block γ closed at all granularities by #2940/#2964/#2977/#2988).
-# α scales each non-final block's output AFTER its post-norm LN — non-1.0
-# values directly modulate feature magnitudes into the next block. Last
-# block's head output is unscaled (no following block).
+# Cross-block residual α diagnostic: DiT-style 4-α extension of #3006.
+# α scales EVERY block's output (n_layers scalars, +1 vs #3006). The last α
+# scales the final predictions; mlp2 head retunes to compensate.
 _inner_for_alpha = getattr(model, "_orig_mod", model)
 _alpha_init = _inner_for_alpha.cross_block_alpha.detach().cpu().tolist()
 print(
-    f"Cross-block residual α (#3006): {_inner_for_alpha.cross_block_alpha.shape[0]} learnable scalars "
-    f"(+{_inner_for_alpha.cross_block_alpha.numel()} params) applied between adjacent TransolverBlocks; "
+    f"Cross-block residual α (#3021 DiT-style 4-α): {_inner_for_alpha.cross_block_alpha.shape[0]} learnable scalars "
+    f"(+{_inner_for_alpha.cross_block_alpha.numel()} params) applied to ALL block outputs incl. last; "
     f"init={[f'{a:.4f}' for a in _alpha_init]} (all 1.0 — identity at step 0); "
     f"in-block γ_attn / γ_mlp UNCHANGED (constant 1.0 from #2964); "
-    f"baseline to beat: val_avg/mae_surf_p < 30.0382 (#2964 NEW baseline)"
+    f"baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006 NEW baseline)"
 )
 
 # SE diagnostic: count modules and added params
