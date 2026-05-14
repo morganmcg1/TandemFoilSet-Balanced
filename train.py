@@ -390,6 +390,7 @@ class Config:
     epochs: int = 50
     n_layers: int = 5
     n_head: int = 4
+    n_hidden: int = 128
     slice_num: int = 48
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -428,7 +429,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
