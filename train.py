@@ -489,7 +489,9 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
     betas=(0.9, 0.99),       # Lion-paper default
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer, T_0=12, T_mult=1, eta_min=0.0
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
