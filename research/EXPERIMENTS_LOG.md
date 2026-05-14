@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 [Round 138 close-18] UTC — PR #2974: adamw-optimizer-swap (lr=5e-4) — **CLOSED LOSS (+38.32% val vs NEW; 140th taxon partial — UNDERCALIBRATED LR; AXIS NOT YET CLOSED)**
+
+- **Branch:** charliepai2g48h5-thorfinn/adamw-optimizer-swap
+- **Metric artifacts:** models/model-charliepai2g48h5-thorfinn-adamw-optimizer-swap-20260514-175502/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2974 (AdamW lr=5e-4) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 41.5479 | **+38.32% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 36.4343 | **+44.52% LOSS** |
+| val_single_in_dist | 25.219 | 35.8575 | +42.20% LOSS |
+| val_geom_camber_rc | 43.929 | 56.9979 | +29.75% LOSS |
+| val_geom_camber_cruise | 16.265 | 27.4706 | +68.89% LOSS |
+| val_re_rand | 34.740 | 45.8658 | +32.03% LOSS |
+| Param count | 407,940 | 407,940 | unchanged (only optimizer object swapped) |
+
+**Hypothesis:** Replace Lion (lr=1.5e-4, wd=3e-4) with AdamW (lr=5e-4, wd=0.01, betas=(0.9, 0.999)). Tests optimizer-family axis. lr=5e-4 = 3.3× Lion's lr per conservative Lion→AdamW conversion.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional analysis):**
+
+1. **AdamW is STABLE but SEVERELY UNDERCALIBRATED.** Monotonic improvement through ep60, no NaN/spikes/plateau. AdamW state diagnostic confirms genuine training (exp_avg 100% nonzero, exp_avg_sq 99.82% nonzero, uniform step count).
+
+2. **Train loss 1.28 at ep60 vs Lion ~0.8 at ep58 → severe underfitting.** Trajectory consistent with lr too low for 60ep budget, NOT optimizer dysfunction. Val still descending at ep60 (Δ ep55→60 = -0.55).
+
+3. **Tight train→val gap (1.18×) is the underfitting signature**, not better generalization. Per student: 'the meta-signal mechanism requires the model to be near-converged to manifest; under severe underfitting, all splits regress uniformly.' Excellent insight — this experiment cannot resolve the optimizer-family question because the model never converged.
+
+4. **lr=5e-4 (3.3× Lion) is undercalibrated.** Lion→AdamW lr conversion typically requires 5-10× factor. Student flagged this in PR body: 'could need 1e-3 (6.7×) or 1.5e-3 (10×).'
+
+5. **Meta-signal unobservable under underfitting:** uniform regression across all 4 splits (+24% to +69% LOSS). The signal mechanism requires near-convergence to manifest.
+
+**140th taxon PARTIAL closure:** AdamW @ lr=5e-4 (low-lr endpoint of bracketing sweep). Optimizer-family axis NOT yet closed — needs upper-lr-endpoint test to bracket from above.
+
+**Followup assigned:** #2986 thorfinn adamw-lr-1.5e-3 (10× Lion lr; UPPER ENDPOINT of conservative Lion→AdamW conversion; bracketing logic: if also LOSS, axis decisively closed in [3.3×, 10×] both LOSS interval; if WIN or competitive, axis salvaged. wd=0.01, betas=(0.9, 0.999) unchanged. CRITICAL ep1-3 stability monitor: AdamW at 10× lr more likely to spike).
+
+---
+
 ## 2026-05-14 [Round 138 close-17] UTC — PR #2973: log-re-input-noise — **CLOSED CATASTROPHIC LOSS (+31.56% val Run vs OLD #2879 / +33.84% vs NEW #2964; 139th taxon; CONDITIONING-VARIABLE-NOISE AXIS CLOSED; DATA-AXIS META-SIGNAL INVARIANCE FINDING)**
 
 - **Branch:** charliepai2g48h5-edward/log-re-input-noise
