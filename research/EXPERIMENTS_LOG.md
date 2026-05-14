@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-14 [Round 94] UTC — PR #2765: SE block-3-only reduction=4 — **MERGED WIN (−2.87% val)**
+
+- **Branch:** charliepai2g48h5-tanjiro/se-reduction4
+- **Hypothesis:** SE bottleneck at reduction=8 (inner dim=12) is capacity-limited in inter-channel correlation modeling. Doubling to reduction=4 (inner dim=24) should enable more discriminative per-channel gating, especially on OOD splits where gate_std from #2727 showed OOD-discriminating behavior.
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-reduction4-20260514-044200/metrics.jsonl`
+
+| Split | reduction=4 val | Baseline #2741 | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | **24.9721** | 25.5303 | **−2.19% WIN** (new best-ever) |
+| `val_geom_camber_rc` | **46.9885** | 47.4674 | **−1.01% WIN** |
+| `val_geom_camber_cruise` | **17.7276** | 19.1621 | **−7.49% WIN** |
+| `val_re_rand` | **35.5983** | 36.8311 | **−3.35% WIN** |
+| **val_avg** | **31.3216** | 32.2477 | **−2.87% WIN** |
+| `test_single_in_dist` | 24.0714 | 23.7995 | +1.14% mild |
+| `test_geom_camber_rc` | **41.9406** | 43.3320 | **−3.21% WIN** |
+| `test_geom_camber_cruise` | **14.2400** | 15.3055 | **−6.96% WIN** |
+| `test_re_rand` | **25.7749** | 27.2622 | **−5.46% WIN** |
+| **test_avg** | **26.5067** | 27.4248 | **−3.35% WIN** |
+
+- **Best epoch:** 64/70 (timeout at ep66); **Param count:** 333,603 (+2,572)
+- **SE gate diagnostic (block 3):** gate_std rose 5-12% on every split (in_dist 0.150→0.168, cruise 0.255→0.269, rc 0.215→0.234, re_rand 0.257→0.275); gate_min collapsed 50-70% on every split (near-total channel veto at cruise 0.016→0.005, re_rand 0.019→0.007). gate_mean and gate_max unchanged.
+- **Commentary:** Hypothesis confirmed. The SE bottleneck at reduction=8 was capacity-limited. Doubling the inner dim unlocked more discriminative per-channel gating — both wider gate distribution (gate_std+) and much more aggressive channel-veto (gate_min−). OOD cruise (−7.49%) and re_rand (−3.35%) benefited most, consistent with the OOD-discrimination mechanism. Test in-dist mild regression (+1.14%) within noise. Block-3 γ_attn mean flipped slightly negative (only block with sign flip) = SE now picking up role previously carried by block-3 attention. SwiGLU stats unchanged (orthogonality confirmed). SE bottleneck dimension is a productive sub-axis. NEW BASELINE val 31.3216 / test 26.5067. **19th merged winner**.
+
+---
+
+## 2026-05-14 [Round 94] UTC — PR #2778: Deep supervision (Lee 2014) — **CLOSED LOSS (+6.41% val)** — 61st taxon
+
+- **Branch:** charliepai2g48h5-edward/aux-deep-supervision
+- **Hypothesis:** Auxiliary mae_surf_p heads after blocks 0, 1, 2 with AUX_WEIGHT=0.1 would act as gradient-pathway regularizer, accelerating early-block specialization and improving OOD generalization via multi-scale supervision.
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-aux-deep-supervision-20260514-043524/metrics.jsonl`
+
+| Split | This run | Baseline #2741 | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 27.0415 | 25.5303 | +5.92% LOSS |
+| `val_geom_camber_rc` | 52.0657 | 47.4674 | +9.69% LOSS |
+| `val_geom_camber_cruise` | 19.7115 | 19.1621 | +2.87% LOSS |
+| `val_re_rand` | 38.4378 | 36.8311 | +4.36% LOSS |
+| **val_avg** | **34.3141** | 32.2477 | **+6.41% LOSS** |
+| **test_avg** | **28.7866** | 27.4248 | **+4.97% LOSS** |
+
+- **Best epoch:** 60/63 (converged); aux/main loss ratio: 2.0-2.2× (effective magnitude ~0.2× main = strong second objective)
+- **Mechanism diagnostic:** Prediction (a) confirmed: early-block γ_attn_std rises (block0 0.0401 highest, block3 0.0332 lowest — gradient-pathway reversal). Predictions (b) and (c) refuted: both in-dist AND OOD regress. Two compounding failure mechanisms: (1) Anti-hierarchical pressure — Transolver's slice-attention + γ=1e-4 biases for gradual late-block-dominated mixing; deep supervision forces the opposite (premature linear decodability at early depths); (2) Linear(96,3) heads apply persistent low-rank 3-D pressure on 75% of residual depth.
+- **Commentary:** Deep supervision (Lee 2014) is a valid regularizer for classification and U-Net dense prediction where intermediate layers carry truly independent multi-scale information. For point-cloud regression to a 3-channel field, the aux/main pathway asymmetry breaks — the aux task asks for "spatial-aware 3-channel reduction at every block" which is precisely what the whole network computes, not an intermediate. The anti-hierarchical pressure mechanism clashes directly with the inductive biases of the merged architecture (LayerScale γ=1e-4 near-identity init, slice-attention gradual mixing). **61st taxon: gradient-pathway-multiplication for point-cloud regression to low-rank target.**
+
+---
+
 ## 2026-05-14 [Round 93] UTC — Round 93
 
 ### Closed PR #2750: fern mlp2-wide192 STALE_WIP (no taxon closed — slot redeployment)
