@@ -517,7 +517,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=96,
     n_layers=4,
-    n_head=2,
+    n_head=4,
     slice_num=24,
     mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
@@ -541,6 +541,11 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# n_head=4 axis (#2906): multi-head attention scaling probe at n_hidden=96
+print(f"Attention: n_head={model_config['n_head']}, dim_head={model_config['n_hidden'] // model_config['n_head']}")
+print(f"Total slice tokens per sample: {model_config['n_head'] * model_config['slice_num']} ({model_config['n_head']} heads x {model_config['slice_num']} slices)")
+print(f"Param count: {n_params} (n_head=4 expected ~384,900 vs baseline 407,940; per-head qkv shrinks quadratically 48^2->24^2 per slot)")
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -1019,6 +1024,76 @@ if best_metrics:
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
+
+    # PhysicsAttention diagnostic (#2906 n_head=4 axis): per-head slice-routing
+    # entropy (H(p) over G=24 slices, base-e nats) and learned softmax temperature.
+    # Capture on val_single_in_dist sample batch with best-checkpoint weights.
+    # Reimplements PhysicsAttention.forward inside a hook so we have access to
+    # slice_weights (not exposed as a sub-module output).
+    _attn_blocks = [(i, blk.attn) for i, blk in enumerate(_inner.blocks)
+                    if isinstance(blk.attn, PhysicsAttention)]
+    _attn_captured: list[dict] = []
+
+    def _make_attn_hook(block_idx: int):
+        def _hook(module, args, _output):
+            with torch.no_grad():
+                x = args[0]
+                B, N, _C = x.shape
+                fx_mid = (
+                    module.in_project_fx(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                slice_w = module.softmax(
+                    module.in_project_slice(x_mid) / module.temperature
+                ).detach().float()  # (B, H, N, G)
+                # per-head distribution over slices: average over real tokens, then entropy
+                # mean over batch
+                p_per_head = slice_w.mean(dim=2)  # (B, H, G) -- approx routing density
+                ent_per_head = -(p_per_head * (p_per_head + 1e-12).log()).sum(dim=-1)  # (B, H)
+                ent_per_head_mean = ent_per_head.mean(dim=0).cpu().tolist()  # list[H]
+                temp_per_head = module.temperature.detach().float().reshape(-1).cpu().tolist()
+                _attn_captured.append({
+                    "block_idx": block_idx,
+                    "slice_entropy_per_head": ent_per_head_mean,
+                    "temperature_per_head": temp_per_head,
+                    "n_heads": int(module.heads),
+                    "dim_head": int(module.dim_head),
+                    "slice_num": int(slice_w.shape[-1]),
+                })
+        return _hook
+
+    _attn_handles = [m.register_forward_hook(_make_attn_hook(i))
+                     for i, m in _attn_blocks]
+    _attn_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _x_a, _y_a, _is_a, _m_a = next(iter(_attn_loader))
+        _x_a = _x_a.to(device, non_blocking=True)
+        _m_a = _m_a.to(device, non_blocking=True)
+        _x_norm_a = (_x_a - stats["x_mean"]) / stats["x_std"]
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_a, "mask": _m_a})
+    for _h in _attn_handles:
+        _h.remove()
+
+    print("\nPhysicsAttention per-head diagnostics (best-checkpoint weights, val_single_in_dist):")
+    _attn_log = {"event": "attn_head_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    for _ad in _attn_captured:
+        ents_str = ", ".join(f"{e:.4f}" for e in _ad["slice_entropy_per_head"])
+        temps_str = ", ".join(f"{t:.4f}" for t in _ad["temperature_per_head"])
+        print(
+            f"  block[{_ad['block_idx']}] heads={_ad['n_heads']} dim_head={_ad['dim_head']} G={_ad['slice_num']}  "
+            f"slice_entropy_per_head=[{ents_str}]  temperature_per_head=[{temps_str}]"
+        )
+        _attn_log["blocks"].append(_ad)
+    append_metrics_jsonl(metrics_jsonl_path, _attn_log)
 
     test_metrics = None
     test_avg = None
