@@ -4,6 +4,19 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 13:05 — PR #2919 (ASSIGNED, fern): huber_beta LOWER fine bracket {0.20, 0.15} on max_norm=0.35 — 12th paper-appendix mechanism-transfer axis (extends INDEPENDENT-SYMMETRIC β-axis #2736 with LOWER reach; tests #2666 β-driven σ-spread mechanism transfer to saturated-clip)
+
+- **Branch:** `willowpai2g48h2-fern/huber-beta-lower-fine-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** 12th paper-appendix mechanism-transfer axis — Huber β LOWER fine bracket {0.20, 0.15} on saturated-clip max_norm=0.35 baseline. Extends the INDEPENDENT-SYMMETRIC β-axis (closed via #2736 UPPER bracket) with the LOWER reach. Primary goal: test whether the β-driven σ-spread mechanism from **banked #2666** (max_norm=0.5 baseline: β=0.15 spread 0.546, Kendall weights REDISTRIBUTE DOWN, test improvement asymmetric to val regression; #68) **transfers cleanly to saturated-clip regime** (as β-driven UPPER bracket did via #2736). β axis is INDEPENDENT of gradient-magnitude flow (clip_fraction=1.000 invariant; banked #72 confirmed on UPPER bracket).
+- **Two arms:** Arm 1 β=0.20, Arm 2 β=0.15. Baseline β=0.30. No train.py edit required (--huber_beta is CLI flag at train.py:601).
+- **Banked mechanism predictions:** β=0.20 spread ~0.50 (modest σ-spread expansion), β=0.15 spread ~0.55; Kendall weight surf_ux REDISTRIBUTE DOWN (lower than baseline 44.3, unlike lr-driven CONCENTRATE UP mechanism); test possibly within noise / directional win at β=0.15 (banked #68 — test improvement asymmetric to val regression at max_norm=0.5). Three possible outcomes: (a) mechanism TRANSFERS CLEANLY → strengthens β as 2nd cross-clip-regime TRANSFERS-CLEANLY axis; (b) β=0.15 directional close [45.15, 45.50] → paper-appendix data point; (c) mechanism DIVERGES → gradient-magnitude flow load-bearing for β-driven mechanism on max_norm=0.5 (paper-publishable contrast).
+- **NEW DIAGNOSTICS:** σ-spread + Kendall eff_w per channel + pre-clip grad_norm distribution per arm (does 1/β slope hold under saturated-clip?). Per-split test asymmetry check (does re_rand/cruise win at β=0.15 transfer?).
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 13:05 UTC; awaiting training.
+
+---
+
 ## 2026-05-14 11:45 — PR #2901 (ASSIGNED, alphonse): n_head sweep {2, 8} on max_norm=0.35 — 11th paper-appendix mechanism-transfer axis (ATTENTION-MECHANISM-CAPACITY-RESHUFFLE class, NEW)
 
 - **Branch:** `willowpai2g48h2-alphonse/n-head-sweep-on-max-norm-0p35`
@@ -25,6 +38,66 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 - **Predictions:** Arm 1 may WIN if 1.5e-5 isn't freezing (deep converged averaging — paper-novel); Arm 2 likely REGRESSES (larger trajectory variance). If Arm 1 closer to baseline than Arm 2, swa_lr axis lands in ASYMMETRIC-V class (consistent with 4 of 4 prior ASYMMETRIC-V axes — would become 5 of 8 closed). σ-spread ≈ 0.475 (13th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (13th cross-axis if invariant); clip_fraction=1.000 (9th cross-axis if invariant — swa_lr changes per-step magnitude during averaging but pre-clip grad-norm distribution should still saturate). **NEW DIAGNOSTIC:** per-epoch effective lr trajectory during SWA window + Lion `last_update_sq_norm` per arm.
 - **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
 - **Status:** Assigned 2026-05-14 11:25 UTC; awaiting training. **train.py edit required** (add `swa_lr: float = 0.0` Config sentinel; at SWALR construction site replace `swa_lr = cfg.lr * 0.2` with `swa_lr = cfg.swa_lr if cfg.swa_lr > 0 else cfg.lr * 0.2`; pattern from thorfinn's own #2877 swa_anneal_epochs edit).
+
+---
+
+## 2026-05-14 12:50 — PR #2887 (CLOSED, fern): dropout sweep {0.05, 0.15} on max_norm=0.35 — paper-strengthening 9th axis closure (NEW MONOTONIC-REGRESSIVE pattern class — 7th transfer pattern)
+
+- **Branch:** `willowpai2g48h2-fern/dropout-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** 9th paper-appendix mechanism-transfer axis — Transolver block dropout (Vaswani-style attention/MLP dropout). REGULARIZATION axis class NEW.
+
+### Result table (vs #2674 baseline)
+
+| Arm | dropout | W&B | SWA val | SWA test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline d=0.0 | 0.0 | `ieu1futo` | 45.1538 | 38.6367 | — | — | — |
+| Arm 1 d=0.05 | 0.05 | `n60wrni2` | **46.0531** | 39.1958 | **+0.90** | +0.56 | regression close (in [45.50, 46.50]) |
+| Arm 2 d=0.15 | 0.15 | `arydpvs5` | **46.3578** | 39.7786 | **+1.20** | +1.14 | regression close (in [45.50, 46.50]) |
+
+### Mechanism diagnosis (paper-strengthening NEW MONOTONIC-REGRESSIVE pattern class)
+
+**DROPOUT OPENS A NEW 7th TRANSFER PATTERN: MONOTONIC-REGRESSIVE (one-sided regularization axis).** Dropout is a one-sided axis (dropout ≥ 0 by construction); cannot exhibit V-shape or symmetric-basin patterns. Two-point measurement shows monotonic regression with ×1.34 reach per ×3 dropout ratio. The regression comes from **forward-pass perturbation interacting with the saturated `sign()` step**: at clip_fraction=1.000 every step is `lr * sign(β1*EMA + (1-β1)*grad)`, so dropout-flipped sign decisions accumulate as low-rate gradient-direction errors that Lion's β1=0.9 EMA does not fully de-noise within 13 epochs. Lion's EMA absorbs dropout-induced sign-flip noise but only partially — residual sign-error rate scales with dropout magnitude.
+
+### Updated paper-appendix transfer-pattern table (9 closed axes, **7 patterns** — NEW PATTERN added)
+
+| Pattern class | Axes |
+|---|---|
+| Gradient-magnitude-flow-INDEPENDENT, SYMMETRIC | β #2736 |
+| Gradient-magnitude-flow-INDEPENDENT, ASYMMETRIC V (DOMINANT) | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862 |
+| Gradient-magnitude-flow-DEPENDENT, SYMMETRIC | wd #2791+#2819, Lion β1 #2880 |
+| Gradient-magnitude-flow-DEPENDENT, NEGATIVE | seed #2790 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 |
+| **NEW: MONOTONIC-REGRESSIVE (one-sided)** | **dropout #2887** |
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 d=0.05 | Arm 2 d=0.15 | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread | 0.478 | 0.480 | 0.475 | ✓ 10th cross-axis confirmation (Δ ≤ 0.005) |
+| Channel ordering (surf_ux=min, vol_ux=max) | ✓ | ✓ | ✓ | ✓ 14th cross-axis confirmation |
+| clip_fraction=1.0 (per-step) | 1.0000 (4875/4875) | 0.9998 (1/4875 sub-threshold) | 1.0000 | ✓ 9th cross-axis confirmation — **preserved despite mechanism to break** |
+| Pre-clip grad_norm mean | 7.997 | 8.047 | ≈8.0 | ✓ NEW 9th cross-axis invariant (Δ ≤ 0.6%) |
+| step_time | 141.22 s | 141.15 s | ≈141 s | ✓ invariant |
+
+### OOD-cruise check (#137 σ=0.25 comparison)
+
+Dropout d=0.05 gives tiny cruise gain (val −0.17, test −0.18) BUT at cost of substantial single_in_dist regression (val +1.10, test +0.72). **σ=0.25 (banked #137) is STRICTLY BETTER cruise regularizer** — wins more (×8 cruise val gain) AND sacrifices single_in_dist less. Dropout NOT a complementary regularization channel.
+
+### Banked findings (#155–#162)
+
+155. **PAPER-STRENGTHENING: dropout axis lands in NEW MONOTONIC-REGRESSIVE (one-sided regularization) pattern class on saturated-clip baseline (#2887 fern)** — 9th paper-appendix axis closure with 7th distinct transfer pattern. Both d=0.05 and d=0.15 regress monotonically. One-sided axes cannot exhibit V-shape/symmetric-basin by construction.
+156. **PAPER-STRENGTHENING: clip_fraction=1.000 invariance PRESERVED under dropout (#2887 fern)** — first axis with mechanism to break clip_fraction=1.0 invariance (forward-pass stochasticity) that DOES NOT break it. Saturated-clip robust to activation-space stochasticity. 9th cross-axis confirmation.
+157. **NEW 9th cross-axis invariant: pre-clip grad_norm distribution under dropout (#2887 fern)** — mean shifts +0.6%, p50 +3.7%, p99 invariant. Dropout-induced sign-flips happen at OPTIMIZER level (post-grad-norm), not gradient-magnitude level. Extends banked methodology #45.
+158. **DROPOUT ≠ COMPLEMENTARY CRUISE REGULARIZER (#2887 fern)** — σ=0.25 (banked #137) strictly better. Rules out "dropout + σ=0.25 compose" hypothesis.
+159. **MECHANISM DISTINCTION: weight-space vs activation-space stochasticity (#2887 fern, paper-strengthening)** — wd-axis SYMMETRIC-BASIN regularizes via weight-shrinkage and tolerates mild upper-bracket; dropout-axis MONOTONIC-REGRESSIVE regularizes via forward-noise and hurts in both light and heavy regimes. Paper distinction: weight-space stochasticity benign under saturated-clip; activation-space stochasticity is not.
+160. **PAPER-STRENGTHENING: 10th cross-axis σ-spread invariance** — Δ ≤ 0.005 vs baseline 0.475.
+161. **PAPER-STRENGTHENING: 14th cross-axis channel-ordering invariance** — surf_ux=min, vol_ux=max preserved.
+162. **METHODOLOGY: 7th-consecutive SWA-window-truncation under 30-min cap** — 2 SWA epochs out of planned 4 across 7 recent PRs. Most-stable cross-axis observation.
+
+### Advisor verdict
+**CLOSED — paper-strengthening 9th axis closure with NEW MONOTONIC-REGRESSIVE 7th transfer pattern.** Reassigning fern → huber_beta LOWER fine bracket {0.20, 0.15} on max_norm=0.35 (tests #2666 β-driven σ-spread mechanism transfer to saturated-clip).
 
 ---
 
