@@ -136,21 +136,44 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class RMSNorm(nn.Module):
+    """Llama-style RMSNorm (Zhang & Sennrich 2019). Manual form avoids the
+    Triton fused-kernel compilation failure observed with ``nn.RMSNorm`` under
+    ``torch.compile`` in this stack."""
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return x * rms * self.weight
+
+
+def _make_norm(hidden_dim: int, use_rmsnorm: bool) -> nn.Module:
+    """LayerNorm by default; RMSNorm (Zhang & Sennrich 2019) when use_rmsnorm=True."""
+    if use_rmsnorm:
+        return RMSNorm(hidden_dim)
+    return nn.LayerNorm(hidden_dim)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_rmsnorm: bool = False):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = _make_norm(hidden_dim, use_rmsnorm)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = _make_norm(hidden_dim, use_rmsnorm)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = _make_norm(hidden_dim, use_rmsnorm)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -198,7 +221,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_rmsnorm: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -219,6 +243,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_rmsnorm=use_rmsnorm,
             )
             for i in range(n_layers)
         ])
@@ -232,6 +257,8 @@ class Transolver(nn.Module):
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
@@ -493,6 +520,7 @@ class Config:
     lion_wd_scale: float = 3.0  # Multiplier applied to weight_decay when use_lion=True (paper: ~3x)
     lion_beta1: float = 0.9   # Lion β1 (default per Chen 2023 Algorithm 2)
     lion_beta2: float = 0.99  # Lion β2 — NOT AdamW β2 (no v_t in Lion)
+    use_rmsnorm: bool = False  # If True, replace nn.LayerNorm with nn.RMSNorm in TransolverBlock. Zhang & Sennrich 2019.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -538,6 +566,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_rmsnorm=cfg.use_rmsnorm,
 )
 
 model = Transolver(**model_config).to(device)
