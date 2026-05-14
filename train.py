@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -480,14 +482,23 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    seed: int = 1  # Seed for torch/numpy/random.
+    late_block_lr_scale: float = 1.0  # LR multiplier for late Transolver blocks (PR #3002).
+    late_block_start: int = 2  # First block index classified as "late" (0-indexed).
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Seed: {cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -530,12 +541,75 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
 
-optimizer = Lion(
-    model.parameters(),
-    lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
-    weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
-    betas=(0.9, 0.99),       # Lion-paper default
-)
+base_lr = cfg.lr * 0.15  # 7.5e-5 — Lion lr from PR #2562 (50% above 5e-5)
+lion_wd = cfg.weight_decay * 10.0  # Lion-recommended: ×10 of AdamW wd
+
+if cfg.late_block_lr_scale != 1.0:
+    # Per-block param groups: early (< late_block_start) at base_lr, late at
+    # base_lr * late_block_lr_scale. Non-block params (preprocess MLP, placeholder)
+    # stay at base_lr. PR #3002: testing inverted (0.5×/0.7×) reduction.
+    n_layers_cfg = model_config["n_layers"]
+    early_params, late_params, other_params = [], [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        matched_block = None
+        for i in range(n_layers_cfg):
+            if f"blocks.{i}." in name:
+                matched_block = i
+                break
+        if matched_block is not None:
+            if matched_block >= cfg.late_block_start:
+                late_params.append(p)
+            else:
+                early_params.append(p)
+        else:
+            other_params.append(p)
+
+    late_lr = base_lr * cfg.late_block_lr_scale
+    param_groups = [
+        {"params": other_params, "lr": base_lr, "name": "other"},
+        {"params": early_params, "lr": base_lr, "name": "early"},
+        {"params": late_params, "lr": late_lr, "name": "late"},
+    ]
+    optimizer = Lion(param_groups, weight_decay=lion_wd, betas=(0.9, 0.99))
+
+    n_early = sum(p.numel() for p in early_params)
+    n_late = sum(p.numel() for p in late_params)
+    n_other = sum(p.numel() for p in other_params)
+    print(f"[init] late_block_start={cfg.late_block_start} "
+          f"(late blocks: {list(range(cfg.late_block_start, n_layers_cfg))}), "
+          f"late_lr_scale={cfg.late_block_lr_scale}")
+    print(f"[init] early param count = {n_early:,}, "
+          f"late param count = {n_late:,}, "
+          f"other param count = {n_other:,}")
+    print(f"[init] base_lr={base_lr:.3e}, late_lr={late_lr:.3e}")
+    param_split_summary = {
+        "param_split/n_early": n_early,
+        "param_split/n_late": n_late,
+        "param_split/n_other": n_other,
+        "param_split/base_lr": base_lr,
+        "param_split/late_lr": late_lr,
+        "param_split/late_scale": cfg.late_block_lr_scale,
+        "param_split/late_block_start": cfg.late_block_start,
+    }
+else:
+    optimizer = Lion(
+        model.parameters(),
+        lr=base_lr,
+        weight_decay=lion_wd,
+        betas=(0.9, 0.99),
+    )
+    n_all = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    param_split_summary = {
+        "param_split/n_early": 0,
+        "param_split/n_late": 0,
+        "param_split/n_other": n_all,
+        "param_split/base_lr": base_lr,
+        "param_split/late_lr": base_lr,
+        "param_split/late_scale": 1.0,
+        "param_split/late_block_start": cfg.late_block_start,
+    }
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -560,6 +634,8 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+
+wandb.summary.update(param_split_summary)
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -671,6 +747,11 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    # Per-group LR diagnostics (PR #3002): when late_block_lr_scale != 1.0 the
+    # optimizer carries three groups (other/early/late) with distinct base LRs.
+    for pg in optimizer.param_groups:
+        gname = pg.get("name", "default")
+        log_metrics[f"lr/{gname}"] = pg["lr"]
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
