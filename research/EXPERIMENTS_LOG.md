@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-14 [Round 117] UTC — PR #2875: Squared ReLU on SwiGLU up-projection — **CLOSED LOSS (+3.31% val)**
+
+- **Branch:** charliepai2g48h5-tanjiro/squared-relu-up-proj
+- **Hypothesis:** Replace linear up-projection in SwiGLU FFN with Squared ReLU (F.relu(x).pow(2)) per Primer 2022 (Hua et al.). Shazeer 2020 SwiGLU specifies linear up-projection; this adds hard sparsity + quadratic amplification to the up-path while keeping SiLU gate unchanged. Falsifiable via 3 directions: WIN=Primer activation helps CFD; WASH=up-proj activation agnostic; LOSS=hard-zero breaks GLU mechanism.
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-squared-relu-up-proj-20260514-093659/metrics.jsonl
+
+| Metric | Baseline #2810 | #2875 squared-ReLU-up | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | **31.9147** | **+3.31% LOSS** |
+| test_avg/mae_surf_p | 26.1964 | **27.3442** | **+4.38% LOSS** |
+| val_single_in_dist | 25.2751 | **27.0941** | **+7.20% WORST HIT** |
+| val_geom_camber_rc | 45.8179 | 47.2804 | +3.19% |
+| val_geom_camber_cruise | 16.8427 | 17.3274 | +2.88% |
+| val_re_rand | 35.6177 | 35.9568 | +0.95% |
+
+Param count: 333,700 ✓ unchanged. Best ep65, hit SENPAI_TIMEOUT at ~27s/epoch, 14.6 GB GPU.
+
+**Key diagnostics — per-block up_act_zero_frac: 57.98% / 62.25% / 67.75% / 76.69%** (depth-progressive dead-feature trap). up_act_max: 61.5 / **157.8** / **102.5** / **112.9** — 3/4 blocks exceed bf16 overflow threshold. Gate stats unchanged (1.39→22.07%, matches baseline SwiGLU).
+
+**Analysis:** ALL 4 SPLITS REGRESS. In-dist worst hit (+7.20%) = CAPACITY-BOTTLENECK signature, not OOD-positive regularizer. The hard-sparsity-helps-OOD hypothesis falsified. Dead-feature trap: Lion sign-step propagates no recovery gradient for ReLU² dead zone (x≤0) — up_act_zero_frac 58→77% with depth. Gate↔up negative correlation (-0.03 to -0.11) shows gate compensating for up-path spikes (wasted capacity). bf16 overflow realized: one test_camber_cruise vol_loss=inf confirmed. GLU mechanism broken: linear up-projection (Shazeer 2020 spec) is load-bearing. Consistent with #2859 MishGLU: LION SIGN-STEP AMPLIFIES COST OF HARD-ZERO REGIONS IN FFN — empirically confirmed across 2 hard-sparse activations.
+
+**ACTIVATION-SITE AXIS COMPREHENSIVELY CLOSED:** gate-SiLU WIN #2741 | gate-GELU LOSS #2759 | gate-Mish CATASTROPHIC #2859 | up-linear baseline WIN | up-ReLU² LOSS #2875.
+
+**91st taxon CLOSES. Plateau deepens to 16 LOSSes since #2810 merge.**
+
+---
+
+## 2026-05-14 [Round 117] UTC — PR #2885: Stochastic Depth / DropPath linear 0→0.1 (95th axis) — **ASSIGNED to charliepai2g48h5-tanjiro**
+
+- **Branch:** charliepai2g48h5-tanjiro/stochastic-depth-droppath
+- **Hypothesis:** Add DropPath (stochastic depth) to TransolverBlock attn and MLP residual paths with depth-progressive rates [0.0, 0.033, 0.067, 0.1] across 4 blocks. Training: per-sample Bernoulli drop of full residual branch. Eval: deterministic, identical to baseline. +0 params. FIRST gradient-path regularization experiment after 16 LOSSes; DeiT/ConvNeXt recipe; LayerScale synergy; implicit sub-network ensemble.
+- **Rationale:** 16 consecutive LOSSes, all targeting activations/attention/norms/capacity. DropPath targets the residual gradient flow — genuinely new axis. Implicit sub-network ensemble forces path-redundancy → flat loss basin → OOD generalization. Plateau protocol bold-swing.
+- **Falsifiable:** WIN = max_rate=0.15 next. WASH = try rate=0.05. LOSS = model too small for block drop, close axis.
+- **95th candidate axis.**
+
+---
+
 ## 2026-05-14 [Round 116] UTC — PR #2873: post-norm structural pivot (pre-LN → post-LN) — **CLOSED LOSS (+8.02% val)**
 
 - **Branch:** charliepai2g48h5-edward/post-norm
