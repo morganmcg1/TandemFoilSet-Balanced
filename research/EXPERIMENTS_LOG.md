@@ -4,6 +4,46 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-15 00:20 — PR #3040 (CLOSED, alphonse): max_norm=0 (no clip) + Huber β=10 (≈MSE) 2-arm ablation on saturated-clip baseline — **ABLATION-CONTRIBUTION-QUANTIFICATION 4th + 5th members + 3 cross-axis invariance refinements**
+
+- **Branch:** `willowpai2g48h2-alphonse/max-norm-zero-huber-beta-10-ablation`
+- **Student:** willowpai2g48h2-alphonse
+- **Verdict:** Arm 1 max_norm=0 (`9sv9xk7c`) SWA val 51.3891 +6.235 / test 44.3233 +5.687 = MODERATE-high regression; Arm 2 huber_beta=10 (`wg475apf`) SWA val 57.0538 +11.900 / test 49.0720 +10.435 = STRONG regression. **No arm merges.** INTERESTING-CLOSE. **NOT a new paper-appendix axis closure** (max_norm-axis closed at #3005 + huber β-axis closed at #2919; this PR is bracket-extension into ablation-contribution-quantification regime). **One of the most informative ablation PRs in the programme** — 8 banked findings, 3 cross-axis invariance refinements.
+- **W&B runs:** `9sv9xk7c` (Arm 1), `wg475apf` (Arm 2), baseline `ieu1futo`.
+- **Headline:** **Contribution ranking COMPLETE** — optimizer-choice > loss-shape (β=10) > gradient-clipping (mn=0) > Kendall σ > RFF. Loss function itself is the **2nd-largest lever** in the stack after optimizer. **Lion(model)=sign-invariant / AdamW(σ)=scale-sensitive mechanism EXPOSED** at mn=0: model-side sign-step update-norm = 868.63 invariant, but AdamW σ-branch exp_avg_norm = **141× inflated to 1.4353** vs baseline 0.01015. Hybrid optimizer split has hidden vulnerability in σ-branch under no-clip.
+
+### Mechanism diagnosis (paper-publishable findings — banked #334-#341)
+
+**(#334) ABLATION-CONTRIBUTION-QUANTIFICATION class completes 5-member contribution ranking** — class now has 5 closed members with clean ordering: CATASTROPHIC (Lion→AdamW, ~+22) > STRONG (β=10, +11.90) > MODERATE-high (mn=0, +6.24) > MODERATE (Kendall σ OFF +2.92; huber→MSE) > MILD (RFF OFF). Contribution ranking: **optimizer > loss-shape > clipping > Kendall > RFF**. Loss function = 2nd-largest lever in the stack — publishable contribution-budget narrative.
+
+**(#335) Lion exp_avg_norm 141× CATASTROPHIC BREAK at max_norm=0** — Arm 1 exp_avg_norm = 1.4353 vs baseline 0.01015. Refines banked #194: "invariant across max_norm ∈ {0.2, 0.35, 0.5, 1.0} **within saturated-clip regime only**; catastrophic 141× break at max_norm=0." The linear-in-max_norm scaling c≈0.0289 from Loop 108 (#304/#311) is **bounded above by saturated clip** and does NOT extrapolate to mn=0.
+
+**(#336) Lion(model)=sign-invariant / AdamW(σ)=scale-sensitive mechanism EXPOSED** — Arm 1 sign-step update-norm = 868.63 (invariant, baseline ~870). Model-side Lion sign-step IS invariant to max_norm. The 141× exp_avg_norm inflation comes from the **AdamW σ-branch**, which is scale-sensitive and accumulates unbounded EMA when clip is removed. Clean mechanistic dissection: hybrid Lion+AdamW(σ) design has hidden vulnerability at mn=0 in σ-branch. **Publishable finding**: hybrid optimizer split scope-localizes the clip-invariance argument to the model branch only.
+
+**(#337) clip_fraction CROSS-AXIS INVARIANCE REFUTED for loss-shape axis** — Arm 2 (β=10) clip_fraction ramps **0.14 → 0.99** epoch-by-epoch rather than constant 1.000. Refines clip_fraction invariance bank: "INVARIANT for non-loss-shape axes; **VIOLATES at extreme loss-shape values** where raw gradient magnitude distribution is altered (MSE regime → larger residuals → larger gradients → gradual clip saturation)." 2nd clip_fraction quasi-BREAK (after hkl-LOWER under σ-COLLAPSE Loop 109 #320).
+
+**(#338) σ-spread COLLAPSE at Huber β=10** — Arm 2 σ-spread = 0.1010 (baseline 0.475, −79%). β-axis monotonicity extends into MSE regime: σ-spread monotonically decreases with β (β=0.05 ~ baseline; β=0.3 = 0.475; β=10 = 0.1010). Refines σ-spread invariance rule: "INVARIANT for non-forward-pass-shape, **non-loss-shape** axes; **MONOTONE BREAK** for loss-shape axes (β-axis σ-spread monotone-in-1/β extends to MSE regime as σ-spread COLLAPSE; mechanism: MSE → larger gradients on hard channels → σ-heads over-concentrate)."
+
+**(#339) Channel ordering 23rd-24th cross-axis confirmation** — surf_p=MAX / vol_ux=MAX preserved on both arms despite 141× EMA explosion (Arm 1) and 79% σ-spread collapse (Arm 2). **Channel ordering is the DEEPEST invariant in the stack**.
+
+**(#340) SWA window 4 epochs (epochs 11-14) on both arms** — NOT truncated despite catastrophic mechanism breaks; refines banked #170: "SWA window 2 epochs is the truncation pattern; full 4-epoch SWA can be achieved under stable convergence."
+
+**(#341) grad_norm LOGGING GAP under max_norm=0** — Arm 1 has no grad_norm because train.py gates that logging inside `if max_norm > 0`. **Methodology lesson**: future max_norm=0 experiments should remove this gate.
+
+### Cross-axis invariance bank scope revisions
+
+1. **#194 (Lion exp_avg_norm)** → scope narrowed to "within saturated-clip regime ONLY; catastrophic 141× break at mn=0 in AdamW σ-branch"
+2. **clip_fraction=1.000** → scope narrowed to "non-loss-shape axes; quasi-BREAK at hkl-LOWER (#320) + ramp-VIOLATION at β=10 (#337)"
+3. **σ-spread invariance** → scope narrowed to "non-forward-pass-shape, non-loss-shape axes; MONOTONE BREAK along loss-shape axis with β=10 = collapse extreme"
+
+Other invariants confirmed: Step time ≈137-139s/epoch on both arms (clip/loss-shape have zero compute overhead); peak VRAM invariant.
+
+### Reassignment
+
+**alphonse → #3074 NEW activation function sweep {ReLU, SwiGLU}** on saturated-clip baseline — **24th axis attempt**; completes forward-pass-shape QUINTET → SEXTET characterization. Activation function is the cleanest remaining forward-pass-shape candidate (QUINTET members all change tensor shapes; activation does NOT change shapes — only function). Arm 1 ReLU = simpler/parameter-free/zero-gradient negative half; Arm 2 SwiGLU = gated activation with parameter count change. Discriminating predictions: if joins forward-pass-shape pattern → σ-spread BREAK (5/5 QUINTET); if function-only axis → σ-spread INVARIANT. Class candidates: BOTH-LOSE Pareto-cap (forward-pass-shape extension), ASYMMETRIC-V, or INDEPENDENT-SYMMETRIC.
+
+---
+
 ## 2026-05-14 23:55 — PR #3037 (CLOSED, frieren): Kendall σ OFF ablation + surf_weight sweep {10, 20} on saturated-clip baseline — **3rd MODERATE member of ABLATION-CONTRIBUTION-QUANTIFICATION class**
 
 - **Branch:** `willowpai2g48h2-frieren/kendall-off-ablation-with-surf-weight-sweep`
