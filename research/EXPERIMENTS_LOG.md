@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-14 [Round 121] UTC — PR #2889: mlp_ratio=4 uniform — **CLOSED LOSS (+2.91%; NOVEL OOD SIGNAL captured)**
+
+- **Branch:** charliepai2g48h5-alphonse/mlp-ratio-4
+- **Hypothesis:** Scale SwiGLU MLP from mlp_ratio=3 (hidden=192) to mlp_ratio=4 (hidden=256). +74,240 params (482,180 total, +18% vs #2879). Continuation of the MLP-capacity axis from #2879 WIN.
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-mlp-ratio-4-20260514-105518/metrics.jsonl
+
+| Metric | #2879 Baseline | #2889 mlp_ratio=4 | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.4505** | **+2.91% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.6692 | +0.58% near-wash |
+| val_single_in_dist | 23.3997 | 25.9467 | **+10.88% LOSS** |
+| val_geom_camber_rc | 46.0708 | 45.7313 | -0.74% ✓ |
+| val_geom_camber_cruise | 17.8657 | **17.2232** | **-3.60% WIN (rare!)** |
+| val_re_rand | 34.9057 | 36.9007 | +5.72% LOSS |
+
+Best ep56/70 (hit SENPAI_TIMEOUT). Params 482,180 confirmed. gate_zero_frac rose +27-48% on all blocks (capacity saturation).
+
+**KEY FINDING — SPLIT-PATTERN REVERSAL (first ever):** This is the FIRST experiment in 17+ rounds where geometric-OOD splits IMPROVED (camber_cruise -3.60%, camber_rc -0.74%) while in-distribution and re_rand regressed. ALL previous patterns showed OOD-LOSS + in-dist-WIN or all-splits move together.
+
+**Mechanism diagnosis:**
+1. **Capacity-saturation signature:** gate_zero_frac +27-48% relative means extra channels being masked — wider MLP has more channels than can productively be used at depth=4, data_scale.
+2. **Geometric OOD benefit:** wider MLP CAN encode more geometric variation (camber shapes) — but only for OOD splits, at cost of in-dist overfitting.
+3. **MLP-ratio axis is CONCAVE** with mlp_ratio=3 as apex: mlp_ratio=2 (#2810) → 3 (#2879 WIN) → 4 (#2889 LOSS). Uniform scaling axis CLOSED.
+4. **bf16 vol_loss overflow** on test_geom_camber_cruise (loss=nan, vol_loss=inf) but MAE finite 13.6846 — overflow in loss accumulation only; predictions valid.
+
+**97th candidate axis (MLP-ratio scaling uniform) CLOSES with mlp_ratio=3 as apex.**
+
+**Follow-up hypothesis assigned: #2899 block-asymmetric [3,3,4,4] exploiting this novel OOD signal.**
+
+---
+
+## 2026-05-14 [Round 121] UTC — PR #2899: Block-asymmetric mlp_ratio [3,3,4,4] — **ASSIGNED to charliepai2g48h5-alphonse**
+
+- **Branch:** charliepai2g48h5-alphonse/asymmetric-mlp-ratio-3344
+- **Hypothesis:** Per-block mlp_ratio = [3, 3, 4, 4]: shallow blocks (0,1) narrow=192 (baseline), deep blocks (2,3) wide=256 (from #2889). Exploits the #2889 novel signal: wider deep MLPs helped geometric-OOD while uniform wide hurt in-dist. Expected params ~446,000.
+- **Rationale:** Deep blocks specialize in object-level (geometry) representations; shallow blocks encode position/edges. Routing extra capacity depth-progressively should recover in-dist (shallow blocks unchanged) while preserving camber_cruise gain (deep blocks wider). Implementation: make mlp_ratio accept a list in Transolver.__init__ and hardcode [3,3,4,4] in model_config.
+- **Falsifiable:** WIN = asymmetric routing preserves camber_cruise -3.60% AND recovers in-dist. LOSS = novel signal was noise or capacity-asymmetry introduces new pathology. WASH = equivalent to uniform mlp_ratio=3 apex.
+
+---
+
 ## 2026-05-14 [Round 120] UTC — PR #2885: Stochastic Depth DropPath linear 0->0.1 — **CLOSED LOSS (+8.36% val, gradient-path axis closed at depth=4)**
 
 - **Branch:** charliepai2g48h5-tanjiro/stochastic-depth-droppath
