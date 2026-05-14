@@ -205,13 +205,16 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 naca_pair_film: bool = False,
+                 naca_pair_film_hidden: int = 16):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.naca_pair_film_enabled = naca_pair_film
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -246,6 +249,14 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+        # NACA-pair geometry FiLM: per-sample 8-D tandem signature → additive
+        # offset on the trunk hidden state. Created AFTER self.apply so the
+        # zero-init of the final layer is preserved (apply would overwrite it
+        # with trunc_normal otherwise).
+        if naca_pair_film:
+            self.naca_film = NACAPairFiLM(
+                n_geom=8, hidden=naca_pair_film_hidden, n_hidden=n_hidden,
+            )
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -266,6 +277,13 @@ class Transolver(nn.Module):
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.naca_pair_film_enabled:
+            # NACA-pair signature: M_1, P_1, T_1 (15-17), M_2, P_2, T_2, gap,
+            # stagger (19-23). These are per-sample-constant channels so node 0
+            # holds the same value as every other real node. Mask check has
+            # been verified: mask[:, 0].all() == True in pad_collate.
+            naca_sig = torch.cat([x[:, 0, 15:18], x[:, 0, 19:24]], dim=-1)
+            fx = fx + self.naca_film(naca_sig)
         if self.re_conditional_layernorm:
             for block in self.blocks:
                 fx = block(fx, gamma, beta, log_re=log_re,
@@ -381,6 +399,42 @@ class ReFiLM(nn.Module):
         gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
         beta = beta.reshape(B, self.heads, 1, self.slice_num)
         return gamma, beta
+
+
+class NACAPairFiLM(nn.Module):
+    """Geometry-conditional additive offset over the trunk hidden state.
+
+    Conditions the trunk on the 8-D tandem-pair NACA signature
+    (M_1, P_1, T_1, M_2, P_2, T_2, gap, stagger), all per-sample constants
+    in the input features. Tiny MLP: Linear(8, hidden) → GELU → Linear(hidden,
+    n_hidden), with the final layer zero-initialized so the offset is exactly
+    0 at step 0 and the model reproduces the no-FiLM identity at init.
+
+    Injected as an additive offset broadcast over all mesh nodes immediately
+    after the input embedding MLP and before the first transformer block.
+    β-only by design: the existing ReConditionalLayerNorm already supplies
+    γ+β at every LN affine, so adding multiplicative scaling here would
+    duplicate that capacity. An additive shift moves the trunk into a
+    NACA-conditioned subspace without rescaling magnitudes — the natural
+    inductive bias for geometry interpolation on the held-out cambers.
+
+    References: Perez et al. 2018 (1709.07871, FiLM); Peebles & Xie 2022
+    (2212.09748, DiT adaLN-Zero); Dumoulin et al. 2017 (1610.07629, CIN).
+    """
+
+    def __init__(self, n_geom: int = 8, hidden: int = 16, n_hidden: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_geom, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, n_hidden),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, naca_sig: torch.Tensor) -> torch.Tensor:
+        # naca_sig: [B, 8]  →  [B, 1, n_hidden] additive offset (broadcast over N).
+        return self.net(naca_sig).unsqueeze(1)
 
 
 class ReConditionalOutputBias(nn.Module):
@@ -601,6 +655,12 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # NACA-pair geometry FiLM at the trunk input. β-only FiLM from the 8-D
+    # tandem signature (M_1, P_1, T_1, M_2, P_2, T_2, gap, stagger) → additive
+    # offset over the trunk hidden state. Zero-init reproduces no-FiLM baseline
+    # at step 0. ~2.3K new params (with default hidden=16).
+    naca_pair_film: bool = False
+    naca_pair_film_hidden: int = 16
 
 
 cfg = sp.parse(Config)
@@ -642,6 +702,8 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    naca_pair_film=cfg.naca_pair_film,
+    naca_pair_film_hidden=cfg.naca_pair_film_hidden,
 )
 
 model = Transolver(**model_config).to(device)
@@ -656,12 +718,19 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
 n_params_out_bias = sum(p.numel() for p in output_bias.parameters()) if output_bias is not None else 0
+n_params_naca_film = sum(p.numel() for p in model.naca_film.parameters()) if cfg.naca_pair_film else 0
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
-    f"ReCondLN {n_params_re_ln}) "
+    f"ReCondLN {n_params_re_ln}, NACAPairFiLM {n_params_naca_film}) "
     f"+ ReScaleHead ({n_params_head} params)"
     + (f" + ReCondOutputBias ({n_params_out_bias} params)" if output_bias is not None else "")
 )
+if cfg.naca_pair_film:
+    print(
+        f"NACA-pair FiLM: enabled. Channels (M_1,P_1,T_1,M_2,P_2,T_2,gap,stagger) "
+        f"= [15,16,17,19,20,21,22,23]; hidden={cfg.naca_pair_film_hidden}; "
+        f"β-only additive offset injected after preprocess MLP."
+    )
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
 # (slice entropy capture). Diagnostics toggle a Python flag that would otherwise
@@ -826,6 +895,18 @@ for epoch in range(MAX_EPOCHS):
             "abs_b_logre_cross": 0.0,
             "n": 0,
         }
+    # NACAPairFiLM offset diagnostics — track absmax, mean |β|, and per-sample
+    # |β|-norm accumulator. Detects whether the zero-init module ever activates.
+    naca_film_diag = None
+    if cfg.naca_pair_film:
+        naca_film_diag = {
+            "absmax": 0.0,
+            "abs_mean_sum": 0.0,           # Σ_samples mean_dim(|offset|)
+            "abs_mean_sq_sum": 0.0,
+            "abs_mean_logre_cross": 0.0,   # corr(|β|_mean, logRe) — signed correlation
+            "signed_sum": 0.0,             # Σ_samples mean_dim(offset)
+            "n": 0,
+        }
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -963,6 +1044,25 @@ for epoch in range(MAX_EPOCHS):
                 d["abs_b_logre_cross"] += (abs_b_per * lr).sum().item()
                 d["n"] += abs_b_per.shape[0]
 
+            # NACAPairFiLM offset diagnostics — call the FiLM MLP directly on the
+            # 8-D NACA signature from x_norm node 0 (per-sample constant). Recovers
+            # the [B, n_hidden] additive offset for stat accumulation.
+            if naca_film_diag is not None:
+                naca_sig_diag = torch.cat(
+                    [x_norm[:, 0, 15:18], x_norm[:, 0, 19:24]], dim=-1,
+                )
+                offset_diag = uncompiled_model.naca_film.net(naca_sig_diag).to(torch.float64)  # [B, n_hidden]
+                abs_off = offset_diag.abs()
+                d = naca_film_diag
+                d["absmax"] = max(d["absmax"], abs_off.max().item())
+                abs_off_per = abs_off.mean(dim=-1)        # [B]  per-sample |β|-mean
+                signed_per = offset_diag.mean(dim=-1)     # [B]  per-sample signed mean
+                d["abs_mean_sum"] += abs_off_per.sum().item()
+                d["abs_mean_sq_sum"] += (abs_off_per ** 2).sum().item()
+                d["signed_sum"] += signed_per.sum().item()
+                d["abs_mean_logre_cross"] += (abs_off_per * lr).sum().item()
+                d["n"] += abs_off_per.shape[0]
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
@@ -1059,6 +1159,29 @@ for epoch in range(MAX_EPOCHS):
                 "corr_beta_logre": float(b_corr),
             }
 
+    # NACAPairFiLM offset summary — absmax, mean |β|, signed mean, and
+    # corr(|β|, log_Re) as a cross-conditioning sanity check (should stay small
+    # since the conditioning is on NACA shape, not Re).
+    naca_film_summary: dict | None = None
+    if naca_film_diag is not None:
+        d = naca_film_diag
+        n = max(d["n"], 1)
+        abs_mean = d["abs_mean_sum"] / n
+        signed_mean = d["signed_sum"] / n
+        abs_mean_var = max(d["abs_mean_sq_sum"] / n - abs_mean ** 2, 0.0)
+        abs_mean_std = abs_mean_var ** 0.5
+        if scale_n > 0 and lr_std > 1e-8 and abs_mean_std > 1e-12:
+            cov = d["abs_mean_logre_cross"] / n - abs_mean * lr_mean
+            corr_abs_mean_logre = cov / (abs_mean_std * lr_std)
+        else:
+            corr_abs_mean_logre = 0.0
+        naca_film_summary = {
+            "offset_absmax": d["absmax"],
+            "offset_abs_mean": abs_mean,
+            "offset_signed_mean": signed_mean,
+            "corr_abs_mean_logre": float(corr_abs_mean_logre),
+        }
+
     # ReConditionalOutputBias summary — absmax (overall + per-channel),
     # per-channel mean (signed + |.|), and corr(|b|, log_re).
     re_out_bias_summary: dict | None = None
@@ -1135,6 +1258,7 @@ for epoch in range(MAX_EPOCHS):
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
         "re_cond_out_bias": re_out_bias_summary,
+        "naca_pair_film": naca_film_summary,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1177,6 +1301,13 @@ for epoch in range(MAX_EPOCHS):
             f"per_ch_absmax=[Ux={s['per_ch_absmax'][0]:.5f} Uy={s['per_ch_absmax'][1]:.5f} p={s['per_ch_absmax'][2]:.5f}]  "
             f"per_ch_mean=[Ux={s['per_ch_mean'][0]:+.5f} Uy={s['per_ch_mean'][1]:+.5f} p={s['per_ch_mean'][2]:+.5f}]  "
             f"corr(|b|,logRe)={s['corr_abs_b_logre']:+.3f}"
+        )
+    if naca_film_summary is not None:
+        s = naca_film_summary
+        print(
+            f"    NACAPairFiLM  offset[absmax={s['offset_absmax']:.5f}, "
+            f"abs_mean={s['offset_abs_mean']:.5f}, signed_mean={s['offset_signed_mean']:+.5f}]  "
+            f"corr(|β|,logRe)={s['corr_abs_mean_logre']:+.3f}"
         )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
