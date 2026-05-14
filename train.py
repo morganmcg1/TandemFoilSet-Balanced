@@ -153,10 +153,13 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 re_conditional_layernorm: bool = False):
+                 re_conditional_layernorm: bool = False,
+                 re_conditional_layerscale: bool = False,
+                 layerscale_hidden: int = 8):
         super().__init__()
         self.last_layer = last_layer
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.re_conditional_layerscale = re_conditional_layerscale
         # When re_conditional_layernorm is True, the LN affine is provided by
         # shared ReConditionalLayerNorm modules owned by the parent Transolver;
         # this block contributes no LN parameters. Otherwise, plain nn.LayerNorm.
@@ -169,6 +172,11 @@ class TransolverBlock(nn.Module):
         )
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        if re_conditional_layerscale:
+            # Two independent per-block residual gates conditioned on log(Re).
+            # Zero-init final layer → α=1.0 at init, identical to baseline.
+            self.layerscale_attn = ReCondLayerScale(hidden=layerscale_hidden)
+            self.layerscale_mlp = ReCondLayerScale(hidden=layerscale_hidden)
         if self.last_layer:
             if not re_conditional_layernorm:
                 self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -183,12 +191,18 @@ class TransolverBlock(nn.Module):
             normed_1 = rcln_1(fx, log_re)
         else:
             normed_1 = self.ln_1(fx)
-        fx = self.attn(normed_1, gamma, beta) + fx
+        attn_out = self.attn(normed_1, gamma, beta)
+        if self.re_conditional_layerscale:
+            attn_out = attn_out * self.layerscale_attn(log_re)
+        fx = attn_out + fx
         if self.re_conditional_layernorm:
             normed_2 = rcln_2(fx, log_re)
         else:
             normed_2 = self.ln_2(fx)
-        fx = self.mlp(normed_2) + fx
+        mlp_out = self.mlp(normed_2)
+        if self.re_conditional_layerscale:
+            mlp_out = mlp_out * self.layerscale_mlp(log_re)
+        fx = mlp_out + fx
         if self.last_layer:
             if self.re_conditional_layernorm:
                 normed_3 = rcln_3(fx, log_re)
@@ -205,13 +219,16 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 re_conditional_layerscale: bool = False,
+                 re_layerscale_hidden: int = 8):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.re_conditional_layerscale = re_conditional_layerscale
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -228,6 +245,8 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 re_conditional_layernorm=re_conditional_layernorm,
+                re_conditional_layerscale=re_conditional_layerscale,
+                layerscale_hidden=re_layerscale_hidden,
             )
             for i in range(n_layers)
         ])
@@ -246,6 +265,14 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+        # Re-zero LayerScale MLP final layers — self.apply ran trunc_normal_ over
+        # them above, overwriting the constructor's zero-init. Identity at step 0
+        # (α=1.0) is the design contract; re-zeroing restores it.
+        if re_conditional_layerscale:
+            for block in self.blocks:
+                for ls in (block.layerscale_attn, block.layerscale_mlp):
+                    nn.init.zeros_(ls.mlp[-1].weight)
+                    nn.init.zeros_(ls.mlp[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -273,7 +300,7 @@ class Transolver(nn.Module):
                            rcln_3=self.re_ln_3)
         else:
             for block in self.blocks:
-                fx = block(fx, gamma, beta)
+                fx = block(fx, gamma, beta, log_re=log_re)
         return {"preds": fx}
 
 
@@ -381,6 +408,37 @@ class ReFiLM(nn.Module):
         gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
         beta = beta.reshape(B, self.heads, 1, self.slice_num)
         return gamma, beta
+
+
+class ReCondLayerScale(nn.Module):
+    """Per-block scalar residual gate conditioned on log(Re).
+
+    α(Re) = 1.0 + g(log(Re))  where g is a 1→hidden→1 MLP with zero-init final
+    layer. Returns α as [B, 1, 1] so it broadcasts over the sequence and hidden
+    dimensions of the residual stream [B, N, n_hidden]. At init α = 1.0 → the
+    block is identical to baseline; the optimiser must actively open the gate.
+
+    Used at each TransolverBlock to gate the attention residual and the MLP
+    residual independently. Conditioning on log(Re) lets the model vary
+    effective depth per flow regime.
+
+    References: Touvron et al. 2021 (2103.17239, LayerScale);
+    Peebles & Xie 2022 (2212.09748, DiT adaLN-Zero).
+    """
+
+    def __init__(self, hidden: int = 8):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, 1),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, log_re: torch.Tensor) -> torch.Tensor:
+        # log_re: [B, 1] → α: [B, 1, 1]
+        return (1.0 + self.mlp(log_re)).unsqueeze(1)
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +614,12 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Re-conditional LayerScale: per-block scalar residual gate α(Re) = 1 + g(log Re)
+    # on the attention and MLP residuals. Two independent gates per block; with
+    # n_layers=5 that's 10 gates × ~25 params = ~250 params total. Zero-init MLP
+    # final layer makes α = 1.0 at step 0 → identical to baseline.
+    re_conditional_layerscale: bool = False
+    re_layerscale_hidden: int = 8
 
 
 cfg = sp.parse(Config)
@@ -597,6 +661,8 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    re_conditional_layerscale=cfg.re_conditional_layerscale,
+    re_layerscale_hidden=cfg.re_layerscale_hidden,
 )
 
 model = Transolver(**model_config).to(device)
@@ -609,9 +675,15 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_2.parameters())
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
+n_params_re_ls = sum(
+    p.numel()
+    for block in model.blocks
+    for ls in (block.layerscale_attn, block.layerscale_mlp)
+    for p in ls.parameters()
+) if cfg.re_conditional_layerscale else 0
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
-    f"ReCondLN {n_params_re_ln}) "
+    f"ReCondLN {n_params_re_ln}, ReCondLS {n_params_re_ls}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
 
@@ -759,6 +831,22 @@ for epoch in range(MAX_EPOCHS):
             "b_logre_cross": 0.0,
             "n": 0,
         } for role in ("attn", "ffn", "out")}
+    # ReConditionalLayerScale α diagnostics (per block × per gate). Tracks |α-1|
+    # absmax (deviation from identity), plus per-sample α accumulators for
+    # correlation with log_Re — confirms gates are both opening and Re-modulated.
+    re_ls_diag = None
+    if cfg.re_conditional_layerscale:
+        re_ls_diag = {
+            (i, gate): {
+                "absdev_max": 0.0,
+                "a_sum": 0.0,
+                "a_sq_sum": 0.0,
+                "a_logre_cross": 0.0,
+                "n": 0,
+            }
+            for i in range(len(uncompiled_model.blocks))
+            for gate in ("attn", "mlp")
+        }
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -870,6 +958,23 @@ for epoch in range(MAX_EPOCHS):
                     d["b_logre_cross"] += (b_per * lr).sum().item()
                     d["n"] += g_per.shape[0]
 
+            # ReConditionalLayerScale α diagnostics (call the LayerScale MLPs
+            # directly on each block — same operation as the forward pass).
+            if re_ls_diag is not None:
+                for i, block in enumerate(uncompiled_model.blocks):
+                    for gate_name, ls_mod in (
+                        ("attn", block.layerscale_attn),
+                        ("mlp", block.layerscale_mlp),
+                    ):
+                        # ls_mod returns [B, 1, 1]; squeeze to [B] per-sample α.
+                        alpha = ls_mod(log_re_norm).squeeze(-1).squeeze(-1).to(torch.float64)
+                        d = re_ls_diag[(i, gate_name)]
+                        d["absdev_max"] = max(d["absdev_max"], (alpha - 1.0).abs().max().item())
+                        d["a_sum"] += alpha.sum().item()
+                        d["a_sq_sum"] += (alpha ** 2).sum().item()
+                        d["a_logre_cross"] += (alpha * lr).sum().item()
+                        d["n"] += alpha.shape[0]
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
@@ -963,6 +1068,29 @@ for epoch in range(MAX_EPOCHS):
                 "corr_beta_logre": float(b_corr),
             }
 
+    # ReConditionalLayerScale α summary — per-block per-gate. Absdev_max measures
+    # how far the gate has drifted from identity; corr(α, log_Re) measures whether
+    # the gate is actually using the conditioning signal.
+    re_ls_summary: dict | None = None
+    if re_ls_diag is not None:
+        re_ls_summary = {}
+        for (i, gate), d in re_ls_diag.items():
+            n = max(d["n"], 1)
+            a_mean = d["a_sum"] / n
+            a_var = max(d["a_sq_sum"] / n - a_mean ** 2, 0.0)
+            a_std = a_var ** 0.5
+            if scale_n > 0 and lr_std > 1e-8 and a_std > 1e-12:
+                a_cov = d["a_logre_cross"] / n - a_mean * lr_mean
+                a_corr = a_cov / (a_std * lr_std)
+            else:
+                a_corr = 0.0
+            re_ls_summary[f"block{i}_{gate}"] = {
+                "alpha_absdev_max": d["absdev_max"],
+                "alpha_mean": float(a_mean),
+                "alpha_std": float(a_std),
+                "corr_alpha_logre": float(a_corr),
+            }
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -1013,6 +1141,7 @@ for epoch in range(MAX_EPOCHS):
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
+        "re_ls/per_gate": re_ls_summary,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1048,6 +1177,15 @@ for epoch in range(MAX_EPOCHS):
                 f"beta[absmax={s['beta_absmax']:.4f}, mean|.|={s['beta_mean_abs']:.4f}]  "
                 f"corr(|γ|,logRe)={s['corr_gamma_logre']:+.3f}  corr(|β|,logRe)={s['corr_beta_logre']:+.3f}"
             )
+    if re_ls_summary is not None:
+        ls_absdev_all = [s["alpha_absdev_max"] for s in re_ls_summary.values()]
+        ls_corr_all = [s["corr_alpha_logre"] for s in re_ls_summary.values()]
+        print(
+            f"    ReCondLS  |α-1|_absmax[max={max(ls_absdev_all):.4f} "
+            f"mean={sum(ls_absdev_all)/len(ls_absdev_all):.4f}]  "
+            f"corr(α,logRe)[absmax={max(ls_corr_all, key=abs):+.3f} "
+            f"mean={sum(ls_corr_all)/len(ls_corr_all):+.3f}]"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
