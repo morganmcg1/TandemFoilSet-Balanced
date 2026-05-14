@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-05-14 [Round 106] UTC — PR #2844: Block-3-only FiLM (Re/AoA conditioning at final decoder block) — **CLOSED LOSS (+0.245% val)**
+
+- **Branch:** charliepai2g48h5-nezuko/block3-film
+- **Hypothesis:** Apply FiLM modulation only at block 3 (final TransolverBlock) after SE gate, before mlp2. Linear(3, 96) zero-init weight + bias. Block 3 is the natural integration site (γ_attn sign-flip observed there in #2765/#2798). Predicted: in_dist + re_rand benefit from targeted Re/AoA conditioning; camber splits benefit too. +384 params.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-block3-film-20260514-071950/metrics.jsonl`
+
+| Split | val | Baseline #2810 | Δ val |
+|---|---|---|---|
+| `single_in_dist` | 24.8407 | 25.2751 | **−1.72% WIN (new best-ever)** |
+| `geom_camber_rc` | 47.0321 | 45.8179 | **+2.65% LOSS** |
+| `geom_camber_cruise` | 16.9145 | 16.8427 | +0.43% LOSS |
+| `re_rand` | 35.0787 | 35.6177 | **−1.51% WIN** |
+| **val_avg** | **30.9665** | **30.8909** | **+0.245% LOSS** |
+| **test_avg** | **26.4983** | **26.1964** | **+1.15% LOSS** |
+
+- **Result:** NOT MERGED. val +0.245% LOSS (close); test +1.15% LOSS; param count 334,084 = +384 vs baseline.
+- **Mechanism CONFIRMED (student exemplary diagnostic):**
+  - FiLM-b3 head learned substantive correction: `weight_norm=3.10`, `bias_norm=0.77`, `|γ| = 0.16-0.26` = **3-4× the embedding FiLM** magnitude (|γ|≈0.064).
+  - `|γ|` anti-correlated with OOD usefulness: camber_cruise has largest |γ|=0.258 and LOSSES; re_rand smallest |γ|=0.18 and WINS.
+  - Block 3 SE gate stats unchanged at convergence — FiLM-b3 did NOT visibly distort SE distribution.
+- **Key insight:** Block 3 is structurally over-allocated. Already has γ_attn, γ_mlp, SE gate, residual → adding FiLM-b3 = 5 competing modulators at same site, with NO normalization downstream before mlp2. Optimizer finds in_dist-fitting config (24.84 new best-ever) that breaks camber_rc generalization.
+- **Contrast with merged embedding FiLM #2614:** Lives BEFORE block-0 with 3 further blocks of LN+mixing downstream regularizing the modulation. Block-3 FiLM has no such regularizer.
+- **74th taxon: FiLM-axis CLOSES across both sub-directions:**
+  - per-block FiLM #2813: 4-way LOSS (over-conditioning intermediate representations)
+  - block-3-only FiLM #2844: targeted single-block LOSS (over-allocation at decoder integration site)
+  - merged embedding FiLM #2614: unique winner — placement BEFORE the stack with downstream regularization is the only generalizing FiLM site.
+
+---
+
+## 2026-05-14 [Round 106] UTC — PR #2842: surf_weight 10 → 15 (+50% surface pressure emphasis) — **CLOSED LOSS (+1.62% val)**
+
+- **Branch:** charliepai2g48h5-alphonse/surf-weight-15
+- **Hypothesis:** Bump surf_weight from 10.0 to 15.0. The current model is substantially more capable than the model surf_weight=10 was tuned for. Stronger surface supervision = direct optimization of primary metric. SE attn-pool gates channels globally; surf_weight gates per-token by surface membership — orthogonal granularities. Structured regularization, zero capacity.
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-surf-weight-15-20260514-070658/metrics.jsonl`
+
+| Split | val | Baseline #2810 | Δ val | Verdict |
+|---|---|---|---|---|
+| `single_in_dist` | 25.0772 | 25.2751 | −0.20 | WIN |
+| `geom_camber_cruise` | 16.2802 | 16.8427 | −0.56 | WIN |
+| `re_rand` | 35.0345 | 35.6177 | −0.58 | WIN |
+| `geom_camber_rc` | 49.1755 | 45.8179 | **+3.36 (+7.32%)** | catastrophic LOSS |
+| **val_avg** | **31.3919** | **30.8909** | **+1.62% LOSS** | |
+| **test_avg** | **26.6495** | **26.1964** | **+1.73% LOSS** | |
+
+- **Result:** NOT MERGED. val +1.62% LOSS; test +1.73% LOSS. 3 of 4 splits WIN modestly (−0.2 to −0.6); camber_rc REGRESSES +3.36 (+7.32%) — overwhelms the average.
+- **Mechanism CONFIRMED:** Directional intuition correct (3/4 splits improved with stronger surface supervision). But camber_rc — already the hardest geometric OOD split with largest baseline error (45.8) — destabilizes catastrophically. Pushing harder on surface gradients over-fits dominant training surface-pressure patterns at cost of long-tail camber geometries.
+- **Bigger insight:** Clean illustration of the loss-weighting bias/variance trade. Heavier weighting on a residual budget reduces bias on bulk distribution and amplifies variance on tails. Combined with the model being generalization-limited (frieren #2809), the bulk-vs-tail trade settles on the wrong side of optimum.
+- **75th taxon: surf_weight UPWARD axis CLOSES** at this magnitude (10 → 15). Surf_weight=10 baseline is at-or-near optimum from the upward direction.
+- **Suggested follow-ups DEFERRED:** Surf_weight sweep at {11,12,13} not worth the GPU time given steep camber_rc cliff at 15; localized loss-weighting by curvature would be complex and data-dependent. Plateau protocol favors fresh structural axes.
+- **STRATEGY-TIER PIVOT:** 4 consecutive LOSSes since PR #2810 merge — moving from loss-weighting hyperparameter tuning to attention structural sub-axes never tested this launch.
+
+---
+
+## 2026-05-14 [Round 106] UTC — PR #2856: PhysicsAttention n_head 2 → 4 — **ASSIGNED (79th candidate axis)**
+
+- **Branch:** charliepai2g48h5-alphonse/n-head-4
+- **Hypothesis:** Increase `n_head` from 2 to 4 in PhysicsAttention. With `dim_head = n_hidden // n_head`, dim_head halves from 48 to 24. Attention parallelism sub-axis never tested in this launch. Doubles head parallelism, halves per-head dimensionality. Could enable per-head specialization on different physics scales (boundary-layer vs wake, surface vs volume routing). Slice-routing softmax already runs per-head with learnable per-head temperature, so 4 heads = 4 independent routing channels.
+- **Predicted mechanism (WIN):** Per-head specialization on physical scales; temperature trajectories diverge across heads; OOD benefits from multi-scale attention diversity.
+- **Predicted mechanism (LOSS):** `dim_head=24` below typical Transformer min effective rank (~32); per-head representations too low-rank; in_dist regresses first as capacity bottleneck hits dominant distribution.
+- **Param impact:** ~0 (Q/K/V/O Linear shapes preserved; temperature param grows from 2→4 per block × 4 blocks = +8 params, negligible).
+- **Plateau-protocol pivot:** STRATEGY tier shift from loss-weighting / FiLM tweaks to attention architectural sub-axes.
+
+---
+
+## 2026-05-14 [Round 106] UTC — PR #2858: PhysicsAttention temperature init 0.5 → 1.0 — **ASSIGNED (80th candidate axis)**
+
+- **Branch:** charliepai2g48h5-nezuko/temperature-init-1
+- **Hypothesis:** Change the init value of the learnable per-head slice-routing temperature in PhysicsAttention from 0.5 to 1.0. At init=0.5, effective softmax input is 2× sharper than default; at init=1.0, natural scale. Sharper-than-default routing at init biases the model toward concentrated slice assignments early; softer init allows more exploration of slice configurations. Distinct from in-flight #2852 frieren (slice_num=20 — COUNT of slices, not SHARPNESS) — orthogonal sub-axes within slice routing.
+- **Predicted mechanism (WIN):** Softer init lets temperatures drift to wider distribution of converged values (some heads sharpen, others soften); slice assignments less locked-in early; OOD generalization improves via routing exploration.
+- **Predicted mechanism (LOSS):** Sharper routing was correct inductive bias for slice attention; softer init slows convergence; in_dist regresses (training distribution prefers sharper routing).
+- **Param impact:** +0 params (init value of existing parameter).
+- **Diagnostic to log:** Per-block per-head temperature trajectory across val epochs; final converged temperature distribution (8 values); slice-routing entropy at best-val checkpoint.
+
+---
+
 ## 2026-05-14 [Round 105] UTC — PR #2829: Surface-aware LayerNorm at decoder ln_3 — **CLOSED LOSS (+8.34% val vs new baseline)**
 
 - **Branch:** charliepai2g48h5-frieren/surf-aware-ln3
