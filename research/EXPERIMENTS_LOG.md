@@ -3239,3 +3239,43 @@ Both arms miss 13th, 14th, and 15th shift bars by wide margins. `test_geom_cambe
 - Arms: late_block_wd_scale=0.25 s1 (protect specialization), late_block_wd_scale=4.0 s2 (regularize specialization)
 - Merge bar: mean val < 33.71, mean test < 28.65
 - Reuses alphonse's param-group split infrastructure from #2959.
+
+---
+
+## 2026-05-14 21:40 — PR #2990: FiLM-Re γ MLP depth-2 tanjiro (CLOSED)
+- Branch: `willowpai2g48h3-tanjiro/film-gamma-depth2`
+- Hypothesis: Add 2nd hidden layer to γ MLP at width=256 (1→256→256→128). Tests whether depth adds non-linear Re-modulation expressiveness on top of #2948's 2× width win.
+
+### Results (2 seeds)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | `94flg3ls` / `oy7xe8t3` | 33.7062 | 28.6525 | — | — |
+| s1 `lzs3ce31` | depth=2 | 34.3624 | 28.7211 | +1.95% ❌ | +0.24% |
+| s2 `inew06ms` | depth=2 | 33.2259 | 28.3341 | −1.44% ✓ | −1.11% ✓ |
+| **2-seed mean** | — | **33.7942** | **28.5276** | **+0.26% ❌** | **−0.44% ✓** |
+
+Per-split test (2-seed mean): single_in_dist=31.62 (−1.85% ✓), geom_camber_rc=41.27 (−0.45% ✓), geom_camber_cruise=15.07 (+1.06% ❌), re_rand=26.15 (+0.49% ❌).
+
+**Primary metric (val_avg/mae_surf_p): FAILS merge bar** (+0.26% regression vs 33.7062 baseline). Test passes, but val does not.
+
+**Seed variance:** val σ=0.568 (1.68%) — 4× wider than #2948 baseline (σ=0.14, 0.4%). Clear sign of convergence-slowdown.
+
+**γ_w_L2 diagnostic (key finding):** Depth-2 flattens the depth-monotone γ_w_L2 pattern. #2948 baseline: 3.97→5.75 (block 0→4). Depth-2: flat ~4.1–4.6 across blocks — the additional hidden Linear absorbs the depth-dependent modulation that previously lived in the output Linear's weights. γ_bias still drifts monotonically (block 0→4), so Re-conditional differentiation survives in the bias scalar, not the weight L2.
+
+**Mechanism:** Width=256 already saturated the conditioning-capacity headroom the 35-ep budget can exploit. Depth-2 redistributes γ_w_L2 expressivity (new hidden Linear captures depth-dependent modulation) rather than adding new capacity. Wider seed variance = deeper MLP adds curvature the optimizer doesn't fully resolve in 35 epochs with Lion's signed-momentum dynamics.
+
+**Meta-finding #18:** *γ-MLP depth is NOT a free axis at compute-bound 35-ep budget.* Depth redistributes without adding at width=256. Further conditioning gains must come from **input expressivity** (Fourier-Re #2965 in flight) or **conditioning surface area** (joint Re+AoA input — assigned as #3019).
+
+**Decision: CLOSED.** Primary metric fails; per-split results are mixed; mechanism diagnosis is clear.
+
+---
+
+## 2026-05-14 21:40 — PR #3019: FiLM-Re γ MLP joint [log_re, AoA_1, AoA_2] input tanjiro (ASSIGNED)
+- Branch: `willowpai2g48h3-tanjiro/film-joint-re-aoa`
+- Hypothesis: Feed `[log_re_norm, AoA_1, AoA_2]` (3-dim) as input to the FiLM-Re γ MLP instead of `log_re_norm` (1-dim). Current γ MLP is pure Re-conditional; AoA is encoded only in the input feature vector, never in the conditioning path. Joint input lets γ learn the Re×AoA interaction surface — critical for `geom_camber_rc` (test=41.46), which is characterized by unusual AoA×Re combinations. Param delta: +2×256=+512 per block, +2,560 total (negligible).
+- Differs from closed FiLM-AoA PRs (#2867 NeRF K=8 alias, #2886 γ-only per-block AoA): those added a *separate* AoA γ MLP per block. This uses the **single existing γ MLP** with richer joint input — parameter-efficient, forces Re-AoA interaction learning.
+- Arms: joint s1 (default seed), joint s2 (seed=2)
+- Merge bar: mean val < 33.71, mean test < 28.65
+- Target: `test_geom_camber_rc` < 41.46 (OOD improvement)
+- AoA indices (14, 18) must be verified in debug pass
