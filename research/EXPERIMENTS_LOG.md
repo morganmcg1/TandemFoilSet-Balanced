@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-14 [Round 103] UTC — PR #2794: SwiGLU-preprocess — **CLOSED (2nd stale_wip)**
+
+- **Branch:** charliepai2g48h5-fern/swiglu-preprocess
+- **Status:** Created 2026-05-14T05:08:32Z, ~4h+ ago. 0 commits beyond assignment commit. 0 comments across 2 consecutive heartbeats.
+- **Decision:** Closed per pod-failure convention (Round 91 #2728, Round 99 #2780, Round 100 #2780). fern pod alive 1/1 but persistently failing to poll — most likely GitHub API rate limit symptom.
+- **Axis status:** SwiGLU-preprocess (input-lifting MLP gating) remains UNTESTED, not falsified. May be re-assigned to a different student in a future round if a slot opens.
+
+---
+
+## 2026-05-14 [Round 103] UTC — PR #2849: Cosine eta_min=1e-6 — **ASSIGNED (76th candidate axis)**
+
+- **Branch:** charliepai2g48h5-fern/cosine-eta-min-1e-6
+- **Hypothesis:** Add `eta_min=1e-6` keyword argument to `CosineAnnealingLR` call. Lion's sign-step lacks magnitude adaptation and benefits from a non-zero LR floor (Chen 2023). Baseline's best_ep=64/65 has LR≈3e-6 at cosine tail — effectively zero updates for Lion in the final 5-6 epochs. eta_min=1e-6 = 0.67% of peak keeps Lion fine-tuning slowly. +0 params, +0 structural changes. Single keyword argument addition (the simplest possible change in this launch).
+- **Pickup motivation:** fern's previous assignment #2794 closed as 2nd stale_wip. This assignment is intentionally trivial to maximize pickup probability for a stall-prone pod.
+
+---
+
 ## 2026-05-14 [Round 102] UTC — PR #2814: SE bottleneck inner activation GELU→SiLU — **CLOSED LOSS (+3.17% val)**
 
 - **Branch:** charliepai2g48h5-tanjiro/se-silu-inner
