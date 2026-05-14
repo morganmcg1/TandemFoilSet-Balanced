@@ -39,10 +39,39 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **33.0195** | #2692 | Lion lr=1.5e-4 + FiLM + SE per-block (reduction=8, zero-init fc2); all other params from #2614 unchanged | ep65/70 (timeout-truncated, 5 epochs missing); **−1.06% vs #2614** (33.3722); val OOD splits WIN 3/4; in_dist regresses +4.31%; test essentially flat (−0.06%) |
-| `test_avg/mae_surf_p` | **28.3562** | #2692 | — | test from best-val checkpoint ep65; essentially flat −0.06% vs #2614 (28.3736) |
+| `val_avg/mae_surf_p` | **32.4498** | #2727 | Lion lr=1.5e-4 + FiLM + SE block-3-only (reduction=8, zero-init fc2); all other params from #2692 unchanged | ep66/70 (timeout-truncated); **−1.73% vs #2692** (33.0195); **−2.76% vs #2614** (33.3722); val 3/4 splits WIN; in_dist regression eliminated; +2,412 params (+2,412 vs #2692 saves 7,236 vs #2714) |
+| `test_avg/mae_surf_p` | **27.6573** | #2727 | — | test from best-val checkpoint ep66; −2.46% vs #2692 (28.3562) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 33.0195` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 32.4498` to be merged.
+
+## 2026-05-14 [Round 87] — PR #2727: SE block-3-only: val WIN −1.73% (NEW BEST)
+
+- **Student:** charliepai2g48h5-tanjiro
+- **Best epoch:** 66 of 70 (timeout-truncated at 30 min; 4 cosine epochs missing)
+- **Epochs reached:** 68 (~26 s/epoch; ~2 s faster than #2692 as expected from 3 fewer SE modules)
+- **Peak GPU memory:** 14.4 GB (effectively pre-SE level)
+- **Param count:** 331,031 (328,619 baseline + 2,412 SE-block3 = +0.73%; saves 7,236 vs #2692)
+- **SE gate stats (block 3 terminal):** std 0.15 (in_dist) to 0.26 (re_rand) — 2-3.4× wider than 4-block SE #2692 (std=0.076); OOD splits gate harder than in_dist (mean 0.39-0.41 OOD vs 0.45 in_dist)
+- **Key finding:** In-dist regression from 4-block SE fully eliminated (25.65 vs 26.42); block 3 alone absorbs the work 3 upstream SEs were diluting
+
+| Split | val mae_surf_p | Δ vs #2692 (33.0195) |
+|---|---|---|
+| `val_single_in_dist` | **25.6532** | **−2.91% WIN** (regression eliminated) |
+| `val_geom_camber_rc` | **47.2242** | **−2.27% WIN** |
+| `val_geom_camber_cruise` | **19.0752** | **−6.01% WIN** |
+| `val_re_rand` | 37.8467 | +2.17% mild regression |
+| **val_avg** | **32.4498** | **−1.73% WIN** |
+
+| Split | test mae_surf_p | Δ vs #2692 (28.3562) |
+|---|---|---|
+| `test_single_in_dist` | 24.2435 | −1.90% WIN |
+| `test_geom_camber_rc` | 43.1488 | +0.46% flat |
+| `test_geom_camber_cruise` | **15.5263** | −3.44% WIN |
+| `test_re_rand` | **27.7105** | **−6.64% WIN** |
+| **test_avg** | **27.6573** | **−2.46% WIN** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-block3-only-20260514-020946/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-tanjiro --experiment_name "charliepai2g48h5-tanjiro/se-block3-only" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`
 
 ## 2026-05-14 [Round 84] — PR #2692: Squeeze-Excitation per-block: val OOD WIN −1.06% (NEW BEST)
 
