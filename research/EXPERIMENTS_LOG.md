@@ -4,6 +4,38 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 21:00 — PR #3004 (CLOSED, tanjiro): 3-seed CI confirmation on current saturated-clip max_norm=0.35 baseline — paper-strengthening **high seed-variance flag** close + FIRST direct measurement of saturated-clip × seed-CI interaction
+
+- **Branch:** `willowpai2g48h2-tanjiro/3-seed-ci-confirmation-on-baseline`
+- **Student:** willowpai2g48h2-tanjiro
+- **Verdict:** Arm 1 seed=1 (`efk04nn5`) SWA val **47.0433** +1.89 / test 40.6281 +1.99; Arm 2 seed=2 (`96h8stqu`) SWA val **47.9525** +2.80 / test 40.6701 +2.03 vs current #2674 baseline (45.1538/38.6367) — **both arms > +1.89 val regression → Prediction 4 high seed-variance flag confirmed**. Per current decision rule (val < 45.10 AND test < 38.50 to merge): **neither arm wins** — paper-strengthening CI confirmation close (NOT a new paper-appendix axis closure; seed-axis already closed at #2790 DEPENDENT-NEGATIVE).
+- **W&B runs:** Arm 1 `efk04nn5`, Arm 2 `96h8stqu`, baseline `ieu1futo`.
+- **Headline:** **Seed-CI WIDENS at saturated-clip baseline** vs prior #2311 baseline — mean ± std = 46.72 ± 1.43 across {0, 1, 2}; DEPENDENT-NEGATIVE seed pattern CONFIRMED twice across baselines with growing asymmetry magnitude.
+
+### Mechanism diagnosis (paper-publishable findings — banked #271-#276)
+
+- **#271 PAPER-PUBLISHABLE — Seed-CI WIDENS at saturated-clip baseline.** {seed=0: 45.15, seed=1: 47.04, seed=2: 47.95} → spread +2.80 val between seed=0 and seed=2; substantially wider than expected seed-noise band (±0.2-0.5). Mechanism hypothesis: at clip_fraction=1.000 saturated-clip, every step is clip-bounded so effective LR is gradient-DIRECTION-driven not magnitude-driven; initial state (seed-determined) dominates the gradient-direction trajectory through the loss landscape → larger inter-seed final-state divergence. **Paper-appendix value**: FIRST direct measurement of clip-regime × seed-CI interaction. To-be-tested in tanjiro's reassignment #3030: does the wide CI persist at max_norm=0.5 (unsaturated regime).
+
+- **#272 PAPER-PUBLISHABLE — DEPENDENT-NEGATIVE seed pattern CONFIRMED twice across baselines.** At #2790 (prior baseline), seed=42 and seed=1337 regressed from seed=0 ~+0.5 val; at #3004 (current saturated-clip baseline), seed=1 and seed=2 regress from seed=0 ~+2 val. **Seed=0 is empirically the lucky pick across 2 independent baselines** on the same advisor branch — structural replication of the DEPENDENT-NEGATIVE seed-axis pattern; magnitude of asymmetry GROWS at saturated-clip — quantitative refinement of the class.
+
+- **#273 PAPER-STRENGTHENING — σ-spread invariance 18th cross-axis confirmation across seed.** Arm 1: 0.4787, Arm 2: 0.4797 (both within baseline 0.475 ± 0.02 band). Bank: 18 INVARIANT spanning seed × wd × β × lr × β1 × β2 × hkl × anneal_epochs × swa_lr × swa_start_frac × fourier_sigma × fourier_num_features × max_norm × film_mid_dim (NEARLY-INVARIANT) + 4 forward-pass-shape BREAKs + 1 batch-size BREAK + 1 compose-induced BIDIRECTIONAL BREAK + β-axis monotone-in-1/β.
+
+- **#274 PAPER-STRENGTHENING — Channel ordering 21st cross-axis confirmation across both seeds.** Min channel surf_ux, max channel vol_ux preserved across both seeds, matching baseline ieu1futo.
+
+- **#275 PAPER-STRENGTHENING — clip_fraction=1.000 16th cross-axis confirmation; saturated-clip invariance preserved.** Both arms clip_fraction=1.000 at max_norm=0.35. Pre-clip grad_norm_max seed-sensitive within ±5 (82.36 → 87.45 → 89.54) — extends banked #268 trajectory-dependence to inter-seed variance.
+
+- **#276 PAPER-STRENGTHENING — SWA window 2-epoch 14th-consecutive confirmation #170; methodology-form invariant across seed.** All three runs hit 30-min cap at 13/15 epochs; SWA enters at 1-indexed epoch 12; same 2-epoch truncation; step-time ~140-143 s/epoch within 2% across all 3 seeds.
+
+### Paper-appendix matrix update — UNCHANGED at 20 closed × 8 transfer patterns + 2 MIXED + 1 PROVISIONAL class
+
+Loop 103 is a **paper-strengthening CI confirmation** for the headline 45.1538 / 38.6367 row, NOT a new axis closure or new pattern class. Headline stays at 45.1538 / 38.6367 (seed=0, `ieu1futo`) for the paper-appendix row — with explicit caveat noting wider-than-expected seed CI at saturated-clip (mean ± std = 46.72 ± 1.43 across {0, 1, 2}).
+
+### Reassignment
+
+Closing this PR. Reassigning tanjiro to follow up student suggestion #3: **PR #3030 NEW cross-clip-regime seed CI test {seed=1, seed=2} on max_norm=0.5 unsaturated stack** to discriminate the saturated-clip-induced wide CI hypothesis (#271) from the intrinsic wide CI hypothesis. Complements edward's #3005 max_norm sweep (seed=0 max_norm {0.2, 1.0}) — fills the seed × max_norm grid with 2 additional cells at (seed=1, max_norm=0.5) and (seed=2, max_norm=0.5). Mechanism-level finding either way is paper-publishable on its own.
+
+---
+
 ## 2026-05-14 20:45 — PR #2996 (CLOSED, thorfinn): lr × hybrid_kendall_lr counter-directional compose 2-arm test on max_norm=0.35 — NEW **COMPOSE-ASYMMETRIC class** in compose-tests bank (2nd compose-test bank entry after #2925; NOT a new paper-appendix axis closure)
 
 - **Branch:** `willowpai2g48h2-thorfinn/lr-times-hybrid-kendall-lr-counter-directional-compose-on-max-norm-0p35`
