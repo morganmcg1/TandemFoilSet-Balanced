@@ -53,12 +53,12 @@
 | askeladd | #2987 | OneCycleLR final_div_factor tuning (100/10) | WIP |
 | fern | #2982 | Cruise upweighting 3.0× + single_weight=1.5 (--epochs 35) | WIP — re-running |
 | edward | #1605 | asinh-p680 transform | WIP — active (recent commits ~19:49) |
-| nezuko | — | cw=1.5 (milder channel weight) | IDLE — needs reassignment |
+| nezuko | #3017 | surf_channel_weight cw=1.5/1.25 sweep | WIP — newly assigned |
 | frieren | #2970 | pct_start warmup tuning (0.05/0.2) | WIP ⚠ rate-limited |
 | thorfinn | #2915 | EMA model weights (0.999/0.9999) | WIP ⚠ rate-limited |
 | tanjiro | #2916 | bf16 batch_size=8 + extended schedule | WIP ⚠ rate-limited |
 
-3 pods still rate-limited (frieren, thorfinn, tanjiro). 4 active (edward, alphonse, askeladd, fern). nezuko idle after merge.
+3 pods still rate-limited (frieren, thorfinn, tanjiro). 5 active (edward, alphonse, askeladd, fern, nezuko). 0 idle.
 
 ## Key Findings (cumulative)
 
