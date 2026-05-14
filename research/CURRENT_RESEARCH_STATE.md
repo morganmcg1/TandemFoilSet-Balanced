@@ -1,10 +1,26 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 06:30
+- **Date:** 2026-05-14 06:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
+
+## Round 8 mid-flight signals (W&B-observed, seed-1 only — NOT YET TERMINAL)
+
+**Winner candidate:** askeladd #2801 pinball τ=0.55 — seed-1 (`xkaghm9f`) finished at **val=43.092 / test=37.194** with all four per-split test surf_p finite (single_in_dist=43.00, geom_camber_rc=49.86, geom_camber_cruise=21.22, **re_rand=34.70 — best ever**). Seed-2 (`gyccmr5r`) at epoch ~33 mid-training. Awaiting terminal SENPAI-RESULT + code commit; student running with uncommitted `M train.py`. If holds, this is the 11th baseline shift.
+
+**Regression candidates (close on terminal):**
+- alphonse #2800 RMSNorm: seed-1 val=48.08, test=41.55 (+5.8% / +5.2%) — mild regression
+- frieren #2803 param-group wd: seed-1 val=47.15, test=41.41 (+3.8% / +4.8%) — mild regression
+- tanjiro #2805 LN γ-init=0.5: seed-1 val=59.16, test=52.0 (+30% / +31%) — SEVERE regression, likely variance-vs-mean decoupling via init geometry shift
+
+**Mid-flight (single seed):**
+- thorfinn #2811 Sobolev: val=60.0 mid-training (very early)
+- nezuko #2812 LayerScale: val=52.3 mid-training (mid)
+- edward #2816 FiLM-Re: val=83.4 (~9 min in, too early)
+
+**Fern #2817 truncated-normal init — pivoted to σ-scan:** student verified that `Transolver._init_weights` ALREADY applies `trunc_normal_(std=0.02)` to all Linear layers (timm). Hypothesis premise was wrong; PR pivoted to σ-scan (σ=0.01 s1, σ=0.05 s2). Also discovered latent bug: `PhysicsAttention.in_project_slice.weight` orthogonal init is clobbered by subsequent `self.apply(_init_weights)`. Tracked as follow-up axis.
 
 ## Current baseline (10th shift)
 
