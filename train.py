@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -85,11 +86,18 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
+    # Class-level toggle/store for post-hoc per-block attention stat collection.
+    # Compiled forward never enters this branch (flag flipped only when calling
+    # _orig_mod directly outside torch.compile).
+    _RECORD_STATS = False
+    _STATS_STORE: list[dict] = []
+
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -126,11 +134,24 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        out_slice = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            is_causal=False,
-        )
+        # Sigmoid Attention (Ramapuram et al. 2024): replace softmax MHA over
+        # slice tokens with sigmoid(Q·K^T/sqrt(d_k) - log(N)). Slice-routing
+        # softmax above is UNCHANGED. N=slice_num=24 is a Python constant.
+        scale = self.dim_head ** -0.5
+        logits = (q @ k.transpose(-2, -1)) * scale  # (B, H, G, G)
+        attn = torch.sigmoid(logits - math.log(self.slice_num))
+        out_slice = attn @ v
+
+        if PhysicsAttention._RECORD_STATS:
+            with torch.no_grad():
+                _a = attn.float()
+                PhysicsAttention._STATS_STORE.append({
+                    "attn_mean": _a.mean().item(),
+                    "attn_std": _a.std().item(),
+                    "attn_max": _a.max().item(),
+                    "attn_min": _a.min().item(),
+                    "attn_row_sum_mean": _a.sum(dim=-1).mean().item(),
+                })
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -369,6 +390,29 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     )
 
 
+def collect_sigmoid_attn_stats(model, loader, stats_norm, device, amp_ctx_factory):
+    """Run an UNCOMPILED forward through _orig_mod with PhysicsAttention._RECORD_STATS=True
+    to harvest per-block sigmoid attention probability statistics. Returns the list of
+    per-block stat dicts in block order. Each block contributes one entry.
+    """
+    inner = getattr(model, "_orig_mod", model)
+    inner.eval()
+    PhysicsAttention._STATS_STORE.clear()
+    PhysicsAttention._RECORD_STATS = True
+    try:
+        with torch.no_grad():
+            x, y, is_surface, mask = next(iter(loader))
+            x = x.to(device, non_blocking=True)
+            x_norm = (x - stats_norm["x_mean"]) / stats_norm["x_std"]
+            with amp_ctx_factory():
+                _ = inner({"x": x_norm})
+    finally:
+        PhysicsAttention._RECORD_STATS = False
+        collected = list(PhysicsAttention._STATS_STORE)
+        PhysicsAttention._STATS_STORE.clear()
+    return collected
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -476,6 +520,11 @@ print(
     f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
+print(
+    f"Sigmoid Attention (Ramapuram et al. 2024): replaced softmax over Q·K positions "
+    f"with sigmoid(logits - log(N)) where N=slice_num={model_config['slice_num']}; "
+    f"slice-routing softmax UNCHANGED; +0 params; baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
 print(f"Actual total params: {n_params}")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -578,6 +627,20 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+
+# --- Sigmoid Attention diagnostic at TRAINING START (random init weights) ---
+_pre_attn_stats = collect_sigmoid_attn_stats(model, val_loaders["val_single_in_dist"], stats, device, amp_ctx_factory)
+print("\nSigmoid Attention stats @ training start (random init, val_single_in_dist sample batch):")
+for _i, _s in enumerate(_pre_attn_stats):
+    print(
+        f"  block[{_i}]: attn mean={_s['attn_mean']:.4f} std={_s['attn_std']:.4f} "
+        f"max={_s['attn_max']:.4f} min={_s['attn_min']:.4f} row_sum_mean={_s['attn_row_sum_mean']:.4f}"
+    )
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "sigmoid_attn_diagnostic_start",
+    "blocks": _pre_attn_stats,
+})
+
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -712,6 +775,20 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Sigmoid Attention diagnostic at TRAINING END (best-checkpoint weights, val_single_in_dist sample batch)
+    _post_attn_stats = collect_sigmoid_attn_stats(model, val_loaders["val_single_in_dist"], stats, device, amp_ctx_factory)
+    print("\nSigmoid Attention stats @ training end (best checkpoint, val_single_in_dist sample batch):")
+    for _i, _s in enumerate(_post_attn_stats):
+        print(
+            f"  block[{_i}]: attn mean={_s['attn_mean']:.4f} std={_s['attn_std']:.4f} "
+            f"max={_s['attn_max']:.4f} min={_s['attn_min']:.4f} row_sum_mean={_s['attn_row_sum_mean']:.4f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "sigmoid_attn_diagnostic_end",
+        "epoch": int(best_metrics["epoch"]),
+        "blocks": _post_attn_stats,
+    })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
