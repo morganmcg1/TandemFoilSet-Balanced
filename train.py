@@ -256,6 +256,19 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
+        # Auxiliary deep-supervision heads (Lee 2014, AISTATS): linear-only Linear(n_hidden -> out_dim)
+        # attached after blocks 0..n_layers-2; the last block already produces the main prediction
+        # via its mlp2 head. Linear-only (no LN, no MLP body) per Contrastive Deep Supervision
+        # (Zhang 2022): MLP aux heads did not consistently beat linear, and a single linear
+        # constrains the gradient pressure to ask each intermediate block to produce features
+        # that are LINEARLY decodable to the target — the right inductive bias for regression.
+        self.aux_heads = nn.ModuleList([
+            nn.Linear(n_hidden, out_dim) for _ in range(n_layers - 1)
+        ])
+        for _head in self.aux_heads:
+            trunc_normal_(_head.weight, std=0.02)
+            nn.init.zeros_(_head.bias)
+
         # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
         # Applied AFTER _init_weights so it overrides the trunc_normal_ init.
         # Channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531 instrumentation).
@@ -281,9 +294,15 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        aux_preds: list[torch.Tensor] = []
+        for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
-        return {"preds": fx}
+            # block i < n_layers-1 has last_layer=False so fx is still [B, N, n_hidden];
+            # apply aux head on the residual-stream features. Last block returns the main
+            # prediction in out_dim shape — no aux head for it.
+            if i < len(self.blocks) - 1:
+                aux_preds.append(self.aux_heads[i](fx))
+        return {"preds": fx, "aux_preds": aux_preds}
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +687,25 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# Deep supervision (Lee 2014): aux heads after blocks 0..n_layers-2 produce per-block
+# predictions; AUX_WEIGHT scales the mean of the per-head losses, each formed the same
+# way as the main vol + surf_weight*surf L1 loss. Total loss = main + AUX_WEIGHT * mean(aux).
+AUX_WEIGHT = 0.1
+print(
+    f"Deep supervision (Lee 2014 AISTATS): {model_config['n_layers']-1} auxiliary linear heads "
+    f"after blocks 0..{model_config['n_layers']-2} (last block has the main head); "
+    f"AUX_WEIGHT={AUX_WEIGHT} on mean(aux_losses); each aux_loss uses the same vol+surf_weight*surf L1 "
+    f"shape as the main loss; aux heads are training-only (eval uses main head only); "
+    f"linear-only per Contrastive Deep Supervision (Zhang 2022) — MLP aux heads no consistent win in regression"
+)
+# Aux-head param-cost diagnostic (rebuild after model wrap)
+_inner_dbg = getattr(model, "_orig_mod", model)
+_n_aux_params = sum(p.numel() for h in _inner_dbg.aux_heads for p in h.parameters())
+print(
+    f"Aux head params: {_n_aux_params} ({_n_aux_params / max(n_params, 1) * 100:.3f}% of {n_params}); "
+    f"baseline to beat: val_avg/mae_surf_p < 32.2477"
+)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -676,6 +714,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux_per_block = [0.0] * (model_config['n_layers'] - 1)
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -687,14 +726,31 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            out = model({"x": x_norm, "mask": mask})
+            pred = out["preds"]
+            aux_preds = out.get("aux_preds", [])
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_denom = vol_mask.sum().clamp(min=1)
+            surf_denom = surf_mask.sum().clamp(min=1)
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_denom
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_denom
+            main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+            aux_loss_total = main_loss.new_zeros(())
+            aux_losses_scalar: list[float] = []
+            if aux_preds:
+                for aux_p in aux_preds:
+                    aux_sq_err = F.l1_loss(aux_p, y_norm, reduction='none')
+                    aux_vol_loss = (aux_sq_err * vol_mask.unsqueeze(-1)).sum() / vol_denom
+                    aux_surf_loss = (aux_sq_err * surf_mask.unsqueeze(-1)).sum() / surf_denom
+                    aux_block_loss = aux_vol_loss + cfg.surf_weight * aux_surf_loss
+                    aux_loss_total = aux_loss_total + aux_block_loss
+                    aux_losses_scalar.append(aux_block_loss.detach().float().item())
+                aux_loss_total = aux_loss_total / len(aux_preds)
+            loss = main_loss + AUX_WEIGHT * aux_loss_total
 
         optimizer.zero_grad()
         loss.backward()
@@ -702,12 +758,17 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        for _i, _v in enumerate(aux_losses_scalar):
+            epoch_aux_per_block[_i] += _v
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux_per_block = [v / max(n_batches, 1) for v in epoch_aux_per_block]
+    epoch_main_loss = epoch_vol + cfg.surf_weight * epoch_surf
+    epoch_aux_mean = sum(epoch_aux_per_block) / max(len(epoch_aux_per_block), 1)
 
     # --- Validate ---
     model.eval()
@@ -731,7 +792,21 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+
+    # Per-epoch per-block LayerScale gamma stats — deep-supervision-specific
+    # diagnostic to track whether aux heads drive early-block specialization.
+    _inner_epoch = getattr(model, "_orig_mod", model)
+    _gamma_per_block = []
+    for _bi, _blk in enumerate(_inner_epoch.blocks):
+        _gamma_per_block.append({
+            "block_idx": _bi,
+            "gamma_attn_mean": _blk.gamma_attn.detach().float().mean().item(),
+            "gamma_attn_std": _blk.gamma_attn.detach().float().std().item(),
+            "gamma_mlp_mean": _blk.gamma_mlp.detach().float().mean().item(),
+            "gamma_mlp_std": _blk.gamma_mlp.detach().float().std().item(),
+        })
+
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -739,14 +814,22 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/main_loss": epoch_main_loss,
+        "train/aux_loss_mean": epoch_aux_mean,
+        "train/aux_to_main_loss_ratio": epoch_aux_mean / max(epoch_main_loss, 1e-12),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
-    })
+        "gamma_per_block": _gamma_per_block,
+    }
+    for _i, _v in enumerate(epoch_aux_per_block):
+        epoch_record[f"train/aux_loss_block{_i}"] = _v
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux="
+        f"{','.join(f'{v:.3f}' for v in epoch_aux_per_block)}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -934,8 +1017,9 @@ if best_metrics:
 
     _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
                        for i, m in _swiglu_blocks]
+    _swiglu_diag_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     with torch.no_grad():
-        _x_s, _y_s, _is_s, _m_s = next(iter(_se_loader))
+        _x_s, _y_s, _is_s, _m_s = next(iter(_swiglu_diag_loader))
         _x_s = _x_s.to(device, non_blocking=True)
         _m_s = _m_s.to(device, non_blocking=True)
         _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
