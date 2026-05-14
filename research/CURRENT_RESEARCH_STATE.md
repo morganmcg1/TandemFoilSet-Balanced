@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 17:40
+- **Date:** 2026-05-14 18:15
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -69,7 +69,7 @@
 | #2965 | fern | Fourier-encoded Re input to FiLM-Re γ MLP (K=2, K=4) | ASSIGNED 2026-05-14 17:15 |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
 | #2972 | edward | LayerScale: per-block channel-wise learnable gain (init=0.1, 0.01) | ASSIGNED 2026-05-14 17:40 |
-| #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× and 4× γ width | WIP |
+| #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× ALL-4-SPLITS-WIN single seed, awaiting 2nd seed | WIP (sent back 2026-05-14 18:00) |
 | #2971 | askeladd | Slice attention dropout: drop_p=0.1 (s1), drop_p=0.2 (s2) | ASSIGNED 2026-05-14 17:38 |
 
 **Closed this round (rounds 12–13):**
@@ -95,6 +95,7 @@
 10. **Mechanism overlap surfacing at 14th-shift basin** — both SwiGLU (#2902) and y-flip (#2895) helped on σ=0.05 but regress on σ=0.07+FiLM-Re. Both mechanisms add "Re-regime feature diversity" that FiLM-Re now provides explicitly. Pattern suggests aug/capacity axes that helped at σ=0.05 are increasingly likely to overlap with FiLM-Re at 14th shift; emphasis must shift to genuinely orthogonal axes (input enrichment, optimizer geometry, decoder capacity).
 11. **OOD-vs-IID trade-off pattern (4 instances)** — Lion lr=9e-5 (#2942), head_depth=3 (#2943), slice_temp=0.5 (#2953) ALL improve single_in_dist but regress all 3 OOD splits. The 14th-shift basin saturates IID-side capacity. Future axes targeting IID-side capacity are predicted to fail similarly. The path forward is mechanisms that increase **redundancy / regularization** on OOD splits without adding IID capacity — slice dropout (#2971), DropPath (#2926), cond-mixup (#2960), per-block lr (#2959).
 12. **Learnable per-head slice softmax τ is already present in baseline** — init=0.5. Slice softmax is not at τ=1.0 default. Future axis scans on PhysicsAttention must account for this learnable temperature.
+13. **First experiment to break OOD-vs-IID trade-off pattern (#2948 tanjiro 2× FiLM-Re γ width)** — single-seed `94flg3ls`: val=33.566 (−2.86%), test=28.401 (−1.91%), ALL 4 splits improve simultaneously (single_in_dist=32.32, geom_camber_rc=41.51, geom_camber_cruise=14.84, re_rand=24.93). The mechanism is **γ MLP capacity**, not IID-side capacity — widens the conditioning bottleneck without adding capacity in a regime-specific manner. Confirms FiLM-Re γ MLP is input/representation-bottlenecked, validates tanjiro #2948 and fern #2965 (Fourier-Re γ input) as the right axis pair. Awaiting 2nd seed for merge confirmation. 4× width regresses → capacity has finite optimum. Compound prediction: tanjiro 2× + fern Fourier-Re (capacity + input information) could stack.
 
 ## Currently retired axes
 

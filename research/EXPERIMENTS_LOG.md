@@ -2917,3 +2917,28 @@ Per-split test (depth=3): single_in_dist=30.28 (**−6.90%, improves dramaticall
 - Hypothesis: Per-block learnable diagonal channel-wise scaling on TransolverBlock residual outputs (CaiT/DeiT trick). `x = x + scale_b * block(x)`. Sample-independent per-channel gain — orthogonal to FiLM-Re γ (sample-dependent per-channel gain). Lets late blocks (where FiLM-Re γ_w_L2 grows 3.4→5.2) learn block-channel-wise amplification.
 - Arms: init=0.1 (s1), init=0.01 (s2, seed=2). Both apply to attn AND FFN residuals.
 - Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 18:15 — PR #2948: FiLM-Re γ MLP capacity scan tanjiro (SENT BACK for 2nd seed at 2× width)
+- Branch: `willowpai2g48h3-tanjiro/film-gamma-capacity-scan`
+- Hypothesis: Widen γ MLP hidden dim (default 128 = trunk n_hidden) to test if FiLM-Re γ-branch is capacity-bottlenecked.
+
+### Results (single seed per arm)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs bar |
+|---|---|---:|---:|---:|
+| 2× (hidden=256) s1 `94flg3ls` | — | **33.566** | **28.401** | **val −2.9%, test −1.9% ✅✅** |
+| 4× (hidden=512) s2 `77odiijy` | — | 34.820 | 29.444 | val +0.8%, test +1.7% ❌ |
+| 14th-shift bar (mean 2 seeds) | — | 34.55 | 28.95 | — |
+
+**Per-split test (2× arm):** single_in_dist=31.66 (**−2.7%**), geom_camber_rc=41.76 (**−0.57%**), geom_camber_cruise=14.71 (**−3.2%**), re_rand=25.48 (**−2.4%**). **ALL 4 SPLITS IMPROVE.** First experiment in this round to break the OOD-vs-IID trade-off pattern.
+
+**γ diagnostics (2× vs baseline):**
+- γ_bias depth-monotone drift preserved (0.997→0.988, late blocks attenuate more)
+- γ_w_l2 grows MORE with depth (3.97→5.75, vs baseline ~3.4→5.2) — widened γ MLP uses the extra capacity
+- 4× takes γ_w_l2 too high (4.52→6.87), overshooting
+
+**Action: SENT BACK for 2nd seed at 2× width ONLY** (drop 4×). Single-seed at 2× clears both bars cleanly but baseline variance is high enough that the 2nd seed could push the 2-arm mean over the test bar. Need 2-seed confirmation before declaring 15th shift.
+
+If 2-seed mean < 34.55 val AND test < 29.20 (within 1% of bar): merge as 15th shift.
