@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 13:30
+- **Date:** 2026-05-14 13:35
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -65,7 +65,7 @@ Data augmentation axis:
 6. **Y-flip augmentation (fern #2895)** — WIP.
 
 Regularization axis:
-7. **Weight-decay scan on σ=0.05 (alphonse #2897)** — WIP (running on σ=0.05; results will be interpreted vs new bar).
+7. **Weight-decay scan (alphonse #2897)** — SENT BACK 2026-05-14 13:35. σ=0.05 results: wd=1e-3 beats OLD bar (−8.0%/−9.6%, every test split improves, OOD strongest) but misses 13th-shift bar by 2-4%. Re-running wd=1e-3 + wd=7e-4 on σ=0.07 baseline to test compounding.
 8. **Stochastic depth DropPath (nezuko #2926)** — NEW, assigned 2026-05-14 13:25; depth-scaled DropPath rates 0.1 (s1) and 0.2 (s2); block-level regularization complementary to init-scale and weight-decay; σ=0.07 init; 5-layer ramp 0.0→drop_path across blocks.
 
 Architectural axis:

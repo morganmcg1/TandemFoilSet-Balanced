@@ -2543,3 +2543,26 @@ After closing #2866 (nezuko idle), assigned:
 **Motivation**: σ=0.07 init (13th shift) pushed the model into a higher-L2 basin using more capacity. DropPath regularizes *block-level dependencies* (complementary to weight decay which constrains magnitudes, and to init scale which sets the basin). Tests depth-scaled DropPath rates: 0.1 (seed 1) and 0.2 (seed 2). Both run at σ=0.07 init on full 35-ep budget.
 
 Expected mechanism: forcing each block to be useful in isolation → more robust feature representations → better OOD on geom_camber_rc (hardest split at test_surf_p=43.28).
+
+---
+
+## 2026-05-14 13:35 — PR #2897: wd-scan on σ=0.05 baseline (alphonse, SENT BACK for σ=0.07 compound)
+- Branch: `willowpai2g48h3-alphonse/wd-scan-sigma005`
+- Hypothesis: wd=2e-4 was tuned at σ=0.02 init; with σ=0.05 init the weights start at higher L2, so wd may be under-regularizing. Test wd=5e-4 (s1) and wd=1e-3 (s2).
+
+### Results (on σ=0.05 baseline, NOT σ=0.07)
+
+| Run | wd | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|---|---|---|---:|---:|---:|
+| `975dmw6e` | 5e-4 | — | 41.14 (+0.78%) | 34.42 (−2.36%) | 29 |
+| `fzbe5b7m` | **1e-3** | — | **37.54 (−8.04%)** | **31.85 (−9.63%)** | 34 |
+| σ=0.05 baseline (12th shift) | 2e-4 | — | 40.82 | 35.25 | — |
+| 13th-shift bar (σ=0.07, single seed) | 2e-4 | — | 36.58 | 30.64 | — |
+
+Per-split test (wd=1e-3 vs σ=0.05): single_in_dist −5.0%, geom_camber_rc −5.1%, **geom_camber_cruise −20.8%**, **re_rand −14.2%**. OOD splits benefit most — classic regularization signature.
+
+**Beats OLD σ=0.05 bar; misses 13th-shift σ=0.07 bar by 2-4%.** The wd-axis is clearly load-bearing but the test was on the wrong baseline.
+
+**Mechanism insight (student-found)**: PR's L2 framing was wrong. Init L2 with σ=0.05 is ~55 (not ~25 as PR predicted); convergence L2 is ~61.5 for both wds tested. wd is not acting on the total L2 norm — it's acting on the *Linear-weight subset* (small magnitude, ~0.05 init) while biases/LayerNorm gammas stay O(1). Both wds converge to nearly identical L2 (61.52 vs 61.65) — the diff lives in the weight-magnitude *distribution*, not the total norm. Future wd PRs should log per-module-class L2.
+
+**Status**: SENT BACK 2026-05-14 13:35. Rerun on σ=0.07 baseline with wd=1e-3 (s1) and wd=7e-4 (s2) to test compounding with the σ=0.07 winner. Decision criterion: if wd=1e-3 compounds (val<36.58), merge as 14th shift. If not, the wd-axis is σ-dependent (σ=0.07 already provides the regularization wd was giving on σ=0.05).
