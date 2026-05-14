@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -450,6 +452,82 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
     return out
 
 
+def evaluate_split_tta(
+    model, rescale_head, loader, stats, surf_weight, device, delta: float,
+) -> dict[str, float]:
+    """Re-bracket TTA evaluation: average predictions at log(Re) ± delta.
+
+    Perturbs feature 13 (already-normalized log Re) in x_norm by ±delta and
+    averages the two predictions in normalized output space. The model uses
+    that same feature for ReFiLM, ReConditionalLayerNorm γ/β, and ReScaleHead,
+    so bracketing log(Re) probes the model under two slightly different Re
+    conditions and averages out direction-of-error noise around the true Re.
+
+    Metric computation identical to evaluate_split — MAE in original (denorm)
+    target space, per-sample skipping for non-finite y, float64 accumulators.
+    """
+    vol_loss_sum = surf_loss_sum = 0.0
+    mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
+    n_surf = n_vol = n_batches = 0
+
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            y_sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask = mask & y_sample_finite.unsqueeze(-1)
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+            # Perturb feature 13 (normalized log Re) by ±delta on a CLONE so
+            # the two passes see distinct inputs; everything else identical.
+            x_norm_plus = x_norm.clone()
+            x_norm_plus[:, :, 13] = x_norm_plus[:, :, 13] + delta
+            x_norm_minus = x_norm.clone()
+            x_norm_minus[:, :, 13] = x_norm_minus[:, :, 13] - delta
+
+            log_re_plus = x_norm_plus[:, 0, 13:14]
+            log_re_minus = x_norm_minus[:, 0, 13:14]
+            pred_plus = model({"x": x_norm_plus})["preds"] * rescale_head(log_re_plus)
+            pred_minus = model({"x": x_norm_minus})["preds"] * rescale_head(log_re_minus)
+            pred = 0.5 * (pred_plus + pred_minus)
+
+            sq_err = (pred - y_norm) ** 2
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss_sum += (
+                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                / vol_mask.sum().clamp(min=1)
+            ).item()
+            surf_loss_sum += (
+                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                / surf_mask.sum().clamp(min=1)
+            ).item()
+            n_batches += 1
+
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            B_now = y.shape[0]
+            y_good = torch.isfinite(y.reshape(B_now, -1)).all(dim=-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            mask_safe = mask & y_good.unsqueeze(-1)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_safe, mae_surf, mae_vol)
+            n_surf += ds
+            n_vol += dv
+
+    vol_loss = vol_loss_sum / max(n_batches, 1)
+    surf_loss = surf_loss_sum / max(n_batches, 1)
+    out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
+           "loss": vol_loss + surf_weight * surf_loss}
+    out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    return out
+
+
 def _sanitize_path_token(s: str) -> str:
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
     return out.strip("-_.") or "experiment"
@@ -556,11 +634,35 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Seeded torch / numpy / random RNG for reproducible model init and
+    # WeightedRandomSampler ordering. None → no manual seed (default behavior).
+    seed: int | None = None
+    # Re-bracket TTA: average predictions at log(Re) ± tta_delta. When
+    # tta_val_per_epoch is set, TTA-val is computed every epoch and used to
+    # select an additional best-checkpoint (saved to checkpoint_tta.pt).
+    tta_val_per_epoch: bool = False
+    tta_delta: float = 0.05
+    # Test-only TTA: when set, after training compute TTA val (on best no-TTA
+    # checkpoint) + TTA test in addition to the standard no-TTA test eval.
+    # No per-epoch cost — useful for clean 28-ep training + TTA stacking.
+    tta_test: bool = False
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed is not None:
+    # Seeding torch / numpy / random pins model init, WeightedRandomSampler
+    # ordering, dropout if any. bf16 + torch.compile still admit some
+    # non-determinism; this gives statistical reproducibility per seed, not
+    # bit-identity.
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seed: {cfg.seed}")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -695,6 +797,7 @@ experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+model_path_tta = model_dir / "checkpoint_tta.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
@@ -710,6 +813,8 @@ print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+best_avg_surf_p_tta = float("inf")
+best_metrics_tta: dict = {}
 slice_entropy_ep1: list[list[float]] | None = None
 slice_entropy_film_stats_ep1: dict | None = None
 slice_entropy_last: list[list[float]] | None = None
@@ -890,6 +995,20 @@ for epoch in range(MAX_EPOCHS):
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+
+    # Optionally compute TTA validation (Re-bracket ±tta_delta on log(Re)).
+    split_metrics_tta: dict | None = None
+    avg_surf_p_tta: float | None = None
+    if cfg.tta_val_per_epoch:
+        split_metrics_tta = {
+            name: evaluate_split_tta(
+                model, rescale_head, loader, stats, cfg.surf_weight, device, cfg.tta_delta,
+            )
+            for name, loader in val_loaders.items()
+        }
+        val_avg_tta = aggregate_splits(split_metrics_tta)
+        avg_surf_p_tta = val_avg_tta["avg/mae_surf_p"]
+
     dt = time.time() - t0
 
     tag = ""
@@ -905,6 +1024,24 @@ for epoch in range(MAX_EPOCHS):
             model_path,
         )
         tag = " *"
+
+    # Secondary best-checkpoint selection by TTA-val. Saved independently so
+    # the test step can evaluate the TTA-selected checkpoint vs the no-TTA one.
+    tag_tta = ""
+    if avg_surf_p_tta is not None and avg_surf_p_tta < best_avg_surf_p_tta:
+        best_avg_surf_p_tta = avg_surf_p_tta
+        best_metrics_tta = {
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "val_avg/mae_surf_p_tta": avg_surf_p_tta,
+            "per_split": split_metrics,
+            "per_split_tta": split_metrics_tta,
+        }
+        torch.save(
+            {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
+            model_path_tta,
+        )
+        tag_tta = " *T"
 
     # Re-conditioned scale diagnostics (per-channel mean/std across epoch + corr w/ log(Re)).
     if scale_n > 0:
@@ -1004,8 +1141,14 @@ for epoch in range(MAX_EPOCHS):
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
         "val_avg/mae_surf_p": avg_surf_p,
+        "val_avg/mae_surf_p_tta": avg_surf_p_tta,
         "val_splits": split_metrics,
+        "val_splits_tta": split_metrics_tta,
+        "tta_delta": cfg.tta_delta if cfg.tta_val_per_epoch else None,
+        "tta_val_per_epoch": cfg.tta_val_per_epoch,
+        "seed": cfg.seed,
         "is_best": tag == " *",
+        "is_best_tta": tag_tta == " *T",
         "rescale/scale_mean": scale_mean,
         "rescale/scale_std": scale_std,
         "rescale/scale_logre_corr": corr,
@@ -1014,11 +1157,12 @@ for epoch in range(MAX_EPOCHS):
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
     })
+    tta_str = f"  val_tta={avg_surf_p_tta:.4f}{tag_tta}" if avg_surf_p_tta is not None else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{tta_str}"
     )
     print(
         f"    HuberPerCh (unweighted)  surf[Ux={surf_huber_per_ch[0]:.5f} "
@@ -1083,6 +1227,11 @@ append_metrics_jsonl(metrics_jsonl_path, {
 # --- Test evaluation + local summary ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    if best_metrics_tta:
+        print(
+            f"Best TTA-val: epoch {best_metrics_tta['epoch']}, "
+            f"val_avg/mae_surf_p_tta = {best_avg_surf_p_tta:.4f}"
+        )
 
     ckpt = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(ckpt["model"])
@@ -1092,8 +1241,31 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_metrics_tta = None
+    test_avg_tta = None
+    test_metrics_tta_ckpt = None
+    test_avg_tta_ckpt = None
+    test_metrics_tta_ckpt_tta = None
+    test_avg_tta_ckpt_tta = None
+    val_metrics_tta_on_best = None
+    val_avg_tta_on_best = None
+    if cfg.tta_test:
+        # TTA val on best (no-TTA-selected) checkpoint — fills the table column
+        # without requiring per-epoch TTA val cost during training.
+        print(f"\nEvaluating TTA val (δ={cfg.tta_delta}) on best (no-TTA) ckpt...")
+        val_metrics_tta_on_best = {
+            name: evaluate_split_tta(
+                model, rescale_head, loader, stats, cfg.surf_weight, device, cfg.tta_delta,
+            )
+            for name, loader in val_loaders.items()
+        }
+        val_avg_tta_on_best = aggregate_splits(val_metrics_tta_on_best)
+        print(
+            f"  VAL (best no-TTA ckpt, TTA δ={cfg.tta_delta})  "
+            f"avg_surf_p={val_avg_tta_on_best['avg/mae_surf_p']:.4f}"
+        )
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (no-TTA-selected ckpt)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -1104,14 +1276,80 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (no-TTA ckpt, no TTA)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+
+        # Also evaluate TTA test on the no-TTA-selected checkpoint to measure
+        # the pure TTA-mechanism gain (same checkpoint, with/without TTA).
+        if cfg.tta_val_per_epoch or cfg.tta_test:
+            test_metrics_tta = {
+                name: evaluate_split_tta(
+                    model, rescale_head, loader, stats, cfg.surf_weight, device, cfg.tta_delta,
+                )
+                for name, loader in test_loaders.items()
+            }
+            test_avg_tta = aggregate_splits(test_metrics_tta)
+            print(
+                f"\n  TEST (no-TTA ckpt, TTA δ={cfg.tta_delta})  "
+                f"avg_surf_p={test_avg_tta['avg/mae_surf_p']:.4f}"
+            )
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_metrics_tta[name])
+
+            # Evaluate TTA-selected checkpoint (different model weights).
+            if best_metrics_tta and model_path_tta.exists():
+                print(f"\nLoading TTA-selected checkpoint from epoch {best_metrics_tta['epoch']}...")
+                ckpt_tta = torch.load(model_path_tta, map_location=device, weights_only=True)
+                model.load_state_dict(ckpt_tta["model"])
+                rescale_head.load_state_dict(ckpt_tta["rescale_head"])
+                model.eval()
+                rescale_head.eval()
+
+                test_metrics_tta_ckpt = {
+                    name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+                    for name, loader in test_loaders.items()
+                }
+                test_avg_tta_ckpt = aggregate_splits(test_metrics_tta_ckpt)
+                print(
+                    f"\n  TEST (TTA ckpt, no TTA)  "
+                    f"avg_surf_p={test_avg_tta_ckpt['avg/mae_surf_p']:.4f}"
+                )
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(name, test_metrics_tta_ckpt[name])
+
+                test_metrics_tta_ckpt_tta = {
+                    name: evaluate_split_tta(
+                        model, rescale_head, loader, stats, cfg.surf_weight, device, cfg.tta_delta,
+                    )
+                    for name, loader in test_loaders.items()
+                }
+                test_avg_tta_ckpt_tta = aggregate_splits(test_metrics_tta_ckpt_tta)
+                print(
+                    f"\n  TEST (TTA ckpt, TTA δ={cfg.tta_delta})  "
+                    f"avg_surf_p={test_avg_tta_ckpt_tta['avg/mae_surf_p']:.4f}"
+                )
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(name, test_metrics_tta_ckpt_tta[name])
+
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
+            "best_epoch_tta": best_metrics_tta.get("epoch") if best_metrics_tta else None,
+            "tta_delta": cfg.tta_delta if (cfg.tta_val_per_epoch or cfg.tta_test) else None,
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "test_avg_tta": test_avg_tta,
+            "test_splits_tta": test_metrics_tta,
+            "test_avg_tta_ckpt": test_avg_tta_ckpt,
+            "test_splits_tta_ckpt": test_metrics_tta_ckpt,
+            "test_avg_tta_ckpt_tta": test_avg_tta_ckpt_tta,
+            "test_splits_tta_ckpt_tta": test_metrics_tta_ckpt_tta,
+            "val_avg/mae_surf_p_no_tta_ckpt": best_avg_surf_p,
+            "val_avg/mae_surf_p_tta_ckpt": best_avg_surf_p_tta if best_metrics_tta else None,
+            "val_avg_tta_on_best": val_avg_tta_on_best,
+            "val_splits_tta_on_best": val_metrics_tta_on_best,
+            "seed": cfg.seed,
         })
 
     write_experiment_summary(

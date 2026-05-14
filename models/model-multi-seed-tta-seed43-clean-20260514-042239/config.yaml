@@ -1,0 +1,46 @@
+agent: charliepai2g24h1-edward
+batch_size: 4
+debug: false
+epochs: 28
+experiment_name: multi-seed-tta-seed43-clean
+grad_clip: 1.0
+lr: 0.001
+max_precond_dim: 256
+model_config:
+  fun_dim: 22
+  mlp_ratio: 2
+  n_head: 4
+  n_hidden: 128
+  n_layers: 5
+  out_dim: 3
+  output_dims:
+  - 1
+  - 1
+  - 1
+  output_fields:
+  - Ux
+  - Uy
+  - p
+  re_conditional_layernorm: true
+  re_ln_hidden_film: 8
+  slice_num: 64
+  space_dim: 2
+n_params: 671127
+p_channel_weight: 5.0
+precondition_frequency: 10
+re_conditional_layernorm: true
+re_ln_hidden_film: 8
+seed: 43
+skip_test: false
+splits_dir: /mnt/new-pvc/datasets/tandemfoil/splits_v2
+surf_weight: 10.0
+train_samples: 1499
+tta_delta: 0.05
+tta_test: true
+tta_val_per_epoch: false
+val_samples:
+  val_geom_camber_cruise: 100
+  val_geom_camber_rc: 100
+  val_re_rand: 100
+  val_single_in_dist: 100
+weight_decay: 0.0001
