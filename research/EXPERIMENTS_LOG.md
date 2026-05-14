@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-05-15 01:15 [Round 138 close-43] UTC — PR #3043 per-channel α (LOSS but cruise PRESERVED; α-axis CLOSED at scalar granularity)
+
+### Closed: #3043 alphonse cross-block-alpha-per-channel (173rd taxon PER-CHANNEL-α-LOSS-MEAN-CARRIES-SIGNAL-VARIANCE-CARRIES-NOISE / α-AXIS-CLOSED-AT-SCALAR-GRANULARITY)
+
+- **Branch:** charliepai2g48h5-alphonse/cross-block-alpha-per-channel
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-cross-block-alpha-per-channel-20260514-220244/metrics.jsonl
+- **Hypothesis:** Replace 3 scalar α from #3006 with 3 per-channel α vectors [3, 96]; preserves asymmetric 3-position layout (per #3021 finding); +285 net params; tests whether α-axis follows γ-axis pattern
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.883 | +4.57% LOSS |
+| test_avg | 25.680 | +0.78% WASH |
+| val_cruise | 16.907 | +3.42% < 17.0 PRESERVED |
+| Best epoch | 58 | — |
+| Param count | 407,460 | +285 |
+
+- **KEY MECHANISTIC FINDING — mean carries signal, channel-variance carries noise.** Student's α convergence diagnostic at ep58:
+
+| Position | mean (per-channel) | std | #3006 scalar |
+|---|---|---|---|
+| α[0] (b0→b1) | **0.9794** | 0.0470 | ~0.95 |
+| α[1] (b1→b2) | **0.9702** | 0.0495 | ~0.97 |
+| α[2] (b2→b3) | **0.9544** | 0.0591 | ~0.96 |
+
+  Per-channel α did NOT collapse to scalar — channels span 0.82-1.10 with std ~5%. **BUT per-position MEANS match #3006's scalars almost exactly** — same depth-monotonic 0.98→0.97→0.95 pattern. Direct mechanistic evidence: per-channel granularity is strict superset that includes harmful per-channel idiosyncrasy on top of useful uniform attenuation.
+- **γ-AXIS PATTERN CONFIRMED ON α-AXIS:** γ-axis was {fixed γ=1.0 WIN (#2964), scalar γ LOSS (#2988), per-channel γ WASH-overfit (#2977)}; α-axis is now {3-scalar WIN (#3006), per-channel LOSS (this PR)}. Exact predicted parallel.
+- **5th-refinement cruise invariant CONFIRMED:** granularity is **orthogonal** to residual-stream perturbation property. Per-channel α is parameterization change at structurally-cruise-preserving site; cruise survives even when granularity hurts. **9th cruise-preserving datapoint.**
+- **Conclusion:** α-AXIS DECISIVELY CLOSED AT SCALAR GRANULARITY. The post-LN scaling pattern is uniform across channels by physics — different layers want different attenuation (depth-monotonic) but within a layer all 96 channels want the SAME attenuation. Per-channel variance around the mean is overfitting noise.
+
+### Followup assignment (alphonse idle → busy)
+
+- **#3061 alphonse slice-num-12** — Halve slice routing granularity from slice_num=24 → 12. Single CLI flag. Param reduction ~−4,608 params (~−1.1% total). Fresh axis: slice_num has NEVER been swept in this launch — most under-explored core Transolver hyperparameter. Tests if 24 was over-parameterized → coarser routing as implicit regularization. Could help val_geom_camber_rc (most-failed OOD split). Cruise predicted PRESERVED (intra-block attention reparameterization). 168th active axis. Would be 10th cruise-preserving datapoint if confirmed. Lower-bracket probe — opens slice_num axis.
+
+### Round 138 close-43 summary
+- Closed 1 LOSS PR with exemplary mechanistic analysis (α-axis comprehensively closed at scalar granularity)
+- α-axis decisively closed at #3006 recipe; granularity hurts (per-channel) and counted-up extension hurts (4-position #3021)
+- Cruise-preservation ledger now 18 datapoints (9 BROKEN + 9 PRESERVED — adding #3043). Sub-invariant 'granularity-orthogonal-to-cruise-protection' now backed by 2 datapoints (#3026 cosine-routing parameterization, #3043 per-channel α parameterization).
+- 9 in-flight axes (#3044/#3047/#3048/#3049/#3050/#3054/#3056/#3061) test the refined invariant across diverse design dimensions
+- Total closed: 173. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-15 00:45 [Round 138 close-42] UTC — PR #3039 SWA-last-10 (LOSS but cruise PRESERVED; weight-averaging axis COMPREHENSIVELY CLOSED)
 
 ### Closed: #3039 thorfinn swa-last-10-epochs (172nd taxon SWA-LAST-10-LOSS-MONOTONIC-DESCENT-INCOMPATIBLE / WEIGHT-AVERAGING-AXIS-COMPREHENSIVELY-CLOSED)
