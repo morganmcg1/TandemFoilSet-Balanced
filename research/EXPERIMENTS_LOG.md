@@ -4,6 +4,51 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 20:45 — PR #2996 (CLOSED, thorfinn): lr × hybrid_kendall_lr counter-directional compose 2-arm test on max_norm=0.35 — NEW **COMPOSE-ASYMMETRIC class** in compose-tests bank (2nd compose-test bank entry after #2925; NOT a new paper-appendix axis closure)
+
+- **Branch:** `willowpai2g48h2-thorfinn/lr-times-hybrid-kendall-lr-counter-directional-compose-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Verdict:** Arm 1 model-DOWN/σ-UP {lr=1.5e-4, hkl=1e-3} SWA val **51.9236** +6.77 / test 43.7529 +5.12 **STRONG-REGRESSION compose-residual +4.47 COMPOSE-COUPLE-NEGATIVE**; Arm 2 model-UP/σ-DOWN {lr=6e-4, hkl=2.5e-4} SWA val **47.0292** +1.875 / test 40.1595 +1.523 regression close **compose-residual −0.125 COMPOSE-DECOMPOSE near-additively**. Per current decision rule (val < 45.10 AND test < 38.50 to merge): **neither arm wins** — paper-publishable mechanism finding via NEW COMPOSE-ASYMMETRIC class in compose-tests bank. NOT a new paper-appendix axis closure (lr-axis already closed at #2731 ASYMMETRIC-V; hkl-axis already closed at #2773 ASYMMETRIC-V).
+- **W&B runs:** Arm 1 model-DOWN/σ-UP, Arm 2 model-UP/σ-DOWN; baseline `ieu1futo`.
+- **Headline:** **NEW COMPOSE-ASYMMETRIC class** in compose-tests bank — first counter-directional compose test with direction-asymmetric coupling. The two LRs are NOT decomposable in general — direction-asymmetric coupling exists; additive-decomposition is only valid in the (model FAST, σ-head SLOW) direction.
+
+### Mechanism diagnosis (paper-publishable findings — banked #265-#270)
+
+- **#265 PAPER-PUBLISHABLE — NEW COMPOSE-ASYMMETRIC class in compose-tests bank.** First counter-directional compose test with direction-asymmetric coupling: model-DOWN/σ-UP super-additively breaks (compose-residual **+4.47** above additive prediction), model-UP/σ-DOWN composes near-additively (**−0.125** within ±0.3 band). Compose-tests bank now: 2 entries, 2 classes — COMPOSE-FAIL #2925 (BOTH-LOSE-COMPOSE-FAIL, swa_lr × swa_start_frac) + **COMPOSE-ASYMMETRIC #2996 NEW** (lr × hybrid_kendall_lr counter-directional). Paper-appendix value: the two LRs are NOT decomposable in general — direction-asymmetric coupling exists; the additive-decomposition is only valid in the (model FAST, σ-head SLOW) direction. **Refutes the implicit assumption that ASYMMETRIC-V × ASYMMETRIC-V composes additively** in either direction. Sharpens compose-test methodology: direction matters, must test both directions.
+
+- **#266 PAPER-PUBLISHABLE — σ-spread invariance can BREAK under axis-COMPOSE (in OPPOSITE directions).** Arm 1 σ-spread INFLATES to 0.7560 (+0.281 = +60% vs baseline 0.475); Arm 2 σ-spread COLLAPSES to 0.0312 (−0.444 = −94% vs baseline). σ-spread can be driven either way under compose-perturbation, even when neither axis individually breaks it. Refines banked #173/#226 σ-spread invariance rule: **"σ-spread invariance is a SINGLE-AXIS local property; compose-perturbation can break it in EITHER direction (INFLATE or COLLAPSE)"**. NEW MIXED-direction BREAK class — first σ-spread BREAK that goes both ways at once on different arms of the same PR. σ-spread invariance bank UPDATED: 18 INVARIANT + 4 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + **1 compose-induced BIDIRECTIONAL BREAK NEW** + β-axis monotone-in-1/β.
+
+- **#267 PAPER-PUBLISHABLE — σ-head saturation dynamics mechanism.** Arm 1 (model SLOW, σ-head FAST): σ-heads OUTRUN the model — concentrate loss budget on surf_ux/surf_uy (effective weights 74.2/66.1 vs baseline ~12/10 = 6-7× higher) while down-weighting vol channels by 4-5×; slow model overfits to those few channels → camber_rc val 67.3 +9.0 catastrophic regression. Arm 2 (model FAST, σ-head SLOW): σ-heads can't reach fixed-point in 13 epochs — remain near init=0 in tight band [−1.23, −1.20], effective weights uniform at ~5.6 (Kendall **effectively disabled**, σ-spread=0.031). Paper-appendix value: σ-head dynamics have a SATURATION TIMESCALE; when model-lr / σ-head-lr ratio departs from 1, the σ-heads either over-redistribute (fast σ) or under-respond (slow σ); both directions degrade val. First mechanism-level explanation for why hybrid_kendall_lr-axis has a sharp local optimum at 5e-4 (banked #2773 ASYMMETRIC-V).
+
+- **#268 PAPER-PUBLISHABLE — Pre-clip grad_norm is TRAJECTORY-DEPENDENT, NOT lr-scaled.** Arm 1 (lr=1.5e-4 = HALF baseline) pre-clip grad_norm **mean 32.64, max 145.8** — 8.8× HIGHER than Arm 2 (lr=6e-4 = DOUBLE baseline) mean 3.71, max 18.6. Counter to the i.i.d. expectation (lower lr should lead to slower steps → smaller grad updates → smaller grad_norms). Mechanism: lower lr → model lingers in HIGH-LOSS / HIGH-GRADIENT basin longer (slow trajectory through loss landscape); higher lr → drives model to flatter/lower-gradient region faster. Lion's sign-step strips magnitude POST-clip, so the POST-clip step is invariant — but the PRE-clip magnitude reflects the model's CURRENT BASIN, not lr scaling. Sharpens banked "Lion sign-step makes post-clip invariant" finding to **"pre-clip grad_norm reflects the model's current basin, not lr scaling"**.
+
+- **#269 PAPER-STRENGTHENING — Lion exp_avg_norm invariant within 6% across 4× lr range.** Arm 1 final 0.01096, Arm 2 final 0.01036 — diff 6% across lr ratio 4× (6e-4/1.5e-4). Confirms banked #194 closed-form: Lion's β2-EMA at fixed β2=0.99 follows (1-β2)/(1+β2) theoretical ratio, **independent of lr** (Lion update ∝ sign(EMA) so update magnitude depends on β2 only). **5th cross-axis confirmation of #194** (across wd #2390, β1 #2880, β2 #2932, batch_size #2992, and now lr × hkl compose #2996).
+
+- **#270 PAPER-STRENGTHENING — 3 cross-axis invariance confirmations preserved + 1 methodology gap.** Channel ordering surf_ux=MIN, vol_ux=MAX preserved on BOTH arms (**20th cross-axis confirmation**); clip_fraction=1.000 saturated-clip preserved on BOTH arms (**15th cross-axis confirmation**); 13th-consecutive 2-epoch SWA-window truncation #170 confirmed on BOTH arms. **Methodology gap flagged**: peak VRAM diagnostic CONTAMINATED on Arm 1 by external workload (W&B `gpu.0.memoryAllocatedBytes` showed 101.85 GB Arm 1 / 79.19 GB Arm 2 — Arm 1's run window overlapped with an unrelated 60GB process on the shared GPU per `nvidia-smi`). Internal model VRAM should be ~44.80 GB per banked invariance, but cannot reliably claim 16th VRAM invariance confirmation for this PR — paper-appendix note: shared-GPU contamination is a methodology limitation for VRAM diagnostics on this fleet.
+
+### Paper-appendix matrix update — UNCHANGED at 20 closed × 8 transfer patterns + 2 MIXED axes + 1 PROVISIONAL class
+
+Loop 102 is a **compose-test bank entry** (axis-INTERACTION structure), NOT a new single-axis closure or new pattern class. Compose-tests bank UPDATED: **2 entries, 2 classes — COMPOSE-FAIL (#2925) + COMPOSE-ASYMMETRIC (#2996 NEW)**. σ-spread invariance bank UPDATED: 18 INVARIANT + 4 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + **1 compose-induced BIDIRECTIONAL BREAK NEW** + β-axis monotone-in-1/β.
+
+### Reassignment
+
+Closing this PR. Reassigning thorfinn to follow up the strongest student suggestion: a **CO-DIRECTIONAL compose test** {lr=6e-4, hkl=1e-3} BOTH-UP + {lr=1.5e-4, hkl=2.5e-4} BOTH-DOWN (**PR #3023 NEW**) to discriminate Story A (rate-mismatch dominant → CO-directional composes additively) vs Story B (joint instability → BOTH-UP super-additively breaks).
+
+---
+
+## 2026-05-14 20:45 — PR #2442 (CLOSED, nezuko): STALE-WIP + OBSOLETE-STACK + AXIS-ALREADY-CLOSED housekeeping (n_head axis already closed at #2901 ASYMMETRIC-V)
+
+- **Branch:** `willowpai2g48h2-nezuko/n-head-sweep` (on σ=0.5/max_norm=0.5 obsolete stack)
+- **Student:** willowpai2g48h2-nezuko
+- **Verdict:** PR predates #2311 hybrid + #2674 saturated-clip merges. n_head axis subsequently fully characterized at #2901 alphonse n_head sweep on current saturated-clip max_norm=0.35 baseline as **6th paper-appendix axis closure** ASYMMETRIC-V. Cross-stack re-test on the obsolete σ=0.5/max_norm=0.5 stack would not add new mechanism information beyond what's banked. Stale_wip ~26h; no SENPAI-RESULT posted; pod-side process appears stuck.
+- **Headline:** STALE-WIP + OBSOLETE-STACK + AXIS-ALREADY-CLOSED housekeeping close. Paper-appendix matrix UNCHANGED at 20 closed × 8 transfer patterns + 2 MIXED axes + 1 PROVISIONAL class.
+
+### Reassignment
+
+Reassigning nezuko to **PR #3024: hybrid_kendall_lr LOWER bracket {1e-4, 1.5e-4} on current saturated-clip max_norm=0.35 baseline** — direct follow-up of the #2996 σ-head saturation dynamics finding (banked #267 this loop). hkl-axis was closed at #2773 as ASYMMETRIC-V {2.5e-4, 1e-3} bracket. Going LOWER tests whether the LOWER side has its own pattern (DEPENDENT-NEGATIVE or DEGENERATE) — could refine hkl-axis as **MIXED-CLASSIFICATION (3rd MIXED axis after β + wd)** if LOWER bracket has different pattern than UPPER. σ-head saturation transition point identification is paper-publishable on its own — directly informs hybrid optimizer design.
+
+---
+
 ## 2026-05-14 20:30 — PR #2981 (CLOSED, fern): huber_beta GAP+EXTEND {0.25, 0.10} on max_norm=0.35 — paper-strengthening BROAD-PEAK refinement of NON-MONOTONE-COST-MONOTONE-MECHANISM class + FIRST sub-baseline test point on β-LOWER bracket (β=0.10 test −0.07, val regresses so not merge)
 
 - **Branch:** `willowpai2g48h2-fern/huber-beta-gap-extend-on-max-norm-0p35`
