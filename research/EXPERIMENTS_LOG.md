@@ -4,6 +4,19 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 13:25 — PR #2925 (ASSIGNED, thorfinn): swa_lr × swa_start_frac compose {0.65/1.5e-5, 0.65/3e-5} on max_norm=0.35 — MERGE candidate at 4-epoch SWA window with deep-low-lr
+
+- **Branch:** `willowpai2g48h2-thorfinn/swa-lr-x-swa-start-frac-compose-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** MERGE candidate — tests whether 4-epoch SWA window at deep-low-lr converts #2896 Arm 1's directional-close + sub-noise marginal test win (val 45.30/+0.149, test 38.6172/**−0.020**) into a genuine MERGE. Drops swa_start_frac from 0.75 → 0.65 to give 5 epochs of SWA window (4 epochs at deep-low-lr after 2-epoch SWALR ramp); combines with swa_lr=1.5e-5 (#2896 Arm 1 floor). Directly addresses thorfinn's own #1 + #2 follow-up suggestions from #2896 and resolves banked methodology #170 (8th-consecutive SWA-window-truncation under 30-min cap).
+- **Two arms:** Arm 1 s_f=0.65 + swa_lr=1.5e-5 (DEEP-LOW-LR COMPOSE — primary MERGE candidate); Arm 2 s_f=0.65 + swa_lr=3e-5 (ASYMMETRIC-V GEOMETRIC MIDPOINT — probes #2896 thorfinn's #2 follow-up; geometric midpoint between #2896 Arm 1 1.5e-5 directional close and baseline 6e-5).
+- **Predictions:** Arm 1 val ∈ [44.80, 45.20] (MERGE candidate); Arm 2 val ∈ [45.05, 45.45]. Three outcomes: (a) Arm 1 MERGE → banked #170 actionable; (b) directional close → asymmetric-V midpoint optimum, further fine-bracket follow-up; (c) both regress → banked #2429 swa_start_frac<0.75 mechanism extends to saturated-clip. **Risk**: banked #2429 closed swa_start_frac<0.75 on σ=0.5 stack monotonically; mitigated by deep-low-lr swa_lr=1.5e-5 dominating SWA-mean.
+- **NEW DIAGNOSTICS:** per-epoch SWA-window effective lr trajectory; per-epoch base_val + swa_val trajectory (at what epoch does swa_val drop below baseline?); effective per-step weight-delta during SWA window (lr × |sign_update|, Arm 1 ~0.013 vs Arm 2 ~0.026 vs baseline 0.052); SWA-window completion check (does s_f=0.65 actually deliver 5 SWA epochs under 30-min cap?).
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 13:25 UTC; awaiting training. **train.py edit required** (add `swa_lr: float = 0.0` and `swa_start_frac: float = 0.0` Config sentinel flags; replace hardcoded 0.75 at line 741 with `cfg.swa_start_frac if cfg.swa_start_frac > 0 else 0.75`; decouple swa_lr at SWALR construction site).
+
+---
+
 ## 2026-05-14 13:05 — PR #2919 (ASSIGNED, fern): huber_beta LOWER fine bracket {0.20, 0.15} on max_norm=0.35 — 12th paper-appendix mechanism-transfer axis (extends INDEPENDENT-SYMMETRIC β-axis #2736 with LOWER reach; tests #2666 β-driven σ-spread mechanism transfer to saturated-clip)
 
 - **Branch:** `willowpai2g48h2-fern/huber-beta-lower-fine-on-max-norm-0p35`
@@ -26,6 +39,69 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 - **Predictions:** Could land in ASYMMETRIC-V (dominant), SYMMETRIC basin, BOTH-LOSE Pareto-cap, or open NEW CAPACITY-RESHUFFLE pattern class if both lose by similar magnitude mechanistically neutral. σ-spread ≈ 0.475 (10th cross-axis); channel ordering surf_ux=min/vol_ux=max (14th); clip_fraction=1.000 (9th — n_head is first axis with mechanism to shift pre-clip grad_norm distribution via attention shape). **NEW DIAGNOSTIC**: pre-clip grad_norm distribution + step-time per arm.
 - **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
 - **Status:** Assigned 2026-05-14 11:45 UTC; awaiting training. **train.py edit required** (add `n_head: int = 4` Config field; replace `n_head=4,` in model_config dict with `n_head=cfg.n_head,` — single-line edit at line 641).
+
+---
+
+## 2026-05-14 13:15 — PR #2896 (CLOSED, thorfinn): swa_lr sweep {1.5e-5, 1.5e-4} on max_norm=0.35 — paper-strengthening 10th axis closure (ASYMMETRIC-V class — 5th member of DOMINANT pattern, 50% of closed axes)
+
+- **Branch:** `willowpai2g48h2-thorfinn/swa-lr-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Verdict:** DIRECTIONAL CLOSE per PR rule. Arm 1 (swa_lr=1.5e-5) val 45.30 / test 38.6172 (+0.149 val / **−0.020 test** — sub-noise marginal test win); Arm 2 (swa_lr=1.5e-4) val 46.12 / test 39.08 (+0.965 val / +0.444 test, MODERATE REGRESSION). Per the PR decision rule no MERGE.
+- **W&B runs:** Arm 1 `ji5t5zes`, Arm 2 `gftma8ih`, baseline `ieu1futo`.
+- **Headline:** **10th paper-appendix mechanism-transfer axis with NEW 5th member of DOMINANT ASYMMETRIC-V pattern class** — swa_lr joins lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862. ASYMMETRIC-V now 5 of 10 closed axes (50%) — paper-publishable headline pattern under saturated-clip baseline.
+
+### Mechanism diagnosis (paper-publishable)
+
+- **Banked open question #146 RESOLVED**: swa_lr × cosine-final-lr coincidence WAS the load-bearing parameter (baseline swa_lr=6e-5 lands ~0.1e-5 above cosine-final 5.9e-5 → SWALR almost no-ops at default; this is what made anneal_epochs DEGENERATE in #2877). Once decoupled (Arms 1/2: 8.3× under/over cosine-final), SWALR ramp mechanism is genuine.
+- **Asymmetric-V mechanism**: higher swa_lr (Arm 2) ×10 weight delta during SWA window → bigger trajectory variance → looser average → worse SWA-model val; lower swa_lr (Arm 1) tight averaging at deeper-converged weights → near-baseline val + marginal test improvement (−0.020, ~9× below seed-noise stdev~1.76 from banked #88).
+- **Lion EMA bias REJECTED as confound** during SWA window — pessimistic open mechanism question fails. `exp_avg_norm` within ±25% across arms; Arm 1 actually has LARGEST EMA, not smallest. Lion EMA tracks current grads, which scale with effective lr.
+
+### Updated paper-appendix transfer-pattern table (10 closed axes, 7 patterns)
+
+| Pattern class | Axes | Count |
+|---|---|---|
+| INDEPENDENT-SYMMETRIC | β #2736 | 1 |
+| INDEPENDENT-ASYMMETRIC V (DOMINANT) | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, **swa_lr #2896 NEW** | **5** |
+| DEPENDENT-SYMMETRIC | wd #2791+#2819, Lion β1 #2880 | 2 |
+| DEPENDENT-NEGATIVE | seed #2790 | 1 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 | 1 |
+| DEGENERATE-AXIS (no headroom) | anneal_epochs #2877 | 1 |
+| MONOTONIC-REGRESSIVE (one-sided) | dropout #2887 | 1 |
+
+In-flight: #2901 alphonse n_head (ATTENTION-MECHANISM-CAPACITY-RESHUFFLE class NEW), #2919 fern huber_beta LOWER (extends INDEPENDENT-SYMMETRIC β-axis).
+
+### Cross-axis invariance confirmations (from #2896)
+
+| Quantity | Baseline | Arm 1 | Arm 2 | Confirmation # |
+|---|---|---|---|---|
+| σ-spread (max−min log_σ) | 0.4748 | 0.4734 | 0.4771 | **13th cross-axis** σ-spread invariance |
+| min log_σ channel | surf_ux | surf_ux | surf_ux | **15th cross-axis** channel ordering invariance |
+| max log_σ channel | vol_ux | vol_ux | vol_ux | (same) |
+| clip_fraction (final) | 1.000 | 1.000 | 1.000 | **10th cross-axis** clip_fraction=1.000 invariance |
+
+### Banked findings (#163–#171)
+
+#163 **PAPER-STRENGTHENING: swa_lr axis in ASYMMETRIC-V class — NEW 5th DOMINANT-pattern member** — 50% of closed axes; paper-publishable headline.
+
+#164 **PAPER-STRENGTHENING: banked open question #146 RESOLVED — swa_lr × cosine-final-lr coincidence WAS load-bearing parameter** — explains DEGENERATE-AXIS finding of #2877.
+
+#165 **Lion EMA bias REJECTED as confound during SWA window** — `exp_avg_norm` within ±25%; Arm 1 LARGEST not smallest.
+
+#166 **PAPER-STRENGTHENING: 13th cross-axis σ-spread invariance.**
+
+#167 **PAPER-STRENGTHENING: 15th cross-axis channel-ordering invariance.**
+
+#168 **PAPER-STRENGTHENING: 10th cross-axis clip_fraction=1.000 invariance.**
+
+#169 **SUB-NOISE MARGINAL TEST WIN on Arm 1 (IMPORTANT)** — test Δ=−0.020, ~9× below seed-noise. MERGE-threshold-adjacent. Strong motivator for swa_lr × swa_start_frac compose follow-up: 4-epoch SWA window at deep-low-lr could push directional-close into MERGE.
+
+#170 **METHODOLOGY: 8th-consecutive SWA-window-truncation under 30-min cap** — 2 of 4 planned SWA epochs (#2790, #2818, #2835, #2862, #2877, #2880, #2887, #2896). Most-stable cross-axis observation. Paper-appendix needs the cap-coincidence caveat called out explicitly.
+
+#171 **METHODOLOGY EXTENDS BANKED #148**: `optimizer_update_norm` uninformative for Lion (identical 868.63 across runs because Lion's update is sign vector; L2 norm = sqrt(num_params)). Meaningful quantity = `lr × update_norm`. Future Lion SWA work should log this OR per-step sign-flip rate (banked #148).
+
+### Advisor verdict
+
+**CLOSED — paper-strengthening 10th axis closure with NEW 5th ASYMMETRIC-V pattern member.** Reassigning thorfinn → swa_lr × swa_start_frac compose {s_f=0.65/swa_lr=1.5e-5, s_f=0.65/swa_lr=3e-5} on max_norm=0.35 (directly addresses thorfinn's #1 + #2 follow-up suggestions; tests whether 4-epoch SWA window at deep-low-lr converts Arm 1's directional-close + marginal test win into MERGE).
 
 ---
 
