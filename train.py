@@ -186,6 +186,14 @@ class PhysicsAttention(nn.Module):
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
+        # H76: cache slice tokens for spectral-HF aux loss (training only).
+        # slice_token shape: [B, heads, slice_num, dim_head] e.g. [B, 4, 64, 32].
+        # Cleared in eval to avoid stale references during validation/test.
+        if self.training:
+            self._cached_slice_tokens = slice_token
+        else:
+            self._cached_slice_tokens = None
+
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
@@ -240,6 +248,10 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
+        # H76: clear stale slice-token cache before each forward. If stoch depth
+        # drops this block, attn.forward never runs and the cache must not carry
+        # over a stale tensor whose autograd graph was freed by the prior step.
+        self.attn._cached_slice_tokens = None
         if self.training and self.stoch_depth_prob > 0.0:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
                 if self.last_layer:
@@ -300,6 +312,31 @@ class Transolver(nn.Module):
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
+
+
+# ---------------------------------------------------------------------------
+# H76: spectral high-frequency penalty on slice tokens (iMOOE-inspired)
+# ---------------------------------------------------------------------------
+
+def spectral_hf_aux_loss(slice_token: torch.Tensor, n_low: int = 4) -> torch.Tensor:
+    """L2 (squared) HF energy fraction along the dim_head axis of slice tokens.
+
+    Args:
+        slice_token: ``[B, heads, slice_num, dim_head]``.
+        n_low: number of low-frequency rfft components to preserve. The rest
+            (``dim_head/2 + 1 - n_low`` bins) are treated as high-frequency
+            and counted toward the penalty.
+
+    Returns:
+        Scalar mean HF energy fraction in ``[0, 1]``. Lower = more energy
+        concentrated in the lowest ``n_low`` rfft bins.
+    """
+    fft = torch.fft.rfft(slice_token, dim=-1, norm="ortho")  # [..., dim_head/2 + 1]
+    mag2 = fft.real.pow(2) + fft.imag.pow(2)  # |F|^2, same as fft.abs().pow(2)
+    hf_energy = mag2[..., n_low:].sum(dim=-1)
+    total_energy = mag2.sum(dim=-1) + 1e-9
+    hf_fraction = hf_energy / total_energy
+    return hf_fraction.mean()
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +610,18 @@ print(
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
 
+# H76: spectral high-frequency penalty on slice tokens (iMOOE-inspired).
+# Aux loss = mean HF energy fraction (top dim_head/2+1 - n_low rfft bins)
+# averaged across blocks. Added as lambda * spectral_loss to the main loss.
+H76_LAMBDA_SPECTRAL = 0.001
+H76_N_LOW = 4
+_h76_n_rfft = _h67_dim_head // 2 + 1
+print(
+    f"H76 spectral-HF-penalty: lambda={H76_LAMBDA_SPECTRAL} "
+    f"n_low={H76_N_LOW}/{_h76_n_rfft} components "
+    f"(dim_head={_h67_dim_head}, axis=-1)"
+)
+
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
 # H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
 # channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
@@ -663,6 +712,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_spectral = 0.0
+    epoch_per_block_hf = [0.0] * len(model.blocks)
+    epoch_per_block_count = [0] * len(model.blocks)  # H76: stoch-depth-aware avg
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -684,7 +736,32 @@ for epoch in range(MAX_EPOCHS):
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
         surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
         surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # H76: aggregate spectral HF penalty across all blocks that have cached
+        # slice tokens (every block during training). Mean per-block HF fraction.
+        spectral_loss = main_loss.new_zeros(())
+        n_blocks_with_tokens = 0
+        for i, block in enumerate(model.blocks):
+            cached = getattr(block.attn, "_cached_slice_tokens", None)
+            if cached is not None:
+                block_loss = spectral_hf_aux_loss(cached, n_low=H76_N_LOW)
+                spectral_loss = spectral_loss + block_loss
+                epoch_per_block_hf[i] += float(block_loss.detach().item())
+                epoch_per_block_count[i] += 1
+                n_blocks_with_tokens += 1
+        if n_blocks_with_tokens > 0:
+            spectral_loss = spectral_loss / n_blocks_with_tokens
+
+        loss = main_loss + H76_LAMBDA_SPECTRAL * spectral_loss
+
+        if epoch == 0 and n_batches == 0:
+            print(
+                f"[H76] ep1 batch1: main_loss={float(main_loss.detach().item()):.4f} "
+                f"spectral_loss={float(spectral_loss.detach().item()):.4f} "
+                f"(lambda*spectral={H76_LAMBDA_SPECTRAL * float(spectral_loss.detach().item()):.6f}, "
+                f"{n_blocks_with_tokens} blocks contributing)"
+            )
 
         optimizer.zero_grad()
         loss.backward()
@@ -700,10 +777,18 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_spectral += float(spectral_loss.detach().item())
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_spectral /= max(n_batches, 1)
+    # H76: per-block HF-fraction averages over batches where the block was
+    # *active* (stoch depth may drop it), so deeper blocks aren't biased low.
+    epoch_per_block_hf = [
+        (v / c if c > 0 else 0.0)
+        for v, c in zip(epoch_per_block_hf, epoch_per_block_count)
+    ]
 
     # --- Validate ---
     model.eval()
@@ -744,6 +829,12 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        # H76: spectral HF aux loss diagnostics
+        "train/spectral_hf_fraction": epoch_spectral,
+        "train/spectral_hf_fraction_per_block": epoch_per_block_hf,
+        "train/spectral_hf_active_batches_per_block": epoch_per_block_count,
+        "train/spectral_hf_lambda": H76_LAMBDA_SPECTRAL,
+        "train/spectral_hf_n_low": H76_N_LOW,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -752,6 +843,12 @@ for epoch in range(MAX_EPOCHS):
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    )
+    print(
+        f"    [H76] HF-fraction mean={epoch_spectral:.4f}  "
+        f"per-block=["
+        + ", ".join(f"b{i}={v:.4f}" for i, v in enumerate(epoch_per_block_hf))
+        + f"]  (lambda*HF={H76_LAMBDA_SPECTRAL * epoch_spectral:.6f})"
     )
     print(
         f"    freqs (lr={freqs_lr:.2e}): "
