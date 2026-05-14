@@ -28,7 +28,7 @@
 
 | PR | Student | Config | Compound | Status |
 |----|---------|--------|----------|--------|
-| **TBD** | **edward** | **ema_decay higher direction (0.995/0.999) on new compound** | NEW | Assigning now |
+| #2729 | edward | ema_decay=0.995/0.999 (higher direction) on new compound | NEW | WIP (just assigned) |
 | #2708 | thorfinn | Huber loss δ=0.5/1.0 vs MAE on n_layers=3+wd=3e-4 | NEW | WIP |
 | #2618 | frieren | --epochs 80/100 (T_max LARGER) on new compound | NEW | WIP |
 | #2491 | fern | sw=5/sw=3 stack on n_layers=3 | NEW | WIP (pod rate-limit blocked) |
@@ -68,7 +68,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 - **n_layers=2/n_layers=1 (askeladd #2482):** speed-dividend extension; val still descending at cap
 - **n_head=1 + n_layers=3/2 (tanjiro #2483):** cross-axis test of n_head=1 at shallow depth
 - **sw=5/sw=3 (fern #2491):** stack sw synergistic interaction at n_layers=3+wd=3e-4
-- **edward NEW (assigning):** ema_decay higher direction (0.995/0.999) on new compound — load-bearing main-vs-EMA gap (~2-4 pts) signals EMA smoothing is critical; testing higher decay strengthens that effect
+- **edward #2729:** ema_decay=0.995/0.999 higher direction on new compound — load-bearing main-vs-EMA gap (~2-4 pts) signals EMA smoothing is critical; higher decay deepens smoothing effect
 - **thorfinn #2708:** Huber δ=0.5/1.0 vs MAE loss on new compound — loss-formulation probe; MAE dominated early (#1825) but that was before Lion/EMA/n_layers=3/wd=3e-4
 
 **Plateau Protocol status:** Many basic axes now closed on new compound — wd (locked at 3e-4), dropout (locked at 0.2), n_head (locked at 2), slice_num (locked at 32), n_layers (locked at 3 pending askeladd), batch_size (locked at 4, no speed dividend), cosine T_max (T_max=50 sweet spot, T_max>50 promising), lr (locked at 1e-4, narrow). Three axes pending in current wave (n_layers=2/1, sw, T_max LARGER). After current wave: must escalate to architecture/loss-formulation tier — width axis (n_hidden, requires Config edit), Huber+MAE blend (requires train.py edit), length-bucketed sampler (requires data-loader edit). The substitutive-vs-complementary regularizer-interaction framework (findings 30, 34, 35, 39) is a paper-grade contribution distinct from any individual metric improvement.
