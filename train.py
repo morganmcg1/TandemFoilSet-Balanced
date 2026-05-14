@@ -649,14 +649,17 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
-optimizer = Lion(
+optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
-    betas=(0.9, 0.99),
+    betas=(0.9, 0.999),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Optimizer: AdamW (lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.999))")
+print(f"10x Lion baseline lr=1.5e-4; tests upper end of conservative conversion bracket [3.3x, 10x]")
+print(f"Previous AdamW @ 5e-4 (3.3x): val 41.55 LOSS (#2974); this PR runs 10x endpoint per #2986")
+print(f"Total params: {sum(p.numel() for p in model.parameters())}")
+print(f"NEW BASELINE: val 30.0382 / test 25.2099 (PR #2964)")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -852,23 +855,31 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
-# --- Lion momentum diagnostic: sanity-check optimizer state at terminal ---
-_lion_total = 0
-_lion_nz = 0
+# --- AdamW state diagnostic: sanity-check optimizer state at terminal ---
+_adamw_total = 0
+_adamw_nz_exp_avg = 0
+_adamw_nz_exp_avg_sq = 0
 for _group in optimizer.param_groups:
     for _p in _group['params']:
         if _p in optimizer.state:
-            _m = optimizer.state[_p].get('momentum')
-            if _m is not None:
-                _lion_total += _m.numel()
-                _lion_nz += (_m.abs() > 1e-8).sum().item()
-_lion_nz_frac = _lion_nz / max(_lion_total, 1)
-print(f"Lion momentum non-zero fraction at terminal: {_lion_nz_frac:.4f} ({_lion_nz}/{_lion_total} elements)")
+            _ea = optimizer.state[_p].get('exp_avg')
+            _eas = optimizer.state[_p].get('exp_avg_sq')
+            if _ea is not None:
+                _adamw_total += _ea.numel()
+                _adamw_nz_exp_avg += (_ea.abs() > 1e-8).sum().item()
+            if _eas is not None:
+                _adamw_nz_exp_avg_sq += (_eas.abs() > 1e-12).sum().item()
+_adamw_nz_ea_frac = _adamw_nz_exp_avg / max(_adamw_total, 1)
+_adamw_nz_eas_frac = _adamw_nz_exp_avg_sq / max(_adamw_total, 1)
+print(f"AdamW exp_avg non-zero fraction at terminal: {_adamw_nz_ea_frac:.4f} ({_adamw_nz_exp_avg}/{_adamw_total} elements)")
+print(f"AdamW exp_avg_sq non-zero fraction at terminal: {_adamw_nz_eas_frac:.4f} ({_adamw_nz_exp_avg_sq}/{_adamw_total} elements)")
 append_metrics_jsonl(metrics_jsonl_path, {
-    "event": "lion_momentum_diagnostic",
-    "nonzero_fraction": _lion_nz_frac,
-    "nonzero_count": _lion_nz,
-    "total_count": _lion_total,
+    "event": "adamw_state_diagnostic",
+    "exp_avg_nonzero_fraction": _adamw_nz_ea_frac,
+    "exp_avg_nonzero_count": _adamw_nz_exp_avg,
+    "exp_avg_sq_nonzero_fraction": _adamw_nz_eas_frac,
+    "exp_avg_sq_nonzero_count": _adamw_nz_exp_avg_sq,
+    "total_count": _adamw_total,
 })
 
 # --- Test evaluation + local summary ---
