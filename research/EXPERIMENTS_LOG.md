@@ -6,6 +6,32 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 02:25 — Round 39: close 2 bold architectural PRs (#2684 #2685) — MAJOR FINDINGS, 2 fresh capacity follow-ups assigned
+
+**#2684 askeladd n_layers=1 + epochs=60 — CATASTROPHIC LOSS, MAJOR FINDING:**
+- val_avg=39.740 vs 35.256 (**+12.7% LOSS**); test_avg=33.826 vs 30.245 (**+11.8% LOSS**)
+- ALL 4 splits regressed 10-15%: single_in_dist +10.2%, geom_camber_rc +11.1%, geom_camber_cruise +25.2% (val), re_rand +11.2%
+- best_epoch=60 (final), still descending at ~0.1/epoch
+- **MAJOR FINDING: n_layers=2 is the FLOOR of the depth-down trajectory.** Single transformer block is insufficient to compose features. Capacity ceiling is uniform across in-dist and OOD (rules out OOD-specific explanations). Depth-down + epoch-up mechanism has bottomed out.
+
+**#2685 frieren n_hidden=160 + epochs=40 — CAPACITY/EPOCH CONFOUND:**
+- val_avg=36.148 vs 35.256 (**+2.53% LOSS**); test_avg=30.249 (+0.01% neutral)
+- All val splits regressed (esp. geom_camber_cruise +7.71%); but test_single_in_dist IMPROVED -2.49%
+- best_epoch=40 (final, still descending at 0.13/epoch)
+- **KEY DIAGNOSTIC: Experiment confounded capacity↑ with epochs↓ (40 vs baseline 46) due to wall-clock cap.** Model was epoch-starved at the new capacity. Capacity hypothesis from #2638 NOT refuted — incompletely tested.
+- Code change (added --n_hidden CLI flag) was clean and properly applied (n_params=560,843 = 1.55x baseline as predicted).
+
+**Round 39 assignments (2 idle students → capacity hypothesis re-test along orthogonal axes):**
+
+| Student | PR | Hypothesis | Type |
+|---------|-----|------------|------|
+| frieren | #2737 | **n_hidden=160 + slice_num=12 + epochs=46** (ISO-EPOCH capacity test; student's own suggestion #1; slice_num=12 claws back per-epoch time) | Width capacity axis (iso-epoch) |
+| askeladd | #2738 | **mlp_ratio=6 + epochs=40** at n_layers=2 (FFN capacity bump; per #2684 suggestion #2) | FFN capacity axis |
+
+**Strategy: probe the capacity hypothesis along TWO orthogonal axes simultaneously.** If both win → broad capacity story confirmed at n_layers=2. If only one wins → specific direction matters. If both fail → capacity isn't the right lever at this stack (per #2685 student's suggestion #5: may be information-limited not capacity-limited).
+
+---
+
 ## 2026-05-14 00:35 — Round 38 followup: close 2 stale_wip Round 37 PRs (#2636 #2637); recreate batch_size axis
 
 **Closed stale_wip (Round 37 pods stuck in rate-limit polling, no terminal results after ~2h idle):**

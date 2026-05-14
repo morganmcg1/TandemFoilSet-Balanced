@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 00:35
+- **Date:** 2026-05-14 02:30
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -18,11 +18,12 @@
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
-> **Round 38 frontier signals (after WD axis closure + architectural pivot):**
-> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR (5e-5 retry, 8e-5 retry, 1e-4 baseline, 1.2e-4 lost, 1.5e-4 lost), WD (5e-5 lost, 1e-4 baseline, 3e-4 lost), surface_weight (10 baseline, 8/12/15 all lost), mlp_ratio (4 baseline, 2 retry), n_head (4 baseline, 2 lost), slice_num (16 baseline, 14/20/24 retry), epochs (46 baseline, 50 lost). bs (2 #2636, 8 #2637) in-flight from Round 37.
-> - **#2638 diagnostic (split-dependent OOD)**: re_rand is regularization-friendly; geom_camber is CAPACITY-LIMITED. Two different OOD mechanisms.
-> - **Round 38 ARCHITECTURAL PIVOT**: askeladd n_layers=1 (depth-down extreme) + frieren n_hidden=160 (capacity bump targeting geom_camber). These are the first non-HP architectural moves of the round.
-> - **If Round 38 architectural arms also fail**: pivot to code-change PRs for aux surface head, per-channel surface weighting (surf_weight_p ≠ surf_weight_uv), physics-informed loss term (pressure-gradient × surface-normal), or seed-averaged baseline confirmation.
+> **Round 39 frontier signals (depth-down floor + capacity hypothesis under test):**
+> - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss). Trajectory bottomed out — no further depth reduction possible.
+> - **Capacity hypothesis still LIVE but confounded**: PR #2685 (n_hidden=160 + epochs=40) confounded capacity↑ with epochs↓. Best_epoch=40 (final, still descending) confirms epoch-starvation. Iso-epoch retest assigned (frieren #2737: n_hidden=160 + slice_num=12 + epochs=46) plus FFN-axis test (askeladd #2738: mlp_ratio=6).
+> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth all saturated or floored.
+> - **#2638 split-dependent OOD diagnostic**: re_rand is regularization-friendly; geom_camber is CAPACITY-LIMITED (or possibly INFORMATION-limited per #2685 student suggestion #5).
+> - **If Round 39 capacity tests fail**: pivot to code-change PRs for aux surface head, per-channel surface weighting (surf_weight_p ≠ surf_weight_uv), physics-informed loss term, or seed-averaged baseline confirmation. The "information-limited" hypothesis (no M=2-4 cruise camber in training data) would require dataset/augmentation changes.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future architectural arm should explicitly target this split.
 
 | Split | val mae_surf_p | test mae_surf_p |
@@ -107,8 +108,8 @@
 | edward | **#2681** | **slice_num=24+epochs=33** retry (wider partition) | slice axis recreate |
 | nezuko | **#2682** | **mlp_ratio=2** retry (narrower FFN) | mlp_ratio axis recreate |
 | thorfinn | **#2683** | **lr=5e-5** 3rd retry (LR lower bound) | LR axis recreate (3rd) |
-| askeladd | **#2684** | **n_layers=1 + epochs=60** EXTREME depth-down | **BOLD: architectural** |
-| frieren | **#2685** | **n_hidden=160 + epochs=40** CAPACITY BUMP (code change to add --n_hidden) | **BOLD: capacity-targeted** |
+| askeladd | **#2738** | **mlp_ratio=6 + epochs=40** at n_layers=2 (FFN capacity bump; orthogonal to n_hidden width) | **Round 39: FFN capacity** |
+| frieren | **#2737** | **n_hidden=160 + slice_num=12 + epochs=46** (ISO-EPOCH capacity test; claws back per-epoch time via slice reduction) | **Round 39: iso-epoch width capacity** |
 
 **Round 38 strategy: ARCHITECTURAL PIVOT after HP axes closed.**
 
@@ -130,6 +131,7 @@
 **Critical insight from #2523 result (seed variance):** Run-to-run variance is ~±1.0 val units (the same config produced epoch-46 vals of 35.26 vs 36.42 across two runs). Single-seed comparisons of small tweaks (<5% change) are below the noise floor. **Strategy shift: prioritize bigger experimental swings (compounds, 20%+ axis changes) over marginal tuning.**
 
 **Merged:** #2348 (val=35.548), #2468 (val=35.256 NEW BEST)
+**Closed Round 39:** #2684 (askeladd n_layers=1 **+12.7% LOSS** — MAJOR FINDING: n_layers=2 is depth-down floor); #2685 (frieren n_hidden=160 **+2.53% loss** — capacity/epoch confound; iso-epoch retest assigned)
 **Closed Round 38:** #2638 (frieren wd=3e-4 alone **+1.43% loss** — KEY diagnostic: split-dependent OOD finding); #2639 (askeladd wd=5e-5 **+2.07% within noise** — WD axis fully closed); #2608/2609/2610/2611 (4 Round 36 stale_wip, all recreated in Round 38)
 **Closed Round 37:** #2600 (frieren sw=12 **+3.96% LOSS** — sw axis at this stack now closed: optimum bracketed tightly around sw=10); #2601 (askeladd compound lr=1.5e-4+wd=3e-4 **+2.89% LOSS** — WD partially rescues OOD but erases in-dist gain; LR/WD sweep space exhausted at this stack); #2570 (fern sw=8 stale_wip); #2571 (tanjiro mlp_ratio=3 stale_wip)
 **Closed Round 36:** #2543 (alphonse stale_wip), #2545 (edward stale_wip), #2547 (nezuko stale_wip), #2549 (thorfinn stale_wip)
