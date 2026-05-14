@@ -63,6 +63,11 @@ ACTIVATION = {
 }
 
 
+def squared_relu(x: torch.Tensor) -> torch.Tensor:
+    """Primer (So et al. 2021) squared ReLU: f(x) = (relu(x))^2."""
+    return F.relu(x).pow(2)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -213,7 +218,12 @@ class TransolverBlock(nn.Module):
         # gain on residual branches. Saves 2×hidden_dim params per block.
         self.gamma_attn = 1.0
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
+        # Inner activation swapped F.silu -> squared_relu (Primer 2021) per PR
+        # #3009. Activation-only swap inside the SwiGLU gate path; topology and
+        # param count unchanged. NOTE: the SwiGLU MLP branch never used GELU in
+        # this baseline; this is a SiLU -> sqrelu swap, not the GELU -> sqrelu
+        # the PR body literally describes. See PR comment for rationale.
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=squared_relu)
         self.gamma_mlp = 1.0
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
@@ -585,9 +595,16 @@ _std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
     f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
     f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
-    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
+    f"act=SquaredReLU (Primer 2021) [was SiLU]; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+)
+print(
+    f"Activation swap (PR #3009): SwiGLU inner act_fn F.silu -> squared_relu (F.relu(x).pow(2)); "
+    f"Primer/PaLM-2/Nemotron canonical recipe was plain MLP + sqrelu, but the current model is SwiGLU; "
+    f"Option A interpretation: activation-only swap inside existing SwiGLU gate path. "
+    f"Param count UNCHANGED at 407,172 (#2964 baseline). "
+    f"NEW BASELINE to beat: val_avg/mae_surf_p < 30.0382 (PR #2964)."
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -753,6 +770,72 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     return captured
 
 
+def capture_swiglu_gate_distribution(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
+    """Probe SwiGLU gate post-activation distribution per block on one val batch.
+
+    Captures (B, N, hidden_swiglu) tensor of post-activation gate values =
+    squared_relu(linear_gate(LN(x))) per TransolverBlock. Logs mean, std, max,
+    and fraction-zero — the squared-ReLU dead-feature signature predicted by
+    Primer/PaLM-2 literature. Compared across blocks to detect saturation or
+    sparsity drift with depth.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    captured: list[dict] = []
+
+    def make_gate_hook(block_idx):
+        def hook(_module, _args, output):
+            with torch.no_grad():
+                # output of linear_gate is pre-activation; apply squared_relu
+                # to get the gate values that multiply with value branch.
+                pre = output.detach().float()
+                gate = F.relu(pre).pow(2)
+                captured.append({
+                    "block_idx": block_idx,
+                    "gate_mean": gate.mean().item(),
+                    "gate_std": gate.std().item(),
+                    "gate_max": gate.max().item(),
+                    "gate_frac_zero": (gate == 0).float().mean().item(),
+                    "preact_mean": pre.mean().item(),
+                    "preact_std": pre.std().item(),
+                    "preact_min": pre.min().item(),
+                    "preact_max": pre.max().item(),
+                })
+        return hook
+
+    handles = []
+    for bi, blk in enumerate(inner.blocks):
+        # SwiGLUMLP.linear_gate -> the activation is applied to its output
+        handles.append(blk.mlp.linear_gate.register_forward_hook(make_gate_hook(bi)))
+
+    model_obj.eval()
+    with torch.no_grad():
+        x_b, _, _, mask_b = next(iter(loader))
+        x_b = x_b.to(device_, non_blocking=True)
+        mask_b = mask_b.to(device_, non_blocking=True)
+        x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+        with amp_ctx():
+            _ = inner({"x": x_norm, "mask": mask_b})
+
+    for h in handles:
+        h.remove()
+
+    print(f"\nSwiGLU squared-ReLU gate distribution probe @ {epoch_tag}:")
+    log_payload = {
+        "event": "swiglu_gate_distribution",
+        "epoch_tag": epoch_tag,
+        "blocks": captured,
+    }
+    for site in captured:
+        print(
+            f"  block[{site['block_idx']}].mlp.gate: "
+            f"mean={site['gate_mean']:.4f} std={site['gate_std']:.4f} "
+            f"max={site['gate_max']:.3f} frac_zero={site['gate_frac_zero']:.3f} | "
+            f"preact[min={site['preact_min']:.3f} max={site['preact_max']:.3f}]"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, log_payload)
+    return captured
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -848,6 +931,12 @@ for epoch in range(MAX_EPOCHS):
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+        # PR #3009: squared-ReLU gate distribution probe at ep1 — captures the
+        # post-activation distribution (sparsity, heavy-tail signature) for
+        # comparison with SiLU baseline. Required by PR's "ep1 stability check".
+        capture_swiglu_gate_distribution(
+            model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
+        )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
@@ -881,6 +970,11 @@ if best_metrics:
     # Residual magnitude probe @ best-checkpoint (compare to ep1 capture).
     _probe_loader_end = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     capture_residual_magnitudes(
+        model, _probe_loader_end, stats, amp_ctx_factory, device,
+        epoch_tag=f"best_ep{best_metrics['epoch']}",
+    )
+    # PR #3009: squared-ReLU gate distribution probe @ best-checkpoint.
+    capture_swiglu_gate_distribution(
         model, _probe_loader_end, stats, amp_ctx_factory, device,
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
