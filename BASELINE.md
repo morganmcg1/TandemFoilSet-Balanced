@@ -56,6 +56,15 @@ cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
 
 **Cumulative**: **-76.5%** vs initial 117.17 (-2.32% vs #2650)
 
+### Noise floor (calibrated by PR #2725 edward, 2-seed multi-seed pilot on #2650 stack)
+
+| Quantity | Mean (n=2 seeds, on #2650 stack) | Std |
+|----------|---------:|----:|
+| val_avg/mae_surf_p | 28.866 | **0.37** |
+| test_avg/mae_surf_p | 24.946 | **0.16** |
+
+**Implication for future merge decisions on this branch**: a single-seed gain under ~0.4 val_avg (~1σ) is consistent with seed noise. The merged #2690 gain (-0.66 val_avg = ~1.8σ over the #2650 seed mean) was real but borderline. Future close-to-baseline single-seed deltas should be flagged for multi-seed confirmation rather than auto-merged.
+
 ---
 
 ## Previous Baseline — PR #2650 (re-conditional-layernorm-affine)

@@ -2,6 +2,92 @@
 
 ---
 
+## 2026-05-14 05:08 — Round 05:08: 2 closures + 2 bold-direction assignments + noise floor calibration
+
+First wave of Round 02:28 assignments arrived. No winners — both review-ready PRs regressed vs the #2690 baseline. But the multi-seed PR delivered a critical noise-floor calibration that will shape all future merge decisions on this branch.
+
+### Closure — #2768 alphonse `re-conditional-attn-temperature` (+3.5% val regression)
+
+- val_avg 28.5527 vs #2690 baseline 27.5868 = **+0.97 (+3.5%)**
+- test_avg 25.1924 vs 24.1056 = **+1.09 (+4.5%)**
+- All 4 val splits regressed: single +1.10, rc +2.25, cruise +0.20, re_rand +0.31
+- Metrics: `models/model-re-conditional-attn-temperature-20260514-042931/metrics.jsonl`
+
+**Mechanism worked perfectly** — clean diagnostic confirms hypothesis at the parameter level:
+- α opened from 1.0 → mean ~1.28 by epoch 5, stabilized 1.20–1.30 across all blocks
+- corr(α, log_Re) = +1.00 across all 5 blocks (monotonic by construction)
+- Sharper softmax for high-Re samples, softer for low-Re — direction matches hypothesis
+- No clamp hits (|α-1| ≤ 0.65), no NaNs, only 10 added params
+
+**But the lever didn't transfer to val gain.** This is the FIRST Re-conditioning hook to NOT win on this branch (4-of-4 streak broken at the 5th):
+1. ✅ ReFiLM (slice-attn output gates) — feature-output FiLM
+2. ✅ ReScaleHead (output scale) — feature-output scale
+3. ✅ ReConditionalLayerNorm (γ/β affine) — feature-output affine post-LN
+4. ✅ ReConditionalOutputBias (output bias) — feature-output bias
+5. ❌ ReConditionalAttnTemperature (softmax denominator) — **computation path**, not feature output
+
+**Refined principle**: Re-condition feature *outputs* ≫ Re-condition computation *paths*. The 4 winners all act on already-computed features (or about-to-be-output features). Attn temp changes how slice mass is *distributed*, not the values being summed — it's the function class itself, not the parametrization. Mean α≈1.28 = 28% sharpening = less mixing across slices = worse OOD generalization (consistent with all-splits regression rather than regime-specific failure).
+
+**Re-conditional-attn-TEMPERATURE axis CLOSED.** No follow-up; the diagnostic is conclusive.
+
+### Closure — #2725 edward `multi-seed-variance-new-baseline` (not a winner, but established noise floor)
+
+- 2-seed config switched mid-flight from `--tta_val_per_epoch` (no-op, cost 5 epochs) to `--tta_test` (end-of-train TTA + variance only). Right call.
+- 2-seed mean val_avg/mae_surf_p (with TTA) = 28.8634 (vs #2650 baseline 28.2414 = **+2.21%**)
+- 2-seed mean test_avg/mae_surf_p (with TTA) = 24.8868 (vs #2650 baseline 24.4827 = **+1.65%**)
+- Both seeds landed **above** #2650 (28.60 and 29.13) — meaning **#2650 itself was on the favorable tail of its seed distribution**.
+- Metrics: `models/model-multi-seed-tta-seed42-20260514-034250/metrics.jsonl`, `models/model-multi-seed-tta-seed43-clean-20260514-042239/metrics.jsonl`
+
+**CRITICAL DELIVERABLE — Noise floor on the #2650 baseline stack (n=2 seeds):**
+
+| Quantity | Mean | Std |
+|----------|-----:|----:|
+| val_avg/mae_surf_p | 28.866 | **0.37** |
+| test_avg/mae_surf_p | 24.946 | **0.16** |
+
+**Implications for all future merge decisions on this branch:**
+
+1. **The merged #2690 ReConditionalOutputBias gain (-0.66 val_avg over #2650) is ~1.8σ over the #2650 seed mean.** Real but borderline. Cumulative -76.5% is unchanged.
+2. **Future single-seed wins under ~0.4 val_avg ARE noise-equivalent.** Decision criteria updated: single-seed gain ≥ 0.4 val_avg = confident winner; gain ∈ [0, 0.4) = marginal, prefer multi-seed confirmation or merge with explicit noise caveat; gain < 0 = close.
+3. **TTA stacking is small (~0.06 test, ~0 val) and dominated by 0.16 test std.** Per-epoch TTA-val checkpoint selection was empirically a no-op. **TTA-stacking axis CLOSED.**
+
+This noise floor will be added to `BASELINE.md` Current Baseline section.
+
+### New assignment — #2795 alphonse `ema-weight-averaging-decay0p999`
+
+Bold direction off the Re-conditioning family after #2768 broke the streak.
+
+- **Hypothesis**: Polyak EMA from step 0 with decay=0.999. Maintain running `θ_ema = 0.999·θ_ema + 0.001·θ`, evaluate using `θ_ema`. Aggregates final-region trajectory smoothly (~last 2-3K steps weighted exponentially by end of training).
+- **Why now**: Model is budget-limited (best epoch always = last epoch). EMA captures the final descent more stably than the literal terminal weights. Different from SWA (which failed in #2702 due to swa_lr=1e-4 LR conflict with cosine floor).
+- **Zero new params, zero new compute** — pure free-lunch optimizer trick.
+- **Diagnostics requested**: `||θ-θ_ema||/||θ||` at end of training + val_avg with/without EMA at best epoch.
+
+### New assignment — #2796 edward `sam-sharpness-aware-minimization`
+
+Bold optimizer-level direction targeting flat minima for OOD generalization.
+
+- **Hypothesis**: SAM (Foret et al. 2021) with ρ=0.05. Perturb θ→θ+ρ·∇L/||∇L||, compute grad at perturbed point, use THAT grad to update θ. Finds parameters where both θ and its neighborhood have low loss → flat minima → better OOD generalization.
+- **Why now**: Our hardest splits are OOD (rc, re_rand). SAM's flat-minima bias is exactly designed for this regime. Edward's #2725 noise floor showed current optimizer is at the local-basin noise floor — moving basins should provide >0.4σ separation.
+- **Trade-off**: 2× cost → halve to 14 epochs (T_max=14). Risk of undertraining is the main caveat.
+- **Diagnostics requested**: sharpness measure `(L(θ+ρ·∇L/||∇L||) - L(θ)) / L(θ)` on val batch + grad-norm trajectory.
+
+### Open state at end of Round 05:08
+
+| PR | Student | Slug | Status |
+|----|---------|------|--------|
+| #2770 | askeladd | re-cond-ffn-film | WIP (~1h) |
+| #2772 | nezuko | p-label-noise-1pct | WIP (~50min) |
+| #2775 | fern | aoa1-neg-jitter | WIP (~50min) |
+| #2779 | thorfinn | naca-pair-film | WIP (~50min) |
+| #2788 | tanjiro | re-cond-input-scale | WIP (just-assigned) |
+| #2721 | frieren | rc-nn-geom-weighted | WIP needs rebase + softer cap |
+| #2795 | alphonse | ema-decay0p999 | WIP (just-assigned 05:08) |
+| #2796 | edward | sam-rho0p05 | WIP (just-assigned 05:08) |
+
+**Family balance**: 3 Re-conditioning (#2770 FFN-FiLM, #2788 input-scale, #2779 NACA-pair geometric FiLM), 2 data-augmentation (#2772, #2775), 1 oversampling-diagnostic (#2721), 2 optimizer-level (#2795 EMA, #2796 SAM). Healthy diversity given the 5th Re-hook just failed; the 2 optimizer-level swings de-risk overfitting to a single mechanism family.
+
+---
+
 ## 2026-05-14 02:40 — Round 02:40: stale-PR rotation (1 closure, 1 reassignment, 1 send-back follow-up)
 
 Mini-round triggered by survey showing #2724 tanjiro stalled ~2h45m. No new winners, no review-ready PRs. All 8 students now actively WIP after rotation.

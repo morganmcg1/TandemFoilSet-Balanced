@@ -1,5 +1,10 @@
 # SENPAI Research State
 
+- **Date**: 2026-05-14 05:08 — Round 05:08: **2 closures (#2768 alphonse Re-cond-attn-temp +3.5%, #2725 edward multi-seed +2.2%). 2 new bold-direction assignments (#2795 alphonse EMA decay=0.999, #2796 edward SAM rho=0.05).** Key strategic findings:
+  - **#2768 Re-cond attn temperature**: The first Re-hook to NOT win. Mechanism worked perfectly (α opened 1.0→1.28, corr +1.0 with log_Re) but sharpening softmax hurt ALL splits (+3.5% val). Refined principle: **Re-condition feature outputs ≫ Re-condition computation paths**. The 4 merged Re-hooks all condition features (slice-attn output FiLM, LN affine, output scale, output bias). The softmax denominator is the function class itself, not the parametrization. The space of "good Re-hook injection points" is narrower than 4-of-4 winning streak suggested.
+  - **#2725 multi-seed variance floor**: std=0.37 val_avg / 0.16 test_avg (n=2 seeds on #2650 stack). The #2690 merge (val 27.58, -0.66 vs #2650 mean 28.87) was ~1.8σ — real but borderline. **Future single-seed wins under ~0.4 val_avg are noise-equivalent**; encode this in future decision criteria. TTA-stacking axis CLOSED (gain ~0.06 dominated by 0.16 test std).
+  - **Strategic pivot for Round 05:08**: After 4-of-4 Re-hooks won then 5th broke, time for boldness OFF the Re-conditioning family. Both assignments are optimizer-level orthogonal to all architecture/feature/loss work: **EMA Polyak averaging** (alphonse — budget-aware flat-minima from step 0, zero cost) and **SAM Sharpness-Aware Minimization** (edward — flat-minima with explicit worst-case perturbation, 2× cost so 14 epochs).
+
 - **Date**: 2026-05-14 02:40 — Round 02:40 (mini-round, post-survey): **#2724 tanjiro geometry-mirror-TTA CLOSED** (pod stuck on GraphQL rate-limit ~2h45m, iterations 304-307 all "no work assigned"; same precedent as #2599/#2534 closures from 01:54). **Reassigned tanjiro to #2788 `re-conditional-input-scale`** (5th Re-hook on 16-D input vector before encoder — input-side dual of merged #2690 ReCondOutputBias; ~32 params, init-to-identity). Also **re-sent follow-up on #2721 frieren** with cleaner shell-safe instructions + rebase request (PR is `mergeable=CONFLICTING` after #2690 merge). All 8 students now actively WIP, 0 idle.
 
 - **Date**: 2026-05-14 02:28 — Round 02:28: **🏆 PR #2690 MERGED (Re-cond output bias, val 27.5868, -2.32%). New baseline: 27.5868/-76.5%**. 5 closures (#2699 LayerScale +5.88%, #2702 SWA +8.67%, #2723 ensemble K=3 +5.61%, #2703 asymmetric ch15 +9.87%, #2721 frieren sent-back for geometry-weighted k-NN). 5 new assignments (#2768-#2779) + frieren sent-back on #2721. Key strategic insight from #2699 failure: per-block gating is too heavy for 30-min budget (cost 2 epochs). Focus on lightweight Re-hooks (≤10 params). Key insight from rc-NN: log_Re dominates distance metric and selects wrong samples — exclude Re from geometry-based k-NN.
@@ -148,20 +153,24 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments (round 02:40 — current wave)
+## Active Experiments (round 05:08 — current wave)
 
-Baseline: **PR #2690 ReCondOutputBias val_avg=27.5868** (cumulative -76.5%). All 8 experiments below target this new baseline. **0 idle students.**
+Baseline: **PR #2690 ReCondOutputBias val_avg=27.5868** (cumulative -76.5%). **Noise floor: val std=0.37, test std=0.16 (n=2 seeds on #2650 stack, from #2725 edward).** Single-seed wins under ~0.4 val_avg are noise-equivalent — beat baseline by ≥ 0.4 to be confident. All 8 experiments below target this baseline. **0 idle students.**
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2768 | alphonse | `re-conditional-attn-temperature` | WIP | **HIGHEST** | 6th Re-hook: multiply slice logits by α(Re)=1+g(logRe) before softmax. 10 params. Orthogonal to FiLM's additive shift — together they give full affine control (scale + shift) on attention logits. |
+| #2795 | alphonse | `ema-weight-averaging-decay0p999` | WIP (just-assigned 05:08) | **HIGHEST** | **NEW DIRECTION**: Polyak EMA from step 0, decay=0.999. Budget-aware flat-minima at zero cost (we always hit wall clock on final epoch — EMA aggregates final-region trajectory smoothly). Orthogonal to all Re-conditioning. |
 | #2770 | askeladd | `re-conditional-ffn-film` | WIP | **HIGH** | 6th Re-hook: FiLM inside FFN hidden layer of each block (after first GELU). Different injection from ReCondLN which conditions FFN input. ~2.3K params. |
 | #2772 | nezuko | `p-label-noise-epsilon-1pct` | WIP | **HIGH** | Gaussian noise on p-targets (ε=0.01, annealed) during training. Zero inference cost. Different angle from all architecture/feature/optimizer attempts. |
 | #2775 | fern | `aoa1-negative-jitter-sigma02` | WIP | **HIGHEST** | Targeted AoA_1 one-sided negative jitter (grounded in frieren's diagnostic: rc = all-negative AoA_1 while train = mixed sign). First experiment targeting the MOST DISCRIMINATIVE OOD channel. |
 | #2779 | thorfinn | `naca-pair-film-conditioning` | WIP | **HIGHEST** | Geometry-conditional FiLM on 8-D tandem signature. Orthogonal to Re-conditioning: conditions on SHAPE not physics. Directly targets multi-axis rc OOD joint condition. |
 | #2721 | frieren | `rc-nn-oversampling-geom-weighted` | WIP (sent-back, needs rebase) | **HIGH** | Softer reweighting (max_boost=2.0) + geometry-weighted distance (exclude log_Re, upweight NACA geometry). rc mechanism real (-3.71% rc), collateral damage from Re-dominated distance metric. Currently `mergeable=CONFLICTING`. |
-| #2788 | tanjiro | `re-conditional-input-scale` | WIP (just-assigned 02:40) | **HIGHEST** | 5th Re-hook: γ(log_Re)∈R^16 applied multiplicatively to 16-D input before encoder. Input-side dual of #2690 output-bias. ~32 params, init-to-identity. (#2724 geom-mirror-TTA closed for pod rate-limit stall.) |
-| #2725 | edward | `multi-seed-variance-new-baseline` | WIP | **HIGH** | 2-seed variance floor + TTA-val-per-epoch. Establishes noise floor for all merge decisions. |
+| #2788 | tanjiro | `re-conditional-input-scale` | WIP | **HIGH** | 5th Re-hook: γ(log_Re)∈R^16 applied multiplicatively to 16-D input before encoder. Input-side dual of #2690 output-bias. ~32 params, init-to-identity. Note: 5th in family, after #2768 attn-temp BROKE the streak — risk of overfitting the Re-conditioning hypothesis. |
+| #2796 | edward | `sam-sharpness-aware-minimization` | WIP (just-assigned 05:08) | **HIGHEST** | **NEW DIRECTION**: SAM with ρ=0.05, runs at half-epochs (14 vs 28) due to 2× cost. Flat-minima OOD optimizer with strong CV/NLP literature support. High-variance high-reward swing. |
+
+**Closed-this-round trajectory** (Round 05:08):
+- #2768 alphonse Re-cond attn temp **CLOSED +3.5%**: first Re-hook to break the 4-of-4 winning streak. Refined principle: Re-condition feature outputs ≫ Re-condition computation paths (softmax denominator). Re-conditional-attn-TEMPERATURE axis CLOSED.
+- #2725 edward multi-seed **CLOSED +2.2%** (not a winner) but established critical noise floor for all future merge decisions on this branch. TTA-stacking axis CLOSED (gain ~0.06 < 0.16 test std).
 
 ## Active Experiments (round 01:54 — post-4-closure wave)
 
