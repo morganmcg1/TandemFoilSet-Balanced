@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -571,14 +573,34 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Seed for torch / numpy / random — set this to make multi-seed run-variance
+    # comparisons clean.
+    seed: int = 42
+    # Per-epoch validation TTA delta (log-Re bracket). On every epoch we run
+    # ``evaluate_split_multi_tta`` with both no_tta and ±val_tta_delta arms so
+    # the best checkpoint under each criterion can be saved independently
+    # (checkpoint_no_tta.pt / checkpoint_tta.pt) and compared later.
+    val_tta_delta: float = 0.05
+    # When set, skip training entirely, load checkpoints from this directory, and
+    # run only the final test / TTA evaluation. Used to recover the final eval
+    # for a run whose training completed but whose 30-min wall-time was eaten by
+    # the eval before it could finish (see seed42 rerun, where the harness killed
+    # the process during the final eval block).
+    eval_only_dir: str = ""
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Seed: {cfg.seed}  val_tta_delta: {cfg.val_tta_delta}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -693,30 +715,45 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
+SCHEDULER_T_MAX = 22  # per-epoch TTA val (3× val cost) pushes ~80s/epoch — 30 min budget fits ~22-23 epochs, so cosine schedule completes within wall-time
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
-model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
-model_dir.mkdir(parents=True, exist_ok=True)
+if cfg.eval_only_dir:
+    model_dir = Path(cfg.eval_only_dir)
+    if not model_dir.exists():
+        raise FileNotFoundError(f"eval_only_dir does not exist: {model_dir}")
+    print(f"[eval-only] Reusing existing model dir: {model_dir}")
+else:
+    model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
+    model_dir.mkdir(parents=True, exist_ok=True)
+# Best checkpoint by no-TTA val (the legacy criterion, kept for back-compat with
+# downstream tooling that loads checkpoint.pt) and by TTA-val (delta=0.05).
 model_path = model_dir / "checkpoint.pt"
+model_path_no_tta = model_dir / "checkpoint_no_tta.pt"
+model_path_tta = model_dir / "checkpoint_tta.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
-with open(model_dir / "config.yaml", "w") as f:
-    yaml.safe_dump({
-        **asdict(cfg),
-        "model_config": model_config,
-        "n_params": n_params,
-        "train_samples": len(train_ds),
-        "val_samples": {k: len(v) for k, v in val_splits.items()},
-    }, f, sort_keys=True)
+if not cfg.eval_only_dir:
+    with open(model_dir / "config.yaml", "w") as f:
+        yaml.safe_dump({
+            **asdict(cfg),
+            "model_config": model_config,
+            "n_params": n_params,
+            "train_samples": len(train_ds),
+            "val_samples": {k: len(v) for k, v in val_splits.items()},
+        }, f, sort_keys=True)
 
 ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
 print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
 
-best_avg_surf_p = float("inf")
+best_avg_surf_p = float("inf")          # legacy criterion: no-TTA val_avg/mae_surf_p
 best_metrics: dict = {}
+best_no_tta_avg_surf_p = float("inf")
+best_no_tta_metrics: dict = {}
+best_tta_avg_surf_p = float("inf")
+best_tta_metrics: dict = {}
 slice_entropy_ep1: list[list[float]] | None = None
 slice_entropy_film_stats_ep1: dict | None = None
 slice_entropy_last: list[list[float]] | None = None
@@ -724,8 +761,41 @@ slice_entropy_film_stats_last: dict | None = None
 last_completed_epoch: int = 0
 diag_split_name = next(iter(val_loaders.keys()))  # use one val split as the diag batch source
 train_start = time.time()
+# Per-epoch TTA val arm settings — we evaluate both no_tta and ±val_tta_delta
+# in a single shared-forward-pass pass over val splits, so the extra cost is
+# only the (val_tta_delta and -val_tta_delta) forwards.
+per_epoch_tta_settings = {
+    "no_tta": [0.0],
+    "tta": [-cfg.val_tta_delta, 0.0, cfg.val_tta_delta],
+}
 
-for epoch in range(MAX_EPOCHS):
+if cfg.eval_only_dir:
+    # Rebuild best_* state from the existing metrics.jsonl so the test-eval block
+    # has everything it needs. Use the per-epoch records to find the best epoch
+    # under each criterion (mirrors the in-loop tracker).
+    print(f"[eval-only] Loading per-epoch state from {metrics_jsonl_path}")
+    if not metrics_jsonl_path.exists():
+        raise FileNotFoundError(f"metrics.jsonl missing in eval_only_dir: {metrics_jsonl_path}")
+    with open(metrics_jsonl_path) as _f:
+        _existing = [json.loads(l) for l in _f if l.strip()]
+    _epoch_recs = [r for r in _existing if r.get("event") == "epoch"]
+    if not _epoch_recs:
+        raise RuntimeError("No epoch records found in eval_only_dir/metrics.jsonl")
+    _best_no = min(_epoch_recs, key=lambda r: r["val_avg/mae_surf_p"])
+    _best_tt = min(_epoch_recs, key=lambda r: r["val_avg/mae_surf_p_tta"])
+    best_avg_surf_p = _best_no["val_avg/mae_surf_p"]
+    best_metrics = {"epoch": _best_no["epoch"], "val_avg/mae_surf_p": best_avg_surf_p}
+    best_no_tta_avg_surf_p = best_avg_surf_p
+    best_no_tta_metrics = {"epoch": _best_no["epoch"]}
+    best_tta_avg_surf_p = _best_tt["val_avg/mae_surf_p_tta"]
+    best_tta_metrics = {"epoch": _best_tt["epoch"]}
+    last_completed_epoch = max(r["epoch"] for r in _epoch_recs)
+    print(
+        f"[eval-only] Best no_tta epoch {_best_no['epoch']} val={best_avg_surf_p:.4f}; "
+        f"best tta epoch {_best_tt['epoch']} val_tta={best_tta_avg_surf_p:.4f}"
+    )
+
+for epoch in range(MAX_EPOCHS if not cfg.eval_only_dir else 0):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
@@ -849,14 +919,28 @@ for epoch in range(MAX_EPOCHS):
     epoch_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
+    # Per-epoch TTA val: in a single pass we compute no_tta predictions and
+    # ±val_tta_delta-bracketed predictions on every val split. Shared
+    # forward passes mean the cost is 3× val time (vs 1× before). Best
+    # checkpoint is tracked separately for each criterion.
     model.eval()
     rescale_head.eval()
-    split_metrics = {
-        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
+    split_metrics_per_arm: dict[str, dict[str, dict[str, float]]] = {
+        arm: {} for arm in per_epoch_tta_settings
     }
+    for name, loader in val_loaders.items():
+        arm_results = evaluate_split_multi_tta(
+            model, rescale_head, loader, stats, cfg.surf_weight, device,
+            per_epoch_tta_settings,
+        )
+        for arm_name, m in arm_results.items():
+            split_metrics_per_arm[arm_name][name] = m
+    split_metrics = split_metrics_per_arm["no_tta"]
+    split_metrics_tta = split_metrics_per_arm["tta"]
     val_avg = aggregate_splits(split_metrics)
+    val_avg_tta = aggregate_splits(split_metrics_tta)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+    avg_surf_p_tta = val_avg_tta["avg/mae_surf_p"]
     dt = time.time() - t0
 
     tag = ""
@@ -871,7 +955,43 @@ for epoch in range(MAX_EPOCHS):
             {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
             model_path,
         )
+        # Mirror the no-TTA best checkpoint at checkpoint_no_tta.pt for clarity.
+        torch.save(
+            {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
+            model_path_no_tta,
+        )
         tag = " *"
+
+    # Track the best epoch under no-TTA criterion (mirrors `best_avg_surf_p`,
+    # but kept separate for clarity in downstream reporting).
+    is_best_no_tta = (tag == " *")
+    if is_best_no_tta:
+        best_no_tta_avg_surf_p = avg_surf_p
+        best_no_tta_metrics = {
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "val_avg/mae_surf_p_tta": avg_surf_p_tta,
+            "per_split": split_metrics,
+            "per_split_tta": split_metrics_tta,
+        }
+
+    # TTA-criterion best checkpoint. Saved to checkpoint_tta.pt so we can
+    # evaluate the 4-arm TTA sweep on it after training.
+    is_best_tta = (avg_surf_p_tta < best_tta_avg_surf_p)
+    if is_best_tta:
+        best_tta_avg_surf_p = avg_surf_p_tta
+        best_tta_metrics = {
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "val_avg/mae_surf_p_tta": avg_surf_p_tta,
+            "per_split": split_metrics,
+            "per_split_tta": split_metrics_tta,
+        }
+        torch.save(
+            {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
+            model_path_tta,
+        )
+    tag_tta = " *T" if is_best_tta else ""
 
     # Re-conditioned scale diagnostics (per-channel mean/std across epoch + corr w/ log(Re)).
     if scale_n > 0:
@@ -939,9 +1059,15 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "seed": cfg.seed,
+        "val_tta_delta": cfg.val_tta_delta,
         "val_avg/mae_surf_p": avg_surf_p,
+        "val_avg/mae_surf_p_tta": avg_surf_p_tta,
         "val_splits": split_metrics,
+        "val_splits_tta": split_metrics_tta,
         "is_best": tag == " *",
+        "is_best_no_tta": is_best_no_tta,
+        "is_best_tta": is_best_tta,
         "rescale/scale_mean": scale_mean,
         "rescale/scale_std": scale_std,
         "rescale/scale_logre_corr": corr,
@@ -953,7 +1079,7 @@ for epoch in range(MAX_EPOCHS):
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val[no_tta={avg_surf_p:.4f}{tag} tta={avg_surf_p_tta:.4f}{tag_tta}]"
     )
     print(
         f"    HuberPerCh (unweighted)  surf[Ux={surf_huber_per_ch[0]:.5f} "
@@ -979,12 +1105,15 @@ for epoch in range(MAX_EPOCHS):
         print_split_metrics(name, split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
-print(f"\nTraining done in {total_time:.1f} min")
+if not cfg.eval_only_dir:
+    print(f"\nTraining done in {total_time:.1f} min")
 
 # Always capture slice entropy on the actually-completed final epoch, so the
 # "last" snapshot reflects reality even if training was cut short by the
-# timeout before the SCHEDULER_T_MAX-2 trigger range was reached.
-if last_completed_epoch > 0 and last_completed_epoch != 1:
+# timeout before the SCHEDULER_T_MAX-2 trigger range was reached. Skip in
+# eval-only mode (we don't re-run training, so no new captured slice entropy
+# state to record — the existing metrics.jsonl already has the original one).
+if not cfg.eval_only_dir and last_completed_epoch > 0 and last_completed_epoch != 1:
     _ent, _g, _b = capture_slice_entropy(
         uncompiled_model, val_loaders[diag_split_name], stats, device,
     )
@@ -993,147 +1122,233 @@ if last_completed_epoch > 0 and last_completed_epoch != 1:
 
 # Persist epoch-1 vs last-epoch slice-entropy comparison as a single record so it's
 # easy to surface in the results comment.
-append_metrics_jsonl(metrics_jsonl_path, {
-    "event": "film_slice_entropy_summary",
-    "n_params_film": n_params_film,
-    "ep1": {
-        "slice_entropy_per_head": slice_entropy_ep1,
-        "film_stats": slice_entropy_film_stats_ep1,
-    },
-    "last": {
-        "epoch": last_completed_epoch,
-        "slice_entropy_per_head": slice_entropy_last,
-        "film_stats": slice_entropy_film_stats_last,
-    },
-})
+if not cfg.eval_only_dir:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "film_slice_entropy_summary",
+        "n_params_film": n_params_film,
+        "ep1": {
+            "slice_entropy_per_head": slice_entropy_ep1,
+            "film_stats": slice_entropy_film_stats_ep1,
+        },
+        "last": {
+            "epoch": last_completed_epoch,
+            "slice_entropy_per_head": slice_entropy_last,
+            "film_stats": slice_entropy_film_stats_last,
+        },
+    })
 
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
-
-    ckpt = torch.load(model_path, map_location=device, weights_only=True)
-    model.load_state_dict(ckpt["model"])
-    rescale_head.load_state_dict(ckpt["rescale_head"])
-    model.eval()
-    rescale_head.eval()
+    print(
+        f"\nBest val: epoch {best_metrics['epoch']}, "
+        f"val_avg/mae_surf_p = {best_avg_surf_p:.4f} (no-TTA criterion)"
+    )
+    print(
+        f"Best val under TTA delta={cfg.val_tta_delta} criterion: "
+        f"epoch {best_tta_metrics['epoch']}, val_avg/mae_surf_p_tta = {best_tta_avg_surf_p:.4f}"
+    )
 
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nLoading test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
-        test_metrics = {
-            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
-            for name, loader in test_loaders.items()
+        val_tta_loaders = {
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            for name, ds in val_splits.items()
         }
-        test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
-        for name in TEST_SPLIT_NAMES:
-            print_split_metrics(name, test_metrics[name])
-        append_metrics_jsonl(metrics_jsonl_path, {
-            "event": "test",
-            "best_epoch": best_metrics["epoch"],
-            "test_avg": test_avg,
-            "test_splits": test_metrics,
-        })
 
-        # --- TTA Re-bracket evaluation (PR #2534) ---
-        # Apply test-time augmentation by averaging predictions at
-        # Re * {e^-delta, 1.0, e^+delta} in log-space (delta added directly
-        # to physical x[..., 13] before normalization). Pure inference-time —
-        # the best checkpoint above is reused. We run multiple deltas in a
-        # single pass to share forward passes (no_tta + 0.02 + 0.05 + 0.10
-        # share the delta=0 forward pass, so the total unique forwards/sample
-        # is 7 across all four arms).
+        # --- Final 4-arm TTA Re-bracket evaluation (PR #2534) ---
+        # Evaluate val and test under {no_tta, ±0.02, ±0.05, ±0.10} for the
+        # checkpoint chosen by EACH selection criterion. The shared-forward-pass
+        # `evaluate_split_multi_tta` keeps total cost bounded (7 unique forwards
+        # per batch).
         tta_settings = {
             "no_tta": [0.0],
             "tta_0.02": [-0.02, 0.0, 0.02],
             "tta_0.05": [-0.05, 0.0, 0.05],
             "tta_0.10": [-0.10, 0.0, 0.10],
         }
-        print("\nEvaluating TTA arms on val splits...")
-        val_tta_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in val_splits.items()
-        }
-        val_tta_per_arm: dict[str, dict[str, dict[str, float]]] = {arm: {} for arm in tta_settings}
-        for split_name, loader in val_tta_loaders.items():
-            arm_results = evaluate_split_multi_tta(
-                model, rescale_head, loader, stats, cfg.surf_weight, device, tta_settings,
-            )
-            for arm_name, metrics in arm_results.items():
-                val_tta_per_arm[arm_name][split_name] = metrics
-        val_tta_avg = {
-            arm: aggregate_splits(val_tta_per_arm[arm]) for arm in tta_settings
-        }
-        for arm_name in tta_settings:
-            val_avg_p = val_tta_avg[arm_name].get("avg/mae_surf_p", float("nan"))
-            print(f"  VAL  {arm_name:10s}  val_avg/mae_surf_p={val_avg_p:.4f}")
-        append_metrics_jsonl(metrics_jsonl_path, {
-            "event": "tta_val",
-            "best_epoch": best_metrics["epoch"],
-            "tta_settings": tta_settings,
-            "val_tta_per_arm": val_tta_per_arm,
-            "val_tta_avg": val_tta_avg,
-        })
 
-        print("\nEvaluating TTA arms on test splits...")
-        test_tta_per_arm: dict[str, dict[str, dict[str, float]]] = {arm: {} for arm in tta_settings}
-        for split_name, loader in test_loaders.items():
-            arm_results = evaluate_split_multi_tta(
-                model, rescale_head, loader, stats, cfg.surf_weight, device, tta_settings,
-            )
-            for arm_name, metrics in arm_results.items():
-                test_tta_per_arm[arm_name][split_name] = metrics
-        test_tta_avg = {
-            arm: aggregate_splits(test_tta_per_arm[arm]) for arm in tta_settings
-        }
-        for arm_name in tta_settings:
-            t_avg_p = test_tta_avg[arm_name].get("avg/mae_surf_p", float("nan"))
-            print(f"  TEST {arm_name:10s}  test_avg/mae_surf_p={t_avg_p:.4f}")
-        append_metrics_jsonl(metrics_jsonl_path, {
-            "event": "tta_test",
-            "best_epoch": best_metrics["epoch"],
-            "tta_settings": tta_settings,
-            "test_tta_per_arm": test_tta_per_arm,
-            "test_tta_avg": test_tta_avg,
-        })
+        def eval_checkpoint(ckpt_path: Path, label: str, best_epoch: int) -> dict:
+            """Evaluate one checkpoint under the full 4-arm TTA sweep on val+test.
 
-        # Pick best TTA arm by val_avg/mae_surf_p for headline reporting.
-        best_arm = min(tta_settings, key=lambda a: val_tta_avg[a].get("avg/mae_surf_p", float("inf")))
-        best_arm_val = val_tta_avg[best_arm]["avg/mae_surf_p"]
-        best_arm_test = test_tta_avg[best_arm]["avg/mae_surf_p"]
-        no_tta_val = val_tta_avg["no_tta"]["avg/mae_surf_p"]
-        no_tta_test = test_tta_avg["no_tta"]["avg/mae_surf_p"]
-        delta_val = best_arm_val - no_tta_val
-        delta_test = best_arm_test - no_tta_test
-        print(
-            f"\nBest TTA arm by val: {best_arm}  "
-            f"val_avg={best_arm_val:.4f} (Δ {delta_val:+.4f} vs no_tta {no_tta_val:.4f})  "
-            f"test_avg={best_arm_test:.4f} (Δ {delta_test:+.4f} vs no_tta {no_tta_test:.4f})"
+            ``label`` is "no_tta_best" or "tta_best" — recorded in JSONL and used in
+            the final summary so we can compare which selection criterion was better.
+            """
+            print(f"\n=== Evaluating checkpoint [{label}] from epoch {best_epoch} ({ckpt_path.name}) ===")
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+            model.load_state_dict(ckpt["model"])
+            rescale_head.load_state_dict(ckpt["rescale_head"])
+            model.eval()
+            rescale_head.eval()
+
+            # Plain (no-TTA) test for backward-compat reporting.
+            test_metrics_local = {
+                name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            test_avg_local = aggregate_splits(test_metrics_local)
+            print(f"  [no_tta-only] TEST  avg_surf_p={test_avg_local['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_metrics_local[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "test",
+                "checkpoint_label": label,
+                "best_epoch": best_epoch,
+                "test_avg": test_avg_local,
+                "test_splits": test_metrics_local,
+            })
+
+            print(f"  [TTA-sweep] Evaluating val arms ({label})...")
+            val_tta_per_arm: dict[str, dict[str, dict[str, float]]] = {arm: {} for arm in tta_settings}
+            for split_name, loader in val_tta_loaders.items():
+                arm_results = evaluate_split_multi_tta(
+                    model, rescale_head, loader, stats, cfg.surf_weight, device, tta_settings,
+                )
+                for arm_name, metrics in arm_results.items():
+                    val_tta_per_arm[arm_name][split_name] = metrics
+            val_tta_avg_local = {
+                arm: aggregate_splits(val_tta_per_arm[arm]) for arm in tta_settings
+            }
+            for arm_name in tta_settings:
+                val_avg_p = val_tta_avg_local[arm_name].get("avg/mae_surf_p", float("nan"))
+                print(f"    VAL  {arm_name:10s}  val_avg/mae_surf_p={val_avg_p:.4f}")
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "tta_val",
+                "checkpoint_label": label,
+                "best_epoch": best_epoch,
+                "tta_settings": tta_settings,
+                "val_tta_per_arm": val_tta_per_arm,
+                "val_tta_avg": val_tta_avg_local,
+            })
+
+            print(f"  [TTA-sweep] Evaluating test arms ({label})...")
+            test_tta_per_arm: dict[str, dict[str, dict[str, float]]] = {arm: {} for arm in tta_settings}
+            for split_name, loader in test_loaders.items():
+                arm_results = evaluate_split_multi_tta(
+                    model, rescale_head, loader, stats, cfg.surf_weight, device, tta_settings,
+                )
+                for arm_name, metrics in arm_results.items():
+                    test_tta_per_arm[arm_name][split_name] = metrics
+            test_tta_avg_local = {
+                arm: aggregate_splits(test_tta_per_arm[arm]) for arm in tta_settings
+            }
+            for arm_name in tta_settings:
+                t_avg_p = test_tta_avg_local[arm_name].get("avg/mae_surf_p", float("nan"))
+                print(f"    TEST {arm_name:10s}  test_avg/mae_surf_p={t_avg_p:.4f}")
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "tta_test",
+                "checkpoint_label": label,
+                "best_epoch": best_epoch,
+                "tta_settings": tta_settings,
+                "test_tta_per_arm": test_tta_per_arm,
+                "test_tta_avg": test_tta_avg_local,
+            })
+
+            best_arm = min(
+                tta_settings, key=lambda a: val_tta_avg_local[a].get("avg/mae_surf_p", float("inf"))
+            )
+            best_arm_val = val_tta_avg_local[best_arm]["avg/mae_surf_p"]
+            best_arm_test = test_tta_avg_local[best_arm]["avg/mae_surf_p"]
+            no_tta_val = val_tta_avg_local["no_tta"]["avg/mae_surf_p"]
+            no_tta_test = test_tta_avg_local["no_tta"]["avg/mae_surf_p"]
+            delta_val = best_arm_val - no_tta_val
+            delta_test = best_arm_test - no_tta_test
+            print(
+                f"  [{label}] Best TTA arm by val: {best_arm}  "
+                f"val_avg={best_arm_val:.4f} (Δ {delta_val:+.4f} vs no_tta {no_tta_val:.4f})  "
+                f"test_avg={best_arm_test:.4f} (Δ {delta_test:+.4f} vs no_tta {no_tta_test:.4f})"
+            )
+            summary = {
+                "event": "tta_summary",
+                "checkpoint_label": label,
+                "best_epoch": best_epoch,
+                "best_arm": best_arm,
+                "val_avg_by_arm": {a: val_tta_avg_local[a].get("avg/mae_surf_p") for a in tta_settings},
+                "test_avg_by_arm": {a: test_tta_avg_local[a].get("avg/mae_surf_p") for a in tta_settings},
+                "best_arm_val_avg/mae_surf_p": best_arm_val,
+                "best_arm_test_avg/mae_surf_p": best_arm_test,
+                "delta_val_vs_no_tta": delta_val,
+                "delta_test_vs_no_tta": delta_test,
+            }
+            append_metrics_jsonl(metrics_jsonl_path, summary)
+            return {
+                "label": label,
+                "best_epoch": best_epoch,
+                "test_avg": test_avg_local,
+                "test_metrics": test_metrics_local,
+                "val_tta_avg": val_tta_avg_local,
+                "test_tta_avg": test_tta_avg_local,
+                "summary": summary,
+            }
+
+        # Share the 4-arm TTA sweep when both selection criteria pick the same
+        # epoch — in that case both checkpoint files are byte-identical, so
+        # running the full eval twice is wasted ~1-2 min of wall-time. In the
+        # one-epoch-different case, both checkpoints are evaluated independently.
+        same_epoch_ckpt = (
+            best_no_tta_metrics["epoch"] == best_tta_metrics["epoch"]
         )
-        append_metrics_jsonl(metrics_jsonl_path, {
-            "event": "tta_summary",
-            "best_epoch": best_metrics["epoch"],
-            "best_arm": best_arm,
-            "val_avg_by_arm": {a: val_tta_avg[a].get("avg/mae_surf_p") for a in tta_settings},
-            "test_avg_by_arm": {a: test_tta_avg[a].get("avg/mae_surf_p") for a in tta_settings},
-            "best_arm_val_avg/mae_surf_p": best_arm_val,
-            "best_arm_test_avg/mae_surf_p": best_arm_test,
-            "delta_val_vs_no_tta": delta_val,
-            "delta_test_vs_no_tta": delta_test,
-        })
+        if same_epoch_ckpt:
+            print(
+                f"\n[shared-eval] Both selection criteria picked epoch "
+                f"{best_tta_metrics['epoch']} → evaluating once and reusing for both labels."
+            )
+            tta_eval = eval_checkpoint(
+                model_path_tta, "shared_both_criteria", best_tta_metrics["epoch"]
+            )
+            no_tta_eval = tta_eval
+        else:
+            no_tta_eval = eval_checkpoint(
+                model_path_no_tta, "no_tta_best", best_no_tta_metrics["epoch"]
+            )
+            tta_eval = eval_checkpoint(
+                model_path_tta, "tta_best", best_tta_metrics["epoch"]
+            )
 
+        # Headline test metrics (the primary submission) come from the
+        # TTA-criterion checkpoint with the best TTA arm — this is what the
+        # follow-up is designed to test.
+        test_metrics = tta_eval["test_metrics"]
+        test_avg = tta_eval["test_avg"]
+
+        # Final comparison summary.
+        compare = {
+            "event": "criterion_compare",
+            "seed": cfg.seed,
+            "val_tta_delta": cfg.val_tta_delta,
+            "no_tta_best": {
+                "best_epoch": no_tta_eval["best_epoch"],
+                "val_avg_by_arm": no_tta_eval["summary"]["val_avg_by_arm"],
+                "test_avg_by_arm": no_tta_eval["summary"]["test_avg_by_arm"],
+            },
+            "tta_best": {
+                "best_epoch": tta_eval["best_epoch"],
+                "val_avg_by_arm": tta_eval["summary"]["val_avg_by_arm"],
+                "test_avg_by_arm": tta_eval["summary"]["test_avg_by_arm"],
+            },
+            "same_epoch": no_tta_eval["best_epoch"] == tta_eval["best_epoch"],
+        }
+        append_metrics_jsonl(metrics_jsonl_path, compare)
+        print(
+            f"\nCriterion compare: no_tta-best epoch {no_tta_eval['best_epoch']} | "
+            f"tta-best epoch {tta_eval['best_epoch']} | same_epoch={compare['same_epoch']}"
+        )
+
+    # Headline summary uses the TTA-criterion best checkpoint so the YAML
+    # mirrors the primary submission. The companion JSONL events have full
+    # per-arm breakdowns for both checkpoints.
     write_experiment_summary(
-        model_path=model_path,
+        model_path=model_path_tta,
         model_dir=model_dir,
         cfg=cfg,
-        best_metrics=best_metrics,
-        best_avg_surf_p=best_avg_surf_p,
+        best_metrics=best_tta_metrics,
+        best_avg_surf_p=best_tta_avg_surf_p,
         test_metrics=test_metrics,
         test_avg=test_avg,
         n_params=n_params,
