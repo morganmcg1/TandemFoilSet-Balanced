@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -242,11 +243,27 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        # Fourier positional encoding on mesh coords (x, z) — input dim +16
+        # Frequencies [pi, 2pi, 4pi, 8pi] over (x, z) -> 4 freqs * 2 (sin/cos) * 2 (x/z) = 16
+        # NeRF (Mildenhall 2020) / Tancik (2020): expanding raw coords into multi-frequency
+        # sinusoids gives explicit spatial inductive bias at multiple scales.
+        n_fourier_freqs = 4
+        fourier_dim = n_fourier_freqs * 2 * 2
+        self.n_fourier_freqs = n_fourier_freqs
+        self.fourier_dim = fourier_dim
+        # Pre-bake frequency table on CPU; will be moved with module .to(device)
+        self.register_buffer(
+            "_fourier_freqs",
+            torch.tensor([(2 ** i) * math.pi for i in range(n_fourier_freqs)],
+                         dtype=torch.float32),
+            persistent=False,
+        )
+
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + fourier_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + fourier_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -285,7 +302,16 @@ class Transolver(nn.Module):
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        # Fourier positional encoding on (pos_x, pos_z) = channels 0:2.
+        # Compute sin/cos in fp32 then cast to x.dtype: at high freq (8pi) on
+        # z-score-normalized coords (range ~[-6.5, 6.2]) arg can reach ~163 rad,
+        # which exceeds bf16 7-bit mantissa precision and would alias the phase.
+        xy = x[:, :, :2].float()                                   # [B, N, 2] in fp32
+        proj = xy.unsqueeze(-1) * self._fourier_freqs              # [B, N, 2, n_freqs]
+        fourier_feats = torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(start_dim=-2)
+        fourier_feats = fourier_feats.to(x.dtype)                  # back to model dtype
+        x_aug = torch.cat([x, fourier_feats], dim=-1)              # [B, N, 24+16]
+        fx = self.preprocess(x_aug) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
@@ -531,6 +557,20 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+# Fourier positional encoding diagnostic (#2881)
+_n_fourier_freqs = model.n_fourier_freqs
+_fourier_freqs = [(2 ** i) for i in range(_n_fourier_freqs)]  # multiples of pi
+_fourier_periods = [round(2.0 / f, 4) for f in _fourier_freqs]  # in normalized coord units
+_preproc_in_shape = tuple(model.preprocess.linear_pre[0].weight.shape)
+print(
+    f"Fourier positional encoding (NeRF/Tancik 2020): n_fourier_freqs={_n_fourier_freqs}, "
+    f"freqs (in units of pi)={_fourier_freqs} -> periods={_fourier_periods} in normalized coord units; "
+    f"applied on channels [0,1] = (pos_x, pos_z); +{model.fourier_dim} input features; "
+    f"preprocess input dim 24->{24 + model.fourier_dim}; "
+    f"preprocess linear_pre[0] weight shape={_preproc_in_shape}; "
+    f"fp32 sin/cos computation cast to bf16 (avoids high-freq phase aliasing at bf16 mantissa precision); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.8909"
+)
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
