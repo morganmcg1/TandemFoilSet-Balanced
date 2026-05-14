@@ -63,6 +63,25 @@ ACTIVATION = {
 }
 
 
+class DyT(nn.Module):
+    """Dynamic Tanh normalization (Liu, Ba, et al. 2024 NeurIPS).
+
+    y = gamma * tanh(alpha * x) + beta
+    Drop-in replacement for nn.LayerNorm: removes mean/variance reduction in
+    favour of a bounded element-wise tanh with a learnable per-layer scalar
+    alpha. gamma, beta are the per-channel affine.
+    """
+
+    def __init__(self, dim: int, alpha_init: float = 0.5):
+        super().__init__()
+        self.alpha = nn.Parameter(torch.tensor(alpha_init))
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
+
+    def forward(self, x):
+        return self.gamma * torch.tanh(self.alpha * x) + self.beta
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -143,18 +162,18 @@ class TransolverBlock(nn.Module):
                  layerscale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = DyT(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = DyT(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = DyT(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -468,6 +487,13 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# DyT diagnostic: count replaced LN sites and log initial alpha values
+_dyt_modules = [m for m in model.modules() if isinstance(m, DyT)]
+_n_dyt = len(_dyt_modules)
+_init_alphas = [m.alpha.item() for m in _dyt_modules]
+print(f"DyT: replaced {_n_dyt} LayerNorm sites with DyT (alpha_init=0.5); +{_n_dyt} scalar alphas")
+print(f"DyT: initial alpha values = {[f'{a:.4f}' for a in _init_alphas]}")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -643,6 +669,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _epoch_alphas = [m.alpha.item() for m in _dyt_modules]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -655,6 +682,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "dyt_alphas": _epoch_alphas,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -695,6 +723,19 @@ if best_metrics:
 
     # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
     _inner = getattr(model, "_orig_mod", model)
+
+    # DyT diagnostic: per-site alpha at best-checkpoint load (post state_dict restore)
+    _final_alphas = [m.alpha.item() for m in _inner.modules() if isinstance(m, DyT)]
+    print("\nDyT final alpha values (best-checkpoint weights):")
+    print(f"  alphas = {[f'{a:.4f}' for a in _final_alphas]}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "dyt_alphas_terminal",
+        "epoch": int(best_metrics["epoch"]),
+        "alphas": _final_alphas,
+        "alpha_init": 0.5,
+        "n_sites": len(_final_alphas),
+    })
+
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
     print("\nLayerScale final gammas (best-checkpoint weights):")
     for _i, _blk in enumerate(_inner.blocks):
