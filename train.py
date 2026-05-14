@@ -177,7 +177,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False):
+                 film_re=False, film_re_hidden: int = 128):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -199,10 +199,11 @@ class TransolverBlock(nn.Module):
             # γ-only FiLM-Re: scale-only modulation from log(Re).
             # Identity init (last-linear weight=0, bias=1) sets γ≡1 at epoch 0
             # so the model matches baseline exactly until γ drifts.
+            # γ MLP hidden width = film_re_hidden (PR #2948 capacity scan).
             self.film_gamma = nn.Sequential(
-                nn.Linear(1, hidden_dim),
+                nn.Linear(1, film_re_hidden),
                 nn.GELU(),
-                nn.Linear(hidden_dim, hidden_dim),
+                nn.Linear(film_re_hidden, hidden_dim),
             )
 
     def forward(self, fx, mask=None, log_re=None):
@@ -225,7 +226,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
-                 film_re=False, log_re_x_index: int = 13):
+                 film_re=False, film_re_hidden: int = 128,
+                 log_re_x_index: int = 13):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -233,6 +235,7 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
         self.init_std = init_std
         self.film_re = film_re
+        self.film_re_hidden = film_re_hidden
         self.log_re_x_index = log_re_x_index
 
         if self.unified_pos:
@@ -249,7 +252,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                film_re=film_re,
+                film_re=film_re, film_re_hidden=film_re_hidden,
             )
             for i in range(n_layers)
         ])
@@ -476,6 +479,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
 
 
 cfg = sp.parse(Config)
@@ -517,12 +521,14 @@ model_config = dict(
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
+    film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
 )
 
 model = Transolver(**model_config).to(device)
 model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
 
 optimizer = Lion(
     model.parameters(),
