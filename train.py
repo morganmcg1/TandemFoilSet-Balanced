@@ -341,6 +341,7 @@ def write_experiment_summary(
         "surf_weight": cfg.surf_weight,
         "surf_channel_weight": cfg.surf_channel_weight,
         "loss": cfg.loss,
+        "pct_start": cfg.pct_start,
         "epochs_configured": cfg.epochs,
     }
 
@@ -392,6 +393,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
     compile_model: bool = False   # torch.compile the model for throughput
+    pct_start: float = 0.1  # OneCycleLR warmup fraction (default 0.1 = 10% of total_steps)
 
 
 cfg = sp.parse(Config)
@@ -454,7 +456,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=cfg.lr,
     total_steps=MAX_EPOCHS * len(train_loader),
-    pct_start=0.1,
+    pct_start=cfg.pct_start,
     anneal_strategy="cos",
     div_factor=25.0,
     final_div_factor=1e4,
