@@ -340,6 +340,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_decay": cfg.ema_decay,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -389,6 +390,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
     compile_model: bool = False   # torch.compile the model for throughput
+    ema_decay: float = 0.0  # EMA decay for shadow model weights; 0 disables EMA
 
 
 cfg = sp.parse(Config)
@@ -433,6 +435,28 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema_enabled = cfg.ema_decay > 0.0
+ema_model = None
+if ema_enabled:
+    ema_model = Transolver(**model_config).to(device)
+    ema_model.load_state_dict(model.state_dict())
+    ema_model.eval()
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    print(f"EMA enabled (decay={cfg.ema_decay}); shadow weights initialized from online model")
+
+
+def update_ema(src_model, dst_model, decay: float) -> None:
+    """Exponential moving average: dst ← decay * dst + (1-decay) * src.
+
+    Operates on parameter tensors in declaration order. ``src_model.parameters()``
+    returns the underlying parameter tensors regardless of torch.compile wrapping.
+    """
+    with torch.no_grad():
+        for p, ep in zip(src_model.parameters(), dst_model.parameters()):
+            ep.data.mul_(decay).add_(p.data, alpha=1.0 - decay)
+
 
 if cfg.compile_model:
     import torch._dynamo
@@ -510,6 +534,8 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         scheduler.step()
+        if ema_enabled:
+            update_ema(model, ema_model, cfg.ema_decay)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -528,22 +554,41 @@ for epoch in range(MAX_EPOCHS):
         }
         val_avg = aggregate_splits(split_metrics)
         avg_surf_p = val_avg["avg/mae_surf_p"]
+
+        ema_split_metrics = None
+        ema_avg_surf_p = None
+        if ema_enabled:
+            ema_split_metrics = {
+                name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+            ema_val_avg = aggregate_splits(ema_split_metrics)
+            ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
         dt = time.time() - t0
 
+        # Primary metric for checkpoint selection: EMA val when EMA enabled,
+        # else the online model val. Best EMA val is the metric the experiment
+        # is judged on (see PR #2915 instructions).
+        primary_avg = ema_avg_surf_p if ema_enabled else avg_surf_p
+        primary_per_split = ema_split_metrics if ema_enabled else split_metrics
+
         tag = ""
-        if avg_surf_p < best_avg_surf_p:
-            best_avg_surf_p = avg_surf_p
+        if primary_avg < best_avg_surf_p:
+            best_avg_surf_p = primary_avg
             best_metrics = {
                 "epoch": epoch + 1,
-                "val_avg/mae_surf_p": avg_surf_p,
-                "per_split": split_metrics,
+                "val_avg/mae_surf_p": primary_avg,
+                "per_split": primary_per_split,
             }
-            torch.save(model.state_dict(), model_path)
+            # Save the weights whose validation we will report — EMA weights
+            # when EMA enabled, online weights otherwise.
+            save_target = ema_model if ema_enabled else model
+            torch.save(save_target.state_dict(), model_path)
             tag = " *"
 
         peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
         current_lr = optimizer.param_groups[0]["lr"]
-        append_metrics_jsonl(metrics_jsonl_path, {
+        record = {
             "event": "epoch",
             "epoch": epoch + 1,
             "seconds": dt,
@@ -554,14 +599,29 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "val_splits": split_metrics,
             "is_best": tag == " *",
-        })
-        print(
-            f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-            f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
-        )
-        for name in VAL_SPLIT_NAMES:
-            print_split_metrics(name, split_metrics[name])
+        }
+        if ema_enabled:
+            record["ema_val_avg/mae_surf_p"] = ema_avg_surf_p
+            record["ema_val_splits"] = ema_split_metrics
+            record["ema_decay"] = cfg.ema_decay
+        append_metrics_jsonl(metrics_jsonl_path, record)
+        if ema_enabled:
+            print(
+                f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+                f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+                f"val_avg_surf_p={avg_surf_p:.4f}  "
+                f"ema_val_avg_surf_p={ema_avg_surf_p:.4f}{tag}"
+            )
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(f"ema/{name}", ema_split_metrics[name])
+        else:
+            print(
+                f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+                f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+                f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+            )
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(name, split_metrics[name])
     else:
         # Skipped eval — log train-only metrics
         dt = time.time() - t0
@@ -591,8 +651,17 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    # Load the saved (best-val) weights into the model used for test eval.
+    # When EMA is enabled, the saved checkpoint contains EMA weights; load them
+    # into ema_model so the test eval matches the val-selection metric.
+    if ema_enabled:
+        ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        ema_model.eval()
+        test_model = ema_model
+    else:
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.eval()
+        test_model = model
 
     test_metrics = None
     test_avg = None
@@ -604,7 +673,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(test_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
