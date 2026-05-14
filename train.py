@@ -81,6 +81,23 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class GeGLU(nn.Module):
+    """Gated GELU Linear Unit (Shazeer 2020, arXiv:2002.05202).
+
+    Drop-in replacement for the MLP block used inside TransolverBlock.
+    Forward: out(GELU(gate(x)) * value(x)).
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        self.gate = nn.Linear(n_input, n_hidden)
+        self.value = nn.Linear(n_input, n_hidden)
+        self.out = nn.Linear(n_hidden, n_output)
+
+    def forward(self, x):
+        return self.out(F.gelu(self.gate(x)) * self.value(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -138,7 +155,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_geglu=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -147,8 +165,11 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        if use_geglu:
+            self.mlp = GeGLU(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        else:
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                           n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -198,7 +219,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_geglu=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -219,6 +241,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_geglu=use_geglu,
             )
             for i in range(n_layers)
         ])
@@ -499,6 +522,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    use_geglu: bool = False  # If True, replace the standard MLP in TransolverBlock with GeGLU (Shazeer 2020).
 
 
 cfg = sp.parse(Config)
@@ -538,6 +562,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_geglu=cfg.use_geglu,
 )
 
 model = Transolver(**model_config).to(device)
