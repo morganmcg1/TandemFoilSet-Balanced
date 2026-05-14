@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 05:45
+- **Date:** 2026-05-14 05:55
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -40,10 +40,11 @@
 3. **Param-group wd (frieren #2803)**: exclude norms/biases from weight decay — standard modern practice, prevents wd from shrinking LN γ→0
 4. **LN γ-init=0.5 (tanjiro #2805)**: initialize LayerNorm scale at 0.5 (DeepNorm-style) — changes initial optimization geometry, not training trajectory
 
+5. **Sobolev loss on pressure gradient (thorfinn #2811)**: physics-aware loss term — penalize ∇p mismatch in addition to p mismatch
+6. **LayerScale (nezuko #2812)**: CaiT-style learnable residual scaling, init=1e-4 — per-channel gating on attention/FFN branch output
+
 Still in flight from prior round:
-5. **SWA (thorfinn #2712)**: average last-10-epoch checkpoints — free improvement if late checkpoints are diverse enough
-6. **max_norm=0.5 (fern #2763)**: re-test gradient clip on new baseline — had the best OOD single-split signal of the round (−3.8pt camber_rc)
-7. **Per-layer LR decay (nezuko #2753)**: α=0.85 geometric decay — deeper transformer blocks get smaller LR
+7. **max_norm=0.5 (fern #2763)**: re-test gradient clip on new baseline — had the best OOD single-split signal of the round (−3.8pt camber_rc)
 8. **Gradient Centralization (edward #2762)**: zero-mean gradient before momentum update; different from variance-vs-mean axis (GC modifies gradient direction, not trajectory frequency)
 
 ## Round 1 portfolio (current)
@@ -72,16 +73,18 @@ Still in flight from prior round:
 | #2743 | askeladd | p_weight=2.0 (volume) | **CLOSED** 2026-05-14 05:30 (+5.22pt val; pressure worst-hit; Lion sign discards magnitude weight) |
 | #2751 | frieren | Re-feature jitter σ=0.05 | **CLOSED** 2026-05-14 05:30 (+12.4pt val +27%; conditioning jitter creates inconsistency) |
 | #2752 | tanjiro | Gradient accumulation 2× | **CLOSED** 2026-05-14 05:30 (+8.87pt val; variance −95%; step-count cost irrecoverable) |
-| **#2712** | **thorfinn** | **SWA (average epochs 26-35)** | **WIP** |
-| **#2753** | **nezuko** | **Per-layer LR decay α=0.85** | **WIP** |
+| #2712 | thorfinn | SWA average epochs 26-35 | **CLOSED** 2026-05-14 05:50 (val 47.82 vs 45.43 bar; variance −74% val/−90% test characterized but mean still misses) |
+| #2753 | nezuko | Per-layer LR decay α=0.85 | **CLOSED** 2026-05-14 05:50 (stale; no commits in 2.5h+; second strike on nezuko slot) |
 | **#2762** | **edward** | **Gradient Centralization on Lion** | **WIP** |
 | **#2763** | **fern** | **max_norm=0.5 on new baseline (fresh)** | **WIP** |
 | **#2800** | **alphonse** | **RMSNorm (replace LayerNorm)** | **WIP NEW 2026-05-14 05:45** |
 | **#2801** | **askeladd** | **Pinball loss τ=0.55 for pressure** | **WIP NEW 2026-05-14 05:45** |
 | **#2803** | **frieren** | **Param-group wd (no wd on norms/biases)** | **WIP NEW 2026-05-14 05:45** |
 | **#2805** | **tanjiro** | **LayerNorm γ-init=0.5 (DeepNorm-style)** | **WIP NEW 2026-05-14 05:45** |
+| **#2811** | **thorfinn** | **Sobolev loss on surface ∇p** | **WIP NEW 2026-05-14 05:55** |
+| **#2812** | **nezuko** | **LayerScale on residual branches (init=1e-4)** | **WIP NEW 2026-05-14 05:55** |
 
-**Merged:** 10 | **Closed:** 47 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 49 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -112,19 +115,20 @@ Still in flight from prior round:
 - **Gradient accumulation 2×** — step-count halving catastrophic at 35-ep cap
 - **Per-channel amplitude weighting** — Lion sign() discards magnitude; amplitude weights have no effect on capacity allocation
 - **Conditioning-variable jitter (log(Re))** — creates supervised inconsistency; degraded all splits
+- **SWA (last-10 ckpt averaging)** — variance reduction works (4-10× tighter std) but mean still misses bar at current baseline; pairs best with a stronger base run, revisit after future merges
 
 ## Potential next research directions
 
 ### Immediate (round 8 in flight)
 
-1. **RMSNorm** — free-lunch normalization swap; modern default for transformers
-2. **Pinball τ=0.55** — directional pressure bias; if residual diagnostic shows consistent direction, retry τ=0.45 if needed
-3. **Param-group wd** — standard practice; zero compute cost
-4. **LN γ-init=0.5** — init geometry; recoverable since γ is learnable
-5. **SWA** — checkpoint averaging; free improvement if checkpoints diverse
-6. **max_norm=0.5** — had best OOD single-split signal this round
-7. **Per-layer LR decay** — untested structural lever
-8. **Gradient Centralization** — geometric constraint on gradient direction (distinct from trajectory frequency)
+1. **RMSNorm (#2800)** — free-lunch normalization swap; modern default for transformers
+2. **Pinball τ=0.55 (#2801)** — directional pressure bias; if residual diagnostic shows consistent direction, retry τ=0.45 if needed
+3. **Param-group wd (#2803)** — standard practice; zero compute cost
+4. **LN γ-init=0.5 (#2805)** — init geometry; recoverable since γ is learnable
+5. **max_norm=0.5 (#2763)** — had best OOD single-split signal this round
+6. **Gradient Centralization (#2762)** — geometric constraint on gradient direction (distinct from trajectory frequency)
+7. **Sobolev loss on ∇p (#2811)** — physics-aware loss; targets aerodynamic-coefficient-relevant gradient match
+8. **LayerScale (#2812)** — learnable per-channel residual gating, init=1e-4 (CaiT-style)
 
 ### Medium-term
 

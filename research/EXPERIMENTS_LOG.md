@@ -1899,3 +1899,56 @@ Four new experiments assigned to newly-idle students:
 All four axes test structural/geometric properties rather than training trajectory stabilization, specifically avoiding the variance-vs-mean decoupling pattern confirmed in 6 prior closures.
 
 ---
+
+## 2026-05-14 05:50 — PR #2712: SWA average last-10-epoch checkpoints (thorfinn)
+- Branch: `willowpai2g48h3-thorfinn/swa`
+- Hypothesis: Weight-space ensembling via SWA — average last 10 checkpoints (epochs 26-35) → free improvement; expected smoother mean and reduced seed variance
+- W&B runs: `9hfykfvg` (s1), `zmfq9h2a` (s2), `02fivglv` (s3)
+
+| Run | last-ep val | SWA val | last-ep test | SWA test |
+|---|---:|---:|---:|---:|
+| s1 | 47.823 | 48.304 | 40.575 | 40.616 |
+| s2 | 50.163 | **47.702** | 42.574 | **40.560** |
+| s3 | 47.082 | 47.457 | 40.842 | 40.406 |
+| **mean** | **48.356** | **47.821** | **41.330** | **40.527** |
+| **std** | **1.652** | **0.428** | **1.075** | **0.107** |
+| **Baseline** | **45.433** | **45.433** | **39.509** | **39.509** |
+
+**Does NOT beat merge bar: val 47.82 vs 45.43 (+2.39pt), test 40.53 vs 39.51 (+1.02pt). But variance reduction is real: val std 1.65 → 0.43 (−74%), test std 1.08 → 0.11 (−90%).**
+
+Key diagnostics:
+- **Variance reduction works as theory predicts** (4-10× tighter std on test) — late-cosine tail checkpoints sit at noisy points within a flat basin; averaging projects toward the basin's center.
+- **Test mean improves modestly** (40.53 vs 41.33, −0.80pt) — physics-meaningful test metric is the cleanest signal of SWA's benefit.
+- **Val mean barely moves** (47.82 vs 48.36, −0.54pt) — dominated by s2's outlier rescue (50.16 → 47.70); on s1 and s3, SWA val was slightly WORSE than last-epoch.
+- **SWA5 (5-ckpt) on s3**: val 46.90, test 39.89 — closer to bar but still missing. Cheaper window outperforms full-window on this seed.
+
+Mechanism: SWA differs from the 6 prior variance-vs-mean decouplings in that it's a *post-hoc* averaging mechanism, not a training-trajectory change. So the trade-off is less severe (mean cost is modest rather than catastrophic), but still insufficient to beat the bar at our current baseline. SWA is a variance-reducer; it pairs best with a base run that already gets close to the merge bar.
+
+**Conclusion**: CLOSED. **SWA characterized**: at compute-bound 35-ep Lion regime, weight-space averaging delivers 4-10× tighter variance with negligible mean cost — meaningful methodology result for the paper, even though it doesn't merge into the main result. Worth revisiting after a future baseline merge brings val into the 45-46 range.
+
+thorfinn reassigned to Sobolev loss on surface pressure gradient (PR #2811) — physics-aware loss term, novel axis.
+
+---
+
+## 2026-05-14 05:50 — PR #2753: Per-layer LR decay α=0.85 (nezuko, STALE)
+- Branch: `willowpai2g48h3-nezuko/layer-lr-decay`
+- Status: STALE — only the initial assignment commit, no commits or comments in 2.5+ hours since assignment
+- This is the second stale strike on nezuko's slot (previous: GC #2564)
+
+**Conclusion**: CLOSED as stale. The per-layer LR decay hypothesis remains valid — mechanism is well-motivated and untested. Reassigned to a simpler, more contained hypothesis with fewer points of failure.
+
+nezuko reassigned to LayerScale on residual branches (init=1e-4, CaiT-style, PR #2812) — single self-contained architectural change, ~10 lines.
+
+---
+
+## 2026-05-14 05:55 — New assignments after round-8 partial closures
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2811 | willowpai2g48h3-thorfinn | Sobolev loss on surface pressure gradient | Physics-aware loss structure |
+| #2812 | willowpai2g48h3-nezuko | LayerScale on residual branches (init=1e-4) | Initialization geometry + learnable scaling |
+
+These two PRs join the 4 round-8 assignments already in flight (#2800 RMSNorm, #2801 pinball-τ, #2803 param-wd, #2805 LN-γ-init), plus 2 carryover (#2762 GC, #2763 max_norm=0.5). All 8 students assigned, zero idle.
+
+---
+
