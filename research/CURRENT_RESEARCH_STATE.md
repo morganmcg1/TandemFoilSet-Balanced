@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 22:25
+- **Date:** 2026-05-14 22:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -62,17 +62,17 @@
 - **Slice softmax temperature (#2953 askeladd):** τ=0.5 (sharper) and τ=2.0 (smoother) on PhysicsAttention. Fundamental Transolver knob, never touched.
 - **DropPath (#2926 nezuko):** Stochastic depth (rates 0.1/0.2) as regularizer.
 
-## Active WIPs (8 students, 8 PRs, 0 idle) — updated 2026-05-14 22:25
+## Active WIPs (8 students, 8 PRs, 0 idle) — updated 2026-05-14 23:00
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | #3012 | alphonse | Per-block weight decay scan: 0.25×/4× on late blocks (γ_w_L2 specialization probe) | ASSIGNED 2026-05-14 21:15 |
 | #2965 | fern | Fourier-Re K=4: 2-seed rerun on 15th-shift baseline (compound with 2× γ width) | WIP (rebase+new-baseline sent 2026-05-14 19:50) |
-| #3007 | nezuko | Y-flip TTA at inference (paper-facing finishing move; 2× eval forward, avg in physical frame) | ASSIGNED 2026-05-14 21:00 |
+| #3042 | nezuko | Polyak weight averaging over last K epochs at eval time (K=5 and K=3) | ASSIGNED 2026-05-14 23:00 |
 | #3001 | edward | FiLM-Re γ MLP init std scan: film_re_init_std=0.05/0.03 vs global 0.07 | ASSIGNED 2026-05-14 20:40 |
 | #3019 | tanjiro | FiLM-Re γ MLP joint [log_re, AoA_1, AoA_2] conditioning input (Re×AoA interaction surface) | ASSIGNED 2026-05-14 21:45 |
 | #3028 | askeladd | FiLM-Re γ at output decoder (Re-blind decoder injection, target: re_rand OOD) | ASSIGNED 2026-05-14 21:55 |
-| #3034 | frieren | Re-stratified mini-batch sampling by Re-bin (WeightedRandomSampler, K=4 quartiles) | ASSIGNED 2026-05-14 22:15 |
+| #3041 | frieren | Re-jitter: Gaussian noise on FiLM-Re γ-MLP input at train time (σ=0.10/0.30) | ASSIGNED 2026-05-14 23:00 |
 | #3035 | thorfinn | FiLM-Re γ on PhysicsAttention routing layer (slice_proj logits — Re-conditional routing) | ASSIGNED 2026-05-14 22:15 |
 | #3038 | fern | slice_num bracket scan: 48 (0.75×) and 96 (1.5×) vs baseline 64 | ASSIGNED 2026-05-14 22:25 |
 
@@ -119,7 +119,9 @@
 19. **Per-block lr scaling is fully retired — meta-finding #14 RETRACTED (#3002, #2959)** — both boost (1.5×/2.0×, #2959) and reduction (0.7×/0.5×, #3002) hurt all splits monotonically; geom_camber_rc is monotone-bad in BOTH directions from 1.0×. The per-block lr optimum is centered at 1.0× and any deviation hurts OOD. **Meta-finding #14 ("early blocks drive OOD signal") was a misattribution of confounded run variance.** γ_w_L2 depth-monotone diagnostic confirmed as health-signal: runs that fail to grow the early~4.2/late~5.6 pattern consistently regress (0.5× late-lr inverts pattern, maps perfectly to worst performance).
 20. **Per-batch λ Mixup on conditioning inputs without per-sample target preservation = conditioning label noise (#2984)** — α=0.2 and α=0.4 both regress >66% val, >75% test, all 4 splits catastrophic. Implementation samples one λ per batch and pairs `(x[perm[i]] cond, y[i] target)` for ~half of batches (Beta-bimodal mass at λ≈0/1). Model's optimal response: down-weight conditioning channels. test_re_rand +76-86% confirms encoder learned to IGNORE Re. **Conditioning Mixup has no clean variant on non-corresponding meshes.** Single-sample Gaussian Re-jitter with target pairing preserved is the clean replacement axis if conditioning-smoothing is desired (already-explored axis worth revisiting at 15th-shift with FiLM-Re in place).
 21. **Output decoder head capacity is fully retired (#2991 width, #2943 depth)** — 2×/3× head_hidden uniformly regresses 5-9% across all 4 test splits (no OOD trade-off); mirrors #2943 head-depth (depth=3 closed). At the 15th-shift basin, output head capacity is NOT orthogonal to trunk — additional head params rob optimization budget from trunk + γ-MLP within the 30-min/35-epoch cap. 128-d single-hidden-layer head sits at the capacity sweet spot. Future capacity moves: trunk-internal width, slice_num, or genuinely new injection points (e.g. #3028 decoder-FiLM-Re).
-22. **Conditioning-encoder bottleneck-relief axes are NOT orthogonal (#2965 K=4 Fourier on 15th-shift)** — γ-width (#2948 width=256), Fourier input expressivity (#2965 K=4), and γ-MLP depth (#2990) all relieve the same scalar→γ information bottleneck. γ_w_L2 trajectory flattens to ~4.2 with EITHER width=256 OR K=4-on-width=128; combining both gives flat ~4.2 too — no further relief. K=4 on 15th-shift baseline regresses 5-9% on all 4 splits (test_single_in_dist hit hardest at +14.5%, consistent with over-parameterized γ MLP memorizing IID patterns through redundant Fourier features). **Pay the bottleneck relief once at the cheapest axis** (γ-width was the winner). Further conditioning-encoder capacity expansion exhausted — gains must come from injection-point expansion (#3028 decoder, #3035 routing), conditioning surface area (#3019 joint Re+AoA), or data-side distribution levers (#3034 stratified sampling).
+22. **Conditioning-encoder bottleneck-relief axes are NOT orthogonal (#2965 K=4 Fourier on 15th-shift)** — γ-width (#2948 width=256), Fourier input expressivity (#2965 K=4), and γ-MLP depth (#2990) all relieve the same scalar→γ information bottleneck. γ_w_L2 trajectory flattens to ~4.2 with EITHER width=256 OR K=4-on-width=128; combining both gives flat ~4.2 too — no further relief. K=4 on 15th-shift baseline regresses 5-9% on all 4 splits (test_single_in_dist hit hardest at +14.5%, consistent with over-parameterized γ MLP memorizing IID patterns through redundant Fourier features). **Pay the bottleneck relief once at the cheapest axis** (γ-width was the winner). Further conditioning-encoder capacity expansion exhausted — gains must come from injection-point expansion (#3028 decoder, #3035 routing), conditioning surface area (#3019 joint Re+AoA), or data-side distribution levers.
+23. **Re-distribution rebalancing is NOT the lever for OOD generalization on TandemFoilSet (#3034 frieren)** — Per-split log_re mean+std analysis on the train/val splits: `val_re_rand` is co-distributed with train (mean 14.65 ≈ train 14.59) → re_rand is not Re-coverage-bound. `val_geom_camber_rc` is shifted toward HIGHER Re than train (mean 14.86 vs 14.59). Quantile binning is structurally a no-op (equal bin_counts by construction → uniform weights). Equal-width binning would up-weight low-Re samples, but camber_rc lives at HIGH Re — equal-width balancing would HURT camber_rc. Conclusion: training-data Re-distribution is the wrong intervention for OOD on this dataset; conditioning gains must come from MODEL-side axes (FiLM-Re width/decoder/routing/joint-input). The per-split log_re statistics are paper-appendix material.
+24. **Y-flip TTA is fundamentally incompatible with TandemFoilSet (#3007 nezuko)** — Two compounding failure modes: (a) 70% of train is ground-bound (raceCar single+tandem, z ≥ 0); y-flipping → below-ground OOD; (b) cruise tandem subset (30%) has cambered foils at non-zero AoA → FLOW is non-y-equivariant even when the MESH is z-symmetric. Per-sample sym-gate (z_min ≥ -0.5) fixes (a) but NOT (b) → 3.4× test regression on cruise even when correctly gated. 3.6× uniform TTA test regression overall. Symmetry-free eval-time ensembling (multi-checkpoint averaging, Polyak weight averaging over last K epochs) is the clean alternative — no symmetry assumption needed.
 
 ## Currently retired axes
 

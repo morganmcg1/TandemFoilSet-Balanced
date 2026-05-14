@@ -3425,3 +3425,78 @@ Per-split test (2-seed mean): single_in_dist=36.88 (+14.5% ❌), geom_camber_rc=
 - Complementary to thorfinn #3035 (routing-FiLM): fern tests codebook DIMENSIONALITY, thorfinn tests Re-CONDITIONING of the routing
 - Arms: slice_num=96 s1 (over-bracket), slice_num=48 s2 (under-bracket), single seed each
 
+
+---
+
+## 2026-05-14 22:50 — PR #3034: Re-stratified mini-batch sampling frieren (CLOSED — structurally null at quantile binning)
+- Branch: `willowpai2g48h3-frieren/re-stratified-sampling`
+- Hypothesis: Use WeightedRandomSampler with inverse-Re-bin-frequency weights (K=4 quartile bins) to balance training Re distribution.
+
+### Key diagnostic findings (no full seeds run; closed via Step 3 directive)
+
+**Quantile binning is structurally a no-op** (by construction):
+- K=2: bin_counts=[748, 751], weight ratio 1.00×
+- K=4: bin_counts=[374, 374, 376, 375], weight ratio 1.01×
+- K=8: bin_counts=[188, 186, 188, 186, 189, 187, 187, 188], weight ratio 1.02×
+
+WeightedRandomSampler with ~uniform weights reduces to uniform random sampling. The literal PR was guaranteed to produce baseline ± noise.
+
+**Underlying dataset Re-distribution (N=1499 train, equal-width binning):**
+- log_re range [11.51, 15.42] → Re range [100K, 5.0M]
+- Heavy right-skew: low-Re tail = 9 samples (0.6%), high-Re mode = 531 samples (35.4%)
+- K=4 equal-width bin_counts=[35, 105, 368, 991] → 28× max weight skew
+
+**Per-split Re distribution (critical insight):**
+- `val_re_rand`: log_re mean=14.65, std=0.65, range=[12.11, 15.40] — **co-distributed with train (mean 14.59)**
+- `val_geom_camber_rc`: log_re mean=14.86, std=0.41, range=[13.82, 15.42] — **SHIFTED toward HIGHER Re**
+
+Equal-width binning up-weights low-Re samples — but `geom_camber_rc` lives at HIGH Re. Up-weighting low-Re would *hurt* camber_rc by reducing exposure to its OOD region. And `re_rand` already spans the full Re distribution that train spans, so the underlying hypothesis ("re_rand under-represented in Re") is empirically false.
+
+**Decision: CLOSED.** Both versions of the experiment have negative expected value: quantile is null, equal-width hurts camber_rc.
+
+**Meta-finding #23:** *Re-distribution rebalancing is NOT the lever for OOD generalization on TandemFoilSet. (a) `re_rand` is co-distributed with train in log_re, so balancing has no theoretical signal there. (b) `geom_camber_rc` lives at HIGHER Re than train, so equal-width balancing (which up-weights low-Re) would actively hurt it. (c) Quantile-binning rebalancing is structurally null. Re-conditioning gains must come from MODEL-side axes (FiLM-Re width/decoder/routing/joint-input), not from training-data redistribution. The student's per-split log_re statistics are paper-appendix material on the underlying OOD-distribution structure.*
+
+---
+
+## 2026-05-14 22:50 — PR #3007: Y-flip TTA nezuko (CLOSED — catastrophic)
+- Branch: `willowpai2g48h3-nezuko/yflip-tta`
+- Hypothesis: At inference, forward each sample twice (original + y-flipped with AoA→−AoA, Uy→−Uy reflection), average in physical frame.
+
+### Results (2 seeds)
+
+| Metric | Vanilla (no TTA) | Uniform y-flip TTA | Sym-only TTA (s2 only) | Baseline #2948 |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 35.487 | **117.632 (+247%)** | 49.938 (+47%) | 33.706 |
+| test_avg/mae_surf_p | 30.514 | **110.864 (+287%)** | 47.980 (+68%) | 28.653 |
+
+Per-split test surf_p (uniform TTA mean): single_in_dist=145.08 (+350%), geom_camber_rc=133.96 (+223%), geom_camber_cruise=55.60 (+273%), re_rand=108.82 (+318%). All splits catastrophic.
+
+**Mechanism diagnosis (excellent student work):**
+
+1. **Dataset is NOT y-symmetric.** First 200 train samples: z range [0.008, 9.609] (all positive, foils mounted above ground), AoA1 range [-9.97°, -0.00°] (negative-only), 200/200 samples ground-bound. The racecar single+tandem subset (1056/1499 = 70% of train) all have z ≥ 0 — y-flipping puts foils below ground = OOD.
+
+2. **Even z-symmetric cruise samples regress 3.4× under TTA.** `test_geom_camber_cruise` 16.5 → 55.6. The mesh is z-symmetric, but the FLOW is not: cambered NACA foils + non-zero AoA + asymmetric AoA range → non-y-equivariant flow physics. Per-sample sym-gate (z_min ≥ -0.5) correctly excludes ground-bound samples but doesn't rescue cruise.
+
+3. **Brute-force mirror-pair search** confirmed near-symmetric INPUTS on cruise (mean L1 diff=0.18) — the failure is in the trained model's downstream features, not in input-pair construction.
+
+**Decision: CLOSED.** Y-flip TTA is incompatible with TandemFoilSet at any sym-gate threshold.
+
+**Meta-finding #24:** *Y-flip TTA is fundamentally incompatible with TandemFoilSet. Two failure modes compound: (a) 70% of train is ground-bound (raceCar), y-flipping → below-ground OOD; (b) the remaining 30% (cruise tandem) has cambered foils at non-zero AoA, so the FLOW is non-y-equivariant even when the MESH is z-symmetric. Sym-gating fixes (a) but not (b) → 3.4× regression on cruise even when correctly gated. Symmetry-free eval-time ensembling (multi-checkpoint averaging, Polyak weight averaging) is the clean alternative.*
+
+
+---
+
+## 2026-05-14 23:00 — PR #3041: Re-jitter frieren (ASSIGNED)
+- Branch: `willowpai2g48h3-frieren/re-jitter`
+- Hypothesis: Add Gaussian noise to the FiLM-Re γ-MLP's `log_re` input only (isolated path, NOT x directly) during training. Target pairing fully preserved. Bracket-scan: σ=0.10 (arm s1) and σ=0.30 (arm s2). Direct regularizer for the conditioning encoder — forces γ(log_re) to be smooth over local Re neighborhoods. Plateau-protocol clean alternative: addresses conditioning-encoder smoothing gap left by #2984 (cond-mixup: target-pairing broken) and #3034 (stratified: structurally null). Param delta: ZERO. Pre-FiLM jitter retirement does NOT apply here — that jitter propagated to trunk via x directly; this isolates perturbation to the FiLM-Re γ path only.
+- Arms: σ=0.10 arm s1, σ=0.30 arm s2 (single seed each, bracket-scan)
+- Target: test_re_rand < 26.022
+
+---
+
+## 2026-05-14 23:00 — PR #3042: Polyak weight averaging nezuko (ASSIGNED)
+- Branch: `willowpai2g48h3-nezuko/polyak-avg`
+- Hypothesis: After training completes (byte-identical to 15th-shift baseline), save model snapshots at the last K epochs (K=5 and K=3), compute w̄ = mean(w_i) post-hoc, evaluate w̄ on val/test. Symmetry-free eval-time gain alternative to y-flip TTA (#3007 closed: 3.6× regression, dataset not y-symmetric). Architecturally distinct from EMA-during-training (#2399 retired) and SWA-during-training (#2712 retired): training dynamics unchanged; only checkpoint selection differs (averaging vs best-single-epoch). Theoretically reduces parameter variance around the converged solution without any symmetry assumption.
+- Arms: K=5 arm s1 (last 5 epochs), K=3 arm s2 (last 3 epochs), single seed each
+- Distinction: reports BOTH last-epoch metrics AND Polyak metrics; the Polyak metrics are the merge-bar comparison
+
