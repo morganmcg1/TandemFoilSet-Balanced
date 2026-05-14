@@ -306,6 +306,109 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# H71: Thin-airfoil-theory auxiliary loss (PR #2652)
+# ---------------------------------------------------------------------------
+# Column layout verified from program.md + data inspection:
+#   col 0  : node x-coordinate (≈ chord-relative for foil 1)
+#   col 13 : log(Re), natural log, per-sample constant
+#   col 14 : AoA foil 1 (radians), per-sample constant
+#   col 15 : NACA M foil 1 (normalized as M_digit / 9, range [0, 1])
+#   col 16 : NACA P foil 1 (normalized as P_digit / 9, range [0, ~0.89])
+#   col 23 : Stagger (0 for single-foil; foil 2 chord starts at x≈stagger)
+# NACA-digit → fraction-of-chord:
+#   max camber fraction  = M_digit / 100 = (col 15) * 9/100 = (col 15) * 0.09
+#   camber-pos fraction  = P_digit / 10  = (col 16) * 9/10  = (col 16) * 0.9
+H71_TAT_LAMBDA = 0.05                       # weight on aux loss (advisor's upper end; debug shows λ=0.01 → aux_pct≈0.01%)
+H71_TAT_NU_AIR = 1.5e-5                     # kinematic viscosity of air (m²/s)
+H71_TAT_X_LO, H71_TAT_X_HI = 0.10, 0.85     # mid-chord range (avoid LE/TE breakdown)
+H71_TAT_FOIL2_GUARD = 0.05                  # foil 2 LE buffer (exclude col_0 > stagger - this)
+H71_NACA_M_COL = 15
+H71_NACA_P_COL = 16
+H71_AOA_COL = 14
+H71_LOG_RE_COL = 13
+H71_X_COL = 0
+H71_STAGGER_COL = 23
+
+
+def thin_airfoil_cp(x_coord, m_camber, p_position, aoa_rad):
+    """H71: Thin-airfoil-theory leading-order Cp estimate (PR #2652).
+
+    NACA 4-digit camber line y_c (Anderson/Abbott, standard):
+      x ≤ p:  y_c = (M/p²)(2px - x²)         → dy/dx = (2M/p²)(p - x)
+      x ≥ p:  y_c = (M/(1-p)²)(1-2p+2px-x²)  → dy/dx = (2M/(1-p)²)(p - x)
+
+    NOTE: PR pseudocode had a sign error in the x≥p branch
+    (used `-2*m/(1-p)² * (p - x)` which flips the sign for x>p);
+    corrected here to (2M/(1-p)²)*(p - x) so dy/dx is negative for x > p
+    (camber line slopes down past max camber), matching the standard
+    NACA 4-digit derivation.
+
+    TAT leading-order Cp signal (heuristic):
+      Cp_TAT(x) ≈ 2*(AoA - dy/dx)
+    """
+    p_safe = p_position.clamp(min=0.01, max=0.99)
+    dc_dx = torch.where(
+        x_coord < p_safe,
+        2.0 * m_camber / (p_safe ** 2) * (p_safe - x_coord),
+        2.0 * m_camber / ((1.0 - p_safe) ** 2) * (p_safe - x_coord),
+    )
+    return 2.0 * (aoa_rad - dc_dx)
+
+
+def thin_airfoil_aux_loss(
+    pred: torch.Tensor,
+    x: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    y_mean_p: torch.Tensor,
+    y_std_p: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute the thin-airfoil-theory L1 aux loss on foil-1 mid-chord surface nodes.
+
+    Returns (aux_loss, n_valid, aux_target_mean_abs) for logging.
+    pred: [B, N, 3] (normalized space)
+    x:    [B, N, 24] (raw features)
+    """
+    x_chord = x[..., H71_X_COL]
+    log_re = x[..., H71_LOG_RE_COL]
+    aoa_rad = x[..., H71_AOA_COL]
+    m_camber = x[..., H71_NACA_M_COL] * 0.09       # M_digit/9 * 9/100
+    p_position = x[..., H71_NACA_P_COL] * 0.9      # P_digit/9 * 9/10
+    stagger = x[..., H71_STAGGER_COL]
+
+    # foil-1 mid-chord mask: (0.10, 0.85), but for tandem clamp upper bound
+    # to (stagger - 0.05) to avoid catching foil-2 LE region (raceCar tandem
+    # has stagger ~0.7-1.0, partially overlapping with foil-1 TE).
+    is_tandem = stagger.abs() > 0.01
+    upper_bound = torch.where(
+        is_tandem,
+        (stagger - H71_TAT_FOIL2_GUARD).clamp(max=H71_TAT_X_HI),
+        torch.full_like(stagger, H71_TAT_X_HI),
+    )
+    valid_chord = (x_chord > H71_TAT_X_LO) & (x_chord < upper_bound)
+    valid_mask = mask & is_surface & valid_chord
+
+    if not valid_mask.any():
+        zero = torch.zeros((), device=pred.device, dtype=pred.dtype)
+        return zero, zero, zero
+
+    # TAT Cp prediction → physical kinematic pressure → normalized space
+    cp_tat = thin_airfoil_cp(x_chord, m_camber, p_position, aoa_rad)  # [B, N]
+    u_inf = torch.exp(log_re) * H71_TAT_NU_AIR                        # m/s (chord=1)
+    p_tat_phys = 0.5 * u_inf * u_inf * cp_tat                         # m²/s²
+    p_tat_norm = (p_tat_phys - y_mean_p) / y_std_p
+
+    pred_p_norm = pred[..., 2]
+    diff = (pred_p_norm - p_tat_norm).abs()
+    n_valid = valid_mask.sum()
+    aux_loss = (diff * valid_mask).sum() / n_valid.clamp(min=1)
+
+    # Diagnostic: average magnitude of the TAT target (helps tune λ)
+    tgt_mag = (p_tat_norm.abs() * valid_mask).sum() / n_valid.clamp(min=1)
+    return aux_loss, n_valid.to(aux_loss.dtype), tgt_mag
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -651,6 +754,17 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+# H71: Thin-airfoil-theory aux loss diagnostics
+print(
+    f"[H71] thin-airfoil aux: naca_m_col={H71_NACA_M_COL} naca_p_col={H71_NACA_P_COL} "
+    f"aoa_col={H71_AOA_COL} x_col={H71_X_COL} log_re_col={H71_LOG_RE_COL} "
+    f"stagger_col={H71_STAGGER_COL} mid_chord=({H71_TAT_X_LO},{H71_TAT_X_HI}) "
+    f"foil2_guard={H71_TAT_FOIL2_GUARD} lambda={H71_TAT_LAMBDA} nu_air={H71_TAT_NU_AIR}"
+)
+y_mean_p_t = stats["y_mean"][2]
+y_std_p_t = stats["y_std"][2]
+print(f"[H71] y_mean_p={y_mean_p_t.item():.4f} y_std_p={y_std_p_t.item():.4f}")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -662,7 +776,8 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_aux = epoch_aux_tgt_mag = 0.0
+    epoch_main = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -684,7 +799,13 @@ for epoch in range(MAX_EPOCHS):
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
         surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
         surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # H71: thin-airfoil-theory auxiliary residual loss (foil-1 mid-chord surface only)
+        aux_loss, _aux_n, aux_tgt_mag = thin_airfoil_aux_loss(
+            pred, x, is_surface, mask, y_mean_p_t, y_std_p_t,
+        )
+        loss = main_loss + H71_TAT_LAMBDA * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -700,10 +821,16 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_main += main_loss.item()
+        epoch_aux += aux_loss.item()
+        epoch_aux_tgt_mag += aux_tgt_mag.item()
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_main /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
+    epoch_aux_tgt_mag /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -731,6 +858,9 @@ for epoch in range(MAX_EPOCHS):
     freqs_lr = optimizer.param_groups[1]["lr"]
     layer_scale_lr = optimizer.param_groups[2]["lr"]
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
+    aux_pct_of_total = (
+        H71_TAT_LAMBDA * epoch_aux / max(epoch_main + H71_TAT_LAMBDA * epoch_aux, 1e-9)
+    )
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -743,6 +873,11 @@ for epoch in range(MAX_EPOCHS):
         "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/main_loss": epoch_main,
+        "train/aux_physics_loss": epoch_aux,
+        "train/aux_physics_tgt_mag": epoch_aux_tgt_mag,
+        "train/aux_pct_of_total": aux_pct_of_total,
+        "train/tat_lambda": H71_TAT_LAMBDA,
         "train/last_grad_norm": float(total_norm),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
@@ -750,7 +885,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux:.4f} "
+        f"tgt_mag={epoch_aux_tgt_mag:.4f} aux%={aux_pct_of_total*100:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
