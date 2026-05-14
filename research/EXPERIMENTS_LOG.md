@@ -6,6 +6,34 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 13:10 — Round 42 cont.: close #2907 askeladd EMA (math/impl mismatch in advisor's snippet, EMA frozen near worst-window-iterate — LOSS +33%); SMOOTHING AXIS FULLY CLOSED (SWA + EMA both refuted); assign askeladd #2921 input-embedding noise σ=0.05 (data-side regularization, parallel to frieren #2917 dropout)
+
+### PR #2907 — askeladd EMA decay=0.999 from e30 (CLOSED, mechanism broken due to per-epoch vs per-step decay mismatch)
+- Branch: `charliepai2g48h3-askeladd/ema-decay0p999-start30-epochs50-nlayers2-slicenum16`
+- Hypothesis: EMA tracks a smoothed trajectory continuously with exponential decay, robust where SWA's uniform tail failed.
+- Artifacts: `models/model-charliepai2g48h3-askeladd-ema-decay0p999-start30-epochs50-nlayers2-slicenum16-20260514-123058/metrics.jsonl`
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| **Current baseline (#2872)** | **34.544** | **29.916** |
+| Best single-epoch (e50) | 34.887 (+0.99% — within seed noise) | 29.229 (−2.30% test) |
+| **EMA checkpoint** | **46.442 (+33.4% LOSS)** | 39.768 (+33% LOSS) |
+
+EMA is worse on EVERY single split — both val and test, both ID and OOD. No partial signal of improvement.
+
+**Per-epoch val_avg trajectory (last 10):** [37.562, 37.030★, 36.456★, 35.946★, 36.099, 35.653★, 35.155★, 34.931★, 34.953, 34.887★] — best moves forward on 6 of last 9 epochs → still descending at e50.
+
+**ADVISOR ERROR (math/implementation mismatch):** The assignment snippet specified `ema_model.update_parameters(model)` in the OUTER (per-epoch) loop, but the EV-justifying math assumed per-STEP (inner training-batch loop) updates. At per-epoch decay=0.999 over 20 epochs: coefficient of model_e30 = 0.999^20 ≈ 0.980 → EMA is essentially frozen near e30 weights (val ≈ 42), and the observed 46.44 is even worse due to parameter-space non-linearity (partially-averaged still-descending weights are not a valid point in loss landscape). Caught by student's diagnostic.
+
+**SMOOTHING AXIS FULLY CLOSED**: SWA (uniform tail, #2857 + #2888) and EMA (exponentially-weighted continuous, #2907) both refuted. The fundamental problem is shared: any smoothing window over a still-descending trajectory averages over non-stationary weights and pulls toward worse iterates. Closing this axis at this stack.
+
+**Updated seed-variance picture (n=4 same-config runs):** val_avg = [34.544, 35.414, 35.697, 34.887], mean 35.135, sample std 0.531. The 34.544 baseline is ~1.1σ above mean — a moderately favorable seed. Possibly bimodal: 2 runs at 34.5-34.9, 2 runs at 35.4-35.7 (if real, suggests seeds select between two basins).
+
+### Round 42 cont. assignment: askeladd #2921 input-embedding noise σ=0.05
+- Hypothesis: Adding Gaussian noise σ=0.05 to input embeddings during training acts as data-side regularization, distinct from dropout (activation-side, frieren #2917). Both probe the seed-variance/overfitting hypothesis from different angles. If both win independently, they compound.
+- Implementation: 1 line in model.forward — `embed = embed + torch.randn_like(embed) * sigma` (training mode only).
+- Decision threshold: val < 34.0 = clear win; val ∈ [34.5, 35.6] = within seed noise; val > 36.0 = loss.
+
 ## 2026-05-14 12:55 — Round 42 cont.: close #2904 frieren compound (specialized_decoders + epochs=50 LOSS +15% — MECHANISM INTERACTION via LR schedule); assign frieren #2917 dropout=0.1 (canonical regularization, attacks seed-variance/overfitting)
 
 ### PR #2904 — frieren specialized surf/vol decoders + epochs=50 COMPOUND (CLOSED, mechanism interaction refuted)

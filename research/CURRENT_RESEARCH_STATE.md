@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 12:55
+- **Date:** 2026-05-14 13:10
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -15,9 +15,9 @@
 > **EPOCH-BUDGET WIN (Round 42).** epochs=50 (T_max=50) vs epochs=46 (T_max=46): the cosine's extended decay captured one more productive descent step at e46→e47 (slope −0.452, largest in final tail). Val −2.02%, test −1.09%. E47-50 is flat plateau [34.54-34.79] — epoch-budget axis saturated at e47 for this stack. BOTH val and test improved; confirmed above seed-variance floor.
 > **Previous baseline (PR #2468):** val=35.256, test=30.245 (n_layers=2+slice_num=16+epochs=46).
 
-> **SWA AXIS FULLY CLOSED (both schedules)** — #2888 askeladd epochs=50 + SWA-from-e47 (2 independent runs): SWA Δ vs best single-epoch sign-flips between runs (|Δ| ≤ 0.07 val, ≤ 0.03 test), comfortably below seed variance. Reason for closure: askeladd's two runs both still mildly descending through e50 (mean slope ~−0.1/epoch, vs #2872's true plateau +0.02/epoch). The "plateau premise" was config-and-seed specific to #2872 — same config, different seeds produced different trajectory shapes. SWA closed for both 46-epoch (still-descending, #2857) AND 50-epoch (variable plateau, #2888) regimes.
+> **SMOOTHING AXIS FULLY CLOSED** — SWA (#2857 + #2888) AND EMA (#2907) both refuted at this stack. Mechanism: any smoothing window over a still-descending trajectory averages over non-stationary weights and pulls toward worse iterates. SWA neutral (Δ ≤ 0.07 val); EMA at per-epoch decay=0.999 was catastrophic (+33% val) due to math/impl mismatch — coefficient of model_e30 = 0.999^20 ≈ 0.980, EMA frozen near worst-window-iterate. Both schedules (46-epoch and 50-epoch) tested.
 >
-> **MAJOR INSIGHT — seed variance dominates at this stack** (from #2888): three same-config runs gave val [34.544, 35.414, 35.697], sample std 0.605, range 1.153 (3.3% relative). PR #2872's val=34.544 was 1-2σ lucky; true mean ~35.2. **This re-interprets:** (a) frieren #2883 (val 35.140) was within seed-noise of true mean, NOT a clear regression — test wins on all 4 splits are the more robust signal; (b) future experiments need ≥3 seeds for small-delta comparisons OR target ≥3-5% mechanism gains OR test variance-robust mechanisms (smoothing, regularization, augmentation). Single-seed <2% delta comparisons are below the noise floor.
+> **MAJOR INSIGHT — seed variance dominates** (n=4 same-config runs): val_avg = [34.544 (#2872), 35.414, 35.697 (#2888), 34.887 (#2907)], mean 35.135, sample std 0.531. The 34.544 baseline is ~1.1σ above mean (moderately favorable seed). Possibly bimodal: 2 runs at 34.5-34.9, 2 runs at 35.4-35.7 (if real, seeds select between two basins). **Re-interprets:** (a) frieren #2883 (val 35.140) was AT the seed-mean — test wins on all 4 splits are the more robust signal; (b) future experiments need ≥3-seed runs OR ≥3-5% mechanism gains OR variance-robust mechanisms (regularization, augmentation, but NOT smoothing — that axis is closed); (c) Single-seed <2% delta comparisons are below noise floor.
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
@@ -138,8 +138,8 @@
 | edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
-| askeladd | **#2907** | **EMA decay=0.999 from e30** — continuous smoothing alternative to SWA (uniform window). Tests whether exponential decay can capture smoothing benefit when trajectory descending (SWA's failure mode). | **Round 42: EMA smoothing** |
-| frieren | **#2917** | **Dropout p=0.1 on attention + FFN** — canonical transformer regularization (missing from this stack). Attacks seed-variance/overfitting hypothesis from #2888. Mechanism-distinct from all prior attempts (training-time stochastic regularization vs post-hoc smoothing). | **Round 42: regularization probe** |
+| askeladd | **#2921** | **Input-embedding noise σ=0.05** — data-side regularization probe, mechanism-distinct from frieren's dropout (activation-side). Both target seed-variance/overfitting from different angles. | **Round 42: data-side regularization** |
+| frieren | **#2917** | **Dropout p=0.1 on attention + FFN** — canonical transformer regularization (missing from this stack). Attacks seed-variance/overfitting hypothesis from #2888. Mechanism-distinct from all prior attempts. | **Round 42: activation-side regularization** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed
