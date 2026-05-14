@@ -1878,3 +1878,46 @@ Tanjiro pod was stuck for ~5 hours on a pod-side secondary rate-limit cycle (eac
 - **Metrics JSONL**: `models/model-charliepai2g24h1-fern-naca-feature-jitter-sigma-0p02-20260513-22*/metrics.jsonl`
 
 **Programme learning**: **5th confirmed input-side perturbation augmentation closure**. The full-channel jitter strategy is closed. Reassigned fern to **#2662 naca-jitter-ch15-17-only-sigma02** — same σ=0.02 jitter, but channel 16 (camber position, the rc OOD axis) masked to zero. Targets preserving the cruise -43.7% win without the rc +24.2% regression. If successful, demonstrates the channel-selective augmentation principle and unlocks a new class of OOD-aware input augmentations.
+
+
+## 2026-05-14 00:00 — PR #2627: Surface-normal direction (n_x, n_y) per-node input feature — CLOSED
+- **Branch**: `charliepai2g24h1-askeladd/surface-normal-volume-feature`
+- **Hypothesis**: Inject surface-normal direction (n_x, n_y) for each volume node from nearest surface point as 2 additional input channels. Physically motivated by pressure-normal coupling at viscous walls; expected to help OOD camber generalization.
+- **Status**: **CLOSED — large regression with the 3rd-confirmed dichotomy** val +8.34%, test +6.55%
+
+| Split | Baseline (#2011) | Surface-normal | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | 31.19 | +7.8% |
+| val_geom_camber_rc | 41.95 | 44.89 | **+27.2%** ❌ |
+| val_geom_camber_cruise | 14.15 | 13.98 | **−44.8%** ✅ MASSIVE WIN |
+| val_re_rand | 30.81 | 35.01 | **+35.0%** ❌ |
+| **val_avg** | **28.8762** | **31.2686** | **+8.34%** ❌ |
+| **test_avg** | **24.9992** | **26.6361** | **+6.55%** ❌ |
+
+- **🔑 3RD CONFIRMATION of cruise-WIN / rc-LOSS dichotomy**:
+  - #2625 fern NACA-jitter (cruise -43.7% / rc +24.2%)
+  - #2626 thorfinn per-channel-heads (cruise -44% / rc +21%)
+  - **#2627 askeladd surface-normal (cruise -44.8% / rc +27.2%)** — new
+  - Three orthogonal interventions (input augmentation, output-head architecture, new input feature) all produce essentially identical cruise/rc dichotomy ratios. **This is a STRUCTURAL finding about the data/model geometry under the current 30-min budget + N=1499 + Transolver baseline**, not specific to any one intervention.
+
+- **Diagnostic**: Student's analysis nails three points: (a) "volume nodes inherit the normal of the nearest surface point" creates wake/far-field "ghost orientation" pollution; (b) "model has learned a normal→flow mapping conditional on cruise-regime priors that doesn't generalize outside them" — the interpolation-densification pattern again; (c) val_re_rand +35% is the worst side-effect — model uses normals as a memorization channel conflated with Re-specific flow features.
+
+- **Metrics JSONL**: `models/model-charliepai2g24h1-askeladd-surface-normal-volume-feature-20260513-231529/metrics.jsonl`
+
+**Programme learning**: Per-node normal feature with volume-node inheritance closed. Reassigned to **#2671 surface-only-normal-feature** (student's suggested follow-up #1): zero normals on volume nodes, keep only on surface elements. Clean test of whether the dichotomy is structural or pollution-driven.
+
+### Channel-index correction (from fern empirical verification on #2662)
+
+**CORRECTION TO ROUND 23:41 NOTES**: The NACA-4 code is `MPTT`. Verified empirically against `splits_v2/`:
+- ch15 = M = camber **amplitude** (1st NACA digit)
+- ch16 = P = camber **position** (2nd NACA digit)
+- ch17 = T = thickness (3rd-4th digits, dataset has these collapsed into one ch)
+
+Train tandem ch15 = {0, 0.111, ..., 0.667, 1.0}; rc/cruise are held out on **ch15** (camber amplitude M):
+- val_geom_camber_rc ch15 = {0.667, 0.778, 0.889} — values 0.778, 0.889 are OOD (extrapolation beyond train [0,1.0] cluster)
+- val_geom_camber_cruise ch15 = {0.222, 0.333, 0.444} — in-distribution (interpolation in middle)
+- Both splits have ch16 fully in-distribution.
+
+The "rc"/"cruise" prefix refers to **raceCar/cruise environment**, NOT to camber-position channel.
+
+The structural finding (rc=EXTRAPOLATION along the held-out shape axis; cruise=INTERPOLATION) is correct — just on **ch15** (camber amplitude M), not ch16. PR #2662 was sent back with corrected instruction: mask ch15, jitter ch16+ch17.
