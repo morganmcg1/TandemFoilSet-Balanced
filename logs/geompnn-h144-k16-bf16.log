@@ -1,0 +1,44 @@
+Device: cuda
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+[H90] model_class=geompnn — skipping FourierCoordEnc (raw normalized x).
+Model: GeoMPNN hidden=144 layers=5 k=16 (0.79M params)
+n_params (total trainable): 789123
+[H90] layer 0: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 1: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 2: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 3: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 4: layer_scale init avg=0.1000 (target 0.1)
+[H90] Optimizer param groups: other lr=5.00e-04 wd=1e-04 (788403 params), layerscale lr=5.00e-03 wd=0e+00 (720 params, expected 720)
+LR schedule: linear warmup over 188 batches (1 epoch), then cosine T_max=2256 batches (12 epochs)
+Epoch 1/12:   0%|          | 0/188 [00:00<?, ?it/s]                                                   Traceback (most recent call last):
+  File "/workspace/senpai/target/train.py", line 1005, in <module>
+    loss.backward()
+  File "/usr/local/lib/python3.10/dist-packages/torch/_tensor.py", line 631, in backward
+    torch.autograd.backward(
+  File "/usr/local/lib/python3.10/dist-packages/torch/autograd/__init__.py", line 381, in backward
+    _engine_run_backward(
+  File "/usr/local/lib/python3.10/dist-packages/torch/autograd/graph.py", line 869, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/usr/local/lib/python3.10/dist-packages/torch/utils/checkpoint.py", line 1173, in unpack_hook
+    _run_fn_with_dynamo_disabled(frame.recompute_fn, *args)
+  File "/usr/local/lib/python3.10/dist-packages/torch/_compile.py", line 54, in inner
+    return disable_fn(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/_dynamo/eval_frame.py", line 1263, in _fn
+    return fn(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/utils/checkpoint.py", line 1139, in _run_fn_with_dynamo_disabled
+    return fn(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/utils/checkpoint.py", line 1607, in recompute_fn
+    fn(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/workspace/senpai/target/train.py", line 397, in forward
+    msgs = self.msg_out(F.gelu(h_i_p + h_j_p + e_p))             # [B, N, K, H]
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/linear.py", line 134, in forward
+    return F.linear(input, self.weight, self.bias)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 7.55 GiB. GPU 0 has a total capacity of 94.97 GiB of which 3.86 GiB is free. Including non-PyTorch memory, this process has 91.10 GiB memory in use. Of the allocated memory 83.49 GiB is allocated by PyTorch, and 6.97 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)

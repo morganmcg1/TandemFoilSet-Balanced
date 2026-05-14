@@ -32,6 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.utils.checkpoint import checkpoint
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -313,10 +314,249 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# H90: GeoMPNN — geometry-aware message-passing GNN
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def compute_knn_graph(
+    pos: torch.Tensor, mask: torch.Tensor, k: int, chunk_size: int = 1024,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute KNN graph per sample, chunked along the query axis.
+
+    Naive ``torch.cdist(pos, pos)`` is ``[B, N, N]`` which is ~938 GB at
+    ``B=4, N=242K``. We chunk over queries so peak memory is
+    ``B * chunk_size * N * 4 bytes``.
+
+    Returns ``(knn_dist [B, N, k], knn_idx [B, N, k])``. Padded source
+    nodes (``~mask``) are masked to ``+inf`` distance so they never appear
+    in any query's neighbour list (unless a query has fewer than ``k``
+    real neighbours, in which case the extra slots have ``+inf`` and are
+    replaced with 0 by the caller).
+    """
+    B, N, _ = pos.shape
+    knn_dist = torch.empty(B, N, k, device=pos.device, dtype=pos.dtype)
+    knn_idx = torch.empty(B, N, k, device=pos.device, dtype=torch.long)
+    invalid_j = ~mask  # [B, N]
+    for cs in range(0, N, chunk_size):
+        ce = min(cs + chunk_size, N)
+        chunk_q = pos[:, cs:ce]                # [B, Nc, 2]
+        d = torch.cdist(chunk_q, pos)          # [B, Nc, N]
+        d = d.masked_fill(invalid_j.unsqueeze(1), float("inf"))
+        kd, ki = torch.topk(d, k=k + 1, dim=-1, largest=False)
+        # drop self (index 0 in sorted order — query is at distance 0 to itself)
+        knn_dist[:, cs:ce] = kd[..., 1:]
+        knn_idx[:, cs:ce] = ki[..., 1:]
+    return knn_dist, knn_idx
+
+
+class GeoMPNNLayer(nn.Module):
+    """Single GeoMPNN message-passing layer with residual + LayerScale.
+
+    Uses a **factorized message** form to avoid materializing the wide
+    ``[B, N, k, 3H]`` concat tensor used by the canonical
+    ``msg = MLP(cat(h_i, h_j, e_ij))`` formulation:
+
+        msg = W_out · GELU(W_i · h_i + W_j · h_j + W_e · e_ij)
+
+    Mathematically the same first linear, but ``W_i · h_i`` is computed
+    on ``[B, N, H]`` (no ``k`` dim) and broadcast over neighbours.
+    """
+
+    def __init__(self, hidden: int, ls_init: float = 0.1):
+        super().__init__()
+        self.ln_h = nn.LayerNorm(hidden)
+        self.msg_i = nn.Linear(hidden, hidden)
+        self.msg_j = nn.Linear(hidden, hidden)
+        self.msg_e = nn.Linear(hidden, hidden)
+        self.msg_out = nn.Linear(hidden, hidden)
+        self.update = nn.Sequential(
+            nn.Linear(2 * hidden, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, hidden),
+        )
+        self.layer_scale = nn.Parameter(torch.ones(hidden) * ls_init)
+
+    def forward(self, h: torch.Tensor, edge_h: torch.Tensor,
+                knn_idx: torch.Tensor) -> torch.Tensor:
+        B, N, H = h.shape
+        K = knn_idx.shape[2]
+        h_norm = self.ln_h(h)
+        # Gather neighbour features.
+        # Critical: do NOT use ``h_norm.unsqueeze(1).expand(-1, N, -1, -1)`` —
+        # that creates a [B, N, N, H] *virtual* view, but ``gather``'s backward
+        # allocates ``grad_input`` of the source shape, which would be
+        # ~134 TB at N=242K. Instead, flatten the (query, k) axis and gather
+        # along dim=1 of the original [B, N, H] tensor.
+        idx_flat = knn_idx.reshape(B, N * K, 1).expand(B, N * K, H)  # view; stride=0 on H
+        h_j_flat = torch.gather(h_norm, dim=1, index=idx_flat)       # [B, N*K, H]
+        h_j = h_j_flat.view(B, N, K, H)                              # [B, N, K, H]
+        h_i_p = self.msg_i(h_norm).unsqueeze(2)                      # [B, N, 1, H]
+        h_j_p = self.msg_j(h_j)                                      # [B, N, K, H]
+        e_p = self.msg_e(edge_h)                                     # [B, N, K, H]
+        msgs = self.msg_out(F.gelu(h_i_p + h_j_p + e_p))             # [B, N, K, H]
+        agg = msgs.mean(dim=2)                                       # [B, N, H]
+        update_input = torch.cat([h_norm, agg], dim=-1)              # [B, N, 2H]
+        delta = self.update(update_input)                            # [B, N, H]
+        return h + self.layer_scale * delta
+
+
+class GeoMPNN(nn.Module):
+    """Geometry-aware message-passing GNN for irregular meshes (H90).
+
+    Replaces Transolver's slice-token attention with explicit local
+    message passing along a KNN graph in node-position space. Edges
+    carry geometry features ``(rel_pos_xy, distance)``, encoded once
+    and reused across all layers.
+
+    Input contract: ``data = {"x": [B, N, in_dim], "pos": [B, N, 2],
+    "mask": [B, N]}``; output ``{"preds": [B, N, out_dim]}`` with
+    padded rows zeroed.
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 24,
+        hidden: int = 288,
+        out_dim: int = 3,
+        n_layers: int = 5,
+        k_neighbors: int = 16,
+        ls_init: float = 0.1,
+        knn_chunk_size: int = 1024,
+        use_checkpoint: bool = True,
+        output_fields: list[str] | None = None,
+        output_dims: list[int] | None = None,
+    ):
+        super().__init__()
+        self.k = k_neighbors
+        self.n_layers = n_layers
+        self.hidden = hidden
+        self.knn_chunk_size = knn_chunk_size
+        self.use_checkpoint = use_checkpoint
+        self.output_fields = output_fields or []
+        self.output_dims = output_dims or []
+        self.node_enc = nn.Sequential(
+            nn.Linear(in_dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, hidden),
+        )
+        self.edge_enc = nn.Sequential(
+            nn.Linear(3, hidden // 2),
+            nn.GELU(),
+            nn.Linear(hidden // 2, hidden),
+        )
+        self.layers = nn.ModuleList([
+            GeoMPNNLayer(hidden, ls_init=ls_init) for _ in range(n_layers)
+        ])
+        self.decoder = nn.Sequential(
+            nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, out_dim),
+        )
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, data, **kwargs):
+        x = data["x"]          # [B, N, in_dim]
+        pos = data["pos"]      # [B, N, 2]
+        mask = data["mask"]    # [B, N], bool
+        B, N, _ = x.shape
+
+        h = self.node_enc(x)   # [B, N, H]
+
+        # KNN graph in fp32 (autocast disabled): cdist + topk need numerical
+        # precision; small tensors so bf16 buys nothing here.
+        with torch.amp.autocast("cuda", enabled=False):
+            knn_dist, knn_idx = compute_knn_graph(
+                pos.float(), mask, k=self.k, chunk_size=self.knn_chunk_size,
+            )
+            # Replace +inf with 0 for queries whose neighbours fell short — those
+            # rows are zeroed at the output anyway since the query is padded.
+            knn_dist = torch.where(
+                torch.isfinite(knn_dist), knn_dist, torch.zeros_like(knn_dist),
+            )
+            with torch.no_grad():
+                idx_exp_pos = knn_idx.unsqueeze(-1).expand(-1, -1, -1, 2)  # [B, N, k, 2]
+                knn_pos = torch.gather(
+                    pos.float().unsqueeze(1).expand(-1, N, -1, -1),        # [B, N, N, 2] view
+                    dim=2, index=idx_exp_pos,
+                )                                                          # [B, N, k, 2]
+                rel_pos = knn_pos - pos.float().unsqueeze(2)               # [B, N, k, 2]
+                edge_feat = torch.cat([rel_pos, knn_dist.unsqueeze(-1)], dim=-1)  # [B, N, k, 3]
+        edge_h = self.edge_enc(edge_feat)                              # [B, N, k, H]
+
+        for layer in self.layers:
+            if self.use_checkpoint and self.training:
+                h = checkpoint(layer, h, edge_h, knn_idx, use_reentrant=False)
+            else:
+                h = layer(h, edge_h, knn_idx)
+
+        out = self.decoder(h)                                          # [B, N, out_dim]
+        out = out * mask.unsqueeze(-1)                                 # zero padded rows
+        return {"preds": out}
+
+
+# ---------------------------------------------------------------------------
+# H90: stratified node subsample for GeoMPNN training
+# ---------------------------------------------------------------------------
+
+
+def stratified_subsample_batch(
+    x: torch.Tensor, y: torch.Tensor,
+    is_surface: torch.Tensor, mask: torch.Tensor,
+    n_keep: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per-sample stratified subsample to ``n_keep`` nodes.
+
+    Keeps *all* valid surface nodes (small set, primary-metric target) plus a
+    uniform-random subset of valid volume nodes filling the rest of the budget.
+    Output is padded to ``n_keep`` along dim 1 with ``mask=False`` for short
+    samples, so the existing scoring/loss masking continues to work unchanged.
+    """
+    B, N, X = x.shape
+    Y = y.shape[-1]
+    device = x.device
+    out_x = torch.zeros(B, n_keep, X, dtype=x.dtype, device=device)
+    out_y = torch.zeros(B, n_keep, Y, dtype=y.dtype, device=device)
+    out_surf = torch.zeros(B, n_keep, dtype=torch.bool, device=device)
+    out_mask = torch.zeros(B, n_keep, dtype=torch.bool, device=device)
+    for b in range(B):
+        valid = mask[b]
+        surf = is_surface[b] & valid
+        vol = valid & ~surf
+        surf_idx = surf.nonzero(as_tuple=True)[0]
+        vol_idx = vol.nonzero(as_tuple=True)[0]
+        n_surf = int(surf_idx.numel())
+        n_vol = int(vol_idx.numel())
+        n_keep_surf = min(n_surf, n_keep)
+        n_keep_vol = min(n_vol, n_keep - n_keep_surf)
+        if n_vol > n_keep_vol:
+            perm = torch.randperm(n_vol, device=device)[:n_keep_vol]
+            vol_idx = vol_idx[perm]
+        chosen = torch.cat([surf_idx[:n_keep_surf], vol_idx], dim=0)
+        n_chosen = chosen.numel()
+        out_x[b, :n_chosen] = x[b, chosen]
+        out_y[b, :n_chosen] = y[b, chosen]
+        out_surf[b, :n_chosen] = is_surface[b, chosen]
+        out_mask[b, :n_chosen] = mask[b, chosen]
+    return out_x, out_y, out_surf, out_mask
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   use_bf16_autocast: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -336,9 +576,20 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # H90: GeoMPNN takes raw normalized x + pos + mask;
+            # Transolver path goes through FourierCoordEnc as before.
+            with torch.amp.autocast(
+                "cuda", dtype=torch.bfloat16, enabled=use_bf16_autocast,
+            ):
+                if fourier_enc is None:
+                    pos = x_norm[..., :2].contiguous()
+                    pred = model({"x": x_norm, "pos": pos, "mask": mask})["preds"]
+                else:
+                    x_norm_fe = fourier_enc(x_norm)
+                    pred = model({"x": x_norm_fe})["preds"]
+            if use_bf16_autocast:
+                pred = pred.float()
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -505,6 +756,25 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # H90: model-class switch — "transolver" (default) keeps the established
+    # baseline path; "geompnn" swaps in the geometry-aware message-passing GNN.
+    model_class: str = "transolver"
+    geompnn_hidden: int = 288
+    geompnn_layers: int = 5
+    geompnn_k: int = 16
+    geompnn_chunk: int = 1024  # KNN query chunk size (memory tradeoff)
+    geompnn_ls_init: float = 0.1
+    geompnn_checkpoint: bool = True  # gradient checkpointing per MP layer (cuts memory ~5x at ~30% time cost)
+    # H90: training-time stratified node subsample. KNN graph is O(N^2) per
+    # batch; at N=242K it makes full-mesh training infeasible inside the 30 min
+    # cap. We keep all surface nodes (~1-3% of N, primary metric) plus a random
+    # half-budget of volume nodes, up to ``geompnn_train_subsample`` total per
+    # sample. 0 disables subsampling. Eval/test never subsample.
+    geompnn_train_subsample: int = 32768
+    cosine_t_max_epochs: int = 14  # cosine T_max in epochs (post-warmup)
+    # bf16 autocast (Blackwell-friendly) — used for GeoMPNN to keep the wide
+    # edge tensors in half precision; Transolver path is unaffected when False.
+    use_bf16_autocast: bool = False
 
 
 cfg = sp.parse(Config)
@@ -534,131 +804,181 @@ val_loaders = {
 }
 
 N_FREQS = 6
-fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+USE_GEOMPNN = cfg.model_class == "geompnn"
 
-model_config = dict(
-    space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
-    out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
-    output_fields=["Ux", "Uy", "p"],
-    output_dims=[1, 1, 1],
-)
+# H90: for GeoMPNN we keep raw normalized x (24-dim, positions intact at
+# dims 0-1 ready for the KNN graph). FourierCoordEnc is Transolver-only.
+fourier_enc: FourierCoordEnc | None
+if USE_GEOMPNN:
+    fourier_enc = None
+    print(f"[H90] model_class=geompnn — skipping FourierCoordEnc (raw normalized x).")
+else:
+    fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
-model = Transolver(**model_config).to(device)
+if USE_GEOMPNN:
+    model_config = dict(
+        model_class="geompnn",
+        in_dim=X_DIM,
+        hidden=cfg.geompnn_hidden,
+        out_dim=3,
+        n_layers=cfg.geompnn_layers,
+        k_neighbors=cfg.geompnn_k,
+        ls_init=cfg.geompnn_ls_init,
+        knn_chunk_size=cfg.geompnn_chunk,
+        use_checkpoint=cfg.geompnn_checkpoint,
+        output_fields=["Ux", "Uy", "p"],
+        output_dims=[1, 1, 1],
+    )
+    model_kwargs = {k: v for k, v in model_config.items() if k != "model_class"}
+    model = GeoMPNN(**model_kwargs).to(device)
+else:
+    model_config = dict(
+        model_class="transolver",
+        space_dim=2,
+        fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+        out_dim=3,
+        n_hidden=128,
+        n_layers=5,
+        n_head=4,
+        slice_num=64,
+        mlp_ratio=2,
+        output_fields=["Ux", "Uy", "p"],
+        output_dims=[1, 1, 1],
+    )
+    model_kwargs = {k: v for k, v in model_config.items() if k != "model_class"}
+    model = Transolver(**model_kwargs).to(device)
+
 n_model_params = sum(p.numel() for p in model.parameters())
-n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
-n_params = n_model_params + n_fourier_params  # includes 6 learnable freqs
-print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
-print(f"n_params (total trainable): {n_params}")
-swiglu_inner_dim = model.blocks[0].mlp.inner_dim
-print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
-# H39: ReGLU gate sanity check (ReLU = max(0,x))
-_h39_test_x = torch.tensor([-1.0, 0.0, 1.0])
-print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 0.0000)")
-print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
-print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
-print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
-print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")  # should print 288
-print(f"[H46] n_params: {n_params}")  # should print ~892,631
-for i, b in enumerate(model.blocks):
+n_fourier_params = sum(p.numel() for p in fourier_enc.parameters()) if fourier_enc is not None else 0
+n_params = n_model_params + n_fourier_params
+if USE_GEOMPNN:
     print(
-        f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
-        f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
+        f"Model: GeoMPNN hidden={cfg.geompnn_hidden} layers={cfg.geompnn_layers} "
+        f"k={cfg.geompnn_k} ({n_model_params/1e6:.2f}M params)"
     )
+    print(f"n_params (total trainable): {n_params}")
+    for i, layer in enumerate(model.layers):
+        print(
+            f"[H90] layer {i}: layer_scale init avg={layer.layer_scale.mean().item():.4f} "
+            f"(target {cfg.geompnn_ls_init})"
+        )
+else:
+    print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
+    print(f"n_params (total trainable): {n_params}")
+    swiglu_inner_dim = model.blocks[0].mlp.inner_dim
+    print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
+    # H39: ReGLU gate sanity check (ReLU = max(0,x))
+    _h39_test_x = torch.tensor([-1.0, 0.0, 1.0])
+    print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 0.0000)")
+    print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
+    print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
+    print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
+    print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")
+    print(f"[H46] n_params: {n_params}")
+    for i, b in enumerate(model.blocks):
+        print(
+            f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
+            f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
+        )
 
-# H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
-# N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
-# (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
-# per-epoch in the training loop.
-N_ANNEAL_EPOCHS = 12
-_h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
-_h73_init_factor = math.sqrt(3.0)
-_h73_final_factor = math.sqrt(2.0)
-_h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
-_h73_final_scale = _h73_final_factor / math.sqrt(_h73_dim_head)
-_h73_default_scale = 1.0 / math.sqrt(_h73_dim_head)
-print(
-    f"[H73] attn-temp anneal: linear sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
-    f"over {N_ANNEAL_EPOCHS} epochs (then clamped at sqrt(2)); "
-    f"scale {_h73_init_scale:.4f} -> {_h73_final_scale:.4f} "
-    f"(default scale would be {_h73_default_scale:.4f}, "
-    f"dim_head={_h73_dim_head}, slice_num={model_config['slice_num']}, "
-    f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
-)
-# H73: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
-for i, b in enumerate(model.blocks):
+# H73: Transolver-only attention-temperature annealing. GeoMPNN has no
+# attention so this entire block is skipped.
+if USE_GEOMPNN:
+    N_ANNEAL_EPOCHS = 0
+else:
+    N_ANNEAL_EPOCHS = 12
+    _h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
+    _h73_init_factor = math.sqrt(3.0)
+    _h73_final_factor = math.sqrt(2.0)
+    _h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
+    _h73_final_scale = _h73_final_factor / math.sqrt(_h73_dim_head)
+    _h73_default_scale = 1.0 / math.sqrt(_h73_dim_head)
     print(
-        f"[H73] block {i}: attn_sharpening_factor init = "
-        f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
+        f"[H73] attn-temp anneal: linear sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
+        f"over {N_ANNEAL_EPOCHS} epochs (then clamped at sqrt(2)); "
+        f"scale {_h73_init_scale:.4f} -> {_h73_final_scale:.4f} "
+        f"(default scale would be {_h73_default_scale:.4f}, "
+        f"dim_head={_h73_dim_head}, slice_num={model_config['slice_num']}, "
+        f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
     )
+    for i, b in enumerate(model.blocks):
+        print(
+            f"[H73] block {i}: attn_sharpening_factor init = "
+            f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
+        )
 
-# H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
-# H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
-# channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
-# scaling factors toward zero (init=0.025), fighting the model's learned per-channel
-# diversification, and default lr=5e-4 under-trains them.
-freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
-layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
-other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
-assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
-    f"Expected 1 freq tensor with {N_FREQS} elems, "
-    f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
-)
-# H54: param-group consistency check — every model param ends up in exactly one of
-# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
+# H40/H54: LayerScale params (and learned Fourier freqs) go in a 10x-lr, no-WD
+# param group. For GeoMPNN, layer-scale params live at ``model.layers[i].layer_scale``
+# (one per layer); there are no Fourier freqs.
+if USE_GEOMPNN:
+    freq_params = []
+    layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
+    other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
+    expected_layer_scale = cfg.geompnn_layers * cfg.geompnn_hidden
+else:
+    freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
+    layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
+    other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
+    assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
+        f"Expected 1 freq tensor with {N_FREQS} elems, "
+        f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
+    )
+    expected_layer_scale = 2 * len(model.blocks) * model_config["n_hidden"]
+
 all_model_p = {id(p): p for p in model.parameters()}
 all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
 assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
     f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
 )
 n_layer_scale = sum(p.numel() for p in layer_scale_params)
-expected_layer_scale = 2 * len(model.blocks) * model_config["n_hidden"]
 assert n_layer_scale == expected_layer_scale, (
-    f"Expected {expected_layer_scale} LayerScale params "
-    f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
+    f"Expected {expected_layer_scale} LayerScale params, got {n_layer_scale}"
 )
+_fourier_total = sum(p.numel() for p in fourier_enc.parameters()) if fourier_enc is not None else 0
 assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
-    sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
+    sum(p.numel() for p in model.parameters()) + _fourier_total
 )
-optimizer = torch.optim.AdamW(
-    [
-        {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
-        {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
-        {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
-    ],
-    lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
-)
-print(
-    f"[H54] Optimizer param groups: "
-    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
-    f"({sum(p.numel() for p in other_params)} params), "
-    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
-    f"({sum(p.numel() for p in freq_params)} params), "
-    f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
-    f"({n_layer_scale} params, expected {expected_layer_scale})"
-)
-print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
-# H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
-# scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
+opt_groups = [
+    {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
+    {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+]
+if freq_params:
+    opt_groups.insert(1, {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0})
+optimizer = torch.optim.AdamW(opt_groups, lr=cfg.lr, weight_decay=cfg.weight_decay)
+if USE_GEOMPNN:
+    print(
+        f"[H90] Optimizer param groups: "
+        f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
+        f"({sum(p.numel() for p in other_params)} params), "
+        f"layerscale lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
+        f"({n_layer_scale} params, expected {expected_layer_scale})"
+    )
+else:
+    print(
+        f"[H54] Optimizer param groups: "
+        f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
+        f"({sum(p.numel() for p in other_params)} params), "
+        f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
+        f"({sum(p.numel() for p in freq_params)} params), "
+        f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
+        f"({n_layer_scale} params, expected {expected_layer_scale})"
+    )
+    print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+# H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining epochs.
 batches_per_epoch = len(train_loader)
 warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=1e-8, end_factor=1.0, total_iters=batches_per_epoch
 )
+cosine_t_max = cfg.cosine_t_max_epochs * batches_per_epoch
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=14 * batches_per_epoch
+    optimizer, T_max=cosine_t_max
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[warmup_scheduler, cosine_scheduler],
     milestones=[batches_per_epoch],
 )
-print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={14 * batches_per_epoch} batches (14 epochs)")
+print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={cosine_t_max} batches ({cfg.cosine_t_max_epochs} epochs)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -684,18 +1004,19 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
-    # H73: linearly anneal sqrt(3) -> sqrt(2) over N_ANNEAL_EPOCHS, clamped at
-    # sqrt(2) afterward. Updated at the start of each epoch so the new factor
-    # applies to all batches in this epoch (and to validation immediately
-    # after).
-    anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
-    current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
-    for block in model.blocks:
-        block.attn.attn_sharpening_factor.fill_(current_attn_factor)
-    print(
-        f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
-        f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
-    )
+    # H73: Transolver-only attention-temperature anneal. Skipped for GeoMPNN.
+    if USE_GEOMPNN:
+        current_attn_factor = float("nan")
+        anneal_frac = float("nan")
+    else:
+        anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
+        current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
+        for block in model.blocks:
+            block.attn.attn_sharpening_factor.fill_(current_attn_factor)
+        print(
+            f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
+            f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
+        )
 
     t0 = time.time()
     model.train()
@@ -708,10 +1029,27 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # H90: stratified subsample for GeoMPNN training only. KNN graph is
+        # O(N^2) and full meshes (up to 242K nodes) don't fit the 30 min cap.
+        # Eval and test runs always use full mesh — never subsampled.
+        if USE_GEOMPNN and cfg.geompnn_train_subsample > 0 and x.shape[1] > cfg.geompnn_train_subsample:
+            x, y, is_surface, mask = stratified_subsample_batch(
+                x, y, is_surface, mask, cfg.geompnn_train_subsample,
+            )
+
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.amp.autocast(
+            "cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16_autocast,
+        ):
+            if fourier_enc is None:
+                pos = x_norm[..., :2].contiguous()
+                pred = model({"x": x_norm, "pos": pos, "mask": mask})["preds"]
+            else:
+                x_norm_fe = fourier_enc(x_norm)
+                pred = model({"x": x_norm_fe})["preds"]
+        if cfg.use_bf16_autocast:
+            pred = pred.float()
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
@@ -725,14 +1063,16 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        # H40: clip both model and fourier_enc params together (freqs included).
-        total_norm = torch.nn.utils.clip_grad_norm_(
-            list(model.parameters()) + list(fourier_enc.parameters()), max_norm=25.0
-        )
+        # Clip model (and fourier_enc when present) params together.
+        clip_params = list(model.parameters())
+        if fourier_enc is not None:
+            clip_params += list(fourier_enc.parameters())
+        total_norm = torch.nn.utils.clip_grad_norm_(clip_params, max_norm=25.0)
         optimizer.step()
-        # H40: keep freqs bounded after the update. Safety net for the higher freqs lr.
-        with torch.no_grad():
-            fourier_enc.freqs.clamp_(0.1, 100.0)
+        if fourier_enc is not None:
+            # H40: keep freqs bounded after the update.
+            with torch.no_grad():
+                fourier_enc.freqs.clamp_(0.1, 100.0)
         scheduler.step()
 
         epoch_vol += vol_loss.item()
@@ -745,7 +1085,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             use_bf16_autocast=cfg.use_bf16_autocast)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -765,10 +1106,18 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
-    freqs_lr = optimizer.param_groups[1]["lr"]
-    layer_scale_lr = optimizer.param_groups[2]["lr"]
-    freqs_now = fourier_enc.freqs.detach().cpu().tolist()
-    append_metrics_jsonl(metrics_jsonl_path, {
+    # Param group layout depends on model class:
+    #   Transolver: [other, freqs, layer_scale]
+    #   GeoMPNN:    [other, layer_scale]
+    if USE_GEOMPNN:
+        freqs_lr = float("nan")
+        layer_scale_lr = optimizer.param_groups[1]["lr"]
+        freqs_now: list[float] = []
+    else:
+        freqs_lr = optimizer.param_groups[1]["lr"]
+        layer_scale_lr = optimizer.param_groups[2]["lr"]
+        freqs_now = fourier_enc.freqs.detach().cpu().tolist()
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -781,30 +1130,32 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
-        # H73: log annealed sharpening factor at this epoch.
-        "train/attn_sharpening_factor": current_attn_factor,
-        "train/attn_anneal_frac": anneal_frac,
-        "train/attn_anneal_n_epochs": N_ANNEAL_EPOCHS,
+        "train/model_class": "geompnn" if USE_GEOMPNN else "transolver",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if not USE_GEOMPNN:
+        epoch_record["train/attn_sharpening_factor"] = current_attn_factor
+        epoch_record["train/attn_anneal_frac"] = anneal_frac
+        epoch_record["train/attn_anneal_n_epochs"] = N_ANNEAL_EPOCHS
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
-    print(
-        f"    freqs (lr={freqs_lr:.2e}): "
-        f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
-    )
+    if freqs_now:
+        print(
+            f"    freqs (lr={freqs_lr:.2e}): "
+            f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
+        )
     print(f"    layer_scale (lr={layer_scale_lr:.2e})")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
-    # H67: probe slice-to-slice attention entropy at epochs 1, 6, 12 for
-    # comparison against the post-#2475 baseline (default scale 1/sqrt(32)).
-    if (epoch + 1) in (1, 6, 12):
+    # H67: Transolver attention-entropy probe — GeoMPNN has no attention.
+    if (not USE_GEOMPNN) and (epoch + 1) in (1, 6, 12):
         probe_loader = val_loaders["val_single_in_dist"]
         ent_means, ent_min_per_head = measure_attention_entropies(
             model, probe_loader, stats, fourier_enc, device, n_batches=4,
@@ -832,40 +1183,52 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Log final per-block LayerScale stats (end-of-training state) ---
 final_layer_scale_stats: dict[str, float] = {}
-for i, b in enumerate(model.blocks):
-    final_layer_scale_stats[f"final/layer_scale_attn_l{i}_mean"] = float(b.layer_scale_attn.mean().item())
-    final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
-    final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
-    final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-# H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
-final_freqs = fourier_enc.freqs.detach().cpu().tolist()
-init_freqs = [2.0**k for k in range(N_FREQS)]
-freq_drift = [f - i for f, i in zip(final_freqs, init_freqs)]
-freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, init_freqs)]
-freqs_summary = {
-    "final/freqs": final_freqs,
-    "final/freqs_init": init_freqs,
-    "final/freqs_abs_drift": freq_drift,
-    "final/freqs_rel_drift": freq_rel_drift,
-}
+if USE_GEOMPNN:
+    for i, layer in enumerate(model.layers):
+        final_layer_scale_stats[f"final/layer_scale_l{i}_mean"] = float(layer.layer_scale.mean().item())
+        final_layer_scale_stats[f"final/layer_scale_l{i}_std"] = float(layer.layer_scale.std().item())
+    freqs_summary: dict = {}
+else:
+    for i, b in enumerate(model.blocks):
+        final_layer_scale_stats[f"final/layer_scale_attn_l{i}_mean"] = float(b.layer_scale_attn.mean().item())
+        final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
+        final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
+        final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
+    final_freqs = fourier_enc.freqs.detach().cpu().tolist()
+    init_freqs = [2.0**k for k in range(N_FREQS)]
+    freq_drift = [f - i for f, i in zip(final_freqs, init_freqs)]
+    freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, init_freqs)]
+    freqs_summary = {
+        "final/freqs": final_freqs,
+        "final/freqs_init": init_freqs,
+        "final/freqs_abs_drift": freq_drift,
+        "final/freqs_rel_drift": freq_rel_drift,
+    }
 append_metrics_jsonl(
     metrics_jsonl_path,
     {"event": "final", **final_layer_scale_stats, **freqs_summary},
 )
 print("Final LayerScale stats (end-of-training):")
-for i in range(len(model.blocks)):
-    print(
-        f"  block {i}: attn mean={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_mean']:.4f} "
-        f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
-        f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
-        f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
-    )
-print("[H40] Final learned freqs vs dyadic init:")
-for k in range(N_FREQS):
-    print(
-        f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
-        f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
-    )
+if USE_GEOMPNN:
+    for i in range(len(model.layers)):
+        print(
+            f"  layer {i}: mean={final_layer_scale_stats[f'final/layer_scale_l{i}_mean']:.4f} "
+            f"std={final_layer_scale_stats[f'final/layer_scale_l{i}_std']:.4f}"
+        )
+else:
+    for i in range(len(model.blocks)):
+        print(
+            f"  block {i}: attn mean={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_mean']:.4f} "
+            f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
+            f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
+            f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+        )
+    print("[H40] Final learned freqs vs dyadic init:")
+    for k in range(N_FREQS):
+        print(
+            f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
+            f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
+        )
 
 # --- Test evaluation + local summary ---
 if best_metrics:
@@ -884,7 +1247,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 use_bf16_autocast=cfg.use_bf16_autocast)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)

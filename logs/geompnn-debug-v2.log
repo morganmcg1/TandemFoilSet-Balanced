@@ -1,0 +1,42 @@
+Device: cuda [DEBUG]
+Train: 6, val_single_in_dist: 2, val_geom_camber_rc: 2, val_geom_camber_cruise: 2, val_re_rand: 2
+[H90] model_class=geompnn — skipping FourierCoordEnc (raw normalized x).
+Model: GeoMPNN hidden=144 layers=5 k=8 (0.79M params)
+n_params (total trainable): 789123
+[H90] layer 0: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 1: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 2: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 3: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 4: layer_scale init avg=0.1000 (target 0.1)
+[H90] Optimizer param groups: other lr=5.00e-04 wd=1e-04 (788403 params), layerscale lr=5.00e-03 wd=0e+00 (720 params, expected 720)
+LR schedule: linear warmup over 2 batches (1 epoch), then cosine T_max=28 batches (14 epochs)
+Epoch 1/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 1/3:  50%|█████     | 1/2 [00:02<00:02,  2.38s/it]Epoch 1/3: 100%|██████████| 2/2 [00:03<00:00,  1.48s/it]                                                        Epoch   1 (12s) [17.6GB]  train[vol=1.7150 surf=1.4566]  val_avg_surf_p=478.3397 *
+    layer_scale (lr=5.00e-03)
+    val_single_in_dist         loss=42.8375  surf[p=1068.3599 Ux=27.3659 Uy=3.5399]  vol[p=893.3709 Ux=24.7571 Uy=8.1732]
+    val_geom_camber_rc         loss=26.0192  surf[p=574.9386 Ux=21.2341 Uy=3.6554]  vol[p=551.6409 Ux=16.5212 Uy=7.5429]
+    val_geom_camber_cruise     loss=12.3095  surf[p=190.3199 Ux=20.4382 Uy=1.3814]  vol[p=199.7654 Ux=15.3367 Uy=3.0035]
+    val_re_rand                loss=8.8816  surf[p=79.7405 Ux=20.5319 Uy=1.1359]  vol[p=114.5841 Ux=17.6098 Uy=2.5421]
+Epoch 2/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 2/3:  50%|█████     | 1/2 [00:01<00:01,  1.77s/it]Epoch 2/3: 100%|██████████| 2/2 [00:02<00:00,  1.22s/it]                                                        Epoch   2 (11s) [17.6GB]  train[vol=1.8682 surf=1.6472]  val_avg_surf_p=473.0740 *
+    layer_scale (lr=4.94e-03)
+    val_single_in_dist         loss=42.7815  surf[p=1075.3525 Ux=27.1768 Uy=3.2920]  vol[p=845.6818 Ux=25.1358 Uy=7.7998]
+    val_geom_camber_rc         loss=25.3406  surf[p=563.7223 Ux=20.3779 Uy=3.4296]  vol[p=527.4216 Ux=16.4956 Uy=7.5511]
+    val_geom_camber_cruise     loss=11.6817  surf[p=174.8991 Ux=19.4547 Uy=1.5401]  vol[p=194.3557 Ux=14.8905 Uy=2.9926]
+    val_re_rand                loss=8.3457  surf[p=78.3221 Ux=18.5601 Uy=1.1357]  vol[p=105.7752 Ux=17.2293 Uy=2.4346]
+Epoch 3/3:   0%|          | 0/2 [00:00<?, ?it/s]Epoch 3/3:  50%|█████     | 1/2 [00:01<00:01,  1.74s/it]Epoch 3/3: 100%|██████████| 2/2 [00:02<00:00,  1.21s/it]                                                        Epoch   3 (11s) [17.6GB]  train[vol=1.7748 surf=1.6194]  val_avg_surf_p=458.3103 *
+    layer_scale (lr=4.75e-03)
+    val_single_in_dist         loss=42.0784  surf[p=1049.0120 Ux=27.1174 Uy=3.4547]  vol[p=839.5389 Ux=25.5631 Uy=7.7199]
+    val_geom_camber_rc         loss=24.5966  surf[p=544.8154 Ux=19.6129 Uy=3.4988]  vol[p=500.2975 Ux=16.3596 Uy=7.5390]
+    val_geom_camber_cruise     loss=12.1095  surf[p=190.9237 Ux=18.4919 Uy=1.8493]  vol[p=216.2262 Ux=14.4319 Uy=3.0629]
+    val_re_rand                loss=7.0605  surf[p=48.4903 Ux=16.5902 Uy=1.3189]  vol[p=92.1622 Ux=16.7445 Uy=2.3699]
+
+Training done in 0.6 min
+Final LayerScale stats (end-of-training):
+  layer 0: mean=0.0989 std=0.0136
+  layer 1: mean=0.1007 std=0.0135
+  layer 2: mean=0.1001 std=0.0133
+  layer 3: mean=0.0998 std=0.0144
+  layer 4: mean=0.1014 std=0.0138
+
+Best val: epoch 3, val_avg/mae_surf_p = 458.3103
+
+Saved experiment summary to models/model-charliepai2g24h4-tanjiro-geompnn-debug-20260514-052057/metrics.yaml

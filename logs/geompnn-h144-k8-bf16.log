@@ -1,0 +1,13 @@
+Device: cuda
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+[H90] model_class=geompnn — skipping FourierCoordEnc (raw normalized x).
+Model: GeoMPNN hidden=144 layers=5 k=8 (0.79M params)
+n_params (total trainable): 789123
+[H90] layer 0: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 1: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 2: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 3: layer_scale init avg=0.1000 (target 0.1)
+[H90] layer 4: layer_scale init avg=0.1000 (target 0.1)
+[H90] Optimizer param groups: other lr=5.00e-04 wd=1e-04 (788403 params), layerscale lr=5.00e-03 wd=0e+00 (720 params, expected 720)
+LR schedule: linear warmup over 188 batches (1 epoch), then cosine T_max=2256 batches (12 epochs)
+Epoch 1/12:   0%|          | 0/188 [00:00<?, ?it/s]Epoch 1/12:   1%|          | 1/188 [00:16<52:23, 16.81s/it]Epoch 1/12:   1%|          | 2/188 [00:36<57:00, 18.39s/it]Epoch 1/12:   2%|▏         | 3/188 [00:51<52:45, 17.11s/it]Epoch 1/12:   2%|▏         | 4/188 [01:11<56:01, 18.27s/it]Epoch 1/12:   3%|▎         | 5/188 [01:27<52:59, 17.38s/it]Epoch 1/12:   3%|▎         | 6/188 [01:46<54:07, 17.84s/it]Epoch 1/12:   4%|▎         | 7/188 [02:00<50:00, 16.58s/it]
