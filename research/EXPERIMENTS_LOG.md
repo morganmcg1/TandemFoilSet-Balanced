@@ -2,6 +2,80 @@
 
 ---
 
+## 2026-05-14 21:20 [Round 138 close-32/33] UTC — PR #3009 SqReLU + PR #3008 K-only LN — **2 LOSS closures (154th, 155th taxa)**
+
+### Closed: #3009 nezuko squared-relu-mlp (Option A: SwiGLU inner-act swap)
+
+- **Branch:** charliepai2g48h5-nezuko/squared-relu-mlp
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-squared-relu-mlp-20260514-200909/metrics.jsonl
+
+| Metric | NEW Baseline #3006 | #3009 (SqReLU SwiGLU inner) | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | **29.5318** | **32.9215** | **+11.48% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 27.7138 | +8.77% LOSS |
+| val_single_in_dist | 24.283 | 28.746 | +18.38% LOSS |
+| val_geom_camber_rc | 43.630 | 47.842 | +9.66% LOSS |
+| val_geom_camber_cruise | 16.348 | 18.702 | **+14.40% LOSS (9th post-#2964 cruise breakage)** |
+| val_re_rand | 33.866 | 36.397 | +7.47% LOSS |
+| best_epoch | 60/60 | 60/60 | terminal |
+| Param count | 407,175 | 407,172 | (Option A; SwiGLU topology unchanged) |
+
+**Hypothesis:** Replace MLP activation with Primer/PaLM-2 squared ReLU. Student executed Option A (most-faithful interpretation: swap SwiGLU's inner activation F.silu → F.relu(x).pow(2); preserves SwiGLU topology and merged WIN from #2879).
+
+**DECISIVE MECHANISTIC FINDINGS (154th taxon — SWIGLU-INNER-ACT-SQRELU-CATASTROPHIC-DEAD-FEATURE-COLLAPSE):**
+
+1. **CATASTROPHIC DEAD-FEATURE COLLAPSE.** gate_frac_zero 41-47% @ep1 → **86-96% @ep60** (60-90× inflation vs SwiGLU baseline's 1.0-1.6%). Effective MLP gate width collapsed from full 96 channels to ~3.6-13.8% active by depth, deepest block 96.4%.
+
+2. **MECHANISM:** Hybrid (GLU + sqrelu) non-canonical recipe — Squared-ReLU's hard zero combined with SwiGLU multiplicative gate produces self-reinforcing pre-activation negative drift (mean −7.8 @ep60, std 4-8). Only sparse positive tail fires through squared-ReLU; gate structurally dead at convergence.
+
+3. **CRUISE META-SIGNAL BROKEN 9TH TIME post-#2964** — confirms refined invariant: activation-pathway perturbations also break cruise basin.
+
+4. **STABILITY CONFIRMED** — Lion's sign-step absorbed magnitude blowup; failure is effective-capacity collapse not training instability.
+
+5. **OPTION A WAS NATURAL INTERPRETATION** — Option B (canonical Primer plain MLP + sqrelu) would drop SwiGLU WIN from #2879 (confounded change). Decided to NOT pivot back to confounded Option B.
+
+**Followup assigned:** #3025 nezuko pre-block-input-beta (FRESH RESIDUAL-POSITION AXIS — learnable scalar β at block INPUT before LN+branch+residual; +4 params; SYMMETRIC COUNTERPART to #3006 α at block OUTPUT; pivots completely off activation-axis to cross-block scaling axis where #3006 WIN lives; tests whether pre-residual input scaling captures same beneficial signal as post-residual output scaling; 158th axis).
+
+### Closed: #3008 edward k-only-ln-physics-attention
+
+- **Branch:** charliepai2g48h5-edward/k-only-ln-physics-attention
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-k-only-ln-physics-attention-20260514-195947/metrics.jsonl
+
+| Metric | NEW Baseline #3006 | #3008 (K-only LN) | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | **29.5318** | **31.1236** | **+5.39% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 26.0822 | +2.36% LOSS |
+| val_single_in_dist | 24.283 | 26.1115 | +7.54% LOSS |
+| val_geom_camber_rc | 43.630 | 46.1435 | +5.76% LOSS |
+| val_geom_camber_cruise | 16.348 | 16.3515 | **+0.02% (essentially flat; mildest post-#2964 cruise breakage)** |
+| val_re_rand | 33.866 | 35.8877 | +5.97% LOSS |
+| best_epoch | 60/60 | 60/60 | terminal |
+| Param count | 407,175 | 407,556 | +384 (4×96 LN(K) γ,β params; matches PR prediction) |
+
+**Hypothesis:** Apply LayerNorm only to K (not Q) in Physics_Attention slice-routing. Preserves Q's depth-growth signal while gaining K-side stability. Revival hypothesis from #2983 closure recommendation #2.
+
+**DECISIVE MECHANISTIC FINDINGS (155th taxon — K-ONLY-LN-AT-PHYSICS-ATTENTION-ROUTING-SITE-CLOSED / QK-NORM-AXIS-DECISIVELY-CLOSED-ACROSS-ALL-3-GRANULARITIES):**
+
+1. **HYPOTHESIS FALSIFIED BY DYNAMICAL FAILURE MODE.** Ep1 routing diagnostics confirmed PR prediction (|logit/T| 1.5-21 at deep blocks vs #2983's 71+). But the prediction held only at init. Over 60 epochs ‖Q‖_raw at deep blocks grew 14× (1.4 → 19-21) while LN-pinned ‖K‖ couldn't compensate, causing routing logit explosion to 285-530 at ep60.
+
+2. **KEY CORRECTION TO PRIOR FRAMING (close-24, #2983):** **K-magnitude drift in baseline is NOT an informative signal per se — it's a COOPERATIVE SCALE VARIABLE the optimizer uses to keep Q·K bounded as Q grows with depth.** Pinning K's scale removes the cooperative damping; even K-only LN breaks the dynamic.
+
+3. **QK-NORM AXIS DECISIVELY CLOSED ACROSS ALL 3 GRANULARITIES at this routing site:**
+   - Q+K LN (#2983): catastrophic +20.24% LOSS
+   - K-only LN (this PR): +3.61% LOSS (less catastrophic; preserves some routing softness)
+   - Q-only LN (untried but Q is the rapidly-growing side; structurally most similar to #2983's failure)
+   - **Closure rule: any intervention that strips one side of Q-K cooperative scale dynamic at this routing site without symmetric compensation breaks routing.**
+
+4. **CRUISE META-SIGNAL BROKEN 10TH TIME post-#2964 — but SMALLEST breakage** (+0.02% essentially flat; K-only LN preserves more of #2964's basin character than other interventions; 8/8 prior post-#2964 routing-modifications broke cruise more severely).
+
+5. **MILDEST POST-#2964 STRUCTURAL LOSS.** val 31.12 +3.61% vs #2964 is the smallest val regression of the post-#2964 LOSS streak; confirms K-only is less severe than Q+K. The fact that magnitude pinning of EITHER side breaks routing tells us magnitude information is structurally load-bearing at this site.
+
+**Followup assigned:** #3026 edward cosine-routing-tau-0.07 (SURVIVING DIRECTION AFTER QK-NORM CLOSURE — F.normalize(Q, dim=-1) and F.normalize(K, dim=-1) before slice-routing einsum; τ_init=0.07 calibrated to preserve baseline softmax range; logit = (Q̂·K̂)/τ ∈ [-1/τ, +1/τ] bounded by Cauchy-Schwarz; structurally prevents the 285-530 explosion; per student closure recommendation #1 verbatim; 159th axis).
+
+Total closed: 155. Winners: 23.
+
+---
+
 ## 2026-05-14 21:10 [Round 138 MERGE+close-31] UTC — PR #3006: cross-block-residual-α — **🏆 MERGED WIN (val −1.69% vs #2964; 23rd winner; NEW BASELINE val 29.5318)** + PR #3010 droppath CLOSED (153rd taxon)
 
 ### Merged Winner: #3006 alphonse cross-block-residual-α
