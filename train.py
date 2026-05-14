@@ -452,6 +452,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # σ in RAW log_Re space (channel 13). 0.05 ≈ ~5% multiplicative Re noise.
+    # Applied per-sample, broadcast across all nodes; training only.
+    log_Re_noise_std: float = 0.05
 
 
 cfg = sp.parse(Config)
@@ -658,6 +661,21 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
+# Log-Re input-noise diagnostic. Channel 13 is log_Re (per-sample scalar
+# broadcast across all N nodes). σ=0.05 in raw log_Re space ≈ ~5%
+# multiplicative noise on Re (since d(log_Re) = dRe/Re). Training only.
+_logRe_mean = stats["x_mean"][13].item()
+_logRe_std = stats["x_std"][13].item()
+_noise_in_norm_space = cfg.log_Re_noise_std / max(_logRe_std, 1e-8)
+print(
+    f"log_Re input noise: σ={cfg.log_Re_noise_std} (raw log_Re space, training only); "
+    f"per-sample scalar broadcast across all N nodes on channel 13; "
+    f"stats x_mean[13]={_logRe_mean:.4f} x_std[13]={_logRe_std:.4f}; "
+    f"effective σ in normalized space ≈ {_noise_in_norm_space:.4f}; "
+    f"~5% multiplicative noise on linear Re; eval/test see clean log_Re; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605 (#2879)"
+)
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -692,6 +710,13 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Train-only log_Re input noise on channel 13. Per-sample scalar
+        # σ=cfg.log_Re_noise_std in raw log_Re space, broadcast over all N
+        # nodes so the "log_Re is constant per sample" invariant holds.
+        if cfg.log_Re_noise_std > 0.0:
+            log_Re_noise = torch.randn(x.shape[0], device=device, dtype=x.dtype) * cfg.log_Re_noise_std
+            x[:, :, 13] = x[:, :, 13] + log_Re_noise.unsqueeze(1)
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
