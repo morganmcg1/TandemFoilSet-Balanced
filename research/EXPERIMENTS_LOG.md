@@ -3588,3 +3588,68 @@ Both decision-tree close conditions triggered: (a) "both arms regress" and (b) "
 - Key diagnostic: clip rate (% of steps hitting the clip at each max_norm) — if clip rate < 5% at max_norm=2.0, the looser arm is a no-op and the axis closes quickly
 - Param delta: ZERO. Pure optimizer-behavior bracket.
 
+---
+
+## 2026-05-15 01:00 — PR #3019: FiLM-Re γ MLP joint [log_re, AoA_1, AoA_2] input tanjiro (CLOSED — variance-dominated)
+- Branch: `willowpai2g48h3-tanjiro/film-joint-re-aoa`
+- Hypothesis: Feed `[log_re, AoA_1, AoA_2]` (3-dim) as conditioning input to FiLM-Re γ MLP to learn Re×AoA interaction surface. Target: geom_camber_rc (test=41.458, highest OOD split).
+
+### Results (2 seeds)
+
+| Arm | W&B ID | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | — | 28.653 | — |
+| s1 (default seed) | `mozcqjv2` | 33.1279 | −1.72% ✓ | 27.8710 | −2.73% ✓ |
+| s2 (seed=2) | `iqi0eqc4` | 35.1067 | +4.16% ❌ | 29.8850 | +4.30% ❌ |
+| **2-seed mean** | — | **34.1173** | **+1.22% ❌** | **28.8780** | **+0.79% ❌** |
+
+Per-split test surf_p (s1 / s2 / 2-seed mean / Δ mean):
+- single_in_dist: 31.9504 / 35.0819 / 33.5161 / +4.02% ❌
+- **geom_camber_rc**: 40.0354 / 43.6151 / 41.8252 / +0.89% ❌ (target OOD — misses)
+- geom_camber_cruise: 14.1670 / 14.2254 / 14.1962 / −4.78% ✓
+- re_rand: 25.3310 / 26.6177 / 25.9744 / −0.18% ≈
+
+**2-seed mean misses all merge bars.** s1 alone is a clean win (test −2.73%, all 4 splits improve including camber_rc −3.43%); s2 is a clean loss (test +4.30%, 3/4 splits regress). Δ between seeds (~2 val points) exceeds baseline seed scatter → high seed variance.
+
+### Mechanism diagnostic: γ-MLP input layer column-L2 norms (film_gamma.0.weight, shape [256, 3])
+
+| Block | s1: log_re / AoA_1 / AoA_2 | s2: log_re / AoA_1 / AoA_2 |
+|---|---|---|
+| 0 | 0.97 / **1.27** / 0.91 | 0.97 / **1.21** / 0.83 |
+| 1 | **1.05** / 0.87 / 0.66 | **1.12** / 1.09 / 0.71 |
+| 2 | **1.37** / 0.83 / 0.60 | **1.47** / 0.83 / 0.69 |
+| 3 | **1.57** / 0.78 / 0.64 | **1.63** / 0.89 / 0.71 |
+| 4 | **1.52** / 0.82 / 0.66 | **1.47** / 0.72 / 0.63 |
+
+1. **AoA_1 dominates at block 0** (1.27 vs log_re 0.97) — AoA IS used, not dead.
+2. **By block 2+, log_re dominates** (ramps to 1.57); AoA contribution decays.
+3. **AoA_2 < AoA_1 at all blocks** — 70% single-foil samples have AoA_2≡0; model learned this asymmetry.
+
+### γ_w_L2 depth trajectory — flattening signature
+
+| Block | s1 joint | s2 joint | Baseline #2948 (Re-only) |
+|---|---:|---:|---:|
+| 0 | 5.44 | 5.66 | 3.97 |
+| 1 | 5.08 | 5.39 | ~4.4 |
+| 2 | 4.97 | 4.83 | ~4.8 |
+| 3 | 5.35 | 5.10 | ~5.3 |
+| 4 | 5.22 | 4.90 | **5.75** |
+
+Joint input **flattens the depth-monotone γ_w_L2 ramp** (3.97→5.75 → 4.9–5.4 flat). Same pattern as #2990 depth-2 and #2965 K=4 Fourier: redistributes capacity to block 0 rather than adding it. Front-loading γ effort at block 0 (where AoA matters) starves deep blocks.
+
+### Decision: CLOSED
+
+2-seed mean fails all merge bars. geom_camber_rc shows only +0.89% (WORSE) vs baseline. Both the val and test bars missed, and the target OOD split didn't improve on the mean. High seed variance (s1 win, s2 loss) with ~2pt spread exceeds baseline scatter.
+
+**Meta-finding #27:** *Joint conditioning input ([log_re, AoA_1, AoA_2]) is variance-dominated at 35-ep budget. Mechanism IS real (AoA_1 used at block 0, s1 delivers clean 4-split improvement), but seed-fragility makes it unreliable for compounding. Same redistribute-not-add signature as #2990 depth-2 and #2965 K=4 Fourier: joint input perturbs the conditioning landscape locally (front-loads γ effort at block 0) but doesn't expand the total conditioning capacity. The AoA channel decays with depth, confirming AoA's role is shallow-feature modulation rather than deep task routing. Clean follow-up: replace AoA with camber channels ([log_re, camber_1, camber_2]) — geom_camber_rc is geometry-defined (foil camber), not Re×AoA, making camber the correct OOD lever for this axis.*
+
+---
+
+## 2026-05-15 01:00 — PR #3067: FiLM-Re joint conditioning camber channels tanjiro (ASSIGNED)
+- Branch: `willowpai2g48h3-tanjiro/film-camber-joint`
+- Hypothesis: Replace AoA channels with camber (foil-shape) channels in joint FiLM-Re γ MLP input: `[log_re, camber_1, camber_2]` at x-indices 15, 19. geom_camber_rc is geometry-defined by foil camber (not Re×AoA), so the conditioning-surface-area axis should point at the actual OOD lever. s1 of #3019 showed joint conditioning with AoA delivered a clean 4-split win including camber_rc −3.43%; replacing AoA→camber may give a more robust signal because camber is the structural feature that defines the hard OOD split.
+- Arms: s1 (default seed), s2 (seed=2) — 2-seed setup to directly measure variance vs #3019's seed fragility
+- Key diagnostic: per-block γ-MLP input col-L2 (does camber_1 show stronger depth-persistence than AoA_1?) and per-block γ_w_L2 flattening signature
+- Param delta: ~+2,560 (+512 per block × 5), same as #3019 — negligible
+- Merge bar: mean val < 33.71, mean test < 28.65
+
