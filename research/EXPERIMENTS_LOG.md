@@ -2,6 +2,93 @@
 
 ---
 
+## 2026-05-14 [Round 137] UTC — PR #2941: surf-p-weight-2x-mean-form — **CLOSED LOSS (+5.52% val / +1.72% test; 125th taxon; PER-CHANNEL p-WEIGHT 2× AXIS CLOSED AT BOTH MAGNITUDE ENDPOINTS)**
+
+- **Branch:** charliepai2g48h5-alphonse/surf-p-weight-2x-mean-form
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-surf-p-weight-2x-mean-form-20260514-150238/metrics.jsonl
+
+| Metric | Baseline #2879 | #2933 sum-form (effective surf_w ~13.3) | #2941 mean-form (effective surf_w ~3.25) | Δ vs baseline | Δ vs #2933 |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.9074 (+4.41% LOSS) | **32.2472** | **+5.52% LOSS** | **+1.06% WORSE** |
+| test_avg/mae_surf_p | 26.5160 | 26.5558 (+0.15% wash) | 26.9710 | +1.72% LOSS | +1.56% WORSE |
+| val_single_in_dist | 23.3997 | 25.6471 (+9.60% LOSS) | 26.3118 | +12.45% LOSS | +2.59% WORSE |
+| val_geom_camber_rc | 46.0708 | — | 47.9878 | +4.16% LOSS | — |
+| val_geom_camber_cruise | 17.8657 | **17.6938 (-0.96% WIN)** | 18.1687 | **+1.70% LOSS (WIN VANISHED)** | +2.69% WORSE |
+| val_re_rand | 34.9057 | — | 36.5204 | +4.63% LOSS | — |
+| Param count | 407,940 | 407,940 | 407,940 | — | — |
+
+**Hypothesis:** Retest per-channel p-weight 2× using `(mae_Ux + mae_Uy + 2*mae_p) / 4` mean-form to preserve baseline surf_loss magnitude. Disambiguates #2933 confound where sum-form gave +33% magnitude bump.
+
+**Result:** CLEAR LOSS (+5.52% val), WORSE than #2933 sum-form despite "magnitude-preserving" framing.
+
+**SECONDARY CONFOUND DISCOVERED:** Student verified that the /4 divisor does NOT preserve baseline magnitude — it REDUCES it ~3.07× (ep1 surf_loss 0.5435 vs sum-form ~1.67). Math: for roughly equal channel MAEs k, baseline sum-form = 3k, while (k+k+2k)/4 = k. So this run effectively has surf_weight ≈ 3.25 (vs baseline 10, #2933's ~13.3). The /4 form introduced a NEW opposite confound. The PR's stated "preserves magnitude" assumption was incorrect.
+
+**BUT THE AXIS IS STILL DECISIVELY CLOSED:** Per-channel p-weight 2× is LOSS at BOTH magnitude endpoints:
+- #2933 effective surf_weight ~13.3: +4.41% val LOSS, cruise -0.96% WIN
+- #2941 effective surf_weight ~3.25: +5.52% val LOSS, cruise +1.70% LOSS
+
+Both magnitude directions LOSS → channel reweighting itself is bad, regardless of magnitude.
+
+**CRITICAL META-SIGNAL FINDING:** **The cruise-WIN of #2933 DID NOT PERSIST under the /4 mean-form's -67% magnitude direction.** Cruise went from -0.96% WIN (in #2933) to +1.70% LOSS (in #2941). **The cruise-WIN was tied to surf_loss MAGNITUDE, NOT to per-channel p-reweighting structure.** This is CONSISTENT WITH #2922's decisive insight: cruise↔in_dist tradeoff lives in LOSS-LANDSCAPE / REPRESENTATION space, NOT in surface-loss-WEIGHTING space.
+
+Per-channel train MAE shows all 3 channels (Ux, Uy, p) descending monotonically together — no p-specific bottleneck. The p reweighting does not unlock anything stuck.
+
+**125th taxon CLOSED:** PER-CHANNEL p-WEIGHT 2× AT BOTH MAGNITUDE ENDPOINTS. The lever is bad regardless of magnitude direction. The cruise-WIN observed in #2933 was a magnitude artifact, NOT a channel-reweighting signal.
+
+**KEY STUDENT INSIGHT:** *"The per-channel p-weight axis at p=2× is closed in both magnitude directions. The cruise-WIN of #2933 was a magnitude artifact, not a channel signal — consistent with #2922 (cruise↔in_dist tradeoff is loss-landscape/representation, not loss-weighting)."*
+
+**Followup assigned:** #2952 alphonse aux-mid-block-surf-loss (NEW STRUCTURAL/LOCAL axis: deep supervision via auxiliary surface loss at block-2 (mid-network) with weight=0.1; +291 params for aux Linear(96,3); directly motivated by #2937 STRUCTURAL/LOCAL insight; depth-axis structural intervention paralleling #2946 head-axis split; 126th axis).
+
+---
+
+## 2026-05-14 [Round 137] UTC — PR #2940: layerscale-gamma-asymmetric — **CLOSED LOSS (+5.37% val / +1.32% test; 124th taxon; γ-INIT AXIS MAPPED AT 3 POINTS — BASELINE 1e-4 IS OPTIMUM)**
+
+- **Branch:** charliepai2g48h5-nezuko/layerscale-gamma-asymmetric
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-layerscale-gamma-asymmetric-20260514-145810/metrics.jsonl
+
+| Metric | Baseline #2879 (γ=1e-4) | #2928 (γ=1.0) | #2940 (asym 0.85/0.93) | Δ vs baseline | Δ vs #2928 |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 30.9444 (+1.26% LOSS) | **32.2005** | **+5.37% LOSS** | +4.06% WORSE |
+| test_avg/mae_surf_p | 26.5160 | 26.4847 (-0.12% WIN) | 26.8660 | +1.32% LOSS | +1.44% WORSE |
+| val_single_in_dist | 23.3997 | — | 26.8992 | **+14.96% LOSS (WORST)** | — |
+| val_geom_camber_rc | 46.0708 | — | 46.4868 | +0.90% LOSS | — |
+| val_geom_camber_cruise | 17.8657 | — | 17.8868 | +0.12% (≈wash) | — |
+| val_re_rand | 34.9057 | — | 37.5294 | +7.52% LOSS | — |
+| Param count | 407,940 | 407,940 | 407,940 | — | — |
+
+**Hypothesis:** Initialize γ at #2928's "converged values" (γ_attn=0.85, γ_mlp=0.93) to skip the γ-convergence budget cost. First time using prior experiment's CONVERGED values as a new experiment's INIT.
+
+**Result:** CLEAR LOSS (+5.37% val), much WORSE than both baseline (γ=1e-4) and #2928 (γ=1.0). The "skip convergence phase" hypothesis was based on a FALSE EQUILIBRIUM IDENTIFICATION.
+
+**KEY MECHANISTIC FINDING (refutes hypothesis premise — γ-space is path-dependent):**
+
+γ trajectory from this run:
+| Epoch | b0 γ_attn | b1 γ_attn | b2 γ_attn | b3 γ_attn | b0 γ_mlp | b1 γ_mlp | b2 γ_mlp | b3 γ_mlp |
+|---|---|---|---|---|---|---|---|---|
+| 1 (init 0.85/0.93) | 0.849 | 0.849 | 0.849 | 0.849 | 0.931 | 0.932 | 0.932 | 0.932 |
+| 60 | **0.693** | **0.748** | **0.776** | **0.700** | **0.877** | **0.879** | **0.865** | **0.852** |
+
+From init 0.85/0.93, the model DRIFTS FURTHER DOWN to γ_attn ∈ [0.69, 0.78], γ_mlp ∈ [0.85, 0.88]. This is DIFFERENT from #2928's converged equilibrium (γ_attn ~0.86, γ_mlp ~0.93 from γ=1.0 init).
+
+**Same architecture+data+optimizer, DIFFERENT inits → DIFFERENT equilibria → strong PATH-DEPENDENCE in γ-space.** #2928's reported "converged values" describe ONE stationary point reachable from γ=1.0, NOT the global γ minimum.
+
+The model spent ~30 epochs *undoing* the strong residual contribution from the 0.85/0.93 init AND co-adapting weights to a lower-γ equilibrium — DOUBLE budget cost vs baseline 1e-4.
+
+**γ-init axis now MAPPED at 3 points:**
+- 1e-4 (baseline, near-identity) → val 30.56 ✓ BEST
+- 1.0 (uniform full-strength, #2928) → val 30.94 (+1.26% LOSS)
+- 0.85/0.93 (asymmetric "converged-value" init, #2940) → val 32.20 (+5.37% LOSS)
+
+**Pattern: smaller γ_init wins.** Baseline 1e-4 starts at near-identity (residual ~0), letting head/embedding dominate early; residual contribution grows organically. The 60-epoch budget rewards a SLOW RAMP FROM NEAR-ZERO, NOT a "land at the equilibrium" recipe.
+
+**124th taxon CLOSED:** γ-INIT-AXIS / CONVERGED-VALUE-INIT-FALSE-PREMISE. γ-init axis is mapped; baseline 1e-4 is at or near optimum.
+
+**KEY STUDENT INSIGHT:** *"The γ axis is mapped. Predicted from the LOSS curve: the optimum γ_init is at or below 1e-4 — the 60-epoch budget rewards a slow ramp from near-zero, not a land-at-the-equilibrium recipe. DROP this hypothesis line entirely; move to orthogonal recipe axes."*
+
+**Followup assigned:** #2951 nezuko post-norm-topology (NEW STRUCTURAL/REPRESENTATION axis: pre-norm → post-norm topology change at all 9 LN sites; directly motivated by #2939 finding that LN mean-centering is load-bearing — WHERE the centering happens in the residual stream is now a load-bearing question; single forward() change; zero new params; 125th axis).
+
+---
+
 ## 2026-05-14 [Round 137] UTC — PR #2938: pure-cosine-lr-1e-4 — **CLOSED LOSS (+13.50% val / +13.29% test; 123rd taxon; NO-WARMUP / RAMP-SHAPE-LOAD-BEARING DECISIVELY CLOSED)**
 
 - **Branch:** charliepai2g48h5-frieren/pure-cosine-lr-1e-4
