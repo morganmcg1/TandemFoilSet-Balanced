@@ -4,6 +4,18 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 08:45 — PR #2862 (ASSIGNED, fern): fourier_sigma sweep {0.25, 1.0} on max_norm=0.35 — RFF frequency axis under saturated-clip
+
+- **Branch:** `willowpai2g48h2-fern/fourier-sigma-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** 6th paper-appendix mechanism-transfer axis after {β #2736, lr #2731, seed #2790, wd #2791, fourier_num_features #2835 in-flight}. RFF frequency (random Fourier σ) is the orthogonal axis to #2835's RFF capacity. Tests whether σ=0.5 optimum (banked merged from #2168 + closed #2407 + closed #2512 on prior baselines) transfers to saturated-clip max_norm=0.35.
+- **Two arms:** Arm 1 fourier_sigma=0.25 (lower frequency, smoother — banked #29 single_in_dist regularizer), Arm 2 fourier_sigma=1.0 (higher frequency, finer-grained — banked #28 prior baseline).
+- **Predictions:** σ-spread ≈ 0.475 (orthogonality; 11th cross-axis if invariant), channel ordering surf_ux=min/vol_ux=max (11th cross-axis if invariant), clip_fraction=1.000 (7th cross-axis if invariant). Likely both arms regress on val with σ=0.5 baseline holding.
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 08:45 UTC; awaiting training.
+
+---
+
 ## 2026-05-14 08:35 — PR #2818 (CLOSED, fern): swa_start_frac fine-bracket {0.6, 0.85} on max_norm=0.35 — SWA-window axis Pareto-optimal verdict
 
 - **Branch:** `willowpai2g48h2-fern/swa-start-frac-fine-bracket-on-max-norm-0p35`
