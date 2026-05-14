@@ -17,12 +17,14 @@ Usage:
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -480,6 +482,9 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    re_stratified_sampling: bool = False  # Re-bin balanced WeightedRandomSampler (PR #3034)
+    re_stratified_k: int = 4  # Number of Re-bins (quantile cuts) for stratification
+    seed: int = 1  # Run seed (passed to set_seed if needed by harness)
 
 
 cfg = sp.parse(Config)
@@ -495,11 +500,68 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
-if cfg.debug:
+
+def _extract_log_re_from_file(path: str) -> float:
+    s = torch.load(path, weights_only=True)
+    return float(s["x"][0, 13].item())
+
+
+re_strat_info: dict = {"enabled": cfg.re_stratified_sampling}
+combined_weights = sample_weights  # default: domain-balanced only
+
+if cfg.re_stratified_sampling:
+    # PR #3034: balance gradient signal across Re-bins by reweighting samples by
+    # inverse Re-bin frequency, then multiplying by the existing domain-balanced
+    # weights to preserve the 3-domain balance the 15th-shift baseline relies on.
+    # Resulting sampler delivers joint (domain × Re-bin) balanced mini-batches.
+    paths = [str(p) for p in train_ds.files]
+    t_extract = time.time()
+    print(f"[init] Extracting log_re from {len(paths)} train samples for Re-stratified sampling...")
+    with mp.Pool(min(8, len(paths))) as pool:
+        log_re_train = pool.map(_extract_log_re_from_file, paths)
+    log_re_train = np.array(log_re_train, dtype=np.float64)
+    print(f"[init] log_re extraction took {time.time() - t_extract:.1f}s, "
+          f"range=[{log_re_train.min():.4f}, {log_re_train.max():.4f}], "
+          f"mean={log_re_train.mean():.4f}, std={log_re_train.std():.4f}")
+
+    K = max(2, cfg.re_stratified_k)
+    quantile_probs = np.linspace(0.0, 1.0, K + 1)[1:-1]
+    quantile_edges = np.quantile(log_re_train, quantile_probs)
+    bin_ids = np.digitize(log_re_train, quantile_edges).astype(np.int64)  # 0..K-1
+    bin_counts = np.bincount(bin_ids, minlength=K).astype(np.float64)
+    if (bin_counts == 0).any():
+        # Degenerate (e.g. debug mode with N<K): fall back to uniform weights.
+        re_weights = np.ones_like(log_re_train, dtype=np.float64)
+        print(f"[init] WARN: some bins empty (bin_counts={bin_counts.tolist()}), "
+              f"using uniform Re weights")
+    else:
+        re_weights = 1.0 / bin_counts[bin_ids]
+    # Combine with domain-balanced sample_weights (multiplicative).
+    domain_w = sample_weights.numpy().astype(np.float64)
+    combined_np = domain_w * re_weights
+    combined_np /= combined_np.sum()  # normalize for printable scale (sampler doesn't require it)
+    combined_weights = torch.tensor(combined_np, dtype=torch.float64)
+
+    re_strat_info.update({
+        "K": int(K),
+        "bin_counts": bin_counts.tolist(),
+        "quantile_edges": [float(x) for x in quantile_edges],
+        "log_re_min": float(log_re_train.min()),
+        "log_re_max": float(log_re_train.max()),
+        "log_re_mean": float(log_re_train.mean()),
+        "re_weights_min": float(re_weights.min()),
+        "re_weights_max": float(re_weights.max()),
+        "re_weights_ratio": float(re_weights.max() / max(re_weights.min(), 1e-12)),
+    })
+    print(f"[init] Re-stratified sampling: K={K}, bin_counts={bin_counts.tolist()}, "
+          f"edges={[round(float(x), 4) for x in quantile_edges]}, "
+          f"re_weight_ratio={re_strat_info['re_weights_ratio']:.3f}x")
+
+if cfg.debug and not cfg.re_stratified_sampling:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler = WeightedRandomSampler(combined_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
@@ -550,6 +612,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "re_strat_info": re_strat_info,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -572,10 +635,27 @@ with torch.no_grad():
 print(f"Param L2 norm at init: {param_l2_init:.4f}")
 wandb.summary["param_l2_init"] = param_l2_init
 
+# Re-stratification config snapshot in summary for easy queries across runs.
+wandb.summary["re_strat/enabled"] = bool(re_strat_info.get("enabled", False))
+if re_strat_info.get("enabled"):
+    wandb.summary["re_strat/K"] = re_strat_info["K"]
+    wandb.summary["re_strat/bin_counts"] = re_strat_info["bin_counts"]
+    wandb.summary["re_strat/quantile_edges"] = re_strat_info["quantile_edges"]
+    wandb.summary["re_strat/re_weights_ratio"] = re_strat_info["re_weights_ratio"]
+    wandb.summary["re_strat/log_re_min"] = re_strat_info["log_re_min"]
+    wandb.summary["re_strat/log_re_max"] = re_strat_info["log_re_max"]
+    wandb.summary["re_strat/log_re_mean"] = re_strat_info["log_re_mean"]
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+
+# Per-batch Re-distribution tracking for first 100 batches (PR #3034 sanity check
+# that the WeightedRandomSampler is actually delivering balanced Re-bin mini-batches).
+re_strat_batch_log_re_track: list[float] = []
+re_strat_batch_means: list[float] = []
+re_strat_batch_stds: list[float] = []
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -632,13 +712,35 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
-        wandb.log({
+        # Per-batch Re-distribution diagnostic (first 100 batches only).
+        # x[:, 0, 13] is per-sample log_re; under stratified sampling its mean
+        # should stay near global mean and its std should reflect the K-bin
+        # spread rather than the under-sampled tails.
+        log_dict = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
             "global_step": global_step,
-        })
+        }
+        if global_step <= 100:
+            with torch.no_grad():
+                batch_log_re = x[:, 0, 13].detach().float()
+            br_mean = batch_log_re.mean().item()
+            br_std = batch_log_re.std().item() if batch_log_re.numel() > 1 else 0.0
+            re_strat_batch_log_re_track.extend(batch_log_re.cpu().tolist())
+            re_strat_batch_means.append(br_mean)
+            re_strat_batch_stds.append(br_std)
+            log_dict["train/batch_log_re_mean"] = br_mean
+            log_dict["train/batch_log_re_std"] = br_std
+            if global_step == 100:
+                arr = np.asarray(re_strat_batch_log_re_track, dtype=np.float64)
+                wandb.summary["re_strat/first100_pooled_mean"] = float(arr.mean())
+                wandb.summary["re_strat/first100_pooled_std"] = float(arr.std())
+                wandb.summary["re_strat/first100_batchmean_mean"] = float(np.mean(re_strat_batch_means))
+                wandb.summary["re_strat/first100_batchmean_std"] = float(np.std(re_strat_batch_means))
+                wandb.summary["re_strat/first100_batchstd_mean"] = float(np.mean(re_strat_batch_stds))
+        wandb.log(log_dict)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
