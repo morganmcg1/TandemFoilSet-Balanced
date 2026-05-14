@@ -115,7 +115,7 @@ class PhysicsAttention(nn.Module):
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 1.0)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -575,6 +575,19 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# PhysicsAttention slice-routing temperature init diagnostic.
+# Per PR #2858: changed init from 0.5 -> 1.0. At T=0.5 the softmax input is
+# effectively doubled (sharper routing); at T=1.0 it is at its natural scale
+# (softer routing at init), allowing more exploration of slice partitions early.
+print(
+    "[temperature init] PhysicsAttention slice-routing temperature init = 1.0 "
+    "(was 0.5 baseline) — PR #2858 routing-sharpness sub-axis"
+)
+print(
+    f"[temperature init] block 0 temperature init values: "
+    f"{model.blocks[0].attn.temperature.data.flatten().tolist()}"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -728,6 +741,57 @@ for epoch in range(MAX_EPOCHS):
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
 
+    # --- Temperature trajectory + slice-routing entropy diagnostic (PR #2858) ---
+    # Track per-block per-head temperature values and the effective routing
+    # sharpness (entropy of slice_weights softmax). Trajectory from init=1.0
+    # should be compared against the baseline trajectory from init=0.5.
+    _inner_rt = getattr(model, "_orig_mod", model)
+    _temps_per_block = []
+    _temp_flat: list[float] = []
+    for _bi, _blk in enumerate(_inner_rt.blocks):
+        _vals = _blk.attn.temperature.detach().float().flatten().cpu().tolist()
+        _temps_per_block.append({"block_idx": _bi, "values": _vals})
+        _temp_flat.extend(_vals)
+    _temp_mean = sum(_temp_flat) / max(len(_temp_flat), 1)
+    _temp_var = sum((v - _temp_mean) ** 2 for v in _temp_flat) / max(len(_temp_flat), 1)
+    _temp_std = _temp_var ** 0.5
+
+    # Slice-routing entropy: hook softmax modules, run one val batch through
+    # the uncompiled module so hooks fire (torch.compile bypasses post-compile
+    # hooks).
+    _slice_ents: dict[int, list[float]] = {bi: [] for bi in range(len(_inner_rt.blocks))}
+
+    def _make_softmax_hook(_bi):
+        def _h(_module, _inp, _out):
+            with torch.no_grad():
+                # _out: slice_weights, shape (B, heads, N, slice_num)
+                ent = -(_out * (_out.clamp(min=1e-12)).log()).sum(dim=-1).mean()
+                _slice_ents[_bi].append(float(ent.item()))
+        return _h
+
+    _sm_handles = [
+        _inner_rt.blocks[_bi].attn.softmax.register_forward_hook(_make_softmax_hook(_bi))
+        for _bi in range(len(_inner_rt.blocks))
+    ]
+    try:
+        with torch.no_grad():
+            _smp_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+            _x_smp, _y_smp, _is_smp, _m_smp = next(iter(_smp_loader))
+            _x_smp = _x_smp.to(device, non_blocking=True)
+            _m_smp = _m_smp.to(device, non_blocking=True)
+            _xn_smp = (_x_smp - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner_rt({"x": _xn_smp, "mask": _m_smp})
+    finally:
+        for _h in _sm_handles:
+            _h.remove()
+
+    _slice_ent_per_block = {
+        bi: (sum(es) / len(es) if es else None) for bi, es in _slice_ents.items()
+    }
+    _valid_ent = [v for v in _slice_ent_per_block.values() if v is not None]
+    _slice_ent_mean = sum(_valid_ent) / len(_valid_ent) if _valid_ent else None
+
     tag = ""
     if avg_surf_p < best_avg_surf_p:
         best_avg_surf_p = avg_surf_p
@@ -752,6 +816,11 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "temperature/mean": _temp_mean,
+        "temperature/std": _temp_std,
+        "temperature/per_block": _temps_per_block,
+        "slice_routing_entropy/per_block": _slice_ent_per_block,
+        "slice_routing_entropy/mean": _slice_ent_mean,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
