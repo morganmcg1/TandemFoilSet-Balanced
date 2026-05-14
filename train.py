@@ -601,6 +601,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    grad_accumulation_steps: int = 1  # Microbatches accumulated per optimizer.step(); effective BS = batch_size * grad_accumulation_steps.
 
 
 cfg = sp.parse(Config)
@@ -799,6 +800,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_clip_fraction_sum = 0.0
+    epoch_optim_steps = 0  # Number of optimizer.step() calls this epoch (microbatches / grad_accumulation_steps).
+    # Clear any leftover accumulated grad from prior epoch's tail microbatch (when n_batches per epoch
+    # is not divisible by grad_accumulation_steps); harmless when no accumulation is active.
+    optimizer.zero_grad()
+    if optimizer_kendall is not None:
+        optimizer_kendall.zero_grad()
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -859,12 +866,20 @@ for epoch in range(MAX_EPOCHS):
             surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
 
-        optimizer.zero_grad()
-        if optimizer_kendall is not None:
-            optimizer_kendall.zero_grad()
-        loss.backward()
+        # Gradient accumulation: scale per-microbatch loss so accumulated grad has the same magnitude
+        # as a single-batch grad at effective BS = batch_size * grad_accumulation_steps.
+        loss_scaled = loss / cfg.grad_accumulation_steps
+        loss_scaled.backward()
         grad_norm_val = None
         clip_fired = 0.0
+        # n_batches counts completed microbatches in this epoch; fire optimizer step every grad_accumulation_steps.
+        do_optim_step = (n_batches + 1) % cfg.grad_accumulation_steps == 0
+        if not do_optim_step:
+            # Accumulate gradients silently; defer per-step diagnostics + wandb.log until the step fires.
+            epoch_vol += vol_loss.item()
+            epoch_surf += surf_loss.item()
+            n_batches += 1
+            continue
         if cfg.max_norm > 0:
             # Clip model params only; log_sigmas (a tiny ParameterTensor, not in model.parameters())
             # follow their own optimizer's update rule unclipped.
@@ -877,7 +892,11 @@ for epoch in range(MAX_EPOCHS):
         optimizer.step()
         if optimizer_kendall is not None:
             optimizer_kendall.step()
+        optimizer.zero_grad()
+        if optimizer_kendall is not None:
+            optimizer_kendall.zero_grad()
         global_step += 1
+        epoch_optim_steps += 1
         log_payload = {
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
@@ -962,10 +981,11 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
-    if cfg.max_norm > 0 and n_batches > 0:
-        log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
+    if cfg.max_norm > 0 and epoch_optim_steps > 0:
+        log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / epoch_optim_steps
         log_metrics["train/grad_norm_max"] = epoch_grad_norm_max
-        log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / n_batches
+        log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / epoch_optim_steps
+        log_metrics["train/optim_steps_per_epoch"] = epoch_optim_steps
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
