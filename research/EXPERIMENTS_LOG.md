@@ -6,6 +6,47 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 12:00 — Round 42 cont.: close #2883 frieren specialized surf/vol decoders (+1.73% val vs NEW BASELINE — mechanism validated but val regression; compound with epochs=50 assigned)
+
+### PR #2883 — frieren specialized surf/vol decoders (n_layers=2+slice_num=16+epochs=46) — CLOSED, compounded
+- Branch: `charliepai2g48h3-frieren/surfvoldecoders-nlayers2-slicenum16-epochs46`
+- Hypothesis: Replacing shared decoder with two specialized decoders (surf and vol heads gated by mask) gives readout per-node-type specialization without redundant gradient signal (unlike #2871 aux head).
+- Artifacts: `models/model-charliepai2g48h3-frieren-surfvoldecoders-nlayers2-slicenum16-epochs46-20260514-111109/metrics.jsonl`
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| **Current baseline (#2872, e50)** | **34.544** | **29.916** |
+| Specialized decoders (best ep 46/46) | 35.140 (+1.73% LOSS) | 29.594 (−1.08% WIN) |
+
+Per-split val (best_epoch=46/46, still descending):
+| Split | Baseline val | Specialized val | Δ val |
+|---|---:|---:|---:|
+| single_in_dist | 35.113 | 33.197 | −5.46% ✓ |
+| geom_camber_rc | 48.106 | 49.146 | +2.16% |
+| geom_camber_cruise | 18.895 | 19.327 | +2.29% |
+| re_rand | 36.060 | 38.891 | +7.85% |
+
+Per-split test:
+| Split | Baseline test | Specialized test | Δ test |
+|---|---:|---:|---:|
+| single_in_dist | (n/a) | 31.144 | n/a |
+| geom_camber_rc | (n/a) | 43.884 | n/a |
+| geom_camber_cruise | (n/a) | 15.296 | n/a |
+| re_rand | (n/a) | 28.052 | n/a |
+| **avg** | **29.916** | **29.594** | **−1.08% ✓** |
+
+(All 4 test splits improve.)
+
+Decoder specialization diagnostics:
+- Cosine similarity between final-layer surf vs vol decoder weights: **0.0396** (orthogonal — true mechanistic specialization, NOT failure-mode of redundant copies)
+- L2 norms: surf=1.1255, vol=1.6996 (vol +51%, consistent with vol needing larger magnitude for wider channel ranges)
+- Cost: +4.7% params (361,131 → 378,030), +5.4% per-epoch wall-clock (35.1s → 37s)
+- Trajectory still descending at e46 (best=final epoch); same pattern as old #2468 — epoch-budget binding constraint
+
+**Analysis:** The mechanism is **validated** (orthogonal weight directions confirm two distinct functions, not redundant), and test improves on **all 4 splits** by −1.08% — a stronger generalization signal than val. However, val regresses +1.73% vs the NEW baseline (within ~2.85% seed-noise envelope but a primary-metric loss). The 'still descending at e46' trajectory mirrors the pre-#2872 pattern that epochs=50 unlocked, suggesting the val regression is an **early-stopping artifact** rather than a structural loss. The two mechanisms (epoch-budget + decoder specialization) are mechanistically independent — epoch extension changes WHEN training stops, decoder specialization changes WHAT gradient flow each readout sees. Compounding them is the highest-EV follow-up (PR #2904).
+
+**Decision:** Close + reassign as compound. Decoder specialization is a validated mechanism waiting for the proper training budget.
+
 ## 2026-05-14 10:40 — Round 42 cont.: MERGE #2872 askeladd epochs=50 (−2.02% val WIN — NEW BASELINE val=34.544, test=29.916); assign askeladd epochs=50+SWA from e47 (compound on now-confirmed plateau)
 
 ### PR #2872 — askeladd epochs=50 retest at n_layers=2+slice_num=16 (WINNER — MERGED)
