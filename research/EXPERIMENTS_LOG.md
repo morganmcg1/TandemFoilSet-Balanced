@@ -2,6 +2,79 @@
 
 ---
 
+## 2026-05-14 [Round 90] UTC — Round 90
+
+### Closed PR #2749: frieren mlp_ratio 2→3 LOSS (56th taxon — MLP-width upward axis)
+- **Student:** charliepai2g48h5-frieren
+- **Branch:** charliepai2g48h5-frieren/mlp-ratio3
+- **Hypothesis:** 1-character change `mlp_ratio=2 → 3`; MLP body hidden 192→288 per block; +74K params (+22%). Standard ViT/BERT uses mlp_ratio=4 — never probed above 2 in this launch.
+
+| Metric | mlp_ratio=3 | Baseline #2741 SwiGLU | Δ vs new baseline | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **32.7558** | 32.2477 | **+1.59% LOSS** | LOSS (close, but clear) |
+| `test_avg/mae_surf_p` | **28.0663** | 27.4248 | **+2.25% LOSS** | LOSS |
+| `val_single_in_dist` | **24.4065** | 25.5303 | **−4.40% WIN — best-ever in-dist** | trade-off positive |
+| `val_geom_camber_rc` | 48.5753 | 47.4674 | +2.34% LOSS | trade-off negative |
+| `val_geom_camber_cruise` | 19.7757 | 19.1621 | +3.20% LOSS | trade-off negative |
+| `val_re_rand` | 38.2657 | 36.8311 | +3.89% LOSS | trade-off negative |
+| Param count | 405,143 | 338,523 | +66,620 (+19.7%) | |
+
+**Classic capacity-vs-generalization trade-off.** In-dist WINS by largest margin (-4.40%) but ALL 3 OOD splits regress. |γ_mlp| ballooned 25-40% (baseline 0.04-0.07 → this run 0.06-0.10, peak block 2 = 0.101) confirming the model leans into the extra capacity but spends it on in_dist overfit. **Conclusion:** MLP body at mlp_ratio=2 is NOT capacity-bound in a generalization sense; wider exchanges in-dist fit for OOD robustness.
+
+**Assignment (Round 90):** PR #2764 frieren mlp_ratio=1.5 (inverse downward probe; if wider hurts OOD via capacity-overfit, narrower might tighten OOD generalization further).
+
+### Closed PR #2748: tanjiro SE-blocks-2+3 LOSS (57th taxon — SE depth-extended axis)
+- **Student:** charliepai2g48h5-tanjiro
+- **Branch:** charliepai2g48h5-tanjiro/se-blocks23
+- **Hypothesis:** Direct follow-up to tanjiro's own SE-block3-only WIN (#2727). Add SE module to blocks 2 AND 3 (top-2 depth). Tests whether block 2 contributes independently or block-3-only is the minimal viable unit.
+
+| Metric | SE-blocks-2+3 | Baseline #2741 SwiGLU | Δ vs new baseline | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **33.4972** | 32.2477 | **+3.88% LOSS** | LOSS |
+| `test_avg/mae_surf_p` | **29.2486** | 27.4248 | **+6.65% LOSS** | LOSS |
+| `val_single_in_dist` | **25.5506** | 25.5303 | +0.08% flat | flat |
+| `val_geom_camber_cruise` | 21.4185 | 19.1621 | +11.78% LOSS | bad |
+| `val_geom_camber_rc` | 48.5911 | 47.4674 | +2.37% LOSS | LOSS |
+| `val_re_rand` | 38.4287 | 36.8311 | +4.34% LOSS | LOSS |
+| Param count | 333,443 | 338,523 | −5,080 (-1.5%) | matches prediction |
+
+**Mechanism diagnostic (exemplary):**
+- Block 2 SE engaged more than in #2692 4-block — std climbed 0.030 → 0.073-0.111 (confirming upstream-SE-was-dampening hypothesis was correct)
+- **BUT block 3 std DROPPED**: in_dist 0.150 → 0.112, re_rand 0.245 → 0.204 (block 2 STOLE gating budget from block 3)
+- LayerScale γ on block 3 also dropped: γ_attn 0.017→0.009, γ_mlp 0.10→0.07 (model reduced block-3 residual contribution because SE there became less decisive)
+- OOD-to-in_dist ratios: block 3 held (1.73× → 1.82×) but absolute magnitudes dropped; block 2 ratio (1.52×) weaker than block 3 — block 2 does less OOD-discrimination work
+- Redistributing gating across two depths reduced TOTAL decisiveness rather than increasing it
+
+**Conclusion:** Block-3-only is the MINIMAL VIABLE UNIT for SE depth. SE depth landscape fully mapped: {none=baseline, block-3-only=WIN #2727, blocks-2+3=LOSS #2748, all-4=mixed #2692}. SE-block3-only is the SE optimum.
+
+**Assignment (Round 90):** PR #2765 tanjiro SE-block3-only with reduction=4 (SE bottleneck-dim probe; doubles SE intermediate dim from 12 to 24 channels; tests whether reduction=8 is capacity-limiting OOD discrimination).
+
+### Closed PR #2735: askeladd EMA decay=0.9995/0.9999 LOSS (58th taxon — eval-time weight averaging)
+- **Student:** charliepai2g48h5-askeladd
+- **Branch:** charliepai2g48h5-askeladd/ema-decay0.9995
+- **Hypothesis:** EMA weight averaging (Polyak 1992) with decay=0.9995 (effective window ~2000 steps ≈ 5.3 epochs). Two arms run: decay=0.9995 primary + decay=0.9999 follow-up. Targets Lion narrow-minimum in-dist overfit via eval-time weight smoothing.
+
+| Metric | decay=0.9995 | decay=0.9999 | Baseline #2741 | Δ vs new baseline |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **34.5688** | **87.2438** | 32.2477 | +7.20% / +170% |
+| `test_avg/mae_surf_p` | **29.7303** | 79.9536 | 27.4248 | +8.40% / +191% |
+| `val_single_in_dist` (EMA) | 27.6313 | — | 25.5303 | +8.23% |
+| `val_geom_camber_cruise` (EMA) | 21.6635 | — | 19.1621 | +13.05% |
+
+**EMA-vs-raw A/B at decay=0.9995, ep64:**
+- val_avg raw: 34.7792 → EMA shadow: 34.5688 → −0.21 abs / **−0.6% relative WIN**
+- But: underlying raw run sat 5% below baseline before EMA helped → EMA's structural improvement could not bridge the gap
+
+**Mechanism (textbook signature):**
+- decay=0.9995: drift_ratio peaks ep5 = 0.331 during rapid descent → decays monotonically to 0.0147 at terminal. With cosine LR collapsing toward 1e-6 in final epochs, raw weights stop moving → EMA averaging collapses to nearly a no-op.
+- decay=0.9999: effective window ~10000 steps ≈ 26.7 epochs > total training horizon; drift_ratio stays >16% at terminal; EMA never forgets initial random weights at meaningful rate.
+
+**Conclusion:** Eval-time weight-averaging axis closed on this stack at this LR schedule. Combined with SWA #2567 (28th taxon, train-time post-hoc averaging) and Lookahead #2740 (55th taxon, fast-slow commit), the weight-averaging meta-family is now 3-direction exhaustive. Only direct flat-minima probe (SAM #2761 in-flight nezuko) remains in the narrow-basin-escape research arm.
+
+**Assignment (Round 90):** PR #2766 askeladd GroupNorm(num_groups=4) replacing LayerNorm (normalization-granularity probe; same param count; tests whether 4 channel-groups of 24 each specialize statistically vs LN single-pop; orthogonal to closed DyT all-or-nothing axis 48th taxon).
+
+---
+
 ## 2026-05-14 [Round 89] UTC — Round 89
 
 ### Closed PR #2740: Lookahead+Lion CATASTROPHIC LOSS (55th taxon)
