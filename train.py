@@ -142,6 +142,8 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # Per-block routing entropy for auxiliary loss (mean over batch, heads, tokens of -sum w*log w)
+        self._routing_entropy = -(slice_weights * (slice_weights + 1e-8).log()).sum(dim=-1).mean()
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -525,6 +527,8 @@ model_config = dict(
 )
 print(f"slice_num: {model_config['slice_num']}")
 print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(f"Entropy regularization: alpha=0.005 (loss -= alpha * mean_per_block_routing_entropy)")
+print(f"  Prediction: block-2 entropy will increase from collapsed ~0.27 (seen in #2869) to >1.0")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
@@ -685,6 +689,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_blocks_unwrapped = getattr(model, '_orig_mod', model).blocks
+    epoch_block_ents = [0.0] * len(epoch_blocks_unwrapped)
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -704,6 +710,11 @@ for epoch in range(MAX_EPOCHS):
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
+            # Entropy regularization: maximize slice-routing entropy (encourage broad routing)
+            entropy_reg_alpha = 0.005
+            blocks = getattr(model, '_orig_mod', model).blocks
+            routing_entropies = torch.stack([b.attn._routing_entropy for b in blocks])
+            loss = loss - entropy_reg_alpha * routing_entropies.mean()
 
         optimizer.zero_grad()
         loss.backward()
@@ -711,12 +722,15 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        for _i, _b in enumerate(epoch_blocks_unwrapped):
+            epoch_block_ents[_i] += _b.attn._routing_entropy.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_block_ents = [e / max(n_batches, 1) for e in epoch_block_ents]
 
     # --- Validate ---
     model.eval()
@@ -740,6 +754,9 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    mean_block_ent = sum(epoch_block_ents) / max(len(epoch_block_ents), 1)
+    entropy_bonus = 0.005 * mean_block_ent
+    train_loss_approx = epoch_vol + cfg.surf_weight * epoch_surf
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -748,6 +765,10 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/routing_entropy": {f"b{i}": e for i, e in enumerate(epoch_block_ents)},
+        "train/routing_entropy_mean": mean_block_ent,
+        "train/entropy_bonus": entropy_bonus,
+        "train/entropy_bonus_frac_of_loss": entropy_bonus / max(train_loss_approx, 1e-8),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -758,6 +779,7 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    print(f"  routing_entropy: " + " ".join(f"b{i}={e:.3f}" for i, e in enumerate(epoch_block_ents)))
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
