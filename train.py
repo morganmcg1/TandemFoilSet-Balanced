@@ -189,10 +189,10 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, return_hidden: bool = False):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
-        if self.last_layer:
+        if self.last_layer and not return_hidden:
             return self.mlp2(self.ln_3(fx))
         return fx
 
@@ -238,11 +238,17 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, return_hidden: bool = False, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        n_last = len(self.blocks) - 1
+        for i, block in enumerate(self.blocks):
+            if i == n_last and return_hidden:
+                fx = block(fx, return_hidden=True)
+            else:
+                fx = block(fx)
+        if return_hidden:
+            return {"hidden": fx}
         return {"preds": fx}
 
 
@@ -458,6 +464,9 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    pretrain_epochs: int = 0  # masked-feature reconstruction pre-training epochs before supervised training (0 = off)
+    pretrain_mask_ratio: float = 0.4  # fraction of real (non-padding) nodes to mask during pre-training
+    pretrain_lr: float = 1e-4  # LR during pre-training phase (Lion optimizer regardless of cfg.optimizer)
 
 
 cfg = sp.parse(Config)
@@ -528,6 +537,158 @@ print(
     f"({n_params/1e6:.2f}M params)"
 )
 
+# --- Pretrain modules: mask_token + reconstruction_head (only if pretrain_epochs > 0)
+# Mask token is in NORMALIZED feature space (matches what the model sees after
+# x_norm = (x - x_mean) / x_std). Reconstruction head projects per-node hidden
+# state (n_hidden=128) back to the 24-d normalized input space.
+mask_token: nn.Parameter | None = None
+reconstruction_head: nn.Linear | None = None
+if cfg.pretrain_epochs > 0:
+    mask_token = nn.Parameter(torch.zeros(X_DIM, device=device))
+    nn.init.normal_(mask_token.data, std=0.02)
+    reconstruction_head = nn.Linear(model_config["n_hidden"], X_DIM).to(device)
+    nn.init.trunc_normal_(reconstruction_head.weight, std=0.02)
+    nn.init.zeros_(reconstruction_head.bias)
+    print(
+        f"Pretraining: {cfg.pretrain_epochs} epochs, mask_ratio={cfg.pretrain_mask_ratio}, "
+        f"pretrain_lr={cfg.pretrain_lr} | mask_token shape={tuple(mask_token.shape)}, "
+        f"recon_head: {model_config['n_hidden']}→{X_DIM}"
+    )
+
+run = wandb.init(
+    entity=os.environ.get("WANDB_ENTITY"),
+    project=os.environ.get("WANDB_PROJECT"),
+    group=cfg.wandb_group,
+    name=cfg.wandb_name,
+    tags=[cfg.agent] if cfg.agent else [],
+    config={
+        **asdict(cfg),
+        "model_config": model_config,
+        "n_params": n_params,
+        "train_samples": len(train_ds),
+        "val_samples": {k: len(v) for k, v in val_splits.items()},
+    },
+    mode=os.environ.get("WANDB_MODE", "online"),
+)
+
+wandb.define_metric("global_step")
+wandb.define_metric("pretrain_step")
+wandb.define_metric("train/*", step_metric="global_step")
+wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("pretrain/*", step_metric="pretrain_step")
+for _name in VAL_SPLIT_NAMES:
+    wandb.define_metric(f"{_name}/*", step_metric="global_step")
+wandb.define_metric("lr", step_metric="global_step")
+
+model_dir = Path(f"models/model-{run.id}")
+model_dir.mkdir(parents=True, exist_ok=True)
+model_path = model_dir / "checkpoint.pt"
+model_no_ema_path = model_dir / "checkpoint_no_ema.pt"
+with open(model_dir / "config.yaml", "w") as f:
+    yaml.dump(model_config, f)
+
+# Start the wall-clock timer NOW so pretraining counts against the SENPAI cap.
+train_start = time.time()
+
+# --- Masked-feature reconstruction pretraining ---------------------------
+if cfg.pretrain_epochs > 0:
+    from timm.optim import Lion
+    pretrain_params = list(model.parameters()) + [mask_token] + list(reconstruction_head.parameters())
+    pre_opt = Lion(pretrain_params, lr=cfg.pretrain_lr, weight_decay=cfg.weight_decay)
+    print(
+        f"Pretrain optimizer: Lion (lr={cfg.pretrain_lr}, weight_decay={cfg.weight_decay}) "
+        f"over {sum(p.numel() for p in pretrain_params)/1e6:.2f}M params"
+    )
+    pretrain_step = 0
+    model.train()
+    pretrain_stopped_early = False
+    for p_epoch in range(cfg.pretrain_epochs):
+        if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
+            print(f"Timeout ({MAX_TIMEOUT_MIN} min) in pretrain. Stopping pretraining.")
+            pretrain_stopped_early = True
+            break
+        t0 = time.time()
+        p_epoch_loss_sum = 0.0
+        p_epoch_n_masked = 0
+        p_n_batches = 0
+        for x, y, is_surface, mask in tqdm(train_loader, desc=f"PreEpoch {p_epoch+1}/{cfg.pretrain_epochs}", leave=False):
+            x = x.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            amp_ctx = (
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                if cfg.amp and device.type == "cuda"
+                else torch.amp.autocast(device_type="cuda", enabled=False)
+            )
+            with amp_ctx:
+                x_norm = (x - stats["x_mean"]) / stats["x_std"]
+
+                # Sample mask only over real (non-padding) nodes.
+                rand = torch.rand(mask.shape, device=device)
+                mask_mask = (rand < cfg.pretrain_mask_ratio) & mask  # [B, N], True = masked
+                n_masked = int(mask_mask.sum().item())
+                if n_masked == 0:
+                    continue
+
+                # Substitute masked node features with the learned mask token.
+                x_input = torch.where(
+                    mask_mask.unsqueeze(-1),
+                    mask_token.to(dtype=x_norm.dtype).expand_as(x_norm),
+                    x_norm,
+                )
+
+                hidden = model({"x": x_input}, return_hidden=True)["hidden"]  # [B, N, n_hidden]
+                x_pred = reconstruction_head(hidden)  # [B, N, X_DIM]
+
+                # Smooth L1 on masked positions only (normalized space).
+                if cfg.loss_fn == "smooth_l1":
+                    pretrain_loss = F.smooth_l1_loss(
+                        x_pred[mask_mask], x_norm[mask_mask], beta=cfg.smooth_l1_beta
+                    )
+                elif cfg.loss_fn == "l1":
+                    pretrain_loss = F.l1_loss(x_pred[mask_mask], x_norm[mask_mask])
+                else:
+                    pretrain_loss = F.mse_loss(x_pred[mask_mask], x_norm[mask_mask])
+
+            pre_opt.zero_grad()
+            pretrain_loss.backward()
+            clip_value = cfg.grad_clip if cfg.grad_clip > 0 else float("inf")
+            grad_norm = torch.nn.utils.clip_grad_norm_(pretrain_params, max_norm=clip_value)
+            pre_opt.step()
+
+            pretrain_step += 1
+            wandb.log({
+                "pretrain/loss": pretrain_loss.item(),
+                "pretrain/grad_norm": grad_norm.item(),
+                "pretrain/n_masked": n_masked,
+                "pretrain_step": pretrain_step,
+            })
+            p_epoch_loss_sum += pretrain_loss.item()
+            p_epoch_n_masked += n_masked
+            p_n_batches += 1
+
+        dt = time.time() - t0
+        epoch_loss = p_epoch_loss_sum / max(p_n_batches, 1)
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        print(
+            f"PreEpoch {p_epoch+1:2d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"pretrain_loss={epoch_loss:.4f}  total_masked={p_epoch_n_masked}"
+        )
+        wandb.log({
+            "pretrain/epoch": p_epoch + 1,
+            "pretrain/epoch_loss": epoch_loss,
+            "pretrain/epoch_time_s": dt,
+            "pretrain_step": pretrain_step,
+        })
+
+    # Discard reconstruction head and pretrain optimizer; keep model trunk weights.
+    del reconstruction_head, pre_opt
+    if pretrain_stopped_early:
+        print("Pretraining stopped due to timeout; proceeding to supervised phase.")
+    else:
+        print(f"Pretraining done ({(time.time() - train_start)/60.0:.1f} min elapsed). Starting supervised fine-tune.")
+
+# --- EMA model + supervised optimizer (constructed AFTER pretraining) -----
 ema_model = deepcopy(model) if cfg.ema_decay > 0 else None
 if ema_model is not None:
     for p in ema_model.parameters():
@@ -560,40 +721,9 @@ if cfg.warmup_epochs > 0:
 else:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
-run = wandb.init(
-    entity=os.environ.get("WANDB_ENTITY"),
-    project=os.environ.get("WANDB_PROJECT"),
-    group=cfg.wandb_group,
-    name=cfg.wandb_name,
-    tags=[cfg.agent] if cfg.agent else [],
-    config={
-        **asdict(cfg),
-        "model_config": model_config,
-        "n_params": n_params,
-        "train_samples": len(train_ds),
-        "val_samples": {k: len(v) for k, v in val_splits.items()},
-    },
-    mode=os.environ.get("WANDB_MODE", "online"),
-)
-
-wandb.define_metric("global_step")
-wandb.define_metric("train/*", step_metric="global_step")
-wandb.define_metric("val/*", step_metric="global_step")
-for _name in VAL_SPLIT_NAMES:
-    wandb.define_metric(f"{_name}/*", step_metric="global_step")
-wandb.define_metric("lr", step_metric="global_step")
-
-model_dir = Path(f"models/model-{run.id}")
-model_dir.mkdir(parents=True, exist_ok=True)
-model_path = model_dir / "checkpoint.pt"
-model_no_ema_path = model_dir / "checkpoint_no_ema.pt"
-with open(model_dir / "config.yaml", "w") as f:
-    yaml.dump(model_config, f)
-
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
-train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
