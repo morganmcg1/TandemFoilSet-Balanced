@@ -177,10 +177,11 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False):
+                 film_re=False, layerscale_init: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
+        self.use_layerscale = layerscale_init > 0
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -204,10 +205,22 @@ class TransolverBlock(nn.Module):
                 nn.GELU(),
                 nn.Linear(hidden_dim, hidden_dim),
             )
+        if self.use_layerscale:
+            # CaiT LayerScale: per-channel learnable diagonal gain on each residual
+            # branch (attn and ffn), applied to the block output BEFORE residual add.
+            # Small init keeps the network near identity at epoch 0.
+            self.ls_attn = nn.Parameter(torch.full((hidden_dim,), layerscale_init))
+            self.ls_ffn = nn.Parameter(torch.full((hidden_dim,), layerscale_init))
 
     def forward(self, fx, mask=None, log_re=None):
-        fx = self.attn(self.ln_1(fx), mask=mask) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        attn_out = self.attn(self.ln_1(fx), mask=mask)
+        if self.use_layerscale:
+            attn_out = attn_out * self.ls_attn
+        fx = attn_out + fx
+        ffn_out = self.mlp(self.ln_2(fx))
+        if self.use_layerscale:
+            ffn_out = ffn_out * self.ls_ffn
+        fx = ffn_out + fx
         if self.film_re and log_re is not None:
             # Post-residual γ modulation, after both attn and mlp residuals.
             # γ shape [B, 1, hidden_dim] broadcasts over node axis.
@@ -225,7 +238,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
-                 film_re=False, log_re_x_index: int = 13):
+                 film_re=False, log_re_x_index: int = 13,
+                 layerscale_init: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -234,6 +248,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.log_re_x_index = log_re_x_index
+        self.layerscale_init = layerscale_init
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -249,7 +264,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                film_re=film_re,
+                film_re=film_re, layerscale_init=layerscale_init,
             )
             for i in range(n_layers)
         ])
@@ -257,6 +272,10 @@ class Transolver(nn.Module):
         self.n_linear_init = 0
         self.apply(self._init_weights)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
+        ls_params_per_block = 2 * n_hidden if layerscale_init > 0 else 0
+        print(f"LayerScale init scale = {layerscale_init} (0.0 = disabled); "
+              f"LayerScale params per block = {ls_params_per_block}, "
+              f"total = {ls_params_per_block * n_layers}")
         if self.film_re:
             # Identity-init the FiLM γ output linear AFTER apply() so it isn't
             # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
@@ -476,6 +495,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    layerscale_init: float = 0.0  # CaiT LayerScale init: 0.0=disabled, 0.1=canonical, 0.01=DeiT-III
 
 
 cfg = sp.parse(Config)
@@ -517,6 +537,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
+    layerscale_init=cfg.layerscale_init,  # CaiT LayerScale (PR #2972)
 )
 
 model = Transolver(**model_config).to(device)
@@ -524,8 +545,25 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+if cfg.layerscale_init > 0:
+    # Exclude LayerScale params (ls_attn, ls_ffn) from weight decay, per CaiT.
+    # These are scale parameters initialized near zero; wd would shrink them
+    # further and undo the learned per-channel gain. Mirrors standard
+    # bias/LayerNorm-style wd exclusion for diagonal scale params.
+    ls_params = [p for n, p in model.named_parameters()
+                 if "ls_attn" in n or "ls_ffn" in n]
+    other_params = [p for n, p in model.named_parameters()
+                    if "ls_attn" not in n and "ls_ffn" not in n]
+    param_groups = [
+        {"params": other_params, "weight_decay": cfg.weight_decay * 10.0},
+        {"params": ls_params, "weight_decay": 0.0},
+    ]
+    print(f"Lion optimizer: {len(ls_params)} LayerScale params in no-wd group, "
+          f"{len(other_params)} other params with wd={cfg.weight_decay * 10.0}")
+else:
+    param_groups = model.parameters()
 optimizer = Lion(
-    model.parameters(),
+    param_groups,
     lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
     weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
     betas=(0.9, 0.99),       # Lion-paper default
@@ -725,6 +763,37 @@ if model_config.get("film_re"):
         print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
               f"{w_l2:>10.4f} {w_absmax:>12.4f}")
     wandb.summary.update(gamma_diagnostics)
+
+# --- LayerScale diagnostics: per-block ls_attn / ls_ffn stats at final epoch ---
+# Mean/std per block reveals what gain the model learned. CaiT typically sees
+# late blocks acquire larger ls than early ones (if depth-monotone), or some
+# channels collapse to ≈0 (block-channel attenuation as effective pruning).
+if cfg.layerscale_init > 0:
+    base_model = getattr(model, "_orig_mod", model)
+    ls_diagnostics: dict[str, float] = {}
+    print("\nLayerScale per-block diagnostics (final epoch):")
+    print(f"  {'block':<6s} {'attn_mean':>11s} {'attn_std':>10s} {'attn_min':>10s} "
+          f"{'attn_max':>10s} {'ffn_mean':>11s} {'ffn_std':>10s} {'ffn_min':>10s} "
+          f"{'ffn_max':>10s}")
+    for i, block in enumerate(base_model.blocks):
+        la = block.ls_attn.detach().float()
+        lf = block.ls_ffn.detach().float()
+        a_mean, a_std = la.mean().item(), la.std().item()
+        a_min, a_max = la.min().item(), la.max().item()
+        f_mean, f_std = lf.mean().item(), lf.std().item()
+        f_min, f_max = lf.min().item(), lf.max().item()
+        ls_diagnostics[f"layerscale/block{i}/ls_attn_mean"] = a_mean
+        ls_diagnostics[f"layerscale/block{i}/ls_attn_std"] = a_std
+        ls_diagnostics[f"layerscale/block{i}/ls_attn_min"] = a_min
+        ls_diagnostics[f"layerscale/block{i}/ls_attn_max"] = a_max
+        ls_diagnostics[f"layerscale/block{i}/ls_ffn_mean"] = f_mean
+        ls_diagnostics[f"layerscale/block{i}/ls_ffn_std"] = f_std
+        ls_diagnostics[f"layerscale/block{i}/ls_ffn_min"] = f_min
+        ls_diagnostics[f"layerscale/block{i}/ls_ffn_max"] = f_max
+        print(f"  {i:<6d} {a_mean:>11.5f} {a_std:>10.5f} {a_min:>10.5f} "
+              f"{a_max:>10.5f} {f_mean:>11.5f} {f_std:>10.5f} {f_min:>10.5f} "
+              f"{f_max:>10.5f}")
+    wandb.summary.update(ls_diagnostics)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
