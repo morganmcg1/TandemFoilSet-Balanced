@@ -161,17 +161,24 @@ class PhysicsAttention(nn.Module):
 
 
 class SqueezeExcitation(nn.Module):
-    """Squeeze-Excitation channel gate (Hu et al. 2018 CVPR) — masked global
-    average pool over tokens, bottleneck MLP, sigmoid gate, broadcast multiply.
+    """Squeeze-Excitation channel gate with content-aware attention pool.
 
-    Mask is threaded through forward to exclude padded mesh nodes from the
-    global pool (TandemFoilSet meshes range 74K-242K nodes; padding fraction up
-    to ~70% within a batch makes unmasked pool biased on small-mesh samples).
+    Replaces SE's standard mean-pool with a learned single-head attention pool
+    (Lin et al. 2017 "Structured Self-Attentive Sentence Embedding"; Lee et al.
+    2019 "Set Transformer"). attn_pool: Linear(C, 1) -> softmax over tokens
+    (masked) -> weighted mean -> bottleneck MLP -> sigmoid gate -> broadcast.
+
+    At step 0, attn_pool uses trunc_normal_(std=0.02) init (applied by Transolver
+    _init_weights); logit std ~ 0.02 * sqrt(C) * std(x) yields softmax nearly
+    uniform over T~100K tokens, i.e. approximately mean pool. Optimizer can then
+    sharpen the pool toward informative tokens (surface, wake, boundary).
+
     Zero-init fc2 so gate = sigmoid(0) = 0.5 uniformly at step 0.
     """
     def __init__(self, dim: int, reduction: int = 8):
         super().__init__()
         d_hidden = max(1, dim // reduction)
+        self.attn_pool = nn.Linear(dim, 1, bias=True)
         self.fc1 = nn.Linear(dim, d_hidden, bias=True)
         self.fc2 = nn.Linear(d_hidden, dim, bias=True)
         with torch.no_grad():
@@ -180,11 +187,11 @@ class SqueezeExcitation(nn.Module):
 
     def forward(self, x, mask=None):
         # x: (B, N, D); mask: (B, N) bool, True for real nodes
+        attn_logits = self.attn_pool(x)  # (B, N, 1)
         if mask is not None:
-            mask_f = mask.unsqueeze(-1).to(x.dtype)
-            s = (x * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1)
-        else:
-            s = x.mean(dim=1)
+            attn_logits = attn_logits.masked_fill(~mask.unsqueeze(-1), -1e9)
+        attn_weights = torch.softmax(attn_logits, dim=1)  # (B, N, 1)
+        s = (x * attn_weights).sum(dim=1)  # (B, D)
         s = self.fc2(F.gelu(self.fc1(s)))
         gate = torch.sigmoid(s)
         return x * gate.unsqueeze(1)
@@ -540,12 +547,14 @@ _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
 print(
-    f"Squeeze-Excitation depth-selective (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
-    f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> GELU -> "
-    f"fc({model_config['n_hidden']//4}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
+    f"Squeeze-Excitation with ATTENTION POOL (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
+    f"attention pool: Linear({model_config['n_hidden']},1) -> softmax over tokens (masked); "
+    f"fc1({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> GELU -> "
+    f"fc2({model_config['n_hidden']//4}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
     f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
-    f"baseline to beat: val_avg/mae_surf_p < 32.2477 (SwiGLU MLP #2741)"
+    f"attn_pool trunc_normal_ init (std=0.02) -> softmax over T~100K ~ uniform at step 0 (~mean pool baseline); "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 mean pool #2765)"
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
@@ -829,25 +838,51 @@ if best_metrics:
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
 
-    # Squeeze-Excitation diagnostic: gate stats per block per split (in_dist vs OOD).
-    # Capture true block_idx (block 3 only carries SE here) and compare gate
-    # engagement on val_single_in_dist (in_dist) vs val_geom_camber_rc (most OOD).
+    # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
+    # split (in_dist vs OOD). Hook mirrors the SE forward — attention pool
+    # (softmax over masked tokens) then bottleneck MLP — so the captured gate
+    # and attn weights match the actual module behaviour.
     _se_mods_with_idx = [(i, blk.se) for i, blk in enumerate(_inner.blocks) if blk.se is not None]
     _se_per_split: dict[str, list[tuple[int, torch.Tensor]]] = {}
+    _attn_pool_per_split: dict[str, list[dict]] = {}
 
-    def _make_se_hook(block_idx: int, split_name: str):
+    def _make_se_hook(block_idx: int, split_name: str, is_surface_t: torch.Tensor):
         def _hook(module, args, kwargs, output):
             with torch.no_grad():
                 x = args[0] if args else kwargs.get("x")
                 m = kwargs.get("mask")
+                attn_logits = module.attn_pool(x)  # (B, N, 1)
                 if m is not None:
-                    mf = m.unsqueeze(-1).to(x.dtype)
-                    s = (x * mf).sum(dim=1) / mf.sum(dim=1).clamp(min=1)
-                else:
-                    s = x.mean(dim=1)
+                    attn_logits = attn_logits.masked_fill(~m.unsqueeze(-1), -1e9)
+                attn_w = torch.softmax(attn_logits, dim=1)  # (B, N, 1)
+                s = (x * attn_w).sum(dim=1)  # (B, D)
                 s = module.fc2(F.gelu(module.fc1(s)))
                 gate = torch.sigmoid(s).detach().float().cpu()
                 _se_per_split.setdefault(split_name, []).append((block_idx, gate))
+
+                # Attention pool diagnostics — per-sample over real tokens only
+                w = attn_w.squeeze(-1).detach().float()  # (B, N)
+                B = w.shape[0]
+                max_ws, ents, surf_fracs, n_actives, n_reals = [], [], [], [], []
+                for b in range(B):
+                    m_b = m[b] if m is not None else torch.ones(w.shape[1], dtype=torch.bool, device=w.device)
+                    w_b = w[b][m_b]
+                    if w_b.numel() == 0:
+                        continue
+                    max_ws.append(w_b.max().item())
+                    ents.append(-(w_b * (w_b + 1e-12).log()).sum().item())
+                    is_surf_b = is_surface_t[b][m_b]
+                    surf_fracs.append(w_b[is_surf_b].sum().item() if is_surf_b.any() else 0.0)
+                    n_actives.append((w_b > 0.1).sum().item())
+                    n_reals.append(int(m_b.sum().item()))
+                _attn_pool_per_split.setdefault(split_name, []).append({
+                    "block_idx": block_idx,
+                    "max_w_mean": float(sum(max_ws) / max(len(max_ws), 1)),
+                    "entropy_mean": float(sum(ents) / max(len(ents), 1)),
+                    "surface_frac_mean": float(sum(surf_fracs) / max(len(surf_fracs), 1)),
+                    "n_active_tokens_mean": float(sum(n_actives) / max(len(n_actives), 1)),
+                    "n_real_tokens_mean": float(sum(n_reals) / max(len(n_reals), 1)),
+                })
         return _hook
 
     _se_diag_splits = ["val_single_in_dist", "val_geom_camber_rc",
@@ -856,14 +891,15 @@ if best_metrics:
         _ldr = val_loaders.get(_split_name)
         if _ldr is None:
             continue
-        _se_handles = [
-            mod.register_forward_hook(_make_se_hook(bi, _split_name), with_kwargs=True)
-            for bi, mod in _se_mods_with_idx
-        ]
         with torch.no_grad():
             _x_s, _y_s, _is_s, _m_s = next(iter(_ldr))
             _x_s = _x_s.to(device, non_blocking=True)
+            _is_s_dev = _is_s.to(device, non_blocking=True)
             _m_s = _m_s.to(device, non_blocking=True)
+            _se_handles = [
+                mod.register_forward_hook(_make_se_hook(bi, _split_name, _is_s_dev), with_kwargs=True)
+                for bi, mod in _se_mods_with_idx
+            ]
             _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
             # Route through uncompiled module so Python-level hooks fire
             # (torch.compile bypasses hooks registered after compile).
@@ -892,6 +928,32 @@ if best_metrics:
             })
         _se_log["splits"][_split_name] = _split_log
     append_metrics_jsonl(metrics_jsonl_path, _se_log)
+
+    # SE attention-pool diagnostic: how concentrated is the pool? How much
+    # weight on surface tokens vs uniform reference (~surface_frac=0.05-0.3
+    # depending on mesh)? Lower entropy / higher max_w = sharper pool.
+    print("\nSE attention-pool stats per split (best-checkpoint weights):")
+    for _split_name, _ap_list in _attn_pool_per_split.items():
+        for _ap in _ap_list:
+            print(
+                f"  Split: {_split_name}  SE block[{_ap['block_idx']}]: "
+                f"max_w_mean={_ap['max_w_mean']:.4f}  "
+                f"entropy_mean={_ap['entropy_mean']:.4f}  "
+                f"surface_frac_mean={_ap['surface_frac_mean']:.4f}  "
+                f"n_active(w>0.1)_mean={_ap['n_active_tokens_mean']:.1f}  "
+                f"n_real_mean={_ap['n_real_tokens_mean']:.0f}"
+            )
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "se_attn_pool_diagnostic",
+                "epoch": int(best_metrics["epoch"]),
+                "split": _split_name,
+                "block_idx": _ap["block_idx"],
+                "max_w_mean": _ap["max_w_mean"],
+                "entropy_mean": _ap["entropy_mean"],
+                "surface_frac": _ap["surface_frac_mean"],
+                "n_active_tokens": _ap["n_active_tokens_mean"],
+                "n_real_tokens": _ap["n_real_tokens_mean"],
+            })
 
     # SwiGLU gate diagnostic — capture per-block gate (silu(W_gate x)) and value
     # (W_value x) statistics on a sample val batch, best-checkpoint weights.
