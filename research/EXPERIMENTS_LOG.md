@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-05-14 [Round 108] UTC — PR #2851: RMSNorm replacement of LayerNorm at all 9 sites — **CLOSED LOSS (+1.67% val, +3.83% test)**
+
+- **Branch:** charliepai2g48h5-askeladd/rmsnorm-replace
+- **Hypothesis:** Replace `nn.LayerNorm` with `RMSNorm` (Zhang & Sennrich 2019) at all 3 LayerNorm sites in `TransolverBlock` (ln_1, ln_2 per block × 4 blocks + ln_3 in last_layer = 9 sites). RMSNorm: `γ * (x / RMS(x))`, no mean centering, no β. LLaMA/T5/Mistral/PaLM-2 standard. −864 params (96 β × 9 sites).
+- **Metric artifacts:** `models/model-charliepai2g48h5-askeladd-rmsnorm-replace-20260514-075010/metrics.jsonl`
+
+| Val split | RMSNorm | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | **24.2105** | 25.2751 | **−4.21% WIN (best-ever in-dist)** |
+| `geom_camber_rc` | 47.5202 | 45.8179 | +3.71% LOSS |
+| `geom_camber_cruise` | 17.7834 | 16.8427 | +5.58% LOSS |
+| `re_rand` | 36.1124 | 35.6177 | +1.39% LOSS |
+| **val_avg** | **31.4066** | **30.8909** | **+1.67% LOSS** |
+
+| Test split | RMSNorm | Baseline #2810 | Δ |
+|---|---:|---:|---:|
+| `single_in_dist` | 23.7295 | 23.4553 | +1.17% flat |
+| `geom_camber_rc` | 43.1389 | 41.1687 | +4.79% LOSS |
+| `geom_camber_cruise` | 14.2638 | 14.1435 | +0.85% flat |
+| `re_rand` | 27.6667 | 25.9980 | +6.42% LOSS |
+| **test_avg** | **27.1997** | **26.1964** | **+3.83% LOSS** |
+
+- **Result:** NOT MERGED. Param count 332,836 ✓ matches predicted 333,700 − 864. 67/70 epochs (best ep67 still descending; cosine tail LR ~7.4e-7). sec/epoch ~27s — predicted 2-5% speedup NOT measurable.
+- **Striking pattern:** in-dist WIN + OOD LOSS on 3/4 OOD splits = exact OPPOSITE of recent merge-pattern (#2810/#2765/#2727/#2614 all OOD-positive). Mean-centering and β are load-bearing for OOD generalization.
+- **Mechanism — exemplary student 3-part diagnostic:**
+  1. **γ-evolution pattern: 8/9 sites untouched.** Per-site γ stats showed only `block0_ln1` had learned modulation (γ_mean 0.91, std 0.098, range [0.625, 1.135]). The other 8 sites had γ ≈ 1.000 ± 0.002 essentially identity. LayerScale γ_attn~1e-3 / γ_mlp~1e-1 makes the residual near-identity → gradient signal back through these norms is small and uniform → RMSNorm's diagonal γ has nothing to push against. LayerNorm's β provides per-channel bias that CAN shift the residual stream irrespective of pre-norm magnitude. **β was the load-bearing degree of freedom for 8/9 sites.** The exception block0_ln1 sits immediately after the FiLM gate `fx = fx * (1 + γ_c(Re,AoA))` injection — RMSNorm there has per-channel bias content to learn from, but γ_min collapsed to 0.625 to suppress some channels (the place where the architecture suffers most from losing β).
+  2. **Mean-centering and β are load-bearing for OOD generalization.** Slice attention is permutation-invariant. Each token's pre-norm representation carries both shape (per-channel structure) and absolute-scale (per-token mean magnitude) information. Mean-centering removes per-token DC offset, forcing the model to encode positional info into relative channel structure — useful for OOD generalization. Without it, the network "memorizes" in-dist DC offset as an extra discriminator (in-dist gain) but fails to generalize the scale structure to OOD distributions (Re/geometry/camber shifts).
+  3. **LLaMA/T5/Mistral RMSNorm prior does not transfer.** Causal LLMs use absolute/rotary position embeddings where per-token mean carries no inductive load. In Transolver, slice attention is the only structure that can route per-mesh-node info; per-token mean IS the location signal. Prior architectural choice doesn't transfer.
+- **78th taxon: RMSNorm-at-all-sites CLOSES.** Combined with closed DyT #2686, embed-LN replacement #2808, surface-aware-LN #2829, QK-Norm, GroupNorm = normalization-axis comprehensively mapped at SITE level. LN-feature-decomposition (mean-centering vs γ vs β) partially resolved: β is load-bearing for the OOD-generalization-active configuration.
+- **Plateau deepens to 7 consecutive LOSSes** since #2810 merge.
+
+---
+
+## 2026-05-14 [Round 108] UTC — PR #2864: Hybrid LN-at-block0_ln1 + RMSNorm-at-8-other-sites — **ASSIGNED (83rd candidate axis)**
+
+- **Branch:** charliepai2g48h5-askeladd/hybrid-ln-rmsnorm
+- **Hypothesis:** Direct architectural conversion of #2851 diagnostic finding. Keep `nn.LayerNorm` at block 0 ln_1 (the ONE site where #2851's per-site γ stats showed active learning post-FiLM, γ range [0.625, 1.135]); replace LN with `RMSNorm` at the 8 inactive-γ sites (block0_ln2, block1_ln1+ln2, block2_ln1+ln2, block3_ln1+ln2+ln3-last_layer). Reuses #2851 RMSNorm class.
+- **Why:** Student #2851 diagnostic established that 8/9 RMSNorm sites had γ ≈ 1.000 ± 0.002 (essentially untouched) — at those sites, BOTH γ and β were decorative. The exception block0_ln1 has FiLM γ_c(Re,AoA) per-channel bias content immediately upstream that β captures. Hybrid keeps full LN where β is doing work, strips β where γ proved decorative.
+- **Expected param count:** 332,932 = 333,700 − 768 (8 × 96 β params removed).
+- **Three falsifiable predictions:**
+  1. **WIN** (val < 30.8909): 8 inactive-γ sites genuinely don't need β → save 768 params for free → close LN-feature-decomposition with structural improvement.
+  2. **WASH** (val ≈ 30.8909): same conclusion with smaller margin; net save 768 params for free.
+  3. **LOSS similar to #2851** (val ≈ 31.4): β is universally load-bearing regardless of γ activity at the site → comprehensively close normalization-axis.
+- **NEW bar to beat:** val_avg < **30.8909** vs current baseline #2810. Reproduce: `cd target/ && python train.py --agent charliepai2g48h5-askeladd --experiment_name "charliepai2g48h5-askeladd/hybrid-ln-rmsnorm" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`.
+
+---
+
 ## 2026-05-14 [Round 107] UTC — PR #2848: SE bottleneck post-GELU Dropout p=0.1 — **CLOSED LOSS (+1.31% val)**
 
 - **Branch:** charliepai2g48h5-tanjiro/se-bottleneck-dropout
