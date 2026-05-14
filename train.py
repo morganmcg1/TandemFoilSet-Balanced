@@ -311,6 +311,28 @@ class Transolver(nn.Module):
             fx = block(fx)
         return {"preds": fx}
 
+    def forward_features(self, data, **kwargs):
+        """Forward through encoder, returning hidden state at d_model dim
+        instead of out_dim. Skips ``mlp2`` of the last block — gradients in
+        H91 Phase-1 SSL pretraining flow through ``ln_3`` but never touch
+        ``mlp2``, so it stays at random init for Phase-2 supervised use.
+        """
+        x = data["x"]
+        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        n = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            if i < n - 1:
+                fx = block(fx)
+            else:
+                # Last block: replicate attn+mlp+ln_3 path but skip mlp2.
+                # H91: stoch-depth never fires during pretrain since the
+                # post-#1552 schedule sets last-block stoch_depth_prob<0.1
+                # and the wrap branch (mlp2-only) is the very op we skip.
+                fx = block.layer_scale_attn * block.attn(block.ln_1(fx)) + fx
+                fx = block.layer_scale_mlp * block.mlp(block.ln_2(fx)) + fx
+                fx = block.ln_3(fx)
+        return fx
+
 
 # ---------------------------------------------------------------------------
 # Evaluation helpers
@@ -505,10 +527,27 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # H91: masked-node SSL pretraining (Phase 1) + supervised fine-tune (Phase 2).
+    # Phase 1 masks raw input dims 0-11 (position + saf + dsdf) at random
+    # 30%-of-nodes and trains the encoder to reconstruct them in normalized
+    # space, then Phase 2 reuses encoder weights and trains end-to-end on
+    # the standard L1 + surf-ch-weight objective. ``pretrain_epochs=0``
+    # disables Phase 1 and reproduces the pre-H91 baseline.
+    pretrain_epochs: int = 0
+    pretrain_mask_ratio: float = 0.30
+    # H91: cosine annealing T_max in epochs. Baseline = 14 (warmup 1 + cosine
+    # 14 = 15 supervised epochs of schedule covering the typical 12-15-epoch
+    # 30-min training). With a 4-epoch pretrain carve-out, the supervised
+    # phase shortens to 8 epochs and cosine_t_max=8 keeps the LR arc
+    # commensurate with the shortened run.
+    cosine_t_max: int = 14
 
 
 cfg = sp.parse(Config)
-MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
+# H91: ``MAX_EPOCHS`` is the supervised-phase epoch count. Phase 1
+# pretraining runs separately for ``cfg.pretrain_epochs`` epochs before
+# the supervised loop fires.
+MAX_EPOCHS = 3 if cfg.debug else (cfg.epochs - cfg.pretrain_epochs)
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -575,7 +614,10 @@ for i, b in enumerate(model.blocks):
 # N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
 # (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
 # per-epoch in the training loop.
-N_ANNEAL_EPOCHS = 12
+# H91: when Phase 1 pretraining is active, anneal across the Phase 2
+# supervised duration so the sharp-early phase covers the full
+# supervised stretch. Otherwise preserve the baseline 12-epoch span.
+N_ANNEAL_EPOCHS = max(1, MAX_EPOCHS) if cfg.pretrain_epochs > 0 else 12
 _h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
 _h73_init_factor = math.sqrt(3.0)
 _h73_final_factor = math.sqrt(2.0)
@@ -651,14 +693,18 @@ warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=1e-8, end_factor=1.0, total_iters=batches_per_epoch
 )
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=14 * batches_per_epoch
+    optimizer, T_max=cfg.cosine_t_max * batches_per_epoch
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[warmup_scheduler, cosine_scheduler],
     milestones=[batches_per_epoch],
 )
-print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={14 * batches_per_epoch} batches (14 epochs)")
+print(
+    f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), "
+    f"then cosine T_max={cfg.cosine_t_max * batches_per_epoch} batches "
+    f"({cfg.cosine_t_max} epochs)"
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -678,6 +724,193 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+
+# ---------------------------------------------------------------------------
+# H91 — Phase 1: Masked-node SSL pretraining
+# ---------------------------------------------------------------------------
+# Mask raw input dims 0-11 (position + saf + dsdf) at a random fraction of
+# valid nodes per batch, replace with a learnable mask token, run the encoder
+# (via ``forward_features`` so ``mlp2`` of the last block is never touched
+# and stays at random init for Phase 2), and reconstruct the masked dims
+# with a small linear head. Loss is L1 on masked nodes only, in normalized
+# space. Reconstruction-head + mask-token are discarded after Phase 1.
+#
+# Deviation from PR (justified by researcher-agent findings):
+#   • Masks dims 0-11 (positions + saf + dsdf), not just 0-1 — saf/dsdf are
+#     derived from position and would make position-only reconstruction
+#     trivial (Point-FeatMAE, ICLR 2024).
+#   • Keeps batch_size from cfg (default 4), not the PR's 24 — batch=24 on
+#     242K-node meshes would exceed 96 GB VRAM (baseline already at 42 GB
+#     peak at batch=4).
+#   • Phase-1 optimizer reuses the 3-group structure from the supervised
+#     optimizer (other / freqs / layer_scale) so freq + layer_scale params
+#     keep their tuned 10× lr / no-WD treatment during pretraining.
+if cfg.pretrain_epochs > 0:
+    n_mask_dims = 12  # dims 0-1 (position) + 2-3 (saf) + 4-11 (dsdf)
+    mask_token = nn.Parameter(torch.zeros(n_mask_dims, device=device))
+    reconstruction_head = nn.Linear(model.n_hidden, n_mask_dims).to(device)
+    nn.init.normal_(reconstruction_head.weight, std=0.02)
+    nn.init.zeros_(reconstruction_head.bias)
+
+    # H91: 3-group optimizer mirrors supervised setup. Reconstruction head
+    # and mask_token join the ``other`` group at base lr / wd.
+    p1_other_params = (
+        other_params
+        + list(reconstruction_head.parameters())
+        + [mask_token]
+    )
+    pretrain_optimizer = torch.optim.AdamW(
+        [
+            {"params": p1_other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
+            {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+            {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        ],
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
+    )
+    # H91: pretraining wall-clock budget = proportional share of total
+    # timeout so Phase 2 still gets the bulk of training (which determines
+    # the metric).
+    pretrain_budget_min = max(
+        1.0,
+        MAX_TIMEOUT_MIN * cfg.pretrain_epochs / max(cfg.epochs, 1),
+    )
+    print(
+        f"\n=== H91 Phase 1: Masked-node SSL pretraining "
+        f"(epochs={cfg.pretrain_epochs}, mask_ratio={cfg.pretrain_mask_ratio}, "
+        f"mask_dims=0..{n_mask_dims-1}, budget={pretrain_budget_min:.1f} min) ==="
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "pretrain_start",
+        "pretrain_epochs": cfg.pretrain_epochs,
+        "pretrain_mask_ratio": cfg.pretrain_mask_ratio,
+        "n_mask_dims": n_mask_dims,
+        "lr": cfg.lr,
+        "weight_decay": cfg.weight_decay,
+        "batch_size": cfg.batch_size,
+        "pretrain_budget_min": pretrain_budget_min,
+        "n_recon_head_params": sum(p.numel() for p in reconstruction_head.parameters()),
+        "n_mask_token_params": int(mask_token.numel()),
+    })
+
+    n_pretrain_epochs_done = 0
+    for pre_ep in range(cfg.pretrain_epochs):
+        if (time.time() - train_start) / 60.0 >= pretrain_budget_min:
+            print(
+                f"[H91] Phase 1 budget reached at epoch {pre_ep+1}; "
+                f"stopping pretraining to preserve Phase-2 time."
+            )
+            break
+        t0 = time.time()
+        model.train()
+        reconstruction_head.train()
+        epoch_recon_loss = 0.0
+        epoch_frac_masked = 0.0
+        n_pre_batches = 0
+        last_grad_norm = torch.tensor(0.0, device=device)
+
+        for x, _y, _is_surface, mask in tqdm(
+            train_loader,
+            desc=f"Pretrain {pre_ep+1}/{cfg.pretrain_epochs}",
+            leave=False,
+        ):
+            x = x.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            B, N, _ = x_norm.shape
+            rand = torch.rand(B, N, device=device)
+            node_mask = (rand < cfg.pretrain_mask_ratio) & mask
+            n_masked = node_mask.sum().clamp(min=1).float()
+            n_valid = mask.sum().clamp(min=1).float()
+
+            target = x_norm[..., :n_mask_dims].clone().detach()
+            x_masked = x_norm.clone()
+            x_masked[..., :n_mask_dims] = torch.where(
+                node_mask.unsqueeze(-1),
+                mask_token[None, None, :].expand_as(x_masked[..., :n_mask_dims]),
+                x_masked[..., :n_mask_dims],
+            )
+
+            x_input = fourier_enc(x_masked)
+            feats = model.forward_features({"x": x_input})
+            recon = reconstruction_head(feats)
+
+            abs_err = (recon - target).abs()
+            recon_loss = (
+                (abs_err * node_mask.unsqueeze(-1).float()).sum()
+                / (n_masked * n_mask_dims)
+            )
+
+            pretrain_optimizer.zero_grad()
+            recon_loss.backward()
+            last_grad_norm = torch.nn.utils.clip_grad_norm_(
+                list(model.parameters())
+                + list(fourier_enc.parameters())
+                + list(reconstruction_head.parameters())
+                + [mask_token],
+                max_norm=25.0,
+            )
+            pretrain_optimizer.step()
+            with torch.no_grad():
+                fourier_enc.freqs.clamp_(0.1, 100.0)
+
+            epoch_recon_loss += recon_loss.item()
+            epoch_frac_masked += float((n_masked / n_valid).item())
+            n_pre_batches += 1
+
+        epoch_recon_loss /= max(n_pre_batches, 1)
+        epoch_frac_masked /= max(n_pre_batches, 1)
+        dt = time.time() - t0
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        n_pretrain_epochs_done = pre_ep + 1
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "pretrain_epoch",
+            "phase": "pretrain",
+            "pretrain_epoch": pre_ep + 1,
+            "global_epoch": pre_ep + 1,
+            "seconds": dt,
+            "peak_memory_gb": peak_gb,
+            "lr": cfg.lr,
+            "pretrain/recon_loss": epoch_recon_loss,
+            "pretrain/last_grad_norm": float(last_grad_norm),
+            "pretrain/n_batches": n_pre_batches,
+            "pretrain/mask_ratio": cfg.pretrain_mask_ratio,
+            "pretrain/frac_masked_per_batch_mean": epoch_frac_masked,
+        })
+        print(
+            f"Pretrain {pre_ep+1:2d}/{cfg.pretrain_epochs} "
+            f"({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"recon_loss={epoch_recon_loss:.4f}  "
+            f"grad_norm={float(last_grad_norm):.2f}  "
+            f"frac_masked={epoch_frac_masked:.3f}"
+        )
+
+    pretrain_time_min = (time.time() - train_start) / 60.0
+    print(
+        f"=== H91 Phase 1 done: {n_pretrain_epochs_done}/{cfg.pretrain_epochs} "
+        f"epochs in {pretrain_time_min:.1f} min. Encoder ready for "
+        f"supervised fine-tuning. ===\n"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "pretrain_done",
+        "n_pretrain_epochs_done": n_pretrain_epochs_done,
+        "pretrain_time_min": pretrain_time_min,
+        "final_recon_loss": epoch_recon_loss,
+    })
+    # Phase 1 done — encoder weights persist on the existing ``model``;
+    # mlp2 of the last block was never touched during Phase 1
+    # (forward_features skips it) so it stays at random init for Phase 2.
+    del reconstruction_head
+    del mask_token
+    del pretrain_optimizer
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+# ---------------------------------------------------------------------------
+# Phase 2: supervised fine-tuning (or full supervised run when pretrain=0)
+# ---------------------------------------------------------------------------
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -771,6 +1004,10 @@ for epoch in range(MAX_EPOCHS):
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
+        # H91: phase tag + global_epoch (1-indexed across pretrain+supervised)
+        # so the JSONL trajectory is unambiguous when post-processing.
+        "phase": "supervised",
+        "global_epoch": cfg.pretrain_epochs + epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": current_lr,
