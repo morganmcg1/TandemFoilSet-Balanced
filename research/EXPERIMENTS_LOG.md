@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 [Round 97] UTC — PR #2792: Register tokens N_REG=4 (Darcet 2024) — **CLOSED LOSS (+4.39% val)**
+
+- **Branch:** charliepai2g48h5-nezuko/register-tokens-4
+- **Hypothesis:** Add 4 learnable register tokens as extra K/V positions in PhysicsAttention slice attention to expand attention-input capacity without disrupting mesh-derived slice routing. Predicted OOD WIN via dedicated global capacity not bottlenecked through slice tokens.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-register-tokens-4-20260514-051701/metrics.jsonl`
+
+| Split | RegTokens val | Baseline #2765 | Δ vs #2765 |
+|---|---|---|---|
+| `val_single_in_dist` | 24.9768 | 24.9721 | +0.02% wash |
+| `val_geom_camber_rc` | 49.1908 | 46.9885 | **+4.69% LOSS** |
+| `val_geom_camber_cruise` | 18.3609 | 17.7276 | **+3.57% LOSS** |
+| `val_re_rand` | 38.2559 | 35.5983 | **+7.46% LOSS** (worst-hit) |
+| **val_avg** | **32.6961** | **31.3216** | **+4.39% LOSS** |
+| `test_avg/mae_surf_p` | **27.3044** | **26.5067** | **+3.01% LOSS** |
+
+- **Result:** All 4 splits regress or wash; all 3 OOD splits LOSS. Test also LOSS. Per-split signature is exact INVERSION of hypothesis (predicted OOD WIN, observed OOD worst-hit).
+- **Mechanism (student's diagnostic exemplary):** Block 1 monopolizes registers at 56% slice→register attention mass by ep20 (some queries 100%, max=1.000); block 2 spontaneously vetoes them (register norms grew 5× but query attn mass dropped to 0.123 below uniform init 0.143); blocks 0 and 3 use modestly ~15-20%. **Block-1 lock-in creates low-rank rank-4 global bottleneck** that fits dominant in-dist regime but cannot express OOD geometries/Re-numbers. Classic "global bottleneck overfits in-dist" pattern.
+- **Why re_rand worst-hit (+7.46%):** re_rand is the Reynolds-randomization split needing strong Re-conditioning. Adding 4 unconditioned K/V slots competes with FiLM's #2614 conditioning capacity — the merged FiLM modulates the residual stream via flow scalars, but registers are unconditioned and steal attention mass from FiLM-modulated tokens. Re_rand fundamentally needs more Re-conditioning, not more attention slots.
+- **Taxonomic closure:** 65th taxon. **Attention-input capacity expansion via unconditioned learnable K/V positions closed at this scale.** Combined with closed positional embedding (RoPE #2675 46th, Fourier features #2509 24th), attention-input augmentation meta-axis now mapped: positional encoding LOSS + register tokens LOSS. The merged FiLM + SE mechanism for OOD generalization is structurally incompatible with raw K/V augmentation.
+- **Follow-up:** Per-block FiLM #2813 (nezuko, 67th candidate axis) — depth-progressive Re/AoA re-injection directly attacks the re_rand bottleneck. Student's own zero-init+LayerScale register variant deprioritized in favor of higher-impact axis.
+
+---
+
+## 2026-05-14 [Round 97] UTC — PR #2813: Per-block FiLM (depth-progressive flow conditioning) — **ASSIGNED (67th candidate axis)**
+
+- **Branch:** charliepai2g48h5-nezuko/per-block-film
+- **Hypothesis:** Add `self.film = nn.Linear(3, 96)` to each TransolverBlock, zero-init weight + bias, applied AFTER residual blocks (after SE on block 3, after MLP on blocks 0-2): `fx = fx * (1 + film(flow_scalars))`. Each block re-injects log_Re, AoA0_rad, AoA1_rad — depth-progressive Re-conditioning where currently the merged FiLM #2614 only conditions at embedding once. Directly attacks the re_rand bottleneck pattern exposed by closed #2792 (re_rand worst-hit −7.46% precisely because raw K/V competes with FiLM's Re-conditioning capacity).
+- **Param delta:** +1,536 (4 blocks × (3 × 96 + 96) = 4 × 384) → expected 335,139.
+- **Predicted mechanism:** |film_scale| grows most at block 3 (Re-conditioning before SE gate); film_scale_std depth-progressive grow; val_re_rand benefits most (it's been the worst-hit OOD split — closing both directions of mlp_ratio AND register tokens, all blamed on missing Re-conditioning); camber splits also benefit (AoA conditioning).
+- **Bar:** val_avg/mae_surf_p < 31.3216.
+
+---
+
 ## 2026-05-14 [Round 96] UTC — PR #2759: GeGLU MLP (gelu gate ablation) — **CLOSED LOSS (+3.48% val)**
 
 - **Branch:** charliepai2g48h5-alphonse/geglu-mlp
