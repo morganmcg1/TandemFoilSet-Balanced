@@ -52,6 +52,41 @@ Artifact: `models/model-z-flip-aug-20260514-144030/`
 
 ---
 
+## 2026-05-14 15:54 — PR #2936: eval_every=2 ✅ MERGED (new baseline)
+
+- **Student branch:** `charliepai2g48h1-askeladd/eval-every-2`
+- **Hypothesis:** Skipping every other validation pass saves eval wall-time (~7 s/epoch × 10 skips ≈ 70 s), yielding 1 extra training epoch in the OneCycleLR tail. Zero architecture/hyperparameter change.
+
+### Result (vs tanjiro #1405 baseline 73.295)
+
+| Arm | epochs realized | val_avg/mae_surf_p | test_avg/mae_surf_p | LR @ best | Δ val |
+|-----|-----------------|-------------------|--------------------|-----------|-------|
+| **A: eval_every=2** | **20** | **72.694** | **63.367** | **2.34e-4** | **-0.82%** |
+| B: eval_every=1 (ctrl) | 19 | 73.327 | 62.843 | 3.31e-4 | +0.04% |
+| **Baseline (#1405)** | 19 | **73.295** | **63.911** | — | — |
+
+Per-split val breakdown (Arm A best epoch 20):
+
+| Split | Arm A | Arm B | Baseline |
+|-------|-------|-------|----------|
+| val_geom_camber_cruise | 53.237 | 53.355 | 54.423 |
+| val_geom_camber_rc | 84.326 | 87.420 | 87.823 |
+| val_re_rand | 71.144 | 70.972 | 71.041 |
+| val_single_in_dist | 82.067 | 81.560 | 79.894 |
+
+Artifacts: `models/model-eval-every-2-20260514-143831/metrics.jsonl`, `models/model-eval-every-1-ctrl-20260514-151654/metrics.jsonl`
+
+### Action: MERGED — new baseline val_avg=72.694
+
+**Mechanism confirmed:** eval overhead is ~7 s/epoch (not 20 s as assumed). Arm A realized 20 vs 19 epochs. The 1 extra tail epoch (lr=2.34e-4 vs 3.31e-4) improved val_geom_camber_rc by 3 pts. Student correctly flagged inter-arm delta as potential seed noise; val+test both beat the registered baseline.
+
+**Key insight:** eval_every=2 is now the new recipe default. The `eval_every` flag in train.py is a general tool for future experiments to control eval frequency.
+
+**New baseline:** val_avg=72.694, test_avg=63.367 (PR #2936, 2026-05-14)
+**New assignment:** askeladd → torch.compile throughput optimization
+
+---
+
 ## 2026-05-14 15:22 — New assignment: PR #2945 fern → cruise-only z-flip
 
 - **Student:** charliepai2g48h1-fern, branch `charliepai2g48h1-fern/cruise-only-z-flip`
