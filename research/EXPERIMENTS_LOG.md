@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-14 02:40 — Round 02:40: stale-PR rotation (1 closure, 1 reassignment, 1 send-back follow-up)
+
+Mini-round triggered by survey showing #2724 tanjiro stalled ~2h45m. No new winners, no review-ready PRs. All 8 students now actively WIP after rotation.
+
+### Closure — #2724 tanjiro `geometry-mirror-tta`
+
+- Branch: `charliepai2g24h1-tanjiro/geometry-mirror-tta`
+- Reason: pod stuck on GraphQL rate-limit cycles (iterations 304-307 visible, all "No work assigned" despite PR correctly labeled `status:wip` + `student:charliepai2g24h1-tanjiro`). Same persistent rate-limit pattern as #2599 (~24h stuck) and #2534 (~5h stuck) closed in Round 01:54 — both students recovered when a fresh PR was created.
+- No metrics produced. Geometry-mirror TTA hypothesis remains theoretically valuable (zero training cost, rc has heavy AoA asymmetry per #2721 diagnostic) but pushed to a future round in favor of the proven Re-conditioning family for tanjiro's reassignment.
+
+### Reassignment — #2788 tanjiro `re-conditional-input-scale` (5th Re-hook)
+
+- Hypothesis: 4 merged Re-hooks (ReFiLM at slice-logits, ReScaleHead at output-scale, ReConditionalLayerNorm on activations, ReConditionalOutputBias on outputs) all operate on intermediate features or outputs. Add a 5th Re-hook at the **input embedding**: γ(log_Re) ∈ R^16 applied multiplicatively to the 16-D input vector before the encoder.
+- Mechanism: input-side dual of the #2690 output-bias winner. Together they bracket the network with Re-conditioning at both ends, giving the model an explicit per-channel importance dial across the Re continuum. Init-to-identity (zero-init final layer, gamma starts at 1.0) so baseline behavior preserved at step 0. ~32 params.
+- Why this swing: 4-of-4 Re-hook precedent is the strongest signal we have. Even -1% pushes cumulative to -77.5%. Low risk (init-to-identity), orthogonal to all 4 merged hooks (input vs. intermediate vs. output).
+- Decision criteria: val_avg < 27.5868 → winner; [27.5868, 28.97) → send back; ≥ 28.97 → close.
+
+### Send-back follow-up — #2721 frieren `rc-nn-oversampling-geom-weighted`
+
+- Re-sent the prior Round 02:28 send-back with cleaner shell-safe instructions (the original send-back lost two `$EXPR` placeholders to bash interpolation issues — the local exp name and `--re_conditional_output_bias` flag were emitted as empty strings in the comment).
+- Also requested rebase: PR is currently `mergeable=CONFLICTING` due to the #2690 merge changing `train.py`.
+- Full follow-up at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/2721#issuecomment-4447593928 with explicit code snippet (distance_weights tensor with log_Re zeroed and NACA-geometry channels 2×), `--rc_nn_max_boost 2.0`, and the new merged reproduce command including `--re_conditional_output_bias`.
+
+### Active matrix after Round 02:40
+
+| PR | Student | Slug | Notes |
+|----|---------|------|-------|
+| #2768 | alphonse | re-cond-attn-temperature | 6th Re-hook (slice softmax scale) |
+| #2770 | askeladd | re-cond-ffn-film | 6th Re-hook (FFN hidden) |
+| #2772 | nezuko | p-label-noise-1pct | output-side data aug |
+| #2775 | fern | aoa1-negative-jitter-sigma02 | targeted at #1 rc-distinctive channel |
+| #2779 | thorfinn | naca-pair-film | 8-D tandem shape FiLM |
+| #2721 | frieren | rc-nn-geom-weighted | needs rebase + softer cap re-run |
+| #2788 | tanjiro | re-cond-input-scale | 5th Re-hook (input γ) |
+| #2725 | edward | multi-seed-variance | noise floor + TTA stack |
+
+**Re-hook density now exceptional**: 4 merged + 3 active (input-scale #2788, attn-temp #2768, FFN-FiLM #2770) = 7 distinct Re-conditioning injection points being explored on this branch. The 5 active variants attack:
+- **Re-conditioning of features**: 3 active (input-scale, attn-temp, FFN-FiLM)
+- **Geometry conditioning**: 1 active (NACA-pair FiLM)
+- **Data augmentation**: 2 active (p-label noise, AoA_1 jitter)
+- **Oversampling**: 1 active-sent-back (geom-weighted k-NN)
+- **Ensembling / noise floor**: 1 active (multi-seed + TTA)
+
+---
+
 ## 2026-05-14 02:28 — Round 02:28: WINNER #2690 + 5 closures + 6 new assignments
 
 ### 🏆 PR #2690 thorfinn `re-conditional-output-bias` — MERGED, NEW BASELINE

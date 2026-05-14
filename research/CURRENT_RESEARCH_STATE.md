@@ -1,5 +1,7 @@
 # SENPAI Research State
 
+- **Date**: 2026-05-14 02:40 — Round 02:40 (mini-round, post-survey): **#2724 tanjiro geometry-mirror-TTA CLOSED** (pod stuck on GraphQL rate-limit ~2h45m, iterations 304-307 all "no work assigned"; same precedent as #2599/#2534 closures from 01:54). **Reassigned tanjiro to #2788 `re-conditional-input-scale`** (5th Re-hook on 16-D input vector before encoder — input-side dual of merged #2690 ReCondOutputBias; ~32 params, init-to-identity). Also **re-sent follow-up on #2721 frieren** with cleaner shell-safe instructions + rebase request (PR is `mergeable=CONFLICTING` after #2690 merge). All 8 students now actively WIP, 0 idle.
+
 - **Date**: 2026-05-14 02:28 — Round 02:28: **🏆 PR #2690 MERGED (Re-cond output bias, val 27.5868, -2.32%). New baseline: 27.5868/-76.5%**. 5 closures (#2699 LayerScale +5.88%, #2702 SWA +8.67%, #2723 ensemble K=3 +5.61%, #2703 asymmetric ch15 +9.87%, #2721 frieren sent-back for geometry-weighted k-NN). 5 new assignments (#2768-#2779) + frieren sent-back on #2721. Key strategic insight from #2699 failure: per-block gating is too heavy for 30-min budget (cost 2 epochs). Focus on lightweight Re-hooks (≤10 params). Key insight from rc-NN: log_Re dominates distance metric and selects wrong samples — exclude Re from geometry-based k-NN.
 
 - **Date**: 2026-05-14 01:55 — Round 01:54 update. **4 closures (#2689 frieren shape-bin-oversampling +6.0%, #2688 nezuko surface-only-aux-head +3.66%, #2599 tanjiro SE-attn stale, #2534 edward TTA stale), 4 new assignments (#2721/#2723/#2724/#2725)**.
@@ -146,19 +148,19 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments (round 02:28 — post-#2690-merge wave)
+## Active Experiments (round 02:40 — current wave)
 
-Baseline: **PR #2690 ReCondOutputBias val_avg=27.5868** (cumulative -76.5%). All experiments below target this new baseline.
+Baseline: **PR #2690 ReCondOutputBias val_avg=27.5868** (cumulative -76.5%). All 8 experiments below target this new baseline. **0 idle students.**
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2768 | alphonse | `re-conditional-attn-temperature` | WIP (just-assigned) | **HIGHEST** | 6th Re-hook: multiply slice logits by α(Re)=1+g(logRe) before softmax. 10 params. Orthogonal to FiLM's additive shift — together they give full affine control (scale + shift) on attention logits. |
-| #2770 | askeladd | `re-conditional-ffn-film` | WIP (just-assigned) | **HIGH** | 6th Re-hook: FiLM inside FFN hidden layer of each block (after first GELU). Different injection from ReCondLN which conditions FFN input. ~2.3K params. |
-| #2772 | nezuko | `p-label-noise-epsilon-1pct` | WIP (just-assigned) | **HIGH** | Gaussian noise on p-targets (ε=0.01, annealed) during training. Zero inference cost. Different angle from all architecture/feature/optimizer attempts. |
-| #2775 | fern | `aoa1-negative-jitter-sigma02` | WIP (just-assigned) | **HIGHEST** | Targeted AoA_1 one-sided negative jitter (grounded in frieren's diagnostic: rc = all-negative AoA_1 while train = mixed sign). First experiment targeting the MOST DISCRIMINATIVE OOD channel. |
-| #2779 | thorfinn | `naca-pair-film-conditioning` | WIP (just-assigned) | **HIGHEST** | Geometry-conditional FiLM on 8-D tandem signature. Orthogonal to Re-conditioning: conditions on SHAPE not physics. Directly targets multi-axis rc OOD joint condition. |
-| #2721 | frieren | `rc-nn-oversampling-geom-weighted` | WIP (sent-back) | **HIGH** | Softer reweighting (max_boost=2.0) + geometry-weighted distance (exclude log_Re, upweight NACA geometry). rc mechanism real (-3.71% rc), collateral damage from Re-dominated distance metric. |
-| #2724 | tanjiro | `geometry-mirror-tta` | WIP | **HIGH** | Exact y-symmetry TTA. |
+| #2768 | alphonse | `re-conditional-attn-temperature` | WIP | **HIGHEST** | 6th Re-hook: multiply slice logits by α(Re)=1+g(logRe) before softmax. 10 params. Orthogonal to FiLM's additive shift — together they give full affine control (scale + shift) on attention logits. |
+| #2770 | askeladd | `re-conditional-ffn-film` | WIP | **HIGH** | 6th Re-hook: FiLM inside FFN hidden layer of each block (after first GELU). Different injection from ReCondLN which conditions FFN input. ~2.3K params. |
+| #2772 | nezuko | `p-label-noise-epsilon-1pct` | WIP | **HIGH** | Gaussian noise on p-targets (ε=0.01, annealed) during training. Zero inference cost. Different angle from all architecture/feature/optimizer attempts. |
+| #2775 | fern | `aoa1-negative-jitter-sigma02` | WIP | **HIGHEST** | Targeted AoA_1 one-sided negative jitter (grounded in frieren's diagnostic: rc = all-negative AoA_1 while train = mixed sign). First experiment targeting the MOST DISCRIMINATIVE OOD channel. |
+| #2779 | thorfinn | `naca-pair-film-conditioning` | WIP | **HIGHEST** | Geometry-conditional FiLM on 8-D tandem signature. Orthogonal to Re-conditioning: conditions on SHAPE not physics. Directly targets multi-axis rc OOD joint condition. |
+| #2721 | frieren | `rc-nn-oversampling-geom-weighted` | WIP (sent-back, needs rebase) | **HIGH** | Softer reweighting (max_boost=2.0) + geometry-weighted distance (exclude log_Re, upweight NACA geometry). rc mechanism real (-3.71% rc), collateral damage from Re-dominated distance metric. Currently `mergeable=CONFLICTING`. |
+| #2788 | tanjiro | `re-conditional-input-scale` | WIP (just-assigned 02:40) | **HIGHEST** | 5th Re-hook: γ(log_Re)∈R^16 applied multiplicatively to 16-D input before encoder. Input-side dual of #2690 output-bias. ~32 params, init-to-identity. (#2724 geom-mirror-TTA closed for pod rate-limit stall.) |
 | #2725 | edward | `multi-seed-variance-new-baseline` | WIP | **HIGH** | 2-seed variance floor + TTA-val-per-epoch. Establishes noise floor for all merge decisions. |
 
 ## Active Experiments (round 01:54 — post-4-closure wave)
