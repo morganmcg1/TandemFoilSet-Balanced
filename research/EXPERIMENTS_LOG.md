@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-14 [Round 120] UTC — PR #2885: Stochastic Depth DropPath linear 0->0.1 — **CLOSED LOSS (+8.36% val, gradient-path axis closed at depth=4)**
+
+- **Branch:** charliepai2g48h5-tanjiro/stochastic-depth-droppath
+- **Hypothesis:** Per-sample DropPath with depth-progressive rates [0.0, 0.033, 0.067, 0.1] across 4 blocks wrapping LayerScale-weighted residual branches. DeiT/ConvNeXt recipe with LayerScale gamma=1e-4 synergy. +0 params.
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-drop-path-0.1-linear-20260514-103757/metrics.jsonl
+
+| Metric | New Baseline #2879 | #2885 drop-path-0.1 | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **33.1152** | **+8.36% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 28.5526 | +7.68% LOSS |
+| val_single_in_dist | 23.3997 | 26.4296 | +12.95% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.9428 | +6.23% LOSS |
+| val_geom_camber_cruise | 17.8657 | 19.8668 | +11.20% LOSS |
+| val_re_rand | 34.9057 | 37.2218 | +6.63% LOSS |
+
+DropPath schedule confirmed at startup as [0.0, 0.033, 0.067, 0.1]. Param count 333,700 unchanged. Sec/epoch 27.5s.
+
+**Mechanism diagnosis (tanjiro):**
+1. 4 blocks too few for DropPath — single block = ~25% of representational depth. DeiT/ConvNeXt amortize across 12-24 blocks; ours cannot.
+2. ALL splits regress including in_dist +12.95% — capacity-reduction signature NOT regularization signature.
+3. val_geom_camber_cruise +11.20% (per epoch-62 reading) — cruise depends most on stable propagation through full block stack.
+4. LayerScale gamma synergy did NOT manifest: gamma_attn=0.018 (near-identity, dropping no-op), gamma_mlp=0.073 (real work, dropping loses information).
+
+**Gradient-path axis CLOSES at depth=4.** Future gradient-path work needs n_layers>=8 or MLP-only / last-block-only variants (same axis-family, also LOSS-risk).
+
+**95th candidate axis CLOSES.**
+
+---
+
+## 2026-05-14 [Round 120] UTC — PR #2898: Gradient Clipping max_norm=1.0 (100th axis) — **ASSIGNED to charliepai2g48h5-tanjiro**
+
+- **Branch:** charliepai2g48h5-tanjiro/grad-clip-1.0
+- **Hypothesis:** Apply torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) between loss.backward() and optimizer.step(). Standard transformer training intervention. Controls gradient magnitude WITHOUT reducing model capacity. +0 params.
+- **Rationale:** Gradient-FLOW axis (different from gradient-PATH axis #2885 just closed). 16+ closed taxa have spanned activations/attention/normalization/capacity/routing/PE/loss-shape/gradient-path but NEVER gradient-magnitude. Lion compatible: sign-step is bounded but momentum buffer accumulates raw gradients. Equalizes contribution of hard OOD samples (camber_rc grad_norm dominates) with easy in_dist samples. Key diagnostic: grad_norm_clip_frac per epoch tells us if clipping is biting.
+- **Falsifiable:** WIN = try max_norm=0.5 tighter. WASH = gradients already <1.0 (clipping no-op). LOSS = clipping slows convergence below 30min budget.
+- **100th candidate axis** (round number milestone for the programme).
+
+---
+
 ## 2026-05-14 [Round 119] UTC — PR #2884: Slice-routing entropy regularization alpha=0.005 — **CLOSED LOSS (+3.47% val vs new baseline)**
 
 - **Branch:** charliepai2g48h5-edward/slice-entropy-reg
