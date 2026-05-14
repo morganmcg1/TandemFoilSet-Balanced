@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-14 02:28 — Round 02:28: WINNER #2690 + 5 closures + 6 new assignments
+
+### 🏆 PR #2690 thorfinn `re-conditional-output-bias` — MERGED, NEW BASELINE
+
+**val_avg 27.5868 (-2.32% vs #2650 28.2414) | test_avg 24.1056 (-1.54%)**
+
+| Split | val | vs #2650 | test |
+|-------|-----|---------|------|
+| single_in_dist | 27.2278 | +0.20% | 27.8682 |
+| **geom_camber_rc** | **39.8226** | **-5.67%** ✅ | 36.9633 |
+| geom_camber_cruise | 13.3872 | -2.09% ✅ | 10.2260 |
+| re_rand | 29.9096 | +0.02% | 21.3648 |
+| **val_avg** | **27.5868** | **-2.32%** | **24.1056** |
+
+**Mechanism**: 4th Re-conditioning hook (additive output bias conditioned on log(Re), injected after ReScaleHead). Ux channel dominates by ~30× (absmax 0.73); corr(|b|, logRe) = -0.640 meaning larger correction at low-Re (viscous boundary-layer offsets). The rc improvement (-5.67%) is the standout — Ux correction targeting low-Re viscous regimes directly addresses rc's high-Re + negative-AoA regime where systematic biases are largest.
+
+**New baseline: val_avg=27.5868, test_avg=24.1056. Cumulative: -76.5% from initial 117.17.**
+
+### Closures (5 PRs, all vs new baseline 27.5868)
+
+| PR | Student | Slug | val_avg | vs new baseline | Mechanism / finding |
+|----|---------|------|---------|----------------|---------------------|
+| #2699 | alphonse | Re-cond LayerScale | 29.2061 | +5.88% | Gates real (corr=-0.999) but 2 epochs short (mem overhead). Per-block residual gating disrupts early feature computation (block0_attn α=0.557). |
+| #2702 | askeladd | SWA last 5 ep | 29.9779 | +8.67% (SWA best) | SWA itself worked (-2.62% vs regular) but swa_lr=1e-4 switches LR UP from cosine floor, undermining the critical cosine-tail refinement. SWA meta-axis CLOSED. |
+| #2723 | nezuko | K=3 ensemble | 29.1357 | +5.61% | Heads anti-correlated (cos -0.14 to -0.17) — competition not independence. Ensemble-output-head meta-axis CLOSED. |
+| #2703 | fern | Asymmetric ch15 σ=0.05 | 30.3078 | +9.87% | One-sided positive pushed cruise OUTSIDE its tight cluster (+15.1% cruise). Single-axis ch15 augmentation insufficient for multi-axis rc OOD. ch15-augmentation-family CLOSED. |
+| #2721 | frieren | rc-NN-oversample | 28.3367 | +2.72% | rc mechanism works (-3.71% rc, -0.21% test_avg) but collateral on iid/re_rand. Sent back for geometry-weighted k-NN (exclude log_Re from distance metric, max_boost=2.0). |
+
+### Round 02:28 New Assignments (5 + 1 sent-back = 6 total active)
+
+| PR | Student | Slug | Hypothesis |
+|----|---------|------|-----------|
+| #2768 | alphonse | `re-conditional-attn-temperature` | 6th Re-hook: scale slice logits by α(Re) before softmax — orthogonal to FiLM's shift, 10 params, full affine control when stacked |
+| #2770 | askeladd | `re-conditional-ffn-film` | 6th Re-hook: FiLM inside each block's FFN hidden layer (after first GELU), ~2.3K params, different injection from ReCondLN |
+| #2772 | nezuko | `p-label-noise-epsilon-1pct` | Gaussian noise on p-targets during training, ε=0.01, linearly annealed; zero inference cost |
+| #2775 | fern | `aoa1-negative-jitter-sigma02` | Targeted augmentation on AoA_1 channel (one-sided negative), grounded in frieren's diagnostic: rc = all-negative AoA_1 |
+| #2779 | thorfinn | `naca-pair-film-conditioning` | Geometry-conditional FiLM on 8-D tandem signature (M_1,P_1,T_1,M_2,P_2,T_2,gap,stagger) — shape-conditioning, not physics-conditioning |
+| #2721 | frieren | `rc-nn-oversampling-geom-weighted` | Softer reweighting (max_boost=2.0) + geometry-weighted distance (exclude log_Re, upweight NACA geometry 2×) |
+
+---
+
 ## 2026-05-14 01:55 — Round 01:54 Closures: shape-bin-M-oversampling, surface-only-aux-head, 2 stale pods
 
 ### 🚨 PROGRAMME CORRECTION — Multi-axis OOD, not single-axis-M
