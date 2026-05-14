@@ -617,6 +617,16 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+print(
+    "Loss function (PR #3036): F.smooth_l1_loss(beta=0.01) for surf AND vol TRAINING criteria. "
+    "Calibration: normalized residuals O(0.1) >> β=0.01 → linear (L1) regime for bulk; "
+    "quadratic smoothing active only for |residuals| < 0.01 (deep tail near zero). "
+    "MAE reporting (UNCHANGED): F.l1_loss → mae_surf_*, mae_vol_*. "
+    "train/{vol,surf}_loss reported as L1 for direct baseline comparison; "
+    "train/{vol,surf}_huber added as diagnostic; ratio_huber_over_l1 target ≈ 1.0 (true L1 regime). "
+    "Pivot from #3022 (β=1.0 effective-L2 LOSS); targets normalized-residual scale O(0.1)."
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -792,6 +802,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_huber = epoch_surf_huber = 0.0
+    epoch_quad_frac = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -804,13 +816,26 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            # PR #3036: Smooth-L1 (Huber) at β=0.01 is the TRAINING criterion.
+            # L1 is computed in parallel for reporting and Huber/L1 ratio diagnostic.
+            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.01, reduction='none')
+            l1_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_huber = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_huber = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (l1_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (l1_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_huber + cfg.surf_weight * surf_huber
+
+            # Quadratic-mass diagnostic: fraction of |residuals| < β=0.01
+            # (denotes the share of loss mass currently in the quadratic regime).
+            with torch.no_grad():
+                tok_mask = mask.unsqueeze(-1).expand_as(l1_err)
+                in_quad = (l1_err < 0.01) & tok_mask
+                n_total = tok_mask.sum().clamp(min=1)
+                quad_frac = in_quad.sum().float() / n_total.float()
 
         optimizer.zero_grad()
         loss.backward()
@@ -818,12 +843,20 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_vol_huber += vol_huber.item()
+        epoch_surf_huber += surf_huber.item()
+        epoch_quad_frac += quad_frac.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol_huber /= max(n_batches, 1)
+    epoch_surf_huber /= max(n_batches, 1)
+    epoch_quad_frac /= max(n_batches, 1)
+    surf_huber_l1_ratio = epoch_surf_huber / max(epoch_surf, 1e-12)
+    vol_huber_l1_ratio = epoch_vol_huber / max(epoch_vol, 1e-12)
 
     # --- Validate ---
     model.eval()
@@ -855,6 +888,12 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_huber": epoch_vol_huber,
+        "train/surf_huber": epoch_surf_huber,
+        "train/surf_huber_l1_ratio": surf_huber_l1_ratio,
+        "train/vol_huber_l1_ratio": vol_huber_l1_ratio,
+        "train/quadratic_mass_frac": epoch_quad_frac,
+        "loss_function": "smooth_l1_beta_0.01",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -865,6 +904,18 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    # Huber/L1 ratio diagnostic at ep1/10/30/45/55/60 — confirms β=0.01 keeps
+    # bulk loss in L1 (linear) regime. Ratio ≈ 1.0 = TRUE L1 regime (target);
+    # ratio < 0.9 → quadratic regime activating (would mirror #3022 β=1.0 failure).
+    if (epoch + 1) in (1, 10, 30, 45, 55, 60):
+        print(
+            f"  Huber/L1 diag @ ep{epoch+1}: "
+            f"surf_l1={epoch_surf:.4f} surf_huber={epoch_surf_huber:.4f} "
+            f"ratio_surf={surf_huber_l1_ratio:.4f} | "
+            f"vol_l1={epoch_vol:.4f} vol_huber={epoch_vol_huber:.4f} "
+            f"ratio_vol={vol_huber_l1_ratio:.4f} | "
+            f"|res|<β=0.01 frac={epoch_quad_frac:.4f}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
