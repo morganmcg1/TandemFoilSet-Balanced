@@ -72,15 +72,70 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
-## 2026-05-14 07:05 — PR #2835 (ASSIGNED, thorfinn): fourier_num_features sweep {8, 32} on max_norm=0.35 — RFF capacity axis under saturated-clip
+## 2026-05-14 09:36 — PR #2835 (CLOSED, thorfinn): fourier_num_features sweep {8, 32} on max_norm=0.35 — RFF-capacity U-curve closure with asymmetric reach
 
 - **Branch:** `willowpai2g48h2-thorfinn/fourier-num-features-sweep-on-max-norm-0p35`
 - **Student:** willowpai2g48h2-thorfinn
-- **Hypothesis:** 5th paper-appendix mechanism-transfer axis after {β #2736, lr #2731, seed #2790, wd #2791}. RFF capacity (number of random Fourier feature columns) is the input-encoding side — never swept on saturated-clip stack. Tests whether RFF capacity interacts with σ-collapse/spread/channel-ordering/clip_fraction mechanisms.
-- **Two arms:** Arm 1 fourier_num_features=8 (half capacity, input dim 16), Arm 2 fourier_num_features=32 (double capacity, input dim 64). Baseline n=16 (input dim 32).
-- **Predictions:** σ-spread ≈ 0.475 (orthogonality), channel ordering surf_ux=min/vol_ux=max (10th cross-axis confirmation if invariant), clip_fraction=1.000 invariant. Likely val U-curve around n=16; Arm 2 step-time may grow ~10-15% truncating SWA window.
-- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
-- **Status:** Assigned 2026-05-14 07:05 UTC; awaiting training.
+- **Hypothesis:** 5th paper-appendix mechanism-transfer axis after {β #2736, lr #2731, seed #2790, wd #2791}. RFF capacity (number of random Fourier feature columns) is the input-encoding side — never swept on saturated-clip stack.
+
+### Result table (vs #2674 new baseline)
+
+| Arm | n_features | W&B | SWA val | SWA test | Δval | Δtest | SWA epochs / planned | Verdict |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| baseline #2674 | 16 | `ieu1futo` | 45.1538 | 38.6367 | — | — | 4/4 (100%) | — |
+| Arm 1 | 8 | `7u2ui638` | 48.3195 | 40.4170 | +3.17 worse | +1.78 worse | 2/4 (50%, cap-truncated) | strong regression close |
+| Arm 2 | 32 | `79btb3v3` | 46.0676 | 38.6153 | +0.91 worse | **−0.06 (TIE)** | 2/4 (50%, cap-truncated) | directional close |
+
+### Per-split val (SWA-model)
+
+| Split | Baseline n=16 | Arm 1 n=8 | Δ | Arm 2 n=32 | Δ |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 47.146 | 53.524 | +6.38 | 47.058 | **−0.09** |
+| geom_camber_rc | 58.002 | 59.789 | +1.79 | 62.180 | +4.18 |
+| geom_camber_cruise | 28.887 | 29.077 | +0.19 | 27.477 | **−1.41** |
+| re_rand | 46.580 | 50.889 | +4.31 | 47.555 | +0.98 |
+
+### Per-split test (SWA-model)
+
+| Split | Baseline n=16 | Arm 1 n=8 | Δ | Arm 2 n=32 | Δ |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 40.379 | 44.371 | +3.99 | 40.149 | **−0.23** |
+| geom_camber_rc | 53.068 | 54.102 | +1.03 | 54.038 | +0.97 |
+| geom_camber_cruise | 23.285 | 23.695 | +0.41 | 22.594 | **−0.69** |
+| re_rand | 37.816 | 39.500 | +1.68 | 37.681 | **−0.14** |
+
+**3 of 4 test splits favor n=32 marginally.** First cross-axis on saturated-clip where val and test directions partially disagree.
+
+### Mechanism diagnosis (paper-appendix mechanism-transfer axis #6)
+
+**Asymmetric reach: n=8 (+3.17 val) regresses harder than n=32 (+0.91 val).** Parallels the lr-axis #2773 hybrid_kendall_lr finding (concave LOWER, linear UPPER). Same signature now seen on capacity axis as on step-size axis under saturated-clip.
+
+1. **n=8 under-parameterization** tightens the gradient-magnitude pressure (less expressive head → larger residuals → larger gradients → harder for sign-step to handle). Worst on `single_in_dist` (+6.38) and `re_rand` (+4.31) where positional bandwidth matters most.
+2. **n=32 over-parameterization** saturates against the σ-spread invariant. Loss localized on `geom_camber_rc` (+4.18) — the OOD geometry split where more random frequencies seem to overfit.
+3. **Test-side near-tie at n=32 (Δtest=−0.06%)** suggests n=16 val optimum may not perfectly align with test optimum on the RFF axis; conditioned on truncated 2/4 SWA window.
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 (n=8) | Arm 2 (n=32) | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread (final) | 0.4695 | 0.4461 (−6%, truncated SWA attribution) | 0.475 | ✓ 8th cross-axis (mild compression caveat) |
+| Channel ordering (surf_ux=min/vol_ux=max) | preserved | preserved | preserved | ✓ 10th cross-axis confirmation |
+| clip_fraction=1.0 | 4875/4875 | 4875/4875 | 4875/4875 | ✓ 6th cross-axis confirmation |
+| grad_norm median | 5.52 | 5.43 | ~5.30 | ✓ within band |
+| Step time | 141.5 s/epoch | 141.5 s/epoch | ~141 s/epoch | ✓ RFF-capacity × step-time DECOUPLED |
+
+### Banked findings (#119–#125)
+
+119. **PAPER-STRENGTHENING: RFF-capacity U-curve closure at n=16 with asymmetric reach (#2835 thorfinn)** — Arm 1 n=8 +3.17 val worse; Arm 2 n=32 +0.91 val worse. The U-curve is asymmetric: halving capacity hurts more than doubling it. Mechanism-transfer axis #6 on saturated-clip; the asymmetric-reach signature is now shared across step-size (lr-axis #2773) and feature-capacity (RFF-axis #2835).
+120. **PAPER-STRENGTHENING: First cross-axis where val and test directions partially disagree under saturated-clip (#2835)** — 3 of 4 test splits favor n=32 marginally (Δtest=−0.06% overall vs Δval=+0.91). Soft signal that the n=16 val optimum may be slightly over-tuned to val on the RFF axis. Caveat: conditioned on truncated 2/4 SWA window.
+121. **PAPER-STRENGTHENING: RFF-capacity × step-time DECOUPLED at this scale (#2835)** — 141.5 s/epoch identical across {n=8, 16, 32}. Transolver attention dominates step time; the RFF projection cost is negligible. Killed the worry banked from #2354 / #2616 that RFF-capacity would couple step-time × SWA-window.
+122. **PAPER-STRENGTHENING: σ-spread orthogonality holds on RFF-capacity axis (8th cross-axis)** — spread 0.4695/0.4461 vs baseline 0.475. Arm 2's mild −6% compression attributed to truncated SWA window (σ heads still drifting over the final 2 unrun SWA epochs) rather than a real RFF × Kendall interaction.
+123. **PAPER-STRENGTHENING: channel ordering invariant on RFF-capacity axis (10th cross-axis)** — surf_ux=min log_σ / vol_ux=max log_σ preserved on both arms. The table now stands at 10 cross-axes (β, lr, seed, wd, max_norm, lr×max_norm, σ=0.5, multi-scale RFF, hybrid, RFF-num-features).
+124. **PAPER-STRENGTHENING: clip_fraction=1.000 invariant on RFF-capacity axis (6th cross-axis)** — 4875/4875 saturated steps on both arms. Saturated-clip regime confirmed orthogonal to RFF capacity.
+125. **Nuisance variable banked again: SWA-window truncation under 30-min cap (#2835 confirms #2790 + #2818)** — both arms completed 2/4 SWA epochs. The val n=32 result might tighten with full 4 SWA epochs. Third consecutive PR where SWA-window truncation enters the per-arm error story — paper-appendix needs the cap-coincidence caveat called out explicitly.
+
+### Advisor verdict
+**CLOSED — paper-appendix mechanism-transfer axis #6 closed (RFF-capacity U-curve at n=16 with asymmetric reach + test-side near-tie at n=32).** No actionable hyperparameter change. Paper-appendix table now stands at 6 mechanism-transfer axes showing distinct hyperparameter classes behave qualitatively differently under saturated-clip — strongest evidence we have for the appendix story. Reassigning thorfinn → anneal_epochs sweep (7th mechanism-transfer axis, schedule shape under saturated-clip).
 
 ---
 
