@@ -391,6 +391,7 @@ class Config:
     n_layers: int = 5
     n_head: int = 4
     slice_num: int = 48
+    warmup_epochs: int = 0  # If >0, linear warmup from lr*0.1 to lr over first N epochs, then cosine decay over remaining (epochs - N).
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -442,7 +443,18 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=cfg.warmup_epochs
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(MAX_EPOCHS - cfg.warmup_epochs, 1)
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs]
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -469,6 +481,7 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    epoch_lr = optimizer.param_groups[0]["lr"]
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
@@ -530,6 +543,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
