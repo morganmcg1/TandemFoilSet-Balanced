@@ -25,6 +25,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -541,6 +542,7 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+print(f"Mixup: alpha=0.2, application_rate=0.5, applied in training only (Beta(0.2,0.2) -> bimodal mode at lambda~{{0,1}}, mean lambda=0.5); mix x and y, anchor's mask/is_surface; +0 params")
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -692,6 +694,12 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if model.training and torch.rand(1, device=x.device).item() < 0.5:
+            lam = float(np.random.beta(0.2, 0.2))
+            perm = torch.randperm(x.size(0), device=x.device)
+            x = lam * x + (1.0 - lam) * x[perm]
+            y = lam * y + (1.0 - lam) * y[perm]
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
