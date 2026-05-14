@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -45,6 +46,22 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+# NeRF-style positional encoding of AoA (foil 1, radians at x[..., 14]).
+# K=8 → 2*K=16 extra input dims with frequencies {2^0, ..., 2^7}.
+AOA_FF_K = 8
+
+
+def aoa_fourier_features(aoa: torch.Tensor, K: int = AOA_FF_K) -> torch.Tensor:
+    """[sin(2πf_k·aoa), cos(2πf_k·aoa)] for f_k = 2^k, k=0..K-1.
+
+    aoa: shape [..., 1] in radians (raw, pre-normalization).
+    Returns: [..., 2*K].
+    """
+    frequencies = (2.0 ** torch.arange(K, device=aoa.device, dtype=aoa.dtype))
+    angles = 2.0 * math.pi * frequencies * aoa  # broadcast last dim
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
 
 
 class Lion(torch.optim.Optimizer):
@@ -287,8 +304,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                aoa_ff = aoa_fourier_features(x[..., 14:15])  # raw rad
+                x_in = torch.cat([x_norm, aoa_ff], dim=-1)
                 y_norm = (y - stats["y_mean"]) / stats["y_std"]
-                pred = model({"x": x_norm, "mask": mask})["preds"]
+                pred = model({"x": x_in, "mask": mask})["preds"]
             pred = pred.float()  # back to fp32 for downstream metric accumulation
 
             huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
@@ -467,7 +486,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 2 * AOA_FF_K,  # +16 dims from AoA Fourier features
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -503,6 +522,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "aoa_ff_K": AOA_FF_K,
+        "aoa_ff_source_dim": 14,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -543,8 +564,10 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            aoa_ff = aoa_fourier_features(x[..., 14:15])  # raw rad
+            x_in = torch.cat([x_norm, aoa_ff], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            pred = model({"x": x_in, "mask": mask})["preds"]
             # Huber β=0.5 for Ux/Uy (channels 0,1); pinball τ=0.55 for pressure (channel 2).
             # Pinball: ρ_τ(r) = max(τ*r, (τ-1)*r) with r = y - ŷ.
             # τ=0.55 biases the model toward over-predicting pressure when residuals are
