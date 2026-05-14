@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 07:20
+- **Date:** 2026-05-14 07:40
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -25,9 +25,11 @@
 > - **LOSS-WEIGHT AXIS SATURATED**: swp=15 (+0.21% val noise, −1.06% test directional), swp=20 (+4.76% val LOSS — over-pushed, broke optimization). Loss-WEIGHTING is non-monotone; weight amplification is not the path.
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
 > - **Round 41 cont. — code-change pivots**:
->   - **frieren #2847 Huber d=0.1 (corrected)**: previous #2822 Huber d=5.0 catastrophic +116% val — delta miscalibrated for normalized space (effectively MSE everywhere). Retry with d=0.1 properly scales for normalized errors (typical O(0.5-1.5)); ~90% errors stay L1, smallest 10% get quadratic smoothing
->   - **askeladd #2824 AdamW lr=3e-4** (IN FLIGHT): switch from Lion to AdamW (betas=0.9/0.95) — OPTIMIZER AXIS, fundamentally orthogonal to all previously tested HP/arch/schedule/loss axes
-> - **NEW NEGATIVE RESULT**: MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). This confirms L1 is the right magnitude shape; loss-form has narrow window if it exists.
+>   - **frieren #2847 Huber d=0.1 (corrected)** (IN FLIGHT): previous #2822 Huber d=5.0 catastrophic +116% val — delta miscalibrated for normalized space (effectively MSE everywhere). Retry with d=0.1 properly scales for normalized errors
+>   - **askeladd #2850 AdamW lr=1e-3 (10× Lion lr)** (IN FLIGHT): previous #2824 AdamW lr=3e-4 UNDER-CONVERGED +29.6% val — too-small effective step size for short-horizon regression. Retry with lr×10 to match Lion's sign-update step magnitude
+> - **NEW NEGATIVE RESULTS this round**:
+>   - MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). Confirms L1 is the right magnitude shape.
+>   - AdamW lr=3e-4 (Lion lr × 3 standard rule) UNDER-CONVERGES on this small-data regression (#2824 → +29.6% val, best_ep=46 still descending). The lr×3 rule is image-classification-calibrated, not appropriate here.
 > - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head).
 > - **#2638 split-dependent OOD diagnostic**: geom_camber is INFORMATION-limited or REPRESENTATION-limited — needs mechanism change, not weight tuning.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.

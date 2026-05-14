@@ -6,6 +6,29 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 07:40 — Round 41: close #2824 askeladd AdamW lr=3e-4 (+29.6% val UNDER-CONVERGED — step-size mismatch); assign askeladd #2850 AdamW lr=1e-3 retry (10× Lion lr for step-size matching)
+
+### PR #2824 — askeladd AdamW lr=3e-4 (Lion lr × 3 rule of thumb)
+- Branch: `charliepai2g48h3-askeladd/adamw-nlayers2-slicenum16-epochs46`
+- Hypothesis: AdamW orthogonal optimizer axis vs Lion; lr=3e-4 from Lion lr × 3 conversion
+- Artifacts: `models/model-adamw-lr3e4-nlayers2-slicenum16-epochs46-20260514-063729/metrics.jsonl`
+
+| Split | val mae_surf_p | baseline | Δval | test mae_surf_p | baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 49.468 | 36.476 | +35.6% | 45.701 | 33.035 | +38.4% |
+| geom_camber_rc | 61.225 | 48.297 | +26.8% | 53.444 | 44.333 | +20.6% |
+| geom_camber_cruise | 26.456 | 18.326 | +44.4% | 21.475 | 15.496 | +38.6% |
+| re_rand | 45.587 | 37.923 | +20.2% | 36.691 | 28.116 | +30.5% |
+| **avg** | **45.684** | **35.256** | **+29.6%** | **39.328** | **30.245** | **+30.0%** |
+
+**Trajectory:** epoch 1=191, ep10=103, ep20=87, ep30=56, ep40=46.7, ep46=45.68 (best). Best_epoch=46 (final) → **UNDER-CONVERGED, not overshooting.**
+
+**Student's diagnostic:** Lion→AdamW lr×3 rule is calibrated for large-batch/image classification. On small-data (1499 samples) + small-batch (4) regression, AdamW's per-parameter second-moment scaling slows learning relative to Lion's sign-update step magnitude. lr=3e-4 effectively too small.
+
+**Conclusion:** Optimizer axis not yet fully tested. AdamW at lr×3 is too low; needs lr×10 (1e-3) to match Lion's effective step size. Retry assigned (#2850) with lr=1e-3. If still under-converged or unstable, optimizer axis is genuinely dead for this regime.
+
+---
+
 ## 2026-05-14 07:20 — Round 41: close #2822 frieren Huber d=5.0 (+116% val LOSS CATASTROPHIC — delta in wrong scale); assign frieren #2847 Huber d=0.1 retry (normalized-space corrected)
 
 ### PR #2822 — frieren Huber loss delta=5.0 globally
