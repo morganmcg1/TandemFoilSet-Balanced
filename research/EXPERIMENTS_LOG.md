@@ -2,6 +2,73 @@
 
 ---
 
+## 2026-05-14 [Round 137] UTC — PR #2938: pure-cosine-lr-1e-4 — **CLOSED LOSS (+13.50% val / +13.29% test; 123rd taxon; NO-WARMUP / RAMP-SHAPE-LOAD-BEARING DECISIVELY CLOSED)**
+
+- **Branch:** charliepai2g48h5-frieren/pure-cosine-lr-1e-4
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-pure-cosine-lr-1e-4-20260514-144700/metrics.jsonl
+
+| Metric | Baseline #2879 | #2929 (lr=1.5e-4 no-warmup) | #2938 (lr=1.0e-4 no-warmup) | Δ vs baseline | Δ vs #2929 |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 32.6744 | **34.6871** | **+13.50% LOSS** | **+6.16% WORSE** |
+| test_avg/mae_surf_p | 26.5160 | 26.9837 | 30.0423 | +13.29% LOSS | +11.33% WORSE |
+| val_single_in_dist | 23.3997 | 27.1737 | 26.6617 | +13.94% LOSS | -1.88% |
+| val_geom_camber_rc | 46.0708 | 48.4569 | 51.8572 | +12.56% LOSS | +7.02% WORSE |
+| val_geom_camber_cruise | 17.8657 | 18.2055 | 21.5062 | +20.38% LOSS | +18.13% WORSE |
+| val_re_rand | 34.9057 | 36.8616 | 38.7234 | +10.94% LOSS | +5.05% WORSE |
+| Param count | 407,940 | 407,940 | 407,940 | — | — |
+
+**Hypothesis:** Replicate #2929 (pure CosineAnnealingLR T_max=60, no warmup) but at peak LR=1.0e-4 instead of 1.5e-4. Disambiguate: was #2929's LOSS from "too much LR too soon at cold-start"? Baseline effective ep1-3 LR under warmup ramp is ~0.825e-4 (averaged). If lr=1.0e-4 (only 21% above the baseline ep1-3 effective avg) cleanly outperforms #2929, the LOSS magnitude is the lever. If LOSS again, ramp SHAPE is load-bearing regardless of magnitude.
+
+**Result:** CLEAR LOSS (+13.50% val), substantially **WORSE than #2929** despite lower peak LR — the opposite of the "too much LR" hypothesis prediction. 3 experiments now closing the no-warmup axis (#2920, #2929, #2938) — all underperform baseline by 6-14%.
+
+**Mechanistic finding (DECISIVE — schedule axis disambiguation):**
+- Hypothesis (a) "Too much LR too soon" → **REFUTED.** Dropping peak from 1.5e-4 to 1.0e-4 should have helped under this hypothesis; it hurt by 6.16%. Lion at 1.0e-4 has no observable cold-start instability that lower LR would fix.
+- Hypothesis (b) "Ramp shape is load-bearing" → **STRONGLY SUPPORTED.** Baseline's LinearLR(0.1→1.0× over 3 ep) produces ramp behavior that constant cold-start LR cannot reproduce, regardless of magnitude.
+- Hypothesis (c) "Total LR budget" → **ALSO CONTRIBUTING.** At lr=1.0e-4 over 60 epochs the cosine integral is ~3.0e-3 (vs ~4.4e-3 with baseline warmup at peak=1.5e-4) — 33% less total optimization energy. Slow early descent + flat-ish ep50-60 val (35.96 → 34.71) is consistent with **under-training rather than instability**.
+
+Both (b) and (c) point in the SAME direction: no-warmup axis is closed. Cold-start is monotonic and stable, no NaN/instability — Lion handles lr=1.0e-4 from cold start fine. The LOSS is from under-training (slope too shallow to close gap at 60ep) + missing ramp shape.
+
+**123rd taxon CLOSED:** NO-WARMUP-AXIS / LR-SCHEDULE-SHAPE — 3-experiment decisive closure. 7th 'uniform regularization breaks splits uniformly' closure (cruise +20.38% LOSS NOT a WIN; meta-signal broken uniformly under schedule-shape removal). The warmup ramp from 0.1× is load-bearing; stop testing variants without it.
+
+**KEY STUDENT INSIGHT:** *"If the schedule axis is worth revisiting, the productive direction is the OPPOSITE: try a longer warmup (4-5 epochs instead of 3), or a HIGHER PEAK LR with the existing warmup (e.g. lr=1.75e-4 or 2.0e-4 with the 3-epoch ramp). The ramp gives headroom that cold-start cannot reproduce."*
+
+**Followup assigned:** #2950 frieren lr-2e-4-with-warmup (student followup #2: tests LR magnitude axis upward at peak=2.0e-4 with the load-bearing 3-epoch warmup ramp preserved; +33% peak vs baseline 1.5e-4; first explicit upward test of LR magnitude in this launch; if WIN baseline tuning was conservative; if LOSS/DIVERGE Lion stability boundary near baseline; 124th axis).
+
+---
+
+## 2026-05-14 [Round 137] UTC — PR #2939: rmsnorm-replacement — **CLOSED LOSS (+7.28% val / +7.42% test; 122nd taxon; RMSNORM-AT-ALL-SITES / MEAN-CENTERING-LOAD-BEARING-FOR-CFD CLOSED)**
+
+- **Branch:** charliepai2g48h5-edward/rmsnorm-replacement
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-rmsnorm-replacement-20260514-145619/metrics.jsonl
+
+| Metric | Baseline #2879 (LN) | #2939 RMSNorm (no β) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.7855** | **+7.28% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 28.4832 | +7.42% LOSS |
+| val_single_in_dist | 23.3997 | 26.5145 | **+13.31% LOSS (WORST hit)** |
+| val_geom_camber_rc | 46.0708 | 47.2673 | +2.60% LOSS (smallest hit) |
+| val_geom_camber_cruise | 17.8657 | 19.3018 | +8.04% LOSS |
+| val_re_rand | 34.9057 | 38.0584 | +9.03% LOSS |
+| Param count | 407,940 | 407,076 | -864 (9 β biases removed) |
+
+**Hypothesis:** Replace LayerNorm with RMSNorm at all 9 norm sites (4× ln_1 pre-attn + 4× ln_2 pre-mlp + 1× ln_3 in last block). Test the representation-statistics axis: does mean-preservation help Lion's sign-gradient carry directional pressure info at deep blocks, or is LN's mean-centering load-bearing for CFD targets with per-Reynolds DC offsets?
+
+**Result:** CLEAN LOSS, uniform across all 4 val splits. Worst hit on in_dist (+13.31%), smallest on hardest geometry-OOD split rc (+2.60%) — OOD splits show smaller % delta only because absolute MAE is already higher. Param count drop matches prediction (-864 = 9 × 96 β biases).
+
+**Mechanistic finding (DECISIVE):** **LayerNorm's mean-centering is doing REAL, LOAD-BEARING WORK for CFD targets.** Pressure/velocity fields have natural per-Reynolds-regime DC offsets that LN strips explicitly, isolating the fluctuations the model needs to predict. RMSNorm preserves these baselines, forcing the model to learn to factor them out implicitly — and at 407k param budget the model can't afford that capacity hit.
+
+**Trajectory diagnostic:** Model was still actively improving at ep60 (32.83 → 32.79 last epoch), but slope was ~0.04/epoch — too shallow to close 2.2-point gap inside budget. Train→val gap small (0.028 normalized) — **UNDERFIT / slower-converging regime**, NOT generalization bottleneck. Cold-start convergence ~3-5x slower than baseline (ep5 val 131 vs baseline-converged 30.56) — the residual-stream statistics shift forces re-calibration cost the model can't recover from in 60 epochs.
+
+**122nd taxon CLOSED:** RMSNORM-AT-ALL-SITES / MEAN-CENTERING-IS-LOAD-BEARING-FOR-CFD. Clean falsification of the modern-default heuristic for this domain: **LLM defaults (RMSNorm in LLaMA/T5/PaLM) don't always transfer to CFD surrogates.** The residual-stream statistics matter, and CFD field statistics are sufficiently different from token-embedding statistics that the LN-vs-RMSNorm trade-off does not generalize.
+
+**CONFOUND in #2939:** This experiment changed TWO things at once — (a) removed mean-subtraction, AND (b) removed β bias (-864 params). The LOSS could be attributable to EITHER factor (or both). The follow-up isolates these.
+
+**KEY STUDENT INSIGHT:** *"Try RMSNorm + add a per-channel learnable bias (β) after the γ scale ('RMSNorm + β' or equivalently a LayerNorm without mean-subtraction). Would test whether the LOSS comes from losing the β bias or from losing the mean-subtraction itself. Cheap, +864 params back, isolates the two factors."*
+
+**Followup assigned:** #2949 edward rmsnorm-plus-beta (student followup #1: RMSNorm WITH learnable β bias added — equivalent to LayerNorm without mean-subtraction; custom RMSNormWithBias module at all 9 sites; +864 params restoring total to 407,940; param-matched isolation; if WIN β was load-bearing, mean-subtraction is removable; if LOSS still, mean-subtraction is the load-bearing piece; 123rd axis).
+
+---
+
 ## 2026-05-14 [Round 137] UTC — PR #2937: huber-loss-delta-0.5 — **CLOSED CLEAR LOSS (+26.14% val / +24.92% test; 121st taxon; HUBER-LOSS / L2-NEAR-ZERO-WITH-LION INCOMPATIBILITY CLOSED)**
 
 - **Branch:** charliepai2g48h5-askeladd/huber-loss-delta-0.5
