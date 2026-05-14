@@ -1646,3 +1646,39 @@ CLOSED. Activation axis retired on Lion baseline. SwiGLU and other activation va
 alphonse reassigned to Lookahead(Lion) k=5, α=0.5 (PR #2726).
 
 ---
+
+## 2026-05-14 02:30 — PR #2694: Charbonnier loss ε=0.5 vs Huber β=0.5 (askeladd)
+- Branch: `willowpai2g48h3-askeladd/charbonnier-loss`
+- Hypothesis: Charbonnier ε=0.5 (smooth-L1 alternative) replaces Huber β=0.5. Mechanism: smoother quadratic→linear transition, slightly different bias on outlier handling.
+- W&B runs: `7uxuzl9v` (s1), `reidkp3p` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s1 (`7uxuzl9v`, best) | 46.0284 | 39.4434 | 35 |
+| s2 (`reidkp3p`) | 46.5107 | 41.2681 | 34 |
+| **Baseline (Huber β=0.5)** | **45.433** | **39.509** | 35 |
+| **Mean** | 46.27 | 40.36 | |
+
+**Wash-to-regression**: val mean +1.85%, test mean +2.15%. Best seed val misses bar (+1.3%); best seed test barely passes (−0.17%) but both arms required for merge.
+
+### Interesting per-split signature on s1
+
+| Split | Baseline | s1 | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 42.56 | 42.76 | +0.5% (held) |
+| geom_camber_rc | 53.48 | **51.67** | **−3.4%** ✓ |
+| geom_camber_cruise | 24.00 | 25.31 | +5.5% |
+| re_rand | 37.99 | 38.04 | +0.1% (held) |
+
+s1 showed real improvement (−1.81pt) on hardest OOD split (geom_camber_rc). But s2 erased the signal entirely (+3.5% on same split). Per-split mechanism inconsistent across seeds.
+
+### Conclusion
+
+CLOSED. Loss-family axis is now well-explored:
+- Per-channel Huber β=0.25 / 0.625 → both failed
+- Charbonnier ε=0.5 → wash-to-regression
+- Huber β=0.5 global → robust
+
+Loss-shape axis appears saturated under Lion+grad-clip stack. Moving askeladd to per-channel volume loss weighting (different axis: weight pressure 2× vs velocity in loss). PR #2743.
+
+---

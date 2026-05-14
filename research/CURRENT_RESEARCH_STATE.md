@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 02:10
+- **Date:** 2026-05-14 02:30
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -41,7 +41,7 @@
 4. **Gradient Centralization (nezuko #2564)**: GC inside Lion step — zero-mean gradient constraint before momentum update
 5. **max_norm=0.5 (fern #2565)**: rebasing onto new baseline (sent back); OOD camber improved −3.8 on old baseline
 6. **CosineAnnealingWarmRestarts T_0=12 (tanjiro #2693)**: multi-cycle schedule; different shape from retired cosine flat/long-T_max
-7. **Charbonnier loss ε=0.5 (askeladd #2694)**: smooth L1 alternative to Huber; loss-family change
+7. **Per-channel volume loss weighting (askeladd #2743)**: upweight pressure 2× in surface and volume Huber — direct objective alignment with eval metric (mae_surf_p)
 8. **Lookahead(Lion) (alphonse #2726)**: outer optimizer wrapper, k=5, α=0.5 — slow-weight smoothing different from SWA's end-of-training averaging
 
 ## Round 1 portfolio (live)
@@ -65,11 +65,12 @@
 | #2629 | frieren | Lion wd=3e-3 | **CLOSED** 2026-05-14 01:45 (+1.68 pt val; all 4 splits regress; wd axis monotonic-worse) |
 | #2700 | edward | Lion beta1=0.85 | **WIP** |
 | #2693 | tanjiro | CosineAnnealingWarmRestarts T_0=12 | **WIP** |
-| #2694 | askeladd | Charbonnier loss ε=0.5 | **WIP** |
+| #2694 | askeladd | Charbonnier loss ε=0.5 | **CLOSED** 2026-05-14 02:30 (val 46.03 best, +1.3% miss bar; per-channel signature on s1 erased by s2; loss-shape axis saturated) |
+| **#2743** | **askeladd** | **Per-channel volume loss weighting: p_weight=2.0** | **WIP NEW 2026-05-14 02:30** |
 | **#2712** | **thorfinn** | **SWA (average epochs 26-35)** | **WIP NEW 2026-05-14 01:50** |
 | **#2713** | **frieren** | **Lion beta2=0.999** | **WIP NEW 2026-05-14 01:50** |
 
-**Merged:** 10 | **Closed:** 37 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 38 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -116,3 +117,4 @@
 - **Lion warmup 5ep** — 5 warmup epochs eat compute budget; variance reduction insufficient to compensate
 - **Lion wd=3e-3** — monotonic-worse; wd=2e-3 confirmed optimal
 - **SiLU activation in FFN** — Lion's sign-normalization neutralizes SiLU's "non-zero gradient" advantage; GELU's selective gating is doing useful work in the slice-attention pathway
+- **Charbonnier loss ε=0.5** — wash-to-regression on val; loss-shape axis appears saturated (Huber β=0.5 robust under Lion+clip)
