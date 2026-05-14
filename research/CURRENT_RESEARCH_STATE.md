@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 18:35
+- **Date:** 2026-05-14 18:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -64,7 +64,7 @@
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | #2959 | alphonse | Per-block lr scaling: 1.5× single seed clears both bars (val=32.89, test=28.53) but camber_rc regresses; awaiting 2nd seed at 1.5× | WIP (sent back 2026-05-14 18:30) |
-| #2960 | frieren | Conditioning-variable Mixup: α=0.2 (s1), α=0.4 (s2) | ASSIGNED 2026-05-14 16:45 |
+| #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged. Arms: α=0.2 (s1), α=0.4 (s2) | ASSIGNED 2026-05-14 18:50 |
 | #2886 | thorfinn | γ-only FiLM-AoA: per-block AoA conditioning (sent back for σ=0.07+FiLM-Re compound) | WIP (sent back) |
 | #2965 | fern | Fourier-encoded Re input to FiLM-Re γ MLP (K=2, K=4) | ASSIGNED 2026-05-14 17:15 |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
@@ -77,6 +77,7 @@
 - #2909 (askeladd PP-loss) — all 4 splits regress +11-29%. h⁴ weighting kills boundary-layer signal; +70% wall-clock overhead binding.
 - #2902 (frieren SwiGLU compound) — val=34.72 misses by +0.49%. NOT orthogonal to FiLM-Re; redundant conditioning path.
 - #2942 (alphonse Lion-lr) — lr=6e-5 ≈ baseline; lr=9e-5 trade-off (wins camber_rc, loses single_in_dist). lr=7.5e-5 confirmed optimal. Axis closed; motivates per-block lr.
+- #2960 (frieren cond-mixup) — val=60.70/61.37, test=53.57/54.32 — 76-88% worse than baseline. Mesh-aligned target mixup is physically meaningless (node k has no correspondence across samples). All 4 splits regress including target OOD camber_rc (+28 MAE). Closed. Follow-up: input-only version (#2984).
 - #2895 (fern y-flip compound on σ=0.07+FiLM-Re) — val=35.41, test=30.86. NOT orthogonal: directly-augmented cruise split regresses +27% (15.19→19.28). FiLM-Re's per-sample γ specialization is diluted by mirrored cruise inputs. Y-flip training-time aug retired at FiLM-Re baseline.
 - #2953 (askeladd slice-temperature) — τ=0.5 val +0.07%/test +2.86% (single_in_dist −1.0%, all OOD regress); τ=2.0 val +4.0%/test +7%. CRITICAL: baseline has learnable per-head τ initialized to 0.5, not 1.0. Default sits near per-head optimum. Slice-temp axis closed.
 - #2943 (edward head-depth) — depth=3 val −0.16%/test +1.04% (single_in_dist −6.90%, all 3 OOD splits regress); depth=4 strictly worse. Head depth NOT the bottleneck at FiLM-Re baseline. 4th OOD-vs-IID trade-off instance.

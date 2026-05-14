@@ -2970,3 +2970,38 @@ If 2-seed mean < 34.55 val AND test < 29.20 (within 1% of bar): merge as 15th sh
 Follow-up axis queued for after 2nd seed: **inverted scaling (late_block_lr_scale=0.7)** — late blocks↓, early blocks↑ — directly tests whether the OOD signal lives in early layers.
 
 If 2-seed mean val < 34.55 AND mean test < 29.20: merge as 15th-shift candidate (alongside tanjiro #2948 if it also confirms).
+
+---
+
+## 2026-05-14 18:45 — PR #2960: Conditioning-variable Mixup frieren (CLOSED)
+- Branch: `willowpai2g48h3-frieren/cond-mixup`
+- Hypothesis: Interpolate (Re, AoA) inputs AND targets during training to regularize across conditioning manifold. Arms: α=0.2 (s1), α=0.4 (s2).
+
+### Results
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs bar |
+|---|---|---:|---:|---:|
+| α=0.2 (s1) `0ifju2yf` | — | 60.701 | 53.573 | val +75.6%, test +85.1% ❌ |
+| α=0.4 (s2) `npb76g8t` | — | 61.371 | 54.323 | val +77.5%, test +87.7% ❌ |
+| 14th-shift bar (mean 2 seeds) | — | 34.55 | 28.95 | — |
+
+**Per-split test (α=0.2 arm):** single_in_dist=59.47 (+82.9%), geom_camber_rc=69.73 (+66.1%), geom_camber_cruise=33.58 (+121%), re_rand=51.51 (+97.5%). ALL 4 SPLITS REGRESS MASSIVELY.
+
+**Per-epoch time:** 54s (matches baseline — compute overhead is not the issue).
+
+**Both arms were still improving when timeout hit** (s1 epoch 30: 60.70, epoch 28: 64.92, epoch 24: 68.80 — still decreasing). BUT the convergence deficit was ~100% above baseline, not a 30-min cap issue.
+
+**Root cause (student's analysis, confirmed by advisor):**
+Mesh-aligned target mixup is physically meaningless. `y[i, k, :]` (node k in sample i) was mixed with `y[perm[i], k, :]` (node k in a DIFFERENT mesh with different geometry). Mesh ordering is arbitrary across samples — there is NO physical correspondence between node-k of mesh A and node-k of mesh B. The model was asked to learn an impossible per-node averaging. This is unlike image Mixup (pixel-aligned) or scalar-target Mixup (no per-node issue).
+
+Decision tree match: "Both miss bar AND test_geom_camber_rc regresses" → **Close axis**.
+
+**Action: CLOSED.** New PR #2984 assigned to frieren: input-only conditioning Mixup (Re/AoA inputs mixed, targets NOT mixed). The conditioning interpolation hypothesis is sound; the target-mix was the flaw.
+
+---
+
+## 2026-05-14 18:50 — PR #2984: Input-only conditioning Mixup frieren (ASSIGNED)
+- Branch: `willowpai2g48h3-frieren/input-only-cond-mixup`
+- Hypothesis: Smooth the (Re, AoA) conditioning manifold during training by interpolating conditioning inputs only (log_re, AoA foil-1, AoA foil-2), leaving per-node targets as the original sample's targets. Addresses root cause of #2960 failure. With α=0.2 (Beta-bimodal near 0/1), most samples see near-original conditions — convergence should track baseline. The conditioning encoder (FiLM-Re γ MLP) is exposed to mid-Re interpolation, smoothing γ(Re) across Re-space and directly targeting re_rand OOD.
+- Arms: α=0.2 (s1), α=0.4 (s2)
+- Merge bar: mean val < 34.55, mean test < 28.95
