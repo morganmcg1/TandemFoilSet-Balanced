@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-05-14 06:50 — PR #2789: fourier_min_freq sweep (0.5/2.0 vs 1.0) on n_layers=3+wd=3e-4 (frieren) — CLOSED, MIN_FREQ=1.0 LOCKED
+
+- **Branch:** `willowpai2g24h5-frieren/fourier-min-freq-sweep`
+- **Hypothesis:** L=6 band [1.0, 32.0] hasn't tested min_freq direction. Wider (0.5) might add global structure; narrower (2.0) might pack more local bandwidth.
+- **W&B runs:** `3fyk8ra3` (min_freq=0.5), `f1q9p2ew` (min_freq=2.0)
+
+| Arm | min_freq | val | test | Δ val | Δ test |
+|-----|----------|-----|------|-------|--------|
+| Baseline #2489 | 1.0 | **42.00** | **35.96** | — | — |
+| Arm 1 | 0.5 | 43.01 | 36.73 | +2.4% ✗ | +2.1% ✗ |
+| Arm 2 | 2.0 | 42.50 | 36.38 | +1.2% ✗ | +1.2% ✗ |
+
+Per-test-split (both arms): single_in_dist improves 4-5% (arms have spare capacity for easy split), camber_rc near-baseline, **re_rand regresses 8-9% on both** — band-coverage critical for Re-cross-regime generalization.
+
+**Result:** CLOSED. fourier_min_freq=1.0 is the local optimum.
+
+Key findings:
+1. **Finding 48 — fourier_min_freq=1.0 locked.** L=6 log-spaced [1.0, 32.0] has lowest band f₀=1.0 ≈ one full half-domain-period. Wider (0.5) → near-linear feature duplicating learned linear weight. Narrower (2.0) → loses globally-coherent positional feature.
+2. **Critical observation: re_rand is the deciding split.** Both arms regress re_rand 8-9%. Re-stratified holdout specifically benefits from the f₀=1.0 band. This is band-coverage, not under-training (val still descending at cap).
+3. **In-dist asymmetry:** both arms improve single_in_dist by 4-5%. The model has spare capacity for in-dist data while under-fitting OOD generalization splits. Suggests targeted OOD regularization is the next axis.
+4. **Combines with finding 44 (L=6 locked):** The fourier band is now fully closed in both shape (L=6 channels) and position (f₀=1.0). Only max_freq remains in-flight (#2784 thorfinn).
+
+**Frieren reassigned:** drop_path stochastic depth sweep — code-edit tier; targets the re_rand OOD weakness directly via residual-branch regularization.
+
+---
+
+## 2026-05-14 06:48 — PR #2793: n_hidden width sweep (96/160 vs 128) on n_layers=3+wd=3e-4 (edward) — CLOSED, N_HIDDEN=128 LOCKED (first code-edit-tier experiment)
+
+- **Branch:** `willowpai2g24h5-edward/n-hidden-width-sweep`
+- **Hypothesis:** n_hidden=128 hardcoded since earliest compound. With rich regularization stack, model may be over- or under-capacity. Speed-dividend may favor narrower if capacity headroom exists.
+- **W&B runs:** `51n0tnj6` (n_hidden=96), `kr5kmkuo` (n_hidden=160)
+
+| Arm | n_hidden | head_dim | params | epochs | s/ep | val | test | Δ val | Δ test |
+|-----|----------|----------|--------|--------|------|-----|------|-------|--------|
+| Baseline #2489 | 128 | 64 | 0.45M | 34 | 53.1 | **42.00** | **35.96** | — | — |
+| Arm 1 | 96 | 48 | 0.26M | 41 | 44.4 | 45.83 | 38.24 | +9.1% ✗ | +6.3% ✗ |
+| Arm 2 | 160 | 80 | 0.70M | 29 | 62.7 | 43.32 | 36.49 | +3.1% ✗ | +1.5% ✗ |
+
+Per-test-split (Arm 1, n_hidden=96): all 4 splits regress 4-8%. Per-head capacity floor dominates speed dividend.
+Per-test-split (Arm 2, n_hidden=160): camber_rc wins (-1.8%), others regress 1-5%. Val still descending at cap (slope ~0.5/ep) — budget-limited.
+
+**Result:** CLOSED. n_hidden=128 is the fixed-budget optimum.
+
+Key findings:
+1. **Finding 47 — n_hidden=128 locked.** Width axis exhibits classic budget-vs-capacity trade. Below 128: per-head dim 48 falls below finding-38 sweet spot of 64; speed dividend (16% faster s/ep, 41 vs 34 epochs) cannot compensate. Above 128: per-head dim 80 has more capacity but only 29 epochs at 18% slower s/ep.
+2. **Speed-dividend asymmetry (vs finding 37):** for width, per-head-dim capacity floor matters more than extra training steps. This contrasts with n_layers and slice_num where speed dividend favored fewer layers/slices.
+3. **Budget-dependent finding noted:** n_hidden=160 val curve still descending at cap (slope ~0.5/ep). Under a longer budget, wider may win — but this is out of scope for the 30-min cap.
+4. **First successful code-edit-tier experiment.** 2-line Config edit (`n_hidden: int = 128` + `n_hidden=cfg.n_hidden`) executed cleanly. Pattern established for future Config additions.
+
+**Edward reassigned:** Lion β2 sweep — code-edit tier; expose Lion `betas` via Config, sweep β2=0.95 vs β2=0.999 (default 0.99) to test momentum-buffer decay.
+
+---
+
 ## 2026-05-14 05:30 — PR #2758: clip_grad_norm sweep (0.5/2.0) on n_layers=3+wd=3e-4 (edward) — CLOSED, CLIP=1.0 CONFIRMED SWEET SPOT
 
 - **Branch:** `willowpai2g24h5-edward/clip-grad-norm-sweep`
