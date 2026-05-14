@@ -601,6 +601,11 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Pressure-label Gaussian noise for training-time label smoothing on the p
+    # channel. Linearly annealed: eps_t = epsilon * max(0, 1 - epoch / epochs).
+    # Per-sample p std (across valid mesh nodes) sets the noise magnitude so it
+    # scales with each batch element's pressure range. Disabled at 0.0.
+    p_label_noise_epsilon: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -827,11 +832,34 @@ for epoch in range(MAX_EPOCHS):
             "n": 0,
         }
 
+    # Annealed pressure-label noise epsilon for this epoch.
+    # Linear warm-to-zero: epoch 0 → full epsilon; epoch >= MAX_EPOCHS → 0.
+    p_label_noise_eps_t = (
+        cfg.p_label_noise_epsilon * max(0.0, 1.0 - epoch / max(MAX_EPOCHS, 1))
+        if cfg.p_label_noise_epsilon > 0.0
+        else 0.0
+    )
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Pressure-label Gaussian noise (training only). Per-sample p std over
+        # valid mesh nodes sets the noise scale so the perturbation is small
+        # relative to the in-sample pressure range. Zero on padded nodes.
+        if p_label_noise_eps_t > 0.0:
+            with torch.no_grad():
+                valid_f = mask.to(y.dtype)
+                n_valid = valid_f.sum(dim=1, keepdim=True).clamp(min=1.0)
+                p = y[..., 2]
+                p_mean = (p * valid_f).sum(dim=1, keepdim=True) / n_valid
+                p_var = (((p - p_mean) ** 2) * valid_f).sum(dim=1, keepdim=True) / n_valid
+                p_std = p_var.clamp(min=0.0).sqrt()
+                noise = torch.randn_like(p) * (p_label_noise_eps_t * p_std) * valid_f
+            y = y.clone()
+            y[..., 2] = y[..., 2] + noise
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -1124,6 +1152,8 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "p_label_noise_epsilon": cfg.p_label_noise_epsilon,
+        "p_label_noise_eps_t": p_label_noise_eps_t,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
