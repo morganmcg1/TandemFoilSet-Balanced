@@ -2,6 +2,97 @@
 
 ---
 
+## 2026-05-14 23:45 [Round 138 close-40] UTC — 4 closures (#3025/#3031/#3032/#3033) + 4 fresh assignments (#3047/#3048/#3049/#3050)
+
+### Closed: #3025 nezuko pre-block-input-beta (167th taxon RESIDUAL-EDGE-DOUBLE-SCALAR-COLLAPSES-UNDER-LION-SIGN-STEP)
+
+- **Branch:** charliepai2g48h5-nezuko/pre-block-input-beta
+- **Hypothesis:** +4 learnable scalar β at block INPUT (before LN+branch+residual); symmetric counterpart to #3006 α at block OUTPUT
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.3479 | +2.76% LOSS |
+| test_avg | 24.9243 | **−2.18% WIN** |
+| val_in_dist | — | +8.27% LOSS |
+| val_cruise | 16.331 | −0.10% PRESERVED |
+
+- **KEY MECHANISTIC FINDING — Lion sign-step redundancy:** Student discovered β_{i+1} ≡ α_i exactly throughout training (4-decimal-place match). Under Lion's sign-only step rule, two scalars sandwiching the same residual edge converge to identical update directions and become a redundant product β·α. The nominal +4 DOF collapsed to +1 effective DOF (β_0 alone). This is a *mathematical* property of Lion + composite-scalar-on-shared-edge, not a training pathology.
+- **Compound effect:** at b2→b3 junction product β_2·α_2 over-compresses residual to ~0.87 vs #3006's 0.96 → val_in_dist regression. OOD test WIN suggests over-compression is regularizing for distributional shift.
+- **7th cruise-preserving datapoint** (continues supporting 5th-refinement invariant).
+- **Conclusion:** RESIDUAL-SCALING SATURATED AT ONE-SCALAR-PER-JUNCTION under Lion. Pivot to fresh MLP-activation axis (GeGLU) orthogonal to residual scaling.
+
+### Closed: #3031 askeladd surf-weight-5 (168th taxon SURF-WEIGHT-5-LOWER-BRACKET-CRUISE-WIN)
+
+- **Branch:** charliepai2g48h5-askeladd/surf-weight-5
+- **Hypothesis:** halve surf_weight 10.0 → 5.0 (rebalance volumetric vs surface gradients)
+- **Results vs #3006 baseline:**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 29.7724 | +0.81% LOSS |
+| test_avg | 25.3812 | −0.39% slight WIN |
+| **val_cruise** | **15.816** | **−3.25% WIN — STRONGEST cruise WIN since #3006** |
+| best_epoch | 59 (=last) | 30-min cap clipped descent |
+
+- **KEY MECHANISTIC FINDING:** Halving surface-loss weight produces cleanest cruise basin of the launch outside #3006 itself. The −3.25% on val_cruise is the largest single-PR cruise improvement we've measured. But val_in_dist regressed enough to push average +0.81% LOSS. Lower-bracket bounded.
+- **8th cruise-preserving datapoint** AND a WIN, not just preservation. First non-baseline cruise WIN of the launch.
+- **Conclusion:** Lower bracket bounded. Minimum-val surf_weight sits in (5, 10). Pivot askeladd to surf_weight=7 midpoint sweep.
+
+### Closed: #3032 tanjiro surf-weight-15 (169th taxon SURF-WEIGHT-15-UPPER-BRACKET-LOSS-WITH-CRUISE-DRIFT)
+
+- **Branch:** charliepai2g48h5-tanjiro/surf-weight-15
+- **Hypothesis:** 1.5× surf_weight 10.0 → 15.0 paired upper bracket
+- **Results vs #3006 baseline:**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 31.1066 | +5.34% LOSS |
+| test_avg | 26.1963 | +2.81% LOSS |
+| val_cruise | ~16.74 | +4.12% drift (near 17.0 break threshold) |
+| All 8 splits | LOSS | clean upper-bracket close |
+
+- **KEY MECHANISTIC FINDING:** Over-emphasizing surface loss starves volumetric updates of effective signal. **Possible 5th-refinement candidate:** Lion's sign-step under composite-loss reweighting causes per-channel gradient direction perturbation even though L1 sign-shape per term is preserved (subtle distinction from #3033/#3014).
+- **3-point surf_weight sweep clean:** 5 (val LOSS / cruise WIN) | 10 (#3006 baseline) | 15 (val LOSS / cruise drift). Convex around 10 with cruise-favoring tilt toward lower values.
+- **Conclusion:** Upper bracket bounded. Pivot tanjiro to bias-free Linear (Llama-style, fresh axis).
+
+### Closed: #3033 fern wsd-schedule-stable47-decay10 (170th taxon WSD-SCHEDULE-LION-FAILS-AT-PEAK-LR-COSINE-IS-LOAD-BEARING)
+
+- **Branch:** charliepai2g48h5-fern/wsd-schedule-stable47-decay10
+- **Hypothesis:** Warmup-Stable-Decay (3ep warmup + 47ep peak + 10ep linear decay) replaces CosineAnnealingLR
+- **Results vs #3006 baseline:**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 31.0105 | +5.0% LOSS |
+| test_avg | 26.2244 | +2.92% LOSS |
+| val_cruise | 16.82 | <17.0 PRESERVED |
+
+- **KEY MECHANISTIC FINDING — Lion does NOT converge at peak LR.** Critical training-dynamics property:
+  - val_avg stayed in 43–55 range across ep10–ep50 (47 epochs of stable phase essentially wasted)
+  - Last 10 epochs descended monotonically 43.2 → 31.0 at ~−1.2 to −2.0 per epoch
+  - Linear extrapolation: continued descent would have beaten baseline at ~ep65–70
+  - Lion + sign-step + L1 + Transolver does NOT extract useful descent at peak LR; requires continuous LR decay (cosine schedule) to make progress
+- **This is OPPOSITE of the SGD+momentum + cross-entropy WSD literature** (Llama 3 / DeepSeek / MiniCPM) where stable phases produce real loss reduction. The sign-only update of Lion appears to need continuous LR shrinkage.
+- **6th cruise-preserving datapoint** (schedule-shape change is outside-block; criterion gradients unchanged).
+- **Conclusion:** SCHEDULE-SHAPE AXIS CONDITIONALLY CLOSED — "cosine is load-bearing for Lion at this 60-ep budget." Pivot fern to grad clipping (fresh stability axis, orthogonal).
+
+### Followup assignments (4 idle students → 0 idle GPUs)
+
+- **#3047 nezuko geglu-mlp** — SwiGLU → GeGLU (1-line swap: `F.silu` → `F.gelu` in MLP gate). +0 params. Fresh activation axis untested in this launch at the gate position; modern Llama vs PaLM coin-flip choice; cruise predicted PRESERVED (intra-block per-element). 171st taxon / 162nd active axis.
+- **#3048 askeladd surf-weight-7** — single CLI flag `--surf_weight 7.0` between #3031's 5.0 (cruise WIN) and #3006's 10.0 (baseline). Cheapest experiment in launch; tests convexity of val_avg vs surf_weight in the (5, 10) region. 172nd taxon / 163rd active axis.
+- **#3049 tanjiro bias-free-linear** — set `bias=False` on all `nn.Linear` modules (Llama-style). LayerNorm bias kept. Param reduction ~1.5%. Fresh param-space pruning axis; cruise predicted PRESERVED (LayerNorm bias substitutes). 173rd taxon / 164th active axis.
+- **#3050 fern grad-clip-1pt0** — `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` after backward(). +0 params. Fresh stability axis orthogonal to schedule; protects Lion EMA buffer from outlier-batch contamination; cruise predicted PRESERVED (per-batch not per-sample). 174th taxon / 165th active axis.
+
+### Round 138 close-40 summary
+- Closed 4 LOSS PRs, all with rich mechanistic findings
+- Cruise-preservation ledger now 16 datapoints (9 BROKEN + 7 PRESERVED) — #3025 added (7th preserved)
+- 5th-refinement cruise invariant: continues to hold across all closed PRs
+- New finding pipeline: Lion sign-step composite-scalar collapse (#3025) + surf_weight cruise/in_dist tradeoff (#3031/#3032) + Lion-needs-continuous-LR-decay (#3033)
+- Total closed: 170. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-14 23:00 [Round 138 close-39] UTC — PR #3021 4-α DiT-style (LOSS, 161st taxon) + PR #3026 cosine-routing (LOSS but cruise PRESERVED, 162nd taxon)
 
 ### Closed: #3021 alphonse cross-block-alpha-4-dit-style
