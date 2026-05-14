@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-14 [Round 80] UTC — Round 80
+
+### PR #2672 nezuko: Kendall heteroscedastic uncertainty-weighted multi-task loss — CLOSED (45th taxon, loss-balance meta-axis closed)
+
+- **Branch:** `charliepai2g48h5-nezuko/kendall-heteroscedastic`
+- **Hypothesis:** Replace fixed `surf_weight=10` with learned log-variance scalars `s_surf`, `s_vol` such that `loss = exp(-s_surf)*L_surf + s_surf + exp(-s_vol)*L_vol + s_vol`. Self-balancing precision-weighted loss; Kendall, Gal & Cipolla 2018 CVPR. +2 params. First probabilistic loss re-weighting probe in launch.
+
+- **Results table:**
+
+| Metric | Value | vs Baseline 33.3722 | Direction |
+|---|---|---|---|
+| val_avg/mae_surf_p | **33.6532** | **+0.84%** | **LOSS** |
+| test_avg/mae_surf_p | **29.1607** | **+2.78%** | **LOSS** |
+| val_single_in_dist | 26.7223 | +5.50% | LOSS |
+| val_geom_camber_rc | 48.0617 | −3.06% | **WIN** |
+| val_geom_camber_cruise | 22.4845 | +10.12% | **LOSS** (worst) |
+| val_re_rand | 37.3409 | −2.15% | **WIN** |
+
+- **Mechanism diagnostic** (terminal s values from metrics):
+
+| Param | Init | Terminal | Effective weight |
+|---|---|---|---|
+| `s_surf` | −2.30 (log(1/10)) | **−2.42** | exp(2.42) ≈ **5.61** |
+| `s_vol` | 0.0 (uniform) | **−1.75** | exp(1.75) ≈ **2.89** |
+| ratio surf/vol | **10.0** (baseline) | **1.94** | **5× rebalance toward vol** |
+
+- **Per-split signature is MIXED, not uniform:**
+  - Easy splits (in_dist, camber_cruise) regress HARD (+5.50%, +10.12%)
+  - Hard OOD splits (camber_rc, re_rand) IMPROVE (−3.06%, −2.15%)
+  - val_geom_camber_rc is the long-running OOD bottleneck — Kendall HELPED it
+  - But camber_cruise damage dominates val_avg
+
+- **Conclusion / 45th taxon:** **Probabilistic NLL optimum DIVERGES from primary surface-pressure metric optimum.** Kendall's heteroscedastic uncertainty target is "minimize joint NLL across surf+vol noise" not "minimize surface-pressure MAE". Algebraically: when surf has lower true noise than vol, NLL-optimal eff_w_surf < fixed-weight-optimum eff_w_surf — Kendall trades surface fidelity for volumetric noise modeling. **Loss-balance meta-axis closed across all 3 directions** — fixed surf_weight=10 baseline OPTIMAL vs learnable Kendall (#2672) + per-channel ch_w surf_loss-only (#2496) + global per-channel ch_w (#1428/#1871). Combined with previously closed loss-SHAPE family (Huber β ∈ {0.1, 0.25, 0.5, 1.0, 2.0} + L1-MERGED + berHu), the loss-shape meta-axis is also fully saturated. Pure L1 with `surf_weight=10` is the dual-optimum across loss-shape and loss-balance dimensions.
+
+- **Decision:** Closed. PR comment cites mixed per-split signature, 5× rebalance ratio, and probabilistic-vs-MAE divergence. Nezuko pivots from saturated loss-balance to schedule-restart axis.
+
+### PR #2697 nezuko: SGDR Cosine Warm Restarts (T_0=35, T_mult=2) — ASSIGNED
+
+- **Branch:** `charliepai2g48h5-nezuko/sgdr-t35`
+- **Hypothesis:** Replace `CosineAnnealingLR(T_max=epochs-3)` with `CosineAnnealingWarmRestarts(T_0=35, T_mult=2)`. Single warm restart at approximately ep38 (post-warmup-3 + T_0=35) resetting LR back to peak 1.5e-4; second cosine cycle decays toward 0 over remaining ~32 epochs. ZERO new params. One-line scheduler change. **FIRST schedule-restart probe since warmup-3-cosine merged.** Reference: Loshchilov & Hutter 2017 ICLR "SGDR: Stochastic Gradient Descent with Warm Restarts".
+- **Mechanism:** mid-budget LR reset shakes Lion's sign-step optimizer out of a narrow attractor basin, then the second cosine-decay phase re-anneals into (potentially) a different, wider basin. Targets the documented Lion narrow-basin tendency (30th and 35th closed taxa) via mid-budget LR reset enabling escape from sharp minimum AND re-anneal into potentially wider basin in the second cycle.
+- **Structural orthogonality:** optimizer-orthogonal — keeps Lion intact (lr=1.5e-4, wd=3e-4, betas=(0.9, 0.99)), only changes the trajectory through LR space. Lion-internal axes are now exhaustively closed across all 4 dimensions (LR 36th, β₁ 35th, β₂ 39th, WD 43rd), so optimizer-hyperparameter space is saturated. Schedule-restart is the canonical optimizer-orthogonal escape mechanism for sharp-minimum tendencies.
+- **Predicted signatures:**
+  - **WIN** (val_avg < 33.37): best-epoch lands near end of second cycle (ep ~65-70); temporary loss spike at ep 38-40 then re-anneal smooths it
+  - **WASH** (within ±1%): warm restart finds equivalent basin — same generalization, different geometric path → Lion-converged-basin is unique up to symmetry
+  - **LOSS** (>34.0): warm restart breaks converged state; second cycle too short or LayerScale γ caps re-organization → best-epoch < 35
+- **Key diagnostic:** best epoch position in first cycle vs at restart boundary vs second cycle is the entire attribution lever.
+
+---
+
 ## 2026-05-14 [Round 79] UTC — Round 79
 
 ### PR #2669 tanjiro: Talking-Heads Attention — CLOSED (44th taxon, cross-head mixing at H=2 saturates)
