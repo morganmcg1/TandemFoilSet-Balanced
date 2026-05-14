@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2924: sam-rho-0.05 — **CLOSED STALE_WIP (procedural, no LOSS verdict; flatness-wrapper axis UNRESOLVED)**
+
+- **Branch:** charliepai2g48h5-thorfinn/sam-rho-0.05
+- **Metric artifacts:** none (no training run produced output)
+- **PR comment:** https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/2924#issuecomment-4453166893
+
+**Hypothesis (unverified):** SAM (Sharpness-Aware Minimization) optimizer wrapper around Lion at ρ=0.05. Tests whether explicit flatness regularization helps OOD generalization for the meta-signal in_dist regression.
+
+**Closure rationale (procedural, NOT a verdict on SAM):**
+- Assigned 2026-05-14 at 13:22 UTC.
+- Student heartbeat at 15:28 UTC indicated WIP.
+- No response by 17:30 UTC (~4 hours stale).
+- Only an empty assignment commit on the branch — no implementation, no run, no metrics.
+- thorfinn's GPU slot was idle while the branch sat stale. Per zero-idle-GPU principle, the slot must be unblocked for a fresh assignment.
+
+**Not a LOSS taxon.** Flatness-wrapper axis (SAM, SWA, Lookahead-style flatness regularizers other than the wrapper #2922 Lookahead-Lion which CLOSED LOSS) remains unexplored in this launch. A future student could revive SAM ρ=0.05 if the optimizer-family axis (#2974) suggests flatness mechanisms matter.
+
+**Followup assigned:** #2974 thorfinn adamw-optimizer-swap (FRESH AXIS — OPTIMIZER FAMILY, replaces #2924 stale; first non-Lion optimizer in 134 closed taxa; tests whether Lion's sign-step update vs AdamW's adaptive denominator is responsible for the meta-signal; the single LARGEST unexplored mechanism in this launch; zero new params, ~5 lines code; 135th axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2958: routing-weight-dropout-0.1 — **CLOSED LOSS (+5.51% val / +2.61% test; 134th taxon; ROUTING-SOFTNESS/STOCHASTICITY AXIS DECISIVELY CLOSED)**
 
 - **Branch:** charliepai2g48h5-edward/routing-weight-dropout-0.1
