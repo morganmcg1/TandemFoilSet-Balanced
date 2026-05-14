@@ -176,7 +176,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layer_scale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -187,6 +188,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.layer_scale_attn = nn.Parameter(torch.full((hidden_dim,), layer_scale_init))
+        self.layer_scale_ffn = nn.Parameter(torch.full((hidden_dim,), layer_scale_init))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -195,8 +198,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.attn(self.ln_1(fx), mask=mask) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.layer_scale_attn * self.attn(self.ln_1(fx), mask=mask) + fx
+        fx = self.layer_scale_ffn * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -207,7 +210,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 layer_scale_init=1e-4):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -228,6 +232,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                layer_scale_init=layer_scale_init,
             )
             for i in range(n_layers)
         ])
@@ -437,6 +442,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    layer_scale_init: float = 1e-4  # CaiT-style residual scale init
 
 
 cfg = sp.parse(Config)
@@ -476,6 +482,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    layer_scale_init=cfg.layer_scale_init,
 )
 
 model = Transolver(**model_config).to(device)
@@ -596,6 +603,16 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    # LayerScale diagnostics: per-block mean and std of α_attn / α_ffn
+    orig = getattr(model, "_orig_mod", model)
+    with torch.no_grad():
+        for i, blk in enumerate(orig.blocks):
+            la = blk.layer_scale_attn.detach().float()
+            lf = blk.layer_scale_ffn.detach().float()
+            log_metrics[f"layer_scale/block{i}/attn_mean"] = la.mean().item()
+            log_metrics[f"layer_scale/block{i}/attn_std"] = la.std().item()
+            log_metrics[f"layer_scale/block{i}/ffn_mean"] = lf.mean().item()
+            log_metrics[f"layer_scale/block{i}/ffn_std"] = lf.std().item()
     wandb.log(log_metrics)
 
     tag = ""
