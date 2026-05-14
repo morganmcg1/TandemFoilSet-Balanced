@@ -196,11 +196,12 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        # H73: dynamic sharper temperature — buffer-stored sharpening factor
-        # updated per-epoch from the training loop (linear anneal sqrt(3) ->
-        # sqrt(2) across the first N_ANNEAL_EPOCHS epochs, clamped to sqrt(2)
-        # afterward). Default scale is 1/sqrt(d_head); factor=sqrt(2) matches
-        # #2519, factor=sqrt(3) is the sharper early-epoch start.
+        # H82: dynamic sharper temperature — buffer-stored sharpening factor
+        # updated per-epoch from the training loop (hold at sqrt(3) for
+        # HOLD_EPOCHS, then linear decay sqrt(3) -> sqrt(2) by 0-indexed epoch
+        # N_ANNEAL_EPOCHS-1, clamped to sqrt(2) afterward). Default scale is
+        # 1/sqrt(d_head); factor=sqrt(2) matches #2519, factor=sqrt(3) is the
+        # sharper early-epoch start.
         sharper_scale = self.attn_sharpening_factor.item() / math.sqrt(self.dim_head)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
@@ -571,29 +572,33 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
-# N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
-# (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
-# per-epoch in the training loop.
+# H82: hold-then-decay attention-temperature schedule — fixed sqrt(3) for the
+# first HOLD_EPOCHS epochs (0..HOLD_EPOCHS-1, 1-indexed: epochs 1..3), then
+# linear decay sqrt(3) -> sqrt(2) over the remaining epochs up to
+# N_ANNEAL_EPOCHS-1 (0-indexed) / N_ANNEAL_EPOCHS (1-indexed). Clamped at
+# sqrt(2) thereafter. Extends #2648's linear anneal by holding peak sharpness
+# longer; same endpoint at 1-indexed epoch 12.
 N_ANNEAL_EPOCHS = 12
-_h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
-_h73_init_factor = math.sqrt(3.0)
-_h73_final_factor = math.sqrt(2.0)
-_h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
-_h73_final_scale = _h73_final_factor / math.sqrt(_h73_dim_head)
-_h73_default_scale = 1.0 / math.sqrt(_h73_dim_head)
+HOLD_EPOCHS = 3
+_h82_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h82_init_factor = math.sqrt(3.0)
+_h82_final_factor = math.sqrt(2.0)
+_h82_init_scale = _h82_init_factor / math.sqrt(_h82_dim_head)
+_h82_final_scale = _h82_final_factor / math.sqrt(_h82_dim_head)
+_h82_default_scale = 1.0 / math.sqrt(_h82_dim_head)
 print(
-    f"[H73] attn-temp anneal: linear sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
-    f"over {N_ANNEAL_EPOCHS} epochs (then clamped at sqrt(2)); "
-    f"scale {_h73_init_scale:.4f} -> {_h73_final_scale:.4f} "
-    f"(default scale would be {_h73_default_scale:.4f}, "
-    f"dim_head={_h73_dim_head}, slice_num={model_config['slice_num']}, "
+    f"[H82] hold-then-decay attn-temp: sqrt(3)={_h82_init_factor:.4f} fixed for "
+    f"epochs 1..{HOLD_EPOCHS} (0-indexed 0..{HOLD_EPOCHS-1}), then linear decay to "
+    f"sqrt(2)={_h82_final_factor:.4f} by 1-indexed epoch {N_ANNEAL_EPOCHS} "
+    f"(then clamped); scale {_h82_init_scale:.4f} -> {_h82_final_scale:.4f} "
+    f"(default scale would be {_h82_default_scale:.4f}, "
+    f"dim_head={_h82_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
-# H73: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
+# H82: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
 for i, b in enumerate(model.blocks):
     print(
-        f"[H73] block {i}: attn_sharpening_factor init = "
+        f"[H82] block {i}: attn_sharpening_factor init = "
         f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
     )
 
@@ -684,17 +689,28 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
-    # H73: linearly anneal sqrt(3) -> sqrt(2) over N_ANNEAL_EPOCHS, clamped at
-    # sqrt(2) afterward. Updated at the start of each epoch so the new factor
-    # applies to all batches in this epoch (and to validation immediately
-    # after).
-    anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
-    current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
+    # H82: hold at sqrt(3) for HOLD_EPOCHS epochs (0-indexed 0..HOLD_EPOCHS-1),
+    # then linear decay sqrt(3) -> sqrt(2) over remaining epochs up to
+    # N_ANNEAL_EPOCHS-1 (0-indexed). Clamped at sqrt(2) afterward. Updated at
+    # the start of each epoch so the new factor applies to all batches in this
+    # epoch (and to validation immediately after).
+    if epoch < HOLD_EPOCHS:
+        decay_progress = 0.0
+        current_attn_factor = math.sqrt(3.0)
+        phase = "hold"
+    else:
+        decay_progress = min(
+            1.0,
+            (epoch - HOLD_EPOCHS) / max(1, (N_ANNEAL_EPOCHS - 1) - HOLD_EPOCHS),
+        )
+        current_attn_factor = math.sqrt(3.0) + decay_progress * (math.sqrt(2.0) - math.sqrt(3.0))
+        phase = "decay"
     for block in model.blocks:
         block.attn.attn_sharpening_factor.fill_(current_attn_factor)
     print(
-        f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
-        f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
+        f"[H82] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
+        f"({phase}, decay_progress={decay_progress:.3f}, "
+        f"sqrt(3)={math.sqrt(3.0):.4f}, sqrt(2)={math.sqrt(2.0):.4f})"
     )
 
     t0 = time.time()
@@ -781,9 +797,11 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
-        # H73: log annealed sharpening factor at this epoch.
+        # H82: log hold-then-decay sharpening factor at this epoch.
         "train/attn_sharpening_factor": current_attn_factor,
-        "train/attn_anneal_frac": anneal_frac,
+        "train/attn_phase": phase,
+        "train/attn_decay_progress": decay_progress,
+        "train/attn_hold_epochs": HOLD_EPOCHS,
         "train/attn_anneal_n_epochs": N_ANNEAL_EPOCHS,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
