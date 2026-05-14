@@ -339,6 +339,8 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_channel_weight": cfg.surf_channel_weight,
+        "loss": cfg.loss,
         "epochs_configured": cfg.epochs,
     }
 
@@ -380,6 +382,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    surf_channel_weight: str = "1.0,1.0,1.0"  # comma-separated per-channel weights for [Ux, Uy, p]
     epochs: int = 50
     loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -397,6 +400,12 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+surf_channel_weight = torch.tensor(
+    [float(x) for x in cfg.surf_channel_weight.split(",")],
+    device=device,
+).view(1, 1, 3)
+print(f"surf_channel_weight: {surf_channel_weight.view(-1).tolist()}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -503,7 +512,10 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            weighted_surf_sq = sq_err * surf_channel_weight
+            surf_loss = (weighted_surf_sq * surf_mask.unsqueeze(-1)).sum() / (
+                surf_mask.sum() * surf_channel_weight.mean()
+            ).clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
