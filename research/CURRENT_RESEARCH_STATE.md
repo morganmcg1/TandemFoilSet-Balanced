@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 17:15
+- **Date:** 2026-05-14 17:40
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -68,9 +68,9 @@
 | #2886 | thorfinn | γ-only FiLM-AoA: per-block AoA conditioning (sent back for σ=0.07+FiLM-Re compound) | WIP (sent back) |
 | #2965 | fern | Fourier-encoded Re input to FiLM-Re γ MLP (K=2, K=4) | ASSIGNED 2026-05-14 17:15 |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
-| #2943 | edward | Output head depth scan (head_depth=3/4) | WIP |
+| #2972 | edward | LayerScale: per-block channel-wise learnable gain (init=0.1, 0.01) | ASSIGNED 2026-05-14 17:40 |
 | #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× and 4× γ width | WIP |
-| #2953 | askeladd | Slice softmax temperature scan: τ=0.5 and τ=2.0 | WIP |
+| #2971 | askeladd | Slice attention dropout: drop_p=0.1 (s1), drop_p=0.2 (s2) | ASSIGNED 2026-05-14 17:38 |
 
 **Closed this round (rounds 12–13):**
 - #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07. L2 monotone in σ but val non-monotonic — parameter-scale alone insufficient.
@@ -78,6 +78,8 @@
 - #2902 (frieren SwiGLU compound) — val=34.72 misses by +0.49%. NOT orthogonal to FiLM-Re; redundant conditioning path.
 - #2942 (alphonse Lion-lr) — lr=6e-5 ≈ baseline; lr=9e-5 trade-off (wins camber_rc, loses single_in_dist). lr=7.5e-5 confirmed optimal. Axis closed; motivates per-block lr.
 - #2895 (fern y-flip compound on σ=0.07+FiLM-Re) — val=35.41, test=30.86. NOT orthogonal: directly-augmented cruise split regresses +27% (15.19→19.28). FiLM-Re's per-sample γ specialization is diluted by mirrored cruise inputs. Y-flip training-time aug retired at FiLM-Re baseline.
+- #2953 (askeladd slice-temperature) — τ=0.5 val +0.07%/test +2.86% (single_in_dist −1.0%, all OOD regress); τ=2.0 val +4.0%/test +7%. CRITICAL: baseline has learnable per-head τ initialized to 0.5, not 1.0. Default sits near per-head optimum. Slice-temp axis closed.
+- #2943 (edward head-depth) — depth=3 val −0.16%/test +1.04% (single_in_dist −6.90%, all 3 OOD splits regress); depth=4 strictly worse. Head depth NOT the bottleneck at FiLM-Re baseline. 4th OOD-vs-IID trade-off instance.
 
 ## Key meta-findings
 
@@ -91,6 +93,8 @@
 8. **SwiGLU mechanism insight** — SwiGLU gained on σ=0.05 by compensating under-conditioning that FiLM-Re now provides. FFN-capacity axes not orthogonal when Re-conditioning is already rich.
 9. **Global lr cannot resolve OOD-vs-IID split trade-off** — lr=9e-5 wins geom_camber_rc but hurts single_in_dist. Per-block lr scaling is the natural resolution.
 10. **Mechanism overlap surfacing at 14th-shift basin** — both SwiGLU (#2902) and y-flip (#2895) helped on σ=0.05 but regress on σ=0.07+FiLM-Re. Both mechanisms add "Re-regime feature diversity" that FiLM-Re now provides explicitly. Pattern suggests aug/capacity axes that helped at σ=0.05 are increasingly likely to overlap with FiLM-Re at 14th shift; emphasis must shift to genuinely orthogonal axes (input enrichment, optimizer geometry, decoder capacity).
+11. **OOD-vs-IID trade-off pattern (4 instances)** — Lion lr=9e-5 (#2942), head_depth=3 (#2943), slice_temp=0.5 (#2953) ALL improve single_in_dist but regress all 3 OOD splits. The 14th-shift basin saturates IID-side capacity. Future axes targeting IID-side capacity are predicted to fail similarly. The path forward is mechanisms that increase **redundancy / regularization** on OOD splits without adding IID capacity — slice dropout (#2971), DropPath (#2926), cond-mixup (#2960), per-block lr (#2959).
+12. **Learnable per-head slice softmax τ is already present in baseline** — init=0.5. Slice softmax is not at τ=1.0 default. Future axis scans on PhysicsAttention must account for this learnable temperature.
 
 ## Currently retired axes
 
@@ -122,7 +126,7 @@
 ### Near-term (queue for next idle slots)
 
 1. **FiLM dual conditioning (Re + AoA compound)** — natural compound if thorfinn #2886 (FiLM-AoA) wins; combine into single joint (Re, AoA) conditioning per block
-2. **Slice softmax temperature bracketing** — if #2953 wins at τ=0.5, try τ=0.3; if at τ=2.0, try τ=4.0
+2. ~~**Slice softmax temperature bracketing**~~ — closed (#2953). Learnable per-head τ near per-head optimum.
 3. **Per-block lr sharpening** — if #2959 wins, try late_block_start=3 (only block 4 boosted) for sharper targeting
 4. ~~**Fourier Re embedding into γ MLP**~~ — ACTIVE as #2965 (fern)
 5. **Y-flip TTA at inference** — apply y-flip on eligible (cruise) test samples and average predictions in physical space. Free at training (training-time y-flip retired per #2895). Paper-facing finishing move.

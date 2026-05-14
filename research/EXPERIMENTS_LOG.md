@@ -2858,3 +2858,62 @@ Per-split test surf_p (mean, vs 14th-shift bar): single_in_dist=33.17 (+2.0%), *
 - Arms: K=2 (s1, input dim=5), K=4 (s2, input dim=9, seed=2)
 - Orthogonal to tanjiro #2948 (which widens γ MLP at fixed input dim). Combined later if both win.
 - Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 17:30 — PR #2953: Slice softmax temperature scan askeladd (CLOSED — near-optimal default via learnable τ)
+- Branch: `willowpai2g48h3-askeladd/slice-temperature`
+- Hypothesis: PhysicsAttention slice softmax τ never tuned; lower τ → sharper specialization, higher τ → smoother mixing.
+
+### Results
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| τ=0.5 (s1) | `bze6fsbq` | 34.58 (+0.07%) | 29.78 (+2.86%) |
+| τ=2.0 (s2) | `95ui9jhf` | 35.93 (+4.0%) | 30.99 (+7.04%) |
+
+Per-split test (τ=0.5): single_in_dist=32.21 (**−1.0%, improves**), geom_camber_rc=42.85 (+2.0%), geom_camber_cruise=15.99 (+5.3%), re_rand=28.08 (+7.6%).
+
+**Critical implementation discovery:** Baseline PhysicsAttention has a **learnable per-head temperature τ initialized to 0.5**, not fixed τ=1.0 as my PR body assumed. Student correctly implemented `slice_temperature` as a multiplier on top of the learnable τ:
+- τ=1.0 default → effective τ ≈ 0.5 (baseline, mildly sharper than naive softmax)
+- τ=0.5 → effective τ ≈ 0.25 (learnable τ drifted up to 0.55 trying to compensate)
+- τ=2.0 → effective τ ≈ 1.0 (learnable τ drifted down to 0.46)
+
+**Mechanism — OOD-vs-IID trade-off (3rd instance):** sharper helps IID (single_in_dist −1.0%) but hurts all 3 OOD splits. Pattern repeats: Lion lr=9e-5 #2942, head_depth=3 #2943, slice_temp=0.5 #2953 — all add IID-side capacity, all trade IID gains for OOD regressions.
+
+**Conclusion:** **Closed** — slice softmax temperature axis is well-tuned via the learnable per-head τ. Default sits near per-head optimum at 14th-shift basin. Next: slice attention DROPOUT (different mechanism: redundancy not specialization).
+
+---
+
+## 2026-05-14 17:33 — PR #2943: Output head depth scan edward (CLOSED — 4th OOD-vs-IID trade-off)
+- Branch: `willowpai2g48h3-edward/head-depth`
+- Hypothesis: 2-layer head bottlenecks decoding of FiLM-Re's richer feature manifold.
+
+### Results
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| depth=3 (s1) | `aer9sn3g` | 34.50 (−0.16%) | 29.25 (+1.04%) |
+| depth=4 (s2) | `cqpp12vz` | 34.99 (+1.27%) | 29.96 (+3.46%) |
+
+Per-split test (depth=3): single_in_dist=30.28 (**−6.90%, improves dramatically**), geom_camber_rc=43.01 (+2.42%), geom_camber_cruise=15.84 (+4.27%), re_rand=27.88 (+6.86%).
+
+**Mechanism:** depth=3 head capacity uplift goes ENTIRELY into single_in_dist (−6.90%), at the cost of ALL 3 OOD splits. Net test +1.04%. Same OOD-vs-IID trade-off pattern as Lion-lr-9e-5 and slice-τ=0.5. Head depth is NOT the bottleneck — the 2-layer head is well-sized for the FiLM-Re-conditioned feature manifold.
+
+**Conclusion:** **Closed** — output head depth axis closed. Next: LayerScale (per-block channel-wise gain control, fundamentally different from depth).
+
+---
+
+## 2026-05-14 17:38 — PR #2971: Slice attention dropout askeladd (ASSIGNED)
+- Branch: `willowpai2g48h3-askeladd/slice-dropout`
+- Hypothesis: Random per-token slice mask during training forces slice redundancy across regimes, helping OOD generalization. Mechanistically different from slice softmax τ (which controls specialization sharpness) — dropout forces multiple slices to handle similar regimes (redundancy not specialization). Directly addresses the OOD-vs-IID trade-off pattern.
+- Arms: drop_p=0.1 (s1), drop_p=0.2 (s2)
+- Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 17:40 — PR #2972: LayerScale (CaiT-style) edward (ASSIGNED)
+- Branch: `willowpai2g48h3-edward/layerscale`
+- Hypothesis: Per-block learnable diagonal channel-wise scaling on TransolverBlock residual outputs (CaiT/DeiT trick). `x = x + scale_b * block(x)`. Sample-independent per-channel gain — orthogonal to FiLM-Re γ (sample-dependent per-channel gain). Lets late blocks (where FiLM-Re γ_w_L2 grows 3.4→5.2) learn block-channel-wise amplification.
+- Arms: init=0.1 (s1), init=0.01 (s2, seed=2). Both apply to attn AND FFN residuals.
+- Merge bar: mean val < 34.55, mean test < 28.95
