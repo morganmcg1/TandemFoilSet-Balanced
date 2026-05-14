@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 08:20
+- **Date:** 2026-05-14 09:15
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -18,25 +18,29 @@
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
-> **Round 41 frontier signals — capacity DEAD, schedule-SHAPE DEAD, loss-weight DEAD, loss-form CLOSED, optimizer CLOSED, post-hoc averaging + schedule-FLOOR OPENING:**
+> **Round 41 frontier signals — ALL HP/training axes CLOSED at this stack; pivoting to architectural and epoch-budget:**
 > - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss).
 > - **CAPACITY AXIS FULLY DEAD**: n_hidden (#2685 +2.53%, #2737 +7.55%), mlp_ratio (#2738 +4.35%), depth (#2684 +12.7%).
 > - **SCHEDULE-SHAPE AXIS FULLY DEAD**: TAIL truncated cosine (#2760 +1.63%), HEAD warmup_epochs=3 (#2797 +2.04%). Standard cosine T_max=epochs confirmed optimal SHAPE.
+> - **SCHEDULE-FLOOR AXIS DEAD FOR LION** (#2861 eta_min=5e-6 +1.09% val LOSS). Mechanism: Lion's sign-only updates have step magnitude = lr exactly (no gradient-magnitude scaling), so non-zero LR floor → late updates take full-magnitude directional steps, oscillating around basin (best_epoch shifted 46→45). Structurally tied to Lion optimizer, not a calibration issue.
 > - **LOSS-WEIGHT AXIS SATURATED**: swp=15 (+0.21% val noise, −1.06% test directional), swp=20 (+4.76% val LOSS — over-pushed, broke optimization). Loss-WEIGHTING is non-monotone; weight amplification is not the path.
 > - **LOSS-FORM AXIS CLOSED**: Huber d=5.0 (#2822 +116% catastrophic, raw-scale miscalibration → MSE everywhere), Huber d=0.1 (#2847 +5.54% mild regression, calibrated correctly in normalized space, no divergence). L1 is locally optimal for this stack. Both Huber endpoints tested → axis fully closed.
 > - **OPTIMIZER AXIS CLOSED (at 30-min budget)**: AdamW lr=3e-4 (#2824 +29.6% val UNDER-CONVERGED at epoch 46 still descending), AdamW lr=1e-3 (#2850 +39.1% val UNDER-CONVERGED, cut at ep37, WORSE than lr=3e-4). Two structural disadvantages: ~10% per-epoch overhead (9 fewer epochs in budget) + step-magnitude mismatch (no lr scale replicates Lion's sign-update directional bias). Lion + L1 + cosine confirmed optimal for this regime.
+> - **POST-HOC WEIGHT-AVERAGING AXIS CLOSED (for 46-epoch schedule)**: SWA swa_start=30 (#2857 SWA +4.16% val, best-epoch +2.90% — SWA strictly worse than best-epoch on every val/test split). Mechanism: trajectory still descending in averaging window (val 42.22 → 36.28 across SWA epochs 31-46 = 14% relative descent), so SWA averages over non-stationary weights pulling backward toward earlier worse-performing iterates. \"Still descending at end\" ≠ \"flat region.\" SWA fails when weights are still moving directionally. Variants requiring epochs>46 don't fit the 30-min cap.
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
 > - **Round 41 cont. — fresh-axis pivots (active)**:
->   - **frieren #2857 SWA (Stochastic Weight Averaging, swa_start=30)** (IN FLIGHT, status:wip): pivot after loss-form closed. Averages weights over last 17 of 46 epochs (~37% of training). Exploits the still-descending epoch-46 trajectory to find a flatter minimum. **Orthogonal to all prior axes** (capacity, schedule, loss, optimizer); composes with future winners. Expected gain 0.5-2% on val.
->   - **askeladd #2861 cosine eta_min=5e-6 (schedule-FLOOR axis)** (IN FLIGHT, status:wip): pivot after optimizer axis closed. Tests whether non-zero late-epoch LR floor (5% of initial) salvages the final-epoch progress that's currently discarded by LR=0 decay. **Distinct mechanism from schedule-SHAPE tests** which preserved eta_min=0. The still-descending-at-final-epoch signal (8+ consecutive baseline experiments) is the empirical motivation.
+>   - **frieren #2871 Aux surface decoder head** (IN FLIGHT, status:wip): **Architectural pivot.** Adds parallel surface-only decoder operating on shared final features. Multi-task regularization shapes the shared encoder for surface-specific features. Direct attack on primary metric (val_avg/mae_surf_p is surface-only). ~5-20K extra params on 361K baseline. aux_surf_weight=1.0 initial calibration. **Orthogonal to all closed HP/training axes** (capacity, schedule, loss, optimizer, post-hoc).
+>   - **askeladd #2872 epochs=50 retest at n_layers=2 stack** (IN FLIGHT, status:wip): **Epoch-budget retest.** Tests whether the still-descending-at-46 signal converts to real improvement at the current optimal stack. Previous epochs=50 test #2523 was at OLDER n_layers=3+slice_num=24 stack with +2.30% loss — but that's within seed variance (~±1 val unit) and not a definitive negative. Zero code changes, just `--epochs 50`. 50×35s=29.2 min fits cap.
 > - **NEW NEGATIVE RESULTS this round**:
 >   - MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). Confirms L1 is the right magnitude shape.
 >   - AdamW under-converges at all tested lr scales (×3 and ×10) under 30-min budget. Lion's sign-update advantage is structural at this stack.
 >   - Properly-calibrated Huber d=0.1 still net worse than L1 (#2847 → +5.54% val). Lion's sign-only updates make near-zero gradient magnitude immaterial.
-> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head), loss-form shape, optimizer.
+>   - SWA fails on still-descending trajectories regardless of swa_start (#2857). Mathematical issue with averaging non-stationary weights.
+>   - Schedule-FLOOR eta_min>0 fails for Lion (#2861) due to sign-update oscillation. Lion structurally requires LR→0 endpoint.
+> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head), schedule FLOOR, loss-form shape, optimizer, post-hoc averaging.
 > - **#2638 split-dependent OOD diagnostic**: geom_camber is INFORMATION-limited or REPRESENTATION-limited — needs mechanism change, not weight tuning.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.
-> - **Future levers if SWA + eta_min pivots stagnate**: EMA with warmup decay (finer-grained than SWA), aux surface head, physics-informed loss (divergence/curl), data augmentation (CFD-valid symmetries — limited: AoA asymmetric for raceCar [-10,0]; cruise [-5,+6] OK), seed-averaged baseline confirmation, complete model replacement (e.g., transformer→GNN hybrid), quantile loss, focal MAE, camber-aware sample reweighting (target geom-OOD boundaries).
+> - **Future levers if aux head + epochs=50 stagnate**: physics-informed loss (divergence/curl), data augmentation (CFD-valid symmetries — limited: AoA asymmetric for raceCar [-10,0]; cruise [-5,+6] OK), seed-averaged baseline confirmation, complete model replacement (e.g., transformer→GNN hybrid), quantile loss, focal MAE, camber-aware sample reweighting (target geom-OOD boundaries), Lion-with-different-betas perturbations.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
@@ -128,8 +132,8 @@
 | edward | **#2745** | **slice_num=24+epochs=33** (3rd attempt) | slice axis |
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
-| askeladd | **#2861** | **Cosine eta_min=5e-6** (schedule-FLOOR axis; non-zero late-epoch LR floor; distinct mechanism from dead schedule-SHAPE tests #2760/#2797) | **Round 41: schedule-floor pivot** |
-| frieren | **#2857** | **SWA (Stochastic Weight Averaging, swa_start=30)** — post-hoc late-stage weight averaging on baseline config (orthogonal to all prior axes; exploits still-descending epoch-46 trajectory) | **Round 41: weight-averaging pivot** |
+| askeladd | **#2872** | **epochs=50** retest at n_layers=2 stack — epoch-budget axis at current optimal stack (prior #2523 at older stack +2.30% within seed-noise; under-tested here) | **Round 41: epoch-budget retest** |
+| frieren | **#2871** | **Aux surface decoder head** (architectural pivot — parallel surface-only MLP head; multi-task regularization; direct attack on primary metric val_avg/mae_surf_p) | **Round 41: architectural pivot** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed

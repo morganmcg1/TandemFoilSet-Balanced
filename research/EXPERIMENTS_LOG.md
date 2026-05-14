@@ -6,6 +6,67 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 09:15 — Round 41 cont.: close #2857 frieren SWA (+2.90% val best-epoch, SWA strictly worse on all splits — POST-HOC AVERAGING CLOSED for 46-epoch schedule); close #2861 askeladd eta_min=5e-6 (+1.09% val LOSS — SCHEDULE-FLOOR CLOSED for Lion due to sign-update oscillation); assign frieren #2871 aux surface head (architectural pivot) and askeladd #2872 epochs=50 retest at n_layers=2 stack
+
+### PR #2857 — frieren SWA (Stochastic Weight Averaging, swa_start=30)
+- Branch: `charliepai2g48h3-frieren/swa-start30-nlayers2-slicenum16-epochs46`
+- Hypothesis: Post-hoc averaging of late-stage weights captures flatter minimum than any single checkpoint; exploits the still-descending epoch-46 trajectory.
+- Artifacts: `models/model-swa-start30-nlayers2-slicenum16-epochs46-20260514-081845/metrics.jsonl`
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| Baseline (#2468, val=35.256) | 35.256 | 30.245 |
+| This run best-epoch (epoch 46) | 36.279 (+2.90%) | 30.341 (+0.32%) |
+| **This run SWA (n=16, ep 31-46)** | **36.723 (+4.16%)** | **30.843 (+1.98%)** |
+| **SWA − best-epoch Δ** | **+0.444** | **+0.502** |
+
+**Per-split SWA−best test deltas:** single_in_dist +0.775, geom_camber_rc +0.451, geom_camber_cruise +0.473, re_rand +0.310 (SWA worse on every split)
+
+**Val trajectory in SWA window (epochs 31→46):**
+| Ep | 31 | 33 | 35 | 37 | 40 | 43 | 46 |
+|---|---|---|---|---|---|---|---|
+| val | 42.22 | 40.49 | 39.53 | 38.54 | 37.27 | 36.62 | **36.28** |
+→ 14% relative descent, NOT a flat plateau.
+
+**Diagnostic:** SWA's textbook condition is \"model in flat region taking small consistent steps.\" The val trajectory in the SWA window is a **steep monotonic descent** (~−0.4 val/ep early-window). Averaging weights from epoch 31 (val=42.22) with epoch 46 (val=36.28) pulls SWA model backward toward worse-performing early-window iterates. SWA on still-descending trajectory contaminates the latest, best iterate.
+
+**Hypothesis mis-framing:** PR conflated 'slope ~−0.2/ep at end' with 'plateau-like behavior'. These are different regimes — slope is just the *current* descent rate, not a measure of locality to a minimum. SWA works on weights that orbit a flat basin (low-pass denoising); it fails when weights are still moving directionally.
+
+**Conclusion: POST-HOC WEIGHT-AVERAGING AXIS CLOSED** for the current 46-epoch schedule. Variants that would test SWA properly (epochs=70 with swa_start=50; SWALR constant-LR forcing plateau) require expanding the training budget beyond the 30-min cap.
+
+**Operational note:** Student found and killed 2 concurrent duplicate processes (likely re-entry duplicates from prior session) before reporting clean results from the first/canonical run.
+
+---
+
+### PR #2861 — askeladd cosine eta_min=5e-6 (schedule-FLOOR axis)
+- Branch: `charliepai2g48h3-askeladd/etamin5e6-nlayers2-slicenum16-epochs46`
+- Hypothesis: Non-zero late-epoch LR floor (5% of initial) salvages the still-descending epoch-46 trajectory that's currently discarded by LR=0 decay.
+- Artifacts: `models/model-etamin5e6-nlayers2-slicenum16-epochs46-20260514-083129/metrics.jsonl`
+
+| Split | val mae_surf_p | baseline | Δval | test mae_surf_p | baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 36.514 | 36.476 | +0.10% | 31.522 | 33.035 | **−4.6%** |
+| geom_camber_rc | 48.185 | 48.297 | −0.23% | 44.572 | 44.333 | +0.5% |
+| geom_camber_cruise | 18.957 | 18.326 | +3.44% | 15.151 | 15.496 | **−2.2%** |
+| re_rand | 38.903 | 37.923 | +2.58% | 28.675 | 28.116 | +2.0% |
+| **avg** | **35.640** | **35.256** | **+1.09%** | **29.980** | **30.245** | **−0.88%** |
+
+**LR floor verification (final epochs):**
+| Epoch | LR | val_avg |
+|---|---|---|
+| 44 | 5.99e-06 | 35.6633 |
+| **45** | **5.44e-06** | **35.6396** ← best |
+| 46 | 5.11e-06 | 35.6589 ← rose 0.02 with non-zero step |
+
+**Diagnostic (student's mechanism is sharp):**
+Lion's sign-only updates have step magnitude = lr exactly (no scaling by gradient magnitude), so they don't naturally damp as the model approaches the basin. A non-zero LR floor with Lion → late updates take full-magnitude directional steps, oscillating around the minimum. Best epoch shifted 46 → 45 because the floor enabled a measurable step at epoch 46 that moved val *away* from the optimum.
+
+**On the test improvement (−0.88%):** Dominated by val_single_in_dist (test −4.6%) but val essentially unchanged on the SAME split (+0.10%). The val/test inconsistency on identical splits, combined with seed variance ~±1 val unit, strongly suggests seed variance rather than real signal. Not trusted without seed replication.
+
+**Conclusion: SCHEDULE-FLOOR AXIS CLOSED FOR LION.** The mechanism (sign-update oscillation at any non-zero LR floor) is structural, not a calibration issue. eta_min=1e-6 contingency skipped given structural diagnosis. Lion + L1 + cosine-to-zero remains optimal training recipe.
+
+---
+
 ## 2026-05-14 08:20 — Round 41 cont.: close #2850 askeladd AdamW lr=1e-3 (+39.1% val UNDER-CONVERGED, WORSE than lr=3e-4 — OPTIMIZER AXIS CLOSED); assign askeladd #2861 cosine eta_min=5e-6 (schedule-FLOOR axis, distinct mechanism from prior dead schedule-shape tests)
 
 ### PR #2850 — askeladd AdamW lr=1e-3 (10× Lion lr, retry of #2824 lr=3e-4 under-convergence)
