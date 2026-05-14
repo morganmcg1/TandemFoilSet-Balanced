@@ -108,14 +108,15 @@ class SwiGLUMLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 init_temperature: float = 0.5):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * init_temperature)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -200,13 +201,14 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, init_temperature: float = 0.5):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            init_temperature=init_temperature,
         )
         # POST-NORM topology + γ=1.0 constant (Vaswani 2017 recipe). LayerScale
         # removed: γ is a plain Python float, not nn.Parameter — no learnable
@@ -235,6 +237,13 @@ class TransolverBlock(nn.Module):
 
 
 class Transolver(nn.Module):
+    # Per-block learnable slice-temperature init schedule (#2979). Schedule-as-prior:
+    # block 0 starts diffuse (broad attention, high entropy), block 3 starts sharp
+    # (sparse routing). Mirrors the baseline entropy gradient observed in #2964
+    # diagnostics. T remains fully learnable — schedule is a warm start, not a
+    # constraint. Param count unchanged vs uniform 0.5 init.
+    T_INIT_SCHEDULE = [1.0, 0.5, 0.5, 0.25]
+
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
@@ -255,12 +264,16 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        assert len(self.T_INIT_SCHEDULE) == n_layers, (
+            f"T_INIT_SCHEDULE length {len(self.T_INIT_SCHEDULE)} must match n_layers={n_layers}"
+        )
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                init_temperature=self.T_INIT_SCHEDULE[i],
             )
             for i in range(n_layers)
         ])
@@ -590,6 +603,23 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# Per-block learnable T init schedule diagnostic (#2979). Schedule-as-prior;
+# T remains fully learnable nn.Parameter. Compare vs uniform 0.5 baseline (#2964)
+# and vs frozen schedule (#2969 LOSS, block-0 entropy collapsed because projection
+# weights couldn't co-evolve with fixed T).
+_T_SCHEDULE = Transolver.T_INIT_SCHEDULE
+print(
+    f"Per-block learnable T init schedule (#2979): {_T_SCHEDULE} (schedule-as-prior, learnable preserved); "
+    f"baseline init was uniform 0.5; T param count per block unchanged (n_head={model_config['n_head']}); "
+    f"NEW BASELINE to beat: val_avg/mae_surf_p < 30.0382 (PR #2964 post-norm + γ=1.0)"
+)
+_inner_for_T = getattr(model, "_orig_mod", model)
+for _bi, _blk in enumerate(_inner_for_T.blocks):
+    _T_val = _blk.attn.temperature.detach().float().mean().item()
+    _T_min = _blk.attn.temperature.detach().float().min().item()
+    _T_max = _blk.attn.temperature.detach().float().max().item()
+    print(f"  Block {_bi}: T_init mean={_T_val:.4f} min={_T_min:.4f} max={_T_max:.4f} (expected {_T_SCHEDULE[_bi]:.4f})")
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -841,6 +871,31 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # Per-block T monitoring (#2979). Key question: does schedule-init T_block-0
+    # stay near 1.0 (warm-start is a meaningful prior) or drift toward equilibrium
+    # ~0.5 (optimizer overrides init)? Log every epoch for full trajectory.
+    _inner_T = getattr(model, "_orig_mod", model)
+    _T_log = []
+    _T_print_parts = []
+    for _bi, _blk in enumerate(_inner_T.blocks):
+        _t = _blk.attn.temperature.detach().float()
+        _T_log.append({
+            "block_idx": _bi,
+            "T_init": Transolver.T_INIT_SCHEDULE[_bi],
+            "T_mean": _t.mean().item(),
+            "T_min": _t.min().item(),
+            "T_max": _t.max().item(),
+            "T_std": _t.std().item() if _t.numel() > 1 else 0.0,
+        })
+        _T_print_parts.append(f"B{_bi}={_t.mean().item():.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "temperature",
+        "epoch": epoch + 1,
+        "blocks": _T_log,
+    })
+    if (epoch + 1) in (1, 10, 30, 60) or (epoch + 1) == MAX_EPOCHS:
+        print(f"  T per-block (mean): {' | '.join(_T_print_parts)}")
+
     # Residual magnitude probe at ep1 — captures the post-norm "capped" pattern
     # early in training (vs pre-norm baseline that grows residuals with depth).
     if (epoch + 1) == 1:
@@ -884,6 +939,90 @@ if best_metrics:
         model, _probe_loader_end, stats, amp_ctx_factory, device,
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
+
+    # Per-block slice entropy / dead-slice diagnostic (#2979). Tests whether
+    # schedule-init T (block-0 init=1.0 learnable) avoids the entropy collapse
+    # that #2969 fixed schedule (T=1.0 frozen) produced (~16-17/24 dead slices in
+    # block-0). Baseline uniform-T learnable ~3-4 dead in block-0. "Dead" means
+    # per-slice token-distribution entropy < 0.01 nats (effectively one token
+    # dominates the slice's input).
+    _inner_se = getattr(model, "_orig_mod", model)
+    _slice_capture: list[dict] = []
+
+    def _make_slice_entropy_hook(block_idx: int, mask_t: torch.Tensor | None):
+        def _hook(module, args, _kwargs, _output):
+            with torch.no_grad():
+                x = args[0] if args else None
+                if x is None:
+                    return
+                B, N, _ = x.shape
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                sw = module.softmax(module.in_project_slice(x_mid) / module.temperature)
+                # sw: [B, H, N, G]
+                if mask_t is not None:
+                    m_f = mask_t.float().unsqueeze(1).unsqueeze(-1)  # [B, 1, N, 1]
+                    sw = sw * m_f
+                slice_norm = sw.sum(dim=2, keepdim=True)  # [B, H, 1, G]
+                p_per_slice = sw / (slice_norm + 1e-12)  # [B, H, N, G]
+                entropy_per_slice = -(p_per_slice * (p_per_slice + 1e-12).log()).sum(dim=2)  # [B, H, G]
+                mean_entropy_per_slice = entropy_per_slice.mean(dim=(0, 1))  # [G]
+                n_dead = int((mean_entropy_per_slice < 0.01).sum().item())
+                total_w_per_slice = sw.sum(dim=(0, 1, 2))  # [G] — total mass per slice
+                _slice_capture.append({
+                    "block_idx": block_idx,
+                    "T_mean": module.temperature.detach().float().mean().item(),
+                    "T_init": Transolver.T_INIT_SCHEDULE[block_idx],
+                    "slice_entropy_mean": entropy_per_slice.mean().item(),
+                    "slice_entropy_min_g": mean_entropy_per_slice.min().item(),
+                    "slice_entropy_max_g": mean_entropy_per_slice.max().item(),
+                    "n_dead_slices": n_dead,
+                    "n_total_slices": int(mean_entropy_per_slice.numel()),
+                    "slice_mass_min": total_w_per_slice.min().item(),
+                    "slice_mass_max": total_w_per_slice.max().item(),
+                })
+        return _hook
+
+    _attn_modules = [(bi, blk.attn) for bi, blk in enumerate(_inner_se.blocks)]
+    _slice_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _x_s, _y_s, _is_s, _m_s = next(iter(_slice_loader))
+        _x_s = _x_s.to(device, non_blocking=True)
+        _m_s = _m_s.to(device, non_blocking=True)
+        _slice_handles = [
+            mod.register_forward_hook(
+                _make_slice_entropy_hook(bi, _m_s),
+                with_kwargs=True,
+            )
+            for bi, mod in _attn_modules
+        ]
+        _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+        with amp_ctx_factory():
+            _ = _inner_se({"x": _x_norm_s, "mask": _m_s})
+    for _h in _slice_handles:
+        _h.remove()
+
+    print("\nPer-block slice entropy / dead-slice diagnostic (best-checkpoint, val_single_in_dist batch):")
+    _slice_log = {
+        "event": "slice_entropy_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "blocks": [],
+    }
+    for _cap in _slice_capture:
+        print(
+            f"  block[{_cap['block_idx']}]: T_init={_cap['T_init']:.4f} "
+            f"T_final={_cap['T_mean']:.4f} "
+            f"entropy[mean={_cap['slice_entropy_mean']:.4f} "
+            f"min_g={_cap['slice_entropy_min_g']:.4f} max_g={_cap['slice_entropy_max_g']:.4f}] "
+            f"dead_slices={_cap['n_dead_slices']}/{_cap['n_total_slices']} "
+            f"mass[min={_cap['slice_mass_min']:.2e} max={_cap['slice_mass_max']:.2e}]"
+        )
+        _slice_log["blocks"].append(_cap)
+    append_metrics_jsonl(metrics_jsonl_path, _slice_log)
 
     # LayerScale diagnostic: γ_attn = γ_mlp = 1.0 CONSTANT (no learnable Parameter).
     # Report the constants for confirmation; per-block dynamics are inapplicable.
