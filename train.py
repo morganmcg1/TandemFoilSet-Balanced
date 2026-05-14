@@ -254,6 +254,11 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Pre-block-0 embedding LayerNorm: normalize embedding stream after
+        # preprocess+placeholder+FiLM, before residual blocks ingest it.
+        # +192 params (96 weight + 96 bias). Distinct site from existing
+        # block LNs (ln_1, ln_2, ln_3 inside TransolverBlock).
+        self.embed_ln = nn.LayerNorm(n_hidden)
         self.apply(self._init_weights)
 
         # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
@@ -281,6 +286,8 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
+        # Embedding LayerNorm: stationary scale at block-0 entry
+        fx = self.embed_ln(fx)
         for block in self.blocks:
             fx = block(fx, mask=mask)
         return {"preds": fx}
@@ -566,6 +573,15 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# Embedding LayerNorm diagnostic: new pre-block-0 LN site (PR #2808 probe).
+_embed_ln_params = sum(p.numel() for p in model.embed_ln.parameters())
+print(
+    f"Embedding LayerNorm (pre-block-0 site): {_embed_ln_params} params; "
+    f"applied AFTER preprocess + placeholder + FiLM, BEFORE block loop; "
+    f"weight=1 bias=0 init (pure normalization at step 0); "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (#2765)"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -827,6 +843,62 @@ if best_metrics:
         "film_weight_norm": _film_w_norm,
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+    })
+
+    # Embedding LayerNorm diagnostic: confirm LN is doing something — input var
+    # should NOT be ~1.0 (preprocess+placeholder+FiLM produces drifted scale),
+    # output var should be ~1.0 (LN normalizes per-token across channels).
+    # Sample on val_single_in_dist (in-dist) batch; lightweight forward hook.
+    _embed_ln = _inner.embed_ln
+    _embed_ln_capture: dict[str, float] = {}
+
+    def _embed_ln_hook(module, inputs, output):
+        with torch.no_grad():
+            _in = inputs[0].detach().float()
+            _out = output.detach().float()
+            _embed_ln_capture["input_var"] = float(_in.var(dim=-1).mean().cpu())
+            _embed_ln_capture["output_var"] = float(_out.var(dim=-1).mean().cpu())
+            _embed_ln_capture["input_abs_mean"] = float(_in.abs().mean().cpu())
+            _embed_ln_capture["output_abs_mean"] = float(_out.abs().mean().cpu())
+
+    _embed_ln_handle = _embed_ln.register_forward_hook(_embed_ln_hook)
+    _embed_ln_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _x_s, _y_s, _is_s, _m_s = next(iter(_embed_ln_loader))
+        _x_s = _x_s.to(device, non_blocking=True)
+        _m_s = _m_s.to(device, non_blocking=True)
+        _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+    _embed_ln_handle.remove()
+    _embed_ln_w_mean = float(_embed_ln.weight.detach().float().mean().cpu())
+    _embed_ln_w_std = float(_embed_ln.weight.detach().float().std().cpu())
+    _embed_ln_b_mean = float(_embed_ln.bias.detach().float().mean().cpu())
+    _embed_ln_b_std = float(_embed_ln.bias.detach().float().std().cpu())
+    print("\nEmbedding LayerNorm diagnostic (val_single_in_dist sample, best-checkpoint weights):")
+    print(
+        f"  input_var (per-token mean): {_embed_ln_capture.get('input_var', float('nan')):.4f}  "
+        f"output_var: {_embed_ln_capture.get('output_var', float('nan')):.4f}"
+    )
+    print(
+        f"  input_abs_mean: {_embed_ln_capture.get('input_abs_mean', float('nan')):.4f}  "
+        f"output_abs_mean: {_embed_ln_capture.get('output_abs_mean', float('nan')):.4f}"
+    )
+    print(
+        f"  weight: mean={_embed_ln_w_mean:.4f} std={_embed_ln_w_std:.4f}  "
+        f"bias: mean={_embed_ln_b_mean:.4f} std={_embed_ln_b_std:.4f}"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "embed_ln_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "input_var": _embed_ln_capture.get("input_var"),
+        "output_var": _embed_ln_capture.get("output_var"),
+        "input_abs_mean": _embed_ln_capture.get("input_abs_mean"),
+        "output_abs_mean": _embed_ln_capture.get("output_abs_mean"),
+        "weight_mean": _embed_ln_w_mean,
+        "weight_std": _embed_ln_w_std,
+        "bias_mean": _embed_ln_b_mean,
+        "bias_std": _embed_ln_b_std,
     })
 
     # Squeeze-Excitation diagnostic: gate stats per block per split (in_dist vs OOD).
