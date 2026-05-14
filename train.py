@@ -571,6 +571,12 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+# AoA foil 1 lives at x channel 14 (see program.md "Input features" table).
+# Observed train range from PR #2721 split_signatures.json: [-0.17, +0.10] rad.
+AOA1_CH = 14
+AOA1_MIN_OBSERVED = -0.17
+AOA1_MAX_OBSERVED = 0.10
+
 
 @dataclass
 class Config:
@@ -601,6 +607,13 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # One-sided NEGATIVE jitter on AoA_1 (x channel 14) during training. For each
+    # training sample, draws δ = -|N(0, σ)| (always non-positive) and adds it to
+    # AoA_1 before normalization. Targets the rc OOD regime: rc is all-negative
+    # AoA, training is [-0.17, +0.10] rad (positive front-foil AoA has no rc
+    # analog). σ=0.02 rad ≈ 12% of the AoA range. Result is clamped to
+    # [AOA1_MIN_OBSERVED, AOA1_MAX_OBSERVED]. σ=0 disables.
+    aoa1_negative_jitter_sigma: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -832,6 +845,18 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if cfg.aoa1_negative_jitter_sigma > 0.0:
+            # One-sided negative jitter on AoA_1 (channel 14), per-sample scalar
+            # broadcast over real (masked) nodes. Padded positions keep their 0.
+            B = x.shape[0]
+            delta = -torch.abs(torch.randn(B, device=x.device, dtype=x.dtype)
+                               * cfg.aoa1_negative_jitter_sigma)
+            delta_full = delta.unsqueeze(1) * mask.to(x.dtype)  # [B, N]
+            x = x.clone()
+            x[:, :, AOA1_CH] = (x[:, :, AOA1_CH] + delta_full).clamp(
+                AOA1_MIN_OBSERVED, AOA1_MAX_OBSERVED,
+            )
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -1124,6 +1149,7 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "aoa1_negative_jitter_sigma": cfg.aoa1_negative_jitter_sigma,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
