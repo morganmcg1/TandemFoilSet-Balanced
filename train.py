@@ -69,10 +69,10 @@ class MLP(nn.Module):
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
-        self.linear_post = nn.Linear(n_hidden, n_output)
+        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden, bias=False), act_fn())
+        self.linear_post = nn.Linear(n_hidden, n_output, bias=False)
         self.linears = nn.ModuleList(
-            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
+            [nn.Sequential(nn.Linear(n_hidden, n_hidden, bias=False), act_fn()) for _ in range(n_layers)]
         )
 
     def forward(self, x):
@@ -94,9 +94,9 @@ class SwiGLUMLP(nn.Module):
         super().__init__()
         hidden_swiglu = max(8, int(round((n_hidden_full * 2 / 3) / 8) * 8))
         self.hidden_swiglu = hidden_swiglu
-        self.linear_gate = nn.Linear(n_input, hidden_swiglu)
-        self.linear_value = nn.Linear(n_input, hidden_swiglu)
-        self.linear_out = nn.Linear(hidden_swiglu, n_output)
+        self.linear_gate = nn.Linear(n_input, hidden_swiglu, bias=False)
+        self.linear_value = nn.Linear(n_input, hidden_swiglu, bias=False)
+        self.linear_out = nn.Linear(hidden_swiglu, n_output, bias=False)
         self.act_fn = act_fn
 
     def forward(self, x):
@@ -117,14 +117,14 @@ class PhysicsAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
-        self.in_project_x = nn.Linear(dim, inner_dim)
-        self.in_project_fx = nn.Linear(dim, inner_dim)
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
+        self.in_project_x = nn.Linear(dim, inner_dim, bias=False)
+        self.in_project_fx = nn.Linear(dim, inner_dim, bias=False)
+        self.in_project_slice = nn.Linear(dim_head, slice_num, bias=False)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim, bias=False), nn.Dropout(dropout))
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -178,12 +178,13 @@ class SqueezeExcitation(nn.Module):
     def __init__(self, dim: int, reduction: int = 8):
         super().__init__()
         d_hidden = max(1, dim // reduction)
-        self.attn_pool = nn.Linear(dim, 1, bias=True)
-        self.fc1 = nn.Linear(dim, d_hidden, bias=True)
-        self.fc2 = nn.Linear(d_hidden, dim, bias=True)
+        self.attn_pool = nn.Linear(dim, 1, bias=False)
+        self.fc1 = nn.Linear(dim, d_hidden, bias=False)
+        self.fc2 = nn.Linear(d_hidden, dim, bias=False)
         with torch.no_grad():
             self.fc2.weight.zero_()
-            self.fc2.bias.zero_()
+            if self.fc2.bias is not None:
+                self.fc2.bias.zero_()
 
     def forward(self, x, mask=None):
         # x: (B, N, D); mask: (B, N) bool, True for real nodes
@@ -219,8 +220,8 @@ class TransolverBlock(nn.Module):
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+                nn.Linear(hidden_dim, hidden_dim, bias=False), nn.GELU(),
+                nn.Linear(hidden_dim, out_dim, bias=False),
             )
 
     def forward(self, fx, mask=None):
@@ -274,12 +275,13 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
-        # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
+        # Feature-stream FiLM gate — zero-init weight for identity at step 0.
+        # bias=False per Llama-style bias-free Linear (#3049). Identity preserved:
+        # film(x) = 0·x = 0, then (1 + 0) = 1 → no modulation at step 0.
         # Applied AFTER _init_weights so it overrides the trunc_normal_ init.
         # Channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531 instrumentation).
-        self.film = nn.Linear(3, n_hidden)
+        self.film = nn.Linear(3, n_hidden, bias=False)
         nn.init.zeros_(self.film.weight)
-        nn.init.zeros_(self.film.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -568,6 +570,24 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Bias-free Linear diagnostic (#3049): every nn.Linear in the model has bias=False
+# (Llama-style). LayerNorm bias parameters are KEPT (default), since LN's β provides
+# an effective additive bias at the entry to each Linear. Param reduction tracked vs
+# #3006 baseline (407,175 params).
+_linear_modules = [(name, m) for name, m in model.named_modules() if isinstance(m, nn.Linear)]
+_n_linear = len(_linear_modules)
+_n_with_bias = sum(1 for _, m in _linear_modules if m.bias is not None)
+_n_bias_params = sum(m.bias.numel() for _, m in _linear_modules if m.bias is not None)
+_ln_modules = [m for m in model.modules() if isinstance(m, nn.LayerNorm)]
+_n_ln_bias_params = sum(m.bias.numel() for m in _ln_modules if m.bias is not None)
+print(
+    f"Bias-free Linear (#3049, Llama-style): {_n_linear} nn.Linear modules, "
+    f"{_n_with_bias} with bias (expect 0), {_n_bias_params} Linear bias params (expect 0). "
+    f"LayerNorm bias KEPT: {len(_ln_modules)} LN modules, {_n_ln_bias_params} LN bias params."
+)
+print(f"NEW BASELINE: val 29.5318 / test 25.4795 (PR #3006, 407,175 params)")
+print(f"Δ vs #3006 baseline (407,175): {n_params - 407175} params ({(n_params - 407175) * 100 / 407175:+.2f}%)")
 
 # Cross-block residual α diagnostic: between-block adaptivity at a fresh axis
 # (in-block γ closed at all granularities by #2940/#2964/#2977/#2988).
@@ -968,10 +988,10 @@ if best_metrics:
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
     _film_w_norm = _film.weight.detach().float().norm().item()
-    _film_b_norm = _film.bias.detach().float().norm().item()
+    _film_b_norm = _film.bias.detach().float().norm().item() if _film.bias is not None else 0.0
     print("\nFeature-stream FiLM final diagnostics (best-checkpoint weights):")
     print(f"  film.weight.norm: {_film_w_norm:.4f}")
-    print(f"  film.bias.norm:   {_film_b_norm:.4f}")
+    print(f"  film.bias.norm:   {_film_b_norm:.4f} (bias=False per #3049 — reported as 0.0)")
 
     # Modulation magnitude on a val_re_rand batch (highest-OOD split for Re).
     _film_scale_mag = None
