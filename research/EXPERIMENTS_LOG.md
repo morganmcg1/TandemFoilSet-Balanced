@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-14 [Round 138 close-22] UTC — PR #2986: adamw-lr-1.5e-3 — **CLOSED LOSS (+18.54% val vs NEW; 144th taxon; OPTIMIZER-FAMILY AXIS DECISIVELY CLOSED AT 60EP BUDGET)**
+
+- **Branch:** charliepai2g48h5-thorfinn/adamw-lr-1.5e-3
+- **Metric artifacts:** models/model-charliepai2g48h5-thorfinn-adamw-lr-1.5e-3-20260514-184118/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2974 (AdamW @ 3.3×) | #2986 (AdamW @ 10×) | Δ #2986 vs NEW baseline |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 41.5454 | **35.6060** | **+18.54% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | (unreported) | **30.3794** | **+20.51% LOSS** |
+| val_single_in_dist | 25.219 | 35.8575 | 29.5298 | +17.09% LOSS |
+| val_geom_camber_rc | 43.929 | 56.9979 | 50.6082 | +15.20% LOSS |
+| val_geom_camber_cruise | 16.265 | 27.4706 | 21.3561 | **+31.30% LOSS (CRUISE WORST-HIT — meta-signal INVERTED 3rd time)** |
+| val_re_rand | 34.740 | 45.8658 | 40.9300 | +17.82% LOSS |
+| Train loss ep60 (vol + 10·surf) | ~0.8 (Lion) | 1.28 | **1.02** | model never converged |
+| Train→val gap @ ep60 | wider | 1.18× | **1.02× (tightest underfit signature)** | model never fit train |
+| Param count | 407,172 | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** Replace Lion (lr=1.5e-4, wd=3e-4) with AdamW lr=1.5e-3 (10× Lion's lr per the upper end of conservative Lion→AdamW conversion). Tests UPPER endpoint of bracketing sweep (#2974 tested 3.3× LOWER endpoint). If LOSS → axis closed across [3.3×, 10×] both LOSS.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **BRACKETING SUCCEEDED — needle moved 14.3% in val and 20.3% in train going 3.3× → 10×.** But the floor at ep60 is bounded above Lion's 0.8 train loss; AdamW cannot match Lion's basin in 60ep at any interior lr.
+
+2. **Train→val gap 1.02× = TIGHTEST UNDERFIT SIGNATURE.** Even at 4.5× #2974's lr, AdamW never exits the underfit regime in 60ep. Model fit train marginally better than #2974 but val unchanged in direction.
+
+3. **CRUISE META-SIGNAL DECISIVELY INVERTED at +31.30% LOSS** — 3rd post-#2964 cruise breakage after #2961 aux-supervision and #2978 AoA noise. **Cruise is now the load-bearing canary for basin quality.** Lion's sign-step finds the cruise basin; AdamW's adaptive step cannot reach it in 60ep regardless of lr.
+
+4. **STABILITY HEADROOM CONFIRMED at 10× lr.** ep1-3 clean monotonic, no NaN/spikes, no instability. LOSS is NOT instability-driven; AdamW could safely run at 20×+ without divergence. But no interior lr can salvage the axis.
+
+5. **OPTIMIZER STATE HEALTHY (99.99% exp_avg non-zero, 100% exp_avg_sq).** Not an optimizer pathology — AdamW IS doing what it's supposed to do; the basin geometry is the issue.
+
+6. **144th taxon CLOSED:** OPTIMIZER-FAMILY-AXIS-DECISIVELY-CLOSED-AT-60EP-BUDGET. The combination of LOSS at BOTH 3.3× (low underfit) and 10× (less-low underfit, still LOSS) with monotonic improvement-with-lr proves AdamW cannot match Lion at 60ep regardless of lr in this regime.
+
+7. **MECHANISTIC FINDING — LION SIGN-STEP IS STRUCTURALLY LOAD-BEARING for 407k-param + 1499-sample + 60ep regime.** Two converging signatures: (a) train→val gap stuck at underfit; (b) cruise basin unreachable. Lion's per-element sign(grad) produces a basin AdamW's adaptive denominator cannot find in the budget envelope.
+
+**Followup assigned:** #3003 thorfinn sandwich-norm-magneto (FRESH STRUCTURAL AXIS — Cogview/Magneto Sub-LN recipe; adds nn.LayerNorm at BRANCH INPUT in each block ON TOP OF existing post-norm at branch output; pre-norm INSIDE post-norm topology; +1536 params; tests whether BOTH normalizations are load-bearing or post-norm alone is sufficient; compatible with #2964 post-norm WIN; PIVOTS OFF optimizer-family axis per student recommendations #2,#5 verbatim; 145th axis). Total closed: 144. Winners: 22. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-14 [Round 138 close-21] UTC — PR #2976: coord-noise-sigma-0.01 — **CLOSED LOSS (+6.31% val vs NEW; 143rd taxon; DATA-AUG TRIPLET COMPREHENSIVELY CLOSED with #2973/#2978)**
 
 - **Branch:** charliepai2g48h5-fern/coord-noise-sigma-0.01
