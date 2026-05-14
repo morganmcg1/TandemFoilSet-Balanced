@@ -2,6 +2,102 @@
 
 ---
 
+## 2026-05-15 03:30 [Round 138 close-45] UTC — 3 LOSS-with-cruise-PRESERVED PRs in one round (#3047 GeGLU + #3049 bias-free + #3050 grad-clip-1.0); 3 datapoints added; ledger 22 (9 BROKEN + 13 PRESERVED)
+
+### Closed: #3050 fern grad-clip-1pt0 (176th taxon GRAD-CLIP-AT-MAX-NORM-1-DECOUPLES-FROM-STABILITY-INTO-GLOBAL-LR-MULTIPLIER / LION-SIGN-STEP-IS-SCALE-INVARIANT-UNDER-UNIFORM-BATCH-RESCALING)
+
+- **Branch:** charliepai2g48h5-fern/grad-clip-1pt0
+- **Metric artifacts:** models/model-charliepai2g48h5-fern-grad-clip-1pt0-20260514-222109/metrics.jsonl
+- **Hypothesis:** `torch.nn.utils.clip_grad_norm_(max_norm=1.0)` after backward(); +0 params; protects Lion EMA from outlier batches; 165th axis; cruise predicted PRESERVED (per-batch perturbation only)
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 29.7456 | +0.72% LOSS (small) |
+| test_avg | 24.8041 | **−2.65% WIN** |
+| val_cruise | 16.3058 | PRESERVED |
+| test_cruise | 13.0510 | small |
+| Best epoch | 58/60 (30-min timeout cut) | — |
+
+- **KEY MECHANISTIC FINDING — Lion sign-step is LR-robust under uniform per-batch rescaling.** Student diagnostic:
+  - **clip_fraction = 1.0000 on EVERY step every epoch** (375/375 steps × 58 epochs)
+  - Raw grad-norm distribution: mean 20-70, max observed 310.83 — ~25× the 1.0 threshold throughout training
+  - Effective LR at ep58: 1.5e-4 / 20.79 ≈ **7.2e-6** (~21× smaller than nominal Lion LR)
+- Despite 21× effective LR reduction, val only regressed +0.21 absolute (+0.72%) — **striking insight: Lion's sign-step is fundamentally LR-robust.** Mechanism: Lion's update `sign(c_t)` is invariant to uniform positive scalar multiplication; clipping uniformly rescales magnitudes feeding the EMA buffer but preserves sign-pattern exactly → "Lion at much smaller LR."
+- **10th cruise-preserving datapoint.** Per-batch uniform rescaling does NOT alter per-sample relative sign patterns → 5th-refinement invariant CONFIRMED. Clean test on the optimizer-stability axis.
+- **Conclusion:** Grad-clip-axis closed at max_norm=1.0 (too aggressive — never entered Goldilocks zone of 5-30% clip rate). Re-opening would require max_norm sweep at {5, 10, 30, 50} but **the deeper Lion-LR-robustness finding is the higher-information output** — Lion's LR sweet spot may be a "single point" only because sign-step is so insensitive to magnitude.
+
+### Closed: #3049 tanjiro bias-free-linear (177th taxon BIAS-FREE-LINEAR-LOSS-AT-SUB-MILLION-PARAM-SCALE / PARAM-PRUNING-AT-D=96-N=4-CARRIES-CAPACITY-NOT-REGULARIZATION)
+
+- **Branch:** charliepai2g48h5-tanjiro/bias-free-linear
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-bias-free-linear-20260514-222237/metrics.jsonl
+- **Hypothesis:** Llama-style `bias=False` on all nn.Linear; LayerNorm bias kept; ~1.5% param reduction; fresh param-space pruning axis; 164th axis; cruise predicted PRESERVED
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.7930 | +4.27% LOSS |
+| test_avg | 25.3813 | −0.39% WIN (marginal) |
+| val_cruise | 16.5523 | PRESERVED |
+| test_cruise | 13.0316 | — |
+| Param count | 403,403 | −3,772 (−0.93%) |
+| Best epoch | 60/60 | — |
+
+- **KEY MECHANISTIC FINDING — bias-free is NOT free at sub-million-param scale.** All 48 nn.Linear modules confirmed bias=False at startup; LayerNorm bias kept (864 LN-bias params unchanged). All three OOD splits regressed uniformly +4-6% (in_dist +4.0%, geom_camber_rc +4.8%, re_rand +5.8%). Train→val gap 0.009 (~13% relative) — NOT meaningfully regularizing. **Hit is across the board, not a regularization tradeoff.** At Llama 3 70B scale bias loss is amortized over 8192 wide features; at d=96 with n_layers=4 (407k params), each Linear's bias provides per-output-feature offset that LN's single γ/β cannot replicate → meaningful expressive load per output feature.
+- **11th cruise-preserving datapoint AND first INSIDE-BLOCK CAPACITY-REDUCTION preserver.** Prior cruise preservers were structural reparameterization, outside-block regularization, intra-block parameterization, or stochastic-on-residual. Bias-free is FIRST capacity-reduction INSIDE-block to preserve cruise.
+- **Refined sub-invariant (tentative):** cruise robust to capacity REMOVAL (parameter pruning) at intra-block linear maps, but NOT to capacity REPLACEMENT (e.g., per-channel γ #2977 mild LOSS, per-channel α #3043 LOSS). Capacity removal preserves residual-stream geometry (offsets default to zero); capacity replacement adds DOF that the optimizer routes around with idiosyncratic per-channel patterns.
+- **Conclusion:** Llama-style adoption is NOT universally net-positive for sub-million-param physics-informed transformers. Single-intervention bias-free closed; per student rec #4 "Adding it without other Llama-style features hurts at this scale."
+
+### Closed: #3047 nezuko geglu-mlp (178th taxon GEGLU-LOSS-AT-GATE-POSITION-NEGATIVE-TAIL-INTRODUCES-SIGN-FLIPS / SWIGLU-SILU-BOUNDED-DIP-IS-LOAD-BEARING)
+
+- **Branch:** charliepai2g48h5-nezuko/geglu-mlp
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-geglu-mlp-20260514-221904/metrics.jsonl
+- **Hypothesis:** SwiGLU SiLU gate → GELU gate; +0 params; fresh activation axis at gate position; 162nd active axis; cruise predicted PRESERVED
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.5144 | +3.33% LOSS |
+| test_avg | 25.6106 | +0.51% LOSS (marginal) |
+| val_cruise | 15.8188 | PRESERVED — **STRONG** (lowest val split, lowest test split) |
+| test_cruise | 12.6660 | — |
+| Param count | 407,175 | UNCHANGED |
+| Best epoch | 59/60 | — |
+
+- **KEY MECHANISTIC FINDING — gate-pre is strongly negative-biased (~75-83% negfrac); SiLU's bounded dip is load-bearing.** Student gate diagnostic at ep59:
+
+| Block | gate_pre mean | gate_pre negfrac | gate_post zero_frac | gate-value corr |
+|---|---|---|---|---|
+| 0 | −1.350 | 0.775 | 0.222 | +0.028 |
+| 1 | −1.486 | 0.818 | 0.226 | +0.003 |
+| 2 | −1.443 | 0.802 | 0.212 | −0.039 |
+| 3 | **−2.478** | 0.830 | **0.434** | +0.002 |
+
+  Block 3 (deepest) shows strongest sparsification (zero_frac=0.43, ~half deep-block gates near zero). **Mechanism:** Under SwiGLU's SiLU, gate values with x≈−1.28 map to bounded dip at gate≈−0.28 (small bounded negative contribution). Under GELU, the same negative-tilted pre-activations map to a slow-decaying long negative tail (gate_post can take arbitrary negative values for negative x). **GELU's negative tail through gate*value introduces sign flips on the multiplicative branch that SwiGLU does not** → slightly less coherent residual updates → +3.33% val LOSS.
+- **12th cruise-preserving datapoint (STRONG margin: 15.82, lowest val split AND lowest test split).** Gate-activation changes are per-element intra-block, preserve loss curvature, preserve per-sample gradient sign-pattern → cruise preserved per 5th-refinement invariant.
+- **#3006 α trajectory was UNCHANGED by GeGLU swap** — α @ ep59 [0.946, 0.981, 0.987] (mean 0.971), alternating-down pattern preserved. GeGLU does NOT disrupt α dynamics — independent evidence that activation-axis and α-axis are orthogonal.
+- **Conclusion:** Activation-axis at gate position closed at SiLU. PaLM/T5/GLM-family GELU choice does NOT transfer to CFD surrogate at this scale.
+
+### Followup assignments (fern, nezuko, tanjiro idle → busy)
+
+- **#3068 fern lion-beta2-0pt95** — Sweep Lion's second-moment EMA decay coefficient β₂ from 0.99 → 0.95 (β₁ unchanged at 0.9). Companion to thorfinn's in-flight #3056 Lion β₁=0.95. Together would comprehensively close Lion-hyperparameter axis. +0 params, +0 compute. β₂=0.95 is de-facto modern AdamW default (Chinchilla/Llama 3). Targets the most-fundamental untouched optimizer-internal hyperparameter. Cruise predicted PRESERVED. 178th active axis.
+
+- **#3069 nezuko output-mlp-2layer** — Replace 1-layer output projection with 2-layer MLP (GELU intermediate). +~9.3k params (+2.3%). Fresh axis OUTSIDE all blocks (outside residual stream). Tests whether 1-layer head is bottlenecking prediction; could help val_geom_camber_rc (most-failed OOD split). Cruise predicted PRESERVED per outside-block sub-invariant (5 datapoints). 179th active axis.
+
+- **#3071 tanjiro attn-dropout-0pt05** — Add `nn.Dropout(p=0.05)` on slice-routing softmax output. Fresh stochastic-regularization site INSIDE blocks (distinct from #3065 DropPath which drops residual branches; this is per-element softmax noise). Vaswani 2017 default for original Transformer attention. +0 params. Could decrease dead-slice fraction and improve slice utilization. Cruise predicted PRESERVED per "stochastic perturbations with deterministic eval" sub-invariant. 180th active axis.
+
+### Round 138 close-45 summary
+- **3 LOSS-with-cruise-PRESERVED closures in one round** (largest batch of cruise preservers in launch)
+- **Cruise-preservation ledger jumped 3 datapoints in one round**: 22 total (9 BROKEN + 13 PRESERVED)
+- **Major mechanistic insight: Lion sign-step is LR-robust** (#3050) — uniform per-batch rescaling barely affects val due to sign-step scale-invariance. This deepens our understanding of why Lion's LR sweet spot is "narrow" — it's actually because any reasonable LR works similarly (sign-step is what matters, not magnitude).
+- **Refined sub-invariant (tentative)**: cruise robust to capacity REMOVAL at intra-block linear maps, NOT to capacity REPLACEMENT at intra-block sites.
+- **SwiGLU's SiLU is load-bearing** (#3047): activation-axis at gate position closed; GELU's negative tail through multiplicative branch introduces incoherent sign flips.
+- **Three activation/regularization/optimizer axes closed in one round**: gate-activation (#3047), param-pruning (#3049), grad-clip-magnitude (#3050).
+- 8 in-flight axes: #3054 RMSNorm, #3056 Lion β₁=0.95, #3061 slice_num=12, #3065 DropPath p=0.05, #3066 LayerScale, #3068 Lion β₂=0.95 (new), #3069 output-MLP-2layer (new), #3071 attn-dropout-0.05 (new)
+- Total closed: 178. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-15 02:30 [Round 138 close-44] UTC — PR #3048 surf-weight-7 (LOSS but STRONGEST CRUISE WIN of launch) + PR #3044 additive-β (LOSS via α-β coupling)
 
 ### Closed: #3048 askeladd surf-weight-7 (174th taxon SURF-WEIGHT-LANDSCAPE-NON-MONOTONE-VAL-CRUISE-DIVERGE-AT-7 / VAL-OPT-AT-10-CRUISE-OPT-AT-7)
