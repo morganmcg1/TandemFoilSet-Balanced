@@ -580,6 +580,23 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# Mixup (Zhang et al. 2018 ICLR): input + output Beta-blend per training batch.
+# Sample lam ~ Beta(alpha, alpha) per batch, permute batch indices, blend
+# (x, y) linearly. is_surface and mask are kept from the anchor sample i —
+# interpolating binary masks between incommensurable meshes is undefined.
+# Applied training-mode only; eval/validation paths untouched.
+mixup_alpha = 0.2
+mixup_dist = torch.distributions.Beta(
+    torch.tensor(mixup_alpha, dtype=torch.float32),
+    torch.tensor(mixup_alpha, dtype=torch.float32),
+)
+all_lams: list[float] = []
+print(
+    f"Mixup: alpha={mixup_alpha}, Beta({mixup_alpha},{mixup_alpha}) -> bimodal mode at lambda~{{0,1}}, "
+    f"mean lambda=0.5; blend x and y per batch (training-mode only); is_surface/mask use anchor sample. "
+    f"Baseline to beat: val_avg/mae_surf_p < 33.3722"
+)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -588,6 +605,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_lams: list[float] = []
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -595,6 +613,14 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Mixup blending — only in training mode (we are inside model.train()).
+        if mixup_alpha > 0.0 and x.size(0) > 1:
+            lam = float(mixup_dist.sample().item())
+            perm = torch.randperm(x.size(0), device=x.device)
+            x = lam * x + (1.0 - lam) * x[perm]
+            y = lam * y + (1.0 - lam) * y[perm]
+            epoch_lams.append(lam)
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -642,6 +668,18 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # Per-epoch Mixup diagnostics
+    if epoch_lams:
+        _lam_t = torch.tensor(epoch_lams)
+        lam_mean = float(_lam_t.mean().item())
+        lam_extreme_frac = float(((_lam_t < 0.1) | (_lam_t > 0.9)).float().mean().item())
+        lam_mid_frac = float(((_lam_t >= 0.4) & (_lam_t <= 0.6)).float().mean().item())
+        all_lams.extend(epoch_lams)
+    else:
+        lam_mean = float("nan")
+        lam_extreme_frac = float("nan")
+        lam_mid_frac = float("nan")
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -655,17 +693,48 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "mixup/alpha": mixup_alpha,
+        "mixup/lam_mean": lam_mean,
+        "mixup/lam_extreme_frac": lam_extreme_frac,
+        "mixup/lam_mid_frac": lam_mid_frac,
+        "mixup/n_mixed_batches": len(epoch_lams),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  "
+        f"mixup[lam_mean={lam_mean:.3f} extreme={lam_extreme_frac:.2%}]"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- Mixup diagnostic: summarize lambda distribution across entire training ---
+if all_lams:
+    _all = torch.tensor(all_lams)
+    _all_mean = float(_all.mean().item())
+    _all_extreme = float(((_all < 0.1) | (_all > 0.9)).float().mean().item())
+    _all_mid = float(((_all >= 0.4) & (_all <= 0.6)).float().mean().item())
+    _all_lt01 = float((_all < 0.1).float().mean().item())
+    _all_gt09 = float((_all > 0.9).float().mean().item())
+    print(
+        f"Final Mixup diagnostic: alpha={mixup_alpha}, total_mixed_batches={len(all_lams)}, "
+        f"lam_mean={_all_mean:.4f}, lam<0.1 frac={_all_lt01:.2%}, lam>0.9 frac={_all_gt09:.2%}, "
+        f"extreme(<0.1|>0.9)={_all_extreme:.2%}, mid(0.4-0.6)={_all_mid:.2%}; "
+        f"baseline to beat: val_avg/mae_surf_p < 33.3722"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "mixup_diagnostic",
+        "alpha": mixup_alpha,
+        "total_mixed_batches": len(all_lams),
+        "lam_mean": _all_mean,
+        "lam_lt_01_frac": _all_lt01,
+        "lam_gt_09_frac": _all_gt09,
+        "lam_extreme_frac": _all_extreme,
+        "lam_mid_frac": _all_mid,
+    })
 
 # --- Lion momentum diagnostic: sanity-check optimizer state at terminal ---
 _lion_total = 0
