@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2955: slice-routing-temperature-0.25 — **CLOSED LOSS (+3.40% val / +1.32% test; 133rd taxon; TEMPERATURE AXIS U-SHAPED / LEARNABILITY-IS-LOAD-BEARING)**
+
+- **Branch:** charliepai2g48h5-tanjiro/slice-routing-temperature-0.25
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-slice-routing-temperature-0.25-20260514-162620/metrics.jsonl
+
+| Metric | Baseline #2879 | #2955 (T=0.25 hardcoded) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.5998** | **+3.40% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **26.8651** | **+1.32% LOSS** |
+| val_single_in_dist | 23.3997 | 24.6585 (+5.38%) | LOSS |
+| val_geom_camber_rc | 46.0708 | 48.3201 (+4.88%) | LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.5287 (-1.88%)** | **WIN** (meta-signal) |
+| val_re_rand | 34.9057 | 35.8919 (+2.83%) | LOSS |
+| Param count | 407,940 | 407,932 (-8) | — |
+
+**Hypothesis:** Hardcoded T=0.25 (sharper than baseline learnable init 0.5) at all 4 Physics_Attention blocks. Opposite-direction symmetric closure of #2944 (T=2.0 LOSS).
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **Failure mode is BLOCK-0 starvation, NOT block-3.** Under baseline learnable T, block-0 entropy 1.32-1.71 nats (active routing); under T=0.25, block-0 entropy collapses to 0.28-0.41 nats with **13-18 of 24 slices dead (<1% routing weight)**. Block-3 entropy (0.50-0.62) sits INSIDE baseline range (0.01-0.92) — T=0.25 didn't push block-3 sharper than baseline's converged values.
+
+2. **Per-head learnable temperatures encode a PER-DEPTH SCHEDULE:** soft routing at shallow blocks (T~1.0), sharp at deep blocks (T~0.25-0.5). The 8 learnable params save >4% — **0.002% of param budget for 4% gain.**
+
+3. **U-shaped temperature axis around baseline:**
+   - T=2.0 (#2944, softer): +4.43% LOSS (block-3 too soft)
+   - T=learnable init 0.5 (baseline): 30.5605 OPTIMUM
+   - T=0.25 (#2955, sharper): +3.40% LOSS (block-0 collapse)
+
+4. **Meta-signal repeats under SHARPER routing.** cruise -1.88% WIN, others LOSS. Now confirmed under BOTH directions of temperature axis — meta-signal is invariant to routing softness/sharpness.
+
+5. **Routing-axis cluster (5 closures total):** #2934 slice_num=16 LOSS, #2923 slice_num=32 LOSS, #2944 T=2.0 LOSS, #2955 T=0.25 LOSS, #2884 entropy-reg LOSS. Capacity AND shape both LOSS. Only LEARNABILITY (per-head adaptive temperature) survives.
+
+**133rd taxon CLOSED:** SLICE-ROUTING-TEMPERATURE-SHARP-DIRECTION / TEMPERATURE-AXIS-U-SHAPED / LEARNABILITY-IS-LOAD-BEARING.
+
+**Followup assigned:** #2969 tanjiro per-block-temperature-schedule (hardcoded T=[1.0, 0.5, 0.5, 0.25] matching implicit learned per-depth schedule; SCHEDULE-vs-LEARNABILITY attribution test; student suggestion #2 verbatim; -8 params; if WIN → schedule alone suffices; if LOSS → learnability itself is load-bearing; 134th axis).
+
+---
+
+## 2026-05-14 [Round 138] UTC — PR #2956: asymmetric-surf-correction-head — **CLOSED LOSS (+3.29% val / +3.06% test; 132nd taxon; ASYMMETRIC-SURF-CORRECTION / SHARED-HEAD-CO-ADAPTATION-IS-LOAD-BEARING)**
+
+- **Branch:** charliepai2g48h5-askeladd/asymmetric-surf-correction-head
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-asymmetric-surf-correction-head-20260514-163828/metrics.jsonl
+
+| Metric | Baseline #2879 | #2956 (zero-init correction head) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.5658** | **+3.29% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **27.3282** | **+3.06% LOSS** |
+| val_single_in_dist | 23.3997 | 25.4820 (+8.90%) | **WORST split — meta-signal repeats** |
+| val_geom_camber_rc | 46.0708 | 46.2831 (+0.46%) | wash |
+| val_geom_camber_cruise | 17.8657 | 17.9637 (+0.55%) | wash (attenuated) |
+| val_re_rand | 34.9057 | 36.5345 (+4.66%) | LOSS |
+| Param count | 407,940 | 408,231 (+291) | — |
+
+**Hypothesis:** Zero-init `nn.Linear(96, 3)` surface-only correction ADDED on top of shared head; vol tokens unchanged. Tests whether structural specialization can be added WITHOUT breaking shared-head regularization (#2946 free-rider failure mode).
+
+**DECISIVE FINDINGS:**
+
+1. **Correction grew correctly.** ||W_corr|| 0→0.40 over 60 epochs with strongest growth on p channel (0.31, the metric channel). ep0 zero-init confirmed (forward path correctly wired).
+
+2. **Correction WAS actively used.** Mean(|Δ|) per channel on val_single_in_dist: Ux=0.47, Uy=0.05, p=0.20. Functionally active, not no-op.
+
+3. **YET metrics REGRESSED.** All pre-conditions met (grew + concentrated on p + moved predictions meaningfully) AND val regressed +3.29%. Falsifies the hypothesis.
+
+4. **CO-ADAPTATION DRIFT MECHANISM:** Shared `mlp2` co-adapts to surface + vol jointly. Adding ANY surface-only knob breaks this co-adaptation: gradient flow rebalances, `mlp2` surface-tuning relaxes (correction can do that), `mlp2` drifts toward vol-friendly weights → equivalent "vol free-ride" to #2946 head-split, just mediated through mlp2 drift instead of separate head. **The implicit regularizer is the CO-ADAPTATION PRESSURE, not just parameter sharing.**
+
+5. **Meta-signal ATTENUATED but present.** in_dist WORST hit (+8.90%), re_rand LOSS (+4.66%), rc/cruise wash. Same direction as #2946 head-split but smaller magnitude — gentler version of head-split with same underlying mechanism.
+
+6. **HEAD-AXIS DEFINITIVELY CLOSED.** Three structural head-axis attempts (prior head-split, #2946 separate-heads, #2956 asymmetric correction) ALL LOSS or wash. Bottleneck is NOT in the head — must be in body, loss landscape, or gradient flow.
+
+**132nd taxon CLOSED:** ASYMMETRIC-SURF-CORRECTION-HEAD / ZERO-INIT-ADDITIVE / SHARED-HEAD-CO-ADAPTATION-IS-LOAD-BEARING.
+
+**Followup assigned:** #2968 askeladd mlp2-differential-wd-10x (differential weight decay: 10× wd on mlp2 only, baseline wd elsewhere; tests co-adaptation preservation by pinning mlp2 closer to small-norm; student suggestion #2 verbatim; zero new params; 133rd axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2951: post-norm-topology — **CLOSED LOSS (+14.73% val / +13.18% test; 131st taxon; POST-NORM TOPOLOGY AT ALL 9 SITES / PRE-NORM-IS-LOAD-BEARING-FOR-THIS-RECIPE)**
 
 - **Branch:** charliepai2g48h5-nezuko/post-norm-topology
