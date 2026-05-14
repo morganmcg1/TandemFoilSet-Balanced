@@ -323,3 +323,28 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
 **New merge bar (15th shift): mean val < 33.71, mean test < 28.65, all four test splits finite.**
 **Best single-seed bar: val < 33.57, test < 28.40.**
 **Note: 2 seeds, mean-based bar. Hardest split remains geom_camber_rc (mean=41.46, best=41.76).**
+
+## 2026-05-15 01:30 — PR #3028: FiLM-Re γ at output decoder (16th shift)
+
+- **`val_avg/mae_surf_p`:** 33.1315 (2-seed mean); s1 `nlxkthy2` = 33.0531, s2 `k6oy3ori` = 33.2098
+- **`test_avg/mae_surf_p`:** 28.4206 (2-seed mean); s1 `nlxkthy2` = 28.3997, s2 `k6oy3ori` = 28.4415 — **NEW BEST TEST MEAN**
+- **Per-split test surf_p (2-seed mean):** single_in_dist=30.728, geom_camber_rc=42.553, geom_camber_cruise=14.242, re_rand=26.159
+- **Per-split test surf_p (s1 `nlxkthy2`):** single_in_dist=31.154, geom_camber_rc=42.672, geom_camber_cruise=13.537, re_rand=26.236
+- **W&B runs:** `nlxkthy2` (s1, val=33.053, test=28.400), `k6oy3ori` (s2, val=33.210, test=28.442)
+- **Seed variance:** val σ=0.078 (0.24%), test σ=0.021 (0.07%). Extremely tight — most robust shift yet.
+- **Mechanism:** Added `film_gamma_decoder` MLP to the final TransolverBlock only (`last_layer=True`). Applied as `γ_dec * ln_3(fx)` before `mlp2` in the decoder. Same identity-init as trunk γ (last-linear weight=0, bias=1 → γ_dec ≡ 1 at epoch 0). Decoder γ_w_l2 grew to 6.378 (mean), extending the trunk's depth-monotone pattern (3.70→4.31→4.61→5.24→5.49→**6.38 decoder**). Surprise: gain concentrates on `single_in_dist` (−4.63%) and `geom_camber_cruise` (−4.47%) rather than `re_rand` (the predicted target, +0.53%). `geom_camber_rc` shows mild regression (+2.64%) — both seeds consistent. Param delta: +33K params, identity-init, ~54s/epoch.
+- **Flag:** `--film_re_decoder` (action='store_true')
+- **Init:** `--init_std 0.07 --film_re_hidden 256 --film_re_decoder`
+- **Runtime:** ~30.83 min, 34 epochs both seeds; best=last. Peak VRAM ~24 GB.
+- **Delta vs PR #2948 (15th shift):** mean val **−1.70%** (33.706 → 33.132), mean test **−0.81%** (28.653 → 28.421). Wins: single_in_dist −4.63%, geom_camber_cruise −4.47%. Near-flat: re_rand +0.53%. Mild regression: geom_camber_rc +2.64%.
+- **Reproduce (best seed s1):**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-askeladd --init_std 0.07 \
+      --film_re_hidden 256 --film_re_decoder \
+      --wandb_name "willowpai2g48h3-askeladd/film-decoder-s1" \
+      --wandb_group film-decoder
+  ```
+
+**New merge bar (16th shift): mean val < 33.13, mean test < 28.42, all four test splits finite.**
+**Best single-seed bar: val < 33.05, test < 28.40.**
+**Note: 2 seeds, mean-based bar. Hardest split: geom_camber_rc (mean=42.55, regressed from 41.46). Watch this split in follow-ups.**
