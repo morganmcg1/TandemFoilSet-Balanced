@@ -108,7 +108,7 @@ class PhysicsAttention(nn.Module):
         self._diag_capture = False
         self._last_slice_entropy: torch.Tensor | None = None
 
-    def forward(self, x, gamma=None, beta=None):
+    def forward(self, x, gamma=None, beta=None, alpha=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -124,6 +124,13 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_logits = self.in_project_slice(x_mid) / self.temperature
+        # Re-conditional attention temperature (scalar per sample). Applied
+        # BEFORE the ReFiLM β shift so the two operations remain
+        # orthogonal: α(Re) controls attention spread/entropy, β(Re) shifts
+        # which slices are attended to. Combined: slice_logits' =
+        # α · ((logits/T) · (1+γ) + β) ≈ α(1+γ) · logits + αβ (per-head).
+        if alpha is not None:
+            slice_logits = slice_logits * alpha.view(B, 1, 1, 1)
         if gamma is not None and beta is not None:
             slice_logits = slice_logits * (1.0 + gamma) + beta
         slice_weights = self.softmax(slice_logits)
@@ -178,12 +185,12 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, gamma=None, beta=None, log_re=None,
-                rcln_1=None, rcln_2=None, rcln_3=None):
+                rcln_1=None, rcln_2=None, rcln_3=None, alpha=None):
         if self.re_conditional_layernorm:
             normed_1 = rcln_1(fx, log_re)
         else:
             normed_1 = self.ln_1(fx)
-        fx = self.attn(normed_1, gamma, beta) + fx
+        fx = self.attn(normed_1, gamma, beta, alpha=alpha) + fx
         if self.re_conditional_layernorm:
             normed_2 = rcln_2(fx, log_re)
         else:
@@ -205,13 +212,16 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 re_conditional_attn_temperature: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.re_conditional_attn_temperature = re_conditional_attn_temperature
+        self.n_layers = n_layers
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -246,6 +256,14 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+        # Re-conditional attention temperature. Per-block scalar α(Re) = 1 +
+        # Linear(1,1)(log_Re), zero-init so α = 1.0 at step 0 (no-op).
+        # Multiplies slice logits before softmax, orthogonal to ReFiLM β shift.
+        # Created AFTER self.apply to preserve the zero-init.
+        if re_conditional_attn_temperature:
+            self.re_temps = nn.ModuleList([
+                ReConditionalAttnTemperature() for _ in range(n_layers)
+            ])
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -266,14 +284,14 @@ class Transolver(nn.Module):
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        if self.re_conditional_layernorm:
-            for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            alpha = self.re_temps[i](log_re) if self.re_conditional_attn_temperature else None
+            if self.re_conditional_layernorm:
                 fx = block(fx, gamma, beta, log_re=log_re,
                            rcln_1=self.re_ln_1, rcln_2=self.re_ln_2,
-                           rcln_3=self.re_ln_3)
-        else:
-            for block in self.blocks:
-                fx = block(fx, gamma, beta)
+                           rcln_3=self.re_ln_3, alpha=alpha)
+            else:
+                fx = block(fx, gamma, beta, alpha=alpha)
         return {"preds": fx}
 
 
@@ -381,6 +399,41 @@ class ReFiLM(nn.Module):
         gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
         beta = beta.reshape(B, self.heads, 1, self.slice_num)
         return gamma, beta
+
+
+class ReConditionalAttnTemperature(nn.Module):
+    """Re-conditional attention temperature: scalar α(Re) multiplies slice logits before softmax.
+
+    Parameterisation: α(Re) = 1.0 + Linear(1, 1)(log_Re), zero-init both
+    weight and bias so α ≡ 1.0 at step 0 (exactly the baseline). The
+    optimiser must actively open the gate.
+
+    Per-block module — each TransolverBlock gets its own scalar α(Re),
+    enabling different attention sharpness/entropy at different stack
+    depths. Orthogonal to ReFiLM (additive β shift): temperature scales
+    the SPREAD of attention while FiLM shifts WHICH slices are preferred.
+
+    Output broadcasts over heads, mesh nodes, and slices: α: [B, 1] →
+    [B, 1, 1, 1] in attention's slice_logits multiplication.
+
+    References: Perez et al. 2018 (1709.07871, FiLM — orthogonal γ/β);
+    Hinton et al. 2015 (1503.02531, temperature-scaled softmax for KD);
+    Dumoulin et al. 2017 (1610.07629, CIN).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.proj = nn.Linear(1, 1, bias=True)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, log_re: torch.Tensor) -> torch.Tensor:
+        # log_re: [B, 1] → alpha: [B, 1]
+        # Clamp to [0.1, 10] to prevent softmax entropy collapse from
+        # α → 0 (uniform attention, vanishing gradient) or α → ∞
+        # (argmax-only attention, σReparam pathology, Zhai et al. ICML 2023).
+        # Init is a no-op since α=1.0 at step 0 is well within bounds.
+        return (1.0 + self.proj(log_re)).clamp(min=0.1, max=10.0)
 
 
 class ReConditionalOutputBias(nn.Module):
@@ -601,6 +654,11 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Re-conditional attention temperature: per-block scalar α(Re) multiplies
+    # slice logits before softmax (and before the ReFiLM β shift). Per-block
+    # Linear(1, 1) with zero-init weight+bias so α ≡ 1.0 at init.
+    # n_layers (=5) Linear(1,1) modules = 10 params total.
+    re_conditional_attn_temperature: bool = False
 
 
 cfg = sp.parse(Config)
@@ -642,6 +700,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    re_conditional_attn_temperature=cfg.re_conditional_attn_temperature,
 )
 
 model = Transolver(**model_config).to(device)
@@ -656,9 +715,12 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
 n_params_out_bias = sum(p.numel() for p in output_bias.parameters()) if output_bias is not None else 0
+n_params_re_temp = (
+    sum(p.numel() for p in model.re_temps.parameters())
+) if cfg.re_conditional_attn_temperature else 0
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
-    f"ReCondLN {n_params_re_ln}) "
+    f"ReCondLN {n_params_re_ln}, ReCondAttnTemp {n_params_re_temp}) "
     f"+ ReScaleHead ({n_params_head} params)"
     + (f" + ReCondOutputBias ({n_params_out_bias} params)" if output_bias is not None else "")
 )
@@ -812,6 +874,20 @@ for epoch in range(MAX_EPOCHS):
             "b_logre_cross": 0.0,
             "n": 0,
         } for role in ("attn", "ffn", "out")}
+    # ReConditionalAttnTemperature diagnostics — per-block α absmax-shift
+    # (|α-1|), α mean / std, and per-sample (α-1) mean for correlation with log_Re.
+    re_temp_diag = None
+    if cfg.re_conditional_attn_temperature:
+        re_temp_diag = [
+            {
+                "alpha_minus_one_absmax": 0.0,
+                "alpha_sum": 0.0,
+                "alpha_sq_sum": 0.0,
+                "alpha_logre_cross": 0.0,
+                "n": 0,
+            }
+            for _ in range(model_config["n_layers"])
+        ]
     # ReConditionalOutputBias diagnostics — per-channel absmax / mean and
     # per-sample |b| mean accumulators for correlation with log_Re.
     re_out_bias_diag = None
@@ -942,6 +1018,21 @@ for epoch in range(MAX_EPOCHS):
                     d["b_logre_cross"] += (b_per * lr).sum().item()
                     d["n"] += g_per.shape[0]
 
+            # ReConditionalAttnTemperature diagnostics — call each per-block α
+            # module directly to recover the per-sample α [B, 1] for stat accumulation.
+            if re_temp_diag is not None:
+                for bi, re_temp in enumerate(uncompiled_model.re_temps):
+                    alpha = re_temp(log_re_norm)  # [B, 1]
+                    alpha_f = alpha.squeeze(-1).to(torch.float64)  # [B]
+                    alpha_shift = (alpha_f - 1.0)  # signed shift from identity
+                    d = re_temp_diag[bi]
+                    d["alpha_minus_one_absmax"] = max(d["alpha_minus_one_absmax"],
+                                                       alpha_shift.abs().max().item())
+                    d["alpha_sum"] += alpha_f.sum().item()
+                    d["alpha_sq_sum"] += (alpha_f ** 2).sum().item()
+                    d["alpha_logre_cross"] += (alpha_f * lr).sum().item()
+                    d["n"] += alpha_f.shape[0]
+
             # ReConditionalOutputBias diagnostics — call the bias MLP directly
             # to recover the per-sample bias [B, 3] for stat accumulation.
             if re_out_bias_diag is not None:
@@ -1059,6 +1150,28 @@ for epoch in range(MAX_EPOCHS):
                 "corr_beta_logre": float(b_corr),
             }
 
+    # ReConditionalAttnTemperature summary — per-block absmax-shift |α-1|,
+    # mean / std of α across samples, and corr(α, log_Re).
+    re_temp_summary: list | None = None
+    if re_temp_diag is not None:
+        re_temp_summary = []
+        for d in re_temp_diag:
+            n = max(d["n"], 1)
+            alpha_mean = d["alpha_sum"] / n
+            alpha_var = max(d["alpha_sq_sum"] / n - alpha_mean ** 2, 0.0)
+            alpha_std = alpha_var ** 0.5
+            if scale_n > 0 and lr_std > 1e-8 and alpha_std > 1e-12:
+                cov = d["alpha_logre_cross"] / n - alpha_mean * lr_mean
+                alpha_logre_corr = cov / (alpha_std * lr_std)
+            else:
+                alpha_logre_corr = 0.0
+            re_temp_summary.append({
+                "alpha_minus_one_absmax": d["alpha_minus_one_absmax"],
+                "alpha_mean": alpha_mean,
+                "alpha_std": alpha_std,
+                "corr_alpha_logre": float(alpha_logre_corr),
+            })
+
     # ReConditionalOutputBias summary — absmax (overall + per-channel),
     # per-channel mean (signed + |.|), and corr(|b|, log_re).
     re_out_bias_summary: dict | None = None
@@ -1135,6 +1248,7 @@ for epoch in range(MAX_EPOCHS):
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
         "re_cond_out_bias": re_out_bias_summary,
+        "re_cond_attn_temp/per_block": re_temp_summary,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1177,6 +1291,16 @@ for epoch in range(MAX_EPOCHS):
             f"per_ch_absmax=[Ux={s['per_ch_absmax'][0]:.5f} Uy={s['per_ch_absmax'][1]:.5f} p={s['per_ch_absmax'][2]:.5f}]  "
             f"per_ch_mean=[Ux={s['per_ch_mean'][0]:+.5f} Uy={s['per_ch_mean'][1]:+.5f} p={s['per_ch_mean'][2]:+.5f}]  "
             f"corr(|b|,logRe)={s['corr_abs_b_logre']:+.3f}"
+        )
+    if re_temp_summary is not None:
+        alpha_means = [s["alpha_mean"] for s in re_temp_summary]
+        alpha_shifts = [s["alpha_minus_one_absmax"] for s in re_temp_summary]
+        alpha_corrs = [s["corr_alpha_logre"] for s in re_temp_summary]
+        print(
+            "    ReCondAttnTemp  "
+            f"|α-1|_absmax_per_block={[f'{v:.4f}' for v in alpha_shifts]}  "
+            f"α_mean_per_block={[f'{v:.4f}' for v in alpha_means]}  "
+            f"corr(α,logRe)_per_block={[f'{v:+.3f}' for v in alpha_corrs]}"
         )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
