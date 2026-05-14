@@ -582,14 +582,113 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
-optimizer = Lion(
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead optimizer wrapper (Zhang et al. 2019, NeurIPS).
+
+    Maintains slow weights theta_slow; every k regular base-optimizer steps:
+        theta_slow <- theta_slow + alpha * (theta_fast - theta_slow)
+        theta_fast <- theta_slow
+
+    Inherits from ``torch.optim.Optimizer`` so PyTorch's LRScheduler isinstance
+    check passes. Does not call ``super().__init__`` — we delegate
+    ``param_groups`` / ``defaults`` / ``state`` to the wrapped base optimizer so
+    scheduler updates flow through naturally.
+
+    Args:
+        base_optimizer: any torch.optim.Optimizer instance (e.g. Lion).
+        k: number of fast steps between slow-weight syncs (default 5).
+        alpha: interpolation factor for slow weights (default 0.5).
+    """
+    def __init__(self, base_optimizer: torch.optim.Optimizer, k: int = 5, alpha: float = 0.5):
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
+        self.base_optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.slow_weights = []
+        for group in base_optimizer.param_groups:
+            self.slow_weights.append([p.detach().clone() for p in group['params']])
+        # Delegate optimizer-protocol attributes to the base optimizer.
+        self.param_groups = base_optimizer.param_groups
+        self.defaults = base_optimizer.defaults
+        # Per-epoch peak-drift diagnostic, reset externally each epoch.
+        self.peak_drift = 0.0
+        self.peak_drift_ratio = 0.0
+        self.last_drift = 0.0
+        self.last_drift_ratio = 0.0
+
+    @property
+    def state(self):
+        return self.base_optimizer.state
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.base_optimizer.step(closure)
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            l2_drift_sq = 0.0
+            l2_fast_sq = 0.0
+            for group_idx, group in enumerate(self.base_optimizer.param_groups):
+                for p_idx, p in enumerate(group['params']):
+                    slow = self.slow_weights[group_idx][p_idx]
+                    l2_drift_sq += (p.data - slow).pow(2).sum().item()
+                    l2_fast_sq += p.data.pow(2).sum().item()
+            drift = l2_drift_sq ** 0.5
+            fast_l2 = l2_fast_sq ** 0.5
+            ratio = drift / max(fast_l2, 1e-12)
+            self.last_drift = drift
+            self.last_drift_ratio = ratio
+            if drift > self.peak_drift:
+                self.peak_drift = drift
+                self.peak_drift_ratio = ratio
+            for group_idx, group in enumerate(self.base_optimizer.param_groups):
+                for p_idx, p in enumerate(group['params']):
+                    slow = self.slow_weights[group_idx][p_idx]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def reset_drift_diagnostics(self):
+        self.peak_drift = 0.0
+        self.peak_drift_ratio = 0.0
+
+    def state_dict(self):
+        return {
+            "base": self.base_optimizer.state_dict(),
+            "slow_weights": self.slow_weights,
+            "step_count": self.step_count,
+            "k": self.k,
+            "alpha": self.alpha,
+        }
+
+    def load_state_dict(self, state_dict):
+        self.base_optimizer.load_state_dict(state_dict["base"])
+        self.slow_weights = state_dict["slow_weights"]
+        self.step_count = state_dict["step_count"]
+        self.k = state_dict["k"]
+        self.alpha = state_dict["alpha"]
+
+
+_base_optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(0.9, 0.99),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+optimizer = Lookahead(_base_optimizer, k=5, alpha=0.5)
+# Capture parameter names in optimizer-iteration order so we can save / load
+# slow weights as a named state dict for the post-training fast-vs-slow A/B
+# diagnostic. model.parameters() (used to construct Lion) and
+# model.named_parameters() iterate in the same order.
+_param_names_in_order = [name for name, _ in model.named_parameters()]
+print(f"Optimizer: Lookahead(k=5, alpha=0.5) wrapping Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99)")
+print(f"Lookahead (Zhang et al. 2019): every k=5 Lion steps, slow weights theta_slow += alpha*(theta_fast - theta_slow); fast weights reset to slow. Targets Lion narrow-basin + in_dist overfitting bottleneck via smooth slow-weight commitment. Baseline to beat: val_avg/mae_surf_p < 33.0195")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -630,6 +729,7 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
+    optimizer.reset_drift_diagnostics()
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
@@ -685,9 +785,16 @@ for epoch in range(MAX_EPOCHS):
             "per_split": split_metrics,
         }
         torch.save(model.state_dict(), model_path)
+        # Save Lookahead slow weights at this best-val moment as a named
+        # state dict so we can run a fast-vs-slow A/B at end of training.
+        _slow_flat = [s for g in optimizer.slow_weights for s in g]
+        _slow_state = {name: s.detach().clone()
+                       for name, s in zip(_param_names_in_order, _slow_flat)}
+        torch.save(_slow_state, model_dir / "checkpoint_slow.pt")
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _total_syncs = optimizer.step_count // optimizer.k
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -700,6 +807,11 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "lookahead/syncs_total": _total_syncs,
+        "lookahead/peak_drift": optimizer.peak_drift,
+        "lookahead/peak_drift_ratio": optimizer.peak_drift_ratio,
+        "lookahead/last_drift": optimizer.last_drift,
+        "lookahead/last_drift_ratio": optimizer.last_drift_ratio,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -862,6 +974,40 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+    # Lookahead diagnostic: re-evaluate val splits using SLOW weights to compare
+    # vs fast (= the original training-protocol checkpoint we just evaluated).
+    _slow_ckpt_path = model_dir / "checkpoint_slow.pt"
+    if _slow_ckpt_path.exists():
+        print("\nLookahead diagnostic: re-evaluating val splits with SLOW (Lookahead) weights...")
+        _slow_state = torch.load(_slow_ckpt_path, map_location=device, weights_only=True)
+        _fast_backup = {name: p.detach().clone() for name, p in model.named_parameters()}
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                if name in _slow_state:
+                    p.data.copy_(_slow_state[name])
+        model.eval()
+        slow_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+            for name, loader in val_loaders.items()
+        }
+        slow_val_avg = aggregate_splits(slow_split_metrics)["avg/mae_surf_p"]
+        print(f"\nFast (best-checkpoint) val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+        print(f"Slow (Lookahead) val_avg/mae_surf_p       = {slow_val_avg:.4f}")
+        print(f"Delta (fast - slow): {best_avg_surf_p - slow_val_avg:+.4f}  "
+              f"({'slow wins' if slow_val_avg < best_avg_surf_p else 'fast wins'})")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, slow_split_metrics[name])
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "lookahead_slow_diagnostic",
+            "fast_val_avg": best_avg_surf_p,
+            "slow_val_avg": slow_val_avg,
+            "delta_fast_minus_slow": best_avg_surf_p - slow_val_avg,
+            "slow_per_split": slow_split_metrics,
+        })
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                p.data.copy_(_fast_backup[name])
 
     write_experiment_summary(
         model_path=model_path,
