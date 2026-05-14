@@ -47,6 +47,59 @@ from data import (
     pad_collate,
 )
 from soap import SOAP
+from torch.utils.data import Dataset
+
+# Per-node surface-normal targets (n_x, n_z), unit-length on surface nodes,
+# inherited from nearest surface node for volume nodes. Built once via
+# ``build_surface_normal_cache.py``; per-sample files share the split layout
+# and filenames of the on-PVC ``splits_v2``.
+SURFACE_NORMAL_CACHE_DIR = Path("surface_normal_cache/splits_v2")
+
+
+class SurfaceNormalWrappedDataset(Dataset):
+    """Wrap a base dataset and emit the matching per-node (n_x, n_z) tensor.
+
+    Returns ``(x, y, is_surface, normal)`` where ``normal`` is ``[N, 2]``.
+    """
+
+    def __init__(self, base, normal_dir):
+        self.base = base
+        self.normal_dir = Path(normal_dir)
+
+    def __len__(self):
+        return len(self.base)
+
+    def _filename(self, idx):
+        if hasattr(self.base, "files"):
+            return self.base.files[idx].name
+        if hasattr(self.base, "x_files"):
+            return self.base.x_files[idx].name
+        raise AttributeError("Base dataset has neither .files nor .x_files")
+
+    def __getitem__(self, idx):
+        x, y, is_surf = self.base[idx]
+        normal = torch.load(self.normal_dir / self._filename(idx), weights_only=True)
+        return x, y, is_surf, normal
+
+
+def pad_collate_with_normal(batch):
+    """Pad variable-length mesh samples plus per-node (n_x, n_z) targets."""
+    xs, ys, surfs, normals = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    normal_pad = torch.zeros(B, max_n, 2)
+    for i, (x, y, sf, n) in enumerate(zip(xs, ys, surfs, normals)):
+        n_nodes = x.shape[0]
+        x_pad[i, :n_nodes] = x
+        y_pad[i, :n_nodes] = y
+        surf_pad[i, :n_nodes] = sf
+        mask[i, :n_nodes] = True
+        normal_pad[i, :n_nodes] = n
+    return x_pad, y_pad, surf_pad, mask, normal_pad
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -191,10 +244,10 @@ class TransolverBlock(nn.Module):
         fx = self.mlp(normed_2) + fx
         if self.last_layer:
             if self.re_conditional_layernorm:
-                normed_3 = rcln_3(fx, log_re)
+                h = rcln_3(fx, log_re)
             else:
-                normed_3 = self.ln_3(fx)
-            return self.mlp2(normed_3)
+                h = self.ln_3(fx)
+            return self.mlp2(h), h
         return fx
 
 
@@ -205,7 +258,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 aux_normal: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -246,6 +300,18 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+        # Auxiliary output head: predict per-node surface-normal direction
+        # (n_x, n_z) from the trunk's post-LN hidden state, jointly with the
+        # main pressure/velocity prediction. Zero-init so the head starts as a
+        # no-op and warms up gradually as the trunk learns shape-aware features.
+        # Created AFTER self.apply so the zero-init is preserved (apply would
+        # overwrite the weight with trunc_normal_ otherwise).
+        if aux_normal:
+            self.aux_normal_head = nn.Linear(n_hidden, 2)
+            nn.init.zeros_(self.aux_normal_head.weight)
+            nn.init.zeros_(self.aux_normal_head.bias)
+        else:
+            self.aux_normal_head = None
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -274,7 +340,11 @@ class Transolver(nn.Module):
         else:
             for block in self.blocks:
                 fx = block(fx, gamma, beta)
-        return {"preds": fx}
+        main_out, h = fx
+        out = {"preds": main_out}
+        if self.aux_normal_head is not None:
+            out["aux_normal"] = self.aux_normal_head(h)
+        return out
 
 
 class ReScaleHead(nn.Module):
@@ -400,7 +470,10 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
     n_surf = n_vol = n_batches = 0
 
     with torch.no_grad():
-        for x, y, is_surface, mask in loader:
+        for batch in loader:
+            # Aux-normal loader yields 5 elements; baseline yields 4. Aux target
+            # isn't used for val/test scoring (we only care about the main MAE).
+            x, y, is_surface, mask = batch[:4]
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
@@ -556,6 +629,18 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # Auxiliary surface-normal output head. When weight > 0, the model gains
+    # a 2-channel Linear(n_hidden, 2) aux head that predicts per-node
+    # (n_x, n_z) from the trunk's post-LN hidden state, supervised by the
+    # precomputed unit-normal targets in surface_normal_cache/splits_v2.
+    # When ``aux_normal_surface_only`` is True (this PR #2688), the aux L1
+    # loss is computed only on valid surface nodes — volume nodes are
+    # excluded so the trunk is free to encode bulk-flow features there
+    # without competing aux supervision (volume-node target is inherited
+    # from the nearest surface node and has no physical interpretation in
+    # the wake/far-field).
+    aux_normal_weight: float = 0.0
+    aux_normal_surface_only: bool = False
 
 
 cfg = sp.parse(Config)
@@ -568,7 +653,26 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+# Auxiliary surface-normal output head: wrap datasets so __getitem__ also
+# returns the per-node (n_x, n_z) target loaded from disk, and use a custom
+# collate that pads the normals alongside (x, y, is_surface, mask).
+aux_normal_enabled = cfg.aux_normal_weight > 0
+if aux_normal_enabled:
+    print(
+        f"Auxiliary surface-normal head: ON (weight={cfg.aux_normal_weight}, "
+        f"surface_only={cfg.aux_normal_surface_only}). "
+        f"Loading per-node target normals from {SURFACE_NORMAL_CACHE_DIR}."
+    )
+    train_ds = SurfaceNormalWrappedDataset(train_ds, SURFACE_NORMAL_CACHE_DIR / "train")
+    val_splits = {
+        name: SurfaceNormalWrappedDataset(ds, SURFACE_NORMAL_CACHE_DIR / name)
+        for name, ds in val_splits.items()
+    }
+    collate_fn = pad_collate_with_normal
+else:
+    collate_fn = pad_collate
+
+loader_kwargs = dict(collate_fn=collate_fn, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
@@ -597,6 +701,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    aux_normal=aux_normal_enabled,
 )
 
 model = Transolver(**model_config).to(device)
@@ -609,9 +714,13 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_2.parameters())
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
+n_params_aux = (
+    sum(p.numel() for p in model.aux_normal_head.parameters())
+    if model.aux_normal_head is not None else 0
+)
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
-    f"ReCondLN {n_params_re_ln}) "
+    f"ReCondLN {n_params_re_ln}, AuxNormal {n_params_aux}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
 
@@ -647,7 +756,8 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
     gamma_stats = beta_stats = None
     try:
         with torch.no_grad():
-            for x, _y, _is_surface, mask in val_loader:
+            for batch in val_loader:
+                x, _y, _is_surface, mask = batch[:4]
                 x = x.to(device_, non_blocking=True)
                 mask = mask.to(device_, non_blocking=True)
                 x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
@@ -727,6 +837,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     rescale_head.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_main_loss_unweighted = 0.0
+    epoch_aux_loss = 0.0
+    epoch_aux_pred_mag = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
@@ -760,7 +873,13 @@ for epoch in range(MAX_EPOCHS):
             "n": 0,
         } for role in ("attn", "ffn", "out")}
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        if aux_normal_enabled:
+            x, y, is_surface, mask, target_normal = batch
+            target_normal = target_normal.to(device, non_blocking=True)
+        else:
+            x, y, is_surface, mask = batch
+            target_normal = None
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -771,7 +890,9 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            model_out = model({"x": x_norm})
+            pred = model_out["preds"] * scale
+            aux_pred = model_out.get("aux_normal", None)
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
@@ -803,7 +924,27 @@ for epoch in range(MAX_EPOCHS):
             surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
             vol_loss = (vol_sq / vol_denom).mean()
             surf_loss = (surf_sq / surf_denom).mean()
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Auxiliary surface-normal L1 loss. Trunk hidden state → (n_x, n_z),
+            # supervised against the precomputed unit-normal targets. When
+            # ``aux_normal_surface_only`` is True (PR #2688), the loss is
+            # restricted to valid surface nodes — volume-node targets are
+            # inherited from the nearest surface node and have no physical
+            # meaning in the wake/far-field, so co-supervising the trunk on
+            # them competes with bulk-flow encoding.
+            if aux_pred is not None:
+                if cfg.aux_normal_surface_only:
+                    valid_mask_aux = (mask & is_surface).unsqueeze(-1)
+                else:
+                    valid_mask_aux = mask.unsqueeze(-1)
+                aux_err = (aux_pred - target_normal).abs() * valid_mask_aux
+                n_valid_aux = valid_mask_aux.sum().clamp(min=1) * 2  # 2 channels
+                aux_loss = aux_err.sum() / n_valid_aux
+                loss = main_loss + cfg.aux_normal_weight * aux_loss
+            else:
+                aux_loss = None
+                loss = main_loss
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         # and per-channel unweighted Huber loss (so we can compare the raw
@@ -818,6 +959,18 @@ for epoch in range(MAX_EPOCHS):
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
+            if aux_pred is not None:
+                # Track aux predicted-normal magnitude over the supervised
+                # nodes (surface-only here). Should approach 1.0 as the
+                # model learns to output unit vectors.
+                aux_pred_f = aux_pred.detach().float()
+                if cfg.aux_normal_surface_only:
+                    diag_mask = mask & is_surface
+                else:
+                    diag_mask = mask
+                pred_mag = aux_pred_f.norm(dim=-1) * diag_mask
+                n_valid_nodes = diag_mask.sum().clamp(min=1).float()
+                epoch_aux_pred_mag += float((pred_mag.sum() / n_valid_nodes).item())
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -872,6 +1025,9 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_main_loss_unweighted += float(main_loss.item())
+        if aux_loss is not None:
+            epoch_aux_loss += float(aux_loss.item())
         epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
@@ -879,6 +1035,9 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_main_loss_unweighted /= max(n_batches, 1)
+    epoch_aux_loss /= max(n_batches, 1)
+    epoch_aux_pred_mag /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
@@ -1013,6 +1172,12 @@ for epoch in range(MAX_EPOCHS):
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
+        "aux_normal/weight": cfg.aux_normal_weight,
+        "aux_normal/enabled": aux_normal_enabled,
+        "aux_normal/surface_only": cfg.aux_normal_surface_only,
+        "aux_normal/loss": epoch_aux_loss if aux_normal_enabled else None,
+        "aux_normal/pred_magnitude_mean": epoch_aux_pred_mag if aux_normal_enabled else None,
+        "aux_normal/main_loss_unweighted": epoch_main_loss_unweighted,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1048,6 +1213,13 @@ for epoch in range(MAX_EPOCHS):
                 f"beta[absmax={s['beta_absmax']:.4f}, mean|.|={s['beta_mean_abs']:.4f}]  "
                 f"corr(|γ|,logRe)={s['corr_gamma_logre']:+.3f}  corr(|β|,logRe)={s['corr_beta_logre']:+.3f}"
             )
+    if aux_normal_enabled:
+        print(
+            f"    AuxNormal  loss={epoch_aux_loss:.4f}  "
+            f"pred_mag_mean={epoch_aux_pred_mag:.4f}  "
+            f"main_loss(unweighted)={epoch_main_loss_unweighted:.4f}  "
+            f"weight={cfg.aux_normal_weight}  surf_only={cfg.aux_normal_surface_only}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -1095,6 +1267,11 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        if aux_normal_enabled:
+            test_datasets = {
+                name: SurfaceNormalWrappedDataset(ds, SURFACE_NORMAL_CACHE_DIR / name)
+                for name, ds in test_datasets.items()
+            }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
