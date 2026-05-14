@@ -203,15 +203,19 @@ class TransolverBlock(nn.Module):
                  layerscale_init=1e-4, use_se=True):
         super().__init__()
         self.last_layer = last_layer
+        # SANDWICH-NORM (Cogview / Magneto): pre-LN at branch INPUT + post-LN at branch OUTPUT.
+        # ln_pre_* normalizes the branch input only (NOT the residual stream); ln_1/ln_2
+        # remain post-norm over residual sum. Adds 2 × LN per block (+4 × hidden_dim params).
+        self.ln_pre_attn = nn.LayerNorm(hidden_dim)
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        # POST-NORM topology + γ=1.0 constant (Vaswani 2017 recipe). LayerScale
-        # removed: γ is a plain Python float, not nn.Parameter — no learnable
-        # gain on residual branches. Saves 2×hidden_dim params per block.
+        # γ=1.0 constant (Vaswani 2017 recipe). LayerScale removed: γ is a plain Python
+        # float, not nn.Parameter — no learnable gain on residual branches.
         self.gamma_attn = 1.0
+        self.ln_pre_mlp = nn.LayerNorm(hidden_dim)
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = 1.0
@@ -224,9 +228,11 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        # POST-NORM: LN applied AFTER residual addition (LN(x + f(x)) vs pre-norm x + f(LN(x)))
-        fx = self.ln_1(self.gamma_attn * self.attn(fx) + fx)
-        fx = self.ln_2(self.gamma_mlp * self.mlp(fx) + fx)
+        # SANDWICH-NORM: pre-LN at branch input + post-LN at residual sum.
+        # ln_pre_*(x) normalizes only what enters the branch; the residual `fx`
+        # stays un-pre-normalized, then ln_1/ln_2 post-norm the residual sum.
+        fx = self.ln_1(self.gamma_attn * self.attn(self.ln_pre_attn(fx)) + fx)
+        fx = self.ln_2(self.gamma_mlp * self.mlp(self.ln_pre_mlp(fx)) + fx)
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -537,11 +543,21 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(
-    f"Block topology: POST-NORM (LN AFTER residual sum) at all {model_config['n_layers']}*2={model_config['n_layers']*2} per-block LN sites; "
+    f"Block topology: SANDWICH-NORM (Cogview/Magneto) — pre-LN at branch input + post-LN at residual sum; "
+    f"per block sites: ln_pre_attn, ln_1 (post), ln_pre_mlp, ln_2 (post) → {model_config['n_layers']}*4={model_config['n_layers']*4} per-block LN params blocks; "
     f"final ln_3 retained in last block for output-head cleanup; "
-    f"forward: ln(gamma * f(x) + x) vs baseline pre-norm x + gamma * f(ln(x)); "
-    f"vs #2951 post-norm + LayerScale γ=1e-4: val 35.0624 (+14.73% LOSS), cruise +25.03% (worst). "
-    f"This PR isolates topology from LayerScale init."
+    f"forward: ln_post(gamma * f(ln_pre(x)) + x); "
+    f"vs #2964 post-norm-only (NEW baseline val 30.0382): adds +{2 * model_config['n_layers'] * 2 * model_config['n_hidden']} pre-LN params; "
+    f"tests whether BOTH pre+post normalizations are load-bearing."
+)
+_pre_ln_sites = sum(1 for n, _ in model.named_modules() if "ln_pre" in n)
+_post_ln_sites = sum(
+    1 for n, m in model.named_modules()
+    if isinstance(m, nn.LayerNorm) and (n.endswith(".ln_1") or n.endswith(".ln_2"))
+)
+print(
+    f"Sandwich-LN site count: pre-LN={_pre_ln_sites} (expect {2 * model_config['n_layers']}), "
+    f"post-LN={_post_ln_sites} (expect {2 * model_config['n_layers']})"
 )
 print(
     f"LayerScale: REMOVED — γ_attn = γ_mlp = 1.0 constant (Python float, NOT nn.Parameter); "
@@ -719,6 +735,10 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
 
     handles = []
     for bi, blk in enumerate(inner.blocks):
+        if hasattr(blk, "ln_pre_attn"):
+            handles.append(blk.ln_pre_attn.register_forward_hook(make_hook(bi, "ln_pre_attn")))
+        if hasattr(blk, "ln_pre_mlp"):
+            handles.append(blk.ln_pre_mlp.register_forward_hook(make_hook(bi, "ln_pre_mlp")))
         handles.append(blk.ln_1.register_forward_hook(make_hook(bi, "ln_1")))
         handles.append(blk.ln_2.register_forward_hook(make_hook(bi, "ln_2")))
         if getattr(blk, "last_layer", False) and hasattr(blk, "ln_3"):
@@ -737,7 +757,7 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     for h in handles:
         h.remove()
 
-    print(f"\nResidual magnitude probe @ {epoch_tag} (post-norm topology):")
+    print(f"\nResidual magnitude probe @ {epoch_tag} (sandwich-norm topology):")
     log_payload = {
         "event": "residual_magnitude",
         "epoch_tag": epoch_tag,
@@ -751,6 +771,43 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
         )
     append_metrics_jsonl(metrics_jsonl_path, log_payload)
     return captured
+
+
+def capture_pre_ln_params(model_obj, epoch_tag):
+    """Snapshot sandwich-norm pre-LN γ/β statistics per block at a given epoch.
+
+    Logs whether ln_pre_attn / ln_pre_mlp γ drifted from init (1.0) and whether
+    β learned non-trivial bias — captures the convergence behavior requested
+    in PR #3003.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    payload = {"event": "pre_ln_params", "epoch_tag": epoch_tag, "blocks": []}
+    print(f"\nPre-LN γ/β snapshot @ {epoch_tag} (sandwich-norm):")
+    for bi, blk in enumerate(inner.blocks):
+        sites = []
+        for ln_name in ("ln_pre_attn", "ln_pre_mlp"):
+            ln = getattr(blk, ln_name, None)
+            if ln is None:
+                continue
+            with torch.no_grad():
+                g = ln.weight.detach().float()
+                b = ln.bias.detach().float()
+                g_mean, g_std = g.mean().item(), g.std().item()
+                b_mean, b_std = b.mean().item(), b.std().item()
+                g_abs_max = g.abs().max().item()
+                b_abs_max = b.abs().max().item()
+            print(
+                f"  block[{bi}].{ln_name}: "
+                f"γ mean={g_mean:.4f} std={g_std:.4f} |max|={g_abs_max:.4f} | "
+                f"β mean={b_mean:.4f} std={b_std:.4f} |max|={b_abs_max:.4f}"
+            )
+            sites.append({
+                "ln_name": ln_name,
+                "gamma_mean": g_mean, "gamma_std": g_std, "gamma_abs_max": g_abs_max,
+                "beta_mean": b_mean, "beta_std": b_std, "beta_abs_max": b_abs_max,
+            })
+        payload["blocks"].append({"block_idx": bi, "sites": sites})
+    append_metrics_jsonl(metrics_jsonl_path, payload)
 
 
 best_avg_surf_p = float("inf")
@@ -841,13 +898,17 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
-    # Residual magnitude probe at ep1 — captures the post-norm "capped" pattern
-    # early in training (vs pre-norm baseline that grows residuals with depth).
+    # Residual magnitude probe at ep1 — captures the sandwich-norm topology
+    # signature (pre-LN absorbs branch input scale; post-LN caps residual sum).
     if (epoch + 1) == 1:
         _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+
+    # Sandwich-norm pre-LN γ/β convergence probes at ep1, 10, 30, 60 (PR #3003).
+    if (epoch + 1) in (1, 10, 30, 60):
+        capture_pre_ln_params(model, epoch_tag=f"ep{epoch+1}")
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
