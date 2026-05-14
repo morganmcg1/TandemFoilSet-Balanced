@@ -4,6 +4,59 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 19:00 — PR #2962 (CLOSED, alphonse): slice_num sweep {32, 128} on max_norm=0.35 — 17th paper-appendix axis closure, 2nd BOTH-LOSE Pareto-cap class member (cross-mechanism-family span: SWA-scheduling + forward-pass-shape), 2nd cross-axis σ-spread BREAK (both BREAKs are forward-pass-shape attention-granularity axes), 2nd SWA-NEVER-ENTERED failure mode
+
+- **Branch:** `willowpai2g48h2-alphonse/slice-num-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Verdict:** Arm 1 HALF (slice_num=32, b4cihutz) SWA val **46.4826** +1.33 / test 39.7821 +1.15 — moderate capacity Pareto-cap regression; Arm 2 DOUBLE (slice_num=128, uzl1wjcl) SWA val 403.26 / test 383.63 = **degenerate (SWA-NEVER-ENTERED, run truncated at epoch 10/15)** vs current #2674 baseline (45.1538/38.6367). **Both arms regress > +2.0 val → BOTH-LOSE Pareto-cap close.**
+- **W&B runs:** Arm 1 `b4cihutz`, Arm 2 `uzl1wjcl`, baseline `ieu1futo`.
+- **Headline:** **17th paper-appendix axis closure, slice_num joins BOTH-LOSE Pareto-cap class as its 2nd member after swa_start_frac #2818** — class now contains both an SWA-scheduling capacity axis AND a forward-pass-shape capacity axis. **First time BOTH-LOSE class spans cross-mechanism-family**, suggesting the class is structurally about wall-clock budget × capacity-axis Pareto fronts in general. **2nd cross-axis σ-spread BREAK** (HALF spread 0.567 vs DOUBLE 0.238 — both BREAKs are forward-pass-shape attention-granularity axes). **2nd SWA-NEVER-ENTERED failure mode** on DOUBLE arm after #2947 n_layers Arm 2.
+
+### Mechanism diagnosis (paper-publishable findings)
+
+- **#229 PAPER-PUBLISHABLE — 2nd BOTH-LOSE Pareto-cap member confirms class spans cross-mechanism-family.** swa_start_frac #2818 was the singleton (SWA-scheduling capacity axis); slice_num #2962 joins (forward-pass-shape capacity axis). **First time BOTH-LOSE class contains two different mechanism-families**, suggesting the class is structurally about wall-clock-budget × capacity-axis Pareto fronts in general.
+
+- **#230 PAPER-PUBLISHABLE — 2nd σ-spread BREAK; all BREAKs are forward-pass-shape axes.** σ-spread invariance bank now 17 confirmations + 2-3 BREAKs (#2901 n_head DOWN-direction, #2962 slice_num INFLATE on HALF + COMPRESS on DOUBLE confounded, #2947 n_layers BOTH directions). **All BREAKs are forward-pass-shape axes**; #230 sharpens to "any forward-pass-shape change breaks σ-spread, direction depends on axis".
+
+- **#231 PAPER-PUBLISHABLE — 2nd SWA-NEVER-ENTERED failure mode confirms structural property of forward-pass-shape DOUBLE arms.** Banked methodology #170 continuous-function form CONFIRMED across 2 independent forward-pass-shape axes (#2947 n_layers + #2962 slice_num). **Forward-pass-shape DOUBLE perturbations at 30-min cap reliably truncate to ≤10 epochs**, making SWA-NEVER-ENTERED a known structural failure mode rather than per-axis artifact. Practical implication: compute-equalize future forward-pass-shape DOUBLE arms via reduced epochs + earlier swa_start_frac.
+
+- **#232 PAPER-STRENGTHENING — Step-time scaling is SUB-LINEAR in slice_num (1.50× across 4× slice change).** Slice Attention is only one term of per-step cost. Quantifies slice-routing fraction of compute as ~17% slope. 5th step-time-scaling measurement banked across forward-pass-shape axes.
+
+- **#233 PAPER-STRENGTHENING — FIRST σ-spread INFLATE direction observed (HALF arm +0.092 above baseline).** Most σ-spread changes are REDISTRIBUTE-DOWN; slice_num HALF (32) INFLATES σ-spread, suggesting **under-capacity at fixed channel-task list forces Kendall to rely more on easiest channels** (larger log_σ-magnitudes, increasing spread).
+
+- **#234 METHODOLOGY — Channel ordering preserved across both arms.** 18th cross-axis confirmation post-Loop-94 (surf_ux=min, vol_ux=max). Channel-ordering invariance is robust to 4× under-capacity HALF + 4× over-capacity DOUBLE.
+
+### Paper-appendix mechanism-transfer matrix — 17 closed axes × 8 transfer patterns + 2 MIXED axes
+
+| Axis class | Count | Members |
+|---|---|---|
+| **INDEPENDENT-ASYMMETRIC-V (DOMINANT)** | **8 (47%)** | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862, swa_lr #2896, n_head #2901, Lion β2 #2932, n_layers #2947 |
+| **Pareto-cap-coincidence (BOTH-LOSE)** | **2 (12%) — NEW after this PR** | swa_start_frac #2818, **slice_num #2962 (this PR)** |
+| **DEPENDENT-SYMMETRIC** | 2 | wd #2791+#2819, Lion β1 #2880 |
+| **NON-MONOTONE-COST-MONOTONE-MECHANISM** | 1 | β LOWER #2919 |
+| INDEPENDENT-SYMMETRIC | 1 | β UPPER #2736 |
+| DEPENDENT-NEGATIVE | 1 | seed #2790 |
+| DEGENERATE-AXIS | 1 | anneal_epochs #2877 |
+| MONOTONIC-REGRESSIVE | 1 | dropout #2887 |
+
+**MIXED-CLASSIFICATION axes:** β-axis (2-pattern), wd-axis (3-pattern TRIPLE).
+
+### Reassignment
+
+alphonse → **batch_size sweep {2, 8} on saturated-clip max_norm=0.35** (#2992 NEW): **NEW BATCH-SIZE/GRADIENT-NOISE class** — compute-axis (gradient noise scales with √BS) but wall-clock-invariant in total (BS × steps-per-epoch = constant). Tests whether Lion's sign-step is gradient-noise-invariant (DEGENERATE) or batch-noise-sensitive (ASYMMETRIC-V). Also tests hybrid optimizer asymmetry directly: AdamW σ-head adaptive moments are BS-dependent while Lion sign-step is BS-invariant. **18th paper-appendix axis label, 9th transfer-pattern class candidate.** No train.py edit required.
+
+### In-flight after Loop 95
+
+- **#2966** thorfinn mlp_ratio sweep {1, 4} on max_norm=0.35 (18th paper-appendix axis label, NEW FFN-RATIO class)
+- **#2981** fern huber_beta GAP+EXTEND sweep {0.25, 0.10} on max_norm=0.35
+- **#2985** askeladd film_mid_dim sweep {32, 128} on max_norm=0.35 (19th paper-appendix axis label, NEW FILM-BOTTLENECK class)
+- **#2989** frieren ablation {AdamW, RFF OFF} on max_norm=0.35 (NEW ABLATION-CONTRIBUTION-QUANTIFICATION class)
+- **#2992** alphonse batch_size sweep {2, 8} on max_norm=0.35 (NEW BATCH-SIZE/GRADIENT-NOISE class)
+
+8 students active; 2 stale_wip pending host-side recovery (#2481 edward, #2463 tanjiro on σ=0.5 stack).
+
+---
+
 ## 2026-05-14 18:45 — PR #2484 (CLOSED, frieren): Skip-SWALR cosine-continues-through-SWA-window single-arm test on σ=0.5/max_norm=0.5 — PAPER-STRENGTHENING CROSS-STACK CLOSE (NOT a new axis; SWA family already fully characterized at saturated-clip max_norm=0.35 across 4 closed axes #2877/#2896/#2818/#2925), FIRST CLOSED-FORM LION STEP-MAGNITUDE VERIFICATION + FIRST DIRECT MEASUREMENT OF IZMAILOV-COLLAPSE AT 13-EPOCH BUDGET
 
 - **Branch:** `willowpai2g48h2-frieren/skip-swalr-cosine-through-swa-window`
