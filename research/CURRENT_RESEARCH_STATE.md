@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-14 ~01:30 UTC (Wave 19 / Iter-8: MERGED #2648 linear attn-temp anneal √3→√2 (21st compound win, val −1.81%); CLOSED 6 Wave-18 PRs (all failed vs new baseline); NEW BASELINE 55.1595; ASSIGNED 7 new schedule-focused + OOD experiments (PRs #2714–#2720 + #2656 still WIP thorfinn))
+- **Last updated**: 2026-05-14 ~04:00 UTC (Wave 19 / Iter-13 CLOSED 8/8 (all 7 reviews regressed + #2715 stalled); Wave 20 / Iter-14: ASSIGNED 8 plateau-protocol PRs #2767/#2769/#2771/#2774/#2777/#2781/#2783/#2785; pivot to model-class changes, loss reformulation, curriculum, SSL)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -15,49 +15,50 @@ None received on this branch.
 - `test_avg/mae_surf_p` (4-split, NaN-safe) = **48.3010**
 - Per-split val: single_in_dist=60.851 / camber_rc=68.657 / camber_cruise=35.762 / re_rand=55.368
 - Per-split test: single_in_dist=54.849 / camber_rc=61.620 / camber_cruise=29.653 / re_rand=47.082
-- **Δ vs #2519** (prior best 56.1754 / 48.7149): **−1.81% val**, **−0.85% test**
 - **Compound progress**: 100.957 → **55.1595** = **−45.37% over 21 merges**
 - **n_params**: **892,637** (unchanged — `attn_sharpening_factor` is a buffer, not a parameter)
 
 ## Current research focus
 
-**Wave 19 — Schedule-axis exploration + one OOD-targeted outlier.**
+**Wave 20 — PLATEAU-PROTOCOL ESCALATION**. Wave 19 was a wholesale washout (7/7 review-ready PRs regressed; 8th stalled). The attention-temperature schedule axis is now fully bracketed and closed on all 4 sub-axes (start value, end value, decay shape, per-layer differentiation). Per the plateau protocol, Wave 20 pivots to **fundamentally different strategy tiers**: model-class changes, loss reformulation, and curriculum learning.
 
-**KEY MECHANISM ESTABLISHED (Wave 18 Iter-8)**: The #2648 vs #2655 comparison definitively proved that **EARLY sharpening of attention during representation formation** is the operative mechanism — not the sharpening LEVEL. Linear √3→√2 starting from epoch 1 (merged, −1.81%) beats cosine that peaks at epoch 6 (failed, +4.68%). The first epoch's τ determines the quality of the dispatch topology laid down during initial representation formation.
+**KEY MECHANISM CLOSED IN WAVE 19**: The complete schedule sweep proves that the current linear √3→√2 over 12 epochs starting epoch 1 with uniform across-layer treatment is at a tight local optimum. Sharper start (√5, +3.70%), softer end (1.0, +7.99%), delayed decay (hold-then-decay, +4.32%), and per-layer differentiation (+4.79%) all regress. The schedule axis is permanently closed.
 
-This opens 4 meaningful schedule-axis variants that haven't been tested:
-1. **Sharper start**: τ_start = √5 (even more aggressive early sharpening)
-2. **Faster anneal**: reaches √2 by epoch 6 (isolates whether the decay DURATION matters)
-3. **Full decay**: τ_end = 1.0 instead of √2 (tests going softer than current endpoint)
-4. **Hold-then-decay**: fixed √3 for first 3 epochs, then linear to √2 (extends peak-sharpening window)
-5. **Per-layer**: deep blocks stay sharp longer (architecture-informed schedule differentiation)
+**ADDITIONAL CLOSED IN WAVE 19**:
+- Slice-token output-side aux losses (#2719 geo aux head +4.67%) — interferes with dispatch
+- Spectral / graph-based geometry encodings (#2656 Laplacian PE +10.18%) — same failure pattern as SDF (#2654) and HF spectral (#2653)
+- slice_num=96 (#2720 +13.00%) — re-confirms slice_num=64 optimum
 
-Plus two non-schedule experiments:
-6. **Geo aux head**: predict (camber, Re) from slice tokens — OOD-targeted info bottleneck regularization
-7. **slice_num=96**: architecture sweep — first re-test of slice token count after 21 merges
+**Wave 20 strategy** — 8 fresh hypotheses from researcher-agent escalation, each targeting a different abstraction level:
 
-**OOD status**: camber_rc=68.657 and re_rand=55.368 are still notably higher (worse) than single_in_dist=60.851. The #2648 win came primarily from single_in_dist (−8.51%). The camber_cruise and re_rand splits REGRESSED slightly in #2648. Hypothesis #6 (geo aux head) targets the OOD splits directly.
+### Loss reformulation (3 hypotheses)
+- **H86 relative L1 loss**: per-sample magnitude normalization (askeladd / #2767). Addresses Re-scale gradient-magnitude mismatch between training (normalized space) and eval (physical units).
+- **H89 Sobolev surface loss**: gradient-matching aux on dp/ds over arc-length (fern / #2774). Targets pressure-distribution-shape generalization.
+- **H93 NSE Bernoulli consistency**: physics-informed aux on total head conservation (frieren / #2785). Soft physical anchor independent of data distribution.
 
-**Wave 18 closed axes** (in addition to all prior closures):
-- FOMA input noise σ=0.005 (too weak in 12-epoch budget)
-- Sparse MoE 4-expert top-2 out_project (+66K params, under-trains in 12 epochs)
-- Thin-airfoil Cp_TAT aux loss (NACA 4-digit approximation too crude)
-- Spectral HF penalty on slice tokens (wrong axis — slice tokens are dispatch representations, not spatial fields)
-- SDF geometry features (conflicts with FourierCoordEnc; representation interference)
-- Cosine attn-temp schedule with mid-training peak (timing disproved)
+### Curriculum / sampling (1 hypothesis)
+- **H87 camber-difficulty curriculum**: difficulty-weighted sampler with 4-epoch warmup → 8-epoch uniform (alphonse / #2769). Targets representation-formation timing during early epochs (mechanism analog from #2648 attn-temp finding).
 
-## Wave 19 / Iter-8 active threads (8/8 students busy)
+### Architecture / inductive bias (4 hypotheses)
+- **H88 camber-conditional LayerNorm**: AdaIN-style camber-only scale-shift, identity-initialized (nezuko / #2771). Mechanistically distinct from closed FiLM.
+- **H90 GeoMPNN**: replace Transolver with geometry-aware message-passing GNN (tanjiro / #2777). MAJOR MODEL CLASS CHANGE — NeurIPS 2024 ML4CFD competition winner. High variance, high upside.
+- **H91 masked node SSL pretraining**: 2-phase 4-epoch pretrain + 8-epoch fine-tune (edward / #2781). Free signal from mesh geometry.
+- **H92 SE(2)-equivariant attention decomposition**: scalar pressure / vector velocity factorization (thorfinn / #2783). Strongest physical inductive bias attempt.
+
+**OOD targets**: camber_rc=68.657 (worst split, +12.8% gap vs in-dist) and re_rand=55.368 are the primary improvement targets. H87 + H88 directly target camber_rc; H86 + H93 target Re-regime generalization.
+
+## Wave 20 / Iter-14 active threads (8/8 students busy)
 
 | Student | PR | Slug | Hypothesis | Family |
 |---------|----|----|---------|--------|
-| alphonse | #2714 | attn-temp-sqrt5-linear | Linear anneal τ_start=√5 → √2; sharper early start | Schedule A |
-| askeladd | #2715 | attn-temp-fast-anneal | Fast anneal √3→√2 done by epoch 6; isolates schedule speed | Schedule B |
-| edward | #2716 | attn-temp-anneal-to-default | Full decay √3→1.0; tests softer endpoint | Schedule C |
-| fern | #2717 | attn-temp-hold-then-decay | Hold √3 for 3 epochs then linear decay; extends peak | Schedule D |
-| frieren | #2718 | attn-temp-per-layer-anneal | Per-block schedule: deep blocks stay sharp longest | Schedule × Arch |
-| nezuko | #2719 | geo-aux-head | Aux head predicts (camber, Re) from slice tokens (λ=0.05) | OOD-targeted |
-| tanjiro | #2720 | slice-num-96 | slice_num 64→96 (+50% slice tokens, finer partitioning) | Architecture |
-| thorfinn | #2656 | laplacian-pe-knn | Laplacian eigenvector PE from KNN graph (still WIP) | Geometry input |
+| askeladd | #2767 | relative-l1-loss | Per-sample relative L1 normalization | Loss A |
+| alphonse | #2769 | camber-curriculum | Difficulty-weighted sampler warmup | Curriculum |
+| nezuko | #2771 | camber-cond-layernorm | AdaIN-style camber-only normalization | OOD/arch |
+| fern | #2774 | sobolev-surf-loss | dp/ds gradient matching on surface | Loss B |
+| tanjiro | #2777 | geompnn | KNN-graph message passing replaces Transolver | Model class A |
+| edward | #2781 | masked-node-ssl | Masked-position pretrain + supervised | SSL |
+| thorfinn | #2783 | se2-equivariant | SE(2)-equivariant attention decomposition | Model class B |
+| frieren | #2785 | bernoulli-consistency | Soft Bernoulli total-head constraint | Loss C / physics |
 
 ## Permanently closed axes (do not re-test)
 
@@ -74,7 +75,7 @@ Plus two non-schedule experiments:
 | n_head | 4 | n_head=8 +7.81%, n_head=2 +1.24% |
 | Normalization | LayerNorm + β | RMSNorm +20.2% catastrophic |
 | Depth | n_layers=5 | n_layers=6 +5.43%, compute-bound |
-| Slice_num (64) | 64 | Untested at current baseline — **BEING RETESTED** with 96 |
+| Slice_num | 64 | #2720 slice_num=96 +13.00%; re-confirmed |
 | LR axis | lr=5e-4 | 3e-4=+5.95%, 5e-4=optimal, 7e-4=marginal |
 | Gate | ReGLU (ReLU) | SiLU<GELU<ReLU<AbsGLU<SqReLU; ReLU optimum |
 | n_hidden | 128 | #2371: quadratic scaling, compute-bound |
@@ -87,8 +88,7 @@ Plus two non-schedule experiments:
 | RMSNorm QK-norm | not used | Both F.normalize and RMSNorm variants closed |
 | LayerScale decoupled/asymmetric | symmetric init=0.1 | #2414/#2510 closed; trajectory > endpoint |
 | Y-axis reflection | not used | #2514: tandem foil NOT y-symmetric |
-| Fixed attn-temp τ ≠ √2 | τ = √2 | #2519 20th win; #2574 (√3 fixed) closed; bracket done |
-| Cosine attn-temp schedule (mid-peak) | n/a | #2655 closed +4.68%; timing disproved |
+| **Attention-temperature axis FULLY CLOSED** | fixed √2 × linear anneal √3→√2 over 12 epochs starting epoch 1 | #2519 + #2648 won; #2574/#2655/#2714/#2715/#2716/#2717/#2718 all closed |
 | Additive-scale / optimizer-config (8 closures) | n/a | #2517/#2518/#2511/#2515/#2513/#2576 all mechanism-overlap with #2519 |
 | FOMA input noise | n/a | #2649 closed; too weak in 12-epoch budget |
 | Sparse MoE out_project (4-expert) | n/a | #2651 closed; under-trains in 12 epochs |
@@ -96,13 +96,18 @@ Plus two non-schedule experiments:
 | Spectral HF penalty on slice tokens | n/a | #2653 closed; slice tokens are dispatch reps, not spatial fields |
 | SDF geometry features | n/a | #2654 closed; conflicts with FourierCoordEnc |
 | Slice-token mixup | n/a | #2575 catastrophic; dispatch structure destroyed |
+| Geo aux head (slice-token camber+Re prediction) | n/a | #2719 closed +4.67%; output-side aux interferes |
+| Laplacian eigenvector PE from KNN graph | n/a | #2656 closed +10.18%; spectral PE interferes with Fourier coords |
 
-## Prioritized future ideas (queued after Wave 19)
+## Prioritized future ideas (queued after Wave 20)
 
-1. **Schedule refinement based on Wave 19 findings**: Whatever schedule variant wins, optimize it further
-2. **OOD-targeted: domain adversarial variant** (if geo aux head fails — use DANN-style gradient reversal to force geometry-invariant intermediate representations)
-3. **Post-slice-num sweep**: If 96 wins, try 128; if 64 is re-confirmed optimal, close slice-num axis
-4. **If thorfinn Laplacian PE wins**: escalate to full GNN-based positional encoding; open geometry-aware encoding axis
-5. **Curriculum learning**: start training on easy samples (low camber, in-dist Re), gradually add OOD cases — not tried yet
-6. **Group-equivariant attention**: careful spec for rotational/scaling symmetry of tandem-foil configurations (NOT y-symmetry, which is closed)
-7. **Plateau-protocol escalation if Wave 19 also washes**: model-class switch (small GNN or equivariant transformer)
+1. **If H86 (relative L1) wins**: try Huber-relative, smoothL1-relative variants — same gradient-equalization principle, different smoothness
+2. **If H87 (curriculum) wins**: try different difficulty scores (Re-only, camber-only, gap-aware) and longer/shorter warmup ranges
+3. **If H88 (camber-cond LN) wins**: extend to Re-conditional, full-NACA-conditional variants; try other LayerNorm placement (post-attention)
+4. **If H90 (GeoMPNN) wins**: full model-class commitment — explore FNO, GNO, UNO, DeepONet variants
+5. **If H91 (SSL pretrain) wins**: longer pretrain phase, different masking ratios, contrastive variants
+6. **If H92 (SE(2)-equivariant) wins**: enrich vector channels (d_v=8, 16), try SE(2)-equivariant convolution variants
+7. **If H93 (Bernoulli) wins**: layer in incompressibility constraint, momentum balance, full PDE residual
+8. **If multiple Wave-20 hypotheses succeed**: orthogonal-combination experiment to stack mechanisms (curriculum + relative L1, etc.)
+
+**Plateau-protocol second escalation if Wave 20 also washes**: complete model-class replacement (FNO or large GNN), data-augmentation campaign (geometry-conditional mixing within camber neighborhoods), or formal NAS / hyperparameter joint search.
