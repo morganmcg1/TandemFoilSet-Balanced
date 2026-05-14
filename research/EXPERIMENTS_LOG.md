@@ -2355,3 +2355,45 @@ Mirrors edward's γ-only FiLM-Re pattern (same identity-init MLP architecture, s
 
 ---
 
+## 2026-05-14 11:00 — PR #2853: Pinball τ=0.60 pressure (alphonse, CLOSED)
+- Branch: `willowpai2g48h3-alphonse/pinball-tau-060`
+- Hypothesis: extend pinball τ=0.55 to τ=0.60 — test whether pressure under-prediction benefit continues past 0.55.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `pevpbrxx` | 47.6814 | 41.8605 |
+| s2 | `jn6b7ely` | 48.4328 | 42.5079 |
+| **mean** | — | **48.057** | **42.184** |
+| **OLD baseline (11th shift, this assignment's bar)** | — | 43.09 | 37.19 |
+| **Δ vs OLD bar** | — | **+11.5% MISSES** | **+13.4% MISSES** |
+| **NEW baseline (12th shift σ=0.05 bar)** | — | 40.82 | 35.25 |
+| **Δ vs NEW bar** | — | **+17.7% MISSES** | **+19.7% MISSES** |
+
+Per-split test (mean): single_in_dist=50.11 (+16.5%), geom_camber_rc=54.76 (+9.8%), geom_camber_cruise=24.90 (+17.3%), re_rand=38.98 (+12.3%). All 4 splits regress on both seeds.
+
+Bias diagnostic (final-epoch signed residuals): s1 surf=−0.011, s2 surf=−0.006. Signed residual went NEGATIVE — model is now slightly over-predicting. τ=0.55 was near-zero; τ=0.60 overshoots to over-prediction bias.
+
+Best epoch: 29 (both seeds hit 30-min cap at ep 29; τ=0.55 baseline reached ep 35, slight per-epoch overhead from τ).
+
+**Analysis**: τ-axis single optimum at τ=0.55 confirmed. τ=0.50 (symmetric) < τ=0.55 (WIN) > τ=0.60 (overcorrection). The asymmetric loss mechanism is alive (signed residual responds to τ) but τ=0.60 exceeds the sweet spot. **τ axis now fully bracketed; retiring.**
+
+**Status**: CLOSED 2026-05-14 11:00. Per decision tree: `val > 45 → regression. τ=0.55 was near-optimal. Retire τ axis.`
+
+---
+
+## 2026-05-14 11:05 — Round-10 expansion: #2895 fern + #2897 alphonse
+
+After closing #2853, alphonse became idle. Combined with fern (idle since #2817 merged), 2 new assignments:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2895 | willowpai2g48h3-fern | Y-flip data augmentation: exploit flow y-equivariance to 2× effective training data | Data augmentation |
+| #2897 | willowpai2g48h3-alphonse | Weight-decay scan on σ=0.05 baseline: wd=5e-4 and wd=1e-3 | Regularization |
+
+- **#2895 fern Y-flip**: flip (y_node, AoA, Uy) with p=0.5 each batch. Physics-motivated free augmentation. Uses `--init_std 0.05`.
+- **#2897 alphonse wd-scan**: σ=0.05 init starts at param L2=25 (vs σ=0.02 L2=10); wd=2e-4 may under-regularize at the new init scale. Testing wd=5e-4 (s1) and wd=1e-3 (s2). Log param_L2 trajectory.
+
+---
+

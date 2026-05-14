@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 10:50
+- **Date:** 2026-05-14 11:05
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -62,8 +62,15 @@ Init-scale axis:
 Input-encoding axis:
 7. **Re-Fourier features at input (askeladd #2863)** — WIP
 
-Closed this heartbeat:
-- **AoA-Fourier features at input (thorfinn #2867)** — CLOSED 2026-05-14 10:35: +20.8% val regression. K=8 frequency ladder creates ~44 cycles across ±0.175 rad AoA range — high-frequency aliasing. All 4 splits degrade systematically.
+Data augmentation axis (NEW #2895):
+8. **Y-flip augmentation (fern #2895)** — NEW, assigned 2026-05-14 11:05; flip (y_node, AoA, Uy) with p=0.5 per batch; 2× effective data for free. Uses `--init_std 0.05`.
+
+Regularization axis (NEW #2897):
+9. **Weight-decay scan on σ=0.05 baseline (alphonse #2897)** — NEW, assigned 2026-05-14 11:05; wd=5e-4 and wd=1e-3 vs current wd=2e-4; σ=0.05 init starts at higher L2, may be under-regularized. Uses `--init_std 0.05`.
+
+Closed this round:
+- **AoA-Fourier features at input (thorfinn #2867)** — CLOSED 2026-05-14 10:35: +20.8% val regression. K=8 frequency ladder creates ~44 cycles across ±0.175 rad AoA range — high-frequency aliasing.
+- **Pinball τ=0.60 pressure (alphonse #2853)** — CLOSED 2026-05-14 11:00: +11.5% val regression. τ-axis single optimum at 0.55 confirmed; τ=0.60 overshoots to over-prediction bias. τ axis fully bracketed and retired.
 - **Pinball Ux/Uy extension (tanjiro #2855)** — CLOSED 09:21: regression (+4.5% val); velocity channels unbiased. Axis retired.
 
 ## Round 1 portfolio (current)
@@ -112,9 +119,12 @@ Closed this heartbeat:
 | **#2866** | **nezuko** | **Divergence-free auxiliary loss (∇·u=0)** | **WIP** |
 | #2867 | thorfinn | AoA-Fourier features at input (targets camber_rc) | **CLOSED** 2026-05-14 10:35 (+20.8% val — frequency aliasing on narrow AoA range) |
 | **#2882** | **tanjiro** | **σ-scan continuation: std=0.07 and std=0.10** | **WIP 2026-05-14 10:10** |
-| **#2886** | **thorfinn** | **γ-only FiLM-AoA: per-block AoA conditioning (targets camber_rc OOD)** | **WIP NEW 2026-05-14 10:45** |
+| **#2886** | **thorfinn** | **γ-only FiLM-AoA: per-block AoA conditioning (targets camber_rc OOD)** | **WIP 2026-05-14 10:45** |
+| #2853 | alphonse | Pinball τ=0.60 pressure | **CLOSED** 2026-05-14 11:00 (+11.5% — τ peak at 0.55, axis retired) |
+| **#2895** | **fern** | **Y-flip data augmentation (flow y-equivariance, 2× data free)** | **WIP NEW 2026-05-14 11:05** |
+| **#2897** | **alphonse** | **Weight-decay scan on σ=0.05: wd=5e-4 and wd=1e-3** | **WIP NEW 2026-05-14 11:05** |
 
-**Merged:** 12 | **Closed:** 59 | **WIP:** 7 | **Idle:** 0
+**Merged:** 12 | **Closed:** 60 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -151,6 +161,8 @@ Closed this heartbeat:
 - **Conditioning-variable jitter (log(Re))** — creates supervised inconsistency; degraded all splits
 - **SWA (last-10 ckpt averaging)** — variance reduction works (4-10× tighter std) but mean still misses bar at current baseline; pairs best with a stronger base run, revisit after future merges
 - **Gradient Centralization on Lion** — sign-incompatible: GC's row-mean subtraction forcibly inverts coordinate update directions when combined with sign() optimizer; GC needs Adam-style magnitude updates
+- **Pinball τ > 0.55 (pressure channel)** — τ-axis has single optimum at τ=0.55. τ=0.60 overshoots: signed residual goes negative (over-prediction), all 4 splits regress +11-17%. Axis fully bracketed (0.50 < **0.55 WIN** > 0.60). No further τ scans warranted.
+- **Pinball on velocity channels (Ux/Uy)** — velocity channels unbiased (signed residuals ≈ −0.003); τ≠0.5 overcorrects unbiased channels. Effective only on channels with directional bias.
 
 ## Potential next research directions
 
