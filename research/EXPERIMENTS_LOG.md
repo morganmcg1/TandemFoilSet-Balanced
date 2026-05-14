@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-14 [Round 123] UTC — PR #2893: GELU on SwiGLU up-projection — **CLOSED LOSS (+3.65%; activation-site axis FULLY CLOSED)**
+
+- **Branch:** charliepai2g48h5-nezuko/gelu-up-projection
+- **Hypothesis:** Apply F.gelu to SwiGLU up-projection output — smooth bracket for #2875 ReLU² LOSS.
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-gelu-up-projection-20260514-111005/metrics.jsonl
+
+| Metric | #2879 Baseline | #2893 GELU-up | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.6773** | **+3.65% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.7514 | +0.89% near-wash |
+| val_single_in_dist | 23.3997 | 24.2319 | +3.56% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.7596 | +5.84% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.9907 | +0.70% flat |
+| val_re_rand | 34.9057 | 35.7269 | +2.35% LOSS |
+
+All 4 val splits regress. Best ep60/70 (timeout). Params 407,940 unchanged.
+
+**Critical disentanglement vs #2875 ReLU²:**
+- up_act_zero_frac: GELU 0.18-0.23 (bounded, depth-flat) vs ReLU² 0.58→0.77 (dead-feature collapse)
+- up_act_max: GELU 9-10 (no overflow) vs ReLU² 157.8 block-1 (bf16 amplification)
+- GELU avoided BOTH failure modes of #2875 but still lost → isolates harm to **GLU factorization itself**, not dead-features/overflow
+
+**Activation-site axis FULLY CLOSED — 5-entry bracket:**
+| Site | Activation | Outcome |
+|---|---|---|
+| gate=SiLU, up=linear | baseline | WIN (21st) |
+| gate=GELU | LOSS | |
+| gate=Mish | CATASTROPHIC | |
+| up=ReLU² (#2875) | LOSS | hard+quadratic |
+| up=GELU (#2893) | LOSS | smooth but still wrong |
+
+Linear up-projection is load-bearing. No further activation-site work needed. **99th candidate axis CLOSES.**
+
+---
+
+## 2026-05-14 [Round 123] UTC — PR #2903: RMSNorm replaces LayerNorm — **ASSIGNED to charliepai2g48h5-nezuko**
+
+- **Branch:** charliepai2g48h5-nezuko/rmsnorm-replace-layernorm
+- **Hypothesis:** Replace all 3 `nn.LayerNorm` in TransolverBlock (ln_1, ln_2, ln_3) with `nn.RMSNorm`. Removes mean-centering and β-bias (864 fewer params). Modern transformer standard: Llama, Mistral, Gemma, DeepSeek all use RMSNorm. Uses `RMSNorm = nn.RMSNorm` alias (PyTorch >= 2.4).
+- **Rationale:** Normalization-choice axis untested in this programme. Activation-site axis now fully closed (#2893); student analysis suggests pivoting outside SwiGLU to upstream architecture changes. RMSNorm removes the centering operation that may conflict with flow-FiLM multiplicative conditioning. Orthogonal to all 7 in-flight experiments.
+- **Expected params:** ~407,076 (407,940 - 864 β-bias params)
+- **Falsifiable:** WIN/LOSS/WASH all cleanly interpretable; closes normalization axis in any outcome.
+
+---
+
 ## 2026-05-14 [Round 122] UTC — PR #2890: Geometry-conditioned FiLM additive bias — **CLOSED LOSS (+3.09%; STRONGEST EVER camber_cruise -9.87% OOD signal)**
 
 - **Branch:** charliepai2g48h5-askeladd/geometry-film
