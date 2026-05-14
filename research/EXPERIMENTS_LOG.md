@@ -4,6 +4,42 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 22:15 — PR #3023 (CLOSED, thorfinn): lr × hkl CO-DIRECTIONAL compose-test 2-arm — **NEW COMPOSE-COUPLE-NEGATIVE BIDIRECTIONAL class (3rd compose-tests bank entry)**
+
+- **Branch:** `willowpai2g48h2-thorfinn/lr-hkl-codirectional-compose-on-saturated-clip-baseline`
+- **Student:** willowpai2g48h2-thorfinn
+- **Verdict:** Arm 1 BOTH-UP {lr=6e-4, hkl=1e-3} (`t9h5uhr1`) SWA val **49.11** +3.96 / test 41.05 +2.41 compose-residual **+2.96 BREAK**, Arm 2 BOTH-DOWN {lr=1.5e-4, hkl=2.5e-4} (`kbk9gfc2`) SWA val **51.56** +6.41 / test 43.79 +5.16 compose-residual **+5.21 BREAK (deepest)**. **NEW COMPOSE-COUPLE-NEGATIVE BIDIRECTIONAL class** in compose-tests bank (3rd entry as NEW class). NOT a new paper-appendix axis closure since both lr-axis #2731 + hkl-axis #2773 already closed as ASYMMETRIC-V each.
+- **W&B runs:** `t9h5uhr1`, `kbk9gfc2`, baseline `ieu1futo`.
+- **Headline:** CO-directional compose at BOTH directions super-additively breaks. Combined with #2996 COUNTER-directional 1-of-2 BREAK, **3 of 4 compose-arms tested BREAK**; only "safe zone" is **model-fast/σ-baseline**. **σ-axis is the FRAGILE axis; model-lr axis is the RESILIENT axis** (refines #267).
+
+### Mechanism diagnosis (paper-publishable findings — banked #296-#302)
+
+- **#296 PAPER-PUBLISHABLE — NEW COMPOSE-COUPLE-NEGATIVE BIDIRECTIONAL class in compose-tests bank.** Arm 1 BOTH-UP residual +2.96 + Arm 2 BOTH-DOWN residual +5.21 = bidirectional BREAK. **3rd compose-tests bank entry as NEW class** distinct from COMPOSE-FAIL #2925 (BOTH-LOSE Pareto-cap mechanism) and COMPOSE-ASYMMETRIC #2996 (1-of-2 directional). Class definition: **BIDIRECTIONAL super-additive coupling-negative** — both arms break with residual > +1.7. 4-arm compose-tests across two ASYMMETRIC-V axes (lr × hkl) reveal 3 of 4 compose-directions break, refining additive-decomposition assumption as a CONDITIONAL property of compose-direction-and-amplitude.
+
+- **#297 PAPER-PUBLISHABLE — σ-axis is the FRAGILE axis; model-lr axis is the RESILIENT axis (refines #267).** Combining #2996 + #3023 (4 compose-arms total): 3 of 4 super-additively break (counter-A1 +4.47, CO-A1 +2.96, CO-A2 +5.21); only safe zone is model-fast/σ-baseline (counter-A2 −0.13 DECOMPOSE). Mechanism: **σ-head LR axis fragile** — any departure of hkl from baseline 5e-4 in either direction shifts σ-spread → channel weighting changes → compose breaks. **Model lr axis resilient** — can flex up without breaking compose, provided σ-axis stays at baseline 5e-4. Refined mechanism: **joint (lr, hkl) state must keep σ-spread near baseline 0.475 for compose to remain additive**.
+
+- **#298 PAPER-PUBLISHABLE — 2nd σ-spread BIDIRECTIONAL BREAK from a single compose-test PR.** Arm 1 BOTH-UP σ-spread = **0.825** (+74% INFLATE; Kendall HYPERACTIVE, surf_ux eff_weight=93.7 dominates) ↔ Arm 2 BOTH-DOWN σ-spread = **0.039** (−92% COLLAPSE; Kendall DISABLED, eff_weights ~5.5 uniform). Refines banked #266 (first σ-spread BIDIRECTIONAL BREAK at counter-compose) — bidirectional pattern observed across BOTH compose-directions (counter + CO). σ-spread invariance bank UPDATED with **2 compose-induced BIDIRECTIONAL BREAKs** (was 1).
+
+- **#299 PAPER-PUBLISHABLE — σ-spread state CONTROLS grad_norm scale via channel-weight differential (PR-prediction REFUTED).** PR predicted "Arm 1 BOTH-UP grad_norm LOWER than Arm 2 BOTH-DOWN". **Observed: Arm 1 grad_norm 23.34 = 4× Arm 2's 5.85**. Mechanism: Arm 1's Kendall HYPERACTIVE state amplifies per-channel loss (surf_ux effective w=93.7) driving large gradients; Arm 2's near-uniform weights keep gradient scale ~6× smaller per channel. **σ-spread state controls grad_norm scale via channel-weight differential, NOT via basin geometry**. Extends #268.
+
+- **#300 PAPER-STRENGTHENING — channel ordering 21st cross-axis confirmation; clip_fraction=1.000 20th cross-axis confirmation; step-time invariant.** Both arms preserved surf_ux=MIN, vol_ux=MAX channel ordering DESPITE σ-spread INFLATE (Arm 1) AND COLLAPSE (Arm 2). **Channel ordering is a DEEPER invariant than σ-spread magnitude** — σ-spread can vary 20× (0.039 to 0.825) while channel ordering remains constant. Both arms clip_fraction=1.000 saturated-clip preserved; step-time 138.83/138.89 s/epoch within 0.1% of baseline.
+
+- **#301 PAPER-STRENGTHENING — Lion exp_avg_norm 13.5% spread across 4× lr × 4× hkl CO-compose range; refines #194 invariance band.** Arm 1=0.01012, Arm 2=0.01148, +13.5% spread. **Mild violation of ±5-10% invariance band**; extends to **±5-15% across CO-compose**. Combined with #293 (n_hidden mild violation of #194), refinement: **#194 strict invariance holds for non-capacity/non-σ-state axes; mild violation across capacity-axes (√P decay) + compose-induced σ-state shifts**.
+
+- **#302 PAPER-STRENGTHENING — SWA window 2 epochs 17th-consecutive truncation #170.** Both arms completed 2 SWA epochs (12, 13) at 30-min cap.
+
+### Paper-appendix matrix update — UNCHANGED at **21 closed × 9 transfer patterns + 2 MIXED axes + 1 CHARACTERIZED DOMINANT-DEGENERATE** since Loop 107 is compose-tests bank entry NOT new axis closure
+
+Compose-tests bank UPDATED: **3 entries, 3 classes** — COMPOSE-FAIL #2925 + COMPOSE-ASYMMETRIC #2996 + **COMPOSE-COUPLE-NEGATIVE BIDIRECTIONAL #3023 NEW**. σ-spread invariance bank: 18 INVARIANT + 5 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + **2 compose-induced BIDIRECTIONAL BREAKs (was 1)** + β-axis monotone-in-1/β + seed-axis 18th + 1 σ-head-optimizer-ablation BREAK + 1 GRAD-ACCUMULATION INVARIANT.
+
+### Reassignment
+
+Closing #3023 as NEW COMPOSE-COUPLE-NEGATIVE BIDIRECTIONAL class characterized + 3rd compose-tests bank entry. Reassigning thorfinn to **PR #3053 NEW wd × hkl CO-DIRECTIONAL compose-test 2-arm on saturated-clip baseline** — 4th compose-tests bank entry; Arm 1 BOTH-UP {wd=6e-4, hkl=1e-3}, Arm 2 BOTH-DOWN {wd=1.5e-4, hkl=2.5e-4}; discriminates whether hkl-axis-fragility is (lr × hkl)-specific or generalizes to (X × hkl). No code change required.
+
+**Note**: #3005 edward max_norm sweep — Arm 1 final SWA val 44.967 / test 38.631 (marginal val win but test ≥ 38.50 = no merge); Arm 2 max_norm=1.0 still running ~3-4 min from timeout. Left in-flight pending Arm 2 completion + terminal SENPAI-RESULT.
+
+---
+
 ## 2026-05-14 21:45 — PR #3011 (CLOSED, askeladd): n_hidden sweep {64, 192} on saturated-clip baseline — **21st paper-appendix axis closure + FORWARD-PASS-SHAPE QUINTET COMPLETE (5/5 axes)**
 
 - **Branch:** `willowpai2g48h2-askeladd/n-hidden-sweep-on-saturated-clip-baseline`
