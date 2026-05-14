@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-05-14 [Round 137] UTC — PR #2937: huber-loss-delta-0.5 — **CLOSED CLEAR LOSS (+26.14% val / +24.92% test; 121st taxon; HUBER-LOSS / L2-NEAR-ZERO-WITH-LION INCOMPATIBILITY CLOSED)**
+
+- **Branch:** charliepai2g48h5-askeladd/huber-loss-delta-0.5
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-huber-loss-delta-0.5-20260514-144046/metrics.jsonl
+
+| Metric | Baseline #2879 | #2937 Huber β=0.5 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 38.5482 | **+26.14% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 33.1240 | +24.92% LOSS |
+| val_single_in_dist | 23.3997 | 32.3328 | +38.18% LOSS |
+| val_geom_camber_rc | 46.0708 | 54.1356 | +17.51% LOSS |
+| val_geom_camber_cruise | 17.8657 | 25.5793 | **+43.18% LOSS (NOT a WIN — meta-signal broken)** |
+| val_re_rand | 34.9057 | 42.1453 | +20.74% LOSS |
+
+**Hypothesis:** Replace L1 loss with SmoothL1/Huber loss at β=δ=0.5 on both surf_loss and vol_loss. Test the gradient-SHAPE axis of the loss function (orthogonal to per-channel WEIGHT axis #2933/#2941). Huber near 0 gives Lion a SMOOTH gradient to take sign of, carrying magnitude information up to ±δ — could unlock fine-tuning L1+Lion cannot capture.
+
+**Result type:** CLEAR LOSS — far above the >5% close threshold. Convergence-budget failure: val_avg still descending at ep60 (38.55 → would need many more epochs to approach baseline). Lion's sign-step + Huber's L2-like-near-zero is a fundamental optimizer/loss mismatch.
+
+**Key mechanistic finding (student diagnostic):** Lion's per-element sign(grad) preserves direction info per parameter, but the BATCH-AVERAGED gradient over tokens depends on residual magnitudes. Huber down-weights small residuals (|r|<0.5) so as training converges and 98.8% of residuals are in L2-regime, Lion gets gradient signal dominated by the rare large-residual tokens — STARVES the optimizer of fine-tuning signal at convergence. The result: dramatically slower convergence (still descending at the budget cutoff) even though stability is fine.
+
+**CRITICAL META-SIGNAL FINDING:** This is the 6th 'uniform regularization breaks all splits uniformly' closure (cf. #2910 surf-weight-20, #2912 droppath, #2920 linear-warmup, plus older closures). Cruise +43.18% was the BIGGEST LOSS (NOT a WIN), uniformly LOSS across all splits. The cruise-WIN / in_dist-LOSS meta-signal is ROBUST TO GLOBAL LOSS-SHAPE CHANGES — global re-shaping is too coarse to move it.
+
+**Closes 121st taxon: HUBER / L2-NEAR-ZERO / LION-INCOMPATIBLE.** The mechanism (Lion + down-weighted small-residual gradients at convergence) is fundamental, not tunable. δ smaller would be even MORE L2-like (worse); δ much larger would collapse to ~L1 (no gain). Future loss-shape attacks would need to decouple from Lion (Huber+AdamW combo) — but that's a 2-axis change, not a clean test.
+
+**KEY STUDENT INSIGHT:** "Future cruise/in_dist attacks need to be STRUCTURAL/LOCAL (per-region weighting, geometry-conditioned re-weighting, surface-vs-volume specialization), not uniform global re-shaping."
+
+**Student followups (4):**
+1. Close Huber/loss-shape axis — done. ✓
+2. Decouple loss-shape from Lion (Huber + AdamW) — 2-axis change, deferred.
+3. #2933 alphonse's per-channel-WEIGHT axis — already in-flight as #2941.
+4. **STRUCTURAL/LOCAL attacks** — **SELECTED** as askeladd's next direction. Surface-vs-volume specialization is the most tractable: separate output heads.
+
+---
+
+## 2026-05-14 [Round 137] UTC — PR #2946 (assignment): askeladd separate-surf-vol-heads — **122nd axis: FIRST STRUCTURAL/LOCAL intervention (surface-vs-volume specialization)**
+
+- **Hypothesis:** Split single output `nn.Linear(96, 3)` into TWO heads: `head_surf` (for surface tokens) and `head_vol` (for volume tokens). Surface mask routes surface tokens through `head_surf`; volume mask routes through `head_vol`. Each head learns physics-specialized weights for its region.
+- **Why might WIN:** Direct response to #2937 student recommendation. Surface (boundary-layer, pressure peaks, high gradients) and volume (far-field, smooth flow) have fundamentally different physics — shared head must compromise. With surf_weight=10, the shared head's gradient is dominated by surface tokens (10/11 of pull) — vol tokens are likely under-specialized.
+- **Why might LOSS:** Shared head may already correctly compromise. Body residual stream is still shared — bottleneck may be earlier. Could hurt in_dist if heads over-fit to their regions.
+- **Pattern change:** Two `nn.Linear(96, 3)` heads + masked-combine in forward.
+- **Param count change:** +591 (single head was 291 params, doubled = 582). Effectively 0.15% capacity increase.
+- **FIRST STRUCTURAL/LOCAL intervention** in this launch — tests whether per-region specialization moves the meta-signal where global re-shaping (Huber, surf_weight, droppath, warmup) cannot.
+
+---
+
+## 2026-05-14 [Round 137] UTC — PR #2924 [STALE-WIP HEARTBEAT, NOT CLOSED]: thorfinn sam-rho-0.05
+
+- ~2hr WIP with zero commits/comments after assignment. SAM doubles per-step training cost (extra forward+backward for inner ascent step) — likely against SENPAI_TIMEOUT_MINUTES=30 budget.
+- Pod is running (kubectl confirms 1/1 Running, 0 restarts).
+- **Action:** Heartbeat ping sent. Student must report status (acknowledge / partial results / negative-result with diagnostic). PR remains WIP pending response.
+
+---
+
 ## 2026-05-14 [Round 137] UTC — PR #2934: slice-num-16 — **CLOSED LOSS (+3.39% val / +1.55% test; 120th taxon; SLICE-ROUTING-ALPHABET AXIS CLOSED BOTH SIDES, 24 is peak)**
 
 - **Branch:** charliepai2g48h5-tanjiro/slice-num-16
