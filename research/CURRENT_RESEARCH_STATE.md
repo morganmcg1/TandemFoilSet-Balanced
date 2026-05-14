@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-14 ~04:00 UTC (Wave 19 / Iter-13 CLOSED 8/8 (all 7 reviews regressed + #2715 stalled); Wave 20 / Iter-14: ASSIGNED 8 plateau-protocol PRs #2767/#2769/#2771/#2774/#2777/#2781/#2783/#2785; pivot to model-class changes, loss reformulation, curriculum, SSL)
+- **Last updated**: 2026-05-14 ~05:30 UTC (Wave 20 / Iter-14 CLOSED 8/8 — second consecutive full washout; Wave 21 / Iter-15: ASSIGNING 8 corrected-mechanism PRs H94-H101)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -20,45 +20,46 @@ None received on this branch.
 
 ## Current research focus
 
-**Wave 20 — PLATEAU-PROTOCOL ESCALATION**. Wave 19 was a wholesale washout (7/7 review-ready PRs regressed; 8th stalled). The attention-temperature schedule axis is now fully bracketed and closed on all 4 sub-axes (start value, end value, decay shape, per-layer differentiation). Per the plateau protocol, Wave 20 pivots to **fundamentally different strategy tiers**: model-class changes, loss reformulation, and curriculum learning.
+**Wave 21 — SECOND PLATEAU-PROTOCOL ESCALATION: CORRECTED MECHANISMS**. Wave 19 (7/7 closed) and Wave 20 (8/8 closed) are two consecutive full washouts. Wave 20's first escalation (model-class changes, loss reformulation, curriculum, SSL) all failed, but each failure revealed *why* it failed — not just that it did. Wave 21 applies corrected implementations of each Wave 20 hypothesis.
 
-**KEY MECHANISM CLOSED IN WAVE 19**: The complete schedule sweep proves that the current linear √3→√2 over 12 epochs starting epoch 1 with uniform across-layer treatment is at a tight local optimum. Sharper start (√5, +3.70%), softer end (1.0, +7.99%), delayed decay (hold-then-decay, +4.32%), and per-layer differentiation (+4.79%) all regress. The schedule axis is permanently closed.
+**KEY FINDING FROM WAVE 20**: Every Wave 20 failure was an implementation-level problem, not a mechanism-level closure:
+- Relative L1: train/eval metric mismatch (gradient normalized, eval absolute)
+- Camber curriculum: easy-first downweighted the hard OOD target (camber_rc); anti-curriculum was better
+- Camber-cond LN: additive correction on frozen LN requires unlearning; not feasible in 12 epochs
+- Sobolev surface loss: mesh irregularity causes ds_min ≈ 0 → gradient explosion; student self-corrected λ but still unstable
+- GeoMPNN: per-forward KNN graph construction = only ~3 effective training epochs; model never trained
+- Masked node SSL: masked input geometry (wrong signal); should mask output pressure targets
+- SE(2)-equivariant: rigid equivariance eliminates AoA direction information; d_v=2 too small
+- Bernoulli physics loss: physical-space gradients 100-1000× larger than normalized MAE
 
-**ADDITIONAL CLOSED IN WAVE 19**:
-- Slice-token output-side aux losses (#2719 geo aux head +4.67%) — interferes with dispatch
-- Spectral / graph-based geometry encodings (#2656 Laplacian PE +10.18%) — same failure pattern as SDF (#2654) and HF spectral (#2653)
-- slice_num=96 (#2720 +13.00%) — re-confirms slice_num=64 optimum
+**Wave 21 strategy** — 8 corrected hypotheses H94-H101, each a targeted fix of a Wave 20 failure:
 
-**Wave 20 strategy** — 8 fresh hypotheses from researcher-agent escalation, each targeting a different abstraction level:
+### Corrected implementations (7 hypotheses)
+- **H94 hard-first camber upsampling**: fixed 2×/3× upsampling of camber_rc samples (alphonse / #pending). Corrects H87's easy-first direction.
+- **H95 pressure-node mask SSL**: mask output pressure targets, reconstruct as aux supervised task (edward / #pending). Corrects H91's input-masking error.
+- **H96 Re-cond feature scale**: single scalar Re-conditional gain multiplier, identity-initialized (nezuko / #pending). Corrects H88's additive-correction-on-frozen-LN failure.
+- **H97 arc-length Sobolev loss**: equispaced arc-length resampling before dp/ds computation (fern / #pending). Corrects H89's ds_min instability.
+- **H98 static KNN GNN correction**: precomputed graph + 1-layer GNN correction layer on top of Transolver (tanjiro / #pending). Corrects H90's per-forward-pass graph construction overhead.
+- **H99 normalized Bernoulli λ=1e-5**: Bernoulli residual in normalized space at λ=1e-5 (frieren / #pending). Corrects H93's physical-space gradient amplification.
+- **H100 AoA-decomposed attention**: (cos α, sin α) encoding + 2-head directional cross-attention (thorfinn / #pending). Corrects H92's AoA-information loss from SE(2) constraint.
 
-### Loss reformulation (3 hypotheses)
-- **H86 relative L1 loss**: per-sample magnitude normalization (askeladd / #2767). Addresses Re-scale gradient-magnitude mismatch between training (normalized space) and eval (physical units).
-- **H89 Sobolev surface loss**: gradient-matching aux on dp/ds over arc-length (fern / #2774). Targets pressure-distribution-shape generalization.
-- **H93 NSE Bernoulli consistency**: physics-informed aux on total head conservation (frieren / #2785). Soft physical anchor independent of data distribution.
+### New hypothesis (1)
+- **H101 adaptive surf-weight schedule**: schedule surf_ch_weight [1,1,1]→[0.5,0.5,2.0] over epochs 1-4 (askeladd / #pending). Novel application of #2648's scheduling-beats-fixed-value precedent to the channel weight axis.
 
-### Curriculum / sampling (1 hypothesis)
-- **H87 camber-difficulty curriculum**: difficulty-weighted sampler with 4-epoch warmup → 8-epoch uniform (alphonse / #2769). Targets representation-formation timing during early epochs (mechanism analog from #2648 attn-temp finding).
+**OOD targets**: camber_rc=68.657 (worst split, +12.8% gap vs in-dist) and re_rand=55.368 remain the primary improvement targets.
 
-### Architecture / inductive bias (4 hypotheses)
-- **H88 camber-conditional LayerNorm**: AdaIN-style camber-only scale-shift, identity-initialized (nezuko / #2771). Mechanistically distinct from closed FiLM.
-- **H90 GeoMPNN**: replace Transolver with geometry-aware message-passing GNN (tanjiro / #2777). MAJOR MODEL CLASS CHANGE — NeurIPS 2024 ML4CFD competition winner. High variance, high upside.
-- **H91 masked node SSL pretraining**: 2-phase 4-epoch pretrain + 8-epoch fine-tune (edward / #2781). Free signal from mesh geometry.
-- **H92 SE(2)-equivariant attention decomposition**: scalar pressure / vector velocity factorization (thorfinn / #2783). Strongest physical inductive bias attempt.
+## Wave 21 / Iter-15 active threads (assigning)
 
-**OOD targets**: camber_rc=68.657 (worst split, +12.8% gap vs in-dist) and re_rand=55.368 are the primary improvement targets. H87 + H88 directly target camber_rc; H86 + H93 target Re-regime generalization.
-
-## Wave 20 / Iter-14 active threads (8/8 students busy)
-
-| Student | PR | Slug | Hypothesis | Family |
-|---------|----|----|---------|--------|
-| askeladd | #2767 | relative-l1-loss | Per-sample relative L1 normalization | Loss A |
-| alphonse | #2769 | camber-curriculum | Difficulty-weighted sampler warmup | Curriculum |
-| nezuko | #2771 | camber-cond-layernorm | AdaIN-style camber-only normalization | OOD/arch |
-| fern | #2774 | sobolev-surf-loss | dp/ds gradient matching on surface | Loss B |
-| tanjiro | #2777 | geompnn | KNN-graph message passing replaces Transolver | Model class A |
-| edward | #2781 | masked-node-ssl | Masked-position pretrain + supervised | SSL |
-| thorfinn | #2783 | se2-equivariant | SE(2)-equivariant attention decomposition | Model class B |
-| frieren | #2785 | bernoulli-consistency | Soft Bernoulli total-head constraint | Loss C / physics |
+| Student | Slug | Hypothesis | Family |
+|---------|------|---------|--------|
+| alphonse | hard-first-camber-upsampling | Fixed 2×/3× upsampling of camber_rc | Curriculum B |
+| edward | pressure-node-mask-ssl | Mask output pressure targets, reconstruct aux | SSL B |
+| nezuko | re-cond-feature-scale | Scalar Re-conditional gain, identity init | Conditioning B |
+| fern | arclength-sobolev-loss | Equispaced arc-length dp/ds computation | Loss B2 |
+| tanjiro | static-knn-gnn-correction | Precomputed KNN + 1-layer GNN correction | Model Class B |
+| frieren | normalized-bernoulli-1e5 | Bernoulli in normalized space at λ=1e-5 | Loss C2 |
+| thorfinn | aoa-decomposed-attention | (cos α, sin α) + directional cross-attention | Equivariant B |
+| askeladd | adaptive-surf-weight-schedule | Schedule surf_ch_weight [1,1,1]→[0.5,0.5,2] | Loss D |
 
 ## Permanently closed axes (do not re-test)
 
@@ -71,7 +72,7 @@ None received on this branch.
 | Grad-clip | max_norm=25 | {1.0,10,25,50} bracket complete |
 | Fourier L (fixed) | L=6 dyadic | L=8 plateau; now learned |
 | LayerScale init | γ_l=0.1 | #2475 19th win; sweep fully closed |
-| Surf-ch-weight | [0.5,0.5,2.0] | 4× p:v ratio optimum |
+| Surf-ch-weight (fixed) | [0.5,0.5,2.0] | 4× p:v ratio optimum — note: schedule variant H101 now testing |
 | n_head | 4 | n_head=8 +7.81%, n_head=2 +1.24% |
 | Normalization | LayerNorm + β | RMSNorm +20.2% catastrophic |
 | Depth | n_layers=5 | n_layers=6 +5.43%, compute-bound |
@@ -80,7 +81,7 @@ None received on this branch.
 | Gate | ReGLU (ReLU) | SiLU<GELU<ReLU<AbsGLU<SqReLU; ReLU optimum |
 | n_hidden | 128 | #2371: quadratic scaling, compute-bound |
 | inner_dim | 288 | #2386: 320 over-fits; 256 under-fits |
-| OOD domain upsampling | equal weights | #2391: extrapolation gap, not density gap |
+| OOD domain upsampling | equal weights | #2391: extrapolation gap, not density gap — NOTE: H94 tests *hard-split upsampling*, not uniform OOD upsampling |
 | EMA, dropout, coord-jitter | off | Compound improvements prove these wrong |
 | Fourier variants (separate xy, hybrid, equilibrium init) | learned L=6 dyadic | All closed in Wave 14–16 |
 | FiLM conditioning | not used | #2453: helps ID, hurts all OOD |
@@ -98,16 +99,30 @@ None received on this branch.
 | Slice-token mixup | n/a | #2575 catastrophic; dispatch structure destroyed |
 | Geo aux head (slice-token camber+Re prediction) | n/a | #2719 closed +4.67%; output-side aux interferes |
 | Laplacian eigenvector PE from KNN graph | n/a | #2656 closed +10.18%; spectral PE interferes with Fourier coords |
+| Relative L1 loss | n/a | #2767 closed +10.3%; train/eval metric mismatch; corrected direction → H101 |
+| Camber easy-first curriculum | n/a | #2769 closed +10.3%/+5.9%; downweights hard OOD target; corrected → H94 hard-first |
+| Camber-cond LayerNorm (additive) | n/a | #2771 closed ~+5%; additive correction on frozen LN fails in budget; corrected → H96 |
+| Sobolev surface loss (raw mesh) | n/a | #2774 closed +11.9%; ds_min instability; corrected → H97 arc-length resampled |
+| GeoMPNN full model replacement | n/a | #2777 closed +209%; per-forward KNN too slow (3 epochs); corrected → H98 static graph |
+| Masked input-geometry SSL | n/a | #2781 closed ~+12%; wrong task signal; corrected → H95 pressure-target masking |
+| SE(2)-equivariant attention | n/a | #2783 closed ~+8%; loses AoA direction; corrected → H100 AoA-decomposed |
+| Bernoulli physics loss (physical-space) | n/a | #2785 closed ~+14%; physical-space gradient amplification; corrected → H99 normalized |
 
-## Prioritized future ideas (queued after Wave 20)
+## Third escalation plan (if Wave 21 washes)
 
-1. **If H86 (relative L1) wins**: try Huber-relative, smoothL1-relative variants — same gradient-equalization principle, different smoothness
-2. **If H87 (curriculum) wins**: try different difficulty scores (Re-only, camber-only, gap-aware) and longer/shorter warmup ranges
-3. **If H88 (camber-cond LN) wins**: extend to Re-conditional, full-NACA-conditional variants; try other LayerNorm placement (post-attention)
-4. **If H90 (GeoMPNN) wins**: full model-class commitment — explore FNO, GNO, UNO, DeepONet variants
-5. **If H91 (SSL pretrain) wins**: longer pretrain phase, different masking ratios, contrastive variants
-6. **If H92 (SE(2)-equivariant) wins**: enrich vector channels (d_v=8, 16), try SE(2)-equivariant convolution variants
-7. **If H93 (Bernoulli) wins**: layer in incompressibility constraint, momentum balance, full PDE residual
-8. **If multiple Wave-20 hypotheses succeed**: orthogonal-combination experiment to stack mechanisms (curriculum + relative L1, etc.)
+If Wave 21 produces another full washout (0/8 wins), the third escalation will be:
+1. **Full model-class replacement**: FNO (Fourier Neural Operator), DeepONet, or large GNN — complete Transolver replacement, not hybrid
+2. **Data augmentation within camber families**: geometry-conditional mixing of samples within camber neighborhoods to synthesize OOD training examples
+3. **Formal NAS / joint hyperparameter search**: systematic grid or Bayesian search over the remaining high-dimensional hyperparameter space (depth × width × heads × LR × schedule)
+4. **Physics-informed architecture**: mesh-free collocation methods, PINN variants with explicit boundary conditions
 
-**Plateau-protocol second escalation if Wave 20 also washes**: complete model-class replacement (FNO or large GNN), data-augmentation campaign (geometry-conditional mixing within camber neighborhoods), or formal NAS / hyperparameter joint search.
+## Prioritized future ideas (queued after Wave 21)
+
+1. **If H94 (hard-first upsampling) wins**: try different upsampling ratios (4×, 5×), or make the ratio an annealed curriculum (high early, taper to baseline)
+2. **If H95 (pressure SSL) wins**: try higher masking ratios (30%, 40%), contrastive SSL variants across airfoil geometries
+3. **If H96 (Re-cond scale) wins**: extend to camber-conditional, full-NACA-conditional variants; try application at intermediate blocks
+4. **If H97 (arc-length Sobolev) wins**: try higher λ values, combined Sobolev + L1 loss scheduling
+5. **If H98 (static KNN GNN) wins**: add more GNN layers, try different aggregation (attention-weighted vs mean)
+6. **If H99 (normalized Bernoulli) wins**: layer in incompressibility constraint, momentum balance, full PDE residual in normalized space
+7. **If H100 (AoA-decomposed attn) wins**: enrich direction encoding (more Fourier frequencies of α), apply at multiple block positions
+8. **If H101 (surf-weight schedule) wins**: try different schedule shapes (cosine, quadratic), different endpoint ratios

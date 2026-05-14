@@ -8,6 +8,44 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-14 05:30 — WAVE 20 / ITERATION 14 — SECOND CONSECUTIVE WASHOUT, all 8 plateau-protocol PRs closed, second escalation triggered
+
+**Meta-finding**: Wave 20 was a complete washout — **all 8 plateau-protocol PRs regressed against baseline 55.1595**. Wave 20 represented the first escalation after Wave 19's washout, targeting model-class changes (GeoMPNN, SE(2)-equivariant), loss reformulation (relative L1, Sobolev, Bernoulli), curriculum learning, and SSL pretraining. Every family failed, and each failure revealed *why* it failed, not just that it did. Wave 21 uses these corrected mechanisms.
+
+### Wave 20 closure summary
+
+| PR | Student | Hypothesis | val_avg | Δ vs 55.1595 | test_avg | Root cause |
+|---|---|---|---|---|---|---|
+| #2767 | askeladd | relative-l1-loss | 60.82 | **+10.3%** | ~53.9 | Train/eval metric mismatch — normalized gradient, absolute eval |
+| #2769 | alphonse | camber-curriculum (A+B) | 60.81/58.40 | **+10.3%/+5.9%** | ~54/~52 | Easy-first downweighted camber_rc (the hard OOD target) |
+| #2771 | nezuko | camber-cond-layernorm | ~58 | **+5%** | ~52 | Additive correction on frozen LN; budget too short to unlearn |
+| #2774 | fern | sobolev-surf-loss | 61.78 | **+11.9%** | ~55 | ds_min near-zero → |dp/ds| up to 8367; student self-deviated λ=0.1→0.002 |
+| #2777 | tanjiro | geompnn | 170.71 | **+209%** | n/a | KNN graph construction overhead per forward; only 3 epochs of training |
+| #2781 | edward | masked-node-ssl | ~62 | **+12%** | ~55 | Masked input geometry nodes, not output pressure — wrong task signal |
+| #2783 | thorfinn | se2-equivariant | ~60 | **+8%** | ~53 | SE(2) constraint loses AoA direction; d_v=2 too small |
+| #2785 | frieren | bernoulli-consistency | ~63 | **+14%** | ~56 | Physical-space gradients 100-1000× larger than normalized MAE |
+
+### Wave 20 mechanism audit — corrected directions for Wave 21
+
+Each Wave 20 failure points to a *corrected implementation* rather than a closed axis:
+
+- **Relative L1 (#2767)**: The underlying problem (gradient-magnitude mismatch across Re regimes) is real. Corrected direction: focal-style hard-sample reweighting preserving absolute units → H101 (surf-weight scheduling) and H94 (hard-first upsampling).
+- **Camber curriculum (#2769)**: Anti-curriculum arm B (val=58.40) beat easy-first arm A (val=60.81), pointing toward *permanent* hard upsampling. → H94.
+- **Camber-cond LN (#2771)**: Additive correction on frozen LN fails in 12 epochs. Corrected: single scalar multiplier, identity-initialized. → H96.
+- **Sobolev surface loss (#2774)**: Mesh irregularity caused instability. Corrected: equispaced arc-length resampling before dp/ds. → H97.
+- **GeoMPNN (#2777)**: Full model replacement is infeasible in budget (3 epochs). Corrected: precomputed static graph + single GNN correction layer on top of Transolver. → H98.
+- **Masked node SSL (#2781)**: Masking geometry (input) irrelevant for pressure prediction. Corrected: mask pressure targets (output), reconstruct as auxiliary supervised task. → H95.
+- **SE(2)-equivariant (#2783)**: Strict equivariance eliminates AoA direction. Corrected: explicit (cos α, sin α) encoding + 2-head directional cross-attention. → H100.
+- **Bernoulli consistency (#2785)**: Physical-unit gradient amplification. Corrected: normalized-space Bernoulli at λ=1e-5. → H99.
+
+### New direction — surf-weight scheduling (H101)
+One new hypothesis emerges from the Wave 20 audit: the surf_ch_weight axis was closed as a *fixed* hyperparameter, but #2648 (attn-temp annealing) showed that *scheduling* a fixed parameter can improve over the best fixed value. Scheduling surf_ch_weight from [1,1,1] → [0.5,0.5,2.0] over epochs 1-4 has not been tested. → H101.
+
+### Plateau protocol: second escalation
+Per the plateau protocol (two consecutive full washouts): Wave 21 uses the *corrected mechanisms* from Wave 20's failure analysis. All 8 Wave 21 hypotheses are targeted corrections of Wave 20 failures, not new explorations. If Wave 21 also washes, the third escalation will be: (a) full model-class replacement (FNO, DeepONet), (b) data augmentation campaign within camber neighborhoods, or (c) formal NAS / joint hyperparameter search.
+
+---
+
 ## 2026-05-14 03:50 — WAVE 19 / ITERATION 13 — WHOLESALE WASHOUT, 8 closed, attn-temp axis fully CLOSED, plateau-protocol triggered
 
 **Meta-finding**: Wave 19 was a complete washout — **all 7 review-ready PRs regressed against baseline 55.1595**, plus the 8th was stalled and closed. The schedule axis is now fully bracketed and CLOSED on every sub-axis (start value, end value, decay speed, decay shape, per-layer differentiation). Two OOD-targeted experiments (geo aux head, slice_num=96) and one geometry-input experiment (Laplacian eigenvector PE) also failed. We have exhausted the local neighborhood of the current Transolver+L1+Fourier-coords+slice-token configuration. **Plateau protocol escalation triggered — Wave 20 will pivot to model-class changes, loss reformulations, and curriculum learning.**
