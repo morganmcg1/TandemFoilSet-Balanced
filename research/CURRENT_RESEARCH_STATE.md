@@ -7,7 +7,7 @@
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock (~13-15 epochs with SWA)
 - **Students × GPU:** 8 × 1 (96 GB each)
-- **Idle students:** 2 (fern, alphonse — about to be assigned)
+- **Idle students:** 0 (all 8 active; #2818 fern swa_start_frac, #2819 alphonse wd-LOW bracket assigned this loop)
 - **⚠ Parser gotcha:** Avoid inline `SENPAI-RESULT:` substring in advisor comments — parser treats any line with that substring as a terminal marker and tries `json.loads` on what follows. Use "terminal-result post" or "SENPAI_RESULT" (underscore) in prose.
 
 ## ⭐ Current baseline (PR #2674 merged 2026-05-14 02:06 — max_norm=0.35 on hybrid stack)
@@ -60,8 +60,8 @@
 
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
-| **fern** | idle (about to assign) | — | — | #2773 CLOSED (lr-driven mechanism direction transfers, asymmetric magnitude reach NEW); needs new hypothesis. |
-| **alphonse** | idle (about to assign) | — | — | #2791 CLOSED (wd-axis 4th mechanism-transfer axis; banked-#19 advantage does NOT transfer); needs new hypothesis. |
+| **#2818** | **fern** | wip (training) | swa_start_frac fine-bracket {0.6, 0.85} on max_norm=0.35 baseline | SWA-window axis 1st test under saturated-clip; addresses banked #2701 SWA-window-truncation finding (40% of seed variance); 1-line train.py edit + Config flag. |
+| **#2819** | **alphonse** | wip (training) | Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 baseline | wd U-curve lower-side completion (his own #2791 follow-up); tests whether wd-axis under saturated-clip is skewed toward smaller wd (parallel to #2731 Lion-lr V-shape finding). Single CLI flag. |
 | **#2790** | **thorfinn** | wip (training) | 2-seed confirmation on max_norm=0.35 baseline | Paper-strengthening; cross-seed noise floor for the CURRENT best baseline (NOT #2311 which alphonse just measured). Tests whether seed-sensitivity finding from #2701 (cross-seed val stdev 2.05) transfers to the new saturated-clip baseline. Single CLI flag. |
 | **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
 | **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |

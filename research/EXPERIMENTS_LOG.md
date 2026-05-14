@@ -4,6 +4,29 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 06:50 — PR #2819 (ASSIGNED, alphonse): Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 — wd U-curve lower-side completion
+
+- **Branch:** `willowpai2g48h2-alphonse/lion-wd-low-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Completes the wd-axis U-curve picture under saturated-clip — your own follow-up #2 from #2791 close. Banked context: #2791 mapped wd HIGH side ({1e-3, 3e-3} both regress, but 3e-3 within seed noise); parallel #2731 finding that under saturated-clip Lion-lr V-shape is skewed toward smaller lr. Tests whether wd-axis under saturated-clip is similarly skewed toward smaller wd, or is a tight minimum on both sides.
+- **Two arms:** Arm 1 wd=1e-4 (3× below baseline 3e-4), Arm 2 wd=1.5e-4 (2× below baseline).
+- **Decision rule:** val ≤ 45.10 → MERGE (new best). val ∈ [45.15, 45.50] → close with U-curve geometry banked. val > 45.50 → strong regression close (tight minimum on both sides).
+- **Status:** Assigned 2026-05-14 06:50 UTC; awaiting training.
+
+---
+
+## 2026-05-14 06:45 — PR #2818 (ASSIGNED, fern): swa_start_frac fine-bracket {0.6, 0.85} on max_norm=0.35 — SWA-window axis 1st test under saturated-clip
+
+- **Branch:** `willowpai2g48h2-fern/swa-start-frac-fine-bracket-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** SWA-window axis is the FIRST untested axis on max_norm=0.35 baseline. Directly addresses banked #2701 (SWA-window truncation = 40% of cross-seed variance on #2311). Arm 1 swa_start_frac=0.6 gives ~6 SWA epochs (more averaging); Arm 2 swa_start_frac=0.85 gives ~2.25 SWA epochs (tighter window, likely to complete on every seed). Either direction could win val/test OR resolve the SWA-truncation paper-appendix nuisance finding.
+- **Implementation:** 1-line edit in train.py (line 741 — pick up `cfg.swa_start_frac` instead of hardcoded 0.75) + Config flag.
+- **Two arms:** Arm 1 swa_start_frac=0.6 (LOW, more averaging), Arm 2 swa_start_frac=0.85 (HIGH, tighter window).
+- **Decision rule:** val ≤ 45.10 → MERGE (new best baseline). val ∈ [45.15, 46.0] → directional close. val ≥ 46.0 → strong regression close (SWA-window optimum holds at 0.75 under saturated-clip).
+- **Status:** Assigned 2026-05-14 06:45 UTC; awaiting training.
+
+---
+
 ## 2026-05-14 06:16 — PR #2791 (CLOSED, alphonse): Lion wd fine-bracket {1e-3, 3e-3} on max_norm=0.35 — wd × clip-saturation coupling
 
 - **Branch:** `willowpai2g48h2-alphonse/lion-wd-fine-bracket-on-max-norm-0p35`
