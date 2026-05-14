@@ -3547,3 +3547,44 @@ Both arms miss the merge bar on val (+2.8% / +3.7% regress). s1 incidentally tie
 - Target: test_geom_camber_rc (β additive shift most likely to extrapolate to higher-Re OOD), test_avg < 28.65
 - Key metric: β_L2 trajectory per block at final epoch (is β learning at all?) and γ_w_L2 comparison vs baseline
 
+---
+
+## 2026-05-14 23:50 — PR #3012: Per-block weight decay scan alphonse (CLOSED — Lion sign() neuters magnitude regularization)
+- Branch: `willowpai2g48h3-alphonse/per-block-wd`
+- Hypothesis: Scale wd 0.25×/4× on late blocks (blocks 2-4) while keeping early blocks at base wd=2e-4. Test whether per-block magnitude regularization controls FiLM-Re γ specialization.
+
+### Results (1 seed per arm, 30.7 min/arm, ~34 epochs)
+
+| Arm | late_wd_scale | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test | W&B |
+|---|---|---:|---:|---:|---:|---|
+| Baseline 15th-shift | 1.0 | **33.706** | — | **28.653** | — | `94flg3ls`, `oy7xe8t3` |
+| s1 (0.25×) | 0.25× | 35.3394 | +4.8% ❌ | 30.0523 | +4.9% ❌ | `2t4pxxxw` |
+| s2 (4×) | 4× | 34.8774 | +3.5% ❌ | 29.6633 | +3.5% ❌ | `aprtnr30` |
+
+Per-split test surf_p:
+- **s1 (0.25× late)**: single_in_dist=35.55 (+10.3% ❌), camber_rc=43.56 (+5.1% ❌), cruise=14.81 (−0.7% ≈), re_rand=26.29 (+1.0% ❌)
+- **s2 (4× late)**: single_in_dist=31.97 (−0.8% ✓), camber_rc=42.97 (+3.6% ❌), cruise=16.47 (+10.5% ❌), re_rand=27.24 (+4.7% ❌)
+
+Clean IID-vs-OOD wedge: s1 hurts IID, s2 hurts cruise OOD. Both arms hurt camber_rc.
+
+### Mechanism finding (3 layers)
+
+1. **Lion sign() neuters wd magnitude regularization.** 16× wd ratio between arms produces ≤0.15 L2 difference on late-block params (s1 late param L2=34.45 vs s2=34.31). Total param L2 essentially identical (s1=79.36 vs s2=79.29). The mechanism the PR was probing is muted by Lion's sign-based update.
+2. **γ_w_L2 depth-monotone pattern is robust.** Both arms preserve the baseline 4→6 depth gradient (block 4: s1=5.81, s2=5.78, baseline=5.75 — identical within noise). Confirms the pattern is a **training-signal** property, not regularization-controllable. γ_w_L2 trajectory is now a stable diagnostic for FiLM-Re-related experiments.
+3. **Param-group split asymmetry (60% late) makes orthogonal early/late framing leaky.** s2 4× late effectively shifts most of the model toward stronger regularization → val/test penalty matches global-wd-too-high.
+
+### Decision: CLOSED
+
+Both decision-tree close conditions triggered: (a) "both arms regress" and (b) "both arms show OOD-vs-IID wedge". Axis closed.
+
+**Meta-finding #26:** *Per-block magnitude-based regularization (lr #2959/#3002, wd #3012) is fully retired under Lion. Lion's sign(m) update direction is independent of gradient magnitude, so wd's pull (scaled by parameter magnitude) competes against a unit-vector update — the differential-magnitude framing has no traction. γ_w_L2 depth-monotone pattern (3.97→5.75 baseline) is a robust training-signal property, not a tunable hyperparameter, and survives 16× per-block wd variation. Future per-block axes must operate on a non-magnitude dimension: structural connectivity, attention masking, or stochastic gating. Optimizer-axis experiments under Lion should target gradient *direction* (sign-flip via noise injection or loss-landscape modification), not magnitude.*
+
+---
+
+## 2026-05-15 00:30 — PR #3057: Gradient clip max_norm bracket alphonse (ASSIGNED)
+- Branch: `willowpai2g48h3-alphonse/max-norm-bracket`
+- Hypothesis: Bracket-scan gradient clipping `max_norm` at 0.5 (sharper) and 2.0 (looser) vs baseline 1.0. The current max_norm=1.0 was set at PR #1692 (MAE~60 era, 14 baseline shifts ago) and has never been re-bracketed at the 15th-shift FiLM-Re basin. The FiLM-Re γ-MLP (γ_w_L2 ~ 5.6 at block 4) may have shifted the effective gradient norm distribution, making the old clip threshold suboptimal. This is the only optimizer-side axis that can affect Lion's sign() via indirect sign-flip in momentum dynamics when the clip threshold changes the magnitude of historical gradient contributions.
+- Arms: s1 `max_norm=0.5` (sharper clip), s2 `max_norm=2.0` (looser clip), single seed each
+- Key diagnostic: clip rate (% of steps hitting the clip at each max_norm) — if clip rate < 5% at max_norm=2.0, the looser arm is a no-op and the axis closes quickly
+- Param delta: ZERO. Pure optimizer-behavior bracket.
+
