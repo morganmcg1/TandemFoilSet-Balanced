@@ -485,7 +485,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(
     model.parameters(),
-    lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
+    lr=cfg.lr * 0.20,       # Bisect upward: 5e-4 * 0.20 = 1e-4 (33% above 7.5e-5)
     weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
     betas=(0.9, 0.99),       # Lion-paper default
 )
