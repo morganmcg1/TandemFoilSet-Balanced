@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-14 05:20 — PR #2618: Cosine T_max extension epochs=80/100 on n_layers=3+wd=3e-4 (frieren) — CLOSED, T_MAX=50 IS U-SHAPE MINIMUM
+
+- **Branch:** `willowpai2g24h5-frieren/cosine-tmax-extension-80-100`
+- **Hypothesis:** #2542 showed monotonic ordering T_max=34 < T_max=44 < T_max=50. Extrapolating: T_max=80/100 should continue the trend and beat baseline.
+- **W&B runs:** `ix8ny7xx` (T_max=80, clean), `dcwcwzt8` (T_max=100, clean), `9rx79h3p` (T_max=100, confirm seed)
+
+| Arm | T_max | val | test | Δ val | Δ test | epochs | lr_final |
+|-----|-------|-----|------|-------|--------|--------|----------|
+| Baseline #2489 | 50 | **42.00** | **35.96** | — | — | 33 | 0.485×lr_init |
+| Arm 1 | 80 | 46.22 | 39.02 | +10.0% ✗ | +8.5% ✗ | 29 | 0.709×lr_init |
+| Arm 2 (best) | 100 | 43.64 | 37.28 | +3.9% ✗ | +3.7% ✗ | 34 | 0.741×lr_init |
+| Arm 2 (confirm) | 100 | 44.53 | 37.54 | +6.0% ✗ | +4.4% ✗ | 34 | — |
+
+Per-test-split (Arm 1, T_max=80): single_in_dist +4.8%, camber_rc +2.2%, camber_cruise +14.8%, re_rand +18.7% — OOD worst-hit.
+Per-test-split (Arm 2 best, T_max=100): single_in_dist +0.5%, camber_rc +2.4%, camber_cruise +3.1%, re_rand +10.0% — all regress.
+
+**Result:** CLOSED. Hypothesis REFUTED. Monotonic extrapolation was a local one-sided trend.
+
+Key findings:
+1. **Finding 45 — cosine T_max=50 is U-shape minimum, both directions now closed.** Full U-shape: T_max=34 (46.26) < T_max=44 (45.81) < T_max=50 (42.00) > T_max=80 (46.22) > T_max=100 (43.64). T_max=50 is the clear minimum.
+2. **Mechanism: lr at terminal epoch determines "polish" quality.** At 30-min cap all variants get ~33 epochs. T_max=50 reaches lr≈0.485×lr_init → late-epoch refinement phase. T_max=80/100 keeps lr too high at cap → no polish → val still descending but absolute level worse.
+3. **"Val still descending at cap" is misleading.** Slower descent in an under-annealed arm is NOT a sign of headroom — it's a sign the model never reached the convergent regime. Baseline descent rate (~1.1 val units/epoch late) >> under-annealed (~0.6 val units/epoch).
+4. **EMA × Lion interaction.** High terminal lr = noisier weight trajectory → EMA averaging window less converged. Pairs with finding 43 (ema_decay): convergence quality near end-of-training is load-bearing.
+5. **Scheduler axis fully characterized by CLI:** T_max = {34, 44, 50, 80, 100} all tested. T_max=50 locked. Further `--epochs` tuning is dead at 30-min cap.
+6. **Architecture insight from student:** Linear-warmup + cosine-decay-to-zero-at-epoch-cap (train.py code edit) would unify "polish" with "headroom." Parked for code-edit tier.
+
+**Frieren reassigned:** fourier_min_freq=0.5/2.0 sweep at L=6, max_freq=32 (PR #2789). Brackets low-frequency encoding band in parallel with thorfinn's max_freq sweep.
+
+---
+
 ## 2026-05-14 04:50 — PR #2742: fourier_L sweep (L=4/L=8 vs L=6) on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, L=6 LOCKED
 
 - **Branch:** `willowpai2g24h5-thorfinn/fourier-L-sweep`
