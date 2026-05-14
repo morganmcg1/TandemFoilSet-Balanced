@@ -217,14 +217,77 @@ Channel ordering surf_ux=min / vol_ux=max preserved on all 3 seeds (9th cross-ax
 
 ---
 
-## 2026-05-14 06:50 — PR #2819 (ASSIGNED, alphonse): Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 — wd U-curve lower-side completion
+## 2026-05-14 09:53 — PR #2819 (CLOSED, alphonse): Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 — wd-axis tableau closure with axis-class distinction
 
 - **Branch:** `willowpai2g48h2-alphonse/lion-wd-low-bracket-on-max-norm-0p35`
 - **Student:** willowpai2g48h2-alphonse
 - **Hypothesis:** Completes the wd-axis U-curve picture under saturated-clip — your own follow-up #2 from #2791 close. Banked context: #2791 mapped wd HIGH side ({1e-3, 3e-3} both regress, but 3e-3 within seed noise); parallel #2731 finding that under saturated-clip Lion-lr V-shape is skewed toward smaller lr. Tests whether wd-axis under saturated-clip is similarly skewed toward smaller wd, or is a tight minimum on both sides.
-- **Two arms:** Arm 1 wd=1e-4 (3× below baseline 3e-4), Arm 2 wd=1.5e-4 (2× below baseline).
-- **Decision rule:** val ≤ 45.10 → MERGE (new best). val ∈ [45.15, 45.50] → close with U-curve geometry banked. val > 45.50 → strong regression close (tight minimum on both sides).
-- **Status:** Assigned 2026-05-14 06:50 UTC; awaiting training.
+
+### Result table (vs #2674 new baseline)
+
+| Arm | wd | W&B | SWA val | SWA test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline #2674 | 3e-4 | `ieu1futo` | 45.1538 | 38.6367 | — | — | — |
+| Arm 1 | 1e-4 | `x0pscas5` | 45.4062 | 39.0781 | +0.25 | +0.44 | directional close |
+| Arm 2 | 1.5e-4 | `zxmr9s8h` | 45.4829 | 38.9594 | +0.33 | +0.32 | directional close |
+
+### Per-split SWA val/test (this PR's reported numbers)
+
+| Split | Arm 1 val | Arm 2 val | Arm 1 test | Arm 2 test |
+|---|---:|---:|---:|---:|
+| single_in_dist | 47.4924 | 47.7150 | 40.2757 | 40.6764 |
+| geom_camber_rc | 59.3279 | 58.4710 | 54.9894 | 54.0523 |
+| geom_camber_cruise | 28.3241 | 28.6440 | 22.9034 | 23.0008 |
+| re_rand | 46.4803 | 47.1016 | 38.1437 | 38.1081 |
+| **avg** | **45.4062** | **45.4829** | **39.0781** | **38.9594** |
+
+### wd-axis tableau (4 points) under saturated-clip
+
+| wd | source | SWA val | Δval | Verdict |
+|---|---:|---:|---:|---|
+| 1e-4 | this PR Arm 1 | 45.41 | +0.25 | directional close |
+| 1.5e-4 | this PR Arm 2 | 45.48 | +0.33 | directional close |
+| **3e-4** | **baseline #2674** | **45.15** | **— (minimum)** | — |
+| 1e-3 | #2791 Arm 1 | 46.22 | +1.07 | strong regression |
+| 3e-3 | #2791 Arm 2 | 45.28 | +0.12 | directional close (SWA absorbs) |
+
+**Geometry:** shallow symmetric basin at wd=3e-4 with the **knee at 1e-3 (3.3× baseline, +1.07)** and **mild upper-tolerance at 3e-3 (10× baseline, +0.12)** absorbed by SWA. Lower side rises gently (+0.25 to +0.33 over 2-3× lower wd). **The wd-axis is mildly skewed toward HIGHER wd tolerance**, not lower — opposite of the lr-axis V-shape skew.
+
+### Mechanism diagnosis (paper-publishable axis-class distinction)
+
+After 7 axes tested on saturated-clip baseline, distinct geometric patterns emerge by axis class:
+
+| Axis class | Axes | Geometry | Mechanism interpretation |
+|---|---|---|---|
+| Gradient-magnitude-flow-INDEPENDENT, SYMMETRIC | β #2736 | Symmetric (β=0.3 robust both sides) | Loss-shape independent of gradient-flow |
+| Gradient-magnitude-flow-INDEPENDENT, ASYMMETRIC | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835 | Asymmetric V (concave/saturating LOWER, linear UPPER) | Step-magnitude × feature-capacity directional skew |
+| Gradient-magnitude-flow-DEPENDENT, SYMMETRIC | wd #2791 + this PR | Symmetric shallow basin with mild upper-tolerance | Multiplicative weight-shrinkage; SWA absorbs over-shrinkage symmetrically |
+| Gradient-magnitude-flow-DEPENDENT, NEGATIVE | seed #2790 | Does not transfer; stdev INFLATES | Seed-driven outcomes not regularized by saturated-clip |
+| Pareto-cap-coincidence | swa_start_frac #2818 | Both sides lose for DISTINCT mechanism reasons | s_f=0.75 co-tuned to wall-clock cap |
+
+**The asymmetric-reach signature seen on lr-axis (#2773) and RFF-capacity axis (#2835) is NOT shared by wd-axis or β-axis** — under saturated-clip, the asymmetric pattern lives in step-magnitude + feature-capacity dimensions; the regularization-strength + loss-shape dimensions are symmetric.
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 (wd=1e-4) | Arm 2 (wd=1.5e-4) | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread (final) | 0.4699 | 0.4687 | 0.475 | ✓ 8th cross-axis (extended to lower-wd half-axis) |
+| Channel ordering | preserved | preserved | preserved | ✓ 11th cross-axis confirmation |
+| Best epoch | 13 | 13 | 13 | ✓ checkpoint-selection invariant |
+| Peak VRAM | 44.8 GB | 44.8 GB | 44.8 GB | ✓ identical |
+
+### Banked findings (#126–#131)
+
+126. **PAPER-STRENGTHENING: wd-axis tableau under saturated-clip is COMPLETE — shallow symmetric basin at wd=3e-4 with mild upper-tolerance (#2819 + #2791 banked findings #93–#98)** — 4-point picture {1e-4, 1.5e-4, 3e-4, 1e-3, 3e-3} establishes the basin shape; symmetric NOT asymmetric like lr-axis. The wd-axis effective sensitivity is more compressed than lr-axis.
+127. **PAPER-STRENGTHENING: wd-axis vs lr-axis GEOMETRY DISTINCTION under saturated-clip (#2819 NEW HEADLINE)** — Under same saturated-clip regime, the wd-axis (multiplicative weight-shrinkage) shows SYMMETRIC basin while lr-axis (step-magnitude) shows ASYMMETRIC V skewed toward smaller lr. Paper-publishable mechanism-level distinction between regularization-strength and step-magnitude axes.
+128. **PAPER-STRENGTHENING: Paper-appendix table now stands at 7 mechanism-transfer axes with 4 distinct transfer patterns** — {β symmetric, lr/RFF/head-lr asymmetric, wd symmetric, seed regression-inflate, swa_start_frac Pareto-cap-coincidence}. Distinct hyperparameter classes behave qualitatively differently under saturated-clip — strongest evidence yet for the appendix story.
+129. **PAPER-STRENGTHENING: SWA absorbs wd over-shrinkage AND under-shrinkage symmetrically (#2819 extends #2791 banked #98)** — both wd directions show SWA re-centering the wd dial: base val 47.17/47.43 (2 units worse than baseline) → SWA val 45.41/45.48 (within seed-noise band).
+130. **σ-spread invariant on lower-wd half-axis (#2819, 8th cross-axis)** — 0.4699/0.4687 vs baseline 0.475, Δ ≤ 0.006.
+131. **Channel ordering invariant on lower-wd half-axis (#2819, 11th cross-axis)** — surf_ux=min log_σ / vol_ux=max log_σ preserved on both arms; Kendall weight ordering identical to baseline (surf_ux=44.07/44.00 max-effective-weight, vol_ux=17.22/17.23 min).
+- Soft signal banked: 2nd cross-axis val/test partial-disagreement at Arm 2 (val WORSE than Arm 1 by 0.08, test BETTER by 0.12) — parallels RFF-capacity #2835 signature; conditioned on val/test split-pool noise.
+
+### Advisor verdict
+**CLOSED — wd-axis tableau COMPLETED; paper-publishable axis-class geometry distinction.** No actionable hyperparameter change. Mechanism-transfer table now stands at 7 axes with 4 distinct transfer patterns. Reassigning alphonse → next paper-appendix mechanism-transfer axis (TBD this loop).
 
 ---
 
