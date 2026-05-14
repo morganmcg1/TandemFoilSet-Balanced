@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-15 06:30 [Round 138 close-47] UTC — 2 closures: #3061 slice_num=12 LOSS-with-cruise-PRESERVED (180th taxon, 14th preserver) + #3056 Lion β₁=0.95 LOSS-with-cruise-BROKEN (181st taxon, 10th BROKEN — first optimizer-internal axis to break cruise)
+
+### Closed: #3061 alphonse slice-num-12 (180th taxon SLICE-NUM-12-LOWER-BRACKET-LOSS-VIA-HEAD-SPECIALIZATION-COLLISION / SLICE-NUM-AXIS-CLOSED-AT-LOWER-BRACKET-24-LOAD-BEARING-MINIMUM)
+
+- **Branch:** charliepai2g48h5-alphonse/slice-num-12
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-slice-num-12-20260514-225839/metrics.jsonl
+- **Hypothesis:** Halve slice routing granularity (slice_num=24 → 12); single CLI flag; cruise predicted PRESERVED; param Δ −2,352 (−0.58% total). Tests if 24 was over-parameterized.
+- **Result:** val 30.6600 (+3.82% LOSS vs #3006 29.5318); test 25.6049 (+0.49% slight LOSS vs 25.4795); val_cruise 15.7191 PRESERVED (< 17.0); param Δ −2,352.
+- **Cruise: PRESERVED** (14th cruise-preserving datapoint).
+- **Mechanistic findings (exemplary student diagnostic):**
+  - (1) "Dead-slice under-parameterization" hypothesis FALSIFIED: all 12 slices USED at every probe epoch (dead_slice_frac=0.00 across 4 blocks × 2 heads × 3 epochs).
+  - (2) **Routing capacity bottleneck via head specialization-collision:** max-usage rises from uniform 0.084 (ep1) to 0.41-0.58 (ep30/59); per-head entropy drops to as low as 1.59 (block 2 H0 @ ep59); heads concentrate >50% mass on one slice in some blocks. **24-slice headroom is load-bearing for in-distribution accuracy.**
+  - (3) Sec/epoch flat (29.0) despite −2,352 params — slice-routing compute is NOT the bottleneck at this model size; not a viable acceleration path.
+  - (4) val_geom_camber_rc unchanged at 45.91 — coarser routing is NOT a useful implicit regularizer.
+- **Sub-invariant 'granularity-orthogonal-to-cruise-protection' strengthened to 3 datapoints:** #3026 cosine-routing (mechanism reparameterization), #3043 per-channel α (granularity at inter-block site), #3061 slice_num=12 (granularity at slice-routing site).
+- **Followup #3076 alphonse slice-num-48** — Double slice_num from 24 → 48 (upper-bracket complement per student rec #1 verbatim). Tests whether 24 was UNDER-parameterized vs OPTIMAL. Param Δ +9,216 (~+2.3%). Cruise predicted PRESERVED (would be 15th datapoint). 170th active axis.
+
+### Closed: #3056 thorfinn lion-beta1-0pt95 (181st taxon LION-BETA1-0PT95-LOSS-WITH-CRUISE-BREAK-VIA-SIGN-EXTRACTION-STALE-DIRECTION / LION-BETA1-AXIS-CLOSED-AT-DEFAULT-0.9)
+
+- **Branch:** charliepai2g48h5-thorfinn/lion-beta1-0pt95
+- **Metric artifacts:** models/model-charliepai2g48h5-thorfinn-lion-beta1-0pt95-20260514-224716/metrics.jsonl
+- **Hypothesis:** Sweep Lion β₁ from 0.9 → 0.95 (β₂=0.99 unchanged); +0 params; +0 compute; cruise predicted PRESERVED.
+- **Result:** val 31.3064 (+6.01% LOSS vs #3006); test 26.0975 (+2.43% LOSS); **val_cruise 17.4802 BROKEN (+0.48 above 17.0 threshold)**; param unchanged 407,175.
+- **Cruise: BROKEN** (10th BROKEN datapoint; FIRST optimizer-internal axis to break cruise).
+- **Mechanistic findings (highest-quality predictive hypothesis this round — student predicted failure verbatim):**
+  - (1) **"Stale 20-step direction info" mechanism CONFIRMED verbatim** — sign-step stability rises to 0.79 at ep59 (vs Chen et al. ~0.7 typical for β₁=0.9). Under cosine LR decay, stale 20+-step-old gradient direction dominates over current loss-surface gradient.
+  - (2) Late-window non-monotonicity confirmed: ep55→56→57→58→59→60 = 31.38→31.35→**31.69 (bounce)**→31.41→31.31→31.32. Contrast #3039's monotonic 30.63→30.32. β₁=0.95 introduces extra non-monotonicity in late training.
+  - (3) Train→val gap at convergence consistent with baseline — regression is in absolute val MAE, not generalization quality.
+- **NEW SUB-INVARIANT (tentative, 1 datapoint):** "sign-extraction-coefficient axes break cruise; buffer-update-coefficient axes preserve cruise." β₁ sits in sign-extraction `sign(β₁·m + (1-β₁)·g)` — changes per-step weight delta sign directly. β₂ only updates buffer `m ← β₂·m + (1-β₂)·g` for NEXT step. **#3068 (β₂=0.95, in-flight) will be the cleanest first companion-datapoint to test this sub-invariant.**
+- **Followup #3077 thorfinn mlp-dropout-0pt05** — Fresh ARCHITECTURE axis: `nn.Dropout(p=0.05)` INSIDE SwiGLU MLP (after gate*value, before down-projection). 3rd site in stochastic-regularization-cluster filling matrix at p=0.05 across (attn-softmax #3071, branch #3065, MLP-internal #NEW). +0 params. Cruise prediction UNCERTAIN (most aggressive in-block-stochastic test yet). 171st active axis.
+
+### Round summary
+
+- Cruise-preservation ledger now **24 datapoints (10 BROKEN + 14 PRESERVED)**. Total closed: 181. Winners: 23.
+- **8 students all busy, zero idle GPUs.**
+- **In-flight axes (8):** #3065 askeladd DropPath p=0.05, #3066 edward LayerScale, #3068 fern Lion β₂=0.95, #3069 nezuko output-MLP-2layer, #3071 tanjiro attn-dropout p=0.05, #3075 frieren hybrid-LN-RMSNorm, #3076 alphonse slice_num=48, #3077 thorfinn MLP-dropout p=0.05.
+- **Stochastic-regularization-cluster forming:** 3 sites at p=0.05 (#3065 branch, #3071 attn-softmax, #3077 MLP-internal).
+- **Lion-hyperparameter axis comprehensively closed:** β₁=0.95 LOSS-with-cruise-break, β₂=0.95 in-flight.
+- **Slice_num axis brackets:** {12 LOSS PRESERVED, 24 OPT baseline, 48 in-flight}.
+
+---
+
 ## 2026-05-15 05:00 [Round 138 close-46] UTC — #3054 frieren RMSNorm LOSS-with-cruise-PRESERVED + TEST WIN; 179th taxon; 13th cruise preserver; ledger 22 (9 BROKEN + 13 PRESERVED)
 
 ### Closed: #3054 frieren rmsnorm-replace-layernorm (179th taxon RMSNORM-LOSS-LN-MEAN-SUBTRACTION-MILDLY-LOAD-BEARING / NORMALIZATION-TYPE-AXIS-CLOSED-AT-LN-WITH-POSITION-DEPENDENT-FOLLOWUP)
