@@ -2,6 +2,70 @@
 
 ---
 
+## 2026-05-14 [Round 95] UTC — PR #2766: GroupNorm(G=4) replacing LayerNorm — **CLOSED LOSS (+14.69% val)**
+
+- **Branch:** charliepai2g48h5-askeladd/groupnorm-g4
+- **Hypothesis:** GroupNorm with G=4 (24-channel groups) tests whether intermediate granularity between per-channel (LN) and per-channel-stat reduction granularity yields better-conditioned normalization for point-cloud regression. If groups capture meaningful channel correlations without LN's full-channel pooling, val/mae_surf_p should improve.
+- **Metric artifacts:** `models/model-charliepai2g48h5-askeladd-groupnorm-g4-20260514-*/metrics.jsonl`
+
+| Split | GN(G=4) val | Baseline #2765 | Δ vs #2765 |
+|---|---|---|---|
+| `val_single_in_dist` | 28.4636 | 24.9721 | **+13.99% LOSS** |
+| `val_geom_camber_rc` | 50.2261 | 46.9885 | **+6.89% LOSS** |
+| `val_geom_camber_cruise` | 19.4244 | 17.7276 | **+9.57% LOSS** |
+| `val_re_rand` | 41.6202 | 35.5983 | **+16.91% LOSS** |
+| **val_avg** | **35.9188** | **31.3216** | **+14.69% LOSS** |
+| `test_avg/mae_surf_p` | **30.7585** | **26.5067** | **+16.04% LOSS** |
+
+- **Result:** All 4 val splits regress 6.89-16.91%. Test +16.04%.
+- **Mechanism (student analysis correct):** GN with G=4 reduces over (T, C_g=24) statistics including padded mesh positions, contaminating per-group normalization. LayerNorm normalizes per-token over the full channel dim only — immune to padding ratio. LayerScale γ patterns preserved (no training instability), confirming this is a poor-conditioning failure mode, not a learning-rate or schedule issue.
+- **Taxonomic closure:** 62nd taxon. Combined with closed DyT (#2686, 48th taxon, all-or-nothing replacement) and closed RMSNorm (#2139), the normalization-meta-axis is now COMPREHENSIVELY mapped across both REPLACEMENT (DyT, RMSNorm) and GRANULARITY (G=4 here) dimensions. LayerNorm full-channel pooling remains optimal for variable-token-count point-cloud regression. **Normalization-granularity sub-axis closes at LN.**
+- **Follow-up:** ADD-LN-site experiment #2808 (askeladd, structurally orthogonal — adds a new pre-block-0 LN site instead of replacing).
+
+---
+
+## 2026-05-14 [Round 95] UTC — PR #2764: mlp_ratio 2 → 1.5 (MLP-width-down) — **CLOSED LOSS (+2.46% val)**
+
+- **Branch:** charliepai2g48h5-frieren/mlp-ratio15
+- **Hypothesis:** mlp_ratio=2 may be over-parameterized given Lion's sign-momentum compresses effective capacity. Reducing to 1.5 (-32K params in MLP body) may regularize without losing representation power. Inverse probe to closed #2749 mlp_ratio=3.
+- **Metric artifacts:** `models/model-charliepai2g48h5-frieren-mlp-ratio15-20260514-*/metrics.jsonl`
+
+| Split | ratio=1.5 val | Baseline #2765 | Δ vs #2765 |
+|---|---|---|---|
+| `val_single_in_dist` | 25.2367 | 24.9721 | +1.06% regress |
+| `val_geom_camber_rc` | 46.1657 | 46.9885 | −1.75% improved |
+| `val_geom_camber_cruise` | 17.0813 | 17.7276 | −3.65% improved |
+| `val_re_rand` | 36.2113 | 35.5983 | +1.72% regress |
+| **val_avg** | **32.0910** | **31.3216** | **+2.46% LOSS** |
+| `test_avg/mae_surf_p` | **27.8057** | **26.5067** | **+1.39% LOSS** |
+
+- **Result:** Borderline against OLD #2741 baseline (val 32.2477; −0.49% improve), but **LOSS against new #2765 baseline** (val 31.3216; +2.46%). Test regressed +1.39%.
+- **Per-split inversion vs #2749 (mlp_ratio=3 wider):** wider arm regressed in_dist+helped camber; narrower arm regresses in_dist+re_rand+helps camber. Net: in_dist+re_rand strictly prefer mlp_ratio≈2; camber splits prefer ANYTHING different from 2 but magnitudes small. |γ_mlp| stayed flat through training = model still wants the MLP capacity it had at ratio=2.
+- **Re_rand bottleneck is NOT MLP capacity** — regressed in BOTH directions (+1.72% here, +1.11% in #2749). Reynolds-conditioned probe is the right next move on that split.
+- **Taxonomic closure:** 63rd taxon. MLP-width sub-axis now mapped from both directions (#2749 wider closed, #2764 narrower closed). **MLP-width axis saturated at mlp_ratio=2.** Student's own conclusion ('Stop probing MLP-width. The axis is mapped') aligns exactly.
+- **Bug fix consideration:** PR included a defensive code-hygiene patch for SwiGLU diagnostic block (adds `is not None` and `_swiglu_blocks` guards). Verified advisor branch already has functional `_swiglu_loader = val_loaders.get('val_single_in_dist') or next(iter(val_loaders.values()))` — no NameError exists; the change is purely defensive. NOT cherry-picked (no functional change for in-flight SwiGLU experiments).
+- **Follow-up:** decoder-depth experiment #2809 (frieren mlp2 deeper 2→3 layers, orthogonal to closed mlp2-wide192 stale_wip decoder-width).
+
+---
+
+## 2026-05-14 [Round 95] UTC — PR #2808: Pre-block-0 embedding LayerNorm — **ASSIGNED (64th candidate axis)**
+
+- **Branch:** charliepai2g48h5-askeladd/embed-ln
+- **Hypothesis:** Adding an `nn.LayerNorm(96)` site AFTER FiLM modulation and BEFORE the block loop gives block 0 a normalized stationary-scale input, enabling its LayerScale γ to learn against a fixed baseline rather than chasing drift in preprocess+placeholder+FiLM. Structurally DISTINCT from closed normalization-REPLACEMENT taxa (DyT, RMSNorm, GroupNorm) — this experiment ADDS a new LN site rather than replacing existing ones. Xiong et al. 2020 (pre-LN at residual stream entries stabilizes optimization).
+- **Param delta:** +192 (96 weight + 96 bias) → expected 333,795 total.
+- **Bar:** val_avg/mae_surf_p < 31.3216.
+
+---
+
+## 2026-05-14 [Round 95] UTC — PR #2809: 3-layer output head (mlp2 deeper) — **ASSIGNED (65th candidate axis)**
+
+- **Branch:** charliepai2g48h5-frieren/mlp2-deeper
+- **Hypothesis:** Replace `mlp2 = Linear(96,96)→GELU→Linear(96,3)` with `Linear(96,96)→GELU→Linear(96,96)→GELU→Linear(96,3)`. Decoder-depth probe (2 nonlinearities vs 1) — distinct sub-axis from closed PR #2750 fern decoder-WIDTH (stale_wip, axis-untested). The output head is the *only* place semantic latents convert to physical-channel predictions; a richer decoder may rebalance work load from block 3.
+- **Param delta:** +9,312 (96×96 + 96) → expected ~342,915 total.
+- **Bar:** val_avg/mae_surf_p < 31.3216.
+
+---
+
 ## 2026-05-14 [Round 94] UTC — PR #2765: SE block-3-only reduction=4 — **MERGED WIN (−2.87% val)**
 
 - **Branch:** charliepai2g48h5-tanjiro/se-reduction4
