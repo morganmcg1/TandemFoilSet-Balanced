@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-05-14 [Round 135] UTC — PR #2923: slice-num-32 — **CLOSED LOSS (+6.02% val / +2.82% test; 114th taxon; SLICE-ROUTING-ALPHABET UPWARD SWEEP AT n_head=2 CLOSED)**
+
+- **Branch:** charliepai2g48h5-tanjiro/slice-num-32
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-slice-num-32-*/metrics.jsonl
+
+| Metric | Baseline #2879 | #2923 slice_num=32 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 32.3998 | **+6.02% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.2641 | +2.82% LOSS |
+| val_single_in_dist | 23.3997 | 25.9244 | +10.79% LOSS (largest) |
+| val_geom_camber_rc | 46.0708 | 48.1209 | +4.45% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.8268 | -0.22% FLAT |
+| val_re_rand | 34.9057 | 37.7274 | +8.08% LOSS |
+
+**Hypothesis:** Increase slice-routing alphabet from 24→32 to test whether richer routing capacity (per #2906 n_head=4 closure also failed → had hypothesized that more routing tokens at fixed n_head=2 might compensate). Tests slice_num upward sweep.
+
+**Result:** LOSS uniform except cruise FLAT. The pattern partly resembles meta-signal (cruise FLAT, in_dist worst hit at +10.79%) but breaks the typical capacity-shift framing — slice_num scales projection matrices, not feature allocation.
+
+**Student diagnostic (decisive):** Per-block per-head routing entropy reveals:
+- Block-0: 1.32-1.71 nats range (active head differentiation at slice_num=32)
+- Block-3: 0.01-0.92 nats range (COLLAPSED — entropy floor at near-zero, ceiling at log(32)=3.466)
+- The model is NOT using the wider 32-token alphabet at deep blocks. Wider routing space ≠ better routing.
+- Comparison to #2906 (n_head=4, dim_head=24): n_head=4 had block-3 entropy range 2.11 nats vs 0.91 here. **n_head and slice_num are NOT interchangeable** — n_head distributes capacity across attention heads, slice_num just widens the routing alphabet without making routing sharper.
+
+**Closes 114th taxon:** slice-routing-alphabet upward sweep at fixed n_head=2.
+
+**Student followups (4 proposed):**
+1. slice_num=16 (downward sweep, complementary) — **SELECTED** for tanjiro reassignment as #2934.
+2. slice_num=20 (small downward perturbation)
+3. Per-block slice_num (16 at depth, 32 at shallow)
+4. Hard top-k routing (sharpen learned routing distribution)
+
+---
+
+## 2026-05-14 [Round 135] UTC — PR #2934 (assignment): tanjiro slice-num-16 — **115th axis: routing-alphabet downward sweep**
+
+- **Hypothesis:** If 24→32 hurt (#2923), does 24→16 help? Tests whether baseline is at peak of routing-capacity curve or above-peak. Student of #2923 explicitly recommended this as their #1 followup.
+- **Why might WIN:** Block-3 routing already collapsed even at slice_num=24 (range 0.01-0.92 nats vs 3.18 ceiling) — model uses only ~2-3 effective slices at depth. Smaller alphabet (16) may match actual usage and free capacity for other learning.
+- **Why might LOSS:** Block-0 has active head differentiation (entropy range 1.32-1.71 nats at #2923 slice_num=32); reducing to 16 might force collapse there too.
+- **Single-line change:** `slice_num=24 → slice_num=16` in Transolver config.
+- **Expected param count:** ~406k (slight decrease vs 407,940 baseline).
+
+---
+
 ## 2026-05-14 [Round 134] UTC — PR #2922: lookahead-lion-k5-α0.5 — **CLOSED LOSS (+19.83% val; 113th taxon; OPTIMIZER-WRAPPER AXIS CLOSED; SLOW-WEIGHT-AVERAGING CLASS RULED OUT)**
 
 - **Branch:** charliepai2g48h5-alphonse/lookahead-lion-k5-a0.5
