@@ -699,6 +699,12 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+HUBER_BETA = 1.0
+print(f"Loss function: F.smooth_l1_loss(beta={HUBER_BETA}) for surf AND vol terms (replaces F.l1_loss)")
+print(f"surf_weight (unchanged): {cfg.surf_weight}")
+print(f"MAE reporting (unchanged): physical-space MAE via accumulate_batch; val/*surf_loss kept L1 for cross-experiment comparability")
+print(f"Topology: post-norm γ=1.0 + cross-block α [3] (unchanged from #3006)")
+print(f"NEW BASELINE: val 29.5318 / test 25.4795 (PR #3006)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -792,6 +798,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_l1 = epoch_surf_l1 = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -804,12 +811,19 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            # Huber / Smooth-L1 (beta=1.0) training criterion: quadratic for |res|<1,
+            # linear elsewhere; combines L2's near-zero stability with L1's outlier
+            # robustness. Replaces F.l1_loss to test the loss-function axis.
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=HUBER_BETA, reduction='none')
+            l1_err = F.l1_loss(pred, y_norm, reduction='none')  # diagnostic only
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            with torch.no_grad():
+                vol_l1_diag = (l1_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+                surf_l1_diag = (l1_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -818,12 +832,16 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_vol_l1 += vol_l1_diag.item()
+        epoch_surf_l1 += surf_l1_diag.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol_l1 /= max(n_batches, 1)
+    epoch_surf_l1 /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -855,14 +873,22 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_l1": epoch_vol_l1,
+        "train/surf_l1": epoch_surf_l1,
+        "train/surf_huber_over_l1": (epoch_surf / epoch_surf_l1) if epoch_surf_l1 > 0 else None,
+        "train/vol_huber_over_l1": (epoch_vol / epoch_vol_l1) if epoch_vol_l1 > 0 else None,
+        "huber_beta": HUBER_BETA,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
     })
+    huber_l1_ratio = (epoch_surf / epoch_surf_l1) if epoch_surf_l1 > 0 else float("nan")
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} (huber); "
+        f"l1[vol={epoch_vol_l1:.4f} surf={epoch_surf_l1:.4f}]; "
+        f"surf_huber/l1={huber_l1_ratio:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
