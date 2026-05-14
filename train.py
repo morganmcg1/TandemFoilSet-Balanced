@@ -114,6 +114,172 @@ class FourierFeatures(nn.Module):
         return torch.cat([sin_feats, cos_feats, rest], dim=-1)
 
 
+class LocalNodeAggregator(nn.Module):
+    """Local node aggregation BEFORE Transolver slice routing (Transolver++ H6).
+
+    Each node's features are fused with the mean of its k nearest spatial
+    neighbors (kNN mode) or with the mean of its grid cell (zone mode), then
+    passed through a small MLP. Output is residual: ``features + mlp([feat,
+    neighbor_mean])``. The final MLP layer is initialized with std=0.01 so the
+    module starts as near-identity and ramps up during training (per the PR
+    Step 6 recipe).
+
+    Approximate kNN uses chunked brute-force matmul-based distance computation
+    with bf16 inside the matmul (matmul dtype follows the surrounding autocast
+    context). Padded nodes are pushed far away in coord-space so they cannot be
+    selected as neighbors.
+    """
+
+    def __init__(self, feat_dim: int, k: int = 4, mode: str = "knn",
+                 n_cells: int = 32, chunk_size: int = 1024):
+        super().__init__()
+        self.k = int(k)
+        self.mode = mode
+        self.n_cells = int(n_cells)
+        self.chunk_size = int(chunk_size)
+        self.mlp = nn.Sequential(
+            nn.Linear(feat_dim * 2, feat_dim),
+            nn.GELU(),
+            nn.Linear(feat_dim, feat_dim),
+        )
+        # Near-identity init for the final layer so aggregation contributes
+        # minimally at the start of training (Step 6 from the PR).
+        trunc_normal_(self.mlp[-1].weight, std=0.01)
+        nn.init.constant_(self.mlp[-1].bias, 0)
+
+    def forward(self, features: torch.Tensor, coords: torch.Tensor,
+                mask: torch.Tensor) -> torch.Tensor:
+        if self.mode == "knn":
+            agg = self._knn_aggregate(features, coords, mask)
+        elif self.mode == "zone":
+            agg = self._zone_aggregate(features, coords, mask)
+        else:
+            raise ValueError(f"Unknown local_aggregation_mode={self.mode!r}")
+        combined = torch.cat([features, agg], dim=-1)
+        return features + self.mlp(combined)
+
+    @torch.no_grad()
+    def _build_knn_indices(self, coords: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Return (B, N, k) neighbor indices via cell-list approximate kNN.
+
+        Algorithm (O(N·M) where M = 9·k_per_cell ≈ 72 candidates per query):
+          1. Bucket all nodes into an ``n_cells × n_cells`` spatial grid
+             (per-batch bounding box; masked nodes go to a sentinel cell).
+          2. For each grid cell, pre-pad to ``k_per_cell`` representative node
+             indices (sort by cell-id, slice, modulo-wrap if a cell is sparse).
+          3. For each query node, gather candidates from its 3×3 cell window
+             (cell + 8 neighbours) and take the ``k`` closest by L² distance.
+
+        Masked (padding) nodes carry far_val coords so they cannot be in any
+        live cell; the sentinel cell never appears in the adjacent-cell lookup.
+        """
+        B, N, _ = coords.shape
+        device = coords.device
+        n_cells = self.n_cells
+        n_cells_total = n_cells * n_cells
+        k_per_cell = max(self.k * 2, 8)
+
+        # Per-batch bbox of *valid* coords; masked coords kept out of min/max.
+        coords_for_min = torch.where(mask.unsqueeze(-1), coords,
+                                     coords.new_full(coords.shape, float("inf")))
+        coords_for_max = torch.where(mask.unsqueeze(-1), coords,
+                                     coords.new_full(coords.shape, -float("inf")))
+        cmin = coords_for_min.amin(dim=1, keepdim=True)  # (B, 1, 2)
+        cmax = coords_for_max.amax(dim=1, keepdim=True)
+        crange = (cmax - cmin).clamp(min=1e-6)
+
+        cell_xy = ((coords - cmin) / crange * n_cells).long().clamp(0, n_cells - 1)
+        cell_id = cell_xy[..., 0] * n_cells + cell_xy[..., 1]  # (B, N)
+        # Masked nodes get cell_id == n_cells_total (sentinel) so they're isolated.
+        sentinel = n_cells_total
+        cell_id = torch.where(mask, cell_id, torch.full_like(cell_id, sentinel))
+
+        # Sort nodes by cell_id within each batch — same-cell nodes contiguous.
+        sort_idx = cell_id.argsort(dim=1)  # (B, N)
+        sorted_cell_id = cell_id.gather(1, sort_idx)  # (B, N)
+
+        # Boundaries of each cell in sorted order via searchsorted.
+        cell_arange = torch.arange(n_cells_total, device=device).unsqueeze(0).expand(B, -1)
+        cell_starts = torch.searchsorted(sorted_cell_id, cell_arange)            # (B, C)
+        cell_ends = torch.searchsorted(sorted_cell_id, cell_arange + 1)          # (B, C)
+        cell_counts = (cell_ends - cell_starts).clamp(min=1)                     # (B, C)
+
+        # Pre-pad each cell to k_per_cell node indices (modulo-wrap sparse cells).
+        offsets = torch.arange(k_per_cell, device=device).view(1, 1, -1)         # (1,1,kpc)
+        pos = cell_starts.unsqueeze(-1) + offsets % cell_counts.unsqueeze(-1)    # (B, C, kpc)
+        pos = pos.clamp(max=N - 1)
+        cell_nodes = sort_idx.gather(1, pos.reshape(B, -1)).view(B, n_cells_total, k_per_cell)
+
+        # 3×3 neighbour offsets in (dx, dy) on the cell grid.
+        dxs = torch.tensor([-1, -1, -1, 0, 0, 0, 1, 1, 1], device=device)
+        dys = torch.tensor([-1, 0, 1, -1, 0, 1, -1, 0, 1], device=device)
+        cx = cell_xy[..., 0]  # (B, N)
+        cy = cell_xy[..., 1]
+        adj_cx = (cx.unsqueeze(-1) + dxs.view(1, 1, -1)).clamp(0, n_cells - 1)   # (B, N, 9)
+        adj_cy = (cy.unsqueeze(-1) + dys.view(1, 1, -1)).clamp(0, n_cells - 1)
+        adj_cell_id = adj_cx * n_cells + adj_cy                                  # (B, N, 9)
+
+        # Fancy-index gather: cell_nodes[b, adj_cell_id[b, n, i], :]  → (B, N, 9, kpc)
+        b_idx = torch.arange(B, device=device).view(B, 1, 1)
+        cand = cell_nodes[b_idx, adj_cell_id]                                    # (B, N, 9, kpc)
+        M = 9 * k_per_cell
+        cand_flat = cand.reshape(B, N, M)                                        # (B, N, M)
+
+        # Gather candidate coords and compute L² distance from each query.
+        cand_coords = coords.gather(
+            1,
+            cand_flat.reshape(B, -1, 1).expand(-1, -1, 2),
+        ).view(B, N, M, 2)
+        diff = cand_coords - coords.unsqueeze(2)                                 # (B, N, M, 2)
+        dist = (diff * diff).sum(dim=-1)                                         # (B, N, M)
+        # If any candidate is itself a masked node (shouldn't happen due to sentinel
+        # cell + clamped adjacency, but be defensive), push it to +inf.
+        cand_mask = mask.gather(1, cand_flat.reshape(B, -1)).view(B, N, M)
+        dist = dist.masked_fill(~cand_mask, float("inf"))
+
+        _, top_k_pos = dist.topk(self.k, dim=-1, largest=False)                  # (B, N, k)
+        knn_idx = cand_flat.gather(2, top_k_pos)                                 # (B, N, k)
+        return knn_idx
+
+    def _knn_aggregate(self, features: torch.Tensor, coords: torch.Tensor,
+                       mask: torch.Tensor) -> torch.Tensor:
+        B, N, D = features.shape
+        idx = self._build_knn_indices(coords, mask)  # (B, N, k)
+        # gather neighbour features: (B, N, k, D)
+        idx_flat = idx.reshape(B, N * self.k)               # (B, N*k)
+        idx_exp = idx_flat.unsqueeze(-1).expand(-1, -1, D)   # (B, N*k, D)
+        neigh = torch.gather(features, dim=1, index=idx_exp)  # (B, N*k, D)
+        neigh = neigh.view(B, N, self.k, D)
+        return neigh.mean(dim=2)
+
+    def _zone_aggregate(self, features: torch.Tensor, coords: torch.Tensor,
+                        mask: torch.Tensor) -> torch.Tensor:
+        """Grid-bin mean aggregation. Each node receives the mean feature of
+        every node in its spatial grid cell (per-batch bounding box, n_cells
+        bins per axis)."""
+        B, N, D = features.shape
+        device = features.device
+        big = float("inf")
+        coords_for_min = torch.where(mask.unsqueeze(-1), coords,
+                                     coords.new_full(coords.shape, big))
+        coords_for_max = torch.where(mask.unsqueeze(-1), coords,
+                                     coords.new_full(coords.shape, -big))
+        cmin = coords_for_min.amin(dim=1, keepdim=True)  # (B, 1, 2)
+        cmax = coords_for_max.amax(dim=1, keepdim=True)  # (B, 1, 2)
+        crange = (cmax - cmin).clamp(min=1e-6)
+        cell_xy = ((coords - cmin) / crange * self.n_cells).long().clamp(0, self.n_cells - 1)
+        cell_id = cell_xy[..., 0] * self.n_cells + cell_xy[..., 1]  # (B, N)
+        n_cells_total = self.n_cells * self.n_cells
+        feat_dtype = features.dtype
+        masked_feat = features * mask.unsqueeze(-1).to(feat_dtype)
+        cell_sum = torch.zeros(B, n_cells_total, D, device=device, dtype=feat_dtype)
+        cell_sum.scatter_add_(1, cell_id.unsqueeze(-1).expand(-1, -1, D), masked_feat)
+        cell_count = torch.zeros(B, n_cells_total, device=device, dtype=feat_dtype)
+        cell_count.scatter_add_(1, cell_id, mask.to(feat_dtype))
+        cell_mean = cell_sum / cell_count.unsqueeze(-1).clamp(min=1.0)
+        return cell_mean.gather(1, cell_id.unsqueeze(-1).expand(-1, -1, D))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -202,7 +368,12 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_local_token_merging: bool = False,
+                 local_knn_k: int = 4,
+                 local_aggregation_mode: str = "knn",
+                 local_grid_cells: int = 32,
+                 local_chunk_size: int = 1024):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -227,7 +398,22 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.use_local_token_merging = use_local_token_merging
+        self.local_aggregator = None
+        if use_local_token_merging:
+            self.local_aggregator = LocalNodeAggregator(
+                feat_dim=n_hidden,
+                k=local_knn_k,
+                mode=local_aggregation_mode,
+                n_cells=local_grid_cells,
+                chunk_size=local_chunk_size,
+            )
         self.apply(self._init_weights)
+        # Re-apply LocalNodeAggregator's narrower final-layer init after the
+        # generic _init_weights pass (which overwrites the std=0.01 we set).
+        if self.local_aggregator is not None:
+            trunc_normal_(self.local_aggregator.mlp[-1].weight, std=0.01)
+            nn.init.constant_(self.local_aggregator.mlp[-1].bias, 0)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -241,6 +427,15 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.local_aggregator is not None:
+            coords = data.get("coords")
+            mask = data.get("mask")
+            if coords is None or mask is None:
+                raise RuntimeError(
+                    "Transolver with local_token_merging requires 'coords' and "
+                    "'mask' in the data dict."
+                )
+            fx = self.local_aggregator(fx, coords, mask)
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -286,12 +481,13 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            model_inputs = {"x": x_norm, "mask": mask}
             if amp and device.type == "cuda":
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    pred = model({"x": x_norm})["preds"]
+                    pred = model(model_inputs)["preds"]
                 pred = pred.float()
             else:
-                pred = model({"x": x_norm})["preds"]
+                pred = model(model_inputs)["preds"]
 
             if loss_fn == "smooth_l1":
                 per_elem = F.smooth_l1_loss(
@@ -458,6 +654,12 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    # Transolver++ local token merging (H6)
+    use_local_token_merging: bool = False
+    local_knn_k: int = 4
+    local_aggregation_mode: str = "knn"  # "knn" or "zone"
+    local_grid_cells: int = 32  # grid cells per spatial axis (zone mode)
+    local_chunk_size: int = 1024  # chunked-brute-force chunk size (knn mode)
 
 
 cfg = sp.parse(Config)
@@ -497,6 +699,11 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_local_token_merging=cfg.use_local_token_merging,
+    local_knn_k=cfg.local_knn_k,
+    local_aggregation_mode=cfg.local_aggregation_mode,
+    local_grid_cells=cfg.local_grid_cells,
+    local_chunk_size=cfg.local_chunk_size,
 )
 
 if cfg.fourier_k > 0:
@@ -505,7 +712,12 @@ if cfg.fourier_k > 0:
 
 
 class FourierModel(nn.Module):
-    """Wraps Transolver with a FourierFeatures expansion of the first 2 input dims."""
+    """Wraps Transolver with a FourierFeatures expansion of the first 2 input dims.
+
+    The raw (pre-Fourier) x/z coords are forwarded as ``data['coords']`` so that
+    downstream local aggregation modules (LocalNodeAggregator) can use them.
+    Note: these are normalized coords — same units as the Transolver input.
+    """
 
     def __init__(self, fourier: FourierFeatures, base: Transolver):
         super().__init__()
@@ -513,9 +725,12 @@ class FourierModel(nn.Module):
         self.base = base
 
     def forward(self, data, **kwargs):
-        x_aug = self.fourier(data["x"])
+        x_raw = data["x"]
+        x_aug = self.fourier(x_raw)
         new_data = {k: v for k, v in data.items() if k != "x"}
         new_data["x"] = x_aug
+        if "coords" not in new_data:
+            new_data["coords"] = x_raw[..., :2].contiguous()
         return self.base(new_data, **kwargs)
 
 
@@ -619,7 +834,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx:
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
             if cfg.loss_fn == "smooth_l1":
                 per_elem = F.smooth_l1_loss(
                     pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
