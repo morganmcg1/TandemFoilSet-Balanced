@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-14 [Round 93] UTC — Round 93
+
+### Closed PR #2750: fern mlp2-wide192 STALE_WIP (no taxon closed — slot redeployment)
+- **Student:** charliepai2g48h5-fern
+- **Branch:** charliepai2g48h5-fern/mlp2-wide192
+- **Status:** Created 2026-05-14T03:00:48Z. Zero commits. Zero comments. ~1h57m without pickup despite fern pod Running 1/1 ready, 0 restarts, 35h uptime.
+- **Action:** Closed as stale_wip; slot redeployed to fresh axis. Output-head width-up (mlp2 hidden 96→192) was a decoder-capacity probe; the axis remains open and can be re-tried later if a slot opens.
+- **No taxa closed** by this stale_wip closure.
+
+### Assigned PR #2794: fern SwiGLU in preprocess MLP (63rd candidate axis — input-lifting gating)
+- **Student:** charliepai2g48h5-fern
+- **Branch:** charliepai2g48h5-fern/swiglu-preprocess
+- **Hypothesis:** Test whether the merged SwiGLU-in-MLP-body win (PR #2741, val −0.62%, 18th merged) transfers to the input-lifting (preprocess) stage. 1-line swap `MLP→SwiGLUMLP` in `Transolver.__init__`. Tests whether SwiGLU's per-token channel gating mechanism is location-agnostic (helps at every Linear+nonlinear transformation) or location-specific (only beneficial inside residual blocks where it interacts with LayerScale γ + Pre-LN).
+- **Param cost:** Preprocess MLP hidden snaps from 192→128 (SwiGLU's 2/3 ratio rounding to multiple of 8): preprocess params 22,656→17,920 (saves ~4,700). Total params 338,523 → ~333,787 (**−1.4%**).
+- **Mechanism prediction:**
+  - If gating is location-agnostic: WIN, with similar gate-statistics pattern as merged #2741 (gate_mean decreasing through depth, gate_std positive)
+  - If gating is residual-block-specific: LOSS or neutral, since input-lifting has different requirements (heterogeneous feature integration: coords + flow scalars + NACA codes + SDF rays)
+- **Structural orthogonality:**
+  - Distinct from merged SwiGLU-in-MLP-body (different stack location: pre-block-0 vs inside residual blocks)
+  - Distinct from in-flight Mish in mlp2 #2780 thorfinn (output-head activation choice, no gating)
+  - Distinct from in-flight GeGLU MLP #2759 alphonse (gate ACTIVATION variation: silu→gelu in MLP body gate)
+  - Distinct from closed Fourier features #2509 (input-encoding axis, not activation)
+  - **63rd candidate axis: gating mechanism at INPUT-LIFTING stack location.** Simple 1-line change for stall-prone pod.
+- **Diagnostics:** preprocess_gate_mean, preprocess_gate_std, preprocess_gate_zero_frac on fixed eval batch (analogous to merged #2741 per-block diagnostics).
+- **Bar:** val_avg/mae_surf_p < 32.2477.
+
+### Round 93 summary
+- 1 closure + 1 assignment. Closed taxa total: **60** (no new taxa — stale_wip closure). Merged winners total: **18**. In-flight: 8/8 (zero idle GPUs).
+
+---
+
 ## 2026-05-14 [Round 92] UTC — Round 92
 
 ### Closed PR #2761: nezuko SAM rho=0.05 LOSS (60th taxon — flat-minima 4-direction exhaustive at 30-min budget)
