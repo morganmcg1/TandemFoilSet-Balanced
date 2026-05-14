@@ -600,6 +600,8 @@ class Config:
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
+    hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    skip_swalr: bool = False  # if True, continue cosine scheduler through SWA window instead of SWALR.
 
 
 cfg = sp.parse(Config)
@@ -692,18 +694,42 @@ def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
     raise ValueError(f"Unknown optimizer: {name!r}")
 
 
+optimizer_kendall: torch.optim.Optimizer | None = None
+hybrid_kendall = False
 if cfg.use_kendall_uncertainty:
     log_sigmas = nn.Parameter(torch.zeros(len(KENDALL_CHANNELS), device=device))
-    # Separate param group with weight_decay=0 — weight decay on log_sigma acts as an unwanted prior toward sigma=1.
-    optimizer = _build_optimizer(
-        cfg.optimizer,
-        [
-            {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
-            {"params": [log_sigmas], "weight_decay": 0.0},
-        ],
-        lr=cfg.lr,
-        default_wd=cfg.weight_decay,
-    )
+    # Hybrid path: Lion's sign-update strips gradient magnitude and collapses all log_σ channels
+    # to an identical value (verified in PR #2063). When using Lion + Kendall, route log_sigmas
+    # through a separate AdamW optimizer so gradient-magnitude per-channel differentiation is
+    # preserved. Model params still use Lion (which delivered the 28.5% win).
+    if cfg.optimizer.lower() == "lion":
+        hybrid_kendall = True
+        # Pass `model.parameters()` (a generator) — _build_optimizer's isinstance(list) check
+        # otherwise drops the weight_decay kwarg when it sees a list-of-tensors.
+        optimizer = _build_optimizer(
+            cfg.optimizer,
+            model.parameters(),
+            lr=cfg.lr,
+            default_wd=cfg.weight_decay,
+        )
+        optimizer_kendall = torch.optim.AdamW(
+            [log_sigmas], lr=cfg.hybrid_kendall_lr, weight_decay=0.0
+        )
+        print(
+            f"Hybrid optimizer: Lion(model, lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e}) + "
+            f"AdamW(log_sigmas, lr={cfg.hybrid_kendall_lr:.2e}, wd=0)"
+        )
+    else:
+        # Separate param group with weight_decay=0 — weight decay on log_sigma acts as an unwanted prior toward sigma=1.
+        optimizer = _build_optimizer(
+            cfg.optimizer,
+            [
+                {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
+                {"params": [log_sigmas], "weight_decay": 0.0},
+            ],
+            lr=cfg.lr,
+            default_wd=cfg.weight_decay,
+        )
     print(f"Kendall uncertainty: ON (6 log_sigmas, clamp ±{KENDALL_LOG_SIGMA_CLAMP}, no weight decay on log_sigmas)")
 else:
     log_sigmas = None
@@ -739,6 +765,7 @@ run = wandb.init(
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "skip_swalr": cfg.skip_swalr,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -835,10 +862,14 @@ for epoch in range(MAX_EPOCHS):
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
 
         optimizer.zero_grad()
+        if optimizer_kendall is not None:
+            optimizer_kendall.zero_grad()
         loss.backward()
         grad_norm_val = None
         clip_fired = 0.0
         if cfg.max_norm > 0:
+            # Clip model params only; log_sigmas (a tiny ParameterTensor, not in model.parameters())
+            # follow their own optimizer's update rule unclipped.
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_norm)
             grad_norm_val = grad_norm.item()
             clip_fired = 1.0 if grad_norm_val > cfg.max_norm else 0.0
@@ -846,6 +877,8 @@ for epoch in range(MAX_EPOCHS):
             epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm_val)
             epoch_clip_fraction_sum += clip_fired
         optimizer.step()
+        if optimizer_kendall is not None:
+            optimizer_kendall.step()
         global_step += 1
         log_payload = {
             "train/loss": loss.item(),
@@ -901,8 +934,12 @@ for epoch in range(MAX_EPOCHS):
 
     if epoch >= swa_start_epoch:
         swa_model.update_parameters(model)
-        swa_scheduler.step()
-        current_lr = swa_scheduler.get_last_lr()[0]
+        if cfg.skip_swalr:
+            scheduler.step()
+            current_lr = scheduler.get_last_lr()[0]
+        else:
+            swa_scheduler.step()
+            current_lr = swa_scheduler.get_last_lr()[0]
         swa_active = True
     else:
         scheduler.step()
@@ -1116,6 +1153,7 @@ if best_metrics:
         "swa_start_frac": swa_start_frac,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "skip_swalr": cfg.skip_swalr,
         "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
         "swa_test_avg/mae_surf_p": (swa_test_avg["avg/mae_surf_p"] if swa_test_avg else None),
         "base_best_epoch": best_metrics["epoch"],
