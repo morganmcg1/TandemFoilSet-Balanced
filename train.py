@@ -467,6 +467,10 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Sample-level focal-MAE weighting exponent. 0.0 = disabled (baseline).
+    # Per-sample weight = (sample_surf_p_mae / batch_mean_surf_p_mae) ** gamma,
+    # normalized to mean=1 per batch so effective gradient scale is preserved.
+    focal_sample_gamma: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -646,6 +650,12 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    # Sample-level focal-MAE diagnostics (per-batch, aggregated over epoch).
+    focal_weight_min = float("inf")
+    focal_weight_max = float("-inf")
+    focal_weight_mean_sum = 0.0
+    focal_effective_ratio_sum = 0.0
+    focal_n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -688,9 +698,31 @@ for epoch in range(MAX_EPOCHS):
             vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
             surf_sq = (sq_err_weighted * surf_mask).sum(dim=(1, 2))
             surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
-            vol_loss = (vol_sq / vol_denom).mean()
-            surf_loss = (surf_sq / surf_denom).mean()
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            per_sample_vol = vol_sq / vol_denom        # [B]
+            per_sample_surf = surf_sq / surf_denom     # [B]
+            per_sample_loss = per_sample_vol + cfg.surf_weight * per_sample_surf  # [B]
+
+            vol_loss = per_sample_vol.mean()
+            surf_loss = per_sample_surf.mean()
+            loss_unweighted = per_sample_loss.mean()
+
+            # Sample-level focal-MAE reweighting: weight whole samples by their
+            # surface-p MAE relative to the batch mean. Normalized to mean=1 so
+            # the effective gradient scale matches the unweighted baseline.
+            if cfg.focal_sample_gamma > 0:
+                with torch.no_grad():
+                    abs_res_p = residual[..., 2:3].abs().to(torch.float32)        # [B, N, 1]
+                    surf_mask_f = surf_mask.to(torch.float32)                     # [B, N, 1]
+                    n_surf_per_sample = surf_mask_f.sum(dim=(1, 2)).clamp_min(1.0)
+                    sample_mae_p = (abs_res_p * surf_mask_f).sum(dim=(1, 2)) / n_surf_per_sample  # [B]
+                    batch_mean_mae = sample_mae_p.mean().clamp_min(1e-6)
+                    ratio = sample_mae_p / batch_mean_mae
+                    sample_weight = ratio.pow(cfg.focal_sample_gamma)
+                    sample_weight = sample_weight / sample_weight.mean().clamp_min(1e-6)
+                loss = (per_sample_loss * sample_weight).mean()
+            else:
+                sample_weight = None
+                loss = loss_unweighted
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         # and per-channel unweighted Huber loss (so we can compare the raw
@@ -705,6 +737,14 @@ for epoch in range(MAX_EPOCHS):
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
+            if sample_weight is not None:
+                sw_f64 = sample_weight.detach().to(torch.float64)
+                focal_weight_min = min(focal_weight_min, sw_f64.min().item())
+                focal_weight_max = max(focal_weight_max, sw_f64.max().item())
+                focal_weight_mean_sum += sw_f64.mean().item()
+                lu = loss_unweighted.detach().to(torch.float64).clamp_min(1e-12).item()
+                focal_effective_ratio_sum += loss.detach().to(torch.float64).item() / lu
+                focal_n_batches += 1
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -795,6 +835,15 @@ for epoch in range(MAX_EPOCHS):
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
 
+    if focal_n_batches > 0:
+        focal_weight_mean_epoch = focal_weight_mean_sum / focal_n_batches
+        focal_effective_ratio_epoch = focal_effective_ratio_sum / focal_n_batches
+        focal_weight_min_epoch = focal_weight_min
+        focal_weight_max_epoch = focal_weight_max
+    else:
+        focal_weight_mean_epoch = focal_effective_ratio_epoch = float("nan")
+        focal_weight_min_epoch = focal_weight_max_epoch = float("nan")
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -844,6 +893,11 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "sample_focal/gamma": cfg.focal_sample_gamma,
+        "sample_focal/weight_mean": focal_weight_mean_epoch,
+        "sample_focal/weight_min": focal_weight_min_epoch,
+        "sample_focal/weight_max": focal_weight_max_epoch,
+        "sample_focal/effective_loss_ratio": focal_effective_ratio_epoch,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -871,6 +925,12 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    if focal_n_batches > 0:
+        print(
+            f"    SampleFocal(γ={cfg.focal_sample_gamma:.2f})  "
+            f"w[mean={focal_weight_mean_epoch:.3f} min={focal_weight_min_epoch:.3f} max={focal_weight_max_epoch:.3f}]  "
+            f"eff_loss_ratio={focal_effective_ratio_epoch:.3f}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
