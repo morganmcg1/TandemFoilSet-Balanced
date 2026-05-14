@@ -207,12 +207,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 init_std: float = 0.02):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.init_std = init_std
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -232,13 +234,16 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.n_linear_init = 0
         self.apply(self._init_weights)
+        print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=0.02)
+            trunc_normal_(m.weight, std=self.init_std)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+            self.n_linear_init += 1
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
@@ -437,6 +442,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    init_std: float = 0.02  # trunc_normal_ std for Linear weight init
 
 
 cfg = sp.parse(Config)
@@ -476,6 +482,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    init_std=cfg.init_std,
 )
 
 model = Transolver(**model_config).to(device)
