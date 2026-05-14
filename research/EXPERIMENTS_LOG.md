@@ -87,6 +87,47 @@ Artifacts: `models/model-eval-every-2-20260514-143831/metrics.jsonl`, `models/mo
 
 ---
 
+## 2026-05-14 16:48 — PR #2945: Cruise-only z-flip augmentation ❌ CLOSED (mesh-topology failure)
+
+- **Student branch:** `charliepai2g48h1-fern/cruise-only-z-flip`
+- **Hypothesis:** Domain-conditional z-flip (cruise samples only, z.min()<0 detector) preserves training physics while effectively doubling cruise domain data.
+
+### Result (2 seeds, vs baseline 72.694)
+
+| Arm | val_avg/mae_surf_p | test_avg | epochs | Δ vs baseline |
+|-----|-------------------|---------:|-------:|--------------|
+| Seed 1 | 75.998 | 67.259 | 18/25 | **+3.304 (+4.5%)** |
+| Seed 2 | 86.025 | 76.053 | 19/25 | **+13.331 (+18.3%)** |
+| **Baseline** | 72.694 | 63.367 | 20 | — |
+
+Note: seed 1 compares vs PR #1405 baseline (73.295) in student comment; vs new baseline 72.694 it's still +3.3 pts.
+
+Per-split (seed 1): cruise +5.74, re_rand +5.86, single_in_dist +2.73 (unexpected), geom_camber_rc -3.52 (unexpected improvement not reproduced in seed 2: +8.34).
+
+Augmentation diagnostics: correct — `aug_cruise_sample_frac=0.32` (matches 33% dataset balance), `aug_flipped_sample_frac=0.16` (exactly 33%×0.5).
+
+Artifacts: `models/model-cruise-only-z-flip-20260514-153510/`, `models/model-cruise-only-z-flip-seed2-20260514-161011/`
+
+### Action: CLOSED — z-flip direction exhausted
+
+**Combined with PR #2935 (full-mesh flip, +20.4%)**: both variants failed. Root causes:
+1. Cruise AoA range [-5°,+6°] means symmetric pairs are largely already in training distribution
+2. Mesh node density NOT z-symmetric even for two-sided meshes (overset zones, ground refinement)
+3. Augmentation perturbs OneCycleLR convergence path globally — val_single_in_dist regressed despite raceCar being untouched
+
+**New assignment:** PR #2963 fern → variance-penalized surface loss (mean + λ·std)
+
+---
+
+## 2026-05-14 16:48 — New assignment: PR #2963 fern → variance-penalized surface loss
+
+- **Student:** charliepai2g48h1-fern, branch `charliepai2g48h1-fern/variance-penalized-surf-loss`
+- **Hypothesis:** `surf_loss = mean(|err|) + λ * std(|err|)` penalizes spatial outlier nodes (stagnation points, suction peaks) on the surface, forcing gradients to outlier nodes instead of averaging them out. Should specifically help `val_geom_camber_rc` (84.33 — worst split; high-camber foils produce sharp suction peaks).
+- **Arms:** λ=0.5 (Arm A) and λ=1.0 (Arm B)
+- **Beat:** val_avg/mae_surf_p < 72.694
+
+---
+
 ## 2026-05-14 15:57 — New assignment: PR #2954 askeladd → torch.compile throughput
 
 - **Student:** charliepai2g48h1-askeladd, branch `charliepai2g48h1-askeladd/torch-compile-throughput`
