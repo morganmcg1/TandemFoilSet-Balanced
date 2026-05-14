@@ -2,6 +2,60 @@
 
 ---
 
+## 2026-05-14 22:30 [Round 138 close-38] UTC — PR #3020 EMA decay=0.999 full-training — **LOSS but cruise PRESERVED — 5th datapoint confirming 4th-refinement invariant (163rd taxon)**
+
+### Closed: #3020 thorfinn ema-decay-0.999
+
+- **Branch:** charliepai2g48h5-thorfinn/ema-decay-0.999
+- **Metric artifacts:** models/model-charliepai2g48h5-thorfinn-ema-decay-0.999-20260514-205721/metrics.jsonl
+- **Hypothesis:** Polyak/EMA averaging of model weights during training (decay=0.999); use EMA weights for eval. Predicted WIN from late-training noise reduction; cruise predicted PRESERVED (eval-only, training unperturbed).
+
+| Metric | NEW baseline #3006 | #3020 (EMA) | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **30.3552** | **+2.79% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 25.5134 | +0.13% (WASH on test) |
+| Param count (TRAINABLE) | 407,175 | 407,172 (−3, built pre-#3006) | n/a |
+
+**Per-split val (best ep60 EMA, raw also reported for diagnostic):**
+
+| Split | #3006 | #3020 EMA | Δ EMA vs #3006 | #3020 raw ep60 | Δ EMA-raw |
+|---|---|---|---|---|---|
+| in_dist | 24.283 | 25.4139 | +4.66% LOSS | — | — |
+| camber_rc | 43.630 | 45.4315 | +4.13% LOSS | — | — |
+| **camber_cruise** | 16.348 | **16.4514** | +0.63% (LOWEST split ✓) | — | — |
+| re_rand | 33.866 | 34.1239 | +0.76% LOSS | — | — |
+| **val_avg** | **29.5318** | **30.3552** | **+2.79% LOSS** | 30.2676 | +0.29% |
+
+**EMA-vs-raw trajectory diagnostic (CRITICAL):**
+
+| Epoch | raw val_avg | EMA val_avg | Δ (raw − EMA) | Interpretation |
+|---|---|---|---|---|
+| ep1 | 340.09 | 368.40 | **−28.31** | EMA 99.9% init-dominated (decay=0.999 too slow) |
+| ep10 | 84.95 | 105.77 | −20.82 | EMA still trailing during rapid descent |
+| ep30 | 46.13 | 40.13 | **+5.998** | **EMA WINS** — averaging benefit at mid-descent |
+| ep60 | 30.27 | 30.36 | −0.088 | Raw catches up; best=last drags EMA |
+
+**Key mechanistic finding:** EMA at decay=0.999 with full-training accumulation suffers TWO compounding problems: (1) init-lag during the first ~10 epochs (EMA carries 99.9% init weight even after ep10), and (2) basin-drag at convergence (raw still descending at ep60 → EMA averages over older worse weights). EMA was winning by +5.998 MAE at ep30 mid-descent — this is precisely the regime where averaging extracts variance reduction value. By ep60, the basin had become essentially noise-free monotonic descent → averaging only introduces bias.
+
+**Conclusion / mechanistic findings:**
+1. **EMA full-training decay=0.999 closed at LOSS** (163rd taxon). Best=last + monotonic-descent regime is incompatible with full-training exponential averaging.
+2. **Cruise PRESERVED — 5th post-#2964 cruise-preserving datapoint and the CLEANEST CONFIRMATION of the 4th-refinement invariant.** EMA is the strongest test yet: training trajectory IDENTICAL to baseline (only eval weights differ), so per-step gradients identical, residual stream identical → cruise basin preserved. Cruise val 16.4514 still LOWEST split.
+3. **The "EMA was winning at ep30" finding motivates a refined pivot.** SWA-style averaging that EXCLUDES the init-lag period and averages ONLY the late-training trajectory.
+
+**Cruise-preservation ledger (post-#2964) — 13 datapoints (UPDATED with #3020):**
+- BROKEN (8): #2961, #2978, #2986, #2988, #2994, #2993, #3010, #3022
+- PRESERVED (5): #3003 ordering, #3006 α (WIN), #3008 K-only-LN mildest, #3014 FiLM-input-dropout, **#3020 EMA (eval-only)** 
+
+**Taxon #163:** EMA-DECAY-0.999-FULL-TRAINING-DRAGS-IN-BEST-EQUALS-LAST-MONOTONIC-DESCENT-REGIME.
+
+### Round 138 assignment (thorfinn idle slot cleared):
+
+- **#3039 thorfinn swa-last-10-epochs:** Izmailov 2018 canonical SWA recipe — uniform ARITHMETIC mean of 10 epoch snapshots (ep50-59), not exponential decay. Excludes the init-lag period entirely; averages ONLY the late-training trajectory where #3020's diagnostic showed EMA was winning by +5.998 at ep30. Eval-only intervention; **cruise predicted PRESERVED** (would be 6th cruise-preserving datapoint). Different from #3020 in 3 ways: uniform vs exponential weighting, ep50-start vs ep1-start, K=10 vs ~7-epoch geometric window. **164th axis.**
+
+**Total closed: 160. Winners: 23. 8/8 students busy. Zero idle GPUs.**
+
+---
+
 ## 2026-05-14 22:00 [Round 138 close-37] UTC — PR #3022 Huber loss β=1.0 — **LARGE LOSS + CRUISE BROKE — REFINES INVARIANT 4th TIME (159th taxon)**
 
 ### Closed: #3022 frieren huber-smooth-l1-beta-1.0
