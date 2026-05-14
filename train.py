@@ -185,7 +185,7 @@ class SqueezeExcitation(nn.Module):
             s = (x * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1)
         else:
             s = x.mean(dim=1)
-        s = self.fc2(F.gelu(self.fc1(s)))
+        s = self.fc2(F.silu(self.fc1(s)))
         gate = torch.sigmoid(s)
         return x * gate.unsqueeze(1)
 
@@ -541,11 +541,11 @@ _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
 print(
     f"Squeeze-Excitation depth-selective (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
-    f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> GELU -> "
+    f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> SILU -> "
     f"fc({model_config['n_hidden']//4}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
     f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
-    f"baseline to beat: val_avg/mae_surf_p < 32.2477 (SwiGLU MLP #2741)"
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (#2765, SE r=4 with GELU inner activation)"
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
@@ -832,8 +832,11 @@ if best_metrics:
     # Squeeze-Excitation diagnostic: gate stats per block per split (in_dist vs OOD).
     # Capture true block_idx (block 3 only carries SE here) and compare gate
     # engagement on val_single_in_dist (in_dist) vs val_geom_camber_rc (most OOD).
+    # Also capture SE inner-activation (SiLU after fc1) stats: tests whether the
+    # bottleneck activation hard-masks channels (parallel to GeGLU diagnostic #2759).
     _se_mods_with_idx = [(i, blk.se) for i, blk in enumerate(_inner.blocks) if blk.se is not None]
     _se_per_split: dict[str, list[tuple[int, torch.Tensor]]] = {}
+    _se_silu_per_split: dict[str, list[tuple[int, dict[str, float]]]] = {}
 
     def _make_se_hook(block_idx: int, split_name: str):
         def _hook(module, args, kwargs, output):
@@ -845,7 +848,19 @@ if best_metrics:
                     s = (x * mf).sum(dim=1) / mf.sum(dim=1).clamp(min=1)
                 else:
                     s = x.mean(dim=1)
-                s = module.fc2(F.gelu(module.fc1(s)))
+                pre_act = module.fc1(s).detach().float()
+                post_act = F.silu(pre_act)
+                # Bottleneck-activation stats — tests "GELU hard-masking" hypothesis
+                # at the SE inner activation. For SiLU, expect zero_frac << 0.16.
+                _se_silu_per_split.setdefault(split_name, []).append((block_idx, {
+                    "silu_zero_frac": float((post_act.abs() < 1e-4).float().mean().cpu()),
+                    "pre_act_mean": float(pre_act.mean().cpu()),
+                    "pre_act_std": float(pre_act.std().cpu()),
+                    "post_act_mean": float(post_act.mean().cpu()),
+                    "post_act_std": float(post_act.std().cpu()),
+                    "negative_frac": float((post_act < 0).float().mean().cpu()),
+                }))
+                s = module.fc2(post_act)
                 gate = torch.sigmoid(s).detach().float().cpu()
                 _se_per_split.setdefault(split_name, []).append((block_idx, gate))
         return _hook
@@ -892,6 +907,24 @@ if best_metrics:
             })
         _se_log["splits"][_split_name] = _split_log
     append_metrics_jsonl(metrics_jsonl_path, _se_log)
+
+    print("\nSE inner-activation (SiLU after fc1) stats per split, block-3-only:")
+    for _split_name, _captures in _se_silu_per_split.items():
+        for _idx, _astats in _captures:
+            print(
+                f"  Split {_split_name} SE block[{_idx}]: "
+                f"silu_zero_frac={_astats['silu_zero_frac']:.4f}  "
+                f"pre_act_mean={_astats['pre_act_mean']:+.4f}  pre_act_std={_astats['pre_act_std']:.4f}  "
+                f"post_act_mean={_astats['post_act_mean']:+.4f}  post_act_std={_astats['post_act_std']:.4f}  "
+                f"negative_frac={_astats['negative_frac']:.4f}"
+            )
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "se_silu_inner_diagnostic",
+                "epoch": int(best_metrics["epoch"]),
+                "split": _split_name,
+                "block": _idx,
+                **_astats,
+            })
 
     # SwiGLU gate diagnostic — capture per-block gate (silu(W_gate x)) and value
     # (W_value x) statistics on a sample val batch, best-checkpoint weights.
