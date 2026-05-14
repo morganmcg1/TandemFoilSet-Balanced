@@ -39,10 +39,40 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **30.5605** | #2879 | Lion lr=1.5e-4 + FiLM + SE block-3-only attn-pool + SwiGLU MLP + **mlp_ratio=3** | ep58/60 (timeout-truncated); **−1.07% vs #2810** (30.8909); in_dist -7.42% camber_rc +0.55% camber_cruise +6.07% re_rand -2.00%; 407,940 params |
-| `test_avg/mae_surf_p` | **26.5160** | #2879 | — | test from best-val checkpoint ep58; +1.22% regression vs #2810 (26.1964) — val improved, test regressed |
+| `val_avg/mae_surf_p` | **30.0382** | #2964 | Lion lr=1.5e-4 + FiLM + SE block-3-only attn-pool + SwiGLU MLP + mlp_ratio=3 + **post-norm + γ=1.0** | ep60/60 (best=last); **−1.71% vs #2879** (30.5605); in_dist 25.219 rc 43.929 cruise 16.265 re_rand 34.740; **407,172 params** (−768 from #2879; LayerScale γ vectors removed) |
+| `test_avg/mae_surf_p` | **25.2099** | #2964 | — | test from best-val checkpoint ep60; **−4.93% vs #2879** (26.5160) — strong test improvement |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 30.5605` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 30.0382` to be merged.
+
+## 2026-05-14 [Round 138] — PR #2964: post-norm topology + LayerScale γ=1.0: val WIN −1.71% / test WIN −4.93% (NEW BEST)
+
+- **Student:** charliepai2g48h5-nezuko
+- **Best epoch:** 60 of 60 (best=terminal; validation still improving at ep60)
+- **Param count:** 407,172 (−768 vs #2879's 407,940; 8×96 LayerScale γ vectors REMOVED)
+- **sec/epoch:** ~29.2 s
+- **Peak GPU memory:** 14.42 GB
+- **Key finding:** Post-norm topology + γ=1.0 (Vaswani 2017 "original Transformer" recipe) beats the pre-norm + γ=1e-4 baseline. **CRITICAL MECHANISTIC FINDING:** LayerScale γ=1e-4 was the CONFOUND in #2951 post-norm LOSS (+14.73%). Post-norm itself is NOT harmful when paired with γ=1.0. Pre-norm + γ=1e-4 and post-norm + γ=1.0 are TWO COMPATIBLE PAIRS; mixing them (post-norm + γ=1e-4) breaks the stack. **Cruise META-SIGNAL RESTORED AND EXTENDED** — cruise 17.866 (baseline) → 16.265 (−9.0% WIN). Test improves dramatically (−4.93%), more than val (−1.71%).
+
+| Split | val mae_surf_p | Δ vs #2879 (30.5605) |
+|---|---|---|
+| `val_single_in_dist` | 25.219 | +7.78% LOSS |
+| `val_geom_camber_rc` | 43.929 | **−4.65% WIN** |
+| `val_geom_camber_cruise` | **16.265** | **−9.00% WIN** |
+| `val_re_rand` | **34.740** | **−0.47% WIN** |
+| **val_avg** | **30.0382** | **−1.71% WIN** |
+
+| Split | test mae_surf_p | Δ vs #2879 (26.5160) |
+|---|---|---|
+| `test_single_in_dist` | **22.700** | **−2.78% WIN** |
+| `test_geom_camber_rc` | **39.646** | **−7.59% WIN** |
+| `test_geom_camber_cruise` | **13.397** (loss=NaN; MAE valid) | **−3.35% WIN** |
+| `test_re_rand` | **25.096** | **−3.31% WIN** |
+| **test_avg** | **25.2099** | **−4.93% WIN** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-post-norm-gamma-1.0-20260514-171414/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-nezuko --experiment_name "charliepai2g48h5-nezuko/post-norm-gamma-1.0" --lr 1.5e-4 --weight_decay 3e-4 --epochs 60`
+
+---
 
 ## 2026-05-14 [Round 118] — PR #2879: mlp_ratio=3 (SwiGLU wider MLP): val WIN −1.07% (NEW BEST)
 
