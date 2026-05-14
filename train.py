@@ -233,6 +233,9 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Restore intended orthogonal init on in_project_slice — trunc_normal_ above clobbers it
+        for block in self.blocks:
+            nn.init.orthogonal_(block.attn.in_project_slice.weight)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
