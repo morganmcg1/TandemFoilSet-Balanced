@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 13:10
+- **Date:** 2026-05-14 14:05
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -139,7 +139,7 @@
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
 | askeladd | **#2921** | **Input-embedding noise σ=0.05** — data-side regularization probe, mechanism-distinct from frieren's dropout (activation-side). Both target seed-variance/overfitting from different angles. | **Round 42: data-side regularization** |
-| frieren | **#2917** | **Dropout p=0.1 on attention + FFN** — canonical transformer regularization (missing from this stack). Attacks seed-variance/overfitting hypothesis from #2888. Mechanism-distinct from all prior attempts. | **Round 42: activation-side regularization** |
+| frieren | **#2917 SENT BACK 14:05** | **Dropout p=0.1 FFN-ONLY retry** — first attempt cut at e46/50 with val=35.84 (borderline +1σ) but trajectory STILL DESCENDING (−1.0/epoch over last 5 epochs); +8.9% per-epoch overhead from SDPA `dropout_p>0` (slow attention kernel path). Retry removes attention `dropout_p` arg, keeps FFN `F.dropout` only → restores fast SDPA path → fits 50 epochs cleanly. If still descending past e46 in retry, masked-by-overhead winner; if plateaus near 35, axis closes cleanly. | **Round 42: activation-side regularization (retry)** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed

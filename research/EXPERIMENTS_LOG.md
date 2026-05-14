@@ -6,6 +6,16 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 14:05 — Round 42 cont.: send #2917 frieren dropout BACK for FFN-only retry (SDPA dropout_p forces slow attention path → +8.9% per-epoch overhead ate 4 epochs at e46/50 cap; trajectory STILL DESCENDING from 40.57→35.84 over last 5 epochs so axis not yet refuted)
+
+### PR #2917 — frieren dropout p=0.1 on attention + FFN (SENT BACK, overhead-bounded run)
+- Branch: `charliepai2g48h3-frieren/dropout-p0p1-epochs50-nlayers2-slicenum16`
+- Result at e46 (cut by timeout): **val=35.840** (+1.03σ above seed-mean 35.218; within ambiguous band).
+- Trajectory last 5: [40.57 e35, 38.34 e40, 37.10 e43, 36.42 e44, 35.84 e46] — slope ≈ −1.0/epoch, STILL DESCENDING.
+- Root cause of overhead: `F.scaled_dot_product_attention(q, k, v, dropout_p=p)` forces no-flash/no-memory-efficient kernel path → 39.24s/epoch vs ~36s baseline (+8.9%).
+- Decision: BORDERLINE result + incomplete schedule = not enough signal to refute or accept. Send back for FFN-only dropout (remove attention `dropout_p` arg, keep `F.dropout` between FFN layers) — restores fast SDPA path, fits 50 epochs.
+- If full 50-epoch run with FFN-only dropout still descends, possible winner masked by overhead. If it plateaus near 35, axis closes cleanly.
+
 ## 2026-05-14 13:10 — Round 42 cont.: close #2907 askeladd EMA (math/impl mismatch in advisor's snippet, EMA frozen near worst-window-iterate — LOSS +33%); SMOOTHING AXIS FULLY CLOSED (SWA + EMA both refuted); assign askeladd #2921 input-embedding noise σ=0.05 (data-side regularization, parallel to frieren #2917 dropout)
 
 ### PR #2907 — askeladd EMA decay=0.999 from e30 (CLOSED, mechanism broken due to per-epoch vs per-step decay mismatch)
