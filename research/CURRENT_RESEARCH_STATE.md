@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 06:40
+- **Date:** 2026-05-14 07:20
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -24,9 +24,10 @@
 > - **SCHEDULE AXIS FULLY DEAD**: TAIL truncated cosine (#2760 +1.63%), HEAD warmup_epochs=3 (#2797 +2.04%). Standard cosine T_max=epochs confirmed optimal.
 > - **LOSS-WEIGHT AXIS SATURATED**: swp=15 (+0.21% val noise, −1.06% test directional), swp=20 (+4.76% val LOSS — over-pushed, broke optimization). Loss-WEIGHTING is non-monotone; weight amplification is not the path.
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
-> - **Round 41 — TWO NEW CODE-CHANGE PIVOTS**:
->   - **frieren #2822 Huber loss delta=5.0**: switch from L1 to Huber (smooth_l1_loss beta=5.0) across all channels+terms — loss-FORM test; hypothesis that smooth quadratic region near zero improves final accuracy
->   - **askeladd #2824 AdamW lr=3e-4**: switch from Lion to AdamW (betas=0.9/0.95) — OPTIMIZER AXIS, fundamentally orthogonal to all previously tested HP/arch/schedule/loss axes
+> - **Round 41 cont. — code-change pivots**:
+>   - **frieren #2847 Huber d=0.1 (corrected)**: previous #2822 Huber d=5.0 catastrophic +116% val — delta miscalibrated for normalized space (effectively MSE everywhere). Retry with d=0.1 properly scales for normalized errors (typical O(0.5-1.5)); ~90% errors stay L1, smallest 10% get quadratic smoothing
+>   - **askeladd #2824 AdamW lr=3e-4** (IN FLIGHT): switch from Lion to AdamW (betas=0.9/0.95) — OPTIMIZER AXIS, fundamentally orthogonal to all previously tested HP/arch/schedule/loss axes
+> - **NEW NEGATIVE RESULT**: MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). This confirms L1 is the right magnitude shape; loss-form has narrow window if it exists.
 > - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head).
 > - **#2638 split-dependent OOD diagnostic**: geom_camber is INFORMATION-limited or REPRESENTATION-limited — needs mechanism change, not weight tuning.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.

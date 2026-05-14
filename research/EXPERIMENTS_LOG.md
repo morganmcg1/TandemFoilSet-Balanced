@@ -6,6 +6,28 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 07:20 — Round 41: close #2822 frieren Huber d=5.0 (+116% val LOSS CATASTROPHIC — delta in wrong scale); assign frieren #2847 Huber d=0.1 retry (normalized-space corrected)
+
+### PR #2822 — frieren Huber loss delta=5.0 globally
+- Branch: `charliepai2g48h3-frieren/huber-d5-nlayers2-slicenum16-epochs46`
+- Hypothesis: Replace L1 with Huber/SmoothL1(beta=5.0) for smooth-near-zero / L1-tail behavior
+- Artifacts: `models/model-huber_d5-nlayers2-slicenum16-epochs46-20260514-063737/metrics.jsonl`
+- Result: ABORTED at epoch 29 by student per stop-rule (val > 36.5)
+
+| Metric | Huber δ=5.0 (best ep28) | Baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **76.309** | 35.256 | **+116.4%** CATASTROPHIC |
+| val_single_in_dist | 86.420 | 36.476 | +136.9% |
+| val_geom_camber_rc | 88.120 | 48.297 | +82.5% |
+| val_geom_camber_cruise | 56.827 | 18.326 | +210.1% |
+| val_re_rand | 73.869 | 37.923 | +94.8% |
+
+**Student's excellent root-cause diagnostic:** `pred` and `y_norm` are both z-score-normalized (errors O(0.5-1.5)), so delta=5.0 places virtually ALL errors in the quadratic region. This experiment effectively trained with MSE everywhere, not Huber.
+
+**Conclusion:** MSE-on-everything is decisively worse than L1 for this problem (informative negative result). The Huber loss-shape hypothesis remains UNTESTED in its proper L1-in-tails configuration. Pivoting frieren to #2847 Huber d=0.1 retry — properly scaled for normalized loss space (~90% of errors stay L1, only smallest ~10% get quadratic smoothing).
+
+---
+
 ## 2026-05-14 06:40 — Round 40 cont.: close #2755 swp=20 (+4.76% val LOSS — loss-weight over-pushed), close #2797 warmup (+2.04% val LOSS — schedule HEAD refuted); assign frieren #2822 Huber d5, askeladd #2824 AdamW lr=3e-4
 
 ### PR #2755 — frieren swp=20, swuv=10 retry (per-channel surf weighting 2× ratio)
