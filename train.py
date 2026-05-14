@@ -239,7 +239,13 @@ class Transolver(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
+        elif isinstance(m, nn.LayerNorm):
+            # DeepNorm-style residual scaling: γ=0.5 halves initial residual
+            # branch magnitude. β stays at 0. γ is learnable so the network can
+            # recover any needed gain.
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 0.5)
+        elif isinstance(m, nn.BatchNorm1d):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
@@ -479,6 +485,17 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+
+# Diagnostic: confirm LayerNorm γ=0.5 init applied to all LN modules.
+_ln_modules = [(n, m) for n, m in model.named_modules() if isinstance(m, nn.LayerNorm)]
+_ln_gamma_init_mean = (
+    torch.stack([m.weight.detach().mean() for _, m in _ln_modules]).mean().item()
+    if _ln_modules else float("nan")
+)
+print(f"LayerNorm γ=0.5 init: {len(_ln_modules)} modules, mean γ={_ln_gamma_init_mean:.4f}")
+for _ln_name, _ln_m in _ln_modules[:3]:
+    print(f"  {_ln_name}: γ[0:3]={_ln_m.weight.detach()[:3].tolist()}, β[0:3]={_ln_m.bias.detach()[:3].tolist()}")
+
 model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
@@ -583,6 +600,11 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    # γ tracking: mean across all LayerNorms, plus per-block samples
+    ln_gammas = torch.stack([m.weight.detach().mean() for _, m in _ln_modules])
+    ln_gamma_mean = ln_gammas.mean().item()
+    ln_gamma_std = ln_gammas.std().item() if len(ln_gammas) > 1 else 0.0
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -590,7 +612,11 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "ln_gamma/mean": ln_gamma_mean,
+        "ln_gamma/std_across_lns": ln_gamma_std,
     }
+    for _ln_name, _ln_m in _ln_modules:
+        log_metrics[f"ln_gamma/{_ln_name}"] = _ln_m.weight.detach().mean().item()
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
