@@ -2,6 +2,122 @@
 
 ---
 
+## 2026-05-14 [Round 86] UTC — Round 86
+
+### Closed PR #2722: DropPath/Stochastic Depth — LOSS (51st closed taxon)
+- **Student:** charliepai2g48h5-edward
+- **Branch:** charliepai2g48h5-edward/droppath-r01
+- **Hypothesis:** Linear DropPath schedule 0→0.1 across n_layers=4, applied per-sample to both attn AND mlp residual branches independently.
+
+| Metric | Run | Baseline (#2692) | Δ% | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 34.8786 | 33.0195 | +5.63% | **LOSS** |
+| `test_avg/mae_surf_p` | 30.4406 | 28.3562 | +7.35% | **LOSS** |
+| `val_single_in_dist` | 27.6627 | 26.4221 | +4.70% | LOSS |
+| `val_geom_camber_rc` | 50.7255 | 48.3191 | +4.98% | LOSS |
+| `val_geom_camber_cruise` | 21.6651 | 19.5170 | +11.01% | LOSS |
+| `val_re_rand` | 39.4610 | 37.5198 | +5.17% | LOSS |
+
+**Mechanism — "model fighting back" via LayerScale γ_mlp ballooning:**
+
+| Block | dpr | γ_attn abs_mean | γ_mlp abs_mean |
+|---|---|---|---|
+| 0 | 0.0000 | 0.025724 | 0.087099 |
+| 1 | 0.0333 | 0.026297 | 0.109507 |
+| 2 | 0.0667 | 0.022508 | 0.109733 |
+| 3 | 0.1000 | 0.022108 | 0.107821 |
+
+γ_mlp blocks 1-3 ballooned **4-10× larger than baseline ~0.01-0.02** with nearly identical values (0.107-0.110) despite different drop_probs — optimizer treats DropPath uniformly as noise to compensate against. Block 0 (no drop) γ_mlp = 0.087 confirms drop-conditional compensation pattern. `val_single_in_dist` regressed +9.21% (worst) — exact "DropPath LOSS — starved representation" signature pre-registered in PR.
+
+**Stochastic-residual-branch axis closed at small width.** At n_hidden=96, n_head=2, 4 blocks, residual stack too narrow for stochastic branch zeroing. Combined with Mixup #2687 + Manifold Mixup #2704, stochastic-perturbation meta-axis converging toward "this stack rewards deterministic mechanisms" (FiLM/SE/LayerScale winners; Mixup/DropPath/Manifold-Mixup losers).
+
+**Metric artifacts:** `models/model-charliepai2g48h5-edward-droppath-r01-20260514-015521/metrics.jsonl`
+
+### Closed PR #2697: SGDR (T_0=35, T_mult=2) — LOSS (52nd closed taxon)
+- **Student:** charliepai2g48h5-nezuko
+- **Branch:** charliepai2g48h5-nezuko/sgdr_t35_t_mult2
+
+| Metric | Run | Baseline (#2692) | Δ% | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 39.0987 | 33.0195 | +18.41% | **LOSS** |
+| `test_avg/mae_surf_p` | 35.9756 | 28.3562 | +26.87% | **LOSS** |
+| `val_single_in_dist` | 32.8696 | 26.4221 | +24.41% | LOSS (worst) |
+| `val_geom_camber_rc` | 56.0114 | 48.3191 | +15.92% | LOSS |
+| `val_geom_camber_cruise` | 22.6041 | 19.5170 | +15.82% | LOSS |
+| `val_re_rand` | 44.9097 | 37.5198 | +19.70% | LOSS |
+
+**Restart shock signature:**
+
+| Epoch | LR | val_avg/mae_surf_p | Notes |
+|---|---|---|---|
+| 37 | 3.0e-7 | 43.08 | cycle-1 LR≈0 |
+| 38 | 1.5e-4 | 42.74 | RESTART to peak |
+| 39 | 1.5e-4 | 64.41 | restart shock |
+| 40 | 1.5e-4 | 71.37 | shock peak (+67% in 2 epochs) |
+| 68 | 9.17e-5 | 39.10 (BEST) | partial cycle-2 |
+
+**Schedule-restart axis closed:** T_0=35 too short to converge cycle-1 (ends at val 42.92 vs baseline 33.37); cycle-2 (T_mult=2 → 70 epochs) truncated mid-flight; restart shock + slow recovery left insufficient budget. val_single_in_dist +29.77% confirms slow 67-epoch cosine load-bearing for in-dist convergence.
+
+**Metric artifacts:** `models/model-charliepai2g48h5-nezuko-sgdr_t35_t_mult2-20260514-015011/metrics.jsonl`
+
+### Closed PR #2704: Manifold Mixup α=0.2 — CATASTROPHIC LOSS (53rd closed taxon)
+- **Student:** charliepai2g48h5-alphonse
+- **Branches:** charliepai2g48h5-alphonse/manifold-mixup-a02 (2 independent runs cross-checking)
+
+| Metric | Run 2 (best) | Baseline (#2692) | Δ% | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 46.0412 | 33.0195 | +39.45% | **CATASTROPHIC** |
+| `test_avg/mae_surf_p` | 40.9491 | 28.3562 | +44.40% | **CATASTROPHIC** |
+| `val_single_in_dist` | 42.5064 | 26.4221 | **+60.86%** | LOSS (worst) |
+| `val_geom_camber_rc` | 63.4317 | 48.3191 | +31.27% | LOSS |
+| `val_geom_camber_cruise` | 29.6969 | 19.5170 | +52.16% | LOSS |
+| `val_re_rand` | 48.5300 | 37.5198 | +29.35% | LOSS |
+
+Cross-check Run 1: val=46.7552 (within 1% of Run 2).
+
+**Mechanism — slice-routing semantic prototypes cannot linearly interpolate:**
+- λ ∼ Beta(0.2, 0.2) bimodal correctly engaged (mean=0.4996, 33.58% <0.1, 33.72% >0.9, 17,625 batches)
+- k_layer uniform ~25% each (k=0,1,2,3)
+- mask consistency: per-sample masks blended at loss level (researcher-agent recommended)
+- **PhysicsAttention.slice_token = einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)** where `slice_weights = softmax(in_project_slice(x_mid))` produces **semantic prototypes**. Linearly mixing `fx` at block-k input means next block's slice projection sees a per-channel convex combination of two physically incompatible meshes (different Re/AoA/foil geometry) — the softmax slicer cannot decompose this into meaningful prototypes. Features 13/14/18 (FiLM-modulated channels) also mixed, so every slice-routing decision is conditioned on physically nonsensical (log_Re, AoA0, AoA1) interpolation.
+
+**Wall-clock overhead +52%:** k_layer as Python int → 4 distinct torch.compile graphs; `cache_size_limit` hit ep 36 → Inductor fell back to eager.
+
+**Mixup family fully mapped — 3 independent failure mechanisms:**
+- 49th: input-space Mixup (#2687) — physical incompatibility + pad_collate mesh-structure corruption
+- 53rd: hidden-state Manifold Mixup (#2704, THIS) — slice-routing prototype incompatibility
+- Prior 18th: reflection-augmentation (#2454) — rigid-body augmentation
+
+CFD data structurally incompatible with synthetic-sample augmentation at this stack scale.
+
+**Metric artifacts:** `models/model-charliepai2g48h5-alphonse-manifold-mixup-a02-20260514-015532/metrics.jsonl` (Run 2 best); `models/model-charliepai2g48h5-alphonse-manifold-mixup-a02-20260514-013826/metrics.jsonl` (Run 1 cross-check)
+
+### Assigned PR #2739: Weight Standardization (edward, idle after DropPath close)
+- **Hypothesis:** Qiao 2019 — at forward time, standardize each output row of every `nn.Linear` weight to zero mean and unit std before x @ W^T. Deterministic regularizer per edward's own follow-up #4 from DropPath closure ("non-stochastic in-dist regularizers"). Zero new params.
+- **Targeted bottleneck:** in-dist overfitting (SE #2692 winner regressed val_single_in_dist +4.31%; all stochastic regularizers have closed; deterministic mechanism is the natural next probe).
+- **Implementation:** `WSLinear(nn.Linear)` subclass overrides forward to compute `W_hat = (W - W.mean(1, keepdim=True)) / (W.std(1, keepdim=True) + eps)`. Recursive swap function replaces every nn.Linear in model. ~22 Linear layers covered.
+- **Built-in diagnostic:** per-layer `row_std_mean/max/min` at terminal — does standardization compress loud-row spread?
+
+### Assigned PR #2740: Lookahead wrapper around Lion (nezuko, idle after SGDR close)
+- **Hypothesis:** Zhang et al. 2019 — wrap Lion with Lookahead(k=5, α=0.5). Maintains slow weights θ_slow; every k=5 Lion steps, θ_slow ← θ_slow + 0.5(θ_fast - θ_slow); θ_fast ← θ_slow. Smooth slow-weight commitment escapes narrow basin without LR-shock penalty that killed SGDR.
+- **Targeted bottleneck:** Lion narrow-basin (taxa 30/31/35) + in-dist overfitting. Same goal as SGDR but via smooth interpolation, not perturbation.
+- **Compatibility:** EMA #2735 askeladd in-flight operates on eval-time weights; Lookahead operates on train-time weights. They map the full weight-averaging family together (eval-time + train-time).
+- **Built-in diagnostic:** fast-vs-slow A/B at best epoch; drift_ratio per epoch.
+
+### Assigned PR #2741: SwiGLU MLP activation (alphonse, idle after Manifold Mixup close)
+- **Hypothesis:** Shazeer 2020 "GLU Variants Improve Transformer" — replace MLP body `GELU(W₁x)·W₂x` with `silu(W_gate x) ⊙ W_value x → W_out`. Param-matched via hidden = (2/3)·standard. Standard in LLaMA/PaLM/Mistral/Gemma.
+- **Targeted bottleneck:** in-dist overfitting + general expressivity. Per-channel gating gives MLP conditional capacity for fine-grained discrimination.
+- **Structurally orthogonal:** modifies only MLP activation body; everything else (attn, slice-routing, normalization, residual, SE/FiLM/LayerScale, mlp2 output head) unchanged. Param-matched at ~338K (no capacity confound).
+- **Built-in diagnostic:** SwiGLU gate stats per block (gate_zero_frac, gate_value_correlation, gate_abs_mean).
+
+### Status
+- **PR #2677 fern grad-noise injection at 1st stale_wip event** (assigned ~2.5h ago at 2026-05-14T00:23:15Z; pod alive but hasn't picked up assignment). Leaving for one more round per launch convention (close at 2nd stale).
+- **8 in-flight after Round 86 assignments**, zero idle.
+- **53 total closed taxa** (49 → 53 in last 3 rounds: Mixup, α-entmax, DropPath, SGDR, Manifold Mixup added).
+- **16 merged winners**; baseline val 33.0195 / test 28.3562 (PR #2692 SE per-block) unchanged.
+
+---
+
 ## 2026-05-14 [Round 85] UTC — Round 85
 
 ### Closed PR #2706: α-entmax(α=1.5) MHA attention — LOSS (50th closed taxon)
