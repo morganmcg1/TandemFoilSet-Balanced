@@ -642,7 +642,7 @@ optimizer = Lion(
 )
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
 print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
-warmup_epochs = 3
+warmup_epochs = 5
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[
@@ -656,6 +656,8 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
     milestones=[warmup_epochs],
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
+print(f"Warmup fraction: {warmup_epochs}/{MAX_EPOCHS} = {100 * warmup_epochs / max(MAX_EPOCHS,1):.2f}% (baseline 3/60 = 5.00%)")
+print(f"Motivation: #2957 warmup DURATION axis at baseline lr=1.5e-4 (#2938 + #2950 student first recommendation)")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -672,6 +674,21 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "lr_schedule_config",
+    "scheduler": "SequentialLR(LinearLR -> CosineAnnealingLR)",
+    "warmup_epochs": warmup_epochs,
+    "warmup_start_factor": 0.1,
+    "warmup_end_factor": 1.0,
+    "cosine_T_max": max(MAX_EPOCHS - warmup_epochs, 1),
+    "peak_lr": cfg.lr,
+    "max_epochs": MAX_EPOCHS,
+    "warmup_fraction": warmup_epochs / max(MAX_EPOCHS, 1),
+    "baseline_warmup_epochs": 3,
+    "pr_id": 2957,
+    "axis": "warmup-DURATION at baseline lr=1.5e-4",
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
