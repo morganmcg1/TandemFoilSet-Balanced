@@ -47,6 +47,26 @@ from data import (
 )
 
 
+class DropPath(nn.Module):
+    """Per-sample drop_path (stochastic depth) — drops the entire residual branch.
+
+    At training time with rate p, each sample in the batch independently passes
+    the input through (with prob 1-p) or zeros it (with prob p), then rescales
+    by 1/(1-p) so the expected output magnitude is preserved. No-op at eval.
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = x.new_empty(shape).bernoulli_(keep_prob)
+        return x.div(keep_prob) * mask
+
+
 class Lion(torch.optim.Optimizer):
     """Lion: Symbolic Discovery of Optimization Algorithms (Chen et al., 2023)."""
     def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
@@ -176,7 +196,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -187,6 +208,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path_attn = DropPath(drop_path)
+        self.drop_path_mlp = DropPath(drop_path)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -195,8 +218,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.attn(self.ln_1(fx), mask=mask) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path_attn(self.attn(self.ln_1(fx), mask=mask)) + fx
+        fx = self.drop_path_mlp(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -208,7 +231,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 init_std: float = 0.02):
+                 init_std: float = 0.02, drop_path: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -225,11 +248,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear ramp from 0 to drop_path across blocks (timm/Swin/ViT/MAE convention).
+        if n_layers > 1:
+            dp_rates = [drop_path * i / (n_layers - 1) for i in range(n_layers)]
+        else:
+            dp_rates = [drop_path]
+        self.drop_path_rates = dp_rates
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path=dp_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -237,6 +267,7 @@ class Transolver(nn.Module):
         self.n_linear_init = 0
         self.apply(self._init_weights)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
+        print(f"[init] drop_path_rates per block = [{', '.join(f'{r:.3f}' for r in dp_rates)}]")
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -443,14 +474,19 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    drop_path: float = 0.0  # stochastic depth max rate; linear ramp across blocks (0..drop_path)
+    seed: int = 1  # torch RNG seed; affects model init and dataloader sampler order
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f" seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -483,6 +519,7 @@ model_config = dict(
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
+    drop_path=cfg.drop_path,
 )
 
 model = Transolver(**model_config).to(device)
