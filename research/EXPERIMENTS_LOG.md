@@ -6,6 +6,31 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 10:20 — Round 42: close #2871 frieren aux surface head (+4.73% val REGRESSION — AUX-HEAD AXIS CLOSED, redundant with surf_weight=10); assign frieren #2883 specialized surf/vol decoders (decoder specialization pivot, round 2)
+
+### PR #2871 — frieren Aux Surface Decoder Head (aux_surf_head=true, weight=1.0, hidden=64)
+- Branch: `charliepai2g48h3-frieren/auxsurfhead-nlayers2-slicenum16-epochs46`
+- Hypothesis: Parallel aux head operating on same final features acts as multi-task regularization, shaping shared encoder to produce better surface-prediction features.
+- Artifacts: `models/model-auxsurfhead-nlayers2-slicenum16-epochs46-20260514-093049/metrics.jsonl`
+- Note: 40/46 epochs completed (hit 30-min timeout; slow stretches ~75-80s/epoch in epochs 16-22 and 38-39)
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| Baseline (#2468) | 35.256 | 30.245 |
+| Aux head (best ep 40/46) | 36.925 (+4.73%) | 31.114 (+2.87%) |
+
+Per-split detail:
+| Split | Baseline val | Aux-head val | Δ val |
+|---|---:|---:|---:|
+| single_in_dist | 36.476 | 37.523 | +2.87% |
+| geom_camber_rc | 48.297 | 51.320 | +6.26% |
+| geom_camber_cruise | 18.326 | 20.356 | +11.08% |
+| re_rand | 37.923 | 38.501 | +1.52% |
+
+**Analysis:** The aux head DID learn surface structure (final aux_surf_loss=0.0880 tracks main surf_loss=0.0827 closely). But the auxiliary gradient did NOT regularize the encoder into better features for the main head. Root cause (per student): `surf_weight=10` already provides 10× surface gradient weight — adding another surface-only loss is REDUNDANT gradient signal in the same direction, not complementary regularization. Any aux head adding signal in the same direction as the existing loss will fail by the same mechanism.
+
+**Conclusion:** AUX-HEAD AXIS CLOSED at weight=1.0, hidden=64. Frieren's own recommendation: feature-routing SEPARATION (specialized decoders per node type), not auxiliary prediction targets. Assigning #2883.
+
 ## 2026-05-14 09:15 — Round 41 cont.: close #2857 frieren SWA (+2.90% val best-epoch, SWA strictly worse on all splits — POST-HOC AVERAGING CLOSED for 46-epoch schedule); close #2861 askeladd eta_min=5e-6 (+1.09% val LOSS — SCHEDULE-FLOOR CLOSED for Lion due to sign-update oscillation); assign frieren #2871 aux surface head (architectural pivot) and askeladd #2872 epochs=50 retest at n_layers=2 stack
 
 ### PR #2857 — frieren SWA (Stochastic Weight Averaging, swa_start=30)

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 09:15
+- **Date:** 2026-05-14 10:20
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -29,7 +29,8 @@
 > - **POST-HOC WEIGHT-AVERAGING AXIS CLOSED (for 46-epoch schedule)**: SWA swa_start=30 (#2857 SWA +4.16% val, best-epoch +2.90% — SWA strictly worse than best-epoch on every val/test split). Mechanism: trajectory still descending in averaging window (val 42.22 → 36.28 across SWA epochs 31-46 = 14% relative descent), so SWA averages over non-stationary weights pulling backward toward earlier worse-performing iterates. \"Still descending at end\" ≠ \"flat region.\" SWA fails when weights are still moving directionally. Variants requiring epochs>46 don't fit the 30-min cap.
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
 > - **Round 41 cont. — fresh-axis pivots (active)**:
->   - **frieren #2871 Aux surface decoder head** (IN FLIGHT, status:wip): **Architectural pivot.** Adds parallel surface-only decoder operating on shared final features. Multi-task regularization shapes the shared encoder for surface-specific features. Direct attack on primary metric (val_avg/mae_surf_p is surface-only). ~5-20K extra params on 361K baseline. aux_surf_weight=1.0 initial calibration. **Orthogonal to all closed HP/training axes** (capacity, schedule, loss, optimizer, post-hoc).
+>   - **AUX-HEAD AXIS CLOSED** — frieren #2871 aux surface head at weight=1.0, hidden=64: +4.73% val (36.925 vs 35.256), REFUTED. Aux head DID learn surface structure (final aux_surf_loss tracks main surf_loss) but did NOT regularize the shared encoder. Root cause: surf_weight=10 already provides 10× gradient signal in the same direction — the aux head was redundant. Adding any signal that duplicates the existing loss direction will fail by the same mechanism.
+>   - **frieren #2883 Specialized surf/vol decoders** (IN FLIGHT, status:wip): **Architectural pivot round 2.** Replaces shared final decoder with TWO separate decoders — `surf_decoder` (surface nodes) and `vol_decoder` (volume nodes) — each consuming the same shared features but with independent weights, gated by `surf_mask`/`vol_mask`. Different readout function per node type, without redundant gradient signal. Implementation: ~20 lines, `--specialized_decoders true` flag. Decoder capacity: 2×(n_hidden→n_hidden→3). Per-epoch overhead minimal (~same as aux head's 36-38s vs baseline 35.1s).
 >   - **askeladd #2872 epochs=50 retest at n_layers=2 stack** (IN FLIGHT, status:wip): **Epoch-budget retest.** Tests whether the still-descending-at-46 signal converts to real improvement at the current optimal stack. Previous epochs=50 test #2523 was at OLDER n_layers=3+slice_num=24 stack with +2.30% loss — but that's within seed variance (~±1 val unit) and not a definitive negative. Zero code changes, just `--epochs 50`. 50×35s=29.2 min fits cap.
 > - **NEW NEGATIVE RESULTS this round**:
 >   - MSE-on-everything is decisively worse than L1 in normalized space (#2822 Huber d=5.0 → +116% val). Confirms L1 is the right magnitude shape.
@@ -133,7 +134,7 @@
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
 | askeladd | **#2872** | **epochs=50** retest at n_layers=2 stack — epoch-budget axis at current optimal stack (prior #2523 at older stack +2.30% within seed-noise; under-tested here) | **Round 41: epoch-budget retest** |
-| frieren | **#2871** | **Aux surface decoder head** (architectural pivot — parallel surface-only MLP head; multi-task regularization; direct attack on primary metric val_avg/mae_surf_p) | **Round 41: architectural pivot** |
+| frieren | **#2883** | **Specialized surf/vol decoders** — replace shared final decoder with two separate gated decoders (surf_decoder + vol_decoder), independent weights per node type, `--specialized_decoders true` | **Round 42: decoder specialization pivot** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed
