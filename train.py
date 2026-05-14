@@ -360,6 +360,56 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
     return out
 
 
+def collect_routing_diagnostics(model, sample_loader, stats, device, amp_ctx_factory):
+    """Per-block PhysicsAttention temperature + slice-routing softmax entropy.
+
+    Routes through uncompiled inner module so Python forward hooks fire (compile
+    bypasses hooks). Captures softmax output of each block's ``attn.softmax``
+    via a forward hook and averages entropy over real (mask=True) tokens.
+    """
+    inner = getattr(model, "_orig_mod", model)
+    n_blocks = len(inner.blocks)
+    temps = [float(blk.attn.temperature.detach().float().mean().cpu().item())
+             for blk in inner.blocks]
+
+    cap_ent: list[float | None] = [None] * n_blocks
+    mask_ref: dict = {"m": None}
+
+    def _make_hook(block_idx: int):
+        def _hook(module, args, output):
+            with torch.no_grad():
+                w = output.detach().float()              # [B, heads, N, slice_num]
+                ent = -(w * (w + 1e-12).log()).sum(dim=-1)  # [B, heads, N]
+                m = mask_ref["m"]
+                if m is not None:
+                    m_exp = m.unsqueeze(1).expand_as(ent)  # broadcast across heads
+                    e_val = float(ent[m_exp].mean().cpu().item())
+                else:
+                    e_val = float(ent.mean().cpu().item())
+                cap_ent[block_idx] = e_val
+        return _hook
+
+    handles = [blk.attn.softmax.register_forward_hook(_make_hook(i))
+               for i, blk in enumerate(inner.blocks)]
+
+    try:
+        inner.eval()
+        with torch.no_grad():
+            x, _y, _is_surface, mask = next(iter(sample_loader))
+            x = x.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            mask_ref["m"] = mask
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = inner({"x": x_norm, "mask": mask})
+    finally:
+        for h in handles:
+            h.remove()
+
+    ents = [cap_ent[i] if cap_ent[i] is not None else 0.0 for i in range(n_blocks)]
+    return temps, ents
+
+
 def _sanitize_path_token(s: str) -> str:
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
     return out.strip("-_.") or "experiment"
@@ -517,7 +567,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=96,
     n_layers=4,
-    n_head=2,
+    n_head=1,
     slice_num=24,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -525,7 +575,7 @@ model_config = dict(
 )
 print(f"slice_num: {model_config['slice_num']}")
 print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
-print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
+print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']}) — max per-head rank diagnostic (PR #2869, opposite of #2856 n_head=4)")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
 
@@ -726,6 +776,21 @@ for epoch in range(MAX_EPOCHS):
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+
+    # PhysicsAttention routing diagnostics (per-block temperature + slice-routing
+    # softmax entropy) — single in-dist val batch, hooks on attn.softmax modules.
+    _diag_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    _block_temps, _block_ents = collect_routing_diagnostics(
+        model, _diag_loader, stats, device, amp_ctx_factory,
+    )
+    _routing_diag = {}
+    for _bi, (_t, _e) in enumerate(zip(_block_temps, _block_ents)):
+        _routing_diag[f"temperature/block_{_bi}"] = _t
+        _routing_diag[f"slice_routing_entropy/block_{_bi}"] = _e
+    _routing_diag["slice_routing_entropy/mean"] = (
+        sum(_block_ents) / max(len(_block_ents), 1)
+    )
+
     dt = time.time() - t0
 
     tag = ""
@@ -735,6 +800,7 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "routing": _routing_diag,
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
@@ -752,6 +818,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        **_routing_diag,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
