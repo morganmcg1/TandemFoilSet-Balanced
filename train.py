@@ -437,6 +437,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    re_jitter_std: float = 0.05  # σ of per-sample N(0,σ) noise added to log(Re) (x dim 13) during training
 
 
 cfg = sp.parse(Config)
@@ -482,6 +483,8 @@ model = Transolver(**model_config).to(device)
 model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+if cfg.re_jitter_std > 0.0:
+    print(f"Re-jitter: train-only N(0, σ={cfg.re_jitter_std}) on log(Re) (x dim 13)")
 
 optimizer = Lion(
     model.parameters(),
@@ -540,6 +543,20 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Re-feature jitter (train-only): add per-sample N(0, σ) noise to log(Re) at x dim 13.
+        # log(Re) is a global flow condition shared across all nodes in a sample, so noise is
+        # broadcast per-sample (one scalar per item) rather than per-node.
+        if cfg.re_jitter_std > 0.0:
+            re_noise = torch.randn(x.shape[0], device=x.device, dtype=x.dtype) * cfg.re_jitter_std
+            x = x.clone()
+            x[..., 13] = x[..., 13] + re_noise[:, None]
+            if cfg.debug and epoch == 0 and n_batches < 2:
+                print(
+                    f"  [re-jitter] epoch=0 batch={n_batches} "
+                    f"re_noise={re_noise.detach().cpu().tolist()} "
+                    f"log_re_after={x[:, 0, 13].detach().cpu().tolist()}"
+                )
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
