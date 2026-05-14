@@ -1997,4 +1997,114 @@ fern reassigned to **Truncated normal Linear init σ=0.02 (BERT/GPT-2 style, PR 
 
 ---
 
+## 2026-05-14 06:27 — PR #2817: Truncated normal Linear init σ=0.02 (fern, PIVOTED)
+- Branch: `willowpai2g48h3-fern/trunc-normal-init`
+- Status: PRE-IMPLEMENTATION PIVOT — fern discovered the hypothesis premise was wrong
+
+**Finding**: `Transolver._init_weights` already applies `trunc_normal_(std=0.02)` from `timm.layers` to ALL Linear layers. The PR as written would be a near-no-op. Fern also discovered a **latent bug** (tracked for follow-up): `PhysicsAttention.__init__` orthogonalizes `in_project_slice.weight` at line 132, but `Transolver.__init__`'s subsequent `self.apply(_init_weights)` overwrites it with trunc_normal_ at line 235.
+
+**Decision**: PR pivoted to **σ-scan** (σ=0.01 seed-1, σ=0.05 seed-2) to genuinely probe the init-scale axis. Orthogonal-init bug tracked as a new axis (assigned to frieren #2854).
+
+---
+
+## 2026-05-14 07:15 — PR #2801: Pinball loss τ=0.55 for pressure channel (askeladd, **MERGED**)
+- Branch: `willowpai2g48h3-askeladd/pinball-tau-055`
+- Hypothesis: Replace symmetric Huber β=0.5 on the pressure channel (surf+vol) with asymmetric pinball loss τ=0.55. Mechanism: pressure field has systematic under-prediction bias; τ=0.55 penalizes under-predictions 10% more, directly addressing the directional residual distribution.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Best epoch |
+|---|---|---:|---:|---:|
+| s1 | `xkaghm9f` | **43.092** | **37.194** | 35/35 |
+| s2 | `gyccmr5r` | 44.276 | 37.350 | 35/35 |
+| **mean** | — | **43.684** | **37.272** | — |
+| **baseline** | `srveevtx` | 45.433 | 39.509 | — |
+| **Δ (best seed)** | — | **−5.1%** | **−5.9%** | — |
+
+**Per-split test surf_p (mean of both seeds):**
+| Split | Mean | Baseline | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 43.138 | 42.56 | +1.4% (marginal) |
+| geom_camber_rc | 49.936 | 53.48 | **−6.6%** |
+| geom_camber_cruise | 21.204 | 24.00 | **−11.6%** |
+| re_rand | 34.812 | 37.99 | **−8.4%** |
+
+**Seed variance**: val ±0.59, test ±0.08 (test extremely tight — improvement is robust).
+
+**Analysis**: Clean win. Asymmetric loss targeting under-prediction bias works exactly as predicted. OOD splits improve most (re_rand, geom_camber_cruise), single_in_dist marginal. The τ-axis is productive — follow-ups: τ=0.60 (alphonse #2853) and τ=0.55 extended to Ux/Uy velocity channels (tanjiro #2855). Zero compute overhead.
+
+**Status**: MERGED 2026-05-14 07:15. **11th baseline shift: val=43.09, test=37.19.**
+
+---
+
+## 2026-05-14 07:40 — PR #2800: Replace LayerNorm with RMSNorm (alphonse, CLOSED)
+- Branch: `willowpai2g48h3-alphonse/rmsnorm`
+- Hypothesis: Replace all LayerNorm with RMSNorm throughout Transolver — removes mean-centering step, free-lunch compute saving.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `5tizv8rp` | 49.168 | 42.401 |
+| s2 | `ebahy73q` | 48.751 | 42.416 |
+| **mean** | — | **48.959** | **42.408** |
+| **new baseline** | — | 43.093 | 37.194 |
+| **Δ** | — | **+13.6%** | **+13.9%** |
+
+**Analysis**: Regression on both seeds. No compute speedup (51.5s/epoch ≈ baseline 52s). RMSNorm removes mean-centering from LayerNorm. Mechanism: PhysicsAttention's slice softmax (`in_project_slice(x_mid) / temperature`) depends on well-normalized activations; removing mean-centering shifts the distribution entering the softmax, degrading the physics-informed slice assignments. Seed std=0.30 (much tighter than baseline 3.6pt) — variance decreased but mean regressed, consistent with variance-vs-mean decoupling (8th confirmed instance). RMSNorm axis retired.
+
+**Status**: CLOSED 2026-05-14 07:40.
+
+---
+
+## 2026-05-14 07:40 — PR #2803: Param-group wd: exclude norms/biases (frieren, CLOSED)
+- Branch: `willowpai2g48h3-frieren/paramgroup-wd`
+- Hypothesis: BERT-style param-group weight decay — exclude norms, biases, and 1D parameters from wd.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `pq00jfld` | 47.149 | 41.414 |
+| s2 | `402dx2ft` | 46.304 | 40.322 |
+| **mean** | — | **46.727** | **40.868** |
+| **new baseline** | — | 43.093 | 37.194 |
+| **Δ (best seed)** | — | **+7.7%** | **+8.4%** |
+
+**Analysis**: Regression (wash zone vs OLD baseline but clear regression vs new pinball baseline). Does NOT clear the merge bar on either seed. BERT-style param-group wd is designed for AdamW; under Lion's sign() update, excluding small params from wd has a larger relative effect on activation distributions than intended. Param-group wd axis retired under Lion.
+
+**Status**: CLOSED 2026-05-14 07:40.
+
+---
+
+## 2026-05-14 07:40 — PR #2805: LayerNorm γ-init=0.5 DeepNorm-style (tanjiro, CLOSED)
+- Branch: `willowpai2g48h3-tanjiro/ln-gamma-init-05`
+- Hypothesis: Initialize LayerNorm gain (γ) to 0.5 instead of 1.0 (DeepNorm-style) to improve gradient flow stability.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `2xhq2bs9` | 59.206 | 51.737 |
+| s2 | `b5m88jkd` | 57.470 | 50.022 |
+| **mean** | — | **58.338** | **50.879** |
+| **new baseline** | — | 43.093 | 37.194 |
+| **Δ** | — | **+35.4%** | **+36.6%** |
+
+**Analysis**: Severe regression — 8th instance of variance-vs-mean decoupling pattern. γ=0.5 makes first-epoch LN output scale half of normal. Under Lion's sign() update, this creates weaker gradients through residual branches. The 35-ep / 30-min budget is insufficient for the optimizer to raise γ values enough to recover representational capacity. Tanjiro confirmed: "final γ values barely budged from 0.5 — the network didn't reclaim the gain." Lower seed variance (std=1.23 vs baseline 3.6pt) with much worse mean — canonical decoupling pattern. LN γ-init axis retired.
+
+**Status**: CLOSED 2026-05-14 07:40.
+
+---
+
+## 2026-05-14 07:45 — Round-9 assignments
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2853 | willowpai2g48h3-alphonse | Pinball τ=0.60 for pressure channel (stronger asymmetry) | τ-scan continuation |
+| #2854 | willowpai2g48h3-frieren | Restore orthogonal init for in_project_slice (latent bug fix) | Architectural correctness |
+| #2855 | willowpai2g48h3-tanjiro | Extend pinball τ=0.55 to Ux/Uy velocity channels | Loss channel coverage |
+
+---
+
 

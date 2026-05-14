@@ -1,34 +1,20 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 06:50
+- **Date:** 2026-05-14 07:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
 
-## Round 8 mid-flight signals (W&B-observed, seed-1 only — NOT YET TERMINAL)
 
-**Winner candidate:** askeladd #2801 pinball τ=0.55 — seed-1 (`xkaghm9f`) finished at **val=43.092 / test=37.194** with all four per-split test surf_p finite (single_in_dist=43.00, geom_camber_rc=49.86, geom_camber_cruise=21.22, **re_rand=34.70 — best ever**). Seed-2 (`gyccmr5r`) at epoch ~33 mid-training. Awaiting terminal SENPAI-RESULT + code commit; student running with uncommitted `M train.py`. If holds, this is the 11th baseline shift.
+## Current baseline (11th shift)
 
-**Regression candidates (close on terminal):**
-- alphonse #2800 RMSNorm: seed-1 val=48.08, test=41.55 (+5.8% / +5.2%) — mild regression
-- frieren #2803 param-group wd: seed-1 val=47.15, test=41.41 (+3.8% / +4.8%) — mild regression
-- tanjiro #2805 LN γ-init=0.5: seed-1 val=59.16, test=52.0 (+30% / +31%) — SEVERE regression, likely variance-vs-mean decoupling via init geometry shift
-
-**Mid-flight (single seed):**
-- thorfinn #2811 Sobolev: val=60.0 mid-training (very early)
-- nezuko #2812 LayerScale: val=52.3 mid-training (mid)
-- edward #2816 FiLM-Re: val=83.4 (~9 min in, too early)
-
-**Fern #2817 truncated-normal init — pivoted to σ-scan:** student verified that `Transolver._init_weights` ALREADY applies `trunc_normal_(std=0.02)` to all Linear layers (timm). Hypothesis premise was wrong; PR pivoted to σ-scan (σ=0.01 s1, σ=0.05 s2). Also discovered latent bug: `PhysicsAttention.in_project_slice.weight` orthogonal init is clobbered by subsequent `self.apply(_init_weights)`. Tracked as follow-up axis.
-
-## Current baseline (10th shift)
-
-**PR #2562 (Lion lr=7.5e-5)** merged 2026-05-13 22:30:
-- **`val_avg/mae_surf_p` = 45.433** (seed 2 `srveevtx`)
-- **`test_avg/mae_surf_p` = 39.509**
-- Per-split test: single_in_dist=42.56, geom_camber_rc=53.48, geom_camber_cruise=24.00, re_rand=37.99
-- **New merge bar: val < 45.43, test < 39.51, all four test splits finite**
+**PR #2801 (Pinball τ=0.55 for pressure channel)** merged 2026-05-14 07:15:
+- **`val_avg/mae_surf_p` = 43.0923** (best seed 1 `xkaghm9f`)
+- **`test_avg/mae_surf_p` = 37.1943**
+- Per-split test: single_in_dist=43.00, geom_camber_rc=49.86, geom_camber_cruise=21.22, re_rand=34.70
+- Two-seed mean: val=43.684, test=37.272 (test extremely tight, ±0.08)
+- **New merge bar: val < 43.09, test < 37.19, all four test splits finite**
 
 ## Baseline progression
 
@@ -43,25 +29,29 @@
 | PR #1589 (AdamW betas 0.9, 0.95) | 2026-05-13 16:03 | 59.970 | 52.363 | −0.2% / −1.9% |
 | PR #2017 (weight_decay 1e-4 → 2e-4) | 2026-05-13 16:10 | 58.883 | 51.078 | −1.8% / −2.4% |
 | PR #2516 (Lion optimizer) | 2026-05-13 20:05 | 50.193 | 43.501 | −14.8% / −14.8% |
-| **PR #2562 (Lion lr=7.5e-5)** | **2026-05-13 22:30** | **45.433** | **39.509** | **−9.5% / −9.2%** |
+| PR #2562 (Lion lr=7.5e-5) | 2026-05-13 22:30 | 45.433 | 39.509 | −9.5% / −9.2% |
+| **PR #2801 (Pinball τ=0.55 pressure)** | **2026-05-14 07:15** | **43.092** | **37.194** | **−5.1% / −5.9%** |
 
-**Cumulative: −62.0% val, −64.0% test from round-1 start.** Still compute-bound (best=last on both seeds at all 10 merges).
+**Cumulative: −63.9% val, −66.1% test from round-1 start.** Still compute-bound (best=last on all 11 merges).
 
-## Current research focus (round 8)
+## Current research focus (round 9)
 
-**Moving beyond Lion hyperparameter tuning.** The variance-vs-mean decoupling pattern is now fully confirmed across 6 experiments — any Lion trajectory-stabilization mechanism regresses mean while reducing variance. New round focuses on **structural/geometric axes** orthogonal to training trajectory:
+**Building on the pinball τ=0.55 win (PR #2801).** The asymmetric pressure loss win revealed two productive axes: (1) the τ-scale can be pushed higher, and (2) the velocity channels may also benefit from asymmetric loss. Simultaneously, fern's pre-implementation discovery opened a new structural axis (orthogonal init bug fix).
 
-1. **RMSNorm (alphonse #2800)**: replace LayerNorm throughout — normalization architecture change, ~7-10% per-layer compute saving, removes mean-centering step
-2. **Pinball loss τ=0.55 (askeladd #2801)**: asymmetric directional loss bias for pressure channel — tests whether pressure is systematically under-predicted; directional not amplitude
-3. **Param-group wd (frieren #2803)**: exclude norms/biases from weight decay — standard modern practice, prevents wd from shrinking LN γ→0
-4. **LN γ-init=0.5 (tanjiro #2805)**: initialize LayerNorm scale at 0.5 (DeepNorm-style) — changes initial optimization geometry, not training trajectory
+Current focus: **loss geometry exploration** (τ-scan, channel coverage) and **architectural correctness** (latent bug fix).
 
-5. **Sobolev loss on pressure gradient (thorfinn #2811)**: physics-aware loss term — penalize ∇p mismatch in addition to p mismatch
-6. **LayerScale (nezuko #2812)**: CaiT-style learnable residual scaling, init=1e-4 — per-channel gating on attention/FFN branch output
+### Round-9 in-flight (newly assigned)
 
-Replacing 2 closed PRs:
-7. **FiLM-style Re-conditioning (edward #2816)**: per-block scale+shift modulated by log(Re) — targets re_rand OOD via learned per-layer conditioning
-8. **Truncated normal Linear init σ=0.02 (fern #2817)**: BERT/GPT-2 standard init — simpler, contained task designed to fit single Claude instance lifetime after fern's harness issues
+1. **Pinball τ=0.60 pressure (alphonse #2853)**: scale up asymmetry — test whether stronger directional bias helps further
+2. **Orthogonal init restore for in_project_slice (frieren #2854)**: fix the latent bug where trunc_normal_ clobbers the intended orthogonal init — zero compute cost, pure architectural correctness
+3. **Pinball τ=0.55 on Ux/Uy velocity channels (tanjiro #2855)**: extend the winning pressure loss to all 3 channels — test velocity field bias hypothesis
+
+### Round-8 WIPs still in flight
+
+4. **Sobolev loss on pressure gradient (thorfinn #2811)**: physics-aware loss term (early val=60 mid-training, trending poor)
+5. **LayerScale (nezuko #2812)**: CaiT-style residual gating init=1e-4 (early val=52 mid-training, trending poor)
+6. **FiLM-style Re-conditioning (edward #2816)**: per-block Re conditioning (early val=83, very early/inconclusive)
+7. **σ-scan for Linear init (fern #2817)**: σ=0.01/0.05 scan after discovering trunc_normal_ σ=0.02 already in baseline
 
 ## Round 1 portfolio (current)
 
@@ -69,50 +59,56 @@ Replacing 2 closed PRs:
 |---|---|---|---|
 | #1504–#2017 | various | 8 stacked improvements | **MERGED** (baseline history above) |
 | #2516 | edward | Lion optimizer | **MERGED** 2026-05-13 20:05 (val=50.19) |
-| #2562 | tanjiro | Lion lr=7.5e-5 | **MERGED** 2026-05-13 22:30 (val=45.43) — 10th baseline shift |
-| #2561 | edward | Lion beta2=0.95 | **CLOSED** (+14.8%, beta2 analogy wrong) |
-| #2520 | thorfinn | n_head 4→8 | **CLOSED** (+24%, capacity loss) |
-| #2504 | frieren | QK-RMSNorm | **CLOSED** (+14%, Q/K magnitude signal) |
-| #2628 | tanjiro | Lion lr=1e-4 | **CLOSED** (+1.9% val, overshoot) |
-| #2501 | askeladd | β_p=0.625 | **CLOSED** (+6.8% val — per-channel β fully closed) |
-| #2565 | fern | max_norm=0.5 | **CLOSED** 2026-05-14 03:25 (stale; reassigned fresh) |
-| #2564 | nezuko | Gradient Centralization | **CLOSED** 2026-05-14 03:00 (stale; reassigned fresh) |
-| #2505 | alphonse | SiLU activation | **CLOSED** (+18.9% val; Lion sign neutralizes SiLU advantage) |
-| #2633 | edward | Lion beta1=0.95 | **CLOSED** (+4.83pt val; variance −85% but mean shifted) |
-| #2631 | thorfinn | Lion warmup 5ep | **CLOSED** (+4.44% val; warmup cost too high at 35-ep cap) |
-| #2629 | frieren | Lion wd=3e-3 | **CLOSED** (+1.68pt val; wd axis monotonic-worse) |
-| #2700 | edward | Lion beta1=0.85 | **CLOSED** (+8.3% val; β1 axis FULLY BRACKETED, 0.90 optimal) |
-| #2693 | tanjiro | CosineAnnealingWarmRestarts T_0=12 | **CLOSED** (+17.7% val; schedule-shape axis retired) |
-| #2713 | frieren | Lion β2=0.999 | **CLOSED** (+5.69% val; β2 axis FULLY BRACKETED, 0.99 optimal) |
-| #2694 | askeladd | Charbonnier loss ε=0.5 | **CLOSED** (+1.3% miss bar; loss-shape axis saturated) |
-| #2726 | alphonse | Lookahead(Lion) k=5 α=0.5 | **CLOSED** 2026-05-14 05:30 (+6.77pt val; variance −93%; 6th variance-vs-mean decoupling) |
-| #2743 | askeladd | p_weight=2.0 (volume) | **CLOSED** 2026-05-14 05:30 (+5.22pt val; pressure worst-hit; Lion sign discards magnitude weight) |
-| #2751 | frieren | Re-feature jitter σ=0.05 | **CLOSED** 2026-05-14 05:30 (+12.4pt val +27%; conditioning jitter creates inconsistency) |
-| #2752 | tanjiro | Gradient accumulation 2× | **CLOSED** 2026-05-14 05:30 (+8.87pt val; variance −95%; step-count cost irrecoverable) |
-| #2712 | thorfinn | SWA average epochs 26-35 | **CLOSED** 2026-05-14 05:50 (val 47.82 vs 45.43 bar; variance −74% val/−90% test characterized but mean still misses) |
-| #2753 | nezuko | Per-layer LR decay α=0.85 | **CLOSED** 2026-05-14 05:50 (stale; no commits in 2.5h+; second strike on nezuko slot) |
-| #2762 | edward | Gradient Centralization on Lion | **CLOSED** 2026-05-14 06:25 (val 48.33 +6.4%; GC+sign() forcibly inverts coordinate signs each step — sign-incompatible) |
-| #2763 | fern | max_norm=0.5 on new baseline | **CLOSED** 2026-05-14 06:25 (stale; pod cycling with GPU active but no commits; second strike on fern slot; harness issue) |
-| **#2800** | **alphonse** | **RMSNorm (replace LayerNorm)** | **WIP NEW 2026-05-14 05:45** |
-| **#2801** | **askeladd** | **Pinball loss τ=0.55 for pressure** | **WIP NEW 2026-05-14 05:45** |
-| **#2803** | **frieren** | **Param-group wd (no wd on norms/biases)** | **WIP NEW 2026-05-14 05:45** |
-| **#2805** | **tanjiro** | **LayerNorm γ-init=0.5 (DeepNorm-style)** | **WIP NEW 2026-05-14 05:45** |
-| **#2811** | **thorfinn** | **Sobolev loss on surface ∇p** | **WIP NEW 2026-05-14 05:55** |
-| **#2812** | **nezuko** | **LayerScale on residual branches (init=1e-4)** | **WIP NEW 2026-05-14 05:55** |
-| **#2816** | **edward** | **FiLM-style Re-conditioning on each block** | **WIP NEW 2026-05-14 06:30** |
-| **#2817** | **fern** | **Truncated normal Linear init σ=0.02 (BERT/GPT-2)** | **WIP NEW 2026-05-14 06:30** |
+| #2562 | tanjiro | Lion lr=7.5e-5 | **MERGED** 2026-05-13 22:30 (val=45.43) — 10th shift |
+| **#2801** | **askeladd** | **Pinball loss τ=0.55 for pressure** | **MERGED** 2026-05-14 07:15 (val=43.09) — **11th shift** |
+| #2561 | edward | Lion beta2=0.95 | **CLOSED** (+14.8%) |
+| #2520 | thorfinn | n_head 4→8 | **CLOSED** (+24%) |
+| #2504 | frieren | QK-RMSNorm | **CLOSED** (+14%) |
+| #2628 | tanjiro | Lion lr=1e-4 | **CLOSED** (+1.9% overshoot) |
+| #2501 | askeladd | β_p=0.625 | **CLOSED** (+6.8%) |
+| #2565 | fern | max_norm=0.5 | **CLOSED** (stale) |
+| #2564 | nezuko | GC (stale) | **CLOSED** (stale) |
+| #2505 | alphonse | SiLU activation | **CLOSED** (+18.9%) |
+| #2633 | edward | Lion β1=0.95 | **CLOSED** (+4.83pt; var-vs-mean #2) |
+| #2631 | thorfinn | Lion warmup 5ep | **CLOSED** (+4.44%; var-vs-mean #3) |
+| #2629 | frieren | Lion wd=3e-3 | **CLOSED** (+1.68pt wd axis) |
+| #2700 | edward | Lion β1=0.85 | **CLOSED** (+8.3%; β1 fully bracketed) |
+| #2693 | tanjiro | CosineAnnealingWarmRestarts | **CLOSED** (+17.7%; schedule retired) |
+| #2713 | frieren | Lion β2=0.999 | **CLOSED** (+5.69%; β2 fully bracketed) |
+| #2694 | askeladd | Charbonnier loss | **CLOSED** (+1.3% loss-shape saturated) |
+| #2726 | alphonse | Lookahead(Lion) | **CLOSED** (+6.77pt; var-vs-mean #6) |
+| #2743 | askeladd | p_weight=2.0 | **CLOSED** (+5.22pt; Lion sign discards magnitude) |
+| #2751 | frieren | Re-jitter σ=0.05 | **CLOSED** (+12.4pt; conditioning inconsistency) |
+| #2752 | tanjiro | Gradient accumulation 2× | **CLOSED** (+8.87pt; var-vs-mean #7) |
+| #2712 | thorfinn | SWA avg epochs 26-35 | **CLOSED** (variance characterized; mean misses) |
+| #2753 | nezuko | Per-layer LR decay | **CLOSED** (stale; harness issue) |
+| #2762 | edward | GC on Lion | **CLOSED** (+6.4%; sign-incompatible) |
+| #2763 | fern | max_norm=0.5 v2 | **CLOSED** (stale; harness issue) |
+| #2800 | alphonse | RMSNorm | **CLOSED** 2026-05-14 07:40 (+13.6%; mean-centering load-bearing; var-vs-mean #8) |
+| #2803 | frieren | Param-group wd | **CLOSED** 2026-05-14 07:40 (+7.7%; Lion wd interaction; axis retired) |
+| #2805 | tanjiro | LN γ-init=0.5 | **CLOSED** 2026-05-14 07:40 (+35.4%; var-vs-mean #9 — γ never recovered) |
+| **#2811** | **thorfinn** | **Sobolev loss on ∇p** | **WIP 2026-05-14 05:55** |
+| **#2812** | **nezuko** | **LayerScale (init=1e-4)** | **WIP 2026-05-14 05:55** |
+| **#2816** | **edward** | **FiLM-style Re-conditioning** | **WIP 2026-05-14 06:30** |
+| **#2817** | **fern** | **σ-scan (σ=0.01/0.05) for Linear init** | **WIP 2026-05-14 06:30** |
+| **#2853** | **alphonse** | **Pinball τ=0.60 pressure** | **WIP NEW 2026-05-14 07:45** |
+| **#2854** | **frieren** | **Orthogonal init restore (in_project_slice)** | **WIP NEW 2026-05-14 07:45** |
+| **#2855** | **tanjiro** | **Pinball τ=0.55 Ux/Uy velocity channels** | **WIP NEW 2026-05-14 07:45** |
 
-**Merged:** 10 | **Closed:** 51 | **WIP:** 8 | **Idle:** 0
+**Merged:** 11 | **Closed:** 54 | **WIP:** 7 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
 1. **Compute is permanently binding** — best=last at every merge. The 30-min cap has been the dominant constraint since bf16 (PR #1715).
-2. **Variance-vs-mean decoupling confirmed (6 instances)** — β1=0.85/0.95, β2=0.999, warmup, Lookahead, grad-accum all show variance −68%–95% with mean regression +4.4pt–8.9pt. Pattern: any mechanism reducing optimizer step frequency (or equivalent trajectory diversity) trades mean improvement for variance reduction. At 35-ep compute-bound cap, the mean cost is never recovered.
+2. **Variance-vs-mean decoupling confirmed (9 instances)** — β1=0.85/0.95, β2=0.999, warmup, Lookahead, grad-accum, RMSNorm, grad-accum, LN γ-init=0.5 all show variance reduction with mean regression. Pattern: any mechanism reducing optimizer step frequency, representation capacity, or initial activation scale trades mean improvement for variance reduction. At 35-ep compute-bound cap, the mean cost is never recovered.
 3. **Lion β1 axis FULLY BRACKETED** — β1=0.85 (+8.3%) and β1=0.95 (+4.83pt) both regress; β1=0.90 confirmed optimal.
 4. **Lion β2 axis FULLY BRACKETED** — β2=0.95 (+14.8%) and β2=0.999 (+5.69%) both regress; β2=0.99 confirmed optimal.
 5. **Schedule-shape axis FULLY RETIRED** — warmup, warm restarts, all variants lose to cosine T_max=50 with implicit residual.
 6. **Per-channel amplitude axis RETIRED under Lion** — p_weight=2.0 failed; per-channel β closed; Lion's sign() discards gradient magnitude, so amplitude-based loss scaling has no effect on capacity allocation.
 7. **Conditioning-variable jitter axis RETIRED** — jittering log(Re) creates supervised inconsistency; valid augmentation requires conditional invariance in outputs.
+8. **GC + sign() is sign-incompatible** — Gradient Centralization's row-mean subtraction forcibly inverts ~half of coordinate update directions each step under Lion. GC needs magnitude-based optimizers.
+9. **Pinball τ=0.55 WIN (PR #2801)** — directional asymmetric loss for under-prediction bias works under Lion. Mechanism: τ=0.55 penalizes residuals with y>pred 10% more; OOD splits (re_rand −8.4%, cruise −11.6%) benefit most. Lion's sign() preserves the directional signal from pinball (unlike amplitude-scaling which gets discarded). This opens the τ-axis and the channel-coverage axis.
+10. **trunc_normal_(std=0.02) already in baseline** — fern discovered Transolver._init_weights already applies BERT-style init. Latent bug: in_project_slice orthogonal init clobbered by subsequent apply().
 
 ## Currently retired axes
 
@@ -138,22 +134,22 @@ Replacing 2 closed PRs:
 
 ## Potential next research directions
 
-### Immediate (round 8 in flight)
+### Immediate (round 9 in flight)
 
-1. **RMSNorm (#2800)** — free-lunch normalization swap; modern default for transformers
-2. **Pinball τ=0.55 (#2801)** — directional pressure bias; if residual diagnostic shows consistent direction, retry τ=0.45 if needed
-3. **Param-group wd (#2803)** — standard practice; zero compute cost
-4. **LN γ-init=0.5 (#2805)** — init geometry; recoverable since γ is learnable
-5. **Sobolev loss on ∇p (#2811)** — physics-aware loss; targets aerodynamic-coefficient-relevant gradient match
-6. **LayerScale (#2812)** — learnable per-channel residual gating, init=1e-4 (CaiT-style)
-7. **FiLM-style Re-conditioning (#2816)** — per-block scale+shift from log(Re); targets re_rand OOD
-8. **Truncated normal Linear init σ=0.02 (#2817)** — BERT/GPT-2 standard; simpler task for fern after harness issues
+1. **Pinball τ=0.60 pressure (alphonse #2853)** — scan τ axis upward; if current τ=0.55 under-corrected the bias
+2. **Orthogonal init restore for in_project_slice (frieren #2854)** — zero-cost bug fix; potentially high impact on slice mechanism quality
+3. **Pinball τ=0.55 Ux/Uy velocity (tanjiro #2855)** — if velocity fields also have under-prediction bias, extending coverage may win
+4. **Sobolev loss on ∇p (thorfinn #2811)** — still running; early val high but may converge
+5. **LayerScale (nezuko #2812)** — still running; early val uncertain
+6. **FiLM-style Re-conditioning (edward #2816)** — still running
+7. **σ-scan for Linear init (fern #2817)** — σ=0.01/0.05
 
-### Medium-term
+### Medium-term (if round-9 clears)
 
-9. **Per-sample Re embedding** — dedicated re_rand OOD lever separate from conditioning variable
-10. **Surface-anchored cross-attention** — boundary nodes as queries against volume tokens
-11. **Y-flip augmentation** — flow-symmetric BCs admit clean mirror augmentation (conditionally invariant → valid)
-12. **Label smoothing / target noise** — augment TARGET not INPUT (avoids conditioning inconsistency)
-13. **Stochastic depth / DropPath with very low rate** — test if any regularization is still beneficial
-14. **Separate embedding network for Re** — rather than concatenating log(Re), learn a dedicated Re embedding; avoids the conditioning-inconsistency problem of jitter
+8. **Pinball τ=0.65 pressure** — if τ=0.60 wins, continue scan
+9. **Per-sample Re embedding (MLP-encoded)** — dedicated re_rand OOD lever; learn Re → embedding rather than raw log(Re) concat
+10. **Y-flip augmentation** — flow-symmetric BCs admit clean mirror augmentation (conditionally invariant → valid)
+11. **τ per-split tuning** — re_rand improved most; try separate τ for different geometry classes
+12. **Pinball τ < 0.5 for single_in_dist** — probe whether in-distribution has over-prediction bias (single_in_dist barely improved at τ=0.55)
+13. **Surface-anchored cross-attention** — boundary nodes as queries against volume tokens
+14. **Separate Re embedding network** — richer Re representation for the OOD split
