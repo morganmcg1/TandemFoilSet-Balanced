@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -525,6 +526,15 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# SWA: keep a sliding window of the last SWA_N epoch state_dicts (CPU-resident).
+# At end of training we average them and run one extra val + test pass. A sliding
+# window is robust to the 30-min wall-clock timeout cutting training before the
+# requested MAX_EPOCHS: whatever final tail of epochs we complete is what we
+# average. ~70 MB total (10 × ~7 MB).
+SWA_N = 10
+swa_state_dicts: deque[dict] = deque(maxlen=SWA_N)
+total_epochs_completed = 0
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -618,6 +628,12 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # SWA: append this epoch's state_dict to the sliding window.
+    swa_state_dicts.append(
+        {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+    )
+    total_epochs_completed = epoch + 1
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -626,7 +642,116 @@ with torch.no_grad():
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
 
-# --- Test evaluation + artifact upload ---
+# Load test data once: reused by both SWA and best-ckpt evals.
+test_loaders = None
+if not cfg.skip_test:
+    test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+    test_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in test_datasets.items()
+    }
+
+# --- SWA: average the captured late-training state_dicts and evaluate ---
+# Two windows in one run, both off the same captured trajectory:
+#   - "swa"  → all N captured epochs (default; matches PR hypothesis: N=10)
+#   - "swa5" → last 5 epochs only (advisor decision-tree: less averaging dilution
+#              when full-window SWA val is above the baseline bar)
+# Same training step is amortised across both evals → ~12-15s extra per variant.
+swa_n_captured = len(swa_state_dicts)
+wandb.summary["swa_n_checkpoints"] = swa_n_captured
+if swa_n_captured > 0:
+    swa_sds = list(swa_state_dicts)
+    swa_state_dicts.clear()  # we own swa_sds now
+    swa_last_epoch = total_epochs_completed
+
+    swa_variants: list[tuple[str, list[dict]]] = [("swa", swa_sds)]
+    if len(swa_sds) >= 5:
+        swa_variants.append(("swa5", swa_sds[-5:]))
+
+    for label, sds_subset in swa_variants:
+        n = len(sds_subset)
+        first_ep = swa_last_epoch - n + 1
+        print(
+            f"\n{label.upper()}: averaging {n} checkpoints "
+            f"(epochs {first_ep}-{swa_last_epoch})"
+        )
+        wandb.summary[f"{label}_first_epoch"] = first_ep
+        wandb.summary[f"{label}_last_epoch"] = swa_last_epoch
+        wandb.summary[f"{label}_n_checkpoints"] = n
+        var_t0 = time.time()
+
+        avg_state: dict = {}
+        for k, first in sds_subset[0].items():
+            if first.dtype.is_floating_point:
+                stacked = torch.stack([sd[k].float() for sd in sds_subset], dim=0)
+                avg_state[k] = stacked.mean(dim=0).to(first.dtype)
+            else:
+                # Integer/bool buffers (e.g. counters): take the last one — averaging
+                # is not meaningful and rounding would lose information.
+                avg_state[k] = sds_subset[-1][k].clone()
+
+        has_non_finite = any(
+            v.dtype.is_floating_point and not torch.isfinite(v).all().item()
+            for v in avg_state.values()
+        )
+        if has_non_finite:
+            print(f"WARNING: {label} averaged state contains non-finite values; skipping eval")
+            wandb.summary[f"{label}_eval_skipped"] = "non_finite"
+            continue
+
+        model.load_state_dict({k: v.to(device) for k, v in avg_state.items()})
+        del avg_state
+        model.eval()
+
+        with torch.no_grad():
+            param_l2 = torch.sqrt(
+                sum(p.detach().float().pow(2).sum() for p in model.parameters())
+            ).item()
+        print(f"Param L2 norm at {label}: {param_l2:.4f}")
+        wandb.summary[f"param_l2_{label}"] = param_l2
+
+        val_split = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_m = aggregate_splits(val_split)
+        print(f"\n  {label.upper()} VAL  avg_surf_p={val_avg_m['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, val_split[name])
+
+        log_d: dict[str, float] = {}
+        for split_name, m in val_split.items():
+            for k, v in m.items():
+                log_d[f"{label}_val/{split_name}/{k}"] = v
+        for k, v in val_avg_m.items():
+            log_d[f"{label}_val_{k}"] = v
+
+        if test_loaders is not None:
+            print(f"\nEvaluating {label} on held-out test splits...")
+            test_split = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            test_avg_m = aggregate_splits(test_split)
+            print(f"\n  {label.upper()} TEST  avg_surf_p={test_avg_m['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_split[name])
+            for split_name, m in test_split.items():
+                for k, v in m.items():
+                    log_d[f"{label}_test/{split_name}/{k}"] = v
+            for k, v in test_avg_m.items():
+                log_d[f"{label}_test_{k}"] = v
+
+        wandb.log(log_d)
+        wandb.summary.update(log_d)
+        wandb.summary[f"{label}_overhead_s"] = time.time() - var_t0
+        print(f"{label.upper()} eval overhead: {time.time() - var_t0:.1f}s")
+
+    swa_sds.clear()
+else:
+    print("\nNo SWA checkpoints captured (no epoch completed).")
+
+# --- Best-checkpoint eval + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
@@ -644,13 +769,8 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
-    if not cfg.skip_test:
+    if test_loaders is not None:
         print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
