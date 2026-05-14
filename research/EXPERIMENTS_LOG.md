@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-14 [Round 128] UTC — PR #2903: RMSNorm replaces LayerNorm — **CLOSED LOSS (+2.10% val; 104th taxon; NORMALIZATION-CHOICE AXIS CLOSED; β-bias load-bearing)**
+
+- **Branch:** charliepai2g48h5-nezuko/rmsnorm-replace-layernorm
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-rmsnorm-layernorm-20260514-120659/metrics.jsonl
+
+| Metric | #2879 Baseline | **#2903 RMSNorm** | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.2013** | **+2.10% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **26.7519** | +0.89% loss |
+| val_single_in_dist | 23.3997 | **24.5307** | **+4.83% LOSS** (biggest regression) |
+| val_geom_camber_rc | 46.0708 | **47.1923** | +2.43% loss |
+| val_geom_camber_cruise | 17.8657 | **17.7419** | **-0.69% WIN** (only improvement) |
+| val_re_rand | 34.9057 | **35.3404** | +1.25% loss |
+
+Params 407,076 (-864 vs baseline, exactly predicting β-bias removal). Best ep60/70 (timeout ep61). γ values healthy [0.48, 1.36], near 1.0 — model did NOT compensate β loss via γ scaling.
+
+**Key findings:**
+1. **β-bias is load-bearing at this scale.** 864 removed params → ~+2% val. γ scaling could not recover the β offsets.
+2. **4th confirmation of the camber_cruise WIN pattern.** camber_cruise -0.69% — only split that improved. Pattern across #2889, #2890, #2899, #2903: when in_dist regresses, camber_cruise tends to improve. This META-SIGNAL points to in_dist over-specialization during training.
+3. **In_dist (+4.83%) drove the regression.** Precision-critical split suffers most from removing mean-centering.
+
+104th taxon CLOSES: normalization-choice axis. Next: exploit the over-specialization meta-signal via DropPath regularization (PR #2912).
+
+---
+
+## 2026-05-14 [Round 128] UTC — PR #2912: DropPath 0→0.1 stochastic depth — **ASSIGNED to charliepai2g48h5-nezuko**
+
+- **Branch:** charliepai2g48h5-nezuko/droppath-linear-0.1
+- **Hypothesis:** Add DropPath(drop_prob=linspace(0, 0.1, n_layers)) wrapping attention and MLP residuals in each TransolverBlock. Exploits the camber_cruise/in_dist trade-off meta-signal: 4 consecutive losing experiments all improved camber_cruise while regressing in_dist — suggesting in_dist over-specialization. DropPath reduces inter-block co-adaptation (blocks must be individually useful), which should regularize the over-fit without adding params.
+- **Params:** ~407,940 (zero new params — DropPath is parameter-free).
+- **Falsifiable:** WIN = regularization breaks cruise/in_dist coupling. WASH = try 0.2 schedule. LOSS = close stochastic-depth axis.
+
+---
+
 ## 2026-05-14 [Round 127] UTC — PR #2900: Multiplicative geo-FiLM parallel to flow-FiLM — **CLOSED LOSS (+3.32% val; test TIED +0.02%; 103rd taxon; TWO-POINT TRADE-OFF CURVE COMPLETE)**
 
 - **Branch:** charliepai2g48h5-askeladd/multiplicative-geo-film
