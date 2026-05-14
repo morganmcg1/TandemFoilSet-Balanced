@@ -46,6 +46,45 @@ from data import (
     pad_collate,
 )
 
+def transform_y(y: torch.Tensor, asinh_p_scale: float) -> torch.Tensor:
+    """Apply asinh(p/scale) to pressure channel (index 2). Identity when scale<=0."""
+    if asinh_p_scale <= 0:
+        return y
+    y_out = y.clone()
+    y_out[..., 2] = torch.asinh(y[..., 2] / asinh_p_scale)
+    return y_out
+
+
+def inverse_transform_pred(pred: torch.Tensor, asinh_p_scale: float) -> torch.Tensor:
+    """Inverse on pressure channel in *original* (denormalized) space: sinh(p')*scale."""
+    if asinh_p_scale <= 0:
+        return pred
+    pred_out = pred.clone()
+    pred_out[..., 2] = torch.sinh(pred_out[..., 2]) * asinh_p_scale
+    return pred_out
+
+
+def recompute_p_stats_post_asinh(train_ds, asinh_p_scale: float) -> tuple[float, float]:
+    """Recompute (mean, std) of ``asinh(p/scale)`` over the training set's pressure channel."""
+    if asinh_p_scale <= 0:
+        raise ValueError("recompute_p_stats_post_asinh requires asinh_p_scale > 0")
+    n = 0
+    s = 0.0
+    sq = 0.0
+    for i in tqdm(range(len(train_ds)), desc="Recomputing p stats (post-asinh)"):
+        _, y, _ = train_ds[i]
+        p_t = torch.asinh(y[:, 2].double() / asinh_p_scale)
+        n += p_t.numel()
+        s += p_t.sum().item()
+        sq += (p_t * p_t).sum().item()
+    if n == 0:
+        raise RuntimeError("No training samples found for stats recomputation")
+    mean = s / n
+    var = max(sq / n - mean * mean, 1e-12)
+    std = var ** 0.5
+    return float(mean), float(std)
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -217,12 +256,14 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   asinh_p_scale: float = 0.0) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
-    ``loss`` is the normalized-space loss used for training monitoring; the MAE
-    channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``loss`` is the normalized-space loss used for training monitoring (in the
+    asinh-transformed space when ``asinh_p_scale > 0``); the MAE channels are
+    in the original target space and accumulated per organizer ``score.py``
+    (float64, non-finite samples skipped).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -247,7 +288,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_t = transform_y(y, asinh_p_scale)
+            y_norm = (y_t - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model({"x": x_norm})["preds"]
             pred = pred.float()
@@ -280,7 +322,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred_d * stats["y_std"].double() + stats["y_mean"].double()
+            pred_unnorm = pred_d * stats["y_std"].double() + stats["y_mean"].double()
+            pred_orig = inverse_transform_pred(pred_unnorm, asinh_p_scale)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -324,6 +367,7 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    recomputed_p_stats: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -343,7 +387,11 @@ def write_experiment_summary(
         "loss": cfg.loss,
         "pct_start": cfg.pct_start,
         "epochs_configured": cfg.epochs,
+        "asinh_p_scale": cfg.asinh_p_scale,
+        "loss": cfg.loss,
     }
+    if recomputed_p_stats is not None:
+        summary["recomputed_p_stats"] = recomputed_p_stats
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
@@ -386,6 +434,7 @@ class Config:
     surf_channel_weight: str = "1.0,1.0,1.0"  # comma-separated per-channel weights for [Ux, Uy, p]
     epochs: int = 50
     loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
+    asinh_p_scale: float = 0.0  # 0 disables; >0 applies asinh(p/scale) on the target p channel
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -410,6 +459,33 @@ surf_channel_weight = torch.tensor(
 print(f"surf_channel_weight: {surf_channel_weight.view(-1).tolist()}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+
+# If asinh transform is enabled on the pressure target, the original
+# (raw-p) y_mean/y_std are no longer the right normalization for the
+# transformed channel — re-derive them from the training set so the
+# post-transform y_norm_p has mean~0 / std~1 and shares gradient scale with
+# Ux/Uy. Only the pressure channel changes; Ux/Uy stats are untouched.
+recomputed_p_stats: dict | None = None
+if cfg.asinh_p_scale > 0:
+    raw_mean_p = float(stats["y_mean"][2].item())
+    raw_std_p = float(stats["y_std"][2].item())
+    new_mean_p, new_std_p = recompute_p_stats_post_asinh(train_ds, cfg.asinh_p_scale)
+    stats["y_mean"][2] = new_mean_p
+    stats["y_std"][2] = new_std_p
+    recomputed_p_stats = {
+        "asinh_p_scale": cfg.asinh_p_scale,
+        "raw_y_mean_p": raw_mean_p,
+        "raw_y_std_p": raw_std_p,
+        "post_asinh_y_mean_p": new_mean_p,
+        "post_asinh_y_std_p": new_std_p,
+        "n_train_samples_used": len(train_ds),
+    }
+    print(
+        f"asinh_p_scale={cfg.asinh_p_scale}: pressure stats recomputed -- "
+        f"raw mean/std={raw_mean_p:.4f}/{raw_std_p:.4f} -> "
+        f"post-asinh mean/std={new_mean_p:.6f}/{new_std_p:.6f}"
+    )
+
 stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -475,10 +551,18 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "recomputed_p_stats": recomputed_p_stats,
     }, f, sort_keys=True)
+
+if recomputed_p_stats is not None:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "stats_recompute",
+        **recomputed_p_stats,
+    })
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+sanity_logged = False
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -498,7 +582,30 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_t = transform_y(y, cfg.asinh_p_scale)
+        y_norm = (y_t - stats["y_mean"]) / stats["y_std"]
+        if not sanity_logged:
+            with torch.no_grad():
+                m = mask.unsqueeze(-1)
+                n_valid = m.sum().clamp(min=1).item()
+                y_norm_masked = y_norm * m
+                per_channel_mean = (y_norm_masked.sum(dim=(0, 1)) / n_valid).tolist()
+                centered_sq = ((y_norm - torch.tensor(per_channel_mean, device=y_norm.device)) ** 2) * m
+                per_channel_std = (centered_sq.sum(dim=(0, 1)) / n_valid).sqrt().tolist()
+            sanity_record = {
+                "event": "sanity_first_batch_y_norm",
+                "asinh_p_scale": cfg.asinh_p_scale,
+                "y_norm_mean_per_channel": per_channel_mean,
+                "y_norm_std_per_channel": per_channel_std,
+            }
+            append_metrics_jsonl(metrics_jsonl_path, sanity_record)
+            print(
+                "Sanity (first batch, masked) y_norm "
+                f"mean={['%.4f' % v for v in per_channel_mean]} "
+                f"std={['%.4f' % v for v in per_channel_std]} "
+                "[order: Ux, Uy, p]"
+            )
+            sanity_logged = True
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
             if cfg.loss == "mse":
@@ -537,7 +644,8 @@ for epoch in range(MAX_EPOCHS):
     if should_eval:
         model.eval()
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 asinh_p_scale=cfg.asinh_p_scale)
             for name, loader in val_loaders.items()
         }
         val_avg = aggregate_splits(split_metrics)
@@ -618,7 +726,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 asinh_p_scale=cfg.asinh_p_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -642,6 +751,7 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        recomputed_p_stats=recomputed_p_stats,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
