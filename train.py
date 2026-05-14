@@ -601,6 +601,8 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    swa_lr: float = 0.0  # SWALR target; 0 sentinel uses cfg.lr * 0.2 default
+    swa_start_frac: float = 0.0  # SWA start fraction; 0 sentinel uses 0.75 default
 
 
 cfg = sp.parse(Config)
@@ -738,10 +740,10 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
-swa_start_frac = 0.75
+swa_start_frac = cfg.swa_start_frac if cfg.swa_start_frac > 0 else 0.75
 swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
 swa_model = AveragedModel(model)
-swa_lr = cfg.lr * 0.2
+swa_lr = cfg.swa_lr if cfg.swa_lr > 0 else cfg.lr * 0.2
 swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
 print(
     f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
