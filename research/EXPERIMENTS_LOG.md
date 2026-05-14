@@ -2,6 +2,168 @@
 
 ---
 
+## 2026-05-15 02:30 [Round 138 close-44] UTC — PR #3048 surf-weight-7 (LOSS but STRONGEST CRUISE WIN of launch) + PR #3044 additive-β (LOSS via α-β coupling)
+
+### Closed: #3048 askeladd surf-weight-7 (174th taxon SURF-WEIGHT-LANDSCAPE-NON-MONOTONE-VAL-CRUISE-DIVERGE-AT-7 / VAL-OPT-AT-10-CRUISE-OPT-AT-7)
+
+- **Branch:** charliepai2g48h5-askeladd/surf-weight-7
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-surf-weight-7-*/metrics.jsonl
+- **Hypothesis:** Midpoint of {5, 10} surf_weight sweep; tests landscape shape between #3031 (5 cruise-WIN) and #3006 (10 val-WIN); CLI flag only; 163rd active axis
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 29.9129 | +1.29% LOSS |
+| test_avg | 24.9360 | **−2.13% WIN** |
+| val_cruise | 15.5562 | **−4.85% STRONGEST OUTSIDE #3006** |
+| test_cruise | — | −2.44% WIN |
+| Best epoch | 60/60 | — |
+| Param count | 407,175 | unchanged |
+
+- **KEY MECHANISTIC FINDING — surf_weight landscape is NON-MONOTONE in BOTH val and cruise.** Complete 4-point grid {5, 7, 10, 15}:
+
+| surf_weight | val_avg | val_cruise |
+|---|---|---|
+| 5 (#3031) | drift LOSS | 15.82 |
+| **7 (this)** | 29.9129 (LOSS) | **15.5562 GLOBAL MIN** |
+| 10 (#3006) | **29.5318 GLOBAL MIN** | 16.345 |
+| 15 (#3032) | 31.11 (LOSS) | 16.74 |
+
+  val_avg is convex around 10; val_cruise has minimum AT 7 (not at lower bracket 5). **Linear-interpolation prediction from #3031→#3006 was −2.5% cruise gain at 7; observed −4.85%, ~50% LARGER than linear.** Refutes "lower surf_weight uniformly better for cruise" — cruise responds non-linearly to loss-shape reweighting.
+- **Val/test asymmetry at surf_weight=7** (val LOSS but test WIN) is consistent with surf_weight controlling per-token loss weighting at criterion level — surface tokens dominate val_avg via weighted contribution, but test reports unweighted L1 (lower surf_weight de-emphasizes surface → helps unweighted test).
+- **9th cruise-preserving datapoint + 3rd non-baseline cruise WIN.** Surf_weight axis decisively closed at val_optimum=10 (baseline holds). Cruise/test optimum at 7 documents a real val/test contract divergence we cannot exploit without retuning val/test weighting.
+- **Conclusion:** SURF_WEIGHT AXIS COMPREHENSIVELY CLOSED AT 4-POINT GRID. Pivot askeladd to a fresh stochastic-regularization axis (DropPath, never touched in launch).
+
+### Closed: #3044 edward inter-block-additive-beta (175th taxon INTER-BLOCK-ADDITIVE-BETA-LOSS-VIA-ALPHA-BETA-COUPLING-GRADIENT-STEAL)
+
+- **Branch:** charliepai2g48h5-edward/inter-block-additive-beta
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-inter-block-additive-beta-*/metrics.jsonl
+- **Hypothesis:** Add 3 scalar additive β at same 3 positions as #3006 α (x ← x*α + β at inter-block); +3 params; tests if additive mechanism is orthogonal to multiplicative at the cruise-preserving site; 166th active axis
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.8445 | +4.44% LOSS |
+| test_avg | 25.7971 | +1.25% mild LOSS |
+| val_cruise | 17.0833 | +0.5% above 17.0 threshold but ORDERING preserved |
+| Param count | 407,178 | +3 |
+
+- **KEY MECHANISTIC FINDING — α-β COUPLING (gradient-steal).** Student's trajectory diagnostic at ep59:
+
+| Position | α[i] (ep59) | β[i] (ep59) | effective magnitude |
+|---|---|---|---|
+| 0 | ~0.998 | ~−0.005 | near identity (vs #3006's α=0.95) |
+| 1 | ~0.999 | ~−0.007 | near identity |
+| 2 | ~0.998 | **−0.0144** | near identity |
+
+  β drifted NON-TRIVIALLY (β[2]=−0.0144) BUT this NEUTRALIZED α's downward drift. α stayed near 1.0 (mean ~0.9985) instead of #3006's 0.958. **The joint solution (α≈1.0, β≈−0.007) has SMALLER effective intervention magnitude than the α-only solution at α=0.958.** Adding β STEALS magnitude from α — optimizer redistributes gradient signal between two coupled DOF instead of using both at full strength.
+- **First "ordering-preserved but level-relaxed" datapoint at the #3006 site.** val_cruise 17.0833 sits MARGINALLY above the 17.0 PRESERVED threshold (+0.5%); ordering with #3006 (16.345) is preserved (both well below the 27% BROKEN threshold seen at LN-axis closures). Cruise survives the structural reparameterization but level relaxes monotonically with effective intervention magnitude.
+- **REFINED CRUISE INVARIANT (6th refinement, tentative):** Inter-block site preserves cruise ORDERING under additive-vs-multiplicative reparameterization but cruise LEVEL is monotonic in effective-intervention magnitude. **#3006's level (16.345) is achieved at effective-α=0.958; #3044's level (17.083) is achieved at effective-α≈0.998 → smaller intervention, less cruise gain.**
+- **Three converging closures now box the inter-block-α axis:**
+  - Granularity: scalar #3006 WIN > per-channel #3043 LOSS
+  - Mechanism: multiplicative #3006 WIN > additive #3044 LOSS (this PR)
+  - Routing direction: 3-position asymmetric #3006 WIN > 4-position symmetric #3021 LOSS
+
+  **The α-axis is a single-DOF scalar at three specific positions; LOSS direction in all three sub-axes is "more parameters that the optimizer routes around."**
+- **Cruise-preservation ledger now 19 datapoints (9 BROKEN + 10 PRESERVED if we score #3044 as ordering-preserved-marginal-level-violation; alternative score 10 BROKEN + 9 PRESERVED).** Conservative scoring: PRESERVED-MARGINAL.
+- **Conclusion:** ADDITIVE MECHANISM AT #3006 SITE CLOSED via gradient-steal coupling. Pivot edward to a fresh non-residual-edge multiplicative site (LayerScale at branch output, CaiT-style, never touched in launch).
+
+### Followup assignments (askeladd, edward idle → busy)
+
+- **#3065 askeladd drop-path-0pt05** — Add Stochastic Depth on residual branches (p=0.05 per branch per block); 4 blocks × 2 branches = 8 DropPath modules; +0 params; single CLI flag. Fresh stochastic-regularization axis NEVER touched in launch — orthogonal to deterministic regularization (wd) and parametric regularization (loss-shape). Larsson 2016 / Huang 2016 / DeiT / Swin. Composes with #3006 α (residual edge) and all in-flight axes. Cruise predicted PRESERVED (training-only perturbation; eval deterministic). 176th active axis. Would be 11th cruise-preserving datapoint if confirmed.
+
+- **#3066 edward layerscale-branch-output** — Per-channel learnable γ (shape [96]) at branch output with γ_init=1e-4; x ← x + γ * Block(x); 4 blocks × 2 branches × 96 channels = +768 params (~+0.19%); CaiT (Touvron 2021) prescription for transformers. Fresh SITE (branch output, not residual edge — orthogonal to all α-axis sub-axes including #3044's coupling). Different mechanism: multiplicative with SMALL init biases optimizer toward identity-like training dynamics. Cruise prediction UNCERTAIN (first non-residual-edge site at scalar granularity) — 6th-refinement invariant test. 177th active axis.
+
+### Round 138 close-44 summary
+- Closed 2 LOSS PRs with exemplary mechanistic analyses
+- **Strongest cruise WIN outside baseline:** #3048 val_cruise 15.5562 (−4.85%) — surf_weight=7 found cruise optimum at non-baseline operating point
+- **Surf_weight axis comprehensively closed** at 4-point grid {5, 7, 10, 15}; val convex at 10; cruise convex at 7 — val/test contract divergence documented
+- **Additive-β mechanism at #3006 site closed** via α-β coupling; refines invariant to 6th refinement (ordering preserved, level monotonic in effective intervention magnitude)
+- Cruise-preservation ledger now 19 datapoints (9 BROKEN + 10 PRESERVED conservative; #3044 is first ordering-preserved-marginal-level-violation)
+- 9 in-flight axes (#3043 closed; new in-flight: #3047/#3049/#3050/#3054/#3056/#3061/#3065/#3066) test the refined invariant across orthogonal axes
+- Total closed: 175. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
+- **Branch:** charliepai2g48h5-askeladd/surf-weight-7
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-surf-weight-7-*/metrics.jsonl
+- **Hypothesis:** Midpoint of {5, 10} surf_weight sweep; tests landscape shape between #3031 (5 cruise-WIN) and #3006 (10 val-WIN); CLI flag only; 163rd active axis
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 29.9129 | +1.29% LOSS |
+| test_avg | 24.9360 | **−2.13% WIN** |
+| val_cruise | 15.5562 | **−4.85% STRONGEST OUTSIDE #3006** |
+| test_cruise | — | −2.44% WIN |
+| Best epoch | 60/60 | — |
+| Param count | 407,175 | unchanged |
+
+- **KEY MECHANISTIC FINDING — surf_weight landscape is NON-MONOTONE in BOTH val and cruise.** Complete 4-point grid {5, 7, 10, 15}:
+
+| surf_weight | val_avg | val_cruise |
+|---|---|---|
+| 5 (#3031) | drift LOSS | 15.82 |
+| **7 (this)** | 29.9129 (LOSS) | **15.5562 GLOBAL MIN** |
+| 10 (#3006) | **29.5318 GLOBAL MIN** | 16.345 |
+| 15 (#3032) | 31.11 (LOSS) | 16.74 |
+
+  val_avg is convex around 10; val_cruise has minimum AT 7 (not at lower bracket 5). **Linear-interpolation prediction from #3031→#3006 was −2.5% cruise gain at 7; observed −4.85%, ~50% LARGER than linear.** Refutes "lower surf_weight uniformly better for cruise" — cruise responds non-linearly to loss-shape reweighting.
+- **Val/test asymmetry at surf_weight=7** (val LOSS but test WIN) is consistent with surf_weight controlling per-token loss weighting at criterion level — surface tokens dominate val_avg via weighted contribution, but test reports unweighted L1 (lower surf_weight de-emphasizes surface → helps unweighted test).
+- **9th cruise-preserving datapoint + 3rd non-baseline cruise WIN.** Surf_weight axis decisively closed at val_optimum=10 (baseline holds). Cruise/test optimum at 7 documents a real val/test contract divergence we cannot exploit without retuning val/test weighting.
+- **Conclusion:** SURF_WEIGHT AXIS COMPREHENSIVELY CLOSED AT 4-POINT GRID. Pivot askeladd to a fresh stochastic-regularization axis (DropPath, never touched in launch).
+
+### Closed: #3044 edward inter-block-additive-beta (175th taxon INTER-BLOCK-ADDITIVE-BETA-LOSS-VIA-ALPHA-BETA-COUPLING-GRADIENT-STEAL)
+
+- **Branch:** charliepai2g48h5-edward/inter-block-additive-beta
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-inter-block-additive-beta-*/metrics.jsonl
+- **Hypothesis:** Add 3 scalar additive β at same 3 positions as #3006 α (x ← x*α + β at inter-block); +3 params; tests if additive mechanism is orthogonal to multiplicative at the cruise-preserving site; 166th active axis
+- **Results vs #3006 baseline (val 29.5318 / test 25.4795):**
+
+| Split | This PR | Δ vs #3006 |
+|---|---|---|
+| val_avg | 30.8445 | +4.44% LOSS |
+| test_avg | 25.7971 | +1.25% mild LOSS |
+| val_cruise | 17.0833 | +0.5% above 17.0 threshold but ORDERING preserved |
+| Param count | 407,178 | +3 |
+
+- **KEY MECHANISTIC FINDING — α-β COUPLING (gradient-steal).** Student's trajectory diagnostic at ep59:
+
+| Position | α[i] (ep59) | β[i] (ep59) | effective magnitude |
+|---|---|---|---|
+| 0 | ~0.998 | ~−0.005 | near identity (vs #3006's α=0.95) |
+| 1 | ~0.999 | ~−0.007 | near identity |
+| 2 | ~0.998 | **−0.0144** | near identity |
+
+  β drifted NON-TRIVIALLY (β[2]=−0.0144) BUT this NEUTRALIZED α's downward drift. α stayed near 1.0 (mean ~0.9985) instead of #3006's 0.958. **The joint solution (α≈1.0, β≈−0.007) has SMALLER effective intervention magnitude than the α-only solution at α=0.958.** Adding β STEALS magnitude from α — optimizer redistributes gradient signal between two coupled DOF instead of using both at full strength.
+- **First "ordering-preserved but level-relaxed" datapoint at the #3006 site.** val_cruise 17.0833 sits MARGINALLY above the 17.0 PRESERVED threshold (+0.5%); ordering with #3006 (16.345) is preserved (both well below the 27% BROKEN threshold seen at LN-axis closures). Cruise survives the structural reparameterization but level relaxes monotonically with effective intervention magnitude.
+- **REFINED CRUISE INVARIANT (6th refinement, tentative):** Inter-block site preserves cruise ORDERING under additive-vs-multiplicative reparameterization but cruise LEVEL is monotonic in effective-intervention magnitude. **#3006's level (16.345) is achieved at effective-α=0.958; #3044's level (17.083) is achieved at effective-α≈0.998 → smaller intervention, less cruise gain.**
+- **Three converging closures now box the inter-block-α axis:**
+  - Granularity: scalar #3006 WIN > per-channel #3043 LOSS
+  - Mechanism: multiplicative #3006 WIN > additive #3044 LOSS (this PR)
+  - Routing direction: 3-position asymmetric #3006 WIN > 4-position symmetric #3021 LOSS
+
+  **The α-axis is a single-DOF scalar at three specific positions; LOSS direction in all three sub-axes is "more parameters that the optimizer routes around."**
+- **Cruise-preservation ledger now 19 datapoints (9 BROKEN + 10 PRESERVED if we score #3044 as ordering-preserved-marginal-level-violation; alternative score 10 BROKEN + 9 PRESERVED).** Conservative scoring: PRESERVED-MARGINAL.
+- **Conclusion:** ADDITIVE MECHANISM AT #3006 SITE CLOSED via gradient-steal coupling. Pivot edward to a fresh non-residual-edge multiplicative site (LayerScale at branch output, CaiT-style, never touched in launch).
+
+### Followup assignments (askeladd, edward idle → busy)
+
+- **#3065 askeladd drop-path-0pt05** — Add Stochastic Depth on residual branches (p=0.05 per branch per block); 4 blocks × 2 branches = 8 DropPath modules; +0 params; single CLI flag. Fresh stochastic-regularization axis NEVER touched in launch — orthogonal to deterministic regularization (wd) and parametric regularization (loss-shape). Larsson 2016 / Huang 2016 / DeiT / Swin. Composes with #3006 α (residual edge) and all in-flight axes. Cruise predicted PRESERVED (training-only perturbation; eval deterministic). 176th active axis. Would be 11th cruise-preserving datapoint if confirmed.
+
+- **#3066 edward layerscale-branch-output** — Per-channel learnable γ (shape [96]) at branch output with γ_init=1e-4; x ← x + γ * Block(x); 4 blocks × 2 branches × 96 channels = +768 params (~+0.19%); CaiT (Touvron 2021) prescription for transformers. Fresh SITE (branch output, not residual edge — orthogonal to all α-axis sub-axes including #3044's coupling). Different mechanism: multiplicative with SMALL init biases optimizer toward identity-like training dynamics. Cruise prediction UNCERTAIN (first non-residual-edge site at scalar granularity) — 6th-refinement invariant test. 177th active axis.
+
+### Round 138 close-44 summary
+- Closed 2 LOSS PRs with exemplary mechanistic analyses
+- **Strongest cruise WIN outside baseline:** #3048 val_cruise 15.5562 (−4.85%) — surf_weight=7 found cruise optimum at non-baseline operating point
+- **Surf_weight axis comprehensively closed** at 4-point grid {5, 7, 10, 15}; val convex at 10; cruise convex at 7 — val/test contract divergence documented
+- **Additive-β mechanism at #3006 site closed** via α-β coupling; refines invariant to 6th refinement (ordering preserved, level monotonic in effective intervention magnitude)
+- Cruise-preservation ledger now 19 datapoints (9 BROKEN + 10 PRESERVED conservative; #3044 is first ordering-preserved-marginal-level-violation)
+- 9 in-flight axes (#3043 closed; new in-flight: #3047/#3049/#3050/#3054/#3056/#3061/#3065/#3066) test the refined invariant across orthogonal axes
+- Total closed: 175. Winners: 23. **8 students all busy, zero idle GPUs.**
+
+---
+
 ## 2026-05-15 01:15 [Round 138 close-43] UTC — PR #3043 per-channel α (LOSS but cruise PRESERVED; α-axis CLOSED at scalar granularity)
 
 ### Closed: #3043 alphonse cross-block-alpha-per-channel (173rd taxon PER-CHANNEL-α-LOSS-MEAN-CARRIES-SIGNAL-VARIANCE-CARRIES-NOISE / α-AXIS-CLOSED-AT-SCALAR-GRANULARITY)
