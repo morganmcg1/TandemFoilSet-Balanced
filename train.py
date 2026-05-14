@@ -505,6 +505,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # H87: per-epoch camber-difficulty curriculum sampler. 0 disables.
+    curriculum_warmup_epochs: int = 4
+    curriculum_strength: float = 3.0
 
 
 cfg = sp.parse(Config)
@@ -520,13 +523,68 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+# H87: camber-difficulty curriculum — precompute per-sample difficulty score
+# from RAW x features (loader returns un-normalized x). Dim 13=log(Re),
+# 15=NACA foil1 camber, 22=gap, 23=stagger. The score targets the camber_rc
+# OOD axis (unseen front-foil camber M=6-8) by downweighting high-camber
+# tandem-at-extreme-Re samples during the first curriculum_warmup_epochs.
+def _h87_compute_difficulty_scores(dataset) -> torch.Tensor:
+    scores = []
+    iter_bar = tqdm(range(len(dataset)), desc="[H87] difficulty scores")
+    for i in iter_bar:
+        s = torch.load(dataset.files[i], weights_only=True)
+        x = s["x"]  # [N, 24] raw
+        camber1 = float(x[0, 15].item())
+        log_re = float(x[0, 13].item())
+        gap = float(x[0, 22].item())
+        stagger = float(x[0, 23].item())
+        gap_present = (gap != 0.0) or (stagger != 0.0)
+        difficulty = (
+            camber1 * 2.0
+            + max(0.0, abs(log_re - 13.5) / 4.0)
+            + (1.0 if gap_present else 0.0)
+        )
+        scores.append(difficulty)
+    return torch.tensor(scores, dtype=torch.float64)
+
+
+def _h87_curriculum_weights(diff: torch.Tensor, epoch: int,
+                            warmup_epochs: int, strength: float) -> torch.Tensor:
+    if warmup_epochs <= 0 or epoch >= warmup_epochs:
+        return torch.ones_like(diff)
+    alpha = epoch / warmup_epochs
+    return 1.0 / (1.0 + diff * (1.0 - alpha) * strength)
+
+
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
+    difficulty_scores = None
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    difficulty_scores = _h87_compute_difficulty_scores(train_ds)
+    # H87 initial weights (epoch 0): apply curriculum at peak downweighting
+    init_cur_w = _h87_curriculum_weights(
+        difficulty_scores, epoch=0,
+        warmup_epochs=cfg.curriculum_warmup_epochs,
+        strength=cfg.curriculum_strength,
+    )
+    init_final_w = sample_weights * init_cur_w
+    sampler = WeightedRandomSampler(init_final_w, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
+    # Difficulty distribution summary (logged once, before training).
+    d_arr = difficulty_scores.numpy()
+    print(
+        f"[H87] difficulty: n={len(d_arr)}, min={d_arr.min():.3f}, "
+        f"max={d_arr.max():.3f}, mean={d_arr.mean():.3f}, "
+        f"q25={float(torch.quantile(difficulty_scores, 0.25)):.3f}, "
+        f"q50={float(torch.quantile(difficulty_scores, 0.50)):.3f}, "
+        f"q75={float(torch.quantile(difficulty_scores, 0.75)):.3f}"
+    )
+    print(
+        f"[H87] curriculum: warmup_epochs={cfg.curriculum_warmup_epochs}, "
+        f"strength={cfg.curriculum_strength}"
+    )
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -675,6 +733,23 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+if difficulty_scores is not None:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "h87_difficulty_distribution",
+        "n": int(len(difficulty_scores)),
+        "min": float(difficulty_scores.min()),
+        "max": float(difficulty_scores.max()),
+        "mean": float(difficulty_scores.mean()),
+        "std": float(difficulty_scores.std()),
+        "q10": float(torch.quantile(difficulty_scores, 0.10)),
+        "q25": float(torch.quantile(difficulty_scores, 0.25)),
+        "q50": float(torch.quantile(difficulty_scores, 0.50)),
+        "q75": float(torch.quantile(difficulty_scores, 0.75)),
+        "q90": float(torch.quantile(difficulty_scores, 0.90)),
+        "warmup_epochs": cfg.curriculum_warmup_epochs,
+        "strength": cfg.curriculum_strength,
+    })
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -696,6 +771,35 @@ for epoch in range(MAX_EPOCHS):
         f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
         f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
     )
+
+    # H87: update sampler weights with the current epoch's curriculum factor.
+    # Mutate the existing sampler's .weights in place so we don't recycle the
+    # DataLoader's persistent workers each epoch.
+    if difficulty_scores is not None:
+        cur_w = _h87_curriculum_weights(
+            difficulty_scores, epoch=epoch,
+            warmup_epochs=cfg.curriculum_warmup_epochs,
+            strength=cfg.curriculum_strength,
+        )
+        h87_final_w = sample_weights * cur_w
+        sampler.weights = h87_final_w
+        h87_alpha = (
+            min(1.0, epoch / max(1, cfg.curriculum_warmup_epochs))
+            if cfg.curriculum_warmup_epochs > 0 else 1.0
+        )
+        # Diagnostic: effective weight on hardest-quartile samples vs full mean.
+        with torch.no_grad():
+            top_q = float(torch.quantile(difficulty_scores, 0.75))
+            hard_mask = difficulty_scores >= top_q
+            easy_mask = difficulty_scores <= float(torch.quantile(difficulty_scores, 0.25))
+            hard_mean_w = float(h87_final_w[hard_mask].mean())
+            easy_mean_w = float(h87_final_w[easy_mask].mean())
+        print(
+            f"[H87] Epoch {epoch+1}: cur_w in [{float(cur_w.min()):.3f}, {float(cur_w.max()):.3f}], "
+            f"final_w hard_q4_mean={hard_mean_w:.5f}, easy_q1_mean={easy_mean_w:.5f}, "
+            f"hard/easy ratio={hard_mean_w / max(easy_mean_w, 1e-12):.3f} "
+            f"(alpha={h87_alpha:.3f})"
+        )
 
     t0 = time.time()
     model.train()
@@ -768,7 +872,7 @@ for epoch in range(MAX_EPOCHS):
     freqs_lr = optimizer.param_groups[1]["lr"]
     layer_scale_lr = optimizer.param_groups[2]["lr"]
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -788,7 +892,20 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if difficulty_scores is not None:
+        epoch_record.update({
+            # H87: curriculum sampler state for this epoch.
+            "train/h87_warmup_epochs": cfg.curriculum_warmup_epochs,
+            "train/h87_strength": cfg.curriculum_strength,
+            "train/h87_alpha": h87_alpha,
+            "train/h87_cur_w_min": float(cur_w.min()),
+            "train/h87_cur_w_max": float(cur_w.max()),
+            "train/h87_hard_q4_mean_w": hard_mean_w,
+            "train/h87_easy_q1_mean_w": easy_mean_w,
+            "train/h87_hard_over_easy_ratio": hard_mean_w / max(easy_mean_w, 1e-12),
+        })
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
