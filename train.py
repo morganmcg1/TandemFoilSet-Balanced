@@ -83,7 +83,12 @@ class MLP(nn.Module):
 
 
 class SwiGLUMLP(nn.Module):
-    """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * W_value x).
+    """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * gelu(W_value x)).
+
+    Round-119 (#2893): GELU activation applied to the up-projection (was linear).
+    Smooth-activation bracket vs. #2875 ReLU² LOSS — isolates "is up-proj non-linearity
+    the problem?" from "is hard-sparsity the problem?" by replacing the linear up-path
+    with a smooth, everywhere-differentiable nonlinearity.
 
     Param-matched vs. MLP(d, d*mlp_ratio, d): hidden = round(d*mlp_ratio*2/3)
     snapped to a multiple of 8 for tensor-core alignment. 3 matrices of
@@ -98,10 +103,11 @@ class SwiGLUMLP(nn.Module):
         self.linear_value = nn.Linear(n_input, hidden_swiglu)
         self.linear_out = nn.Linear(hidden_swiglu, n_output)
         self.act_fn = act_fn
+        self.up_act_fn = F.gelu  # #2893: smooth nonlinearity on up-projection
 
     def forward(self, x):
         gate = self.act_fn(self.linear_gate(x))
-        value = self.linear_value(x)
+        value = self.up_act_fn(self.linear_value(x))
         return self.linear_out(gate * value)
 
 
@@ -574,6 +580,11 @@ print(
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
+print(
+    "SwiGLU up-projection activation: GELU (was: linear). #2875 ReLU² LOSS bracket test: "
+    "smooth-nonlinearity bracket (no hard-zero region, no quadratic amplification). "
+    "baseline to beat: val_avg/mae_surf_p < 30.5605 (#2879 mlp_ratio=3)"
+)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -969,9 +980,11 @@ if best_metrics:
             with torch.no_grad():
                 gate_pre = module.linear_gate(x)
                 gate_post = module.act_fn(gate_pre).detach().float()
-                value = module.linear_value(x).detach().float()
+                # #2893: linear_value followed by GELU — mirror module.forward
+                up_pre = module.linear_value(x)
+                up_post = module.up_act_fn(up_pre).detach().float()
                 flat_g = gate_post.flatten()
-                flat_v = value.flatten()
+                flat_v = up_post.flatten()
                 # Correlation in a fixed-size random subsample to avoid GPU OOM
                 # on big meshes (242K nodes × 128 hidden = 31M elements).
                 n_sub = min(flat_g.numel(), 200_000)
@@ -989,8 +1002,13 @@ if best_metrics:
                     "gate_std": float(gate_post.std().cpu()),
                     "gate_abs_mean": float(gate_post.abs().mean().cpu()),
                     "gate_zero_frac": float((gate_post.abs() < 0.01).float().mean().cpu()),
-                    "value_abs_mean": float(value.abs().mean().cpu()),
+                    "value_abs_mean": float(up_post.abs().mean().cpu()),
                     "gate_value_corr": corr,
+                    # #2893: up-projection (post-GELU) diagnostics — critical vs #2875 ReLU²
+                    "up_act_zero_frac": float((up_post.abs() < 0.01).float().mean().cpu()),
+                    "up_act_mean": float(up_post.mean().cpu()),
+                    "up_act_std": float(up_post.std().cpu()),
+                    "up_act_max": float(up_post.max().cpu()),
                 }))
         return _hook
 
@@ -1015,7 +1033,11 @@ if best_metrics:
             f"std={_stats['gate_std']:.4f}  abs_mean={_stats['gate_abs_mean']:.4f}  "
             f"zero_frac={_stats['gate_zero_frac']:.4f}  "
             f"value_abs_mean={_stats['value_abs_mean']:.4f}  "
-            f"corr(gate,value)={_stats['gate_value_corr']:.4f}"
+            f"corr(gate,up)={_stats['gate_value_corr']:.4f}  "
+            f"up_act[zero_frac={_stats['up_act_zero_frac']:.4f} "
+            f"mean={_stats['up_act_mean']:.4f} "
+            f"std={_stats['up_act_std']:.4f} "
+            f"max={_stats['up_act_max']:.4f}]"
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
