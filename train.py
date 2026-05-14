@@ -380,6 +380,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    surf_std_weight: float = 0.0  # λ for variance-penalty term on surface loss (0 = baseline L1)
     epochs: int = 50
     loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -473,6 +474,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    epoch_surf_std = 0.0
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -497,6 +499,13 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            surf_std_term = torch.zeros((), device=surf_loss.device, dtype=surf_loss.dtype)
+            if cfg.surf_std_weight > 0.0:
+                # Variance-penalized surface loss: + λ * std(|err|) over surface nodes × channels.
+                # std is computed on absolute residuals regardless of cfg.loss (intended for L1).
+                surf_abs_err = (pred - y_norm).abs()[surf_mask]  # [n_surf, 3]
+                surf_std_term = surf_abs_err.std(unbiased=False)
+                surf_loss = surf_loss + cfg.surf_std_weight * surf_std_term
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -506,10 +515,12 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_std += surf_std_term.item() if cfg.surf_std_weight > 0.0 else 0.0
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_std /= max(n_batches, 1)
 
     # --- Validate ---
     should_eval = ((epoch + 1) % cfg.eval_every == 0) or ((epoch + 1) == MAX_EPOCHS)
@@ -543,6 +554,7 @@ for epoch in range(MAX_EPOCHS):
             "peak_memory_gb": peak_gb,
             "train/vol_loss": epoch_vol,
             "train/surf_loss": epoch_surf,
+            "train/surf_std_raw": epoch_surf_std,
             "train/lr_end_of_epoch": current_lr,
             "val_avg/mae_surf_p": avg_surf_p,
             "val_splits": split_metrics,
@@ -567,6 +579,7 @@ for epoch in range(MAX_EPOCHS):
             "peak_memory_gb": peak_gb,
             "train/vol_loss": epoch_vol,
             "train/surf_loss": epoch_surf,
+            "train/surf_std_raw": epoch_surf_std,
             "train/lr_end_of_epoch": current_lr,
             "val_avg/mae_surf_p": None,  # skipped
             "is_best": False,
