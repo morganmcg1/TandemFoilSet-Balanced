@@ -270,6 +270,16 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Zero-init the final output projection (DiT/fixup-style head-zero recipe).
+        # Pairs with LayerScale γ=1e-4 body init: at step 0, body is near-identity AND
+        # head outputs exactly 0, so step-0 model output is 0 everywhere — no wasted
+        # early gradient pushing arbitrary Kaiming-init noise toward zero.
+        # Final head = last TransolverBlock.mlp2[-1] (Linear(hidden_dim, out_dim)).
+        _final_head = self.blocks[-1].mlp2[-1]
+        nn.init.zeros_(_final_head.weight)
+        if _final_head.bias is not None:
+            nn.init.zeros_(_final_head.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -575,6 +585,21 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# Head zero-init diagnostic: confirm the final output projection is zeroed at step 0.
+# Pairs with LayerScale γ=1e-4 body init for DiT/fixup-style zero-init recipe.
+_final_head_layer = model.blocks[-1].mlp2[-1]
+_head_w_norm_init = _final_head_layer.weight.detach().float().norm().item()
+_head_b_norm_init = (
+    _final_head_layer.bias.detach().float().norm().item()
+    if _final_head_layer.bias is not None else float("nan")
+)
+print(
+    f"Head zero-init: final projection = blocks[-1].mlp2[-1] (Linear({model_config['n_hidden']}->{model_config['out_dim']})); "
+    f"weight.norm at step 0 = {_head_w_norm_init:.6f} (expect 0); "
+    f"bias.norm at step 0 = {_head_b_norm_init:.6f} (expect 0); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -675,6 +700,42 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+
+# Head zero-init forward-pass sanity check: feed one train batch and confirm
+# step-0 model output magnitude is ~0 (body LayerScale γ=1e-4 + head zeros).
+_head_step0_output_mag = None
+try:
+    _inner_for_check = getattr(model, "_orig_mod", model)
+    _final_head_layer = _inner_for_check.blocks[-1].mlp2[-1]
+    _check_w_norm = _final_head_layer.weight.detach().float().norm().item()
+    _check_b_norm = (
+        _final_head_layer.bias.detach().float().norm().item()
+        if _final_head_layer.bias is not None else float("nan")
+    )
+    model.eval()
+    with torch.no_grad():
+        _xc, _yc, _isc, _maskc = next(iter(train_loader))
+        _xc = _xc.to(device, non_blocking=True)
+        _maskc = _maskc.to(device, non_blocking=True)
+        with amp_ctx_factory():
+            _x_norm_c = (_xc - stats["x_mean"]) / stats["x_std"]
+            _pred_init = model({"x": _x_norm_c, "mask": _maskc})["preds"]
+        _head_step0_output_mag = _pred_init.detach().float().abs().mean().item()
+    model.train()
+    print(
+        f"Head zero-init forward-pass check: weight.norm={_check_w_norm:.6f} bias.norm={_check_b_norm:.6f}; "
+        f"step-0 model output |.|.mean = {_head_step0_output_mag:.6e} (expect ~0, threshold ≤ 1e-5)"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "head_zero_init_diagnostic",
+        "final_head_module": "blocks[-1].mlp2[-1]",
+        "head_weight_norm_init": _check_w_norm,
+        "head_bias_norm_init": _check_b_norm,
+        "step0_output_abs_mean": _head_step0_output_mag,
+    })
+except Exception as _hzi_err:
+    print(f"Head zero-init forward-pass check skipped: {_hzi_err!r}")
+
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -740,6 +801,14 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # Head trajectory: how fast does the zero-init final projection grow?
+    _inner_ep = getattr(model, "_orig_mod", model)
+    _head_layer_ep = _inner_ep.blocks[-1].mlp2[-1]
+    _head_w_norm_ep = _head_layer_ep.weight.detach().float().norm().item()
+    _head_b_norm_ep = (
+        _head_layer_ep.bias.detach().float().norm().item()
+        if _head_layer_ep.bias is not None else float("nan")
+    )
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +821,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "head_weight_norm": _head_w_norm_ep,
+        "head_bias_norm": _head_b_norm_ep,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
