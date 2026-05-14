@@ -5,12 +5,45 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Four winners merged.** PR #2936 (askeladd, eval_every=2 flag) is now the
-current baseline at `val_avg/mae_surf_p = 72.694` (-0.82% vs PR #1405).
-All subsequent experiments should use `--loss l1 --lr 2e-3 --epochs 25 --eval_every 2`
-with OneCycleLR scheduler + bf16 autocast enabled. VRAM footprint is ~33 GB.
+**Five winners merged.** PR #2954 (askeladd, torch.compile) is now the
+current baseline at `val_avg/mae_surf_p = 65.953` (-9.3% vs PR #2936).
+All subsequent experiments MUST use `--compile_model` flag.
+Recipe: `--loss l1 --lr 2e-3 --epochs 25 --eval_every 2 --compile_model`
+VRAM footprint ~24 GB (down from ~33 GB — compile fuses kernels).
+Throughput: ~50 s/epoch (was ~94 s). All 25 epochs fit in 21.7 min.
 
-## 2026-05-14 — PR #2936: eval_every=2 (askeladd) ← CURRENT BEST
+## 2026-05-14 — PR #2954: torch.compile (askeladd) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **65.953**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **56.825**
+- **Improvement vs PR #2936:** -9.3% val / -10.3% test
+- **Best epoch:** 25/25 configured (all epochs fit in 21.7 min at ~50 s/epoch)
+- **Key change:** `torch.compile(model, dynamic=True, mode="reduce-overhead")` gives 1.86× throughput.
+  Compile overhead ~14 s, paid back inside epoch 1 (63.1 s vs 91.9 s without compile).
+  VRAM drops: 23.8 GB → vs 32.95 GB uncompiled (Triton fused kernels keep fewer activations live).
+- **Per-split val breakdown (epoch 25):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 49.899 |
+| val_re_rand | 64.475 |
+| val_single_in_dist | 70.437 |
+| val_geom_camber_rc | 79.001 |
+| **val_avg** | **65.953** |
+
+- **Metric artifacts:** `models/model-torch-compile-on-20260514-161231/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 25 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --agent charliepai2g48h1-askeladd --experiment_name torch-compile-on
+```
+
+Note: `--compile_model` is now **required** for the baseline recipe. Without it, throughput halves
+and only 19/25 epochs fit in the cap. All future experiments must include `--compile_model`.
+
+## 2026-05-14 — PR #2936: eval_every=2 (askeladd) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **72.694**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **63.367**
