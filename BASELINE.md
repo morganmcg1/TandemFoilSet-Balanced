@@ -39,10 +39,41 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **30.0382** | #2964 | Lion lr=1.5e-4 + FiLM + SE block-3-only attn-pool + SwiGLU MLP + mlp_ratio=3 + **post-norm + γ=1.0** | ep60/60 (best=last); **−1.71% vs #2879** (30.5605); in_dist 25.219 rc 43.929 cruise 16.265 re_rand 34.740; **407,172 params** (−768 from #2879; LayerScale γ vectors removed) |
-| `test_avg/mae_surf_p` | **25.2099** | #2964 | — | test from best-val checkpoint ep60; **−4.93% vs #2879** (26.5160) — strong test improvement |
+| `val_avg/mae_surf_p` | **29.5318** | #3006 | post-norm γ=1.0 baseline + **3 learnable cross-block residual α scalars (between adjacent TransolverBlocks, after post-LN)** | ep60/60 (best=last); **−1.69% vs #2964** (30.0382); in_dist 24.283 rc 43.630 cruise 16.348 re_rand 33.866; **407,175 params** (+3 vs #2964; 3 α scalars between blocks 0→1, 1→2, 2→3); α drifted DOWN from 1.0 init to mean ~0.958 by ep60 (b0→b1=0.95, b1→b2=0.97, b2→b3=0.96) — uniform ~4% attenuation; **CRUISE BASIN PRESERVED** (16.348 flat vs #2964 16.265) |
+| `test_avg/mae_surf_p` | **25.2099** (HELD)** | #2964 | — | test from #3006 was 25.4795 mild LOSS +1.07% (test_in_dist +1.05%, test_rc +4.05% LOSS; test_cruise -3.41% WIN, test_re_rand -1.24% WIN); val-best reference frozen at #2964 25.2099 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 30.0382` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 29.5318` to be merged.
+
+## 2026-05-14 [Round 138] — PR #3006: cross-block residual α (3 learnable scalars between blocks): val WIN −1.69% / test mild LOSS +1.07% (NEW BEST val)
+
+- **Student:** charliepai2g48h5-alphonse
+- **Best epoch:** 60 of 60 (best=terminal; validation still improving at ep60; cosine LR fully consumed)
+- **Param count:** 407,175 (+3 vs #2964: three nn.Parameter scalars α₀, α₁, α₂ between adjacent TransolverBlocks)
+- **sec/epoch:** 30.27 s
+- **Total wall time:** 30.3 min
+- **Peak GPU memory:** 14.42 GB
+- **Topology:** Post-norm γ=1.0 (unchanged from #2964) + α scaling **AFTER post-LN** on non-final block outputs (b3 unscaled to keep head input scale). Mechanistic distinction from closed #2988 in-block γ: γ scales BEFORE post-LN (LN absorbs scale) vs α scales AFTER post-LN (LN cannot absorb — scale survives downstream).
+- **α convergence:** init 1.0; ep1 0.9993; ep10 1.0019; ep30 0.9502; ep60 **0.9583 mean** (~4% attenuation); per-position 0.95/0.97/0.96 (roughly uniform). Direction: DOWN from 1.0 (compressing block outputs into next block) — same direction as #2988 γ but **20× smaller magnitude** (~4% vs ~45%) and **opposite outcome** (WIN vs LOSS) — confirms the predicted "scale survives post-LN" mechanism.
+- **Cruise meta-signal:** PRESERVED — val_cruise 16.348 (+0.51% flat vs #2964 16.265). **First WIN post-#2964 with cruise basin preserved.** Confirms the hypothesis from #3003 close-30: training-time-preserving structural interventions preserve cruise.
+
+| Split | val mae_surf_p | Δ vs #2964 (30.0382) |
+|---|---|---|
+| `val_single_in_dist` | **24.283** | **−3.71% WIN** |
+| `val_geom_camber_rc` | **43.630** | **−0.68% WIN** |
+| `val_geom_camber_cruise` | 16.348 | +0.51% flat (PRESERVED) |
+| `val_re_rand` | **33.866** | **−2.52% WIN** |
+| **val_avg** | **29.5318** | **−1.69% WIN** |
+
+| Split | test mae_surf_p | Δ vs #2964 (25.2099) |
+|---|---|---|
+| `test_single_in_dist` | 22.939 | +1.05% mild LOSS |
+| `test_geom_camber_rc` | 41.253 | +4.05% LOSS |
+| `test_geom_camber_cruise` | **12.941** | **−3.41% WIN** |
+| `test_re_rand` | **24.786** | **−1.24% WIN** |
+| **test_avg** | **25.4795** | +1.07% mild LOSS |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-cross-block-residual-alpha-20260514-195917/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-alphonse --experiment_name "charliepai2g48h5-alphonse/cross-block-residual-alpha" --lr 1.5e-4 --weight_decay 3e-4 --epochs 60`
 
 ## 2026-05-14 [Round 138] — PR #2964: post-norm topology + LayerScale γ=1.0: val WIN −1.71% / test WIN −4.93% (NEW BEST)
 
