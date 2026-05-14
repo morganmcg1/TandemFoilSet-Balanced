@@ -20,9 +20,11 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -30,8 +32,9 @@ import torch.nn.functional as F
 import wandb
 import yaml
 from einops import rearrange
+from scipy.spatial import cKDTree
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -46,6 +49,152 @@ from data import (
     pad_collate,
 )
 
+
+# ---------------------------------------------------------------------------
+# Divergence-free auxiliary loss: KNN cache + gradient estimator
+# ---------------------------------------------------------------------------
+
+class IndexedDataset(Dataset):
+    """Wraps a base dataset, adding the sample index and precomputed KNN tensor."""
+
+    def __init__(self, base_ds: Dataset, knn_cache: list[torch.Tensor]):
+        self.base_ds = base_ds
+        self.knn_cache = knn_cache  # list of [N_i, K] CPU long tensors
+
+    def __len__(self):
+        return len(self.base_ds)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base_ds[idx]
+        return x, y, is_surface, self.knn_cache[idx]
+
+
+def indexed_pad_collate(batch):
+    """Pad variable-length mesh samples (including KNN indices) into a batch.
+
+    Returns (x, y, is_surface, mask, knn_idx). knn_idx is [B, N_max, K] long.
+    Padded KNN rows point to themselves so dx = positions[i] - positions[i] = 0
+    and the least-squares solve degenerates cleanly to G=0 (no singular matrix).
+    """
+    xs, ys, surfs, knns = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    K = knns[0].shape[1]
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    # Default KNN: each node points to itself K times -> dx=0 for padded rows.
+    self_idx = torch.arange(max_n, dtype=torch.long).unsqueeze(-1).expand(-1, K)
+    knn_pad = self_idx.unsqueeze(0).expand(B, -1, -1).contiguous()
+    for i, (x, y, sf, knn) in enumerate(zip(xs, ys, surfs, knns)):
+        n = x.shape[0]
+        x_pad[i, :n] = x
+        y_pad[i, :n] = y
+        surf_pad[i, :n] = sf
+        mask[i, :n] = True
+        knn_pad[i, :n] = knn
+    return x_pad, y_pad, surf_pad, mask, knn_pad
+
+
+def _build_knn_for_sample(args: tuple[int, str, int]) -> tuple[int, torch.Tensor]:
+    """Build [N, K] long tensor of KNN indices for one sample.
+
+    Loads only the positions from disk (dims 0-1 of x), builds cKDTree, queries
+    k+1 (to drop self), returns indices excluding self.
+    """
+    idx, path, k = args
+    s = torch.load(path, weights_only=True)
+    pos = s["x"][:, :2].numpy().astype(np.float32)
+    tree = cKDTree(pos, leafsize=32)
+    # k+1 because the closest point is the query itself
+    _, indices = tree.query(pos, k=k + 1, workers=1)
+    # indices: [N, k+1]. Drop self-column (typically idx 0, but use mask to be safe).
+    self_arr = np.arange(pos.shape[0])[:, None]
+    is_self = indices == self_arr  # [N, k+1]
+    # For each row, drop the self entry: keep the k columns that are not self.
+    # If self isn't found in the k+1 nearest (impossible w/ leafsize default), fall back to dropping col 0.
+    keep_mask = ~is_self
+    keep_counts = keep_mask.sum(axis=1)
+    if (keep_counts == k).all():
+        # Standard case: exactly one self entry per row
+        knn = indices[keep_mask].reshape(-1, k)
+    else:
+        # Defensive fallback (duplicate-position rows): drop col 0
+        knn = indices[:, 1:]
+    return idx, torch.from_numpy(knn.astype(np.int64))
+
+
+def build_knn_cache(base_ds, k: int, max_workers: int = 8) -> list[torch.Tensor]:
+    """Build a list of [N_i, K] long tensors, one per sample in base_ds."""
+    files = [str(p) for p in base_ds.files]
+    cache: list[torch.Tensor | None] = [None] * len(files)
+    args_iter = [(i, p, k) for i, p in enumerate(files)]
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for idx, knn in tqdm(pool.map(_build_knn_for_sample, args_iter),
+                              total=len(files), desc=f"KNN k={k}"):
+            cache[idx] = knn
+    return cache  # type: ignore[return-value]
+
+
+def compute_velocity_divergence(
+    positions: torch.Tensor,   # [B, N, 2] physical coordinates
+    velocities: torch.Tensor,  # [B, N, 2] physical-scale Ux, Uy
+    knn_indices: torch.Tensor, # [B, N, K] long
+) -> torch.Tensor:             # returns [B, N] divergence
+    """KNN least-squares estimator of div(u) on irregular meshes.
+
+    For each node, fits ∇u ∈ R^{2x2} from neighbor displacements via the normal
+    equations (dx^T dx) G = dx^T du. Forced to fp32 (autocast disabled) because
+    bf16 einsum loses precision on squared-distance accumulations and produces
+    NaN on near-degenerate neighborhoods. Divergence = trace(G).
+    """
+    B, N, K = knn_indices.shape
+
+    # Disable autocast so einsum and the 2x2 inversion run in fp32, not bf16.
+    with torch.amp.autocast(device_type="cuda", enabled=False):
+        positions_f32 = positions.float()
+        velocities_f32 = velocities.float()
+
+        # Gather neighbor positions and velocities. Reshape KNN to [B, N*K, 1]
+        # then broadcast to [B, N*K, 2] for a single gather along node dim.
+        idx_flat = knn_indices.reshape(B, N * K, 1)
+        pos_neighbors = positions_f32.gather(1, idx_flat.expand(-1, -1, 2)).reshape(B, N, K, 2)
+        vel_neighbors = velocities_f32.gather(1, idx_flat.expand(-1, -1, 2)).reshape(B, N, K, 2)
+
+        dx = pos_neighbors - positions_f32.unsqueeze(2)   # [B, N, K, 2]
+        du = vel_neighbors - velocities_f32.unsqueeze(2)  # [B, N, K, 2]
+
+        # Normal equations: (dx^T dx) G = dx^T du
+        AtA = torch.einsum('bnki,bnkj->bnij', dx, dx)  # [B, N, 2, 2]
+        Atb = torch.einsum('bnki,bnkj->bnij', dx, du)  # [B, N, 2, 2]
+
+        # Closed-form 2x2 inversion with Tikhonov regularization that scales
+        # with the matrix trace. Relative reg ε·trace dominates only when AtA
+        # is near-singular; floor at 1e-8 keeps fully-degenerate AtA invertible.
+        a = AtA[..., 0, 0]
+        b = AtA[..., 0, 1]
+        d = AtA[..., 1, 1]
+        eps = (1e-4 * (a + d)).clamp(min=1e-8)
+        a_reg = a + eps
+        d_reg = d + eps
+        det = a_reg * d_reg - b * b
+        inv00 = d_reg / det
+        inv01 = -b / det
+        inv11 = a_reg / det
+        # We only need trace(G) = ∂Ux/∂x + ∂Uy/∂y
+        div = (
+            inv00 * Atb[..., 0, 0]
+            + inv01 * Atb[..., 1, 0]
+            + inv01 * Atb[..., 0, 1]  # symmetric: inv10 == inv01
+            + inv11 * Atb[..., 1, 1]
+        )
+    return div
+
+
+# ---------------------------------------------------------------------------
+# Optimizer
+# ---------------------------------------------------------------------------
 
 class Lion(torch.optim.Optimizer):
     """Lion: Symbolic Discovery of Optimization Algorithms (Chen et al., 2023)."""
@@ -437,6 +586,11 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # Divergence-free auxiliary loss: λ_div * mean(|∇·u|_phys) on interior volume nodes.
+    # KNN least-squares gradient with K neighbors; velocities denormalized via y_std[:2]
+    # before divergence so that ∇·u=0 is the correct physical constraint.
+    lambda_div: float = 0.1
+    knn_k: int = 8
 
 
 cfg = sp.parse(Config)
@@ -449,19 +603,29 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)
+# Precompute KNN indices for the divergence-free auxiliary loss. Geometry is
+# fixed per sample, so we cache [N_i, K] long tensors once. Parallel cKDTree
+# builds across worker threads to amortize startup cost.
+knn_t0 = time.time()
+train_knn_cache = build_knn_cache(train_ds, k=cfg.knn_k, max_workers=8)
+print(f"KNN cache built for {len(train_knn_cache)} train samples in {time.time()-knn_t0:.1f}s")
+indexed_train_ds = IndexedDataset(train_ds, train_knn_cache)
+
+train_loader_kwargs = dict(collate_fn=indexed_pad_collate, num_workers=4,
+                           pin_memory=True, persistent_workers=True, prefetch_factor=2)
+val_loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+                         persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(indexed_train_ds, batch_size=cfg.batch_size,
+                              shuffle=True, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(indexed_train_ds, batch_size=cfg.batch_size,
+                              sampler=sampler, **train_loader_kwargs)
 
 val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
     for name, ds in val_splits.items()
 }
 
@@ -535,11 +699,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for x, y, is_surface, mask, knn_idx in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+        knn_idx = knn_idx.to(device, non_blocking=True)
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -558,7 +723,24 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            primary_loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Divergence-free auxiliary loss on interior volume nodes.
+            # PR-specified: use NORMALIZED velocities so the λ_div=0.1 calibration
+            # (assumes ~1e-3 typical |∇·u|) holds. Multiplying pred by y_std[:2]
+            # — as the previous revision did — pushed |∇·u| up to ~30, making the
+            # weighted aux loss ~30,000x stronger than intended. Since y_std is a
+            # constant scalar, ∇·u_norm = 0 ⇔ ∇·u_phys = 0; only the magnitude
+            # differs, so calibration matters for λ.
+            positions_phys = x[..., :2]  # input dims 0-1 are physical (x, z)
+            vel_for_div = pred[..., :2]
+            div = compute_velocity_divergence(positions_phys, vel_for_div, knn_idx)
+            vol_mask_f = vol_mask.float()
+            div_abs = div.abs() * vol_mask_f
+            div_count = vol_mask_f.sum().clamp(min=1)
+            div_loss_unweighted = div_abs.sum() / div_count
+            div_loss = cfg.lambda_div * div_loss_unweighted
+            loss = primary_loss + div_loss
 
             # Diagnostic: signed residual mean for pressure on surface and volume
             # nodes. If pinball τ=0.55 is shifting the bias as hypothesized, surf
@@ -566,7 +748,6 @@ for epoch in range(MAX_EPOCHS):
             # Critical check given Lion's sign() update can wash out pinball's
             # magnitude asymmetry — bias shift confirms the mechanism is alive.
             with torch.no_grad():
-                vol_mask_f = vol_mask.float()
                 surf_mask_f = surf_mask.float()
                 p_signed_vol = (
                     (residual_p * vol_mask_f).sum() / vol_mask_f.sum().clamp(min=1)
@@ -574,6 +755,7 @@ for epoch in range(MAX_EPOCHS):
                 p_signed_surf = (
                     (residual_p * surf_mask_f).sum() / surf_mask_f.sum().clamp(min=1)
                 )
+                div_mean_abs = (div_abs.sum() / div_count).detach()
 
         optimizer.zero_grad()
         loss.backward()
@@ -582,6 +764,10 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/primary_loss": primary_loss.item(),
+            "train/div_mean_abs": div_mean_abs.item(),
+            "train/div_loss_unweighted": div_loss_unweighted.item(),
+            "train/div_loss_weighted": div_loss.item(),
             "train/grad_norm": grad_norm.item(),
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
@@ -672,7 +858,7 @@ if best_metrics:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
