@@ -177,7 +177,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False):
+                 film_re=False, film_aoa_hidden=128):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -189,6 +189,14 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        # γ-only FiLM-AoA: per-block multiplicative scale on the FFN delta,
+        # conditioned on the scalar AoA. Identity init (γ ≡ 1) is applied
+        # after `self.apply(self._init_weights)` in Transolver.__init__.
+        self.film_gamma_aoa = nn.Sequential(
+            nn.Linear(1, film_aoa_hidden),
+            nn.GELU(),
+            nn.Linear(film_aoa_hidden, hidden_dim),
+        )
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -205,12 +213,16 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim),
             )
 
-    def forward(self, fx, mask=None, log_re=None):
+    def forward(self, fx, aoa, mask=None, log_re=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        # γ-only FiLM-AoA: per-channel scale on the FFN delta (identity init).
+        h = self.mlp(self.ln_2(fx))
+        gamma_aoa = self.film_gamma_aoa(aoa.unsqueeze(-1)).unsqueeze(1)  # [B, 1, dim]
+        h = gamma_aoa * h
+        fx = h + fx
         if self.film_re and log_re is not None:
-            # Post-residual γ modulation, after both attn and mlp residuals.
-            # γ shape [B, 1, hidden_dim] broadcasts over node axis.
+            # γ-only FiLM-Re: post-residual γ modulation on the full stream
+            # (matches PR #2865 mechanism — applied after both attn and FFN).
             gamma = self.film_gamma(log_re.unsqueeze(-1)).unsqueeze(1)
             fx = gamma * fx
         if self.last_layer:
@@ -256,14 +268,21 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.n_linear_init = 0
         self.apply(self._init_weights)
+        # Override the last Linear of each block's film_gamma_aoa to identity:
+        # weights=0, bias=1 ⇒ γ(AoA) ≡ 1 at init, matching baseline behaviour.
+        for block in self.blocks:
+            nn.init.zeros_(block.film_gamma_aoa[-1].weight)
+            nn.init.ones_(block.film_gamma_aoa[-1].bias)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
+        print(f"FiLM-AoA: identity init (γ≡1) applied to {len(self.blocks)} block(s)")
         if self.film_re:
-            # Identity-init the FiLM γ output linear AFTER apply() so it isn't
+            # Identity-init the FiLM-Re γ output linear AFTER apply() so it isn't
             # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
             # γ ≡ 1 at epoch 0 → model exactly matches baseline initially.
             for block in self.blocks:
                 nn.init.zeros_(block.film_gamma[-1].weight)
                 nn.init.ones_(block.film_gamma[-1].bias)
+            print(f"FiLM-Re: identity init (γ≡1) applied to {len(self.blocks)} block(s)")
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -278,15 +297,16 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool or None
+        # AoA (foil 1) is replicated across all nodes; pad_collate places padding
+        # at the end so x[:, 0, 14] is always real. x is normalized — film MLPs
+        # adapt to that.
+        aoa = x[:, 0, 14]  # [B]
         log_re = None
         if self.film_re:
-            # x is normalized; log_re is the standardized log(Re) at every node.
-            # All nodes in a sample share the same value, so node 0 is safe.
-            # The film_gamma MLP can absorb the affine normalization.
             log_re = x[:, 0, self.log_re_x_index]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx, mask=mask, log_re=log_re)
+            fx = block(fx, aoa=aoa, mask=mask, log_re=log_re)
         return {"preds": fx}
 
 
@@ -476,14 +496,18 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    seed: int = 1  # torch/cuda seed for weight init and sampler reproducibility
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f" seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -700,14 +724,31 @@ with torch.no_grad():
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
 
-# --- γ-only FiLM-Re diagnostics: per-block γ bias and weight L2 ---
-# Goal: compare to prior PR #2816 (γ+β FiLM-Re). Does γ drift more or less
-# without β present? Log final-epoch bias/weight stats from each block's
-# film_gamma[-1] (the last linear that directly produces γ).
+# --- FiLM diagnostics: per-block γ bias and weight L2 for both branches ---
+# Compound test: does γ_w (AoA-driven) and γ_bias (Re-driven) remain orthogonal
+# when both are active? Log final-epoch stats for film_gamma (FiLM-Re) and
+# film_gamma_aoa (FiLM-AoA) per block.
+base_model = getattr(model, "_orig_mod", model)
+film_stats: dict[str, float] = {}
+
+print("\nFiLM-AoA per-block γ diagnostics (final epoch):")
+print(f"  {'block':<6s} {'γ_bias_mean':>14s} {'γ_bias_std':>12s} "
+      f"{'γ_w_l2':>10s} {'γ_w_absmax':>12s}")
+for i, block in enumerate(base_model.blocks):
+    last_lin = block.film_gamma_aoa[-1]
+    gb = last_lin.bias.detach().float()
+    gw = last_lin.weight.detach().float()
+    b_mean, b_std = gb.mean().item(), gb.std().item()
+    w_l2 = gw.norm().item()
+    w_absmax = gw.abs().max().item()
+    film_stats[f"film_aoa/block{i}/gamma_bias_mean"] = b_mean
+    film_stats[f"film_aoa/block{i}/gamma_bias_std"] = b_std
+    film_stats[f"film_aoa/block{i}/gamma_w_l2"] = w_l2
+    film_stats[f"film_aoa/block{i}/gamma_w_absmax"] = w_absmax
+    print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
+          f"{w_l2:>10.4f} {w_absmax:>12.4f}")
+
 if model_config.get("film_re"):
-    # Resolve underlying module past torch.compile's _orig_mod wrapper.
-    base_model = getattr(model, "_orig_mod", model)
-    gamma_diagnostics: dict[str, float] = {}
     print("\nγ-only FiLM-Re per-block diagnostics (final epoch):")
     print(f"  {'block':<6s} {'γ_bias_mean':>14s} {'γ_bias_std':>12s} "
           f"{'γ_w_l2':>10s} {'γ_w_absmax':>12s}")
@@ -718,13 +759,14 @@ if model_config.get("film_re"):
         b_mean, b_std = gb.mean().item(), gb.std().item()
         w_l2 = gw.norm().item()
         w_absmax = gw.abs().max().item()
-        gamma_diagnostics[f"film/block{i}/gamma_bias_mean"] = b_mean
-        gamma_diagnostics[f"film/block{i}/gamma_bias_std"] = b_std
-        gamma_diagnostics[f"film/block{i}/gamma_w_l2"] = w_l2
-        gamma_diagnostics[f"film/block{i}/gamma_w_absmax"] = w_absmax
+        film_stats[f"film/block{i}/gamma_bias_mean"] = b_mean
+        film_stats[f"film/block{i}/gamma_bias_std"] = b_std
+        film_stats[f"film/block{i}/gamma_w_l2"] = w_l2
+        film_stats[f"film/block{i}/gamma_w_absmax"] = w_absmax
         print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
               f"{w_l2:>10.4f} {w_absmax:>12.4f}")
-    wandb.summary.update(gamma_diagnostics)
+
+wandb.summary.update(film_stats)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
