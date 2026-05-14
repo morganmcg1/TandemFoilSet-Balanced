@@ -4,6 +4,68 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 23:30 — PR #3018 (CLOSED, fern): Huber β EXTEND-BRACKET {0.05, 0.50} on saturated-clip baseline — **β-axis bracket EXTENSION + paper-publishable val/test SPLIT signal at β=0.05 (NEW 11th-class CANDIDATE)**
+
+- **Branch:** `willowpai2g48h2-fern/extend-beta-bracket`
+- **Student:** willowpai2g48h2-fern
+- **Verdict:** Arm 1 β=0.05 (`u8d6il3b`/`9q9lrdn2`) val **47.06** +1.91 / test **37.96 = SUB-BASELINE TEST WIN** (−0.68 vs baseline 38.64); Arm 2 β=0.50 (`takyo74q`) val **48.50** +3.35 / test 39.25 +0.61 REGRESS-BOTH. **NOT a new paper-appendix axis closure** (β-axis already closed MIXED-CLASSIFICATION NON-MONOTONE-COST-MONOTONE-MECHANISM at #2919/#2736). **Stale SENPAI-RESULT marker** — closure determined via W&B + pod-status verification.
+- **W&B runs:** `u8d6il3b`, `9q9lrdn2` (Arm 1 deterministic re-runs), `takyo74q` (Arm 2), baseline `ieu1futo`.
+- **Headline:** β=0.05 shows **NEW val/test SPLIT signal** = val FAIL + SUB-BASELINE TEST WIN = OPPOSITE direction of max_norm=0.2 MAX_NORM-CLIP-BOUNDARY #310 (val WIN + test FAIL). Potential **11th transfer-pattern class CANDIDATE: VAL-FAIL-TEST-WIN-BOUNDARY** pending cross-axis confirmation.
+
+### Mechanism diagnosis (paper-publishable findings — banked #324-#328)
+
+- **#324 PAPER-PUBLISHABLE — β=0.05 reveals NEW val/test SPLIT signal (potential 11th-class CANDIDATE).** β=0.05 Arm 1 val 47.06 FAIL but test 37.96 SUB-BASELINE WIN (−0.68 vs baseline). Opposite class signature from #310: max_norm-CLIP-BOUNDARY shows val WIN + test FAIL; β-LOWER shows val FAIL + test WIN. **Class CANDIDATE: VAL-FAIL-TEST-WIN-BOUNDARY** — sharper Huber sacrifices in-distribution val MAE for OOD test MAE; β=0.05 is potentially better for test-MAE-priority deployments despite failing val cutoff.
+
+- **#325 PAPER-STRENGTHENING — β-axis monotone-in-1/β REFINED.** Val MAE is MONOTONE-IN-1/β across {0.05, 0.10, 0.20, 0.30, 0.35, 0.50}; **test MAE is NON-MONOTONE U-shaped with BEST at β=0.05 (37.96)** vs baseline 38.64. New val-vs-test asymmetric structure on β-axis.
+
+- **#326 PAPER-STRENGTHENING — β=0.50 cross-stack ASYMMETRIC mechanism CONFIRMED.** β=0.50 Arm 2 val 48.50 / test 39.25 both regress = permissive cost-shape regresses both metrics; UPPER bracket of β-axis structurally distinct from LOWER bracket. β-axis triply-characterized: NON-MONOTONE-COST-MONOTONE-MECHANISM + MIXED-CLASSIFICATION + val/test SPLIT at LOWER bracket NEW.
+
+- **#327 PAPER-STRENGTHENING — Stale SENPAI-RESULT methodology lesson (4th occurrence).** Harness retry chain p7y41kfe → 2ppk9soo dead; 3 of 4 prior runs completed cleanly; no terminal marker posted; verified via W&B + pod-status; closure appropriate when (a) ≥1 finished run per arm with stable metrics, (b) deterministic re-runs match, (c) data fully diagnoses. 4th stale-flag occurrence pattern (vs #3005 edward verified-active).
+
+- **#328 PAPER-STRENGTHENING — SWA window 2 epochs 19th-consecutive truncation #170 + step-time/VRAM invariance across β-axis EXTEND-BRACKET.**
+
+### Paper-appendix matrix update — UNCHANGED at **22 closed × 10 transfer patterns + 3 MIXED axes + 1 CHARACTERIZED DOMINANT-DEGENERATE** (β-axis bracket-extension; NOT new closure; potential 11th class CANDIDATE pending cross-axis confirmation)
+
+### Reassignment
+
+Closing #3018 as β-axis bracket extension + paper-publishable val/test SPLIT signal + 5 banked findings. Reassigning fern to **PR #3064 NEW β × hkl CO-DIRECTIONAL compose-test 2-arm** — 7th compose-tests bank entry; Arm 1 BOTH-DOWN-SHARP {β=0.10, hkl=2.5e-4}, Arm 2 BOTH-UP-PERMISSIVE {β=0.50, hkl=1e-3}; discriminates whether σ-axis-fragility extends to (cost-shape × σ-head LR).
+
+---
+
+## 2026-05-14 23:15 — PR #3024 (CLOSED, nezuko): hybrid_kendall_lr LOWER bracket {1.5e-4, 1e-4} on saturated-clip baseline — **hkl-axis class REFINEMENT from ASYMMETRIC-V to MIXED-CLASSIFICATION (3rd MIXED axis)**
+
+- **Branch:** `willowpai2g48h2-nezuko/hybrid-kendall-lr-lower-bracket`
+- **Student:** willowpai2g48h2-nezuko
+- **Verdict:** Arm 1 hkl=1.5e-4 (`p1vkkrz3`) SWA val **46.81** +1.66 / test 40.06 +1.42 REGRESS, Arm 2 hkl=1e-4 (`b5zdv2vj`) SWA val **46.97** +1.82 / test 40.08 +1.44 REGRESS-FLAT plateau. **NOT a new paper-appendix axis closure** (hkl-axis already closed ASYMMETRIC-V at #2773). HEADLINE: **hkl-axis class REFINED to MIXED-CLASSIFICATION** (ASYMMETRIC-V UPPER + DEGENERATE-PLATEAU LOWER = 3rd MIXED axis after β + wd).
+- **W&B runs:** `p1vkkrz3`, `b5zdv2vj`, baseline `ieu1futo`.
+- **Headline:** σ-COLLAPSE fully confirmed; Kendall functionally DISABLED at hkl<2e-4 with per-channel eff_weights essentially uniform (±1.6%); **first clip_fraction=1.000 invariance QUASI-BREAK** at low hkl (0.989/0.964 vs baseline 1.000).
+
+### Mechanism diagnosis (paper-publishable findings — banked #317-#323)
+
+- **#317 PAPER-PUBLISHABLE — hkl-axis class REFINED to MIXED-CLASSIFICATION (3rd MIXED axis).** UPPER bracket ASYMMETRIC-V + LOWER bracket DEGENERATE-PLATEAU (val/test plateau at ~46.9/~40.07 with sharp transition between 5e-4 and 2.5e-4). Refines #297 σ-axis-fragile mechanism: FRAGILITY is about avoiding both INFLATE (UPPER) and COLLAPSE (LOWER) regimes.
+
+- **#318 PAPER-PUBLISHABLE — σ-spread COLLAPSE asymptotes to numerical floor below hkl=2e-4.** σ-spread = 0.0081 (Arm 1) and 0.0063 (Arm 2) — both −98% vs baseline 0.475. **Gating threshold ~ hkl=2e-4** with sharp >15× collapse in a single 2× hkl halving. NEW σ-spread invariance bank entry: **MONOTONE-IN-1/hkl WITH SHARP GATING THRESHOLD ~ hkl=2e-4**.
+
+- **#319 PAPER-PUBLISHABLE — Per-channel eff_weights essentially UNIFORM under σ-COLLAPSE (Kendall DISABLED equivalence).** Channel differentiation Δ < 2% of mean across both arms; Kendall heads converge to single log_σ → eff_weight = 1/σ² uniform across 6 channels. **σ-COLLAPSE = Kendall-DISABLED equivalence** directly observed; complements banked #278 AdamW-σ-collapse mechanism.
+
+- **#320 PAPER-PUBLISHABLE — clip_fraction=1.000 INVARIANCE WEAKLY BROKEN at low hkl (first cross-axis quasi-BREAK).** Arm 1 clip_fraction=0.989, Arm 2=0.964 (vs baseline 1.000). **Mechanism**: lower eff_weights → lower absolute loss magnitude → smaller pre-clip gradients → some steps fall BELOW max_norm=0.35 threshold. **New axis-conditional invariance rule**: saturated-clip 1.000 holds only when σ-spread is near baseline.
+
+- **#321 PAPER-STRENGTHENING — channel ordering 22nd cross-axis confirmation across hkl LOWER bracket.** Channel ordering preserved DESPITE σ-spread COLLAPSE × Kendall DISABLED. **Channel ordering is fully geometry/data-driven** (uniform eff_weights yet ordering still surfaces from per-channel prediction difficulty). Strongest cross-axis evidence: channel ordering invariant across 6 distinct σ-spread regimes.
+
+- **#322 PAPER-STRENGTHENING — Lion exp_avg_norm INVARIANT under σ-COLLAPSE (model-side hkl-INVARIANT).** Arm 1 exp_avg_norm=0.00976, Arm 2=0.00983; ~12% below baseline (within refined #194 ±15% band). Consistent with #311 c × max_norm rule: model-side Lion is hkl-INVARIANT; σ-COLLAPSE affects only AdamW σ-side state.
+
+- **#323 PAPER-STRENGTHENING — SWA window 2 epochs 18th-consecutive truncation #170 + pre-clip grad_norm scales DOWN with σ-COLLAPSE.** Pre-clip grad_norm conditional invariance: invariant across cross-clip at fixed σ-spread state; NOT invariant across hkl-axis under σ-COLLAPSE.
+
+### Paper-appendix matrix update — UNCHANGED at **22 closed × 10 transfer patterns + 3 MIXED axes + 1 CHARACTERIZED DOMINANT-DEGENERATE** (hkl-axis class REFINEMENT; NOT new closure)
+
+hkl-axis becomes the **3rd MIXED-CLASSIFICATION axis** after β + wd. σ-spread invariance bank: 20 INVARIANT + 5 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + 2 compose-induced BIDIRECTIONAL BREAKs + β-axis monotone-in-1/β + seed-axis 18th + 1 σ-head-optimizer-ablation BREAK + 1 GRAD-ACCUMULATION INVARIANT + **NEW hkl-axis-LOWER MONOTONE-IN-1/hkl WITH SHARP GATING THRESHOLD ~ hkl=2e-4** (banked #318). clip_fraction invariance bank: 20 INVARIANT + **1 quasi-BREAK at hkl-LOWER under σ-COLLAPSE NEW** (banked #320).
+
+### Reassignment
+
+Closing #3024 as hkl-axis MIXED-CLASSIFICATION class refinement + 7 banked findings. Reassigning nezuko to **PR #3063 NEW fourier_num_features sweep {8, 32} on saturated-clip baseline** — 23rd paper-appendix axis closure attempt. Tests input-side RFF dimensionality axis (information-bottleneck vs over-parameterization).
+
+---
+
 ## 2026-05-14 22:45 — PR #3005 (CLOSED, edward): max_norm sweep {0.2, 1.0} on saturated-clip baseline — **22nd paper-appendix axis closure + NEW MAX_NORM-CLIP-BOUNDARY class (10th transfer-pattern class)**
 
 - **Branch:** `willowpai2g48h2-edward/max-norm-sweep-on-saturated-clip-baseline`
