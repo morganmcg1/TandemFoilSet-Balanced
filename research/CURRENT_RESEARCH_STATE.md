@@ -1,20 +1,20 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 11:55
+- **Date:** 2026-05-14 12:25
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
 
 
-## Current baseline (12th shift)
+## Current baseline (13th shift)
 
-**PR #2817 (trunc_normal_ init std=0.05)** merged 2026-05-14 09:21:
-- **`val_avg/mae_surf_p` mean (2 seeds) = 40.8198** (best seed `npvg5u4o` val=39.6184)
-- **`test_avg/mae_surf_p` mean (2 seeds) = 35.2474** (best seed test=33.2254)
-- Per-split test surf_p (mean): single_in_dist=38.08, geom_camber_rc=47.72, geom_camber_cruise=21.09, re_rand=34.10
-- W&B runs: `72s3ljky` (seed 1), `npvg5u4o` (seed 2, best-ever)
-- **New merge bar: mean val < 40.82, mean test < 35.25, all four test splits finite**
+**PR #2882 (trunc_normal_ init std=0.07)** merged 2026-05-14 12:15:
+- **`val_avg/mae_surf_p`** = 36.5754 (σ=0.07, W&B `gj8qijiv`, single seed)
+- **`test_avg/mae_surf_p`** = 30.6438 (σ=0.07, W&B `gj8qijiv`, single seed)
+- Per-split test surf_p: single_in_dist=35.87, geom_camber_rc=43.28, geom_camber_cruise=16.30, re_rand=27.12
+- Default init_std=0.07 (train.py updated on advisor branch)
+- **New merge bar: val < 36.58, test < 30.64, all four test splits finite (single-seed basis; directional)**
 
 ## Baseline progression
 
@@ -31,22 +31,47 @@
 | PR #2516 (Lion optimizer) | 2026-05-13 20:05 | 50.193 | 43.501 | −14.8% / −14.8% |
 | PR #2562 (Lion lr=7.5e-5) | 2026-05-13 22:30 | 45.433 | 39.509 | −9.5% / −9.2% |
 | PR #2801 (Pinball τ=0.55 pressure) | 2026-05-14 07:15 | 43.092 | 37.194 | −5.1% / −5.9% |
-| **PR #2817 (σ=0.05 init)** | **2026-05-14 09:21** | **40.820** | **35.247** | **−5.3% / −5.4%** |
+| PR #2817 (σ=0.05 init) | 2026-05-14 09:21 | 40.820 | 35.247 | −5.3% / −5.4% |
+| **PR #2882 (σ=0.07 init)** | **2026-05-14 12:15** | **36.575** | **30.644** | **−10.4% / −13.1% ← LARGEST** |
 
-**Cumulative: −65.8% val, −67.9% test from round-1 start.** Still compute-bound (best=last on all 12 merges).
+**Cumulative: −69.4% val, −72.1% test from round-1 start.** Still compute-bound (best=last on all 13 merges).
 
-## Current research focus (rounds 9–10)
+## Current research focus (rounds 10–11)
 
-**Two major wins in rapid succession: pinball τ=0.55 (11th shift) and σ=0.05 init (12th shift).** Together they pushed val from 45.43 → 40.82 (−10.2%) and test from 39.51 → 35.25 (−10.8%) with only 2 changes, demonstrating that multiple orthogonal improvements exist in parallel.
+**Three major wins in rapid succession: σ=0.05, σ=0.07 (init-scale axis)**. σ=0.07 alone gave the largest single-PR improvement in the launch (−13.1% test). This confirms the init-scale axis is strongly load-bearing under compute-bound Lion, with the optimizer behaving differently in small vs large-norm initialization regimes.
 
-Current focus: **probing whether remaining round-9 techniques compound with σ=0.05** (which they run on σ=0.02 baseline due to branch timing) and **pushing the σ-axis further** (new tanjiro assignment).
+**Mechanism insight (13th shift)**: the "start near convergence neighbourhood" mental model was wrong. The correct story: larger σ pushes Lion into a different, higher-L2 basin that generalizes better within 35 epochs. Small σ traps the optimizer in a small-norm regime where it never fully escapes within the compute budget.
 
-**Context for in-flight experiments**: ALL round-9 experiments (#2853, #2854, #2863, #2865, #2866, #2867) were assigned before the σ=0.05 merge. They run on the σ=0.02 baseline and their deltas should be interpreted vs the OLD bar (val<43.09). If any show a positive delta on the old baseline, they will be combined with σ=0.05 as a follow-up.
+**Current focus**: 
+1. Pin down the σ-axis peak (tanjiro #2908: σ=0.06/0.09 interior scan)
+2. Test whether other axes compound with σ=0.07 (in-flight PRs using σ=0.05 or σ=0.02 need rebase/follow-up)
 
-### Round-9/10 in-flight (full grid)
+**Context for in-flight experiments**: PRs #2865, #2866, #2886, #2895, #2897, #2902 were assigned on σ=0.05 or σ=0.02 baseline. Their deltas should be interpreted relative to their original bar. If any beat their original bar, follow-up tests on σ=0.07 baseline are warranted.
 
-Loss-geometry axis:
-1. **Pinball τ=0.60 pressure (alphonse #2853)** — stale_wip, comparing vs BOTH bars
+### Round-10/11 in-flight (full grid)
+
+Init-scale axis:
+1. **σ interior scan: σ=0.06/0.09 (tanjiro #2908)** — NEW, assigned 2026-05-14 12:20; pins down σ-axis peak around σ=0.07 winner.
+
+Physics loss axis:
+2. **Pressure-Poisson auxiliary loss (askeladd #2909)** — NEW, assigned 2026-05-14 12:20; ∇²p = f(∇u), λ=0.01; targets geom_camber_rc.
+3. **Divergence-free auxiliary loss (nezuko #2866)** — stale_wip, comparing vs BOTH bars.
+
+Conditioning / OOD axis:
+4. **γ-only FiLM-AoA (thorfinn #2886)** — WIP, targets camber_rc.
+5. **γ-only FiLM-Re (edward #2865)** — rebased (CLEAN); waiting for re-run on σ=0.07 baseline.
+
+Data augmentation axis:
+6. **Y-flip augmentation (fern #2895)** — WIP.
+
+Regularization axis:
+7. **Weight-decay scan on σ=0.05 (alphonse #2897)** — WIP (running on σ=0.05; results will be interpreted vs new bar).
+
+Architectural axis:
+8. **SwiGLU FFN (frieren #2902)** — WIP.
+
+Closed (previously active):
+- **Pinball τ=0.60 pressure (alphonse #2853)** — CLOSED: τ-axis bracketed
 2. **Divergence-free auxiliary loss (nezuko #2866)** — WIP
 
 Architectural / capacity axis:
@@ -124,10 +149,15 @@ Closed this round:
 | #2853 | alphonse | Pinball τ=0.60 pressure | **CLOSED** 2026-05-14 11:00 (+11.5% — τ peak at 0.55, axis retired) |
 | **#2895** | **fern** | **Y-flip data augmentation (flow y-equivariance, 2× data free)** | **WIP 2026-05-14 11:05** |
 | **#2897** | **alphonse** | **Weight-decay scan on σ=0.05: wd=5e-4 and wd=1e-3** | **WIP 2026-05-14 11:05** |
-| #2854 | frieren | Orthogonal init for in_project_slice | **CLOSED** 2026-05-14 11:50 (+4.5% val on old bar; scale mismatch with surrounding init) |
-| **#2902** | **frieren** | **SwiGLU FFN: replace GELU+Linear with gated FFN** | **WIP NEW 2026-05-14 11:55** |
+| #2853 | alphonse | Pinball τ=0.60 pressure | **CLOSED** 2026-05-14 11:00 (+11.5%) |
+| #2854 | frieren | Orthogonal init for in_project_slice | **CLOSED** 2026-05-14 11:50 (+4.5%) |
+| #2863 | askeladd | Re-Fourier K=8 at input | **CLOSED** 2026-05-14 12:10 (+5.2%; scalar Re aliasing) |
+| **#2882** | **tanjiro** | **σ=0.07/0.10 scan** | **MERGED** 2026-05-14 12:15 (13th shift, −10.4% val/−13.1% test) |
+| **#2902** | **frieren** | **SwiGLU FFN: replace GELU+Linear with gated FFN** | **WIP 2026-05-14 11:55** |
+| **#2908** | **tanjiro** | **σ interior scan: σ=0.06/0.09** | **WIP NEW 2026-05-14 12:20** |
+| **#2909** | **askeladd** | **Pressure-Poisson auxiliary loss (λ=0.01)** | **WIP NEW 2026-05-14 12:20** |
 
-**Merged:** 12 | **Closed:** 61 | **WIP:** 8 | **Idle:** 0
+**Merged:** 13 | **Closed:** 62 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 

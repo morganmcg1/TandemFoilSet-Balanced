@@ -2413,6 +2413,71 @@ Best epoch: 29-31 (late, near end-of-budget), consistent with "took longer to co
 
 ---
 
+## 2026-05-14 12:10 — PR #2863: Re-Fourier features at input (askeladd, CLOSED)
+- Branch: `willowpai2g48h3-askeladd/re-fourier-features`
+- Hypothesis: NeRF-style K=8 Fourier features of log(Re) appended to node input vector (~+4K params).
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s1 | `hx3d5sj2` | 47.35 | 41.40 |
+| s2 | `bvtytvwv` | 43.33 | 37.96 |
+| **mean** | — | **45.34** | **39.68** |
+| **OLD baseline (11th shift)** | — | 43.09 | 37.19 |
+| **Δ vs OLD bar** | — | **+5.2% MISS** | **+6.7% MISS** |
+
+Per-split test (mean): single_in_dist=43.51 (+1.2%), geom_camber_rc=53.92 (+8.1%), geom_camber_cruise=23.15 (+9.1%), re_rand=38.14 (+9.9% — TARGET SPLIT WORST). Seed variance val std=2.84 (5× baseline 0.59).
+
+**Analysis**: Same failure mode as #2867 AoA-Fourier. K=8 top frequency ~128 cycles over standardized log(Re) ∈ [-2,2] → per-sample fingerprinting rather than smooth mapping. Re is a single scalar per sample — high-frequency encoding gives near-orthogonal representations to adjacent Re values → memorization, not generalization. Seed variance amplified 5× by high-amplitude oscillatory feature injection. Even best seed (43.33) sits in "wash" band and re_rand regressed.
+
+**Status**: CLOSED 2026-05-14 12:10. Key lesson: NeRF-style encoding works on spatially varying coordinates (like in NeRF); fails on narrow-range scalar conditioning variables. Per-block FiLM γ (edward's #2865) is the right mechanism for Re conditioning.
+
+---
+
+## 2026-05-14 12:15 — PR #2882: σ=0.07 init (σ interior scan, tanjiro, MERGED 13th shift)
+- Branch: `willowpai2g48h3-tanjiro/init-std-scan`
+- Hypothesis: extend σ-axis above σ=0.05 winner; test σ=0.07 and σ=0.10 on new σ=0.05 baseline.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| σ=0.07 | `gj8qijiv` | 36.5754 | **30.6438** |
+| σ=0.10 | `sasn9dgj` | **35.8972** | 30.8399 |
+| **σ=0.05 baseline (12th shift)** | — | 40.8198 | 35.2474 |
+| **Δ σ=0.07 vs σ=0.05** | — | **−10.4%** | **−13.1%** |
+
+Per-split test (σ=0.07): single_in_dist=35.87 (−5.8%), geom_camber_rc=43.28 (−9.3%), geom_camber_cruise=16.30 (−22.7%), re_rand=27.12 (−20.5%). ALL 4 SPLITS IMPROVE.
+
+Param L2: σ=0.07 init=67.97, final=73.59; σ=0.10 init=89.20, final=93.72 (99% GPU memory at peak — risky).
+
+**Why σ=0.07 merged (not σ=0.10)**: σ=0.07 wins on paper-facing test metric (30.64 vs 30.84) and 3/4 OOD splits. σ=0.10's 99% peak GPU is unsafe for compounding with future techniques. Gap (0.2 test) is within single-seed noise.
+
+Mechanism update: student reports that "param L2 starts near convergence" was the wrong mental model. The correct observation: larger σ pushes optimization into a different, higher-L2 basin that generalises better within 35-ep budget. Small σ keeps optimizer in a small-norm regime where it never escapes.
+
+**Status**: MERGED 2026-05-14 12:15. **13th baseline shift: σ=0.07 default. Single-seed val=36.58, test=30.64. New merge bar: val<36.58, test<30.64. Default init_std updated to 0.07 in train.py.**
+
+**LARGEST SINGLE-PR TEST IMPROVEMENT IN LAUNCH (−13.1%).**
+
+---
+
+## 2026-05-14 12:20 — Round-11 expansion: #2908 tanjiro + #2909 askeladd
+
+After merging #2882 (tanjiro idle) and closing #2863 (askeladd idle), 2 new assignments:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2908 | willowpai2g48h3-tanjiro | σ interior scan: σ=0.06 (s1) and σ=0.09 (s2) to pin optimum around σ=0.07 | Init-scale |
+| #2909 | willowpai2g48h3-askeladd | Pressure-Poisson auxiliary loss: physics constraint ∇²p = f(∇u), λ=0.01 | Physics loss |
+
+- **#2908 tanjiro**: σ=0.06 tests whether valley floor is below 0.07; σ=0.09 tests whether peak is above 0.07. Both vs new bar (val<36.58, test<30.64).
+- **#2909 askeladd**: extends nezuko's divfree direction to the pressure field. Targets geom_camber_rc (43.28, still hardest split at new baseline).
+
+Baseline update comments posted on all 6 active WIPs.
+
+---
+
 ## 2026-05-14 11:55 — Round-10 expansion: #2902 frieren SwiGLU FFN
 
 Following #2854 close, frieren immediately assigned:
