@@ -256,14 +256,52 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+# Distance threshold (in raw input-position units) above which two consecutive
+# surface nodes in mesh order are treated as a loop closure or foil boundary,
+# and therefore NOT included in the Sobolev finite-difference pair set.
+# Median surface-node spacing on TandemFoilSet is ~0.004; loop/foil jumps are
+# 0.05 to 3.0. The gate at 0.05 keeps all genuine adjacent pairs and excludes
+# the closure jumps.
+SOBOLEV_DS_THRESHOLD = 0.05
+
+
+def sobolev_p_grad_loss(pred_p, y_norm_p, positions, surf_mask, beta=0.5):
+    """Finite-difference Huber penalty on surface pressure gradient.
+
+    Computes |Δp_pred − Δp_true| in normalized space between adjacent surface
+    nodes in mesh order. Pairs that span loop closures or foil boundaries
+    (distance gate) are masked out.
+
+    Args:
+        pred_p:    [B, N] predicted pressure in normalized space (channel 2)
+        y_norm_p:  [B, N] ground-truth pressure in normalized space
+        positions: [B, N, 2] raw input positions (x, z) — used only for gating
+        surf_mask: [B, N] bool — True for valid surface nodes
+        beta:      Huber beta
+
+    Returns: scalar loss, scalar grad/val-pair ratio diagnostic, scalar count.
+    """
+    dp_pred = pred_p[:, 1:] - pred_p[:, :-1]                   # [B, N-1]
+    dp_true = y_norm_p[:, 1:] - y_norm_p[:, :-1]               # [B, N-1]
+    pair_is_surf = surf_mask[:, 1:] & surf_mask[:, :-1]        # [B, N-1]
+    ds = (positions[:, 1:, :] - positions[:, :-1, :]).norm(dim=-1)   # [B, N-1]
+    close_pair = ds < SOBOLEV_DS_THRESHOLD                     # [B, N-1]
+    grad_mask = pair_is_surf & close_pair                      # [B, N-1]
+    grad_err = F.smooth_l1_loss(dp_pred, dp_true, beta=beta, reduction="none")
+    grad_mask_f = grad_mask.to(grad_err.dtype)
+    n_pairs = grad_mask_f.sum().clamp(min=1)
+    loss_grad = (grad_err * grad_mask_f).sum() / n_pairs
+    return loss_grad, n_pairs
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, sobolev_lambda=0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
     """
-    vol_loss_sum = surf_loss_sum = 0.0
+    vol_loss_sum = surf_loss_sum = surf_grad_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
@@ -302,6 +340,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 (huber_err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
+
+            surf_grad_loss, _ = sobolev_p_grad_loss(
+                pred[..., 2], y_norm[..., 2], x[..., :2], surf_mask, beta=0.5,
+            )
+            surf_grad_loss_sum += surf_grad_loss.item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -311,8 +354,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
-    out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+    surf_grad_loss = surf_grad_loss_sum / max(n_batches, 1)
+    out = {"vol_loss": vol_loss, "surf_loss": surf_loss, "surf_grad_loss": surf_grad_loss,
+           "loss": vol_loss + surf_weight * (surf_loss + sobolev_lambda * surf_grad_loss)}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -430,6 +474,7 @@ class Config:
     weight_decay: float = 2e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    sobolev_lambda: float = 0.1   # Sobolev-1 surface-pressure gradient penalty
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -532,7 +577,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_surf_grad = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -551,7 +596,10 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            surf_grad_loss, n_grad_pairs = sobolev_p_grad_loss(
+                pred[..., 2], y_norm[..., 2], x[..., :2], surf_mask, beta=0.5,
+            )
+            loss = vol_loss + cfg.surf_weight * (surf_loss + cfg.sobolev_lambda * surf_grad_loss)
 
         optimizer.zero_grad()
         loss.backward()
@@ -561,21 +609,25 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/surf_grad_loss": surf_grad_loss.item(),
+            "train/sobolev_n_pairs": n_grad_pairs.item(),
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_grad += surf_grad_loss.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_grad /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.sobolev_lambda)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -586,6 +638,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_grad_loss_epoch": epoch_surf_grad,
+        "train/sobolev_ratio": (cfg.sobolev_lambda * epoch_surf_grad) / max(epoch_surf, 1e-12),
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -652,7 +706,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.sobolev_lambda)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
