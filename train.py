@@ -487,7 +487,7 @@ optimizer = Lion(
     model.parameters(),
     lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
     weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
-    betas=(0.9, 0.99),       # Lion-paper default
+    betas=(0.95, 0.99),      # Conservative beta1 for variance reduction at lr=7.5e-5
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
