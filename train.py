@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -476,11 +478,22 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    seed: int = 1  # RNG seed for torch/numpy/random
+    # Input-only conditioning Mixup (PR #2984): interpolate (Re, AoA) inputs across the
+    # batch via Beta(α, α). Targets, mesh, mask are NOT mixed — distinct from closed #2960.
+    cond_input_mixup_alpha: float = 0.0
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+print(f"[init] seed = {cfg.seed}")
+print(f"[init] conditioning input-only Mixup alpha = {cfg.cond_input_mixup_alpha} (0.0 = off); target mix DISABLED")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -580,12 +593,38 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_lams: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Input-only conditioning Mixup (PR #2984): mix Re, AoA1, AoA2 across the
+        # batch with a per-batch λ ~ Beta(α, α). Re interpolated in physical space
+        # (linear in Re, then log). Targets, mesh, mask, geometry NOT mixed —
+        # mesh-node correspondence is preserved (the #2960 flaw).
+        mixup_lam = 1.0
+        if cfg.cond_input_mixup_alpha > 0:
+            B = x.shape[0]
+            mixup_lam = float(np.random.beta(cfg.cond_input_mixup_alpha, cfg.cond_input_mixup_alpha))
+            perm = torch.randperm(B, device=x.device)
+            # Sample-level conditioning lives at position 0 (replicated across valid nodes).
+            log_re = x[:, 0, 13]
+            aoa1 = x[:, 0, 14]
+            aoa2 = x[:, 0, 18]
+            re_mixed = mixup_lam * torch.exp(log_re) + (1.0 - mixup_lam) * torch.exp(log_re[perm])
+            log_re_mixed = torch.log(re_mixed)
+            aoa1_mixed = mixup_lam * aoa1 + (1.0 - mixup_lam) * aoa1[perm]
+            aoa2_mixed = mixup_lam * aoa2 + (1.0 - mixup_lam) * aoa2[perm]
+            # Broadcast back across nodes; keep 0 at padded positions to match pad_collate.
+            mask_f = mask.to(x.dtype)
+            x = x.clone()
+            x[..., 13] = log_re_mixed[:, None] * mask_f
+            x[..., 14] = aoa1_mixed[:, None] * mask_f
+            x[..., 18] = aoa2_mixed[:, None] * mask_f
+            epoch_lams.append(mixup_lam)
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -626,13 +665,16 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
             "global_step": global_step,
-        })
+        }
+        if cfg.cond_input_mixup_alpha > 0:
+            log_payload["train/mixup_lam"] = mixup_lam
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -665,6 +707,12 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.cond_input_mixup_alpha > 0 and epoch_lams:
+        lams_arr = np.array(epoch_lams, dtype=np.float64)
+        log_metrics["train/mixup_lam_mean"] = float(lams_arr.mean())
+        log_metrics["train/mixup_lam_std"] = float(lams_arr.std())
+        log_metrics["train/mixup_lam_min"] = float(lams_arr.min())
+        log_metrics["train/mixup_lam_max"] = float(lams_arr.max())
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
