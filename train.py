@@ -340,6 +340,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "cruise_weight": cfg.cruise_weight,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -389,6 +390,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     eval_every: int = 1  # run validation every N epochs (1 = every epoch, default)
     compile_model: bool = False   # torch.compile the model for throughput
+    cruise_weight: float = 1.0  # multiplier on cruise-domain sample weights in WeightedRandomSampler
 
 
 cfg = sp.parse(Config)
@@ -408,6 +410,22 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
+    if cfg.cruise_weight != 1.0:
+        with open(Path(cfg.splits_dir) / "meta.json") as _mf:
+            _meta = json.load(_mf)
+        _cruise_idx = torch.tensor(_meta["domain_groups"]["cruise"], dtype=torch.long)
+        sample_weights = sample_weights.clone()
+        sample_weights[_cruise_idx] *= cfg.cruise_weight
+        _group_totals = {
+            name: sample_weights[torch.tensor(idxs, dtype=torch.long)].sum().item()
+            for name, idxs in _meta["domain_groups"].items()
+        }
+        _total = sum(_group_totals.values())
+        _pct = {k: 100.0 * v / _total for k, v in _group_totals.items()}
+        print(
+            f"cruise_weight={cfg.cruise_weight}: sampling shares "
+            + ", ".join(f"{k}={p:.1f}%" for k, p in _pct.items())
+        )
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
