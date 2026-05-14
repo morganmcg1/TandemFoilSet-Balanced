@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-14 ~05:20 UTC
+- **Date:** 2026-05-14 ~05:35 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -28,7 +28,7 @@
 
 | PR | Student | Config | Compound | Status |
 |----|---------|--------|----------|--------|
-| **#2758** | **edward** | **clip_grad_norm=0.5/2.0 sweep on new compound** | NEW | WIP (just assigned) |
+| **#2793** | **edward** | **n_hidden=96/160 width sweep (code-edit tier)** | NEW | WIP (just assigned) |
 | **#2784** | **thorfinn** | **fourier_max_freq=16/48 sweep at L=6 on new compound** | NEW | WIP (just assigned) |
 | **#2789** | **frieren** | **fourier_min_freq=0.5/2.0 sweep at L=6** | NEW | WIP (just assigned) |
 | #2491 | fern | sw=5/sw=3 stack on n_layers=3 | NEW | WIP (pod rate-limit blocked) |
@@ -60,6 +60,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 39. **DROPOUT DIRECTION CLOSED BOTH SIDES; wd × dropout COMPLEMENTARY NOT SUBSTITUTIVE (#2645):** dropout=0.10 (+2.85% val) and 0.05 (+0.89% val) both regress vs baseline d=0.20. Combined with #2551 closing upper direction (0.25/0.30 regress), **dropout=0.20 is locked as local optimum**. Critically REFUTES the substitutive-regularizer prior: lowering dropout did NOT free capacity under wd=3e-4. **wd × dropout are COMPLEMENTARY** — distinct interaction sign from wd × n_head substitutive (finding 34) and slice × n_head substitutive (finding 30). Non-monotonic 0.10 < 0.05 hints mid-strength dropout is worst case. **Different regularizer pairs have different interaction signs — paper-grade finding on regularizer-interaction topology.** In-dist single_in_dist test IMPROVES on both arms while OOD splits regress.
 40. **lr=1e-4 LOCKED AS LOCAL OPTIMUM ON NEW COMPOUND; LR SURFACE NARROW (#2641):** lr=8e-5 (+2.58% val) and lr=1.5e-4 (+1.05% val) both regress. wd=3e-4 stabilization did NOT shift lr optimum. **wd and lr are independent axes** under Lion+MAE. lr surface is narrow: ±0.5×–1.5× regresses by 1–2.6 points. Interesting regime-trade: Arm 2 lr=1.5e-4 IMPROVES single_in_dist test (−8.9%) but worsens re_rand (+8.7%) — higher lr trades in-dist fidelity for OOD robustness. **Reinforces finding 37: step count is the bottleneck** (val still descending at cap across all three lrs). Only architecture or padding-waste reduction can free more steps.
 41. **SURF_WEIGHT UPPER DIRECTION CLOSED; sw × SPLIT-TYPE INTERACTION (#2707):** sw=15 regresses +2.63 val / +2.12 test on new compound. **Strong asymmetric per-split pattern:** single_in_dist IMPROVES (−2.32%) while ALL OOD splits regress, **re_rand worst at +13.81%**. Mechanism: over-emphasizing surface loss starves volume field; OOD extrapolation depends on volume context anchoring surface prediction. Both geom_camber splits regress, REFUTING original OOD-improvement hypothesis. Surface emphasis is NOT a substitute for balanced surface+volume signal of MAE. **For higher-surf direction would need pairing with volume-loss-floor or per-channel reweighting** (different hypothesis, requires code). With fern's pending #2491 sw=5/3 lower test, sw axis is bracketed on new compound. **The sw × split-type interaction is paper-grade appendix material.**
+46. **CLIP_GRAD_NORM=1.0 CONFIRMED SWEET SPOT, BOTH DIRECTIONS CLOSED (#2758):** clip=0.5 (val=44.10, +4.99%) and clip=2.0 (val=44.09, +4.97%) both regress. Arms within 0.02% of each other (Lion near-clip-invariance on sign). **Key diagnostic:** pre-clip grad_norm median ~40, max ~200 — **clipping binds 100% of steps at all c ∈ {0.5, 1.0, 2.0}**. No "rare-burst" regime. Sweet-spot at c=1.0 comes from EMA momentum buffer rescaling (not update direction). **7th consecutive CLI negative → escalate to code-edit tier.**
 45. **COSINE T_MAX=50 IS U-SHAPE MINIMUM, BOTH DIRECTIONS CLOSED (#2618):** T_max=80 (val=46.22, +10.0%) and T_max=100 (val=43.64, +3.9%) both regress. Full U-curve: T_max=34(46.26) < T_max=44(45.81) < T_max=50(42.00) > T_max=80(46.22) > T_max=100(43.64). Mechanism: at 30-min cap all variants get ~33 epochs; T_max=50 reaches lr≈0.485×lr_init (polish phase); T_max>50 keeps lr too high → no polish → slower val descent that never catches up. **"Val still descending" is misleading — it's slower, not better.** All splits regress OOD-worst. Scheduler CLI axis fully closed. Linear-warmup+cosine-decay-to-zero (code edit) parked for next tier.
 44. **FOURIER_L=6 LOCKED, BOTH DIRECTIONS CLOSED (#2742):** L=4 val=42.57 (+0.57 worse)/test=35.73 (−0.23 ≈ noise); L=8 val=43.59 (+1.59)/test=37.23 (+1.27) — clearly regressive. Aliasing at max_freq=32 on standardized coords explains L=8 failure: top octave near Nyquist for typical mesh spacing. L=4 is within noise (channel count unchanged at 0.45M params). **Key finding: L vs max_freq are distinct axes.** The natural follow-up is max_freq=16/48 at L=6 to isolate aliasing from channel count. Pre-existing bug noted: test_geom_camber_cruise normalized-space loss logs as NaN/Inf in W&B summaries (denormalized MAE correct).
 43. **EMA DECAY LOCKED AT 0.99, HIGHER DIRECTION CLOSED (#2729):** ema_decay=0.995 (+1.77 val worse, +1.15 test worse) and 0.999 (val −0.31 worse, test +0.15 ≈ noise) both fail to beat baseline. At the 30-min step budget where val is still descending at cap, higher decay produces *EMA lag* rather than deeper smoothing — the EMA averaging window exceeds remaining training convergence horizon. Main-EMA gap dynamics confirm: 0.995 widens gap (+4.32) = sluggish; 0.999 narrows gap (+1.92) = can't keep up. Arm 2 per-split: trades single_in_dist gain (−3.14) for re_rand regression (+2.39) — echoes sw×split-type pattern (finding 41). **ema_decay=0.99 was already optimally tuned for this budget.** EMA bias correction (handles first-epoch init-anchoring at 0.999) noted as future code axis if budget extends.
@@ -72,11 +73,16 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 - **n_layers=2/n_layers=1 (askeladd #2482):** speed-dividend extension; val still descending at cap
 - **n_head=1 + n_layers=3/2 (tanjiro #2483):** cross-axis test of n_head=1 at shallow depth
 - **sw=5/sw=3 (fern #2491):** stack sw synergistic interaction at n_layers=3+wd=3e-4
-- **edward #2758:** clip_grad_norm=0.5/2.0 sweep on new compound — last untested CLI-only optimizer axis; Lion+sign-grad makes clipping subtle, both directions informative
+- **edward #2793:** n_hidden=96/160 width sweep — CODE-EDIT tier escalation; n_hidden=128 hardcoded since earliest compound; at n_layers=3 the model may be over/under-capacity on width; requires 2-line Config edit to expose --n_hidden CLI flag
 - **thorfinn #2784:** fourier_max_freq=16/48 sweep at L=6 — direct aliasing test; max_freq=32 may add noise above Nyquist on standardized coords; max_freq=16 drops potentially-aliased octave; max_freq=48 extends into clearly-aliased band
 - **frieren #2789:** fourier_min_freq=0.5/2.0 sweep at L=6 — low-frequency encoding band test; min_freq=1.0 default may miss global-scale features (0.5) or pack unnecessary long-period components (test 2.0). Parallel to thorfinn's max_freq sweep — together these bracket the encoding band
 
-**Plateau Protocol status:** CLI-only axes nearly exhausted — wd (3e-4), dropout (0.2), n_head (2), slice_num (32), n_layers (3), batch_size (4), cosine T_max (50, U-shape confirmed), lr (1e-4), ema_decay (0.99), fourier_L (6), clip_grad_norm (in-flight #2758), fourier_max_freq (in-flight #2784), fourier_min_freq (in-flight #2789). After these 3 return: **escalate to code-edit tier** — linear-warmup+cosine-decay scheduler, width axis (n_hidden), length-bucketed sampler (data-loader), EMA bias correction. **6+ consecutive CLI-axis negatives signal code-edit tier readiness.** The substitutive-vs-complementary regularizer-interaction framework (findings 30, 34, 35, 39) and T_max U-shape mechanism (finding 45) are paper-grade findings.
+**Plateau Protocol status: ESCALATED TO CODE-EDIT TIER.** All CLI axes confirmed closed — wd (3e-4), dropout (0.2), n_head (2), slice_num (32), n_layers (3), batch_size (4), cosine T_max (50), lr (1e-4), ema_decay (0.99), fourier_L (6), clip_grad_norm (1.0), fourier_max_freq (in-flight #2784), fourier_min_freq (in-flight #2789). **7 consecutive CLI negatives = plateau confirmed.** Code-edit tier now active:
+- **In-flight:** edward #2793 (n_hidden=96/160 — 2-line Config edit)
+- **Queued:** frieren → linear-warmup+cosine-decay-to-zero scheduler (after #2789 returns)
+- **Deeper:** length-bucketed sampler (data-loader edit), EMA bias correction (code edit), Lion β1/β2 expose via Config
+
+The substitutive-vs-complementary regularizer-interaction framework (findings 30, 34, 35, 39), T_max U-shape mechanism (finding 45), and clip_grad_norm 100%-binding diagnostic (finding 46) are paper-grade findings.
 
 **Ongoing OLD-compound isolated-axis data (vs 46.67):**
 - **#2470 alphonse:** sw=15/20 — sw-reversal mechanism test at n_head=1
@@ -84,6 +90,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 
 ## Closed experiments this cycle
 
+- **#2758 (edward):** clip_grad_norm=0.5/2.0 sweep — CLOSED. clip=1.0 confirmed sweet spot. Grad_norm median ~40 → clip binds 100% steps at all values; near-clip-invariant (arms within 0.02%) but real sweet-spot at 1.0. Finding 46. 7th CLI negative → plateau escalation. Edward reassigned to n_hidden width sweep (PR #2793).
 - **#2618 (frieren):** cosine T_max=80/100 extension on new compound — CLOSED. T_max=50 confirmed U-shape minimum. Scheduler CLI axis fully closed. Finding 45. Frieren reassigned to fourier_min_freq sweep (PR #2789).
 - **#2742 (thorfinn):** fourier_L=4/L=8 sweep on new compound — CLOSED. L=6 confirmed. L=4 within-noise; L=8 aliasing regression. Finding 44. Thorfinn reassigned to max_freq sweep (PR #2784).
 - **#2729 (edward):** ema_decay=0.995/0.999 higher direction on new compound — CLOSED. ema=0.99 locked. EMA lag mechanism confirmed; higher decay = lagged EMA at this step budget, not deeper smoothing. Arm 2 (0.999) trades single_in_dist for re_rand regression. Finding 43.

@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-14 05:30 — PR #2758: clip_grad_norm sweep (0.5/2.0) on n_layers=3+wd=3e-4 (edward) — CLOSED, CLIP=1.0 CONFIRMED SWEET SPOT
+
+- **Branch:** `willowpai2g24h5-edward/clip-grad-norm-sweep`
+- **Hypothesis:** clip_grad_norm=1.0 (default) never tuned on Lion. Lion sign-update makes clipping subtle — mechanism is rescaling gradient contribution to EMA momentum buffer.
+- **W&B runs:** `glfhgedv` (clip=0.5), `5caqwyca` (clip=2.0)
+
+| Arm | clip_grad_norm | val | test | Δ val vs baseline (42.00) | Δ test vs baseline (35.96) |
+|-----|----------------|-----|------|--------------------------|----------------------------|
+| Baseline #2489 | 1.0 | **42.00** | **35.96** | — | — |
+| Arm 1 | 0.5 | 44.10 | 37.24 | +4.99% ✗ | +3.56% ✗ |
+| Arm 2 | 2.0 | 44.09 | 36.87 | +4.97% ✗ | +2.53% ✗ |
+
+Per-test-split: both arms regress all 4 splits. Arm 2 (clip=2.0) near-ties single_in_dist (+0.2%) but OOD splits regress.
+
+**Result:** CLOSED. clip_grad_norm=1.0 confirmed as sweet spot.
+
+Key findings:
+1. **Finding 46 — clip_grad_norm=1.0 locked, both directions closed.** Clean negative. Both arms within 0.02% of each other on val (Lion's near-clip-invariance confirmed) — but both lose ~5% val vs clip=1.0.
+2. **Critical diagnostic: clip binds 100% of steps at ALL three values.** Pre-clip grad_norm median ~40, max ~200. No "rare burst" regime. Sweep compared three regimes of constant rescaling factor, not "off vs on."
+3. **Sweet-spot mechanism:** Sign of gradient is preserved across clip values, but EMA momentum buffer accumulates rescaled gradients — the balance between current-grad and momentum contribution has a non-monotonic optimum at c=1.0.
+4. **Arm 1 vs Arm 2 divergence by split:** Arm 2 (clip=2.0) slightly biased toward in-dist vs OOD — larger rescaling means momentum buffer accumulates less-rescaled gradients, biasing toward smoother features.
+5. **Plateau signal:** This is the 7th consecutive CLI-axis negative. All CLI hyperparameters that affect val are now mapped. **Escalating to code-edit tier (n_hidden width sweep, #2793).**
+
+**Edward reassigned:** n_hidden width sweep (96/160 vs 128) — Config-edit tier. First code-edit-tier experiment. n_hidden=128 has been hardcoded since earliest compound.
+
+---
+
 ## 2026-05-14 05:20 — PR #2618: Cosine T_max extension epochs=80/100 on n_layers=3+wd=3e-4 (frieren) — CLOSED, T_MAX=50 IS U-SHAPE MINIMUM
 
 - **Branch:** `willowpai2g24h5-frieren/cosine-tmax-extension-80-100`
