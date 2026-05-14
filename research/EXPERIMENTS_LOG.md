@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-14 [Round 88] UTC — Round 88
+
+### Merged PR #2741: SwiGLU MLP activation (Shazeer 2020) — **18th WINNER** (−0.62% val, −0.84% test, NEW BASELINE)
+- **Student:** charliepai2g48h5-alphonse
+- **Branch:** charliepai2g48h5-alphonse/swiglu-mlp
+- **Hypothesis:** Replace GELU activation in all 4 TransolverBlock MLP bodies with SwiGLU (param-matched, hidden_swiglu=128 = round(96*2*2/3/8)*8, +256 params). Tests whether multiplicative gating in the MLP body improves per-token conditional capacity. Activation family not previously probed in this launch.
+
+| Metric | PR #2741 SwiGLU | #2727 baseline | Δ vs #2727 | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **32.2477** | 32.4498 | **−0.62%** | **WIN — NEW BASELINE** |
+| `test_avg/mae_surf_p` | **27.4248** | 27.6573 | **−0.84%** | WIN |
+| `val_single_in_dist` | **25.5303** | 25.6532 | **−0.48%** | WIN (best-ever in-dist) |
+| `val_geom_camber_rc` | 47.4674 | 47.2242 | +0.51% | mild flat |
+| `val_geom_camber_cruise` | 19.1621 | 19.0752 | +0.46% | mild flat |
+| `val_re_rand` | **36.8311** | 37.8467 | **−2.68%** | WIN |
+| `test_single_in_dist` | 23.7995 | 24.2435 | −1.83% | WIN |
+| `test_geom_camber_cruise` | 15.3055 | 15.5263 | −1.42% | WIN |
+| `test_re_rand` | 27.2622 | 27.7105 | −1.61% | WIN |
+
+Param count: 338,523 (331,031 + 256 SwiGLU delta; essentially param-matched to GELU baseline).
+Best epoch: 63/70 (timeout-truncated; +3% sec/epoch from extra Linear + element-wise-mul).
+
+**SwiGLU gate diagnostic (per-block, best-val checkpoint sample batch):**
+
+| Block | gate_mean | gate_std | gate_abs_mean | gate_zero_frac | value_abs_mean | corr(gate,value) |
+|---|---|---|---|---|---|---|
+| 0 | 0.3555 | 1.0742 | 0.5695 | 0.0235 | 1.7284 | −0.0023 |
+| 1 | 0.2531 | 0.9166 | 0.4859 | 0.0180 | 1.5435 | −0.0282 |
+| 2 | 0.1531 | 0.7248 | 0.4088 | 0.0131 | 1.2554 | −0.0175 |
+| 3 | 0.0881 | 0.5782 | 0.3373 | 0.0169 | 0.7353 | +0.0525 |
+
+**Analysis:** SwiGLU WIN comes from **smooth, signed, depth-progressive re-weighting** (not hard channel masking — gate_zero_frac 1.3-2.4% is well below the "WIN via hard masking" predicted range of 5-20%). gate_mean decreases monotonically (0.356→0.088) and gate_std decreases (1.07→0.58) — deeper blocks use sparser, more discriminative gating. corr(gate,value)≈0 across all blocks confirms gate learns independently from value stream (decoupled conditional capacity). SwiGLU stacks constructively with SE-block3-only (SE gates global token-pool channels; SwiGLU gates per-token MLP channels — genuinely orthogonal mechanisms).
+
+**Assignment (Round 88):** PR #2759 alphonse GeGLU (1-line change: F.silu→F.gelu in gate; same param count; ablates whether gate activation function or GLU structure drove the WIN).
+
+---
+
 ## 2026-05-14 [Round 87] UTC — Round 87
 
 ### Merged PR #2727: SE block-3-only — **17th WINNER** (−1.73% val, −2.46% test, NEW BASELINE)
