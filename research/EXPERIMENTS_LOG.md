@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-14 [Round 132] UTC — PR #2911: nonlinear-additive-geo-FiLM — **CLOSED LOSS (+7.97% val; 109th taxon; GEO-FILM-CONDITIONER-CAPACITY AXIS CLOSED)**
+
+- **Branch:** charliepai2g48h5-askeladd/nonlinear-additive-geo-film
+
+| Metric | Baseline #2879 | #2911 Nonlinear geo-FiLM | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 32.9946 | **+7.97% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.4964 | +3.70% LOSS |
+| val_single_in_dist | 23.3997 | 26.7719 | +14.40% LOSS |
+| val_geom_camber_rc | 46.0708 | 47.9049 | +3.98% LOSS |
+| val_geom_camber_cruise | 17.8657 | 19.1226 | +7.04% LOSS |
+| val_re_rand | 34.9057 | 37.6788 | +7.95% LOSS |
+| Param count | 407,940 | ~409,716 | +1,776 |
+
+- **Analysis:** WORSE than both linear geo-FiLM variants (#2890, #2900). Uniform LOSS across all 4 splits. Mechanism correctly activated (w2_norm grew 0→3.06; geo_bias magnitude highest on camber_cruise at 0.112) but learned a discriminative-but-harmful direction. The 3-point geo-FiLM curve (linear additive / linear multiplicative / nonlinear additive) confirms the cruise/in_dist trade-off is STRUCTURAL. Conditioner expressivity/capacity cannot decouple it. 109th taxon closed: geo-FiLM-conditioner-capacity axis.
+- **Assignments:** #2927 askeladd per-block-flow-film (per-block conditioning capacity; 111th axis pending), #2928 nezuko layerscale-gamma-1.0 (γ_init=1e-4 cautious init for shallow 4-block net; 112th axis pending)
+
+## 2026-05-14 [Round 132] UTC — PR #2912: droppath-linear-0.1 — **CLOSED LOSS (+7.49% val; 110th taxon; STOCHASTIC-DEPTH AXIS CLOSED)**
+
+- **Branch:** charliepai2g48h5-nezuko/droppath-linear-0.1
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-droppath-linear-0.1-20260514-130306/metrics.jsonl
+
+| Metric | Baseline #2879 | #2912 DropPath 0→0.1 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 32.8491 | **+7.49% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.7555 | +4.68% LOSS |
+| val_single_in_dist | 23.3997 | 25.2057 | +7.72% LOSS |
+| val_geom_camber_rc | 46.0708 | 49.2660 | +6.94% LOSS |
+| val_geom_camber_cruise | 17.8657 | 19.3113 | **+8.09% LOSS (reversed meta-signal)** |
+| val_re_rand | 34.9057 | 37.6135 | +7.76% LOSS |
+| Param count | 407,940 | 407,940 | 0 |
+
+- **Analysis:** Uniform LOSS across all 4 splits including camber_cruise — meta-signal reversed in wrong direction. Key diagnostic: train→val surf_loss ratio = 1.33× at ep60; model NOT overfit; best epoch was 60 (final). Regularization without overfitting = underfitting noise. Cruise gains in prior meta-signal experiments (#2889-#2905) came from capacity reallocation in conditioning pathway, NOT co-adaptation between blocks. Closing 110th taxon: stochastic-depth / DropPath axis. All dropout-class anti-overfit interventions (DropPath, attn-dropout, MLP-dropout) are mistargeted at current model/data scale — do not pursue unless train/val gap widens in a future baseline.
+
 ## 2026-05-14 [Round 131] UTC — PR #2906: n_head 2→4 — **CLOSED LOSS (+1.89% val; 108th taxon; ATTENTION-HEAD AXIS CLOSED; dim_head=24 too small)**
 
 - **Branch:** charliepai2g48h5-tanjiro/n-head-4
