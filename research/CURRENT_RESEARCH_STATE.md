@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 05:40
+- **Date:** 2026-05-14 06:40
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -18,22 +18,19 @@
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
-> **Round 40 frontier signals — capacity DEAD, scheduler-shape DEAD, loss-shape directional positive:**
+> **Round 40 frontier signals — capacity DEAD, schedule DEAD, loss-weight DEAD, loss-form and optimizer NEXT:**
 > - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss).
-> - **CAPACITY HYPOTHESIS NOW DEAD**:
->   - n_hidden axis: #2685 +2.53%, #2737 +7.55% (REFUTED TWICE)
->   - mlp_ratio axis: #2738 +4.35% (also #2278 +5.4% at n_layers=3)
->   - depth axis: #2684 +12.7% (n_layers=1 catastrophic)
-> - **SCHEDULER-SHAPE HYPOTHESIS REFUTED (#2760)**: truncated cosine T_max=60+epochs=46 → +1.63% val LOSS. KEY DIAGNOSTIC: "still descending at final epoch" does NOT mean scheduler-bound. Standard cosine's polish phase at very low LR helps generalization; stretching the schedule HURTS by oversteering on OOD. Model is training-time-limited but needs more EPOCHS, not stretched schedule.
-> - **LOSS-SHAPE direction shows real signal (#2755 swp=15/swuv=10)**: val flat (+0.21%, within noise), **test -1.06%** consistently across 3/4 splits including BOTH OOD geometry splits. Sent back for stronger swp=20 retry — first signal of OOD improvement in Round 38-40.
+> - **CAPACITY AXIS FULLY DEAD**: n_hidden (#2685 +2.53%, #2737 +7.55%), mlp_ratio (#2738 +4.35%), depth (#2684 +12.7%).
+> - **SCHEDULE AXIS FULLY DEAD**: TAIL truncated cosine (#2760 +1.63%), HEAD warmup_epochs=3 (#2797 +2.04%). Standard cosine T_max=epochs confirmed optimal.
+> - **LOSS-WEIGHT AXIS SATURATED**: swp=15 (+0.21% val noise, −1.06% test directional), swp=20 (+4.76% val LOSS — over-pushed, broke optimization). Loss-WEIGHTING is non-monotone; weight amplification is not the path.
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
-> - **Round 40 cont. — TWO new code-change pivots in flight**:
->   - **frieren #2755 swp=20 retry**: amplified pressure ratio (2× vs 1.5×) for stronger signal
->   - **askeladd #2797 warmup_epochs=3**: schedule HEAD complement to #2760 TAIL probe (gentler early gradients)
-> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight (uniform), n_head, depth, slice_num, all 3 capacity axes saturated/refuted, scheduler tail refuted.
-> - **#2638 split-dependent OOD diagnostic NOW REINTERPRETED**: re_rand is regularization-friendly; geom_camber is NOT capacity-limited — likely **INFORMATION-limited** OR **representation-limited**. Per-channel loss weighting (frieren #2755 swp=15) is the FIRST mechanism to give OOD test improvement.
-> - **Future levers if Round 40 pivots stagnate**: aux surface head, physics-informed loss (divergence/curl), eta_min>0 (LR floor), drop_path/stochastic depth, data augmentation (CFD-valid symmetries), seed-averaged baseline confirmation, complete model replacement.
+> - **Round 41 — TWO NEW CODE-CHANGE PIVOTS**:
+>   - **frieren #2822 Huber loss delta=5.0**: switch from L1 to Huber (smooth_l1_loss beta=5.0) across all channels+terms — loss-FORM test; hypothesis that smooth quadratic region near zero improves final accuracy
+>   - **askeladd #2824 AdamW lr=3e-4**: switch from Lion to AdamW (betas=0.9/0.95) — OPTIMIZER AXIS, fundamentally orthogonal to all previously tested HP/arch/schedule/loss axes
+> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth, slice_num, all 3 capacity axes, schedule shape (tail+head).
+> - **#2638 split-dependent OOD diagnostic**: geom_camber is INFORMATION-limited or REPRESENTATION-limited — needs mechanism change, not weight tuning.
 > - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.
+> - **Future levers if Round 41 pivots stagnate**: aux surface head, physics-informed loss (divergence/curl), eta_min>0 (LR floor), data augmentation (CFD-valid symmetries), seed-averaged baseline confirmation, complete model replacement, quantile loss, focal MAE.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|

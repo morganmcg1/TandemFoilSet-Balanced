@@ -6,6 +6,49 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 06:40 — Round 40 cont.: close #2755 swp=20 (+4.76% val LOSS — loss-weight over-pushed), close #2797 warmup (+2.04% val LOSS — schedule HEAD refuted); assign frieren #2822 Huber d5, askeladd #2824 AdamW lr=3e-4
+
+### PR #2755 — frieren swp=20, swuv=10 retry (per-channel surf weighting 2× ratio)
+- Branch: `charliepai2g48h3-frieren-swp15-swuv10-nlayers2-slicenum16-epochs46`
+- Hypothesis: amplify pressure emphasis from 1.5× (swp=15) to 2× (swp=20) to push signal past seed-noise floor
+- Artifacts: `models/model-charliepai2g48h3-frieren-swp20-swuv10-nlayers2-slicenum16-epochs46-20260514-045917/metrics.jsonl`
+
+| Split | val mae_surf_p | baseline | Δval | test mae_surf_p | baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 37.680 | 36.476 | +3.30% | 33.556 | 33.035 | +1.58% |
+| geom_camber_rc | 51.069 | 48.297 | +5.74% | 45.650 | 44.333 | +2.97% |
+| geom_camber_cruise | 20.074 | 18.326 | +9.54% | 16.086 | 15.496 | +3.80% |
+| re_rand | 38.910 | 37.923 | +2.60% | 28.462 | 28.116 | +1.23% |
+| **avg** | **36.933** | **35.256** | **+4.76%** | **30.938** | **30.245** | **+2.29%** |
+
+**Analysis:** BOTH val and test regressed, all 4 splits worse on both metrics. The previously-positive single_in_dist split (val −6.62% at swp=15) FLIPPED to +3.30% at swp=20 — a ~10pp swing. Velocity also degraded (+4-7% Ux/Uy), confirming "over-emphasis damages shared pressure-velocity representation." Best epoch 45 (capped by 30-min timeout at start of epoch 46).
+
+**Conclusion:** Loss-WEIGHTING axis has a sharp optimum between swp=10 and swp=15. The direction is non-monotone: swp=15 shows marginal positive test signal, swp=20 breaks optimization entirely. The axis is SATURATED via weight. Pivoting to loss-FORM (Huber) instead.
+
+---
+
+### PR #2797 — askeladd warmup_epochs=3 + standard cosine (schedule HEAD complement)
+- Branch: `charliepai2g48h3-askeladd-warmup3-nlayers2-slicenum16-epochs46`
+- Hypothesis: 3-epoch linear warmup prevents chaotic early Lion updates, allowing better long-run convergence
+- Artifacts: `models/model-warmup3-nlayers2-slicenum16-epochs46-20260514-053208/metrics.jsonl`
+
+| Split | val mae_surf_p | baseline | Δval | test mae_surf_p | baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 37.354 | 36.476 | +2.41% | 32.536 | 33.035 | −1.51% |
+| geom_camber_rc | 48.411 | 48.297 | +0.24% | 43.797 | 44.333 | −1.21% |
+| geom_camber_cruise | 19.560 | 18.326 | **+6.74%** | 15.378 | 15.496 | −0.76% |
+| re_rand | 38.576 | 37.923 | +1.72% | 28.178 | 28.116 | +0.22% |
+| **avg** | **35.975** | **35.256** | **+2.04%** | **29.972** | **30.245** | **−0.90%** |
+
+**Analysis:** val regressed +2.04%, test showed marginal noise-level improvement −0.90%. The 3-epoch warmup caused epoch 1 val to jump from 167.978 (baseline) to 336.675 (warmup3) — the low LR during warmup delayed productive escape from random initialization. The model has 0.36M params on 1499 samples — small enough that the first epoch at full LR is productive, not chaotic. Worst on geom_camber_cruise (val +6.74%). Best epoch 46 (unchanged — schedule tail still doing meaningful work).
+
+**Conclusion:** Schedule HEAD axis REFUTED. This complements #2760 schedule TAIL refutation. The SCHEDULE AXIS is now fully closed:
+- TAIL: truncated cosine T_max=60 → +1.63% LOSS (#2760)
+- HEAD: linear warmup_epochs=3 → +2.04% LOSS (this PR)
+- Standard cosine T_max=epochs is confirmed optimal for Lion+L1+lr=1e-4
+
+---
+
 ## 2026-05-14 05:35 — Round 40 cont.: close #2760 (askeladd truncated cosine T_max=60 — +1.63% val LOSS, scheduler-bound hypothesis REFUTED); assign askeladd #2797 lr warmup pivot
 
 ### PR #2760 askeladd truncated cosine T_max=60 + epochs=46 — NEGATIVE RESULT (BUT EXCELLENT DIAGNOSTIC)
