@@ -513,6 +513,7 @@ model_config = dict(
     n_head=2,
     slice_num=24,
     mlp_ratio=2,
+    dropout=0.05,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -521,6 +522,7 @@ print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing 
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
+print(f"PhysicsAttention dropout: p={model_config['dropout']} (applied to attention probabilities and output projection)")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
@@ -534,6 +536,65 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# Attention-dropout diagnostic: verify dropout wiring at every PhysicsAttention.
+_attn_modules = [m for m in model.modules() if isinstance(m, PhysicsAttention)]
+for _i, _attn in enumerate(_attn_modules):
+    assert abs(_attn.dropout.p - model_config["dropout"]) < 1e-9, (
+        f"block {_i}: attn.dropout.p={_attn.dropout.p} != {model_config['dropout']}"
+    )
+    _to_out_drop = _attn.to_out[1]
+    assert isinstance(_to_out_drop, nn.Dropout) and abs(_to_out_drop.p - model_config["dropout"]) < 1e-9, (
+        f"block {_i}: to_out[1].p={_to_out_drop.p} != {model_config['dropout']}"
+    )
+print(
+    f"Attention dropout (Vaswani et al. 2017): p={model_config['dropout']} on F.scaled_dot_product_attention "
+    f"and on to_out projection in all {len(_attn_modules)} PhysicsAttention blocks; "
+    f"+0 params; INSIDE attention output magnitude (not residual gating like closed DropPath #2722); "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (#2765 SE r=4)"
+)
+
+# One-shot attention-output diagnostic: forward hook on first PhysicsAttention captures
+# output variance once per epoch in BOTH train and eval mode. Hook is gated by python flags
+# (_attn_diag), enabled before the first batch of each phase, and emits via .item() once.
+# Hook is attached to the inner uncompiled module so it survives torch.compile.
+_attn_diag = {
+    "capture_train": False,
+    "capture_eval": False,
+    "train_var": None,
+    "eval_var": None,
+    "mode_logged_train": False,
+    "mode_logged_eval": False,
+}
+
+
+def _attn_diag_hook(module, _args, output):
+    """Captures variance of PhysicsAttention output (post to_out, post-Dropout)."""
+    if module.training and _attn_diag["capture_train"]:
+        _attn_diag["train_var"] = output.detach().float().var().item()
+        _attn_diag["capture_train"] = False
+        if not _attn_diag["mode_logged_train"]:
+            _attn_diag["mode_logged_train"] = True
+            print(
+                f"[attn-dropout-diag] dropout active: train mode | attn.dropout.training="
+                f"{module.dropout.training} | to_out[1].training={module.to_out[1].training} | "
+                f"out_var={_attn_diag['train_var']:.6g}"
+            )
+    elif (not module.training) and _attn_diag["capture_eval"]:
+        _attn_diag["eval_var"] = output.detach().float().var().item()
+        _attn_diag["capture_eval"] = False
+        if not _attn_diag["mode_logged_eval"]:
+            _attn_diag["mode_logged_eval"] = True
+            print(
+                f"[attn-dropout-diag] dropout inactive: eval mode | attn.dropout.training="
+                f"{module.dropout.training} | to_out[1].training={module.to_out[1].training} | "
+                f"out_var={_attn_diag['eval_var']:.6g}"
+            )
+
+
+_first_attn = model.blocks[0].attn
+_first_attn.register_forward_hook(_attn_diag_hook)
+print(f"[attn-dropout-diag] forward hook attached to model.blocks[0].attn (PhysicsAttention)")
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -675,6 +736,8 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    _attn_diag["capture_train"] = True
+    _attn_diag["train_var"] = None
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
@@ -711,6 +774,8 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    _attn_diag["capture_eval"] = True
+    _attn_diag["eval_var"] = None
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
@@ -743,6 +808,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "attn_out_var_train": _attn_diag["train_var"],
+        "attn_out_var_eval": _attn_diag["eval_var"],
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
