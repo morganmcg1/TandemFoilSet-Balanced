@@ -2,6 +2,188 @@
 
 ---
 
+## 2026-05-14 [Round 78] UTC — Round 78
+
+### PR #2661 frieren: QK-Norm — CLOSED (42nd taxon, attention-internal trio saturated)
+
+- **Branch:** `charliepai2g48h5-frieren/qk-norm`
+- **Hypothesis:** Per-head LayerNorm on Q and K post-projection (V unchanged); +768 params; Henry et al. 2020 / Dehghani et al. 2023 (ViT-22B); targets Q·K magnitude drift causing softmax saturation.
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | QK-Norm | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **33.4391** | 33.3722 | **+0.20% WASH** |
+| test_avg/mae_surf_p | **29.1677** | 28.3736 | **+2.80% LOSS** |
+
+Per-split val:
+
+| Split | QK-Norm | NEW baseline | Δ % |
+|---|---|---|---|
+| val_single_in_dist | **24.6761** | 25.3293 | **−2.58% WIN** |
+| val_geom_camber_rc | 51.3138 | **49.5771** | **+3.50% LOSS (dominates avg)** |
+| val_geom_camber_cruise | **20.0609** | 20.4181 | **−1.75% WIN** |
+| val_re_rand | **37.7057** | 38.1642 | **−1.20% WIN** |
+
+3/4 val splits improved; val_geom_camber_rc dominates because it's the largest-magnitude split.
+
+Per-split test:
+
+| Split | QK-Norm | NEW baseline | Δ % |
+|---|---|---|---|
+| test_single_in_dist | 24.9319 | **24.4830** | +1.83% LOSS |
+| test_geom_camber_rc | 45.8308 | **43.3910** | **+5.62% LOSS** |
+| test_geom_camber_cruise | **16.1193** | 16.8389 | −4.27% WIN |
+| test_re_rand | 29.7888 | **28.7816** | +3.50% LOSS |
+
+- **Run characteristics:** Best ep=66/70 (terminal, timeout-clipped at 30min). +1.9s/epoch over baseline. +768 params (+0.23%, matches expected). Peak GPU 13.12 GB (unchanged).
+
+- **Mechanism diagnostic — pre-norm Q/K magnitudes:** ||Q||,||K|| grew 80-200× from init across 4 blocks (range 9.8-24.3). Without QK-Norm, raw Q·Kᵀ products would scale ∝ 100-550 → softmax saturation territory. **QK-Norm IS normalizing meaningful magnitudes** — mechanism worked as designed.
+
+- **But LayerScale γ_attn caps the effect:**
+
+| Block | γ_attn abs_mean | γ_mlp abs_mean |
+|---|---|---|
+| 0 | 0.0158 | 0.0880 |
+| 1 | 0.0171 | 0.0879 |
+| 2 | 0.0178 | 0.0922 |
+| 3 | 0.0106 | 0.0902 |
+
+γ_attn stays at 0.010-0.018 → attention residual contribution is ~1-2% of the residual stream. Even saturated-softmax attention values contribute very little. **Pre-LN + LayerScale = the implicit bound on softmax saturation that this hypothesis predicted as scenario #2 (WASH).**
+
+- **42nd closed taxon: attention-internal score-stabilization at Lion + LayerScale + L1 stack.**
+
+**Attention-internal trio now fully closed:**
+
+| Mechanism | PR | Status |
+|---|---|---|
+| Post-softmax shape (τ) | #2623 | LOSS (37th) |
+| Weight Lipschitz (spectral norm) | #2580 | LOSS (32nd) |
+| Score stabilization (QK-Norm) | #2661 | WASH/LOSS (42nd) |
+
+Three independent mechanisms all fail to move val significantly → **Pre-LN + small LayerScale γ_attn is sufficient attention regularization** at width=96 / heads=2 / blocks=4.
+
+- **Critical per-split insight (preserved for future hypotheses):** test_geom_camber_rc regressed consistently across val/test (+3.50%/+5.62%). camber_rc has consistently failed to improve across attention-internal interventions, suggesting it's a DATA SPARSITY problem (front-foil M=6-8 held out) rather than a model regularization problem. Sampler reweighting (up-weighting M=2-5 and M=9 training neighbors) may be more productive than any attention tweak.
+
+- **Action:** Closed. Pivoted frieren to structurally distinct normalization-replacement probe.
+
+---
+
+### PR #2658 edward: Lion weight_decay 3e-4 → 1e-4 — CLOSED (43rd taxon, Lion-internal exhausted)
+
+- **Branch:** `charliepai2g48h5-edward/lion-wd-1e-4`
+- **Hypothesis:** Lion WD 3e-4 → 1e-4 (1/3 of inherited Lion-paper default); tests whether Lion paper's 3× AdamW WD rule-of-thumb over-regularizes budget-bound stack.
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | WD=1e-4 | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **34.8122** | 33.3722 | **+4.31% LOSS** |
+| test_avg/mae_surf_p | **29.2347** | 28.3736 | **+3.04% LOSS** |
+
+Per-split val (uniform regression):
+
+| Split | WD=1e-4 | NEW baseline | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 28.5805 | **25.3293** | **+12.84% WORST** |
+| val_geom_camber_rc | 49.7055 | **49.5771** | +0.26% flat |
+| val_geom_camber_cruise | 21.7473 | **20.4181** | +6.51% |
+| val_re_rand | 39.2153 | **38.1642** | +2.75% |
+
+Per-split test (same ordering as val):
+
+| Split | WD=1e-4 | NEW baseline | Δ % |
+|---|---|---|---|
+| test_single_in_dist | 25.7480 | **24.4830** | +5.17% |
+| test_geom_camber_rc | 44.3330 | **43.3910** | +2.17% |
+| test_geom_camber_cruise | 17.0554 | **16.8389** | +1.29% |
+| test_re_rand | 29.8022 | **28.7816** | +3.55% |
+
+- **Run characteristics:** Best ep=61/70 (timeout-clipped at 30.1min). Per-epoch ~26s. Lion momentum non-zero fraction at terminal = 0.9980 (vs baseline 0.996; healthy).
+
+- **Mechanism — in-dist-favoring regularization:** WD=3e-4 was load-bearing regularization for the budget-bound Lion+FiLM stack. The per-split signature is **in-dist-favoring**, not OOD-favoring:
+  - val_single_in_dist regressed MOST (+12.84%) — seen single-foil distribution was what WD was protecting against overfitting
+  - val_geom_camber_rc regressed LEAST (+0.26%) — OOD camber generalization is WD-INSENSITIVE (rc bottleneck is geometric extrapolation, not in-dist regularization)
+  - camber_cruise (+6.51%) and re_rand (+2.75%) sit in middle — confirms progressive in-dist→OOD axis
+
+- **Falsified diagnostic prediction:** "lower WD lets early-epoch fitting proceed faster, freeing budget for late-stage refinement." Best epoch DID move earlier (61 vs 70), but val/test both regressed — the budget-freed epochs were spent overfitting in-dist.
+
+- **Second-attempt confirmation:** Student ran an earlier attempt at same config (60 epochs, val=34.4842) — same LOSS pattern within run-to-run variance. Two consistent attempts confirm the result.
+
+- **43rd closed taxon: Lion-internal optimization axes EXHAUSTIVELY closed across all 4 dimensions:**
+
+| Axis | Closed at | Taxon |
+|---|---|---|
+| LR | 1.5e-4 (bracket {1, 1.5, 1.75, 2}e-4 = {36.40, 33.49, 33.81, 33.83}) | 36th (#2602) |
+| β₁ | 0.90 (asymmetric peak; 0.85 LOSS, 0.95 LOSS) | 35th (#2613) |
+| β₂ | 0.99 (default); 0.999 catastrophic +78% | 39th (#2647) |
+| WD | 3e-4 load-bearing | 43rd (#2658, this PR) |
+
+**Lion optimizer SATURATED at lr=1.5e-4, betas=(0.9, 0.99), wd=3e-4.** Combined with closed parameter-space averaging meta-family (25th EMA, 26th Lookahead, 28th SWA, 30th β₁=0.95) and closed meta-optimizers (12th SAM, 20th LLRD), the optimizer-internal+meta direction is comprehensively saturated.
+
+- **Action:** Closed. Pivoted edward to regularization/data-side probe (Mixup α=0.2).
+
+---
+
+### PR #2686 frieren: DyT (Dynamic Tanh) normalization — ASSIGNED (Round-78)
+
+- **Branch:** `charliepai2g48h5-frieren/dyt-alpha05`
+- **Hypothesis:** Replace ALL `nn.LayerNorm(d)` with `DyT(d) = γ ⊙ tanh(α * x) + β` where α is single learnable scalar per LN site (init=0.5). Liu, Ba et al. 2024 NeurIPS "Transformers without Normalization". Eliminates mean/variance reduction in favor of bounded element-wise nonlinearity; one α scalar per site as saturation knob.
+
+- **Code pattern:**
+```python
+class DyT(nn.Module):
+    def __init__(self, dim, alpha_init=0.5):
+        super().__init__()
+        self.alpha = nn.Parameter(torch.tensor(alpha_init))
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
+    def forward(self, x):
+        return self.gamma * torch.tanh(self.alpha * x) + self.beta
+# Replace every nn.LayerNorm(d) site with DyT(d)
+```
+
+- **Predicted outcomes:**
+  - **WIN:** Removes channel-stat noise at width=96 (only 96 features per token); tanh saturation provides smoother gradient flow. Best case −0.5% to −2%; in_dist improves most.
+  - **WASH:** α drifts to LN-equivalent regime; LN is approximately optimal.
+  - **LOSS:** Channel-stat reduction was load-bearing; residual stream variance drifts uncontrolled.
+
+- **Why structurally fresh:** FIRST normalization-replacement probe in launch beyond closed RMSNorm. Distinct from NormFormer (adds Post-LN), LayerScale (residual gain), and all attention-internal closures (τ, spectral norm, QK-Norm).
+
+- **Param overhead:** +9-12 scalar params (one α per LN site). Compute IMPACT ~−5% per epoch (saves reduce ops).
+
+- **Baseline to beat:** val < 33.3722.
+
+---
+
+### PR #2687 edward: Mixup α=0.2 — ASSIGNED (Round-78)
+
+- **Branch:** `charliepai2g48h5-edward/mixup-alpha02`
+- **Hypothesis:** Per-batch λ ∼ Beta(0.2, 0.2), permute batch, blend `x = λ·x + (1−λ)·x[perm]` and `y = λ·y + (1−λ)·y[perm]`. Zhang et al. 2018 ICLR. Vicinal risk regularization that encourages locally linear behavior in input-output space.
+
+- **Code pattern:**
+```python
+mixup_alpha = 0.2
+if model.training and mixup_alpha > 0.0:
+    lam = float(torch.distributions.Beta(mixup_alpha, mixup_alpha).sample())
+    perm = torch.randperm(x.size(0), device=x.device)
+    x = lam * x + (1.0 - lam) * x[perm]
+    y = lam * y + (1.0 - lam) * y[perm]
+# Continue with forward/loss/backward as usual
+```
+
+- **Predicted outcomes:**
+  - **WIN — vicinal regularization:** val_single_in_dist improves MOST (mirrors Lion-WD LOSS signature inverted); mixup reduces in-dist overfitting.
+  - **WIN — geometry interpolation:** val_geom_camber_rc improves if blended samples include front-foil M=6-8 neighbors.
+  - **WASH:** α=0.2 too gentle (Beta is bimodal at 0/1).
+  - **LOSS:** Blended Re/AoA/geometry not physical → FiLM destabilizes.
+
+- **Why structurally fresh:** FIRST input-space LINEAR BLEND probe in launch. Distinct from closed reflection-aug (#2454 catastrophic), coord-jitter (geometric perturbation), per-channel-loss (loss reweighting), and parameter-space averaging meta-family. Directly targets the in_dist overfitting bottleneck identified by Lion-WD closure.
+
+- **Param overhead:** Zero new params. Compute impact ~+1% (extra blend op per batch).
+
+- **Baseline to beat:** val < 33.3722.
+
+---
+
 ## 2026-05-14 [Round 77] UTC — Round 77
 
 ### PR #2615 fern: Stochastic Depth / DropPath p=0.1 — CLOSED (1st stale_wip → axis non-retried)
