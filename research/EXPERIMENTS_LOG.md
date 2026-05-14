@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2952: aux-mid-block-surf-loss — **CLOSED LOSS (+1.89% val / -1.26% test slight WIN; 130th taxon; AUX-MID-BLOCK AT BLOCK-1 / DEEP-SUPERVISION-50%-DEPTH-CLOSED)**
+
+- **Branch:** charliepai2g48h5-alphonse/aux-mid-block-surf-loss
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-aux-mid-block-surf-loss-20260514-160320/metrics.jsonl
+
+| Metric | Baseline #2879 | #2952 (aux at block-1, weight=0.1) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.1363** | **+1.89% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **26.1821** | **-1.26% slight WIN** |
+| val_single_in_dist | 23.3997 | 24.5750 (+5.02%) | LOSS — hardest hit |
+| val_geom_camber_rc | 46.0708 | 47.0555 (+2.14%) | LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.3003 (-3.16%)** | **WIN** |
+| val_re_rand | 34.9057 | 35.6144 (+2.03%) | LOSS |
+| Param count | 407,940 | 408,231 (+291 aux_head_surf) | — |
+
+**Hypothesis:** Deep supervision via auxiliary Linear(96,3) head at block-2 (index 1, 50% depth) with aux_weight=0.1. STRUCTURAL/LOCAL depth-axis intervention to attack canonical meta-signal at the structural level rather than via output-loss reshaping.
+
+**DECISIVE FINDINGS:**
+
+1. **Aux head learned FUNDAMENTALLY DIFFERENT projection.** ||W_aux||=3.329 vs ||W_primary||=1.504 (2.2× larger weight norm). Per-channel cosine similarity: Ux +0.214, Uy -0.121, **p +0.050 (near-orthogonal on metric channel)**. NOT redundancy — aux is fitting a distinct intermediate→surface mapping.
+
+2. **Aux/surf RATIO CONSISTENTLY 2.5-3.7× THROUGHOUT TRAINING.** At ep57 (best): aux=0.251 vs primary surf=0.072 → mid-block features are NOT linearly mappable to surface output. Mid features have a different job (feed blocks 2-3); forcing them toward surface output creates representational conflict.
+
+3. **TINY TRAIN→VAL GAP (~0.022)** confirms UNDERFIT regime at 60ep. Deep supervision is typically a regularizer that helps in OVERPARAMETERIZED regimes; here at 407k params over 60ep, constraint is convergence budget, NOT feature quality, so aux just steals gradient signal from the primary surf objective.
+
+4. **CANONICAL META-SIGNAL REPEATED under STRUCTURAL DEPTH-AXIS intervention:** cruise -3.16% WIN, in_dist +5.02% LOSS (hardest), rc/re_rand uniform LOSS +2.0-2.1%. SAME pattern as global output-loss reshaping (#2933, #2941) and head-axis split (#2946).
+
+5. **MAJOR META-INSIGHT:** Three structural/loss-reshaping interventions in a row reproduce the meta-signal:
+   - #2933 surf-p-weight-2x (global loss reshape): cruise -0.96% WIN, in_dist +9.60% LOSS
+   - #2946 separate-surf-vol-heads (head-axis structural): cruise -0.78% WIN, in_dist +8.64% LOSS
+   - #2952 aux-mid-block-surf-loss (depth-axis structural): cruise -3.16% WIN, in_dist +5.02% LOSS
+   
+   **The cruise↔in_dist tradeoff lives at a DEEPER, intervention-agnostic representational level** than per-region weighting, per-depth supervision, or per-region head splitting. None of these surface-level levers escape it.
+
+**130th taxon CLOSED:** AUX-MID-BLOCK-SURF-LOSS at BLOCK-1 (50% depth) WITH WEIGHT=0.1.
+
+**Followup assigned:** #2961 alphonse aux-supervision-at-block-3 (deeper placement: index 2, 75% depth; student suggestion #2; same +291 params, same diagnostics; tests representational compatibility — predicted aux/surf ratio ~1.0-1.5× at block-3 vs 3.5× at block-1; 131st axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2949: rmsnorm-plus-beta — **CLOSED LOSS (+5.40% val / +1.58% test; 129th taxon; NORM-SHAPE AXIS DECISIVELY CLOSED — MEAN-SUBTRACTION-LOAD-BEARING-AT-74%)**
 
 - **Branch:** charliepai2g48h5-edward/rmsnorm-plus-beta
