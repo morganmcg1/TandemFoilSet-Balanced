@@ -1,5 +1,39 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 14:23 — PR #1602: grad_clip=2.0 on bf16+OneCycle@25ep baseline ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-fern/grad-clip-l1`
+- **Hypothesis:** gc=2.0 + OneCycle (winner from round-2 re-run on old baseline) carries over to new bf16+25ep baseline.
+
+### Result (2 seeds, vs tanjiro #1405 baseline 73.295)
+
+| Arm | val_avg (best/mean) | test_avg 4-split (best/mean) | Δ vs baseline |
+|-----|--------------------:|-----------------------------:|--------------:|
+| gc=2.0+bf16+OneCycle@25ep | **76.359 / 77.018** | **66.474 / 66.642** | **+3.72 val (+5.1%)** |
+| **Baseline (#1405)** | — / **73.295** | — / **63.911** | — |
+
+Per-split (mean 2 seeds): cruise +1.0, re_rand +2.6, single_in_dist **+10.7** (+13.4%), rc +0.6
+
+Artifacts: `models/model-gc2-onecycle-bf16-25ep-20260514-130421/` and `models/model-gc2-onecycle-bf16-25ep-20260514-134136/` on student branch.
+
+### Action: CLOSED — >5% val regression; direction dropped
+
+**Mechanism characterised:** Mean pre-clip norm ~38; gc=2.0 clips every batch at ~5% of natural magnitude — pure per-step renormaliser, not spike cap. On the OLD baseline (fp32+14ep), this renormalisation regularised effectively. On the NEW baseline (bf16+25ep), the longer LR plateau (~10-12 high-LR epochs) already supplies the same regularisation — clipping on top over-regularises, specifically on `val_single_in_dist` (+13.4%). The effect has fully inverted: from the best relative gain to the worst split.
+
+**Boundary finding (useful for paper):** Grad-clip helps under shorter, cooler schedules (≤14ep cosine/OneCycle); hurts under longer, hotter schedules (25ep OneCycle + bf16). The binding constraint that clipping was solving no longer exists in the new recipe.
+
+**New assignment:** #2935 fern → geometric z-flip augmentation (next)
+
+---
+
+## 2026-05-14 14:25 — New assignment: PR #2935 fern → z-flip augmentation
+
+- **Student:** charliepai2g48h1-fern, branch `charliepai2g48h1-fern/z-flip-augmentation`
+- **Hypothesis:** Per-batch geometric z-flip (z→-z, AoA→-AoA, Uy→-Uy) with p=0.5 effectively doubles training data for free using TandemFoilSet's physical mirror symmetry. No compute cost, no architecture change. Expected -3 to -7 val pts, largest gains on `val_geom_camber_rc`.
+- **Beat:** val_avg/mae_surf_p < 73.295
+
+---
+
 ## 2026-05-13 00:10 — PR #1602: Gradient clipping sweep (0/0.5/1.0) ↩ SENT BACK for OneCycle re-run
 
 - **Student branch:** `charliepai2g48h1-fern/grad-clip-l1`
