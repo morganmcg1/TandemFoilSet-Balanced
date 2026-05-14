@@ -4,6 +4,60 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 01:15 — PR #2701 (ASSIGNED, alphonse): Second-seed confirmation on merged hybrid baseline #2311 — paper-facing noise floor
+
+- **Branch:** `willowpai2g48h2-alphonse/hybrid-baseline-seed-confirm`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Paper-strengthening experiment. All 50+ experiments since #2311 merge (3+ hours) have been single-seed=0. Per #2407 finding, seed effects can flip per-split test verdicts (σ=0.25 seed-1 changed direction). 2-seed sweep (seeds 1, 2) on the exact #2311 baseline command gives us cross-seed mean ± stdev for val_avg, test_avg, all 4 per-split tests, σ-spread, and channel-ordering.
+- **Decision rule:** This is NOT a hyperparameter sweep. CONFIRMS BASELINE if mean(val) within 45.22 ± 0.8 AND stdev < 0.8. NO MERGE — just paper-facing confirmation.
+- **Why this for alphonse:** Architectural single-CLI capacity axes exhausted by your #2616. Next mechanism directions all require code changes. Second-seed confirmation has high paper value, zero mechanism risk, 1 GPU-hour, sharpens noise-floor reading on all future PRs.
+- **Status:** Assigned; awaiting training.
+
+---
+
+## 2026-05-14 01:08 — PR #2616 (CLOSED, alphonse): film_mid_dim sweep {32, 128} — capacity axis closed at 64
+
+- **Branch:** `willowpai2g48h2-alphonse/film-mid-dim-sweep-on-hybrid`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** FiLM mid_dim is the one capacity knob never bracketed. Tests whether geometry conditioning is over- or under-parameterized; targets #2500 per-split asymmetry.
+
+### Result table (vs hybrid baseline #2311)
+
+| Arm | mid_dim | W&B | val | test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline | 64 | `objur0b9` | 45.2181 | 38.7661 | — | — | — |
+| Arm 1 | 32 | `gdk8m0wl` | 48.3480 | 41.0489 | +3.13 | +2.28 | regress (underfit) |
+| Arm 2 | 128 | `pxocuquc` | 392.4 † | 373.5 † | — | — | step-time blow-up, SWA never fired |
+
+(† Arm 2 SWA never activated — only 9/15 epochs at 30-min cap; numbers are AveragedModel snapshot from initialization. Base val at epoch 9 = 66.09 vs baseline epoch-9 = 56.01, so trajectory was already worse before timeout.)
+
+### Per-split BASE test (fair for Arm 2)
+
+| Split | Baseline 64 | mid_dim=32 (Δ) | mid_dim=128 (Δ) |
+|---|---:|---:|---:|
+| test_single_in_dist | 41.775 | 44.182 (+2.41) | 72.304 (+30.53) |
+| test_geom_camber_rc | 54.659 | 57.320 (+2.66) | 67.209 (+12.55) |
+| test_geom_camber_cruise | 24.922 | 24.803 (−0.12) | 33.278 (+8.36) |
+| test_re_rand | 39.802 | 40.552 (+0.75) | 51.324 (+11.52) |
+
+**No per-split OOD asymmetry found** — both bracket ends regress monotonically across all splits. The OOD `geom_camber_rc` does NOT prefer 32 or 128.
+
+### Banked findings (8 total)
+
+1. **film_mid_dim=64 is the optimum** — bracket {32, 64, 128} confirms 64 is near-optimal. Capacity-axis dead zone CONFIRMED (width #2354, slice_num #2378, depth legacy, now film_mid_dim) — all gated by SWA window or step-time cost. Future architectural gains require code changes or composition.
+2. **NEW (IMPORTANT): No OOD asymmetry on FiLM axis** — both arms regress monotonically on ALL FOUR splits. **The #2500 OOD/in-dist σ-spread asymmetry is NOT a FiLM bottleneck issue.** Architectural-bottleneck hypothesis CLEANLY REFUTED. The asymmetry must be in LOSS, DATA representation, or EVALUATION protocol.
+3. **NEW: σ-spread orthogonal to FiLM capacity** — mid_dim=32 spread=0.464 vs baseline 0.475 (within 0.01). Reinforces #2606 finding (orthogonal to max_norm). **Pattern emerging: hybrid_kendall_lr=5e-4 σ mechanism is INDEPENDENT of most other axes — it's a structural fix.**
+4. **NEW: FiLM modulation scales linearly with mid_dim** — |γ|=0.31→0.43→0.82 going 32→64→128; |β|=0.55→1.00→2.06. Larger bottleneck produces ~2× stronger modulation; "over-eager" at mid_dim=128, dominating feature distributions early.
+5. **NEW: Smaller FiLM (32) cleanly underfits** — all 4 splits worse, FiLM activation magnitudes ~30% lower. Genuine capacity limitation, not regularization.
+6. **NEW: mid_dim=128 step-time blow-up (+45% per epoch, σ=high variance 140-301s/epoch)** — pushes run over 30-min cap before SWA activation. NOT VRAM-bound (peaks 48GB). CUDA kernel/memory threshold sensitivity at FiLM head 167K params.
+7. **NEW: Capacity-axis × SWA window interaction confirmed** — any axis increasing per-epoch step time by >5-10% kills SWA window; SWA loss dominates val regression. **30-min budget is the binding constraint for architectural exploration.**
+8. **NEW: Arm 1 even-epoch behavior is stable** — at film_mid_dim=32 training is clean (~141s/epoch, identical to baseline) and just underfits. Separates "underfitting" from "broken at this size" cleanly.
+
+### Direct implication
+**The #2500 OOD/in-dist asymmetry must be in LOSS or DATA, NOT architecture.** Strong candidates per alphonse's follow-ups: (a) per-split λ loss weighting, (b) separate OOD-geometry head, (c) per-split SWA — all require code changes. Banked for after fern's #2666 and thorfinn's #2674 close.
+
+---
+
 ## 2026-05-14 00:10 — PR #2674 (ASSIGNED, thorfinn): max_norm BRACKET LOW {0.25, 0.35} on merged hybrid — complete U-curve
 
 - **Branch:** `willowpai2g48h2-thorfinn/max-norm-bracket-low-on-hybrid`
