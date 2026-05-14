@@ -1618,3 +1618,31 @@ Per-split test surf_p (s1 vs baseline): single_in_dist +8.73 (+20%), geom_camber
 frieren reassigned to Lion beta2=0.999 (PR #2713).
 
 ---
+
+## 2026-05-14 02:10 — PR #2505: GELU → SiLU activation swap in FFN blocks (alphonse)
+- Branch: `willowpai2g48h3-alphonse/silu-activation`
+- Hypothesis: Replace GELU with SiLU in FFN/MLP blocks. SiLU's non-zero gradient everywhere should improve gradient flow under 100% gradient-clipping regime with Lion.
+- W&B runs: `29qv6zik` (s1), `o26a130w` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s2 (`o26a130w`, better seed) | 54.0262 | 47.8822 | 34 |
+| s1 (`29qv6zik`, worse seed) | 55.8976 | 49.6610 | 33 |
+| **Baseline (GELU)** | **45.433** | **39.509** | 35 |
+| **Two-seed mean** | 54.97 | 48.77 | |
+
+**Regression: best seed +18.9% val, +21.2% test. All 4 test splits regress (+13-30%).**
+
+### Mechanism analysis (student's contribution — kept for future activation work)
+
+1. **Lion neutralizes SiLU's predicted advantage.** Lion's `sign(β·m + (1−β)·g)` updates produce essentially constant-magnitude steps regardless of upstream gradient magnitude. SiLU's "non-zero gradient everywhere" property is irrelevant when the optimizer sign-normalizes.
+2. **GELU's selective gating is doing useful work in slice-attention pathway.** Near-flat zero-gradient region for x<-3 suppresses small-magnitude noise after the FFN. SiLU's smooth negative region (sigmoid(x)≈0 only asymptotically) lets noise through.
+3. **Cruise split disproportionate regression (+30%).** geom_camber_cruise has smallest baseline error (24.00) — most noise-floor-sensitive. Useful diagnostic axis.
+
+### Conclusion
+
+CLOSED. Activation axis retired on Lion baseline. SwiGLU and other activation variants would face the same Lion-sign-normalization issue. Future activation experiments need a different mechanism or should target activations in the slice-attention pathway specifically (not FFN).
+
+alphonse reassigned to Lookahead(Lion) k=5, α=0.5 (PR #2726).
+
+---

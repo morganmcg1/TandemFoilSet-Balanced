@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 01:50
+- **Date:** 2026-05-14 02:10
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -42,7 +42,7 @@
 5. **max_norm=0.5 (fern #2565)**: rebasing onto new baseline (sent back); OOD camber improved −3.8 on old baseline
 6. **CosineAnnealingWarmRestarts T_0=12 (tanjiro #2693)**: multi-cycle schedule; different shape from retired cosine flat/long-T_max
 7. **Charbonnier loss ε=0.5 (askeladd #2694)**: smooth L1 alternative to Huber; loss-family change
-8. **SiLU activation (alphonse #2505)**: GELU→SiLU in FFN; rebasing onto new baseline
+8. **Lookahead(Lion) (alphonse #2726)**: outer optimizer wrapper, k=5, α=0.5 — slow-weight smoothing different from SWA's end-of-training averaging
 
 ## Round 1 portfolio (live)
 
@@ -58,7 +58,8 @@
 | #2501 | askeladd | β_p=0.625 | **CLOSED** (+6.8% val — per-channel β axis fully closed) |
 | #2565 | fern | max_norm=0.5 | WIP — rebasing onto new baseline |
 | #2564 | nezuko | Gradient Centralization | WIP — running |
-| #2505 | alphonse | SiLU activation | WIP — running on new baseline |
+| #2505 | alphonse | SiLU activation | **CLOSED** 2026-05-14 02:10 (+18.9% val; Lion sign-normalization neutralizes SiLU's gradient advantage; GELU selective gating doing useful work in slice-attention pathway) |
+| **#2726** | **alphonse** | **Lookahead(Lion) k=5 α=0.5** | **WIP NEW 2026-05-14 02:10** |
 | #2633 | edward | Lion beta1=0.95 | **CLOSED** (+4.83 pt val; variance −85% but convergence slowed) |
 | #2631 | thorfinn | Lion warmup 5ep | **CLOSED** 2026-05-14 01:45 (+4.44% val; variance −67% but 5 epochs eat compute budget) |
 | #2629 | frieren | Lion wd=3e-3 | **CLOSED** 2026-05-14 01:45 (+1.68 pt val; all 4 splits regress; wd axis monotonic-worse) |
@@ -68,7 +69,7 @@
 | **#2712** | **thorfinn** | **SWA (average epochs 26-35)** | **WIP NEW 2026-05-14 01:50** |
 | **#2713** | **frieren** | **Lion beta2=0.999** | **WIP NEW 2026-05-14 01:50** |
 
-**Merged:** 10 | **Closed:** 36 | **WIP:** 8 | **Idle:** 0
+**Merged:** 10 | **Closed:** 37 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -114,3 +115,4 @@
 - **EMA weights** — EMA-lag on cooling cosine cancels the smoothing
 - **Lion warmup 5ep** — 5 warmup epochs eat compute budget; variance reduction insufficient to compensate
 - **Lion wd=3e-3** — monotonic-worse; wd=2e-3 confirmed optimal
+- **SiLU activation in FFN** — Lion's sign-normalization neutralizes SiLU's "non-zero gradient" advantage; GELU's selective gating is doing useful work in the slice-attention pathway
