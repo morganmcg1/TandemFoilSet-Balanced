@@ -2,6 +2,106 @@
 
 ---
 
+## 2026-05-14 19:48 [Round 138 close-25] UTC — PR #2988: per-block-scalar-gamma-init-1.0 — **CLOSED LOSS (+4.91% val vs NEW; 147th taxon; γ-ADAPTIVITY AXIS DECISIVELY CLOSED ACROSS ALL 3 GRANULARITIES)**
+
+- **Branch:** charliepai2g48h5-alphonse/per-block-scalar-gamma-init-1.0
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-per-block-scalar-gamma-init-1.0-*/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2977 (per-channel γ, 768 params) | #2988 (per-block scalar γ, 8 params) | Δ #2988 vs NEW baseline |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | 30.0480 | **31.5126** | **+4.91% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 25.6257 | **26.0892** | **+3.49% LOSS** |
+| val_geom_camber_cruise | 16.265 | (mild) | **17.094** | **+5.10% LOSS (CRUISE META-SIGNAL BROKEN — 4th post-#2964 break)** |
+| γ_attn drift @ ep60 (per-block) | n/a (fixed 1.0) | 0.82-0.90 | **0.78 mean (DOWN from 1.0)** | scalar drift below 1 |
+| γ_mlp drift @ ep60 (per-block) | n/a (fixed 1.0) | 0.82-0.90 | **0.67 mean (DOWN from 1.0)** | scalar drift below 1 |
+| Param count | 407,172 | 407,940 | 407,180 | +8 params |
+
+**Hypothesis:** 8 learnable scalar γ (one per block per branch: 4 blocks × 2 branches) initialized at 1.0; tests MIDDLE granularity of the 3-point γ-adaptivity sweep {0 (fixed=1.0), 8 (per-block scalar), 768 (per-channel)}.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **γ DRIFTS DOWN FROM 1.0 NOT UP.** Mean γ_attn=0.78, γ_mlp=0.67 at ep60 — model self-shrinks branch contributions when given freedom. Yet val/test BOTH WORSE than fixed γ=1.0. This is structurally distinct from #2977's per-channel drift (which stayed closer to 1.0 with per-channel std).
+
+2. **3-POINT γ-ADAPTIVITY SWEEP COMPLETE — fixed γ=1.0 BEATS BOTH learnable granularities at post-norm.** Sweep: {0 params (fixed=1.0) WIN, 8 params (scalar drift down) LOSS, 768 params (per-channel mild LOSS) LOSS}. γ-ADAPTIVITY AXIS DECISIVELY CLOSED across full granularity range.
+
+3. **CRUISE META-SIGNAL BROKEN — 4TH post-#2964 inversion.** #2961 aux-supervision, #2978 AoA noise, #2986 AdamW, #2988 scalar γ — four distinct interventions all break the cruise WIN. Cruise WIN is structurally fragile to ANY residual-stream perturbation at this scale/budget.
+
+4. **MLP γ DRIFTS LOWER THAN ATTN γ.** 0.67 vs 0.78 — MLP branches shrink more aggressively. Suggests model would prefer slimmer MLP topology, but residual-stream LN absorbs the shrinkage and prevents direct downstream benefit.
+
+5. **147th taxon CLOSED:** γ-ADAPTIVITY-AXIS-CLOSED-ACROSS-3-GRANULARITIES-AT-POST-NORM. Conjugate with the (mild) #2977 closure: at this scale/budget, γ-learnability provides no headroom regardless of parameter count.
+
+**Followup assigned:** #3006 alphonse cross-block-residual-α (FRESH STRUCTURALLY-ORTHOGONAL AXIS — learnable scalar α between adjacent TransolverBlocks; scales WHOLE BLOCK OUTPUT AFTER post-norm; +3 params; pivots from in-block γ axis to BETWEEN-BLOCK adaptivity site; 148th axis; per student closure recommendation #3 verbatim).
+
+---
+
+## 2026-05-14 19:30 [Round 138 close-24] UTC — PR #2983: qk-norm-physics-attention — **CLOSED CATASTROPHIC LOSS (+20.24% val vs NEW; 146th taxon; STRUCTURAL INCOMPATIBILITY WITH SLICE-ROUTING)**
+
+- **Branch:** charliepai2g48h5-edward/qk-norm-physics-attention
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-qk-norm-physics-attention-*/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2983 (QK-norm both) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **36.1119** | **+20.24% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | **31.4261** | **+24.66% LOSS** |
+| Routing logit/T abs.max @ ep1 (block-0) | ~1.5 baseline | **71** | **47× explosion** |
+| Routing logit/T abs.max @ ep43 (block-0) | ~1.5 baseline | **774** | **516× explosion** |
+| Slice entropy block-0 @ ep1 | ~0.103 baseline | 0.103 | match |
+| Slice entropy block-0 @ ep43 | ~0.103 baseline | **0.007** | **15× collapse** |
+| Dead slices block-0 (routing < 1%) | ~0/24 | **17/24** | effective slice_num ≈ 7 |
+| T (learnable temperature) | initialized | **0.07 (saturated low)** | softmax saturated |
+| Param count | 407,172 | 407,940 (+768) | LN params added |
+
+**Hypothesis:** Apply LayerNorm to BOTH Q and K in Physics_Attention BEFORE the slice-routing softmax. Standard QK-norm recipe from Llama-3/MAGNETO.
+
+**DECISIVE MECHANISTIC FINDINGS (per student write-up — exceptional):**
+
+1. **STRUCTURAL INCOMPATIBILITY WITH SLICE-ROUTING PARAMETERIZATION.** Standard QK-norm assumes Q and K are symmetric per-token projections; in Physics_Attention, Q is per-token but K is GLOBAL SLICE BASIS (orthogonal-init). LN forces both to magnitude √dim_head, blowing routing logits past what T can compensate.
+
+2. **‖Q‖ DEPTH-GROWTH SIGNAL IS LOAD-BEARING.** Pre-LN: block-0 ‖Q‖_raw=0.036 vs block-3 ‖Q‖_raw=1.4 (40× depth growth). After LN: both forced to √dim_head=6.93. The depth-growth pattern carries signal — stripping it via LN is the broken component.
+
+3. **ROUTING-LOGIT EXPLOSION 30-10000×.** Pre-LN scale: ‖Q‖_raw · ‖K‖_raw ~ 0.04 × 1.0 = 0.04 (block-0). Post-LN: 6.93 × 6.93 = 48. With T=0.5: pre 0.08 → post 96; T saturates at 0.07 trying to compensate → logit/T = 774 → softmax saturated → 17/24 slices dead.
+
+4. **SLICE-BASIS K-DRIFT WAS INFORMATIVE.** K magnitudes drift non-monotonically during training (block-0 1.0 init → 0.14 ep1 → 2.62 ep43). LN(K) fixes this — losing the signal.
+
+5. **EFFECTIVE SLICE_NUM COLLAPSES.** Dead-slice count: 17/24 block-0, 13-20/24 across blocks. Effective slice_num ≈ 7. Model effectively running with severe capacity reduction at the slice-routing bottleneck.
+
+6. **146th taxon CLOSED:** QK-NORM-AT-PHYSICS-ATTENTION-IS-STRUCTURALLY-BROKEN. Q-side LN is the culprit. K-only LN is a structurally-distinct revival hypothesis (preserves Q signal, normalizes only static K basis).
+
+**Followup assigned:** #3008 edward k-only-ln-physics-attention (REVIVAL HYPOTHESIS — corrects parameterization by LN-ing ONLY K, leaving Q intact; preserves Q's depth-growth signal while gaining K-side stability; +384 params half of #2983; 149th axis; per student closure recommendation #2 verbatim).
+
+---
+
+## 2026-05-14 19:15 [Round 138 close-23] UTC — PR #2977: per-channel-learnable-gamma-post-norm — **CLOSED LOSS (+0.03% val / +1.65% test vs NEW; 145th taxon; γ-ADAPTIVITY AXIS PARTIAL CLOSURE)**
+
+- **Branch:** charliepai2g48h5-nezuko/per-channel-learnable-gamma-post-norm
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-per-channel-learnable-gamma-post-norm-*/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #2977 (per-channel γ, 768 params) | Δ vs NEW baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **30.0480** | **+0.03% LOSS (mild)** |
+| test_avg/mae_surf_p | **25.2099** | **25.6257** | **+1.65% LOSS** |
+| val_single_in_dist | 25.219 | **23.605** | **-6.40% WIN** |
+| test_single_in_dist | 22.700 | **23.391** | **+3.04% LOSS (sign-flip vs val_in_dist)** |
+| γ_attn mean @ ep60 | n/a (fixed 1.0) | ~0.82-0.90 (per-channel std) | drift with channel variance |
+| γ_mlp mean @ ep60 | n/a (fixed 1.0) | ~0.82-0.90 (per-channel std) | drift with channel variance |
+| Param count | 407,172 | 407,940 (+768) | per-channel γ added |
+
+**Hypothesis:** Replace fixed γ=1.0 with learnable per-channel γ (768 params: 4 blocks × 2 branches × 96 channels) at post-norm sites, initialized at 1.0. Tests FINEST granularity of 3-point γ-adaptivity sweep.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **γ-LEARNABILITY PROVIDES NO HEADROOM AT FINEST GRANULARITY.** val_avg +0.03% is within noise floor; test_avg +1.65% LOSS suggests slight overfit-of-flexibility. γ adaptation does not unlock gain at the per-channel scale.
+
+2. **VAL/TEST SIGN-FLIP ON in_dist (-6.40% WIN val / +3.04% LOSS test).** This is the overfit-of-flexibility signature: 768 learnable γ params can fit val_in_dist's specific structure but generalize worse to test_in_dist. Bias-variance crossover from added degrees of freedom.
+
+3. **γ DRIFT AWAY FROM 1.0 IS SMALL (per-channel std).** Mean γ values 0.82-0.90 range with per-channel variance. Less aggressive drift than scalar γ (which goes to 0.67-0.78 in #2988). Per-channel granularity dampens the average shrinkage via channel-by-channel cancellation.
+
+4. **145th taxon CLOSED:** γ-ADAPTIVITY-AT-PER-CHANNEL-GRANULARITY-IS-WASH-WITH-OVERFIT-RISK. Combined with #2988 scalar γ (decisive LOSS), the 3-point γ-adaptivity sweep CLOSES the γ axis at post-norm.
+
+**Followup assigned:** #3009 nezuko squared-relu-mlp (FRESH ACTIVATION-FUNCTION AXIS — replaces nn.GELU in MLP branch with Primer's squared ReLU `F.relu(x).pow(2)`; +0 params; PaLM-2 / DeepSeek-V3 recipe at scale; pivots from γ-axis to activation-function axis; 150th axis; per student closure recommendation #1 verbatim).
+
+---
+
 ## 2026-05-14 [Round 138 close-22] UTC — PR #2986: adamw-lr-1.5e-3 — **CLOSED LOSS (+18.54% val vs NEW; 144th taxon; OPTIMIZER-FAMILY AXIS DECISIVELY CLOSED AT 60EP BUDGET)**
 
 - **Branch:** charliepai2g48h5-thorfinn/adamw-lr-1.5e-3
