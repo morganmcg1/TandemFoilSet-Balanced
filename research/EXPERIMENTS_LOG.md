@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-14 [Round 96] UTC — PR #2759: GeGLU MLP (gelu gate ablation) — **CLOSED LOSS (+3.48% val)**
+
+- **Branch:** charliepai2g48h5-alphonse/geglu-mlp
+- **Hypothesis:** Direct 1-line ablation of SwiGLU's silu gate to gelu. Tests whether the merged SwiGLU win (#2741) came from GLU-structure or the specific silu activation. GeGLU is used in PaLM-2/T5/Gemma.
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-geglu-mlp-20260514-045412/metrics.jsonl`
+
+| Split | GeGLU val | Baseline #2765 | Δ vs #2765 |
+|---|---|---|---|
+| `val_single_in_dist` | 27.9161 | 24.9721 | **+11.78% LOSS** (worst-hit) |
+| `val_geom_camber_rc` | 47.2812 | 46.9885 | +0.62% LOSS |
+| `val_geom_camber_cruise` | 17.2964 | 17.7276 | −2.43% improved |
+| `val_re_rand` | 37.1492 | 35.5983 | +4.36% LOSS |
+| **val_avg** | **32.4107** | **31.3216** | **+3.48% LOSS** |
+| `test_avg/mae_surf_p` | **27.6001** | **26.5067** | **+4.13% LOSS** |
+
+- **Result:** Two replicated runs (32.41 / 32.52) well-bracket each other = solid LOSS signal. In-dist worst-hit.
+- **Mechanism (student's diagnostic excellent):** GeGLU `gate_zero_frac` = **16-26% per block** vs SwiGLU's **1.3-2.4%**. GELU's symmetric-near-zero collapse produces ~20% hard channel masking; SiLU's asymmetric-monotone-non-negative-tail gives only ~2%. For this stack, the hard-mask component is detrimental — model wants soft signed re-weighting from the MLP gate, not channel deletion. Hypothesis: GeGLU's hard-masking overlaps SE block-3's channel-gating role, doubling-down counterproductively on in_dist (where SE diagnostics from #2765 already show wider gates).
+- **Taxonomic closure:** 64th taxon. Gate-activation sub-axis within GLU family now mapped: silu strictly preferred (merged #2741). ReGLU would push hard-masking to ~50% — not worth probing.
+- **Bug fix verification:** Confirmed advisor branch has working `_swiglu_loader = val_loaders.get('val_single_in_dist') or ...` since commit 2840599 (PR #2765 merge accidentally fixed the dangling `_se_loader` introduced by 0767a13 #2741 merge). Student's branch must have forked between #2741 and #2765 merges. No further cherry-pick needed.
+- **Param count discrepancy resolved:** Student reported 331,287 on their branch — this is the SwiGLU + SE-reduction=8 baseline (post-#2741, pre-#2765). New baseline #2765 is 333,603 (added +2,316 for SE r=8→4).
+- **Follow-up:** SE attention-pool experiment #2810 — sub-axis of merged SE, replaces mean pool with content-aware learned pool.
+
+---
+
+## 2026-05-14 [Round 96] UTC — PR #2810: SE with attention pooling — **ASSIGNED (66th candidate axis)**
+
+- **Branch:** charliepai2g48h5-alphonse/se-attn-pool
+- **Hypothesis:** Replace SE module's mask-aware mean pool with content-aware attention pool — `attn_logits = Linear(96,1)(x); attn_w = softmax(attn_logits, dim=tokens); pool = (x * attn_w).sum(dim=tokens)`. Mean pool weights all tokens equally for channel-statistics; attention pool learns surface/wake/boundary token importance. Sub-axis of merged SE block-3 (#2765, r=4). Set Transformer (Lee 2019 ICCV) uses single-head attention pool for set summary.
+- **Param delta:** +97 (single Linear(96,1)) → expected 333,700.
+- **Predicted mechanism:** `attn_pool_weights` concentrate on `is_surface=True` tokens; `gate_std` rises beyond #2765's +5-12% gain; OOD splits (camber, re_rand) benefit most.
+- **Bar:** val_avg/mae_surf_p < 31.3216.
+
+---
+
 ## 2026-05-14 [Round 95] UTC — PR #2766: GroupNorm(G=4) replacing LayerNorm — **CLOSED LOSS (+14.69% val)**
 
 - **Branch:** charliepai2g48h5-askeladd/groupnorm-g4
