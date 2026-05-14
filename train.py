@@ -82,6 +82,49 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class DropPath(nn.Module):
+    """Stochastic Depth / DropPath (Huang et al. 2016 "Deep Networks with Stochastic Depth";
+    Larsson et al. 2016 "FractalNet"). Per-sample drop of an entire residual branch
+    output at training time; identity at eval. Scale-by-1/keep_prob preserves expectation.
+
+    Built-in counters track empirical drop fraction since last reset, so we can
+    sanity-check that the realized rate matches the nominal p across an epoch
+    (rate diagnostics are required by PR #3065).
+    """
+    def __init__(self, p: float = 0.0):
+        super().__init__()
+        assert 0.0 <= p < 1.0, f"drop_path p must be in [0, 1), got {p}"
+        self.p = float(p)
+        self.register_buffer("_n_branch_total", torch.zeros(1, dtype=torch.long), persistent=False)
+        self.register_buffer("_n_branch_dropped", torch.zeros(1, dtype=torch.long), persistent=False)
+
+    def reset_counters(self):
+        self._n_branch_total.zero_()
+        self._n_branch_dropped.zero_()
+
+    @torch.no_grad()
+    def empirical_drop_fraction(self) -> float:
+        total = int(self._n_branch_total.item())
+        dropped = int(self._n_branch_dropped.item())
+        return dropped / total if total > 0 else 0.0
+
+    def forward(self, x):
+        if not self.training or self.p == 0.0:
+            return x
+        keep_prob = 1.0 - self.p
+        # Per-sample mask: [B, 1, 1, ...] broadcastable with x ([B, N, D])
+        mask_shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = torch.bernoulli(
+            torch.full(mask_shape, keep_prob, device=x.device, dtype=x.dtype)
+        )
+        # Tensor-only counter updates (no .item() to avoid torch.compile graph breaks).
+        # Read with .item() only outside the compiled forward (end-of-epoch diagnostic).
+        with torch.no_grad():
+            self._n_branch_total.add_(mask.numel())
+            self._n_branch_dropped.add_((mask == 0).sum().long())
+        return x * mask / keep_prob
+
+
 class SwiGLUMLP(nn.Module):
     """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * W_value x).
 
@@ -200,7 +243,7 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -215,6 +258,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = 1.0
+        # Stochastic Depth / DropPath on each residual branch (#3065).
+        # Per-sample drop of attn / mlp branch output at training time; identity at eval.
+        self.drop_path_attn = DropPath(p=drop_path)
+        self.drop_path_mlp = DropPath(p=drop_path)
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -225,8 +272,10 @@ class TransolverBlock(nn.Module):
 
     def forward(self, fx, mask=None):
         # POST-NORM: LN applied AFTER residual addition (LN(x + f(x)) vs pre-norm x + f(LN(x)))
-        fx = self.ln_1(self.gamma_attn * self.attn(fx) + fx)
-        fx = self.ln_2(self.gamma_mlp * self.mlp(fx) + fx)
+        # DropPath wraps each residual branch's contribution (#3065): drop the
+        # entire branch with prob p, otherwise scale by 1/(1-p) to preserve mean.
+        fx = self.ln_1(self.drop_path_attn(self.gamma_attn * self.attn(fx)) + fx)
+        fx = self.ln_2(self.drop_path_mlp(self.gamma_mlp * self.mlp(fx)) + fx)
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -239,7 +288,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -261,6 +311,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                drop_path=drop_path,
             )
             for i in range(n_layers)
         ])
@@ -468,6 +519,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    drop_path: float = 0.05  # stochastic-depth p per residual branch (#3065)
 
 
 cfg = sp.parse(Config)
@@ -536,6 +588,7 @@ model_config = dict(
     n_head=2,
     slice_num=24,
     mlp_ratio=3,
+    drop_path=cfg.drop_path,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -568,6 +621,18 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# DropPath / Stochastic Depth diagnostic (#3065): p per residual branch
+_drop_path_mods = [m for m in model.modules() if isinstance(m, DropPath)]
+_drop_path_p = _drop_path_mods[0].p if _drop_path_mods else 0.0
+print(
+    f"DropPath (Huang et al. 2016): p={_drop_path_p} on every residual branch "
+    f"(attention + MLP per block); n_layers={model_config['n_layers']} × 2 branches = "
+    f"{len(_drop_path_mods)} DropPath modules total; +0 params; "
+    f"per-sample mask, scale-by-1/(1-p) preserves expectation; "
+    f"identity at eval (deterministic forward); "
+    f"NEW BASELINE to beat: val_avg/mae_surf_p < 29.5318 (PR #3006); test 25.4795"
+)
 
 # Cross-block residual α diagnostic: between-block adaptivity at a fresh axis
 # (in-block γ closed at all granularities by #2940/#2964/#2977/#2988).
@@ -794,6 +859,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    # Reset DropPath counters at the start of each epoch so the empirical
+    # drop fraction below reflects only this epoch's forward passes (#3065).
+    _inner_dp = getattr(model, "_orig_mod", model)
+    for _m in _inner_dp.modules():
+        if isinstance(_m, DropPath):
+            _m.reset_counters()
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -875,6 +947,49 @@ for epoch in range(MAX_EPOCHS):
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+
+    # DropPath empirical drop-fraction diagnostic (#3065). Counters were reset
+    # at the start of this epoch, so the fraction is computed across this
+    # epoch's training forward passes only. Log every epoch to JSONL; print
+    # at ep1 / ep30 / ep(MAX) as called out in the PR.
+    _dp_per_branch: list[dict] = []
+    for _bi, _blk in enumerate(_inner_dp.blocks):
+        if hasattr(_blk, "drop_path_attn"):
+            _dp_per_branch.append({
+                "block_idx": _bi,
+                "branch": "attn",
+                "nominal_p": _blk.drop_path_attn.p,
+                "empirical_drop_frac": _blk.drop_path_attn.empirical_drop_fraction(),
+                "n_branch_total": int(_blk.drop_path_attn._n_branch_total.item()),
+            })
+        if hasattr(_blk, "drop_path_mlp"):
+            _dp_per_branch.append({
+                "block_idx": _bi,
+                "branch": "mlp",
+                "nominal_p": _blk.drop_path_mlp.p,
+                "empirical_drop_frac": _blk.drop_path_mlp.empirical_drop_fraction(),
+                "n_branch_total": int(_blk.drop_path_mlp._n_branch_total.item()),
+            })
+    _dp_mean = (
+        sum(d["empirical_drop_frac"] for d in _dp_per_branch) / max(len(_dp_per_branch), 1)
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "drop_path_diagnostic",
+        "epoch": epoch + 1,
+        "branches": _dp_per_branch,
+        "empirical_drop_frac_mean": _dp_mean,
+    })
+    if (epoch + 1) in (1, 30, MAX_EPOCHS):
+        print(
+            f"  DropPath empirical drop fraction @ ep{epoch+1} "
+            f"(nominal p={_dp_per_branch[0]['nominal_p'] if _dp_per_branch else 0.0}):"
+        )
+        for _d in _dp_per_branch:
+            print(
+                f"    block[{_d['block_idx']}].{_d['branch']:<4s}: "
+                f"emp_drop={_d['empirical_drop_frac']:.4f}"
+            )
+        print(f"    mean across {len(_dp_per_branch)} branches = {_dp_mean:.4f}")
 
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
     # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
