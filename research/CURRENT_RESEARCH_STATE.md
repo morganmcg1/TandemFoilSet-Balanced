@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-15 02:00
+- **Date:** 2026-05-15 03:00
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -66,18 +66,26 @@
 - **Slice softmax temperature (#2953 askeladd):** τ=0.5 (sharper) and τ=2.0 (smoother) on PhysicsAttention. Fundamental Transolver knob, never touched.
 - **DropPath (#2926 nezuko):** Stochastic depth (rates 0.1/0.2) as regularizer.
 
-## Active WIPs (8 students, 8 PRs) — updated 2026-05-15 02:00
+## Active WIPs (8 students, 8 PRs) — updated 2026-05-15 03:00
 
-| PR | Student | Hypothesis | Status |
-|---|---|---|---|
-| #3057 | alphonse | Gradient-clipping max_norm bracket scan (0.5/2.0 vs baseline 1.0) — only-affects-Lion-via-sign-flip axis | ASSIGNED 2026-05-15 00:30 |
-| #3042 | nezuko | Polyak weight averaging over last K epochs at eval time (K=5 and K=3) | ASSIGNED 2026-05-14 23:00 |
-| #3046 | edward | Full FiLM-Re (scale+shift): add additive β output alongside γ in film_gamma | ASSIGNED 2026-05-14 23:50 |
-| #3067 | tanjiro | FiLM-Re joint conditioning: camber channels [log_re, camber_1, camber_2] — direct attack on geom_camber_rc OOD split | ASSIGNED 2026-05-15 01:00 |
-| #3072 | askeladd | AoA-conditional FiLM gate at block 0 only (tiny 32-hidden MLP, ~4K params) — mechanistically grounded on #3019 col-L2 diagnostic | ASSIGNED 2026-05-15 01:30 |
-| **#3073** | **frieren** | **Camber-weighted surface loss: sample-level loss reweighting by foil camber magnitude (α=0.3/1.0) — fresh loss-side OOD axis** | **ASSIGNED 2026-05-15 02:00** |
-| #3035 | thorfinn | FiLM-Re γ on PhysicsAttention routing layer (slice_proj logits — Re-conditional routing) | ASSIGNED 2026-05-14 22:15 |
-| #3038 | fern | slice_num bracket scan: 48 (0.75×) and 96 (1.5×) vs baseline 64 | ASSIGNED 2026-05-14 22:25 |
+| PR | Student | Hypothesis | Status | W&B preview (best so far) |
+|---|---|---|---|---|
+| #3057 | alphonse | Gradient-clipping max_norm bracket scan (0.5/2.0 vs baseline 1.0) — only-affects-Lion-via-sign-flip axis | ASSIGNED 2026-05-15 00:30 | max-norm-0.5-s1: val=34.10/test=28.99 (misses +2.91%/+2.02%); one arm still running |
+| #3042 | nezuko | Polyak weight averaging over last K epochs at eval time (K=5 and K=3) | ASSIGNED 2026-05-14 23:00 | polyak-k3-s1: val=34.14/test=29.50 (misses +3.04%/+3.81%); no terminal yet |
+| #3046 | edward | Full FiLM-Re (scale+shift): add additive β output alongside γ in film_gamma | ASSIGNED 2026-05-14 23:50 | full-film-s1: val=43.24/test=37.13 (catastrophic +30.5%/+30.7%); 6 runs, all severe regression |
+| #3067 | tanjiro | FiLM-Re joint conditioning: camber channels [log_re, camber_1, camber_2] — direct attack on geom_camber_rc OOD split | ASSIGNED 2026-05-15 01:00 | camber-joint-s1: val=33.99/test=28.99 (misses +2.59%/+2.00%) — **CLOSEST in flight**, camber_rc=41.48 (recovers!) |
+| #3072 | askeladd | AoA-conditional FiLM gate at block 0 only (tiny 32-hidden MLP, ~4K params) — mechanistically grounded on #3019 col-L2 diagnostic | ASSIGNED 2026-05-15 01:30 | pending |
+| #3073 | frieren | Camber-weighted surface loss: sample-level loss reweighting by foil camber magnitude (α=0.3/1.0) — fresh loss-side OOD axis | ASSIGNED 2026-05-15 02:00 | pending |
+| #3035 | thorfinn | FiLM-Re γ on PhysicsAttention routing layer (slice_proj logits — Re-conditional routing) | ASSIGNED 2026-05-14 22:15 | film-routing-s1 (ll2q971i): val=34.70/test=29.65 (misses +4.74%/+4.32%); 2 nudges sent, awaiting SENPAI-RESULT |
+| #3038 | fern | slice_num bracket scan: 48 (0.75×) and 96 (1.5×) vs baseline 64 | ASSIGNED 2026-05-14 22:25 | slice-48-s1: val=35.51/test=30.07 (misses +7.18%/+5.81%); slice-96 worse; 1 nudge sent, awaiting SENPAI-RESULT |
+
+### Round-30 mid-flight observation pattern (2026-05-15 03:00)
+
+**ALL 6 axes with W&B data so far regress against 16th-shift bar.** Tanjiro #3067 (camber-joint) is closest at +2.59%/+2.00% — and notably **recovers geom_camber_rc to 41.48** (vs 16th-shift baseline 42.55, a −2.51% improvement on the priority OOD split). Alphonse #3057 (max_norm=0.5) close behind at +2.91%/+2.02% but with no camber_rc recovery signal.
+
+**Critical question for next cycle:** does tanjiro's camber-joint s2 confirm the s1 camber_rc recovery, or is it variance-dominated like the (Re, AoA) joint #3019 (which had s1 clean win, s2 clean loss)? If s2 also recovers camber_rc even at the cost of slight val/test regression, this is a **camber-conditional gain** worth banking via a 2-seed-confirm follow-up at this exact configuration. The 16th-shift baseline's only weakness is geom_camber_rc — a swap that trades 0.5pt on val for 1pt on camber_rc would be a paper-quality result.
+
+**Edward #3046 (full FiLM β shift) is the worst by ~30%** — confirms that the γ-only (scale) FiLM-Re is the right output formulation. The β-additive shift breaks identity initialization (β starts at 0 but multiplicative+additive disrupts the early-epoch trunk activations more than γ alone). Likely full retirement of the scale+shift axis after edward posts SENPAI-RESULT.
 
 **Closed this round (rounds 12–15):**
 - #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07.
