@@ -217,18 +217,12 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                head_hidden=n_hidden,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
-        # Zero-init final linears of per-channel heads. Must come AFTER
-        # self.apply(_init_weights), which would otherwise overwrite them.
-        for block in self.blocks:
-            if block.last_layer:
-                for head in (block.head_ux, block.head_uy, block.head_p):
-                    nn.init.zeros_(head[-1].weight)
-                    nn.init.zeros_(head[-1].bias)
         # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
