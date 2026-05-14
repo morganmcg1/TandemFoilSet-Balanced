@@ -3699,3 +3699,56 @@ Per-split test surf_p (mean vs 15th-shift baseline):
 - Key diagnostic: γ_aoa0_w_L2 end-of-training (active or no-op?); depth-monotone Re γ_w_L2 preservation; geom_camber_rc delta vs 16th-shift baseline 42.553
 - Merge bar: mean val < 33.13, mean test < 28.42 (16th-shift bar)
 
+---
+
+## 2026-05-15 02:00 — PR #3041: Re-jitter Gaussian noise on FiLM-Re γ-MLP input frieren (CLOSED — Re-jitter incompatible with Lion+FiLM-Re)
+- Branch: `willowpai2g48h3-frieren/re-jitter`
+- Hypothesis: Apply Gaussian noise σ=0.10/0.30 to log_re input of FiLM-Re γ-MLP at train time (eval untouched). Tests whether smoother γ(log_re) response surface improves Re-conditioning generalization.
+
+### Results (2 arms)
+
+| Arm | W&B ID | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | — | 28.653 | — |
+| σ=0.10 | `p5jvoa1m` | 42.201 | +25.2% ❌ | 38.829 | +35.5% ❌ |
+| σ=0.30 | `jeh66zpi` | 38.113 | +13.1% ❌ | 34.243 | +19.5% ❌ |
+
+Per-split test surf_p (σ=0.10 / σ=0.30 / Δ each vs baseline):
+- single_in_dist: 45.624 / 44.311 / +41.6% / +37.5% ❌
+- geom_camber_rc: 55.493 / 44.968 / +33.9% / +8.5% ❌
+- geom_camber_cruise: 18.788 / 17.940 / +26.0% / +20.3% ❌
+- **test_re_rand**: 35.410 / 29.751 / +36.1% / +14.3% ❌ (direct target REGRESSED on both arms)
+
+### Mechanism diagnostic: per-block γ_w_L2 final epoch
+
+| Block | 15th-shift baseline | σ=0.10 | σ=0.30 |
+|---|---:|---:|---:|
+| 0 | ~4.0 | 4.387 | 3.450 |
+| 1 | ~4.4 | 3.580 | 2.702 |
+| 2 | ~4.8 | 2.925 | 2.392 |
+| 3 | ~5.3 | 3.607 | 2.904 |
+| 4 | 5.75 | 4.371 | 3.672 |
+
+**Mechanism IS present** — γ_w_L2 shrinks monotonically with σ (σ=0.30 ~15-25% smaller weights than σ=0.10 at every block). Re-jitter DOES smooth the γ-MLP response surface as predicted. **V-shaped depth pattern** (mid-block dip) replaces the depth-monotone baseline ramp. γ_bias_mean drift below 1.0 at deeper blocks (block 4=0.990) is consistent with reduced γ-MLP degrees of freedom.
+
+### Decision: CLOSED
+
+Both arms regress > 13% on val and > 19% on test. Decision tree explicit close path: "both arms regress > 3% AND target metric not improved → close." Re-jitter is locked at σ=0 (baseline default).
+
+Note: Counterintuitive σ ordering (σ=0.30 less bad than σ=0.10) suggests σ=0.10 is in a transitional regime where noise disrupts γ-MLP fitting without producing coherent regularization. σ=0.05 sub-bracket NOT justified by the bracket-scan logic (regressions 13-25%, target re_rand regressed not improved).
+
+**Meta-finding #28:** *Pre-γ-MLP-input Gaussian Re-jitter is incompatible with Lion + FiLM-Re at the 15th-shift basin. The mechanism is present (γ_w_L2 shrinkage and depth-flattening confirm noise reaches the γ-MLP) but the smoothing costs more in fit than it gains in generalization. Combined with #20 (cond-Mixup retired) and the closure of Re-distribution rebalancing (#3034), all THREE conditioning-input-side OOD interventions (jitter, mixup, rebalancing) are fully retired. **Conditioning-input-side noise/augmentation/rebalancing axis is exhausted under Lion + FiLM-Re.** Future OOD interventions must operate on (a) conditioning surface area (joint inputs like tanjiro #3067 camber-joint, askeladd #3072 AoA-block-0), (b) injection points (decoder #3028 merged, routing #3035 in-flight), or (c) gradient signal path NOT via conditioning (loss-side weighting, see #3073).*
+
+Student insight worth recording: "γ-MLP at hidden=256 may already be near-saturated for what the conditioning surface can express" — relevant for plateau-protocol axes that touch γ-MLP weights.
+
+---
+
+## 2026-05-15 02:00 — PR #3073: Camber-weighted surface loss frieren (ASSIGNED)
+- Branch: `willowpai2g48h3-frieren/camber-weighted-loss`
+- Hypothesis: Sample-level loss reweighting by foil camber magnitude. `w_i = 1 + α * c_norm_i` where `c_i = max(|camber_1_i|, |camber_2_i|)`. Higher-camber samples contribute more gradient signal. Fresh axis after closing all 3 conditioning-input-side OOD interventions (meta-finding #28). Targets geom_camber_rc=42.553 recovery (regressed +2.64% in 16th-shift merge).
+- **Lion-compatible mechanism:** sample-level loss weighting changes the **batch-mean gradient direction** (preserved by Lion's sign()), distinct from per-block wd (meta-finding #26) which scales gradient *magnitude* per-parameter (neutered by Lion's sign()).
+- Arms: s1 α=0.3 (mild), s2 α=1.0 (strong), single seed each
+- Param delta: ZERO. Pure loss-side intervention.
+- Key diagnostic: per-sample loss weight distribution; γ-MLP γ_w_L2 trajectory preservation (should be unchanged since γ-MLP isn't touched); per-split test deltas with emphasis on geom_camber_rc < 42.55
+- Merge bar: mean val < 33.13, mean test < 28.42 (16th-shift bar)
+
