@@ -251,10 +251,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        if isinstance(mlp_ratio, (list, tuple)):
+            assert len(mlp_ratio) == n_layers, (
+                f"mlp_ratio list len {len(mlp_ratio)} != n_layers {n_layers}"
+            )
+            per_block_mlp_ratios = list(mlp_ratio)
+        else:
+            per_block_mlp_ratios = [mlp_ratio] * n_layers
+        self.per_block_mlp_ratios = per_block_mlp_ratios
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
-                act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
+                act=act, mlp_ratio=per_block_mlp_ratios[i], out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
             )
@@ -519,7 +527,7 @@ model_config = dict(
     n_layers=4,
     n_head=2,
     slice_num=24,
-    mlp_ratio=3,
+    mlp_ratio=[3, 3, 4, 4],
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -532,6 +540,13 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+_per_block_mlp_ratios = list(model.per_block_mlp_ratios)
+_per_block_hidden_swiglu = [
+    max(8, int(round((model_config['n_hidden'] * r * 2 / 3) / 8) * 8))
+    for r in _per_block_mlp_ratios
+]
+print(f"Block-asymmetric mlp_ratio: {_per_block_mlp_ratios}")
+print(f"Per-block hidden_swiglu: {_per_block_hidden_swiglu}")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -559,20 +574,20 @@ print(
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
 _swiglu_modules = [m for m in model.modules() if isinstance(m, SwiGLUMLP)]
-_swiglu_hidden = _swiglu_modules[0].hidden_swiglu if _swiglu_modules else 0
+_swiglu_hidden_widths = [m.hidden_swiglu for m in _swiglu_modules]
 _swiglu_params = sum(p.numel() for m in _swiglu_modules for p in m.parameters())
-_std_mlp_hidden = model_config['n_hidden'] * model_config['mlp_ratio']
-_std_mlp_params_per_block = (
-    model_config['n_hidden'] * _std_mlp_hidden + _std_mlp_hidden  # linear_pre
-    + _std_mlp_hidden * model_config['n_hidden'] + model_config['n_hidden']  # linear_post
+_std_mlp_hiddens = [model_config['n_hidden'] * r for r in _per_block_mlp_ratios]
+_std_mlp_params_total = sum(
+    model_config['n_hidden'] * h + h + h * model_config['n_hidden'] + model_config['n_hidden']
+    for h in _std_mlp_hiddens
 )
-_std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
 print(
     f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
-    f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
+    f"per-block hidden_swiglu={_swiglu_hidden_widths} (param-matched: round(d*mlp_ratio*2/3)/8); "
     f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
-    f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+    f"asymmetric mlp_ratio {_per_block_mlp_ratios} — exploit #2889 camber_cruise OOD signal; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605 (uniform mlp_ratio=3 #2879)"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
