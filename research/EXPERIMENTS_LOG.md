@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-14 02:50 — PR #2708: Huber loss δ=0.5/1.0 vs MAE on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, MAE DOMINATES ON MATURE COMPOUND
+
+- **Branch:** `willowpai2g24h5-thorfinn/huber-loss-delta-sweep`
+- **Hypothesis:** With Lion's sign-magnitude update, Huber's quadratic floor for small residuals might reduce gradient noise and improve convergence. δ=1.0 broader vs δ=0.5 tighter quadratic region.
+- **W&B runs:** `dmyqiw4b` (δ=0.5), `xwuuws4k` (δ=1.0)
+
+| Arm | δ | val | test | Δ vs #2489 (42.00/35.96) | Epochs |
+|-----|---|-----|------|--------------------------|--------|
+| 1 | 0.5 | 46.26 | 39.75 | +4.26 / +3.79 ✗ | 30 |
+| 2 | 1.0 | 45.58 | 38.92 | +3.57 / +2.96 ✗ | 34 |
+| Baseline #2489 (MAE) | — | 42.00 | 35.96 | — | 33 |
+
+Per-test-split (mae_surf_p): all 4 splits regress on both arms uniformly. single_in_dist most preserved (+0.21/+0.88), re_rand worst-hit (+5.58/+6.25).
+
+**Result:** CLOSED. Hypothesis REFUTED. MAE dominates Huber on mature compound — replicates early #1825 result.
+
+Key findings:
+1. **MAE-vs-Huber finding replicates on mature compound (finding 42).** Early result #1825 (Huber → MAE = −7.71% val) holds with Lion + wd=3e-4 + n_layers=3 + EMA + Fourier. The advantage doesn't get eaten by the compound's other regularizers. **Uniform-weighted per-node MAE is essential** to the compound.
+2. **δ=1.0 > δ=0.5 (closer to MAE = better).** Monotonic ordering confirms direction. The quadratic floor at small residuals is the mechanism that hurts; widening δ → more MAE-like → better.
+3. **Step-budget effect: Huber's slower convergence is real.** Per-epoch val descent at cap: δ=0.5 ~−0.7/ep, δ=1.0 ~−0.3/ep. Catch-up unlikely before descent flattens — Huber needs more steps to match MAE.
+4. **Generalization gap similar val↔test (+3.6 vs +3.0).** Huber doesn't generalize better; re_rand cross-regime gap is widest (+5.58/+6.25). Huber HURTS OOD specifically.
+5. **Numerical artifact:** `huber_loss(reduction='none')` returns nan on test_geom_camber_cruise under BF16. Doesn't affect MAE ranking metrics (fp64) but worth filing as a separate bug-fix PR.
+
+**Implication for paper:** Pairs with finding 41 (sw × split-type) to define the **loss-balance landscape**: surface weighting hurts OOD, curvature smoothing hurts everywhere. Per-node uniform MAE is the Pareto-optimal loss formulation on this compound. Loss-formulation axis is now closed without code changes (Huber+MAE blend requires train.py edit).
+
+**Thorfinn reassigned:** fourier_L sweep (L=4/L=8) — input-encoding capacity untested on mature compound. fourier_L=6 was set in #1386 on a much weaker model; the wd=3e-4 regularization headroom may enable richer encoding.
+
+---
+
 ## 2026-05-14 02:05 — PR #2707: surf_weight=15 UPPER direction on n_layers=3+wd=3e-4 (edward) — CLOSED, SW UPPER CLOSED; SW × SPLIT-TYPE INTERACTION
 
 - **Branch:** `willowpai2g24h5-edward/sw-upper-wd3e4`
