@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 74)
+- **As of:** 2026-05-14 00:15 UTC (updated cycle 79)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -45,16 +45,18 @@
 
 | PR | Student | Hypothesis | Status | Notes |
 |----|---------|------------|--------|-------|
-| #2546 | edward | DropPath (Huang 2016) | WIP | Active; running on pre-Lion AdamW base |
-| #2566 | frieren | GeGLU MLP block (Shazeer 2020) | WIP | Running on pre-Lion AdamW base; architecture result will inform GeGLU+Lion composition |
-| #2603 | alphonse | RMSNorm (Zhang & Sennrich 2019) | WIP | Running on pre-Lion AdamW base |
-| #2617 | nezuko | Lion σ calibration (3 seeds) | WIP | Lion baseline config, 3 controlled seeds; started 22:24 |
-| #2619 | fern | Lion WD scale sweep (5.0, 8.0) | WIP | Tests higher WD with Lion; started 22:24 |
-| #2620 | thorfinn | Lion 3-cycle T_mult=1 | WIP | T_0=7 T_mult=1 → [7,7,7] cycles; started 22:25 |
-| #2621 | tanjiro | Lion + RMSNorm composition | WIP | First arch+optimizer compose; started 22:25 |
-| #2635 | askeladd | Lion + 1-epoch linear warmup | WIP NEW | Chen 2023 rec; sign-based Lion updates need warmup to avoid aggressive early steps |
+| #2546 | edward | DropPath + Lion (rebase) | WIP | Sent back c79: was on pre-Lion base. Now rebasing+testing p=0.05 DropPath+Lion |
+| #2566 | frieren | GeGLU + Lion composition | WIP | **POTENTIAL MASSIVE WIN** — seed1 val≈55.88 (4.7σ vs Lion 65.54). Seed2 running, ~00:08 finish |
+| #2603 | alphonse | RMSNorm + Lion (compose) | WIP | Pre-Lion single seed val=83.14 (+0.87 regress). Sent back c79 for Lion composition (2 seeds) |
+| #2617 | nezuko | Lion σ calibration (3 seeds) | WIP | Seed2 running actively since c78 |
+| #2619 | fern | Lion WD scale sweep (5.0, 8.0) | WIP | Arm A WD=5.0 finished at val=63.23 (marginal vs 65.54), Arm B WD=8.0 running |
+| #2620 | thorfinn | Lion 3-cycle T_mult=1 | WIP | Running — 3 crashes + slow convergence reported in c78 |
+| #2635 | askeladd | Lion + 1-epoch linear warmup | WIP | Seed1 val=78.46 (+12.92 regression — warmup HURTS Lion). Seed2 running for confirmation |
+| #2676 | tanjiro | LayerScale + Lion compose | WIP NEW | Assigned c79; pod will pick up after GraphQL rate limit clears (~00:35) |
 
-**Note on pre-Lion WIP PRs (#2546, #2566, #2603):** These are running against the old AdamW baseline (82.26). They need to beat val=65.5364 to merge. If any show improvement on AdamW alone, the next step is testing composition with Lion. Pre-Lion data is still valuable for paper ablations.
+**#2621 tanjiro CLOSED (c79):** Draft, zero progress, bot-account GraphQL rate-limit exhaustion. Tanjiro pod showed "No assigned PRs" for 90+ min due to rate-limit retry loop depleting quota. New assignment: LayerScale+Lion (#2676).
+
+**CRITICAL IN-FLIGHT: frieren #2566 GeGLU+Lion seed1 val≈55.88** — if seed2 confirms, this becomes the largest architectural win since Lion itself. All future assignments and research planning should assume GeGLU+Lion will be the new SOTA at val~55-58.
 
 **Cycle 74 closure:** #2605 askeladd (Gradient Noise, Neelakantan 2015) CLOSED — val=88.33 (+6.07 vs SOTA 82.26, well above 5% close threshold). Two mechanism causes: (1) η=0.01 is 10-100× larger than typical gradient magnitudes O(10⁻³), drowning signal; (2) cosine restart already provides exploration via LR-spike, making gradient noise mechanistically redundant in SGDR regime. All 4 splits regressed including val_single_in_dist (+8.84 worst). askeladd reassigned to #2635 (Lion + linear warmup).
 
@@ -84,11 +86,22 @@
 
 ## Highest-value next directions
 
-After Lion σ calibration, the priority order is:
-1. **Architecture + Lion compositions** (when in-flight PRs #2603 RMSNorm, #2566 GeGLU, #2546 DropPath report): test each architecture change ON TOP OF Lion. These are the only mechanisms that could realistically move val by 4+ val from 65.54.
-2. **Lion WD scale** (fern #2619): could give 2-5 val improvement if current 3.0 is suboptimal.
-3. **Lion cycle structure** (thorfinn #TBD): 3-cycle T_mult=1 if Lion's fast recovery enables it.
-4. **Lion linear warmup** (askeladd #2635): Chen 2023 recommends warmup; sign-based updates need LR ramp to avoid aggressive initial steps. Low-complexity, high-prior change.
+**PRIORITY 1: Confirm and merge frieren #2566 GeGLU+Lion (val≈55.88 seed1).** This is the largest potential win since Lion. If seed2 confirms, merge immediately and update SOTA to ~55-58 val.
+
+**PRIORITY 2: Compose GeGLU with everything else.** Once GeGLU+Lion is SOTA, the new research question becomes "what composes with GeGLU+Lion?". Natural candidates:
+- **SwiGLU vs GeGLU**: swap GELU gate for SiLU. Both are GLU variants; SwiGLU used in Llama. Could be better.
+- **GeGLU+Lion+LayerScale** (tanjiro #2676 tests LayerScale+Lion in isolation first; then compose)
+- **GeGLU+Lion+RMSNorm** (alphonse #2603 testing this axis)
+- **GeGLU + larger MLP ratio** (currently mlp_ratio≈2 with GeGLU; try 3 or 4)
+- **GeGLU applied to encoder preprocess MLP** (frieren PR suggestion #6 — extend beyond TransolverBlocks)
+- **DropPath + GeGLU + Lion** (edward, if DropPath+Lion works)
+
+**PRIORITY 3: Understand warm-restart spike amplification with GeGLU.** The e7→e8 cycle-2 spike is 2.2× larger with GeGLU (+37.50 vs +16.89). Mechanism: gated MLP is more sensitive to LR resets. Options: (a) adjusted T_0/T_mult for GeGLU; (b) shorter warmup at restart; (c) T_0=6 to shift cycle-end to e17 within budget.
+
+**Lower priority:**
+- Lion WD scale (fern #2619): could give 2-5 val if current 3.0 suboptimal, but ~marginal
+- Lion 3-cycle (thorfinn #2620): weak mechanism, likely to close
+- Lion linear warmup (askeladd #2635): seed1 shows +12.92 regression — warmup HURTS Lion
 
 ## Closed hypotheses list
 

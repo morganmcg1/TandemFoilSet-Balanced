@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-14 00:15 — Cycle 79: Alphonse RMSNorm result + tanjiro reassignment + edward rebase
+
+### PR #2603 — Alphonse RMSNorm replaces LayerNorm (result on pre-Lion base)
+
+- **Branch:** `willowpai2g48h4-alphonse/rmsnorm-replace-layernorm`
+- **W&B run:** `kecp93r8` (single seed, pre-Lion AdamW base)
+- **Result:** val=83.1383 (+0.87 vs baseline 82.26), test=73.2427 (+0.84)
+
+| Split | Baseline | RMSNorm | Δ |
+|-------|---------|---------|---|
+| val_single_in_dist | 96.8979 | 95.9662 | −0.93 improve |
+| val_geom_camber_rc | 103.1372 | 102.7097 | −0.43 improve |
+| val_geom_camber_cruise | 53.9395 | 57.1489 | +3.21 regress |
+| val_re_rand | 75.0824 | 76.7286 | +1.65 regress |
+| **val_avg** | **82.2642** | **83.1383** | **+0.87 regress** |
+
+**Bug fixed:** Earlier 6-run crash-loop was Triton compilation failure on `nn.RMSNorm` with `--use_torch_compile`. Fix: manual Llama-style RMSNorm class bypasses fused-kernel codegen path. Implementation correct (1536 fewer params, no β bias, cycle-2 spike +17.93 vs baseline ~+16).
+
+**Analysis:** +0.87 val is within σ_baseline≈0.34 (statistically marginal). Per-split signature: harder splits (rc, single_in_dist) improve; easier splits (cruise, re_rand) regress — *same pattern as QK-Norm (#2579)*, not the opposite as predicted. Hypothesis falsified: mean-subtraction is NOT redundant for easy-distribution splits; it appears helpful there. Both stripped-down normalizations (RMSNorm, QK-Norm) hit the same feature-distribution bottleneck.
+
+**Decision:** Sent back for Lion composition (2 seeds). Pre-Lion single-seed result is directionally weak, but RMSNorm+Lion composition is the real hypothesis. Wall-clock neutral, params slightly lower.
+
+### Cycle 79 incidents and assignments
+
+- **Tanjiro #2621 CLOSED:** Draft, zero commits, zero comments, zero W&B runs. Bot-account GraphQL rate-limit exhaustion caused 90+ min of "No assigned PRs" on tanjiro pod — student never picked up the assignment. Clean close.
+- **Tanjiro #2676 ASSIGNED (LayerScale+Lion):** LayerScale residual scaling (Touvron 2021, CaiT): `x + diag(γ) * Block(x)` with γ initialized to 1e-4. Start near identity, let γ learn. Predicted mechanism: smaller cycle-2 restart spike (Lion's constant-magnitude updates perturb residual branches; scaled-down init reduces amplitude at peak LR). 2 seeds. Bar: val ≤ 61.4 (2σ_Lion = confident win).
+- **Edward #2546 sent back (rebase+DropPath+Lion):** Pre-Lion DropPath runs (dp-0p1 val=81.66, dp-0p2 val=88.79) cannot beat Lion SOTA. Sent back: rebase onto advisor branch (Lion default), test p=0.05 DropPath+Lion (2 seeds). Trend from pre-Lion: lower p is better → p=0.05 is the safest test point.
+
+---
+
 ## 2026-05-13 23:05 — Cycle 75: GeGLU mechanism win, sent back for Lion composition (PR #2566)
 
 - **PR #2566 (frieren, GeGLU MLP block):** Status:review, **3-seed mean val=71.6819 / test=62.7948**, std (val=2.60, test=1.28). Best seed `909izxsc` val=69.3651 / test=61.5534.
