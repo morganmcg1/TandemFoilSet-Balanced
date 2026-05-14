@@ -483,10 +483,47 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+
+def split_param_groups(model, weight_decay):
+    """Split parameters into wd / no-wd groups.
+
+    Standard transformer recipe: apply weight decay only to 2D+ weight matrices
+    (Linear, Conv kernels). 1D parameters — biases, LayerNorm gains/shifts,
+    embedding tables — should NOT be decayed because shrinking them toward 0
+    disrupts the model's intended representational behavior (e.g. LayerNorm γ
+    needs to stay near 1.0).
+    """
+    decay_params, no_decay_params = [], []
+    decay_names, no_decay_names = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        lname = name.lower()
+        if p.ndim < 2 or "bias" in lname or "norm" in lname or "embed" in lname:
+            no_decay_params.append(p)
+            no_decay_names.append(name)
+        else:
+            decay_params.append(p)
+            decay_names.append(name)
+    n_decay = sum(p.numel() for p in decay_params)
+    n_no_decay = sum(p.numel() for p in no_decay_params)
+    print(
+        f"Param groups: {len(decay_params)} wd params ({n_decay:,}), "
+        f"{len(no_decay_params)} no-wd params ({n_no_decay:,})"
+    )
+    print(f"  no-wd names ({len(no_decay_names)}): {no_decay_names}")
+    return [
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ], (len(decay_params), len(no_decay_params), n_decay, n_no_decay)
+
+
+param_groups, (n_wd_groups, n_nowd_groups, n_wd_p, n_nowd_p) = split_param_groups(
+    model, weight_decay=cfg.weight_decay * 10.0
+)
 optimizer = Lion(
-    model.parameters(),
+    param_groups,
     lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
-    weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
     betas=(0.9, 0.99),       # Lion-paper default
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -501,6 +538,10 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "n_wd_param_tensors": n_wd_groups,
+        "n_nowd_param_tensors": n_nowd_groups,
+        "n_wd_params": n_wd_p,
+        "n_nowd_params": n_nowd_p,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
