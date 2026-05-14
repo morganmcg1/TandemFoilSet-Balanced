@@ -115,7 +115,10 @@ class PhysicsAttention(nn.Module):
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # Cosine routing τ: bounded cosine logits ∈ [-1,+1]; τ_init=0.07
+        # preserves baseline softmax-input range (1/0.07 ≈ 14.3 ≈ √48/0.5 = 13.86).
+        # Per-head learnable. Same shape and param count as baseline T.
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.07)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -141,7 +144,16 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # Cosine routing: L2-normalize Q (x_mid) and K (slice direction rows of
+        # in_project_slice.weight) along dim_head before the projection. Bounds
+        # routing logits to [-1, +1] regardless of |Q|/|K| magnitudes. Bias kept
+        # as a learnable per-slice popularity prior (zero-init by _init_weights).
+        x_mid_n = F.normalize(x_mid, p=2, dim=-1, eps=1e-8)
+        w_n = F.normalize(self.in_project_slice.weight, p=2, dim=-1, eps=1e-8)
+        cos_logits = F.linear(x_mid_n, w_n, self.in_project_slice.bias)
+        # Clamp τ to ≥ 1e-3 to prevent collapse-to-one-hot pathology.
+        tau = self.temperature.clamp(min=1e-3)
+        slice_weights = self.softmax(cos_logits / tau)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -569,6 +581,20 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# Cosine routing diagnostic (PR #3026): replaces dot-product token→slice
+# routing with cosine-similarity routing. F.normalize(Q, dim=-1) and
+# F.normalize(K_weight, dim=-1) before the projection bound logits ∈ [-1,+1]
+# (Cauchy-Schwarz). τ_init=0.07 preserves baseline softmax-input range. τ is
+# clamped ≥ 1e-3 to prevent collapse-to-one-hot.
+print(
+    f"Cosine routing (#3026): F.normalize(Q, dim=-1) + F.normalize(K_row, dim=-1) before einsum; "
+    f"logit ∈ [-1,+1] by construction (Cauchy-Schwarz); τ_init=0.07 per-head learnable "
+    f"(1/τ ≈ 14.3 ≈ baseline √dim_head/T = 6.93/0.5 = 13.86); τ ≥ 1e-3 clamp; "
+    f"cooperative Q-K scale dynamic REMOVED from routing path (unit-normalized); "
+    f"param count: {n_params} (UNCHANGED from #3006 baseline 407,175; τ replaces T 1:1); "
+    f"NEW BASELINE: val 29.5318 / test 25.4795 (PR #3006)"
+)
+
 # Cross-block residual α diagnostic: between-block adaptivity at a fresh axis
 # (in-block γ closed at all granularities by #2940/#2964/#2977/#2988).
 # α scales each non-final block's output AFTER its post-norm LN — non-1.0
@@ -780,6 +806,109 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     return captured
 
 
+def capture_routing_diagnostics(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
+    """Per-block routing diagnostics for cosine-routing PR #3026.
+
+    On one val batch, hook each PhysicsAttention.forward and capture:
+      - ||Q||_raw mean/max (Q = x_mid, BEFORE F.normalize) — should grow with depth
+      - ||K||_raw mean (K = in_project_slice.weight rows, BEFORE F.normalize)
+      - cos_QK mean/std/max_abs (the bounded normalized logit) — must be in [-1,+1]
+      - logit/τ |max|, |mean| (the actual softmax input) — should be O(1/τ) ~ 14
+      - H_slice (entropy of routing softmax in nats; max ln(slice_num)=ln(24)≈3.18)
+      - dead_slices (frac with mean weight < 0.01)
+      - τ per-head (effective τ after clamp)
+
+    Compare logit/τ |max| to PR #3008 K-only LN's 285-529 explosion — cosine
+    routing should keep it bounded near 1/τ ≈ 14.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    captured: list[dict] = []
+
+    def make_hook(block_idx):
+        attn = inner.blocks[block_idx].attn
+
+        def hook(_module, args, _output):
+            with torch.no_grad():
+                x_arg = args[0]
+                B, N, _ = x_arg.shape
+                heads = attn.heads
+                dim_head = attn.dim_head
+                # Replicate the routing path inline to capture intermediates.
+                x_mid = (
+                    attn.in_project_x(x_arg)
+                    .reshape(B, N, heads, dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                q_raw_norms = x_mid.float().norm(dim=-1)  # [B, heads, N]
+                k_raw_norms = attn.in_project_slice.weight.float().norm(dim=-1)  # [slice_num]
+                x_mid_n = F.normalize(x_mid, p=2, dim=-1, eps=1e-8)
+                w_n = F.normalize(attn.in_project_slice.weight, p=2, dim=-1, eps=1e-8)
+                cos_logits = F.linear(x_mid_n, w_n)  # no bias here for clean cos range probe
+                # The actual logit with bias added (as in forward):
+                cos_logits_b = F.linear(x_mid_n, w_n, attn.in_project_slice.bias)
+                tau_eff = attn.temperature.clamp(min=1e-3)
+                eff_logit = cos_logits_b / tau_eff
+                slice_w = torch.softmax(eff_logit, dim=-1)
+                # Per-token entropy in nats, mean over valid tokens.
+                ent = -(slice_w * (slice_w.clamp(min=1e-12).log())).sum(dim=-1)  # [B, heads, N]
+                slice_w_mean = slice_w.mean(dim=(0, 2))  # [heads, slice_num]; per-head mean over tokens
+                dead_frac = (slice_w_mean < 0.01).float().mean().item()
+                tau_list = attn.temperature.detach().float().reshape(-1).cpu().tolist()
+                captured.append({
+                    "block_idx": block_idx,
+                    "q_raw_mean": q_raw_norms.mean().item(),
+                    "q_raw_max": q_raw_norms.max().item(),
+                    "k_raw_mean": k_raw_norms.mean().item(),
+                    "k_raw_max": k_raw_norms.max().item(),
+                    "cos_mean": cos_logits.float().mean().item(),
+                    "cos_std": cos_logits.float().std().item(),
+                    "cos_abs_max": cos_logits.float().abs().max().item(),
+                    "eff_logit_abs_max": eff_logit.float().abs().max().item(),
+                    "eff_logit_abs_mean": eff_logit.float().abs().mean().item(),
+                    "H_slice_mean": ent.mean().item(),
+                    "H_slice_max_possible": float(torch.log(torch.tensor(slice_w.shape[-1], dtype=torch.float32)).item()),
+                    "dead_slice_frac": dead_frac,
+                    "tau_per_head": tau_list,
+                })
+        return hook
+
+    handles = []
+    for bi, blk in enumerate(inner.blocks):
+        handles.append(blk.attn.register_forward_hook(make_hook(bi)))
+
+    model_obj.eval()
+    with torch.no_grad():
+        x_b, _, _, mask_b = next(iter(loader))
+        x_b = x_b.to(device_, non_blocking=True)
+        mask_b = mask_b.to(device_, non_blocking=True)
+        x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+        with amp_ctx():
+            _ = inner({"x": x_norm, "mask": mask_b})
+
+    for h in handles:
+        h.remove()
+
+    print(f"\nRouting diagnostic @ {epoch_tag} (cosine routing):")
+    log_payload = {
+        "event": "routing_diagnostic",
+        "epoch_tag": epoch_tag,
+        "blocks": captured,
+    }
+    for c in captured:
+        print(
+            f"  block[{c['block_idx']}]: "
+            f"||Q||_raw mean={c['q_raw_mean']:.3f} max={c['q_raw_max']:.3f} | "
+            f"||K||_raw mean={c['k_raw_mean']:.3f} | "
+            f"cos mean={c['cos_mean']:+.4f} std={c['cos_std']:.4f} |max|={c['cos_abs_max']:.4f} | "
+            f"logit/τ |max|={c['eff_logit_abs_max']:.2f} |mean|={c['eff_logit_abs_mean']:.2f} | "
+            f"H_slice={c['H_slice_mean']:.3f}/{c['H_slice_max_possible']:.3f} dead<1%={c['dead_slice_frac']:.3f} | "
+            f"τ_per_head={[f'{t:.4f}' for t in c['tau_per_head']]}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, log_payload)
+    return captured
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -874,6 +1003,15 @@ for epoch in range(MAX_EPOCHS):
         _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
+        )
+
+    # Cosine-routing diagnostic (PR #3026): track ||Q||, ||K||, cos range,
+    # logit/τ |max|, slice entropy, dead slices, and τ. Compare logit/τ |max| to
+    # PR #3008's 285-529 explosion — cosine routing must keep this bounded.
+    if (epoch + 1) in (1, 10, 30, 60):
+        _route_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+        capture_routing_diagnostics(
+            model, _route_loader, stats, amp_ctx_factory, device, epoch_tag=f"ep{epoch+1}",
         )
 
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
