@@ -172,6 +172,10 @@ class PhysicsAttention(nn.Module):
 
         self.last_attn_entropy_mean: float | None = None
         self.last_attn_entropy_per_head_min: float | None = None
+        # H84: post-attention slice tokens for the geometry aux head.
+        # Shape after forward: [B, slice_num, n_hidden] (heads concatenated).
+        # None when the block's attention is dropped by stoch-depth.
+        self.last_slice_token: torch.Tensor | None = None
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -220,6 +224,12 @@ class PhysicsAttention(nn.Module):
                     ent.mean(dim=(0, 2)).min().item()
                 )
 
+        # H84: capture post-attention slice tokens (heads concatenated) for the
+        # geometry aux head. Shape: [B, slice_num, n_hidden] = [B, slice_num,
+        # heads * dim_head]. Gradients flow back through the aux loss to the
+        # slice-routing path.
+        self.last_slice_token = rearrange(out_slice, "b h g c -> b g (h c)")
+
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
         return self.to_out(out_x)
@@ -252,6 +262,10 @@ class TransolverBlock(nn.Module):
     def forward(self, fx):
         if self.training and self.stoch_depth_prob > 0.0:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
+                # H84: attention is skipped, so the stored slice token is
+                # stale; clear it so the training loop can detect the drop and
+                # skip the aux loss for this batch.
+                self.attn.last_slice_token = None
                 if self.last_layer:
                     return self.mlp2(self.ln_3(fx))
                 return fx
@@ -293,6 +307,14 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # H84: geometry aux head — predict (camber_ratio, log_Re_norm) from the
+        # mean-pooled slice tokens of the last block. Used only during
+        # training; discarded at inference. Default optimizer group (WD + lr).
+        self.geo_aux_head = nn.Sequential(
+            nn.Linear(n_hidden, 32),
+            nn.GELU(),
+            nn.Linear(32, 2),
+        )
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -571,6 +593,22 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
+# H84: geometry-discriminative auxiliary loss. A small Linear(n_hidden,32)+
+# GELU+Linear(32,2) head on top of the mean-pooled slice tokens of the LAST
+# transolver block predicts normalized (camber, log_Re). camber comes from
+# raw x[:,0,15] (NACA M/9 in [0,1]); log_Re is x[:,0,13] (natural log,
+# range ~[11.5, 15.5]) mapped to [0,1] via (x - 11.5)/4.0.
+LAMBDA_GEO = 0.05
+LOG_RE_MIN = 11.5
+LOG_RE_RANGE = 4.0
+n_geo_aux_params = sum(p.numel() for p in model.geo_aux_head.parameters())
+print(
+    f"[H84] geo aux head: lambda={LAMBDA_GEO}, head params={n_geo_aux_params}, "
+    f"slice tokens source = last block ({len(model.blocks)-1}) post-attention, "
+    f"target norms: camber in [0,1] from x[:,0,15], "
+    f"log_Re in [0,1] via (x[:,0,13] - {LOG_RE_MIN})/{LOG_RE_RANGE}"
+)
+
 # H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
 # N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
 # (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
@@ -700,13 +738,24 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_geo_loss = 0.0
     n_batches = 0
+    n_geo_batches = 0  # batches where the last block fired (aux loss active)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # H84: build aux targets from RAW x (pre-normalization). These dims are
+        # constant per sample and the first node is always valid (padding goes
+        # at the END of each sample in pad_collate).
+        raw_log_Re = x[:, 0, 13]
+        raw_camber = x[:, 0, 15]
+        log_Re_norm = ((raw_log_Re - LOG_RE_MIN) / LOG_RE_RANGE).clamp(0.0, 1.0)
+        camber_norm = raw_camber.clamp(0.0, 1.0)
+        geo_targets = torch.stack([camber_norm, log_Re_norm], dim=1)  # [B, 2]
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
@@ -723,8 +772,23 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
+        # H84: geometry aux loss on the post-attention slice tokens of the
+        # last block. When stoch-depth drops the last block's attention the
+        # slice tokens are stale (cleared to None), so the aux loss is skipped
+        # for that batch and the main loss still trains.
+        last_slice = model.blocks[-1].attn.last_slice_token
+        if last_slice is not None:
+            mean_slice = last_slice.mean(dim=1)  # [B, n_hidden]
+            geo_pred = model.geo_aux_head(mean_slice)  # [B, 2]
+            geo_loss = F.mse_loss(geo_pred, geo_targets)
+            total_loss = loss + LAMBDA_GEO * geo_loss
+            epoch_geo_loss += geo_loss.item()
+            n_geo_batches += 1
+        else:
+            total_loss = loss
+
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         # H40: clip both model and fourier_enc params together (freqs included).
         total_norm = torch.nn.utils.clip_grad_norm_(
             list(model.parameters()) + list(fourier_enc.parameters()), max_norm=25.0
@@ -741,6 +805,8 @@ for epoch in range(MAX_EPOCHS):
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_geo_loss_avg = epoch_geo_loss / max(n_geo_batches, 1)
+    geo_dropped_frac = 1.0 - (n_geo_batches / max(n_batches, 1))
 
     # --- Validate ---
     model.eval()
@@ -781,6 +847,13 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        # H84: geometry aux loss (MSE on [0,1]-normalized (camber, log_Re)).
+        # geo_dropped_frac is the share of batches where the last block's
+        # attention was skipped by stoch-depth (~0.10 expected).
+        "train/geo_loss": epoch_geo_loss_avg,
+        "train/geo_lambda": LAMBDA_GEO,
+        "train/geo_dropped_frac": geo_dropped_frac,
+        "train/geo_n_batches": n_geo_batches,
         # H73: log annealed sharpening factor at this epoch.
         "train/attn_sharpening_factor": current_attn_factor,
         "train/attn_anneal_frac": anneal_frac,
@@ -791,7 +864,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"geo={epoch_geo_loss_avg:.4f} drop={geo_dropped_frac:.2%}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
