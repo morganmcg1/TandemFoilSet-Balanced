@@ -171,7 +171,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_layerscale=False, layerscale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -182,6 +183,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.use_layerscale = use_layerscale
+        if use_layerscale:
+            self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+            self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -190,8 +195,12 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        if self.use_layerscale:
+            fx = fx + self.gamma_attn * self.attn(self.ln_1(fx))
+            fx = fx + self.gamma_mlp * self.mlp(self.ln_2(fx))
+        else:
+            fx = self.attn(self.ln_1(fx)) + fx
+            fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -202,7 +211,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_layerscale=False, layerscale_init=1e-4):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -223,6 +233,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_layerscale=use_layerscale, layerscale_init=layerscale_init,
             )
             for i in range(n_layers)
         ])
@@ -458,6 +469,8 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    use_layerscale: bool = False  # Add learnable per-channel scale γ on each residual sub-block (Touvron 2021 CaiT)
+    layerscale_init: float = 1e-4  # Init value for γ; paper recommends 1e-4 (range ~1e-5 to 1e-3)
 
 
 cfg = sp.parse(Config)
@@ -497,6 +510,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_layerscale=cfg.use_layerscale,
+    layerscale_init=cfg.layerscale_init,
 )
 
 if cfg.fourier_k > 0:
@@ -535,12 +550,39 @@ if ema_model is not None:
     ema_model.eval()
     print(f"EMA enabled (decay={cfg.ema_decay})")
 
+if cfg.use_layerscale:
+    # Exclude LayerScale γ from weight decay so it can stay small when a
+    # sub-block isn't useful (we want γ → 0, not weight-decay driving it there).
+    decay_params, no_decay_params, ls_names = [], [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if "gamma_" in name:
+            no_decay_params.append(p)
+            ls_names.append(name)
+        else:
+            decay_params.append(p)
+    n_decay = sum(p.numel() for p in decay_params)
+    n_no_decay = sum(p.numel() for p in no_decay_params)
+    print(
+        f"LayerScale: γ params registered ({len(ls_names)} tensors, "
+        f"{n_no_decay} elements, init={cfg.layerscale_init}); "
+        f"decay group {n_decay} params, no-decay group {n_no_decay} params"
+    )
+    print(f"  γ names: {ls_names}")
+    optim_params = [
+        {"params": decay_params, "weight_decay": cfg.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
+else:
+    optim_params = model.parameters()
+
 if cfg.optimizer == "lion":
     from timm.optim import Lion
-    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = Lion(optim_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
     print(f"Optimizer: Lion (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
 elif cfg.optimizer == "adamw":
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = torch.optim.AdamW(optim_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 
@@ -688,6 +730,16 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if cfg.use_layerscale:
+        for li, blk in enumerate(base_model.blocks):
+            ga = blk.gamma_attn.detach()
+            gm = blk.gamma_mlp.detach()
+            log_metrics[f"layerscale/layer{li}/gamma_attn_mean"] = ga.mean().item()
+            log_metrics[f"layerscale/layer{li}/gamma_attn_abs_mean"] = ga.abs().mean().item()
+            log_metrics[f"layerscale/layer{li}/gamma_attn_std"] = ga.std().item()
+            log_metrics[f"layerscale/layer{li}/gamma_mlp_mean"] = gm.mean().item()
+            log_metrics[f"layerscale/layer{li}/gamma_mlp_abs_mean"] = gm.abs().mean().item()
+            log_metrics[f"layerscale/layer{li}/gamma_mlp_std"] = gm.std().item()
     wandb.log(log_metrics)
 
     tag = ""
@@ -714,6 +766,24 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+if cfg.use_layerscale:
+    print("\nFinal LayerScale γ values per layer (live model, not EMA):")
+    ls_summary: dict[str, float] = {}
+    for li, blk in enumerate(base_model.blocks):
+        ga = blk.gamma_attn.detach()
+        gm = blk.gamma_mlp.detach()
+        ga_mean, ga_abs = ga.mean().item(), ga.abs().mean().item()
+        gm_mean, gm_abs = gm.mean().item(), gm.abs().mean().item()
+        print(
+            f"  layer{li}: γ_attn mean={ga_mean:+.4e} |γ|={ga_abs:.4e}  "
+            f"γ_mlp mean={gm_mean:+.4e} |γ|={gm_abs:.4e}"
+        )
+        ls_summary[f"final_layerscale/layer{li}/gamma_attn_mean"] = ga_mean
+        ls_summary[f"final_layerscale/layer{li}/gamma_attn_abs_mean"] = ga_abs
+        ls_summary[f"final_layerscale/layer{li}/gamma_mlp_mean"] = gm_mean
+        ls_summary[f"final_layerscale/layer{li}/gamma_mlp_abs_mean"] = gm_abs
+    wandb.summary.update(ls_summary)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
