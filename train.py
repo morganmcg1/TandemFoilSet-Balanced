@@ -271,6 +271,11 @@ class Transolver(nn.Module):
         # so non-1.0 α directly changes feature magnitudes flowing into the next
         # block (LN cannot absorb the scale).
         self.cross_block_alpha = nn.Parameter(torch.ones(n_layers - 1))
+        # Cross-block residual β (#3044): learnable scalar ADDITIVE bias at the
+        # same 3 inter-block sites as α. Init 0.0 -> identity at step 0. Applied
+        # AFTER α scaling: x = α*x + β. Orthogonal mechanism to α (additive vs
+        # multiplicative); broadcasts across all tokens and channels.
+        self.cross_block_beta = nn.Parameter(torch.zeros(n_layers - 1))
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -302,10 +307,10 @@ class Transolver(nn.Module):
         n_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
-            # Apply cross-block α to non-final block outputs; the last block is
-            # the head (returns out_dim predictions) and must not be scaled.
+            # Apply cross-block α (multiplicative) AND β (additive) to non-final
+            # block outputs; the last block is the head and must not be scaled.
             if i < n_blocks - 1:
-                fx = self.cross_block_alpha[i] * fx
+                fx = self.cross_block_alpha[i] * fx + self.cross_block_beta[i]
         return {"preds": fx}
 
 
@@ -582,6 +587,20 @@ print(
     f"init={[f'{a:.4f}' for a in _alpha_init]} (all 1.0 — identity at step 0); "
     f"in-block γ_attn / γ_mlp UNCHANGED (constant 1.0 from #2964); "
     f"baseline to beat: val_avg/mae_surf_p < 30.0382 (#2964 NEW baseline)"
+)
+
+# Cross-block residual β diagnostic (#3044): additive bias at the SAME 3 inter-block
+# sites as α. Orthogonal mechanism (additive vs multiplicative). Init 0.0 -> identity
+# at ep1. Tests whether the inter-block site has additional capacity beyond the
+# multiplicative α WIN (#3006), and whether the cruise basin is sensitive to SITE
+# (preserved with α at #3006) or to MECHANISM (additive may differ).
+_beta_init = _inner_for_alpha.cross_block_beta.detach().cpu().tolist()
+print(
+    f"Cross-block residual β (#3044): {_inner_for_alpha.cross_block_beta.shape[0]} learnable scalars "
+    f"(+{_inner_for_alpha.cross_block_beta.numel()} params) ADDITIVE BIAS at SAME 3 sites as α; "
+    f"init={[f'{b:.4f}' for b in _beta_init]} (all 0.0 — identity at step 0); "
+    f"formula at inter-block i: x = α[i] * x + β[i] (i=0,1,2; skip after final block); "
+    f"NEW baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006)"
 )
 
 # SE diagnostic: count modules and added params
@@ -894,6 +913,25 @@ for epoch in range(MAX_EPOCHS):
             "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
         })
 
+    # Cross-block β convergence probe (#3044): log additive bias scalars at the
+    # same epochs as α. Tracks drift from 0.0 init; tells us whether the
+    # additive mechanism extracts signal or stays redundant.
+    if (epoch + 1) in (1, 10, 30, 60):
+        _inner_beta = getattr(model, "_orig_mod", model)
+        _betas = _inner_beta.cross_block_beta.detach().cpu().float().tolist()
+        print(
+            f"  cross-block β @ ep{epoch+1}: " + ", ".join(
+                f"β_{bi}={v:.4f}" for bi, v in enumerate(_betas)
+            )
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "cross_block_beta",
+            "epoch": epoch + 1,
+            "beta_values": _betas,
+            "beta_mean": sum(_betas) / max(len(_betas), 1),
+            "beta_abs_mean": sum(abs(v) for v in _betas) / max(len(_betas), 1),
+        })
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -964,6 +1002,22 @@ if best_metrics:
         + f" (mean={_alpha_best_log['alpha_mean']:.4f}, |Δ|/n={_alpha_best_log['alpha_abs_mean_deviation']:.4f})"
     )
     append_metrics_jsonl(metrics_jsonl_path, _alpha_best_log)
+
+    # Cross-block β at best checkpoint (#3044) — final values after loading best.
+    _beta_best = _inner.cross_block_beta.detach().cpu().float().tolist()
+    _beta_best_log = {
+        "event": "cross_block_beta_best",
+        "epoch": int(best_metrics["epoch"]),
+        "beta_values": _beta_best,
+        "beta_mean": sum(_beta_best) / max(len(_beta_best), 1),
+        "beta_abs_mean": sum(abs(v) for v in _beta_best) / max(len(_beta_best), 1),
+    }
+    print(
+        "\nCross-block β at best checkpoint: "
+        + ", ".join(f"β_{bi}={v:.4f}" for bi, v in enumerate(_beta_best))
+        + f" (mean={_beta_best_log['beta_mean']:.4f}, |β|_mean={_beta_best_log['beta_abs_mean']:.4f})"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, _beta_best_log)
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
