@@ -517,7 +517,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=96,
     n_layers=4,
-    n_head=2,
+    n_head=4,
     slice_num=24,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -526,6 +526,7 @@ model_config = dict(
 print(f"slice_num: {model_config['slice_num']}")
 print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
+print(f"[n-head sweep] n_head={model_config['n_head']}, dim_head={model_config['n_hidden'] // model_config['n_head']}")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
 
@@ -541,6 +542,7 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+print(f"[n-head sweep] total params: {n_params}")
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -740,6 +742,12 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # Per-block per-head attention temperatures (n-head sweep #2856 diagnostic).
+    _inner_epoch = getattr(model, "_orig_mod", model)
+    per_block_temps = [
+        blk.attn.temperature.detach().float().flatten().tolist()
+        for blk in _inner_epoch.blocks
+    ]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +760,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "attn_temperatures_per_block": per_block_temps,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
