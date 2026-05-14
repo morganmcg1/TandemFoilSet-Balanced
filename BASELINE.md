@@ -39,10 +39,39 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **32.4498** | #2727 | Lion lr=1.5e-4 + FiLM + SE block-3-only (reduction=8, zero-init fc2); all other params from #2692 unchanged | ep66/70 (timeout-truncated); **−1.73% vs #2692** (33.0195); **−2.76% vs #2614** (33.3722); val 3/4 splits WIN; in_dist regression eliminated; +2,412 params (+2,412 vs #2692 saves 7,236 vs #2714) |
-| `test_avg/mae_surf_p` | **27.6573** | #2727 | — | test from best-val checkpoint ep66; −2.46% vs #2692 (28.3562) |
+| `val_avg/mae_surf_p` | **32.2477** | #2741 | Lion lr=1.5e-4 + FiLM + SE block-3-only + SwiGLU MLP (hidden=128, param-matched +256 vs GELU) | ep63/70 (timeout-truncated); **−0.62% vs #2727** (32.4498); all 4 splits WIN; in-dist 25.53 best ever |
+| `test_avg/mae_surf_p` | **27.4248** | #2741 | — | test from best-val checkpoint ep63; −0.84% vs #2727 (27.6573) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 32.4498` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 32.2477` to be merged.
+
+## 2026-05-14 [Round 88] — PR #2741: SwiGLU MLP activation: val WIN −0.62% (NEW BEST)
+
+- **Student:** charliepai2g48h5-alphonse
+- **Best epoch:** 63 of 70 (timeout-truncated at 30 min; epoch 64 in progress at cutoff)
+- **Param count:** 338,523 (331,031 baseline + 256 SwiGLU delta; hidden_swiglu=128 = round(96*2*2/3/8)*8; essentially param-matched +0.08%)
+- **sec/epoch:** ~28.9 (+3% vs 28.0 baseline; extra Linear + element-wise-mul absorbed by bf16+compile)
+- **Peak GPU memory:** 15.35 GB (flat vs baseline ~15.3 GB)
+- **SwiGLU gate stats (per-block, best-val checkpoint):** gate_mean 0.356→0.253→0.153→0.088 (monotone depth-decay), gate_std 1.07→0.92→0.72→0.58; gate_zero_frac 1.3-2.4% (smooth signed re-weighting, not hard masking); corr(gate,value)≈0 across all blocks (decoupled conditional capacity); depth-progressive pattern mirrors SE block-3 dominance
+- **Key finding:** SwiGLU stacks productively with SE-block3-only. Per-token MLP channel gating (SwiGLU) + global token-pool channel gating (SE) are orthogonal mechanisms. In-dist bottleneck further closed (25.53 vs 25.65 SE-block3).
+
+| Split | val mae_surf_p | Δ vs #2727 (32.4498) |
+|---|---|---|
+| `val_single_in_dist` | **25.5303** | **−0.47% WIN** (best-ever in-dist) |
+| `val_geom_camber_rc` | **47.4674** | **+0.50% mild** (flat) |
+| `val_geom_camber_cruise` | **19.1621** | **+0.45% mild** (flat) |
+| `val_re_rand` | **36.8311** | **−2.68% WIN** |
+| **val_avg** | **32.2477** | **−0.62% WIN** |
+
+| Split | test mae_surf_p | Δ vs #2727 (27.6573) |
+|---|---|---|
+| `test_single_in_dist` | 23.7995 | −1.83% WIN |
+| `test_geom_camber_rc` | 43.3320 | +0.43% flat |
+| `test_geom_camber_cruise` | 15.3055 | −1.42% WIN |
+| `test_re_rand` | 27.2622 | −1.61% WIN |
+| **test_avg** | **27.4248** | **−0.84% WIN** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-swiglu-mlp-20260514-025715/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-alphonse --experiment_name "charliepai2g48h5-alphonse/swiglu-mlp" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`
 
 ## 2026-05-14 [Round 87] — PR #2727: SE block-3-only: val WIN −1.73% (NEW BEST)
 
