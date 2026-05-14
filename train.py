@@ -601,6 +601,8 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    lion_beta1: float = 0.9  # Lion momentum-EMA coefficient for sign-update interpolation (Chen 2023 default)
+    lion_beta2: float = 0.99  # Lion EMA decay coefficient for the running average state (Chen 2023 default)
 
 
 cfg = sp.parse(Config)
@@ -675,7 +677,8 @@ if cfg.fourier_features:
 # Channel order matches loss decomposition: [surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy].
 KENDALL_CHANNELS = ("surf_p", "surf_ux", "surf_uy", "vol_p", "vol_ux", "vol_uy")
 KENDALL_LOG_SIGMA_CLAMP = 3.0  # clamp |log_sigma| ≤ 3, so sigma ∈ [exp(-3), exp(3)] ≈ [0.05, 20]
-def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
+def _build_optimizer(name: str, param_groups, lr: float, default_wd: float,
+                     lion_betas: tuple[float, float] = (0.9, 0.99)):
     """Builds an AdamW or Lion optimizer from a param_groups iterable.
 
     ``param_groups`` may be ``model.parameters()`` (single group) or a list of dicts
@@ -684,8 +687,8 @@ def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
     name = name.lower()
     if name == "lion":
         if isinstance(param_groups, list):
-            return Lion(param_groups, lr=lr, betas=(0.9, 0.99))
-        return Lion(param_groups, lr=lr, weight_decay=default_wd, betas=(0.9, 0.99))
+            return Lion(param_groups, lr=lr, betas=lion_betas)
+        return Lion(param_groups, lr=lr, weight_decay=default_wd, betas=lion_betas)
     if name == "adamw":
         if isinstance(param_groups, list):
             return torch.optim.AdamW(param_groups, lr=lr)
@@ -710,12 +713,14 @@ if cfg.use_kendall_uncertainty:
             model.parameters(),
             lr=cfg.lr,
             default_wd=cfg.weight_decay,
+            lion_betas=(cfg.lion_beta1, cfg.lion_beta2),
         )
         optimizer_kendall = torch.optim.AdamW(
             [log_sigmas], lr=cfg.hybrid_kendall_lr, weight_decay=0.0
         )
         print(
-            f"Hybrid optimizer: Lion(model, lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e}) + "
+            f"Hybrid optimizer: Lion(model, lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e}, "
+            f"betas=({cfg.lion_beta1}, {cfg.lion_beta2})) + "
             f"AdamW(log_sigmas, lr={cfg.hybrid_kendall_lr:.2e}, wd=0)"
         )
     else:
@@ -728,11 +733,14 @@ if cfg.use_kendall_uncertainty:
             ],
             lr=cfg.lr,
             default_wd=cfg.weight_decay,
+            lion_betas=(cfg.lion_beta1, cfg.lion_beta2),
         )
     print(f"Kendall uncertainty: ON (6 log_sigmas, clamp ±{KENDALL_LOG_SIGMA_CLAMP}, no weight decay on log_sigmas)")
 else:
     log_sigmas = None
-    optimizer = _build_optimizer(cfg.optimizer, model.parameters(), lr=cfg.lr, default_wd=cfg.weight_decay)
+    optimizer = _build_optimizer(cfg.optimizer, model.parameters(), lr=cfg.lr,
+                                 default_wd=cfg.weight_decay,
+                                 lion_betas=(cfg.lion_beta1, cfg.lion_beta2))
 print(f"Optimizer: {cfg.optimizer.upper()} (lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e})")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
