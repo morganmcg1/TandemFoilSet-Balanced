@@ -291,15 +291,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()  # back to fp32 for downstream metric accumulation
 
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            err = pred - y_norm
+            charb_err = torch.sqrt(err * err + CHARBONNIER_EPS * CHARBONNIER_EPS) - CHARBONNIER_EPS
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (huber_err * vol_mask.unsqueeze(-1)).sum()
+                (charb_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (huber_err * surf_mask.unsqueeze(-1)).sum()
+                (charb_err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -422,6 +423,7 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
+CHARBONNIER_EPS = 0.5  # Charbonnier loss: sqrt(err^2 + eps^2) - eps
 
 
 @dataclass
@@ -503,6 +505,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "loss_type": "charbonnier",
+        "charbonnier_eps": CHARBONNIER_EPS,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -545,12 +549,13 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            err = pred - y_norm
+            charb_err = torch.sqrt(err * err + CHARBONNIER_EPS * CHARBONNIER_EPS) - CHARBONNIER_EPS
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (charb_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (charb_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
