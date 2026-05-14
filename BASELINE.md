@@ -1487,3 +1487,53 @@ cd target/ && python train.py \
   --epochs 46 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
   --surf_weight 10 --n_layers 2 --slice_num 16
 ```
+
+---
+
+## 2026-05-14 10:40 — PR #2872: epochs=50 on n_layers=2+slice_num=16 (askeladd)
+
+**New best: `val_avg/mae_surf_p` = 34.544** (best_epoch=47/50, plateau at e47-50 confirmed)
+
+> Extending epochs from 46→50 with cosine T_max=50 captured one more descent step at e46→e47 (slope −0.452, the largest single-epoch drop in the final 10 epochs). Val avg improved −2.02%, test avg improved −1.09%. Both val and test beat baseline, corroborated by the split decomposition. The 'best_epoch=final STILL DESCENDING' signal that held for 8+ consecutive baseline runs was genuine. Plateau confirmed at e47-50: val bounces [34.54, 34.79], slope ~+0.02 average — epoch-budget axis saturates at e47 for this stack. Zero code changes: just `--epochs 50`.
+
+| Hyperparameter | Value |
+|---|---|
+| `n_layers` | 2 |
+| `slice_num` | 16 |
+| `epochs` | **50** (was 46) — best_epoch=47 |
+| `n_head` | 4 |
+| `lr` | 1e-4 |
+| `weight_decay` | 1e-4 |
+| `surf_weight` | 10 |
+| Per-epoch wall-clock | ~35.2s (50 × 35.2s ≈ 29.3 min) |
+| Params | 361,131 |
+| Peak memory | 13.49 GB |
+
+### Val metrics (best checkpoint, epoch 47)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | **35.113** | 44.459 |
+| geom_camber_rc | **48.106** | 53.724 |
+| geom_camber_cruise | 18.895 | 21.762 |
+| re_rand | **36.060** | 38.605 |
+| **avg** | **34.544** | — |
+
+### Test metrics (from best-val checkpoint, epoch 47)
+
+| Split | `mae_surf_p` |
+|---|---|
+| single_in_dist | 31.646 |
+| geom_camber_rc | 44.898 |
+| geom_camber_cruise | 15.049 |
+| re_rand | 28.072 |
+| **avg** | **29.916** |
+
+**Metric artifacts:** `models/model-charliepai2g48h3-askeladd-epochs50-nlayers2-slicenum16-20260514-095644/metrics.jsonl`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --epochs 50 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
+  --surf_weight 10 --n_layers 2 --slice_num 16
+```
