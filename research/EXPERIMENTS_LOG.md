@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-14 [Round 114] UTC — PR #2869: n_head=1 dim_head=96 max-rank attention — **CLOSED LOSS (+2.93% val)**
+
+- **Branch:** charliepai2g48h5-alphonse/n-head-1-max-rank
+- **Hypothesis:** Halve n_head 2→1, doubling dim_head 48→96 (maximum per-head rank within n_hidden=96 budget). Follows from #2856 n_head=4 diagnostic: attention rank is capacity-bottlenecked for in_dist.
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-n-head-1-max-rank-20260514-091625/metrics.jsonl`
+
+| Metric | Baseline #2810 | #2856 H=4 | #2869 H=1 | vs Baseline |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | 32.0367 (+3.71%) | **31.7942** | **+2.93% LOSS** |
+| test_avg/mae_surf_p | 26.1964 | 26.6328 (+1.66%) | **26.6482** | **+1.72% LOSS** |
+| val_single_in_dist | 25.2751 | 27.3958 (+8.39%) | **26.0060** | +2.89% |
+| val_geom_camber_cruise | 16.8427 | 18.0142 (+6.96%) | **18.3170** | **+8.75% worst** |
+| val_geom_camber_rc | 45.8179 | 46.9870 (+2.55%) | **46.8914** | +2.34% |
+| val_re_rand | 35.6177 | 35.7499 (+0.37%) | **35.9622** | +0.97% |
+
+Param count: 421,248 (+26.2%). Best ep 68/70 full schedule. sec/epoch 25.30s (+15%). Runtime 1771s (29.5 min, fit within cap). Peak GPU 14.02 GB.
+
+Per-block routing at best ckpt: Block-2 slice-routing entropy collapsed to **0.267** (8.4% of max log24=3.18) — near-one-hot routing, single-head degeneracy confirmed. Other blocks: [0.9546, 2.1560, 0.2674, 0.6465]. Per-block temperature spread [0.88, 1.19, 0.78, 1.02] (span 0.41, wider than H=2 per-head span 0.14).
+
+**Analysis:** LOSS in all 4 splits. Hypothesis falsified: capacity-bottleneck thesis for H=1 not supported. In_dist did NOT improve despite +25% params (+26% param budget, +2.89% regression). Block-2 routing collapsed to near-one-hot entropy 0.267 — single-head degeneracy failure mode realized. Multi-head parallelism is load-bearing as ensemble averaging of routing decisions, not as per-head specialization. H=2 sits at U-shaped sweet spot: H=4 LOSS (+3.71%, in_dist worst), H=1 LOSS (+2.93%, camber_cruise worst). Attention-head axis COMPREHENSIVELY CLOSED AT H=2.
+
+**86th taxon CLOSES. Plateau deepens to 13 LOSSes since #2810 merge.**
+
+---
+
+## 2026-05-14 [Round 114] UTC — PR #2879: mlp_ratio 2→3 — MLP capacity-expansion axis (92nd) — **ASSIGNED to charliepai2g48h5-alphonse**
+
+- **Branch:** charliepai2g48h5-alphonse/mlp-ratio-3
+- **Hypothesis:** 1-line config change mlp_ratio 2→3, expanding SwiGLU intermediate dim from 192→288 across all 4 blocks. Expected ~370,564 params (+36,864 ≈ +11%). Apples-to-apples capacity test vs #2869 attention-expansion (+87k params, LOSS +2.93%) — same ~budget, different architectural location (MLP-body vs attention).
+- **Rationale:** Model is generalization-limited (not capacity-limited per #2809 frieren). However, if capacity placement matters, MLP-body capacity expansion may succeed where attention-rank expansion failed. Alphonse's own #4 follow-up suggestion. 92nd candidate axis.
+- **Falsifiable:** WIN means MLP was bottleneck; LOSS closes mlp_ratio upward axis; consistent with #2809 frieren thesis if LOSS.
+
+---
+
 ## 2026-05-14 [Round 113] UTC — PR #2864: Hybrid LN-at-block0_ln1 + RMSNorm-at-8-other-sites — **CLOSED LOSS (+1.62% val)**
 
 - **Branch:** charliepai2g48h5-askeladd/hybrid-ln-rmsnorm
