@@ -457,3 +457,154 @@ NaN. Test_avg reported here is the partial mean over the 3 finite splits.
 
 Per-epoch ~2.2 min; 14 of 15 configured epochs ran before the 30-min cap.
 Peak memory ~42 GB of 96 GB — large headroom for wider/deeper models.
+
+---
+
+# Round 3/4 Results — 2026-05-14 Advisor Review
+
+---
+
+## 2026-05-14 — PR #1405: bf16 autocast + OneCycle@25ep (tanjiro) ✅ MERGED — NEW BEST
+
+- **Student branch:** `charliepai2g48h1-tanjiro/amp-bf16-batch8`
+- **Hypothesis:** bf16 autocast reduces VRAM (42→33 GB), and configuring `--epochs 25` stretches the OneCycleLR schedule so that at the 30-min wall-clock cutoff (~19 realized epochs) the LR is still meaningful (~3.3e-4) rather than near-zero (as in the cfg=14 recipe).
+
+### Result
+
+| Arm | bf16 | epochs cfg | epochs realized | wall (min) | val_avg/mae_surf_p | test_avg/mae_surf_p | peak VRAM |
+|-----|------|------------|-----------------|------------|---------------------|----------------------|-----------|
+| A: bf16+OneCycle, cfg=14 | ✅ | 14 | 14 | 22.9 | 83.951 | 73.316 | 32.94 GB |
+| **B (winner): bf16+OneCycle, cfg=25** | **✅** | **25** | **19** | **31.0** | **73.295** | **63.911** | **32.95 GB** |
+| Baseline (PR #1581, fp32) | — | 14 | 14 | — | 85.615 | 83.328 | 42 GB |
+
+Per-split val (Arm B, epoch 19):
+
+| Split | mae_surf_p | Δ vs PR #1581 |
+|-------|-----------|----------------|
+| val_geom_camber_cruise | 54.423 | -18.1% |
+| val_re_rand | 71.041 | -13.2% |
+| val_single_in_dist | 79.894 | -19.7% |
+| val_geom_camber_rc | 87.823 | -7.2% |
+| **val_avg** | **73.295** | **-14.4%** |
+
+Val trajectory (Arm B): ep15=93.09, ep16=88.83, ep17=81.33, ep18=76.40, ep19=73.30. Still improving ~3 pts/epoch at cutoff.
+
+**Metric artifacts:** `models/model-amp-bf16-onecycle-25ep-20260512-233756/metrics.jsonl` on advisor branch.
+
+### Analysis
+
+The key mechanism is the **OneCycleLR schedule horizon**:
+- `cfg=14`: schedule completes fully at epoch 14 (LR → ~8e-9). Model optimizes well but has no LR headroom after ep14.
+- `cfg=25`: schedule configured for 25 epochs. At epoch 19 (cap), LR = ~3.3e-4 (76% through schedule). The model is still in active fine-grained descent.
+
+bf16 itself doesn't speed up training (97 s/epoch identical to fp32 — CPU/dataloader bottleneck, not GPU compute). The VRAM savings (33 vs 42 GB) are headroom for future experiments.
+
+The 5-epoch improvement window (ep14→ep19 with cfg=25) produced -12.3 val pts total — that's the "schedule tail" that was cut off in all previous experiments.
+
+### Action: MERGED — new baseline val_avg=73.295
+
+---
+
+## 2026-05-14 — PR #1602: Grad-clip gc=2.0 + OneCycle (fern) ↩ SENT BACK
+
+- **Student branch:** `charliepai2g48h1-fern/grad-clip-l1`
+- **Round 2 (on OneCycleLR baseline):** gc=2.0 achieved val=81.861 / test=77.818 (best seed) — **−4.4% vs PR #1581 (85.615)**
+
+### Round-2 Result
+
+| Arm | gc | seeds | val_avg best / mean | test_avg (3/4) best / mean |
+|-----|----|------:|--------------------:|---------------------------:|
+| A (gc=1.0) | 1.0 | 3 | 84.038 / 84.751 | 80.516 / 80.999 |
+| **B winner (gc=2.0)** | **2.0** | **2** | **81.861 / 82.731** | **77.818 / 79.030** |
+| Baseline (PR #1581) | — | — | — / 85.615 | — / 83.328 |
+
+Mechanism: pre-clip grad-norm mean ~36 (clips on every step); gc=2.0 preserves 2× more per-batch magnitude than gc=1.0, which helps under OneCycle's higher peak LR.
+
+### Action: SENT BACK — beaten by PR #1405 new baseline (73.295)
+
+gc=2.0's val=81.861 is worse than the new bf16+25ep baseline. Sent back to re-run with `--epochs 25 --batch_size 4` (bf16 default) + `--grad_clip 2.0`.
+
+---
+
+## 2026-05-14 — PR #1605: asinh-p680 + OneCycle (edward) ↩ SENT BACK
+
+- **Student branch:** `charliepai2g48h1-edward/asinh-pressure-target`
+- **Round 2 (on OneCycleLR baseline):** asinh-p680 + OneCycle achieved val=83.259 / test=80.301 — **−2.75% vs PR #1581 (85.615)**
+
+### Round-2 Result
+
+| Run | val_avg/mae_surf_p | test_avg_3of4 | Δ vs OneCycle |
+|-----|-------------------|--------------|---------------|
+| OneCycle baseline (PR #1581) | 85.615 | 83.328 | — |
+| **asinh-p680 + OneCycle** | **83.259** | **80.301** | **-2.75%** |
+
+Per-split: cruise 60.63 (-8.74%), re_rand 80.15 (-2.13%), single 95.75 (-3.80%), rc 96.52 (+2.01% small regression).
+
+### Action: SENT BACK — beaten by PR #1405 new baseline (73.295)
+
+83.259 is above the new 73.295 baseline. Sent back to re-run with `--epochs 25` + `--asinh_p_scale 680.0` on the bf16+OneCycle baseline. Additional arm at scale=400 suggested (rc regression under OneCycle may be recoverable).
+
+---
+
+## 2026-05-14 — PR #1625: Per-channel weight cw=2 on cosine L1 (nezuko) ↩ SENT BACK
+
+- **Student branch:** `charliepai2g48h1-nezuko/surf-channel-pressure-weight`
+- **Result on OLD cosine L1 baseline:** `surf_channel_weight=[1,1,2]` → val=90.362 / test=87.643 — **−4.2% vs PR #1355 (94.291)**
+
+### Result
+
+| Arm | cw | val_avg | test_avg_3of4 | Δ vs #1355 |
+|-----|----|--------:|--------------|-----------|
+| A (cw=2) ★ | [1,1,2] | 90.362 | 87.643 | -4.2% |
+| B (cw=3) | [1,1,3] | 94.367 | 92.922 | +0.08% |
+| C (cw=5) | [1,1,5] | 93.928 | 91.107 | -0.4% |
+
+### Action: SENT BACK — ran on cosine baseline, must re-test on bf16+OneCycle
+
+cw=2 validates the signal on L1+cosine but both the OneCycle and bf16 baselines have since merged. Sent back to run single arm `--surf_channel_weight "1.0,1.0,2.0" --epochs 25 --lr 2e-3 --loss l1`.
+
+---
+
+## 2026-05-14 — PR #1582: surf_weight=5 on cosine L1 (alphonse) ↩ SENT BACK
+
+- **Student branch:** `charliepai2g48h1-alphonse/surf-weight-sweep`
+- **Result on OLD cosine L1 baseline:** `surf_weight=5` → val=90.776 / test=88.984 — **−3.7% vs PR #1355 (94.291)**
+
+### Result
+
+| Arm | surf_weight | val_avg | test_avg_3of4 | Δ vs #1355 |
+|-----|------------|--------:|--------------|-----------|
+| A (sw=5) ★ | 5 | 90.776 | 88.984 | -3.7% |
+| B (sw=10) | 10 | 93.805 | 91.426 | -0.5% (control) |
+| C (sw=20) | 20 | 94.203 | 93.191 | -0.09% |
+
+Mechanism: L1's bounded gradients make the existing 10× surf amplification over-aggressive; 5× is the sweet spot on this loss.
+
+### Action: SENT BACK — ran on cosine baseline, must re-test on bf16+OneCycle
+
+---
+
+## 2026-05-14 — PR #1697: SAM optimizer (thorfinn) ❌ CLOSED
+
+- **Hypothesis:** SAM finds flatter minima → better OOD generalization, particularly on camber-OOD splits.
+- **Result:** Best SAM arm (rho=0.05, 7 epochs) = val=134.744 — **57% worse than baseline 85.615**
+- **Root cause:** SAM's 2× per-step cost halves realized epochs (7 vs 14). Flat-minima benefit requires a converged model; at 7 epochs, the model is far from convergence. The 2× cost is intrinsic and irrecoverable at 30-min cap.
+- **Action: CLOSED** — fundamental compute-budget mismatch.
+
+---
+
+## 2026-05-14 — PR #1381: Wider Transolver n_hidden=256 (askeladd) ❌ CLOSED
+
+- **Hypothesis:** Doubling hidden dim gives more capacity for multi-scale pressure gradients.
+- **Result:** Best arm = val=138.022 — **61% worse than baseline 85.615**
+- **Root cause:** 3.9M params → 2× slower per epoch → OOM at bs=4, forced bs=2, only 5-7 epochs realized. Undertrained model, not capacity-limited. Trajectory still steeply descending at cutoff.
+- **Action: CLOSED** — width without throughput is a losing trade. bf16 now merged; depth experiment (askeladd, PR #2914) is the right follow-up.
+
+---
+
+## 2026-05-14 — PR #1667: OneCycleLR peak LR push 3/4/5e-3 (frieren) ❌ CLOSED
+
+- **Hypothesis:** LR-saturated signal (1e-3→2e-3 gave +2.1pp); push to 3/4/5e-3.
+- **Result:** 3e-3 → val=86.872, 4e-3 → val=89.321, 5e-3 → DIVERGED (val=316.4 at ep1)
+- **Root cause:** AdamW + L1 + OneCycle(pct_start=0.1) is LR-saturated at 2e-3. The OneCycle wind-up at peak >2e-3 enters high-curvature regions before warmup completes. 
+- **Action: CLOSED** — peak LR direction exhausted at 2e-3.

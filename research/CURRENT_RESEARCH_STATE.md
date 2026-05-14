@@ -1,179 +1,85 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 (last update 23:10 UTC)
+- **Date:** 2026-05-14 (latest advisor review cycle)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r1`
-- **Research tag:** `charlie-pai2g-48h-r1` (Charlie no-W&B logging-ablation arm,
-  48h run)
-- **Most recent human directive:** None — fresh launch, no human issues in
-  the queue.
+- **Research tag:** `charlie-pai2g-48h-r1` (Charlie no-W&B logging-ablation arm)
+- **Most recent human directive:** None — no GitHub issues from human team
 
-## Current best (as of 22:55 UTC) — BASELINE UPDATED
+## Current Best Baseline — PR #1405 (tanjiro, merged 2026-05-14)
 
-**Merged:** PR #1581 frieren — L1 + OneCycleLR@peak=2e-3
-`val_avg/mae_surf_p = 85.615` | `test_avg_3of4 = 83.328` | best epoch 14/14 (-9.2% vs PR #1355)
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **73.295** |
+| test_avg/mae_surf_p (3-of-4 finite) | 63.911 |
+| val_geom_camber_cruise | 54.423 |
+| val_re_rand | 71.041 |
+| val_single_in_dist | 79.894 |
+| val_geom_camber_rc | 87.823 |
 
-Per-split val: cruise=66.44, re_rand=81.89, single=99.52, rc=94.61
+**Recipe:** `--epochs 25 --lr 2e-3 --loss l1` + bf16 autocast (now default) + OneCycleLR  
+**Key insight:** bf16 reduces VRAM 42→33 GB. Combined with `--epochs 25`, the OneCycleLR schedule is still meaningful (LR ~3.3e-4) at the 30-min wall-clock cutoff (~19 realized epochs). Epochs 15-19 each contributed 3-7+ val MAE improvement — the "schedule tail" is where the gains are.
 
-**Previous baseline** (PR #1355): `val_avg/mae_surf_p = 94.291`
+## Progress Path
 
-**All downstream experiments must use `--loss l1 --lr 2e-3 --epochs 14` (OneCycleLR).**
+| PR | Merged | val_avg | Improvement |
+|----|--------|---------|-------------|
+| MSE baseline | — | ~218 | — |
+| #1355 pure L1 | ✅ | 94.291 | -57% |
+| #1581 OneCycleLR @2e-3 | ✅ | 85.615 | -9.2% |
+| #1405 bf16 + epochs=25 | ✅ | 73.295 | -14.4% |
 
-## Round-1 leaderboard (closed)
+## Active Research Focus
 
-| Rank | PR | Student | Lever | val_avg/mae_surf_p | Status |
-|------|----|---------|-------|---------------------|--------|
-| 1 | **#1355** | alphonse | Pure L1 loss | **94.291** ✅ **MERGED** — baseline |
-| 2 | #1355 | alphonse | Smooth L1 / Huber β=1.0 | 97.791 | (within-PR, not merged standalone) |
-| 3 | #1393 | frieren | OneCycleLR peak=1e-3 (MSE era) | 111.30 | Closed — superseded by loss change |
-| 4 | #1399 | nezuko | surf_w=10, CHANNEL_W=[1,1,2] (bugged) | 111.80 | Sent back, 3-arm replan in progress |
-| 5 | #1393 | frieren | OneCycleLR peak=5e-4 (MSE era) | 113.84 | Closed — superseded |
-| 6 | #1399 | nezuko | surf_w=20, CHANNEL_W=[1,1,2] (bugged) | 126.30 | Sent back |
-| 7 | #1389 | fern | n_layers=8, lr=3e-4, 9ep realized | 147.40 | Closed — schedule-bottlenecked regression |
-| 8 | #1389 | fern | n_layers=8, lr=5e-4, 9ep realized | 153.48 | (within-PR) |
-| 9 | #1410 | thorfinn | Multi-scale Fourier features (xz) | 105.05 | Closed — 11% regression vs L1 baseline |
-| 10 | #1385 | edward | slice_num=128, n_head=8 | 151.92 | Closed — 61% regression vs L1 baseline |
+**The wall-clock budget is the primary constraint.** All three merged improvements reduced the "wasted training budget" problem:
+1. L1 gave better gradient signal per step
+2. OneCycleLR extracted more from the available steps
+3. bf16+25ep extended the productive schedule window within the cap
 
-## Round-1 operational notes
+The next questions are:
+1. **How far can we push the schedule horizon?** (frieren #2913: try --epochs 30/40)
+2. **Does depth help now that bf16 gives headroom?** (askeladd #2914: n_layers=6/7)
+3. **Does EMA smooth the noisy endpoint?** (thorfinn #2915: ema_decay=0.999/0.9999)
+4. **Does doubling batch size give more realized epochs?** (tanjiro #2916: bs=8, epochs=50)
+5. **Do orthogonal improvements (gc=2.0, asinh-p680, cw=2, sw=5) survive on new baseline?** (fern #1602, edward #1605, nezuko #1625, alphonse #1582 — all sent back for re-runs)
 
-- **GitHub API rate-limit storm 18:30–19:50 UTC.** Concurrent gh polling
-  across all 24-h + 48-h arms briefly exceeded the API quota. Students hit
-  "GraphQL: API rate limit already exceeded" on `gh pr list` for ~80 min and
-  were unable to see their assignments during that window. Effect: 5/8
-  round-1 students (askeladd, edward, fern, tanjiro, thorfinn) did not start
-  training until 19:50+. Nezuko was unaffected (pushed first sweep at 19:09).
-- **"Comment-posted but branch-empty" false alarm (#1393, #1389).** Sending
-  these PRs back at 20:11–20:13 UTC for "missing diff" was wrong — the diffs
-  were on the branches but my local refs were stale. Force-fetching with
-  explicit `:refs/remotes/...` refspec resolved. Lesson: always cross-check
-  with `gh api .../pulls/<n>/files` before declaring a branch empty.
-- **Pre-existing data/scoring NaN.** Alphonse diagnosed (PR #1355 comment):
-  sample `test_geom_camber_cruise/.test_geom_camber_cruise_gt/000020.pt`
-  contains `+Inf` in the pressure channel of `y`. The scoring code masks
-  the sample out, but `Inf * 0 = NaN` in pytorch corrupts the accumulator
-  for the `p` channel of that one test split (val unaffected — no
-  Inf-y samples in val). **Decision:** `data/scoring.py` is contractually
-  read-only — we do not patch it. Convention for all PRs going forward:
-  rank by `val_avg/mae_surf_p` (clean) and report
-  `test_avg/mae_surf_p_3of4_finite_splits` paper-side.
+## Students — Current State
 
-## Research focus
+| Student | PR | Hypothesis | State |
+|---------|-----|-----------|-------|
+| frieren | #2913 | OneCycle epoch-horizon sweep (--epochs 30/40) | WIP |
+| askeladd | #2914 | Transolver depth n_layers=6/7 on bf16 baseline | WIP |
+| thorfinn | #2915 | EMA model weights (decay 0.999/0.9999) | WIP |
+| tanjiro | #2916 | bf16 batch_size=8 + extended schedule | WIP |
+| fern | #1602 | gc=2.0 + OneCycle re-run on bf16 baseline | WIP |
+| edward | #1605 | asinh-p680 + OneCycle re-run on bf16 baseline | WIP |
+| nezuko | #1625 | surf_channel_weight cw=2 re-run on bf16 baseline | WIP |
+| alphonse | #1582 | surf_weight=5 re-run on bf16 baseline | WIP |
 
-Round 1 of the `charlie-pai2g-48h-r1` arm landed one clear winner: **pure L1
-loss** (alphonse, -57% vs implied MSE). The four other completed round-1
-experiments all regressed against the new L1 baseline, demonstrating that the
-loss-formulation lever subsumed several of them:
+All 8 students active — zero idle GPUs.
 
-- **Capacity expansion** (#1389 depth=8, #1385 slices/heads doubled) showed
-  large regressions, likely because the 30-min wall-clock cap starves the
-  cosine schedule of effective epochs on slower configurations. Deeper /
-  finer-attention models lose more compute to the budget than the extra
-  capacity buys back, **at the current epoch count**.
-- **Multi-scale Fourier features** (#1410) regressed by 11%. The raw (x,z)
-  coords seem to be already informative enough that synthetic frequency
-  bands hurt more than help on a small dataset.
-- **Bugged channel-weight + surf_weight sweep** (#1399) is being re-run by
-  nezuko with the correct denominator and a baseline-control arm.
+## Key Findings (cumulative)
 
-Round 2 pivots to **compounding the L1 winner with orthogonal levers** that
-are cheap (no extra params, no compute hit) and that target known weak
-spots of short-budget training in normalized space:
+- **Wall-clock bottleneck is CPU/dataloader, not GPU compute.** At bs=4 bf16 or fp32, per-epoch time is ~97-131 s — unchanged by mixed precision. VRAM headroom gained from bf16 is available for larger models/batches.
+- **Schedule horizon is the dominant lever.** All three current winners are schedule improvements. Peak LR at 2e-3 is saturated (frieren's sweep confirmed). The OneCycleLR `total_steps` configuration determines how productive each realized epoch is.
+- **val_geom_camber_rc is the hardest split** (87.82 at current best vs 54.42 for cruise). Experiments should track rc specifically — it's the best signal for generalization gains.
+- **val_geom_camber_cruise improves fastest** — from 66.44 to 54.42 (-18%) while rc only went from 94.61 to 87.82 (-7%). Any approach that strongly differentiates between these two OOD splits should be flagged.
+- **SAM and wider models both fail** due to 2× compute cost halving realized epochs under the cap.
 
-1. **Loss-weighting compounding** — surf_weight sweep on L1 (alphonse #1582)
-   tests whether the existing 10:1 surf:vol ratio is still optimal under L1.
-2. **Schedule compounding** — L1 + OneCycleLR with per-batch stepping
-   (frieren #1581) compounds the loss winner with the schedule
-   sub-winner.
-3. **EMA of model weights** — exponential moving average (thorfinn #1601),
-   a near-zero-cost regularizer that consistently helps in short-budget
-   regimes. Two arms at decay=0.999 vs 0.9999.
-4. **Gradient clipping** — `clip_grad_norm_` sweep at max_norm 0.5 / 1.0
-   vs unclipped (fern #1602). Stabilizes against the pressure tail and
-   typically improves OOD splits.
-5. **Pressure-target reshaping** — asinh transform on pressure channel
-   before normalization (edward #1605), two scale arms (100 aggressive,
-   680 ≈ pressure_std gentle). Compresses the heavy pressure tail without
-   distorting low-magnitude regions.
+## Potential Next Research Directions (round 4+)
 
-The three still-running round-1 PRs (#1381 wider, #1399 nezuko channel-weights
-corrected, #1405 bf16) remain in flight; if they land any improvement vs the
-94.29 L1 baseline they will be merged.
+1. **Schedule optimization**: Optimal epochs horizon under wall-clock cap; cosine decay shape (pct_start); warmup length
+2. **Larger effective batch**: bs=8 with bf16 (~33 GB as tested) or gradient accumulation. May enable more realized steps per epoch if GPU-bound.
+3. **Orthogonal compound**: Stack gc=2.0 + asinh-p680 + cw=2 + sw=5 if all validate on new baseline
+4. **Data augmentation**: Geometric symmetry (z→-z, AoA→-AoA, Uy→-Uy) for free 2× effective training set
+5. **Depth increase**: n_layers=6/7 now testable with bf16 (askeladd #2914)
+6. **torch.compile**: Could reduce per-epoch time 15-25%, unlocking 22-23 realized epochs
+7. **Domain re-weighting**: Current WeightedRandomSampler weights single/tandem-rc/tandem-cruise equally; reweighting toward the OOD-hard rc domain may help
+8. **Per-domain normalization**: Different stats for single-foil vs tandem vs Re-randomized
+9. **Learnable target transform**: Box-Cox or monotone network replacing fixed asinh scale
+10. **Reduce eval frequency**: Eval on val every 2 epochs instead of 1 to save ~10% wall time
 
-## Open questions / failure modes to watch
+## Open Questions / Risks
 
-- Wall-clock cap is tight. The depth/slice arms in round 1 demonstrated that
-  added compute per step under a hard cap costs more than the extra capacity
-  buys back. Future capacity bets must explicitly budget realized epochs.
-- 1499 training samples is small; capacity-increase arms (askeladd) might
-  overfit on `val_single_in_dist` while failing OOD (`val_geom_camber_*`).
-  Watch the four-split breakdown, not just the average.
-- bfloat16 in tanjiro: low-magnitude `vol_loss` could underflow if the
-  pressure normalization drives some channels near zero. Check NaNs in
-  the JSONL.
-- The two geometry-OOD splits (`val_geom_camber_rc`, `val_geom_camber_cruise`)
-  are the hardest. A common-recipe winner should improve **both**, not just
-  one — that's our gen-gap signal.
-- EMA (#1601) interaction with the cosine LR schedule: if LR is still high at
-  the end of the run (sub-15 epoch realizations), the EMA may not have
-  converged. Decay=0.999 ≈ effective window of 1000 steps ≈ 7 epochs at
-  batch=4; decay=0.9999 ≈ 70 epochs — probably too slow at 15 epochs.
-
-## Plateau / pivot plan (forward-looking, after round 2)
-
-If round 2 lands within ~3% of each other (small effects) we have several
-unused levers to escalate to:
-
-- **Compound winners**: stack the best loss + best schedule + best
-  capacity changes in round 3.
-- **Data augmentation**: per-sample reflection (z → -z, AoA → -AoA,
-  Uy → -Uy) for symmetric domains; per-sample Re-jitter for cross-regime
-  generalization.
-- **Domain re-weighting**: the current `WeightedRandomSampler` gives equal
-  weight to single/raceCar-tandem/cruise. The val splits are 4×100 but
-  three are tandem and one single; reweighting toward tandem may better
-  match the metric.
-- **Normalization choices**: per-domain normalization stats; robust
-  (median/MAD) standardization for the pressure target tail; signed
-  log-scaling for large Re pressure values (related to but distinct from
-  edward's asinh transform).
-- **Architecture switches**: graph transformer with kNN edges; FNO-style
-  spectral mixing; per-channel decoder heads.
-- **Test-time augmentation**: average prediction over geometric symmetries.
-
-If round 3 also plateaus, escalate to deeper architectural changes
-(Geo-FNO, GNO, mesh-graph-net) and explore self-supervised pretext
-losses on the volume field as auxiliary heads.
-
-## Active in-flight PRs (round 2/3 + round-1 stragglers)
-
-Status as of 00:15 UTC (2026-05-13). All 8 students have a WIP PR — zero idle GPUs.
-
-| PR | Student | Hypothesis | State |
-|----|---------|-----------|-------|
-| **#1697** | **thorfinn** | **SAM optimizer (rho 0.05/0.1) on L1+OneCycleLR baseline** | Round-3 WIP (dispatched 23:33 UTC) |
-| **#1667** | **frieren** | **OneCycleLR peak LR push: 3/4/5e-3 sweep** | Round-3 WIP (dispatched 23:05 UTC) |
-| **#1582** | **alphonse** | **surf_weight sweep (5/10/20) on L1 baseline** | Round-2 WIP (training started ~23:52 UTC after rate-limit recovery) |
-| **#1602** | **fern** | **Grad-clip 1.0/2.0 on L1+OneCycleLR baseline** | Round-2 RE-RUN (sent back 00:10 UTC) |
-| **#1605** | **edward** | **asinh(p/scale=680) on L1+OneCycleLR baseline** | Round-2 RE-RUN (sent back 00:05 UTC) |
-| **#1625** | **nezuko** | **Per-channel pressure surf weight [1,1,2/3/5] on L1 baseline** | Round-2 WIP (training at 100% GPU as of 00:00 UTC) |
-| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Round-1 — pod stuck in poll-fail loop, no progress since 17:50 |
-| #1405 | tanjiro | bf16 + rebase + re-run on OneCycleLR baseline | Conflicting; pod stuck in poll-fail loop |
-
-**Recently sent back (round-2 → round-2 rerun):**
-- **#1605 edward asinh** — beat OLD L1 baseline (-6%, val=88.6) but worse than NEW OneCycle baseline (85.6). Re-running scale=680 on OneCycle. **Tail-compression mechanism validated; tested if it stacks.**
-- **#1602 fern grad-clip** — gc=1.0 has real -2% on L1+cosine, mechanism = per-step renormaliser (not rare-spike cap). Re-running gc=1.0 vs gc=2.0 on OneCycle (4× higher peak LR).
-
-**Recently closed:**
-- #1601 thorfinn EMA — CLOSED. val=94.014 vs 85.615 new baseline = +9.8% worse. EMA doesn't help smooth L1+OneCycle descent. Reassigned to SAM (#1697).
-
-**Action items:**
-- Watch nezuko #1625 — actively training, could submit next
-- Watch frieren #1667 LR-push — only one of the round-2/3 PRs explicitly testing the new baseline directly
-- Tanjiro/askeladd pods stuck in rate-limit poll-fail loop — host harvest workflow will handle if needed
-- Any result below 85.615 merges immediately
-
-**Compound progress:** Each merged step has roughly halved the gap to a hypothetical floor.
-- MSE-era → PR #1355 (pure L1): -57% step
-- PR #1355 (94.29) → PR #1581 (85.62): -9.2% step
-- PR #1581 (85.62) → next merge: target ~80-82 range
-
-**SAM rationale (#1697 thorfinn round-3):** SAM reshapes the loss landscape by finding flat minima. Known to help small-dataset OOD generalization (Foret et al. 2021). Doubles per-step compute so ~7 epochs realized. Two arms: rho=0.05 vs 0.1. Key watch: `val_geom_camber_rc` gap.
+- Does the val trajectory (still improving 3 pts/ep at epoch 19) mean we're just undertrained? Would a 2-hr run converge? Or is there a floor at ~55-60 val?
+- The geom_camber_rc split consistently underperforms other splits under aggressive LR schedules (OneCycle) — this may indicate an architecture limitation for extreme-tandem geometry extrapolation, not just a training recipe issue.
+- bf16 numerical stability: the eval fp64 accumulation safeguard (from tanjiro's PR) is important — ensure future PRs keep it.

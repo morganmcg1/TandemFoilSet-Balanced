@@ -228,6 +228,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_nonfinite_nodes = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -236,24 +237,50 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples with non-finite ground-truth y from the mask AND
+            # zero out the bad y entries so downstream (pred-y_norm) stays
+            # finite — otherwise err*0=NaN poisons the accumulators.
+            B = y.shape[0]
+            y_sample_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not bool(y_sample_finite.all()):
+                mask = mask & y_sample_finite.unsqueeze(-1)
+                y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
-            sq_err = (pred - y_norm) ** 2
+            # Under bf16 autocast a small number of test samples produce
+            # finite-but-huge predictions; downstream fp32 (pred-y_norm)**2
+            # or pred*y_std can overflow to inf and mask*inf → NaN poisons
+            # the accumulators. Drop non-finite / absurdly large nodes (pred
+            # is in normalized space so |pred|≫1 is already a model failure)
+            # and do arithmetic in fp64 to avoid the fp32 overflow path.
+            ok_per_node = torch.isfinite(pred).all(dim=-1) & (pred.abs() < 1e6).all(dim=-1)
+            if not bool(ok_per_node.all()):
+                bad = mask & ~ok_per_node
+                n_nonfinite_nodes += int(bad.sum().item())
+                pred = torch.where(ok_per_node.unsqueeze(-1), pred, torch.zeros_like(pred))
+                mask = mask & ok_per_node
+
+            pred_d = pred.double()
+            y_norm_d = y_norm.double()
+            sq_err = (pred_d - y_norm_d) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (sq_err * vol_mask.unsqueeze(-1).double()).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err * surf_mask.unsqueeze(-1).double()).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred_d * stats["y_std"].double() + stats["y_mean"].double()
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +288,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_nonfinite_nodes": float(n_nonfinite_nodes)}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -456,22 +484,23 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        if cfg.loss == "mse":
-            sq_err = (pred - y_norm) ** 2
-        elif cfg.loss == "smooth_l1":
-            abs_err = (pred - y_norm).abs()
-            sq_err = torch.where(abs_err < 1.0, 0.5 * abs_err ** 2, abs_err - 0.5)
-        elif cfg.loss == "l1":
-            sq_err = (pred - y_norm).abs()
-        else:
-            raise ValueError(f"Unknown loss: {cfg.loss!r} (expected one of: mse, smooth_l1, l1)")
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            if cfg.loss == "mse":
+                sq_err = (pred - y_norm) ** 2
+            elif cfg.loss == "smooth_l1":
+                abs_err = (pred - y_norm).abs()
+                sq_err = torch.where(abs_err < 1.0, 0.5 * abs_err ** 2, abs_err - 0.5)
+            elif cfg.loss == "l1":
+                sq_err = (pred - y_norm).abs()
+            else:
+                raise ValueError(f"Unknown loss: {cfg.loss!r} (expected one of: mse, smooth_l1, l1)")
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
