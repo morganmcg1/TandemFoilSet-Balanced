@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-14 [Round 137] UTC — PR #2934: slice-num-16 — **CLOSED LOSS (+3.39% val / +1.55% test; 120th taxon; SLICE-ROUTING-ALPHABET AXIS CLOSED BOTH SIDES, 24 is peak)**
+
+- **Branch:** charliepai2g48h5-tanjiro/slice-num-16
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-slice-num-16-20260514-143006/metrics.jsonl
+
+| Metric | Baseline #2879 (slice=24) | #2934 slice=16 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.5977 | **+3.39% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.9275 | +1.55% LOSS |
+| val_single_in_dist | 23.3997 | 25.3659 | **+8.40% LOSS (largest)** |
+| val_geom_camber_rc | 46.0708 | 46.7064 | +1.38% LOSS |
+| val_geom_camber_cruise | 17.8657 | 17.9540 | +0.49% ~WASH |
+| val_re_rand | 34.9057 | 36.3645 | +4.18% LOSS |
+
+**Hypothesis:** Reduce slice-routing alphabet from 24→16 to test whether baseline is at or above peak of routing-capacity curve. Student of #2923 had hypothesized baseline 24 might be above peak (under-utilized block-3 capacity per entropy diagnostic 0.01-0.92 nats).
+
+**Result:** LOSS — refutes the "above peak" hypothesis. Combined with #2923 (24→32 = +6.02% LOSS upward), the slice_num axis is now SYMMETRICALLY CLOSED ON BOTH SIDES. The capacity curve is non-monotone with maximum at 24.
+
+**Per-split structure:** in_dist took the biggest hit (+8.40%) — the split most dependent on fine-grained routing granularity. Cruise was nearly WASH (+0.49%) — confirms cruise is over-provisioned in block-3 (consistent with #2923 entropy collapse signal). Pattern is uniform LOSS, NOT a cruise-WIN tradeoff.
+
+**Closes 120th taxon: SLICE-ROUTING-ALPHABET DOWNWARD SWEEP.** The full slice_num axis is now characterized: 24 peak; 16 → -3.39%, 32 → -6.02%. The slice_num knob is closed.
+
+**Block-3 entropy collapse re-interpretation:** student of #2923 saw block-3 entropy 0.01-0.92 nats at slice_num=24 and inferred under-utilization. This experiment REFUTES that — the model still benefits from the wider alphabet at blocks 0/1/2 even if block-3 ignores most slices. Block-3 over-provisioning is DECOUPLED from the optimum.
+
+**KEY STUDENT INSIGHT (reinforces #2922):** "For the cruise↔in_dist tradeoff: the tradeoff lives in LOSS-LANDSCAPE / REPRESENTATION space, not in this capacity-knob axis. Future axes: PhysicsAttention temperature, slice-projection initialization, or surface-vs-volume token weighting."
+
+**Student followups (4):**
+1. Stop sweeping slice_num — axis closed both sides. ✓
+2. Per-block slice_num (heterogeneous capacity) — tests block-3 over-provisioning directly, but architecturally heavier; deferred.
+3. **REPRESENTATION-axis interventions** — **SELECTED** as tanjiro's next axis. Slice-routing temperature is the cleanest single-knob test (Physics_Attention temperature recommendation #1).
+4. Add routing-entropy logging — flag for future routing studies.
+
+---
+
+## 2026-05-14 [Round 137] UTC — PR #2944 (assignment): tanjiro slice-routing-temperature-2.0 — **121st axis: routing softmax SHAPE (REPRESENTATION-axis)**
+
+- **Hypothesis:** Add hardcoded temperature T=2.0 to the slice-routing softmax in `Physics_Attention` (divide routing logits by 2.0 before softmax). Tests whether the default temperature over-sharpens routing at deep blocks where entropy collapsed to 0.01-0.92 nats.
+- **Why might WIN:** Direct mechanistic motivation from #2923 block-3 entropy collapse. REPRESENTATION-axis (per #2922 student insight) — softer routing increases per-token slice diversity without changing alphabet, capacity, or params. Could specifically help in_dist (which lost most when alphabet narrowed).
+- **Why might LOSS:** Block-3 sharp routing may BE optimal (block-3 specialists). T=2.0 uniformly applied may over-blur block-0 (which had healthy routing 1.32-1.71 nats).
+- **Pattern change:** single-line `routing_logits = routing_logits / 2.0` before softmax in `Physics_Attention.forward()`, uniform across all 4 blocks.
+- **Param count change:** zero (no new params).
+- **ORTHOGONAL to slice_num alphabet-size axis (now closed):** tests the SHAPE of the routing distribution, not its size.
+- **Direct REPRESENTATION-axis test per #2922 student decisive insight.**
+
+---
+
 ## 2026-05-14 [Round 136] UTC — PR #2927: per-block-flow-film — **CLOSED LOSS (+4.51% val / +2.32% test; 115th taxon; FILM-PATHWAY-CAPACITY AXIS CLUSTER CLOSED)**
 
 - **Branch:** charliepai2g48h5-askeladd/per-block-flow-film
