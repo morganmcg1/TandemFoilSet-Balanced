@@ -108,7 +108,8 @@ class SwiGLUMLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 routing_dropout_p=0.1):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -116,6 +117,12 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # Routing dropout (#2958): stochastic slice-removal regularization applied
+        # to slice_weights AFTER softmax. Re-normalized post-dropout so weights
+        # still sum to 1 across slices. Disabled at eval — preserves the sharp
+        # routing #2944 confirmed is load-bearing.
+        self.routing_dropout_p = routing_dropout_p
+        self.routing_dropout = nn.Dropout(p=routing_dropout_p)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -142,6 +149,12 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # Routing dropout: stochastic slice removal during training. nn.Dropout
+        # zeroes ~p fraction AND scales survivors by 1/(1-p); re-normalize to
+        # restore sum-to-1 across slices (last dim) so slice_norm/slice_token
+        # invariants downstream stay consistent. Identity at eval.
+        slice_weights = self.routing_dropout(slice_weights)
+        slice_weights = slice_weights / (slice_weights.sum(dim=-1, keepdim=True) + 1e-8)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -541,6 +554,13 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+print(
+    f"Routing dropout (#2958): p=0.1 applied to slice_weights AFTER softmax (re-normalized to sum-to-1); "
+    f"mechanism: stochastic slice removal during training, deterministic identity at eval; "
+    f"zero new params (407,940 unchanged); "
+    f"motivation: #2944 confirmed sharp block-3 routing is load-bearing — dropout = robustness without softness; "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
@@ -837,6 +857,129 @@ if best_metrics:
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
+
+    # Routing entropy diagnostic (#2958, reuses #2944's per-block entropy hook):
+    # Captures slice_weights entropy per block per head at the best checkpoint.
+    # Compares EVAL-mode routing (dropout off — what the model relies on at
+    # inference) to TRAIN-mode routing (dropout p=0.1 + renorm — what the model
+    # was trained against). The eval-mode entropy should retain the sharp
+    # block-3 routing #2944 confirmed is load-bearing; the train-vs-eval gap
+    # measures how much routing dropout perturbed the routing during training.
+    print("\nRouting-entropy diagnostic (#2958, best-checkpoint weights):")
+    _pa_mods_with_idx = [(_i, _blk.attn) for _i, _blk in enumerate(_inner.blocks)]
+    _routing_captures: dict[str, list[dict]] = {"eval": [], "train": []}
+
+    def _make_routing_hook(block_idx: int, mode_key: str):
+        def _hook(module, args, kwargs, output):
+            with torch.no_grad():
+                x = args[0] if args else kwargs.get("x")
+                B, N, _ = x.shape
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                slice_weights_pre = module.softmax(
+                    module.in_project_slice(x_mid) / module.temperature
+                )
+                # Apply routing_dropout in current (eval or train) mode + renorm.
+                sw = module.routing_dropout(slice_weights_pre)
+                sw = sw / (sw.sum(dim=-1, keepdim=True) + 1e-8)
+                # Entropy per head, averaged over real tokens (mask-aware).
+                sw32 = sw.float()
+                ent = -(sw32 * (sw32 + 1e-12).log()).sum(dim=-1)  # (B, H, N)
+                # Mean per head over real tokens (mask in non-local _diag_mask).
+                if _diag_mask is not None:
+                    m = _diag_mask.to(ent.device)
+                    valid = m.unsqueeze(1).expand_as(ent)  # (B, H, N)
+                    n_valid = valid.sum().clamp(min=1)
+                    per_head_ent = (ent * valid).sum(dim=(0, 2)) / valid[:, 0, :].sum().clamp(min=1)
+                    overall_mean = (ent * valid).sum() / n_valid
+                else:
+                    per_head_ent = ent.mean(dim=(0, 2))
+                    overall_mean = ent.mean()
+                G = sw.shape[-1]
+                ceiling = float(torch.log(torch.tensor(float(G))).item())
+                _routing_captures[mode_key].append({
+                    "block_idx": block_idx,
+                    "per_head_entropy_nats": per_head_ent.detach().float().cpu().tolist(),
+                    "mean_entropy_nats": float(overall_mean.item()),
+                    "max_entropy_ceiling_nats": ceiling,
+                    "n_slices": int(G),
+                })
+        return _hook
+
+    _diag_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    _diag_mask: torch.Tensor | None = None
+    with torch.no_grad():
+        _x_s, _y_s, _is_s, _m_s = next(iter(_diag_loader))
+        _x_s = _x_s.to(device, non_blocking=True)
+        _m_s = _m_s.to(device, non_blocking=True)
+        _diag_mask = _m_s
+        _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+
+        # EVAL mode: routing_dropout = identity (model already in eval).
+        for _i, _mod in _pa_mods_with_idx:
+            _mod.routing_dropout.eval()
+        _eval_handles = [
+            _mod.register_forward_hook(_make_routing_hook(_i, "eval"), with_kwargs=True)
+            for _i, _mod in _pa_mods_with_idx
+        ]
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+        for _h in _eval_handles:
+            _h.remove()
+
+        # TRAIN mode: routing_dropout active (model otherwise stays eval).
+        for _i, _mod in _pa_mods_with_idx:
+            _mod.routing_dropout.train()
+        _train_handles = [
+            _mod.register_forward_hook(_make_routing_hook(_i, "train"), with_kwargs=True)
+            for _i, _mod in _pa_mods_with_idx
+        ]
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+        for _h in _train_handles:
+            _h.remove()
+
+        # Restore eval for downstream diagnostics.
+        for _i, _mod in _pa_mods_with_idx:
+            _mod.routing_dropout.eval()
+
+    _routing_log = {
+        "event": "routing_entropy_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "diag_split": "val_single_in_dist",
+        "modes": {},
+    }
+    for _mode_key in ["eval", "train"]:
+        print(f"  Mode: {_mode_key}")
+        _mode_entries = sorted(_routing_captures[_mode_key], key=lambda e: e["block_idx"])
+        _routing_log["modes"][_mode_key] = _mode_entries
+        for entry in _mode_entries:
+            _bi = entry["block_idx"]
+            _ents = entry["per_head_entropy_nats"]
+            _mean = entry["mean_entropy_nats"]
+            _ceil = entry["max_entropy_ceiling_nats"]
+            _frac = _mean / max(_ceil, 1e-8)
+            _ent_str = " ".join(f"{_e:.3f}" for _e in _ents)
+            print(
+                f"    block[{_bi}]: per-head [{_ent_str}] mean={_mean:.3f} nats "
+                f"(ceiling={_ceil:.3f}, frac={_frac:.3f})"
+            )
+
+    print("  Train-vs-eval gap (delta = train - eval):")
+    _eval_entries = sorted(_routing_captures["eval"], key=lambda e: e["block_idx"])
+    _train_entries = sorted(_routing_captures["train"], key=lambda e: e["block_idx"])
+    for _e_ent, _t_ent in zip(_eval_entries, _train_entries):
+        _bi = _e_ent["block_idx"]
+        _delta = _t_ent["mean_entropy_nats"] - _e_ent["mean_entropy_nats"]
+        print(
+            f"    block[{_bi}]: train={_t_ent['mean_entropy_nats']:.3f}  "
+            f"eval={_e_ent['mean_entropy_nats']:.3f}  delta={_delta:+.3f} nats"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, _routing_log)
 
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
     # split (in_dist vs OOD). Hook mirrors the SE forward — attention pool
