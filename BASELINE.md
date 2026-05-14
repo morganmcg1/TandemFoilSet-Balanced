@@ -276,3 +276,25 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
 
 **New merge bar: val < 36.58 (single seed), test < 30.64 (single seed), all four test splits finite.**
 **Note: single-seed only for this shift. A 2nd seed confirmation is recommended for follow-ups.**
+
+## 2026-05-14 14:45 — PR #2865: γ-only FiLM-Re: per-block Re conditioning on σ=0.07 baseline (14th shift)
+
+- **`val_avg/mae_surf_p`:** 34.5536 (mean 2 seeds); best seed (s2 `vt8acm18`) = 33.5570
+- **`test_avg/mae_surf_p`:** 28.9528 (mean 2 seeds); best seed (s2 `vt8acm18`) = 28.2333 — **NEW BEST TEST**
+- **Per-split test surf_p (mean):** single_in_dist=32.53, geom_camber_rc=41.997, geom_camber_cruise=15.19, re_rand=26.09
+- **Per-split test surf_p (best s2 `vt8acm18`):** single_in_dist=31.33, geom_camber_rc=40.59, geom_camber_cruise=15.10, re_rand=25.91
+- **W&B runs:** `qw6m3rk1` (s1, val=35.55, test=29.67), `vt8acm18` (s2, val=33.56, test=28.23)
+- **Seed variance:** val σ=1.00 (2.9%), test σ=0.72 (2.5%). Tight but wider than SwiGLU.
+- **Mechanism:** γ-only FiLM (no β branch): per-block `γ(Re) = 1 + MLP(log Re)` modulates hidden-state magnitudes before PhysicsAttention. Identity init preserved. γ_bias drifts from ≈0.995 (block 0) to ≈0.987 (block 4) by final epoch — late blocks attenuate more strongly with Re. FiLM correctly discovers that deeper blocks are more Re-sensitive. +84K params (+14%), +3.5% epoch time, no VRAM increase.
+- **Init:** `--init_std 0.07` (rebased onto σ=0.07 advisor branch)
+- **Runtime:** ~54s/epoch, 34 epochs for both seeds (hits 30-min cap); best=last.
+- **Delta vs PR #2882 (σ=0.07):** mean val **−5.4%** (36.58 → 34.55), mean test **−5.6%** (30.64 → 28.95). All four test splits improve on mean: single_in_dist −9.3%, geom_camber_rc −3.0%, geom_camber_cruise −6.8%, re_rand −3.8%.
+- **Reproduce (best seed):**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-edward --init_std 0.07 \
+      --wandb_name "willowpai2g48h3-edward/film-re-gamma-s2" --wandb_group film-gamma-re
+  ```
+
+**New merge bar (14th shift): mean val < 34.55, mean test < 28.95, all four test splits finite.**
+**Best single-seed bar: val < 33.56, test < 28.23.**
+**Note: 2 seeds, mean-based bar. Orientation: geom_camber_rc (mean=42.00, best=40.59) remains hardest split.**
