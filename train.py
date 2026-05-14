@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -121,6 +122,13 @@ class PhysicsAttention(nn.Module):
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        # QK-norm (Henry 2020 / Llama-3 / ViT-22B recipe) adapted to slice routing:
+        # LN(Q), LN(K_slice) along dim_head before routing dot-product so routing
+        # depends only on direction. K is the static slice-basis (in_project_slice
+        # rows), normalized per-row; Q is per-token x_mid, normalized per-(B,h,n).
+        # γ,β are shared across the (B,heads,N) prefix on Q and across slices on K.
+        self.q_norm = nn.LayerNorm(dim_head)
+        self.k_norm = nn.LayerNorm(dim_head)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -141,7 +149,13 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # QK-norm: normalize Q and K_slice along dim_head BEFORE the routing dot-product.
+        x_mid_normed = self.q_norm(x_mid)
+        k_normed = self.k_norm(self.in_project_slice.weight)  # [slice_num, dim_head]
+        routing_logits = torch.einsum("bhnc,gc->bhng", x_mid_normed, k_normed)
+        if self.in_project_slice.bias is not None:
+            routing_logits = routing_logits + self.in_project_slice.bias
+        slice_weights = self.softmax(routing_logits / self.temperature)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -590,6 +604,25 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# QK-norm diagnostic: count LN sites added inside PhysicsAttention.
+_phys_attn_modules = [m for m in model.modules() if isinstance(m, PhysicsAttention)]
+_qk_norm_params = sum(
+    p.numel()
+    for m in _phys_attn_modules
+    for ln_name in ("q_norm", "k_norm")
+    for p in getattr(m, ln_name).parameters()
+)
+_dim_head = model_config["n_hidden"] // model_config["n_head"]
+print(
+    f"QK-norm: LayerNorm({_dim_head}) on Q (per-token) and K (slice basis) BEFORE routing dot-product in {len(_phys_attn_modules)} PhysicsAttention modules; "
+    f"+{_qk_norm_params} params (each block: 2 LN × (γ+β) × dim_head = 2 × {2 * _dim_head} = {4 * _dim_head}); "
+    f"routing computation: einsum(LN(Q), LN(K)) + bias / T_learnable (T_init=0.5 PRESERVED per PR); "
+    f"K = in_project_slice.weight (slice_num={model_config['slice_num']}, dim_head={_dim_head}) — static learnable parameter, LN applied each forward; "
+    f"Topology: POST-NORM unchanged from #2964; γ_attn=γ_mlp=1.0 constant unchanged; "
+    f"NEW BASELINE: val_avg/mae_surf_p 30.0382 / test_avg/mae_surf_p 25.2099 (PR #2964 post-norm γ=1.0); "
+    f"Expected total params: 407,940 (= 407,172 baseline + {_qk_norm_params} QK-norm)"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -753,6 +786,100 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     return captured
 
 
+def capture_qk_norm_diagnostics(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
+    """Probe QK-norm behavior per PhysicsAttention block on one val batch.
+
+    Logs raw vs normed ||Q||, ||K|| (verifies LN is reshaping magnitudes as
+    expected: ||normed|| ≈ sqrt(dim_head)), routing logit magnitude after T,
+    slice-weight entropy (max log(slice_num) for uniform), and dead-slice count
+    (slices receiving < 1/(2 * slice_num) mass on average).
+
+    Critical for the QK-norm hypothesis: shows whether raw Q,K were drifting
+    large in pre-QK-norm baseline (the failure mode QK-norm fixes) and whether
+    routing collapses, becomes uniform, or specializes as expected.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    captured: list[dict] = []
+
+    def make_hook(block_idx):
+        def hook(module, args, _output):
+            with torch.no_grad():
+                x = args[0]
+                B, N, _ = x.shape
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                x_mid_normed = module.q_norm(x_mid)
+                k_raw = module.in_project_slice.weight  # [slice_num, dim_head]
+                k_normed = module.k_norm(k_raw)
+                routing_logits = torch.einsum("bhnc,gc->bhng", x_mid_normed, k_normed)
+                if module.in_project_slice.bias is not None:
+                    routing_logits = routing_logits + module.in_project_slice.bias
+                slice_logits_over_t = routing_logits / module.temperature
+                slice_weights = module.softmax(slice_logits_over_t)
+
+                slice_num = slice_weights.shape[-1]
+                ent = -(slice_weights * (slice_weights + 1e-12).log()).sum(dim=-1).mean().item()
+                slice_mass = slice_weights.float().mean(dim=(0, 1, 2))  # [slice_num]
+                dead_threshold = 1.0 / (2 * slice_num)
+                n_dead = int((slice_mass < dead_threshold).sum().item())
+
+                captured.append({
+                    "block_idx": block_idx,
+                    "q_raw_norm_mean": x_mid.float().norm(dim=-1).mean().item(),
+                    "q_normed_norm_mean": x_mid_normed.float().norm(dim=-1).mean().item(),
+                    "k_raw_norm_mean": k_raw.float().norm(dim=-1).mean().item(),
+                    "k_normed_norm_mean": k_normed.float().norm(dim=-1).mean().item(),
+                    "routing_logit_pre_t_abs_max": routing_logits.float().abs().max().item(),
+                    "routing_logit_post_t_abs_max": slice_logits_over_t.float().abs().max().item(),
+                    "routing_entropy_mean": ent,
+                    "n_dead_slices": n_dead,
+                    "slice_num": slice_num,
+                    "temperature_mean": module.temperature.detach().float().mean().item(),
+                    "temperature_min": module.temperature.detach().float().min().item(),
+                    "temperature_max": module.temperature.detach().float().max().item(),
+                })
+        return hook
+
+    handles = []
+    for bi, blk in enumerate(inner.blocks):
+        handles.append(blk.attn.register_forward_hook(make_hook(bi)))
+
+    model_obj.eval()
+    with torch.no_grad():
+        x_b, _, _, mask_b = next(iter(loader))
+        x_b = x_b.to(device_, non_blocking=True)
+        mask_b = mask_b.to(device_, non_blocking=True)
+        x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+        with amp_ctx():
+            _ = inner({"x": x_norm, "mask": mask_b})
+
+    for h in handles:
+        h.remove()
+
+    print(f"\nQK-norm diagnostic @ {epoch_tag} (max entropy = log(slice_num) = {math.log(captured[0]['slice_num']):.3f}):")
+    log_payload = {
+        "event": "qk_norm_diagnostic",
+        "epoch_tag": epoch_tag,
+        "blocks": captured,
+    }
+    for site in captured:
+        print(
+            f"  block[{site['block_idx']}].PhysAttn: "
+            f"||Q||raw={site['q_raw_norm_mean']:.3f}->normed={site['q_normed_norm_mean']:.3f} | "
+            f"||K||raw={site['k_raw_norm_mean']:.3f}->normed={site['k_normed_norm_mean']:.3f} | "
+            f"logit/T |max|={site['routing_logit_post_t_abs_max']:.2f} | "
+            f"H(slice)={site['routing_entropy_mean']:.3f} | "
+            f"dead={site['n_dead_slices']}/{site['slice_num']} | "
+            f"T mean={site['temperature_mean']:.3f} [{site['temperature_min']:.3f},{site['temperature_max']:.3f}]"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, log_payload)
+    return captured
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -843,9 +970,14 @@ for epoch in range(MAX_EPOCHS):
 
     # Residual magnitude probe at ep1 — captures the post-norm "capped" pattern
     # early in training (vs pre-norm baseline that grows residuals with depth).
+    # QK-norm probe at ep1 — verifies LN reshapes Q,K magnitudes and reports
+    # initial slice-routing entropy / dead-slice count.
     if (epoch + 1) == 1:
         _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
         capture_residual_magnitudes(
+            model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
+        )
+        capture_qk_norm_diagnostics(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
 
@@ -881,6 +1013,12 @@ if best_metrics:
     # Residual magnitude probe @ best-checkpoint (compare to ep1 capture).
     _probe_loader_end = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
     capture_residual_magnitudes(
+        model, _probe_loader_end, stats, amp_ctx_factory, device,
+        epoch_tag=f"best_ep{best_metrics['epoch']}",
+    )
+    # QK-norm probe @ best-checkpoint — compare T trajectory, slice entropy,
+    # dead-slice count vs ep1; required by the PR's diagnostics list.
+    capture_qk_norm_diagnostics(
         model, _probe_loader_end, stats, amp_ctx_factory, device,
         epoch_tag=f"best_ep{best_metrics['epoch']}",
     )
