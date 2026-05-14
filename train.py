@@ -177,7 +177,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False):
+                 film_re=False, head_depth=2):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
@@ -191,10 +191,13 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            # head_depth = total Linear count in the output head.
+            # head_depth=2 reproduces the original (1 hidden + 1 projection).
+            head_layers: list[nn.Module] = []
+            for _ in range(head_depth - 1):
+                head_layers += [nn.Linear(hidden_dim, hidden_dim), nn.GELU()]
+            head_layers.append(nn.Linear(hidden_dim, out_dim))
+            self.mlp2 = nn.Sequential(*head_layers)
         if self.film_re:
             # γ-only FiLM-Re: scale-only modulation from log(Re).
             # Identity init (last-linear weight=0, bias=1) sets γ≡1 at epoch 0
@@ -225,7 +228,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
-                 film_re=False, log_re_x_index: int = 13):
+                 film_re=False, log_re_x_index: int = 13,
+                 head_depth: int = 2):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -234,6 +238,7 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.log_re_x_index = log_re_x_index
+        self.head_depth = head_depth
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -249,7 +254,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                film_re=film_re,
+                film_re=film_re, head_depth=head_depth,
             )
             for i in range(n_layers)
         ])
@@ -257,6 +262,7 @@ class Transolver(nn.Module):
         self.n_linear_init = 0
         self.apply(self._init_weights)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
+        print(f"[init] output head depth = {head_depth} ({head_depth - 1} hidden Linear+GELU layers, 1 projection)")
         if self.film_re:
             # Identity-init the FiLM γ output linear AFTER apply() so it isn't
             # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
@@ -476,6 +482,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    head_depth: int = 2  # output head depth (total Linear count); default=2 reproduces baseline
 
 
 cfg = sp.parse(Config)
@@ -517,6 +524,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
+    head_depth=cfg.head_depth,
 )
 
 model = Transolver(**model_config).to(device)
