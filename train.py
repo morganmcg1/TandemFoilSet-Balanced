@@ -753,9 +753,32 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     return captured
 
 
+# AoA input noise: training-only Gaussian σ on normalized AoA channels [14, 18]
+# Per-sample (broadcast over nodes); SAME draw for both foils per PR #2978 spec.
+AOA_NOISE_SIGMA = 0.05
+print(
+    f"AoA input noise: σ={AOA_NOISE_SIGMA} on normalized x[:, :, 14] and x[:, :, 18] "
+    f"during training (training-only, per-sample broadcast, SAME draw for both foils). "
+    f"Raw-space std: ch14={float(stats['x_std'][14].item()):.4f}, ch18={float(stats['x_std'][18].item()):.4f}; "
+    f"effective physical σ ≈ ch14:{AOA_NOISE_SIGMA * float(stats['x_std'][14].item()) * 57.2958:.3f}°  "
+    f"ch18:{AOA_NOISE_SIGMA * float(stats['x_std'][18].item()) * 57.2958:.3f}°. "
+    f"NEW BASELINE: val_avg/mae_surf_p < 30.0382 / test_avg/mae_surf_p 25.2099 (PR #2964)."
+)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "aoa_noise_config",
+    "sigma": AOA_NOISE_SIGMA,
+    "channels": [14, 18],
+    "training_only": True,
+    "per_sample_broadcast": True,
+    "same_draw_both_foils": True,
+    "x_std_ch14_raw": float(stats["x_std"][14].item()),
+    "x_std_ch18_raw": float(stats["x_std"][18].item()),
+})
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+_aoa_diag_logged = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -775,6 +798,38 @@ for epoch in range(MAX_EPOCHS):
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # AoA input noise: per-sample (B, 1, 1) broadcast over nodes; SAME
+            # draw for ch14 + ch18. Adds noise in normalized feature space.
+            aoa_noise = torch.randn(
+                x_norm.shape[0], 1, 1, device=x_norm.device, dtype=x_norm.dtype,
+            ) * AOA_NOISE_SIGMA
+            x_norm[:, :, 14:15] = x_norm[:, :, 14:15] + aoa_noise
+            x_norm[:, :, 18:19] = x_norm[:, :, 18:19] + aoa_noise
+            if not _aoa_diag_logged:
+                with torch.no_grad():
+                    _ch14 = x_norm[:, :, 14]
+                    _ch18 = x_norm[:, :, 18]
+                    _aoa_diag = {
+                        "event": "aoa_noise_first_batch_diag",
+                        "ch14_min": float(_ch14.min().item()),
+                        "ch14_max": float(_ch14.max().item()),
+                        "ch14_std": float(_ch14.std().item()),
+                        "ch18_min": float(_ch18.min().item()),
+                        "ch18_max": float(_ch18.max().item()),
+                        "ch18_std": float(_ch18.std().item()),
+                        "noise_min": float(aoa_noise.min().item()),
+                        "noise_max": float(aoa_noise.max().item()),
+                        "noise_std": float(aoa_noise.std().item()),
+                        "batch_size": int(x_norm.shape[0]),
+                    }
+                print(
+                    f"AoA noise first-batch diag (post-noise): "
+                    f"ch14 range=[{_aoa_diag['ch14_min']:.3f}, {_aoa_diag['ch14_max']:.3f}] std={_aoa_diag['ch14_std']:.3f}; "
+                    f"ch18 range=[{_aoa_diag['ch18_min']:.3f}, {_aoa_diag['ch18_max']:.3f}] std={_aoa_diag['ch18_std']:.3f}; "
+                    f"noise std={_aoa_diag['noise_std']:.4f} (B={_aoa_diag['batch_size']})"
+                )
+                append_metrics_jsonl(metrics_jsonl_path, _aoa_diag)
+                _aoa_diag_logged = True
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
