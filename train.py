@@ -634,14 +634,38 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+# --- Differential weight decay: 10x wd on mlp2 (shared output head) ---
+# Per #2968: pin mlp2 closer to small-norm values to preserve early-training surface-tuning
+# and force surface specialization into the body (~403k of 407k params).
+# Direct counter to #2956 head-drift failure mode (||W_corr|| 0->0.40 over training).
+MLP2_WD_MULTIPLIER = 10.0
+_mlp2_params = []
+_other_params = []
+_mlp2_names = []
+for _name, _p in model.named_parameters():
+    if not _p.requires_grad:
+        continue
+    if 'mlp2' in _name:
+        _mlp2_params.append(_p)
+        _mlp2_names.append(_name)
+    else:
+        _other_params.append(_p)
+_mlp2_wd = cfg.weight_decay * MLP2_WD_MULTIPLIER
+_mlp2_param_count = sum(p.numel() for p in _mlp2_params)
+_other_param_count = sum(p.numel() for p in _other_params)
+print(f"Diff-WD on mlp2: {_mlp2_param_count} params at wd={_mlp2_wd:.1e} ({MLP2_WD_MULTIPLIER}x baseline {cfg.weight_decay:.1e})")
+print(f"Other params: {_other_param_count} at wd={cfg.weight_decay:.1e} (baseline)")
+print(f"mlp2 captured names ({len(_mlp2_names)}): {_mlp2_names}")
 optimizer = Lion(
-    model.parameters(),
+    [
+        {'params': _other_params, 'weight_decay': cfg.weight_decay},
+        {'params': _mlp2_params, 'weight_decay': _mlp2_wd},
+    ],
     lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
     betas=(0.9, 0.99),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd_other={cfg.weight_decay} wd_mlp2={_mlp2_wd:.1e}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
+print(f"Diff-WD experiment #2968: testing whether 10x wd on shared head preserves early-training surface-tuning (co-adaptation preservation); baseline to beat: val_avg/mae_surf_p < 30.5605")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -740,6 +764,17 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # --- Diff-WD diagnostic: track ||W_mlp2|| and ||W_body|| per epoch (#2968) ---
+    with torch.no_grad():
+        _mlp2_sqsum = 0.0
+        for _p in _mlp2_params:
+            _mlp2_sqsum += float((_p.detach().float() ** 2).sum().item())
+        _body_sqsum = 0.0
+        for _p in _other_params:
+            _body_sqsum += float((_p.detach().float() ** 2).sum().item())
+        _w_mlp2 = _mlp2_sqsum ** 0.5
+        _w_body = _body_sqsum ** 0.5
+        _w_ratio = _w_mlp2 / max(_w_body, 1e-12)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,11 +787,15 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "diag/W_mlp2_norm": _w_mlp2,
+        "diag/W_body_norm": _w_body,
+        "diag/W_mlp2_over_W_body": _w_ratio,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  "
+        f"||W_mlp2||={_w_mlp2:.4f} ||W_body||={_w_body:.4f} ratio={_w_ratio:.4e}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
