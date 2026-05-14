@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 [Round 104] UTC — PR #2828: Attention dropout p=0.05 in PhysicsAttention — **CLOSED LOSS (+3.77% val)**
+
+- **Branch:** charliepai2g48h5-askeladd/attn-dropout-p0.05
+- **Hypothesis:** Standard transformer attention dropout (Vaswani 2017 / ViT / BERT) as canonical regularizer for generalization-limited model. Predicted: stochastic edge dropping forces redundant slice-routing pathways → OOD splits benefit most.
+- **Metric artifacts:** `models/model-charliepai2g48h5-askeladd-attn-dropout-p0.05-20260514-065705/metrics.jsonl`
+
+| Split | val | Baseline #2765 | Δ val | test |
+|---|---|---|---|---|
+| `single_in_dist` | 26.2668 | 24.9721 | **+5.18% LOSS** | 25.7474 |
+| `geom_camber_rc` | 47.4473 | 46.9885 | +0.97% flat | 43.9342 |
+| `geom_camber_cruise` | 18.9864 | 17.7276 | **+7.10% LOSS** | 15.4055 |
+| `re_rand` | 37.3031 | 35.5983 | +4.79% LOSS | 26.6948 |
+| **val_avg** | **32.5009** | **31.3216** | **+3.77% LOSS** | **27.9455 test** |
+
+- **Result:** NOT MERGED. val_avg +3.77% vs old baseline, +5.21% vs new baseline (30.8909). Hit timeout ep58, 6 epochs short of baseline ep64; linear extrapolation ~31-31.5 still LOSS.
+- **Diagnostics CONFIRMED wiring correct:**
+  - All 4 PhysicsAttention blocks asserted dropout.p=0.05 at startup.
+  - attn_out_var_train ≈ 2× attn_out_var_eval throughout training — dropout actively injecting noise during training, fully off during eval.
+- **Student's 3-mechanism analysis (exemplary):**
+  1. **Slice attention is information-routing, not feature-extraction.** PhysicsAttention's G=24 slice tokens with H=2 heads = ~12 edges per token. Dropping 5% (~0.6 edges) corrupts slice-to-slice routing in a non-redundant way — unlike ViT/BERT where edges are highly redundant across hundreds of tokens.
+  2. **Damage pattern falsifies over-regularization hypothesis.** in_dist +5.18% (worst-hit) > OOD splits — exact opposite of what stochastic regularization should produce. Confirms the model is NOT over-fitted; it's generalization-limited via STRUCTURAL bottleneck (matches frieren's #2809 diagnosis).
+  3. **to_out Dropout fights LayerScale γ=1e-4 init.** Same failure mode as closed DropPath #2722 — zeros entire channels with E[surviving] amplified by 1/(1-p); attention-probability dropout (the dropout_p kwarg) should be safer; to_out Dropout doing most of the damage.
+- **72nd taxon: attention dropout (both attn probabilities + to_out projection) CLOSES.** Combined with closed DropPath #2722 dropout-axis well-mapped. **STRATEGIC PIVOT: from regularization to structural inductive bias changes.**
+
+---
+
+## 2026-05-14 [Round 104] UTC — PR #2851: RMSNorm replacement of LayerNorm — **ASSIGNED (77th candidate axis)**
+
+- **Branch:** charliepai2g48h5-askeladd/rmsnorm-replace
+- **Hypothesis:** Replace all 9 `nn.LayerNorm` sites in `TransolverBlock` (ln_1+ln_2 per block × 4 blocks + ln_3 in last_layer = 9 sites) with RMSNorm (Zhang & Sennrich 2019 / LLaMA / T5 / Mistral / PaLM-2 standard). No mean centering, no β bias. Saves 864 params → 332,836 total. Structural change in normalization op itself — preserves per-token scale baseline that mean centering discards. β removal cleans up LayerScale near-identity residual stream where β was mostly redundant. Distinct from closed embed-LN / DyT / QK-Norm / GroupNorm and from in-flight surface-aware LN #2829 (which keeps LN structure but splits by token type).
+
+---
+
 ## 2026-05-14 [Round 103] UTC — PR #2794: SwiGLU-preprocess — **CLOSED (2nd stale_wip)**
 
 - **Branch:** charliepai2g48h5-fern/swiglu-preprocess
