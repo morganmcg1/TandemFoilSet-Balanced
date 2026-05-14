@@ -3500,3 +3500,50 @@ Per-split test surf_p (uniform TTA mean): single_in_dist=145.08 (+350%), geom_ca
 - Arms: K=5 arm s1 (last 5 epochs), K=3 arm s2 (last 3 epochs), single seed each
 - Distinction: reports BOTH last-epoch metrics AND Polyak metrics; the Polyak metrics are the merge-bar comparison
 
+---
+
+## 2026-05-14 23:50 — PR #3001: FiLM-Re γ MLP init std scan edward (CLOSED — identity output init is optimal)
+- Branch: `willowpai2g48h3-edward/film-re-init-std`
+- Hypothesis: Override the global `init_std=0.07` for the FiLM-Re γ MLP only with smaller stds (0.05 / 0.03) on the assumption that the wider 256-hidden γ MLP was over-conditioning at init.
+
+### Implementation deviation (correctly flagged by student)
+
+The literal PR-body code (`nn.init.zeros_(module.bias)` applied to every `film_gamma` Linear) would have zeroed `b2=1` on the output layer, degenerating γ ≈ 0 at epoch 0. Five-block compounding (0.08⁵ ≈ 3e-6 trunk attenuation) → val MAE = 492 confirmed at debug e1. **Student preserved identity output init** (W2=0, b2=1 → γ ≡ 1 at epoch 0) and re-initialized only the HIDDEN W1 with the smaller std. This matches the stated mechanism in the hypothesis text ("γ = 1 + MLP(log_re)", "1+ prevents near-zero outputs") rather than the inconsistent literal code.
+
+### Results (1 seed per arm, same default torch seed — `--seed` flag not supported in Config)
+
+| Arm | film_re_init_std | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test | W&B |
+|---|---|---:|---:|---:|---:|---|
+| Baseline 15th-shift | 0.07 (inherit) | **33.706** | — | **28.653** | — | `94flg3ls`, `oy7xe8t3` |
+| s1 (0.05) | 0.05 | 34.9504 | +3.7% ❌ | 28.6712 | +0.07% ≈tie | `jc26hjgi` |
+| s2 (0.03) | 0.03 | 34.6698 | +2.8% ❌ | 29.7810 | +3.9% ❌ | `r88y38cp` |
+
+Per-split test surf_p (s1 / s2): single_in_dist=30.63 ✓ / 33.09 ❌, geom_camber_rc=42.45 / 42.89 ❌, geom_camber_cruise=15.29 / 15.80 ❌, re_rand=26.31 / 27.35 ❌.
+
+### γ_w_L2 mechanism finding
+
+| block | baseline `94flg3ls` | s1 (std=0.05) | s2 (std=0.03) |
+|---|---:|---:|---:|
+| 0 | 3.97 | 3.94 | **5.09** |
+| 1 | — | 4.60 | 4.73 |
+| 4 | 5.75 | 6.03 | 6.81 |
+| shape | monotone ↗ | monotone ↗ | **non-monotone** (block 0 > block 1) |
+
+s2's non-monotone trajectory (block 0 > block 1) is a clean degraded-health signal: smaller W1 forces W2 to over-compensate at early blocks. s1 retains the baseline depth-monotone shape but is no better. γ_bias_mean ≈ 1 across all blocks confirms the multiplicative mechanism is intact in both arms — s2 just has *less* drift away from 1, i.e. less effective conditioning despite the prediction that smaller init would let conditioning find a better basin.
+
+### Decision: CLOSED
+
+Both arms miss the merge bar on val (+2.8% / +3.7% regress). s1 incidentally ties on test (+0.07%), s2 regresses on test (+3.9%). Per decision tree, axis is closed. The hypothesis premise ("γ ≠ 1 at init → over-conditioning") doesn't hold in this codebase because identity output init enforces γ ≡ 1 at epoch 0 regardless of hidden init scale.
+
+**Meta-finding #25:** *Identity output init for the FiLM-Re γ-MLP (W2=0, b2=1) is at or near the local optimum at the 15th-shift basin. Hidden-layer init scale is not a viable independent capacity axis: it can only affect post-epoch-0 training dynamics, and shrinking it (s2 std=0.03) forces W2 to over-travel at early blocks (non-monotone γ_w_L2 with block 0 > block 1) — a brittle dynamics signal that correlates with regression. The FiLM-Re γ MLP init is locked at: hidden std = global init_std (0.07), output identity-init (W2=0, b2=1). Future γ init experiments must target the OUTPUT layer (carefully), not hidden.*
+
+---
+
+## 2026-05-14 23:50 — PR #3046: Full FiLM-Re (scale+shift) edward (ASSIGNED)
+- Branch: `willowpai2g48h3-edward/film-gamma-beta`
+- Hypothesis: Convert FiLM-Re from γ-only (scale) to full FiLM (scale+shift β). Add an additive β vector output from `film_gamma`, applied as `fx = γ * fx + β`. Identity init: γ=1, β=0 → baseline at epoch 0. Tests whether the γ-MLP output transformation (scale-only vs scale+shift) is a gainful axis after closing init-scale (#3001) and depth (#2990) axes.
+- Arms: s1 `--film_re_mode gamma_beta` (full FiLM); s2 `--film_re_mode gamma` (CONTROL — should reproduce baseline)
+- Param delta: ~165K extra (+17% of model, last-linear output doubles per block: 128→256)
+- Target: test_geom_camber_rc (β additive shift most likely to extrapolate to higher-Re OOD), test_avg < 28.65
+- Key metric: β_L2 trajectory per block at final epoch (is β learning at all?) and γ_w_L2 comparison vs baseline
+
