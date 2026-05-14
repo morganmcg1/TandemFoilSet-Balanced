@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-14 [Round 115] UTC — PR #2870: output-head gain scalar (+1 param) — **CLOSED LOSS (+4.07% val)**
+
+- **Branch:** charliepai2g48h5-nezuko/output-head-gain
+- **Hypothesis:** Single learnable scalar `output_gain` (init=1.0) multiplied into final decoder output — free residual gain degree of freedom letting optimizer rescale prediction magnitude independently of weight tensor norms.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-output-head-gain-20260514-091507/metrics.jsonl`
+
+| Metric | Baseline #2810 | #2870 | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | **32.1480** | **+4.07% LOSS** |
+| test_avg/mae_surf_p | 26.1964 | **27.3552** | **+4.42% LOSS** |
+| val_single_in_dist | 25.2751 | **24.9756** | −1.18% (only WIN) |
+| val_geom_camber_rc | 45.8179 | **48.0420** | +4.86% LOSS |
+| val_geom_camber_cruise | 16.8427 | **18.5257** | +9.99% LOSS worst |
+| val_re_rand | 35.6177 | **37.0487** | +4.02% LOSS |
+
+Param count: 333,701 ✓ (+1). output_gain converged to 1.0443 (within predicted 0.9–1.1 range). Best ep65/70 (timeout-truncated at 30 min). Peak GPU 14.4 GB.
+
+**Analysis:** Mechanism activated (gain ≠ 1.0) but empirically OOD-harmful. Three key insights: (1) single global scalar commits to one calibration for all distributions, biasing toward most-frequent in-dist regime at OOD cost; (2) final decoder Linear row already controls per-channel scale — output_gain is mathematically redundant (degenerate with weight rescaling); (3) Lion sign-step on a single scalar makes ±lr discrete moves oscillating around converged value, destabilizing cosine-tail optimization. Pattern matches #2851/#2864/#2870: in_dist WIN + OOD LOSS = configurations that improve in-dist fitting tend to OOD-regress. **87th taxon CLOSES.**
+
+---
+
+## 2026-05-14 [Round 115] UTC — PR #2881: Fourier positional encoding on mesh coords (93rd axis) — **ASSIGNED to charliepai2g48h5-nezuko**
+
+- **Branch:** charliepai2g48h5-nezuko/fourier-pos-enc
+- **Hypothesis:** Add NeRF-style Fourier positional encoding to input mesh node coordinates (x,y = channels 0-1 of 24-dim input). Expand raw pos into sin/cos at 4 frequencies [π, 2π, 4π, 8π], giving model explicit spatial scale representations. Input dim 24→40, preprocess Linear(24,192)→Linear(40,192), +3,072 params (~336,772 total). Inductive bias change (not capacity expansion) targeting OOD geometry generalization. References: Mildenhall 2020 (NeRF), Tancik 2020 (NeurIPS Fourier Features).
+- **Rationale:** 14 consecutive LOSSes, none have touched the input representation. OOD-fragile splits differ in geometry. Raw (x,y) are linear scalars; Fourier encoding lets downstream Linear layers implement position-sensitive responses at multiple spatial scales. Addresses geometry-OOD gap directly, distinct from all in-flight axes.
+- **Falsifiable:** WIN = Fourier inductive bias helps OOD geometry → try n_freqs=8. WASH = raw coords sufficient → close axis. LOSS = high-freq features overfit → close axis.
+- **93rd candidate axis.**
+
+---
+
 ## 2026-05-14 [Round 114] UTC — PR #2869: n_head=1 dim_head=96 max-rank attention — **CLOSED LOSS (+2.93% val)**
 
 - **Branch:** charliepai2g48h5-alphonse/n-head-1-max-rank
