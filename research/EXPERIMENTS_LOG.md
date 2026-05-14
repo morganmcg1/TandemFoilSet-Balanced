@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-14 [Round 127] UTC — PR #2900: Multiplicative geo-FiLM parallel to flow-FiLM — **CLOSED LOSS (+3.32% val; test TIED +0.02%; 103rd taxon; TWO-POINT TRADE-OFF CURVE COMPLETE)**
+
+- **Branch:** charliepai2g48h5-askeladd/multiplicative-geo-film
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-mult-geo-film-20260514-115648/metrics.jsonl
+
+| Metric | #2879 Baseline | #2890 additive | **#2900 mult (this PR)** | vs Baseline | vs #2890 |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.5045 | **31.5745** | **+3.32% LOSS** | +0.22% |
+| test_avg/mae_surf_p | 26.5160 | 26.7665 | **26.5212** | **+0.02% TIED** | -0.92% |
+| val_single_in_dist | 23.3997 | 27.3431 | **24.7743** | +5.88% ❌ | **-9.39% RECOVERED** |
+| val_geom_camber_rc | 46.0708 | 45.5498 | **47.3373** | +2.75% ❌ | +3.92% |
+| val_geom_camber_cruise | 17.8657 | **16.1031** | **17.5435** | -1.80% ✓ (weak) | **+8.95% ❌ LOST WIN** |
+| val_re_rand | 34.9057 | 37.0220 | **36.6429** | +4.97% ❌ | -1.02% |
+
+Params 408,804. Best ep60/70 (timeout at ep61). geo_film.weight.norm: 0→2.93. Highest geo_film_scale std on camber_cruise (0.33) — mechanism activated, same OOD signature as #2890.
+
+**CRITICAL FINDING — the cruise WIN and in_dist LOSS are COUPLED:**
+
+The 4-experiment geo-conditioning series (#2889, #2890, #2899, #2900) reveals a **structural two-point trade-off curve**:
+- #2890 additive linear: camber_cruise WIN -9.87% (16.1031) + in_dist LOSS +16.85% (27.3431)
+- #2900 multiplicative linear: camber_cruise tied -1.80% (17.5435) + in_dist partially recovered +5.88% (24.7743)
+
+Changing composition (additive → multiplicative) shifts WHICH direction the trade-off goes, but does NOT break the coupling — both effects originate from the same conditioning capacity. Test_avg improvement (+0.02%, 26.5212 ≈ 26.5160 baseline) shows the mechanism doesn't break the test distribution.
+
+**103rd taxon CLOSES: multiplicative-geo-FiLM-parallel-gate axis.** Next hypothesis: non-linear bottleneck `Linear(8→16)→GELU→Linear(16→96)` at the WIN-producing ADDITIVE site (PR #2911). Tests if expressive non-linearity can break the coupling by allowing per-domain-signature output differentiation.
+
+---
+
+## 2026-05-14 [Round 127] UTC — PR #2911: Non-linear bottleneck additive geo-FiLM — **ASSIGNED to charliepai2g48h5-askeladd**
+
+- **Branch:** charliepai2g48h5-askeladd/nonlinear-additive-geo-film
+- **Hypothesis:** Replace linear `geo_film=Linear(8,96)` zero-init at #2890's additive site with `Sequential(Linear(8,16), GELU(), Linear(16,96))` zero-init on last layer. Tests whether non-linear bottleneck breaks the camber_cruise/in_dist trade-off coupling by enabling per-geometry-signature differentiated output.
+- **Rationale:** A linear projection cannot express "zero on in_dist, useful on cruise" without coupling the two. A 2-layer non-linear architecture creates a soft routing: in_dist geometries cluster in one region of the 16-dim bottleneck, cruise geometries in another, and the final linear can produce near-zero output for one while useful bias for the other.
+- **Params:** ~409,716 (+1776 vs baseline). Epochs=60 to avoid SENPAI_TIMEOUT truncation.
+- **Falsifiable:** WIN = decoupled. WASH/LOSS = trade-off is architecturally structural; close axis.
+
+---
+
 ## 2026-05-14 [Round 126] UTC — PR #2899: Block-asymmetric mlp_ratio [3,3,4,4] — **CLOSED LOSS (+2.38% val; HYPOTHESIS FALSIFIED; deep-block width = OOD driver; test WIN -1.13%)**
 
 - **Branch:** charliepai2g48h5-alphonse/asym-mlp-ratio-3344
