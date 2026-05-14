@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -77,6 +78,31 @@ class Lion(torch.optim.Optimizer):
                 # Momentum update for next step
                 exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
         return loss
+
+
+# ---------------------------------------------------------------------------
+# Re Fourier features (NeRF-style positional encoding of log(Re))
+# ---------------------------------------------------------------------------
+
+# log(Re) lives at dim 13 of the per-node feature vector. Re is constant per
+# sample so any valid node carries it; index 0 is always real (no sample is
+# fully padded out). The value we read is the *standardized* log(Re) — features
+# are normalized before the model. Standardized log(Re) is roughly in
+# [-2, 2], a sensible domain for Fourier features with frequencies 2^k.
+RE_LOG_FEATURE_IDX = 13
+
+
+def re_fourier_features(log_re: torch.Tensor, K: int = 8) -> torch.Tensor:
+    """NeRF-style Fourier features of log(Re).
+
+    log_re: shape [B] or [B, 1]
+    Returns: shape [B, 2*K] — [sin(2π·2^k·log_re), cos(2π·2^k·log_re)] for k=0..K-1
+    """
+    if log_re.dim() == 1:
+        log_re = log_re.unsqueeze(-1)
+    frequencies = 2.0 ** torch.arange(K, device=log_re.device, dtype=log_re.dtype)
+    angles = 2 * math.pi * frequencies * log_re  # [B, K]
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # [B, 2K]
 
 
 # ---------------------------------------------------------------------------
@@ -207,18 +233,21 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 re_fourier_K: int = 0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.re_fourier_K = re_fourier_K
+        re_extra = 2 * re_fourier_K  # 2K Fourier features appended to node feats
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + re_extra, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + re_extra, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -246,6 +275,15 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool or None
+        if self.re_fourier_K > 0:
+            # Index 0 along N is always a real node (no sample is fully padded).
+            # Compute Fourier features in fp32: at K=8 the top frequency angle is
+            # 2π·128·|log_re_std| ≈ 1600, where bf16's 7-bit mantissa quantizes
+            # 2π itself with enough error to make sin/cos at high k pure noise.
+            log_re = x[:, 0, RE_LOG_FEATURE_IDX].float()  # [B], fp32
+            ff = re_fourier_features(log_re, K=self.re_fourier_K)  # [B, 2K] fp32
+            ff = ff.to(x.dtype).unsqueeze(1).expand(-1, x.shape[1], -1)
+            x = torch.cat([x, ff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, mask=mask)
@@ -476,6 +514,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    re_fourier_K=8,
 )
 
 model = Transolver(**model_config).to(device)
