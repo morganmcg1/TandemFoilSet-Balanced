@@ -480,6 +480,8 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    late_block_wd_scale: float = 1.0  # weight-decay multiplier for late Transolver blocks (1.0 = baseline single-group)
+    late_block_start: int = 2  # first block index classified as "late" (0-indexed); calibrated in PR #2959
 
 
 cfg = sp.parse(Config)
@@ -530,12 +532,74 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
 
-optimizer = Lion(
-    model.parameters(),
-    lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
-    weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
-    betas=(0.9, 0.99),       # Lion-paper default
-)
+_lion_lr = cfg.lr * 0.15  # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
+_base_wd = cfg.weight_decay * 10.0  # Lion-recommended: ×10 of AdamW wd
+
+if cfg.late_block_wd_scale != 1.0:
+    # Three-group split: early blocks (0..late_block_start-1), late blocks
+    # (late_block_start..n_layers-1), and everything else (preprocess, placeholder).
+    # PR #3012: probe per-block γ_w_L2 specialization by scaling late-block wd
+    # only; the early/other groups keep the merged-baseline wd=2e-3 (Lion-scaled).
+    # Substring match on `blocks.{i}.` works under torch.compile's `_orig_mod.`
+    # name prefix because the wrapper inserts a prefix but preserves the suffix.
+    n_layers = model_config["n_layers"]
+    early_params, late_params, other_params = [], [], []
+    early_names, late_names, other_names = [], [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        matched_block = None
+        for i in range(n_layers):
+            if f"blocks.{i}." in name:
+                matched_block = i
+                break
+        if matched_block is None:
+            other_params.append(p)
+            other_names.append(name)
+        elif matched_block >= cfg.late_block_start:
+            late_params.append(p)
+            late_names.append(name)
+        else:
+            early_params.append(p)
+            early_names.append(name)
+
+    late_wd = _base_wd * cfg.late_block_wd_scale
+    param_groups = [
+        {"params": other_params, "lr": _lion_lr, "weight_decay": _base_wd, "name": "other"},
+        {"params": early_params, "lr": _lion_lr, "weight_decay": _base_wd, "name": "early"},
+        {"params": late_params,  "lr": _lion_lr, "weight_decay": late_wd,  "name": "late"},
+    ]
+    optimizer = Lion(param_groups, betas=(0.9, 0.99))
+
+    n_early = sum(p.numel() for p in early_params)
+    n_late = sum(p.numel() for p in late_params)
+    n_other = sum(p.numel() for p in other_params)
+    late_blocks = list(range(cfg.late_block_start, n_layers))
+    print(
+        f"[init] per-block wd split: late_block_start={cfg.late_block_start} "
+        f"(late blocks: {late_blocks}), late_wd_scale={cfg.late_block_wd_scale}"
+    )
+    print(f"[init] param counts: early={n_early:,}, late={n_late:,}, other={n_other:,}")
+    print(f"[init] base_wd={_base_wd:.3e}, late_wd={late_wd:.3e}")
+    for g in optimizer.param_groups:
+        print(f"[init] group '{g['name']}': lr={g['lr']:.3e}, weight_decay={g['weight_decay']:.3e}")
+    wandb_param_split = {
+        "param_split/n_early": n_early,
+        "param_split/n_late": n_late,
+        "param_split/n_other": n_other,
+        "param_split/base_wd": _base_wd,
+        "param_split/late_wd": late_wd,
+        "param_split/late_scale": cfg.late_block_wd_scale,
+        "param_split/late_block_start": cfg.late_block_start,
+    }
+else:
+    optimizer = Lion(
+        model.parameters(),
+        lr=_lion_lr,
+        weight_decay=_base_wd,
+        betas=(0.9, 0.99),       # Lion-paper default
+    )
+    wandb_param_split = None
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -571,6 +635,9 @@ with torch.no_grad():
     param_l2_init = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at init: {param_l2_init:.4f}")
 wandb.summary["param_l2_init"] = param_l2_init
+
+if wandb_param_split is not None:
+    wandb.summary.update(wandb_param_split)
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -731,6 +798,25 @@ if model_config.get("film_re"):
         print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
               f"{w_l2:>10.4f} {w_absmax:>12.4f}")
     wandb.summary.update(gamma_diagnostics)
+
+# --- Per-block total parameter L2 (PR #3012 wd-axis probe diagnostic) ---
+# Confirms that per-group weight decay is differentially shrinking late blocks
+# vs early blocks. Tracks the *whole* block's weights (attn, mlp, film_gamma,
+# layer norms) not just γ output — what wd actually pulls on.
+base_model = getattr(model, "_orig_mod", model)
+block_l2_summary: dict[str, float] = {}
+print("\nPer-block total parameter L2 (final epoch):")
+print(f"  {'block':<6s} {'total_l2':>12s} {'n_params':>12s}")
+for i, block in enumerate(base_model.blocks):
+    with torch.no_grad():
+        block_l2 = torch.sqrt(
+            sum(p.detach().float().pow(2).sum() for p in block.parameters())
+        ).item()
+        block_n = sum(p.numel() for p in block.parameters())
+    block_l2_summary[f"params/block{i}/total_l2"] = block_l2
+    block_l2_summary[f"params/block{i}/n_params"] = block_n
+    print(f"  {i:<6d} {block_l2:>12.4f} {block_n:>12,d}")
+wandb.summary.update(block_l2_summary)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
