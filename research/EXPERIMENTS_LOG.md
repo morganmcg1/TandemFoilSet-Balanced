@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2946: separate-surf-vol-heads — **CLOSED LOSS (+4.37% val / +0.56% test wash; 127th taxon; HEAD-ONLY SYMMETRIC SPLIT CLOSED; SHARED-HEAD-IS-REGULARIZER)**
+
+- **Branch:** charliepai2g48h5-askeladd/separate-surf-vol-heads
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-separate-surf-vol-heads-20260514-154116/metrics.jsonl
+
+| Metric | Baseline #2879 (shared head) | #2946 (split head_surf + head_vol) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.8968** | **+4.37% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.6638 | +0.56% (wash) |
+| val_single_in_dist | 23.3997 | 25.4213 | +8.64% LOSS |
+| val_geom_camber_rc | 46.0708 | 48.3571 | +4.96% LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.7302** | **-0.78% (mild WIN)** |
+| val_re_rand | 34.9057 | 36.0786 | +3.36% LOSS |
+| Param count | 407,940 | 408,231 | +291 |
+
+**Hypothesis:** Split the existing single output head `mlp2 = Sequential(Linear(96,96), GELU, Linear(96,3))` into TWO final-layer heads: head_surf for surface tokens, head_vol for volume tokens. Tests whether per-region output specialization beats compromised shared head.
+
+**IMPLEMENTATION NOTE — student kept the trunk shared (Linear+GELU) and only split the final Linear(96,3). This gives +291 params (not the +591 the PR predicted), the cleanest "split only the head" interpretation. Full duplication left as potential followup.**
+
+**Head divergence diagnostic at best ep59:**
+- ||W_surf - W_vol|| = **1.57** (well above 0.5 null threshold — REAL specialization)
+- ||W_surf|| = 1.43 vs ||W_vol|| = **1.98** (vol head GREW LARGER despite surf_weight=10× pull on surf)
+- Per-channel divergence: ||ΔW[Ux]|| = 1.00, ||ΔW[Uy]|| = 0.98, ||ΔW[p]|| = **0.70** (WEAKEST on metric-critical channel)
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **Vol head FREE-RODE.** ||W_vol|| > ||W_surf|| even though surf_loss had 10× weight. Splitting let vol head escape the surface-loss constraint; without it, vol head grew to handle the "scale matching" burden alone (vol tokens have order-of-magnitude larger value range than surf tokens).
+
+2. **Specialization went into WRONG channels.** Energy concentrated on Ux/Uy (velocity), NOT on p (pressure, the metric channel). The metric-critical signal was UNDER-specialized.
+
+3. **STRUCTURAL signature confirmed.** cruise barely changed (-0.78%), in_dist amplified +8.64%, rc +4.96%, re_rand +3.36% — non-uniform per-split impact = STRUCTURAL/LOCAL signature predicted by #2937. The axis-class is right; the topology is wrong.
+
+4. **KEY INSIGHT — shared head is an IMPLICIT REGULARIZER, not a compromise penalty.** Quoting student: *"The shared head was a useful regularizer, not a compromise penalty. Splitting broke the beneficial coupling between surface and volume tokens via the shared head."* This is the FIRST result in the launch where a STRUCTURAL/LOCAL intervention exhibited the canonical meta-signal AND the mechanism was clearly diagnosed.
+
+**127th taxon CLOSED:** HEAD-ONLY SURF-VOL SYMMETRIC SPLIT. The vol-head free-rider is the failure mode.
+
+**Followup assigned:** #2956 askeladd asymmetric-surf-correction-head (KEEP shared head intact, ADD zero-init Linear(96,3) surface-only correction whose output is added to surface tokens' shared head predictions; vol tokens unchanged; +291 params; directly addresses #2946's free-rider failure mode via student suggestion #1: *"split ONLY head_surf, keep head_vol shared"*; 128th axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2944: slice-routing-temperature-2.0 — **CLOSED LOSS (+4.43% val / +2.02% test; 126th taxon; ROUTING-TEMPERATURE SOFT-DIRECTION CLOSED; SHARP ROUTING AT BLOCK-3 IS LOAD-BEARING)**
 
 - **Branch:** charliepai2g48h5-tanjiro/slice-routing-temperature-2.0
