@@ -5,12 +5,56 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Eight winners merged.** PR #1625 (nezuko, surf_channel_weight=[1,1,2]) is the
-current baseline at `val_avg/mae_surf_p = 53.352` (-0.24% val / -0.77% test vs PR #1582).
-Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0"`
-VRAM footprint ~24 GB. Throughput: ~50.5 s/epoch. All 35 epochs fit in 30.1 min.
+**Nine winners merged.** PR #2970 (frieren, pct_start=0.2) is the
+current baseline at `val_avg/mae_surf_p = 51.817` (-2.88% val / -2.47% test vs PR #1625).
+Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2`
+VRAM footprint ~24 GB. Throughput: ~50.5 s/epoch. All 35 epochs fit in ~29 min.
 
-## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline (nezuko) ← CURRENT BEST
+## 2026-05-14 22:34 — PR #2970: OneCycleLR pct_start=0.2 (frieren) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **51.817**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **44.616**
+- **Improvement vs PR #1625:** -2.88% val / -2.47% test
+- **Best epoch:** 35/35 configured (all fit in ~29 min)
+- **Key change:** `--pct_start 0.2` extends OneCycleLR warmup from 3.5 ep (default 0.1) to 7 ep.
+  Two compounding effects: (1) avoids bf16 gradient instability spike seen at ep 10 with fast warmup
+  (0.05 arm shows val 130 → 154 at ep 10, absent in 0.2 arm); (2) keeps ~30% higher LR during
+  productive cosine tail (epochs 15–25). Crossover with short-warmup arm at ep 28; Arm B finishes
+  2.85 ahead.
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 31.929 |
+| val_re_rand | 51.773 |
+| val_single_in_dist | 55.477 |
+| val_geom_camber_rc | **68.090** |
+| **val_avg** | **51.817** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | 26.711 |
+| test_re_rand | 42.358 |
+| test_single_in_dist | 49.047 |
+| test_geom_camber_rc | 60.347 |
+| **test_avg** | **44.616** |
+
+- **Metric artifacts:**
+  - Arm A (pct_start=0.05): `models/model-charliepai2g48h1-frieren-pct-start-0.05-compiled-ep35-20260514-210436/metrics.jsonl`
+  - Arm B (pct_start=0.2, winner): `models/model-pct-start-0.2-compiled-ep35-20260514-214148/metrics.jsonl`
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2 \
+  --agent charliepai2g48h1-frieren --experiment_name pct-start-0.2-compiled-ep35
+```
+
+Note: `--pct_start 0.2 --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --compile_model --epochs 35` is now the **required baseline recipe**. All future experiments MUST include these flags.
+
+## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline (nezuko) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **53.352**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **45.747**
