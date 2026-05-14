@@ -7,6 +7,52 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 06:35 — H5-EXT capacity matrix RESOLVED: K_cross=8 is the sole winner; 3 axes regressed on test
+
+**Headline result of the 4-way ablation matrix (all single-flag probes on merged H5 baseline val 39.39 / test 32.59):**
+
+| PR | Probe | val | test | Per-split target (camber_rc val) | Outcome |
+|---|---|---:|---:|---|---|
+| **#2776 thorfinn** | **geo_cross_tokens=8** | **38.66 (-1.86%)** | **32.45 (-0.43%)** | **51.40 (-2.75%) ✅** | **WINNER — 2nd-seed band** |
+| #2782 frieren | geo_encoder_hidden=128 | 38.77 (-1.60%) | **33.27 (+2.07%)** | 51.41 (-2.72% val) but **+2.82% test** | CLOSED — val/test divergence |
+| #2786 edward | fourier_k=20 | 40.87 (+3.76%) | 33.99 (+4.32%) | 54.65 (+3.40%) | CLOSED — uniform regression |
+| #2787 askeladd | slice_num=48 | 40.54 (+2.91%) | 33.89 (+4.00%) | 54.54 (+3.20%) | CLOSED — no capacity-reallocation signal |
+
+**Strategic mechanism reading:** the H5 bottleneck is specifically the **cross-attention token count** (K_cross). Generic capacity scaling at any other layer (encoder hidden width, input positional encoding, local slice tokens) fails on the paper-facing test metric, and 2 of 3 actively damage the target camber_rc split.
+
+### Why each non-winner failed (preserved student mechanism diagnoses)
+
+**frieren hidden=128**: param count was only +22K (not the predicted +135K) — the `geo_encoder_hidden` flag only widens a single MLP layer inside the encoder, not the whole encoder. The encoder's `token_proj` (d_model → n_tokens·d_model linear) dominates the param count, so hidden-width changes have minimal capacity effect. The small val improvement is plausibly within the H5 2-seed spread (±0.18). Test regression across all 4 splits is the dominant signal: this is val/test divergence, not a clean encoder improvement. **Geo-encoder-hidden axis closed.**
+
+**edward fourier_k=20**: clean uniform regression across val (+3.76%) and test (+4.32%). Edward's key insight: *"The H5 cross-attention provides global context, not a 'spatial-bottleneck broker'. The preprocess MLP already sees raw (x,z), signed arc-length saf, and the 8-d dsdf shape descriptor — all of which encode spatial position. Fourier expansion is just one of several spatial channels, and adding 32 more dims doesn't unlock new information; it dilutes the input MLP's effective width."* And critically: *"The camber_rc gap is a **distributional** problem — M=6-8 raceCar tandem cambers are far outside the front-foil training distribution — not a representation-resolution problem."* **Fourier-K axis is now symmetric-U-closed: k=8 (#2670 +3.55%), k=12 (baseline), k=20 (this PR +3.76%).**
+
+**askeladd slice_num=48**: clean regression with camber_rc regressing MORE than IID (+3.20% target vs +1.62% IID) — the opposite of the predicted capacity-reallocation signal. Askeladd's mechanism: *"Token-count is gated by data, not parameter count. At 30-min cap, the routing softmax doesn't get sufficient gradient signal to discriminate among 48 distinct physics regions; 32 is closer to the per-epoch-data-supportable token count. The H5 cross-attention's K_cross=4 works because there are only 4 of them and they get full geo-encoder signal; expanding the local token count doesn't get a free signal boost from cross-attention."* **Slice_num upward axis closed at K≥48.**
+
+### thorfinn K=8 win — per-split signature
+
+| split | K=8 | K=4 baseline | Δ |
+|---|---:|---:|---|
+| val_single_in_dist | 35.75 | 36.63 | -2.41% ✅ |
+| val_geom_camber_rc (target) | 51.40 | 52.85 | -2.75% ✅ |
+| val_geom_camber_cruise | 26.06 | 26.97 | -3.38% ✅ |
+| val_re_rand | 41.44 | 41.14 | +0.72% ⚠ (capacity-reallocation trade-off) |
+| test_single_in_dist | 29.59 | 29.97 | -1.27% ✅ |
+| test_geom_camber_rc | 45.16 | 44.91 | +0.57% (small) |
+| test_geom_camber_cruise | 22.03 | 21.90 | +0.58% (small) |
+| test_re_rand | 33.03 | 33.59 | -1.66% ✅ |
+
+3 of 4 val splits and 2 of 4 test splits improve. Re_rand val regresses slightly (consistent with capacity-reallocation: K=4 was already saturating re_rand). Test is approximately flat on 2 splits but improves on 2 — net test_avg improvement of -0.43%. **Sent back for --seed 7 confirmation.**
+
+### Fresh assignments (axis bracket around K=8 winner)
+
+| PR | Student | Probe | Rationale |
+|---|---|---|---|
+| #2821 | frieren | geo_cross_tokens=12 | Extends K-axis past K=8; determines if axis is monotone or has plateau at K=8 |
+| #2823 | edward | lr=2e-4 | Lion LR doubling; H5 is gradient-step-bound (best=final), Lion sign-momentum is LR-robust — untested optimization-speed axis |
+| #2825 | askeladd | slice_num=24 | Narrowing direction; askeladd's own follow-up; brackets slice axis to {24, 32 baseline, 48 closed} |
+
+---
+
 ## 2026-05-14 04:42 — Post-merge cycle: 3 closes (DropPath, LayerScale, SAM) + 4-way H5-ext capacity matrix launched
 
 **Headline**: three tier-2 regularization/residual-scaling closures (frieren DropPath, edward LayerScale, askeladd SAM) confirm the **compute-limited/parameter-starved regime** of TandemFoilSet at 30-min cap. Reassigned the freed slots to complete a 4-way **H5-EXT capacity ablation matrix** isolating each capacity axis of the merged H5 GeoTransolver mechanism.
