@@ -261,6 +261,11 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Volume aux head — Linear(n_hidden, 3) applied to block-1 (index 1, 50% depth) output.
+        # Trained jointly with primary loss via 0.1 * L1(aux_pred[vol_mask], y_norm[vol_mask]).
+        # Added BEFORE _init_weights so trunc_normal_(std=0.02) is applied (matches primary
+        # head blocks[-1].mlp2[2] init scheme).
+        self.aux_head_vol = nn.Linear(n_hidden, 3)
         self.apply(self._init_weights)
 
         # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
@@ -288,9 +293,13 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        mid_features = None
+        for i, block in enumerate(self.blocks):
             fx = block(fx, mask=mask)
-        return {"preds": fx}
+            if i == 1:
+                mid_features = fx  # block-1 output, 50% depth (same placement as #2952)
+        aux_pred = self.aux_head_vol(mid_features)
+        return {"preds": fx, "aux_pred": aux_pred}
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +584,23 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
 
+# Volume aux supervision (PR #2975) — target-inversion test of aux orthogonality.
+# Captures block-1 (index 1, 50% depth in n_layers=4) output, projects via
+# aux_head_vol Linear(96, 3), supervises with 0.1 * L1(aux_pred[vol_mask], y_norm[vol_mask]).
+# Total loss: vol_loss + 10*surf_loss + 0.1*aux_vol_loss.
+_aux_mod = model.aux_head_vol
+_aux_params = sum(p.numel() for p in _aux_mod.parameters())
+print(
+    f"Volume aux head: aux_head_vol = Linear({model_config['n_hidden']}, 3) at BLOCK-1 OUTPUT (index 1, 50% depth) | "
+    f"+{_aux_params} params (~291 expected) | "
+    f"alpha=0.1 | target: VOLUME tokens (~surf_mask, ~70% of nodes) | "
+    f"total_loss = vol_loss + 10*surf_loss + 0.1 * L1(aux_pred[vol_mask], y_norm[vol_mask]) | "
+    f"vs #2952 SURF aux at SAME placement (val 31.1363, +1.89% LOSS, aux/surf=3.7x); "
+    f"vs #2961 SURF aux at BLOCK-3 (val 32.5552, +6.53% LOSS, aux/surf=2.5x); "
+    f"hypothesis: aux ALIGNS with dominant vol gradient -> near-redundant (aux/vol < 1.0 predicted); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -684,7 +710,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_aux = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -696,14 +722,18 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            out = model({"x": x_norm, "mask": mask})
+            pred = out["preds"]
+            aux_pred = out["aux_pred"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            sq_err_aux = F.l1_loss(aux_pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            aux_loss = (sq_err_aux * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss + 0.1 * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -711,12 +741,15 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_loss.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
+    aux_vol_ratio = epoch_aux / max(epoch_vol, 1e-12)
 
     # --- Validate ---
     model.eval()
@@ -748,6 +781,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_vol_loss": epoch_aux,
+        "train/aux_vol_ratio": aux_vol_ratio,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -755,7 +790,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux_vol={epoch_aux:.4f} aux/vol={aux_vol_ratio:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -809,6 +844,43 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Volume aux head divergence diagnostic (PR #2975): compares aux_head_vol to
+    # primary head blocks[-1].mlp2[2]. Both heads were initialized identically
+    # (trunc_normal_ std=0.02 via _init_weights). Divergence reveals whether the
+    # aux head learned a representation aligned with (cos sim > 0.5) or orthogonal
+    # to (cos sim ~ 0) the primary head's projection. Compare to #2952 surf aux:
+    # ||W_aux_surf||=3.33, ||W_primary||=1.50 (2.2x), cos(p)=0.05 (orthogonal).
+    _aux_w = _inner.aux_head_vol.weight.detach().float()  # (3, n_hidden)
+    _aux_b = _inner.aux_head_vol.bias.detach().float()    # (3,)
+    _primary_head = _inner.blocks[-1].mlp2[2]             # last Linear in mlp2 sequential
+    _primary_w = _primary_head.weight.detach().float()    # (3, n_hidden)
+    _primary_b = _primary_head.bias.detach().float()      # (3,)
+
+    _aux_w_norm = _aux_w.norm().item()
+    _primary_w_norm = _primary_w.norm().item()
+    _ratio = _aux_w_norm / max(_primary_w_norm, 1e-12)
+    _channels = ["Ux", "Uy", "p"]
+    _cos_per_channel = {}
+    print("\nVolume aux head divergence vs primary head (best-checkpoint weights):")
+    print(f"  ||W_aux_vol|| = {_aux_w_norm:.4f}")
+    print(f"  ||W_primary|| = {_primary_w_norm:.4f}")
+    print(f"  ratio aux/primary = {_ratio:.4f}  (compare #2952 surf aux ratio ~2.2x)")
+    for _ci, _cn in enumerate(_channels):
+        _cs = F.cosine_similarity(_aux_w[_ci].unsqueeze(0), _primary_w[_ci].unsqueeze(0)).item()
+        _cos_per_channel[_cn] = _cs
+        print(f"  cos(W_aux_vol[{_cn}], W_primary[{_cn}]) = {_cs:.4f}")
+    print(f"  ||b_aux_vol|| = {_aux_b.norm().item():.4f}   ||b_primary|| = {_primary_b.norm().item():.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "aux_head_vol_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "aux_w_norm": _aux_w_norm,
+        "primary_w_norm": _primary_w_norm,
+        "ratio_aux_over_primary": _ratio,
+        "cos_aux_vs_primary": _cos_per_channel,
+        "aux_b_norm": _aux_b.norm().item(),
+        "primary_b_norm": _primary_b.norm().item(),
+    })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
