@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-14 [Round 102] UTC — PR #2814: SE bottleneck inner activation GELU→SiLU — **CLOSED LOSS (+3.17% val)**
+
+- **Branch:** charliepai2g48h5-tanjiro/se-silu-inner
+- **Hypothesis:** Following the GeGLU LOSS (#2759, gate_zero_frac 16-26% hard-masking diagnostic), apply same SiLU substitution at the SE bottleneck inner activation. Predicted: SiLU eliminates hard-masking → 24 bottleneck channels preserved → gate_std rises → OOD splits benefit.
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-silu-inner-20260514-062248/metrics.jsonl`
+
+| Split | val | Baseline #2765 | Δ val | test | Baseline test | Δ test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | 25.0757 | 24.9721 | +0.10 | **23.3436** | 24.0714 | **−0.73 WIN** |
+| `geom_camber_rc` | 49.7281 | 46.9885 | **+2.74 LOSS** | 42.6873 | 41.9406 | +0.75 |
+| `geom_camber_cruise` | 18.3988 | 17.7276 | +0.67 | 14.4708 | 14.2400 | +0.23 |
+| `re_rand` | 36.0561 | 35.5983 | +0.46 | 26.7635 | 25.7749 | +0.99 |
+| **val_avg** | **32.3147** | **31.3216** | **+0.99 LOSS** | | | |
+| **test_avg** | **26.8163** | **26.5067** | **+0.31 LOSS** | | | |
+
+- **Result:** NOT MERGED. val_avg +3.17% vs old baseline 31.3216, +4.61% vs new baseline 30.8909 (post-#2810 merge). Decisive LOSS, especially on camber_rc OOD.
+- **Mechanism CONFIRMED (student exemplary):**
+  - `silu_zero_frac = 0.0000` across all 4 val splits — SiLU eliminates hard-masking entirely.
+  - `pre_act_std` 1.4–3.0 symmetric; `negative_frac` 0.46–0.51 — ~half of 24 bottleneck channels output small negative SiLU values.
+  - SE `gate_std` 0.18–0.30 (slightly higher than GELU baseline 0.17–0.28); `gate_min` 0.0004–0.026 preserved low.
+- **Key insight (student):** GELU's hard-masking at the SE bottleneck is acting as **beneficial implicit sparsification**, NOT wasted capacity. The SE bottleneck (24-channel 2-layer encoder feeding sigmoid gate) has structurally different optimal-activation requirements vs the MLP body (gated multiplicative GeGLU/SwiGLU). SiLU's smooth negative range removes the implicit channel-selection pressure that GELU provides. The result destabilizes near-veto OOD gating behavior — sharpest regression on camber_rc (+2.74 val).
+- **71st taxon: SE bottleneck inner activation axis CLOSES at GELU.** Full SE-axis now mapped: width (r=4 #2765 merged), inner activation (GELU, this PR closes), pool function (attn-pool #2810 merged).
+- **Follow-up assigned:** PR #2848 tanjiro SE bottleneck post-GELU Dropout(p=0.1) — direct test of the implicit-sparsification hypothesis.
+
+---
+
+## 2026-05-14 [Round 102] UTC — PR #2848: SE bottleneck post-GELU Dropout p=0.1 — **ASSIGNED (75th candidate axis)**
+
+- **Branch:** charliepai2g48h5-tanjiro/se-bottleneck-dropout
+- **Hypothesis:** Add `nn.Dropout(p=0.1)` between `F.gelu(self.fc1(pool))` and `self.fc2` in `SqueezeExcitation`. +0 params. Directly tests whether GELU's "hard-masking" is acting as implicit sparsification: if yes, explicit dropout will stack on top (WIN) or be redundant (WASH); if not, dropout will regress (LOSS). Structurally distinct from in-flight attention dropout #2828 (attention probabilities inside sdpa softmax) and from closed DropPath #2722 (residual zeroing). Diagnostics include `gelu_zero_frac` to confirm GELU is still hard-masking 16-26% even with dropout active.
+
+---
+
+## 2026-05-14 [Round 102] UTC — PR #2794: SwiGLU-preprocess — **LEFT (1st stale_wip)**
+
+- **Branch:** charliepai2g48h5-fern/swiglu-preprocess
+- **Status:** Created 2026-05-14T05:08:32Z, ~2h ago, 0 commits 0 comments. fern pod likely hitting GitHub API rate limits.
+- **Decision:** Leave as-is per Round 91 / Round 99 convention. 1st stale = wait one more round. If still no pickup next round, close as pod-failure.
+
+---
+
 ## 2026-05-14 [Round 101] UTC — PR #2810: SE block-3-only attention-pool — **MERGED WIN (−1.37% val)**
 
 - **Branch:** charliepai2g48h5-alphonse/se-attn-pool
