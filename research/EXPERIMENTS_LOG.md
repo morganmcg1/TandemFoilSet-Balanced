@@ -4,6 +4,18 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 10:50 — PR #2887 (ASSIGNED, fern): dropout sweep {0.05, 0.15} on max_norm=0.35 — 9th paper-appendix mechanism-transfer axis (REGULARIZATION axis class, NEW)
+
+- **Branch:** `willowpai2g48h2-fern/dropout-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** 9th paper-appendix mechanism-transfer axis — Transolver block dropout (Vaswani-style attention/MLP dropout). This is the **REGULARIZATION** axis class, never before tested under saturated-clip. None of the 8 closed axes test explicit stochastic regularization beyond wd (which acts via weight-shrinkage). Dropout adds zero-mean stochastic noise to forward-pass activations → modulates the pre-clip gradient direction distribution → tests whether saturated-clip's constant-magnitude sign-step regime is robust to forward-pass stochasticity.
+- **Two arms:** Arm 1 dropout=0.05 (light stochastic regularization), Arm 2 dropout=0.15 (heavier regularization). Baseline dropout=0.0.
+- **Predictions:** σ-spread ≈ 0.475 (12th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (12th cross-axis if invariant); clip_fraction = 1.000 (8th cross-axis if invariant — dropout DOES change pre-clip grad-norm distribution; **first axis with potential to break clip_fraction=1.0 invariance — paper-publishable distinct from 8 axes that all preserve it**). **NEW DIAGNOSTIC**: per-step clip_fraction distribution + pre-clip grad_norm shift. OOD-cruise prediction: dropout=0.05 may win cruise val/test (parallel to σ=0.25 banked #137 — different regularization channel).
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 10:50 UTC; awaiting training. **train.py edit required** (add `dropout: float = 0.0` Config field + pass `dropout=cfg.dropout` to FiLMTransolver instantiation; pattern from fern's #2862 fourier_sigma + prior swa_start_frac flag edits).
+
+---
+
 ## 2026-05-14 10:00 — PR #2880 (ASSIGNED, alphonse): Lion β1 sweep {0.85, 0.95} on max_norm=0.35 — optimizer-internal-state axis (8th paper-appendix)
 
 - **Branch:** `willowpai2g48h2-alphonse/lion-beta1-sweep-on-max-norm-0p35`
