@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-05-14 [Round 92] UTC — Round 92
+
+### Closed PR #2761: nezuko SAM rho=0.05 LOSS (60th taxon — flat-minima 4-direction exhaustive at 30-min budget)
+- **Student:** charliepai2g48h5-nezuko
+- **Branch:** charliepai2g48h5-nezuko/sam-rho005
+- **Hypothesis:** Sharpness-Aware Minimization (Foret et al. 2021 ICLR) wrapped around Lion. 2× fwd/bwd per step, adversarial perturbation in rho=0.05 L2-ball, then update from worst-case gradient. Direct flat-minima probe; orthogonal to closed indirect mechanisms (SGDR, SWA, Lookahead).
+- **Results:** Clear LOSS — both val and test ~70-75% worse than baseline:
+
+| Metric | Baseline #2741 | SAM rho=0.05 (#2761) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 32.2477 | 54.6259 | +22.38 (+69.4%) |
+| `test_avg/mae_surf_p` | 27.4248 | 48.0641 | +20.64 (+75.3%) |
+| Best epoch | 63/70 | 35/70 (timeout-truncated) | −28 epochs |
+| Epoch wall-time | ~28 s | ~52 s | +85% |
+
+- **Per-split:** All 4 val splits regress +51% to +118%. No OOD-specific benefit despite the flat-minima prediction that OOD should improve most.
+- **SAM diagnostics — mechanism engaged correctly:**
+  - `sam_loss_ratio` (L(w')/L(w)) climbs monotonically: 1.036 → 1.294 → 1.358 → 1.402 — confirms Lion finds genuinely sharp basins
+  - `sam_grad_norm_ratio` (‖g'‖/‖g‖): 1.21 → 1.93 — landscape sharply curved
+  - `sam_sharpness_estimate`: 0.036 → 0.402 — Lion drives loss into increasingly sharp basins
+  - Lion momentum buffer 99.97% non-zero at terminal — SAM-Lion wiring clean
+  - LayerScale γ at best: gamma_attn abs_mean [0.039, 0.052], gamma_mlp [0.092, 0.113] — γ grew normally, no SAM-specific pathology
+- **Failure mode (LOSS scenario predicted by PR):** The 2× per-step compute cost halved the effective epoch budget (35 vs 63), and the loss curve was still steeply descending at the wall-clock cap (slope ~1.6 val units/epoch between ep30-35; extrapolation suggests ~15 more epochs needed just to reach baseline). The diagnostic evidence is internally coherent: Lion's basins ARE sharp (SAM's own metric), but the wall-clock cap prevented SAM from exploiting that.
+- **Taxonomic significance:**
+  - **60th closed taxon: direct flat-minima probe under 30-min budget**
+  - **Flat-minima/narrow-basin-escape meta-family 4-direction exhaustive:** SGDR (#2697, 52nd, indirect via LR shock) + SWA (#2567, 28th, indirect via trajectory averaging) + Lookahead+Lion (#2740, 55th, indirect via slow-weight commitment) + SAM (#2761, 60th, DIRECT adversarial perturbation) — all LOSS
+  - Flat-minima HYPOTHESIS not refuted (Lion basins genuinely sharp); the wall-clock CAP is the binding constraint. Under 30-min Lion per-step efficiency dominates per-step quality.
+- **Param-count flag noted:** Student reported 331,287 params vs PR body 338,523; upstream baseline accounting discrepancy, doesn't affect SAM conclusion (same model both sides).
+
+### Assigned PR #2792: nezuko Register tokens N_REG=4 (Darcet 2024, 62nd candidate axis — learnable attention K/V capacity expansion)
+- **Student:** charliepai2g48h5-nezuko
+- **Branch:** charliepai2g48h5-nezuko/register-tokens-4
+- **Hypothesis:** Vision Transformers Need Registers (Darcet, Oquab, Mairal, Bojanowski — 2024 ICLR, arXiv:2309.16588). Add N_REG=4 learnable register tokens per head per block to PhysicsAttention's slice attention. Registers participate as additional K/V positions (slice_num=24 + N_REG=4 = 28 total positions for attention computation) but are EXCLUDED from the output routing back to mesh nodes (only the first 24 positions are routed back).
+- **Param cost:** N_REG × heads × dim_head × n_blocks = 4 × 2 × 48 × 4 = **1,536 new params** (+0.45% over 338,523 baseline). Negligible.
+- **Mechanism:** Registers serve as global computation scratchpads. Mesh-derived slice tokens (24) can attend to and use the registers for global state without polluting per-mesh-node outputs.
+- **Structural orthogonality:**
+  - Not weight reg (closed: spectral norm, WS, L1+L2)
+  - Not optimizer/trajectory (closed: SGDR, SWA, Lookahead, SAM — flat-minima 4-direction exhaustive)
+  - Not normalization (closed: DyT, RMSNorm-substitution)
+  - Not activation (in-flight: Mish, GeGLU)
+  - Not positional encoding (closed: Fourier 24th + RoPE 46th)
+  - Not loss-shape (closed: Huber, asinh, BerHu, focal)
+  - Not augmentation (closed: Mixup family, reflection, coord-jitter)
+  - Not stochastic dropout (closed: 3 directions)
+  - Not SE (merged: block-3-only)
+  - Not SwiGLU (merged)
+  - **Different axis: learnable attention K/V capacity expansion. First probe of this dimension in this launch.**
+- **Diagnostics:** register_norm per block per head (does the model use them?) + register_kv_attn per block (attention weight FROM slice tokens TO registers).
+- **Bar:** val_avg/mae_surf_p < 32.2477.
+
+### Round 92 summary
+- 1 closure + 1 assignment. Closed taxa total: **60** (added 60th direct flat-minima probe — completes 4-direction exhaustive flat-minima meta-family). Merged winners total: **18**. In-flight: 8/8 (zero idle GPUs).
+
+---
+
 ## 2026-05-14 [Round 91] UTC — Round 91
 
 ### Closed PR #2739: edward Weight Standardization CATASTROPHIC LOSS (59th taxon — forward-time weight standardization)
