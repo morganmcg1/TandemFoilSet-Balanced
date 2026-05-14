@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -113,6 +114,7 @@ class PhysicsAttention(nn.Module):
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -125,6 +127,10 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        # Routing-diagnostic recorder — set to True externally to capture
+        # slice_weights for the next forward pass; PR #2874 slice_num=28 probe.
+        self.record_routing = False
+        self._last_slice_weights = None
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -142,6 +148,8 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        if self.record_routing:
+            self._last_slice_weights = slice_weights.detach()
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -518,13 +526,12 @@ model_config = dict(
     n_hidden=96,
     n_layers=4,
     n_head=2,
-    slice_num=24,
+    slice_num=28,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
-print(f"slice_num: {model_config['slice_num']}")
-print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(f"slice_num: {model_config['slice_num']} (was 24, +4 slices upward direction test — PR #2874)")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
@@ -1019,6 +1026,82 @@ if best_metrics:
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
+
+    # Slice-routing diagnostic (PR #2874 slice_num=28 upward probe).
+    # Per-block: routing entropy, max-routed slice fraction, active-slice
+    # fraction (>5% mass), temperature mean/std. Captured per val split on
+    # best-checkpoint weights via the record_routing flag on PhysicsAttention.
+    _attn_blocks = [(i, blk.attn) for i, blk in enumerate(_inner.blocks)]
+    _slice_diag_splits = ["val_single_in_dist", "val_geom_camber_rc",
+                          "val_geom_camber_cruise", "val_re_rand"]
+    print("\nSlice-routing stats per split (best-checkpoint weights):")
+    _slice_log = {
+        "event": "slice_routing_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "slice_num": model_config["slice_num"],
+        "splits": {},
+    }
+    for _split_name in _slice_diag_splits:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        for _, _attn in _attn_blocks:
+            _attn.record_routing = True
+        with torch.no_grad():
+            _x_s, _y_s, _is_s, _m_s = next(iter(_ldr))
+            _x_s = _x_s.to(device, non_blocking=True)
+            _m_s = _m_s.to(device, non_blocking=True)
+            _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner({"x": _x_norm_s, "mask": _m_s})
+        for _, _attn in _attn_blocks:
+            _attn.record_routing = False
+        print(f"  Split: {_split_name}")
+        _split_log = []
+        for _bi, _attn in _attn_blocks:
+            _sw = _attn._last_slice_weights  # (B, H, N, G)
+            _mask_t = _m_s.unsqueeze(1).unsqueeze(-1)  # (B, 1, N, 1)
+            # Mass per slice per head per sample, masked over real tokens only.
+            _mass = (_sw.float() * _mask_t).sum(dim=2)  # (B, H, G)
+            _n_real_3d = _mask_t.sum(dim=2).clamp(min=1)   # (B, 1, 1)
+            _n_real_2d = _n_real_3d.squeeze(-1)            # (B, 1)
+            _mass_norm = _mass / _n_real_3d            # (B, H, G) avg per token
+            # Routing entropy averaged per token: each token's slice_weights
+            # is a distribution over G slices → entropy = -Σ w log w.
+            _w = _sw.float().clamp(min=1e-12)
+            _ent_per_tok = -(_w * _w.log()).sum(dim=-1)  # (B, H, N)
+            _ent_per_tok = _ent_per_tok * _m_s.unsqueeze(1)
+            _ent_mean = (_ent_per_tok.sum(dim=2) / _n_real_2d).mean().item()
+            _ent_max = math.log(_attn.slice_num)
+            _max_w = _sw.float().amax(dim=-1)  # (B, H, N)
+            _max_w = (_max_w * _m_s.unsqueeze(1)).sum(dim=2) / _n_real_2d
+            _max_w_mean = _max_w.mean().item()
+            # Active slices: fraction of slices whose normalised mass >5%.
+            _slice_share = _mass_norm  # (B, H, G) — already mass per token avg
+            _active = (_slice_share > 0.05).float().mean(dim=(0, 1))  # (G,)
+            _active_frac = _active.mean().item()  # fraction of slices above 5%
+            _temp = _attn.temperature.detach().float().flatten()
+            _temp_mean = _temp.mean().item()
+            _temp_std = _temp.std().item() if _temp.numel() > 1 else 0.0
+            print(
+                f"    block[{_bi}]: ent={_ent_mean:.3f}/{_ent_max:.3f}  "
+                f"max_slice_frac={_max_w_mean:.3f}  "
+                f"active_slice_frac={_active_frac:.3f}  "
+                f"temp_mean={_temp_mean:.3f}  temp_std={_temp_std:.3f}"
+            )
+            _split_log.append({
+                "block_idx": _bi,
+                "routing_entropy_mean": _ent_mean,
+                "routing_entropy_max_uniform": _ent_max,
+                "max_routed_slice_frac": _max_w_mean,
+                "active_slice_frac_gt5pct": _active_frac,
+                "temperature_mean": _temp_mean,
+                "temperature_std": _temp_std,
+            })
+            # Free buffer.
+            _attn._last_slice_weights = None
+        _slice_log["splits"][_split_name] = _split_log
+    append_metrics_jsonl(metrics_jsonl_path, _slice_log)
 
     test_metrics = None
     test_avg = None
