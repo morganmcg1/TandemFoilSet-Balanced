@@ -1921,3 +1921,40 @@ Train tandem ch15 = {0, 0.111, ..., 0.667, 1.0}; rc/cruise are held out on **ch1
 The "rc"/"cruise" prefix refers to **raceCar/cruise environment**, NOT to camber-position channel.
 
 The structural finding (rc=EXTRAPOLATION along the held-out shape axis; cruise=INTERPOLATION) is correct — just on **ch15** (camber amplitude M), not ch16. PR #2662 was sent back with corrected instruction: mask ch15, jitter ch16+ch17.
+
+
+## 2026-05-14 00:25 — PR #2650: Re-conditional LayerNorm γ/β (shared, zero-init, CIN-style) — MERGED ✅ NEW BASELINE
+- **Branch**: `charliepai2g24h1-alphonse/re-conditional-layernorm-affine`
+- **Hypothesis**: Apply Re-conditioning at the LN-affine injection point (CIN / adaLN-Zero pattern) — same Re-conditioning idea as closed residual-stream FiLM (#2585) but at a fundamentally different injection point where LN normalisation bounds the modulation before γ/β applies.
+- **Status**: **MERGED — new baseline val_avg = 28.2414 (-2.20% vs previous 28.8762)**
+
+| Metric | Baseline (#2011) | ReCondLN (#2650) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | 28.8762 | **28.2414** | **−2.20%** ✅ |
+| **test_avg/mae_surf_p** | 24.9992 | **24.4827** | **−2.07%** ✅ |
+
+Per-split val:
+
+| Split | Baseline (#2011) | ReCondLN | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.6013 | **27.1740** | **−4.99%** ✅ |
+| val_geom_camber_rc | 41.9483 | 42.2153 | +0.64% (mild) |
+| val_geom_camber_cruise | 14.1462 | **13.6733** | **−3.34%** ✅ |
+| val_re_rand | 30.8090 | **29.9031** | **−2.94%** ✅ |
+
+Per-split test:
+
+| Split | test_avg |
+|---|---|
+| test_single_in_dist | 27.6193 (−6.47%) |
+| test_geom_camber_rc | 38.2108 (+3.20%) |
+| test_geom_camber_cruise | 10.6390 (−3.43%) |
+| test_re_rand | 21.4617 (−4.29%) |
+
+- **Mechanism**: Shared CIN/adaLN-Zero Re-conditioning of all 3 LN roles (pre-attn ln_1, pre-FFN ln_2, pre-out ln_3) via log(Re)→(γ_residual, β). Zero-init final layer — identity at step 0, opens to |γ_res|_max=2.34 (ln_1), |β|_max=1.39 (ln_3) by ep28. Corr(|γ_res|, logRe)=-0.77 at ln_1 confirms non-trivial Re-conditioning policy. Strongest at pre-attention LN (fits: that's where ReFiLM's slice-routing also operates).
+- **Key confirmation**: val_single_in_dist IMPROVED -4.99% vs the residual-stream FiLM (#2585 Arm 1) which regressed +1.19%. The bounded-modulation hypothesis is vindicated — LN normalisation before γ/β prevents unbounded amplification.
+- **Cost**: +13,872 params (~2% overhead). Zero memory change (27.79 GB → 27.79 GB). Compute overhead negligible (torch.compile fuses the FiLM MLP).
+- **Convergence**: best=last=28, val still falling monotonically — budget-limited not converged.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-alphonse-re-conditional-layernorm-affine-20260513-234229/metrics.jsonl`
+
+**Programme learning**: **LN-affine injection point WINS where residual-stream injection point FAILED.** The CIN/adaLN-Zero pattern (Dumoulin et al. 2017, Peebles & Xie 2022) provides bounded Re-conditioning by operating on normalised features. This opens a new composition axis: combining ReCondLN with other stack components (per-channel heads, surface normal features) should be orthogonal. The rc mild regression (+0.64% val) is the new bottleneck to address. Student suggested: probe whether restricting ReCondLN to a subset of blocks would fix the rc regression without losing val_avg. Also suggests: the model is NOT converged at ep28 (best=last, still falling) — a T_max=35 re-run would likely push further.

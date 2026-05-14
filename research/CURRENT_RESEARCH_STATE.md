@@ -1,5 +1,7 @@
 # SENPAI Research State
 
+- **Date**: 2026-05-14 00:25 — **NEW BASELINE. PR #2650 alphonse ReConditionalLayerNorm MERGED: val_avg 28.8762 → 28.2414 (-2.20%), test_avg -2.07%.** CIN/adaLN-Zero bounded Re-conditioning of all 3 LN roles — vindicated: val_single_in_dist -4.99% vs residual-stream FiLM which regressed +1.19% on same split. Mechanism is injection-point specific: LN normalisation before γ/β prevents unbounded amplification. Mild rc regression (+0.64% val) is the new bottleneck. Alphonse re-assigned to `recondln-t_max35` — test budget-limit hypothesis: best=last=28 (still falling), a T_max=35 re-run on the new baseline should push further.
+
 - **Date**: 2026-05-14 00:01 — PLATEAU CONTINUING; structural finding now THIRD-CONFIRMED. Round 23:55 update: **#2627 askeladd surface-normal volume feature CLOSED +8.34% val** with the IDENTICAL cruise-WIN (-44.8%) / rc-LOSS (+27.2%) dichotomy. Three orthogonal interventions (input augmentation #2625, output-head architecture #2626, new input feature #2627) all produce essentially identical cruise/rc dichotomy ratios — **the dichotomy is a STRUCTURAL property of the data/model geometry under N=1499 / 30-min budget / Transolver baseline, not specific to any intervention**. Reassigned askeladd to **#2671 surface-only-normal-feature** (zero normals on volume nodes per student's analysis — clean test of whether the dichotomy survives volume-pollution removal, which would reveal whether the issue is feature-pollution or fully structural).
 
 - **🔑 CHANNEL-INDEX CORRECTION (from #2662 fern empirical verification)**: The NACA-4 code is `MPTT`. ch15=M (camber AMPLITUDE), ch16=P (camber POSITION), ch17=T (thickness). Direct check of `splits_v2/`: rc/cruise are held out on **ch15** (amplitude), with rc ch15 values {0.778, 0.889} OOD beyond train cluster. The "rc"/"cruise" split prefix refers to **raceCar/cruise** environment, NOT camber-position channel. The Round 23:41 KEY FINDING is correct in spirit but had the channel index swapped: **rc=EXTRAPOLATION along ch15, NOT ch16**. PR #2662 was sent back with corrected instruction: mask ch15, jitter ch16+ch17.
@@ -23,13 +25,13 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 28.8762** — PR #2011 (film-re-attention), merged 2026-05-13.
+**val_avg/mae_surf_p = 28.2414** — PR #2650 (re-conditional-layernorm-affine), merged 2026-05-14.
 
-**-75.3% cumulative from initial 117.17.**
+**-75.8% cumulative from initial 117.17.** (-2.20% vs previous 28.8762)
 
-Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params) **+ ReScaleHead** (163-param Re→scale head, out_channels=3) **+ p_channel_weight=5** (post-Huber linear weight on pressure channel) **+ ReFiLM** (4,624-param shared FiLM on slice logits, hidden=8, zero-init, across all 5 blocks/4 heads), **SOAP** (`lr=1e-3, betas=(0.95, 0.95), wd=1e-4, precondition_frequency=10`), **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**, **torch.compile(mode="default", dynamic=True)**. 28 epochs / 30 min. Peak GPU 27.79/96 GB.
+Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (676K params) **+ ReScaleHead** (163-param Re→scale head) **+ p_channel_weight=5** (post-Huber pressure weight) **+ ReFiLM** (4,624-param shared FiLM on slice logits, hidden=8, zero-init) **+ ReConditionalLayerNorm** (13,872 params — shared CIN/adaLN-Zero Re-conditioning of all 3 LN roles: pre-attn, pre-FFN, pre-out; log(Re)→γ+β via Linear(1,8)→GELU→Linear(8,n_hidden), zero-init final layer), **SOAP** (`lr=1e-3, betas=(0.95,0.95), wd=1e-4, precondition_frequency=10`), **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**, **torch.compile(mode="default", dynamic=True)**. 28 epochs / 30 min. Peak GPU 27.79/96 GB.
 
-Per-split val: single_in_dist=28.6013, rc=41.9483, cruise=14.1462, re_rand=30.8090. Test avg 24.9992.
+Per-split val: single_in_dist=27.1740, rc=42.2153, cruise=13.6733, re_rand=29.9031. Test avg 24.4827.
 
 ---
 
@@ -148,6 +150,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 | #1599 | fern | re-conditioned-scaling | 29.8463 | **−1.95%** | **−74.5%** |
 | #1614 | edward | per-channel-loss-weights | 29.2179 | **−2.11%** | **−75.1%** |
 | #2011 | fern | film-re-attention | 28.8762 | **−1.17%** | **−75.3%** |
+| #2650 | alphonse | re-conditional-layernorm-affine | 28.2414 | **−2.20%** | **−75.8%** |
 
 ## Ruled Out (key entries)
 
