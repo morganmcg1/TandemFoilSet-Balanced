@@ -264,13 +264,15 @@ class Transolver(nn.Module):
             )
             for i in range(n_layers)
         ])
-        # Cross-block residual α: learnable scalar gain applied to each non-final
-        # block's output BEFORE the next block consumes it. n_layers-1 scalars
-        # (no α after the last block, whose output is already the head prediction).
-        # Init 1.0 -> identity at step 0. Scales AFTER the block's post-norm LN
-        # so non-1.0 α directly changes feature magnitudes flowing into the next
-        # block (LN cannot absorb the scale).
-        self.cross_block_alpha = nn.Parameter(torch.ones(n_layers - 1))
+        # Cross-block residual α: learnable per-channel gain vector applied to
+        # each non-final block's output BEFORE the next block consumes it.
+        # Shape (n_layers-1, n_hidden) — granularity sweep from #3006 (scalar)
+        # to per-channel. No α after the last block (the head). Init 1.0 ->
+        # identity at step 0. Scales AFTER the block's post-norm LN so non-1.0
+        # values directly modulate feature magnitudes flowing into the next
+        # block (LN cannot absorb the scale). Broadcasting [n_hidden] over
+        # [B, N, n_hidden] gives elementwise per-channel scaling.
+        self.cross_block_alpha = nn.Parameter(torch.ones(n_layers - 1, n_hidden))
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -575,13 +577,15 @@ print(f"Actual total params: {n_params}")
 # values directly modulate feature magnitudes into the next block. Last
 # block's head output is unscaled (no following block).
 _inner_for_alpha = getattr(model, "_orig_mod", model)
-_alpha_init = _inner_for_alpha.cross_block_alpha.detach().cpu().tolist()
+_alpha_shape = list(_inner_for_alpha.cross_block_alpha.shape)
 print(
-    f"Cross-block residual α (#3006): {_inner_for_alpha.cross_block_alpha.shape[0]} learnable scalars "
-    f"(+{_inner_for_alpha.cross_block_alpha.numel()} params) applied between adjacent TransolverBlocks; "
-    f"init={[f'{a:.4f}' for a in _alpha_init]} (all 1.0 — identity at step 0); "
+    f"Cross-block residual α PER-CHANNEL: shape={_alpha_shape} "
+    f"({_alpha_shape[0]} positions × {_alpha_shape[1]} channels = "
+    f"+{_inner_for_alpha.cross_block_alpha.numel()} params; +285 net vs #3006 scalar α); "
+    f"applied between adjacent TransolverBlocks (between block-0/1, block-1/2, block-2/3; SKIP α after final block); "
+    f"init=1.0 elementwise (identity at step 0); "
     f"in-block γ_attn / γ_mlp UNCHANGED (constant 1.0 from #2964); "
-    f"baseline to beat: val_avg/mae_surf_p < 30.0382 (#2964 NEW baseline)"
+    f"NEW baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006)"
 )
 
 # SE diagnostic: count modules and added params
@@ -876,22 +880,39 @@ for epoch in range(MAX_EPOCHS):
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
 
-    # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
-    # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
+    # Cross-block α convergence probe: log per-channel stats per position at
+    # ep1/10/30/60. Per-channel granularity test — compare means to #3006's
+    # scalar α values; STD indicates whether channels diverge or collapse to
+    # scalar-equivalent behavior.
     if (epoch + 1) in (1, 10, 30, 60):
         _inner_alpha = getattr(model, "_orig_mod", model)
-        _alphas = _inner_alpha.cross_block_alpha.detach().cpu().float().tolist()
+        _alpha_tensor = _inner_alpha.cross_block_alpha.detach().cpu().float()
+        _per_pos = []
+        for _i in range(_alpha_tensor.shape[0]):
+            _a = _alpha_tensor[_i]
+            _per_pos.append({
+                "position": _i,
+                "mean": float(_a.mean()),
+                "std": float(_a.std()),
+                "min": float(_a.min()),
+                "max": float(_a.max()),
+                "abs_dev_from_1": float((_a - 1.0).abs().mean()),
+            })
         print(
-            f"  cross-block α @ ep{epoch+1}: " + ", ".join(
-                f"α_{ai}={v:.4f}" for ai, v in enumerate(_alphas)
+            f"  cross-block α (per-channel) @ ep{epoch+1}: " + " | ".join(
+                f"α[{p['position']}] mean={p['mean']:.4f} std={p['std']:.4f} "
+                f"min={p['min']:.4f} max={p['max']:.4f} |Δ1|={p['abs_dev_from_1']:.4f}"
+                for p in _per_pos
             )
         )
+        _all_means = [p["mean"] for p in _per_pos]
+        _all_abs_dev = [p["abs_dev_from_1"] for p in _per_pos]
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "cross_block_alpha",
             "epoch": epoch + 1,
-            "alpha_values": _alphas,
-            "alpha_mean": sum(_alphas) / max(len(_alphas), 1),
-            "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
+            "per_position": _per_pos,
+            "global_mean": sum(_all_means) / max(len(_all_means), 1),
+            "global_abs_dev_from_1": sum(_all_abs_dev) / max(len(_all_abs_dev), 1),
         })
 
 total_time = (time.time() - train_start) / 60.0
@@ -949,19 +970,38 @@ if best_metrics:
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
 
-    # Cross-block α at best checkpoint — final values after loading best weights.
-    _alpha_best = _inner.cross_block_alpha.detach().cpu().float().tolist()
+    # Cross-block α at best checkpoint — per-channel stats per position
+    # (mean/std/min/max) after loading best weights. Compare position means
+    # to #3006's scalar α (~0.95-0.97); per-position STD indicates whether
+    # per-channel granularity captured channel-specific patterns.
+    _alpha_tensor_best = _inner.cross_block_alpha.detach().cpu().float()
+    _per_pos_best = []
+    for _i in range(_alpha_tensor_best.shape[0]):
+        _a = _alpha_tensor_best[_i]
+        _per_pos_best.append({
+            "position": _i,
+            "mean": float(_a.mean()),
+            "std": float(_a.std()),
+            "min": float(_a.min()),
+            "max": float(_a.max()),
+            "abs_dev_from_1": float((_a - 1.0).abs().mean()),
+            "channel_values": _a.tolist(),
+        })
+    _all_means_best = [p["mean"] for p in _per_pos_best]
+    _all_abs_dev_best = [p["abs_dev_from_1"] for p in _per_pos_best]
     _alpha_best_log = {
         "event": "cross_block_alpha_best",
         "epoch": int(best_metrics["epoch"]),
-        "alpha_values": _alpha_best,
-        "alpha_mean": sum(_alpha_best) / max(len(_alpha_best), 1),
-        "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alpha_best) / max(len(_alpha_best), 1),
+        "per_position": _per_pos_best,
+        "global_mean": sum(_all_means_best) / max(len(_all_means_best), 1),
+        "global_abs_dev_from_1": sum(_all_abs_dev_best) / max(len(_all_abs_dev_best), 1),
     }
     print(
-        "\nCross-block α at best checkpoint: "
-        + ", ".join(f"α_{ai}={v:.4f}" for ai, v in enumerate(_alpha_best))
-        + f" (mean={_alpha_best_log['alpha_mean']:.4f}, |Δ|/n={_alpha_best_log['alpha_abs_mean_deviation']:.4f})"
+        "\nCross-block α (per-channel) at best checkpoint: " + " | ".join(
+            f"α[{p['position']}] mean={p['mean']:.4f} std={p['std']:.4f} "
+            f"min={p['min']:.4f} max={p['max']:.4f} |Δ1|={p['abs_dev_from_1']:.4f}"
+            for p in _per_pos_best
+        )
     )
     append_metrics_jsonl(metrics_jsonl_path, _alpha_best_log)
 
