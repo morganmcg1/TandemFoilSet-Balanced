@@ -206,6 +206,12 @@ class TransolverBlock(nn.Module):
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
+        # Per-block FiLM (Perez 2018) on flow scalars [log_Re, AoA0_rad, AoA1_rad].
+        # Zero-init weight AND bias -> identity at step 0; applied AFTER attn/MLP/SE
+        # so SE channel-gate decisions are themselves re-conditioned downstream.
+        self.film = nn.Linear(3, hidden_dim)
+        nn.init.zeros_(self.film.weight)
+        nn.init.zeros_(self.film.bias)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -213,11 +219,14 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, flow_scalars=None):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.se is not None:
             fx = self.se(fx, mask=mask)
+        if flow_scalars is not None:
+            film_scale = self.film(flow_scalars).unsqueeze(1)  # [B, 1, hidden_dim]
+            fx = fx * (1 + film_scale)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -263,6 +272,13 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Per-block FiLM (Perez 2018): re-init each block's film Linear to zero
+        # AFTER apply(_init_weights), which would otherwise overwrite with trunc_normal_.
+        for _blk in self.blocks:
+            if hasattr(_blk, "film"):
+                nn.init.zeros_(_blk.film.weight)
+                nn.init.zeros_(_blk.film.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -282,7 +298,7 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            fx = block(fx, mask=mask, flow_scalars=flow_scalars)
         return {"preds": fx}
 
 
@@ -546,6 +562,20 @@ print(
     f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
     f"baseline to beat: val_avg/mae_surf_p < 32.2477 (SwiGLU MLP #2741)"
+)
+
+# Per-block FiLM diagnostic (Perez 2018): re-injection sites for flow scalars at every depth
+_inner_for_diag = getattr(model, "_orig_mod", model)
+_film_blocks = [m for m in _inner_for_diag.blocks if hasattr(m, 'film')]
+_per_block_film_params = sum(p.numel() for m in _film_blocks for p in m.film.parameters())
+print(
+    f"Per-block FiLM (Perez 2018): {len(_film_blocks)} blocks each with Linear(3, {model_config['n_hidden']}); "
+    f"+{_per_block_film_params} params total ({len(_film_blocks)} blocks * (3*{model_config['n_hidden']} + {model_config['n_hidden']}) = {len(_film_blocks) * (3 * model_config['n_hidden'] + model_config['n_hidden'])}); "
+    f"zero-init weight AND bias -> identity at step 0; "
+    f"applied AFTER residual blocks (after SE on block {model_config['n_layers']-1}, after MLP on blocks 0..{model_config['n_layers']-2}); "
+    f"re-injects log_Re, AoA0_rad, AoA1_rad at every depth; "
+    f"existing embedding FiLM merged #2614 unchanged; "
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (#2765)"
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
@@ -828,6 +858,48 @@ if best_metrics:
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
+
+    # Per-block FiLM diagnostic: scale/weight/bias norms per block on a val_single_in_dist
+    # batch. Init: all zero (identity at step 0). Hypothesis: depth-progressive growth,
+    # with block n_layers-1 (where SE sits) showing largest |film_scale|.
+    _pb_film_blocks_with_idx = [(i, blk.film) for i, blk in enumerate(_inner.blocks)
+                                if hasattr(blk, 'film')]
+    print("\nPer-block FiLM final diagnostics (best-checkpoint weights):")
+    _pb_film_log = {"event": "per_block_film_diagnostic",
+                    "epoch": int(best_metrics["epoch"]), "blocks": []}
+    _pb_film_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    with torch.no_grad():
+        _x_pb, _y_pb, _is_pb, _m_pb = next(iter(_pb_film_loader))
+        _x_pb = _x_pb.to(device, non_blocking=True)
+        _x_norm_pb = (_x_pb - stats["x_mean"]) / stats["x_std"]
+        _flow_scalars_pb = _x_norm_pb[:, 0, [13, 14, 18]].float()
+        for _bi, _film_mod in _pb_film_blocks_with_idx:
+            _w = _film_mod.weight.detach().float()
+            _b = _film_mod.bias.detach().float()
+            _w_norm = _w.norm().item()
+            _b_norm = _b.norm().item()
+            _scale = _film_mod(_flow_scalars_pb).detach().float()  # [B, hidden_dim]
+            _scale_abs_mean = _scale.abs().mean().item()
+            _scale_std = _scale.std().item()
+            _scale_max = _scale.abs().max().item()
+            _scale_sign_balance = (_scale > 0).float().mean().item()
+            print(
+                f"  FiLM block[{_bi}]: scale_abs_mean={_scale_abs_mean:.6f}  "
+                f"std={_scale_std:.6f}  max={_scale_max:.6f}  "
+                f"sign_balance={_scale_sign_balance:.4f}  "
+                f"w_norm={_w_norm:.4f}  b_norm={_b_norm:.4f}"
+            )
+            _pb_film_log["blocks"].append({
+                "block_idx": _bi,
+                "film_scale_abs_mean": _scale_abs_mean,
+                "film_scale_std": _scale_std,
+                "film_scale_max": _scale_max,
+                "film_scale_sign_balance": _scale_sign_balance,
+                "film_weight_norm": _w_norm,
+                "film_bias_norm": _b_norm,
+                "split": "val_single_in_dist",
+            })
+    append_metrics_jsonl(metrics_jsonl_path, _pb_film_log)
 
     # Squeeze-Excitation diagnostic: gate stats per block per split (in_dist vs OOD).
     # Capture true block_idx (block 3 only carries SE here) and compare gate
