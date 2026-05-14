@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-05-14 [Round 118] UTC — PR #2879: mlp_ratio=3 SwiGLU wider MLP — **MERGED WIN (-1.07% val, 21st winner)**
+
+- **Branch:** charliepai2g48h5-alphonse/mlp-ratio-3
+- **Hypothesis:** Widen SwiGLU MLP by increasing mlp_ratio from 2 to 3. SwiGLU 2/3 param-matching factor means hidden_swiglu 128->192 (not 192->288 as predicted); actual +74,240 params = 407,940 total. Apples-to-apples capacity test vs #2869 attention expansion (+87k); if MLP-expansion WIN + attention-expansion LOSS => MLP body is better location for capacity.
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-mlp-ratio-3-20260514-100221/metrics.jsonl
+
+| Metric | Baseline #2810 | #2879 mlp_ratio=3 | vs Baseline | vs #2869 (attn-expansion) |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | **30.5605** | **-1.07% WIN** | 31.7942 (MLP wins) |
+| test_avg/mae_surf_p | 26.1964 | 26.5160 | +1.22% LOSS | 27.1764 (MLP wins) |
+| val_single_in_dist | 25.2751 | 23.3997 | -7.42% WIN | 26.0060 (MLP wins) |
+| val_geom_camber_rc | 45.8179 | 46.0708 | +0.55% flat | 46.8914 (MLP wins) |
+| val_geom_camber_cruise | 16.8427 | 17.8657 | +6.07% LOSS | 18.3170 (MLP wins) |
+| val_re_rand | 35.6177 | 34.9057 | -2.00% WIN | 35.9622 (MLP wins) |
+
+Param count 407,940 (best ep58/60, hit SENPAI_TIMEOUT at ep60). SwiGLU gate_zero_frac [0.0146, 0.0139, 0.0103, 0.0159] — very low, extra channels actively used. Sec/epoch ~29.6s (+6% vs baseline).
+
+**Analysis:** Plateau-breaking val WIN after 16 consecutive LOSSes. MLP-axis capacity strictly preferred over attention-axis (#2869) on all splits. Same in-dist-WIN + camber_cruise-LOSS pattern as #2851/#2864/#2870 but this time val_avg cleared the bar. Val-test gap narrowed (4.69->4.04 absolute). Test regression acknowledged. MERGED as 21st winner.
+
+**New baseline: val 30.5605 / test 26.5160**
+
+---
+
+## 2026-05-14 [Round 118] UTC — PR #2878: Differential Attention on slice-token self-attention — **CLOSED LOSS (+2.77% val)**
+
+- **Branch:** charliepai2g48h5-askeladd/differential-attention
+- **Hypothesis:** Replace scaled-dot-product attention in PhysicsAttention with Ye 2024 differential formulation: attn = softmax(q1k1/sqrt(D)) - lambda*softmax(q2k2/sqrt(D)), scaled by 1/(1-lambda). Depth-progressive lambda_init = 0.8-0.6*exp(-0.3*layer_idx). +18,436 params = 352,136 total.
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-differential-attention-20260514-100127/metrics.jsonl
+
+| Metric | Baseline #2810 | #2878 diff-attn | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | **31.7480** | **+2.77% LOSS** |
+| test_avg/mae_surf_p | 26.1964 | 27.4526 | +4.79% LOSS |
+| val_single_in_dist | 25.2751 | 24.9689 | -1.21% slight WIN |
+| val_geom_camber_rc | 45.8179 | 47.7253 | +4.16% LOSS |
+| val_geom_camber_cruise | 16.8427 | 17.9757 | +6.72% LOSS |
+| val_re_rand | 35.6177 | 36.3219 | +1.98% LOSS |
+
+Per-block lambda evolution: block-0 0.20->0.06 (collapsed), block-1 0.36->0.42 (engaged), block-2 0.47->0.27 (weak), block-3 0.56->-0.26 CLAMPED to 0 (inverted, walled off). Attn entropy: blocks 1-2 near log(24)=3.18 (near-uniform), block-3 attn2 collapsed to entropy 0.087 (near-Dirac) with lambda=0 (no effect on output).
+
+**Analysis:** G=24 slice space too small for noise cancellation. Depth-prior wrong for TandemFoilSet: deepest block wants lambda<0 (invert subtraction). Same in_dist-WIN + OOD-LOSS pattern. Mechanism only engaged in blocks 1-2, and there it hurts. Attention-quality axis closed. 92nd taxon.
+
+---
+
+## 2026-05-14 [Round 118] UTC — PR #2889: mlp_ratio=4 (95th candidate axis) — **ASSIGNED to charliepai2g48h5-alphonse**
+
+- **Branch:** charliepai2g48h5-alphonse/mlp-ratio-4
+- **Hypothesis:** Continue MLP-capacity scaling. mlp_ratio=3->4, hidden_swiglu 192->256. Expected ~481,668 params (+18% vs #2879). Direct WIN follow-up per PR #2879 falsifiable criterion. Tests whether capacity scaling continues to compound or plateaus.
+- **Falsifiable:** WIN = continue to mlp_ratio=5. WASH/LOSS = close scaling axis.
+
+---
+
+## 2026-05-14 [Round 118] UTC — PR #2890: Geometry-conditioned FiLM NACA/gap/stagger (96th axis) — **ASSIGNED to charliepai2g48h5-askeladd**
+
+- **Branch:** charliepai2g48h5-askeladd/geometry-film
+- **Hypothesis:** Add a second FiLM branch conditioned on geometric parameters [NACA0(3), NACA1(3), gap(1), stagger(1)] = 8 channels (x[:,0,[15,16,17,19,20,21,22,23]]). Additive bias geo_film = Linear(8, 96), zero-init for identity at step 0. +864 params. Existing flow FiLM uses [log_Re, AoA0, AoA1]; this provides a dedicated low-rank pathway for geometry-specific representation modulation. Directly targets camber_rc/camber_cruise OOD splits which are dominated by non-symmetric foil geometries absent from training distribution.
+- **Falsifiable:** WIN = camber_rc/cruise improve; expect geo_film/weight_norm to grow from 0. WASH = preprocess MLP already encodes geometry. LOSS = additive bias interferes with flow-conditioned representations.
+
+---
+
 ## 2026-05-14 [Round 117] UTC — PR #2875: Squared ReLU on SwiGLU up-projection — **CLOSED LOSS (+3.31% val)**
 
 - **Branch:** charliepai2g48h5-tanjiro/squared-relu-up-proj
