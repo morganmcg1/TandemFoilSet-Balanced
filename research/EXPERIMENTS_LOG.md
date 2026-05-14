@@ -1,5 +1,42 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 22:15 — PR #3027: MLP dropout sweep (0.05/0.10) ❌ CLOSED (negative on primary, positive on OOD)
+
+- **Student branch:** `charliepai2g48h1-thorfinn/dropout-mlp-sweep`
+- **Hypothesis:** MLP dropout 0.05/0.10 reduces co-adaptation and should improve OOD splits (val_geom_camber_rc especially), where the model overfits in-distribution geometry.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | dropout | val_avg | Δ val | test_avg | Δ test |
+|-----|--------:|--------:|------:|---------:|-------:|
+| A | 0.05 | 56.967 | +6.78% | 48.749 | +6.56% |
+| B | 0.10 | 54.211 | +1.61% | 47.180 | +3.13% |
+
+### Per-split val (Arm B vs baseline)
+
+| Split | Baseline | d=0.10 | Δ |
+|-------|---------:|-------:|---|
+| **val_geom_camber_rc** ← key OOD | 69.714 | **66.166** | **−5.1%** ✅ |
+| val_geom_camber_cruise | 35.255 | 38.367 | +8.8% |
+| val_re_rand | 54.832 | 54.925 | +0.2% |
+| val_single_in_dist | 53.605 | 57.385 | +7.1% |
+
+### Test (Arm B) — `test_geom_camber_rc` also improves: 62.383 → 60.660 (−2.8%) ✅
+
+### Action: CLOSED — net regression on primary metric, but mechanism validated cleanly
+
+**Mechanism validated:** Dropout=0.10 *does* improve geometry OOD extrapolation (rc: −5.1% val, −2.8% test). This is the textbook story — dropout reduces co-adaptation and helps unseen-geometry generalization. The signal is consistent across val and test, not noise.
+
+**Why it fails on primary:** ID/cruise splits regress significantly (single_in_dist +7.1%, cruise +8.8%). Dropout slows per-step convergence; OneCycleLR cooldown can't compensate under 30-min/35-epoch cap. Both arms still monotonically descending at ep35. Arm A (0.05) is strictly worse than Arm B (0.10) — mild dropout is the worst of both worlds.
+
+**Implication:** `val_geom_camber_rc` is responsive to capacity-restriction regularizers. Lower-cost regularizers (weight decay — continuous, no per-step slowdown) or targeted ones (DropPath, deeper-block-only dropout) may capture the rc benefit without paying the ID cost. Thorfinn's own follow-ups: weight decay sweep (5e-4 / 1e-3), stochastic depth, deeper-block-only dropout, camber augmentation. **Assigning weight decay sweep to thorfinn next.**
+
+## 2026-05-14 22:08 — PR #3017: cw=[1,1,1.5]/[1,1,1.25] sweep ❌ CLOSED unexpectedly (pre-execution)
+
+- **Student branch:** `charliepai2g48h1-nezuko/surf-channel-weight-15-125-sweep`
+- **State:** PR was CLOSED at 2026-05-14T22:08:31Z with no comments and no SENPAI-RESULT (likely auto-closed by harness or branch lifecycle issue). No experiment was reported.
+- **Action:** Re-assigning the same hypothesis to nezuko on a fresh branch — cw axis below cw=2 is still high-value (cw=3 regressed, cw=2 is local optimum but rc regresses; cw<2 may preserve cruise/single gains while reducing rc penalty).
+
 ## 2026-05-14 20:52 — PR #3000: cw=[1,1,3] (compound sw=5 + cw=3) ❌ CLOSED (negative)
 
 - **Student branch:** `charliepai2g48h1-alphonse/surf-weight-channel-weight-compound`
