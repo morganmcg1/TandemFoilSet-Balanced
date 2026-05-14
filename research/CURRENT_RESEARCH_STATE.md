@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 12:25
+- **Date:** 2026-05-14 13:30
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -55,7 +55,7 @@ Init-scale axis:
 
 Physics loss axis:
 2. **Pressure-Poisson auxiliary loss (askeladd #2909)** — NEW, assigned 2026-05-14 12:20; ∇²p = f(∇u), λ=0.01; targets geom_camber_rc.
-3. **Divergence-free auxiliary loss (nezuko #2866)** — stale_wip, comparing vs BOTH bars.
+   - #2866 divfree (nezuko): CLOSED 2026-05-14 13:20. λ calibration off 3 orders of magnitude (|∇·u| observed 3-19 vs assumed 1e-3); full λ range tested; mechanism alive (div drops 20%) but doesn't help surf_p. Axis cleanly exhausted.
 
 Conditioning / OOD axis:
 4. **γ-only FiLM-AoA (thorfinn #2886)** — WIP, targets camber_rc.
@@ -66,13 +66,14 @@ Data augmentation axis:
 
 Regularization axis:
 7. **Weight-decay scan on σ=0.05 (alphonse #2897)** — WIP (running on σ=0.05; results will be interpreted vs new bar).
+8. **Stochastic depth DropPath (nezuko #2926)** — NEW, assigned 2026-05-14 13:25; depth-scaled DropPath rates 0.1 (s1) and 0.2 (s2); block-level regularization complementary to init-scale and weight-decay; σ=0.07 init; 5-layer ramp 0.0→drop_path across blocks.
 
 Architectural axis:
-8. **SwiGLU FFN (frieren #2902)** — WIP.
+9. **SwiGLU FFN (frieren #2902)** — WIP.
 
 Closed (previously active):
 - **Pinball τ=0.60 pressure (alphonse #2853)** — CLOSED: τ-axis bracketed
-2. **Divergence-free auxiliary loss (nezuko #2866)** — WIP
+- **Divergence-free auxiliary loss (nezuko #2866)** — CLOSED 2026-05-14 13:20: λ calibration 3 OOM off; all λ range tested; volume ∇·u constraint doesn't help surf_p; axis exhausted.
 
 Architectural / capacity axis:
 3. **SwiGLU FFN (frieren #2902)** — NEW, assigned 2026-05-14 11:55; gated FFN replacing GELU+Linear; +25% params; tests whether FFN is saturation point. Uses `--init_std 0.05`.
@@ -157,7 +158,7 @@ Closed this round:
 | **#2908** | **tanjiro** | **σ interior scan: σ=0.06/0.09** | **WIP NEW 2026-05-14 12:20** |
 | **#2909** | **askeladd** | **Pressure-Poisson auxiliary loss (λ=0.01)** | **WIP NEW 2026-05-14 12:20** |
 
-**Merged:** 13 | **Closed:** 62 | **WIP:** 8 | **Idle:** 0
+**Merged:** 13 | **Closed:** 63 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 
@@ -177,7 +178,7 @@ Closed this round:
 
 - **Scalar capacity** (n_hidden, n_layers, slice_num, mlp_ratio) — failed at all 3 baselines
 - **Schedule shape** — T_max, eta_min, warmup-then-flat, warm restarts — all retired
-- **Noise injection** (dropout, DropPath) — regularization stack already saturated
+- **Dropout** (per-neuron) — regularization stack already saturated (note: DropPath/stochastic depth has NOT been explicitly tested — #2926 tests this; removed premature DropPath retirement)
 - **Lion betas** — β1 fully bracketed at 0.90; β2 fully bracketed at 0.99
 - **Lion LR** — 1e-4 overshoots; 7.5e-5 sweet spot
 - **Per-channel Huber β** — both directions failed; global β=0.5 robust

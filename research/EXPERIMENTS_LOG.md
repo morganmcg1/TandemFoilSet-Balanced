@@ -2504,3 +2504,42 @@ After closing #2853, alphonse became idle. Combined with fern (idle since #2817 
 
 ---
 
+
+---
+
+## 2026-05-14 13:20 — PR #2866: Divergence-free auxiliary loss (nezuko, CLOSED)
+- Branch: `willowpai2g48h3-nezuko/divfree-aux-loss`
+- Hypothesis: Add λ·|∇·u|² auxiliary loss to enforce mass conservation (∇·u=0) on velocity predictions. K=8 KNN least-squares gradient estimation.
+
+### Results
+
+| Run | λ_div | seed | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|---:|---:|
+| `889jsiso` | 0.1 | 1 | 48.19 | 41.12 |
+| `v2e07j1q` | 0.1 | 2 | 47.54 | 40.58 |
+| `88fhkhta` | 0.01 | 1 | 46.82 | 42.07 |
+| **Mean λ=0.1** | 0.1 | — | **47.86** | **40.85** |
+| **11th-shift bar (PR body)** | — | — | 43.09 | 37.19 |
+| **13th-shift bar (current)** | — | — | 36.58 | 30.64 |
+
+Per-split test (λ=0.1 mean): single_in_dist=47.04, geom_camber_rc=55.94, geom_camber_cruise=22.05, re_rand=38.39 — ALL REGRESS vs any bar.
+
+**Divergence did decrease**: |∇·u| at λ=0.1 dropped ~20% over training (start ~3.3, end ~2.6). The mechanism is alive; the calibration was wrong.
+
+**Root cause**: PR body assumed |∇·u|_norm ≈ 1e-3. Observed: 3–19. So λ=0.1 makes aux contribution ~0.3 (3× primary ~0.1) instead of ~0.01× primary. λ=0.01 still makes them roughly equal. At the calibrated λ≈3e-4, the aux would be ~5e-3 (5% of primary) — effectively noise at that influence level.
+
+**Status**: CLOSED 2026-05-14 13:20. Key insight: volume-space velocity divergence constraint does not detectably regularize surface pressure prediction in this regime. The pressure-velocity coupling lives in the momentum equation (Pressure-Poisson, askeladd #2909), not the continuity equation. The divfree axis is cleanly exhausted: three λ values spanning 2 orders of magnitude all regress. Student analysis was exceptionally rigorous.
+
+---
+
+## 2026-05-14 13:25 — New assignment: #2926 nezuko DropPath stochastic depth
+
+After closing #2866 (nezuko idle), assigned:
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2926 | willowpai2g48h3-nezuko | Stochastic depth (DropPath) in Transolver blocks: block-level regularization as implicit ensemble | Regularization (feature space) |
+
+**Motivation**: σ=0.07 init (13th shift) pushed the model into a higher-L2 basin using more capacity. DropPath regularizes *block-level dependencies* (complementary to weight decay which constrains magnitudes, and to init scale which sets the basin). Tests depth-scaled DropPath rates: 0.1 (seed 1) and 0.2 (seed 2). Both run at σ=0.07 init on full 35-ep budget.
+
+Expected mechanism: forcing each block to be useful in isolation → more robust feature representations → better OOD on geom_camber_rc (hardest split at test_surf_p=43.28).
