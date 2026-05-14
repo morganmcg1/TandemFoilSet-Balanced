@@ -6,6 +6,35 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 23:40 — Round 38: close 2 losers (#2638 #2639) + 4 stale_wip (Round 36); architectural pivot — assign 6 new
+
+**Closed losers (terminal, with major diagnostic insight):**
+- **#2638 frieren wd=3e-4 alone**: val_avg=35.760 (+1.43% loss), test_avg=30.718 (+1.56% loss). **KEY DIAGNOSTIC**: per-split breakdown reveals OOD is **split-dependent**. re_rand improved -3.97% val (Re-extrapolation likes regularization), single_in_dist improved -1.83% val, but **geom_camber_rc +5.92% val** and **geom_camber_cruise +7.31% val** worsened. **The two camber OOD splits are capacity-limited, not regularization-limited. The re_rand split is regularization-friendly.** This fundamentally changes our research direction at this stack — geom_camber OOD needs MORE capacity, not less.
+- **#2639 askeladd wd=5e-5**: val_avg=35.984 (+2.07% within seed noise), test_avg=30.261 (+0.05% tied). All val splits slightly worse, mixed test. Conclusion: WD axis at n_layers=2 is at or near local optimum (WD=1e-4 baseline). Combined with #2638, **WD axis fully closed at this stack**.
+
+**Closed stale_wip (4 Round 36 PRs stuck in rate-limit polling cycle, 1h+ idle):**
+- #2608 alphonse lr=8e-5 (recreated as #2680)
+- #2609 edward slice_num=24+epochs=33 (recreated as #2681)
+- #2610 nezuko mlp_ratio=2 (recreated as #2682)
+- #2611 thorfinn lr=5e-5 (recreated as #2683, 3rd attempt)
+
+**Assigned 6 fresh PRs — Round 38 architectural pivot:**
+
+| Student | PR | Hypothesis | Type |
+|---------|-----|------------|------|
+| alphonse | #2680 | **lr=8e-5** (LR low-side fine probe, retry of stale #2608) | Recreate |
+| edward | #2681 | **slice_num=24+epochs=33** (wider partition retest, retry of stale #2609) | Recreate |
+| nezuko | #2682 | **mlp_ratio=2** (narrower FFN retest, retry of stale #2610) | Recreate |
+| thorfinn | #2683 | **lr=5e-5** (LR lower bound, 3rd retry of stale #2611) | Recreate (3rd attempt) |
+| askeladd | #2684 | **n_layers=1 + epochs=60** (EXTREME depth-down, mechanism extension) | **NEW BOLD** |
+| frieren | #2685 | **n_hidden=160 + epochs=40** (CAPACITY BUMP targeting geom_camber OOD per #2638 insight; code change to add --n_hidden flag) | **NEW BOLD + CODE CHANGE** |
+
+**Strategy:** Round 38 finally pivots beyond pure hyperparameter axes. The 4 stale recreations preserve the LR/slice/mlp axis coverage. The 2 bold experiments (askeladd n_layers=1, frieren n_hidden=160) target the depth/width architectural levers — both informed by the #2638 capacity-limited geom_camber diagnostic. The trajectory has been depth-down (n_layers 6→5→4→3→2); n_layers=1 tests the extreme. n_hidden has been fixed at 128 throughout — capacity in the width direction is unexplored.
+
+**Round 37 still in-flight (2 PRs):** #2636 fern bs=2, #2637 tanjiro bs=8 (batch_size axis).
+
+---
+
 ## 2026-05-13 22:50 — Round 37: close 2 losers + 2 stale_wip; assign 4 new on batch_size and weight_decay axes
 
 **Closed losers (terminal, above noise floor):**
