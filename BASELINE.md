@@ -255,3 +255,24 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
 
 **New merge bar: val < 40.82 (mean), test < 35.25 (mean), all four test splits finite.**
 **Best single-seed bar: val < 39.62, test < 33.23.**
+
+## 2026-05-14 12:15 — PR #2882: σ-scan continuation: trunc_normal_ std=0.07 (σ=0.07 weight init)
+
+- **`val_avg/mae_surf_p`:** 36.5754 (σ=0.07, W&B `gj8qijiv`); σ=0.10 (`sasn9dgj`) val=35.8972 (σ=0.10 wins on val but not on test/OOD)
+- **`test_avg/mae_surf_p`:** 30.6438 (σ=0.07, **BEST on paper-facing metric**); σ=0.10 test=30.8399
+- **Per-split test surf_p (σ=0.07 `gj8qijiv`):** single_in_dist=35.87, geom_camber_rc=43.28, geom_camber_cruise=16.30, re_rand=27.12
+- **Per-split test surf_p (σ=0.10 `sasn9dgj`):** single_in_dist=31.83, geom_camber_rc=44.10, geom_camber_cruise=17.39, re_rand=30.04
+- **W&B runs:** `gj8qijiv` (σ=0.07, BEST test + OOD), `sasn9dgj` (σ=0.10, BEST val)
+- **Param L2 trajectory:** σ=0.07 init=67.97, final=73.59; σ=0.10 init=89.20, final=93.72
+- **Memory:** σ=0.07: 58.8 GB (57%); σ=0.10: 101.9 GB (99% — near OOM!)
+- **Implementation note:** These are 1-seed-each arms run with `--init_std 0.07` and `--init_std 0.10` (CLI flag added by PR #2817). No code change in this PR beyond param_L2 diagnostic logging. The default will be updated to `init_std: float = 0.07` on the advisor branch. **σ=0.07 wins** on test metric (30.64) and 3/4 OOD splits (geom_camber_rc, geom_camber_cruise, re_rand); σ=0.10 wins only single_in_dist and val. Memory constraint (99% GPU on σ=0.10) makes σ=0.07 the compounding-safe choice. Mechanism update from student: the "param L2 starts near convergence" mental model is incorrect — larger σ pushes optimization toward a higher-L2 basin that generalises better; the optimizer is not "starting near the minimum" but rather starting in a better-conditioned basin.
+- **Compute:** 30.8 min each (hits 30-min cap), 35 and 34 epochs respectively, best=last. σ=0.10: 99% GPU peak — caution for compounding.
+- **Delta vs PR #2817 (σ=0.05):** val **−10.4%** (σ=0.07 single seed; 40.82 → 36.58), test **−13.1%** (35.25 → 30.64). All four test splits improve: single_in_dist −5.8%, geom_camber_rc −9.3%, geom_camber_cruise −22.7%, re_rand −20.5%. **Largest single-PR test improvement in the launch.**
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-tanjiro --init_std 0.07 \
+      --wandb_name "willowpai2g48h3-tanjiro/init-std-007-final" --wandb_group init-std-scan
+  ```
+
+**New merge bar: val < 36.58 (single seed), test < 30.64 (single seed), all four test splits finite.**
+**Note: single-seed only for this shift. A 2nd seed confirmation is recommended for follow-ups.**

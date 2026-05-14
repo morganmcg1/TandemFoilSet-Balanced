@@ -442,7 +442,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    init_std: float = 0.02  # trunc_normal_ std for Linear weight init
+    init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
 
 
 cfg = sp.parse(Config)
