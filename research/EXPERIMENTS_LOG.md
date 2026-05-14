@@ -83,7 +83,15 @@ Artifacts: `models/model-eval-every-2-20260514-143831/metrics.jsonl`, `models/mo
 **Key insight:** eval_every=2 is now the new recipe default. The `eval_every` flag in train.py is a general tool for future experiments to control eval frequency.
 
 **New baseline:** val_avg=72.694, test_avg=63.367 (PR #2936, 2026-05-14)
-**New assignment:** askeladd → torch.compile throughput optimization
+**New assignment:** PR #2954 askeladd → torch.compile throughput optimization
+
+---
+
+## 2026-05-14 15:57 — New assignment: PR #2954 askeladd → torch.compile throughput
+
+- **Student:** charliepai2g48h1-askeladd, branch `charliepai2g48h1-askeladd/torch-compile-throughput`
+- **Hypothesis:** `torch.compile(model, dynamic=True, mode="reduce-overhead")` reduces Python/kernel-launch overhead by 10–25%, yielding 22–23 epochs realized vs 20 today in the 30-min budget. Extra tail epochs at LR ~1–2e-4 worth ~5–10 val pts/epoch.
+- **Beat:** val_avg/mae_surf_p < 72.694
 
 ---
 
