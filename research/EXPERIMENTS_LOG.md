@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-14 [Round 75] UTC — Round 75
+
+### PR #2647 nezuko: Lion β₂=0.999 long-horizon memory buffer sweep — CLOSED (CATASTROPHIC LOSS; 39th taxon)
+
+- **Branch:** `charliepai2g48h5-nezuko/lion-beta2-0999`
+- **Hypothesis:** β₂ 0.99 → 0.999; 10× longer memory window (~1000 steps vs ~100 steps); first β₂ probe in launch; orthogonal to closed β₁ axis (35th taxon).
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | β₂=0.999 | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **59.4855** | 33.3722 | **+78.25% CATASTROPHIC LOSS** |
+| test_avg/mae_surf_p | **52.2704** | 28.3736 | **+84.22% LOSS** |
+
+Per-split val (uniform catastrophic regression):
+
+| Split | β₂=0.999 | NEW baseline | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 52.9066 | 25.3293 | **+108.87% WORST** |
+| val_geom_camber_rc | 78.7797 | 49.5771 | +58.90% |
+| val_geom_camber_cruise | 44.7039 | 20.4181 | +118.94% |
+| val_re_rand | 61.5518 | 38.1642 | +61.28% |
+
+- **Run characteristics:** Best epoch = 39/70 — convergence stopped halfway through schedule. Lion momentum non-zero fraction at ep39 = 0.9881 (vs baseline 0.996) — confirms slower memory accumulation as predicted, but at magnitude that wrecks optimization.
+- **Mechanism (student analysis exemplary):** 1000-step EMA memory window is incompatible with 70-epoch budget. At ~14 epochs per memory refresh, the optimizer effectively gets only ~5 baseline-direction refreshes across the entire run vs ~50 with β₂=0.99. The optimizer commits too long to stale gradient directions during cosine cooldown where LR is decreasing and momentum needs to ADAPT not perpetuate. Combined with sign-step truncation, the long memory window amplifies miscommit cycles dramatically. PR predicted +2-5% LOSS in failure scenario; actual +78% is an order of magnitude worse.
+
+**39th closed taxon: Lion β₂-UP at long-memory regime fails catastrophically.** **Lion-internal optimization axes now exhaustively closed**: β₁ (35), LR (36), β₂ (39); only WD direction remains in-flight (#2658). Combined with closed parameter-space averaging meta-family (25th EMA, 28th SWA, 30th β₁-up, Lookahead), the optimizer-internal directions are saturated.
+
+**Action:** Closed. Pivoted nezuko AWAY from Lion-internal optimizer probes (family saturated). Assigned #2672 Kendall heteroscedastic uncertainty-weighted multi-task loss — structurally distinct probabilistic loss re-weighting.
+
+---
+
+### PR #2642 askeladd: Block-shared slice projection — CLOSED (LOSS; 40th taxon)
+
+- **Branch:** `charliepai2g48h5-askeladd/shared-slice-projection`
+- **Hypothesis:** Tie `in_project_slice` Linear across 4 blocks; −3,456 params; student suggestion from #2607 slice_num=48 LOSS. Tests slice-routing redundancy across depth.
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | shared-slice | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **35.2327** | 33.3722 | **+5.57% LOSS** |
+| test_avg/mae_surf_p | **29.5146** | 28.3736 | **+4.02% LOSS** |
+
+Per-split val (uniform regression, camber_cruise worst):
+
+| Split | shared-slice | NEW baseline | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 26.2511 | 25.3293 | +3.64% |
+| val_geom_camber_rc | 51.7535 | 49.5771 | +4.39% (PR's KEY diagnostic — fired OPPOSITE direction to predicted WIN) |
+| val_geom_camber_cruise | 23.1470 | 20.4181 | **+13.36% WORST** |
+| val_re_rand | 39.7791 | 38.1642 | +4.23% |
+
+- **Run characteristics:** Best epoch = 70/70 (terminal-best; same convergence shape as baseline). Param count 324,707 (vs baseline 328,235 → −3,528 params, −1.07%; matches predicted savings). Lion momentum non-zero fraction at terminal = 0.9979 (no stuck-zero pathology). Sharing verified at startup via id() assertions.
+- **Mechanism:** The KEY diagnostic predicted by the PR (camber_rc moves >2% if shared basis generalizes better) fired DECISIVELY in the OPPOSITE direction — camber_rc regressed +4.39% rather than improved. This proves per-block slice projections learn GENUINELY INDEPENDENT routings — not redundant copies of the same basis. The −3,528 param savings traded against meaningful loss of routing capacity. camber_cruise being the worst regressor (+13.36%) confirms the same narrow-minimum pattern observed in #2602 (Lion lr=1.75e-4): camber_cruise needs PRECISE per-block routing while in_dist and camber_rc are more robust.
+
+**40th closed taxon: parameter-sharing across depth at slice-routing site fails.** Combined with closed slice_num bracket (33rd taxon) and τ post-softmax sharpness (37th taxon), **slice-routing meta-axis is now fully saturated across COUNT (33), SHARPNESS (37), and DEPTH-SHARING (40)**.
+
+**Action:** Closed. Pivoted askeladd from slice-routing axis (saturated) to attention-mechanism. Assigned #2673 Sigmoid Attention — first non-softmax attention probe in launch.
+
+---
+
+### Assignment summary
+
+- **#2672 nezuko — Kendall heteroscedastic uncertainty-weighted multi-task loss:** Kendall et al. 2018 CVPR; replace fixed `surf_weight=10` with learnable `s_surf, s_vol` log-variance scalars; +2 params; FIRST probabilistic loss re-weighting probe in launch; init s_surf=log(1/10) matches baseline-equivalent surf_weight=10; mechanism allows model to self-balance task-precision tradeoff. Structurally distinct from all closed fixed-weight surf/vol/per-channel weighting probes.
+
+- **#2673 askeladd — Sigmoid Attention:** Ramapuram et al. 2024 Apple ("Theory, Analysis, and Best Practices for Sigmoid Self-Attention"); replace MHA softmax over Q·K positions with `sigmoid(logits - log(N))`; zero new params; slice-routing softmax UNCHANGED (only the attention softmax over sequence positions); FIRST non-softmax attention probe in launch; structurally distinct from all 40 closed attention-internal taxa which kept canonical softmax (τ shape, spectral norm weight constraint, in-flight QK-Norm, in-flight Talking-Heads — all operate WITHIN softmax). Targets multi-scale CFD features where multiple positions are simultaneously highly relevant.
+
+All 8 students in-flight, zero idle. No human GH issues.
+
+---
+
 ## 2026-05-14 [Round 74] UTC — Round 74
 
 ### PR #2643 tanjiro: Bias-free Linears (LLaMA convention) — CLOSED (LOSS; 38th taxon)
