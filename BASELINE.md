@@ -39,10 +39,40 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **32.2477** | #2741 | Lion lr=1.5e-4 + FiLM + SE block-3-only + SwiGLU MLP (hidden=128, param-matched +256 vs GELU) | ep63/70 (timeout-truncated); **−0.62% vs #2727** (32.4498); all 4 splits WIN; in-dist 25.53 best ever |
-| `test_avg/mae_surf_p` | **27.4248** | #2741 | — | test from best-val checkpoint ep63; −0.84% vs #2727 (27.6573) |
+| `val_avg/mae_surf_p` | **31.3216** | #2765 | Lion lr=1.5e-4 + FiLM + SE block-3-only **reduction=4** + SwiGLU MLP | ep64/70 (timeout-truncated); **−2.87% vs #2741** (32.2477); all 4 val splits WIN; new best-ever in-dist 24.97 |
+| `test_avg/mae_surf_p` | **26.5067** | #2765 | — | test from best-val checkpoint ep64; −3.35% vs #2741 (27.4248) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 32.2477` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 31.3216` to be merged.
+
+## 2026-05-14 [Round 94] — PR #2765: SE block-3-only reduction=4: val WIN −2.87% (NEW BEST)
+
+- **Student:** charliepai2g48h5-tanjiro
+- **Best epoch:** 64 of 70 (timeout-truncated at 30 min after epoch 66)
+- **Param count:** 333,603 (+2,572 vs prior; 2,316 from SE bottleneck dim 12→24 + 256 SwiGLU param-matching rounding)
+- **sec/epoch:** ~27.0 (no SE-width slowdown — bottleneck dim ≪ token count)
+- **Peak GPU memory:** 14.37 GB
+- **SE gate diagnostic at block 3 (vs prior reduction=8 #2727):** gate_std rose 5-12% on every split (in_dist 0.150→0.168, cruise 0.255→0.269, rc 0.215→0.234, re_rand 0.257→0.275). gate_min collapsed 50-70% on every split (in_dist 0.13→0.07, cruise 0.016→0.005). gate_mean and gate_max unchanged.
+- **Mechanism:** reduction=8 SE bottleneck (inner dim=12) was capacity-limited in inter-channel correlation modeling. Doubling to inner dim=24 enables more discriminative gating: wider gate distribution + much more aggressive per-channel veto. Mechanism intensifies the existing block-3 SE-as-OOD-discriminator pattern.
+- **Key finding:** SE bottleneck dimension is a productive sub-axis. reduction=4 strictly better than reduction=8. SwiGLU gate stats unchanged from #2741 (mechanism orthogonality confirmed). Block 3 γ_attn mean flipped slightly negative (only block with sign-flip — wider SE picking up role previously carried by block-3 attention).
+
+| Split | val mae_surf_p | Δ vs #2741 (32.2477) |
+|---|---|---|
+| `val_single_in_dist` | **24.9721** | **−2.19% WIN** (new best-ever in-dist) |
+| `val_geom_camber_rc` | **46.9885** | **−1.01% WIN** |
+| `val_geom_camber_cruise` | **17.7276** | **−7.49% WIN** |
+| `val_re_rand` | **35.5983** | **−3.35% WIN** |
+| **val_avg** | **31.3216** | **−2.87% WIN** |
+
+| Split | test mae_surf_p | Δ vs #2741 (27.4248) |
+|---|---|---|
+| `test_single_in_dist` | 24.0714 | +1.14% mild |
+| `test_geom_camber_rc` | **41.9406** | **−3.21% WIN** |
+| `test_geom_camber_cruise` | **14.2400** | **−6.96% WIN** |
+| `test_re_rand` | **25.7749** | **−5.46% WIN** |
+| **test_avg** | **26.5067** | **−3.35% WIN** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-tanjiro-se-reduction4-20260514-044200/metrics.jsonl`
+- **Reproduce:** `cd target/ && python train.py --agent charliepai2g48h5-tanjiro --experiment_name "charliepai2g48h5-tanjiro/se-reduction4" --lr 1.5e-4 --weight_decay 3e-4 --epochs 70`
 
 ## 2026-05-14 [Round 88] — PR #2741: SwiGLU MLP activation: val WIN −0.62% (NEW BEST)
 
