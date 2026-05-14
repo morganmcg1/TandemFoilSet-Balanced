@@ -220,13 +220,20 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, is_surface=None, surf_correction=None):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            feats = self.ln_3(fx)
+            out = self.mlp2(feats)
+            # Asymmetric surface-correction head: zero-init residual on surface tokens only
+            # (vol tokens stay on the shared mlp2 head; preserves implicit shared-head regularization).
+            if surf_correction is not None and is_surface is not None:
+                surf_corr_out = surf_correction(feats)
+                out = out + is_surface.unsqueeze(-1).to(out.dtype) * surf_corr_out
+            return out
         return fx
 
 
@@ -270,6 +277,16 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Asymmetric surface-correction head (#2956): zero-init Linear(n_hidden, out_dim) whose
+        # output is added ONLY to surface-token predictions on top of the shared mlp2 head.
+        # Volume tokens are unchanged from baseline. Motivated by #2946: separating head into
+        # head_surf + head_vol let the vol head escape surf_weight pull (||W_vol||=1.98 vs
+        # ||W_surf||=1.43); keeping the shared head intact preserves its implicit regularization,
+        # while a zero-init additive correction lets surf specialize WITHOUT breaking that.
+        self.surf_correction = nn.Linear(n_hidden, out_dim)
+        nn.init.zeros_(self.surf_correction.weight)
+        nn.init.zeros_(self.surf_correction.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -282,6 +299,7 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool, True for real nodes; threaded to SE pool
+        is_surface = data.get("is_surface")  # [B, N] bool, True for surface tokens (asym head)
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
@@ -289,7 +307,11 @@ class Transolver(nn.Module):
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            if block.last_layer:
+                fx = block(fx, mask=mask, is_surface=is_surface,
+                           surf_correction=self.surf_correction)
+            else:
+                fx = block(fx, mask=mask)
         return {"preds": fx}
 
 
@@ -319,7 +341,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_ctx_factory) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx_factory():
-                pred = model({"x": x_norm, "mask": mask})["preds"]
+                pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
             pred = pred.float()
 
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
@@ -542,6 +564,23 @@ print(
 )
 print(f"Actual total params: {n_params}")
 
+# Asymmetric surface-correction head diagnostic (#2956): zero-init Linear(n_hidden, out_dim) added
+# on top of the shared mlp2 head; output is applied to SURFACE tokens only via is_surface mask.
+# Volume tokens use the shared head unchanged. Step-0 output is exactly 0 -> model starts at baseline.
+_inner_init = getattr(model, "_orig_mod", model)
+_surf_corr = _inner_init.surf_correction
+_surf_corr_params = sum(p.numel() for p in _surf_corr.parameters())
+_surf_w_init = _surf_corr.weight.detach().float().norm().item()
+_surf_b_init = _surf_corr.bias.detach().float().norm().item()
+print(
+    f"Asymmetric surface-correction head (#2956): zero-init Linear({model_config['n_hidden']}, "
+    f"{model_config['out_dim']}) ; +{_surf_corr_params} params (~291); "
+    f"mechanism: shared_head + (is_surface * surf_correction); vol tokens use shared head unchanged; "
+    f"motivation: #2946 vol-head free-ride -> keep vol shared; #2946 student insight 'split only head_surf'; "
+    f"init ||W_surf_correction||={_surf_w_init:.6f} (expect 0.0), ||b_surf_correction||={_surf_b_init:.6f} (expect 0.0); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.5605 (PR #2879)"
+)
+
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
@@ -696,7 +735,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
@@ -740,6 +779,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # Surf-correction growth tracking (#2956): per-epoch norms, channels [Ux, Uy, p]
+    _sc_inner = getattr(model, "_orig_mod", model)
+    _sc_w = _sc_inner.surf_correction.weight.detach().float()
+    _sc_b = _sc_inner.surf_correction.bias.detach().float()
+    _sc_w_norm = _sc_w.norm().item()
+    _sc_b_norm = _sc_b.norm().item()
+    _sc_w_per_chan = [_sc_w[c].norm().item() for c in range(_sc_w.shape[0])]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +798,11 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "surf_correction/weight_norm": _sc_w_norm,
+        "surf_correction/bias_norm": _sc_b_norm,
+        "surf_correction/weight_norm_Ux": _sc_w_per_chan[0],
+        "surf_correction/weight_norm_Uy": _sc_w_per_chan[1],
+        "surf_correction/weight_norm_p": _sc_w_per_chan[2],
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -838,6 +889,65 @@ if best_metrics:
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
     })
 
+    # Asymmetric surface-correction diagnostic (#2956)
+    # ||W_surf_correction|| total + per-channel ([Ux, Uy, p]) at best-checkpoint weights.
+    # Also: average per-channel correction magnitude on a val_single_in_dist batch (compares
+    # predictions with and without the correction applied to surface tokens).
+    _sc_final = _inner.surf_correction
+    _sc_w_final = _sc_final.weight.detach().float()
+    _sc_b_final = _sc_final.bias.detach().float()
+    _sc_w_norm_final = _sc_w_final.norm().item()
+    _sc_b_norm_final = _sc_b_final.norm().item()
+    _sc_w_chan = {
+        "Ux": _sc_w_final[0].norm().item(),
+        "Uy": _sc_w_final[1].norm().item(),
+        "p":  _sc_w_final[2].norm().item(),
+    }
+    print("\nAsymmetric surface-correction head final diagnostics (best-checkpoint weights):")
+    print(f"  ||W_surf_correction||        = {_sc_w_norm_final:.6f}")
+    print(f"  ||b_surf_correction||        = {_sc_b_norm_final:.6f}")
+    print(f"  ||W_surf_correction[Ux]||    = {_sc_w_chan['Ux']:.4f}")
+    print(f"  ||W_surf_correction[Uy]||    = {_sc_w_chan['Uy']:.4f}")
+    print(f"  ||W_surf_correction[p]||     = {_sc_w_chan['p']:.4f}  (metric-critical)")
+
+    _sc_corr_mag_surf = {"Ux": None, "Uy": None, "p": None}
+    _sc_corr_n_surf = 0
+    _id_loader = val_loaders.get("val_single_in_dist")
+    if _id_loader is not None:
+        with torch.no_grad():
+            _x_sc, _y_sc, _is_sc, _m_sc = next(iter(_id_loader))
+            _x_sc = _x_sc.to(device, non_blocking=True)
+            _m_sc = _m_sc.to(device, non_blocking=True)
+            _is_sc = _is_sc.to(device, non_blocking=True)
+            _x_norm_sc = (_x_sc - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                pred_with = _inner({"x": _x_norm_sc, "mask": _m_sc, "is_surface": _is_sc})["preds"].float()
+                pred_without = _inner({"x": _x_norm_sc, "mask": _m_sc, "is_surface": None})["preds"].float()
+            _delta = pred_with - pred_without  # only nonzero on surface tokens
+            _surf_only = _m_sc & _is_sc
+            _sc_corr_n_surf = int(_surf_only.sum().item())
+            if _sc_corr_n_surf > 0:
+                _delta_surf = _delta[_surf_only]  # [n_surf, 3]
+                _sc_corr_mag_surf = {
+                    "Ux": float(_delta_surf[:, 0].abs().mean().item()),
+                    "Uy": float(_delta_surf[:, 1].abs().mean().item()),
+                    "p":  float(_delta_surf[:, 2].abs().mean().item()),
+                }
+                print(f"  Surface-prediction correction magnitude (val_single_in_dist sample, "
+                      f"n_surf={_sc_corr_n_surf}):")
+                print(f"    mean |delta_Ux| = {_sc_corr_mag_surf['Ux']:.6f}")
+                print(f"    mean |delta_Uy| = {_sc_corr_mag_surf['Uy']:.6f}")
+                print(f"    mean |delta_p|  = {_sc_corr_mag_surf['p']:.6f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "surf_correction_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "surf_correction_weight_norm": _sc_w_norm_final,
+        "surf_correction_bias_norm": _sc_b_norm_final,
+        "surf_correction_weight_norm_per_channel": _sc_w_chan,
+        "surf_correction_pred_delta_mean_abs_surf": _sc_corr_mag_surf,
+        "surf_correction_n_surf_tokens_sample": _sc_corr_n_surf,
+    })
+
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
     # split (in_dist vs OOD). Hook mirrors the SE forward — attention pool
     # (softmax over masked tokens) then bottleneck MLP — so the captured gate
@@ -904,7 +1014,7 @@ if best_metrics:
             # Route through uncompiled module so Python-level hooks fire
             # (torch.compile bypasses hooks registered after compile).
             with amp_ctx_factory():
-                _ = _inner({"x": _x_norm_s, "mask": _m_s})
+                _ = _inner({"x": _x_norm_s, "mask": _m_s, "is_surface": _is_s_dev})
         for _h in _se_handles:
             _h.remove()
 
@@ -1001,9 +1111,10 @@ if best_metrics:
         _x_s, _y_s, _is_s, _m_s = next(iter(_swiglu_loader))
         _x_s = _x_s.to(device, non_blocking=True)
         _m_s = _m_s.to(device, non_blocking=True)
+        _is_s = _is_s.to(device, non_blocking=True)
         _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
         with amp_ctx_factory():
-            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+            _ = _inner({"x": _x_norm_s, "mask": _m_s, "is_surface": _is_s})
     for _h in _swiglu_handles:
         _h.remove()
 
