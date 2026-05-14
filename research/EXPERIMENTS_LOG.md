@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-05-14 23:00 [Round 138 close-39] UTC — PR #3021 4-α DiT-style (LOSS, 161st taxon) + PR #3026 cosine-routing (LOSS but cruise PRESERVED, 162nd taxon)
+
+### Closed: #3021 alphonse cross-block-alpha-4-dit-style
+
+- **Branch:** charliepai2g48h5-alphonse/cross-block-alpha-4-dit-style
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-cross-block-alpha-4-dit-style-20260514-205129/metrics.jsonl
+- **Hypothesis:** Extend #3006's 3-α with α₃ on head input → 4-α DiT-style. Predicted all 4 α drift DOWN uniformly.
+
+| Metric | NEW baseline #3006 | #3021 | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **30.6618** | **+3.83% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 25.6620 | +0.72% mild LOSS |
+| Param count | 407,175 | 407,176 (+1) | +1 |
+
+**Per-split val (best ep59):** in_dist 25.62 (+5.51%), camber_rc 44.70 (+2.45%), camber_cruise 16.67 (+1.98% — **9th cruise breakage**), re_rand 35.66 (+5.29%). ALL splits LOSS.
+
+**α convergence diagnostic — HYPOTHESIS FALSIFIED BY DIRECTIONAL INVERSION:**
+
+| Position | #3006 best | #3021 best ep59 | Direction |
+|---|---|---|---|
+| α₀ (b0→b1) | ~0.95 ↓ | **0.9237 ↓** | Deeper attenuation |
+| α₁ (b1→b2) | ~0.97 ↓ | **1.0473 ↑** | **FLIPPED — was DOWN, now UP** |
+| α₂ (b2→b3) | ~0.95 ↓ | **0.9612 ↓** | Similar attenuation |
+| α₃ (b3→head) | — | **1.0488 ↑** | NEVER drifted DOWN — went UP from ep1 |
+
+**KEY MECHANISTIC FINDING:** "All four α's want DOWN" is FALSIFIED. With α₃ in the path, α₁ flips from DOWN (0.97 in #3006) to UP (1.05). The 4 scalars COUPLE — adding a head-input scale changes how mid-position scales optimize. The asymmetric "skip α₃" layout from #3006 is **STRUCTURALLY LOAD-BEARING.** Pattern: alternating DOWN/UP/DOWN/UP at converge — opposite of uniform-DOWN that drove #3006's WIN.
+
+**Taxon #161:** 4-α-DIT-STYLE-COUPLES-α-FLIPS-α₁-FROM-DOWN-TO-UP-AND-α₃-DRIFTS-UP-NOT-DOWN-ASYMMETRIC-3-α-LAYOUT-IS-LOAD-BEARING.
+
+### Closed: #3026 edward cosine-routing-tau-0.07
+
+- **Branch:** charliepai2g48h5-edward/cosine-routing-tau-0.07
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-cosine-routing-tau-0.07-20260514-210711/metrics.jsonl
+- **Hypothesis:** F.normalize(Q,K) before slice-routing einsum; τ_init=0.07; bounds logits by Cauchy-Schwarz; prevents the magnitude explosion that broke #2983/#3008.
+
+| Metric | NEW baseline #3006 | #3026 | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **29.9827** | **+1.53% LOSS** ← primary |
+| test_avg/mae_surf_p | 25.4795 | **24.9440** | **−2.10% WIN** ← val/test divergence |
+| val_cruise | 16.348 | **16.3554** | **+0.04% FLAT — basin PRESERVED** |
+| Param count | 407,175 | 407,175 | UNCHANGED ✓ |
+
+**Per-split val:** in_dist 25.85 (+6.47%), rc 44.44 (+1.87%), cruise 16.36 (+0.04% FLAT), re_rand 33.28 (−1.73% WIN).
+**Per-split test:** in_dist 22.40 (−2.35% WIN), rc 39.59 (−4.02% WIN), cruise 13.44 (+3.85%), re_rand 24.34 (−1.79% WIN).
+
+**Routing diagnostic — COSINE ROUTING PREVENTS LOGIT EXPLOSION:**
+
+| Metric | Cosine routing | #3008 K-only LN |
+|---|---|---|
+| `logit/τ |max|` at ep60 | **8-24 (BOUNDED)** | 285-529 (exploded) |
+| Slice death | Block[0] 0.69 (similar to baseline) | 14-15/24 dead |
+| ‖Q‖_raw max block[0] | 95.89 (outlier — magnitude info LOST) | — |
+
+**KEY MECHANISTIC FINDINGS:**
+1. **Cosine routing FIXES logit explosion mechanically.** 12-66× lower than #3008. Routing-stability is **NOT the bottleneck** post-#2964.
+2. **Magnitude information is LOAD-BEARING.** Direction-only routing loses ‖Q‖, ‖K‖ magnitude info. Block[0] outlier ‖Q‖=95.89 in baseline encoded high-confidence routing decisions; cosine equalizes those tokens with median-magnitude. val_in_dist +6.47% LOSS = the magnitude info penalty.
+3. **CRUISE PRESERVED (+0.04% FLAT) is structurally important.** 3rd training-time-preserving structural intervention to preserve cruise basin (after #3003 ordering and #3006 full preservation). Cosine routing is INSIDE the residual stream (routing weights compute differently) yet cruise preserved.
+4. **5th-REFINEMENT CRUISE INVARIANT (tentative):** "Cruise basin is robust to routing-mechanism REPARAMETERIZATIONS that preserve (a) softmax-over-slices structure, (b) per-sample gradient sign-pattern at criterion level." Cosine routing preserved BOTH conditions → cruise survived.
+5. **ROUTING-STABILITY axis: CLOSED.** Both directions tested (scale-pinning via LN closed in #3008; scale-removal via cosine closed here). No productive intervention on routing path within baseline.
+
+**Taxon #162:** ROUTING-MAGNITUDE-IS-LOAD-BEARING / COSINE-ROUTING-FIXES-EXPLOSION-BUT-LOBOTOMIZES-MAGNITUDE-ENCODED-SIGNAL.
+
+### Cruise-preservation ledger (post-#2964) updated to 15 datapoints:
+- **BROKEN (9):** #2961, #2978, #2986, #2988, #2994, #2993, #3010, #3022, **#3021 (α-position change)**
+- **PRESERVED (6):** #3003 ordering, **#3006 α WIN**, #3008 K-only-LN mildest, #3014 FiLM-input-dropout, #3020 EMA eval-only, **#3026 cosine-routing (INSIDE-block, first non-α/non-eval-only preserver)**
+
+### Round 138 assignments (2 idle students cleared):
+
+- **#3043 alphonse cross-block-alpha-per-channel:** Replace 3 SCALAR α from #3006 with 3 PER-CHANNEL vectors (96-d each). +285 net params. Keeps asymmetric 3-position layout (proven load-bearing in #3021). **Strong granularity test on the only WIN axis post-#2964.** Per student suggestion #1 verbatim. **165th axis.**
+- **#3044 edward inter-block-additive-bias:** Add 3 SCALAR ADDITIVE β between blocks (same 3 positions as α from #3006). x ← x*α + β. +3 net params. **FRESH ADDITIVE vs MULTIPLICATIVE mechanism test at the cruise-preserving site.** Per student suggestion #2 verbatim ("learnable post-block depth-wise bias scalar (orthogonal to α)"). Cruise predicted PRESERVED. **166th axis.**
+
+**Total closed: 162. Winners: 23. 8/8 students busy. Zero idle GPUs.**
+
+---
+
 ## 2026-05-14 22:30 [Round 138 close-38] UTC — PR #3020 EMA decay=0.999 full-training — **LOSS but cruise PRESERVED — 5th datapoint confirming 4th-refinement invariant (163rd taxon)**
 
 ### Closed: #3020 thorfinn ema-decay-0.999
