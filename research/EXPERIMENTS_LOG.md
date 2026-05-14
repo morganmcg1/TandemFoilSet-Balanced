@@ -2942,3 +2942,31 @@ Per-split test (depth=3): single_in_dist=30.28 (**−6.90%, improves dramaticall
 **Action: SENT BACK for 2nd seed at 2× width ONLY** (drop 4×). Single-seed at 2× clears both bars cleanly but baseline variance is high enough that the 2nd seed could push the 2-arm mean over the test bar. Need 2-seed confirmation before declaring 15th shift.
 
 If 2-seed mean < 34.55 val AND test < 29.20 (within 1% of bar): merge as 15th shift.
+
+---
+
+## 2026-05-14 18:30 — PR #2959: Per-block lr scaling alphonse (SENT BACK for 2nd seed at 1.5×)
+- Branch: `willowpai2g48h3-alphonse/per-block-lr-scaling`
+- Hypothesis: Boost lr 1.5× / 2.0× on late TransolverBlocks (2-4) to let them adapt the Re-conditional γ MLP faster, predicting OOD camber_rc gain without IID regression (resolution of lr=9e-5 OOD-vs-IID trade-off from #2942).
+
+### Results (single seed per arm)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs bar |
+|---|---|---:|---:|---:|
+| 1.5× (late_block_start=2) s1 `zxvnd2s6` | — | **32.891** | **28.532** | **val −4.8%, test −1.4% ✅✅** |
+| 2.0× (late_block_start=2) s2 `4egjb0qt` | — | 33.017 | 29.156 | val −4.5% ✅, test +0.7% ❌ |
+| 14th-shift bar (mean 2 seeds) | — | 34.55 | 28.95 | — |
+
+**Per-split test (1.5× arm):** single_in_dist=31.22 (−4.0%), geom_camber_rc=43.02 (**+2.4%**), geom_camber_cruise=14.39 (−5.3%), re_rand=25.49 (−2.3%). camber_rc REGRESSED — mechanism is reversed from hypothesis.
+
+**Per-split test (2.0× arm):** single_in_dist=30.05 (−7.6%), geom_camber_rc=44.53 (**+6.0%**), geom_camber_cruise=14.55 (−4.2%), re_rand=27.50 (+5.4%). Stronger IID gain, stronger camber_rc damage.
+
+**Param split:** late group = 57.7% of params (blocks 2-4, includes γ MLPs). Early group = 42.3% (blocks 0-1 + encoder + output head).
+
+**Mechanism reversal:** lr=9e-5 OOD-vs-IID trade-off was hypothesized to live in late blocks (where FiLM-Re γ_w_L2 grows). Data says the opposite — late-lr↑ helps IID, hurts hardest-OOD camber_rc. The OOD signal in lr=9e-5 likely lives in EARLY blocks (broader receptive-field reshaping in blocks 0-1, where Re-modulation is weakest).
+
+**Action: SENT BACK for 2nd seed at 1.5× ONLY** (drop 2.0×). Single-seed at 1.5× clears both bars but test margin is only 0.42 absolute and baseline best-seed test=28.23 (s2 `vt8acm18`) — 2nd seed could mean-revert above 28.95. Consistent treatment with tanjiro #2948.
+
+Follow-up axis queued for after 2nd seed: **inverted scaling (late_block_lr_scale=0.7)** — late blocks↓, early blocks↑ — directly tests whether the OOD signal lives in early layers.
+
+If 2-seed mean val < 34.55 AND mean test < 29.20: merge as 15th-shift candidate (alongside tanjiro #2948 if it also confirms).
