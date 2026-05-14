@@ -176,9 +176,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 film_re=False):
         super().__init__()
         self.last_layer = last_layer
+        self.film_re = film_re
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -193,10 +195,24 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
+        if self.film_re:
+            # γ-only FiLM-Re: scale-only modulation from log(Re).
+            # Identity init (last-linear weight=0, bias=1) sets γ≡1 at epoch 0
+            # so the model matches baseline exactly until γ drifts.
+            self.film_gamma = nn.Sequential(
+                nn.Linear(1, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
 
-    def forward(self, fx, mask=None):
+    def forward(self, fx, mask=None, log_re=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
+        if self.film_re and log_re is not None:
+            # Post-residual γ modulation, after both attn and mlp residuals.
+            # γ shape [B, 1, hidden_dim] broadcasts over node axis.
+            gamma = self.film_gamma(log_re.unsqueeze(-1)).unsqueeze(1)
+            fx = gamma * fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -208,13 +224,16 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 init_std: float = 0.02):
+                 init_std: float = 0.02,
+                 film_re=False, log_re_x_index: int = 13):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.init_std = init_std
+        self.film_re = film_re
+        self.log_re_x_index = log_re_x_index
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -230,6 +249,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                film_re=film_re,
             )
             for i in range(n_layers)
         ])
@@ -237,6 +257,13 @@ class Transolver(nn.Module):
         self.n_linear_init = 0
         self.apply(self._init_weights)
         print(f"Transolver init: {self.n_linear_init} Linear modules re-init'd with trunc_normal_ std={self.init_std}")
+        if self.film_re:
+            # Identity-init the FiLM γ output linear AFTER apply() so it isn't
+            # overwritten by trunc_normal_/constant_(bias, 0) in _init_weights.
+            # γ ≡ 1 at epoch 0 → model exactly matches baseline initially.
+            for block in self.blocks:
+                nn.init.zeros_(block.film_gamma[-1].weight)
+                nn.init.ones_(block.film_gamma[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -251,9 +278,15 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool or None
+        log_re = None
+        if self.film_re:
+            # x is normalized; log_re is the standardized log(Re) at every node.
+            # All nodes in a sample share the same value, so node 0 is safe.
+            # The film_gamma MLP can absorb the affine normalization.
+            log_re = x[:, 0, self.log_re_x_index]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx, mask=mask)
+            fx = block(fx, mask=mask, log_re=log_re)
         return {"preds": fx}
 
 
@@ -483,6 +516,7 @@ model_config = dict(
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     init_std=cfg.init_std,
+    film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
 )
 
 model = Transolver(**model_config).to(device)
@@ -665,6 +699,32 @@ with torch.no_grad():
     param_l2_final = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
+
+# --- γ-only FiLM-Re diagnostics: per-block γ bias and weight L2 ---
+# Goal: compare to prior PR #2816 (γ+β FiLM-Re). Does γ drift more or less
+# without β present? Log final-epoch bias/weight stats from each block's
+# film_gamma[-1] (the last linear that directly produces γ).
+if model_config.get("film_re"):
+    # Resolve underlying module past torch.compile's _orig_mod wrapper.
+    base_model = getattr(model, "_orig_mod", model)
+    gamma_diagnostics: dict[str, float] = {}
+    print("\nγ-only FiLM-Re per-block diagnostics (final epoch):")
+    print(f"  {'block':<6s} {'γ_bias_mean':>14s} {'γ_bias_std':>12s} "
+          f"{'γ_w_l2':>10s} {'γ_w_absmax':>12s}")
+    for i, block in enumerate(base_model.blocks):
+        last_lin = block.film_gamma[-1]
+        gb = last_lin.bias.detach().float()
+        gw = last_lin.weight.detach().float()
+        b_mean, b_std = gb.mean().item(), gb.std().item()
+        w_l2 = gw.norm().item()
+        w_absmax = gw.abs().max().item()
+        gamma_diagnostics[f"film/block{i}/gamma_bias_mean"] = b_mean
+        gamma_diagnostics[f"film/block{i}/gamma_bias_std"] = b_std
+        gamma_diagnostics[f"film/block{i}/gamma_w_l2"] = w_l2
+        gamma_diagnostics[f"film/block{i}/gamma_w_absmax"] = w_absmax
+        print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
+              f"{w_l2:>10.4f} {w_absmax:>12.4f}")
+    wandb.summary.update(gamma_diagnostics)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
