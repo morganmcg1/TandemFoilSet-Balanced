@@ -601,6 +601,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    swa_lr: float = 0.0  # SWALR target lr (the SWA-window floor lr). 0 = use default `cfg.lr * 0.2`. Decouples SWA-floor from cosine-final-lr.
 
 
 cfg = sp.parse(Config)
@@ -741,7 +742,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 swa_start_frac = 0.75
 swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
 swa_model = AveragedModel(model)
-swa_lr = cfg.lr * 0.2
+swa_lr = cfg.swa_lr if cfg.swa_lr > 0 else cfg.lr * 0.2
 swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
 print(
     f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
@@ -799,6 +800,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_clip_fraction_sum = 0.0
+    epoch_lion_update_norm_sum = 0.0
+    epoch_lion_update_norm_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -893,7 +896,10 @@ for epoch in range(MAX_EPOCHS):
             log_payload["train/clip_fraction"] = clip_fired
         if cfg.optimizer == "lion" and isinstance(optimizer, Lion):
             if optimizer.last_update_sq_norm is not None:
-                log_payload["train/optimizer_update_norm"] = optimizer.last_update_sq_norm.sqrt().item()
+                _upd = optimizer.last_update_sq_norm.sqrt().item()
+                log_payload["train/optimizer_update_norm"] = _upd
+                epoch_lion_update_norm_sum += _upd
+                epoch_lion_update_norm_n += 1
             if optimizer.last_exp_avg_sq_norm is not None:
                 log_payload["train/exp_avg_norm"] = optimizer.last_exp_avg_sq_norm.sqrt().item()
         if cfg.use_kendall_uncertainty:
@@ -960,12 +966,17 @@ for epoch in range(MAX_EPOCHS):
         "lr": current_lr,
         "swa_active": int(swa_active),
         "epoch_time_s": dt,
+        "epoch": epoch + 1,
         "global_step": global_step,
     }
     if cfg.max_norm > 0 and n_batches > 0:
         log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
         log_metrics["train/grad_norm_max"] = epoch_grad_norm_max
         log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / n_batches
+    if epoch_lion_update_norm_n > 0:
+        log_metrics["train/lion_update_norm_epoch_mean"] = (
+            epoch_lion_update_norm_sum / epoch_lion_update_norm_n
+        )
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
