@@ -658,6 +658,21 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
+# Per-channel surface-loss weights — channels [Ux, Uy, p].
+# Baseline surf_loss form: (sq_err * surf_mask).sum() / surf_mask.sum() == mae_Ux + mae_Uy + mae_p (sum form).
+# PR #2933: weight p channel 2x within surf_loss → mae_Ux + mae_Uy + 2*mae_p.
+# This preserves baseline's exact mask normalization (IMPORTANT directive in PR);
+# only per-channel weighting changes. p's relative gradient share rises from 1/3
+# to 2/4 = 1/2 (1.5x), matching the PR's stated p-relative-weight intent.
+# Side-effect: surf_loss magnitude grows from ~3*mae to ~4*mae (~33% larger);
+# noted in results comment because the PR's "magnitude comparable to /3" claim
+# assumed baseline divided by 3, which inspection shows it does not.
+surf_channel_weights = torch.tensor([1.0, 1.0, 2.0], device=device).view(1, 1, 3)
+print(f"Loss formulation: surf_loss = mae_Ux + mae_Uy + 2.0 * mae_p (channel weights [1.0, 1.0, 2.0]; sum form, mirrors baseline mask normalization)")
+print(f"  baseline form: surf_loss = mae_Ux + mae_Uy + mae_p (channel weights [1.0, 1.0, 1.0])")
+print(f"  pressure channel relative gradient share: 50% (vs baseline 33%) — 1.5x p weight")
+print(f"Total loss: vol_loss + {cfg.surf_weight} * surf_loss (surf_weight unchanged)")
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -685,6 +700,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_mae_surf_Ux = epoch_mae_surf_Uy = epoch_mae_surf_p = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -702,21 +718,32 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # PR #2933: per-channel surf-loss weighting — p (channel 2) weighted 2x.
+            surf_loss = (sq_err * surf_channel_weights * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
+        # Per-channel train surface MAE (normalized space) — diagnostic.
+        with torch.no_grad():
+            surf_denom = surf_mask.sum().clamp(min=1)
+            sq_err_surf = (sq_err.float() * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / surf_denom
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_mae_surf_Ux += sq_err_surf[0].item()
+        epoch_mae_surf_Uy += sq_err_surf[1].item()
+        epoch_mae_surf_p += sq_err_surf[2].item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_mae_surf_Ux /= max(n_batches, 1)
+    epoch_mae_surf_Uy /= max(n_batches, 1)
+    epoch_mae_surf_p /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -748,6 +775,9 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/mae_surf_Ux": epoch_mae_surf_Ux,
+        "train/mae_surf_Uy": epoch_mae_surf_Uy,
+        "train/mae_surf_p": epoch_mae_surf_p,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -755,7 +785,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}  "
+        f"Ux={epoch_mae_surf_Ux:.4f} Uy={epoch_mae_surf_Uy:.4f} p={epoch_mae_surf_p:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
