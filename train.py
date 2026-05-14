@@ -205,7 +205,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
-        self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
+        self.se = SqueezeExcitation(hidden_dim, reduction=2) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -540,12 +540,12 @@ _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
 print(
-    f"Squeeze-Excitation depth-selective (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=4); "
-    f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//4}) -> GELU -> "
-    f"fc({model_config['n_hidden']//4}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
+    f"Squeeze-Excitation depth-selective (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=2); "
+    f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//2}) -> GELU -> "
+    f"fc({model_config['n_hidden']//2}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
     f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
-    f"baseline to beat: val_avg/mae_surf_p < 32.2477 (SwiGLU MLP #2741)"
+    f"baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 #2765)"
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
