@@ -247,6 +247,101 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Sharpness-Aware Minimization (Foret et al. ICLR 2021, arXiv:2010.01412)
+# ---------------------------------------------------------------------------
+
+
+class SAM(torch.optim.Optimizer):
+    """Wraps an inner optimizer with Sharpness-Aware Minimization.
+
+    For each batch:
+      1) backward at the current weights, then ``first_step()`` perturbs
+         weights by ``rho * grad / ||grad||`` (ascent direction).
+      2) backward at the perturbed weights, then ``second_step()`` restores
+         the original weights and applies ``inner_opt.step()`` using the
+         perturbed-point gradient. The effect: pull the optimizer toward
+         flatter minima.
+
+    Doubles per-step cost (2 forward + 2 backward passes). Setting
+    ``adaptive=True`` switches to ASAM (Kwon et al. 2021), which scales the
+    perturbation per-parameter by ``|w|`` so the ascent step is
+    norm-invariant to weight rescaling.
+    """
+
+    def __init__(self, inner_opt, rho: float = 0.05, adaptive: bool = False):
+        self.inner_opt = inner_opt
+        self.rho = float(rho)
+        self.adaptive = bool(adaptive)
+        # Share state with the wrapped optimizer so LR schedulers writing
+        # into optimizer.param_groups[i]['lr'] reach the inner Lion / AdamW.
+        self.param_groups = inner_opt.param_groups
+        self.state = inner_opt.state
+        self.defaults = inner_opt.defaults
+        self._eps_buffer: dict = {}
+
+    @torch.no_grad()
+    def first_step(self) -> torch.Tensor:
+        """Perturb weights toward gradient ascent. Returns the grad norm."""
+        grad_norm = self._grad_norm()
+        scale = self.rho / (grad_norm + 1e-12)
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                e_w = (torch.pow(p, 2) if self.adaptive else 1.0) * p.grad * scale
+                self._eps_buffer[p] = e_w
+                p.add_(e_w)
+        return grad_norm
+
+    @torch.no_grad()
+    def second_step(self) -> None:
+        """Restore original weights and apply the inner optimizer's step."""
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p in self._eps_buffer:
+                    p.sub_(self._eps_buffer[p])
+        self._eps_buffer.clear()
+        self.inner_opt.step()
+        # The LR scheduler patches optimizer.step with a counter check; since
+        # we never call SAM.step() (using first_step/second_step instead),
+        # tick the counter ourselves so the scheduler doesn't warn each epoch.
+        if hasattr(self, "_step_count"):
+            self._step_count += 1
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        self.inner_opt.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None):
+        raise RuntimeError(
+            "SAM is updated via first_step() + second_step(); training loop must call both."
+        )
+
+    def _grad_norm(self) -> torch.Tensor:
+        norms = []
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad.detach()
+                if self.adaptive:
+                    g = torch.abs(p).detach() * g
+                norms.append(g.norm(p=2))
+        return torch.norm(torch.stack(norms), p=2)
+
+    def state_dict(self):
+        return {
+            "inner_opt": self.inner_opt.state_dict(),
+            "rho": self.rho,
+            "adaptive": self.adaptive,
+        }
+
+    def load_state_dict(self, sd):
+        self.inner_opt.load_state_dict(sd["inner_opt"])
+        self.rho = sd.get("rho", self.rho)
+        self.adaptive = sd.get("adaptive", self.adaptive)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -458,6 +553,9 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    use_sam: bool = False  # Wrap optimizer in Sharpness-Aware Minimization (Foret et al. 2021)
+    sam_rho: float = 0.05  # SAM perturbation radius rho. Safe range 0.01-0.05; do not exceed 0.1.
+    sam_adaptive: bool = False  # ASAM variant — scale perturbation by |w|. Slightly more expensive.
 
 
 cfg = sp.parse(Config)
@@ -537,12 +635,22 @@ if ema_model is not None:
 
 if cfg.optimizer == "lion":
     from timm.optim import Lion
-    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    print(f"Optimizer: Lion (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
+    inner_optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Inner optimizer: Lion (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
 elif cfg.optimizer == "adamw":
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    inner_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Inner optimizer: AdamW (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
+
+if cfg.use_sam:
+    optimizer = SAM(inner_optimizer, rho=cfg.sam_rho, adaptive=cfg.sam_adaptive)
+    print(
+        f"SAM enabled: rho={cfg.sam_rho}, adaptive={cfg.sam_adaptive} "
+        f"(per-step cost ~2x, ~halved epoch budget at the 30-min cap)"
+    )
+else:
+    optimizer = inner_optimizer
 
 if cfg.warmup_epochs > 0:
     warmup = torch.optim.lr_scheduler.LinearLR(
@@ -595,6 +703,38 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+
+def _train_forward_loss(x, y, is_surface, mask):
+    """Single forward + loss computation. Returns (loss, vol_loss, surf_loss).
+
+    Helper for the SAM two-pass loop; also used in the non-SAM single-pass
+    path so both code paths share identical loss math.
+    """
+    amp_ctx = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if cfg.amp and device.type == "cuda"
+        else torch.amp.autocast(device_type="cuda", enabled=False)
+    )
+    with amp_ctx:
+        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        pred = model({"x": x_norm})["preds"]
+        if cfg.loss_fn == "smooth_l1":
+            per_elem = F.smooth_l1_loss(
+                pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
+            )
+        elif cfg.loss_fn == "l1":
+            per_elem = torch.abs(pred - y_norm)
+        else:
+            per_elem = (pred - y_norm) ** 2
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+        vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        loss = vol_loss + cfg.surf_weight * surf_loss
+    return loss, vol_loss, surf_loss
+
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -611,35 +751,26 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        amp_ctx = (
-            torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-            if cfg.amp and device.type == "cuda"
-            else torch.amp.autocast(device_type="cuda", enabled=False)
-        )
-        with amp_ctx:
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
-            if cfg.loss_fn == "smooth_l1":
-                per_elem = F.smooth_l1_loss(
-                    pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
-                )
-            elif cfg.loss_fn == "l1":
-                per_elem = torch.abs(pred - y_norm)
-            else:
-                per_elem = (pred - y_norm) ** 2
-
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
-
         optimizer.zero_grad()
+        loss, vol_loss, surf_loss = _train_forward_loss(x, y, is_surface, mask)
         loss.backward()
-        clip_value = cfg.grad_clip if cfg.grad_clip > 0 else float('inf')
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
-        optimizer.step()
+
+        sam_ascent_norm = None
+        sam_loss_perturbed = None
+        clip_value = cfg.grad_clip if cfg.grad_clip > 0 else float("inf")
+
+        if cfg.use_sam:
+            sam_ascent_norm = optimizer.first_step().item()
+            optimizer.zero_grad()
+            loss2, _, _ = _train_forward_loss(x, y, is_surface, mask)
+            loss2.backward()
+            sam_loss_perturbed = loss2.item()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
+            optimizer.second_step()
+        else:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
+            optimizer.step()
+
         if ema_model is not None:
             with torch.no_grad():
                 for ep, p in zip(ema_model.parameters(), model.parameters()):
@@ -647,11 +778,15 @@ for epoch in range(MAX_EPOCHS):
                 for eb, b in zip(ema_model.buffers(), model.buffers()):
                     eb.data.copy_(b.data)
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if cfg.use_sam:
+            log_payload["train/sam_ascent_grad_norm"] = sam_ascent_norm
+            log_payload["train/sam_loss_perturbed"] = sam_loss_perturbed
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
