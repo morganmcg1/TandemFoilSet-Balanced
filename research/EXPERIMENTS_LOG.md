@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-05-14 [Round 85] UTC — Round 85
+
+### Closed PR #2706: α-entmax(α=1.5) MHA attention — LOSS (50th closed taxon)
+- **Student:** charliepai2g48h5-askeladd
+- **Branch:** charliepai2g48h5-askeladd/entmax15-attn
+- **Hypothesis:** Replace softmax with α-entmax (Peters et al. 2019 ACL) in MHA over slice tokens; sparse probability simplex, row-sum=1, allows exact zeros. Follow-up to closed Sigmoid Attention #2673.
+
+| Metric | Run | Baseline (#2692) | Δ% | Verdict |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 34.0974 | 33.0195 | +3.27% | **LOSS** |
+| `test_avg/mae_surf_p` | 29.1550 | 28.3562 | +2.82% | **LOSS** |
+| `val_single_in_dist` | 27.3715 | 26.4221 | +3.59% | LOSS |
+| `val_geom_camber_rc` | 51.2275 | 48.3191 | +6.02% | LOSS |
+| `val_geom_camber_cruise` | 19.9260 | 19.5170 | +2.09% | LOSS |
+| `val_re_rand` | 37.8646 | 37.5198 | +0.92% | LOSS |
+
+Note: student's table compares vs old baseline #2614 (33.3722); above recalculated vs new baseline #2692 (33.0195).
+
+**Sparsity cascade (best checkpoint ep59):**
+
+| Block | Sparsity | NonZero/G | Top-1 prob | Regime |
+|---|---|---|---|---|
+| 0 | 10.4% | 21.5/24 | 0.118 | mostly dense |
+| 1 | 40.8% | 14.2/24 | 0.256 | moderate sparsity (healthy band) |
+| 2 | 90.3% | 2.3/24 | 0.772 | very sparse |
+| 3 | **95.8%** | **1.0/24** | **1.000** | **DEGENERATE single-token routing** |
+
+**LayerScale γ_attn at terminal:**
+- Block 0: 0.0166 | Block 1: 0.0247 | Block 2: 0.0190 | Block 3: **0.0089** (2.8× smaller — optimizer dampening broken attention branch)
+
+**Mechanism:** Depth-progressive sparsification cascade. Healthy graduated sparsity in blocks 0-1 but cascades into near-total single-token routing in blocks 2-3. Block 3 nonzero_count=1.0/24 — every query attends to exactly one slice prototype. Combined with in-dist overfitting at +8.07% (block 3 needs fine-grained slice blending), the late-block collapse dominates.
+
+**50th taxon closure — attention-shape axis fully mapped:**
+| Mechanism | Row-sum=1? | Smooth competition? | Result |
+|---|---|---|---|
+| Softmax (α=1) baseline | ✓ | ✓ | best — 33.0195 |
+| α-entmax (α=1.5) [THIS] | ✓ | ✗ (exact zeros) | LOSS +3.27% |
+| Sigmoid #2673 | ✗ | ✓ | LOSS |
+
+Both row-sum=1 normalization AND smooth competition (no exact zeros) are independently load-bearing. Attention-shape axis closed — softmax is the optimum.
+
+**Implementation notes:** Used `entmax.entmax15` (deep-spin library v1.3), NOT buggy inline closed-form in PR appendix. fp32 cast around entmax15 forward for bf16 sqrt stability. Manual MHA (not fused SDPA) for diagnostic access — ~17% epoch overhead (30.1s vs 25.7s baseline). Best epoch: ep59/60 (timeout-truncated).
+
+**Metric artifacts:** `models/model-charliepai2g48h5-askeladd-entmax15-attn-20260514-013731/metrics.jsonl`
+
+### Assigned PR #2735: EMA weight averaging (askeladd, idle after #2706 close)
+- **Hypothesis:** EMA (Polyak 1992) shadow weights with decay=0.9995 updated after every optimizer.step(); use EMA weights for val/test evaluation only. Zero new trainable params; ~1.3 MB shadow copy. Standard practice in DeiT/MAE/EfficientNet/ConvNeXt not yet probed this launch.
+- **Targeted bottleneck:** Lion narrow-basin tendency (taxa 30/31/35) + in-dist overfitting (SE #2692 in_dist +4.31% regression open). EMA sits in flatter loss landscape region.
+- **Key diagnostic:** EMA-vs-raw A/B at terminal (built-in counterfactual: raw weights re-evaluated at best-val epoch; direct measure of EMA improvement contribution). Also drift trajectory: `ema/drift_ratio` per epoch should grow then plateau.
+- **Why askeladd:** Closed both halves of attention-shape axis with excellent diagnostic depth; pivot to structurally orthogonal weight-averaging lever.
+
+---
+
 ## 2026-05-14 [Round 84] UTC — Round 84
 
 ### Merged: PR #2692 tanjiro — Squeeze-Excitation per-block (Hu et al. 2018 CVPR) — 16th WINNER
