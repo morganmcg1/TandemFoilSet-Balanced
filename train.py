@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -468,6 +469,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    slice_num: int = 24  # PhysicsAttention slice routing granularity
 
 
 cfg = sp.parse(Config)
@@ -534,13 +536,13 @@ model_config = dict(
     n_hidden=96,
     n_layers=4,
     n_head=2,
-    slice_num=24,
+    slice_num=cfg.slice_num,
     mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
-print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(f"slice_num: {model_config['slice_num']} (from --slice_num CLI flag; #3006 baseline = 24) — PR #3061 halve-slice-granularity probe; fresh slice-routing axis, never swept in launch")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
@@ -715,6 +717,86 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+def capture_slice_usage(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
+    """Probe per-head slice-softmax usage across PhysicsAttention layers.
+
+    Per PR #3061 diagnostic spec: at each block, capture slice_weights of shape
+    [B, H, N, slice_num], aggregate to mean usage per (head, slice), compute
+    per-head entropy, and report dead-slice fraction (usage < 0.01 / slice_num).
+    Tells us whether slice_num=12 produces under-utilised routing (entropy <<
+    log(slice_num), many dead slices) or full utilisation.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    captured: list[dict] = []
+
+    def make_hook(block_idx):
+        def hook(module, args, _output):
+            with torch.no_grad():
+                x_in = args[0]
+                B, N, _ = x_in.shape
+                x_mid = (
+                    module.in_project_x(x_in)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                slice_logits = module.in_project_slice(x_mid) / module.temperature
+                slice_weights = module.softmax(slice_logits)  # [B, H, N, S]
+                usage = slice_weights.detach().float().mean(dim=(0, 2))  # [H, S]
+                eps = 1e-12
+                entropy = -(usage * (usage + eps).log()).sum(dim=-1)  # [H]
+                slice_num_local = usage.shape[-1]
+                dead_thresh = 0.01 / slice_num_local
+                dead_frac = (usage < dead_thresh).float().mean(dim=-1)  # [H]
+                captured.append({
+                    "block_idx": block_idx,
+                    "slice_num": int(slice_num_local),
+                    "entropy_per_head": entropy.cpu().tolist(),
+                    "log_slice_num": math.log(slice_num_local),
+                    "dead_slice_frac_per_head": dead_frac.cpu().tolist(),
+                    "usage_max_per_head": usage.max(dim=-1).values.cpu().tolist(),
+                    "usage_min_per_head": usage.min(dim=-1).values.cpu().tolist(),
+                    "usage_per_head": usage.cpu().tolist(),
+                })
+        return hook
+
+    handles = []
+    for bi, blk in enumerate(inner.blocks):
+        handles.append(blk.attn.register_forward_hook(make_hook(bi)))
+
+    model_obj.eval()
+    with torch.no_grad():
+        x_b, _, _, mask_b = next(iter(loader))
+        x_b = x_b.to(device_, non_blocking=True)
+        mask_b = mask_b.to(device_, non_blocking=True)
+        x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+        with amp_ctx():
+            _ = inner({"x": x_norm, "mask": mask_b})
+
+    for h in handles:
+        h.remove()
+
+    print(f"\nSlice usage probe @ {epoch_tag} (slice_num={captured[0]['slice_num'] if captured else 'NA'}):")
+    for site in captured:
+        log_sn = site["log_slice_num"]
+        entropy_str = ", ".join(
+            f"H{hi}={e:.3f}/{log_sn:.3f}" for hi, e in enumerate(site["entropy_per_head"])
+        )
+        dead_str = ", ".join(
+            f"H{hi}={d:.3f}" for hi, d in enumerate(site["dead_slice_frac_per_head"])
+        )
+        print(
+            f"  block[{site['block_idx']}]: entropy[{entropy_str}]  "
+            f"dead_frac[{dead_str}]"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "slice_usage",
+        "epoch_tag": epoch_tag,
+        "blocks": captured,
+    })
+    return captured
+
+
 def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
     """Probe pre/post-LN residual magnitudes per block on one val batch.
 
@@ -874,6 +956,15 @@ for epoch in range(MAX_EPOCHS):
         _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
+        )
+
+    # PR #3061 slice usage probe at ep1/30/59 — compares slice-routing utilisation
+    # under reduced slice_num (12 vs baseline 24). Looks for under-parameterisation
+    # signatures (entropy << log(slice_num), large dead-slice fraction).
+    if (epoch + 1) in (1, 30, 59):
+        _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+        capture_slice_usage(
+            model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag=f"ep{epoch+1}",
         )
 
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
