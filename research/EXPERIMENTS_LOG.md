@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 [Round 83] UTC — Round 83
+
+### Closed: PR #2687 edward — Mixup alpha=0.2 (Zhang et al. 2018 ICLR)
+
+- **Branch:** charliepai2g48h5-edward/mixup-alpha02
+- **Hypothesis:** Input-space vicinal risk regularization via per-batch λ~Beta(0.2,0.2) blending of x and y, training-mode only. Targets in-dist overfitting bottleneck identified by Lion-WD closure (43rd taxon). ZERO new params.
+- **Metrics (vs baseline #2614 val=33.3722, test=28.3736):**
+
+| Metric | Mixup α=0.2 | Baseline | Delta |
+|---|---|---|---|
+| val_avg/mae_surf_p | 45.0687 | 33.3722 | **+35.04% LOSS** |
+| test_avg/mae_surf_p | 39.4107 | 28.3736 | **+38.91% LOSS** |
+| val_single_in_dist | 38.3806 | 25.3293 | **+51.53% (WORST — prediction inversion)** |
+| val_geom_camber_rc | 59.8475 | 49.5771 | +20.72% |
+| val_geom_camber_cruise | 31.6357 | 20.4181 | +54.94% |
+| val_re_rand | 50.4112 | 38.1642 | +32.10% |
+
+- **Metric artifacts:** models/model-charliepai2g48h5-edward-mixup-alpha02-20260514-005623/metrics.jsonl
+- **Training:** best ep67/70, ~26 s/epoch, 30.4 min wall-clock, 328,619 params (unchanged), 14.02 GB GPU
+- **Mixup diagnostic:** lambda distribution exactly as designed — 67.11% extreme batches (λ<0.1 or λ>0.9), mean=0.4946, Beta(0.2,0.2) bimodal confirmed; FiLM weight norm grew +29% to 3.39 vs baseline 2.62 — gate fought harder under blended Re/AoA inputs but could not disambiguate physically impossible intermediates
+- **Analysis:** CATASTROPHIC LOSS. Prediction inversion — val_single_in_dist was predicted to improve MOST (vicinal regularization hypothesis), instead regressed MOST (+51.53%). Three mechanism failures: (1) Physical incompatibility — tandem-foil mesh occupies constrained physics manifold, not a convex set; linear blend between single-foil and tandem-foil produces physically meaningless intermediate (Re=300, half-tandem) the model has no smooth bridge to. (2) Mesh-structure corruption — pad_collate pads variable-mesh samples (74K-242K nodes) to largest sample; permuting batch indices then blending node-by-node aligns mesh A surface nodes with mesh B volume nodes, producing topologically corrupted per-node features; is_surface mask weights loss correctly but cannot undo input corruption. (3) FiLM gate incompatibility — FiLM gate conditioned on (log_Re, AoA0, AoA1) grew +29% weight norm fighting harder but cannot map blended conditioning back to valid flow states; stack with strong physical-condition gating is MORE vulnerable to input blending, not less.
+- **Conclusion:** 49th taxon. **Data-augmentation meta-axis CLOSED for naive blends.** Combined with reflection-aug #2454 (18th taxon, catastrophic, half-space mesh symmetry violated) + coord-jitter (closed earlier), augmentation axis mapped across 3 directions: rigid-body transforms, local perturbation, sample interpolation — ALL LOSS. Tandem-foil CFD inputs are physically rigid; dataset structural constraints fight augmentation harder than model overfitting tendency. Critical companion signal: edward's result strongly suggests alphonse's in-flight Manifold Mixup #2704 faces similar headwind — slice tokens as semantic prototypes may not linearly interpolate under Verma et al.'s hidden-state Mixup.
+
+### Assigned: PR #2722 edward — DropPath/Stochastic Depth (Huang et al. 2016 ECCV)
+
+- **Branch:** charliepai2g48h5-edward/droppath-r01
+- **Hypothesis:** Stochastic Depth with linear DropPath schedule dpr=[0.0, 0.033, 0.067, 0.1] applied per-sample independently to both attn and mlp residual branches in every TransolverBlock; training-mode only; ZERO new params; ~20-line change total.
+- **Why fresh:** First stochastic residual-branch drop probe in launch. Standard in DeiT/Swin/ConvNeXt/MAE. Structurally distinct from all 49 closed taxa (data-augmentation just closed, gradient-noise in-flight GC in-flight). Compatible with LayerScale γ=1e-4 (each residual contributes ~1% of stream — dropping a branch is a ~1% signal perturbation, very gentle). Distinct mechanism from Mixup: perturbs computation graph not data. Directly targets in-dist overfitting bottleneck via residual variance.
+- **Key diagnostic:** Per-block γ_attn/γ_mlp evolution at terminal vs baseline ~0.01-0.02. γ growth = model trusts each residual more under stochasticity (WIN). γ shrink = model defensively suppresses unreliable branches (LOSS).
+- **Predicted outcome:** WIN if stochastic depth regularizes the residual stack at the right scale for γ=1e-4; WASH if drop_rate_max=0.1 too gentle (follow-up: 0.2); LOSS if small-width stack starved of representational capacity by residual drops.
+
+---
+
 ## 2026-05-14 [Round 82] UTC — Round 82
 
 ### PR #2686 frieren: DyT (Dynamic Tanh) normalization — CLOSED (48th taxon, normalization-replacement fails at small width)
