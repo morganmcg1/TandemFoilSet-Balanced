@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 04:50 — PR #2742: fourier_L sweep (L=4/L=8 vs L=6) on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, L=6 LOCKED
+
+- **Branch:** `willowpai2g24h5-thorfinn/fourier-L-sweep`
+- **Hypothesis:** fourier_L=6 set in #1386 (early model val~103) may be suboptimal on mature compound; wd=3e-4 regularization headroom may enable richer encoding (L=8) or reveal L=6 is over-encoding (L=4).
+- **W&B runs:** `8499pnkt` (L=4), `qkk0m6ph` (L=8)
+
+| Arm | fourier_L | params | val | test | Δ val vs #2489 (42.00) | Δ test vs baseline (35.96) |
+|-----|-----------|--------|-----|------|------------------------|----------------------------|
+| Baseline #2489 | L=6 | 0.45M | **42.00** | **35.96** | — | — |
+| Arm 1 | L=4 | 0.45M | 42.57 | 35.73 | +0.57 ✗ | −0.23 ≈ noise |
+| Arm 2 | L=8 | 0.46M | 43.59 | 37.23 | +1.59 ✗ | +1.27 ✗ |
+
+Per-test-split (W&B summary values — note: student found discrepancy vs PR body; using W&B summary):
+| Split | L=6 (`vtewwalc`) | L=4 | L=8 |
+|-------|-----------------|-----|-----|
+| single_in_dist | 37.27 | **36.68** (−0.59) | 38.86 (+1.59) |
+| geom_camber_rc | 50.92 | **49.37** (−1.55) | 52.61 (+1.69) |
+| geom_camber_cruise | **20.96** | 21.49 (+0.53) | 21.00 (+0.04) |
+| re_rand | **34.69** | 35.36 (+0.67) | 36.44 (+1.76) |
+
+**Result:** CLOSED. Neither arm beats baseline on primary val metric. L=6 confirmed as local optimum.
+
+Key findings:
+1. **Finding 44 — fourier_L=6 locked, both directions closed.** Early #1386 default is near-optimal on mature compound. Compound changes (Lion, wd=3e-4, n_layers=3, EMA) did NOT shift the encoding optimum.
+2. **L=8 regression confirms aliasing concern.** max_freq=32 on standardized coords ≈[-3,3] puts top octave near Nyquist for dense local meshes. Adding an extra octave (fan-in 22→30) over-parameterizes the first linear layer without adding usable signal. All splits regress uniformly.
+3. **L=4 is within-noise.** val +0.57 worse, test −0.23 better — both within timeout-truncation noise (~0.5 pts). geom_camber_rc improves −1.55 (potentially genuine) but re_rand drifts up +0.67. No clean OOD direction.
+4. **L vs max_freq are distinct axes.** L controls channel count; max_freq controls octave band coverage. The natural follow-up is sweeping max_freq at L=6 to isolate the aliasing question from channel count. max_freq=16 drops potentially-aliased top octave; max_freq=48 extends beyond Nyquist.
+5. **Pre-existing NaN bug flagged:** test_geom_camber_cruise normalized loss returns None/Inf in W&B summaries across all runs. Denormalized MAE (the actual metric) is fine — localized to W&B summary logging of normalized-space loss on this split.
+
+**Thorfinn reassigned:** fourier_max_freq=16/48 sweep at L=6 (PR #2784). Direct aliasing test.
+
+---
+
 ## 2026-05-14 03:56 — PR #2729: ema_decay higher (0.995/0.999) on n_layers=3+wd=3e-4 (edward) — CLOSED, EMA DECAY LOCKED AT 0.99
 
 - **Branch:** `willowpai2g24h5-edward/ema-decay-higher`
