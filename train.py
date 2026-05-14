@@ -105,6 +105,14 @@ class SwiGLUMLP(nn.Module):
         return self.linear_out(gate * value)
 
 
+# Hardcoded slice-routing softmax temperature (#2955).
+# Baseline used per-head learnable nn.Parameter init=0.5 (4 blocks × 2 heads = 8 params).
+# #2944 set T=2.0 hardcoded (4× softer than baseline init) — LOSS val +4.43%.
+# This PR: T=0.25 hardcoded (2× sharper than baseline init; opposite-direction symmetric closure).
+# Removes 8 learnable temperature params from the parameter count (407,940 → 407,932).
+ROUTING_TEMPERATURE = 0.25
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -115,7 +123,6 @@ class PhysicsAttention(nn.Module):
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -141,7 +148,7 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / ROUTING_TEMPERATURE)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -555,6 +562,22 @@ print(
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
     f"attn_pool trunc_normal_ init (std=0.02) -> softmax over T~100K ~ uniform at step 0 (~mean pool baseline); "
     f"baseline to beat: val_avg/mae_surf_p < 31.3216 (SE r=4 mean pool #2765)"
+)
+
+import math as _math
+_slice_num = model_config['slice_num']
+_entropy_ceiling = _math.log(_slice_num)
+print(
+    f"Slice-routing softmax temperature: T={ROUTING_TEMPERATURE} HARDCODED across "
+    f"{model_config['n_layers']} PhysicsAttention blocks "
+    f"(replaces per-head learnable temperature nn.Parameter init=0.5 which sharpened "
+    f"logits 2×); effect: routing distribution SHARPER than prior baseline init by "
+    f"factor of 2.0×; #2944 was T=2.0 (4× softer than baseline init) — this PR T=0.25 "
+    f"is the opposite direction (2× sharper than baseline init, 8× sharper than #2944); "
+    f"slice_num={_slice_num}, entropy ceiling log(slice_num)={_entropy_ceiling:.4f} nats; "
+    f"motivated by #2944 mechanistic finding that sharp block-3 routing = useful slice "
+    f"specialization; removed {model_config['n_layers'] * model_config['n_head']} "
+    f"learnable temperature params; baseline to beat: val_avg/mae_surf_p < 30.5605"
 )
 
 # SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
@@ -1019,6 +1042,116 @@ if best_metrics:
         )
         _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
     append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
+
+    # PhysicsAttention slice-routing-entropy diagnostic (#2955).
+    # Per-block, per-head softmax routing entropy + max-probability + effective-slice
+    # count + dead-slice count, masked over real tokens, averaged over each val split's
+    # first batch. Three-point comparison: baseline (T=learnable init 0.5) vs #2944
+    # (T=2.0) vs this PR (T=0.25). Forward-hook on each PhysicsAttention module
+    # recomputes routing on the un-compiled module so hooks fire reliably.
+    _attn_mods_with_idx = [
+        (i, blk.attn) for i, blk in enumerate(_inner.blocks)
+        if isinstance(blk.attn, PhysicsAttention)
+    ]
+    _routing_per_split: dict[str, list[dict]] = {}
+
+    def _make_routing_hook(block_idx: int, split_name: str, mask_t: torch.Tensor):
+        def _hook(module, args, _output):
+            with torch.no_grad():
+                x = args[0]
+                B, N, _D = x.shape
+                x_mid = (
+                    module.in_project_x(x)
+                    .reshape(B, N, module.heads, module.dim_head)
+                    .permute(0, 2, 1, 3)
+                    .contiguous()
+                )
+                logits = module.in_project_slice(x_mid) / ROUTING_TEMPERATURE  # (B, H, N, G)
+                w = torch.softmax(logits, dim=-1).float()
+                # mask: (B, N) — broadcast to (B, 1, N, 1)
+                m4 = mask_t.unsqueeze(1).unsqueeze(-1).to(w.dtype)
+                # Per-(b,h,n) entropy then mean over real tokens then mean over batch
+                ent_bhn = -(w * (w + 1e-12).log()).sum(dim=-1)  # (B, H, N)
+                max_p_bhn = w.max(dim=-1).values               # (B, H, N)
+                real_mask_2d = mask_t.to(w.dtype).unsqueeze(1)  # (B, 1, N)
+                n_real_per_b = real_mask_2d.sum(dim=-1).clamp(min=1.0)  # (B, 1)
+                ent_per_head_b = (ent_bhn * real_mask_2d).sum(dim=-1) / n_real_per_b  # (B, H)
+                max_p_per_head_b = (max_p_bhn * real_mask_2d).sum(dim=-1) / n_real_per_b
+                ent_per_head = ent_per_head_b.mean(dim=0).cpu()       # (H,)
+                max_p_per_head = max_p_per_head_b.mean(dim=0).cpu()   # (H,)
+                # Mean routing weight per slice (averaged over real tokens, heads, batch)
+                # for dead-slice diagnostic
+                mean_w_per_slice = (
+                    (w * m4).sum(dim=(0, 1, 2))
+                    / (m4.sum(dim=(0, 1, 2)) * module.heads).clamp(min=1.0)
+                ).cpu()  # (G,)
+                dead_slices = int((mean_w_per_slice < 0.01).sum().item())
+                slice_num_g = w.shape[-1]
+                ent_mean = float(ent_per_head.mean().item())
+                max_p_mean = float(max_p_per_head.mean().item())
+                eff_slices = float(_math.exp(ent_mean))
+                _routing_per_split.setdefault(split_name, []).append({
+                    "block_idx": block_idx,
+                    "ent_per_head": [float(v) for v in ent_per_head.tolist()],
+                    "max_p_per_head": [float(v) for v in max_p_per_head.tolist()],
+                    "ent_mean": ent_mean,
+                    "max_p_mean": max_p_mean,
+                    "eff_slices": eff_slices,
+                    "mean_w_per_slice": [float(v) for v in mean_w_per_slice.tolist()],
+                    "dead_slices": dead_slices,
+                    "slice_num": int(slice_num_g),
+                })
+        return _hook
+
+    _routing_diag_splits = ["val_single_in_dist", "val_geom_camber_rc",
+                            "val_geom_camber_cruise", "val_re_rand"]
+    for _split_name in _routing_diag_splits:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        with torch.no_grad():
+            _x_r, _y_r, _is_r, _m_r = next(iter(_ldr))
+            _x_r = _x_r.to(device, non_blocking=True)
+            _m_r_dev = _m_r.to(device, non_blocking=True)
+            _x_norm_r = (_x_r - stats["x_mean"]) / stats["x_std"]
+            _routing_handles = [
+                mod.register_forward_hook(_make_routing_hook(bi, _split_name, _m_r_dev))
+                for bi, mod in _attn_mods_with_idx
+            ]
+            with amp_ctx_factory():
+                _ = _inner({"x": _x_norm_r, "mask": _m_r_dev})
+            for _h in _routing_handles:
+                _h.remove()
+
+    print(
+        f"\nPhysicsAttention slice-routing entropy (T={ROUTING_TEMPERATURE}, "
+        f"slice_num={model_config['slice_num']}, "
+        f"ceiling log(slice_num)={_math.log(model_config['slice_num']):.4f} nats):"
+    )
+    _routing_log = {"event": "routing_entropy_diagnostic",
+                    "epoch": int(best_metrics["epoch"]),
+                    "temperature": ROUTING_TEMPERATURE,
+                    "slice_num": int(model_config['slice_num']),
+                    "entropy_ceiling_nats": float(_math.log(model_config['slice_num'])),
+                    "splits": {}}
+    for _split_name in _routing_diag_splits:
+        if _split_name not in _routing_per_split:
+            continue
+        print(f"  Split: {_split_name}")
+        _split_entries = []
+        for _r in _routing_per_split[_split_name]:
+            _eph = "[" + ", ".join(f"{v:.4f}" for v in _r["ent_per_head"]) + "]"
+            _mph = "[" + ", ".join(f"{v:.4f}" for v in _r["max_p_per_head"]) + "]"
+            print(
+                f"    block[{_r['block_idx']}]: ent_per_head={_eph}  "
+                f"max_p_per_head={_mph}  ent_mean={_r['ent_mean']:.4f}  "
+                f"max_p_mean={_r['max_p_mean']:.4f}  "
+                f"eff_slices≈{_r['eff_slices']:.2f}  "
+                f"dead_slices(<1%)={_r['dead_slices']}/{_r['slice_num']}"
+            )
+            _split_entries.append(_r)
+        _routing_log["splits"][_split_name] = _split_entries
+    append_metrics_jsonl(metrics_jsonl_path, _routing_log)
 
     test_metrics = None
     test_avg = None
