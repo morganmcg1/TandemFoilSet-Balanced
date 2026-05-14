@@ -2636,3 +2636,40 @@ Strong mechanism. Mean is slightly better than edward FiLM-Re. BUT runs used σ=
 **PR has merge conflict** (needs rebase after σ=0.07 and FiLM-Re merges).
 
 **Status**: SENT BACK 2026-05-14 14:48. Rebase + rerun with σ=0.07 + FiLM-Re (new default after 14th shift). New bar: val<34.55, test<28.95. If compounds, merge as 15th shift.
+
+---
+
+## 2026-05-14 15:00 — PR #2897: Lion wd scan on σ=0.07 compound (alphonse, CLOSED)
+- Branch: `willowpai2g48h3-alphonse/wd-scan-sigma07-compound`
+- Hypothesis: Test wd=1e-3 with σ=0.07 init, after observing wd=1e-3 outperformed wd=2e-4 at σ=0.05.
+
+### Results
+
+| Arm | σ | wd | val_avg/mae_surf_p |
+|---|---|---|---:|
+| σ=0.05 + wd=2e-4 (baseline) | 0.05 | 2e-4 | 40.82 |
+| σ=0.05 + wd=1e-3 (arm A) | 0.05 | 1e-3 | 37.54 (−8.0%) |
+| σ=0.07 + wd=2e-4 (13th shift) | 0.07 | 2e-4 | 36.58 (−10.4%) |
+| σ=0.07 + wd=1e-3 (PR #2897 arm) | 0.07 | 1e-3 | 37.51 (+2.5% vs σ=0.07 baseline) |
+
+**Key insight**: wd-axis is σ-dependent. At σ=0.05 the model is under-regularized → wd=1e-3 helps. At σ=0.07 the model starts in a higher-L2 basin that is already better-regularized → wd=1e-3 HURTS (over-regularizes).
+
+σ-axis init scale and wd both target the Linear-weight subset. They don't compound; they substitute. wd-axis fully characterized for σ=0.07 baseline (wd=2e-4 wins, wd=1e-3 regresses).
+
+**Status**: CLOSED 2026-05-14 15:02. wd-axis bracketed at σ=0.07 baseline. Mechanism cleanly characterized. Retired.
+
+---
+
+## 2026-05-14 15:10 — PR #2942: Lion lr re-tune at 14th-shift baseline (alphonse, ASSIGNED)
+- Branch: `willowpai2g48h3-alphonse/lion-lr-scan-14th`
+- Hypothesis: With σ=0.07+FiLM-Re basin shift, optimal Lion lr may have moved from the historically-tuned 7.5e-5. FiLM-Re adds γ(Re) per-block modulation (+84K params), potentially shifting angular gradient distribution. Testing lr=6e-5 (s1) and lr=9e-5 (s2) at 14th-shift baseline.
+- Arms: lr=6e-5 (default seed), lr=9e-5 (seed 2)
+- Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 15:10 — PR #2943: Output head depth scan on 14th-shift baseline (edward, ASSIGNED)
+- Branch: `willowpai2g48h3-edward/output-head-depth-scan`
+- Hypothesis: The current 2-layer output head (Linear(128,128)+GELU+Linear(128,out_dim)) may bottleneck the richer FiLM-Re feature manifold. Deepening to 3-layer and 4-layer decoder adds ~16K/32K params to the projection step, potentially improving OOD decoding (geom_camber_rc). Natural follow-up to edward's FiLM-Re win (#2865).
+- Arms: head_depth=3 (s1), head_depth=4 (seed 2)
+- Merge bar: mean val < 34.55, mean test < 28.95
