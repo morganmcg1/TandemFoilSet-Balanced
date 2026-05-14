@@ -114,10 +114,40 @@ class FourierFeatures(nn.Module):
         return torch.cat([sin_feats, cos_feats, rest], dim=-1)
 
 
+class GeoContextEncoder(nn.Module):
+    """Encode per-sample scalars + masked-mean surface summary into K context tokens.
+
+    Output is (B, n_tokens, d_model) used as additional K/V in PhysicsAttention.
+    Final ``token_proj`` is small-init in Transolver._init_weights so the
+    cross-attention starts with minimal effect.
+    """
+
+    def __init__(self, sample_feat_dim, node_feat_dim, hidden, n_tokens, d_model):
+        super().__init__()
+        self.n_tokens = n_tokens
+        self.d_model = d_model
+        self.sample_mlp = nn.Sequential(
+            nn.Linear(sample_feat_dim, hidden), nn.GELU(),
+            nn.Linear(hidden, d_model),
+        )
+        self.surface_mlp = nn.Sequential(
+            nn.Linear(node_feat_dim, hidden), nn.GELU(),
+            nn.Linear(hidden, d_model),
+        )
+        self.token_proj = nn.Linear(d_model * 2, n_tokens * d_model)
+
+    def forward(self, sample_feats, surface_summary):
+        s = self.sample_mlp(sample_feats)
+        u = self.surface_mlp(surface_summary)
+        ctx = torch.cat([s, u], dim=-1)
+        return self.token_proj(ctx).view(-1, self.n_tokens, self.d_model)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 use_geo_cross_attn=False, geo_d_model=None):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -135,7 +165,13 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+        self.use_geo_cross_attn = use_geo_cross_attn
+        if use_geo_cross_attn:
+            geo_d_model = geo_d_model or dim
+            self.geo_k_proj = nn.Linear(geo_d_model, inner_dim, bias=False)
+            self.geo_v_proj = nn.Linear(geo_d_model, inner_dim, bias=False)
+
+    def forward(self, x, geo_tokens=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -158,6 +194,22 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+
+        if self.use_geo_cross_attn and geo_tokens is not None:
+            B_g, M, _ = geo_tokens.shape
+            k_cross = (
+                self.geo_k_proj(geo_tokens)
+                .reshape(B_g, M, self.heads, self.dim_head)
+                .permute(0, 2, 1, 3)
+            )
+            v_cross = (
+                self.geo_v_proj(geo_tokens)
+                .reshape(B_g, M, self.heads, self.dim_head)
+                .permute(0, 2, 1, 3)
+            )
+            k = torch.cat([k, k_cross], dim=2)
+            v = torch.cat([v, v_cross], dim=2)
+
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
@@ -171,13 +223,15 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_geo_cross_attn=False, geo_d_model=None):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            use_geo_cross_attn=use_geo_cross_attn, geo_d_model=geo_d_model,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -189,8 +243,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, geo_tokens=None):
+        fx = self.attn(self.ln_1(fx), geo_tokens=geo_tokens) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -198,16 +252,25 @@ class TransolverBlock(nn.Module):
 
 
 class Transolver(nn.Module):
+    # Last 11 dims of (post-Fourier) x are per-sample BC/geometry scalars:
+    # log(Re), AoA1, NACA1[3], AoA2, NACA2[3], gap, stagger. FourierFeatures
+    # only rewrites dims 0-1, so the trailing 11 dims align with original
+    # x[..., 13:24] regardless of fourier_k.
+    GEO_SAMPLE_FEAT_DIM = 11
+
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_geo_cross_attn=False, geo_cross_tokens=4,
+                 geo_encoder_hidden=64):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_geo_cross_attn = use_geo_cross_attn
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -218,16 +281,38 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        if use_geo_cross_attn:
+            self.geo_encoder = GeoContextEncoder(
+                sample_feat_dim=self.GEO_SAMPLE_FEAT_DIM,
+                node_feat_dim=fun_dim + space_dim,
+                hidden=geo_encoder_hidden,
+                n_tokens=geo_cross_tokens,
+                d_model=n_hidden,
+            )
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_geo_cross_attn=use_geo_cross_attn, geo_d_model=n_hidden,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+
+        if use_geo_cross_attn:
+            # Small-init the gateways into the cross-attention path so the
+            # network starts close to the baseline and learns to use the
+            # geo tokens gradually instead of perturbing slice attention
+            # at step 0.
+            nn.init.normal_(self.geo_encoder.token_proj.weight, std=0.01)
+            nn.init.zeros_(self.geo_encoder.token_proj.bias)
+            for block in self.blocks:
+                nn.init.normal_(block.attn.geo_k_proj.weight, std=0.01)
+                nn.init.normal_(block.attn.geo_v_proj.weight, std=0.01)
+
+        self._geo_token_shape_printed = False
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -238,11 +323,37 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+    def _build_geo_tokens(self, x, is_surface, mask):
+        # x: (B, N, D_aug). Per-sample features are constant across nodes;
+        # masked mean gives the per-sample value while ignoring padding.
+        mask_f = mask.to(x.dtype).unsqueeze(-1)
+        denom = mask_f.sum(1).clamp(min=1.0)
+
+        sample_feats_per_node = x[..., -self.GEO_SAMPLE_FEAT_DIM:]
+        sample_feats = (sample_feats_per_node * mask_f).sum(1) / denom
+
+        surf_mask_f = (mask & is_surface).to(x.dtype).unsqueeze(-1)
+        surf_denom = surf_mask_f.sum(1).clamp(min=1.0)
+        surface_summary = (x * surf_mask_f).sum(1) / surf_denom
+
+        geo_tokens = self.geo_encoder(sample_feats, surface_summary)
+        if not self._geo_token_shape_printed:
+            print(
+                f"  [geo cross-attn] sample_feats={tuple(sample_feats.shape)} "
+                f"surface_summary={tuple(surface_summary.shape)} "
+                f"geo_tokens={tuple(geo_tokens.shape)}"
+            )
+            self._geo_token_shape_printed = True
+        return geo_tokens
+
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        geo_tokens = None
+        if self.use_geo_cross_attn:
+            geo_tokens = self._build_geo_tokens(x, data["is_surface"], data["mask"])
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, geo_tokens=geo_tokens)
         return {"preds": fx}
 
 
@@ -286,12 +397,13 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            model_inputs = {"x": x_norm, "is_surface": is_surface, "mask": mask}
             if amp and device.type == "cuda":
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    pred = model({"x": x_norm})["preds"]
+                    pred = model(model_inputs)["preds"]
                 pred = pred.float()
             else:
-                pred = model({"x": x_norm})["preds"]
+                pred = model(model_inputs)["preds"]
 
             if loss_fn == "smooth_l1":
                 per_elem = F.smooth_l1_loss(
@@ -458,11 +570,23 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    use_geo_cross_attn: bool = False  # add cross-attention to global geometry/flow context (GeoTransolver H5)
+    geo_cross_tokens: int = 4  # number of global context tokens (K_cross)
+    geo_encoder_hidden: int = 64  # hidden dim of geometry encoder MLP
+    seed: int | None = None  # RNG seed for reproducible init + WeightedRandomSampler trajectory; None = non-deterministic
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed is not None:
+    import random as _py_random
+    _py_random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seed: {cfg.seed} (deterministic init + sampler)")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -477,7 +601,12 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler_gen = None
+    if cfg.seed is not None:
+        sampler_gen = torch.Generator()
+        sampler_gen.manual_seed(cfg.seed)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds),
+                                    replacement=True, generator=sampler_gen)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
@@ -497,6 +626,9 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_geo_cross_attn=cfg.use_geo_cross_attn,
+    geo_cross_tokens=cfg.geo_cross_tokens,
+    geo_encoder_hidden=cfg.geo_encoder_hidden,
 )
 
 if cfg.fourier_k > 0:
@@ -619,7 +751,7 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx:
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface, "mask": mask})["preds"]
             if cfg.loss_fn == "smooth_l1":
                 per_elem = F.smooth_l1_loss(
                     pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
