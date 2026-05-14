@@ -215,6 +215,9 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = 1.0
+        # Vaswani 2017 residual dropout: applied to each branch output before
+        # the residual add. Parameter-free; identity at eval time.
+        self.drop = nn.Dropout(p=0.1)
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -224,9 +227,9 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        # POST-NORM: LN applied AFTER residual addition (LN(x + f(x)) vs pre-norm x + f(LN(x)))
-        fx = self.ln_1(self.gamma_attn * self.attn(fx) + fx)
-        fx = self.ln_2(self.gamma_mlp * self.mlp(fx) + fx)
+        # POST-NORM + residual dropout: LN(x + drop(f(x))).
+        fx = self.ln_1(self.drop(self.gamma_attn * self.attn(fx)) + fx)
+        fx = self.ln_2(self.drop(self.gamma_mlp * self.mlp(fx)) + fx)
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -588,6 +591,24 @@ print(
     f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+)
+
+# In-block residual dropout diagnostic (Vaswani 2017 full recipe).
+_drop_modules = [m for m in model.modules() if isinstance(m, nn.Dropout)]
+_block_drops = [b.drop for b in model.blocks]
+_drop_p_unique = sorted({float(d.p) for d in _block_drops})
+model.train()
+_train_flags = [bool(d.training) for d in _block_drops]
+model.eval()
+_eval_flags = [bool(d.training) for d in _block_drops]
+model.train()  # restore for training
+print(
+    f"In-block dropout (Vaswani 2017 residual dropout): nn.Dropout p={_drop_p_unique} "
+    f"in {len(_block_drops)}/{model_config['n_layers']} TransolverBlocks; "
+    f"applied as LN(x + drop(f(x))) on both attn and mlp branches; "
+    f"train-mode .training flags: {_train_flags}; eval-mode .training flags: {_eval_flags}; "
+    f"parameter-free (0 added params); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.0382 (NEW BASELINE #2964 post-norm γ=1.0)"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
