@@ -601,6 +601,7 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    dropout: float = 0.0  # Transolver block dropout (Vaswani-style attention+MLP dropout, forwarded to TransolverBlock via Transolver.__init__)
 
 
 cfg = sp.parse(Config)
@@ -661,6 +662,7 @@ model = FiLMTransolver(
     fourier_features=cfg.fourier_features,
     fourier_num_features=cfg.fourier_num_features,
     fourier_sigma=cfg.fourier_sigma,
+    dropout=cfg.dropout,
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
