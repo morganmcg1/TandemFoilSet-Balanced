@@ -221,8 +221,13 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        # POST-NORM topology: LN applied AFTER the residual sum, normalizing the
+        # sum (x + γ·f(x)). Contrast with pre-norm: x + γ·f(LN(x)).
+        # Motivation (#2939): LN mean-centering is load-bearing for CFD targets;
+        # post-norm centers the SUM, so per-Re DC offsets are stripped AFTER
+        # residual addition rather than only at each block's input.
+        fx = self.ln_1(fx + self.gamma_attn * self.attn(fx))
+        fx = self.ln_2(fx + self.gamma_mlp * self.mlp(fx))
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -532,6 +537,11 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Block topology: POST-NORM (LN applied AFTER residual sum: fx = LN(fx + γ·f(fx)))")
+print(f"vs baseline pre-norm: LN applied BEFORE attention/mlp (inside residual: fx = fx + γ·f(LN(fx)))")
+print(f"Norm sites: 9 (4× post-attn ln_1 + 4× post-mlp ln_2 + 1× ln_3 in last block before mlp2)")
+print(f"Motivation: #2939 found LN mean-centering load-bearing; this tests WHERE the centering happens (per-block INPUT vs per-block SUM)")
+print(f"Param count expected unchanged at 407,940 (no new params; same LN/LayerScale structure)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
@@ -574,6 +584,22 @@ print(
     f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
     f"baseline to beat: val_avg/mae_surf_p < 33.0195"
 )
+
+# --- Residual magnitude probe: per-block sqrt(mean(x^2)) at output (post-norm
+# experiment diagnostic). Forward hooks registered BEFORE torch.compile so they
+# are picked up by the traced graph. Hook records into a module-level list when
+# the `_record_rms` flag is True; logged at tracked epochs (1, 5, 10, 30, 60).
+_record_rms: bool = False
+_block_rms_buf: list[float] = []
+
+
+def _block_rms_hook(_mod, _inp, out):
+    if _record_rms:
+        _block_rms_buf.append(out.detach().float().pow(2).mean().sqrt().item())
+
+
+for _blk in model.blocks:
+    _blk.register_forward_hook(_block_rms_hook)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -718,8 +744,44 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # Stability watchdog (post-norm experiment): NaN/Inf in train loss signals
+    # cold-start divergence — terminate so the failure is captured cleanly.
+    if not (torch.isfinite(torch.tensor(epoch_vol)) and torch.isfinite(torch.tensor(epoch_surf))):
+        print(f"DIVERGED at epoch {epoch+1}: vol={epoch_vol} surf={epoch_surf}. Stopping.")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "divergence",
+            "epoch": epoch + 1,
+            "train/vol_loss": epoch_vol,
+            "train/surf_loss": epoch_surf,
+        })
+        break
+
     # --- Validate ---
     model.eval()
+    # Probe per-block output RMS magnitudes on the first val batch at tracked
+    # epochs (post-norm experiment diagnostic; under post-norm magnitudes are
+    # capped by LN, under pre-norm they can grow unboundedly with depth).
+    _track_epochs = {1, 5, 10, 30, 60}
+    if (epoch + 1) in _track_epochs:
+        _record_rms = True
+        _block_rms_buf.clear()
+        _probe_loader = val_loaders["val_single_in_dist"]
+        with torch.no_grad():
+            _xp, _yp, _isp, _mp = next(iter(_probe_loader))
+            _xp = _xp.to(device, non_blocking=True)
+            _mp = _mp.to(device, non_blocking=True)
+            _xp_norm = (_xp - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = model({"x": _xp_norm, "mask": _mp})
+        _record_rms = False
+        _per_block_rms = list(_block_rms_buf)
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "block_rms_probe",
+            "epoch": epoch + 1,
+            "per_block_output_rms": _per_block_rms,
+        })
+        print(f"  block_rms@ep{epoch+1}: " + " ".join(f"b{i}={v:.3f}" for i, v in enumerate(_per_block_rms)))
+
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
