@@ -1,20 +1,20 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 13:50
+- **Date:** 2026-05-14 14:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
 
 
-## Current baseline (13th shift)
+## Current baseline (14th shift)
 
-**PR #2882 (trunc_normal_ init std=0.07)** merged 2026-05-14 12:15:
-- **`val_avg/mae_surf_p`** = 36.5754 (σ=0.07, W&B `gj8qijiv`, single seed)
-- **`test_avg/mae_surf_p`** = 30.6438 (σ=0.07, W&B `gj8qijiv`, single seed)
-- Per-split test surf_p: single_in_dist=35.87, geom_camber_rc=43.28, geom_camber_cruise=16.30, re_rand=27.12
-- Default init_std=0.07 (train.py updated on advisor branch)
-- **New merge bar: val < 36.58, test < 30.64, all four test splits finite (single-seed basis; directional)**
+**PR #2865 (γ-only FiLM-Re + σ=0.07 init)** merged 2026-05-14 14:45:
+- **`val_avg/mae_surf_p`** = 34.5536 (mean 2 seeds); best seed 33.5570 (s2 `vt8acm18`)
+- **`test_avg/mae_surf_p`** = 28.9528 (mean 2 seeds); best seed 28.2333 (s2 `vt8acm18`)
+- Per-split test surf_p (mean): single_in_dist=32.53, geom_camber_rc=41.997, geom_camber_cruise=15.19, re_rand=26.09
+- Default init_std=0.07 + FiLM-Re conditioning in train.py
+- **New merge bar: mean val < 34.55, mean test < 28.95, all four test splits finite**
 
 ## Baseline progression
 
@@ -32,21 +32,23 @@
 | PR #2562 (Lion lr=7.5e-5) | 2026-05-13 22:30 | 45.433 | 39.509 | −9.5% / −9.2% |
 | PR #2801 (Pinball τ=0.55 pressure) | 2026-05-14 07:15 | 43.092 | 37.194 | −5.1% / −5.9% |
 | PR #2817 (σ=0.05 init) | 2026-05-14 09:21 | 40.820 | 35.247 | −5.3% / −5.4% |
-| **PR #2882 (σ=0.07 init)** | **2026-05-14 12:15** | **36.575** | **30.644** | **−10.4% / −13.1% ← LARGEST** |
+| PR #2882 (σ=0.07 init) | 2026-05-14 12:15 | 36.575 | 30.644 | −10.4% / −13.1% |
+| **PR #2865 (FiLM-Re + σ=0.07)** | **2026-05-14 14:45** | **34.554** | **28.953** | **−5.4% / −5.6% ← 14th shift** |
 
-**Cumulative: −69.4% val, −72.1% test from round-1 start.** Still compute-bound (best=last on all 13 merges).
+**Cumulative: −71.1% val, −73.6% test from round-1 start.** Still compute-bound (best=last on all 14 merges).
 
-## Current research focus (rounds 10–11)
+## Current research focus (rounds 11–12)
 
-**Three major wins in rapid succession: σ=0.05, σ=0.07 (init-scale axis)**. σ=0.07 alone gave the largest single-PR improvement in the launch (−13.1% test). This confirms the init-scale axis is strongly load-bearing under compute-bound Lion, with the optimizer behaving differently in small vs large-norm initialization regimes.
+**Rapid compounding: four major wins in succession.** σ=0.05 → σ=0.07 → FiLM-Re. Cumulative −71.1% val / −73.6% test from launch start.
 
-**Mechanism insight (13th shift)**: the "start near convergence neighbourhood" mental model was wrong. The correct story: larger σ pushes Lion into a different, higher-L2 basin that generalizes better within 35 epochs. Small σ traps the optimizer in a small-norm regime where it never fully escapes within the compute budget.
+**Key insight (14th shift)**: FiLM-Re conditioning (γ-only, per block) compounds with σ=0.07 init — same relative improvement (−5.4%/−5.6%) as FiLM-Re achieved on σ=0.02 init (−5.3%/−7.0%), confirming the two mechanisms are orthogonal. The mechanism specifics: late Transolver blocks (3-4) learn stronger Re-dependent gain modulation than early blocks, consistent with late blocks doing more task-specific processing. Re-rand OOD split improvement (re_rand=26.09 mean, 25.91 best) is the strongest in launch history.
 
 **Current focus**: 
-1. Pin down the σ-axis peak (tanjiro #2908: σ=0.06/0.09 interior scan)
-2. Test whether other axes compound with σ=0.07 (in-flight PRs using σ=0.05 or σ=0.02 need rebase/follow-up)
+1. Test whether SwiGLU further compounds with FiLM-Re+σ=0.07 (frieren #2902 re-running)
+2. Test FiLM-AoA compound with FiLM-Re+σ=0.07 (thorfinn #2886)
+3. Continue compound tests for wd-scan (alphonse #2897), y-flip (fern #2895), σ-interior (#2908), Pressure-Poisson (#2909), DropPath (#2926)
 
-**Context for in-flight experiments**: PRs #2865, #2866, #2886, #2895, #2897, #2902 were assigned on σ=0.05 or σ=0.02 baseline. Their deltas should be interpreted relative to their original bar. If any beat their original bar, follow-up tests on σ=0.07 baseline are warranted.
+**Context for in-flight experiments**: PRs assigned before 14th shift should compare against BOTH their original bar AND the new 14th-shift bar (val<34.55, test<28.95). If any beat the old bar but miss 14th shift, evaluate the mechanism strength and send back for compound test with FiLM-Re+σ=0.07.
 
 ### Round-10/11 in-flight (full grid)
 
@@ -58,18 +60,18 @@ Physics loss axis:
    - #2866 divfree (nezuko): CLOSED 2026-05-14 13:20. λ calibration off 3 orders of magnitude (|∇·u| observed 3-19 vs assumed 1e-3); full λ range tested; mechanism alive (div drops 20%) but doesn't help surf_p. Axis cleanly exhausted.
 
 Conditioning / OOD axis:
-4. **γ-only FiLM-AoA (thorfinn #2886)** — WIP, targets camber_rc.
-5. **γ-only FiLM-Re (edward #2865)** — rebased (CLEAN); waiting for re-run on σ=0.07 baseline.
+4. **γ-only FiLM-AoA (thorfinn #2886)** — WIP, targets camber_rc. Now needs to beat 14th-shift bar (val<34.55, test<28.95).
+5. **γ-only FiLM-Re (edward #2865)** — **MERGED 2026-05-14 14:45 as 14th shift** (mean val=34.55, test=28.95). FiLM-Re now the default config.
 
 Data augmentation axis:
-6. **Y-flip augmentation (fern #2895)** — SENT BACK 2026-05-14 13:50. σ=0.05 results: mean val=38.54 (−5.6%), test=33.73 (−4.3%), ALL 4 splits improve; beats OLD bar, misses 13th-shift bar by 2-3 pts. Student-found: must gate to freestream-only (raceCar ground plane). Re-running on σ=0.07 baseline for compounding test.
+6. **Y-flip augmentation (fern #2895)** — SENT BACK 2026-05-14 13:50. σ=0.05 results: mean val=38.54 (−5.6%), test=33.73 (−4.3%), ALL 4 splits improve; beats OLD 13th bar, misses 14th-shift bar. Re-running on σ=0.07+FiLM-Re baseline for compounding test.
 
 Regularization axis:
-7. **Weight-decay scan (alphonse #2897)** — SENT BACK 2026-05-14 13:35. σ=0.05 results: wd=1e-3 beats OLD bar (−8.0%/−9.6%, every test split improves, OOD strongest) but misses 13th-shift bar by 2-4%. Re-running wd=1e-3 + wd=7e-4 on σ=0.07 baseline to test compounding.
-8. **Stochastic depth DropPath (nezuko #2926)** — NEW, assigned 2026-05-14 13:25; depth-scaled DropPath rates 0.1 (s1) and 0.2 (s2); block-level regularization complementary to init-scale and weight-decay; σ=0.07 init; 5-layer ramp 0.0→drop_path across blocks.
+7. **Weight-decay scan (alphonse #2897)** — SENT BACK 2026-05-14 13:35. σ=0.05 results: wd=1e-3 beats 12th bar (−8.0%/−9.6%). Re-running wd=1e-3 + wd=7e-4 on σ=0.07 baseline (needs further update to include FiLM-Re).
+8. **Stochastic depth DropPath (nezuko #2926)** — WIP, depth-scaled rates 0.1/0.2; σ=0.07 init.
 
 Architectural axis:
-9. **SwiGLU FFN (frieren #2902)** — WIP.
+9. **SwiGLU FFN (frieren #2902)** — SENT BACK 2026-05-14 14:48. σ=0.05 results: mean val=33.70 (−7.9% vs 13th bar!) but merge conflict + wrong baseline. Re-running on σ=0.07+FiLM-Re (new default). New bar: val<34.55, test<28.95.
 
 Closed (previously active):
 - **Pinball τ=0.60 pressure (alphonse #2853)** — CLOSED: τ-axis bracketed
@@ -158,7 +160,7 @@ Closed this round:
 | **#2908** | **tanjiro** | **σ interior scan: σ=0.06/0.09** | **WIP NEW 2026-05-14 12:20** |
 | **#2909** | **askeladd** | **Pressure-Poisson auxiliary loss (λ=0.01)** | **WIP NEW 2026-05-14 12:20** |
 
-**Merged:** 13 | **Closed:** 63 | **WIP:** 8 | **Idle:** 0
+**Merged:** 14 | **Closed:** 63 | **WIP:** 8 | **Idle:** 0
 
 ## Key meta-findings from round 1
 

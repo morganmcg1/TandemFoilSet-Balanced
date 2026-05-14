@@ -2590,3 +2590,49 @@ Per-split test (mean vs σ=0.05): single_in_dist −2.05, geom_camber_rc −2.28
 **Mechanism finding (student-found)**: original PR-as-written would have crashed on raceCar samples (ground plane at y=0, flipping produces non-physical "foil below ground" inputs). Student gated y-flip to **freestream/cruise samples only** via per-sample y-range check (y_min < −1.0). Effective augmentation: ~17% of training samples flipped per epoch (cruise × p=0.5), doubling cruise representation from ~30% → ~50% effective. Despite gating, ALL splits improve — raceCar splits (camber_rc, single_in_dist) benefit from generic regularization (more total physical variety), not just cruise-targeted boost. Crashed naive run (`te3wbgjq`, val=45.69) confirmed the gating was necessary.
 
 **Status**: SENT BACK 2026-05-14 13:50. Rerun y-flip on σ=0.07 baseline (s1+s2) to test compounding. Same pattern as alphonse #2897. Decision criterion: if compounds (val<36.58), merge as 14th shift; if σ-overlapping (val>37.5), close.
+
+---
+
+## 2026-05-14 14:45 — PR #2865: γ-only FiLM-Re on σ=0.07 baseline (edward, MERGED 14th shift)
+- Branch: `willowpai2g48h3-edward/film-gamma-only`
+- Hypothesis: Per-block Re conditioning via γ-only FiLM (no β branch), identity init. Targets Re-rand and camber OOD splits.
+
+### Results (on σ=0.07 baseline)
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| `qw6m3rk1` (s1) | — | 35.5502 | 29.6722 |
+| `vt8acm18` (s2) | — | **33.5570** | **28.2333** |
+| **Mean (2 seeds)** | — | **34.5536 (−5.4%)** | **28.9528 (−5.6%)** |
+| 13th-shift bar (σ=0.07) | — | 36.58 | 30.64 |
+
+Per-split test (mean): single_in_dist=32.53 (−9.3%), geom_camber_rc=41.997 (−3.0%), geom_camber_cruise=15.19 (−6.8%), re_rand=26.09 (−3.8%). ALL 4 SPLITS IMPROVE.
+
+Best seed (s2): val=33.56, test=28.23, re_rand=25.91 (best Re-rand in launch).
+
+**Mechanism**: γ(Re) = 1 + MLP(log Re) per block. γ_bias drifts 0.995 (block 0) → 0.987 (block 4) — late blocks more Re-sensitive. γ_w_l2 grows 3.4→5.2 with depth. +84K params (+14%), +3.5% epoch time, 0 VRAM increase.
+
+**Status**: MERGED 2026-05-14 14:45. **14th baseline shift: FiLM-Re + σ=0.07. Mean val=34.55, test=28.95. New merge bar: val<34.55, test<28.95.**
+
+---
+
+## 2026-05-14 14:48 — PR #2902: SwiGLU FFN (frieren, SENT BACK for σ=0.07+FiLM-Re rerun)
+- Branch: `willowpai2g48h3-frieren/swiglu-ffn`
+- Hypothesis: Replace GELU+Linear FFN with SwiGLU gated FFN (PaLM/LLaMA pattern, +25% params, mlp_ratio=2).
+
+### Results (on σ=0.05 baseline — WRONG baseline)
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| `t3kmi9yk` (s1) | — | 34.00 | 28.72 |
+| `rwpyw6ry` (s2) | — | **33.39** | **28.04** |
+| **Mean (2 seeds)** | — | **33.70 (−17.4% vs 12th bar)** | **28.38 (−19.5% vs 12th bar)** |
+| 13th-shift bar (σ=0.07) | — | 36.58 | 30.64 |
+
+Per-split test (mean vs 13th-shift bar): single_in_dist=32.71 (−8.8%), geom_camber_rc=40.78 (−5.8%), geom_camber_cruise=14.33 (−12.1%), re_rand=25.72 (−5.2%). ALL 4 SPLITS BEAT 13TH-SHIFT BAR.
+
+Strong mechanism. Mean is slightly better than edward FiLM-Re. BUT runs used σ=0.05 init — incompatible with current default.
+
+**PR has merge conflict** (needs rebase after σ=0.07 and FiLM-Re merges).
+
+**Status**: SENT BACK 2026-05-14 14:48. Rebase + rerun with σ=0.07 + FiLM-Re (new default after 14th shift). New bar: val<34.55, test<28.95. If compounds, merge as 15th shift.
