@@ -43,7 +43,7 @@
 2. **Schedule / LR tail** (near-exhausted): askeladd #2987 final_div_factor in-flight
 3. **Domain/sampler**: fern #2982 cruise upweighting re-run (sent back for --epochs 35)
 4. **Input representation**: edward #1605 asinh-p680 in-flight
-5. **Rate-limited pods** (frieren, thorfinn, tanjiro): stale baseline; need updated baseline instructions when tokens recover
+5. **Rate-limited pods** (frieren, tanjiro): stale baseline; need updated baseline instructions when tokens recover
 
 ## Students — Current State
 
@@ -52,13 +52,13 @@
 | alphonse | #3000 | Compound sw=5 + cw=[1,1,2/3] | WIP — cw=2 now baseline; cw=3 arm is key |
 | askeladd | #2987 | OneCycleLR final_div_factor tuning (100/10) | WIP |
 | fern | #2982 | Cruise upweighting 3.0× + single_weight=1.5 (--epochs 35) | WIP — re-running |
-| edward | #1605 | asinh-p680 transform | WIP — active (recent commits ~19:49) |
-| nezuko | #3017 | surf_channel_weight cw=1.5/1.25 sweep | WIP — newly assigned |
+| edward | #1605 | asinh-p680 transform | WIP |
+| nezuko | #3017 | surf_channel_weight cw=1.5/1.25 sweep | WIP |
 | frieren | #2970 | pct_start warmup tuning (0.05/0.2) | WIP ⚠ rate-limited |
-| thorfinn | #2915 | EMA model weights (0.999/0.9999) | WIP ⚠ rate-limited |
+| thorfinn | #3027 | MLP dropout 0.05/0.10 for OOD generalization | WIP — newly assigned |
 | tanjiro | #2916 | bf16 batch_size=8 + extended schedule | WIP ⚠ rate-limited |
 
-3 pods still rate-limited (frieren, thorfinn, tanjiro). 5 active (edward, alphonse, askeladd, fern, nezuko). 0 idle.
+2 pods still rate-limited (frieren, tanjiro). 6 active. 0 idle.
 
 ## Key Findings (cumulative)
 
@@ -77,6 +77,7 @@
 | z-flip (all meshes) | #2935 | +20.4% | raceCar one-sided topology |
 | z-flip (cruise-only) | #2945 | +4.5%/+18.3% | Mesh node density not z-symmetric |
 | variance-penalized loss λ=0.5/1.0 | #2963 | +5.7%/+17.8% | rc is extrapolation gap, not outlier-fitting |
+| EMA weights (decay 0.999/0.9999) | #2915 | +2.1%/+251% | OneCycleLR cooldown = meaningful descent; EMA lag is a liability |
 
 ## Potential Next Directions (not yet assigned)
 

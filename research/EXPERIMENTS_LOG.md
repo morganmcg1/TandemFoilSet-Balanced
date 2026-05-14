@@ -1,5 +1,25 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 20:44 — PR #2915: EMA model weights (decay 0.999/0.9999) ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-thorfinn/ema-model-weights-onecycle`
+- **Hypothesis:** EMA-smoothed weights might give better generalization than online weights, especially in late training where the model oscillates around a good solution.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Arm | ema_decay | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (val) |
+|-----|----------:|-------------------:|-------------------:|--------------------:|
+| A | 0.999 | 55.626 | 47.839 | **+4.3%** |
+| B | 0.9999 | 187.551 | 174.236 | **+251%** (catastrophic) |
+
+### Action: CLOSED — clear negative result
+
+**Mechanism:** EMA's premise (smooth out late-training noise around a converged solution) does not match OneCycleLR's cooldown. The LR cooldown (5e-4 → 4e-6 over the last 8 epochs) makes those epochs **meaningful descent**, not noise to filter. EMA's lag (averaging over ~2.7 epochs of older weights) cannot keep up, and EMA val ends +1.15 points worse than online val at epoch 32.
+
+The decay=0.9999 catastrophic failure is a separate lesson: with half-life ≈ 7000 steps but only ~13K total steps realized, EMA is still ~27% weighted on random-init by the end. This decay rate is mismatched to a 35-epoch budget.
+
+**Implication:** Schedule-tail tuning (askeladd #2987 final_div_factor) is partially exploring the related question of whether the LR tail is too aggressive. The right intervention there is on the schedule, not on weight averaging.
+
 ## 2026-05-14 20:01 — PR #1625: surf_channel_weight=[1,1,2] on sw=5+35ep baseline ✅ MERGED (new baseline)
 
 - **Student branch:** `charliepai2g48h1-nezuko/surf-channel-weight-l1`
