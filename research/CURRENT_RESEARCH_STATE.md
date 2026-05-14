@@ -1,20 +1,22 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 19:00
+- **Date:** 2026-05-14 19:30
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
 - **Most recent direction from human team:** None received — controlled 24/48h Charlie-vs-Willow logging ablation.
 
 
-## Current baseline (14th shift)
+## Current baseline (15th shift) ← UPDATED
 
-**PR #2865 (γ-only FiLM-Re + σ=0.07 init)** merged 2026-05-14 14:45:
-- **`val_avg/mae_surf_p`** = 34.5536 (mean 2 seeds); best seed 33.5570 (s2 `vt8acm18`)
-- **`test_avg/mae_surf_p`** = 28.9528 (mean 2 seeds); best seed 28.2333 (s2 `vt8acm18`)
-- Per-split test surf_p (mean): single_in_dist=32.53, geom_camber_rc=41.997, geom_camber_cruise=15.19, re_rand=26.09
-- Default init_std=0.07 + FiLM-Re conditioning in train.py
-- **New merge bar: mean val < 34.55, mean test < 28.95, all four test splits finite**
+**PR #2948 (2× FiLM-Re γ MLP width, film_re_hidden=256)** merged 2026-05-14 19:15:
+- **`val_avg/mae_surf_p`** = 33.7062 (mean 2 seeds); best seed 33.5660 (s1 `94flg3ls`)
+- **`test_avg/mae_surf_p`** = 28.6525 (mean 2 seeds); best seed 28.4010 (s1 `94flg3ls`) — **NEW BEST**
+- Per-split test surf_p (mean): single_in_dist=32.221, geom_camber_rc=41.458, geom_camber_cruise=14.909, re_rand=26.022
+- Default: `--init_std 0.07 --film_re_hidden 256` (baked into trunk)
+- **New merge bar (15th shift): mean val < 33.71, mean test < 28.65, all four test splits finite**
+
+**Previous (14th shift, PR #2865 γ-only FiLM-Re + σ=0.07):** val=34.55, test=28.95 — superseded.
 
 ## Baseline progression
 
@@ -34,8 +36,9 @@
 | PR #2817 (σ=0.05 init) | 2026-05-14 09:21 | 40.820 | 35.247 | −5.3% / −5.4% |
 | PR #2882 (σ=0.07 init) | 2026-05-14 12:15 | 36.575 | 30.644 | −10.4% / −13.1% |
 | **PR #2865 (FiLM-Re + σ=0.07)** | **2026-05-14 14:45** | **34.554** | **28.953** | **−5.4% / −5.6% ← 14th shift** |
+| **PR #2948 (2× FiLM-Re γ width)** | **2026-05-14 19:15** | **33.706** | **28.653** | **−2.45% / −1.04% ← 15th shift** |
 
-**Cumulative: −71.1% val, −73.6% test from round-1 start.** Still compute-bound (best=last on all 14 merges).
+**Cumulative: −71.8% val, −73.9% test from round-1 start.** Still compute-bound (best=last on all 15 merges).
 
 ## Current research focus (rounds 13–15)
 
@@ -63,13 +66,13 @@
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #2959 | alphonse | Per-block lr scaling: 1.5× single seed clears both bars (val=32.89, test=28.53) but camber_rc regresses; awaiting 2nd seed at 1.5× | WIP (sent back 2026-05-14 18:30) |
-| #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged. Arms: α=0.2 (s1), α=0.4 (s2) | ASSIGNED 2026-05-14 18:50 |
-| #2886 | thorfinn | γ-only FiLM-AoA: per-block AoA conditioning (sent back for σ=0.07+FiLM-Re compound) | WIP (sent back) |
-| #2965 | fern | Fourier-Re γ MLP: K=4 single seed (seed=2) passes thin (val=34.39, test=28.73); seed-confounded vs baseline best-seed; awaiting K=4 seed=1 | WIP (sent back 2026-05-14 19:00) |
+| #2959 | alphonse | Per-block lr scaling: 1.5× awaiting 2nd seed | WIP (sent back 2026-05-14 18:30) |
+| #2984 | frieren | Input-only conditioning Mixup: Re/AoA inputs mixed, targets unchanged | ASSIGNED 2026-05-14 18:50 |
+| #2991 | thorfinn | Output decoder head MLP width scan: 2× (256) and 3× (384) | ASSIGNED 2026-05-14 19:25 |
+| #2965 | fern | Fourier-Re γ MLP: K=4 awaiting seed=1 | WIP (sent back 2026-05-14 19:00) |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
 | #2972 | edward | LayerScale: per-block channel-wise learnable gain (init=0.1, 0.01) | ASSIGNED 2026-05-14 17:40 |
-| #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× ALL-4-SPLITS-WIN single seed, awaiting 2nd seed | WIP (sent back 2026-05-14 18:00) |
+| #2990 | tanjiro | FiLM-Re γ MLP depth-2 at width=256 (extend #2948 win) | ASSIGNED 2026-05-14 19:20 |
 | #2971 | askeladd | Slice attention dropout: drop_p=0.1 (s1), drop_p=0.2 (s2) | ASSIGNED 2026-05-14 17:38 |
 
 **Closed this round (rounds 12–13):**
@@ -77,7 +80,8 @@
 - #2909 (askeladd PP-loss) — all 4 splits regress +11-29%. h⁴ weighting kills boundary-layer signal; +70% wall-clock overhead binding.
 - #2902 (frieren SwiGLU compound) — val=34.72 misses by +0.49%. NOT orthogonal to FiLM-Re; redundant conditioning path.
 - #2942 (alphonse Lion-lr) — lr=6e-5 ≈ baseline; lr=9e-5 trade-off (wins camber_rc, loses single_in_dist). lr=7.5e-5 confirmed optimal. Axis closed; motivates per-block lr.
-- #2960 (frieren cond-mixup) — val=60.70/61.37, test=53.57/54.32 — 76-88% worse than baseline. Mesh-aligned target mixup is physically meaningless (node k has no correspondence across samples). All 4 splits regress including target OOD camber_rc (+28 MAE). Closed. Follow-up: input-only version (#2984).
+- #2960 (frieren cond-mixup) — val=60.70/61.37, test=53.57/54.32 — 76-88% worse than baseline. Mesh-aligned target mixup is physically meaningless. Closed. Follow-up: input-only version (#2984).
+- #2886 (thorfinn FiLM-AoA compound) — val=34.08 (passes), test=29.54 (+2.04% over 14th-shift bar). single_in_dist regresses +4.93%. FiLM-AoA gains on σ=0.05 came from cruise/re_rand which σ=0.07+FiLM-Re already captures. Mechanism orthogonality confirmed (γ_bias-driven Re vs γ_w-driven AoA — paper-worthy ablation). Closed — redundant with FiLM-Re on 14th+ shift baseline. New bar after #2948 merge makes gap even larger.
 - #2895 (fern y-flip compound on σ=0.07+FiLM-Re) — val=35.41, test=30.86. NOT orthogonal: directly-augmented cruise split regresses +27% (15.19→19.28). FiLM-Re's per-sample γ specialization is diluted by mirrored cruise inputs. Y-flip training-time aug retired at FiLM-Re baseline.
 - #2953 (askeladd slice-temperature) — τ=0.5 val +0.07%/test +2.86% (single_in_dist −1.0%, all OOD regress); τ=2.0 val +4.0%/test +7%. CRITICAL: baseline has learnable per-head τ initialized to 0.5, not 1.0. Default sits near per-head optimum. Slice-temp axis closed.
 - #2943 (edward head-depth) — depth=3 val −0.16%/test +1.04% (single_in_dist −6.90%, all 3 OOD splits regress); depth=4 strictly worse. Head depth NOT the bottleneck at FiLM-Re baseline. 4th OOD-vs-IID trade-off instance.

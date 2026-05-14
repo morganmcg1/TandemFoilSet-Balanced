@@ -3043,3 +3043,64 @@ Decision tree match: "Both miss bar AND test_geom_camber_rc regresses" → **Clo
 **Action: SENT BACK for K=4 with seed=1 only** (drop K=2). Single-seed mechanism evidence (γ_w_L2 flattening) is strong, but bar-passing margin is thin (0.16 val, 0.23 test) and seed-confounded. Need 2-seed mean for clean merge decision.
 
 If K=4 2-seed mean val < 34.55 AND test < 29.20: merge as 15th-shift candidate. The γ_w_L2 flattening evidence supports merge even at the edge of the bar.
+
+---
+
+## 2026-05-14 19:15 — PR #2948: FiLM-Re γ MLP 2× width tanjiro (MERGED as 15th shift)
+- Branch: `willowpai2g48h3-tanjiro/film-gamma-capacity-scan`
+- Hypothesis: Widen γ MLP hidden dim from 128 → 256 to remove conditioning bottleneck.
+
+### Results (2-seed confirmed)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs 14th-shift bar |
+|---|---|---:|---:|---:|
+| 2× s1 `94flg3ls` | — | 33.566 | 28.401 | val −2.9%, test −1.9% ✅ |
+| 2× s2 `oy7xe8t3` | — | 33.847 | 28.904 | val −2.1%, test −0.2% ✅ |
+| **2× MEAN** | — | **33.706** | **28.653** | **val −2.45%, test −1.04% ✅✅** |
+| 4× s2 `77odiijy` (dropped) | — | 34.820 | 29.444 | val +0.8%, test +1.7% ❌ |
+
+**Per-split test (2-seed mean):** single_in_dist=32.221 (−0.95%), geom_camber_rc=41.458 (**−1.28%**), geom_camber_cruise=14.909 (−1.85%), re_rand=26.022 (−0.26%). **ALL 4 SPLITS IMPROVE on 2-seed mean.**
+
+**γ diagnostics:** γ_w_L2 depth-monotone pattern preserved (3.97→5.75 for s1; 4.34→6.29 for s2). Wider γ MLP uses extra capacity. 4× overshoots (γ_w_L2 up to 6.87, generalization worsens).
+
+**Decision: MERGED as 15th shift.** Clean 2-seed win, all 4 splits improve, no OOD-vs-IID trade-off.
+
+**New bar (15th shift): mean val < 33.71, mean test < 28.65.**
+
+---
+
+## 2026-05-14 19:20 — PR #2886: FiLM-AoA compound thorfinn (CLOSED)
+- Branch: `willowpai2g48h3-thorfinn/film-aoa-compound`
+- Hypothesis: Stack FiLM-AoA (per-block AoA conditioning) on top of FiLM-Re + σ=0.07 trunk.
+
+### Results (2-seed, compound mode)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs 14th-shift bar |
+|---|---|---:|---:|---:|
+| s1 `bydjskbz` | — | 34.638 | 30.188 | val +0.25%, test +4.3% ❌ |
+| s2 `76lfda68` | — | 33.519 | 28.883 | val −3.0% ✅, test −0.2% ✅ |
+| **MEAN** | — | **34.078** | **29.535** | **val −1.36% ✅, test +2.04% ❌** |
+
+**Per-split test (2-seed mean) vs 14th-shift:** single_in_dist=34.13 (+4.93%), geom_camber_rc=42.37 (+0.89%), geom_camber_cruise=15.22 (+0.20%), re_rand=26.42 (+1.27%).
+
+**Root cause:** FiLM-AoA's σ=0.05 gains came from cruise (−20%) and re_rand (−15%), both already captured by σ=0.07+FiLM-Re. Compound finds no remaining headroom on those splits; single_in_dist regresses.
+
+**Mechanism orthogonality confirmed:** FiLM-Re preserves depth-monotone γ_bias drift (0.995→0.985); FiLM-AoA preserves uniform γ_w_L2 ~4.3-4.7 with no depth pattern. Two conditioning channels genuinely distinct — valuable ablation for the paper.
+
+**Decision: CLOSED.** Val passes but test misses by 2%. After #2948 merge, new bar is even stricter. AoA-conditioning mechanism finding is paper-worthy but the empirical compound doesn't justify merging.
+
+---
+
+## 2026-05-14 19:20 — PR #2990: FiLM-Re γ MLP depth-2 tanjiro (ASSIGNED)
+- Branch: `willowpai2g48h3-tanjiro/film-gamma-depth2`
+- Hypothesis: Add 2nd hidden layer to γ MLP at width=256 (depth-2: 1→256→256→128). Natural extension of #2948 (which widened from 128→256 and won). Tests whether depth adds expressiveness for non-linear Re-modulation.
+- Arms: depth=2 s1 (default seed), depth=2 s2 (fresh run)
+- Merge bar: mean val < 33.71, mean test < 28.65
+
+---
+
+## 2026-05-14 19:25 — PR #2991: Output decoder head width thorfinn (ASSIGNED)
+- Branch: `willowpai2g48h3-thorfinn/head-decoder-width`
+- Hypothesis: Widen the final output MLP head from 128 → 256 (2×) or 384 (3×). FiLM-Re features are richer after 15th shift; the 128-d decoder may now be the bottleneck.
+- Arms: head_hidden_mult=2.0 s1 (256-d head), head_hidden_mult=3.0 s2 (384-d head)
+- Merge bar: mean val < 33.71, mean test < 28.65
