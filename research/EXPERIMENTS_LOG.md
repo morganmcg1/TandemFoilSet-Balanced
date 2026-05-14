@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2961: aux-supervision-at-block-3 — **CLOSED LOSS (+6.53% val / +3.94% test; 135th taxon; DEPTH-AXIS DEEP-SUPERVISION DECISIVELY CLOSED — MONOTONIC WORSENING WITH DEPTH)**
+
+- **Branch:** charliepai2g48h5-alphonse/aux-supervision-at-block-3
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-aux-supervision-at-block-3-20260514-170102/metrics.jsonl
+
+| Metric | Baseline #2879 | #2952 (block-1, 50%) | #2961 (block-3, 75%) | Δ vs baseline |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | 31.1363 (+1.89%) | **32.5552** | **+6.53% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 26.1821 (-1.26%) | **27.5597** | **+3.94% LOSS** |
+| val_single_in_dist | 23.3997 | 24.5750 (+5.02%) | **26.4003 (+12.82%)** | **WORST split (2.55× worse than #2952)** |
+| val_geom_camber_rc | 46.0708 | 47.0555 (+2.14%) | 47.9804 (+4.14%) | LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.3003 (-3.16% WIN)** | **18.4270 (+3.14% LOSS)** | **CRUISE WIN BROKEN — sign-flipped** |
+| val_re_rand | 34.9057 | 35.6144 (+2.03%) | 37.4132 (+7.18%) | LOSS |
+| Param count | 407,940 | 408,231 (+291) | 408,231 (+291) | — |
+
+**Hypothesis:** Move #2952's aux head from block-1 (50%) to block-3 input (75% depth, index 2). Predicted: deeper-block features more linearly mappable → lower aux/surf ratio → less representational conflict.
+
+**DECISIVE MECHANISTIC FINDINGS:**
+
+1. **Aux/surf ratio prediction PARTIALLY CONFIRMED.** Ratio at convergence dropped from 3.72× (50%) → 2.48× (75%). Block-3 features ARE somewhat more linearly mappable than block-1. BUT the ratio is still 2.5× — not the predicted ~1.0-1.5× — partial mechanistic confirmation WITHOUT behavioral payoff.
+
+2. **Weight divergence pattern UNCHANGED with depth.** ||W_aux||/||W_primary||=2.08 (75%) vs 2.22 (50%), basically identical. Cosine similarity on p channel = -0.096 (75%) vs +0.050 (50%), both near-orthogonal. **The aux head learns a near-orthogonal projection on the metric channel REGARDLESS of placement.** Depth doesn't fix representational mismatch — it just changes how much downstream "buffer" exists to dilute the orthogonal aux gradient.
+
+3. **CANONICAL META-SIGNAL DESTROYED, NOT JUST ATTENUATED.** Headline finding: cruise WIN at 50% (-3.16%) → cruise LOSS at 75% (+3.14%). Sign-flipped. The cruise WIN from #2952 was BUFFER-DEPENDENT — the primary head had 2 untouched post-aux blocks to "smooth over" the aux pull; at 75% depth that buffer is gone, all splits regress. **Refines meta-signal interpretation:** cruise-WIN patterns under structural interventions require POST-INTERVENTION blocks to remain available.
+
+4. **in_dist intensifies with depth: +5.02% (50%) → +12.82% (75%), 2.55× worse.** Late-stage feature distortion is the in_dist regression driver — not upstream representation quality. Confirms the meta-signal in_dist component is driven by LATE-LAYER perturbations.
+
+5. **DEPTH-AXIS DEEP-SUPERVISION COMPREHENSIVELY CLOSED — MONOTONIC PATTERN.** 0% baseline 30.5605 → 50% +1.89% → 75% +6.53%. Strictly worse with depth. Opposite of hypothesis-of-record. Axis exhausted at α=0.1 across both depths tested.
+
+6. **Five structural surface-targeting interventions all LOSS:** #2933 output-weighting, #2946 head-split, #2952 mid-aux, #2956 asymmetric correction, #2961 deep-aux. **The "surface-pathway capacity" hypothesis is dead at this scale/budget.** Future attacks need to be on DATA-AXIS or alignment-with-gradient-direction side.
+
+**135th taxon CLOSED:** AUX-SUPERVISION-AT-BLOCK-3-INPUT (75% DEPTH) / DEPTH-AXIS-DEEP-SUPERVISION-MONOTONIC-CLOSED / META-SIGNAL-CRUISE-WIN-IS-BUFFER-DEPENDENT.
+
+**Student's headline insight:** "The meta-signal lives somewhere we haven't probed — three structural interventions all reproduce or worsen the in_dist regression. Suggests it's not a surface-level architectural lever but something about data-balance (in_dist is the smallest split? in_dist has narrowest geometry distribution?)."
+
+**Followup assigned:** #2975 alphonse volume-aux-at-block-1 (DIRECT TARGET INVERSION of #2952: aux head predicts VOLUME field instead of surface field, SAME block-1 placement, SAME α=0.1, SAME +291 params. Tests orthogonality hypothesis directly via student suggestion #1 verbatim. If aux ALIGNS with dominant vol gradient direction (~70% of nodes), predicted: aux/vol ratio ~0.5-1.0× (NOT 2.5-3.7×); high cos sim with primary; either WIN or wash. If LOSS too → aux mechanism fundamentally broken regardless of target → axis comprehensively closed across BOTH target families. 136th axis.)
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2924: sam-rho-0.05 — **CLOSED STALE_WIP (procedural, no LOSS verdict; flatness-wrapper axis UNRESOLVED)**
 
 - **Branch:** charliepai2g48h5-thorfinn/sam-rho-0.05
