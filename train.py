@@ -240,14 +240,19 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, sw_p, sw_uv, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Per-channel surface weighting: ``sw_uv`` weights the (Ux, Uy) sum, ``sw_p``
+    weights the pressure sum (each normalized by the surface node count, NOT
+    the per-element count — so ``sw_uv == sw_p == surf_weight`` recovers the
+    baseline single-bucket loss exactly).
     """
-    vol_loss_sum = surf_loss_sum = 0.0
+    vol_loss_sum = surf_loss_uv_sum = surf_loss_p_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
@@ -282,8 +287,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 (abs_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
-            surf_loss_sum += (
-                (abs_err * surf_mask.unsqueeze(-1)).sum()
+            abs_err_uv = abs_err[..., 0:2]  # Ux, Uy
+            abs_err_p = abs_err[..., 2:3]   # pressure
+            surf_loss_uv_sum += (
+                (abs_err_uv * surf_mask.unsqueeze(-1)).sum()
+                / surf_mask.sum().clamp(min=1)
+            ).item()
+            surf_loss_p_sum += (
+                (abs_err_p * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -294,9 +305,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
-    surf_loss = surf_loss_sum / max(n_batches, 1)
+    surf_loss_uv = surf_loss_uv_sum / max(n_batches, 1)
+    surf_loss_p = surf_loss_p_sum / max(n_batches, 1)
+    # Logged surf_loss = sum_uv/N + sum_p/N; equals baseline surf_loss numerically.
+    surf_loss = surf_loss_uv + surf_loss_p
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "surf_loss_uv": surf_loss_uv, "surf_loss_p": surf_loss_p,
+           "loss": vol_loss + sw_uv * surf_loss_uv + sw_p * surf_loss_p}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -346,6 +361,10 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_weight_p": cfg.surf_weight_p,
+        "surf_weight_uv": cfg.surf_weight_uv,
+        "sw_p_effective": float(sw_p),
+        "sw_uv_effective": float(sw_uv),
         "epochs_configured": cfg.epochs,
     }
 
@@ -387,6 +406,12 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    # Per-channel surface weights. <0 = fallback to surf_weight (backwards compat).
+    # Weight is applied to the per-channel-group SUM normalized by surface node
+    # count (NOT per-element count), so sw_p == sw_uv == surf_weight recovers
+    # the baseline single-bucket loss exactly.
+    surf_weight_p: float = -1.0
+    surf_weight_uv: float = -1.0
     epochs: int = 50
     n_layers: int = 5
     n_head: int = 4
@@ -401,6 +426,10 @@ class Config:
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+sw_p = cfg.surf_weight_p if cfg.surf_weight_p >= 0 else cfg.surf_weight
+sw_uv = cfg.surf_weight_uv if cfg.surf_weight_uv >= 0 else cfg.surf_weight
+print(f"Surface loss weights: sw_uv={sw_uv}, sw_p={sw_p} (surf_weight={cfg.surf_weight})")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -470,7 +499,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_surf_uv = epoch_surf_p = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -488,8 +517,14 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            abs_err_uv = abs_err[..., 0:2]  # Ux, Uy
+            abs_err_p = abs_err[..., 2:3]   # pressure
+            surf_loss_uv = (abs_err_uv * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            surf_loss_p = (abs_err_p * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Logged surf_loss = sum_uv/N + sum_p/N; equals baseline surf_loss numerically.
+            surf_loss = surf_loss_uv + surf_loss_p
+            loss = vol_loss + sw_uv * surf_loss_uv + sw_p * surf_loss_p
 
         optimizer.zero_grad()
         loss.backward()
@@ -497,16 +532,20 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_uv += surf_loss_uv.item()
+        epoch_surf_p += surf_loss_p.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_uv /= max(n_batches, 1)
+    epoch_surf_p /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, sw_p, sw_uv, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -532,13 +571,15 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_uv": epoch_surf_uv,
+        "train/surf_loss_p": epoch_surf_p,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} (uv={epoch_surf_uv:.4f} p={epoch_surf_p:.4f})]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -564,7 +605,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, sw_p, sw_uv, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
