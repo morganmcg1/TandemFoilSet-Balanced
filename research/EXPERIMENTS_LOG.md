@@ -1,5 +1,39 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 23:00 — PR #1605: asinh-p400 pressure transform ✅ MERGED (new baseline, −6.68% on prior)
+
+- **Student branch:** `charliepai2g48h1-edward/asinh-transform-pressure-target`
+- **Hypothesis:** `asinh(p/scale)` compresses heavy-tailed pressure distribution, giving L1 smoother gradient on extreme pressures. Scale=400 (more aggressive than σ_p=680) chosen based on round-2 finding that scale=680 regressed rc slightly under the high-LR OneCycle schedule.
+
+### Result (vs PR #2970 baseline 51.817 / test 44.616)
+
+| Arm | scale | val_avg | Δ vs #2970 | test_avg | Δ vs #2970 |
+|-----|------:|--------:|-----------:|---------:|-----------:|
+| **A** | **400** | **48.357** | **−6.68%** ✅ | **41.112** | **−7.86%** ✅ |
+| B | 680 | 48.634 | −6.15% | 41.403 | −7.21% |
+
+### Per-split val (Arm A vs PR #2970 baseline)
+
+| Split | Baseline #2970 | Arm A scale=400 | Δ |
+|-------|--------------:|---------------:|---|
+| val_geom_camber_cruise | 31.929 | **30.373** | −4.9% |
+| val_re_rand | 51.773 | **48.264** | −6.8% |
+| val_single_in_dist | 55.477 | **51.960** | −6.3% |
+| val_geom_camber_rc | 68.090 | **62.832** | −7.7% |
+
+**Wins on ALL 4 splits** — including rc (−7.7% from pct_start baseline, −9.87% from #1625 baseline).
+
+### Context: experiment ran BEFORE pct_start merged
+
+Edward's runs started at 21:05/21:28 UTC, before pct_start=0.2 merged at 22:38. Recipe used: no `--pct_start 0.2`. However, val=48.357 still beats the pct_start baseline (51.817). The compound (`--asinh_p_scale 400.0 --pct_start 0.2`) is unverified — follow-up assigned as PR #3062.
+
+### New baseline recipe
+`--epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --asinh_p_scale 400.0`
+
+Note: `--pct_start 0.2` NOT yet in recipe — pending compound verification.
+
+---
+
 ## 2026-05-14 22:38 — PR #2970: OneCycleLR pct_start tuning (0.05/0.2) ✅ MERGED (new baseline)
 
 - **Student branch:** `charliepai2g48h1-frieren/onecycle-pct-start-tuning`

@@ -5,12 +5,54 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-14)
 
-**Nine winners merged.** PR #2970 (frieren, pct_start=0.2) is the
-current baseline at `val_avg/mae_surf_p = 51.817` (-2.88% val / -2.47% test vs PR #1625).
-Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --pct_start 0.2`
-VRAM footprint ~24 GB. Throughput: ~50.5 s/epoch. All 35 epochs fit in ~29 min.
+**Ten winners merged.** PR #1605 (edward, asinh-p400 pressure transform) is the
+current baseline at `val_avg/mae_surf_p = 48.357` (-6.68% val / -7.86% test vs PR #2970).
+Recipe: `--loss l1 --lr 2e-3 --epochs 35 --eval_every 2 --compile_model --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --asinh_p_scale 400.0`
+VRAM footprint ~24 GB. Throughput: ~50.5 s/epoch. All 35 epochs fit in ~30 min.
+**Note:** pct_start=0.2 (PR #2970, val 51.817) has NOT been compounded with asinh yet. Combining both may yield additional improvement — follow-up assigned to edward.
 
-## 2026-05-14 22:34 — PR #2970: OneCycleLR pct_start=0.2 (frieren) ← CURRENT BEST
+## 2026-05-14 23:00 — PR #1605: asinh pressure transform scale=400 (edward) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **48.357**
+- **Paper-facing metric:** `test_avg/mae_surf_p` = **41.112**
+- **Improvement vs PR #2970 (51.817):** -6.68% val / -7.86% test
+- **Improvement vs PR #1625 (53.352):** -9.36% val / -10.13% test
+- **Best epoch:** 35/35 configured
+- **Key change:** `--asinh_p_scale 400.0` applies `asinh(p/400)` to the pressure channel before normalization, compressing heavy tails and giving L1 a smoother gradient on extreme pressures. Post-transform pressure stats recomputed from training set: `(mean_p, std_p) = (-0.1416, 0.7811)`. Wins on ALL 4 val splits — including `val_geom_camber_rc` (-9.87%).
+- **Per-split val breakdown (epoch 35):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 30.373 |
+| val_re_rand | 48.264 |
+| val_single_in_dist | 51.960 |
+| val_geom_camber_rc | **62.832** |
+| **val_avg** | **48.357** |
+
+- **Per-split test breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_geom_camber_cruise | (see metrics.jsonl) |
+| test_geom_camber_rc | (see metrics.jsonl) |
+| test_re_rand | (see metrics.jsonl) |
+| test_single_in_dist | (see metrics.jsonl) |
+| **test_avg** | **41.112** |
+
+- **Metric artifacts:**
+  - Arm A (scale=400, winner): `models/model-asinh-p400-cw112-sw5-compiled-20260514-220515/metrics.jsonl`
+  - Arm B (scale=680): `models/model-asinh-p680-cw112-sw5-compiled-20260514-212816/metrics.jsonl`
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 35 --lr 2e-3 --loss l1 --eval_every 2 --compile_model \
+  --surf_weight 5 --surf_channel_weight "1.0,1.0,2.0" --asinh_p_scale 400.0 \
+  --agent charliepai2g48h1-edward --experiment_name asinh-p400-cw112-sw5-compiled
+```
+
+Note: `--asinh_p_scale 400.0` is now required. Recompute post-asinh pressure stats from training set when running (approved deviation, round-1 advisory comment). `--pct_start 0.2` (PR #2970) has NOT been compounded with asinh yet — follow-up experiment assigned.
+
+## 2026-05-14 22:34 — PR #2970: OneCycleLR pct_start=0.2 (frieren) [previous best]
 
 - **Primary metric:** `val_avg/mae_surf_p` = **51.817**
 - **Paper-facing metric:** `test_avg/mae_surf_p` = **44.616**
