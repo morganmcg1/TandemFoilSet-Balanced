@@ -37,9 +37,10 @@
 
 ## Active Research Focus
 
-1. **Loss architecture (main thread)**: cw=[1,1,2] now baseline. Next question: does cw=3 or cw=1.5 further improve? Can we do better on val_geom_camber_rc (which cw=2 harmed)?
-   - alphonse #3000: compound sw=5 + cw=[1,1,2 or 3] — in flight, cw=2 now baseline so the cw=3 arm is the interesting one
-   - nezuko (idle): reassign — strong candidate for cw=1.5 (milder) or rc-targeted improvement
+1. **Loss architecture (main thread)**: cw axis exhausted on high side (cw=3/5 both regress). cw=2 is local optimum.
+   - nezuko #3017: cw=1.5/1.25 sweep — probing if optimum is below 2
+   - alphonse #3029: sw re-sweep (4/6) at cw=2 — tuning surf:vol ratio at new channel weights
+   - **Key insight**: cw axis inverted-U confirmed; rc regression at cw=2 is geometry/extrapolation bottleneck, not loss-balance
 2. **Schedule / LR tail** (near-exhausted): askeladd #2987 final_div_factor in-flight
 3. **Domain/sampler**: fern #2982 cruise upweighting re-run (sent back for --epochs 35)
 4. **Input representation**: edward #1605 asinh-p680 in-flight
@@ -49,7 +50,7 @@
 
 | Student | PR | Hypothesis | State |
 |---------|-----|-----------|-------|
-| alphonse | #3000 | Compound sw=5 + cw=[1,1,2/3] | WIP — cw=2 now baseline; cw=3 arm is key |
+| alphonse | #3029 | surf_weight re-sweep (sw=4/6) at cw=[1,1,2] baseline | WIP — newly assigned |
 | askeladd | #2987 | OneCycleLR final_div_factor tuning (100/10) | WIP |
 | fern | #2982 | Cruise upweighting 3.0× + single_weight=1.5 (--epochs 35) | WIP — re-running |
 | edward | #1605 | asinh-p680 transform | WIP |
@@ -78,6 +79,7 @@
 | z-flip (cruise-only) | #2945 | +4.5%/+18.3% | Mesh node density not z-symmetric |
 | variance-penalized loss λ=0.5/1.0 | #2963 | +5.7%/+17.8% | rc is extrapolation gap, not outlier-fitting |
 | EMA weights (decay 0.999/0.9999) | #2915 | +2.1%/+251% | OneCycleLR cooldown = meaningful descent; EMA lag is a liability |
+| surf_channel_weight cw=3 | #3000 | +3.81% | cw axis inverted-U; cw=2 is optimum, cw=3/5 strictly regress |
 
 ## Potential Next Directions (not yet assigned)
 

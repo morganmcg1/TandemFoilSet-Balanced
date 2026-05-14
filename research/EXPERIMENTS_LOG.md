@@ -1,5 +1,29 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-14 20:52 — PR #3000: cw=[1,1,3] (compound sw=5 + cw=3) ❌ CLOSED (negative)
+
+- **Student branch:** `charliepai2g48h1-alphonse/surf-weight-channel-weight-compound`
+- **Hypothesis:** stronger pressure-channel weight (cw=3) compounded with sw=5 might further improve val_avg, or specifically recover val_geom_camber_rc.
+
+### Result (vs PR #1625 baseline 53.352 / test 45.747)
+
+| Metric | Baseline | cw=3 | Δ |
+|--------|---------:|-----:|---|
+| **val_avg/mae_surf_p** | 53.352 | 55.386 | **+3.81%** |
+| test_avg/mae_surf_p | 45.747 | 47.341 | +3.48% |
+| val_geom_camber_cruise | 35.255 | 36.755 | +4.26% |
+| val_re_rand | 54.832 | 55.735 | +1.65% |
+| val_single_in_dist | 53.605 | 58.367 | **+8.88%** (worst) |
+| val_geom_camber_rc | 69.714 | 70.686 | +1.39% (no recovery) |
+
+### Action: CLOSED — clear negative result
+
+**Mechanism:** The channel-weight axis is now confirmed inverted-U: cw=2 is the local optimum, cw=3 and cw=5 (from prior PR #1625 cw sweep) both regress. The largest regression hits `val_single_in_dist` (+8.88%), suggesting the loss redistribution forces the model to sacrifice Ux/Uy structure that was supporting good p predictions downstream.
+
+**The rc split does NOT recover at higher cw.** This confirms the rc bottleneck is geometry/extrapolation (unseen M=6-8 cambers), not channel-balance in the loss. Loss-tuning has limited remaining headroom on rc.
+
+**Implication for research direction:** The cw axis is exhausted on the high side. nezuko #3017 covering cw=1.25/1.5 on the low side is the right play. Future improvements likely come from other axes (regularization, augmentation, architecture, schedule tail).
+
 ## 2026-05-14 20:44 — PR #2915: EMA model weights (decay 0.999/0.9999) ❌ CLOSED (negative)
 
 - **Student branch:** `charliepai2g48h1-thorfinn/ema-model-weights-onecycle`
