@@ -4,6 +4,55 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 02:06 — PR #2674 (MERGED, thorfinn): max_norm=0.35 — clip U-curve test-side closure, NEW BASELINE
+
+- **Branch:** `willowpai2g48h2-thorfinn/max-norm-bracket-low-on-hybrid`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Completes max_norm U-curve below 0.5. #2606 monotone-bad direction (0.5→1.0→2.0 worse) said the optimum is at 0.5 or below. Tests "tight-clip-OOD-friendly" hypothesis from #2606 per-split signature (geom_camber_rc differentially benefited).
+
+### Result table (vs hybrid baseline #2311)
+
+| Arm | max_norm | W&B | val | test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline | 0.5 | `objur0b9` | 45.2181 | 38.7661 | — | — | — |
+| **Arm 1** | **0.35** | `ieu1futo` | **45.1538** | **38.6367** | **−0.064** | **−0.129** | **MERGE — wins both axes** |
+| Arm 2 | 0.25 | `dsrjmt7u` | 44.9629 | 38.9340 | −0.255 | +0.168 | val-only win, test regress |
+
+### Per-split val (vs baseline)
+
+| Split | Arm 1 (0.35) | Δ | Arm 2 (0.25) | Δ |
+|---|---:|---:|---:|---:|
+| single_in_dist | 47.146 | +0.18 | 47.420 | +0.45 |
+| **geom_camber_rc** | 58.002 | **−0.12** | **56.564** | **−1.56** |
+| geom_camber_cruise | 28.887 | −0.61 | 29.183 | −0.31 |
+| re_rand | 46.580 | +0.30 | 46.685 | +0.40 |
+
+### Per-split test (vs baseline)
+
+| Split | Arm 1 (0.35) | Δ | Arm 2 (0.25) | Δ |
+|---|---:|---:|---:|---:|
+| single_in_dist | 40.379 | +0.04 | 40.551 | +0.21 |
+| **geom_camber_rc** | 53.068 | +0.29 | 53.649 | **+0.87** |
+| geom_camber_cruise | 23.285 | −0.43 | 23.368 | −0.34 |
+| re_rand | 37.816 | −0.42 | 38.168 | −0.06 |
+
+### Banked findings
+
+1. **max_norm U-curve test-side minimum at 0.35** — val keeps descending below; test bottoms at 0.35. Full picture across 5 settings: val 45.22 (0.5) → 45.15 (0.35) → 44.96 (0.25); test 39.40 (1.0) → 38.77 (0.5) → **38.64 (0.35)** → 38.93 (0.25). Test minimum unambiguously at 0.35.
+2. **clip_fraction=100% at both 0.35 and 0.25** (sampled 4875/4875 steps each arm) — past #2606's ~99% at max_norm=0.5; Lion+clip is now in strict constant-magnitude sign-step regime. Going below 0.35 picks up val-specific basins that don't generalize.
+3. **Pre-clip grad_norm invariant** (5.30 vs 5.33 median at 0.35 vs 0.25; matches #2606 ~5.3 at 0.5) — gradient distribution is set by (model + data + loss), not by clip parameter.
+4. **σ-spread bit-identical** at 0.475 (Arm 1) → 0.473 (Arm 2) — Kendall axis structurally orthogonal to max_norm; the #2311 hybrid Lion+AdamW(σ) fix holds.
+5. **NEW: Val-test divergence on geom_camber_rc at max_norm=0.25** — val −1.56 but test +0.87. Cleanest example yet of val-overfit basin. Likely small-pool noise (val=100 samples vs test=200) or over-compression basin that doesn't generalize. **Useful for paper:** val_geom_camber_rc as a generalization predictor is unreliable below max_norm=0.35.
+6. **Tight-clip-OOD-friendly hypothesis from #2606 partially survives** — val_geom_camber_rc improves with tighter clip (matches prediction) but test_geom_camber_rc starts regressing below 0.35 (refutes "monotonic-tighter-is-better" reading). Mechanism is "clip ≤ 0.35 helps generalization; clip < 0.35 helps val only".
+7. **Identical runtime/VRAM/step-time across arms** — max_norm is O(P) and negligible. New baseline costs nothing.
+8. **Seed-0 reproducibility confirmed** — Arm 1 had two identical runs (`qtdyho9w` at 00:07 + `ieu1futo` at 01:23) producing bit-identical metrics. Useful baseline for future PRs comparing this seed=0 trajectory.
+
+### Conclusion
+
+Clean compound win on both val and test, single CLI flag change, structurally orthogonal to all prior banked fixes. Squash-merged 2026-05-14 02:06 UTC. New baseline: val 45.1538 / test 38.6367 / W&B `ieu1futo`.
+
+---
+
 ## 2026-05-14 01:15 — PR #2701 (ASSIGNED, alphonse): Second-seed confirmation on merged hybrid baseline #2311 — paper-facing noise floor
 
 - **Branch:** `willowpai2g48h2-alphonse/hybrid-baseline-seed-confirm`

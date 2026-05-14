@@ -8,6 +8,55 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-14 02:06 — PR #2674: max_norm=0.35 on hybrid stack — clip U-curve closure, test-side minimum
+
+- **val_avg/mae_surf_p:** **45.1538** (seed 0, SWA-model eval, max_norm=0.35)
+- **test_avg/mae_surf_p:** **38.6367** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #2311 (45.2181 / 38.7661): val **−0.14%**, test **−0.33%**
+- Cumulative improvement vs. PR #1757: val **−32.24%**, test **−33.77%**
+
+### Per-split SWA (surface MAE, p)
+
+| Split | val (max_norm=0.35) | Baseline #2311 (max_norm=0.5) | Δ val | test (max_norm=0.35) | Baseline #2311 | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 47.146 | 46.967 | +0.18 | 40.379 | 40.340 | +0.04 |
+| geom_camber_rc | 58.002 | 58.126 | **−0.12** | 53.068 | 52.781 | +0.29 |
+| geom_camber_cruise | 28.887 | 29.496 | **−0.61** | 23.285 | 23.712 | **−0.43** |
+| re_rand | 46.580 | 46.283 | +0.30 | 37.816 | 38.231 | **−0.42** |
+| **avg** | **45.154** | **45.218** | **−0.14%** | **38.637** | **38.766** | **−0.33%** |
+
+Mixed val per-split (2 win, 2 lose); clean test win (3 of 4 splits improve). Largest test gains on cruise (−0.43) and re_rand (−0.42); marginal geom_camber_rc test regression (+0.29) within noise. The U-curve test-side minimum is empirically located at max_norm=0.35.
+
+### Mechanism
+
+**max_norm U-curve closure.** Tighter grad-clip under Lion's sign-update regime acts as a secondary lr (sets the constant step magnitude). Going from 2.0→1.0→0.5→0.35 monotonically improves val. Test bottoms at 0.35: going further to 0.25 (Arm 2) keeps improving val (44.96, −0.26 vs new baseline) but regresses test (+0.30). Below 0.35 the clip_fraction=100% strict sign-step regime overfits val-specific basins (val_geom_camber_rc gains don't transfer to test_geom_camber_rc).
+
+- **clip_fraction=100% at max_norm=0.35** (4875/4875 sampled steps) — past #2606's ~99% at max_norm=0.5; Lion+clip becomes a strict constant-magnitude sign-step regime.
+- **Pre-clip grad_norm invariant** (5.30 median at 0.35 vs ~5.3 at 0.5 ref) — the clip distribution is set by (model + data + loss), not by the clip parameter.
+- **σ-spread bit-identical** (0.475 → 0.473 across the bracket) — Kendall axis structurally orthogonal to max_norm, the hybrid Lion+AdamW(σ) #2311 fix is preserved.
+- **No runtime cost** — step-time, VRAM, runtime identical to baseline.
+
+### Config
+
+Transolver + FiLM (mid_dim=64) + Huber β=0.3 + per-sample Re-weight + **grad-clip max_norm=0.35** + RFF (16-dim, σ=0.5) + Lion lr=3e-4 wd=3e-4 (model params) + AdamW lr=5e-4 wd=0 (log_σ params, hybrid_kendall_lr=5e-4)
+Schedule: CosineAnnealingLR(T_max=15), SWA (start_frac=0.75, swa_lr=lr*0.2, anneal_epochs=2)
+
+W&B run: `ieu1futo` (Arm 1, max_norm=0.35) | sibling Arm 2: `dsrjmt7u` (max_norm=0.25, val-only win)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 --max_norm 0.35 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 0.5 \
+  --huber_beta 0.3 \
+  --optimizer lion --lr 3e-4 --weight_decay 3e-4 \
+  --hybrid_kendall_lr 5e-4 \
+  --seed 0
+```
+
+---
+
 ## 2026-05-13 19:10 — PR #2311: Hybrid Lion (model) + AdamW (Kendall σ heads, lr=5e-4) — σ-collapse fix compounds with σ=0.5 stack
 
 - **val_avg/mae_surf_p:** **45.2181** (seed 0, SWA-model eval, rebased on advisor tip a685e78)

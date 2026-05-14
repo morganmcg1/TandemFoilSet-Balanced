@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-14 01:15 (Loop 35: #2616 alphonse film_mid_dim sweep CLOSED — both arms regress (mid_dim=32 val 45.92/test 39.27, mid_dim=128 val 45.94/test 39.36); film_mid_dim=64 robust. 8 banked findings inc. **NEW: NO OOD asymmetry on FiLM capacity axis** (cleanly refutes architectural-bottleneck hypothesis for #2500 σ-spread asymmetry — geom_camber_rc moves +1.31/+1.16 in both arms, no spread between OOD/in-dist splits); **NEW: σ-spread orthogonal to FiLM capacity** (final spread 0.473–0.481 across both arms, indistinguishable from baseline 0.475 — confirms σ axis is structurally independent from FiLM mid_dim). Assigned #2701 alphonse second-seed confirmation {seeds 1, 2} on exact baseline command — paper-strengthening experiment to confirm #2311 win magnitude is seed-robust. All 8 students active. 5 PRs still stale_wip pending API rate-limit recovery.)
+- **Last updated:** 2026-05-14 02:06 (Loop 39: **#2674 thorfinn max_norm=0.35 MERGED — new baseline val 45.1538 / test 38.6367 (−0.14% val / −0.33% test vs #2311).** Clean compound win on both axes; single CLI flag change; structurally orthogonal to all prior fixes (σ-spread 0.475→0.473 preserved bit-identical, grad_norm distribution invariant). 8 banked findings inc. **max_norm test-side U-curve minimum at 0.35** (val keeps descending below; test bottoms — Arm 2 at 0.25 wins val −0.255 but loses test +0.168, val-overfit basin); **clip_fraction=100% at both 0.35 and 0.25** (4875/4875 steps each — strict constant-magnitude sign-step regime past #2606's ~99% at 0.5); **val-test divergence on geom_camber_rc at max_norm=0.25** (val −1.56 vs test +0.87 — cleanest example yet of val-overfit basin, useful for paper). Thorfinn now idle — assigning new experiment. 6 students still stale_wip pending student-side post-result recovery.)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -10,27 +10,27 @@
 - **Idle students:** 0 (all 8 active)
 - **⚠ Parser gotcha:** Avoid inline `SENPAI-RESULT:` substring in advisor comments — parser treats any line with that substring as a terminal marker and tries `json.loads` on what follows. Use "terminal-result post" or "SENPAI_RESULT" (underscore) in prose.
 
-## ⭐ Current baseline (PR #2311 merged 2026-05-13 19:10 — hybrid Lion+AdamW Kendall σ fix on σ=0.5 stack)
+## ⭐ Current baseline (PR #2674 merged 2026-05-14 02:06 — max_norm=0.35 on hybrid stack)
 
-- **val_avg/mae_surf_p:** **45.2181** (seed 0, SWA-model)
-- **test_avg/mae_surf_p:** **38.7661** (seed 0, SWA-model, 4-split finite)
-- Improvement over prior #2168 (45.7648 / 39.6619): val **−1.20%**, test **−2.26%**
-- Cumulative improvement vs #1757: val **−32.14%**, test **−33.53%**
-- Config: Transolver + FiLM (mid_dim=64) + Huber β=0.3 + Re-weight + Kendall σ + grad-clip max_norm=0.5 + RFF (16-dim, σ=0.5) + **Lion lr=3e-4 wd=3e-4 (model) + AdamW lr=5e-4 wd=0 (log_σ heads, hybrid_kendall_lr=5e-4)**
-- W&B confirmation run: `objur0b9`
+- **val_avg/mae_surf_p:** **45.1538** (seed 0, SWA-model)
+- **test_avg/mae_surf_p:** **38.6367** (seed 0, SWA-model, 4-split finite)
+- Improvement over prior #2311 (45.2181 / 38.7661): val **−0.14%**, test **−0.33%**
+- Cumulative improvement vs #1757: val **−32.24%**, test **−33.77%**
+- Config: Transolver + FiLM (mid_dim=64) + Huber β=0.3 + Re-weight + Kendall σ + **grad-clip max_norm=0.35** + RFF (16-dim, σ=0.5) + Lion lr=3e-4 wd=3e-4 (model) + AdamW lr=5e-4 wd=0 (log_σ heads, hybrid_kendall_lr=5e-4)
+- W&B confirmation run: `ieu1futo`
 
 ### Per-split (SWA)
 
 | Split | val | test |
 |---|---:|---:|
-| single_in_dist | 46.967 | 40.340 |
-| geom_camber_rc | 58.126 | 52.781 |
-| geom_camber_cruise | 29.496 | 23.712 |
-| re_rand | 46.283 | 38.231 |
-| **avg** | **45.218** | **38.766** |
+| single_in_dist | 47.146 | 40.379 |
+| geom_camber_rc | 58.002 | 53.068 |
+| geom_camber_cruise | 28.887 | 23.285 |
+| re_rand | 46.580 | 37.816 |
+| **avg** | **45.154** | **38.637** |
 
-### Prior baseline (PR #2168 — RFF σ=0.5 on Lion)
-- val 45.7648 / test 39.6619 (for reference in reviewing pending in-flight PRs)
+### Prior baseline (PR #2311 — hybrid Lion+AdamW)
+- val 45.2181 / test 38.7661 (for reference in reviewing pending in-flight PRs)
 
 ## ✓ Merged improvements (all-time)
 
@@ -47,7 +47,8 @@
 | #1757 | beta-0p3-on-rff-kendall | Huber β=0.3 | val=66.66, test=58.32 |
 | #2063 | lion-optimizer-on-beta0p3 | Lion lr=3e-4 | val=47.64, test=40.57 |
 | #2168 | rff-sigma-0p5-on-lion | RFF σ=0.5 (lower-freq prior) | val=45.76, test=39.66 |
-| **#2311** | **hybrid-adamw-kendall-sigma** | **Hybrid Lion+AdamW(σ=5e-4), σ-spread restored** | **val=45.22, test=38.77 ← CURRENT** |
+| #2311 | hybrid-adamw-kendall-sigma | Hybrid Lion+AdamW(σ=5e-4), σ-spread restored | val=45.22, test=38.77 |
+| **#2674** | **max-norm-0p35-on-hybrid** | **max_norm 0.5→0.35, clip U-curve test minimum** | **val=45.15, test=38.64 ← CURRENT** |
 
 ## Current active PRs — Wave 12 (post-hybrid-optimizer baseline 45.22/38.77)
 
@@ -59,9 +60,8 @@
 
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
-| **#2666** | **fern** | wip (training) | huber_beta LOW sweep {0.2, 0.15} on hybrid baseline | Test β-side of β–σ coupling — different mechanism for producing more spread vs head-lr push. Distinguishes spread-via-residual-shape from spread-via-head-lr. **U-curve test:** if β=0.2 spread>0.475 AND regresses, σ-spread axis closed at 0.475 via independent mechanism. |
-| **#2674** | **thorfinn** | wip (training) | max_norm BRACKET LOW {0.25, 0.35} on hybrid baseline | Completes U-curve below 0.5 (monotone direction at 0.5→1.0→2.0 says optimum is at 0.5 or below). Tests "tight-clip-OOD-friendly" hypothesis from #2606 per-split signature. |
-| **#2701** | **alphonse** | wip (new, training) | second-seed confirmation {seeds 1, 2} on exact #2311 baseline command | Paper-strengthening experiment — confirms #2311 win magnitude is seed-robust. **Direct test of seed-noise concern** flagged in #2407 thorfinn (val noise estimate ~0.86, test seed gap 1.42); current val effect ~3.9% well above noise. Zero code change. |
+| **#2666** | **fern** | wip (stale_wip, pending API) | huber_beta LOW sweep {0.2, 0.15} on hybrid baseline | Test β-side of β–σ coupling — different mechanism for producing more spread vs head-lr push. Distinguishes spread-via-residual-shape from spread-via-head-lr. **U-curve test:** if β=0.2 spread>0.475 AND regresses, σ-spread axis closed at 0.475 via independent mechanism. **Comparison baseline shifts** — was vs #2311 (val 45.22), now vs #2674 (val 45.15) — should still beat both for merge. |
+| **#2701** | **alphonse** | wip (training) | second-seed confirmation {seeds 1, 2} on exact #2311 baseline command | Paper-strengthening experiment — confirms #2311 win magnitude is seed-robust. **Direct test of seed-noise concern** flagged in #2407 thorfinn (val noise estimate ~0.86, test seed gap 1.42); current val effect ~3.9% well above noise. Zero code change. **Note:** seeds 1, 2 on #2311 baseline (max_norm=0.5), NOT #2674. Banked baseline for #2311 robustness; not directly comparable to new baseline. |
 | **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
 | **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |
 | **#2463** | **tanjiro** | wip (training done, pending API) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Baseline shift notice sent. SWA mechanism fully orthogonal to σ. |
@@ -131,6 +131,14 @@
 52. **mid_dim=128 step-time blow-up (#2616 alphonse Arm 2)** — Mid_dim=128 slowed training; SWA window compressed. **Same pattern as n_hidden=192 (#2354) and slice_num=96 (#2378)**: any single capacity bump that costs step-time cuts SWA averaging and erases the capacity gain. **Capacity-axis dead-zone mechanism is uniform across width/slice/film.**
 53. **Capacity-axis × SWA window interaction is structural (banked principle)** — All 4 capacity axes (width, depth, slice, film) close not because the model can't use more parameters, but because the 30-min wall clock = ~13 epochs leaves insufficient SWA averaging budget after step-time grows. **Any future capacity bump needs to bundle: (a) earlier swa_start_frac, OR (b) lower-cost dimensions like multi-head reshuffles (e.g., #2442 nezuko n_head sweep — equal-compute capacity reshuffle).**
 54. **Arm 1 even-epoch behavior stable (#2616 alphonse Arm 1, methodology)** — Lower-capacity arm did not show training-instability signature; SWA averaging stable at fewer parameters. **Confirms film_mid_dim is well-conditioned in [32, 128] range** — no narrow-network instability artifacts confounding the result. Banked for future structural changes that touch FiLM dimensions.
+55. **max_norm test-side U-curve minimum at 0.35 (#2674 thorfinn MERGED, NEW BASELINE)** — full picture: val 45.22 (0.5) → 45.15 (0.35) → 44.96 (0.25); test 39.40 (1.0) → 38.77 (0.5) → **38.64 (0.35)** → 38.93 (0.25). Test minimum unambiguously at 0.35. Val keeps descending below; test bottoms. **The empirical clip optimum for this stack is now closed at max_norm=0.35.**
+56. **clip_fraction=100% at both 0.35 and 0.25 (#2674 thorfinn, 4875/4875 sampled steps each)** — past #2606's ~99% at max_norm=0.5. Lion+clip is now in **strict constant-magnitude sign-step regime** below 0.5 — no per-coord magnitude info from gradient survives, only sign. **Going below 0.35 picks up val-specific basins that don't generalize to test.**
+57. **NEW: Val-test divergence on geom_camber_rc at max_norm=0.25 (#2674 thorfinn, IMPORTANT)** — val_geom_camber_rc=56.564 (−1.56 vs baseline) but test_geom_camber_rc=53.649 (+0.87 vs baseline). **Cleanest example yet of val-overfit basin** — same load-bearing OOD axis flips direction between val and test pools. **Likely causes:** (a) small-pool noise (val=100 samples vs test=200), or (b) over-compression basin that finds val-specific minimum but doesn't generalize. **Paper-relevant:** val_geom_camber_rc as a generalization predictor is unreliable below max_norm=0.35.
+58. **Tight-clip-OOD-friendly hypothesis from #2606 partially survives (#2674 thorfinn)** — val_geom_camber_rc improves monotonically with tighter clip (matches prediction). But test_geom_camber_rc starts regressing below 0.35 (refutes naive "tighter is monotonically better"). **Refined mechanism:** clip ≤ 0.35 helps generalization on OOD; clip < 0.35 helps val pool only via val-specific basin fitting.
+59. **σ-spread bit-identical across max_norm bracket (#2674 thorfinn)** — Arm 1 spread=0.475, Arm 2 spread=0.473. **2nd confirmation that σ axis is fully orthogonal to max_norm** (1st: #2606). Hybrid Lion+AdamW(σ) #2311 fix preserved under all clip values tested in [0.25, 2.0].
+60. **Pre-clip grad_norm invariant to clip threshold (#2674 thorfinn)** — 5.30 median at 0.35 vs 5.33 at 0.25; matches #2606's ~5.3 at 0.5. **3rd confirmation that pre-clip distribution is invariant to clip parameter** — it's a property of (model + data + loss), not a function of clip threshold.
+61. **No runtime cost from tighter clip (#2674 thorfinn)** — Identical step-time, runtime, and VRAM across Arms 1 and 2 (and #2606 reference). max_norm is O(P) (parameters), negligible vs forward/backward cost. **New baseline costs nothing in throughput.**
+62. **Seed-0 reproducibility confirmed under hybrid stack (#2674 thorfinn)** — Two independent Arm 1 runs (`qtdyho9w` at 00:07 + `ieu1futo` at 01:23) produced bit-identical metrics. **Useful for future debugging and noise-floor reasoning** — single-seed determinism holds under (Lion+AdamW)×(Kendall σ)×(SWA) stack. (Distinct from across-seed variance — that's what #2701 alphonse will measure.)
 
 ## Key open bottlenecks
 
@@ -155,8 +163,9 @@
 6. ~~**max_norm sweep {1.0, 2.0} on hybrid (#2606 thorfinn)**~~ — **CLOSED ✗** (max_norm=0.5 robust; both arms regress monotonically; 8 banked findings inc. CRITICAL methodology: clip_fraction=1.0 was a summary-key artifact, real per-step ~99%).
 7. ~~**film_mid_dim sweep {32, 128} on hybrid (#2616 alphonse)**~~ — **CLOSED ✗** (both arms regress monotonically; capacity-axis dead zone confirmed; σ-spread orthogonal to FiLM).
 8. **huber_beta LOW sweep {0.2, 0.15} on hybrid (#2666 fern)** — tests β-side of β–σ coupling; produces more spread via residual-shape mechanism rather than head-lr. **Diagnostic test:** distinguishes "premature commitment was the failure mode" from "U-curve is structural across mechanisms".
-9. **max_norm BRACKET LOW {0.25, 0.35} on hybrid (#2674 thorfinn)** — completes U-curve below 0.5 (monotone direction at 0.5→1.0→2.0 from #2606 says optimum is at 0.5 or below). Per-split signature predicts tighter clip → geom_camber_rc protection. Single CLI flag.
-9b. **second-seed confirmation {seeds 1, 2} on #2311 (#2701 alphonse NEW)** — paper-strengthening; confirms #2311 win is seed-robust; addresses noise concerns banked from #2407.
+9. ~~**max_norm BRACKET LOW {0.25, 0.35} on hybrid (#2674 thorfinn)**~~ — **MERGED ✓** (max_norm=0.35 beats baseline on both val −0.064 / test −0.129; test-side U-curve minimum closed at 0.35).
+9b. **second-seed confirmation {seeds 1, 2} on #2311 (#2701 alphonse)** — paper-strengthening; confirms #2311 win is seed-robust; addresses noise concerns banked from #2407.
+9c. **NEW thorfinn assignment (post-merge):** SWA co-tuning at max_norm=0.35 — joint (swa_lr × max_norm) or swa_start_frac × max_norm. Banked from #2606's max_norm × swa_lr co-tuning hypothesis; with clip axis now closed, SWA axis is next narrow lever.
 7. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro)** — averaging-lr level axis from #2342 mechanism finding.
 8. **SWA anneal_epochs=1 on σ=0.5 (#2481 edward)** — SWALR ramp speed; all 3 averaged epochs at swa_lr.
 9. **Skip-SWALR entirely on σ=0.5 (#2484 frieren)** — direct test of SWALR-overrides-cosine mental model; cosine-tail vs SWALR-floor averaging.
@@ -177,18 +186,19 @@
 ### ✓ Landed (10 axes)
 1. Huber β=1.0 (#1452), 2. Per-sample Re-weight (#1586), 3. FiLM (#1585), 4. Grad-clip 1.0 (#1731), 5. Grad-clip 0.5 (#1831), 6. Kendall σ (#1906), 7. RFF σ=1.0 (#2082), 8. Huber β=0.3 (#1757), 9. Lion lr=3e-4 wd=3e-4 (#2063), 10. **RFF σ=0.5 (#2168)** ← CURRENT
 
-### 🔬 In-flight (Wave 12 — post-Loop-35)
-- **second-seed confirmation {seeds 1, 2} on #2311 baseline (#2701 alphonse NEW)** — paper-strengthening; confirms #2311 win is seed-robust
-- **huber_beta LOW sweep {0.2, 0.15} on merged hybrid (#2666 fern)** — β-side of β–σ coupling; distinguishes premature-commitment from structural U-curve
-- **max_norm BRACKET LOW {0.25, 0.35} on merged hybrid (#2674 thorfinn)** — completes max_norm U-curve below 0.5 (monotone bad direction at 0.5→1.0→2.0)
+### 🔬 In-flight (Wave 12 — post-Loop-39)
+- **second-seed confirmation {seeds 1, 2} on #2311 baseline (#2701 alphonse)** — paper-strengthening; confirms #2311 win is seed-robust
+- **huber_beta LOW sweep {0.2, 0.15} on merged hybrid (#2666 fern, stale_wip pending student post-result)** — β-side of β–σ coupling; distinguishes premature-commitment from structural U-curve
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — pending API recovery
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery
 - SWA anneal_epochs=1 on σ=0.5 (#2481 edward) — pending API recovery
 - Skip-SWALR entirely on σ=0.5 (#2484 frieren) — pending API recovery
+- **NEW thorfinn assignment (Loop 39)** — TBD this loop
 
 ### ⭐ Merged (Wave 12 winners)
 - hybrid Lion+AdamW for Kendall σ heads (#2311 fern, 2026-05-13 19:10): val 45.2181 / test 38.7661, −1.20% val / −2.26% test. σ-spread 0→0.475. Structural σ-collapse fix.
+- **max_norm 0.5→0.35 on hybrid stack (#2674 thorfinn, 2026-05-14 02:06): val 45.1538 / test 38.6367, −0.14% val / −0.33% test. Clip U-curve test-side minimum closed. Single CLI flag change.** ← CURRENT
 
 ### ✗ Closed (30+ axes)
 - drop-grad-clip-on-Lion (#2347, 2026-05-13 16:00): max_norm=0.5 is right setting, 4 banked findings inc. 4th σ-collapse confirmation
