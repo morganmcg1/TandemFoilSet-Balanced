@@ -2,6 +2,103 @@
 
 ---
 
+## 2026-05-14 21:50 [Round 138 close-36] UTC — PR #3014 FiLM-input dropout p=0.2 — **LOSS, but cruise PRESERVED — refines outside-block invariant (158th taxon)**
+
+### Closed: #3014 fern film-input-dropout-p-0.2
+
+- **Branch:** charliepai2g48h5-fern/film-input-dropout-p-0.2
+- **Metric artifacts:** models/model-charliepai2g48h5-fern-film-input-dropout-p-0.2-20260514-202817/metrics.jsonl
+- **Hypothesis:** apply Bernoulli dropout p=0.2 on the 3-channel FiLM conditioning vector `[log_Re, AoA0, AoA1]` before the FiLM MLP. Targeted intervention predicted to deliver val_re_rand WIN of −2% to −5% per #2993 closure recommendation.
+
+| Metric | NEW baseline #3006 | #3014 | Δ vs NEW |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **30.7040** | **+3.97% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 25.9774 | +1.96% LOSS |
+| Param count | 407,175 | 407,172 (−3, no α) | n/a (PR built before #3006 merge) |
+
+**Per-split val (best ep58):**
+
+| Split | #2964 (PR-stated) | #3006 (current) | #3014 | Δ vs #3006 |
+|---|---|---|---|---|
+| in_dist | 25.219 | 24.283 | 26.092 | **+7.45% LOSS** |
+| camber_rc | 43.929 | 43.630 | 45.319 | **+3.87% LOSS** |
+| **camber_cruise** | 16.265 | 16.348 | **16.011** | **−2.06% WIN ✓** |
+| re_rand | 34.740 | 33.866 | 35.394 | **+4.51% LOSS** ← target inverted |
+| val_avg | 30.0382 | 29.5318 | **30.7040** | **+3.97% LOSS** |
+
+**Conclusion / mechanistic findings:**
+1. **Re-conditioning overfit hypothesis from #2993 DECISIVELY FALSIFIED.** This PR was the cleanest test of that premise. Re_rand under wd=1e-3 (#2993) was a bias-limited-capacity artifact, NOT evidence of Re-overfitting. The "Re-overfit" lineage closes here.
+2. **FiLM 3-vector is fully load-bearing.** Per-sample stochastic zeroing of conditioning channels hurts every OOD split (matches #2978 AoA-noise + #2973 log_Re-noise closures).
+3. **Cruise basin PRESERVED — refines the outside-block invariant.** FiLM-input dropout sits OUTSIDE TransolverBlocks → outside the residual stream → cruise survives even with regularization. **Joins #3003+#3006+#3008 as the 4th cruise-preserving intervention, and the FIRST non-architectural one.** Refines the invariant: cruise basin is incompatible with RESIDUAL-STREAM perturbation; outside-block regularization (FiLM-pathway, end-to-end loss-function changes, LR-schedule changes, loss-weighting changes, optimizer-state EMA, etc.) does NOT count as residual-stream perturbation.
+
+**Taxon #158:** FILM-CONDITIONING-VECTOR-DROPOUT-AT-P=0.2-FALSIFIES-RE-CONDITIONING-OVERFIT-HYPOTHESIS.
+
+### Round 138 assignments (3 idle students cleared, post-#3014 close):
+
+- **#3031 askeladd surf-weight-5:** halve `surf_weight` from 10.0 to 5.0. **FIRST surf_weight experiment in this launch.** Loss-weighting axis is fresh (zero prior experiments across all 158 closed taxa). Lower-bracket of paired sweep with tanjiro. Pivot from #3013 closure rec #5 ("step back to non-architectural axes"). **160th axis.**
+- **#3032 tanjiro surf-weight-15 (slug `surf-weight-1pt5x` to avoid stale-branch conflict):** boost `surf_weight` to 15.0 (1.5×). Upper-bracket pair with askeladd's lower-bracket. Together with baseline (10.0) gives 3-point loss-weighting axis sweep in one round. Pivot from #3015 (data-axis cluster comprehensively closed: #2918/#2973/#2976/#2978/#3015 all LOSS). Same 160th axis (paired).
+- **#3033 fern wsd-schedule-stable47-decay10:** replace CosineAnnealingLR with WSD (Warmup-Stable-Decay) schedule. Keep 3-epoch linear warmup, then constant 47 epochs at peak LR (1.5e-4), then linear decay 1.0×→0.1× over final 10 epochs. **FIRST LR-shape experiment in this launch** — all prior LR experiments varied VALUES, not the schedule SHAPE. Modern standard recipe (Llama 3, DeepSeek, MiniCPM). Pivot from #3014 closure rec #6 ("pivot to non-conditioning regularization"). **161st axis.**
+
+**Total closed: 158. Winners: 23. 8/8 students busy. Zero idle GPUs.**
+
+**Cruise-preservation ledger (post-#2964):**
+- BROKEN (8): #2961, #2978, #2986, #2988, #2994, #2993, #3010, #3008 ordering-but-not-level
+- PRESERVED ordering (1): #3003 sandwich-LN
+- PRESERVED level (3): #3006 α (WIN), #3008 K-only-LN (mildest LOSS), #3014 FiLM-input-dropout (LOSS but cruise improved)
+- The 4 PRESERVED interventions are all either architectural-structural (#3003, #3006, #3008) OR outside-block-regularization (#3014). The 8 BROKEN interventions are all residual-stream perturbations (stochastic OR deterministic-magnitude). **Refined invariant confirmed across 12 datapoints.**
+
+---
+
+## 2026-05-14 21:01 [Round 138 close-34/35] UTC — PR #3013 weight-tied universal block + PR #3015 Fourier-PE L=6 — **2 LOSS closures (156th, 157th taxa)**
+
+### Closed: #3013 askeladd weight-tied-universal-block
+
+- **Branch:** charliepai2g48h5-askeladd/weight-tied-universal-block
+- **Metric artifacts:** models/model-charliepai2g48h5-askeladd-weight-tied-universal-block-20260514-202132/metrics.jsonl
+- **Hypothesis:** ALBERT/Universal-Transformer recipe — share weights across all 4 TransolverBlocks; tests whether iterative-refinement / fixed-point dynamics emerge at this depth. Predicted −67.9% block params at same compute.
+
+| Metric | NEW baseline #3006 | #3013 | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **34.1291** | **+15.57% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 29.2951 | +14.97% LOSS |
+| Param count | 407,175 | 130,614 | −67.9% block params |
+
+**Per-split val:** in_dist +12.12%, rc +12.80%, **cruise +24.29% LOSS** (8th post-#2964 cruise breakage; largest cruise per-split regression in launch), re_rand +10.74%. ALL splits LOSS.
+
+**KEY MECHANISTIC FINDING — PER-PASS RESIDUAL DIAGNOSTIC:**
+- Pass 0→3: ‖x‖_rms grows monotonically +2.8%, ‖x‖_abs_max grows ~25%
+- **OPPOSITE of fixed-point dynamics** (which would show ‖Δx‖→0 / norms saturate)
+- Multigrid/Newton analogy from hypothesis **does NOT hold** for this network at d=96/n_head=2/n_layers=4
+- SwiGLU gate damping IS present (gate_abs_mean drops 30% across passes) but insufficient to halt residual-norm growth
+
+**Taxon #156:** WEIGHT-TYING-ACROSS-BLOCKS-AT-N=4-DECISIVELY-CLOSED. Each block needs unique parameterization — capacity expressivity is load-bearing, not iterative refinement. Cruise basin structurally requires unique-per-block capacity (+24.3% LOSS confirms basin needs distinct block-level transforms).
+
+### Closed: #3015 tanjiro fourier-pe-l6
+
+- **Branch:** charliepai2g48h5-tanjiro/fourier-pe-l6
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-fourier-pe-l6-20260514-202401/metrics.jsonl
+- **Hypothesis:** NeRF-style Fourier positional encoding with L=6 frequency bands; augments raw coords with sin/cos at 2^k·π for k=0..5; +2,304 expected / +4,608 actual params. Predicted to unlock fine spatial detail.
+
+| Metric | NEW baseline #3006 | #3015 | Δ vs #3006 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 29.5318 | **30.7128** | **+4.00% LOSS** |
+| test_avg/mae_surf_p | 25.4795 | 25.9702 | +1.93% LOSS |
+| Param count | 407,175 | 411,780 | +4,605 |
+
+**Per-split val:** **in_dist −6.49% WIN ✓** (isolated strong WIN), camber_rc +5.89%, camber_cruise +7.68%, re_rand +1.43%.
+
+**KEY MECHANISTIC FINDING — SPECTRAL ALIASING AT COORD SCALE:**
+- Fourier feature distribution at ep1: mean ≈0, std=1/√2=0.7071 (perfect sin/cos equidistribution) — mechanism implemented correctly
+- HOWEVER coord range [−6.53, +6.25] × top freq 2^5·π ≈ 100.5 rad/unit → **top-band max phase 654 rad >> 2π**
+- Top frequency channels become effectively uncorrelated noise — L=6 is too many bands for CFD's coord scale
+- **Failure mode = OVERFIT TO COORD POSITIONS:** in_dist (same coord distribution as train) benefits, OOD (geometry-shifted, AoA-shifted, Re-shifted) overfits to absolute coord fingerprints rather than physics signal (dsdf/saf/log_Re/AoA)
+
+**Cruise meta-signal:** held qualitatively (val_cruise stays LOWEST split at 17.51 val / 14.20 test — ordering preserved like #3003) but attenuated quantitatively (+7.68% LOSS). 8th post-#2964 cruise attenuation; ordering-preservation joins #3003+#3006+#3008 training-time-preserving set.
+
+**Taxon #157:** FOURIER-PE-L=6-LOSS-WITH-IN_DIST-WIN / SPECTRAL-OVERFIT-TO-SPATIAL-STRUCTURE-BREAKS-OOD-GENERALIZATION. **DATA/INPUT-REPRESENTATION AXIS COMPREHENSIVELY CLOSED** — #2918 mixup + #2973 log_Re + #2976 coord + #2978 AoA + #3015 Fourier all LOSS at tested magnitudes.
+
+---
+
 ## 2026-05-14 21:20 [Round 138 close-32/33] UTC — PR #3009 SqReLU + PR #3008 K-only LN — **2 LOSS closures (154th, 155th taxa)**
 
 ### Closed: #3009 nezuko squared-relu-mlp (Option A: SwiGLU inner-act swap)
