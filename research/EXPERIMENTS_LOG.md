@@ -7,6 +7,49 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 00:15 — PR #2657: Cautious Lion on n_head=2+Lion — CLOSED
+
+- `willowpai2g24h3-thorfinn/cautious-lion`
+- **Hypothesis (H3 from RESEARCH_IDEAS 2026-05-13_22:30):** Mask Lion updates where `sign(g) ≠ sign(interp_momentum)` per Liang et al. 2411.16085 (ICLR 2026). Targets confirmed Lion+noise amplification mechanism (PR #2097 coord-jitter regress). Implementation via timm's `Lion(caution=True)` — one-line plumbing change.
+- **Results (single clean seed `mmcehzjn`, killed duplicate `bddaxut9` on advisor poke):**
+
+| Metric | Cautious Lion | Baseline Lion (gd934e9l) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | **45.6368** | 40.2741 | **+13.32% ❌** |
+| test_avg/mae_surf_p | **38.9703** | 33.6017 | **+15.98% ❌** |
+| val_single_in_dist | 46.618 | 35.836 | +30.1% |
+| val_geom_camber_rc | 58.884 | 53.495 | +10.1% |
+| val_geom_camber_cruise | 31.642 | 28.146 | +12.4% |
+| val_re_rand | 45.403 | 43.619 | +4.1% |
+| best epoch | 30/50 | 36/50 | (terminated at 30-min cap, still descending ~0.5-1/epoch) |
+| Peak VRAM | 10.0 GiB | ~13.6 GiB | smaller — caution gates updates |
+
+- **Analysis (thorfinn's terminal):** Three sharp insights from his analysis:
+  1. **Motivation surface absent.** The cautious mask was designed to suppress amplification of adversarial noise (e.g. coord-jitter). With no jitter or aug in the baseline, the only signal being suppressed is normal SGD minibatch noise — which IS information, not corruption. Selectively dropping those updates is a net loss.
+  2. **Re-normalization amplifies variance.** `update *= mask / mask.mean()` makes surviving updates take 1.4-2× larger effective steps when mask.mean() ≈ 0.5-0.7. Combined with Lion's already-large sign-step magnitude, this is variance amplification, not noise suppression.
+  3. **Paper-regime mismatch.** Cautious gains (1.5-3× speedup) are wall-clock at multi-day budgets where momentum stabilizes. At epoch 30 in a 50-epoch schedule with warmup_epochs=5, momentum is barely converged — selectivity has no asymptotic regime to benefit from.
+- **Banked follow-ups (thorfinn's suggestions, not assigning):**
+  - Cautious + coord-jitter (2×2 grid) — actually tests hypothesis as stated; requires jitter plumbing
+  - Cautious WITHOUT re-normalization — isolates variance-amplification mechanism
+  - Cautious AdamW + jitter — decouples Lion's sign-step variance from cautious gating
+- **Next experiment:** thorfinn reassigned to **PR #2679 APW Curriculum** (H1; per-sample loss-EMA-weighted SmoothL1 with α 0→0.5 ramp; first sample-conditional gradient shaping test on this stack).
+- **Banked lesson:** Cautious Optimizers' paper-regime is multi-day LLM training. Don't assume "optimizer-level interventions" port to 30-min CFD surrogates without verifying convergence regime overlap.
+
+## 2026-05-14 00:30 — PR #2667: warmup_epochs=10 on n_head=2+Lion — RUNNING (terminal pending)
+
+- `willowpai2g24h3-edward/warmup-epochs-10`
+- **Hypothesis:** Edward's own follow-up #2 from #2612 terminal SENPAI-RESULT: "Since training is gradient-step-bound, anything that gets the live weights to a lower-loss point at epoch 50 will translate directly into a lower-loss EMA. Longer warmup (5→10 epochs) delays the LR peak and shifts more 'useful refinement' into the late phase the EMA actually captures."
+- **Result (single seed `wpt9oaph`, finished):**
+
+| Metric | warmup=10 (this run) | Baseline (gd934e9l) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | **41.7675** | 40.2741 | **+3.71% ❌** |
+| test_avg/mae_surf_p | **34.4976** | 33.6017 | **+2.67% ❌** |
+| Step count | 27000 (final) | ~27000 | (both hit cap) |
+| Elapsed | 30.8 min | ~30 min | |
+
+- **Analysis (pending terminal SENPAI-RESULT from edward):** This is the smallest val/test regression we've seen on the n_head=2+Lion stack since #2192 baseline merged. Val 41.77 (+3.71%) is over close bar (40.30) but tighter than every other regression this round. **Test +2.67% is the smallest test regression of any run in the plateau period**. Interpretation: shifting LR peak later does pull terminal weights slightly *worse*, suggesting the model needs MORE time at peak LR, not less. The mechanism inversion implies the natural follow-up: **shorter warmup** (warmup_epochs=2 or 0) — let the model spend more time at high LR before cosine decay starts. Pending edward's SENPAI-RESULT to confirm direction and queue this as his next assignment.
+
 ## 2026-05-14 00:00 — PR #2552: Fourier K continuation (K=16, K=20) on n_head=2+Lion — CLOSED
 
 - `askeladd/fourier-k-lion-sweep`
