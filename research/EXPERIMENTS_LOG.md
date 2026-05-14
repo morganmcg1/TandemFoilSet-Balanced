@@ -6,6 +6,48 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 04:05 — Round 40 cont.: close #2738 (askeladd mlp_ratio=6 — +4.35% val LOSS, FFN-axis REFUTED → ALL 3 capacity axes dead); assign askeladd #2760 truncated cosine pivot
+
+### PR #2738 askeladd mlp_ratio=6 + epochs=40 — NEGATIVE RESULT (FFN-axis capacity REFUTED)
+
+- **Branch:** charliepai2g48h3-askeladd-mlpratio6-nlayers2-slicenum16-epochs40
+- **Hypothesis:** FFN width bump (mlp_ratio 4→6) at n_layers=2 — orthogonal capacity axis to n_hidden
+- **Result: SOLIDLY NEGATIVE** — val +4.35%, test +3.83%
+
+| Split | val Δ | test Δ |
+|---|---|---|
+| single_in_dist | **−2.12%** ✓ | +0.87% |
+| geom_camber_rc | **+8.31%** ✗ | +3.25% ✗ |
+| geom_camber_cruise | **+9.87%** ✗ | +7.35% ✗ |
+| re_rand | +2.88% ✗ | +6.30% ✗ |
+| **avg** | **+4.35%** ✗ | **+3.83%** ✗ |
+
+**OVERFIT-OOD SIGNATURE**: only single_in_dist improved (−2.12% val); both geom_camber splits regressed sharply (+8.31%, +9.87%); re_rand also regressed. Extra FFN width let the model fit in-distribution mesh patterns harder while losing geometric generalization. This is the OPPOSITE of what the capacity-rescues-OOD hypothesis predicted.
+
+| Quantity | Value |
+|---|---|
+| n_params | 459,947 (~460K, +12% over baseline 411K) |
+| Peak memory | 15.72 GB |
+| Mean s/epoch | 38.6 s |
+| Total wall-clock | 25.7 min |
+| Best epoch | 40 (final, still descending) |
+
+**CONCLUSION — ALL 3 CAPACITY-VIA-PARAM-COUNT AXES NOW REFUTED AT n_layers=2 / 30-min budget**:
+1. n_hidden (channel width): #2685 +2.53%, #2737 +7.55%
+2. mlp_ratio (FFN width): this PR +4.35% (also #2278 +5.4% at n_layers=3)
+3. n_layers (depth): #2684 +12.7% (n_layers=1 catastrophic)
+
+Param-count capacity hypothesis is DEAD. The bottleneck for camber-OOD is NOT model capacity.
+
+**Round 40 cont. pivot — askeladd #2760 (truncated cosine T_max=60 + epochs=46)**:
+- Code-change PR (add --t_max CLI arg)
+- Hypothesis: best_epoch=46 STILL DESCENDING in baseline + every recent run → model is **prematurely terminated by scheduler** (lr→0 at epoch 46), NOT by capacity. Truncated cosine (T_max=60, epochs=46) leaves residual lr ≈ 1.3e-5 (13% of peak) at final epoch, enabling continued descent without compute cost.
+- No compute cost (same epochs, same per-step). Cheap to refute.
+
+**Still in flight**: frieren #2755 (per-channel surf weighting swp=15/swuv=10) — second code-change pivot targeting val_avg/mae_surf_p directly.
+
+---
+
 ## 2026-05-14 03:55 — Round 40: close #2737 (frieren ISO-EPOCH capacity test — +7.55% LOSS, n_hidden axis REFUTED TWICE)
 
 ### PR #2737 frieren ISO-EPOCH capacity test (n_hidden=160 + slice_num=12 + epochs=46) — NEGATIVE RESULT
