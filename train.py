@@ -458,6 +458,8 @@ class Config:
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
+    apw_alpha_max: float = 0.0  # APW curriculum max alpha (0 = disabled). Recommended: 0.5
+    apw_ema_beta: float = 0.95  # EMA decay for the per-sample loss tracker
 
 
 cfg = sp.parse(Config)
@@ -473,13 +475,49 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+# APW (Adaptive Per-Weight) curriculum: per-sample loss EMA + index passthrough.
+# When apw_alpha_max > 0 the train loader yields a sample-index tensor as the
+# first element of every batch, so we can update sample_loss_ema per-index.
+apw_enabled = cfg.apw_alpha_max > 0
+
+
+class _IndexedDataset(torch.utils.data.Dataset):
+    def __init__(self, base):
+        self.base = base
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        return idx, x, y, is_surface
+
+
+def _pad_collate_with_idx(batch):
+    idxs = torch.tensor([b[0] for b in batch], dtype=torch.long)
+    x, y, is_surface, mask = pad_collate([(b[1], b[2], b[3]) for b in batch])
+    return idxs, x, y, is_surface, mask
+
+
+train_loader_kwargs = dict(loader_kwargs)
+train_dataset_for_loader = train_ds
+if apw_enabled:
+    train_dataset_for_loader = _IndexedDataset(train_ds)
+    train_loader_kwargs["collate_fn"] = _pad_collate_with_idx
+
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_dataset_for_loader, batch_size=cfg.batch_size,
+                              shuffle=True, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(train_dataset_for_loader, batch_size=cfg.batch_size,
+                              sampler=sampler, **train_loader_kwargs)
+
+# Per-sample loss EMA tracker (init=1.0, neutral). Only allocated when APW is on.
+if apw_enabled:
+    sample_loss_ema = torch.full((len(train_ds),), 1.0,
+                                 dtype=torch.float32, device=device)
+    print(f"APW curriculum enabled: alpha_max={cfg.apw_alpha_max}, ema_beta={cfg.apw_ema_beta}")
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -582,6 +620,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("apw/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -605,7 +644,17 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    # APW curriculum: alpha ramps 0 -> alpha_max over the first 50% of training.
+    current_alpha = cfg.apw_alpha_max * min(1.0, 2.0 * epoch / max(cfg.epochs, 1)) if apw_enabled else 0.0
+    apw_weight_min = apw_weight_max = apw_weight_mean = 1.0  # filled in last step
+
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        if apw_enabled:
+            indices, x, y, is_surface, mask = batch
+            indices = indices.to(device, non_blocking=True)
+        else:
+            x, y, is_surface, mask = batch
+            indices = None
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -631,9 +680,29 @@ for epoch in range(MAX_EPOCHS):
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            # Global masked means (kept for logging compatibility with baseline runs).
             vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            if apw_enabled:
+                # Per-sample masked means (only valid nodes are counted).
+                vol_count = vol_mask.sum(dim=1).clamp(min=1).to(per_elem.dtype)
+                surf_count = surf_mask.sum(dim=1).clamp(min=1).to(per_elem.dtype)
+                vol_per_sample = (per_elem * vol_mask.unsqueeze(-1)).sum(dim=(1, 2)) / vol_count
+                surf_per_sample = (per_elem * surf_mask.unsqueeze(-1)).sum(dim=(1, 2)) / surf_count
+                per_sample_total = vol_per_sample + cfg.surf_weight * surf_per_sample  # [B]
+
+                with torch.no_grad():
+                    batch_ema_loss = sample_loss_ema[indices].detach()
+                    weights = (batch_ema_loss / batch_ema_loss.mean().clamp(min=1e-6)) ** current_alpha
+                    weights = weights / weights.mean().clamp(min=1e-6)
+                loss = (weights.to(per_sample_total.dtype) * per_sample_total).mean()
+                apw_weight_min = float(weights.min())
+                apw_weight_max = float(weights.max())
+                apw_weight_mean = float(weights.mean())
+            else:
+                per_sample_total = None
+                loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -646,12 +715,26 @@ for epoch in range(MAX_EPOCHS):
                     ep.data.mul_(cfg.ema_decay).add_(p.data, alpha=1.0 - cfg.ema_decay)
                 for eb, b in zip(ema_model.buffers(), model.buffers()):
                     eb.data.copy_(b.data)
+
+        # Per-sample EMA update AFTER optimizer step (uses detached current-step loss).
+        if apw_enabled and per_sample_total is not None:
+            with torch.no_grad():
+                sample_loss_ema[indices] = (
+                    cfg.apw_ema_beta * sample_loss_ema[indices]
+                    + (1.0 - cfg.apw_ema_beta) * per_sample_total.detach().float()
+                )
+
         global_step += 1
-        wandb.log({
+        step_log = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if apw_enabled:
+            step_log["train/apw_alpha"] = current_alpha
+            step_log["train/apw_weight_min"] = apw_weight_min
+            step_log["train/apw_weight_max"] = apw_weight_max
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -688,6 +771,14 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if apw_enabled:
+        log_metrics["apw/alpha"] = current_alpha
+        log_metrics["apw/sample_loss_ema_min"] = float(sample_loss_ema.min())
+        log_metrics["apw/sample_loss_ema_max"] = float(sample_loss_ema.max())
+        log_metrics["apw/sample_loss_ema_mean"] = float(sample_loss_ema.mean())
+        log_metrics["apw/sample_loss_ema_std"] = float(sample_loss_ema.std())
+        log_metrics["apw/last_batch_weight_min"] = apw_weight_min
+        log_metrics["apw/last_batch_weight_max"] = apw_weight_max
     wandb.log(log_metrics)
 
     tag = ""
@@ -704,10 +795,16 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    apw_str = ""
+    if apw_enabled:
+        apw_str = (
+            f"  apw[α={current_alpha:.3f} w=({apw_weight_min:.3f}..{apw_weight_max:.3f})"
+            f" ema=({float(sample_loss_ema.min()):.3f}..{float(sample_loss_ema.max()):.3f})]"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{apw_str}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
