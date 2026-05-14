@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-14 [Round 130] UTC — PR #2910: surf_weight 10→20 — **CLOSED LOSS (+5.85% val; 107th taxon; BREAKS META-SIGNAL — UNIFORM LOSS NOT TRADE-OFF)**
+
+- **Branch:** charliepai2g48h5-alphonse/surf-weight-20
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-surf-weight-20-20260514-123059/metrics.jsonl
+
+| Metric | #2879 Baseline | **#2910 surf_wt=20** | vs Baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **32.3496** | **+5.85% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | **27.1619** | **+2.44% loss** |
+| val_single_in_dist | 23.3997 | **28.1392** | **+20.25% LOSS (BIGGEST EVER)** |
+| val_geom_camber_rc | 46.0708 | **47.9634** | +4.11% |
+| val_geom_camber_cruise | 17.8657 | **17.7832** | -0.46% ~FLAT |
+| val_re_rand | 34.9057 | **35.5129** | +1.74% |
+
+Params 407,940 unchanged. Best ep61/70 (timeout hard-stopped ep61).
+
+**BREAKS the meta-signal:** unlike the 5 prior losing experiments (#2889-#2905) which all showed cruise WIN + in_dist LOSS (a coupling), surf_weight=20 shows UNIFORM LOSS on all splits EXCEPT camber_cruise (flat at -0.46%). Student diagnosis: surf gradient amplification ≠ useful regularization; volume loss provides implicit regularization through encoder representations. Halving volume's gradient contribution shifts the model toward surface-only features that generalize worse overall — NOT the trade-off coupling mechanism. In_dist +20.25% is the biggest regression ever seen.
+
+**Loss-weighting axis CLOSES (107th taxon).** surf_weight=5 bracket not worth testing — clear negative direction confirmed. 107th taxon.
+
+---
+
+## 2026-05-14 [Round 130] UTC — PR #2894: cosine-eta-min-5pct (thorfinn Round 119) — **CLOSED STALE (dormant 10+ rounds)**
+
+No student activity for 10+ rounds. Closed as stale. Experiment idea (eta_min=0.05*lr) remains valid; LR-schedule axis now covered by #2920 frieren linear-warmup.
+
+---
+
+## 2026-05-14 [Round 130] UTC — PR #2922: Lookahead-Lion k=5 α=0.5 — **ASSIGNED to charliepai2g48h5-alphonse**
+
+- **Branch:** charliepai2g48h5-alphonse/lookahead-lion-k5-a0.5
+- **Hypothesis:** Wrap Lion with Lookahead (Zhang et al. 2019). Slow weights updated every k=5 steps toward fast weights (α=0.5), then fast weights reset to slow position. Acts as an in-optimizer anchor preventing in_dist over-specialization drift. Different mechanism from EMA-eval (#2892, closed): Lookahead feeds back into training weights, not just eval. ~1.6 MB slow buffers; zero new trainable params; <5% per-step overhead.
+- **Falsifiable:** WIN = anchor breaks the 5-confirmation meta-signal. WASH = try k=10. LOSS = close optimizer-wrapper axis.
+- **108th axis.**
+
+---
+
 ## 2026-05-14 [Round 129] UTC — PR #2905: weight_decay 3e-4→5e-4 — **CLOSED LOSS (+0.74% val; 105th taxon; 5TH META-SIGNAL CONFIRMATION)**
 
 - **Branch:** charliepai2g48h5-edward/weight-decay-5e-4
