@@ -589,6 +589,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    # GPU 0-d accumulator: avoids per-batch .item() sync (Lion+GC was ~57s/ep
+    # with python-float accumulation; tensor accumulator restores ~26s/ep).
+    gc_norm_ratio_acc = torch.zeros((), device=device, dtype=torch.float32)
+    gc_count = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -610,6 +614,27 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+
+        # === Gradient Centralization (Yong et al. 2020 ECCV, arxiv 2004.01461) ===
+        # Apply to all rank->=2 weight tensors (Linear weights). For each such tensor,
+        # subtract the gradient's mean over all dims except dim 0 (output dim),
+        # restricting each weight row's update to be orthogonal to the all-ones
+        # direction in input space. 1D params (biases, LayerNorm/LayerScale gains)
+        # are automatically skipped via the dim() < 2 guard. Applied BEFORE Lion's
+        # sign-step so the EMA momentum sees the centralized gradient stream.
+        # Diagnostic norms accumulate on-device; .item() runs once per epoch.
+        for _gp in model.parameters():
+            _g = _gp.grad
+            if _g is None or _g.dim() < 2:
+                continue
+            _dims = list(range(1, _g.dim()))
+            _orig_norm = _g.norm()
+            _g.sub_(_g.mean(dim=_dims, keepdim=True))
+            _new_norm = _g.norm()
+            gc_norm_ratio_acc.add_(_new_norm / _orig_norm.clamp(min=1e-8))
+            gc_count += 1
+        # === end GC ===
+
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -620,6 +645,7 @@ for epoch in range(MAX_EPOCHS):
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    gc_norm_ratio_mean = (gc_norm_ratio_acc / max(gc_count, 1)).item() if gc_count > 0 else 0.0
 
     # --- Validate ---
     model.eval()
@@ -655,11 +681,13 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "gc_norm_ratio_mean": gc_norm_ratio_mean,
+        "gc_n_tensors": gc_count // max(n_batches, 1),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  gc_ratio={gc_norm_ratio_mean:.4f}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
