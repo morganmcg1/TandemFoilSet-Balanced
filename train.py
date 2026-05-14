@@ -49,6 +49,135 @@ from data import (
 from soap import SOAP
 
 # ---------------------------------------------------------------------------
+# Surface-normal feature
+# ---------------------------------------------------------------------------
+
+EXTRA_FEAT_DIM = 2  # surface-normal n_x, n_y appended to x
+
+
+def compute_surface_normals_for_sample(x_full: torch.Tensor, device: torch.device,
+                                       k_neighbors: int = 10) -> torch.Tensor:
+    """Outward unit surface-normal at every node.
+
+    Surface nodes: local PCA tangent (k-NN) rotated 90°, sign-resolved via centroid
+    direction (cluster centroid lies inside the foil hull). Volume nodes inherit the
+    normal of their nearest surface point. Returns a CPU tensor [N, 2].
+    """
+    coords = x_full[:, 0:2].to(device, non_blocking=True)
+    is_surf = x_full[:, 12].bool().to(device, non_blocking=True)
+    naca2_thickness = x_full[0, 21].item()
+    N = coords.shape[0]
+
+    surf_idx = is_surf.nonzero(as_tuple=True)[0]
+    surf_pts = coords[surf_idx]
+    S = surf_pts.shape[0]
+    if S < max(k_neighbors, 5):
+        return torch.zeros(N, 2)
+
+    is_tandem = naca2_thickness > 1e-6
+    if not is_tandem:
+        centroids = surf_pts.mean(dim=0, keepdim=True)  # [1, 2]
+        cluster_id = torch.zeros(S, dtype=torch.long, device=device)
+    else:
+        mean_pt = surf_pts.mean(dim=0)
+        centered = surf_pts - mean_pt
+        cov = (centered.T @ centered) / S
+        eigvals, eigvecs = torch.linalg.eigh(cov)
+        primary_axis = eigvecs[:, -1]
+        proj = centered @ primary_axis
+        c0 = surf_pts[proj.argmin()].clone()
+        c1 = surf_pts[proj.argmax()].clone()
+        centroids = torch.stack([c0, c1], dim=0)
+        for _ in range(15):
+            d = torch.cdist(surf_pts, centroids)
+            cluster_id = d.argmin(dim=1)
+            new_cents = centroids.clone()
+            for kk in range(2):
+                mask = cluster_id == kk
+                if mask.any():
+                    new_cents[kk] = surf_pts[mask].mean(dim=0)
+            if (new_cents - centroids).abs().max() < 1e-6:
+                centroids = new_cents
+                break
+            centroids = new_cents
+
+    k = min(k_neighbors, S)
+    d_ss = torch.cdist(surf_pts, surf_pts)
+    _, nn_idx = d_ss.topk(k, dim=1, largest=False)
+    nbrs = surf_pts[nn_idx]
+    nbrs_centered = nbrs - nbrs.mean(dim=1, keepdim=True)
+    cov = torch.einsum('skd,ske->sde', nbrs_centered, nbrs_centered) / k
+    a = cov[:, 0, 0]
+    b = cov[:, 1, 1]
+    c = cov[:, 0, 1]
+    tr = a + b
+    disc = ((a - b) ** 2 + 4 * c ** 2).clamp(min=0).sqrt()
+    lam1 = (tr + disc) / 2
+    v1x = lam1 - b
+    v1y = c
+    v2x = c
+    v2y = lam1 - a
+    use1 = v1x ** 2 + v1y ** 2 > v2x ** 2 + v2y ** 2
+    tx_raw = torch.where(use1, v1x, v2x)
+    ty_raw = torch.where(use1, v1y, v2y)
+    t_norm = (tx_raw ** 2 + ty_raw ** 2).sqrt().clamp(min=1e-12)
+    tx = tx_raw / t_norm
+    ty = ty_raw / t_norm
+    nx = -ty
+    ny = tx
+
+    surf_cents = centroids[cluster_id]
+    out_dir = surf_pts - surf_cents
+    dot = nx * out_dir[:, 0] + ny * out_dir[:, 1]
+    flip = dot < 0
+    nx = torch.where(flip, -nx, nx)
+    ny = torch.where(flip, -ny, ny)
+    surf_normals = torch.stack([nx, ny], dim=1)
+
+    normals = torch.zeros(N, 2, device=device)
+    chunk = 16384
+    for i in range(0, N, chunk):
+        d_vs = torch.cdist(coords[i:i + chunk], surf_pts)
+        nn = d_vs.argmin(dim=1)
+        normals[i:i + chunk] = surf_normals[nn]
+    return normals.cpu()
+
+
+class SurfaceNormalDataset(torch.utils.data.Dataset):
+    """Wraps a base dataset and appends precomputed (n_x, n_y) normal channels to x.
+
+    If `surface_only=True`, zeros the normal channels on volume nodes — keeping only
+    the physically-meaningful normals at viscous walls.
+    """
+
+    def __init__(self, base_ds, normals_cache, surface_only: bool = False):
+        self.base = base_ds
+        self.cache = normals_cache
+        self.surface_only = surface_only
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surf = self.base[idx]
+        normals = self.cache[idx]
+        if self.surface_only:
+            normals = normals * is_surf.float().unsqueeze(-1)
+        x_aug = torch.cat([x, normals], dim=1)
+        return x_aug, y, is_surf
+
+
+def precompute_surface_normals(ds, device, desc: str = "normals") -> list:
+    cache = [None] * len(ds)
+    t0 = time.time()
+    for i in tqdm(range(len(ds)), desc=f"Precompute {desc}", leave=False):
+        x, _, _ = ds[i]
+        cache[i] = compute_surface_normals_for_sample(x, device)
+    print(f"  {desc}: {len(ds)} samples in {time.time() - t0:.1f}s")
+    return cache
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -467,6 +596,12 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Append surface-normal direction (n_x, n_y) as 2 new input channels (24→26).
+    add_surface_normal_feature: bool = False
+    # Zero out the normal channels on volume nodes (keep only surface nodes).
+    # Tests whether the #2627 result was driven by surface-normal signal vs.
+    # ghost-orientation pollution from nearest-surface assignment in the wake.
+    surface_only_normals: bool = False
 
 
 cfg = sp.parse(Config)
@@ -478,6 +613,42 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+INPUT_DIM = X_DIM
+if cfg.add_surface_normal_feature:
+    surf_mode = "surface-only" if cfg.surface_only_normals else "all-nodes"
+    print(f"Surface-normal feature ON ({surf_mode}): precomputing normals on {device}...")
+    train_normals = precompute_surface_normals(train_ds, device, "train")
+    val_normals = {name: precompute_surface_normals(ds, device, name)
+                   for name, ds in val_splits.items()}
+    sample_x, _, sample_surf = train_ds[0]
+    sample_n = train_normals[0]
+    surf_mag = sample_n[sample_surf.bool()].norm(dim=1)
+    vol_mag = sample_n[~sample_surf.bool()].norm(dim=1)
+    print(f"  verification: sample0 surf-node normal mag "
+          f"min={surf_mag.min().item():.4f} max={surf_mag.max().item():.4f} "
+          f"mean={surf_mag.mean().item():.4f}")
+    print(f"  verification: sample0 vol-node normal mag (pre-mask) "
+          f"min={vol_mag.min().item():.4f} max={vol_mag.max().item():.4f} "
+          f"mean={vol_mag.mean().item():.4f}")
+    train_ds = SurfaceNormalDataset(train_ds, train_normals,
+                                    surface_only=cfg.surface_only_normals)
+    val_splits = {name: SurfaceNormalDataset(ds, val_normals[name],
+                                             surface_only=cfg.surface_only_normals)
+                  for name, ds in val_splits.items()}
+    if cfg.surface_only_normals:
+        # Confirm masking is applied at item-access time
+        x0, _, surf0 = train_ds[0]
+        v_norm0 = x0[~surf0.bool()][:, -2:].norm(dim=1)
+        s_norm0 = x0[surf0.bool()][:, -2:].norm(dim=1)
+        print(f"  post-mask vol-node normal mag: min={v_norm0.min().item():.4f} "
+              f"max={v_norm0.max().item():.4f} (should be 0)")
+        print(f"  post-mask surf-node normal mag: min={s_norm0.min().item():.4f} "
+              f"max={s_norm0.max().item():.4f}")
+    stats["x_mean"] = torch.cat([stats["x_mean"], torch.zeros(EXTRA_FEAT_DIM, device=device)])
+    stats["x_std"] = torch.cat([stats["x_std"], torch.ones(EXTRA_FEAT_DIM, device=device)])
+    INPUT_DIM = X_DIM + EXTRA_FEAT_DIM
+    print(f"  input dim: {X_DIM} → {INPUT_DIM}")
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -497,7 +668,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=INPUT_DIM - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -918,6 +1089,13 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        if cfg.add_surface_normal_feature:
+            print("Precomputing surface normals for test splits...")
+            test_normals = {name: precompute_surface_normals(ds, device, name)
+                            for name, ds in test_datasets.items()}
+            test_datasets = {name: SurfaceNormalDataset(ds, test_normals[name],
+                                                       surface_only=cfg.surface_only_normals)
+                             for name, ds in test_datasets.items()}
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
