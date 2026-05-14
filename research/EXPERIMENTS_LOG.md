@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2951: post-norm-topology — **CLOSED LOSS (+14.73% val / +13.18% test; 131st taxon; POST-NORM TOPOLOGY AT ALL 9 SITES / PRE-NORM-IS-LOAD-BEARING-FOR-THIS-RECIPE)**
+
+- **Branch:** charliepai2g48h5-nezuko/post-norm-topology
+- **Metric artifacts:** models/model-charliepai2g48h5-nezuko-post-norm-topology-*/metrics.jsonl
+
+| Metric | Baseline #2879 | #2951 (post-norm + γ=1e-4) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **35.0624** | **+14.73% LOSS (decisive)** |
+| test_avg/mae_surf_p | 26.5160 | **30.0107** | **+13.18% LOSS (decisive)** |
+| val_geom_camber_cruise | 17.8657 | 22.3380 (+25.03%) | **WORST split — META-SIGNAL BROKE** |
+| test_geom_camber_cruise | 13.8565 | 18.1153 (+30.74%) | **WORST split — META-SIGNAL BROKE** |
+| val_geom_camber_rc | 46.0708 | ~50.5 (+9.6%) | LOSS uniform |
+| val_single_in_dist | 23.3997 | ~26.5 (+13.2%) | LOSS uniform |
+| Param count | 407,940 | 407,940 (unchanged) | — |
+
+**Hypothesis:** Pre-norm → post-norm topology change at all 9 LN sites (8 per-block + 1 final). Tests whether centering location within residual stream is load-bearing for the Transolver recipe. Motivated by #2939's finding that LN mean-centering is load-bearing.
+
+**DECISIVE LOSS FINDINGS:**
+
+1. **Post-norm mechanically worked.** Residual magnitudes capped at ~1.0 after every LN site as expected (post-norm renormalizes the SUM, not the INPUT). No NaN/Inf. Code change was correct.
+
+2. **But broke the entire recipe.** Pre-norm + γ=1e-4 deliberately keeps residual stream "wide" early: `x = x + γ·attn(LN(x))` with tiny γ means each block contributes a tiny perturbation to a near-identity stream. Post-norm with γ=1e-4 cancels this: `x = LN(x + γ·attn(x))` renormalizes after every block, washing out the LayerScale-controlled slow build-up.
+
+3. **CANONICAL META-SIGNAL BROKE.** This is THE FIRST intervention where cruise is the WORST-hit split rather than the WIN split. cruise +25.03% val / +30.74% test = inverse of the recurring meta-signal. Post-norm doesn't just hurt — it breaks the cruise-favoring representational specialization.
+
+4. **Refines #2939 finding.** LN's mean-centering is load-bearing AT BLOCK INPUTS (pre-norm), NOT at block sums (post-norm). The pre-norm topology is structurally load-bearing for this 4-block Transolver recipe at the 407k-param scale.
+
+5. **8th uniform-LOSS closure under global reshaping.** All global structural reshapings — full-mlp-ratio, post-norm, lr-2e-4-no-warmup, etc. — produce uniform LOSS across all splits. Local interventions (per-head, per-depth, per-channel) reproduce canonical meta-signal; global ones don't.
+
+**131st taxon CLOSED:** POST-NORM TOPOLOGY AT ALL 9 LN SITES. Pre-norm is structurally load-bearing for the Transolver recipe.
+
+**Followup assigned:** #2964 nezuko post-norm-gamma-1.0 (TOPOLOGY-vs-LAYERSCALE attribution: re-test post-norm with γ_attn=γ_mlp=1.0 instead of γ=1e-4 to isolate topology from LayerScale init scheme; student suggestion #2 verbatim: *"Post-norm with γ=1e-4 might be unfair to post-norm: LayerScale was tuned for pre-norm. A post-norm + γ=1.0 test would isolate topology from LayerScale init scheme"*; -768 params (LayerScale removed); 132nd axis).
+
+---
+
 ## 2026-05-14 [Round 138] UTC — PR #2952: aux-mid-block-surf-loss — **CLOSED LOSS (+1.89% val / -1.26% test slight WIN; 130th taxon; AUX-MID-BLOCK AT BLOCK-1 / DEEP-SUPERVISION-50%-DEPTH-CLOSED)**
 
 - **Branch:** charliepai2g48h5-alphonse/aux-mid-block-surf-loss
