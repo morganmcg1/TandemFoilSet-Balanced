@@ -63,6 +63,28 @@ ACTIVATION = {
 }
 
 
+class DropPath(nn.Module):
+    """Stochastic depth (Huang et al. 2016) — per-sample Bernoulli drop of the
+    branch contribution during training. Identity at eval.
+
+    Applied inside the residual add, on the branch output BEFORE the post-norm
+    LN. Identity (residual) path is always preserved. Scales kept samples by
+    1/(1-p) so the expectation matches the inference-time pass.
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = float(drop_prob)
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()
+        return x.div(keep_prob) * random_tensor
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -200,7 +222,7 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -215,6 +237,11 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = 1.0
+        # Independent DropPath samplers per branch — they fire independently per
+        # forward pass so a sample may drop attn, mlp, both, or neither. Zero
+        # params, applied INSIDE post-norm residual on branch output only.
+        self.drop_path_attn = DropPath(drop_prob=drop_path)
+        self.drop_path_mlp = DropPath(drop_prob=drop_path)
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -225,8 +252,9 @@ class TransolverBlock(nn.Module):
 
     def forward(self, fx, mask=None):
         # POST-NORM: LN applied AFTER residual addition (LN(x + f(x)) vs pre-norm x + f(LN(x)))
-        fx = self.ln_1(self.gamma_attn * self.attn(fx) + fx)
-        fx = self.ln_2(self.gamma_mlp * self.mlp(fx) + fx)
+        # DropPath wraps the branch contribution BEFORE the residual add; identity path preserved.
+        fx = self.ln_1(self.drop_path_attn(self.gamma_attn * self.attn(fx)) + fx)
+        fx = self.ln_2(self.drop_path_mlp(self.gamma_mlp * self.mlp(fx)) + fx)
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -239,7 +267,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -261,6 +290,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_se=(i == n_layers - 1),
+                drop_path=drop_path,
             )
             for i in range(n_layers)
         ])
@@ -526,6 +556,7 @@ model_config = dict(
     mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path=0.1,
 )
 print(f"slice_num: {model_config['slice_num']}")
 print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
@@ -556,6 +587,21 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
 print(f"Actual total params: {n_params}")
+
+# DropPath diagnostic: stochastic depth (Huang et al. 2016) — per-sample
+# Bernoulli drop of the branch contribution; identity at eval. Branch-level
+# regularization INSIDE post-norm residual; identity path preserved.
+_dp_modules = [m for m in model.modules() if isinstance(m, DropPath)]
+_dp_p = model_config.get("drop_path", 0.0)
+print(
+    f"DropPath (Huang et al. 2016 stochastic depth): {len(_dp_modules)} DropPath modules "
+    f"(2 per TransolverBlock × {model_config['n_layers']} blocks); "
+    f"p_drop_attn=p_drop_mlp={_dp_p} constant across all blocks; "
+    f"applied INSIDE post-norm residual on BRANCH output (identity path preserved); "
+    f"separate DropPath instances per branch — independent Bernoulli samples per forward pass; "
+    f"+0 params (unchanged from #2964: 407,172); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.0382 (PR #2964)"
+)
 
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
