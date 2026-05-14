@@ -467,6 +467,13 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Channel-selective NACA-foil-1 jitter (PR #2662). Per-sample Gaussian noise
+    # added to features 15-17 (camber-amplitude M, camber-position P, thickness TT).
+    # ch15 (camber-amplitude M) is the held-out axis for val/test_geom_camber_{rc,cruise}
+    # — masking it avoids inflating the rc extrapolation gap while still smoothing
+    # the in-distribution ch16+ch17 neighborhood.
+    naca_jitter_sigma: float = 0.02
+    naca_jitter_mask_ch15: bool = True
 
 
 cfg = sp.parse(Config)
@@ -653,6 +660,16 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # Channel-selective NACA jitter: per-sample Gaussian noise on features 15-17
+        # (foil-1 camber-amplitude M, camber-position P, thickness TT), broadcast
+        # across all nodes of the sample. ch15 is the rc/cruise hold-out axis, so
+        # we zero its noise component to avoid widening the extrapolation gap.
+        if cfg.naca_jitter_sigma > 0:
+            naca_noise = torch.randn(x.shape[0], 1, 3, device=x.device, dtype=x.dtype) * cfg.naca_jitter_sigma
+            if cfg.naca_jitter_mask_ch15:
+                naca_noise[:, :, 0] = 0.0
+            x[:, :, 15:18] = x[:, :, 15:18] + naca_noise * mask.unsqueeze(-1).to(x.dtype)
+
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -835,6 +852,8 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "naca_jitter_sigma": cfg.naca_jitter_sigma,
+        "naca_jitter_mask_ch15": cfg.naca_jitter_mask_ch15,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
