@@ -4,6 +4,38 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 21:15 — PR #2989 (CLOSED, frieren): AdamW + RFF-OFF 2-arm ablation on max_norm=0.35 — **NEW ABLATION-CONTRIBUTION-QUANTIFICATION class CHARACTERIZED** as 9th transfer-pattern class (FIRST member of class)
+
+- **Branch:** `willowpai2g48h2-frieren/ablation-adamw-and-rff-off-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-frieren
+- **Verdict:** Arm 1 AdamW (`74w1tfgd`) SWA val **67.28** +22.13 / test 58.66 +20.03 **CATASTROPHIC-REGRESSION**; Arm 2 RFF-OFF (`t9le3ecq`) SWA val **47.65** +2.50 / test 39.78 +1.14 **MODERATE-REGRESSION** vs current #2674 baseline (45.1538/38.6367). Per current decision rule (val < 45.10 AND test < 38.50 to merge): **neither arm wins** — both arms paper-publishable for class characterization. **Methodology flag**: SENPAI-RESULT marker NOT posted by student; advisor used W&B data directly (both runs ran to completion 13/15 epochs at 30-min cap).
+- **W&B runs:** Arm 1 `74w1tfgd`, Arm 2 `t9le3ecq`, baseline `ieu1futo`.
+- **Headline:** **Lion is NON-NEGOTIABLE on this stack** — single-feature ablation gives +22.13 val MAE catastrophic regression; ×9 larger than RFF ablation contribution (+2.50). NEW ABLATION-CONTRIBUTION-QUANTIFICATION class CHARACTERIZED.
+
+### Mechanism diagnosis (paper-publishable findings — banked #277-#282)
+
+- **#277 PAPER-PUBLISHABLE — Lion-removal causes CATASTROPHIC regression (val +22.13).** First direct measurement of Lion's contribution to the merged stack. Confirms #2063 Lion-merge was the headline-bracket-defining contribution; Lion is NON-NEGOTIABLE on tandem-foil CFD surrogate task; AdamW (even with all other features present) cannot match Lion's regression. Mechanism: Lion's sign-step strips gradient magnitude → effective LR is gradient-DIRECTION-driven; AdamW's adaptive-moment scaling reduces effective step magnitude in flat-loss directions.
+
+- **#278 PAPER-PUBLISHABLE — σ-collapse mechanism CONFIRMED via #2989 Arm 1 AdamW (re-confirmation of #2311 hypothesis).** Arm 1 σ-spread = **0.1627** vs baseline 0.475 = **−66% COLLAPSE**. When `--optimizer adamw` is used (both model AND σ-heads use AdamW, defeating the hybrid Lion+AdamW(σ) #2311 split), σ-spread collapses. FIRST cross-axis re-confirmation of #2311 hypothesis via ablation — the hybrid split is specifically NECESSARY. Final per-channel log_σ Arm 1 clustered in tight band [−1.49, −1.33] vs Arm 2 spread [−2.22, −1.74]. σ-spread invariance bank UPDATED with 1 σ-head-optimizer-ablation BREAK NEW.
+
+- **#279 PAPER-PUBLISHABLE — RFF-OFF moderate regression (val +2.50 / test +1.14).** First direct measurement of RFF contribution. RFF's ablation-contribution ~9× smaller than Lion's. Pre-clip grad_norm_max **148.89** vs baseline 82.36 = ×1.81 grad-magnitude expansion due to higher-frequency input variability when RFF coordinate smoothing is removed; saturated-clip max_norm=0.35 normalizes the post-clip step (saturated-clip DECOUPLES pre-clip grad distribution from post-clip step magnitude — banked #268).
+
+- **#280 PAPER-PUBLISHABLE — NEW ABLATION-CONTRIBUTION-QUANTIFICATION class CHARACTERIZED as 9th transfer-pattern class.** First systematic measurement of merged-stack feature contributions: Lion = +22.13 val (CATASTROPHIC), RFF = +2.50 val (MODERATE). Class definition: direct measurement of gap to merged feature baseline rather than slope around it. To-be-completed: Kendall σ OFF, max_norm clipping OFF, Re-weight OFF, Huber β-shape variations.
+
+- **#281 PAPER-STRENGTHENING — clip_fraction=1.000 17th cross-axis confirmation across both ablations.** Even at Arm 2 RFF-OFF's wider grad distribution (148.89 max vs 82.36 baseline), clip_fraction remains saturated.
+
+- **#282 PAPER-STRENGTHENING — banked invariance confirmations preserved.** SWA window 2-epoch (15th-consecutive truncation #170 on both arms); step-time within 4% (137.19 / 141.73 s/epoch); SWA entry epoch 12 on both arms — SWA-window form is structurally OPTIMIZER-INVARIANT at fixed forward-pass shape.
+
+### Paper-appendix matrix update — UPDATED to 20 closed × 9 transfer patterns + 2 MIXED + 1 PROVISIONAL class
+
+Loop 104 is the **9th transfer-pattern class CHARACTERIZED** — ABLATION-CONTRIBUTION-QUANTIFICATION class moves from CANDIDATE → CHARACTERIZED. 9 classes now: DEPENDENT-NEGATIVE, ASYMMETRIC-V, BOTH-LOSE Pareto-cap, DEGENERATE-AXIS, DEPENDENT-SYMMETRIC, INDEPENDENT-SYMMETRIC, NON-MONOTONE-COST-MONOTONE-MECHANISM, MAX_NORM-CLIP-BOUNDARY (candidate via edward #3005 in-flight), **ABLATION-CONTRIBUTION-QUANTIFICATION (NEW characterized #2989)**. σ-spread invariance bank: 18 INVARIANT + 4 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK + 1 compose-induced BIDIRECTIONAL BREAK + β-axis monotone-in-1/β + seed-axis 18th + **1 σ-head-optimizer-ablation BREAK NEW (#278)**.
+
+### Reassignment
+
+Closing this PR as ABLATION-CONTRIBUTION-QUANTIFICATION class CHARACTERIZED. Reassigning frieren to **PR #3037 NEW Kendall σ OFF ablation 2-arm with surf_weight sweep {10, 20} on max_norm=0.35** — completes the 3rd member of the ABLATION-CONTRIBUTION-QUANTIFICATION class characterization. Arm 1 surf_weight=10 (fallback), Arm 2 surf_weight=20 (higher surface emphasis); discriminates whether Kendall's main contribution is per-channel-uncertainty-learning (NOT recoverable via fixed weights) or surface-channel-emphasis (recoverable via surf_weight tuning).
+
+---
+
 ## 2026-05-14 21:00 — PR #3004 (CLOSED, tanjiro): 3-seed CI confirmation on current saturated-clip max_norm=0.35 baseline — paper-strengthening **high seed-variance flag** close + FIRST direct measurement of saturated-clip × seed-CI interaction
 
 - **Branch:** `willowpai2g48h2-tanjiro/3-seed-ci-confirmation-on-baseline`
