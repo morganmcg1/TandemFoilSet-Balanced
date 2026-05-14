@@ -2708,3 +2708,35 @@ Per-split test surf_p (σ=0.06 / σ=0.09 vs σ=0.07 baseline):
 - Hypothesis: Expand the just-merged FiLM-Re γ MLP width to test if γ-branch capacity is bottlenecking the conditioning mechanism. If γ MLP hidden ≈ 128 (inferred from 84K total / 5 blocks), doubling/quadrupling adds ~80K/240K params (~10-30% of trunk). Direct extension of the 14th-shift winning mechanism, orthogonal to all other in-flight axes.
 - Arms: γ MLP hidden=2× current (s1), 4× current (s2 seed=2)
 - Merge bar: mean val < 34.55, mean test < 28.95
+
+---
+
+## 2026-05-14 15:50 — PR #2909: Pressure-Poisson auxiliary loss (askeladd, CLOSED)
+- Branch: `willowpai2g48h3-askeladd/pressure-poisson-loss`
+- Hypothesis: Add physics-informed ∇²p = f(∇u) coupling loss at λ=0.01 to improve OOD generalization on geom_camber_rc.
+
+### Results
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs 14th-shift bar |
+|---|---|---:|---:|---:|
+| s1 | `wucwtke6` | 40.66 | 34.62 | +17.7% / +19.5% |
+| s2 | `1ce42wdu` | 40.66 | 34.74 | +17.7% / +20.0% |
+| **Mean** | — | **40.66** | **34.68** | **+17.7% / +19.8%** |
+
+All 4 splits regress 11-29% on both seeds.
+
+Per-split test surf_p (mean): single_in_dist=39.20 (+20.5%), geom_camber_rc=46.86 (+11.6%), geom_camber_cruise=19.61 (+29.1%), re_rand=33.05 (+26.7%).
+
+**Mechanism diagnosis (student):** stencil weighting is `residual_xi² ∝ h⁴` — far-field nodes (large h) dominate the PP loss while near-surface boundary-layer nodes (where surf_p accuracy matters most) are effectively zeroed out. The PP loss trains the model to satisfy the Poisson equation where it does NOT help the primary metric. Gradients conflict with surf_p even at <1-3% of total loss.
+
+**Compute compounding:** PP loss adds +70% wall-clock (+25 s/epoch). Only 30 epochs vs ~50 baseline; val still descending at termination.
+
+**Status**: CLOSED 2026-05-14 15:50. Physics-informed PP-loss axis retired at this baseline. Mechanism note (h⁴ weighting kills boundary-layer signal) preserved for future research.
+
+---
+
+## 2026-05-14 15:53 — PR #2953: Slice softmax temperature scan (askeladd, ASSIGNED)
+- Branch: `willowpai2g48h3-askeladd/slice-softmax-temperature`
+- Hypothesis: PhysicsAttention's slice partitioning uses implicit softmax temperature τ=1.0 (never tuned). Lower τ → sharper slice specialization (per-regime); higher τ → smoother slice mixing (more averaging). Slice partitioning is Transolver's core inductive bias — its temperature is plausibly high-leverage on top of 14th-shift baseline.
+- Arms: τ=0.5 (sharper, s1), τ=2.0 (smoother, s2 seed=2)
+- Merge bar: mean val < 34.55, mean test < 28.95

@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 15:35
+- **Date:** 2026-05-14 15:55
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -50,10 +50,10 @@
 - SwiGLU (frieren #2902): richer FFN → potential capacity uplift on top of FiLM
 - Y-flip aug (fern #2895): ~2× effective data → regularization + OOD coverage
 - DropPath (nezuko #2926): block-level stochastic ensemble → regularization
-- Pressure-Poisson (askeladd #2909): physics-informed aux loss → strong OOD coupling signal
 - Lion lr scan (alphonse #2942): optimizer re-tune after basin shift
 - Output head depth (edward #2943): richer per-channel decoder → potential OOD decoding improvement
 - FiLM-Re γ MLP capacity scan (tanjiro #2948): widen γ branch — direct extension of 14th-shift mechanism
+- Slice softmax temperature (askeladd #2953): τ=0.5/2.0 on PhysicsAttention slice assignment — first time this axis is tuned
 
 ## Active WIPs (8 students, 8 PRs, 0 idle)
 
@@ -62,13 +62,15 @@
 | #2886 | thorfinn | γ-only FiLM-AoA: per-block AoA conditioning (targets camber_rc OOD) | WIP |
 | #2895 | fern | Y-flip data augmentation (flow y-equivariance, 2× data free) | WIP (sent back for σ=0.07+FiLM-Re rerun) |
 | #2902 | frieren | SwiGLU FFN: replace GELU+Linear with gated FFN | WIP (sent back for σ=0.07+FiLM-Re rerun) |
-| #2909 | askeladd | Pressure-Poisson auxiliary loss (λ=0.01) | WIP |
 | #2926 | nezuko | Stochastic depth DropPath (depth-scaled rates 0.1/0.2) | WIP |
 | #2942 | alphonse | Lion lr re-tune at 14th-shift baseline (lr=6e-5, lr=9e-5) | WIP (assigned 15:10) |
 | #2943 | edward | Output head depth scan (head_depth=3/4 on 14th-shift baseline) | WIP (assigned 15:10) |
-| **#2948** | **tanjiro** | **FiLM-Re γ MLP capacity scan: 2× and 4× γ width** | **ASSIGNED 2026-05-14 15:32** |
+| #2948 | tanjiro | FiLM-Re γ MLP capacity scan: 2× and 4× γ width | WIP (assigned 15:32) |
+| **#2953** | **askeladd** | **Slice softmax temperature scan: τ=0.5 (sharper) and τ=2.0 (smoother)** | **ASSIGNED 2026-05-14 15:53** |
 
-**Closed this round:** #2908 (tanjiro σ interior) — both σ=0.06/0.09 regress hard; σ-axis fully characterized with peak at σ=0.07. Mechanism: parameter-scale alone does NOT explain σ-axis (L2 monotone in σ, val sharply non-monotonic with peak at σ=0.07).
+**Closed this round:**
+- #2908 (tanjiro σ interior) — both σ=0.06/0.09 regress hard; σ-axis fully characterized with peak at σ=0.07. Mechanism: parameter-scale alone does NOT explain σ-axis (L2 monotone in σ, val non-monotonic).
+- #2909 (askeladd Pressure-Poisson aux loss) — both seeds regress +17-18% val, +20% test. Mechanism: h⁴ stencil weighting kills boundary-layer signal where surf_p matters; PP loss trains where it doesn't help primary metric. Plus +70% wall-clock overhead means compute-binding at 30-min cap.
 
 ## Context for in-flight PRs
 
@@ -93,6 +95,7 @@ PRs assigned before 14th shift (#2886, #2895, #2902, #2908, #2909, #2926) must c
 - **Lion LR** — 1e-4 overshoots; 7.5e-5 sweet spot historically; re-scan in #2942 at new basin
 - **Weight-decay (wd axis at σ=0.07)** — wd=2e-4 wins; wd=1e-3 regresses. Axis closed.
 - **σ-axis (init_std)** — σ=0.07 confirmed PEAK (PR #2882 won; PR #2908 closed). σ=0.06 (+17% val), σ=0.09 (+16% val), σ=0.10 (memory OOM risk). Non-monotonic: parameter-scale alone does NOT explain σ-axis. Axis fully bracketed.
+- **Pressure-Poisson aux loss** — PR #2909 closed. h⁴ stencil weighting kills boundary-layer signal; PP loss adds +70% wall-clock and gradients conflict with surf_p. Physics-informed aux loss axis retired at 30-min cap (could be revisited with h-invariant re-weighting + KNN precomputation if budget relaxed).
 - **Per-channel Huber β, surf_weight, per-channel amplitude weighting** — fully bracketed/retired
 - **n_head=8, QK-RMSNorm, RMSNorm (hidden)** — various capacity/normalization failures
 - **EMA weights, SWA** — variance reduction works but mean misses bar
@@ -115,7 +118,7 @@ PRs assigned before 14th shift (#2886, #2895, #2902, #2908, #2909, #2926) must c
 2. **FiLM dual conditioning (Re + AoA)** — natural compound if thorfinn #2886 (FiLM-AoA) wins; combine into single joint (Re, AoA) conditioning per block
 3. **Lion lr bracket winner** — if #2942 wins at lr=9e-5, test lr=1.1e-4; if wins at lr=6e-5, test lr=5e-5
 4. **Fourier Re embedding into γ MLP** — richer conditioning input for FiLM: log(Re) + sin/cos(πk·log(Re)) for K=4
-5. **Slice softmax temperature** — Transolver-specific, untouched; learnable τ or fixed τ ∈ {0.5, 2.0}
+5. ~~**Slice softmax temperature**~~ — ACTIVE as #2953 (askeladd)
 6. **Mixup on conditioning (Re, AoA) + targets** — augment effective conditioning range; OOD-targeted regularizer
 7. **SWA revisit at new baseline** — variance reduction may pair better with σ=0.07+FiLM-Re stronger base
 
