@@ -28,15 +28,58 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
-## 2026-05-14 09:40 — PR #2877 (ASSIGNED, thorfinn): anneal_epochs sweep {1, 3} on max_norm=0.35 — SWALR ramp-speed axis under saturated-clip
+## 2026-05-14 11:05 — PR #2877 (CLOSED, thorfinn): anneal_epochs sweep {1, 3} on max_norm=0.35 — paper-strengthening 7th axis closure (DEGENERATE-AXIS — NEW 5th transfer pattern)
 
 - **Branch:** `willowpai2g48h2-thorfinn/anneal-epochs-sweep-on-max-norm-0p35`
 - **Student:** willowpai2g48h2-thorfinn
-- **Hypothesis:** 7th paper-appendix mechanism-transfer axis after {β #2736, lr #2731, seed #2790, wd #2791, swa_start_frac #2818, fourier_num_features #2835}. SWALR ramp-speed (`anneal_epochs`) — directly tests **banked #18 SWALR-overrides-cosine** (GOLD mechanism finding) + the **3-consecutive-PR SWA-window-truncation nuisance** under 30-min cap. Pareto-optimal s_f=0.75 (#2818) was conditioned on baseline anneal_epochs=2; relaxing that to {1, 3} probes whether SWALR-ramp-speed × wall-clock-truncation coupling is monotone.
-- **Two arms:** Arm 1 anneal_epochs=1 (faster cooldown, predicted ~2 epochs at swa_lr floor), Arm 2 anneal_epochs=3 (slower cooldown, predicted 0 epochs at floor under truncation).
-- **Predictions:** Arm 1 directional win (faster ramp → more averaging at swa_lr floor under truncated 30-min cap); Arm 2 strong regression (averaging during ramp at higher lr). σ-spread ≈ 0.475 (9th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (11th cross-axis if invariant); clip_fraction=1.000 (7th cross-axis if invariant). Asymmetric reach test parallel to lr-axis #2773 + RFF-axis #2835.
-- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
-- **Status:** Assigned 2026-05-14 09:40 UTC; awaiting training. **1-line train.py edit required** (make anneal_epochs a CLI flag; pattern from fern's #2818 swa_start_frac).
+- **Hypothesis:** 7th paper-appendix mechanism-transfer axis. SWALR ramp-speed (`anneal_epochs`) — directly tests **banked #18 SWALR-overrides-cosine** (GOLD mechanism finding) + 4-consecutive-PR SWA-window-truncation nuisance.
+
+### Result table (vs #2674 baseline)
+
+| Arm | anneal_epochs | W&B | SWA val | SWA test | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---|
+| baseline ae=2 | 2 | `ieu1futo` | 45.1538 | 38.6367 | — | — | — |
+| Arm 1 ae=1 | 1 | `mhzokh2v` | 45.2022 | 38.6124 | +0.05 | −0.02 | directional close (in [45.15, 45.50]) |
+| Arm 2 ae=3 | 3 | `s6unlioc` | **45.1336** | 38.6367 | **−0.02** | 0.00 | directional close (BELOW baseline but ABOVE merge threshold 45.10) |
+
+### Mechanism diagnosis (paper-strengthening NULL/DEGENERATE-AXIS finding)
+
+**ANNEAL_EPOCHS IS MECHANISTICALLY DEGENERATE UNDER SATURATED-CLIP BASELINE'S swa_start_frac × swa_lr COINCIDENCE.** Even with banked GOLD finding #18 (SWALR-overrides-cosine) intact, the specific axis is degenerate when ramp target ≈ ramp start. At swa_start_frac=0.75 of T_max=15, cosine final lr ≈ 5.9e-5 lands ~0.1e-5 below swa_lr=6e-5; whether the SWALR ramp lasts 1, 2, or 3 epochs, the optimizer holds essentially the same lr (~5.9-6.0e-5) the entire SWA-averaged window. The "averaging-at-floor vs averaging-during-ramp" dichotomy that drives the prediction collapses when ramp target ≈ ramp start.
+
+The primary prediction was inverted (ae=3 slightly beats baseline, ae=1 slightly regresses) but magnitudes are within seed noise → best read as NULL effect.
+
+### Updated paper-appendix transfer-pattern table (7 closed axes, **5 patterns** — NEW PATTERN added)
+
+| Pattern class | Axes |
+|---|---|
+| Gradient-magnitude-flow-INDEPENDENT, SYMMETRIC | β #2736 |
+| Gradient-magnitude-flow-INDEPENDENT, ASYMMETRIC V (DOMINANT) | lr #2731, hybrid_kendall_lr #2773, RFF-capacity #2835, fourier_sigma #2862 |
+| Gradient-magnitude-flow-DEPENDENT, SYMMETRIC | wd #2791+#2819 |
+| Gradient-magnitude-flow-DEPENDENT, NEGATIVE | seed #2790 |
+| Pareto-cap-coincidence (BOTH-LOSE) | swa_start_frac #2818 |
+| **NEW: DEGENERATE-AXIS (no headroom)** | **anneal_epochs #2877** |
+
+### Cross-axis invariance confirmations
+
+| Quantity | Arm 1 ae=1 | Arm 2 ae=3 | Baseline | Status |
+|---|---:|---:|---:|---|
+| σ-spread | 0.4750 | 0.4747 | 0.475 | ✓ 8th cross-axis confirmation (Δ ≤ 0.0003) |
+| Channel ordering (surf_ux=min, vol_ux=max) | ✓ | ✓ | ✓ | ✓ 12th cross-axis confirmation |
+| clip_fraction=1.0 (per-step) | 100% | 100% | 100% | ✓ 7th cross-axis confirmation |
+| Pre-clip grad_norm median | 5.30 | 5.29 | ≈5.30 | ✓ invariant |
+
+### Banked findings (#140–#146)
+
+140. **PAPER-STRENGTHENING: anneal_epochs is mechanistically DEGENERATE-AXIS under saturated-clip baseline's swa_start_frac × swa_lr coincidence (#2877 thorfinn)** — knob has no mechanistic headroom when ramp target ≈ ramp start. 5th paper-appendix transfer pattern. Strengthens banked GOLD #18 (SWALR-overrides-cosine) by showing the mechanism is robust to ramp-duration WHEN lrs coincide.
+141. **NEW PATTERN: DEGENERATE-AXIS class on the paper-appendix table** — distinct from Pareto-cap-coincidence; both directions are essentially NEUTRAL (no headroom) vs both LOSE for distinct reasons. 7-axis table now has 5 distinct transfer patterns.
+142. **PAPER-STRENGTHENING: 8th cross-axis σ-spread invariance** — Arm 1 spread 0.4750, Arm 2 spread 0.4747 (Δ ≤ 0.0003 vs baseline 0.475).
+143. **PAPER-STRENGTHENING: 12th cross-axis channel-ordering invariance** — surf_ux=min, vol_ux=max preserved on both arms.
+144. **PAPER-STRENGTHENING: 7th cross-axis clip_fraction=1.000 invariance** — both arms 100% saturated per-step (NOT summary-key artifact per banked methodology #40). Pre-clip grad_norm median 5.30/5.29 ≈ baseline 5.30.
+145. **METHODOLOGY: 5th-consecutive SWA-window-truncation under 30-min cap (#2790, #2818, #2835, #2862, #2877)** — 2 SWA epochs out of planned 4 across all 5 recent PRs. Most-stable cross-axis observation; paper-appendix needs the cap-coincidence caveat called out explicitly.
+146. **OPEN QUESTION (motivates follow-up): swa_lr × cosine-final-lr coincidence is the real load-bearing parameter, not anneal_epochs.** To test SWALR ramp-shape mechanism, decouple swa_lr from cosine-final-lr by sweeping swa_lr directly. Thorfinn's suggested follow-up #1; addresses banked open question #43 (max_norm × swa_lr co-tuning).
+
+### Advisor verdict
+**CLOSED — paper-strengthening 7th axis closure with NEW DEGENERATE-AXIS transfer pattern.** Reassigning thorfinn → swa_lr sweep on max_norm=0.35 (10th paper-appendix mechanism-transfer axis, decouples SWA-floor from cosine-final-lr).
 
 ---
 
