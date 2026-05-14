@@ -1,5 +1,22 @@
 # SENPAI Research State
 
+- **Date**: 2026-05-14 06:55 — Round 06:55: **Closed #2796 SAM (+74.1% — budget-incompatible at 14 epochs)**. Assigned 4 new PRs across depth/activation/capacity/optimizer families:
+  - **#2839 askeladd: LayerScale init=1e-4** (per-channel block gating, 640 params, Touvron et al. 2021)
+  - **#2843 nezuko: slice_num=96** (50% finer PhysicsAttention partition, ~+20K params)
+  - **#2845 thorfinn: SwiGLU FFN (h=168)** (param-neutral GELU→SwiGLU, canonical LLM improvement)
+  - **#2846 edward: Periodic SAM k=5** (amortized SAM every 5 steps, targets ~24 epochs in 30 min budget)
+  
+  **SAM family update**: end-to-end SAM at 2× cost = 14 epochs, monotone descent, not converged. Budget-incompatibility is fundamental. Periodic SAM reduces effective cost to ~1.2× → ~24 epochs.
+
+- **Date**: 2026-05-14 06:08-06:40 — Round 06:08: **5 closures — entire plateau-escape wave failed (second consecutive 5-of-5 loss)**:
+  - #2795 alphonse EMA decay=0.999: val_avg 28.42 (+3.0%) — EMA averages older-worse weights under monotone cosine descent
+  - #2802 askeladd DropPath p=0.1: val_avg 29.94 (+8.5%) — structurally mismatched to 5-block trunk (damages Re-conditioning in block 4)
+  - #2804 nezuko Manifold Mixup: val_avg 37.01 (+34.2%) — physically meaningless to mix pressure regression targets; corrupts Re-conditioning
+  - #2806 fern cosine restart SGDR: val_avg 30.11 (+9.2%) — budget incompatible; LR restart destabilizes cycle 2
+  - #2807 thorfinn wider/shallower h192/l4: val_avg 33.43 (+21.2%) — not compute-parity (1.78× params, 1.9× per-epoch → only 24/28 epochs)
+  
+  **Intermediate session new assignments**: #2815 alphonse spectral norm FFN, #2826 fern SE channel attention.
+
 - **Date**: 2026-05-14 05:25 — Round 05:25: **PLATEAU CONFIRMED via 4-PR wave-closure**. 4 simultaneous closures (#2770 askeladd FFN-FiLM +3.19%, #2772 nezuko p-label noise +4.25%, #2775 fern AoA_1 jitter +7.2%, #2779 thorfinn NACA-pair FiLM +1.9%). **Striking pattern: ALL 4 saw rc REGRESS by 5-7%**, including #2775 which specifically targeted rc. The post-#2690 parameter space is locally hostile to rc-targeted interventions in feature/data/Re-cond/geometry-FiLM families. Per plateau protocol: escalate to bolder mechanism families. **4 new diverse assignments deliberately spanning 4 orthogonal mechanism families:**
   - #2802 askeladd: **Stochastic Depth (DropPath, p_max=0.1 linear schedule)** — architecture-level regularization, well-established OOD recipe
   - #2804 nezuko: **Manifold Mixup at trunk middle (layer 3, Beta(0.2,0.2))** — representation-space regularization, NOT label-noise (which #2772 just failed)
@@ -68,25 +85,48 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 28.2414** — PR #2650 (re-conditional-layernorm-affine), merged 2026-05-14.
+**val_avg/mae_surf_p = 27.5868** — PR #2690 (ReConditionalOutputBias, 4th Re-hook), merged 2026-05-14.
 
-**-75.8% cumulative from initial 117.17.** (-2.20% vs previous 28.8762)
+**-76.5% cumulative from initial 117.17.** (-2.32% vs previous 28.2414 from #2650)
 
-Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (676K params) **+ ReScaleHead** (163-param Re→scale head) **+ p_channel_weight=5** (post-Huber pressure weight) **+ ReFiLM** (4,624-param shared FiLM on slice logits, hidden=8, zero-init) **+ ReConditionalLayerNorm** (13,872 params — shared CIN/adaLN-Zero Re-conditioning of all 3 LN roles: pre-attn, pre-FFN, pre-out; log(Re)→γ+β via Linear(1,8)→GELU→Linear(8,n_hidden), zero-init final layer), **SOAP** (`lr=1e-3, betas=(0.95,0.95), wd=1e-4, precondition_frequency=10`), **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**, **torch.compile(mode="default", dynamic=True)**. 28 epochs / 30 min. Peak GPU 27.79/96 GB.
+Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (~671K params) + **ReScaleHead** + **p_channel_weight=5** + **ReFiLM** (hidden=8) + **ReConditionalLayerNorm** (all 3 LN roles) + **ReConditionalOutputBias** (Re→bias at output, ~32 params, init-to-zero) + **SOAP** (`lr=1e-3, betas=(0.95,0.95), wd=1e-4, precondition_frequency=10, max_precond_dim=256`) + **CosineAnnealingLR(T_max=28, eta_min=1e-5)** + bf16 AMP + torch.compile(mode="default", dynamic=True) + Huber(δ=0.1) + surf_weight=10 + grad_clip=1.0.
 
-Per-split val: single_in_dist=27.1740, rc=42.2153, cruise=13.6733, re_rand=29.9031. Test avg 24.4827.
+Per-split val: single_in_dist=27.2278, rc=39.8226, cruise=13.3872, re_rand=29.9096. Test avg 24.1056.
+
+**Noise floor**: val_avg std=0.37 (n=2 seeds, from PR #2725). Single-seed wins < 0.4 val_avg are noise-equivalent.
+- Strong winner: val_avg < 27.19
+- Marginal winner: val_avg ∈ [27.19, 27.5868)
+- Promising: val_avg ∈ [27.5868, 28.97)
+- Close: val_avg ≥ 28.97
 
 ---
+
+## Active Experiments (Round 06:55)
+
+| PR | Student | Hypothesis | Status |
+|---|---|---|---|
+| #2839 | askeladd | LayerScale init=1e-4 | WIP |
+| #2843 | nezuko | slice_num=96 (PhysicsAttention) | WIP |
+| #2845 | thorfinn | SwiGLU FFN h=168 (param-neutral) | WIP |
+| #2846 | edward | Periodic SAM k=5 (amortized) | WIP |
+| #2815 | alphonse | Spectral norm FFN (Lipschitz) | WIP |
+| #2826 | fern | SE channel attention (reduction=8) | WIP |
+| #2788 | tanjiro | Re-cond input scale (5th Re-hook) | WIP (GraphQL-stuck, GPU idle) |
+| #2721 | frieren | rc-NN geom-weighted k=5 max_boost=2 | WIP (awaiting rebase) |
 
 ## Critical Programme Findings
 
 ### Noise Floor Calibrated
-Single-seed run-to-run variance is **~1-2%** on val_avg/mae_surf_p. Deltas below 1.5% need multi-seed confirmation.
+**val_avg std=0.37** (n=2 seeds on #2650 stack, from PR #2725). Single-seed wins <0.4 val_avg are noise-equivalent.
 
 ### Convergence/Budget-Limited
-Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (EMA, SWA) remain high value — but EMA axis is now CLOSED (see below).
+Model converges monotonically to cutoff in every run — best epoch is always the last. Budget-aware mechanisms (EMA, SWA, end-to-end SAM) are CLOSED (insufficient budget). Periodic SAM (k=5) is the last budget-aware optimizer experiment.
 
-### Re-Conditioning Stack — 3 confirmed mechanisms
+### Re-Conditioning Stack — 4 confirmed mechanisms (all merged)
+- **ReFiLM** (slice-logit FiLM, -1.17%): PR #2585/#2650 stack
+- **ReScaleHead** (output scale, -1.95%): merged
+- **ReConditionalLayerNorm** (all 3 LN roles, -2.20%): PR #2650
+- **ReConditionalOutputBias** (output bias, -2.32%): PR #2690 — current baseline
 - **ReScaleHead** (output rescaling, -1.95%): learned Re→scale applied to Transolver output
 - **p_channel_weight=5** (loss reweighting, -2.11%): 5× post-Huber pressure weight
 - **ReFiLM** (attention conditioning, -1.17%): shared FiLM gates on slice logits — Re-dependent mode selection, confirmed by 33% entropy drop

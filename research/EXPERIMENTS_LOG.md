@@ -2,6 +2,92 @@
 
 ---
 
+## 2026-05-14 06:55 — Round 06:55: PR #2796 SAM closed + 4 new assignments
+
+### Closure — #2796 edward `periodic-sam-k5-rho0p05` → **CLOSED +74.1% val**
+
+- val_avg 48.0339 vs baseline 27.5868 (+20.45, +74.1%) | test_avg 42.2746 vs 24.1056 (+75.4%)
+
+| Split | SAM (14ep) | Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 58.6422 | 27.2278 | +115% |
+| val_geom_camber_rc | 61.5368 | 39.8226 | +54.5% |
+| val_geom_camber_cruise | 26.3689 | 13.3872 | +97% |
+| val_re_rand | 45.5878 | 29.9096 | +52.4% |
+| **val_avg** | **48.0339** | **27.5868** | **+74.1%** |
+
+**Verdict: CLOSED — budget-incompatible, not hypothesis-broken.** SAM's mandatory 2× forward+backward = 14 epochs in 30 min (vs 28 baseline). Val monotone descent at eta_min floor; sharpness L(θ+δ)/L(θ) = +2.47× at ρ=0.05 confirms sharp basin — but this is undertrained, not intrinsically sharp. End-to-end SAM axis CLOSED. Follow-up: Periodic SAM k=5 (#2846).
+
+### New assignments (Round 06:55 — depth/activation/capacity/optimizer diversity)
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2839 | askeladd | **LayerScale (init=1e-4)** — per-channel block gating, 640 params, capacity warmup |
+| #2843 | nezuko | **slice_num=96** — 50% finer PhysicsAttention partitioning, ~+20K params |
+| #2845 | thorfinn | **SwiGLU FFN (h=168)** — param-neutral GELU→SwiGLU replacement, well-validated |
+| #2846 | edward | **Periodic SAM k=5** — SAM every 5 steps, ~24 epochs fit in 30 min budget |
+
+---
+
+## 2026-05-14 06:08—06:40 — Round 06:08: 5 closures (full plateau-escape wave failed) + 2 reassignments
+
+**All 5 plateau-escape PRs regressed.** Second consecutive 5-of-5 wave with zero winners. Plateau is deepening.
+
+| PR | Student | Hypothesis | val_avg | Δ | Verdict |
+|---|---|---|---|---|---|
+| #2795 | alphonse | EMA Polyak (decay=0.999) | 28.4193 | +0.83 (+3.0%) | CLOSED |
+| #2802 | askeladd | DropPath (p_max=0.1) | 29.9448 | +2.36 (+8.5%) | CLOSED |
+| #2804 | nezuko | Manifold Mixup (Beta 0.2) | 37.0102 | +9.42 (+34.2%) | CLOSED |
+| #2806 | fern | Cosine restart 2-cycle (SGDR) | 30.1126 | +2.53 (+9.2%) | CLOSED |
+| #2807 | thorfinn | Wider/shallower h192/l4 | 33.4279 | +5.84 (+21.2%) | CLOSED |
+
+**Per-PR analysis:**
+
+**#2795 EMA**: val_avg 28.4193 (+3.0%). Correct root-cause diagnosis: cosine schedule eta_min=1e-5 keeps model monotone-descent through epoch 28 — EMA averages older weights that are strictly worse than live weights. EMA-vs-live penalty +0.23 per epoch confirms this. **EMA-Polyak-as-tested axis CLOSED** (schedule incompatibility is fundamental, not parameter tuning).
+
+**#2802 DropPath**: val_avg 29.9448 (+8.5%). Structural mismatch: DropPath targets 50-200 ResNet block stacks; on a 5-block Transolver trunk, block 4 carries Re-conditioning pathway signals (ReScaleHead, ReCondOutputBias). Dropping it randomly damages the conditioning chain. Per-block magnitude trace shows monotone decay (block 4 MLP ~39% of block 0). **DropPath-on-Transolver axis CLOSED.**
+
+**#2804 Manifold Mixup**: val_avg 37.0102 (+34.2%) — catastrophic. Three structural failure modes: (1) mixing regression targets λ·y_rc + (1-λ)·y_cruise is physically meaningless for pressure fields; (2) feature-space convex hull doesn't align with target convex hull in nonlinear blocks 4-5; (3) Re-conditioning hooks receive mixed λ-weighted Re values from two different flight conditions — corrupts the conditioning signal entirely. **Manifold Mixup on physical regression targets CLOSED.**
+
+**#2806 Cosine restart SGDR**: val_avg 30.11 (+9.2%). Cycle 1 terminates at val=36.05 (+30%); LR restart destabilizes cycle 2 (val jumps to 55.93 before recovering). Budget incompatible. **SGDR/multi-cycle axis CLOSED.**
+
+**#2807 Wider/shallower**: val_avg 33.43 (+21.2%). Not compute-parity: h192/l4 = 1.78× params, 1.9× per-epoch time. Only 24/28 epochs fit. Hypothesis not fairly tested. Wider-shallower at TRUE compute-parity requires n_hidden≈154, n_layers=4 — can be revisited later.
+
+### Round 06:08 reassignments (2 new PRs from intermediate session)
+- **#2815 alphonse**: Spectral norm on FFN MLP layers (Lipschitz regularization for OOD smoothness)
+- **#2826 fern**: SE channel attention after each Transolver block (reduction=8)
+
+---
+
+## 2026-05-14 06:35 — PR #2806: Cosine restart (SGDR-style, 2 cycles T=14, lr2_scale=0.5)
+
+- Branch: `charliepai2g24h1-fern/cosine-restart-2cycles-tmax14`
+- Hypothesis: Two cosine annealing cycles (T1=14 + T2=14 epochs, lr2_scale=0.5) instead of a single 28-epoch cosine. SGDR mechanism expected to let optimizer escape cycle-1 local minimum and find a flatter/better basin.
+- Metrics: `models/model-charliepai2g24h1-fern-cosine-restart-2cycles-tmax14-20260514-054717/metrics.jsonl`
+
+| Metric | This run | Baseline (#2690) | Δ |
+|--------|----------|-----------------|---|
+| val_avg/mae_surf_p | 30.1126 | 27.5868 | **+2.53 (+9.2%) ❌** |
+| test_avg/mae_surf_p | 26.1865 | 24.1056 | +2.08 (+8.6%) |
+| val single | 30.5986 | 27.2278 | +12.4% |
+| val rc | 44.3726 | 39.8226 | +11.4% |
+| val cruise | 13.8317 | 13.3872 | +3.3% |
+| val re_rand | 31.6476 | 29.9096 | +5.8% |
+
+**Verdict: CLOSED (val_avg ≥ 28.97 close threshold)**
+
+**What happened:**
+- Cycle 1 (14 epochs) terminates at val=36.05 — already +30% worse than baseline. 14 epochs is too little budget for this stack to anneal.
+- The LR restart kick (5e-4 at epoch 15, even softened to lr2_scale=0.5) destabilized cycle 2: val jumped from 36.05 → 55.93 (+55%) in one epoch.
+- Cycle 2 spent all 14 epochs recovering from the kick, only reaching 30.11 by epoch 28 — still worse than baseline.
+- rc split hit hardest (+11.4%) — the opposite of the intended effect.
+
+**Key diagnostic:** The baseline's final ~14 epochs at low LR contribute ~30% of total quality improvement. Splitting the budget into two 14-epoch halves discards this long polishing tail twice. SGDR works for 100+ epoch regimes; it's incompatible with our 28-epoch/30-min budget.
+
+**SGDR/multi-cycle-restart axis CLOSED** at this epoch budget. No follow-up variations warranted.
+
+---
+
 ## 2026-05-14 05:25 — Round 05:25: PLATEAU CONFIRMED via 4-PR wave-closure
 
 Second wave of Round 02:28 assignments arrived. All 4 review-ready PRs regressed vs #2690 baseline. **Striking cross-PR pattern: all 4 saw rc REGRESS by 5-7%**, including the one that specifically targeted rc.
