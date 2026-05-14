@@ -163,6 +163,13 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
+        # H74: attention sharpening factor lives in a buffer (no grad), updated
+        # per-epoch by the training loop. Effective scale becomes
+        # attn_sharpening_factor / sqrt(dim_head). Init at sqrt(2) (PR #2519 winner).
+        self.register_buffer(
+            "attn_sharpening_factor", torch.tensor(math.sqrt(2.0))
+        )
+
         self.last_attn_entropy_mean: float | None = None
         self.last_attn_entropy_per_head_min: float | None = None
 
@@ -189,9 +196,11 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        # H67: fixed sharper temperature (factor of sqrt(2) sharper than the
-        # default 1/sqrt(d_head) scale of F.scaled_dot_product_attention).
-        sharper_scale = 1.0 / math.sqrt(self.dim_head / 2.0)
+        # H74: dynamic attention scale from buffer, updated per-epoch by the
+        # cosine schedule in the training loop. attn_sharpening_factor controls
+        # sharpness; the buffer init of sqrt(2) reproduces the post-#2519 baseline.
+        # Effective scale = attn_sharpening_factor / sqrt(dim_head).
+        sharper_scale = self.attn_sharpening_factor.item() / math.sqrt(self.dim_head)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             scale=sharper_scale,
@@ -572,6 +581,21 @@ print(
     f"dim_head={_h67_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
+# H74: cosine attention-temperature schedule. Peak √3 at mid-training,
+# √2 at start/end. n_epochs_schedule=12 matches the actual #2519 training
+# length (timeout caps at 12 epochs even though cfg.epochs defaults to 50).
+H74_N_EPOCHS_SCHEDULE = 12
+H74_BASE = (math.sqrt(2.0) + math.sqrt(3.0)) / 2.0
+H74_AMP = (math.sqrt(2.0) - math.sqrt(3.0)) / 2.0
+print(
+    f"[H74] cosine attn-temp: peak sqrt(3)={math.sqrt(3):.4f} at mid-epoch "
+    f"({H74_N_EPOCHS_SCHEDULE // 2}/{H74_N_EPOCHS_SCHEDULE}), "
+    f"sqrt(2)={math.sqrt(2):.4f} at start/end (epoch 0 and {H74_N_EPOCHS_SCHEDULE - 1}). "
+    f"base={H74_BASE:.4f} amp={H74_AMP:.4f}"
+)
+# H74: confirm n_params unchanged from #2519 baseline (892,637).
+assert n_params == 892637, f"H74: expected 892637 params (unchanged from #2519), got {n_params}"
+print(f"[H74] n_params={n_params} (unchanged from #2519 baseline)")
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
 # H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
@@ -660,6 +684,30 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
+    # H74: cosine schedule for attention-temperature sharpening factor.
+    # Full cycle theta in [0, 2*pi]; cos goes 1 -> -1 -> 1.
+    # factor = base + amp * cos(theta), where:
+    #   base = (sqrt(2)+sqrt(3))/2, amp = (sqrt(2)-sqrt(3))/2 (negative).
+    # epoch=0:        cos=+1 -> factor=sqrt(2)
+    # epoch=mid:      cos=-1 -> factor=sqrt(3) (peak sharpening)
+    # epoch=N-1:      cos=+1 -> factor=sqrt(2)
+    # Note: the PR body comment showed `theta = pi * e / (n-1)` but its expected
+    # values table (peak at mid, sqrt(2) at start AND end) and pre-registered
+    # prediction "final epoch tau within 5% of sqrt(2)" require a full cycle —
+    # i.e. `2*pi * e / (n-1)`. Deviating to the 2*pi form to match the schedule
+    # the table+predictions describe; flagged in the PR results comment.
+    # Beyond the schedule horizon (in case training overshoots), clamp epoch
+    # index to N-1 so factor stays at sqrt(2) (post-schedule).
+    h74_epoch_idx = min(epoch, H74_N_EPOCHS_SCHEDULE - 1)
+    h74_theta = 2.0 * math.pi * h74_epoch_idx / max(1, H74_N_EPOCHS_SCHEDULE - 1)
+    h74_factor = H74_BASE + H74_AMP * math.cos(h74_theta)
+    for block in model.blocks:
+        block.attn.attn_sharpening_factor.fill_(h74_factor)
+    print(
+        f"[H74] Epoch {epoch + 1}: attn_sharpening_factor = {h74_factor:.4f} "
+        f"(theta={h74_theta:.4f}, cos={math.cos(h74_theta):+.4f})"
+    )
+
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
@@ -741,6 +789,9 @@ for epoch in range(MAX_EPOCHS):
         "train/freqs_lr": freqs_lr,
         "train/layer_scale_lr": layer_scale_lr,
         "train/freqs": freqs_now,
+        # H74: cosine schedule factor (sqrt(2) at start/end, sqrt(3) at mid)
+        "train/h74_attn_sharpening_factor": h74_factor,
+        "train/h74_theta": h74_theta,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
