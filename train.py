@@ -153,10 +153,12 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 re_conditional_layernorm: bool = False):
+                 re_conditional_layernorm: bool = False,
+                 re_conditional_ffn_film: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.re_conditional_ffn_film = re_conditional_ffn_film
         # When re_conditional_layernorm is True, the LN affine is provided by
         # shared ReConditionalLayerNorm modules owned by the parent Transolver;
         # this block contributes no LN parameters. Otherwise, plain nn.LayerNorm.
@@ -177,8 +179,18 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
+    def _ffn(self, x, ffn_gamma=None, ffn_beta=None):
+        # FFN with optional FiLM modulation on the post-GELU intermediate state.
+        # MLP(..., n_layers=0) is Linear_1 → GELU → Linear_2; linear_pre is the
+        # (Linear_1, GELU) Sequential and linear_post is Linear_2.
+        h = self.mlp.linear_pre(x)
+        if self.re_conditional_ffn_film and ffn_gamma is not None and ffn_beta is not None:
+            h = (1.0 + ffn_gamma).unsqueeze(1) * h + ffn_beta.unsqueeze(1)
+        return self.mlp.linear_post(h)
+
     def forward(self, fx, gamma=None, beta=None, log_re=None,
-                rcln_1=None, rcln_2=None, rcln_3=None):
+                rcln_1=None, rcln_2=None, rcln_3=None,
+                ffn_gamma=None, ffn_beta=None):
         if self.re_conditional_layernorm:
             normed_1 = rcln_1(fx, log_re)
         else:
@@ -188,7 +200,7 @@ class TransolverBlock(nn.Module):
             normed_2 = rcln_2(fx, log_re)
         else:
             normed_2 = self.ln_2(fx)
-        fx = self.mlp(normed_2) + fx
+        fx = self._ffn(normed_2, ffn_gamma, ffn_beta) + fx
         if self.last_layer:
             if self.re_conditional_layernorm:
                 normed_3 = rcln_3(fx, log_re)
@@ -205,13 +217,16 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 re_conditional_ffn_film: bool = False,
+                 re_ffn_film_hidden: int = 8):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.re_conditional_ffn_film = re_conditional_ffn_film
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -228,6 +243,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 re_conditional_layernorm=re_conditional_layernorm,
+                re_conditional_ffn_film=re_conditional_ffn_film,
             )
             for i in range(n_layers)
         ])
@@ -246,6 +262,12 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+        # Re-conditional FiLM at the FFN mid-hidden injection point — single
+        # shared instance, gamma/beta sized to FFN intermediate dim
+        # (n_hidden * mlp_ratio). Zero-init reproduces the no-FiLM identity.
+        if re_conditional_ffn_film:
+            self.re_ffn_film = ReFFNFiLM(d_mid=n_hidden * mlp_ratio,
+                                         hidden_film=re_ffn_film_hidden)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -265,15 +287,18 @@ class Transolver(nn.Module):
         # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
-        if self.re_conditional_layernorm:
-            for block in self.blocks:
-                fx = block(fx, gamma, beta, log_re=log_re,
-                           rcln_1=self.re_ln_1, rcln_2=self.re_ln_2,
-                           rcln_3=self.re_ln_3)
+        if self.re_conditional_ffn_film:
+            ffn_gamma, ffn_beta = self.re_ffn_film(log_re)
         else:
-            for block in self.blocks:
-                fx = block(fx, gamma, beta)
+            ffn_gamma = ffn_beta = None
+        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        rcln_1 = self.re_ln_1 if self.re_conditional_layernorm else None
+        rcln_2 = self.re_ln_2 if self.re_conditional_layernorm else None
+        rcln_3 = self.re_ln_3 if self.re_conditional_layernorm else None
+        for block in self.blocks:
+            fx = block(fx, gamma, beta, log_re=log_re,
+                       rcln_1=rcln_1, rcln_2=rcln_2, rcln_3=rcln_3,
+                       ffn_gamma=ffn_gamma, ffn_beta=ffn_beta)
         return {"preds": fx}
 
 
@@ -381,6 +406,57 @@ class ReFiLM(nn.Module):
         gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
         beta = beta.reshape(B, self.heads, 1, self.slice_num)
         return gamma, beta
+
+
+class ReFFNFiLM(nn.Module):
+    """Re-conditional FiLM applied to the FFN's mid-hidden activation.
+
+    Conditions the intermediate state of each Transolver block's FFN — the
+    post-GELU output of the first linear projection (Linear_1 → GELU), before
+    the second linear projection (Linear_2). This is a distinct injection
+    point from ReConditionalLayerNorm, which conditions the pre-FFN LN affine
+    on the *input* to the FFN. The mid-FFN state has already undergone one
+    round of nonlinear mixing, so FiLM here can reshape the internal feature
+    manifold of each block rather than just rescale its input.
+
+    Operation:
+        h = GELU(Linear_1(x))                       # [B, N, d_mid]
+        h = (1 + γ(log_Re)) * h + β(log_Re)
+        out = Linear_2(h)
+
+    Shared across all TransolverBlocks (one instance lives on the parent
+    Transolver and is called once per forward, then broadcast to every block).
+    The FFN intermediate dim is `n_hidden * mlp_ratio` (not `n_hidden`), so
+    γ/β are sized to the larger mid-state dim.
+
+    Zero-init of the final projection makes (γ, β) = (0, 0) at step 0, so the
+    module reproduces the no-FiLM identity at init; the optimiser must
+    actively open the gate.
+
+    References: Perez et al. 2018 (1709.07871, FiLM); Dumoulin et al. 2017
+    (1610.07629, CIN); Peebles & Xie 2022 (2212.09748, adaLN-Zero).
+    """
+
+    def __init__(self, d_mid: int, hidden_film: int = 8):
+        super().__init__()
+        self.d_mid = d_mid
+        self.trunk = nn.Sequential(
+            nn.Linear(1, hidden_film),
+            nn.GELU(),
+        )
+        self.gamma_proj = nn.Linear(hidden_film, d_mid)
+        self.beta_proj = nn.Linear(hidden_film, d_mid)
+        nn.init.zeros_(self.gamma_proj.weight)
+        nn.init.zeros_(self.gamma_proj.bias)
+        nn.init.zeros_(self.beta_proj.weight)
+        nn.init.zeros_(self.beta_proj.bias)
+
+    def forward(self, log_re: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # log_re: [B, 1] → gamma_residual, beta each [B, d_mid]
+        feat = self.trunk(log_re)
+        gamma_residual = self.gamma_proj(feat)
+        beta = self.beta_proj(feat)
+        return gamma_residual, beta
 
 
 class ReConditionalOutputBias(nn.Module):
@@ -601,6 +677,11 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Re-conditional FiLM at FFN mid-hidden state. Single shared instance —
+    # Linear(1, h)→GELU→{Linear(h, d_mid)×2} where d_mid = n_hidden * mlp_ratio.
+    # Zero-init final projection reproduces baseline FFN at step 0.
+    re_conditional_ffn_film: bool = False
+    re_ffn_film_hidden: int = 8
 
 
 cfg = sp.parse(Config)
@@ -642,6 +723,8 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    re_conditional_ffn_film=cfg.re_conditional_ffn_film,
+    re_ffn_film_hidden=cfg.re_ffn_film_hidden,
 )
 
 model = Transolver(**model_config).to(device)
@@ -656,9 +739,12 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
 n_params_out_bias = sum(p.numel() for p in output_bias.parameters()) if output_bias is not None else 0
+n_params_ffn_film = (
+    sum(p.numel() for p in model.re_ffn_film.parameters())
+) if cfg.re_conditional_ffn_film else 0
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
-    f"ReCondLN {n_params_re_ln}) "
+    f"ReCondLN {n_params_re_ln}, ReFFNFiLM {n_params_ffn_film}) "
     f"+ ReScaleHead ({n_params_head} params)"
     + (f" + ReCondOutputBias ({n_params_out_bias} params)" if output_bias is not None else "")
 )
@@ -826,6 +912,21 @@ for epoch in range(MAX_EPOCHS):
             "abs_b_logre_cross": 0.0,
             "n": 0,
         }
+    # ReFFNFiLM diagnostics — absmax + per-sample |γ_residual| / |β| means for
+    # corr(|γ|, logRe) and corr(|β|, logRe). Mirrors the per-role ReCondLN block.
+    re_ffn_film_diag = None
+    if cfg.re_conditional_ffn_film:
+        re_ffn_film_diag = {
+            "gamma_absmax": 0.0,
+            "beta_absmax": 0.0,
+            "g_sum": 0.0,
+            "b_sum": 0.0,
+            "g_sq_sum": 0.0,
+            "b_sq_sum": 0.0,
+            "g_logre_cross": 0.0,
+            "b_logre_cross": 0.0,
+            "n": 0,
+        }
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -963,6 +1064,23 @@ for epoch in range(MAX_EPOCHS):
                 d["abs_b_logre_cross"] += (abs_b_per * lr).sum().item()
                 d["n"] += abs_b_per.shape[0]
 
+            # ReFFNFiLM diagnostics — call the shared FiLM module directly to
+            # recover per-sample (γ_residual, β) for stat accumulation.
+            if re_ffn_film_diag is not None:
+                g_r, b_v = uncompiled_model.re_ffn_film(log_re_norm)  # [B, d_mid] each
+                g_per = g_r.abs().mean(dim=-1).to(torch.float64)  # [B]
+                b_per = b_v.abs().mean(dim=-1).to(torch.float64)  # [B]
+                d = re_ffn_film_diag
+                d["gamma_absmax"] = max(d["gamma_absmax"], g_r.abs().max().item())
+                d["beta_absmax"] = max(d["beta_absmax"], b_v.abs().max().item())
+                d["g_sum"] += g_per.sum().item()
+                d["b_sum"] += b_per.sum().item()
+                d["g_sq_sum"] += (g_per ** 2).sum().item()
+                d["b_sq_sum"] += (b_per ** 2).sum().item()
+                d["g_logre_cross"] += (g_per * lr).sum().item()
+                d["b_logre_cross"] += (b_per * lr).sum().item()
+                d["n"] += g_per.shape[0]
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
@@ -1059,6 +1177,36 @@ for epoch in range(MAX_EPOCHS):
                 "corr_beta_logre": float(b_corr),
             }
 
+    # ReFFNFiLM summary — absmax + corr(|γ_res|, logRe), corr(|β|, logRe).
+    re_ffn_film_summary: dict | None = None
+    if re_ffn_film_diag is not None:
+        d = re_ffn_film_diag
+        n = max(d["n"], 1)
+        g_mean = d["g_sum"] / n
+        b_mean = d["b_sum"] / n
+        g_var = max(d["g_sq_sum"] / n - g_mean ** 2, 0.0)
+        b_var = max(d["b_sq_sum"] / n - b_mean ** 2, 0.0)
+        g_std = g_var ** 0.5
+        b_std = b_var ** 0.5
+        if scale_n > 0 and lr_std > 1e-8 and g_std > 1e-12:
+            g_cov = d["g_logre_cross"] / n - g_mean * lr_mean
+            g_corr = g_cov / (g_std * lr_std)
+        else:
+            g_corr = 0.0
+        if scale_n > 0 and lr_std > 1e-8 and b_std > 1e-12:
+            b_cov = d["b_logre_cross"] / n - b_mean * lr_mean
+            b_corr = b_cov / (b_std * lr_std)
+        else:
+            b_corr = 0.0
+        re_ffn_film_summary = {
+            "gamma_residual_absmax": d["gamma_absmax"],
+            "beta_absmax": d["beta_absmax"],
+            "gamma_residual_mean_abs": g_mean,
+            "beta_mean_abs": b_mean,
+            "corr_gamma_logre": float(g_corr),
+            "corr_beta_logre": float(b_corr),
+        }
+
     # ReConditionalOutputBias summary — absmax (overall + per-channel),
     # per-channel mean (signed + |.|), and corr(|b|, log_re).
     re_out_bias_summary: dict | None = None
@@ -1135,6 +1283,7 @@ for epoch in range(MAX_EPOCHS):
         "film/beta_stats": epoch_beta_stats,
         "re_ln/per_role": re_ln_summary,
         "re_cond_out_bias": re_out_bias_summary,
+        "re_ffn_film": re_ffn_film_summary,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -1177,6 +1326,14 @@ for epoch in range(MAX_EPOCHS):
             f"per_ch_absmax=[Ux={s['per_ch_absmax'][0]:.5f} Uy={s['per_ch_absmax'][1]:.5f} p={s['per_ch_absmax'][2]:.5f}]  "
             f"per_ch_mean=[Ux={s['per_ch_mean'][0]:+.5f} Uy={s['per_ch_mean'][1]:+.5f} p={s['per_ch_mean'][2]:+.5f}]  "
             f"corr(|b|,logRe)={s['corr_abs_b_logre']:+.3f}"
+        )
+    if re_ffn_film_summary is not None:
+        s = re_ffn_film_summary
+        print(
+            f"    ReFFNFiLM  "
+            f"gamma_res[absmax={s['gamma_residual_absmax']:.4f}, mean|.|={s['gamma_residual_mean_abs']:.4f}]  "
+            f"beta[absmax={s['beta_absmax']:.4f}, mean|.|={s['beta_mean_abs']:.4f}]  "
+            f"corr(|γ|,logRe)={s['corr_gamma_logre']:+.3f}  corr(|β|,logRe)={s['corr_beta_logre']:+.3f}"
         )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
