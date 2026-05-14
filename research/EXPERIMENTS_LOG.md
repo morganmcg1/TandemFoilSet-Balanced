@@ -8,6 +8,54 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-14 03:50 — WAVE 19 / ITERATION 13 — WHOLESALE WASHOUT, 8 closed, attn-temp axis fully CLOSED, plateau-protocol triggered
+
+**Meta-finding**: Wave 19 was a complete washout — **all 7 review-ready PRs regressed against baseline 55.1595**, plus the 8th was stalled and closed. The schedule axis is now fully bracketed and CLOSED on every sub-axis (start value, end value, decay speed, decay shape, per-layer differentiation). Two OOD-targeted experiments (geo aux head, slice_num=96) and one geometry-input experiment (Laplacian eigenvector PE) also failed. We have exhausted the local neighborhood of the current Transolver+L1+Fourier-coords+slice-token configuration. **Plateau protocol escalation triggered — Wave 20 will pivot to model-class changes, loss reformulations, and curriculum learning.**
+
+### Closure summary
+
+| PR | Student | Hypothesis | val_avg | Δ vs 55.1595 | test_avg | Δ vs 48.3010 | Outcome |
+|---|---|---|---|---|---|---|---|
+| #2714 | alphonse | sqrt5-linear (τ_start=√5) | 57.1995 | **+3.70%** | 51.5695 | +6.77% | Close — τ_start ceiling is √3 |
+| #2715 | askeladd | fast-anneal (√3→√2 by ep6) | stalled | stale_wip | — | — | Close — pod stalled, axis closed regardless |
+| #2716 | edward | anneal-to-default (√3→1.0) | 59.5671 | **+7.99%** | 50.5757 | +4.71% | Close — τ_end floor is √2 |
+| #2717 | fern | hold-then-decay (√3 for 3ep) | 57.5451 | **+4.32%** | 50.7678 | +5.10% | Close — delayed decay hurts |
+| #2718 | frieren | per-layer-anneal | 57.8042 | **+4.79%** | 50.9668 | +5.52% | Close — asymmetric < symmetric |
+| #2719 | nezuko | geo-aux-head (camber+Re) | 57.7376 | **+4.67%** | 49.6924 | +2.88% | Close — bottleneck interferes |
+| #2720 | tanjiro | slice_num=96 | 62.3325 | **+13.00%** | 55.3194 | +14.53% | Close — slice_num=64 re-confirmed |
+| #2656 | thorfinn | laplacian-pe-knn (n_eig=8) | 60.7701 | **+10.18%** | 53.4944 | +10.75% | Close — spectral PE interferes |
+
+### Mechanism: schedule axis fully closed
+
+The Wave 18 finding (linear √3→√2 anneal MERGED) plus Wave 19 closures map the schedule axis completely:
+
+- **τ_start bracket**: √2 (closed prior) / √3 (winner) / √5 (#2714 +3.70%) → √3 optimum
+- **τ_end bracket**: √2 (winner) / 1.0 (#2716 +7.99%) → √2 optimum
+- **Decay shape**: linear-from-epoch-1 (winner) / hold-then-decay (#2717 +4.32%) / cosine peak mid (#2655 +4.68%) → monotone linear from epoch 1 optimum
+- **Differentiation**: uniform across blocks (winner) / per-layer (#2718 +4.79%) → symmetric optimum
+- **Duration**: 12 epochs (winner) — fast variant (#2715) untested but axis closed regardless
+
+The schedule axis is now permanently closed on all 4 sub-axes simultaneously.
+
+### Mechanism: OOD-targeted approaches need fundamentally different vector
+
+Both Wave-19 OOD-targeted experiments failed:
+
+- **geo aux head (#2719)**: Forcing slice tokens to encode (camber, log_Re) as a regression target *interfered* with the dispatch representation. The OOD camber_cruise split regressed worst (+12.06%), exactly opposite to the hypothesis. **Slice-token output-side aux losses are CLOSED**.
+- **Laplacian PE (#2656)**: Spectral geometry encoding (k=8 KNN, n_eig=8) conflicts with the Fourier L=6 coords pipeline (already encodes per-point geometry). Same failure pattern as SDF (#2654) and HF spectral penalty (#2653) — adding alternate geometry signal *interferes* rather than complements. **Geometry-input-side spectral and graph-based encodings are CLOSED**.
+
+### Plateau protocol triggered — Wave 20 escalation
+
+Per the plateau protocol (5+ consecutive non-improving experiments): **change strategy tier**.
+
+- **Schedule axis: CLOSED** (can't tune further)
+- **Architecture axis: largely closed** (slice_num, n_head, n_layers, n_hidden, inner_dim, ReGLU all bracketed)
+- **Loss axis: only L1 explored** (no relative L1, no Sobolev/gradient losses, no physics-informed)
+- **Data/sampling axis: only equal-domain weight explored** (no curriculum)
+- **Model class: only Transolver explored** (no GNN, no equivariant, no neural-operator alternatives)
+
+Wave 20 will pivot to: model-class changes (GeoMPNN, SE(2)-equivariant), loss reformulation (relative L1, Sobolev, NSE-residual), curriculum learning, SSL pretraining, and camber-conditional normalization. See `/research/RESEARCH_IDEAS_2026-05-14_03:50.md` for full hypothesis specs.
+
 ## 2026-05-14 — WAVE 18 / ITERATION 8 — 1 win, 6 closed; attn-temp schedule axis proven productive; new baseline 55.1595
 
 **Meta-finding**: The comparison of #2648 (linear √3→√2 anneal, MERGED −1.81%) vs #2655 (cosine peak √3 at epoch 6, CLOSED +4.68%) definitively proves that **EARLY sharpening during representation formation** is the operative mechanism — not sharpening level per se. The schedule TIMING is what matters. All 5 other OOD-targeted hypotheses failed (FOMA noise, SliceMoE, thin-airfoil aux, spectral HF penalty, SDF features), closing those mechanism families.
