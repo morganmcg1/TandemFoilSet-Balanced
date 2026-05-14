@@ -480,6 +480,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    polyak_k: int = 0  # last-K-epoch weight averaging at eval time (0 = disabled; PR #3042)
 
 
 cfg = sp.parse(Config)
@@ -529,6 +530,10 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+if cfg.polyak_k > 0:
+    print(f"[init] Polyak K={cfg.polyak_k} (averaging last {cfg.polyak_k} epochs of weights at eval time)")
+else:
+    print("[init] Polyak averaging disabled (polyak_k=0)")
 
 optimizer = Lion(
     model.parameters(),
@@ -576,6 +581,12 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+
+# Polyak weight-averaging buffer: rolling list of the last K state_dict snapshots
+# captured in CPU/fp32 at the END of each epoch (after val + best-checkpoint save).
+# Robust to early termination by SENPAI_TIMEOUT_MINUTES — list naturally contains
+# the last K completed epochs. Negligible memory: ~0.85M params × 4 B × K snapshots.
+polyak_snapshots: list[dict[str, torch.Tensor]] = []
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -698,6 +709,14 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    if cfg.polyak_k > 0:
+        # Detach + clone to CPU/fp32 — defensive against (a) shared storage with
+        # live params and (b) numeric drift if training were ever in bf16 params.
+        snapshot = {k: v.detach().clone().cpu().float() for k, v in model.state_dict().items()}
+        polyak_snapshots.append(snapshot)
+        if len(polyak_snapshots) > cfg.polyak_k:
+            polyak_snapshots.pop(0)
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -787,6 +806,87 @@ if best_metrics:
         n_params=n_params,
         model_config=model_config,
     )
+
+    # --- Polyak weight averaging at eval time (PR #3042) ---
+    # Standard test eval above used the best-val checkpoint (= last-epoch for the
+    # 15th-shift baseline). Polyak eval here uses the mean of the last K state_dicts.
+    if cfg.polyak_k > 0 and len(polyak_snapshots) > 0:
+        n_snap = len(polyak_snapshots)
+        print(f"\n=== Polyak weight averaging (K={cfg.polyak_k}, snapshots={n_snap}) ===")
+
+        polyak_state: dict[str, torch.Tensor] = {}
+        for key in polyak_snapshots[0].keys():
+            polyak_state[key] = sum(s[key] for s in polyak_snapshots) / float(n_snap)
+
+        # Mechanism diagnostic: ||w_polyak - w_last||_2 / ||w_last||_2 over all params.
+        # Tiny ratio (< 0.005) ⇒ last K epochs have converged, Polyak is a no-op.
+        last_snap = polyak_snapshots[-1]
+        sq_diff = 0.0
+        sq_last = 0.0
+        for k, v_last in last_snap.items():
+            v_polyak = polyak_state[k]
+            sq_diff += (v_polyak - v_last).pow(2).sum().item()
+            sq_last += v_last.pow(2).sum().item()
+        polyak_l2_distance = sq_diff ** 0.5
+        polyak_l2_distance_pct = polyak_l2_distance / (sq_last ** 0.5) if sq_last > 0 else 0.0
+        print(
+            f"||w_polyak - w_last||_2 = {polyak_l2_distance:.6f} "
+            f"({polyak_l2_distance_pct*100:.4f}% of ||w_last||_2)"
+        )
+
+        polyak_state_device = {k: v.to(device) for k, v in polyak_state.items()}
+        model.load_state_dict(polyak_state_device)
+        model.eval()
+
+        with torch.no_grad():
+            param_l2_polyak = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
+        print(f"Param L2 norm of Polyak-averaged model: {param_l2_polyak:.4f}")
+
+        polyak_val_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        polyak_val_avg = aggregate_splits(polyak_val_metrics)
+        print(f"\n  POLYAK VAL  avg_surf_p={polyak_val_avg['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, polyak_val_metrics[name])
+
+        polyak_test_metrics = None
+        polyak_test_avg = None
+        if not cfg.skip_test:
+            polyak_test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            polyak_test_avg = aggregate_splits(polyak_test_metrics)
+            print(f"\n  POLYAK TEST avg_surf_p={polyak_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, polyak_test_metrics[name])
+
+        polyak_log: dict[str, float] = {}
+        for split_name, m in polyak_val_metrics.items():
+            for k, v in m.items():
+                polyak_log[f"val_polyak/{split_name}/{k}"] = v
+        for k, v in polyak_val_avg.items():
+            # k is "avg/<metric>" → map to "val_avg_polyak/<metric>" per PR #3042 naming
+            metric_name = k.split("/", 1)[-1]
+            polyak_log[f"val_avg_polyak/{metric_name}"] = v
+        if polyak_test_metrics is not None:
+            for split_name, m in polyak_test_metrics.items():
+                for k, v in m.items():
+                    polyak_log[f"test_polyak/{split_name}/{k}"] = v
+            for k, v in polyak_test_avg.items():
+                metric_name = k.split("/", 1)[-1]
+                polyak_log[f"test_avg_polyak/{metric_name}"] = v
+        wandb.log(polyak_log)
+        wandb.summary.update(polyak_log)
+        wandb.summary["polyak_k"] = cfg.polyak_k
+        wandb.summary["polyak_n_snapshots"] = n_snap
+        wandb.summary["polyak_weight_l2_distance"] = polyak_l2_distance
+        wandb.summary["polyak_weight_l2_distance_pct"] = polyak_l2_distance_pct
+        wandb.summary["param_l2_polyak"] = param_l2_polyak
+    elif cfg.polyak_k > 0:
+        print(f"\nPolyak averaging requested (K={cfg.polyak_k}) but no snapshots collected — skipping.")
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
 
