@@ -2,6 +2,63 @@
 
 ---
 
+## 2026-05-14 01:55 — Round 01:54 Closures: shape-bin-M-oversampling, surface-only-aux-head, 2 stale pods
+
+### 🚨 PROGRAMME CORRECTION — Multi-axis OOD, not single-axis-M
+
+**Frieren's #2689 JSONL count established a critical empirical fact:** train set CONTAINS samples at M=0.778 (75 samples) and M=0.889 (71 samples). The "rc OOD beyond train cluster ch15 ≤ 0.667" theory we've operated on for 6+ rounds is WRONG on the camber-amplitude axis alone. The rc OOD condition is multi-dimensional — likely a joint condition on (M_front, M_back, P_front, P_back, Re, AoA).
+
+**The 7-experiment cruise/rc dichotomy observation is still real** — it just has a different mechanism than "ch15 extrapolation". The single-axis interpolation/extrapolation story doesn't account for samples already present in train at the rc test values. Most likely: rc's OOD-ness is in the JOINT distribution (the combination of channels), not any single channel.
+
+**Reassignments**: #2721 frieren rc-NN-oversampling-multi-axis builds a per-split feature signature table AND uses multi-axis k-NN-to-rc weighting to identify and target the actual rc-similar train samples. This will replace 6+ rounds of single-axis-M speculation with empirical data.
+
+### PR #2689 frieren `shape-bin-oversampling-m05` — CLOSED +6.0% val (new baseline)
+
+- **Result:** val_avg 29.9505 vs baseline 28.2414. ALL splits regressed: single +10.6%, rc +1.2%, cruise +6.6%, re_rand +8.5%.
+- **Effective sampler verified**: 71% mass on M≥0.5 (vs 46.8% raw), exactly 3× boost.
+- **Hypothesis falsified on two levels**: (a) single-axis M-density does not solve rc gap (+1.2% bump only); (b) collateral damage from undersampling M<0.5 hurt iid bulk by 6-10%.
+- **Critical correction**: train contains M=0.778 (75) and M=0.889 (71) samples — rc OOD is multi-axis joint condition, not ch15 extrapolation.
+
+**Artifact**: `models/model-charliepai2g24h1-frieren-shape-bin-oversampling-m05-20260514-005622/metrics.jsonl`
+
+### PR #2688 nezuko `surface-only-aux-normal-head` — CLOSED +3.66% val (new baseline)
+
+- **Result:** val_avg 29.2733 vs baseline 28.2414. Per-split: single +3.6%, rc +2.4%, cruise +1.5%, re_rand +6.5%.
+- **Aux objective ran CLEANER than #2660**: aux_loss 0.039 vs 0.062, pred_mag 0.988 vs 0.980.
+- **Main task regressed in identical shape as #2660** (vol+surf aux) — directly disproves the volume-pollution hypothesis.
+- **Mechanism: representation-capacity competition** at the post-LN trunk hidden state. Aux supervision at final injection point steals capacity from bulk-flow encoding.
+- **Aux-output-head meta-axis FULLY CLOSED** across 2 arms.
+
+**Artifact**: `models/model-surface-only-aux-normal-head-20260514-005837/metrics.jsonl`
+
+### PR #2599 tanjiro `se-channel-attention-r8` — CLOSED STALE
+
+24+ hours with no comments or results; pod stuck on rate-limit cycle. SE-channel-attention hypothesis remains untested by this branch. Tanjiro reassigned to #2724 geometry-mirror-TTA (free training-time, exact y-symmetry test-time averaging).
+
+### PR #2534 edward `tta-re-bracket` (multi-seed follow-up) — CLOSED STALE
+
+5+ hours without follow-up arm; pod stuck. Original TTA arm (val 29.86 vs #2011 baseline) had +1.0 variance no_tta run, would be ~+5.7% vs new baseline even with TTA. TTA mechanism cleanly validated (-0.04 val / -0.12 test, σ=0.05 sweet spot). Implementation saved for stacking on future winner. Edward reassigned to #2725 multi-seed-variance-new-baseline.
+
+### Round 01:54 New Assignments (4 PRs)
+
+- **#2721 frieren rc-NN-oversampling-multi-axis**: DIAGNOSTIC + corrective. Builds per-split feature signature table (commits `split_signatures.json`), computes k-NN-to-rc weighting on full (M, P, T, Re, AoA) space, oversamples most-rc-similar 20% by up to 3× without undersampling iid bulk. **High value as diagnostic alone** regardless of training outcome.
+- **#2723 nezuko ensemble-output-heads-k3**: K=3 parallel output heads with shared trunk, mean prediction. Deep-ensemble-style variance reduction targeting rc/re_rand. ~1.5K added params, zero extra trunk compute.
+- **#2724 tanjiro geometry-mirror-TTA**: exact y-symmetry test-time averaging (flip y-coord + AoA, predict, un-flip Uy, average). Stacks with edward's validated Re-bracket TTA mechanism.
+- **#2725 edward multi-seed-variance-new-baseline**: 2 seeds (42, 43) of new baseline + TTA-val-per-epoch checkpoint selection. Establishes run-to-run noise floor for all future merge decisions; validates TTA stacking.
+
+### Round 01:54 Programme Status
+
+**8/8 students WIP**, all on the new (#2650) baseline. Active hypothesis cluster:
+- Re-conditioning hooks (3 arms in flight): #2699 alphonse LayerScale, #2690 thorfinn output-bias + #2650 baseline merged
+- Data-side multi-axis (1 diagnostic): #2721 frieren rc-NN-oversampling
+- Output-side ensemble (1 arm): #2723 nezuko K=3 heads
+- TTA (2 arms): #2724 tanjiro mirror, #2725 edward multi-seed Re-bracket
+- Other: #2702 askeladd SWA, #2703 fern asymmetric ch15
+
+**Programme correction propagated**: future strategy must wait on the #2721 diagnostic split_signatures.json output before designing more rc-targeted experiments.
+
+---
+
 ## 2026-05-14 01:08 — Round 01:05 Closures: T_max=35, surface-only-input-normal, mask-ch15-jitter
 
 ### PR #2678 alphonse `recondln-t-max35` — CLOSED +7.09% val (new baseline #2650)
