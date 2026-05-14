@@ -153,7 +153,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 re_conditional_layernorm: bool = False):
+                 re_conditional_layernorm: bool = False,
+                 ensemble_heads: int = 1):
         super().__init__()
         self.last_layer = last_layer
         self.re_conditional_layernorm = re_conditional_layernorm
@@ -172,9 +173,16 @@ class TransolverBlock(nn.Module):
         if self.last_layer:
             if not re_conditional_layernorm:
                 self.ln_3 = nn.LayerNorm(hidden_dim)
+            # ensemble_heads > 1: K parallel output projections averaged at output
+            # (deep-ensemble variance reduction). ensemble_heads == 1 preserves
+            # the baseline single nn.Linear projection bit-for-bit.
+            if ensemble_heads > 1:
+                out_proj = EnsembleOutputHead(hidden_dim, out_dim, n_heads=ensemble_heads)
+            else:
+                out_proj = nn.Linear(hidden_dim, out_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+                out_proj,
             )
 
     def forward(self, fx, gamma=None, beta=None, log_re=None,
@@ -205,13 +213,15 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  re_conditional_layernorm: bool = False,
-                 re_ln_hidden_film: int = 8):
+                 re_ln_hidden_film: int = 8,
+                 ensemble_heads: int = 1):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.re_conditional_layernorm = re_conditional_layernorm
+        self.ensemble_heads = ensemble_heads
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -228,6 +238,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 re_conditional_layernorm=re_conditional_layernorm,
+                ensemble_heads=ensemble_heads,
             )
             for i in range(n_layers)
         ])
@@ -246,6 +257,12 @@ class Transolver(nn.Module):
             self.re_ln_1 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_2 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
             self.re_ln_3 = ReConditionalLayerNorm(n_hidden, hidden_film=re_ln_hidden_film)
+        # Re-init EnsembleOutputHead modules after self.apply (which overwrote
+        # them with trunc_normal_). Keeps kaiming_normal + per-head symmetry
+        # breaking noise intact.
+        for m in self.modules():
+            if isinstance(m, EnsembleOutputHead):
+                m.reinit()
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -344,6 +361,37 @@ class ReConditionalLayerNorm(nn.Module):
         gamma = (1.0 + gamma_residual).unsqueeze(1)  # [B, 1, n_hidden]
         beta = beta.unsqueeze(1)  # [B, 1, n_hidden]
         return gamma * normed + beta
+
+
+class EnsembleOutputHead(nn.Module):
+    """K parallel output projections; final prediction is mean of K predictions.
+
+    Shared-trunk deep-ensemble approximation (Lakshminarayanan et al. 2017):
+    each head is an independent Linear with kaiming_normal init plus a small
+    additive per-head noise to break symmetry and encourage divergent training
+    trajectories. With K heads averaged at the output, the per-head gradient is
+    1/K of the single-head gradient — heads still train but with weaker signal.
+
+    Diagnostic: pairwise cosine similarity between flattened weight matrices
+    quantifies divergence (cos < 0.95 ≈ healthy, > 0.99 ≈ collapsed).
+    """
+
+    def __init__(self, in_dim: int, out_dim: int, n_heads: int = 3):
+        super().__init__()
+        self.heads = nn.ModuleList([
+            nn.Linear(in_dim, out_dim) for _ in range(n_heads)
+        ])
+        self.reinit()
+
+    def reinit(self) -> None:
+        for i, h in enumerate(self.heads):
+            nn.init.kaiming_normal_(h.weight, mode="fan_out", nonlinearity="linear")
+            with torch.no_grad():
+                h.weight.add_(torch.randn_like(h.weight) * 0.02 * (i + 1))
+                nn.init.zeros_(h.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.stack([h(x) for h in self.heads], dim=0).mean(dim=0)
 
 
 class ReFiLM(nn.Module):
@@ -556,6 +604,10 @@ class Config:
     # Zero-init reproduces baseline LN at step 0 (γ=1, β=0).
     re_conditional_layernorm: bool = False
     re_ln_hidden_film: int = 8
+    # K=ensemble_heads parallel output projections, averaged at output for
+    # deep-ensemble-style variance reduction (Lakshminarayanan 2017). 1 = baseline
+    # single head. Heads share the trunk so per-head extra cost is negligible.
+    ensemble_heads: int = 1
 
 
 cfg = sp.parse(Config)
@@ -597,6 +649,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     re_conditional_layernorm=cfg.re_conditional_layernorm,
     re_ln_hidden_film=cfg.re_ln_hidden_film,
+    ensemble_heads=cfg.ensemble_heads,
 )
 
 model = Transolver(**model_config).to(device)
@@ -609,9 +662,12 @@ n_params_re_ln = (
     + sum(p.numel() for p in model.re_ln_2.parameters())
     + sum(p.numel() for p in model.re_ln_3.parameters())
 ) if cfg.re_conditional_layernorm else 0
+# Extract ensemble-head parameter count for visibility (last block's mlp2 final element).
+_last_proj = model.blocks[-1].mlp2[-1]
+n_params_ensemble = sum(p.numel() for p in _last_proj.parameters()) if isinstance(_last_proj, EnsembleOutputHead) else 0
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
-    f"ReCondLN {n_params_re_ln}) "
+    f"ReCondLN {n_params_re_ln}, EnsembleHead(K={cfg.ensemble_heads}) {n_params_ensemble}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
 
@@ -1089,6 +1145,42 @@ if best_metrics:
     rescale_head.load_state_dict(ckpt["rescale_head"])
     model.eval()
     rescale_head.eval()
+
+    # Ensemble-head divergence diagnostic on the best checkpoint state. The
+    # hypothesis predicts heads diverge during training (init noise breaks
+    # symmetry; per-head Linear gets independent direction). cos < 0.95 ≈
+    # healthy divergence, > 0.99 ≈ collapsed (no ensemble effect).
+    if cfg.ensemble_heads > 1:
+        ensemble_head_module = uncompiled_model.blocks[-1].mlp2[-1]
+        if isinstance(ensemble_head_module, EnsembleOutputHead):
+            with torch.no_grad():
+                weights = [h.weight.detach().flatten() for h in ensemble_head_module.heads]
+                biases = [h.bias.detach() for h in ensemble_head_module.heads]
+            n_heads = len(weights)
+            pairwise_cos = []
+            for i in range(n_heads):
+                for j in range(i + 1, n_heads):
+                    cos = F.cosine_similarity(
+                        weights[i].unsqueeze(0), weights[j].unsqueeze(0)
+                    ).item()
+                    pairwise_cos.append({"head_i": i, "head_j": j, "cosine_similarity": cos})
+            per_head_w_norm = [w.norm().item() for w in weights]
+            per_head_b_norm = [b.norm().item() for b in biases]
+            ensemble_diag = {
+                "event": "ensemble_head_diversity",
+                "n_heads": n_heads,
+                "pairwise_cosine": pairwise_cos,
+                "per_head_weight_l2_norm": per_head_w_norm,
+                "per_head_bias_l2_norm": per_head_b_norm,
+                "best_epoch": best_metrics["epoch"],
+            }
+            append_metrics_jsonl(metrics_jsonl_path, ensemble_diag)
+            print(json.dumps(ensemble_diag))
+            cos_vals = [r["cosine_similarity"] for r in pairwise_cos]
+            print(
+                f"  EnsembleHeads(K={n_heads})  cos_range=[{min(cos_vals):+.3f}, "
+                f"{max(cos_vals):+.3f}]  weight_norms={[f'{v:.3f}' for v in per_head_w_norm]}"
+            )
 
     test_metrics = None
     test_avg = None
