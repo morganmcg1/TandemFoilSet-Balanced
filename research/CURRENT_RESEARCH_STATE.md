@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 20:05 UTC
+- **Date:** 2026-05-14 22:25 UTC
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r1`
 - **Research tag:** `charlie-pai2g-48h-r1` (Charlie no-W&B logging-ablation arm)
 - **Most recent human directive:** None — no GitHub issues from human team
@@ -37,37 +37,55 @@
 
 ## Active Research Focus
 
-1. **Loss architecture (main thread)**: cw axis exhausted on high side (cw=3/5 both regress). cw=2 is local optimum.
-   - nezuko #3017: cw=1.5/1.25 sweep — probing if optimum is below 2
-   - alphonse #3029: sw re-sweep (4/6) at cw=2 — tuning surf:vol ratio at new channel weights
-   - **Key insight**: cw axis inverted-U confirmed; rc regression at cw=2 is geometry/extrapolation bottleneck, not loss-balance
-2. **Schedule / LR tail** (near-exhausted): askeladd #2987 final_div_factor in-flight
-3. **Domain/sampler**: fern #2982 cruise upweighting re-run (sent back for --epochs 35)
-4. **Input representation**: edward #1605 asinh-p680 in-flight
-5. **Rate-limited pods** (frieren, tanjiro): stale baseline; need updated baseline instructions when tokens recover
+### 1. Channel weight axis — filling left half of confirmed inverted-U
+- cw axis confirmed inverted-U: cw=3 (+3.81%), cw=2 is local optimum
+- **nezuko #3051**: cw=1.5/1.25 redux sweep — probes whether cw<2 reduces rc regression while preserving cruise/single wins
+
+### 2. OOD regularization — building on dropout findings
+- PR #3027 (thorfinn, dropout 0.05/0.10) validated: dropout=0.10 improved `val_geom_camber_rc` by -5.1% val/-2.8% test but cost +1.6% net (ID regressions dominated under 35-ep cap)
+- **Key insight:** `val_geom_camber_rc` is responsive to capacity-restriction regularizers. Weight decay (continuous, no convergence slowdown) is the next axis to probe.
+- **thorfinn #3052**: AdamW weight_decay sweep 5e-4/1e-3 (baseline=1e-4) — low-cost OOD regularization
+
+### 3. Surface weight tuning at cw=2
+- **alphonse #3029**: sw=4/6 re-sweep at cw=[1,1,2] — optimal surf:vol ratio at new channel weights
+
+### 4. Schedule tail (near-exhausted)
+- **askeladd #2987**: final_div_factor 100/10 — only remaining schedule efficiency lever
+
+### 5. Domain/sampler
+- **fern #2982**: cruise upweighting 3.0× + single_weight=1.5 (--epochs 35 re-run)
+
+### 6. Input representation
+- **edward #1605**: asinh-p680 transform — in-flight
+
+### 7. Warmup tuning
+- **frieren #2970**: pct_start 0.05/0.2
+
+### 8. Batch size / extended schedule
+- **tanjiro #2916**: bf16 batch_size=8 + extended schedule
 
 ## Students — Current State
 
 | Student | PR | Hypothesis | State |
 |---------|-----|-----------|-------|
-| alphonse | #3029 | surf_weight re-sweep (sw=4/6) at cw=[1,1,2] baseline | WIP — newly assigned |
+| alphonse | #3029 | surf_weight re-sweep (sw=4/6) at cw=[1,1,2] baseline | WIP |
 | askeladd | #2987 | OneCycleLR final_div_factor tuning (100/10) | WIP |
-| fern | #2982 | Cruise upweighting 3.0× + single_weight=1.5 (--epochs 35) | WIP — re-running |
+| fern | #2982 | Cruise upweighting 3.0× + single_weight=1.5 (--epochs 35) | WIP |
 | edward | #1605 | asinh-p680 transform | WIP |
-| nezuko | #3017 | surf_channel_weight cw=1.5/1.25 sweep | WIP |
-| frieren | #2970 | pct_start warmup tuning (0.05/0.2) | WIP ⚠ rate-limited |
-| thorfinn | #3027 | MLP dropout 0.05/0.10 for OOD generalization | WIP — newly assigned |
-| tanjiro | #2916 | bf16 batch_size=8 + extended schedule | WIP ⚠ rate-limited |
+| nezuko | #3051 | surf_channel_weight cw=1.5/1.25 sweep redux | WIP — newly assigned |
+| frieren | #2970 | pct_start warmup tuning (0.05/0.2) | WIP |
+| thorfinn | #3052 | AdamW weight_decay sweep 5e-4/1e-3 | WIP — newly assigned |
+| tanjiro | #2916 | bf16 batch_size=8 + extended schedule | WIP |
 
-2 pods still rate-limited (frieren, tanjiro). 6 active. 0 idle.
+0 idle students. 8 active experiments.
 
 ## Key Findings (cumulative)
 
 - **The binding constraint chain:** L1 → OneCycleLR → bf16 → eval_every=2 → torch.compile → 35 epochs → surf_weight=5 → surf_channel_weight=[1,1,2].
-- **Channel weight effect is a rebalancing at the new recipe.** At the old cosine/15ep recipe, cw=2 gave -4.2% val. At the new recipe, it gives -0.24% val / -0.77% test. The improved recipe already extracts most pressure signal, so cw=2 now redistributes: cruise (-5.1%), single_in_dist (-4.8%) improve while rc (+4.8%) regresses.
-- **val_geom_camber_rc is still the hardest split** (69.7 vs 53.4 avg). It regresses under cw=2; finding a cw setting that helps rc rather than hurting it is the open question.
-- **Cruise now very well-predicted** (val=35.3, test=28.2) — the easiest split and diminishing returns expected.
-- **35 epochs is the wall-clock ceiling** at ~50 s/epoch. final_div_factor tuning is the only remaining schedule efficiency lever.
+- **Channel weight axis is inverted-U:** cw=2 is current optimum. cw=3 (+3.81%, PR #3000) and cw=1 (old recipe) bracket it. Left half (cw=1.25/1.5) probed in #3051.
+- **val_geom_camber_rc is the hardest split** (69.7 vs 53.4 avg). Responds to regularization: dropout=0.10 gave -5.1% val on rc but hurt ID. Weight decay is the lower-cost mechanism (#3052).
+- **Dropout validates OOD mechanism but fails on primary metric:** Arm B (d=0.10) improved rc -5.1%/-2.8% but regressed primary +1.6%/+3.1%. Conv slowdown + 35-ep cap = insufficient budget.
+- **EMA failed:** OneCycleLR cooldown is meaningful descent, EMA lag is a liability.
 
 ## Negative Results Confirmed
 
@@ -78,24 +96,21 @@
 | z-flip (all meshes) | #2935 | +20.4% | raceCar one-sided topology |
 | z-flip (cruise-only) | #2945 | +4.5%/+18.3% | Mesh node density not z-symmetric |
 | variance-penalized loss λ=0.5/1.0 | #2963 | +5.7%/+17.8% | rc is extrapolation gap, not outlier-fitting |
-| EMA weights (decay 0.999/0.9999) | #2915 | +2.1%/+251% | OneCycleLR cooldown = meaningful descent; EMA lag is a liability |
-| surf_channel_weight cw=3 | #3000 | +3.81% | cw axis inverted-U; cw=2 is optimum, cw=3/5 strictly regress |
-
-## Potential Next Directions (not yet assigned)
-
-1. **cw=1.5** (nezuko, idle) — milder channel weighting may preserve cruise/single win while reducing rc regression
-2. **cw=3 validation** (alphonse #3000 arm 2) — check if over-weighting pressure is harmful
-3. **final_div_factor tuning** (askeladd #2987) — schedule tail fix
-4. **Cruise upweighting at --epochs 35** (fern #2982 re-run)
-5. **asinh-p680 on new recipe** (edward #1605)
-6. **pct_start warmup tuning** (frieren #2970, rate-limited)
-7. **Camber-interpolation augmentation** — synthetic M=5-9 training samples
-8. **EMA model weights** (thorfinn #2915) — still stale, needs new baseline
-9. **Per-domain normalization** — 4× pressure scale difference cruise vs raceCar
+| EMA weights (decay 0.999/0.9999) | #2915 | +2.1%/+251% | OneCycleLR cooldown = meaningful descent |
+| surf_channel_weight cw=3 | #3000 | +3.81% | cw axis inverted-U; cw=2 is optimum |
+| MLP dropout 0.05/0.10 | #3027 | +6.8%/+1.6% | Slows convergence; OOD gain dominated by ID regression |
 
 ## Open Questions
 
-- Does cw=1.5 mitigate the rc regression while preserving cruise/single_in_dist gains? (next nezuko)
-- Does alphonse's cw=3 arm show further improvement or confirm cw=2 is optimal?
-- Does final_div_factor=10/100 extract meaningful signal from the annealed tail? (#2987)
+- Does cw=1.5/1.25 reduce rc regression while preserving cruise/single_in_dist gains? (#3051)
+- Does weight_decay 5e-4/1e-3 give the same rc OOD benefit as dropout without convergence cost? (#3052)
+- Does alphonse's sw=4/6 re-sweep find a better surf:vol ratio at the cw=2 baseline? (#3029)
 - At val=53.35, how close are we to the physical floor for this architecture?
+
+## Potential Next Directions (not yet assigned)
+
+1. **Stochastic depth / DropPath** — drop entire residual branches (rate 0.05/0.10); less per-token disruption than MLP dropout
+2. **Deeper-block-only dropout** — apply dropout only in blocks 3–5 (regularize high-level abstractions only)
+3. **Camber-interpolation augmentation** — synthetic M=5-9 training samples to directly attack rc extrapolation gap
+4. **Per-domain normalization** — 4× pressure scale difference cruise vs raceCar
+5. **Larger batch_size + gradient accumulation** — batch=4 is conservative; batch=8 with grad accum may stabilize training
