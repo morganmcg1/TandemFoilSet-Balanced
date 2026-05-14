@@ -297,17 +297,99 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+# Y-flip TTA constants (PR #3007): 8-direction dsdf channels permute under y-flip
+# as [0,7,6,5,4,3,2,1] (verified via brute-force search over 694 mirror pairs in
+# cruise tandem samples; mean L1 diff = 0.18 vs 1.96 for identity). Indices 0 and
+# 4 are the two horizontal directions (invariant); the remaining six pair up.
+_DSDF_YFLIP_PERM = torch.tensor([0, 7, 6, 5, 4, 3, 2, 1], dtype=torch.long)
+
+
+def yflip_x(x: torch.Tensor) -> torch.Tensor:
+    """Apply y-flip transforms to raw (un-normalized) x [..., 24].
+
+    Negates z-direction features and permutes dsdf channels per the verified
+    mirror permutation. Used for y-flip Test-Time Augmentation (PR #3007).
+
+    Negated:
+      - x[..., 1]   : node position z
+      - x[..., 3]   : saf[1] (signed arc-length z-component)
+      - x[..., 14]  : AoA foil 1 (radians)
+      - x[..., 18]  : AoA foil 2 (radians)
+      - x[..., 22]  : gap (signed z-offset of foil 2 vs foil 1)
+
+    Permuted:
+      - x[..., 4:12] : dsdf 8-direction descriptor (perm [0,7,6,5,4,3,2,1])
+
+    Invariant:
+      x[..., 0] (x position), x[..., 2] (saf x), x[..., 12] (is_surface),
+      x[..., 13] (log Re), x[..., 15:18] (NACA1 M,P,T), x[..., 19:22] (NACA2),
+      x[..., 23] (stagger).
+    """
+    out = x.clone()
+    out[..., 1] = -out[..., 1]
+    out[..., 3] = -out[..., 3]
+    perm = _DSDF_YFLIP_PERM.to(out.device)
+    out[..., 4:12] = out.index_select(-1, perm + 4)
+    out[..., 14] = -out[..., 14]
+    out[..., 18] = -out[..., 18]
+    out[..., 22] = -out[..., 22]
+    return out
+
+
+def reflect_pred_yflip(pred: torch.Tensor) -> torch.Tensor:
+    """Reflect predicted (Ux, Uy, p) from y-flipped frame back to physical frame.
+
+    Under y-flip: Ux invariant (channel 0), Uy negates (channel 1), p invariant
+    (channel 2). Assumes pred is in either normalized or physical space — the
+    sign-flip is valid in both (Uy mean is near-zero physically; negation in
+    normalized space approximates the physical reflection well enough for the
+    averaging step in val/test eval). This function is purely a sign flip on
+    channel 1.
+    """
+    out = pred.clone()
+    out[..., 1] = -out[..., 1]
+    return out
+
+
+def evaluate_split(
+    model, loader, stats, surf_weight, device, *, use_tta: bool = False,
+    sym_z_threshold: float = -0.5,
+) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``use_tta=True`` (PR #3007), each batch is forwarded twice — once on
+    the original input and once on the y-flipped input — and predictions are
+    averaged in physical space (Uy negated on the flipped pred). Two TTA
+    variants are logged in addition to the vanilla metrics:
+
+    - ``*_tta``: **uniform** TTA — averaged on every sample regardless of
+      mesh symmetry. Matches the PR-spec hypothesis directly.
+    - ``*_tta_sym``: **gated** TTA — averaged only on samples whose mesh
+      spans z < ``sym_z_threshold`` (freestream/cruise tandem). For
+      asymmetric (ground-bound) samples, fall back to the vanilla
+      prediction. Tests the smart-subset variant that the PR decision tree
+      explicitly contemplates ("try TTA on a subset of splits"). Z-symmetry
+      is inferred per-sample from the mesh z range, not from a split label,
+      so it works correctly on the mixed-domain re_rand split as well.
+
+    The vanilla (non-TTA) keys remain unchanged so checkpoint selection and
+    the existing metric pipeline are not perturbed.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_surf_tta = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol_tta = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_surf_tta_sym = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol_tta_sym = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_surf_tta = n_vol_tta = 0
+    n_surf_tta_sym = n_vol_tta_sym = 0
+    n_sym = n_total = 0  # diagnostic: how many samples got the TTA average in sym mode
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -350,11 +432,63 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_surf += ds
             n_vol += dv
 
+            if use_tta:
+                # Y-flip TTA: forward on the y-mirrored batch, reflect Uy in
+                # physical space, average with the original prediction.
+                x_flip = yflip_x(x)
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    x_flip_norm = (x_flip - stats["x_mean"]) / stats["x_std"]
+                    pred_flip = model({"x": x_flip_norm, "mask": mask})["preds"]
+                pred_flip = pred_flip.float()
+                pred_flip_phys = pred_flip * stats["y_std"] + stats["y_mean"]
+                # Reflect (Ux invariant, Uy negates, p invariant) in physical space.
+                pred_flip_phys = reflect_pred_yflip(pred_flip_phys)
+                pred_tta_phys = (pred_orig + pred_flip_phys) / 2.0
+                ds_t, dv_t = accumulate_batch(
+                    pred_tta_phys, y, is_surface, mask, mae_surf_tta, mae_vol_tta,
+                )
+                n_surf_tta += ds_t
+                n_vol_tta += dv_t
+
+                # Sym-only TTA: per-sample, gate on mesh z_min < threshold.
+                # Ground-bound meshes (raceCar) have z_min ~ 0 and the y-flip
+                # puts the foil below the ground — OOD for the trained model.
+                # Freestream meshes (cruise tandem) have z spanning both signs
+                # and are valid y-flip targets.
+                z_masked = torch.where(
+                    mask, x[..., 1],
+                    torch.full_like(x[..., 1], float("inf")),
+                )
+                z_min_per_sample = z_masked.amin(dim=-1)  # [B]
+                is_sym = (z_min_per_sample < sym_z_threshold).to(pred_orig.dtype)
+                # [B, 1, 1] gating: 1 → use TTA-averaged, 0 → use vanilla
+                gate = is_sym[:, None, None]
+                pred_tta_sym_phys = gate * pred_tta_phys + (1.0 - gate) * pred_orig
+                ds_s, dv_s = accumulate_batch(
+                    pred_tta_sym_phys, y, is_surface, mask,
+                    mae_surf_tta_sym, mae_vol_tta_sym,
+                )
+                n_surf_tta_sym += ds_s
+                n_vol_tta_sym += dv_s
+                n_sym += int(is_sym.sum().item())
+                n_total += int(mask.any(dim=-1).sum().item())
+
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    if use_tta:
+        tta_metrics = finalize_split(mae_surf_tta, mae_vol_tta, n_surf_tta, n_vol_tta)
+        for k, v in tta_metrics.items():
+            out[f"{k}_tta"] = v
+        tta_sym_metrics = finalize_split(
+            mae_surf_tta_sym, mae_vol_tta_sym, n_surf_tta_sym, n_vol_tta_sym,
+        )
+        for k, v in tta_sym_metrics.items():
+            out[f"{k}_tta_sym"] = v
+        out["tta_n_sym"] = float(n_sym)
+        out["tta_n_total"] = float(n_total)
     return out
 
 
@@ -480,6 +614,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    tta_yflip: bool = False  # y-flip Test-Time Augmentation at val/test (PR #3007)
 
 
 cfg = sp.parse(Config)
@@ -557,6 +692,9 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("val_avg/*", step_metric="global_step")
+wandb.define_metric("val_avg_tta/*", step_metric="global_step")
+wandb.define_metric("val_avg_tta_sym/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
@@ -571,6 +709,65 @@ with torch.no_grad():
     param_l2_init = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at init: {param_l2_init:.4f}")
 wandb.summary["param_l2_init"] = param_l2_init
+
+# Y-symmetry diagnostic over the training set (PR #3007). Verifies the
+# y-flip TTA assumptions: mesh z-range, saf/dsdf semantics, AoA/gap ranges.
+# Single-foil samples are ground-bound (z >= 0); cruise tandem is symmetric.
+# Reported once so the advisor can review against the per-split TTA deltas.
+if cfg.tta_yflip:
+    print("\n[TTA y-flip] Sampling training-set y-symmetry diagnostics ...")
+    with torch.no_grad():
+        diag_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        n_seen = 0
+        z_min_pos, z_max_pos = float("inf"), float("-inf")
+        aoa1_min, aoa1_max = float("inf"), float("-inf")
+        aoa2_min, aoa2_max = float("inf"), float("-inf")
+        gap_min, gap_max = float("inf"), float("-inf")
+        n_ground_bound = 0
+        n_symmetric = 0
+        for diag_x, _, _, diag_mask in diag_loader:
+            for b in range(diag_x.shape[0]):
+                m = diag_mask[b]
+                z_b = diag_x[b, m, 1]
+                aoa1_b = diag_x[b, 0, 14].item()
+                aoa2_b = diag_x[b, 0, 18].item()
+                gap_b = diag_x[b, 0, 22].item()
+                zmin = z_b.min().item()
+                zmax = z_b.max().item()
+                z_min_pos = min(z_min_pos, zmin)
+                z_max_pos = max(z_max_pos, zmax)
+                aoa1_min = min(aoa1_min, aoa1_b); aoa1_max = max(aoa1_max, aoa1_b)
+                aoa2_min = min(aoa2_min, aoa2_b); aoa2_max = max(aoa2_max, aoa2_b)
+                gap_min = min(gap_min, gap_b); gap_max = max(gap_max, gap_b)
+                if zmin >= -0.1:
+                    n_ground_bound += 1
+                elif zmax > 0 and zmin < 0:
+                    n_symmetric += 1
+                n_seen += 1
+            if n_seen >= 200:
+                break
+        print(f"  Training samples scanned: {n_seen}")
+        print(f"  Mesh z range (raw): [{z_min_pos:.3f}, {z_max_pos:.3f}]")
+        print(f"  AoA1 range (rad):   [{aoa1_min:.4f}, {aoa1_max:.4f}]  "
+              f"(deg [{aoa1_min*180/3.14159265:.2f}°, {aoa1_max*180/3.14159265:.2f}°])")
+        print(f"  AoA2 range (rad):   [{aoa2_min:.4f}, {aoa2_max:.4f}]  "
+              f"(deg [{aoa2_min*180/3.14159265:.2f}°, {aoa2_max*180/3.14159265:.2f}°])")
+        print(f"  gap range:          [{gap_min:.4f}, {gap_max:.4f}]")
+        print(f"  Ground-bound (z_min >= -0.1):  {n_ground_bound}/{n_seen}")
+        print(f"  Y-symmetric (z spans both signs): {n_symmetric}/{n_seen}")
+        wandb.summary.update({
+            "tta_diag/z_min": z_min_pos,
+            "tta_diag/z_max": z_max_pos,
+            "tta_diag/aoa1_min_rad": aoa1_min,
+            "tta_diag/aoa1_max_rad": aoa1_max,
+            "tta_diag/aoa2_min_rad": aoa2_min,
+            "tta_diag/aoa2_max_rad": aoa2_max,
+            "tta_diag/gap_min": gap_min,
+            "tta_diag/gap_max": gap_max,
+            "tta_diag/n_ground_bound": n_ground_bound,
+            "tta_diag/n_symmetric": n_symmetric,
+            "tta_diag/n_scanned": n_seen,
+        })
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -651,12 +848,27 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device,
+            use_tta=cfg.tta_yflip,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    # When TTA is on, also aggregate the *_tta and *_tta_sym channels.
+    val_avg_tta: dict[str, float] = {}
+    val_avg_tta_sym: dict[str, float] = {}
+    if cfg.tta_yflip:
+        chans = [f"mae_{loc}_{ch}" for loc in ("surf", "vol") for ch in ("Ux", "Uy", "p")]
+        for k in chans:
+            v_tta = [m[f"{k}_tta"] for m in split_metrics.values() if f"{k}_tta" in m]
+            if v_tta:
+                val_avg_tta[f"avg_tta/{k}"] = sum(v_tta) / len(v_tta)
+            v_sym = [m[f"{k}_tta_sym"] for m in split_metrics.values() if f"{k}_tta_sym" in m]
+            if v_sym:
+                val_avg_tta_sym[f"avg_tta_sym/{k}"] = sum(v_sym) / len(v_sym)
     dt = time.time() - t0
 
     with torch.no_grad():
@@ -676,6 +888,10 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    for k, v in val_avg_tta.items():
+        log_metrics[f"val_{k}"] = v  # val_avg_tta/mae_surf_p etc.
+    for k, v in val_avg_tta_sym.items():
+        log_metrics[f"val_{k}"] = v  # val_avg_tta_sym/mae_surf_p etc.
     wandb.log(log_metrics)
 
     tag = ""
@@ -690,10 +906,16 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    tta_str = ""
+    if cfg.tta_yflip:
+        tta_str = (
+            f"  tta={val_avg_tta.get('avg_tta/mae_surf_p', float('nan')):.4f}"
+            f"  tta_sym={val_avg_tta_sym.get('avg_tta_sym/mae_surf_p', float('nan')):.4f}"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{tta_str}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -758,11 +980,32 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device,
+                use_tta=cfg.tta_yflip,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        # Also aggregate TTA channels (uniform + sym-only) if enabled.
+        test_avg_tta: dict[str, float] = {}
+        test_avg_tta_sym: dict[str, float] = {}
+        if cfg.tta_yflip:
+            chans = [f"mae_{loc}_{ch}" for loc in ("surf", "vol") for ch in ("Ux", "Uy", "p")]
+            for k in chans:
+                v_tta = [m[f"{k}_tta"] for m in test_metrics.values() if f"{k}_tta" in m]
+                if v_tta:
+                    test_avg_tta[f"avg_tta/{k}"] = sum(v_tta) / len(v_tta)
+                v_sym = [m[f"{k}_tta_sym"] for m in test_metrics.values() if f"{k}_tta_sym" in m]
+                if v_sym:
+                    test_avg_tta_sym[f"avg_tta_sym/{k}"] = sum(v_sym) / len(v_sym)
+        tta_test_str = ""
+        if cfg.tta_yflip:
+            tta_test_str = (
+                f"  tta={test_avg_tta.get('avg_tta/mae_surf_p', float('nan')):.4f}"
+                f"  tta_sym={test_avg_tta_sym.get('avg_tta_sym/mae_surf_p', float('nan')):.4f}"
+            )
+        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}{tta_test_str}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
 
@@ -772,6 +1015,10 @@ if best_metrics:
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        for k, v in test_avg_tta.items():
+            test_log[f"test_{k}"] = v  # test_avg_tta/mae_surf_p etc.
+        for k, v in test_avg_tta_sym.items():
+            test_log[f"test_{k}"] = v  # test_avg_tta_sym/mae_surf_p etc.
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
