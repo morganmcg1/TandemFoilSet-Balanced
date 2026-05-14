@@ -114,6 +114,26 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLU(nn.Module):
+    """SwiGLU gated FFN (PaLM/LLaMA pattern).
+
+    Three linears: gate (w1), value (w2), output (w3).
+      h = SiLU(w1 x) * w2 x   →   y = w3 h
+    Bias=True per advisor spec; trunc_normal_(std=init_std) is applied to all
+    three via Transolver._init_weights.
+    """
+
+    def __init__(self, dim, mlp_ratio=2):
+        super().__init__()
+        hidden = dim * mlp_ratio
+        self.w1 = nn.Linear(dim, hidden, bias=True)
+        self.w2 = nn.Linear(dim, hidden, bias=True)
+        self.w3 = nn.Linear(hidden, dim, bias=True)
+
+    def forward(self, x):
+        return self.w3(F.silu(self.w1(x)) * self.w2(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -187,8 +207,7 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        self.mlp = SwiGLU(hidden_dim, mlp_ratio=mlp_ratio)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -476,11 +495,15 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    seed: int = 0  # torch global seed for init / sampler reproducibility
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
