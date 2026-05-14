@@ -3103,4 +3103,16 @@ If K=4 2-seed mean val < 34.55 AND test < 29.20: merge as 15th-shift candidate. 
 - Branch: `willowpai2g48h3-thorfinn/head-decoder-width`
 - Hypothesis: Widen the final output MLP head from 128 → 256 (2×) or 384 (3×). FiLM-Re features are richer after 15th shift; the 128-d decoder may now be the bottleneck.
 - Arms: head_hidden_mult=2.0 s1 (256-d head), head_hidden_mult=3.0 s2 (384-d head)
+
+---
+
+## 2026-05-14 19:50 — Round-19 post-merge rebases: #2965 fern and #2959 alphonse
+
+Two PRs were sent back for 2nd-seed confirmation BEFORE the 15th-shift merge of #2948 (which widened FiLM-Re γ MLP to 256 by default). Their merge-conflict status after the merge required rebases. Rather than reproducing on the obsolete (γ-width=128) baseline, both students were redirected to test against the **new 15th-shift baseline** (mean val<33.71, mean test<28.65, film_re_hidden=256 default).
+
+**#2965 fern (Fourier-Re K=4):** Original K=4 s2 `dkk00rpz` (test=28.73 against 14th-shift bar 28.95) was on the thinner γ MLP. Rebased; instructed to run 2 seeds of K=4 against the new baseline. Compound test: does richer Fourier input (K=4) further help an already-wider γ MLP, or has width-256 subsumed the input bottleneck? γ_w_L2 flattening (mean ~3.6 vs depth-monotone 3.4→5.2 baseline) was the smoking gun — now testing if it compounds with width.
+
+**#2959 alphonse (per-block lr scaling, late-block 1.5×):** Original 1.5× s1 `zxvnd2s6` (test=28.53 against 14th-shift bar 28.95) was on the thinner γ MLP. Rebased; 2 seeds of 1.5× against new baseline. Mechanism finding (OOD signal in lr=9e-5 lives in EARLY blocks, not late) preserved. Tests whether IID + cruise gains from late-block lr boost compound with γ-width gains, or are now subsumed by them. 2.0× arm dropped (test miss). Inverted scaling (0.7×) queued as follow-up if this round closes negative.
+
+**Both PRs now WIP again, awaiting rerun results against 15th-shift bar.**
 - Merge bar: mean val < 33.71, mean test < 28.65
