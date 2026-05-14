@@ -588,6 +588,9 @@ except Exception as e:
     compile_error = repr(e)
     print(f"torch.compile: skipped ({compile_error})")
 
+GRAD_CLIP_MAX_NORM = 1.0
+print(f"[grad clip] max_norm={GRAD_CLIP_MAX_NORM} enabled via torch.nn.utils.clip_grad_norm_ after backward()")
+
 
 def amp_ctx_factory():
     if torch.cuda.is_available():
@@ -686,6 +689,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    clip_norms: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -707,6 +711,8 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        pre_clip_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
+        clip_norms.append(float(pre_clip_norm))
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -740,6 +746,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    n_clip = max(len(clip_norms), 1)
+    grad_norm_mean_train_epoch = float(sum(clip_norms) / n_clip) if clip_norms else 0.0
+    grad_norm_max_train_epoch = float(max(clip_norms)) if clip_norms else 0.0
+    clip_fired_frac_train_epoch = float(sum(1 for v in clip_norms if v > GRAD_CLIP_MAX_NORM) / n_clip) if clip_norms else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -752,6 +762,10 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
+        "grad_norm_mean_train_epoch": grad_norm_mean_train_epoch,
+        "grad_norm_max_train_epoch": grad_norm_max_train_epoch,
+        "clip_fired_frac_train_epoch": clip_fired_frac_train_epoch,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
