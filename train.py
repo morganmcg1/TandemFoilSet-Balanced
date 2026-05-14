@@ -136,6 +136,41 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class CamberCondLayerNorm(nn.Module):
+    """H88: Camber-conditional LayerNorm.
+
+    Affine-free LN composed with a tiny MLP that maps the per-sample NACA-foil-1
+    camber scalar to per-sample gamma/beta. Identity-initialized (gamma=1,
+    beta=0) so epoch-0 behavior matches a plain LayerNorm and there is no
+    cold-start regression. Conditioning on camber alone (not Re or full
+    geometry) targets the camber_rc OOD axis where M=6-8 is held out.
+    """
+
+    def __init__(self, d_model: int, cond_hidden: int = 8):
+        super().__init__()
+        self.d_model = d_model
+        self.ln = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.cond_net = nn.Sequential(
+            nn.Linear(1, cond_hidden),
+            nn.ReLU(),
+            nn.Linear(cond_hidden, 2 * d_model),
+        )
+        self._identity_init()
+
+    def _identity_init(self) -> None:
+        # Zero the output Linear so gamma/beta are constant at init: gamma=1, beta=0.
+        nn.init.zeros_(self.cond_net[-1].weight)
+        nn.init.zeros_(self.cond_net[-1].bias)
+        self.cond_net[-1].bias.data[: self.d_model] = 1.0
+
+    def forward(self, x: torch.Tensor, camber: torch.Tensor) -> torch.Tensor:
+        # x: [B, N, d_model]; camber: [B] (per-sample scalar, broadcast over N).
+        x_norm = self.ln(x)
+        gb = self.cond_net(camber.unsqueeze(-1))  # [B, 2*d_model]
+        gamma, beta = gb.unsqueeze(1).chunk(2, dim=-1)  # each [B, 1, d_model]
+        return gamma * x_norm + beta
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -233,7 +268,8 @@ class TransolverBlock(nn.Module):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        # H88: replace pre-attention LN with camber-conditional LN (identity-init).
+        self.ln_1 = CamberCondLayerNorm(hidden_dim, cond_hidden=8)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
@@ -249,13 +285,13 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, camber):
         if self.training and self.stoch_depth_prob > 0.0:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
                 if self.last_layer:
                     return self.mlp2(self.ln_3(fx))
                 return fx
-        fx = self.layer_scale_attn * self.attn(self.ln_1(fx)) + fx
+        fx = self.layer_scale_attn * self.attn(self.ln_1(fx, camber)) + fx
         fx = self.layer_scale_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -294,6 +330,11 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # H88: restore identity init for CamberCondLayerNorm cond_net output Linear
+        # (the generic _init_weights above re-randomizes it via trunc_normal_).
+        for m in self.modules():
+            if isinstance(m, CamberCondLayerNorm):
+                m._identity_init()
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -301,14 +342,19 @@ class Transolver(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
+            # H88: affine-free LN (elementwise_affine=False) has no weight/bias.
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # H88: per-sample camber scalar drives the camber-conditional LayerNorm.
+        camber = data["camber"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, camber)
         return {"preds": fx}
 
 
@@ -338,7 +384,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # H88: NACA foil-1 camber (raw, [0,1] from prepare_splits) — constant per sample.
+            camber = x[:, 0, 15]
+            pred = model({"x": x_norm, "camber": camber})["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -474,7 +522,9 @@ def measure_attention_entropies(
             x = x.to(device, non_blocking=True)
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_enc(x_norm)
-            _ = model({"x": x_norm})
+            # H88: camber probe input.
+            camber = x[:, 0, 15]
+            _ = model({"x": x_norm, "camber": camber})
             for i, block in enumerate(model.blocks):
                 sum_mean[i] += block.attn.last_attn_entropy_mean or 0.0
                 sum_min[i] += block.attn.last_attn_entropy_per_head_min or 0.0
@@ -711,7 +761,9 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        # H88: NACA foil-1 camber (raw, [0,1] from prepare_splits) — constant per sample.
+        camber = x[:, 0, 15]
+        pred = model({"x": x_norm, "camber": camber})["preds"]
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
