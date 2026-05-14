@@ -82,6 +82,29 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUMLP(nn.Module):
+    """SwiGLU MLP (Shazeer 2020) — out = W_out (silu(W_gate x) * W_value x).
+
+    Param-matched vs. MLP(d, d*mlp_ratio, d): hidden = round(d*mlp_ratio*2/3)
+    snapped to a multiple of 8 for tensor-core alignment. 3 matrices of
+    d*hidden_swiglu vs. 2 matrices of d*hidden_full keeps Linear param count
+    near-identical (within ~0.2% at d=96, mlp_ratio=2).
+    """
+    def __init__(self, n_input, n_hidden_full, n_output, act_fn=F.silu):
+        super().__init__()
+        hidden_swiglu = max(8, int(round((n_hidden_full * 2 / 3) / 8) * 8))
+        self.hidden_swiglu = hidden_swiglu
+        self.linear_gate = nn.Linear(n_input, hidden_swiglu)
+        self.linear_value = nn.Linear(n_input, hidden_swiglu)
+        self.linear_out = nn.Linear(hidden_swiglu, n_output)
+        self.act_fn = act_fn
+
+    def forward(self, x):
+        gate = self.act_fn(self.linear_gate(x))
+        value = self.linear_value(x)
+        return self.linear_out(gate * value)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -180,8 +203,7 @@ class TransolverBlock(nn.Module):
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.se = SqueezeExcitation(hidden_dim, reduction=8) if use_se else None
         if self.last_layer:
@@ -526,6 +548,24 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 33.0195 (SE-4blocks #2692)"
 )
 
+# SwiGLU diagnostic: hidden width and per-block MLP param count vs standard MLP
+_swiglu_modules = [m for m in model.modules() if isinstance(m, SwiGLUMLP)]
+_swiglu_hidden = _swiglu_modules[0].hidden_swiglu if _swiglu_modules else 0
+_swiglu_params = sum(p.numel() for m in _swiglu_modules for p in m.parameters())
+_std_mlp_hidden = model_config['n_hidden'] * model_config['mlp_ratio']
+_std_mlp_params_per_block = (
+    model_config['n_hidden'] * _std_mlp_hidden + _std_mlp_hidden  # linear_pre
+    + _std_mlp_hidden * model_config['n_hidden'] + model_config['n_hidden']  # linear_post
+)
+_std_mlp_params_total = _std_mlp_params_per_block * len(_swiglu_modules)
+print(
+    f"SwiGLU MLP (Shazeer 2020): replaced GELU-MLP in {len(_swiglu_modules)} TransolverBlocks; "
+    f"hidden_swiglu={_swiglu_hidden} (param-matched: round(d*mlp_ratio*2/3)/8 from full hidden {_std_mlp_hidden}); "
+    f"act=SiLU; total SwiGLU params={_swiglu_params} vs standard-MLP params={_std_mlp_params_total} "
+    f"(delta={_swiglu_params - _std_mlp_params_total:+d}, {(_swiglu_params - _std_mlp_params_total) * 100.0 / max(_std_mlp_params_total, 1):+.2f}%); "
+    f"baseline to beat: val_avg/mae_surf_p < 33.0195"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -852,6 +892,70 @@ if best_metrics:
             })
         _se_log["splits"][_split_name] = _split_log
     append_metrics_jsonl(metrics_jsonl_path, _se_log)
+
+    # SwiGLU gate diagnostic — capture per-block gate (silu(W_gate x)) and value
+    # (W_value x) statistics on a sample val batch, best-checkpoint weights.
+    # gate_zero_frac near 0 ≈ gate passing everything through (acts like a richer
+    # MLP); gate_zero_frac > 0.1 ≈ conditional channel suppression engaged.
+    _swiglu_blocks = [(i, blk.mlp) for i, blk in enumerate(_inner.blocks)
+                      if isinstance(blk.mlp, SwiGLUMLP)]
+    _swiglu_captured: list[tuple[int, dict[str, float]]] = []
+
+    def _make_swiglu_hook(idx: int):
+        def _hook(module, args, _output):
+            x = args[0]
+            with torch.no_grad():
+                gate_pre = module.linear_gate(x)
+                gate_post = module.act_fn(gate_pre).detach().float()
+                value = module.linear_value(x).detach().float()
+                flat_g = gate_post.flatten()
+                flat_v = value.flatten()
+                # Correlation in a fixed-size random subsample to avoid GPU OOM
+                # on big meshes (242K nodes × 128 hidden = 31M elements).
+                n_sub = min(flat_g.numel(), 200_000)
+                if n_sub < flat_g.numel():
+                    idx_sub = torch.randperm(flat_g.numel(), device=flat_g.device)[:n_sub]
+                    fg = flat_g[idx_sub]
+                    fv = flat_v[idx_sub]
+                else:
+                    fg, fv = flat_g, flat_v
+                corr = float(
+                    torch.corrcoef(torch.stack([fg, fv]))[0, 1].cpu().item()
+                ) if fg.numel() > 1 else 0.0
+                _swiglu_captured.append((idx, {
+                    "gate_mean": float(gate_post.mean().cpu()),
+                    "gate_std": float(gate_post.std().cpu()),
+                    "gate_abs_mean": float(gate_post.abs().mean().cpu()),
+                    "gate_zero_frac": float((gate_post.abs() < 0.01).float().mean().cpu()),
+                    "value_abs_mean": float(value.abs().mean().cpu()),
+                    "gate_value_corr": corr,
+                }))
+        return _hook
+
+    _swiglu_handles = [m.register_forward_hook(_make_swiglu_hook(i))
+                       for i, m in _swiglu_blocks]
+    with torch.no_grad():
+        _x_s, _y_s, _is_s, _m_s = next(iter(_se_loader))
+        _x_s = _x_s.to(device, non_blocking=True)
+        _m_s = _m_s.to(device, non_blocking=True)
+        _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+        with amp_ctx_factory():
+            _ = _inner({"x": _x_norm_s, "mask": _m_s})
+    for _h in _swiglu_handles:
+        _h.remove()
+
+    print("\nSwiGLU gate stats per block (sample val batch, best-checkpoint weights):")
+    _swiglu_log = {"event": "swiglu_diagnostic", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    for _idx, _stats in _swiglu_captured:
+        print(
+            f"  SwiGLU block[{_idx}]: gate_mean={_stats['gate_mean']:.4f}  "
+            f"std={_stats['gate_std']:.4f}  abs_mean={_stats['gate_abs_mean']:.4f}  "
+            f"zero_frac={_stats['gate_zero_frac']:.4f}  "
+            f"value_abs_mean={_stats['value_abs_mean']:.4f}  "
+            f"corr(gate,value)={_stats['gate_value_corr']:.4f}"
+        )
+        _swiglu_log["blocks"].append({"block_idx": _idx, **_stats})
+    append_metrics_jsonl(metrics_jsonl_path, _swiglu_log)
 
     test_metrics = None
     test_avg = None
