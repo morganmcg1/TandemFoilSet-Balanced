@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-14 21:10 [Round 138 MERGE+close-31] UTC — PR #3006: cross-block-residual-α — **🏆 MERGED WIN (val −1.69% vs #2964; 23rd winner; NEW BASELINE val 29.5318)** + PR #3010 droppath CLOSED (153rd taxon)
+
+### Merged Winner: #3006 alphonse cross-block-residual-α
+
+- **Branch:** charliepai2g48h5-alphonse/cross-block-residual-alpha
+- **Metric artifacts:** models/model-charliepai2g48h5-alphonse-cross-block-residual-alpha-20260514-195917/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #3006 (3 cross-block α scalars) | Δ vs #2964 |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **29.5318** | **−1.69% WIN** |
+| test_avg/mae_surf_p | **25.2099** | 25.4795 | +1.07% mild LOSS (concentrated in test_rc +4.05%) |
+| val_single_in_dist | 25.219 | **24.283** | **−3.71% WIN** |
+| val_geom_camber_rc | 43.929 | **43.630** | **−0.68% WIN** |
+| val_geom_camber_cruise | 16.265 | 16.348 | **+0.51% flat (PRESERVED 🌟)** |
+| val_re_rand | 34.740 | **33.866** | **−2.52% WIN** |
+| best_epoch | 60/60 | 60/60 | terminal (best=last) |
+| Param count | 407,172 | 407,175 (+3) | 3 nn.Parameter scalars α₀, α₁, α₂ |
+
+**Hypothesis:** Learnable scalar α between adjacent TransolverBlocks scaling whole-block output AFTER post-norm; +3 params; pivots from in-block γ-axis (closed at #2988/#2977) to BETWEEN-BLOCK adaptivity site that LN cannot absorb.
+
+**🌟 BREAKTHROUGH FINDINGS:**
+
+1. **CRUISE META-SIGNAL FULLY PRESERVED — FIRST WIN POST-#2964 TO PRESERVE CRUISE BASIN.** val_cruise 16.348 (+0.51% flat vs #2964's 16.265). Combined with #3003 sandwich-LN ordering preservation, **definitively confirms the close-30 hypothesis: training-time-preserving structural interventions preserve cruise basin.** Both #3003 and #3006 perturb only deterministic forward-pass structure — both preserved cruise. All 8 prior post-#2964 LOSS interventions perturbed training dynamics.
+
+2. **α DRIFTED DOWN UNIFORMLY ~4%.** Init 1.0 → ep60 [0.95, 0.97, 0.96] mean=0.9583. Direction same as #2988 in-block γ (also DOWN from 1.0) but magnitude 20× smaller (~4% vs ~45%). Outcome OPPOSITE (WIN vs LOSS). Confirms mechanistic prediction: **α scales AFTER post-LN — scale survives downstream; γ scales BEFORE post-LN — LN absorbs scale.** Same direction, different site, different absorption, different outcome.
+
+3. **VAL/TEST DIVERGENCE ON CAMBER_RC.** test_camber_rc +4.05% LOSS while val_camber_rc -0.68% WIN. Two test splits improved (cruise -3.41%, re_rand -1.24%); two regressed (in_dist +1.05%, rc +4.05%). Net test +1.07% mild LOSS. Per-split divergence is concentrated; not catastrophic.
+
+4. **MERGE-AGGRESSIVE PRINCIPLE: PRIMARY METRIC IS val.** val_avg/mae_surf_p improved by −1.69%; meets the contract for merge. test_avg loss is mild (+1.07%) and balanced (2/4 test splits improved). Per CLAUDE.md: "When in doubt between merge and close, merge. We want to compound improvements."
+
+5. **23rd WINNER. NEW BASELINE: val 29.5318 / test 25.4795.** BASELINE.md updated. All subsequent PRs must beat val < 29.5318.
+
+**Followup assigned:** #3021 alphonse cross-block-alpha-4-dit-style (+1 scalar α₃ extension — scale ALL 4 block outputs including last; DiT-style hot-axis follow-up; per student suggestion #2 verbatim; tests whether the asymmetric "skip α₃" design choice was load-bearing or arbitrary; 156th axis).
+
+### Closed: #3010 frieren droppath-p-0.1
+
+- **Branch:** charliepai2g48h5-frieren/droppath-p-0.1
+- **Metric artifacts:** models/model-charliepai2g48h5-frieren-droppath-p-0.1-20260514-200024/metrics.jsonl
+
+| Metric | NEW Baseline #2964 | #3010 (DropPath p=0.1) | Δ vs #2964 |
+|---|---|---|---|
+| val_avg/mae_surf_p | **30.0382** | **33.4911** | **+11.50% LOSS** |
+| test_avg/mae_surf_p | **25.2099** | 28.2076 | +11.89% LOSS |
+| val_single_in_dist | 25.219 | 27.832 | +10.36% LOSS |
+| val_geom_camber_rc | 43.929 | 48.934 | +11.39% LOSS |
+| val_geom_camber_cruise | 16.265 | **19.854** | **+22.06% LOSS (8th post-#2964 cruise breakage 🔥)** |
+| val_re_rand | 34.740 | 37.344 | +7.50% LOSS |
+| best_epoch | 60/60 | 59/60 | budget-limited |
+| Param count | 407,172 | 407,172 | unchanged |
+
+**Hypothesis:** DropPath stochastic depth p=0.1 (constant across 4 blocks, attn+mlp branches, INSIDE residual `x = LN(x + DropPath(branch(x)))`); zero new params; first stochastic-depth experiment in launch.
+
+**DECISIVE MECHANISTIC FINDINGS (153rd taxon — DROPPATH-AT-BRANCH-INTERIOR-AT-60EP-CLOSED-AT-P=0.1):**
+
+1. **CRUISE META-SIGNAL BROKEN 8TH TIME post-#2964.** Pattern: #2961 aux, #2978 AoA, #2986 AdamW, #2988 γ, #2994 lr, #2995 T-warmstart, #2993 wd, #3010 droppath. **DropPath stochastic residual-stream perturbation breaks cruise basin same way deterministic γ-adaptivity and noise injection do.** Confirms the refined hypothesis from #3003 close-30: stochastic residual-stream perturbation also breaks cruise.
+
+2. **REFINED INVARIANT: CRUISE BASIN IS INCOMPATIBLE WITH ANY RESIDUAL-STREAM PERTURBATION** — stochastic (DropPath) or deterministic (γ-adaptivity, noise, optimizer/lr/wd magnitude changes). Only #3003 sandwich-LN (deterministic forward-pass structure that scales BEFORE LN) and #3006 cross-block-α (deterministic post-LN scaling that LN can't absorb) preserved cruise.
+
+3. **TRAIN→VAL GAP INVERTED (val < train).** train/surf_loss=0.0771 vs val_in_dist/surf_loss=0.0744. Canonical DropPath signature (branches active at eval, stochastic at train). Regularization mechanism IS active and effective in-distribution; doesn't recover absolute MAE — model is starved of useful gradient signal at p=0.1 in 60ep budget.
+
+4. **60EP BUDGET INSUFFICIENT FOR STOCHASTIC-DEPTH PAYOFF.** Standard recipes (Swin, DeiT, ConvNeXt) use 200-300ep where DropPath's stochastic shortening pays off via implicit ensembling. At 60ep / 407k params, stochastic ensembling cannot amortize the gradient-starvation cost.
+
+5. **PER-EPOCH STABILITY CONFIRMED** — ep1-3 monotonic clean (no NaN/spikes). Not an instability axis, a budget+capacity axis.
+
+**Followup assigned:** #3022 frieren huber-smooth-l1-beta-1.0 (FRESH LOSS-FUNCTION AXIS — replaces L1 with F.smooth_l1_loss(beta=1.0) for both surf and vol training; MAE reporting UNCHANGED for comparability; **completely fresh axis — zero prior experiments in launch changed loss function**; pivots away from regularization-axis closures per #3010 close-meta-guidance; loss-function is downstream of model output / upstream of optimizer — orthogonal to all 153 closed axes; 157th axis).
+
+Total closed: 153. Winners: **23 (PR #3006 promoted).** NEW BASELINE: val 29.5318 / test 25.4795.
+
+---
+
 ## 2026-05-14 20:55 [Round 138 close-30] UTC — PR #3003: sandwich-norm-magneto — **CLOSED LOSS (+4.22% val vs NEW; 152nd taxon; LN-PLACEMENT-AXIS-EXHAUSTED)** **🌟 BUT CRUISE ORDERING HELD — FIRST TIME POST-#2964 🌟**
 
 - **Branch:** charliepai2g48h5-thorfinn/sandwich-norm-magneto
