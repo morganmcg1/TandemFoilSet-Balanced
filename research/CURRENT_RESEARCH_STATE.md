@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 13:35
+- **Date:** 2026-05-14 13:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -62,7 +62,7 @@ Conditioning / OOD axis:
 5. **γ-only FiLM-Re (edward #2865)** — rebased (CLEAN); waiting for re-run on σ=0.07 baseline.
 
 Data augmentation axis:
-6. **Y-flip augmentation (fern #2895)** — WIP.
+6. **Y-flip augmentation (fern #2895)** — SENT BACK 2026-05-14 13:50. σ=0.05 results: mean val=38.54 (−5.6%), test=33.73 (−4.3%), ALL 4 splits improve; beats OLD bar, misses 13th-shift bar by 2-3 pts. Student-found: must gate to freestream-only (raceCar ground plane). Re-running on σ=0.07 baseline for compounding test.
 
 Regularization axis:
 7. **Weight-decay scan (alphonse #2897)** — SENT BACK 2026-05-14 13:35. σ=0.05 results: wd=1e-3 beats OLD bar (−8.0%/−9.6%, every test split improves, OOD strongest) but misses 13th-shift bar by 2-4%. Re-running wd=1e-3 + wd=7e-4 on σ=0.07 baseline to test compounding.

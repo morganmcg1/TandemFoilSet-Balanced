@@ -2566,3 +2566,27 @@ Per-split test (wd=1e-3 vs σ=0.05): single_in_dist −5.0%, geom_camber_rc −5
 **Mechanism insight (student-found)**: PR's L2 framing was wrong. Init L2 with σ=0.05 is ~55 (not ~25 as PR predicted); convergence L2 is ~61.5 for both wds tested. wd is not acting on the total L2 norm — it's acting on the *Linear-weight subset* (small magnitude, ~0.05 init) while biases/LayerNorm gammas stay O(1). Both wds converge to nearly identical L2 (61.52 vs 61.65) — the diff lives in the weight-magnitude *distribution*, not the total norm. Future wd PRs should log per-module-class L2.
 
 **Status**: SENT BACK 2026-05-14 13:35. Rerun on σ=0.07 baseline with wd=1e-3 (s1) and wd=7e-4 (s2) to test compounding with the σ=0.07 winner. Decision criterion: if wd=1e-3 compounds (val<36.58), merge as 14th shift. If not, the wd-axis is σ-dependent (σ=0.07 already provides the regularization wd was giving on σ=0.05).
+
+---
+
+## 2026-05-14 13:50 — PR #2895: Y-flip augmentation (fern, SENT BACK for σ=0.07 compound)
+- Branch: `willowpai2g48h3-fern/yflip-augmentation`
+- Hypothesis: Flip (y_node, AoA, Uy) with p=0.5 per batch to double effective training data via flow y-equivariance.
+
+### Results (on σ=0.05 baseline, NOT σ=0.07)
+
+| Run | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| `ya4hdauh` (s1) | — | 37.92 | 32.88 |
+| `t6e19b6u` (s2) | — | 39.15 | 34.59 |
+| **Mean (2 seeds)** | — | **38.54 (−5.6%)** | **33.73 (−4.3%)** |
+| σ=0.05 baseline | — | 40.82 | 35.25 |
+| 13th-shift bar (σ=0.07) | — | 36.58 | 30.64 |
+
+Per-split test (mean vs σ=0.05): single_in_dist −2.05, geom_camber_rc −2.28, geom_camber_cruise −0.16, re_rand −1.57. ALL 4 SPLITS IMPROVE.
+
+**Beats OLD σ=0.05 bar; misses 13th-shift σ=0.07 bar** (val +5.4%, test +10.1%).
+
+**Mechanism finding (student-found)**: original PR-as-written would have crashed on raceCar samples (ground plane at y=0, flipping produces non-physical "foil below ground" inputs). Student gated y-flip to **freestream/cruise samples only** via per-sample y-range check (y_min < −1.0). Effective augmentation: ~17% of training samples flipped per epoch (cruise × p=0.5), doubling cruise representation from ~30% → ~50% effective. Despite gating, ALL splits improve — raceCar splits (camber_rc, single_in_dist) benefit from generic regularization (more total physical variety), not just cruise-targeted boost. Crashed naive run (`te3wbgjq`, val=45.69) confirmed the gating was necessary.
+
+**Status**: SENT BACK 2026-05-14 13:50. Rerun y-flip on σ=0.07 baseline (s1+s2) to test compounding. Same pattern as alphonse #2897. Decision criterion: if compounds (val<36.58), merge as 14th shift; if σ-overlapping (val>37.5), close.
