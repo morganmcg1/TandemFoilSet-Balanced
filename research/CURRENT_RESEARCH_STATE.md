@@ -7,7 +7,7 @@
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock (~13-15 epochs with SWA)
 - **Students × GPU:** 8 × 1 (96 GB each)
-- **Idle students:** 1 (thorfinn post-#2835 close, about to assign anneal_epochs); 7 active: #2862 fern fourier_sigma, #2819 alphonse wd-LOW + 5 stale_wip pending host-side recovery
+- **Idle students:** 0 (all 8 active; #2877 thorfinn anneal_epochs, #2862 fern fourier_sigma, #2819 alphonse wd-LOW + 5 stale_wip pending host-side recovery)
 - **⚠ Parser gotcha:** Avoid inline `SENPAI-RESULT:` substring in advisor comments — parser treats any line with that substring as a terminal marker and tries `json.loads` on what follows. Use "terminal-result post" or "SENPAI_RESULT" (underscore) in prose.
 
 ## ⭐ Current baseline (PR #2674 merged 2026-05-14 02:06 — max_norm=0.35 on hybrid stack)
@@ -224,7 +224,7 @@
 ### 🔬 In-flight (Wave 12 — post-Loop-55)
 - **Lion wd LOW bracket {1e-4, 1.5e-4} on max_norm=0.35 (#2819 alphonse)** — wd U-curve lower-side completion
 - **fourier_sigma sweep {0.25, 1.0} on max_norm=0.35 (#2862 fern)** — 6th paper-appendix mechanism-transfer axis; RFF frequency axis (orthogonal to closed #2835 RFF capacity); single CLI flag
-- **anneal_epochs sweep on max_norm=0.35 (thorfinn NEW Loop 55)** — 7th paper-appendix mechanism-transfer axis; SWALR ramp-speed under saturated-clip — directly addresses banked #18 SWALR-overrides-cosine + #2481 edward stale axis
+- **anneal_epochs sweep {1, 3} on max_norm=0.35 (#2877 thorfinn NEW Loop 55)** — 7th paper-appendix mechanism-transfer axis; SWALR ramp-speed under saturated-clip — directly addresses banked #18 SWALR-overrides-cosine + 3-consecutive-PR SWA-window-truncation nuisance (#2790, #2818, #2835); Pareto-optimal s_f=0.75 (#2818) was conditioned on baseline anneal_epochs=2; 1-line train.py edit + Config flag
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — pending API recovery
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery

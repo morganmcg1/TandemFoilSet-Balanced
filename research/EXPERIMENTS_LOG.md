@@ -4,6 +4,18 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 09:40 — PR #2877 (ASSIGNED, thorfinn): anneal_epochs sweep {1, 3} on max_norm=0.35 — SWALR ramp-speed axis under saturated-clip
+
+- **Branch:** `willowpai2g48h2-thorfinn/anneal-epochs-sweep-on-max-norm-0p35`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** 7th paper-appendix mechanism-transfer axis after {β #2736, lr #2731, seed #2790, wd #2791, swa_start_frac #2818, fourier_num_features #2835}. SWALR ramp-speed (`anneal_epochs`) — directly tests **banked #18 SWALR-overrides-cosine** (GOLD mechanism finding) + the **3-consecutive-PR SWA-window-truncation nuisance** under 30-min cap. Pareto-optimal s_f=0.75 (#2818) was conditioned on baseline anneal_epochs=2; relaxing that to {1, 3} probes whether SWALR-ramp-speed × wall-clock-truncation coupling is monotone.
+- **Two arms:** Arm 1 anneal_epochs=1 (faster cooldown, predicted ~2 epochs at swa_lr floor), Arm 2 anneal_epochs=3 (slower cooldown, predicted 0 epochs at floor under truncation).
+- **Predictions:** Arm 1 directional win (faster ramp → more averaging at swa_lr floor under truncated 30-min cap); Arm 2 strong regression (averaging during ramp at higher lr). σ-spread ≈ 0.475 (9th cross-axis if invariant); channel ordering surf_ux=min/vol_ux=max (11th cross-axis if invariant); clip_fraction=1.000 (7th cross-axis if invariant). Asymmetric reach test parallel to lr-axis #2773 + RFF-axis #2835.
+- **Decision rule:** val ≤ 45.10 → MERGE; val ∈ [45.15, 45.50] → directional close; val > 46.50 → strong regression close.
+- **Status:** Assigned 2026-05-14 09:40 UTC; awaiting training. **1-line train.py edit required** (make anneal_epochs a CLI flag; pattern from fern's #2818 swa_start_frac).
+
+---
+
 ## 2026-05-14 08:45 — PR #2862 (ASSIGNED, fern): fourier_sigma sweep {0.25, 1.0} on max_norm=0.35 — RFF frequency axis under saturated-clip
 
 - **Branch:** `willowpai2g48h2-fern/fourier-sigma-sweep-on-max-norm-0p35`
