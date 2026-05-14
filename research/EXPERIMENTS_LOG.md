@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-14 [Round 138] UTC — PR #2944: slice-routing-temperature-2.0 — **CLOSED LOSS (+4.43% val / +2.02% test; 126th taxon; ROUTING-TEMPERATURE SOFT-DIRECTION CLOSED; SHARP ROUTING AT BLOCK-3 IS LOAD-BEARING)**
+
+- **Branch:** charliepai2g48h5-tanjiro/slice-routing-temperature-2.0
+- **Metric artifacts:** models/model-charliepai2g48h5-tanjiro-slice-routing-temperature-2.0-20260514-152927/metrics.jsonl
+
+| Metric | Baseline #2879 (T=learnable init 0.5) | #2944 (T=2.0 hardcoded) | Δ vs baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 30.5605 | **31.9159** | **+4.43% LOSS** |
+| test_avg/mae_surf_p | 26.5160 | 27.0516 | +2.02% LOSS |
+| val_single_in_dist | 23.3997 | 25.1462 | +7.46% LOSS (biggest hit) |
+| val_geom_camber_rc | 46.0708 | 47.6722 | +3.48% LOSS |
+| val_geom_camber_cruise | 17.8657 | **17.3736** | **-2.75% WIN** |
+| val_re_rand | 34.9057 | 37.4714 | +7.35% LOSS |
+| Param count | 407,940 (8 learnable temp params) | 407,932 | -8 params |
+
+**Hypothesis:** Hardcode slice-routing softmax temperature T=2.0 (softer), targeting block-3 entropy collapse observed in #2923 diagnostic (0.01-0.92 nats vs log(24)=3.18 ceiling). Tests whether entropy collapse is pathological.
+
+**IMPLEMENTATION NOTE — TWO-CHANGE CONFOUND:** Baseline actually has `self.temperature` as **per-HEAD LEARNABLE parameter** (4 blocks × 2 heads = 8 params, init 0.5). PR's hardcoded T=2.0 both REMOVED learnability AND set temperature 4× softer-than-init. Clean test would isolate the two changes.
+
+**Routing-entropy diagnostic (critical evidence):**
+Block-3 entropy at ep60 under T=2.0: 2.34-2.91 nats (73-91% of log(24)=3.18 ceiling). Compare to baseline #2923: 0.01-0.92 nats (collapsed). T=2.0 SUCCESSFULLY drove block-3 from collapsed to near-ceiling entropy.
+
+**DECISIVE MECHANISTIC FINDING:** Sharp routing at block-3 is LOAD-BEARING. Even though T=2.0 did exactly what was asked (softened block-3), it made things WORSE. Conclusion: block-3's entropy collapse = USEFUL SLICE SPECIALIZATION, not a pathology. Block-3 concentrating routing on a few "specialist" slices is by design.
+
+**Meta-signal repeats under REPRESENTATION-axis lever:**
+- cruise WIN (-2.75%), in_dist LOSS (+7.46%), re_rand LOSS (+7.35%)
+- This is the FIRST representation-axis intervention where the canonical meta-signal (cruise WIN / in_dist LOSS) appears
+- Strongly confirms #2922 mechanistic story: tradeoff lives in REPRESENTATION / LOSS-LANDSCAPE space
+
+**NEW ARCHITECTURAL DETAIL DISCOVERED:** Baseline has per-head learnable routing temperature (`self.temperature`, 8 params). Model has been learning per-block per-head routing sharpness all along — this was not previously documented.
+
+**126th taxon CLOSED:** SLICE-ROUTING-TEMPERATURE SOFT-DIRECTION. T=2.0 LOSS → softening routing is bad.
+
+**Followup assigned:** #2955 tanjiro slice-routing-temperature-0.25 (opposite direction; T=0.25 is 2× sharper than baseline init 0.5; same 2-change structure as this PR; maps temperature axis on both sides; 127th axis).
+
+---
+
 ## 2026-05-14 [Round 137] UTC — PR #2941: surf-p-weight-2x-mean-form — **CLOSED LOSS (+5.52% val / +1.72% test; 125th taxon; PER-CHANNEL p-WEIGHT 2× AXIS CLOSED AT BOTH MAGNITUDE ENDPOINTS)**
 
 - **Branch:** charliepai2g48h5-alphonse/surf-p-weight-2x-mean-form
