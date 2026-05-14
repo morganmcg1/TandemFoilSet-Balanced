@@ -7,6 +7,54 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-14 03:30 — Tier-2 cycle: FIRST WIN + 3 close-and-reassigns
+
+**Headline**: thorfinn #2709 H5 GeoTransolver Cross-Attn landed **val 39.3949 (-2.18%) / test 32.5917 (-3.01%)** — first tier-2 win this round. Sent back for 2nd-seed (`--seed 7`) confirmation. Clear merge candidate if 2nd seed reproduces.
+
+**3 tier-2 closes for terminal regression** + **3 fresh tier-2 assignments**.
+
+### Headline win (1st seed, pending confirmation)
+
+| PR | Student | Hypothesis | Val (Δ) | Test (Δ) | W&B |
+|---|---|---|---|---|---|
+| #2709 | thorfinn | H5 GeoTransolver Cross-Attn (global geo tokens as K_cross/V_cross) | **39.3949 (-2.18%)** | **32.5917 (-3.01%)** | _pending_ |
+
+Per-split val (PR #2192 baseline → arm): re_rand 43.62 → 41.14 (**-5.69%**), camber_cruise 28.15 → 26.97 (**-4.19%**), single_in_dist 35.84 → 35.71 (-0.36%), camber_rc 53.50 → 53.74 (+0.45%). **Pattern**: GLOBAL geometry conditioning helps OOD generalization on re_rand and camber_cruise without hurting in-dist. Sent back for `--seed 7` repro per advisor merge-bar rule (38.5 ≤ val < 40.27 window).
+
+### Tier-2 closes (terminal regression)
+
+| PR | Student | Hypothesis | Val (Δ) | Test (Δ) | Mechanism reading |
+|---|---|---|---|---|---|
+| #2705 | askeladd | H9 Masked Node Pre-training (3-epoch SSL warm-start, 40% mask) | 45.51 (+13.0%) | 38.05 (+13.2%) | 1499-sample regime too small for transferable SSL features; pretrain consumed 8 epochs of budget (28 supervised vs baseline 36); warm-start was 10.2% WORSE than random init at epoch 1. **Representation-init axis closed.** |
+| #2711 | edward | H6 Transolver++ Local Token Merging (kNN-based local aggregation) | 43.43 (+7.85%) | 35.21 (+4.78%) | 19.3% kNN overhead reduced epochs 36→31. Per-node geometry was washed out by local averaging (+18.85% on val_single_in_dist). **Local-attention axis closed.** |
+| #2698 | frieren | H12 CL/CD Aerodynamic Aux Loss (integrated lift/drag aux at λ=0.05) | 42.0730 (+4.5%) | 34.5805 (+2.9%) | Striking test-side OOD signal (camber_rc -3.4%, camber_cruise -1.5%, re_rand -2.6%) BUT in-dist regressed catastrophically (+5.8% test single_in_dist, +15.6% val). train/CL_err decayed 2.8→0.05 (mechanism works), but early aux gradient competed with in-dist local-MAE learning. Aux at fixed weight is wrong — would need warm-on schedule. **Integrated-physics aux at fixed weight closed.** |
+
+### Fresh tier-2 reassignments
+
+| PR | Student | Hypothesis | Mechanism category | Distinct from in-flight? |
+|---|---|---|---|---|
+| #2754 | askeladd | SAM-Lion (Foret 2021 — two-pass perturbation, ρ=0.05) | Loss-landscape geometry | Yes — perturbs WITHIN each Lion update (vs H8 Lookahead's outer averaging); cost 2× wall-clock per step → ~18 epochs in 30-min cap |
+| #2756 | edward | LayerScale (Touvron 2021 CaiT — learnable γ per channel on residual, init 1e-4) | Residual scaling (deterministic) | Yes — ~512 added params, zero wall-clock overhead; modulates which Transolver blocks contribute to residual stream |
+| #2757 | frieren | DropPath / Stochastic Depth (Huang 2016 — Bernoulli zero residual at rate p, linear schedule 0→0.1) | Residual scaling (stochastic) | Yes — implicit ensembling of sub-networks; orthogonal to LayerScale (det. scale) and SAM (loss-landscape) |
+
+### Tier-2 fleet snapshot (after this cycle, 8 PRs across 7 mechanism categories)
+
+- **Physics aux supervision**: #2732 nezuko H11 ∇·u=0 per-node
+- **Attention**: #2709 thorfinn H5 global cross-attn (**1st-seed WIN, 2nd seed pending**)
+- **Normalization**: #2730 alphonse H10 per-zone
+- **Optimizer wrappers**: #2733 tanjiro H8 Lookahead-Lion, #2754 askeladd SAM-Lion
+- **Loss reformulation**: #2734 fern H2 asymmetric quantile-Huber
+- **Residual scaling (deterministic)**: #2756 edward LayerScale
+- **Residual scaling (stochastic)**: #2757 frieren DropPath
+
+### Mechanism polarization (key takeaway)
+
+The H5 (-2.18%) vs H6 (+7.85%) split on the attention axis is the cleanest signal of the round: **GLOBAL geometry context wins, LOCAL kNN aggregation loses**. The bottleneck is whole-flow context, not local node coherence. If H5 holds on 2nd seed, next-round hypotheses should extend the global-context mechanism (more geo tokens, learnable physics-aware queries, multi-scale global context).
+
+### Frieren's OOD-test-not-val divergence observation
+
+From #2698 closing analysis: regularizers that help OOD generalization show up more cleanly in the 200-sample test splits than in the 100-sample val splits. This is a screening-rule limitation — we still gate on val pre-test, but some methods may be screened out that would help the paper-facing number. Captured for the paper.
+
 ## 2026-05-14 02:30 — Tier-1 stale-PR bulk close + tier-2 reassignment cycle
 
 **Action**: Closed 4 stale tier-1 PRs (#2358 alphonse, #2421 nezuko, #2449 tanjiro, #2464 fern) and assigned 4 fresh tier-2 hypotheses on the current n_head=2+Lion stack. No training data here — these were administrative closes, not experimental regressions.
