@@ -167,6 +167,74 @@ class SqueezeExcitation(nn.Module):
         return x * gate.unsqueeze(1)
 
 
+class WSLinear(nn.Linear):
+    """Weight-standardized Linear (Qiao et al. 2019).
+
+    Standardize each output row of self.weight to zero mean and unit std at
+    forward time, then F.linear. No new parameters. eps placement matches the
+    official Qiao implementation (std + eps, not sqrt(var + eps)).
+    """
+    def __init__(self, in_features, out_features, bias=True, eps=1e-5):
+        super().__init__(in_features, out_features, bias=bias)
+        self.ws_eps = eps
+
+    def forward(self, x):
+        W = self.weight
+        mean = W.mean(dim=1, keepdim=True)
+        std = W.std(dim=1, keepdim=True, unbiased=False)
+        W_hat = (W - mean) / (std + self.ws_eps)
+        return F.linear(x, W_hat, self.bias)
+
+
+def apply_weight_standardization(module: nn.Module, min_in_features: int = 16,
+                                 min_out_features: int = 4):
+    """Recursively replace nn.Linear with WSLinear, preserving weights & bias.
+
+    Skips layers with `in_features < min_in_features` to avoid:
+      (a) zero-init layers (FiLM weight, SE.fc2 weight): per-row std=0 at init
+          would produce a 1/eps gradient amplifier and destroy
+          identity-at-init semantics on the very first step.
+      (b) meaningless std on small fan-in (3-element row std is dominated by
+          eps and varies chaotically as a regularizer).
+    Skips layers with `out_features < min_out_features` to protect the
+    prediction head (out_features=3 = out_dim): forcing each output row to
+    zero-mean unit-std weights crushes the prediction magnitude. There is no
+    post-Linear BN/GN/LN to recover that scale (unlike Qiao 2019 vision setup),
+    so the model cannot recover the target scale. First-arm run with WS on
+    mlp2.2 produced val_avg/mae_surf_p plateau at ~366 (vs baseline 33.02).
+    For this Transolver (n_hidden=96, out_dim=3): excludes `film` (in=3),
+    `se.fc2` (in=12), to_q/k/v (in=12), and `mlp2.2` (out=3); all other
+    Linear layers are standardized.
+    """
+    skipped: list[str] = []
+    swapped: list[str] = []
+    def _recurse(mod: nn.Module, prefix: str):
+        for name, child in mod.named_children():
+            full = f"{prefix}{name}" if prefix else name
+            if isinstance(child, nn.Linear) and not isinstance(child, WSLinear):
+                if child.in_features < min_in_features:
+                    skipped.append(f"{full} (in={child.in_features})")
+                    continue
+                if child.out_features < min_out_features:
+                    skipped.append(f"{full} (out={child.out_features})")
+                    continue
+                new_layer = WSLinear(
+                    child.in_features, child.out_features,
+                    bias=child.bias is not None,
+                )
+                with torch.no_grad():
+                    new_layer.weight.copy_(child.weight)
+                    if child.bias is not None:
+                        new_layer.bias.copy_(child.bias)
+                new_layer = new_layer.to(child.weight.device, dtype=child.weight.dtype)
+                setattr(mod, name, new_layer)
+                swapped.append(full)
+            else:
+                _recurse(child, f"{full}.")
+    _recurse(module, "")
+    return swapped, skipped
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
@@ -499,6 +567,29 @@ print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bou
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
 
 model = Transolver(**model_config).to(device)
+
+# Weight Standardization (Qiao et al. 2019): swap nn.Linear -> WSLinear on
+# layers with in_features >= 16 AND out_features >= 4. Skips:
+#  - FiLM (in=3) and SE.fc2 (in=12, zero-init): preserve identity-at-init
+#    and avoid 1/eps gradient amplifier on zero-row layers.
+#  - to_q/k/v (in=12): meaningless 12-element row std as a regularizer.
+#  - mlp2.2 (out=3, prediction head): WS forces each output row to
+#    zero-mean unit-std, which crushes the prediction magnitude (no
+#    downstream BN/LN/scale to recover from). First-arm WS-on-everything
+#    run produced val_avg/mae_surf_p plateau at 366 (vs baseline 33.02).
+_ws_swapped, _ws_skipped = apply_weight_standardization(
+    model, min_in_features=16, min_out_features=4,
+)
+print(f"Weight Standardization: replaced {len(_ws_swapped)} Linear layers with WSLinear "
+      f"(skipped {len(_ws_skipped)} small-fan-in/out layers)")
+print(f"  WS skipped: {_ws_skipped}")
+for name, mod in model.named_modules():
+    if isinstance(mod, nn.Linear) and not isinstance(mod, WSLinear):
+        assert (mod.in_features < 16) or (mod.out_features < 4), (
+            f"Linear {name} (in={mod.in_features}, out={mod.out_features}) not standardized!"
+        )
+print(f"WS sanity: all Linear layers with in_features>=16 and out_features>=4 confirmed standardized")
+
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
@@ -757,6 +848,36 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Weight Standardization diagnostic: per-WSLinear row-std statistics on
+    # the raw (pre-standardization) weight to confirm WS is compressing the
+    # loud-row spread vs raw weights.
+    _ws_layer_stats: list[dict] = []
+    for _name, _mod in _inner.named_modules():
+        if isinstance(_mod, WSLinear):
+            with torch.no_grad():
+                _row_stds = _mod.weight.detach().float().std(dim=1, unbiased=False)
+                _row_means = _mod.weight.detach().float().mean(dim=1)
+            _ws_layer_stats.append({
+                "name": _name,
+                "in_features": _mod.in_features,
+                "out_features": _mod.out_features,
+                "row_std_mean": float(_row_stds.mean()),
+                "row_std_max": float(_row_stds.max()),
+                "row_std_min": float(_row_stds.min()),
+                "row_mean_abs_mean": float(_row_means.abs().mean()),
+            })
+    print(f"\nWeight Standardization diagnostic ({len(_ws_layer_stats)} layers):")
+    for _s in _ws_layer_stats:
+        print(f"  {_s['name']:<40s} row_std[mean={_s['row_std_mean']:.4f} "
+              f"max={_s['row_std_max']:.4f} min={_s['row_std_min']:.4f}] "
+              f"row|mean|={_s['row_mean_abs_mean']:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "ws_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "n_ws_layers": len(_ws_layer_stats),
+        "layers": _ws_layer_stats,
+    })
 
     # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
     _film = _inner.film
