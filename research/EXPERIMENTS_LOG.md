@@ -1572,3 +1572,49 @@ Useful pinned data point for future joint-axis experiments:
 - Filed as future option if β1=0.85 fails: joint move lr=1e-4 + β1=0.95 (variance reduction creates LR slack hypothesis)
 
 ---
+
+## 2026-05-14 01:45 — PR #2631: Lion warmup 5-epoch linear LR warmup (thorfinn)
+- Branch: `willowpai2g48h3-thorfinn/lion-warmup5`
+- Hypothesis: 5-epoch linear warmup (lr 0→7.5e-5) before cosine to stabilize Lion's cold-momentum state and reduce the 3.60 pt seed variance observed at lr=7.5e-5
+- W&B runs: `38otnrto` (s1a), `c11sgtsx` (s1b re-run), `owkr6ow5` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| `38otnrto` (lion-warmup5-s1 first) | 47.4498 | 41.1104 | 34 |
+| `c11sgtsx` (lion-warmup5-s1 rerun) | 47.9898 | 41.2861 | 34 |
+| `owkr6ow5` (lion-warmup5-s2) | 49.7056 | 42.1162 | 35 |
+| **Baseline (no warmup)** | **45.433** | **39.509** | 35 |
+| **mean±std (all 3)** | 48.38±1.18 | 41.50±0.54 | |
+
+**Regression: best seed +4.44% val, +4.05% test.**
+
+Key findings:
+- **Variance reduction confirmed (−67%)**: seed std 3.60 → 1.18 pt. Mechanism works.
+- **Epoch-15 val +13% worse**: 82.9 vs baseline 73.6. The warmup window delays meaningful learning — Lion cold-start window is real but the budget cost is higher than the benefit.
+- **All 4 test splits regress on best seed.**
+- **All 3 runs compute-bound (best=last at epoch 34/35)**: warmup shortened effective cosine budget from 35→30 epochs.
+
+**Conclusion**: CLOSED. Decision tree: "val > 47 → warmup hurts." Warmup mechanism is valid (variance reduction real) but compute budget renders it harmful at 35 epochs. Variance-reduction must come via other mechanisms.
+
+thorfinn reassigned to SWA (PR #2712).
+
+---
+
+## 2026-05-14 01:45 — PR #2629: Lion wd 2e-3→3e-3 (frieren)
+- Branch: `willowpai2g48h3-frieren/lion-wd3e3`
+- Hypothesis: Stronger L2 (wd 2e-3→3e-3, 15× base cfg) at lr=7.5e-5 to combat overfitting and improve OOD generalization
+- W&B runs: `bwgkeyj5` (s1), `4y3sh0hi` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s1 (`bwgkeyj5`) | 47.111 | 42.116 | 35 |
+| s2 (`4y3sh0hi`) | 47.781 | 41.419 | 35 |
+| **Baseline (wd=2e-3)** | **45.433** | **39.509** | 35 |
+
+Per-split test surf_p (s1 vs baseline): single_in_dist +8.73 (+20%), geom_camber_rc +0.12 (+0.2%), cruise +0.15, re_rand +1.44. No targeted OOD improvement — all splits regress.
+
+**Conclusion**: CLOSED. wd axis monotonic-worse in upward direction. Any factor slowing convergence appears as worse final val at compute-bound 30-min cap. wd=2e-3 confirmed optimal or near-optimal for this Lion configuration.
+
+frieren reassigned to Lion beta2=0.999 (PR #2713).
+
+---
