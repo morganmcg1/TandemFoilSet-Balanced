@@ -519,7 +519,7 @@ model_config = dict(
     n_layers=4,
     n_head=2,
     slice_num=24,
-    mlp_ratio=2,
+    mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
