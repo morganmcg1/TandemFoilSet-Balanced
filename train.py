@@ -480,6 +480,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    slice_num: int = 64  # PhysicsAttention slice codebook size (PR #3038 bracket-scan: 48 / 64 / 96)
 
 
 cfg = sp.parse(Config)
@@ -515,7 +516,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -529,6 +530,11 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+print(
+    f"[init] PhysicsAttention slice_num = {cfg.slice_num} (default = 64), "
+    f"temperature_init=0.5 (learnable, per-head), "
+    f"in_project_slice weight shape=[{model_config['n_hidden'] // model_config['n_head']}, {cfg.slice_num}]"
+)
 
 optimizer = Lion(
     model.parameters(),
@@ -731,6 +737,82 @@ if model_config.get("film_re"):
         print(f"  {i:<6d} {b_mean:>14.6f} {b_std:>12.6f} "
               f"{w_l2:>10.4f} {w_absmax:>12.4f}")
     wandb.summary.update(gamma_diagnostics)
+
+# --- PhysicsAttention slice diagnostics (PR #3038 bracket-scan) ---
+# Per-head learnable temperature drift from init=0.5 indicates whether the
+# softmax sharpened (T↓) or flattened (T↑) at this slice_num. Combined with a
+# held-out batch's slice utilization entropy, these tell us whether the model
+# is actually using the extra slices (96) or compressing into fewer (48).
+import math as _math
+
+base_model_attn = getattr(model, "_orig_mod", model)
+slice_diag: dict[str, float] = {}
+print(f"\nPhysicsAttention slice diagnostics (final epoch, slice_num={cfg.slice_num}):")
+print(f"  {'block':<6s} {'T_mean':>10s} {'T_min':>10s} {'T_max':>10s}  "
+      f"per-head temps (init=0.5)")
+for i, block in enumerate(base_model_attn.blocks):
+    temp = block.attn.temperature.detach().float().flatten()  # [heads]
+    t_mean = temp.mean().item()
+    t_min = temp.min().item()
+    t_max = temp.max().item()
+    slice_diag[f"slice/block{i}/temp_mean"] = t_mean
+    slice_diag[f"slice/block{i}/temp_min"] = t_min
+    slice_diag[f"slice/block{i}/temp_max"] = t_max
+    for h_i, t in enumerate(temp.tolist()):
+        slice_diag[f"slice/block{i}/temp_h{h_i}"] = t
+    print(f"  {i:<6d} {t_mean:>10.4f} {t_min:>10.4f} {t_max:>10.4f}  "
+          f"[{', '.join(f'{t:.3f}' for t in temp.tolist())}]")
+
+# Slice utilization entropy on a held-out val_single_in_dist batch:
+# - capture in_project_slice output via forward hooks
+# - apply learned temperature + softmax → slice_weights
+# - mean entropy over real (unmasked) (B, h, N) positions
+# Reference: uniform softmax entropy is ln(slice_num); we report both raw
+# entropy and the ratio to ln(slice_num) so 48/64/96 are comparable.
+slice_logits_cache: dict[int, "torch.Tensor"] = {}
+hooks_handles = []
+
+def _make_slice_hook(idx: int):
+    def _hook(mod, inp, out):
+        slice_logits_cache[idx] = out.detach()
+    return _hook
+
+for i, block in enumerate(base_model_attn.blocks):
+    h = block.attn.in_project_slice.register_forward_hook(_make_slice_hook(i))
+    hooks_handles.append(h)
+
+try:
+    diag_loader = val_loaders[VAL_SPLIT_NAMES[0]]
+    diag_batch = next(iter(diag_loader))
+    diag_x, _, _, diag_mask = diag_batch
+    diag_x = diag_x.to(device, non_blocking=True)
+    diag_mask = diag_mask.to(device, non_blocking=True)
+    with torch.no_grad():
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            diag_x_norm = (diag_x - stats["x_mean"]) / stats["x_std"]
+            _ = base_model_attn({"x": diag_x_norm, "mask": diag_mask})
+finally:
+    for h in hooks_handles:
+        h.remove()
+
+ln_slice = _math.log(max(cfg.slice_num, 1))
+print(f"  {'block':<6s} {'entropy':>10s} {'frac_uniform':>14s}  "
+      f"(uniform = ln({cfg.slice_num}) = {ln_slice:.3f})")
+for i, logits in slice_logits_cache.items():
+    temp = base_model_attn.blocks[i].attn.temperature.detach().float()
+    weights = F.softmax(logits.float() / temp, dim=-1)  # [B, h, N, slice_num]
+    valid = diag_mask[:, None, :, None].to(weights.dtype)  # [B, 1, N, 1]
+    ent_per_point = -(weights * (weights.clamp(min=1e-9)).log()).sum(dim=-1)  # [B, h, N]
+    valid_n = diag_mask[:, None, :].to(weights.dtype)  # [B, 1, N]
+    n_valid = valid_n.sum().clamp(min=1.0) * weights.shape[1]
+    mean_ent = (ent_per_point * valid_n).sum().item() / n_valid.item()
+    frac = mean_ent / ln_slice if ln_slice > 0 else 0.0
+    slice_diag[f"slice/block{i}/entropy_mean"] = mean_ent
+    slice_diag[f"slice/block{i}/entropy_frac_uniform"] = frac
+    print(f"  {i:<6d} {mean_ent:>10.4f} {frac:>14.4f}")
+slice_diag["slice/slice_num"] = float(cfg.slice_num)
+slice_diag["slice/uniform_entropy"] = ln_slice
+wandb.summary.update(slice_diag)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
