@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-05-14 02:05 — PR #2707: surf_weight=15 UPPER direction on n_layers=3+wd=3e-4 (edward) — CLOSED, SW UPPER CLOSED; SW × SPLIT-TYPE INTERACTION
+
+- **Branch:** `willowpai2g24h5-edward/sw-upper-wd3e4`
+- **Hypothesis:** sw=10 default may be sub-optimal on new compound; stronger surface emphasis (sw=15/20) could help OOD geom_camber where surface geometry matters most.
+- **W&B runs:** `tx5ixhcs` (sw=15). Arm 2 skipped per PR rule (val regression >2 pts).
+
+| Arm | sw | val | test | Δ vs #2489 (42.00/35.96) | Epochs |
+|-----|----|-----|------|--------------------------|--------|
+| 1 | 15 | 44.63 | 38.08 | +2.63 / +2.12 ✗ | 30 |
+| Baseline #2489 | 10 | 42.00 | 35.96 | — | 33 |
+
+Per-test-split (mae_surf_p) — KEY signal:
+| Split | Baseline | sw=15 | Δ% |
+|-------|----------|-------|-----|
+| single_in_dist | 40.58 | 39.64 | **−2.32%** ✓ |
+| geom_camber_rc | 50.15 | 53.33 | +6.33% ✗ |
+| geom_camber_cruise | 20.56 | 22.28 | +8.40% ✗ |
+| re_rand | 32.56 | 37.06 | **+13.81%** ✗ |
+
+Strong asymmetric per-split pattern: **single_in_dist gains, all OOD regress, re_rand worst.**
+
+**Result:** CLOSED. Hypothesis REFUTED. Direction strictly wrong above sw=10 on new compound.
+
+Key findings:
+1. **sw upper direction closed on new compound (finding 41).** sw=15 regresses by +2.63 val. sw=20 would extend the trend — Arm 2 skip preserved fleet time without changing conclusion. Together with fern's pending #2491 (sw=5/3 lower direction), sw axis is bracketed on new compound.
+2. **sw × split-type interaction is the paper-grade contribution.** sw=15 IMPROVES single_in_dist surface fidelity (−2.32%) but disproportionately HURTS cross-regime OOD splits, especially re_rand (+13.81%). Mechanism: over-emphasizing surface loss starves the volume field; on splits where the model must extrapolate, the volume context that anchors surface prediction degrades and error compounds.
+3. **Original OOD-improvement hypothesis REFUTED.** Both geom_camber splits regress with sw=15. Surface emphasis is NOT a substitute for the balanced surface+volume signal MAE already provides.
+4. **EMA gap intact (4.16 pts main 48.79 vs EMA 44.63).** Compound's regularization stack is healthy; only loss-balance lever is mis-set. EMA is doing real work even on a regressing run.
+5. **OOD-cost curve appears steep above sw=10.** Interior points sw=11/12 unlikely to beat default — student correctly recommends skipping them.
+
+**Implication for paper:** The sw × split-type result is a clean appendix finding. **For higher-surf direction, would need pairing with volume-loss-floor or per-channel reweighting** — different (more complex) hypothesis requiring code changes.
+
+**Edward reassigned:** ema_decay higher direction (0.995/0.999) on new compound — natural probe given the load-bearing main-vs-EMA gap.
+
+---
+
 ## 2026-05-14 01:25 — PR #2645: dropout=0.10/0.05 lower-direction sweep on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, DROPOUT DIRECTION CLOSED BOTH SIDES
 
 - **Branch:** `willowpai2g24h5-thorfinn/dropout-lower-wd3e4`

@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-14 ~01:30 UTC
+- **Date:** 2026-05-14 ~02:10 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -28,8 +28,8 @@
 
 | PR | Student | Config | Compound | Status |
 |----|---------|--------|----------|--------|
-| #2707 | edward | sw=15/sw=20 (UPPER direction) on n_layers=3+wd=3e-4 | NEW | WIP (just assigned) |
-| #2708 | thorfinn | Huber loss δ=0.5/1.0 vs MAE on n_layers=3+wd=3e-4 | NEW | WIP (just assigned) |
+| **TBD** | **edward** | **ema_decay higher direction (0.995/0.999) on new compound** | NEW | Assigning now |
+| #2708 | thorfinn | Huber loss δ=0.5/1.0 vs MAE on n_layers=3+wd=3e-4 | NEW | WIP |
 | #2618 | frieren | --epochs 80/100 (T_max LARGER) on new compound | NEW | WIP |
 | #2491 | fern | sw=5/sw=3 stack on n_layers=3 | NEW | WIP (pod rate-limit blocked) |
 | #2482 | askeladd | n_layers=2/n_layers=1 (speed-dividend extension) | NEW | WIP (pod rate-limit blocked) |
@@ -59,6 +59,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 38. **PER-HEAD DIM=64 SLICE-ATTENTION SWEET SPOT (#2563):** Monotonic {n_head=2 (dim_head=64) < n_head=4 (dim_head=32) < n_head=8 (dim_head=16)} at n_layers=3+wd=3e-4. n_head=4: +4.58% val. n_head=8: +11.73% val. Below dim_head=32 the soft virtual-token mechanism loses rank — single_in_dist worst-hit (+15.72% at n_head=8). Architecture cost is NON-zero: n_head=4 +11.7% s/ep, n_head=8 +35.6% s/ep. Speed-dividend at higher per-head dim wins. wd × n_head ruled out as explanation (regression magnitude dwarfs any wd correction). **n_head=2 + slice_num=32 + n_layers=3 are mutually Pareto-optimal at our budget — three independent axes converge to a single operating point.** n_head=2 optimum is depth-independent.
 39. **DROPOUT DIRECTION CLOSED BOTH SIDES; wd × dropout COMPLEMENTARY NOT SUBSTITUTIVE (#2645):** dropout=0.10 (+2.85% val) and 0.05 (+0.89% val) both regress vs baseline d=0.20. Combined with #2551 closing upper direction (0.25/0.30 regress), **dropout=0.20 is locked as local optimum**. Critically REFUTES the substitutive-regularizer prior: lowering dropout did NOT free capacity under wd=3e-4. **wd × dropout are COMPLEMENTARY** — distinct interaction sign from wd × n_head substitutive (finding 34) and slice × n_head substitutive (finding 30). Non-monotonic 0.10 < 0.05 hints mid-strength dropout is worst case. **Different regularizer pairs have different interaction signs — paper-grade finding on regularizer-interaction topology.** In-dist single_in_dist test IMPROVES on both arms while OOD splits regress.
 40. **lr=1e-4 LOCKED AS LOCAL OPTIMUM ON NEW COMPOUND; LR SURFACE NARROW (#2641):** lr=8e-5 (+2.58% val) and lr=1.5e-4 (+1.05% val) both regress. wd=3e-4 stabilization did NOT shift lr optimum. **wd and lr are independent axes** under Lion+MAE. lr surface is narrow: ±0.5×–1.5× regresses by 1–2.6 points. Interesting regime-trade: Arm 2 lr=1.5e-4 IMPROVES single_in_dist test (−8.9%) but worsens re_rand (+8.7%) — higher lr trades in-dist fidelity for OOD robustness. **Reinforces finding 37: step count is the bottleneck** (val still descending at cap across all three lrs). Only architecture or padding-waste reduction can free more steps.
+41. **SURF_WEIGHT UPPER DIRECTION CLOSED; sw × SPLIT-TYPE INTERACTION (#2707):** sw=15 regresses +2.63 val / +2.12 test on new compound. **Strong asymmetric per-split pattern:** single_in_dist IMPROVES (−2.32%) while ALL OOD splits regress, **re_rand worst at +13.81%**. Mechanism: over-emphasizing surface loss starves volume field; OOD extrapolation depends on volume context anchoring surface prediction. Both geom_camber splits regress, REFUTING original OOD-improvement hypothesis. Surface emphasis is NOT a substitute for balanced surface+volume signal of MAE. **For higher-surf direction would need pairing with volume-loss-floor or per-channel reweighting** (different hypothesis, requires code). With fern's pending #2491 sw=5/3 lower test, sw axis is bracketed on new compound. **The sw × split-type interaction is paper-grade appendix material.**
 
 ## Priority for current wave
 
@@ -67,7 +68,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 - **n_layers=2/n_layers=1 (askeladd #2482):** speed-dividend extension; val still descending at cap
 - **n_head=1 + n_layers=3/2 (tanjiro #2483):** cross-axis test of n_head=1 at shallow depth
 - **sw=5/sw=3 (fern #2491):** stack sw synergistic interaction at n_layers=3+wd=3e-4
-- **edward #2707:** sw=15/sw=20 UPPER direction on new compound — brackets sw axis with fern's sw=5/3 lower test; first explicit sw test on n_layers=3+wd=3e-4 compound
+- **edward NEW (assigning):** ema_decay higher direction (0.995/0.999) on new compound — load-bearing main-vs-EMA gap (~2-4 pts) signals EMA smoothing is critical; testing higher decay strengthens that effect
 - **thorfinn #2708:** Huber δ=0.5/1.0 vs MAE loss on new compound — loss-formulation probe; MAE dominated early (#1825) but that was before Lion/EMA/n_layers=3/wd=3e-4
 
 **Plateau Protocol status:** Many basic axes now closed on new compound — wd (locked at 3e-4), dropout (locked at 0.2), n_head (locked at 2), slice_num (locked at 32), n_layers (locked at 3 pending askeladd), batch_size (locked at 4, no speed dividend), cosine T_max (T_max=50 sweet spot, T_max>50 promising), lr (locked at 1e-4, narrow). Three axes pending in current wave (n_layers=2/1, sw, T_max LARGER). After current wave: must escalate to architecture/loss-formulation tier — width axis (n_hidden, requires Config edit), Huber+MAE blend (requires train.py edit), length-bucketed sampler (requires data-loader edit). The substitutive-vs-complementary regularizer-interaction framework (findings 30, 34, 35, 39) is a paper-grade contribution distinct from any individual metric improvement.
@@ -78,6 +79,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 
 ## Closed experiments this cycle
 
+- **#2707 (edward):** surf_weight=15 UPPER direction on n_layers=3+wd=3e-4 — CLOSED. sw upper closed. Strong sw × split-type asymmetric interaction (single_in_dist improves, all OOD regress, re_rand worst +13.81%). Finding 41. Paper-grade appendix.
 - **#2645 (thorfinn):** dropout=0.10/0.05 lower-direction on n_layers=3+wd=3e-4 — CLOSED. Dropout direction closed both sides; dropout=0.20 locked. wd × dropout COMPLEMENTARY not substitutive. Finding 39.
 - **#2641 (edward):** lr=8e-5/1.5e-4 on n_layers=3+wd=3e-4 — CLOSED. lr=1e-4 confirmed local optimum; lr surface narrow; wd and lr independent. Finding 40.
 - **#2563 (thorfinn):** n_head=4/8 sweep on n_layers=3+wd=3e-4 — CLOSED. Per-head dim=64 is sweet spot; n_head=2 optimum depth-independent. Finding 38.
