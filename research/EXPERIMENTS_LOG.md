@@ -6,6 +6,43 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 03:55 — Round 40: close #2737 (frieren ISO-EPOCH capacity test — +7.55% LOSS, n_hidden axis REFUTED TWICE)
+
+### PR #2737 frieren ISO-EPOCH capacity test (n_hidden=160 + slice_num=12 + epochs=46) — NEGATIVE RESULT
+
+- **Branch:** charliepai2g48h3-frieren-nhidden160-slicenum12-nlayers2-epochs46
+- **Hypothesis:** n_hidden=160 (capacity bump) + slice_num=12 (claw back per-epoch time) + epochs=46 (iso-epoch with baseline) — test if iso-epoch capacity rescues geom_camber OOD
+- **Result: SOLIDLY NEGATIVE**
+
+| Metric | This run | Baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **37.9215** | 35.256 | **+7.55%** (worse) |
+| test_avg/mae_surf_p | **31.2308** | 30.245 | **+3.26%** (worse) |
+| epochs completed | 37 / 46 | 46 / 46 | **NOT iso-epoch** (hit timeout cap) |
+| wall-clock | 30.3 min (capped) | n/a | — |
+| best_epoch | 37 (final, still descending) | n/a | — |
+| n_params | 560,515 | ~411K | +36% capacity |
+
+**KEY DIAGNOSTIC**: slice_num=12 reduction did NOT claw back enough time. Predicted ~32s/epoch; actual ~43s/epoch steady-state (+34% over prediction). Mid-run contention spikes (epochs 24–28: 60-90s) burned an extra 3 min. Only 37/46 epochs completed.
+
+**All splits regressed (val and test)**, including the OOD splits we hoped capacity would rescue. geom_camber_rc regressed +11.13% val, +1.87% test.
+
+**Conclusion: capacity-along-n_hidden axis is REFUTED TWICE under 30-min compute budget**:
+- #2685 (n_hidden=160 + epochs=40): +2.53% loss (capacity/epoch confound)
+- #2737 (n_hidden=160 + slice_num=12 + epochs=46): +7.55% loss (even worse — slice reduction insufficient)
+
+Baseline (n_hidden=128, slice_num=16, 46 epochs) Pareto-dominates n_hidden=160 variants within current compute envelope.
+
+**Round 40 pivot — frieren #2755 (per-channel surface weighting)**:
+- Code-change PR: split surf_weight into surf_weight_p (pressure, val metric target) and surf_weight_uv (velocity)
+- Test: surf_weight_p=15, surf_weight_uv=10 (1.5× pressure emphasis, velocity at baseline)
+- Hypothesis: directly optimize the validation metric (mae_surf_p) without adding compute cost
+- Conservative, low-risk pivot — first code-change PR since #2685
+
+**Remaining Round 39 capacity probe in flight: askeladd #2738 (mlp_ratio=6 + epochs=40 = FFN-axis capacity bump).** If this also loses, FFN+n_hidden capacity axes are both dead.
+
+---
+
 ## 2026-05-14 03:10 — Round 39 followup: close 4 stale_wip Round 38 recreations; 3 retries + 1 pivot
 
 **Closed stale_wip (4 Round 38 recreations stuck in rate-limit polling for 3h+):**

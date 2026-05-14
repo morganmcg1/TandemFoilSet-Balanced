@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 03:15
+- **Date:** 2026-05-14 03:57
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -18,13 +18,15 @@
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
-> **Round 39 frontier signals (depth-down floor + capacity hypothesis under test):**
-> - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss). Trajectory bottomed out — no further depth reduction possible.
-> - **Capacity hypothesis still LIVE but confounded**: PR #2685 (n_hidden=160 + epochs=40) confounded capacity↑ with epochs↓. Best_epoch=40 (final, still descending) confirms epoch-starvation. Iso-epoch retest assigned (frieren #2737: n_hidden=160 + slice_num=12 + epochs=46) plus FFN-axis test (askeladd #2738: mlp_ratio=6).
-> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight, n_head, depth all saturated or floored.
-> - **#2638 split-dependent OOD diagnostic**: re_rand is regularization-friendly; geom_camber is CAPACITY-LIMITED (or possibly INFORMATION-limited per #2685 student suggestion #5).
-> - **If Round 39 capacity tests fail**: pivot to code-change PRs for aux surface head, per-channel surface weighting (surf_weight_p ≠ surf_weight_uv), physics-informed loss term, or seed-averaged baseline confirmation. The "information-limited" hypothesis (no M=2-4 cruise camber in training data) would require dataset/augmentation changes.
-> - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future architectural arm should explicitly target this split.
+> **Round 40 frontier signals — capacity-along-n_hidden axis REFUTED twice, code-change pivot in flight:**
+> - **n_layers=2 is the depth-down FLOOR** (PR #2684: n_layers=1 catastrophic +12.7% loss).
+> - **n_hidden capacity axis REFUTED TWICE under 30-min budget**: #2685 (n_hidden=160 + epochs=40) lost +2.53%; #2737 (n_hidden=160 + slice_num=12 + epochs=46) lost +7.55%, only 37/46 epochs completed (slice_num=12 didn't claw back enough time). Baseline (n_hidden=128) Pareto-dominates at this compute envelope.
+> - **FFN-axis capacity test still in flight (askeladd #2738 mlp_ratio=6 + epochs=40).** If that also loses, capacity-via-param-count is dead.
+> - **Round 40 pivot: code-change PRs targeting the validation metric directly.** First arm: frieren #2755 (per-channel surface weighting surf_weight_p=15, surf_weight_uv=10) — direct attack on mae_surf_p without compute cost.
+> - **All single-axis HP sweeps CLOSED at n_layers=2 stack**: LR, WD, surface_weight (uniform), n_head, depth, slice_num all saturated/floored.
+> - **#2638 split-dependent OOD diagnostic**: re_rand is regularization-friendly; geom_camber is CAPACITY-LIMITED or INFORMATION-limited. Capacity-limited interpretation now WEAKENED by 2× failed n_hidden tests at compute budget.
+> - **Future levers if Round 40 code-change PRs fail**: aux surface head, physics-informed loss (divergence/curl), data augmentation (rotations, reflections), better init, lr warmup, drop_path/stochastic depth, seed-averaged baseline confirmation.
+> - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
@@ -117,7 +119,9 @@
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
 | askeladd | **#2738** | **mlp_ratio=6 + epochs=40** at n_layers=2 (FFN capacity bump; orthogonal to n_hidden width) | **Round 39: FFN capacity** |
-| frieren | **#2737** | **n_hidden=160 + slice_num=12 + epochs=46** (ISO-EPOCH capacity test; claws back per-epoch time via slice reduction) | **Round 39: iso-epoch width capacity** |
+| frieren | **#2755** | **surf_weight_p=15, surf_weight_uv=10** (per-channel surface weighting; code-change PR; direct attack on mae_surf_p) | **Round 40: code-change pivot** |
+
+**Closed Round 40**: frieren #2737 (n_hidden=160+slice_num=12+epochs=46 ISO-EPOCH test) — +7.55% val LOSS, only 37/46 epochs completed (slice_num=12 didn't claw back enough time). Capacity-along-n_hidden REFUTED TWICE.
 
 **Round 38 strategy: ARCHITECTURAL PIVOT after HP axes closed.**
 
