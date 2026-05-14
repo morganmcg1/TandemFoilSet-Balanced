@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -499,6 +501,14 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    seed: int = 42  # RNG seed for python.random / numpy / torch (cpu+cuda)
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 cfg = sp.parse(Config)
@@ -507,6 +517,9 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+set_seed(cfg.seed)
+print(f"[seed] {cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
