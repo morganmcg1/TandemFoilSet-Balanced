@@ -598,6 +598,7 @@ class Config:
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    slice_num: int = 64  # Transolver Slice Attention granularity (number of slices per layer)
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
@@ -639,7 +640,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
