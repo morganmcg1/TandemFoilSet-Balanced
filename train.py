@@ -208,10 +208,13 @@ class TransolverBlock(nn.Module):
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        # POST-NORM topology + γ=1.0 constant (Vaswani 2017 recipe). LayerScale
+        # removed: γ is a plain Python float, not nn.Parameter — no learnable
+        # gain on residual branches. Saves 2×hidden_dim params per block.
+        self.gamma_attn = 1.0
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, act_fn=F.silu)
-        self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
+        self.gamma_mlp = 1.0
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -221,8 +224,9 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        # POST-NORM: LN applied AFTER residual addition (LN(x + f(x)) vs pre-norm x + f(LN(x)))
+        fx = self.ln_1(self.gamma_attn * self.attn(fx) + fx)
+        fx = self.ln_2(self.gamma_mlp * self.mlp(fx) + fx)
         if self.se is not None:
             fx = self.se(fx, mask=mask)
         if self.last_layer:
@@ -532,7 +536,18 @@ print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing wid
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(
+    f"Block topology: POST-NORM (LN AFTER residual sum) at all {model_config['n_layers']}*2={model_config['n_layers']*2} per-block LN sites; "
+    f"final ln_3 retained in last block for output-head cleanup; "
+    f"forward: ln(gamma * f(x) + x) vs baseline pre-norm x + gamma * f(ln(x)); "
+    f"vs #2951 post-norm + LayerScale γ=1e-4: val 35.0624 (+14.73% LOSS), cruise +25.03% (worst). "
+    f"This PR isolates topology from LayerScale init."
+)
+print(
+    f"LayerScale: REMOVED — γ_attn = γ_mlp = 1.0 constant (Python float, NOT nn.Parameter); "
+    f"-{2 * model_config['n_layers'] * model_config['n_hidden']} params removed (was 8×{model_config['n_hidden']}=768 LayerScale γ params); "
+    f"restores Vaswani 2017 original Transformer recipe: standard residual without learnable per-channel gain on residual branch."
+)
 print(
     f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
     f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); "
@@ -673,6 +688,71 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epoch_tag):
+    """Probe pre/post-LN residual magnitudes per block on one val batch.
+
+    Logs |x| (RMS) before and after each LN site to distinguish post-norm
+    (capped by LN at every block) from pre-norm (residual stream grows with
+    depth). Run at ep1 + best-checkpoint for the topology-vs-LayerScale
+    attribution analysis required by the PR.
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    captured: list[dict] = []
+
+    def make_hook(block_idx, ln_name):
+        def hook(_module, args, output):
+            with torch.no_grad():
+                x_in = args[0]
+                pre_rms = x_in.detach().float().pow(2).mean().sqrt().item()
+                post_rms = output.detach().float().pow(2).mean().sqrt().item()
+                pre_max = x_in.detach().float().abs().max().item()
+                post_max = output.detach().float().abs().max().item()
+                captured.append({
+                    "block_idx": block_idx,
+                    "ln_name": ln_name,
+                    "pre_ln_rms": pre_rms,
+                    "post_ln_rms": post_rms,
+                    "pre_ln_abs_max": pre_max,
+                    "post_ln_abs_max": post_max,
+                })
+        return hook
+
+    handles = []
+    for bi, blk in enumerate(inner.blocks):
+        handles.append(blk.ln_1.register_forward_hook(make_hook(bi, "ln_1")))
+        handles.append(blk.ln_2.register_forward_hook(make_hook(bi, "ln_2")))
+        if getattr(blk, "last_layer", False) and hasattr(blk, "ln_3"):
+            handles.append(blk.ln_3.register_forward_hook(make_hook(bi, "ln_3")))
+
+    model_obj.eval()
+    with torch.no_grad():
+        x_b, _, _, mask_b = next(iter(loader))
+        x_b = x_b.to(device_, non_blocking=True)
+        mask_b = mask_b.to(device_, non_blocking=True)
+        x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+        # Use inner (uncompiled) module so Python forward hooks fire reliably.
+        with amp_ctx():
+            _ = inner({"x": x_norm, "mask": mask_b})
+
+    for h in handles:
+        h.remove()
+
+    print(f"\nResidual magnitude probe @ {epoch_tag} (post-norm topology):")
+    log_payload = {
+        "event": "residual_magnitude",
+        "epoch_tag": epoch_tag,
+        "ln_sites": captured,
+    }
+    for site in captured:
+        print(
+            f"  block[{site['block_idx']}].{site['ln_name']}: "
+            f"pre_LN rms={site['pre_ln_rms']:.4f} max={site['pre_ln_abs_max']:.3f} | "
+            f"post_LN rms={site['post_ln_rms']:.4f} max={site['post_ln_abs_max']:.3f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, log_payload)
+    return captured
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -761,6 +841,14 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # Residual magnitude probe at ep1 — captures the post-norm "capped" pattern
+    # early in training (vs pre-norm baseline that grows residuals with depth).
+    if (epoch + 1) == 1:
+        _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+        capture_residual_magnitudes(
+            model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
+        )
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -790,23 +878,29 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
+    # Residual magnitude probe @ best-checkpoint (compare to ep1 capture).
+    _probe_loader_end = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+    capture_residual_magnitudes(
+        model, _probe_loader_end, stats, amp_ctx_factory, device,
+        epoch_tag=f"best_ep{best_metrics['epoch']}",
+    )
+
+    # LayerScale diagnostic: γ_attn = γ_mlp = 1.0 CONSTANT (no learnable Parameter).
+    # Report the constants for confirmation; per-block dynamics are inapplicable.
     _inner = getattr(model, "_orig_mod", model)
-    _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
-    print("\nLayerScale final gammas (best-checkpoint weights):")
+    _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]),
+                  "layerscale_mode": "constant_1.0_no_parameter", "blocks": []}
+    print("\nLayerScale final gammas (best-checkpoint weights, CONSTANT 1.0 — no learnable γ):")
     for _i, _blk in enumerate(_inner.blocks):
-        _ga_mean = _blk.gamma_attn.detach().float().mean().item()
-        _ga_abs = _blk.gamma_attn.detach().float().abs().mean().item()
-        _gm_mean = _blk.gamma_mlp.detach().float().mean().item()
-        _gm_abs = _blk.gamma_mlp.detach().float().abs().mean().item()
-        print(f"  block[{_i}]: gamma_attn mean={_ga_mean:.6f} abs_mean={_ga_abs:.6f} | "
-              f"gamma_mlp mean={_gm_mean:.6f} abs_mean={_gm_abs:.6f}")
+        _ga = float(_blk.gamma_attn) if not torch.is_tensor(_blk.gamma_attn) else float(_blk.gamma_attn.detach().float().mean().item())
+        _gm = float(_blk.gamma_mlp) if not torch.is_tensor(_blk.gamma_mlp) else float(_blk.gamma_mlp.detach().float().mean().item())
+        print(f"  block[{_i}]: gamma_attn={_ga:.6f} | gamma_mlp={_gm:.6f} (constant; no Parameter)")
         _gamma_log["blocks"].append({
             "block_idx": _i,
-            "gamma_attn_mean": _ga_mean,
-            "gamma_attn_abs_mean": _ga_abs,
-            "gamma_mlp_mean": _gm_mean,
-            "gamma_mlp_abs_mean": _gm_abs,
+            "gamma_attn_mean": _ga,
+            "gamma_attn_abs_mean": abs(_ga),
+            "gamma_mlp_mean": _gm,
+            "gamma_mlp_abs_mean": abs(_gm),
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
 
