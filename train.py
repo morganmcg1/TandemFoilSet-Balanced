@@ -177,10 +177,12 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 film_re=False, film_re_hidden: int = 128):
+                 film_re=False, film_re_hidden: int = 128,
+                 film_re_aoa_joint: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.film_re = film_re
+        self.film_re_aoa_joint = film_re_aoa_joint
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -196,23 +198,26 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
         if self.film_re:
-            # γ-only FiLM-Re: scale-only modulation from log(Re).
+            # γ-only FiLM-Re: scale-only modulation from log(Re) (and optionally
+            # AoA_1, AoA_2 if film_re_aoa_joint=True — PR #3019).
             # Identity init (last-linear weight=0, bias=1) sets γ≡1 at epoch 0
             # so the model matches baseline exactly until γ drifts.
             # γ MLP hidden width = film_re_hidden (PR #2948 capacity scan).
+            film_input_dim = 3 if film_re_aoa_joint else 1
             self.film_gamma = nn.Sequential(
-                nn.Linear(1, film_re_hidden),
+                nn.Linear(film_input_dim, film_re_hidden),
                 nn.GELU(),
                 nn.Linear(film_re_hidden, hidden_dim),
             )
 
-    def forward(self, fx, mask=None, log_re=None):
+    def forward(self, fx, mask=None, cond=None):
         fx = self.attn(self.ln_1(fx), mask=mask) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
-        if self.film_re and log_re is not None:
+        if self.film_re and cond is not None:
             # Post-residual γ modulation, after both attn and mlp residuals.
+            # cond shape: [B, 1] (Re only) or [B, 3] (joint Re+AoA_1+AoA_2).
             # γ shape [B, 1, hidden_dim] broadcasts over node axis.
-            gamma = self.film_gamma(log_re.unsqueeze(-1)).unsqueeze(1)
+            gamma = self.film_gamma(cond).unsqueeze(1)
             fx = gamma * fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -227,7 +232,10 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  init_std: float = 0.02,
                  film_re=False, film_re_hidden: int = 128,
-                 log_re_x_index: int = 13):
+                 film_re_aoa_joint: bool = False,
+                 log_re_x_index: int = 13,
+                 aoa_1_x_index: int = 14,
+                 aoa_2_x_index: int = 18):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -236,7 +244,10 @@ class Transolver(nn.Module):
         self.init_std = init_std
         self.film_re = film_re
         self.film_re_hidden = film_re_hidden
+        self.film_re_aoa_joint = film_re_aoa_joint
         self.log_re_x_index = log_re_x_index
+        self.aoa_1_x_index = aoa_1_x_index
+        self.aoa_2_x_index = aoa_2_x_index
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -253,6 +264,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 film_re=film_re, film_re_hidden=film_re_hidden,
+                film_re_aoa_joint=film_re_aoa_joint,
             )
             for i in range(n_layers)
         ])
@@ -281,15 +293,23 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data.get("mask")  # [B, N] bool or None
-        log_re = None
+        cond = None
         if self.film_re:
-            # x is normalized; log_re is the standardized log(Re) at every node.
-            # All nodes in a sample share the same value, so node 0 is safe.
-            # The film_gamma MLP can absorb the affine normalization.
-            log_re = x[:, 0, self.log_re_x_index]
+            # x is normalized; all nodes in a sample share Re and per-foil AoA,
+            # so node 0 is safe. The film_gamma MLP can absorb the affine
+            # normalization. Joint mode (PR #3019) stacks [log_re, AoA_1, AoA_2]
+            # so γ can express Re×AoA interaction surfaces; OOD splits like
+            # geom_camber_rc see Re×AoA combinations the trunk rarely sees.
+            log_re = x[:, 0, self.log_re_x_index]  # [B]
+            if self.film_re_aoa_joint:
+                aoa_1 = x[:, 0, self.aoa_1_x_index]  # [B]
+                aoa_2 = x[:, 0, self.aoa_2_x_index]  # [B]
+                cond = torch.stack([log_re, aoa_1, aoa_2], dim=-1)  # [B, 3]
+            else:
+                cond = log_re.unsqueeze(-1)  # [B, 1]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx, mask=mask, log_re=log_re)
+            fx = block(fx, mask=mask, cond=cond)
         return {"preds": fx}
 
 
@@ -480,6 +500,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    film_re_aoa_joint: bool = False  # PR #3019: γ MLP sees [log_re, AoA_1, AoA_2] instead of just log_re
 
 
 cfg = sp.parse(Config)
@@ -522,6 +543,7 @@ model_config = dict(
     init_std=cfg.init_std,
     film_re=True,  # γ-only FiLM-Re conditioning (PR #2865)
     film_re_hidden=cfg.film_re_hidden,  # γ MLP hidden width (PR #2948 capacity scan)
+    film_re_aoa_joint=cfg.film_re_aoa_joint,  # joint [log_re, AoA_1, AoA_2] input (PR #3019)
 )
 
 model = Transolver(**model_config).to(device)
@@ -529,6 +551,9 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+_film_input_dim = 3 if cfg.film_re_aoa_joint else 1
+print(f"[init] FiLM-Re γ MLP input dim = {_film_input_dim} "
+      f"({'joint [log_re, AoA_1, AoA_2]' if cfg.film_re_aoa_joint else 'log_re only'})")
 
 optimizer = Lion(
     model.parameters(),
@@ -572,10 +597,18 @@ with torch.no_grad():
 print(f"Param L2 norm at init: {param_l2_init:.4f}")
 wandb.summary["param_l2_init"] = param_l2_init
 
+# Log FiLM-Re joint-input flag and indices so the run is self-describing.
+wandb.summary["film/joint_input"] = bool(cfg.film_re_aoa_joint)
+wandb.summary["film/film_input_dim"] = _film_input_dim
+wandb.summary["film/log_re_x_index"] = 13
+wandb.summary["film/aoa_1_x_index"] = 14
+wandb.summary["film/aoa_2_x_index"] = 18
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+_aoa_index_check_done = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -592,6 +625,34 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # One-shot AoA-index sanity check on the first training batch.
+        # Confirms log_re@13 (~12-15.4), AoA_1@14, AoA_2@18 (radians, may be 0 for single-foil).
+        if not _aoa_index_check_done:
+            with torch.no_grad():
+                raw_log_re = x[0, 0, 13].item()
+                raw_aoa_1 = x[0, 0, 14].item()
+                raw_aoa_2 = x[0, 0, 18].item()
+                # Normalized values (what the FiLM-Re γ MLP actually sees).
+                x_norm_sample = (x[0, 0] - stats["x_mean"]) / stats["x_std"]
+                norm_log_re = x_norm_sample[13].item()
+                norm_aoa_1 = x_norm_sample[14].item()
+                norm_aoa_2 = x_norm_sample[18].item()
+            print(
+                f"[sanity] First-batch raw values  : log_re[13]={raw_log_re:.4f} "
+                f"AoA_1[14]={raw_aoa_1:.4f}rad AoA_2[18]={raw_aoa_2:.4f}rad"
+            )
+            print(
+                f"[sanity] First-batch normalized  : log_re[13]={norm_log_re:.4f} "
+                f"AoA_1[14]={norm_aoa_1:.4f} AoA_2[18]={norm_aoa_2:.4f}"
+            )
+            wandb.summary["sanity/raw_log_re"] = raw_log_re
+            wandb.summary["sanity/raw_aoa_1"] = raw_aoa_1
+            wandb.summary["sanity/raw_aoa_2"] = raw_aoa_2
+            wandb.summary["sanity/norm_log_re"] = norm_log_re
+            wandb.summary["sanity/norm_aoa_1"] = norm_aoa_1
+            wandb.summary["sanity/norm_aoa_2"] = norm_aoa_2
+            _aoa_index_check_done = True
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
