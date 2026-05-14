@@ -227,7 +227,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_se=(i == n_layers - 1),
+                use_se=(i >= n_layers - 2),
             )
             for i in range(n_layers)
         ])
@@ -518,12 +518,12 @@ _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
 _n_se_params = sum(p.numel() for m in _se_modules for p in m.parameters())
 print(
-    f"Squeeze-Excitation depth-selective (block 3 only, deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=8); "
+    f"Squeeze-Excitation depth-selective (blocks {model_config['n_layers']-2} and {model_config['n_layers']-1}, top-2 deepest): added {_n_se} SE modules, +{_n_se_params} params (reduction=8); "
     f"masked global avg pool over tokens -> fc({model_config['n_hidden']}->{model_config['n_hidden']//8}) -> GELU -> "
     f"fc({model_config['n_hidden']//8}->{model_config['n_hidden']}) -> sigmoid -> broadcast multiply; "
-    f"applied at END of TransolverBlock {model_config['n_layers']-1} only (blocks 0..{model_config['n_layers']-2} carry no SE); "
+    f"applied at END of TransolverBlocks {model_config['n_layers']-2} and {model_config['n_layers']-1} (blocks 0..{model_config['n_layers']-3} carry no SE); "
     f"zero-init fc2 -> gate=0.5 uniform at step 0; "
-    f"baseline to beat: val_avg/mae_surf_p < 33.0195 (SE-4blocks #2692)"
+    f"baseline to beat: val_avg/mae_surf_p < 32.4498 (SE-block3-only #2727)"
 )
 
 # torch.compile with dynamic=True because pad_collate yields batches with
@@ -832,7 +832,7 @@ if best_metrics:
         for _h in _se_handles:
             _h.remove()
 
-    print("\nSE gate stats per split (best-checkpoint weights, block-3-only):")
+    print("\nSE gate stats per split (best-checkpoint weights, blocks 2+3 top-2 depth):")
     _se_log = {"event": "se_diagnostic", "epoch": int(best_metrics["epoch"]), "splits": {}}
     for _split_name, _captures in _se_per_split.items():
         print(f"  Split: {_split_name}")
