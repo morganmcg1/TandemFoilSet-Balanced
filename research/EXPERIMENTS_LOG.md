@@ -3279,3 +3279,42 @@ Per-split test (2-seed mean): single_in_dist=31.62 (−1.85% ✓), geom_camber_r
 - Merge bar: mean val < 33.71, mean test < 28.65
 - Target: `test_geom_camber_rc` < 41.46 (OOD improvement)
 - AoA indices (14, 18) must be verified in debug pass
+
+---
+
+## 2026-05-14 21:55 — PR #3002: Inverted late-block lr askeladd (CLOSED)
+- Branch: `willowpai2g48h3-askeladd/inverted-late-lr`
+- Hypothesis: Reduce late blocks (2-4) lr to 0.7×/0.5× of base_lr=7.5e-5, keeping early blocks at full lr. Direct corollary of meta-finding #14 (OOD signal in early blocks). Inverted direction from alphonse #2959 (1.5×/2.0× late boost).
+
+### Results (2 arms)
+
+| Arm | W&B ID | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val | Δ test |
+|---|---|---:|---:|---:|---:|
+| Baseline 15th-shift | — | 33.706 | 28.653 | — | — |
+| s1 0.7× late lr `t75wms0s` | lr_late=5.25e-5 | 35.191 | 29.609 | +4.40% ❌ | +3.34% ❌ |
+| s2 0.5× late lr `mtfa5bd4` | lr_late=3.75e-5 | 36.586 | 30.923 | +8.55% ❌ | +7.92% ❌ |
+| **2-seed mean** | — | **35.888** | **30.266** | **+6.47% ❌** | **+5.63% ❌** |
+
+Per-split test (arm s1 / arm s2): single_in_dist=33.54/35.91, geom_camber_rc=42.31/44.35, geom_camber_cruise=15.76/15.71, re_rand=26.83/27.72. **Every split regresses on both arms.**
+
+**γ_w_L2 depth trajectory (key finding):**
+- Baseline: early≈4.16, late≈5.6 (ratio 1.45×)
+- 0.7× arm: early≈4.3, late≈4.8 (ratio 1.14× — weakened)
+- **0.5× arm: early≈4.5, late≈3.0 (ratio 0.68× — INVERTED)**
+
+Late-block lr cut starves late-block FiLM-Re conditioning (γ_w_L2 drops at 0.5× from 5.6 to 3.0). The depth-monotone γ_w_L2 pattern is a diagnostic: runs that fail to grow it consistently regress.
+
+**Combined view with #2959 (boost):** geom_camber_rc monotone-bad in BOTH directions from 1.0×: 0.5×+6.98%, 0.7×+2.05%, 1.0×=0, 1.5×+2.4%, 2.0×+6.0%. Per-block lr optimum is at 1.0×. **Meta-finding #14 (early blocks drive OOD) was a misattribution of confounded run variance — RETRACTED.**
+
+**Decision: CLOSED.** Both arms regress on all splits, monotonically worse with stronger reduction. Per-block lr axis fully retired (both boost and reduction directions exhausted).
+
+**Meta-finding #19:** *Per-block lr scaling is fully retired. Both boost (#2959: 1.5×/2.0×) and reduction (#3002: 0.7×/0.5×) hurt all splits monotonically; optimum at 1.0×. γ_w_L2 depth-monotone (early~4.2, late~5.6) is a robust health-signal for FiLM-Re effectiveness — its degradation or inversion is a reliable predictor of regression. Meta-finding #14 ("early blocks drive OOD") RETRACTED.*
+
+---
+
+## 2026-05-14 21:55 — PR #3028: FiLM-Re γ at output decoder askeladd (ASSIGNED)
+- Branch: `willowpai2g48h3-askeladd/film-decoder`
+- Hypothesis: Add a FiLM-Re γ MLP to the output decoder (mlp2 in final TransolverBlock). Currently all 5 trunk blocks have FiLM-Re γ; the output decoder is Re-blind. Adding decoder-FiLM tests if output-stage Re-conditioning is a new lever (~33K params, identity-init, orthogonal to all prior FiLM axes). Particular target: re_rand OOD split (test=26.022 — most directly Re-generalization-limited).
+- Param delta: ~+33K (1 extra γ MLP only on the final block)
+- Arms: decoder-FiLM s1, decoder-FiLM s2 (seed=2)
+- Merge bar: mean val < 33.71, mean test < 28.65

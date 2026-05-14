@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-14 21:45
+- **Date:** 2026-05-14 21:55
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -73,7 +73,7 @@
 | #3007 | nezuko | Y-flip TTA at inference (paper-facing finishing move; 2× eval forward, avg in physical frame) | ASSIGNED 2026-05-14 21:00 |
 | #3001 | edward | FiLM-Re γ MLP init std scan: film_re_init_std=0.05/0.03 vs global 0.07 | ASSIGNED 2026-05-14 20:40 |
 | #3019 | tanjiro | FiLM-Re γ MLP joint [log_re, AoA_1, AoA_2] conditioning input (Re×AoA interaction surface) | ASSIGNED 2026-05-14 21:45 |
-| #3002 | askeladd | Inverted late-block lr: 0.7×/0.5× reduction tests early-block OOD signal | ASSIGNED 2026-05-14 20:40 |
+| #3028 | askeladd | FiLM-Re γ at output decoder (Re-blind decoder injection, target: re_rand OOD) | ASSIGNED 2026-05-14 21:55 |
 
 **Closed this round (rounds 12–15):**
 - #2908 (tanjiro σ interior) — σ=0.06/0.09 regress +17-22%. σ-axis fully bracketed at peak σ=0.07.
@@ -90,6 +90,7 @@
 - **#2926 (nezuko DropPath)** — drop_path=0.1: val +3.65/test +4.70; drop_path=0.2: val +4.81/test +4.12. test_geom_camber_rc regress +11-13% (opposite of OOD-help hypothesis). 5-block Transolver too shallow for stochastic depth (literature regime depth ≥ 12). Closed.
 - **#2959 (alphonse per-block lr)** — Closed after 3 send-backs without successful rebase. Meta-finding #14 (OOD signal in early blocks) preserved; inverted-scaling follow-up axis now covered by askeladd #3002. Alphonse reassigned to per-block wd (#3012) — orthogonal optimizer-side axis on the same param-group split.
 - **#2990 (tanjiro γ-MLP depth-2)** — depth-2 at width=256: val=33.7942 (+0.26% REGRESS), test=28.5276 (−0.44% pass). Primary metric fails merge bar. γ_w_L2 depth-monotone pattern FLATTENED (3.97→5.75 → ~4.1–4.6 flat). Seed variance widens to 1.68% (vs 0.4%). γ-MLP depth redistributes capacity at width=256 without adding it. Depth axis closed. Meta-finding #18 added. Tanjiro reassigned to joint Re+AoA γ-MLP input (#3019).
+- **#3002 (askeladd inverted lr)** — 0.7×/0.5× late-block lr: val=35.19/36.59 (+4.4%/+8.6% REGRESS), test=29.61/30.92. γ_w_L2 inverted at 0.5× (late drops below early). Combined with #2959 boost results: geom_camber_rc monotone-bad in BOTH directions from 1.0×. Per-block lr fully retired. Meta-finding #14 ("early blocks drive OOD") RETRACTED (misattribution). Meta-finding #19 added. Askeladd reassigned to FiLM-Re decoder injection (#3028).
 
 ## Key meta-findings
 
@@ -111,6 +112,7 @@
 16. **Slice routing perturbation reliably trades OOD for IID (four-axis closed)** — sharpen τ (#2953), soften τ, slice dropout (#2971), late-block lr boost (#2959) all show the same OOD-IID wedge. Only conditioning-capacity expansion (FiLM-Re γ width) breaks the wedge. Future routing-layer interventions expected to show the same pattern.
 17. **Block-level stochastic regularizers retired at depth=5 (#2926)** — DropPath at rates 0.1/0.2 over-regularizes a 5-block Transolver; literature regime is depth ≥ 12 (ViT-L, Swin-L, MAE). The depth-scaled per-block residual is doing structural work that random zeroing destroys faster than ensemble benefit can compensate. Combined with #11/#16, **only conditioning-capacity expansion has worked**. Two regularization tiers retired: block-level over-regularizes; routing-perturbation trades OOD/IID. Path forward: conditioning-capacity-side interventions only (γ width #2948, γ depth #2990, γ Fourier input #2965, γ component-init #3001).
 18. **γ-MLP depth does NOT add capacity at 35-ep compute-bound budget (#2990)** — depth-2 at width=256: γ_w_L2 depth-monotone pattern FLATTENS (3.97→5.75 → ~4.1–4.6 flat); depth redistributes the depth-dependent modulation from output-Linear weights into a new hidden-layer, without expanding what the model can express. Seed variance widens 4× (0.4%→1.68%). **Width=256 saturates the conditioning-capacity headroom at 35 epochs.** Further γ-MLP internal capacity expansion exhausted — gains must come from **input expressivity** (Fourier-Re #2965) or **conditioning surface area** (joint Re+AoA input #3019).
+19. **Per-block lr scaling is fully retired — meta-finding #14 RETRACTED (#3002, #2959)** — both boost (1.5×/2.0×, #2959) and reduction (0.7×/0.5×, #3002) hurt all splits monotonically; geom_camber_rc is monotone-bad in BOTH directions from 1.0×. The per-block lr optimum is centered at 1.0× and any deviation hurts OOD. **Meta-finding #14 ("early blocks drive OOD signal") was a misattribution of confounded run variance.** γ_w_L2 depth-monotone diagnostic confirmed as health-signal: runs that fail to grow the early~4.2/late~5.6 pattern consistently regress (0.5× late-lr inverts pattern, maps perfectly to worst performance).
 
 ## Currently retired axes
 
