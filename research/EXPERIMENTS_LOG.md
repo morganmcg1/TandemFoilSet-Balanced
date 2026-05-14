@@ -2,6 +2,100 @@
 
 ---
 
+## 2026-05-14 01:08 — Round 01:05 Closures: T_max=35, surface-only-input-normal, mask-ch15-jitter
+
+### PR #2678 alphonse `recondln-t-max35` — CLOSED +7.09% val (new baseline #2650)
+
+- **Branch**: charliepai2g24h1-alphonse/recondln-t-max35
+- **Hypothesis**: T_max=35 extends cosine warmdown beyond wall-cap; #2650 trace was monotone-descending at ep28, "budget-limited not converged".
+- **Status**: CLOSED — hypothesis cleanly falsified, T_max=28 confirmed principled optimum
+
+| Metric | T_max=35 | Baseline #2650 (T_max=28) | Δ |
+|--------|----------|---------------------------|---|
+| val_avg/mae_surf_p | 30.2427 | 28.2414 | **+7.09%** |
+| test_avg/mae_surf_p | 26.6104 | 24.4827 | **+8.69%** |
+| val_single_in_dist | 31.5387 | 27.1740 | +16.06% |
+| val_geom_camber_rc | 43.0129 | 42.2153 | +1.89% |
+| val_geom_camber_cruise | 14.8633 | 13.6733 | +8.70% |
+| val_re_rand | 31.5559 | 29.9031 | +5.53% |
+
+**Critical diagnostic**: ep28 ticked UP (30.24→30.36) at residual LR 1.32e-4 vs #2650's monotone-descent to eta_min=1e-5. **Direct evidence the eta_min FLOOR (not residual LR) was doing the work in #2650's last 3 epochs.** T_max=28 ≈ wall-cap-epochs is the principled setting; extending T_max delays the floor regime past the wall, removing the refinement entirely. T_max=35 sits between T_max=28 (winner) and T_max=40 (worse) — confirms U-shape sensitivity, 28 is tuned optimum not budget artefact.
+
+**T_max>28 axis FULLY CLOSED**. Reassigned alphonse to #2699 re-conditional-layerscale (5th Re-conditioning hook).
+
+**Artifact**: `models/model-recondln-t-max35-20260514-002546/metrics.jsonl`
+
+---
+
+### PR #2671 askeladd `surface-only-normal-feature` — CLOSED +7.02% val (new baseline #2650)
+
+- **Branch**: charliepai2g24h1-askeladd/surface-only-normal-feature
+- **Hypothesis**: Zero out normal channels on volume nodes to isolate the physical signal at surface elements and remove "ghost orientation" pollution that drove #2627's val_re_rand +35% regression.
+- **Status**: CLOSED — pollution mechanism CONFIRMED but net negative; dichotomy partly structural
+
+| Metric | This run | Baseline #2650 | Δ (new baseline) | #2627 (all-nodes) | gap closure |
+|--------|----------|----------------|------------------|-------------------|-------------|
+| val_avg/mae_surf_p | 30.2252 | 28.2414 | **+7.02%** | 31.27 (+8.34% vs #2011) | -3.34% improvement |
+| val_re_rand | 32.392 | 29.9031 | +5.14% | 35.01 (+35% vs #2011) | **-8.5pp gap closure** ✅ |
+| val_geom_camber_cruise | 13.801 | 13.6733 | +0.93% | 13.98 (-44.8% vs cruise base) | preserved as small gain |
+| val_geom_camber_rc | 44.882 | 42.2153 | +7.00% | 44.89 (+27.2% vs #2011) | rc regression PERSISTS |
+| test_avg/mae_surf_p | 26.1163 | 24.4827 | +4.47% | — | — |
+
+**Programme finding (partially confirmed):**
+- **Pollution side-channel WAS real and big**: val_re_rand recovered from +35% (#2627 all-nodes) → +5.14% (this surface-only) = -8.5pp gap closure. Volume-node "ghost normals" inherited from nearest surface point were structurally arbitrary in wake/far-field and the model was learning normal→flow mappings conditional on cruise-regime priors.
+- **Cruise gain is real but small**: -2.44% val, -2.62% test. Surface normals at viscous walls DO carry physically meaningful info for pressure-normal coupling.
+- **BUT rc regression PERSISTS at +7.0% even without volume pollution** → cruise/rc dichotomy at N=1499 / SOAP / 30-min budget is **partly structural**, not purely a pollution artefact.
+- Dichotomy collapse from -45%/+27% (#2627) → -2.4%/+7.0% (#2671): most of #2627's drama was volume-pollution amplifying both effects.
+
+**Surface-only input-feature path closed** — net negative despite clean mechanism validation. Reassigned askeladd to #2702 SWA (optimizer-level flat-minima, fundamentally different angle from feature/architecture/loss).
+
+**Artifact**: `models/model-charliepai2g24h1-askeladd-surface-only-normal-feature-20260514-002742/metrics.jsonl`
+
+---
+
+### PR #2662 fern `naca-jitter-ch16-17-only-sigma02` (mask ch15, σ=0.02) — CLOSED +7.04% val (new baseline #2650)
+
+- **Branch**: charliepai2g24h1-fern/naca-jitter-channels-15-17-only
+- **Hypothesis (corrected after fern's empirical channel-index discovery)**: Mask ch15 (rc OOD axis = camber amplitude M), jitter only ch16+ch17 (fully in-distribution axes). Preserve #2625's cruise win, drop #2625's rc regression.
+- **Status**: CLOSED — hypothesis falsified in informative way; ch15 was the ENTIRE active axis
+
+| Metric | mask-ch15 | Baseline #2650 | Δ vs new baseline | #2625 (all-3) | #2625 Δ vs #2011 |
+|--------|-----------|----------------|-------------------|---------------|------------------|
+| val_avg/mae_surf_p | 30.2298 | 28.2414 | **+7.04%** | 29.8728 | +3.45% |
+| val_geom_camber_rc | 44.2822 | 42.2153 | +4.90% | 52.0962 | +24.20% |
+| val_geom_camber_cruise | 14.3725 | 13.6733 | +5.11% | **7.9610** | **-43.72%** |
+| val_single_in_dist | 30.1703 | 27.1740 | +11.03% | — | — |
+| val_re_rand | 32.0943 | 29.9031 | +7.33% | — | — |
+
+**Programme finding (cleanest possible)**:
+- With ch15 masked: BOTH the -43.7% cruise win AND the +24.2% rc regression of #2625 evaporated TOGETHER.
+- cruise reverted to ~baseline (+5.1% vs #2650, vs #2625's -43.7% win)
+- rc came down sharply (+4.9% vs #2650, vs #2625's +24.2% regression)
+- ch16+ch17 jitter alone is small-magnitude smoothing of already-dense neighborhoods → near-noop
+- **ch15 IS the active axis**: simultaneously the rc OOD axis (train ≤ 0.667, rc test = {0.778, 0.889}) AND the cruise interpolation axis (cruise test ∈ {0.222–0.444} middle of train) — with opposite effects on the two splits.
+- Symmetric ch15 jitter densifies inward (helps cruise interpolation, hurts rc extrapolation by relatively widening the rc gap).
+
+**ch16+ch17 jitter direction CLOSED**. Reassigned fern to #2703 asymmetric-ch15-jitter-sigma05 (her own follow-up #2 — one-sided positive jitter on ch15 only, PUSHING outward toward rc OOD M={0.778, 0.889} rather than densifying inward).
+
+**Artifact**: `models/model-naca-jitter-ch16-17-only-sigma02-20260514-001759/metrics.jsonl`
+
+---
+
+### Round 01:05 Programme Summary
+
+**11 falsified hypotheses on this branch establish two structural findings:**
+1. **Re-conditioning at bounded injection points is the ONLY winning direction** (4 wins: ReFiLM-slice-logit, ReScaleHead, ReFiLM-residual closed, ReCondLN-affine winner). Every architecture/feature/loss/optimizer-schedule experiment outside this family has failed at +5-11% regression.
+2. **The cruise/rc dichotomy is structural at N=1499 / SOAP / 30-min / Transolver**. Even after surface-pollution removal (#2671), rc regression persists at +7.0%. The mechanism is ch15-localized: ch15 simultaneously serves as cruise interpolation densification axis AND rc OOD extrapolation gap. Symmetric augmentation makes the rc gap RELATIVELY worse.
+
+**Round 01:05 strategic pivots:**
+- alphonse #2699: 5th Re-conditioning hook (per-block LayerScale α(Re)) — extend proven winning direction
+- askeladd #2702: SWA on last 5 epochs — optimizer-level flat-minima, only previously-untested axis on the new baseline
+- fern #2703: asymmetric one-sided ch15 jitter σ=0.05 — DIRECT attack on rc extrapolation gap (push outward not densify inward) — first experiment in the round designed to bridge rather than densify
+
+**Remaining 5 WIP (continuing): thorfinn #2690 output-bias 4th hook, frieren #2689 oversampling M≥0.5, nezuko #2688 aux-surface-only, tanjiro #2599 SE-attn (stuck pod), edward #2534 TTA-multi-seed.**
+
+---
+
 ## 2026-05-13 21:05 — PR #2559: [surface-embed-trunk-token] Learned is_surface embedding into trunk — CLOSED
 
 - **Branch**: charliepai2g24h1-alphonse/surface-embed-trunk-token
