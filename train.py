@@ -396,6 +396,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    ema_decay: float = -1.0   # If > 0, enable EMA with this decay (e.g., 0.999)
+    ema_start: int = -1       # 1-indexed epoch at which EMA starts accumulating
 
 
 cfg = sp.parse(Config)
@@ -440,6 +442,18 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema_model = None
+if cfg.ema_decay > 0:
+    from torch.optim.swa_utils import AveragedModel
+    decay = cfg.ema_decay
+
+    @torch.no_grad()
+    def ema_avg(averaged_param, current_param, num_averaged):
+        return decay * averaged_param + (1.0 - decay) * current_param
+
+    ema_model = AveragedModel(model, avg_fn=ema_avg).to(device)
+    print(f"EMA enabled: decay={decay}, start_epoch={cfg.ema_start}")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -500,6 +514,10 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     scheduler.step()
+
+    if ema_model is not None and (epoch + 1) >= cfg.ema_start:
+        ema_model.update_parameters(model)
+
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -576,6 +594,47 @@ if best_metrics:
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+        })
+
+    # --- EMA evaluation (val + test) ---
+    if ema_model is not None and int(ema_model.n_averaged.item()) > 0:
+        n_avg = int(ema_model.n_averaged.item())
+        print(f"\nEvaluating EMA checkpoint (n_averaged={n_avg}, decay={cfg.ema_decay}, start={cfg.ema_start})...")
+        ema_model.eval()
+        ema_val_metrics = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        ema_val_avg = aggregate_splits(ema_val_metrics)
+        print(f"  EMA val  avg_surf_p={ema_val_avg['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, ema_val_metrics[name])
+
+        ema_test_metrics = None
+        ema_test_avg = None
+        if not cfg.skip_test:
+            ema_test_metrics = {
+                name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            ema_test_avg = aggregate_splits(ema_test_metrics)
+            print(f"  EMA test avg_surf_p={ema_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, ema_test_metrics[name])
+
+        ema_path = model_dir / "ema_checkpoint.pt"
+        torch.save(ema_model.module.state_dict(), ema_path)
+        print(f"Saved EMA checkpoint to {ema_path}")
+
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "ema_eval",
+            "ema_decay": cfg.ema_decay,
+            "ema_start": cfg.ema_start,
+            "ema_n_averaged": n_avg,
+            "ema_val_avg/mae_surf_p": ema_val_avg["avg/mae_surf_p"],
+            "ema_val_splits": ema_val_metrics,
+            "ema_test_avg": ema_test_avg,
+            "ema_test_splits": ema_test_metrics,
         })
 
     write_experiment_summary(
