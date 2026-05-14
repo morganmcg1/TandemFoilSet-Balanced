@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 [Round 113] UTC — PR #2864: Hybrid LN-at-block0_ln1 + RMSNorm-at-8-other-sites — **CLOSED LOSS (+1.62% val)**
+
+- **Branch:** charliepai2g48h5-askeladd/hybrid-ln-rmsnorm
+- **Hypothesis:** Hybrid normalization: keep full LayerNorm at block0_ln1 (the ONE site where γ showed active learning post-FiLM per #2851 diagnostic), replace all 8 other LN sites with RMSNorm. Expected param count 332,932 (−768 from β removal at 8 sites).
+- **Metric artifacts:** `models/model-charliepai2g48h5-askeladd-hybrid-ln-rmsnorm-20260514-085627/metrics.jsonl`
+
+| Metric | Baseline #2810 | #2851 RMSNorm-all | #2864 Hybrid | vs Baseline | vs #2851 |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 30.8909 | 31.4066 | **31.3911** | **+1.62% LOSS** | −0.05% (≈ identical) |
+| test_avg/mae_surf_p | 26.1964 | 27.1997 | **26.5492** | **+1.35% LOSS** | −2.39% (better) |
+| val_single_in_dist | 25.2751 | 24.2105 | **23.9145** | **−5.39% WIN (new best-ever)** | −1.22% |
+| val_geom_camber_rc | 45.8179 | 47.5202 | **47.9527** | +4.66% LOSS | +0.91% |
+| val_geom_camber_cruise | 16.8427 | 17.7834 | **17.9843** | +6.78% LOSS | +1.13% |
+| val_re_rand | 35.6177 | 36.1124 | **35.7129** | +0.27% (≈ wash) | −1.10% |
+
+**Per-site γ/β stats at best-val ep65:** block0_ln1 (kept LN) γ_std=0.127, range [0.455, 1.197] strongly modulated, β_std=0.065 non-trivial. All 8 RMSNorm γ_std ≤ 0.0025 (near-identity) — 8 sites had essentially no γ-headroom used. Per-token RMS: block0_ln1 LN post-norm RMS=0.935 (mean-centering active), block1_ln1 RMSNorm post-norm RMS=1.001 (no mean subtraction). Param count: 332,932 ✓. Best ep65/66, timeout ep66. sec/epoch ~27s. Peak GPU 14.6 GB.
+
+**Analysis:** Hypothesis falsified cleanly. The result is statistically indistinguishable from #2851 RMSNorm-everywhere (val 31.3911 vs 31.4066 = −0.05%). The prediction "if γ is near-identity at 8 sites, then β at those sites must also be decorative" is FALSE. Per-token RMS comparison nails the mechanism: LN's mean-centering strips the per-token mean that encodes OOD-relevant per-channel bias content even when γ stays near 1.0. β was compensating for mean-channel shifts on a per-channel basis. In-dist WIN (23.9145 = new best-ever) confirms mean-centering-free residual helps in-distribution prediction but OOD calibration is lost. Student's meta-recommendation accepted: **normalization meta-axis is now COMPREHENSIVELY CLOSED** (embed-LN #2808, DyT #2686, SurfaceAwareLN #2829, QK-Norm, GroupNorm, full RMSNorm #2851, hybrid #2864 — all mapped in BOTH structural directions). Pivot away from norm sub-experiments.
+
+**85th taxon CLOSES. Plateau deepens to 12 LOSSes since #2810 merge.**
+
+---
+
+## 2026-05-14 [Round 113] UTC — PR #2878: Differential Attention on slice-token self-attention (Ye 2024) — **ASSIGNED to charliepai2g48h5-askeladd**
+
+- **Branch:** charliepai2g48h5-askeladd/differential-attention
+- **Hypothesis:** Apply Differential Attention (Ye et al. 2024, arXiv:2410.05258) to the 24-token slice-token self-attention inside PhysicsAttention. Replace standard `attn = softmax(q·k^T/sqrt(D))` with `attn = (softmax(q1·k1^T/sqrt(D)) − λ·softmax(q2·k2^T/sqrt(D))) / (1 − λ + ε)` using two independent Q,K projection pairs and a learnable per-block λ scalar initialized per paper (0.8 − 0.6·exp(−0.3·layer_idx)). V projection unchanged. Expected ~370,568 params (+36,868 = +11%).
+- **Rationale:** Plateau protocol: 12 consecutive LOSSes → bold structural swings required. Differential attention cancels attention noise (irrelevant-token cross-attention mass) — directly attacks the quality of slice-routing in PhysicsAttention. Normalization meta-family now comprehensively closed by student's prior work. Attention architecture is under-explored: #2869 tests attention rank, this tests attention quality via noise-cancellation. Independent of all in-flight axes.
+- **Falsifiable predictions:** WIN means slice-routing noise was load-bearing → try lower λ_init or per-head λ. WASH means G=24 too small for noise to matter → close axis. LOSS means paired attention reduces slice diversity → close axis.
+- **91st candidate axis.**
+
+---
+
 ## 2026-05-14 [Round 112] UTC — PR #2859: SwiGLU gate Mish (gate-activation 3rd direction) — **CLOSED CATASTROPHIC LOSS (+25.2% val, +26.7% test)**
 
 - **Branch:** charliepai2g48h5-tanjiro/mishglu
