@@ -383,6 +383,96 @@ class ReFiLM(nn.Module):
         return gamma, beta
 
 
+class SAM:
+    """Sharpness-Aware Minimization wrapper (Foret et al., ICLR 2021; arxiv:2010.01412).
+
+    Doubles forward+backward per step: perturb θ → θ + ρ·∇L/||∇L||, recompute the
+    gradient at the perturbed point, then take the inner-optimizer step at the
+    original θ using that perturbed-point gradient. Finds flat minima.
+
+    Use:
+        loss.backward()                # gradient at θ
+        sam.first_step()               # θ → θ + ρ·∇L/||∇L||
+        optimizer.zero_grad()
+        loss_perturbed.backward()      # gradient at θ+δ
+        sam.undo_perturbation()        # θ+δ → θ
+        optimizer.step()               # inner-optimizer step with θ+δ gradient
+    """
+
+    def __init__(self, params, rho: float = 0.05):
+        self.params = [p for p in params if p.requires_grad]
+        self.rho = rho
+        self._eps: dict[int, torch.Tensor] = {}
+
+    @torch.no_grad()
+    def first_step(self) -> None:
+        # Global L2 norm of gradients over all params.
+        grad_norm = torch.norm(torch.stack([
+            p.grad.detach().norm(p=2)
+            for p in self.params if p.grad is not None
+        ]), p=2)
+        scale = self.rho / (grad_norm + 1e-12)
+        for p in self.params:
+            if p.grad is None:
+                continue
+            eps = (p.grad.detach() * scale).to(p.dtype)
+            p.add_(eps)
+            self._eps[id(p)] = eps
+
+    @torch.no_grad()
+    def undo_perturbation(self) -> None:
+        for p in self.params:
+            eps = self._eps.get(id(p))
+            if eps is not None:
+                p.sub_(eps)
+        self._eps.clear()
+
+
+def compute_train_loss(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    stats: dict,
+    model: nn.Module,
+    rescale_head: nn.Module,
+    output_bias: nn.Module | None,
+    ch_weights: torch.Tensor,
+    surf_weight: float,
+    huber_delta: float = 0.1,
+) -> torch.Tensor:
+    """Compute the Huber-relative-L2 channel-weighted training loss.
+
+    Single-output helper used by SAM's second forward — duplicates the training
+    loop's first-forward loss math so the SAM-perturbed gradient is computed
+    identically to the unperturbed one.
+    """
+    x_norm = (x - stats["x_mean"]) / stats["x_std"]
+    y_norm = (y - stats["y_mean"]) / stats["y_std"]
+    log_re_norm = x_norm[:, 0, 13:14]
+    scale = rescale_head(log_re_norm)
+    pred = model({"x": x_norm})["preds"] * scale
+    if output_bias is not None:
+        pred = output_bias(pred, log_re_norm)
+    residual = pred - y_norm
+    abs_residual = residual.abs()
+    sq_err = torch.where(
+        abs_residual <= huber_delta,
+        0.5 * residual ** 2,
+        huber_delta * (abs_residual - 0.5 * huber_delta),
+    )
+    vol_mask = (mask & ~is_surface).unsqueeze(-1)
+    surf_mask = (mask & is_surface).unsqueeze(-1)
+    sq_err_weighted = sq_err * ch_weights
+    vol_sq = (sq_err_weighted * vol_mask).sum(dim=(1, 2))
+    vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+    surf_sq = (sq_err_weighted * surf_mask).sum(dim=(1, 2))
+    surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+    vol_loss = (vol_sq / vol_denom).mean()
+    surf_loss = (surf_sq / surf_denom).mean()
+    return vol_loss + surf_weight * surf_loss
+
+
 class ReConditionalOutputBias(nn.Module):
     """Re-conditional additive per-channel bias applied AFTER ReScaleHead.
 
@@ -601,6 +691,15 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # Sharpness-Aware Minimization (Foret et al. 2021, arxiv:2010.01412). When
+    # enabled, doubles forward+backward per step: perturb θ by ρ·∇L/||∇L||,
+    # recompute gradient, then step at θ with the perturbed-point gradient.
+    sam: bool = False
+    sam_rho: float = 0.05
+    # CosineAnnealingLR T_max. Default 28 matches the merged baseline (#2690).
+    # When --sam doubles per-step cost, reduce to 14 to keep the schedule aligned
+    # with the budgeted 14-epoch SAM run.
+    scheduler_t_max: int = 28
 
 
 cfg = sp.parse(Config)
@@ -737,9 +836,15 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
+SCHEDULER_T_MAX = cfg.scheduler_t_max  # cosine T_max; default 28 matches merged baseline
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
+
+# SAM wraps the SOAP gradient flow: 2× forward+backward to land in flat minima.
+# bf16 autocast has fp32 dynamic range — bypass GradScaler in the SAM path.
+sam = SAM(_opt_params, rho=cfg.sam_rho) if cfg.sam else None
+if sam is not None:
+    print(f"SAM: rho={cfg.sam_rho}  (cosine T_max={SCHEDULER_T_MAX}; 2× per-step cost)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -888,25 +993,45 @@ for epoch in range(MAX_EPOCHS):
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
 
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        if cfg.grad_clip > 0:
-            scaler.unscale_(optimizer)
-            _clip_params = list(model.parameters()) + list(rescale_head.parameters())
-            if output_bias is not None:
-                _clip_params += list(output_bias.parameters())
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                _clip_params,
-                cfg.grad_clip,
-            )
-            grad_norm_val = float(grad_norm)
-            epoch_grad_norm_sum += grad_norm_val
-            if grad_norm_val > epoch_grad_norm_max:
-                epoch_grad_norm_max = grad_norm_val
-            if grad_norm_val > cfg.grad_clip:
-                epoch_grad_clipped += 1
-        scaler.step(optimizer)
-        scaler.update()
+        if sam is not None:
+            # SAM step: backward at θ → perturb → backward at θ+δ → undo → SOAP.step().
+            optimizer.zero_grad()
+            loss.backward()
+            sam.first_step()  # θ → θ + ρ·∇L/||∇L||
+
+            with autocast(device_type="cuda", dtype=torch.bfloat16):
+                loss_sam = compute_train_loss(
+                    x, y, is_surface, mask, stats, model, rescale_head,
+                    output_bias, ch_weights, cfg.surf_weight,
+                )
+            optimizer.zero_grad()
+            loss_sam.backward()
+
+            if cfg.grad_clip > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(_opt_params, cfg.grad_clip)
+                grad_norm_val = float(grad_norm)
+                epoch_grad_norm_sum += grad_norm_val
+                if grad_norm_val > epoch_grad_norm_max:
+                    epoch_grad_norm_max = grad_norm_val
+                if grad_norm_val > cfg.grad_clip:
+                    epoch_grad_clipped += 1
+
+            sam.undo_perturbation()  # θ+δ → θ
+            optimizer.step()
+        else:
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            if cfg.grad_clip > 0:
+                scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(_opt_params, cfg.grad_clip)
+                grad_norm_val = float(grad_norm)
+                epoch_grad_norm_sum += grad_norm_val
+                if grad_norm_val > epoch_grad_norm_max:
+                    epoch_grad_norm_max = grad_norm_val
+                if grad_norm_val > cfg.grad_clip:
+                    epoch_grad_clipped += 1
+            scaler.step(optimizer)
+            scaler.update()
 
         with torch.no_grad():
             sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
@@ -1110,6 +1235,8 @@ for epoch in range(MAX_EPOCHS):
         "scheduler": "cosine_annealing_lr",
         "scheduler_T_max": SCHEDULER_T_MAX,
         "scheduler_eta_min": 1e-5,
+        "sam_enabled": cfg.sam,
+        "sam_rho": cfg.sam_rho if cfg.sam else None,
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
         "torch_compile_dynamic": torch_compile_dynamic,
@@ -1248,6 +1375,77 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+    # --- Sharpness diagnostic on best checkpoint ---
+    # (L(θ + ρ·∇L/||∇L||) - L(θ)) / L(θ) on one val batch. Quantifies
+    # local-loss flatness — SAM theory: lower = flatter = better OOD generalization.
+    sharpness_summary: dict | None = None
+    try:
+        diag_loader = val_loaders[diag_split_name]
+        x_b, y_b, is_surface_b, mask_b = next(iter(diag_loader))
+        x_b = x_b.to(device, non_blocking=True)
+        y_b = y_b.to(device, non_blocking=True)
+        is_surface_b = is_surface_b.to(device, non_blocking=True)
+        mask_b = mask_b.to(device, non_blocking=True)
+        # Skip whole samples with non-finite y (mirrors evaluate_split sanitation).
+        y_finite = torch.isfinite(y_b.reshape(y_b.shape[0], -1)).all(dim=-1)
+        mask_b = mask_b & y_finite.unsqueeze(-1)
+        y_b = torch.nan_to_num(y_b, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Clear any stale gradients on the trainable param set.
+        for _p in _opt_params:
+            if _p.grad is not None:
+                _p.grad.detach_()
+                _p.grad.zero_()
+
+        with autocast(device_type="cuda", dtype=torch.bfloat16):
+            loss_theta = compute_train_loss(
+                x_b, y_b, is_surface_b, mask_b, stats, model, rescale_head,
+                output_bias, ch_weights, cfg.surf_weight, huber_delta=0.1,
+            )
+        loss_theta_val = float(loss_theta.detach())
+        loss_theta.backward()
+
+        sharpness_rho = cfg.sam_rho if cfg.sam else 0.05
+        sharpness_sam = SAM(_opt_params, rho=sharpness_rho)
+        sharpness_sam.first_step()  # θ → θ + ρ·∇L/||∇L||
+
+        with torch.no_grad():
+            with autocast(device_type="cuda", dtype=torch.bfloat16):
+                loss_perturbed = compute_train_loss(
+                    x_b, y_b, is_surface_b, mask_b, stats, model, rescale_head,
+                    output_bias, ch_weights, cfg.surf_weight, huber_delta=0.1,
+                )
+        loss_perturbed_val = float(loss_perturbed.detach())
+
+        sharpness_sam.undo_perturbation()  # θ+δ → θ
+        for _p in _opt_params:
+            if _p.grad is not None:
+                _p.grad.detach_()
+                _p.grad.zero_()
+
+        sharpness = (loss_perturbed_val - loss_theta_val) / max(abs(loss_theta_val), 1e-12)
+        sharpness_summary = {
+            "rho": sharpness_rho,
+            "split": diag_split_name,
+            "loss_theta": loss_theta_val,
+            "loss_perturbed": loss_perturbed_val,
+            "sharpness_rel": sharpness,
+            "sharpness_abs": loss_perturbed_val - loss_theta_val,
+        }
+        print(
+            f"\nSharpness ({diag_split_name}, rho={sharpness_rho}): "
+            f"L(θ)={loss_theta_val:.5f}  L(θ+δ)={loss_perturbed_val:.5f}  "
+            f"(L(θ+δ)-L(θ))/L(θ)={sharpness:+.4f}"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "sharpness",
+            "best_epoch": best_metrics["epoch"],
+            "sharpness": sharpness_summary,
+        })
+    except Exception as exc:
+        print(f"\nSharpness diagnostic failed: {exc}")
+        sharpness_summary = None
 
     write_experiment_summary(
         model_path=model_path,
