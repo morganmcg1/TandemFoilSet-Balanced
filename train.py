@@ -270,6 +270,8 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        self.output_gain = nn.Parameter(torch.tensor(1.0))
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -290,7 +292,8 @@ class Transolver(nn.Module):
         fx = fx * (1 + film_scale)
         for block in self.blocks:
             fx = block(fx, mask=mask)
-        return {"preds": fx}
+        preds = fx * self.output_gain
+        return {"preds": preds}
 
 
 # ---------------------------------------------------------------------------
