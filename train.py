@@ -270,6 +270,21 @@ class Transolver(nn.Module):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
+        # Non-linear additive geo-FiLM (#2911): 2-layer bottleneck on 8 geometry-only channels
+        # (NACA1 [15,16,17] + NACA2 [19,20,21] + gap [22] + stagger [23]). Applied additively
+        # at the preprocess-MLP output site (after flow-FiLM scale), broadcast over tokens.
+        # Final layer zero-init -> identity at step 0 (geo_bias = 0). First layer keeps the
+        # default trunc_normal_(std=0.02) init from _init_weights to provide gradient signal
+        # through the GELU. Bottleneck=16 allows non-linear interaction across 8 inputs.
+        geo_bottleneck = 16
+        self.geo_film = nn.Sequential(
+            nn.Linear(8, geo_bottleneck),
+            nn.GELU(),
+            nn.Linear(geo_bottleneck, n_hidden),
+        )
+        nn.init.zeros_(self.geo_film[-1].weight)
+        nn.init.zeros_(self.geo_film[-1].bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -288,6 +303,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
+        # Non-linear additive geo-FiLM (#2911): geometry-only conditioning at preprocess output.
+        # Channels [15,16,17] = NACA1 (camber, pos, thick); [19,20,21] = NACA2; [22] = gap; [23] = stagger.
+        geo_signal = x[:, 0, [15, 16, 17, 19, 20, 21, 22, 23]]     # [B, 8]
+        geo_bias = self.geo_film(geo_signal).unsqueeze(1)          # [B, 1, n_hidden]
+        fx = fx + geo_bias                                         # additive at WIN site (#2890)
         for block in self.blocks:
             fx = block(fx, mask=mask)
         return {"preds": fx}
@@ -540,6 +560,18 @@ print(
     f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
     f"baseline to beat: val_avg/mae_surf_p < 33.4935"
 )
+# Non-linear geo-FiLM diagnostic (#2911)
+_geo_film_inner = getattr(model, "_orig_mod", model).geo_film
+_geo_bottleneck_dim = _geo_film_inner[0].out_features
+_geo_film_n_params = sum(p.numel() for p in _geo_film_inner.parameters())
+print(
+    f"Non-linear additive geo-FiLM (#2911): Linear(8, {_geo_bottleneck_dim}) -> GELU -> "
+    f"Linear({_geo_bottleneck_dim}, {model_config['n_hidden']}); zero-init final layer "
+    f"(geo_bias = 0 at step 0, identity behavior); channels [15,16,17,19,20,21,22,23] = "
+    f"[NACA1, NACA2, gap, stagger]; applied additively after flow-FiLM at preprocess output; "
+    f"+{_geo_film_n_params} params; baseline to beat: val_avg/mae_surf_p < 30.5605"
+)
+print(f"geo_film children: {list(_geo_film_inner.children())}")
 print(f"Actual total params: {n_params}")
 
 # SE diagnostic: count modules and added params
@@ -740,6 +772,11 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    # Non-linear geo-FiLM weight-norm tracking (#2911): final layer (zero-init) must
+    # grow away from zero for the conditioner to do anything useful. Cheap to compute.
+    _inner_now = getattr(model, "_orig_mod", model)
+    _geo_w0_norm = _inner_now.geo_film[0].weight.detach().float().norm().item()
+    _geo_w2_norm = _inner_now.geo_film[-1].weight.detach().float().norm().item()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -750,6 +787,8 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
+        "geo_film/w0_norm": _geo_w0_norm,
+        "geo_film/w2_norm": _geo_w2_norm,
         "is_best": tag == " *",
         "compile_active": compile_active,
     })
@@ -836,6 +875,56 @@ if best_metrics:
         "film_weight_norm": _film_w_norm,
         "film_bias_norm": _film_b_norm,
         "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+    })
+
+    # Non-linear geo-FiLM diagnostic (#2911): per-split geo_bias magnitude. If the
+    # bottleneck broke the cruise/in_dist coupling, camber_cruise abs_mean should
+    # be MEANINGFULLY higher than val_single_in_dist (selective conditioning).
+    _geo_film = _inner.geo_film
+    _geo_w0 = _geo_film[0].weight.detach().float().norm().item()
+    _geo_b0 = _geo_film[0].bias.detach().float().norm().item()
+    _geo_w2 = _geo_film[-1].weight.detach().float().norm().item()
+    _geo_b2 = _geo_film[-1].bias.detach().float().norm().item()
+    print("\nNon-linear geo-FiLM final diagnostics (#2911, best-checkpoint weights):")
+    print(f"  geo_film[0].weight.norm: {_geo_w0:.4f}  bias.norm: {_geo_b0:.4f}")
+    print(f"  geo_film[-1].weight.norm: {_geo_w2:.4f}  bias.norm: {_geo_b2:.4f}  (zero-init)")
+
+    _geo_per_split: dict[str, dict] = {}
+    for _split_name in VAL_SPLIT_NAMES:
+        _ldr = val_loaders.get(_split_name)
+        if _ldr is None:
+            continue
+        with torch.no_grad():
+            _x_g, _, _, _ = next(iter(_ldr))
+            _x_g = _x_g.to(device, non_blocking=True)
+            _x_norm_g = (_x_g - stats["x_mean"]) / stats["x_std"]
+            _geo_signal = _x_norm_g[:, 0, [15, 16, 17, 19, 20, 21, 22, 23]].float()
+            _geo_bias = _geo_film(_geo_signal)  # [B, n_hidden]
+            _abs_mean = _geo_bias.abs().mean().item()
+            _abs_max = _geo_bias.abs().max().item()
+            _norm_per_sample = _geo_bias.norm(dim=-1).mean().item()
+            _hidden_pre = _geo_film[0](_geo_signal)
+            _hidden_post = F.gelu(_hidden_pre)
+            _dead_frac = (_hidden_post.abs() < 1e-4).float().mean().item()
+        _geo_per_split[_split_name] = {
+            "geo_bias_abs_mean": _abs_mean,
+            "geo_bias_abs_max": _abs_max,
+            "geo_bias_norm_per_sample": _norm_per_sample,
+            "hidden_dead_frac": _dead_frac,
+        }
+        print(
+            f"  Split {_split_name}: geo_bias abs_mean={_abs_mean:.4f}  "
+            f"abs_max={_abs_max:.4f}  norm/sample={_norm_per_sample:.4f}  "
+            f"hidden_dead_frac={_dead_frac:.4f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "geo_film_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "geo_film/w0_norm": _geo_w0,
+        "geo_film/b0_norm": _geo_b0,
+        "geo_film/w2_norm": _geo_w2,
+        "geo_film/b2_norm": _geo_b2,
+        "per_split": _geo_per_split,
     })
 
     # Squeeze-Excitation diagnostic: gate + attention-pool stats per block per
