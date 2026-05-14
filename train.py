@@ -482,6 +482,13 @@ def measure_attention_entropies(
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+# H72: tangent-plane feature noise (FOMA-inspired). Absolute Gaussian noise added
+# to the 24-dim raw node input features during training only — small on-manifold
+# perturbations should teach the model local invariance along the OOD-variation
+# axes (camber, Re, AoA) without scrambling dispatch structure (cf. #2575 which
+# perturbed slice tokens and failed catastrophically).
+FEATURE_NOISE_STD = 0.005
+
 
 @dataclass
 class Config:
@@ -555,6 +562,7 @@ print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 
 print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
 print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")  # should print 288
 print(f"[H46] n_params: {n_params}")  # should print ~892,631
+print(f"H72 feature noise std={FEATURE_NOISE_STD} (FOMA-inspired tangent-plane aug, train-only)")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
@@ -670,6 +678,10 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # H72: tangent-plane feature noise (FOMA-inspired). Train-only; targets/mask untouched.
+        if model.training and FEATURE_NOISE_STD > 0:
+            x = x + torch.randn_like(x) * FEATURE_NOISE_STD
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
