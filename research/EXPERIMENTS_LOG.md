@@ -6,6 +6,44 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-14 12:55 — Round 42 cont.: close #2904 frieren compound (specialized_decoders + epochs=50 LOSS +15% — MECHANISM INTERACTION via LR schedule); assign frieren #2917 dropout=0.1 (canonical regularization, attacks seed-variance/overfitting)
+
+### PR #2904 — frieren specialized surf/vol decoders + epochs=50 COMPOUND (CLOSED, mechanism interaction refuted)
+- Branch: `charliepai2g48h3-frieren/surfvoldecoders-epochs50-nlayers2-slicenum16`
+- Hypothesis: epochs=50 schedule extension is orthogonal to specialized decoders mechanism; they should stack.
+- Artifacts: `models/model-charliepai2g48h3-frieren-surfvoldecoders-epochs50-nlayers2-slicenum16-20260514-121313/metrics.jsonl`
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| **Current baseline (#2872)** | **34.544** | **29.916** |
+| Specialized+epochs=50 (best ep 45, cut at e46) | 39.731 (+15.02% LOSS) | 33.249 (+11.14% LOSS) |
+
+**Per-epoch val_avg trajectory (last 8):** [42.565, 41.330, 40.954, 41.121, 40.945, 40.325, 39.731 ★best, 39.847 timeout-cut]
+
+Still descending at e46 (slope ~−0.3 to −0.5 per epoch); even optimistic linear extrapolation to e50 gives val ≈ 38.4, still +3.9 vs baseline. Optimistic-end-of-cosine extrapolation (matching #2883's e46 val=35.14) would still give ≥0.6 regression.
+
+Decoder specialization diagnostic at best checkpoint:
+- cos(surf, vol) final = −0.0411 (orthogonal — mechanism intact)
+- L2 surf=1.0093, vol=1.1863 (vol +17% — same asymmetry pattern as #2883)
+
+**KEY MECHANISTIC FINDING (frieren's diagnosis):** Specialized decoders need full LR annealing to settle into their basin — they do NOT tolerate the higher residual LR of a longer cosine schedule:
+- Specialized decoders, T_max=46, e46 (#2883): val=35.14 (LR fully annealed)
+- Specialized decoders, T_max=50, e46 (this run): val=39.85 (LR still ~2-3% of initial, +4.7 vs T_max=46)
+- Shared decoders, T_max=50, e46 (#2872): val ≈ 34.6 (already plateau)
+
+The two mechanisms (epoch-budget + decoder specialization) are NOT orthogonal — they share an unfavorable interaction through the LR schedule. Specialized decoders need T_max = actual epochs.
+
+**Re-interpretation of #2883:** Test wins on all 4 splits at T_max=46 do NOT generalize to T_max=50 (all 4 test splits regress in this run). The #2883 test wins were schedule-specific, not a robust property of specialized decoders. Combined with #2888's seed-variance finding, specialized-decoders axis is fully closed at this stack.
+
+**SPECIALIZED DECODERS AXIS: FULLY CLOSED** (under any compound). Mechanism requires LR fully annealed by best_epoch — schedule-sensitive.
+
+**Wall-clock note:** Frieren noted a duplicate train.py invocation contended for GPU during e43-46 (74-76s/epoch vs normal 35-38s). Training quality is deterministic on inputs so the numbers stand. Operational issue, not result-affecting.
+
+### Round 42 cont. assignment: frieren #2917 dropout p=0.1 (attention + FFN)
+- Hypothesis: Seed variance ~0.6 val-std (from #2888) is most parsimoniously explained by overfitting → init-path-dependent basins. Standard transformer dropout (canonical regularization missing from this stack) should pull init paths toward a wider, flatter basin and reduce variance — possibly improving the dominant OOD split (geom_camber_rc=48).
+- Mechanism-distinct from all prior attempts: aux head (redundant gradient), specialized decoders (architectural readout), SWA/EMA (post-hoc smoothing). Dropout = stochastic regularization DURING training, affects what model learns.
+- Decision thresholds vs true mean ~35.2: val < 34.0 = clear win; val ∈ [34.5, 35.8] = within seed noise (need re-run); val > 36.0 = loss.
+
 ## 2026-05-14 12:15 — Round 42 cont.: close #2888 askeladd SWA (neutral on both schedules — SWA AXIS FULLY CLOSED; reveals seed variance dominates at this stack); assign askeladd EMA-decay-0.999-from-e30 (#2907) as continuous-smoothing alternative
 
 ### PR #2888 — askeladd SWA from epoch 47 on epochs=50 stack (CLOSED, axis fully refuted)

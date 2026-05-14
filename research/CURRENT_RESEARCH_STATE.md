@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-14 12:15
+- **Date:** 2026-05-14 12:55
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -33,7 +33,7 @@
 > - **OVERFIT-OOD signature** (in #2738): bottleneck for camber-OOD is NOT capacity.
 > - **Round 41 cont. — fresh-axis pivots (active)**:
 >   - **AUX-HEAD AXIS CLOSED** — frieren #2871 aux surface head at weight=1.0, hidden=64: +4.73% val (36.925 vs 35.256), REFUTED. Aux head DID learn surface structure (final aux_surf_loss tracks main surf_loss) but did NOT regularize the shared encoder. Root cause: surf_weight=10 already provides 10× gradient signal in the same direction — the aux head was redundant. Adding any signal that duplicates the existing loss direction will fail by the same mechanism.
->   - **DECODER-SPECIALIZATION MECHANISM VALIDATED, COMPOUND PENDING (#2883 → #2904)**: frieren #2883 specialized surf/vol decoders at epochs=46 produced val 35.140 (+1.73% LOSS vs new baseline 34.544 — within seed noise) but test 29.594 (−1.08% WIN, all 4 test splits improved). **Mechanism validated:** cosine similarity between final-layer surf vs vol decoder weights = 0.0396 (orthogonal — true specialization, not redundant copies); L2 asymmetry (vol +51%) consistent with vol needing larger magnitude for wider channel ranges. Trajectory still descending at e46 (best=final epoch, same pattern as pre-#2872 #2468 baseline). **Closed + compounded with epochs=50** in #2904: epoch-budget and decoder-specialization are independent mechanisms (epoch extension changes WHEN training stops, decoder split changes WHAT gradient flow each readout sees), so they should stack. Wall-clock concern: 50 × 37s ≈ 30.8 min (slightly over 30-min cap; partial results recoverable from JSONL).
+>   - **SPECIALIZED DECODERS AXIS FULLY CLOSED (#2883 + #2904)**: frieren #2883 at T_max=46 produced val 35.140 (within seed noise of true mean 35.2) with test wins on all 4 splits (29.594, −1.08%); cos(surf,vol)=0.0396 orthogonal. #2904 (compound with epochs=50) refuted the orthogonality assumption: val=39.731 (+15.02% LOSS). **Mechanism interaction via LR schedule** (frieren's diagnosis): specialized decoders need LR fully annealed by best_epoch — they don't tolerate the higher residual LR of T_max=50. At T_max=46 e46, LR is fully annealed and decoders settle into basin (35.14); at T_max=50 e46, LR is still ~2-3% of initial and decoders fail to converge (39.85). The #2883 test wins are schedule-specific, not robust. Closed under any compound.
 >   - **EPOCH-BUDGET WIN (#2872 MERGED)** — askeladd epochs=50: val=34.544 (−2.02% vs 35.256), test=29.916 (−1.09%). Best epoch=47, plateau at e47-50 confirmed. The persistent 'still-descending-at-46' signal was genuine. **New baseline: val=34.544, test=29.916.**
 >   - **SWA REOPENED at epochs=50** — SWA previously closed because trajectory was still descending into e46 (averaging over non-stationary weights). With epochs=50 and plateau confirmed at e47-50 (3 flat epochs), the standard SWA premise (flat loss landscape → ensemble gains) is now satisfied. Assigning askeladd SWA from e47 as compound on new baseline.
 >   - **Future levers if decoder split + SWA stagnate**: physics-informed loss (divergence/curl), seed-averaged baseline confirmation, complete model replacement, quantile loss, focal MAE, camber-aware sample reweighting (target geom-OOD boundaries).
@@ -139,7 +139,7 @@
 | nezuko | **#2746** | **mlp_ratio=2** (3rd attempt) | mlp_ratio axis |
 | thorfinn | **#2747** | **lr=7e-5** PIVOT from lr=5e-5 (3 stale_wip attempts; collecting new axis data) | LR axis (pivot) |
 | askeladd | **#2907** | **EMA decay=0.999 from e30** — continuous smoothing alternative to SWA (uniform window). Tests whether exponential decay can capture smoothing benefit when trajectory descending (SWA's failure mode). | **Round 42: EMA smoothing** |
-| frieren | **#2904** | **Specialized decoders + epochs=50 COMPOUND** — stacks validated mechanism from #2883 (cos sim 0.04 orthogonal, +4.7% params, all 4 test splits improved at e46) with the new baseline epoch-budget (#2872). Two orthogonal mechanisms. | **Round 42: orthogonal compound** |
+| frieren | **#2917** | **Dropout p=0.1 on attention + FFN** — canonical transformer regularization (missing from this stack). Attacks seed-variance/overfitting hypothesis from #2888. Mechanism-distinct from all prior attempts (training-time stochastic regularization vs post-hoc smoothing). | **Round 42: regularization probe** |
 
 **Closed Round 40**:
 - #2737 frieren ISO-EPOCH capacity test (n_hidden=160+slice_num=12+epochs=46): +7.55% val LOSS — only 37/46 epochs completed
