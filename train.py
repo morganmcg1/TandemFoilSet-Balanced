@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -80,6 +81,30 @@ class MLP(nn.Module):
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
         return self.linear_post(x)
+
+
+class FourierFeatures(nn.Module):
+    """NeRF-style Fourier positional encoding (Tancik et al. 2020).
+
+    For each spatial dim x_d, computes sin/cos at log-spaced frequencies
+    [2^0*pi, 2^1*pi, ..., 2^(L-1)*pi]. Standard recipe for coordinate-MLP
+    spectral-bias remedy. Frequencies registered as a buffer (no params).
+
+    Input shape:  (..., D_spatial)
+    Output shape: (..., D_spatial * 2 * n_freqs)
+    """
+    def __init__(self, n_freqs: int = 6, spatial_dim: int = 2):
+        super().__init__()
+        self.n_freqs = n_freqs
+        self.spatial_dim = spatial_dim
+        freqs = (2.0 ** torch.arange(n_freqs).float()) * math.pi
+        self.register_buffer('freqs', freqs)
+
+    def forward(self, x):
+        # x: (..., D_spatial); freqs: (L,) -> (..., D_spatial, L)
+        x_freq = x.unsqueeze(-1) * self.freqs
+        sin_cos = torch.stack([x_freq.sin(), x_freq.cos()], dim=-1)
+        return sin_cos.reshape(*sin_cos.shape[:-3], -1)
 
 
 class SwiGLUMLP(nn.Module):
@@ -238,6 +263,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 fourier_n_freqs: int = 0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -246,11 +272,22 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        # NeRF-style Fourier PE: augment input with sin/cos on spatial coords.
+        # fourier_n_freqs=0 disables (baseline behaviour). fourier_n_freqs>0
+        # adds 2*spatial_dim*n_freqs channels to the preprocess input.
+        self.fourier_n_freqs = fourier_n_freqs
+        if fourier_n_freqs > 0:
+            self.fourier_pe = FourierFeatures(n_freqs=fourier_n_freqs, spatial_dim=space_dim)
+            fourier_extra = space_dim * 2 * fourier_n_freqs
+        else:
+            self.fourier_pe = None
+            fourier_extra = 0
+
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + fourier_extra, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + fourier_extra, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -289,6 +326,12 @@ class Transolver(nn.Module):
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
         film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
+        # Augment input with NeRF-style Fourier features on spatial coords.
+        # Append (don't replace) — preserves channel indices used elsewhere
+        # (FiLM reads [13, 14, 18] from the original 24-channel block).
+        if self.fourier_pe is not None:
+            spatial_fourier = self.fourier_pe(x[..., :self.space_dim])
+            x = torch.cat([x, spatial_fourier], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Feature-stream FiLM: zero-init -> identity at step 0
         fx = fx * (1 + film_scale)
@@ -524,6 +567,7 @@ model_config = dict(
     n_head=2,
     slice_num=24,
     mlp_ratio=3,
+    fourier_n_freqs=6,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -532,6 +576,18 @@ print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing 
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
+_fpe_n_freqs = model_config['fourier_n_freqs']
+_fpe_extra = model_config['space_dim'] * 2 * _fpe_n_freqs
+_fpe_total_in = model_config['fun_dim'] + model_config['space_dim'] + _fpe_extra
+print(
+    f"Fourier PE: NeRF-style log-spaced sin/cos on spatial coords (Tancik 2020); "
+    f"n_freqs={_fpe_n_freqs}, freqs=[2^0*pi .. 2^{_fpe_n_freqs - 1}*pi]={[round(2.0**k * math.pi, 4) for k in range(_fpe_n_freqs)]}; "
+    f"appended to input (raw coords PRESERVED — Option A augment, not replace); "
+    f"+{_fpe_extra} input channels (2 spatial dims x 2 sin/cos x {_fpe_n_freqs} freqs); "
+    f"preprocess input dim: 24 -> {_fpe_total_in}; "
+    f"hypothesis: lift coordinate-MLP spectral bias to capture fine-scale CFD features (suction peak, leading edge); "
+    f"baseline to beat: val_avg/mae_surf_p < 30.0382 (PR #2964)"
+)
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
@@ -848,6 +904,48 @@ for epoch in range(MAX_EPOCHS):
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+
+        # Fourier feature distribution diagnostic — verify input scaling
+        _inner_ep1 = getattr(model, "_orig_mod", model)
+        if _inner_ep1.fourier_pe is not None:
+            with torch.no_grad():
+                _x_b, _, _, _m_b = next(iter(_probe_loader))
+                _x_b = _x_b.to(device, non_blocking=True)
+                _m_b = _m_b.to(device, non_blocking=True)
+                _x_norm = (_x_b - stats["x_mean"]) / stats["x_std"]
+                _spatial = _x_norm[..., :_inner_ep1.space_dim].float()
+                _fpe_out = _inner_ep1.fourier_pe(_spatial)
+                _real_fpe = _fpe_out[_m_b]  # (N_real, fourier_dim)
+                _coord_real = _spatial[_m_b]
+            _fpe_mean = float(_real_fpe.mean().cpu())
+            _fpe_std = float(_real_fpe.std().cpu())
+            _fpe_min = float(_real_fpe.min().cpu())
+            _fpe_max = float(_real_fpe.max().cpu())
+            _coord_mean = float(_coord_real.mean().cpu())
+            _coord_std = float(_coord_real.std().cpu())
+            _coord_min = float(_coord_real.min().cpu())
+            _coord_max = float(_coord_real.max().cpu())
+            print(
+                f"\nFourier feature distribution @ ep1: "
+                f"mean={_fpe_mean:.4f}  std={_fpe_std:.4f}  min={_fpe_min:.4f}  max={_fpe_max:.4f}"
+            )
+            print(
+                f"Spatial coords (normalized) @ ep1: "
+                f"mean={_coord_mean:.4f}  std={_coord_std:.4f}  min={_coord_min:.4f}  max={_coord_max:.4f}"
+            )
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "fourier_diagnostic",
+                "epoch_tag": "ep1",
+                "n_freqs": _inner_ep1.fourier_pe.n_freqs,
+                "fourier_mean": _fpe_mean,
+                "fourier_std": _fpe_std,
+                "fourier_min": _fpe_min,
+                "fourier_max": _fpe_max,
+                "coord_mean": _coord_mean,
+                "coord_std": _coord_std,
+                "coord_min": _coord_min,
+                "coord_max": _coord_max,
+            })
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
