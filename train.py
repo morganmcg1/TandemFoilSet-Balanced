@@ -480,6 +480,10 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    # Per-block lr scaling (PR #2959): late TransolverBlocks (≥ late_block_start)
+    # get base_lr * late_block_lr_scale. Default scale=1.0 = no change.
+    late_block_lr_scale: float = 1.0
+    late_block_start: int = 2
 
 
 cfg = sp.parse(Config)
@@ -530,10 +534,46 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
 
+base_lr = cfg.lr * 0.15  # 5e-4 * 0.15 = 7.5e-5 (PR #2562 sweet spot)
+base_wd = cfg.weight_decay * 10.0  # Lion-recommended: ×10 of AdamW wd
+
+# Per-block lr scaling (PR #2959). Match "blocks.<i>." in named_parameters
+# where i ∈ [late_block_start, n_layers_total). torch.compile prefixes names
+# with `_orig_mod.` but the substring check still matches.
+base_for_split = getattr(model, "_orig_mod", model)
+n_layers_total = len(base_for_split.blocks)
+late_indices = list(range(cfg.late_block_start, n_layers_total))
+early_params: list = []
+late_params: list = []
+early_names: list = []
+late_names: list = []
+for name, p in model.named_parameters():
+    is_late = any(f"blocks.{i}." in name for i in late_indices)
+    if is_late:
+        late_params.append(p)
+        late_names.append(name)
+    else:
+        early_params.append(p)
+        early_names.append(name)
+n_early = sum(p.numel() for p in early_params)
+n_late = sum(p.numel() for p in late_params)
+late_lr = base_lr * cfg.late_block_lr_scale
+print(
+    f"[init] late_block_start={cfg.late_block_start} (late blocks: {late_indices}), "
+    f"late_lr_scale={cfg.late_block_lr_scale}"
+)
+print(
+    f"[init] early param count = {n_early} ({len(early_params)} tensors), "
+    f"late param count = {n_late} ({len(late_params)} tensors), "
+    f"total = {n_early + n_late}"
+)
+print(f"[init] base_lr={base_lr:.3e}, late_lr={late_lr:.3e}")
+
 optimizer = Lion(
-    model.parameters(),
-    lr=cfg.lr * 0.15,       # Bisect upward: 5e-4 * 0.15 = 7.5e-5 (50% above 5e-5)
-    weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
+    [
+        {"params": early_params, "lr": base_lr, "weight_decay": base_wd},
+        {"params": late_params,  "lr": late_lr, "weight_decay": base_wd},
+    ],
     betas=(0.9, 0.99),       # Lion-paper default
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -560,6 +600,18 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("lr_late", step_metric="global_step")
+
+wandb.summary.update({
+    "param_split/n_early": n_early,
+    "param_split/n_late": n_late,
+    "param_split/n_early_tensors": len(early_params),
+    "param_split/n_late_tensors": len(late_params),
+    "param_split/late_ratio": n_late / max(n_early + n_late, 1),
+    "param_split/late_indices": late_indices,
+    "param_split/base_lr": base_lr,
+    "param_split/late_lr": late_lr,
+})
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -662,12 +714,14 @@ for epoch in range(MAX_EPOCHS):
     with torch.no_grad():
         param_l2_epoch = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 
+    lrs = scheduler.get_last_lr()
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/param_l2": param_l2_epoch,
         "val/loss": val_loss_mean,
-        "lr": scheduler.get_last_lr()[0],
+        "lr": lrs[0],
+        "lr_late": lrs[1] if len(lrs) > 1 else lrs[0],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
