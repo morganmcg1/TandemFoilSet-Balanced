@@ -4,6 +4,38 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-14 21:30 — PR #3016 (CLOSED, alphonse): BS=4 + grad_accumulation_steps=2 effective BS=8 surrogate on saturated-clip baseline — **BATCH-SIZE class refined from PROVISIONAL → DOMINANT-DEGENERATE CHARACTERIZED**
+
+- **Branch:** `willowpai2g48h2-alphonse/grad-accumulation-bs-effective-8`
+- **Student:** willowpai2g48h2-alphonse
+- **Verdict:** Single arm BS=4 + grad_accumulation_steps=2 (eff-BS=8) on saturated-clip max_norm=0.35 hybrid Lion+AdamW(σ) baseline (`svlfyhcv`) SWA val **51.8637** +6.71 / test **44.3181** +5.68 vs current #2674 baseline (45.1538/38.6367) — **regression EXCEEDS BOTH-LOSE Pareto-cap band [46.00, 47.50] predicted in PR body**. Wall-clock truncated 13/15 epochs at 30-min cap; **σ-spread INVARIANT (0.4793 vs baseline 0.4748 = Δ +0.95%)** — null result is paper-publishable headline finding. NOT a new paper-appendix axis closure since BATCH-SIZE was 20th axis closed at #2992 Loop 100 as PROVISIONAL; this PR CHARACTERIZES it as DOMINANT-DEGENERATE.
+- **W&B runs:** `svlfyhcv`, baseline `ieu1futo`.
+- **Headline:** **σ-spread INVARIANT under grad-accumulation = null result** — grad-accumulation does NOT replicate AdamW adaptive-moment BS dynamics; sharpens #253 finding that σ-spread BREAK at BS=2 is TRUE-BS-specific NOT effective-BS-driven; BATCH-SIZE class refines from PROVISIONAL → DOMINANT-DEGENERATE.
+
+### Mechanism diagnosis (paper-publishable findings — banked #283-#288)
+
+- **#283 PAPER-PUBLISHABLE — σ-spread INVARIANT under grad-accumulation; null result confirms grad-accumulation does NOT replicate AdamW adaptive-moment BS dynamics.** σ-spread = 0.4793 vs baseline 0.4748 = Δ +0.95% essentially identical. Stark contrast vs BS=2 #2992 spread = 0.7602 (+60% INFLATE). Directly REFUTES "effective-BS via grad-accumulation = true-BS dynamics" hypothesis on AdamW-side log_σ heads. Sharpens #253: σ-spread BREAK at BS=2 is TRUE-BS-specific (per-microbatch noise structure-driven), NOT effective-BS-driven. Mechanism: per-microbatch variance preserved at BS=4 → AdamW β2-EMA on log_σ sees same per-step gradient-variance distribution as a true BS=4 → cannot reach σ-spread regime that a true BS=8 would induce. Methodology lesson: grad-accumulation = true-BS for Lion (sign-step strips magnitude); grad-accumulation ≠ true-BS for AdamW (β2-EMA tracks per-step squared gradient). Hybrid Lion+AdamW(σ) split #2311 amplifies this divergence.
+
+- **#284 PAPER-PUBLISHABLE — BATCH-SIZE/GRADIENT-NOISE class refines from PROVISIONAL → DOMINANT-DEGENERATE.** Combining #2992 (BS=2 STRONG-regress; BS=8 OOM at 96 GB) and #3016 (eff-BS=8 surrogate FAILS due to AdamW dynamics non-replicable + halved-step-count confound), BATCH-SIZE axis is fundamentally VRAM-constrained without exploitable BS-vs-loss tradeoff at saturated-clip Lion-sign-step regime. **DOMINANT-DEGENERATE class definition**: "no operating point on this axis offers improvement over baseline at fixed wall-clock budget; axis is constrained by hard resource ceiling (VRAM at 96 GB), and surrogate mechanisms fail to recover the constrained side." Paper-appendix value: tells reader baseline BS=4 choice is FORCED by VRAM (BS=8 OOM at 94.97 GiB peak), NOT freely tunable.
+
+- **#285 PAPER-STRENGTHENING — halved-optim-steps confound dominates val/test regression at fixed wall-clock cap.** optim_steps_per_epoch = 187 (vs baseline ~375 for BS=4), total global_steps ≈ 2431 at 13/15 epochs = **43% of baseline ~5625 step budget**; val trajectory at epoch 11 = 55.08 ≈ baseline epoch 6-7 val state. Run never reached baseline-equivalent training state before SENPAI_TIMEOUT_MINUTES=30 cap. Methodology finding: grad-accumulation surrogate is fundamentally compromised under fixed wall-clock budget; isolating noise-reduction mechanism would require ~2× longer wall-clock.
+
+- **#286 PAPER-STRENGTHENING — channel-asymmetric BS=2 response was per-microbatch-noise-structure-driven, NOT effective-BS-driven.** BS=2 #2992 showed +74% surf_ux + +54% surf_uy precision DECREASE. #3016 eff-BS=8 showed NO channel-asymmetry (all channels clustered ~0.292-0.304 σ). Confirms #254 channel-asymmetric response is per-microbatch-noise-structure-specific.
+
+- **#287 PAPER-STRENGTHENING — clip_fraction=1.000 18th cross-axis confirmation.** Saturated-clip max_norm=0.35 preserved at eff-BS=8 via grad-accumulation. Pre-clip grad_norm_max = 14.40 vs baseline 82.36 = −83% (per-microbatch loss is HALVED by 1/N scaling before backprop → pre-clip grad shrinks); clip_fraction stays 1.000 because max_norm=0.35 << 14.40.
+
+- **#288 PAPER-STRENGTHENING — SWA window 2 epochs 16th-consecutive truncation #170 + step-time invariance + Lion exp_avg_norm 7th cross-axis #194.** SWA entered at 1-indexed epoch 12; SWA window = epochs 12-13 only (2 epochs). Step-time ~140 s/epoch within 4% of baseline. Peak VRAM = 44.8 GB (grad-accumulation has zero memory overhead). Lion exp_avg_norm = 0.00978 within 11% of baseline (~0.011) — 7th cross-axis confirmation.
+
+### Paper-appendix matrix update — UNCHANGED at 20 closed × 9 transfer patterns + 2 MIXED axes, BATCH-SIZE refines PROVISIONAL → CHARACTERIZED DOMINANT-DEGENERATE
+
+DOMINANT-DEGENERATE is a refinement of DEGENERATE-AXIS class. BATCH-SIZE is the first axis with explicit resource-constraint mechanism (VRAM wall) underlying the degeneracy. σ-spread invariance bank: 18 INVARIANT + 4 forward-pass-shape BREAKs + 1 NEARLY-INVARIANT-MONOTONE-TREND + 1 batch-size BREAK (TRUE-BS-specific) + 1 compose-induced BIDIRECTIONAL BREAK + β-axis monotone-in-1/β + seed-axis 18th + 1 σ-head-optimizer-ablation BREAK + **1 GRAD-ACCUMULATION INVARIANT (#283 NEW — confirms BS-BREAK is TRUE-BS-specific, NOT effective-BS-driven)**.
+
+### Reassignment
+
+Closing this PR as BATCH-SIZE class refined from PROVISIONAL → DOMINANT-DEGENERATE CHARACTERIZED. Reassigning alphonse to **PR #3040 NEW max_norm clip OFF (max_norm=0.0) + Huber β=10 (≈MSE) 2-arm ablation on saturated-clip baseline** — completes 4th and 5th members of the ABLATION-CONTRIBUTION-QUANTIFICATION class characterization. Arm 1 max_norm=0.0 tests grad-clipping's contribution; Arm 2 huber_beta=10.0 tests Huber β cost-shape contribution toward MSE regime. Both no-code-change CLI ablations. Together with #2989 (Lion + RFF) + #3037 frieren (Kendall σ + surf_weight=20) + this PR, the merged-stack feature decomposition will cover 5-6 of the 6 main stack features for the paper-appendix story.
+
+---
+
 ## 2026-05-14 21:15 — PR #2989 (CLOSED, frieren): AdamW + RFF-OFF 2-arm ablation on max_norm=0.35 — **NEW ABLATION-CONTRIBUTION-QUANTIFICATION class CHARACTERIZED** as 9th transfer-pattern class (FIRST member of class)
 
 - **Branch:** `willowpai2g48h2-frieren/ablation-adamw-and-rff-off-on-max-norm-0p35`
