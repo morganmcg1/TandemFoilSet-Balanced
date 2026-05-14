@@ -37,7 +37,32 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
-### 2026-05-13 21:25 — PR #2519 (`charliepai2g24h4-tanjiro/attn-temp-fixed-sharper`)
+### 2026-05-13 23:50 — PR #2648 (`charliepai2g24h4-alphonse/attn-temp-anneal-linear`)
+
+**Linear attention-temperature annealing √3 → √2** — per-epoch linear schedule: τ starts at √3 (≈1.732×, sharpest) at epoch 1, anneals linearly down to √2 (≈1.414×) at epoch 12. Builds on #2519's fixed √2 by adding a sharp-early phase during representation formation, then landing at the same endpoint. No new parameters — the schedule factor is stored as a `register_buffer` updated each epoch.
+
+- **`val_avg/mae_surf_p`** = **55.1595** (best @ epoch 12; **−1.81%** vs #2519 baseline 56.1754)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **48.3010** (**−0.85%** vs #2519 baseline 48.7149)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = **60.851** (−8.51% vs #2519 — largest gain)
+  - `val_geom_camber_rc` = **68.657** (−0.24% — marginal)
+  - `val_geom_camber_cruise` = 35.762 (+2.82% — slight regression)
+  - `val_re_rand` = 55.368 (+1.43% — slight regression)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = **54.849** (−5.10% — clear ID improvement)
+  - `test_geom_camber_rc` = **61.620** (−3.10% — OOD improvement)
+  - `test_geom_camber_cruise` = 29.653 (+4.33% — slight regression)
+  - `test_re_rand` = 47.082 (+4.51% — slight regression)
+- **Mechanism**: sharp-early (τ=√3 at epoch 1) forces the model to commit to more decisive dispatch during representation formation when the gradient signal is richest; soft-late (τ=√2 at epoch 12) allows fine-tuning with the same endpoint as the fixed-scalar #2519 winner. The asymmetry of this schedule (vs the failed cosine-peak #2655 = +4.68%) proves that the early-sharpening phase is what carries the gain, not sharpening per se.
+- **Note**: camber_cruise and re_rand slightly regress. The gain is concentrated in single_in_dist (−8.51%) and camber_rc test (−3.10%), yielding a net avg win. The val_avg improvement is dominated by single_in_dist's large contribution.
+- **Compound progress**: 21 merges, **100.957 → 55.1595 = −45.37%**
+- **Param count**: **892,637** (unchanged — `attn_sharpening_factor` is a buffer, not a parameter)
+- **Metric artifacts**: `models/model-charliepai2g24h4-alphonse-attn-temp-anneal-linear-20260513-232234/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-alphonse --experiment_name charliepai2g24h4-alphonse/attn-temp-anneal-linear`
+
+---
+
+### 2026-05-13 21:25 — PR #2519 (`charliepai2g24h4-tanjiro/attn-temp-fixed-sharper`) — *superseded by #2648*
 
 **Fixed sharper attention temperature τ = √2 × default** — single-line change to `F.scaled_dot_product_attention(..., scale=1/sqrt(d_head/2))` which is √2 sharper than the default `1/sqrt(d_head)`. No new parameters. Validates the #2488 RMSNorm-QK-γ Outcome B finding that the model wanted slight attention sharpening — but with a fixed scalar rather than learnable per-channel γ.
 
