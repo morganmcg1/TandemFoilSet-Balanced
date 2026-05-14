@@ -47,6 +47,113 @@ from data import (
 )
 
 
+def pressure_poisson_loss(
+    pred_norm: torch.Tensor,
+    x_raw: torch.Tensor,
+    mask: torch.Tensor,
+    y_std: torch.Tensor,
+    n_query: int = 1024,
+    k: int = 10,
+    reg: float = 1e-6,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Pressure-Poisson auxiliary loss on irregular 2D mesh.
+
+    Steady incompressible NS with continuity gives, in physical units,
+        ∇²p = 2 · [ (∂u/∂x)(∂v/∂y) − (∂u/∂y)(∂v/∂x) ] = 2 · det(∇u)
+    (kinematic pressure, ρ=1). Verified against stagnation flow u=ax, v=−ay:
+    ∇²p = −2a², 2·det(∇u) = 2·(−a²) = −2a² ✓. The PR body's stated form has an
+    opposite-sign algebra slip — the physically-correct equation is used here.
+
+    Predictions live in normalized space (y_norm = (y − y_mean)/y_std). With
+    derivatives w.r.t. *physical* positions, the equation becomes
+        ∇²p_norm = α · det(∇U_norm),   α = 2 · y_std[Ux] · y_std[Uy] / y_std[p].
+
+    Strategy: subsample Q query nodes per sample, find k nearest neighbours via
+    cdist + topk on physical positions, build weighted-least-squares Taylor
+    stencils in locally-rescaled coordinates (for conditioning), apply them to
+    gathered model predictions. Gradients flow back through the predictions only
+    — stencils depend on geometry alone.
+    """
+    pred_fp = pred_norm.float()
+    B = pred_fp.shape[0]
+    device = pred_fp.device
+
+    alpha = float(2.0 * y_std[0].item() * y_std[1].item() / y_std[2].item())
+
+    sample_losses: list[torch.Tensor] = []
+    residual_abs_means: list[float] = []
+
+    for b in range(B):
+        valid_idx = mask[b].nonzero(as_tuple=True)[0]
+        n_valid = int(valid_idx.numel())
+        if n_valid < max(n_query, k + 1):
+            continue
+
+        with torch.no_grad():
+            pos_full = x_raw[b, :, 0:2].float()
+            pos_valid = pos_full[valid_idx]
+            q_perm = torch.randperm(n_valid, device=device)[:n_query]
+            q_idx = valid_idx[q_perm]
+            pos_q = pos_full[q_idx]
+
+            dists = torch.cdist(pos_q.unsqueeze(0), pos_valid.unsqueeze(0)).squeeze(0)
+            _, knn_local = dists.topk(k, dim=-1, largest=False)
+            knn_idx = valid_idx[knn_local]
+
+            knn_pos = pos_full[knn_idx]
+            dx_vec = knn_pos - pos_q.unsqueeze(1)
+            d = dx_vec.norm(dim=-1)
+            h = d.median(dim=-1, keepdim=True).values.clamp(min=1e-12)
+            xi = dx_vec / h.unsqueeze(-1)
+            xi_x, xi_y = xi[..., 0], xi[..., 1]
+            A = torch.stack([
+                torch.ones_like(xi_x),
+                xi_x, xi_y,
+                0.5 * xi_x.pow(2), 0.5 * xi_y.pow(2), xi_x * xi_y,
+            ], dim=-1)
+            w = torch.exp(-(xi ** 2).sum(dim=-1))
+            Aw = A * w.unsqueeze(-1)
+            AtWA = Aw.transpose(-1, -2) @ A
+            AtW = Aw.transpose(-1, -2)
+            I6 = torch.eye(6, device=device, dtype=AtWA.dtype).expand_as(AtWA)
+            S = torch.linalg.solve(AtWA + reg * I6, AtW)
+
+            # Keep stencils in the locally-rescaled xi-coordinate system: the PDE
+            # is coordinate-invariant, but xi-derivatives carry an h-factor that
+            # automatically cancels the singular 1/h² scaling on irregular meshes
+            # (where h ranges from ~1e-5 m near the airfoil to ~0.1 m far field).
+            # Without this, |residual| reaches ~10^7 in dense boundary-layer cells
+            # and dominates the primary loss by 15+ orders of magnitude.
+            s_dx_xi = S[:, 1, :]
+            s_dy_xi = S[:, 2, :]
+            s_dxx_xi = S[:, 3, :]
+            s_dyy_xi = S[:, 4, :]
+
+        u = pred_fp[b, knn_idx, 0]
+        v = pred_fp[b, knn_idx, 1]
+        p = pred_fp[b, knn_idx, 2]
+
+        ux_xi = (s_dx_xi * u).sum(-1)
+        uy_xi = (s_dy_xi * u).sum(-1)
+        vx_xi = (s_dx_xi * v).sum(-1)
+        vy_xi = (s_dy_xi * v).sum(-1)
+        lap_p_xi = ((s_dxx_xi + s_dyy_xi) * p).sum(-1)
+        det_grad_u_xi = ux_xi * vy_xi - uy_xi * vx_xi
+        # Residual in xi-coords ≡ h² × physical-residual. Magnitude O(h²) for a
+        # smooth predictor, O(1) for noise — bounded across the mesh.
+        residual = lap_p_xi - alpha * det_grad_u_xi
+
+        sample_losses.append(residual.pow(2).mean())
+        residual_abs_means.append(residual.detach().abs().mean().item())
+
+    if not sample_losses:
+        return torch.zeros((), device=device, dtype=pred_fp.dtype), {"residual_abs_mean": 0.0}
+
+    loss = torch.stack(sample_losses).mean()
+    stats = {"residual_abs_mean": float(sum(residual_abs_means) / len(residual_abs_means))}
+    return loss, stats
+
+
 class Lion(torch.optim.Optimizer):
     """Lion: Symbolic Discovery of Optimization Algorithms (Chen et al., 2023)."""
     def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
@@ -443,11 +550,19 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
+    # Pressure-Poisson auxiliary loss (PR #2909). λ=0 disables; advisor default λ=0.01.
+    lambda_pp: float = 0.01
+    pp_n_query: int = 1024
+    pp_k: int = 10
+    pp_reg: float = 1e-6
+    seed: int = 1  # torch RNG seed; PR #2909 protocol uses --seed 1 (default) and --seed 2
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+torch.manual_seed(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -587,13 +702,32 @@ for epoch in range(MAX_EPOCHS):
                     (residual_p * surf_mask_f).sum() / surf_mask_f.sum().clamp(min=1)
                 )
 
+        # Pressure-Poisson auxiliary loss (PR #2909) — computed outside autocast
+        # so the per-query 6x6 WLS linalg.solve runs in fp32 (bf16 lacks the
+        # mantissa bits for stable normal-equation solves).
+        if cfg.lambda_pp > 0:
+            pp_loss_t, pp_stats = pressure_poisson_loss(
+                pred, x, mask, stats["y_std"],
+                n_query=cfg.pp_n_query, k=cfg.pp_k, reg=cfg.pp_reg,
+            )
+            total_loss = loss + cfg.lambda_pp * pp_loss_t
+            pp_loss_val = pp_loss_t.item()
+            pp_res_abs = pp_stats["residual_abs_mean"]
+        else:
+            total_loss = loss
+            pp_loss_val = 0.0
+            pp_res_abs = 0.0
+
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/total_loss": total_loss.item(),
+            "train/pp_loss": pp_loss_val,
+            "train/pp_residual_abs_mean": pp_res_abs,
             "train/grad_norm": grad_norm.item(),
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
