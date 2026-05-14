@@ -1682,3 +1682,62 @@ CLOSED. Loss-family axis is now well-explored:
 Loss-shape axis appears saturated under Lion+grad-clip stack. Moving askeladd to per-channel volume loss weighting (different axis: weight pressure 2× vs velocity in loss). PR #2743.
 
 ---
+
+## 2026-05-14 03:00 — PR #2713: Lion β2: 0.99→0.999 longer momentum EMA (frieren)
+- Branch: `willowpai2g48h3-frieren/lion-beta2-0999`
+- Hypothesis: Longer EMA window for Lion's momentum buffer (half-life ~69→~693 steps) → smoother momentum estimate → better update direction at low-LR cosine tail
+- W&B runs: `9rbe6hyo` (s1), `ahevbmmk` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s2 (best) | 48.0177 | 40.7964 | 35 |
+| s1 | 49.1574 | 42.8577 | 34 |
+| **Baseline** | **45.433** | **39.509** | 35 |
+
+**Regression: +5.69% val, +3.26% test (best seed). All 4 splits regress.**
+
+Key diagnostics:
+- **Slow start**: epoch-15 val 76.17/76.81 vs baseline 73.6 (+3.5%/+4.4%). Longer EMA carries random-init noise too long.
+- **Variance reduced** (std 0.81 vs baseline 3.60) — smoother momentum DOES tighten seed dispersion, but the entire distribution shifted upward.
+- Symmetric with β2=0.95 closure: too short → noisy; too long → stale. β2=0.99 is the optimum.
+
+**Conclusion**: CLOSED. **Lion β2 axis now FULLY BRACKETED**: 0.95 fails (too short), 0.999 fails (too long), 0.99 confirmed optimal.
+
+frieren reassigned to Re-feature jitter augmentation (PR #2751).
+
+---
+
+## 2026-05-14 03:00 — PR #2693: CosineAnnealingWarmRestarts T_0=12, 3 cycles (tanjiro)
+- Branch: `willowpai2g48h3-tanjiro/lion-cos-restart12`
+- Hypothesis: SGDR-style warm restarts with T_0=12 epochs → 3 restart cycles in 35-epoch budget; later cycles benefit from earlier exploration; final cycle in low-LR exploit phase
+- W&B runs: `9r9y7d5z` (s1), `5tgb5csf` (s2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_ep |
+|---|---:|---:|---:|
+| s2 (best) | 53.4505 | 48.2400 | 33 |
+| s1 | 58.4048 | 50.8067 | 32 |
+| **Baseline** | **45.433** | **39.509** | 35 |
+
+**Regression: +17.7% val, +22.1% test. All 4 splits regress 20-24%.**
+
+Key diagnostics:
+- **Restart 1 spike**: val jumped 79→110 at epoch 13 (+31pt). LR reset annihilates accumulated progress.
+- **Cycle 3 IS best** for both seeds (matches SGDR theory) but absolute level far below baseline.
+- **Per-cycle best**: cycle 1: 79.21, cycle 2: 59.30, cycle 3: 58.40 (s1) — monotonically improving but cycle 3 truncated by timeout.
+
+**Conclusion**: CLOSED. **Schedule-shape axis is fully retired for round 1** at the 35-epoch compute cap. Any schedule that resets or warms up costs irrecoverable exploitation budget. Cosine with T_max=50 implicit residual is the right design at this budget.
+
+tanjiro reassigned to gradient accumulation 2x (PR #2752).
+
+---
+
+## 2026-05-14 03:00 — PR #2564: Lion + Gradient Centralization (nezuko, STALE)
+- Branch: `willowpai2g48h3-nezuko/lion-gc`
+- Status: STALE — only the initial assignment commit (5+ hours old), no rebase or run on Lion lr=7.5e-5 baseline shift
+- Multiple baseline shifts since assignment (#2562, #2516)
+
+**Conclusion**: CLOSED as stale. Mechanism (zero-mean gradient constraint before Lion momentum update) is still valid in principle and remains in the backlog for future rounds. Closed to clear the slot rather than ask the student to rebase a stale branch.
+
+nezuko reassigned to per-layer LR decay α=0.85 (PR #2753).
+
+---
