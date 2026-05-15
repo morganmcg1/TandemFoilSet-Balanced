@@ -267,6 +267,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose ground truth has any non-finite value.
+            # accumulate_batch tries to skip them but `err * mask` still
+            # produces 0*NaN=NaN, which propagates through the float64 sum
+            # and ruins the whole split. (1 sample in test_geom_camber_cruise
+            # has NaN p values and triggers this.)
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.all():
+                if not y_finite.any():
+                    continue
+                x = x[y_finite]; y = y[y_finite]
+                is_surface = is_surface[y_finite]; mask = mask[y_finite]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
