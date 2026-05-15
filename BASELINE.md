@@ -2,6 +2,32 @@
 
 ## Current Best
 
+### 2026-05-15 19:52 — PR #3221: Fourier positional features (n_freqs=10) — charliepai2i48h5-nezuko
+
+- **val_avg/mae_surf_p**: **89.27** (best_epoch=14/14, timeout-bound)
+- **test_avg/mae_surf_p**: **79.43** (NaN-safe eval)
+- **Improvement over prior best**: -9.5% val / -9.9% test vs Huber-0.3+clip-0.25 (98.62/88.14)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p |
+  |---|---|
+  | single_in_dist | 93.65 |
+  | geom_camber_rc | 88.94 |
+  | geom_camber_cruise | 56.92 |
+  | re_rand | 78.20 |
+- **Metric artifacts**: `models/model-charliepai2i48h5-nezuko-fourier-n10-20260515-191358/metrics.jsonl`
+- **Key finding**: Replacing raw (x,z) coordinates with multi-frequency Fourier positional embeddings (sin/cos at log-spaced frequencies) gives a 9.5% val improvement with near-zero parameter overhead (~4k extra params). `space_dim = 2 + 4*n_freqs = 42`. Best epoch was the last wall-clock-capped epoch — improvement is NOT from running longer, the budget cutoff fired before epoch 50.
+- **Stack**: Huber delta=0.3 (no grad_clip in this run); Fourier features alone beat the Huber+clip baseline.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --n_freqs 10 \
+      --huber_delta 0.3 \
+      --experiment_name fourier-n10 \
+      --agent charliepai2i48h5-nezuko
+  ```
+
+---
+
 ### 2026-05-15 19:26 — PR #3182: Huber loss + gradient clipping (clip=0.25) — charliepai2i48h5-askeladd
 
 - **val_avg/mae_surf_p**: **98.62** (best_epoch=14/50)
