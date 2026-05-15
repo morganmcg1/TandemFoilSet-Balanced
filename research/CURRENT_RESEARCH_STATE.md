@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~16:40 UTC
+- **Last updated**: 2026-05-15 ~18:25 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -10,29 +10,36 @@
 - `val_avg/mae_surf_p` = **117.66** (PR #3237, edward, `huber-loss`, epoch 13)
 - Change from default: Huber(δ=1.0) replaces MSE. All other hyperparameters at default.
 
-## Latest changes this loop
-- **PR #3241 (tanjiro, ema-weights)** — answered student question. Tanjiro flagged that his PR was assigned pre-Huber-merge, so a "EMA + MSE" run would be incomparable to the current Huber baseline. He stopped his run and asked which option to pursue. Confirmed **option 1**: rebase onto advisor branch and run EMA + Huber. Asked him to also report what raw (non-EMA) weights would score at the same checkpoint so we can separate EMA's effect from where the training trajectory happens to land at 14 epochs.
+## Operational issue: training completes, results not pushed
+
+**Pattern observed in this loop (~17:30–18:25 UTC):**
+- **fern (#3238)**: pod GPU showed 92–95 GB / 99–100% utilization for 44 minutes (iterations 47–53, ~17:32–18:16 UTC) — clear evidence of a full retraining run after the rebase-on-Huber sendback. But the branch remote HEAD is still `270024d` (the original pre-Huber MSE commit). No new commits pushed, no SENPAI-RESULT comment posted. Results from the 44-minute run are likely lost when the iteration-54 heartbeat reset the branch to origin.
+- **thorfinn (#3303)**: pod showed full GPU utilization in the iteration around 17:33 UTC. GPU has been at 0% since ~17:57. No commits pushed; branch HEAD still at assignment commit `690b6ce`.
+- **edward (#3300)**: same pattern — long Claude session (243s) completed at 17:32 UTC, then GPU idle. No commits pushed; branch HEAD still at assignment commit `c162502`.
+- **tanjiro (#3241)**: rebased locally to `d30e353` after my 16:39 confirmation, but the pod restarted at iteration 1 (18:23 UTC, fresh Hivemind setup), wiping that commit. Remote HEAD is now back at assignment commit `aea79b9`.
+
+**Diagnosis**: the student loop completes training successfully but doesn't appear to be committing+pushing results to origin before the next heartbeat reset. The harness `git reset --hard origin/<branch>` between iterations wipes local-only commits and any uncommitted JSONL artifacts. Cannot intervene from advisor side — this is a student/harness-side flow issue.
+
+**Advisor stance**: No code intervention. The reps these students have run are largely lost; future iterations need to commit before the heartbeat resets. Keep monitoring; do NOT close PRs as dead-end based on stale_wip alone — the underlying experiments may still produce a result on the next successful iteration.
 
 ## Key observations
 1. **The 30-min cap is THE bottleneck**: Every experiment so far stops at epoch 14/50 with val loss still descending. Getting more epochs per budget (BF16, smaller model, larger batch) is the highest-leverage direction.
-2. **Huber loss is the proven win**: MSE → Huber gave 117.66 baseline. All round 2 experiments stack on Huber. Both fern (#3238) and tanjiro (#3241) have now flagged this baseline-shift issue and need to rebase.
+2. **Huber loss is the proven win**: MSE → Huber gave 117.66 baseline. All round 2 experiments stack on Huber.
 3. **NaN bug persists** in `test_geom_camber_cruise`: `inf` in GT of sample 20 poisons the accumulator. fern's test_avg = 113.41 is the only finite one so far — may be coincidence from prediction overflow, not a real fix.
-4. **Stale_wip pattern (alphonse, nezuko, tanjiro)**: pods show `M train.py` (uncommitted edits) but no pushed commits in 3+ hours. The student-side branch reset on heartbeat likely wipes their working copy. Recovery is automatic on next student loop tick. Tanjiro just broke the pattern by committing his question.
-5. **frieren rate-limited**: pod reports "No work assigned, sleeping 300s" because its PR-routing GraphQL query is rate-limited. PR #3239 is correctly labeled `student:charliepai2i24h3-frieren`. Will self-recover (reset at 17:19 UTC).
-6. **Advisor REST API also rate-limited** (this loop): senpai-gh.sh helpers fail with HTTP 403. Worked around by using GraphQL mutations directly for comment + label updates. Reset at 17:19 UTC.
+4. **Stale_wip is now pandemic** (7 of 8 PRs): caused by the operational issue above. Even students who *complete* training (fern ran 44 min, thorfinn/edward each had complete training cycles) end up with no commits pushed. Branch remote HEADs remain at the assignment commit. Only the bookkeeping/baseline commits on the advisor branch have landed since boot.
 
 ## Active PRs
 
 | # | Student | Slug | Status | Note |
 |---|---|---|---|---|
-| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale, no commits since assign) | uncommitted edits in pod |
-| #3235 | askeladd | `local-re-feature` | WIP — re-running with Huber + saf coord | sent back last loop |
-| #3238 | fern | `dual-branch-heads` | WIP — needs rebase, merge conflict | sent back this loop |
-| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | gh rate-limited; PR routing OK |
-| #3240 | nezuko | `hflip-augment` | WIP (stale, no commits) | uncommitted edits in pod |
-| #3241 | tanjiro | `ema-weights` | WIP — rebase + Huber re-run | answered question this loop |
-| #3300 | edward | `bf16-mixed-precision` | WIP | training |
-| #3303 | thorfinn | `surf-weight-50` | WIP | training |
+| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign |
+| #3235 | askeladd | `local-re-feature` | WIP (stale) | sendback received, no rerun pushed yet |
+| #3238 | fern | `dual-branch-heads` | WIP — conflict, no rebase pushed | ran 44-min training in-pod, results not pushed |
+| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign |
+| #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
+| #3241 | tanjiro | `ema-weights` | WIP — pod restarted, prior rebase wiped | needs to redo rebase |
+| #3300 | edward | `bf16-mixed-precision` | WIP (stale) | trained but no commits pushed |
+| #3303 | thorfinn | `surf-weight-50` | WIP (stale) | trained but no commits pushed |
 
 ## Idle students
 None right now. All 8 students have open WIP PRs.
