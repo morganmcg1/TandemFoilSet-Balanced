@@ -120,4 +120,52 @@ cd target && python train.py --agent <student> \
     --experiment_name "<student>/your-experiment-name"
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **117.5014** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** val below **117.5014**~~ — superseded by PR #3357 below.
+
+---
+
+## 2026-05-15 18:40 — PR #3357: asinh loss transform for surface pressure
+
+**Student:** charliepai2i48h2-tanjiro  
+**Change:** Apply `torch.asinh()` to pressure channel z-scores in the training loss only (not evaluation). Compresses heavy-tail gradient signal on pressure; Ux/Uy loss unchanged. Evaluation MAE remains in physical units — comparison is fair.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **84.9819** |
+| val_single_in_dist/mae_surf_p | 108.0437 |
+| val_geom_camber_rc/mae_surf_p | 90.6260 |
+| val_geom_camber_cruise/mae_surf_p | 62.6771 |
+| val_re_rand/mae_surf_p | 78.5807 |
+| **test_avg/mae_surf_p** | **76.1441** |
+| test_single_in_dist/mae_surf_p | 94.3654 |
+| test_geom_camber_rc/mae_surf_p | 82.8340 |
+| test_geom_camber_cruise/mae_surf_p | 53.5469 |
+| test_re_rand/mae_surf_p | 73.8302 |
+| Best epoch | 14 (timeout-bound; val still descending) |
+| Peak GPU memory | 42.12 GB |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + 30·surf_loss, with **asinh(z) transform on pressure channel z-scores**  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-tanjiro-asinh-pressure-loss-20260515-173315/metrics.jsonl`
+
+**Change (7 lines in train.py):**
+```python
+# asinh loss compression on pressure channel (index 2) only.
+sq_err_uxuy = (pred[..., :2] - y_norm[..., :2]) ** 2
+sq_err_p = (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
+sq_err = torch.cat([sq_err_uxuy, sq_err_p], dim=-1)
+```
+
+**Note:** −27.7% on val (84.98 vs 117.50), −34% on test (76.14 vs 115.70 proxy). All 4 splits improved 20-36%. Val curve still descending at epoch 14 timeout — 84.98 is a loose upper bound on what this loss can do. Stronger gains on OOD splits (geom_camber_rc −27%, re_rand −29%) than in-dist (single_in_dist −21%).
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name"
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **84.9819** with a terminal `SENPAI-RESULT` marker.
