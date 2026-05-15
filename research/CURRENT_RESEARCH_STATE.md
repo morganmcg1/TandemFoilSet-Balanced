@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~19:35 UTC
+- **Last updated:** 2026-05-15 ~20:32 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -25,18 +25,18 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 3. **Grad norm:** Pre-clip gradient norm was 160 at lr=5e-4 in edward's Arm A. Now clipped at max_norm=1.0 (merged). Future PRs benefit automatically.
 4. **Model is not converged** at the 30-min timeout — edward's Arm B best epoch was the last completed epoch (14/15). There is significant headroom at longer training or larger epoch budgets.
 
-## In-flight experiments
+## In-flight experiments — all 7 actively training as of 20:31 UTC
 
-| # | Student | Hypothesis | Status |
+| # | Student | Hypothesis | Status / W&B run |
 |---|---------|-----------|--------|
-| #3089 | alphonse | L1 loss (val=102.37 ✓ on stale code) | REBASED+CODE READY (default flipped, NaN fix in); waiting for confirmation run at --epochs 10 |
-| #3414 | tanjiro | SWA: stochastic weight averaging over last K checkpoints | NEW — assigned 19:32 (label routing fixed) |
-| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | **TRAINING** — GPU 100% as of 18:30; no result posted yet |
-| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | Stale; nudged 18:31 — scope reduced to lr-default only once #3089 merges |
-| #3093 | frieren | bf16 + batch_size 4→8 (speed unlock — 18 epochs vs 14) | Sent back 17:50 — rebase + composed-config arm at `--epochs 10`; decision rule |
-| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting (val=131.08 ❌) | Sent back 18:30 — **read-only violation on data/scoring.py** + regression; ask: surf_weight=20 rebased |
-| #3371 | thorfinn | EMA of weights (Polyak averaging for stable checkpoint selection) | NEW — assigned 17:48 (label routing fixed 18:30) |
-| #3372 | askeladd | Fourier positional encoding on (x,z) coords | NEW — assigned 17:52 (label routing fixed); pod picked up 18:31 |
+| #3089 | alphonse | L1 + warmup + clip + lr=1e-3 confirmation arm (target: val < 109.42) | **TRAINING** — `alphonse-l1-rebased` (ydztkz9s) started 20:22 |
+| #3414 | tanjiro | SWA: stochastic weight averaging over last K checkpoints | **TRAINING** — `…/swa-la…` (udfmekyw) started 20:26 |
+| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | **TRAINING** — `fern-slices-64-baseline-e10` (d62uhu5g) started 20:28 (restart after API storm) |
+| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | Correctly idle — waiting for #3089 to merge; scope reduced to lr-default only |
+| #3093 | frieren | bf16 + bs=8 rebased confirmation arm | **TRAINING** — `frieren-bf16-bs8-rebased` (ytpl95nk) started 20:29 |
+| #3095 | nezuko | surf_weight 10→20 rebased confirmation arm | **TRAINING** — `nezuko-surf20-rebased` (6amjj7jr) started 20:23 |
+| #3371 | thorfinn | EMA of weights (Polyak averaging decay=0.9999) | **TRAINING** — `thorfinn-ema-999` (yr4bbbg8) started 20:28 |
+| #3372 | askeladd | Fourier positional encoding on (x,z) coords | **TRAINING** — `askeladd-fourier-pe-4freq-lr1e` (xmcndd46) started 20:28 |
 
 ## Merged wins
 
@@ -46,7 +46,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 ## Operational note: GitHub API rate-limit storms
 
-Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits; second storm at ~16:05–16:20 UTC; third at ~17:49–17:57 UTC (during advisor PR-creation calls; PRs #3371/#3372 still landed via retries). All recovered.
+Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits; second storm at ~16:05–16:20 UTC; third at ~17:49–17:57 UTC (during advisor PR-creation calls; PRs #3371/#3372 still landed via retries). **Fourth storm at ~20:10–20:25 UTC** — all 8 student pods saw "No assigned PRs" for 2–3 cycles because their assignment-polling helper failed with `JSONDecodeError` on the 403 response. Recovered by 20:23; all 7 active students kicked off training in the post-storm cycle (20:22–20:29).
 
 ## Operational note: label routing on assignment skill
 
