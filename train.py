@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -242,6 +243,15 @@ def per_sample_field_scale(y: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+@torch.no_grad()
+def update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
+    """In-place EMA update of ``ema_model`` parameters and buffers."""
+    for p_ema, p_model in zip(ema_model.parameters(), model.parameters()):
+        p_ema.mul_(decay).add_(p_model.detach(), alpha=1.0 - decay)
+    for b_ema, b_model in zip(ema_model.buffers(), model.buffers()):
+        b_ema.copy_(b_model)
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -347,6 +357,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_decay": EMA_DECAY,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -379,6 +390,10 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
+# EMA decay for weight averaging used by validation/checkpointing/test eval.
+# Why: with batch_size=4 and ~375 steps/epoch, 0.999 gives an averaging window
+# of ~1000 steps ≈ 2.7 epochs — appropriate for the wall-clock-capped 14-epoch runs.
+EMA_DECAY = 0.999
 
 
 @dataclass
@@ -438,6 +453,11 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema_model = copy.deepcopy(model)
+ema_model.requires_grad_(False)
+ema_model.eval()
+print(f"EMA model initialized (decay={EMA_DECAY})")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -454,6 +474,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_decay": EMA_DECAY,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -506,6 +527,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        update_ema(ema_model, model, EMA_DECAY)
 
         epoch_vol += vol_loss_log.item()
         epoch_surf += surf_loss_log.item()
@@ -519,10 +541,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_scale_mean /= max(n_batches, 1)
     epoch_scale_std /= max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
+    # --- Validate (EMA weights) ---
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -537,7 +559,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -570,8 +592,8 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema_model.eval()
 
     test_metrics = None
     test_avg = None
@@ -583,7 +605,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
