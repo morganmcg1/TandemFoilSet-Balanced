@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -217,7 +218,18 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+_AMP_DTYPES = {"fp32": None, "bf16": torch.bfloat16}
+
+
+def make_amp_ctx(amp_dtype: str):
+    """Build the autocast context for ``amp_dtype`` (``"fp32"`` or ``"bf16"``)."""
+    dt = _AMP_DTYPES[amp_dtype]
+    if dt is None:
+        return contextlib.nullcontext()
+    return torch.autocast(device_type="cuda", dtype=dt)
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "fp32") -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -238,19 +250,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
-
-            sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            with make_amp_ctx(amp_dtype):
+                pred = model({"x": x_norm})["preds"]
+                sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+                vol_mask = mask & ~is_surface
+                surf_mask = mask & is_surface
+                vol_loss_sum += (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum += (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -312,6 +324,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "amp_dtype": cfg.amp_dtype,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -358,6 +371,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    amp_dtype: str = "fp32"  # one of: "fp32", "bf16"
 
 
 cfg = sp.parse(Config)
@@ -443,14 +457,15 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        with make_amp_ctx(cfg.amp_dtype):
+            pred = model({"x": x_norm})["preds"]
+            sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -467,7 +482,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -525,7 +540,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
