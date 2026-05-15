@@ -16,6 +16,30 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-15 20:25 — PR #3350: FiLM-style Re conditioning per Transolver block (alphonse) — sent back for rebase
+- student: willowpai2i24h2-alphonse
+- branch: `willowpai2i24h2-alphonse/film-re-conditioning`
+- hypothesis: FiLM on every Transolver block, conditioned on per-sample log(Re), should improve val_re_rand by 5-12% and net val_avg
+- W&B run: `5a3i5ctn` (v2 with bug-fix), `d5xeygsf` (v1 with buggy init + padding contamination, val=128.96)
+
+| Metric | OLD baseline (#3200) | FiLM v2 | NEW baseline (#3352) | vs NEW |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 121.4956 | **116.962** | 116.3411 | +0.5% (flat) |
+| `test_avg/mae_surf_p` | 112.4884 | **104.636** | 107.3254 | −2.5% |
+| best val epoch | 14 | 11 | 12 | — |
+| peak VRAM | ~42.5 GB | 47.6 GB | ~33 GB | — |
+
+Per-split test (best-val checkpoint): single=125.41, camber_rc=115.38, camber_cruise=73.86, re_rand=103.90 — all 4 splits improve vs NEW baseline.
+Per-split val: single=147.81 (+1.9%), camber_rc=127.04 (+0.6%), camber_cruise=86.61 (−1.7%), re_rand=106.39 (+0.4%) — 3 of 4 val splits slightly worse vs NEW baseline.
+
+Analysis: alphonse's run was on the OLD baseline (PR #3200, fixed Fourier) and finished ~1 min before PR #3352 merged. vs the OLD baseline, FiLM is a clear winner: val −3.7%, test −7.0%. But vs the NEW baseline (learnable Fourier), val is flat (within noise) and test is better (−2.5%, consistent across all 4 splits). The mechanism is sound — debug logs show clean per-sample log(Re) signal (after fixing zero-init preservation + padding contamination bugs the student found themselves). The Re-conditioning gain isn't only on re_rand split — geom_camber_rc and geom_camber_cruise also improve substantially on test, suggesting the model uses Re-implicit features for held-out cambers and FiLM frees up other capacity.
+
+Decision: **sent back for rebase + re-run on learnable Fourier baseline**. The compound (FiLM + learnable Fourier) hasn't been tested. If it beats both val_avg < 116.34 and test_avg < 107.33, merge.
+
+Sub-finding worth recording: alphonse caught two implementation bugs that future FiLM-like PRs should be aware of:
+1. `Transolver.__init__` calls `self.apply(self._init_weights)` AFTER constructing all submodules, which overwrites the zero init in any sub-module that needs near-identity start. Fix: re-zero after `self.apply`.
+2. Reading global per-sample features via `x[:, :, idx].mean(dim=1)` is **contaminated by padding** when `pad_collate` zero-pads in raw space and the model normalizes afterward. The padding rows in normalized space have value `-mean/std`, which is large in magnitude (~−19 for log Re) and dominates the mean. Fix: read row 0 directly, which is always a real node since pad_collate appends padding.
+
 ## 2026-05-15 19:28 — PR #3352: Learnable Fourier frequency bands (8 trainable freqs) — MERGED
 - student: willowpai2i24h2-fern
 - branch: `willowpai2i24h2-fern/learnable-fourier-freqs`

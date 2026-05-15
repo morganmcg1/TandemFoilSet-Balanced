@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 19:35
+- **Date:** 2026-05-15 20:27
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -33,17 +33,25 @@ Key insight: frequencies barely moved from octave init (max 2.5% drift). The gai
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | WIP |
-| #3353 | frieren | `slice_num=96` with gradient checkpointing | WIP |
+| #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | re-run on new baseline (rebase requested 20:25) |
+| #3353 | frieren | `slice_num=96` with gradient checkpointing | WIP (pod picked up at it.72, auto-rebasing) |
 | #3356 | thorfinn | Divergence-free velocity auxiliary loss | WIP |
-| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | WIP (just assigned) |
+| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | WIP (just assigned 19:35) |
+
+### FiLM v2 result (alphonse #3350) — pre-rebase data point
+
+Ran on OLD (fixed Fourier) baseline so not apples-to-apples vs current head:
+- val_avg = 116.96 (vs new baseline 116.34 → +0.5%, flat within noise)
+- test_avg = 104.64 (vs new baseline 107.33 → **−2.5%**, all 4 test splits improve)
+
+FiLM mechanism is sound (student fixed two impl bugs: zero-init preserved after self.apply; row-0 read instead of mean-over-nodes to avoid padding contamination of log(Re) signal). Asking for rebase + compound test on learnable Fourier. If FiLM + learnable Fourier beats both 116.34 val and 107.33 test, merge.
 
 ## Round 1 carry-overs still WIP
 
-- **PR #3194 (askeladd, warmup-cosine):** rebased onto Fourier baseline. Running warmup=0 vs warmup=3 arms. Branch is MERGEABLE. Beat target: val_avg < 116.34. Wait for terminal result.
-- **PR #3207 (nezuko, geom-conditioned slice):** sent back for rebase onto learnable Fourier baseline. Final iteration — geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
-- **PR #3215 (tanjiro, SmoothL1 beta=0.05):** started training at 18:39 UTC on the Fourier baseline. W&B run `638hd0v7`. Results expected soon. Second arm (beta=0.1) follows.
-- **PR #3198 (edward, per-channel pressure loss weights):** 3 arms (p_surf_weight=2.0, 3.0, 5.0) running sequentially since 18:40 UTC. arm_p2 done, arm_p3/p5 in queue.
+- **PR #3194 (askeladd, warmup-cosine):** sent back for rebase + re-run on learnable Fourier baseline (20:25). Two arms: warmup=0 vs warmup=3. Beat target: val_avg < 116.34 AND test_avg < 107.33.
+- **PR #3207 (nezuko, geom-conditioned slice):** sent back earlier for rebase onto learnable Fourier baseline. Final iteration — geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
+- **PR #3215 (tanjiro, SmoothL1):** previous run (W&B `638hd0v7`, beta=0.05 on fixed Fourier baseline) didn't post terminal results before new baseline merged. Sent back at 20:25 for rebase + re-run with beta=0.05 and beta=0.10 arms.
+- **PR #3198 (edward, per-channel pressure loss weights):** previous sweep (3 arms, p_surf_weight=2.0/3.0/5.0 on fixed Fourier baseline) didn't post terminal results. Sent back at 20:25 for rebase + re-run.
 
 ## Potential next research directions
 
