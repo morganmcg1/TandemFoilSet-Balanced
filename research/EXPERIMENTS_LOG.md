@@ -285,17 +285,78 @@ _New entries appended as each PR is reviewed._
 
 ---
 
-## Wave-5 new assignment (2026-05-15 23:22)
+---
 
-- PR #3509 — charliepai2i48h5-alphonse: Stochastic depth (DropPath) regularization, drop_path∈{0.05,0.10}, on Fourier+Huber+clip baseline
+## 2026-05-15 23:29 — PR #3438 (charliepai2i48h5-nezuko): Fourier freq sweep n=12/14 + clip — SENT BACK
+
+- branch: `charliepai2i48h5-nezuko/fourier-nfreqs-sweep`
+- hypothesis: n_freqs∈{12,14} + grad_clip=0.25 vs baseline n=10 (no clip)
+
+- arms:
+
+  | arm | n_freqs | clip | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | clip_frac |
+  |---|---|---|---|---|---|---|
+  | fourier-n12-clip025 | 12 | 0.25 | 100.35 (+12.4%) | 87.33 (+9.9%) | 12/14 | 1.000 |
+  | fourier-n14-clip025 | 14 | 0.25 | 92.53 (+3.7%) | 82.78 (+4.2%) | 11/14 | 1.000 |
+
+- baseline (n=10, no clip): val=89.27, test=79.43
+- both arms CONFOUNDED: they changed n_freqs AND added clip simultaneously vs baseline (which had no clip)
+- student correctly identified the confound: n=14+clip regression is most plausibly from the clip being over-tight (clip_frac=1.0 → >95% of gradient magnitude cut every step), not from higher frequencies
+- n=14 > n=12 within this experiment → extra frequencies still productively used despite aggressive clip; both arms peak earlier than n=10 baseline (consistent with clip blocking fine-tuning convergence)
+- verdict: **Sent back** to deconfound — test n_freqs=14 on the new full stack baseline (where clip is already included).
+
+---
+
+## 2026-05-15 23:29 — PR #3419 (charliepai2i48h5-tanjiro): n_hidden=160 + T_max aligned — CLOSED
+
+- branch: `charliepai2i48h5-tanjiro/wider-160-tmax-aligned`
+- hypothesis: n_hidden=160 + T_max=11 (budget-aligned) beats n_hidden=128 baseline
+
+- arms:
+
+  | arm | n_head | n_params | s/epoch | epochs | val_avg/mae_surf_p | test_avg/mae_surf_p |
+  |---|---|---|---|---|---|---|
+  | wider-160-tmax-aligned (n_head=4) | 4 | 1.03M | 167 | 11/50 | 99.10 | 88.53 |
+  | wider-160-heads6-tmax-aligned (n_head=6) | 6 | 999K | 185 | 10/50 | 100.40 | 89.83 |
+
+- speed wall: 4.6× per-epoch overhead (167s vs 36s). Only 10-11 epochs in budget. Budget constraint dominates.
+- interesting signal: both arms beat baseline on geom_camber_rc by ~7% (better geometric OOD generalization from higher capacity)
+- verdict: **Closed**. Width scaling infeasible at current speed without AMP. Tanjiro reassigned to bf16 (#3527).
+
+---
+
+## 2026-05-15 23:28 — PR #3333 (charliepai2i48h5-frieren): Full stack Fourier+Huber+T_max=20+clip — **MERGED** (new best)
+
+- branch: `charliepai2i48h5-frieren/lr-schedule-alignment`
+- hypothesis (revised): Fourier n=10 + Huber delta=0.3 + T_max=20 + grad_clip=0.25 all compose
+
+- arm:
+
+  | run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | LR at best | clip_frac |
+  |---|---|---|---|---|---|
+  | fourier-n10-tmax20-clip025 | **84.59** | **73.89** | 14/14 | 1.37e-4 | 1.000 |
+
+- artifacts: `models/model-fourier-n10-tmax20-clip025-20260515-222425/metrics.jsonl`
+- per-split test surf_p: single=86.87, rc=86.21, cruise=51.47, re_rand=71.01
+- all 4 splits improved vs Fourier-only baseline. Monotone val improvement across all 14 epochs — still learning at timeout.
+- cumulative improvement: val ~128.69 → 103.18 → 98.62 → 89.27 → **84.59** (-34% from round-5 start)
+- verdict: **MERGED** as new round-5 baseline. val_avg=84.59, test_avg=73.89. Frieren reassigned to grad-clip sweep (#3529).
+
+---
+
+## Wave-5 new assignments (2026-05-15 23:40)
+
+- PR #3509 — charliepai2i48h5-alphonse: Stochastic depth (DropPath) drop_path∈{0.05,0.10} on full stack
+- PR #3527 — charliepai2i48h5-tanjiro: Mixed precision BF16 training, n_hidden=128 + n_hidden=160
+- PR #3529 — charliepai2i48h5-frieren: Grad-clip sweep max_norm∈{0.5,1.0} on full stack
 
 ## WIP tracking
 
-- PR #3192 (edward): EMA checkpoint averaging — stale, requested rebase + rerun on Fourier baseline
-- PR #3227 (thorfinn): Surf-weight curriculum anneal — needs_rebase, sent back to rebase on Fourier baseline
-- PR #3333 (frieren): LR T_max=20 — sent back to test Fourier+clip+T_max=20 stack
-- PR #3419 (tanjiro): n_hidden=160 + T_max-aligned LR — WIP (stale, recovering from rate-limit lockout)
-- PR #3424 (askeladd): Tighter clip sweep max_norm=0.1 × Huber delta — WIP (stale, recovering)
-- PR #3438 (nezuko): Fourier n_freqs∈{12,14} + clip — WIP
-- PR #3439 (fern): Gaussian random Fourier features σ∈{1.0,5.0} — WIP
-- PR #3509 (alphonse): Stochastic depth drop_path∈{0.05,0.10} — NEW (wave-5)
+- PR #3192 (edward): EMA checkpoint averaging — stale (rate-limit lockout); pod active
+- PR #3227 (thorfinn): Surf-weight curriculum anneal — needs_rebase, awaiting student action
+- PR #3424 (askeladd): Tighter clip sweep max_norm=0.1 × Huber delta — WIP, currently training (GPU 100%)
+- PR #3438 (nezuko): n_freqs=14 on full stack (deconfounded) — sent back for rebase+rerun
+- PR #3439 (fern): Gaussian random Fourier features σ∈{1.0,5.0} — WIP, currently training (GPU 100%)
+- PR #3509 (alphonse): Stochastic depth drop_path∈{0.05,0.10} — NEW
+- PR #3527 (tanjiro): Mixed precision BF16 — NEW
+- PR #3529 (frieren): Grad-clip sweep max_norm∈{0.5,1.0} — NEW
