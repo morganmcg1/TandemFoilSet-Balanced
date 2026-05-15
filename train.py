@@ -169,7 +169,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 split_heads: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -194,6 +195,21 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+
+        self.split_heads = split_heads
+        if split_heads and out_dim == 3:
+            last = self.blocks[-1]
+            hidden = n_hidden
+            last.mlp2 = None
+            last.vel_head = nn.Sequential(
+                nn.Linear(hidden, hidden), nn.GELU(),
+                nn.Linear(hidden, 2),
+            )
+            last.p_head = nn.Sequential(
+                nn.Linear(hidden, hidden), nn.GELU(),
+                nn.Linear(hidden, 1),
+            )
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,8 +224,19 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                fx = block(fx)
+            else:
+                if self.split_heads:
+                    fx_in = block.attn(block.ln_1(fx)) + fx
+                    fx_in = block.mlp(block.ln_2(fx_in)) + fx_in
+                    feat = block.ln_3(fx_in)
+                    vel = block.vel_head(feat)
+                    prs = block.p_head(feat)
+                    fx = torch.cat([vel, prs], dim=-1)
+                else:
+                    fx = block(fx)
         return {"preds": fx}
 
 
@@ -425,6 +452,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    split_heads=True,
 )
 
 model = Transolver(**model_config).to(device)
