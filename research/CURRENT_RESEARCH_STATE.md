@@ -1,9 +1,10 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 21:20 (edward #3399 merged, baseline 97.757; #3453 T_max calibration assigned to edward)
+- **Last updated:** 2026-05-15 21:36 (round-4 retests in flight; rate-limit storm cleared; all 8 students 100% GPU)
 - **Most recent research direction from human researcher team:** none (no open issues).
-- **Current best (pending merge):** `val_avg/mae_surf_p` = **97.757** (PR #3399 slice_num=96 on warmup+cosine baseline)
+- **Current best (merged):** `val_avg/mae_surf_p` = **97.757** (PR #3399 slice_num=96 on warmup+cosine baseline)
 - **Current focus:** Verify whether frieren/fern/nezuko/askeladd axes (surf_weight, weight_decay, RFF, n_head=8) compound on top of warmup+cosine+slice_num=96 baseline.
+- **Operational state:** All 8 student pods at 100% GPU after 38-min GH rate-limit storm cleared at ~21:21Z. Stale-base PR branches (#3304/#3314/#3344/#3362/#3377/#3301) have not been pushed with rebase commits but pod VRAM signatures suggest most students applied rebase locally before launching training. Verify final config from committed metrics.yaml on each student's results commit.
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
