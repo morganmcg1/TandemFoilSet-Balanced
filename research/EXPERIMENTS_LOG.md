@@ -1,5 +1,56 @@
 # SENPAI Research Results
 
+## 2026-05-15 20:50 — PR #3307: OneCycleLR right-sized to actual budget — **sent back for rebase + replication (winner pending)**
+
+- Branch: `willowpai2i24h5-askeladd/onecyclelr-1e3`
+- Hypothesis: First attempt with `total_steps = len(train_loader) * 50` left ~72% of the OneCycle schedule unused (best epoch hit near peak LR ~9e-4). Right-sizing `total_steps = len(train_loader) * 14` makes the peak hit at epoch 1.4 and the steep anneal phase land exactly within the 30-min wall-clock budget.
+- W&B runs: `jgx0qh7r` (97.44 ★ right-sized), `jk3gbtj1` (119.25 wrong-sized, prior arm)
+
+| Split | jgx0qh7r ★ | warm-restarts baseline `oeo67jf2` | Δ |
+|---|---|---|---|
+| val_single_in_dist | 118.44 | 116.36 | +2.08 |
+| val_geom_camber_rc | 107.83 | 108.40 | −0.57 |
+| val_geom_camber_cruise | 72.49 | 77.91 | −5.42 |
+| val_re_rand | 90.98 | 92.87 | −1.89 |
+| **val_avg** | **97.44** | **98.88** | **−1.44** |
+| test 3-split (excl. cruise) | 94.41 | 94.82 | −0.41 |
+
+**Analysis:** Single-arm result of 97.44 beats current baseline 98.88 by 1.44, and 3-split test (94.41 vs 94.82) is also slightly better. Mechanism is clean: the right-sized OneCycle gives the model a fast warmup (10% of 14 epochs = 1.4 epochs), a brief plateau near peak (LR=1e-3, 2× the baseline constant LR), then aggressive anneal down to 4e-9 over the remaining ~12.6 epochs. The OOD splits (`val_geom_camber_cruise` -5.42, `val_re_rand` -1.89) improve most — contradicting our earlier hypothesis that high peak LR hurts OOD; what actually hurts OOD is *stopping near peak* without the anneal phase. **PR sent back for: (1) rebase to resolve the merge conflict with the warm-restarts scheduler (keep OneCycleLR, drop warm-restarts); (2) 2 more replication arms to confirm the mean across 3 arms beats 98.88, matching the rigor of the warm-restarts replication.** If replicates, this becomes the new baseline and supersedes warm-restarts on the scheduler axis.
+
+---
+
+## 2026-05-15 20:32 — PR #3146: slice_num 64 → 128 — closed
+
+- Branch: `willowpai2i24h5-frieren/slice-num-128`
+- Hypothesis: Finer physics-token partitioning would give the model dedicated tokens for surface/boundary-layer/wake regions, improving `mae_surf_p` especially on OOD-geometry splits.
+- W&B runs: `vkfmawat` (133.95 best), `u1s2sf66` (138.53), `tb06syma` (159.16)
+
+| Run | best val_avg | Δ vs new baseline 98.88 |
+|---|---|---|
+| vkfmawat (best of 3) | 133.95 | +35.5% |
+| u1s2sf66 | 138.53 | +40.1% |
+| tb06syma | 159.16 | +61.0% |
+| **3-arm mean** | **143.88** | **+45.5%** |
+
+**Analysis:** Confirmed negative result across 3 seeds. Frieren's mechanism is the right one: each physics token now aggregates over ~half as many nodes (~500–2000 vs ~1000–4000), so per-token MLP projections become noisier (smaller node clusters per token → higher variance). Compounded by linear-in-slice_num cost eating ~1–2 epochs in budget. The 25-pp spread across 3 seeds (133.95 → 159.16) is itself diagnostic — doubling slice_num amplifies seed sensitivity. The hope that finer slicing would help OOD-geometry tracks was not borne out: `val_geom_camber_rc` regressed harder than the in-dist split (144.07 vs 183.83 for the best-arm). Frieren's NaN root-cause analysis of the `test_geom_camber_cruise` bug (inf*0 = NaN in the surf_mask-zeroed sum) is the clearest description of GH #3292 we have. Follow-up: slice_num=32 probe (PR #3464).
+
+---
+
+## 2026-05-15 20:29 — PR #3139: surf_weight 10 → 25 — closed
+
+- Branch: `willowpai2i24h5-fern/surf-weight-25`
+- Hypothesis: Surface pressure is the ranking metric; upweighting `surf_loss` by 2.5× should pull the optimizer harder on what we care about.
+- W&B runs (8 pure arms): `8fylbhng` (134.80 best), `bgqv1fxd` (141.69), `7lstdd2m` (150.94), `dogdnwxm` (150.74), `nv7bztze` (158.06), `bve49g3i` (160.58), `3pdddoxm` (175.26), `6d7an68q` (201.07 worst). Plus 1 confound arm `ouwpuf2z` (111.30 with extra grad-clip change — reverted).
+
+| | best of 8 | mean of 8 | worst |
+|---|---|---|---|
+| val_avg/mae_surf_p | 134.80 | 159.16 | 201.07 |
+| Δ vs new baseline 98.88 | +36.3% | +61.0% | +103.5% |
+
+**Analysis:** Confirmed negative result across 8 seeds. Fern's loss-balance analysis is the cleanest explanation: at `surf_weight=10` the surface term already dominates the total loss by ~5× (val surf_loss=0.32, val vol_loss=0.63 → surf is 84%); at 25 it's ~13× and the model loses the inductive structure the volume term provides (far-field consistency, smoothness). When the optimizer is pulled hard on a small set of surface nodes, the loss landscape becomes more curved and run-to-run variance blows up (66 MAE units across 8 seeds). Hypothesis-level conclusion: `surf_weight=10` is at or near the sweet spot for this surrogate. The orthogonal `ouwpuf2z` finding (111.30 with grad_clip + surf_weight=25 on the round-1 baseline) is interesting — grad_clip stabilizes the surface-dominant gradient pull. But the current baseline already has grad_clip, so this doesn't change the action. Follow-up: surf_weight=5 probe (PR #3462).
+
+---
+
 ## 2026-05-15 20:25 — PR #3320: CosineAnnealingWarmRestarts T_0=5 T_mult=2 — **MERGED (round-2 winner)**
 
 - Branch: `willowpai2i24h5-nezuko/warm-restarts`
