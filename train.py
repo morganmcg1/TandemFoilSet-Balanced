@@ -459,7 +459,37 @@ ema_model.eval()
 print(f"EMA model initialized (decay={EMA_DECAY})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# Warmup + cosine schedule aligned to realistic ~14-epoch wall-clock budget under 30-min cap.
+# SENPAI_MAX_EPOCHS in the env is the ceiling (50), not the realistic budget — hardcode T_MAX=15
+# to match the hypothesis. eta_min=PEAK_LR*0.01 leaves a small floor for late-epoch fine-tuning.
+T_MAX = 15
+WARMUP_EPOCHS = 1
+PEAK_LR = 7e-4
+
+for pg in optimizer.param_groups:
+    pg["lr"] = PEAK_LR
+    pg["initial_lr"] = PEAK_LR
+cfg.lr = PEAK_LR  # keep saved config consistent with actual peak LR used
+
+warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=1e-3,
+    end_factor=1.0,
+    total_iters=WARMUP_EPOCHS,
+)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=T_MAX - WARMUP_EPOCHS,
+    eta_min=PEAK_LR * 0.01,
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[WARMUP_EPOCHS],
+)
+
+print(f"LR schedule: peak={PEAK_LR}, T_max={T_MAX}, warmup_epochs={WARMUP_EPOCHS}, eta_min={PEAK_LR * 0.01:.2e}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -475,6 +505,14 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "ema_decay": EMA_DECAY,
+        "schedule": {
+            "type": "warmup_linear+cosine",
+            "peak_lr": PEAK_LR,
+            "T_max": T_MAX,
+            "warmup_epochs": WARMUP_EPOCHS,
+            "eta_min": PEAK_LR * 0.01,
+            "warmup_start_factor": 1e-3,
+        },
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -535,6 +573,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_scale_std += sample_scale.std(unbiased=False).item()
         n_batches += 1
 
+    epoch_lr = optimizer.param_groups[0]["lr"]
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -568,6 +607,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "train/lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/sample_scale_mean": epoch_scale_mean,
