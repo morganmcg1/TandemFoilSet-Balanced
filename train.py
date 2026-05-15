@@ -236,6 +236,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # NaN sample guard: if a sample has any non-finite y, zero its mask
+            # entries and sanitize y so downstream arithmetic stays finite.
+            # accumulate_batch's sample-level skip is correct, but its
+            # `err * mask` path produces NaN * 0 = NaN, contaminating the sum.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                nan_sample_mask = y_finite_per_sample.unsqueeze(-1).expand_as(mask)
+                mask = mask & nan_sample_mask
+                y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -403,7 +413,27 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+decay_params, no_decay_params = [], []
+for name, p in model.named_parameters():
+    if not p.requires_grad:
+        continue
+    if p.ndim < 2 or name.endswith(".bias") or "ln_" in name or "temperature" in name or "placeholder" in name:
+        no_decay_params.append(p)
+    else:
+        decay_params.append(p)
+n_decay = sum(p.numel() for p in decay_params)
+n_no_decay = sum(p.numel() for p in no_decay_params)
+print(
+    f"AdamW selective decay: decay={len(decay_params)} groups ({n_decay/1e6:.3f}M params), "
+    f"no_decay={len(no_decay_params)} groups ({n_no_decay/1e6:.3f}M params)"
+)
+optimizer = torch.optim.AdamW(
+    [
+        {"params": decay_params, "weight_decay": cfg.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ],
+    lr=cfg.lr,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -454,6 +484,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
