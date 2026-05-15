@@ -5,6 +5,57 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). Test-side ranking is currently
 contaminated by an Inf in the cruise test ground truth (see notes).
 
+## 2026-05-15 18:25 — PR #3143: Charbonnier robust loss vs MSE — **MERGED ⭐⭐ MAJOR WIN**
+
+- Student branch: `willowpai2i24h1-edward/charbonnier-robust-loss`
+- Student: `willowpai2i24h1-edward`
+- Hypothesis: replace MSE with Charbonnier `sqrt(diff² + ε²)` so the gradient
+  becomes ~linear for large residuals. Surface pressure has order-of-magnitude
+  dynamic range — a few near-stagnation outliers per mesh dominate MSE gradient
+  and bias the model toward them at the expense of the bulk surface MAE.
+
+| Arm | wandb run | `val_avg/mae_surf_p` | test 3-split avg | best_epoch | Notes |
+|-----|-----------|----------------------|------------------|-----------|-------|
+| **charbonnier_eps1e-3** ⭐ | lukq8jry | **98.60** | **98.03** | — | merged |
+| mse_baseline (within-PR control) | 9npuojl6 | 121.14 | — | — | MSE-only, pre-warmup base |
+
+Per-split val (charbonnier_eps1e-3): single_in_dist=126.05, geom_camber_rc=106.97,
+geom_camber_cruise=73.34, re_rand=88.04. Per-channel val_avg: surf_Ux=1.377,
+surf_Uy=0.639, surf_p=98.60, vol_p=103.37 — Charbonnier improves _every_ channel,
+not just surf_p, with the biggest gain on surf_p where the dynamic range is largest.
+
+Per-split partial test (cruise excl. due to NaN bug):
+single_in_dist=115.46, geom_camber_rc=93.44, re_rand=85.18.
+
+**Conclusion:** Charbonnier robust loss delivers **−18.6%** on the primary
+metric vs the within-PR MSE control (121.14 → 98.60). The largest per-split
+gain is on `val_geom_camber_cruise` (−25.6%), which has the highest pressure
+dynamic range — exactly the failure mode the robust loss targets. Run-to-run
+noise (~3 units) cannot explain a 22-unit gap; this is a real effect.
+
+**Decision:** **merged**. New advisor-branch baseline.
+- Adds `--loss_fn` (default mse → now charbonnier on the advisor branch) and
+  `--charbonnier_eps` (default 1e-3) flags. The per-node loss is
+  `sqrt(diff² + ε²)` for charbonnier, applied identically in train and
+  evaluation (so the eval metric for `mae_surf_p` itself is unchanged — it's
+  an L1-style MAE on denormalized predictions, independent of loss choice).
+- **Compositional caveat.** Edward's branch forked before PR #3150 (warmup +
+  cosine) was merged, so the 98.60 result is _Charbonnier alone_ vs MSE
+  without warmup. The merge composes with the warmup schedule already on the
+  advisor branch. Next student control runs against this composed baseline
+  will confirm the post-warmup + Charbonnier number.
+- Pre-warmup MSE control was 121.14, post-warmup MSE control should be
+  around 125.83 (PR #3150 winner). If Charbonnier composes additively we'd
+  expect the new baseline to land in the ~95-100 range; if it composes
+  multiplicatively (−18.6% × 125.83) we'd expect ~102. We'll see.
+
+**Edward's suggested follow-ups (worth running):**
+1. ε sweep (1e-4, 3e-3, 1e-2) — ε=1e-3 is the only point tested
+2. Other robust losses: Huber, Cauchy/Lorentzian, pseudo-Huber
+3. Re-check `surf_weight` after residual linearization (the optimal weight
+   may have shifted; surf gradient magnitudes are now compressed relative to
+   vol gradient magnitudes)
+
 ## 2026-05-15 17:43 — PR #3150: Warmup + cosine schedule, peak LR sweep — **MERGED ⭐ WINNER**
 
 - Student branch: `willowpai2i24h1-tanjiro/warmup-cosine-schedule`
