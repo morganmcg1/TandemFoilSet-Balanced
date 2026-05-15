@@ -439,7 +439,25 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+# Warmup + cosine schedule
+WARMUP_EPOCHS = 5
+SCHEDULE_EPOCHS = 15  # cosine T_max after warmup (tuned to actual epoch budget per PR #3317)
+
+def warmup_lambda(epoch):
+    if epoch < WARMUP_EPOCHS:
+        return (epoch + 1) / WARMUP_EPOCHS
+    return 1.0
+
+warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warmup_lambda)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=SCHEDULE_EPOCHS, eta_min=1e-6
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[WARMUP_EPOCHS],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -453,6 +471,10 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "scheduler": "warmup_cosine",
+        "warmup_epochs": WARMUP_EPOCHS,
+        "schedule_epochs": SCHEDULE_EPOCHS,
+        "cosine_eta_min": 1e-6,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
