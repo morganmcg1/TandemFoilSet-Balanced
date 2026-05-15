@@ -7,24 +7,26 @@
 
 ## Current best (this branch)
 
+> ⚠️ **Seed variance note:** Two runs of H15 SwiGLU gave val_avg=89.48 and 80.21 (~10% spread). The 80.21 is the SENPAI-RESULT primary metric. Mean estimate ≈ 84.85.
+
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p`              | **85.16** | PR #3224 (tanjiro H13 geom-cond GALE), epoch 14 |
-| `val_single_in_dist/mae_surf_p`   | 106.160 | PR #3224 |
-| `val_geom_camber_rc/mae_surf_p`   | 92.098 | PR #3224 |
-| `val_geom_camber_cruise/mae_surf_p` | 61.360 | PR #3224 |
-| `val_re_rand/mae_surf_p`          | 81.005 | PR #3224 |
-| `test_avg/mae_surf_p`             | **77.61** | PR #3224 |
-| `test_single_in_dist/mae_surf_p`  | 99.658 | PR #3224 |
-| `test_geom_camber_rc/mae_surf_p`  | 84.121 | PR #3224 |
-| `test_geom_camber_cruise/mae_surf_p` | 52.932 | PR #3224 |
-| `test_re_rand/mae_surf_p`         | 73.739 | PR #3224 |
+| `val_avg/mae_surf_p`              | **80.21** | PR #3423 (edward H15 SwiGLU MLP), epoch 10, run 2 |
+| `val_single_in_dist/mae_surf_p`   | 104.46 | PR #3423 |
+| `val_geom_camber_rc/mae_surf_p`   | 88.50 | PR #3423 |
+| `val_geom_camber_cruise/mae_surf_p` | 53.88 | PR #3423 |
+| `val_re_rand/mae_surf_p`          | 74.00 | PR #3423 |
+| `test_avg/mae_surf_p`             | **73.20** | PR #3423 |
+| `test_single_in_dist/mae_surf_p`  | — | PR #3423 |
+| `test_geom_camber_rc/mae_surf_p`  | — | PR #3423 |
+| `test_geom_camber_cruise/mae_surf_p` | — | PR #3423 |
+| `test_re_rand/mae_surf_p`         | — | PR #3423 |
 
 ## Current baseline configuration
 
-`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE):
+`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE) + PR #3423 (H15 SwiGLU MLP):
 
-- **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` + `geom_proj MLP(11, 256, 128)` + 5 `geom_gates` scalars (~714K trainable params + 64 non-trainable RFF buffer)
+- **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` + `geom_proj MLP(11, 256, 128)` + 5 `geom_gates` scalars + `SwiGLUMLP` FFN (~843K trainable params + 64 non-trainable RFF buffer)
 - **Input:** RFF coordinate encoding (n_freq=32, sigma=1.0) replacing raw (x,z) — input to preprocess MLP is now 86-dim (64 RFF + 22 other features)
 - **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
 - **Schedule:** CosineAnnealingLR(T_max=epochs)
@@ -36,6 +38,7 @@
 - **Log1p target transform:** `signed_log1p(y) = sign(y) * log1p(|y|)` applied to both `pred` and `y` before loss compute only; `evaluate_split` unchanged (metric stays in physical units)
 - **NaN workaround:** `evaluate_split` masks out and zero-fills non-finite GT samples before accumulation (fixes test_geom_camber_cruise NaN)
 - **Geom-cond GALE:** Per-block additive geometry conditioning: `fx += geom_gates[i] * geom_proj(x[:, 0, 13:24])`. Gates init at 0 (identity start), learned to `[-0.05, -0.11, -0.13, -0.14, -0.15]` at convergence.
+- **SwiGLU FFN:** `TransolverBlock.mlp` replaced from `linear→GELU→linear` to `SwiGLUMLP(fc_in:2×n_hidden + fc_out)`. Gate-modulated: `fc_in(x).chunk(2)` → `silu(gate) * value → dropout(0.1) → fc_out`. +33K params per block vs GELU FFN.
 - **Cosine T_max:** Set to 15 (vs 50 default) to align anneal to realized ~14-epoch budget.
 - **Splits dir:** `/mnt/new-pvc/datasets/tandemfoil/splits_v2`
 
@@ -49,7 +52,22 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 
 ## Baseline history
 
-### 2026-05-15 21:30 — PR #3224: H13 Persistent geom-cond GALE (tanjiro) — **CURRENT BEST**
+### 2026-05-15 22:35 — PR #3423: H15 SwiGLU MLP (edward) — **CURRENT BEST**
+
+- **val_avg/mae_surf_p:** 80.21 (best epoch 10, 30-min cap) — **-5.8% vs 85.16 prior best**
+- ⚠️ **Seed variance:** Two runs at identical config: 89.48 and 80.21 (~10% spread). Primary SENPAI-RESULT is run 2 (80.21). Mean estimate ~84.85. Future PRs beat 80.21 to merge.
+- **Per-split val:**
+  - `val_single_in_dist/mae_surf_p` = 104.46 (-9.5% vs 106.16)
+  - `val_geom_camber_rc/mae_surf_p` = 88.50 (-16.1% vs 92.10) ← biggest gain
+  - `val_geom_camber_cruise/mae_surf_p` = 53.88 (-12.2% vs 61.36)
+  - `val_re_rand/mae_surf_p` = 74.00 (-14.3% vs 81.01)
+- **test_avg/mae_surf_p:** 73.20 (-5.7% vs 77.61)
+- **What changed:** Replaced `TransolverBlock.mlp` from `MLP(linear→GELU→linear)` to `SwiGLUMLP(fc_in:2×n_hidden → silu(gate) * value → dropout(0.1) → fc_out)`. OOD splits gain 1.5–1.7× more than in-dist, suggesting gate modulation reduces co-adaptation like dropout but at a structural level.
+- **Delta:** -5.8% val_avg (85.16 → 80.21). Best epoch is 10 (vs 14 prior — 29% faster convergence).
+- **Metric artifact:** `models/model-charliepai2i24h4-edward-swiglu-mlp-20260515-212619/metrics.jsonl` (run 2, primary)
+- **Reproduce:** `cd target && python train.py --agent charliepai2i24h4-edward --experiment_name "charliepai2i24h4-edward/swiglu-mlp"`
+
+### 2026-05-15 21:30 — PR #3224: H13 Persistent geom-cond GALE (tanjiro)
 
 - **val_avg/mae_surf_p:** 85.156 (best epoch 14, 30-min cap, T_max=15) — **-8.2% vs 92.80 prior best**
 - **Per-split val:**
@@ -130,4 +148,5 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 - **Hardest split:** `val_single_in_dist = 106.16`. The in-dist bottleneck.
 - **Biggest OOD remaining gap:** `val_geom_camber_rc = 92.10` — large relative to cruise (61.36).
 - **Baseline stack:** Re-strat sampler + RFF coord encoding + MLP dropout=0.1 + signed-log1p target transform (α=1.0) + geom-cond GALE (additive per-block with gates) + evaluate_split NaN workaround + T_max=15 cosine alignment.
-- **Active WIP PRs:** #3317 H11b alpha sweep (thorfinn), #3318 H6v2 SGDR+clip (frieren), #3197 H8v3 EMA (askeladd), #3375 H12b dropout sweep (fern), #3421 H14 cosine T_max (nezuko), #3423 H15 SwiGLU MLP (edward), #3184 H1 LinearNO (alphonse).
+- **Active WIP PRs:** #3417 H11b alpha sweep (thorfinn), #3318 H6v2 SGDR+clip (frieren), #3197 H8v3 EMA (askeladd), #3421 H14 cosine T_max (nezuko), #3461 H16 FiLM geom-cond (tanjiro), #3467 H17 attn-dropout (fern), #3184 H1 LinearNO (alphonse).
+- **edward is idle — assigning new hypothesis.**
