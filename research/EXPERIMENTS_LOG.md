@@ -22,6 +22,22 @@ Per-PR results log. Earliest at the bottom; latest at the top.
 - **Analysis**: GALE mechanism confirmed working — camber_rc split benefited most (-12.7%) as predicted (OOD geometry interpolation). T_max=15 alignment was critical: round 1 (T_max=50) showed oscillating val_avg late-training; round 2 with T_max=15 showed monotone descent to epoch 14 best. New baseline: 85.156.
 - **Note on T_max**: tanjiro's merge baked T_max=15 into train.py. Nezuko's H14 (CLI --cosine_t_max) needs to handle this correctly on rebase.
 
+## 2026-05-15 22:35 — PR #3423: H15 SwiGLU MLP (edward) — **MERGED, new best (-5.8%)**
+
+- Branch: `charliepai2i24h4-edward/swiglu-mlp`
+- Hypothesis: Replace GELU FFN with SwiGLU gated FFN: `linear_in → silu(gate)*value → dropout(0.1) → linear_out`. Gate-modulated multiplication allows per-dimension feature attenuation. ~+165K params (678K→843K for full model with geom-cond).
+- Two runs committed (both beat baseline):
+
+| Run | val_avg | test_avg | best_epoch |
+|---|---:|---:|---:|
+| 20260515-202620 (run 1) | 89.48 | 79.71 | 11 |
+| **20260515-212619 (run 2, primary)** | **80.21** | **73.20** | **10** |
+| Baseline (H13) | 85.16 | 77.61 | 14 |
+
+- Per-split (run 2): single=104.46, rc=88.50, cruise=53.88, re=74.00
+- **Analysis**: OOD splits gained 1.5–1.7× more than in-dist (rc −16.1%, re −14.3% vs single −9.5%). Gate modulation reduces co-adaptation similarly to dropout but structurally. Best epoch at 10 (29% faster convergence). ~10% seed variance between runs — notable for future reference.
+- New baseline: 80.21.
+
 ## 2026-05-15 21:36 — PR #3467: H17 Attention dropout sweep 0.05/0.10 (fern) — **assigned (post H12b close)**
 
 - Branch: `charliepai2i24h4-fern/attention-dropout`
