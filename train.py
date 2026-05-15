@@ -215,6 +215,51 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# EMA — exponential moving average of model weights
+# ---------------------------------------------------------------------------
+
+
+class EMA:
+    """Karras-style EMA of model weights with a warmup decay ramp.
+
+    ``decay_eff = min(decay, (1 + step) / (10 + step))`` avoids the early-training
+    pathology where the EMA shadow is dominated by random init.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.step = 0
+
+    def effective_decay(self) -> float:
+        return min(self.decay, (1 + self.step) / (10 + self.step))
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        self.step += 1
+        d = self.effective_decay()
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                self.shadow[n].mul_(d).add_(p.detach(), alpha=1 - d)
+
+    @torch.no_grad()
+    def apply_to(self, model: nn.Module):
+        """Swap EMA weights into ``model.parameters().data``; return a restore callback."""
+        saved = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                p.data.copy_(self.shadow[n])
+
+        @torch.no_grad()
+        def restore() -> None:
+            for n, p in model.named_parameters():
+                if p.requires_grad:
+                    p.data.copy_(saved[n])
+
+        return restore
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -325,6 +370,8 @@ def write_experiment_summary(
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
         "amp_dtype": cfg.amp_dtype,
+        "use_ema": cfg.use_ema,
+        "ema_decay": cfg.ema_decay if cfg.use_ema else None,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -373,6 +420,8 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     amp_dtype: str = "fp32"  # one of: "fp32", "bf16"
+    use_ema: bool = False  # track an EMA shadow copy of weights for val/test/checkpoint
+    ema_decay: float = 0.999  # max decay; warmup ramp protects early training
 
 
 cfg = sp.parse(Config)
@@ -417,6 +466,10 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema = EMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
+if ema is not None:
+    print(f"EMA: enabled (decay={cfg.ema_decay}, warmup ramp (1+step)/(10+step))")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 t_max_eff = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
@@ -484,6 +537,8 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -494,8 +549,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (with EMA-applied weights if enabled; save best while applied) ---
     model.eval()
+    restore = ema.apply_to(model) if ema is not None else None
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype)
         for name, loader in val_loaders.items()
@@ -515,8 +571,11 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    if restore is not None:
+        restore()
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -528,7 +587,11 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if ema is not None:
+        epoch_record["ema_step"] = ema.step
+        epoch_record["ema_effective_decay"] = ema.effective_decay()
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
