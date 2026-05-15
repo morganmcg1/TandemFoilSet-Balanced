@@ -1,5 +1,21 @@
 # SENPAI Research Results
 
+## 2026-05-15 16:25 — PR #3153: Huber (β=1.0) on volume loss — closed
+
+- Branch: `willowpai2i24h5-nezuko/huber-vol-beta1`
+- Hypothesis: Huber loss on volume term frees gradient budget from high-magnitude outliers, letting surface term pull harder.
+- W&B runs: `flndh715` (best), `8u6i1i6e`, `r975jzdy` — 3 identical runs auto-generated
+
+| Metric | Run flndh715 | Run 8u6i1i6e | Run r975jzdy |
+|---|---|---|---|
+| val_avg/mae_surf_p | **127.22** | 141.16 | 141.93 |
+| test_avg (offline, excl. cruise sample 20) | ~117.20 | ~130.94 | ~131.11 |
+| Epochs completed | 14/50 | 14/50 | 14/50 |
+| Peak VRAM | 42 GB | 42 GB | 42 GB |
+
+**Analysis:** 8.6% regression vs baseline (127.22 vs 117.16) in best run; mean ~137 across 3 runs is ~17% worse. Critical finding: **15-point run-to-run variance across identical configs** — single-run rankings in this 14-epoch budget are at the noise floor and unreliable. The comparison is also confounded by missing grad clip: this PR branched before #3157 was merged, so it ran without max_norm=1.0. The Huber-on-vol idea is not conclusively tested; it may help on the clipped baseline. Nezuko's offline test_avg workaround (drop sample 20) recovered a plausible test metric of 117.20. Independently confirmed the cruise NaN bug.
+
+
 ## 2026-05-15 15:42 — PR #3157: Grad clipping max_norm=1.0 — **MERGED (round-1 winner)**
 
 - Branch: `willowpai2i24h5-tanjiro/gradclip-1p0`

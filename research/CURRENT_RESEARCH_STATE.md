@@ -36,7 +36,14 @@ Round 2 in progress. Round 1 established the first baseline: **`val_avg/mae_surf
 | thorfinn | #3308 | AdamW beta2=0.999 → 0.95 | Faster second-moment adaptation to large gradient scales |
 | edward | #3310 | n_layers=5 → 6 | Depth on clipped baseline; round-1 showed 7 was unstable, 6 is the safer step |
 
-Still awaiting round-1 results from: alphonse (#3112 bf16), frieren (#3146 slice_num=128), fern (#3139 surf_weight=25), nezuko (#3153 Huber vol).
+Still awaiting round-1 results from: alphonse (#3112 bf16), frieren (#3146 slice_num=128), fern (#3139 surf_weight=25). Nezuko (#3153 Huber vol) closed — 127.22, confounded by missing grad clip + high variance.
+
+Round-2 additions (after nezuko closed):
+- nezuko → #3320 warm-restarts (CosineAnnealingWarmRestarts T_0=5 T_mult=2)
+
+## Critical finding: high run-to-run variance
+
+Nezuko's round-1 experiment ran 3 identical configs and observed **15-point spread** in val_avg/mae_surf_p (127.22 / 141.16 / 141.93). This means single-run comparisons in the 14-epoch budget regime are at or near the noise floor. For results within ~10 pp of the baseline, we should require 2-3 runs to confirm. For clear winners (>15 pp improvement), single runs are likely reliable.
 
 ## Known data issue
 
