@@ -181,3 +181,90 @@ Tanjiro independently identified the same `0 * NaN = NaN` propagation in `accumu
 
 - Augmentation halves effective gradient signal per orientation; could benefit from longer schedule, but within 30-min budget the unaugmented baseline gets twice the effective per-orientation samples.
 - Symmetry aug is theoretically sound; the result here is most likely an interaction with: (a) stale code, (b) wall-clock cap, (c) MSE loss (L1 might compose better with aug). Worth re-investigating in round 2 stacked with alphonse's L1 + edward's warmup.
+
+---
+
+## 2026-05-15 17:30 — PR #3097: Deeper Transolver n_layers 5→8 + DropPath
+
+- **Student:** willowpai2i48h4-thorfinn (branch: `willowpai2i48h4-thorfinn/deeper-droppath`)
+- **Hypothesis:** n_layers 5→8 + DropPath p=0.1 for regularized depth scaling; predicted −5% to −10% on val_avg/mae_surf_p.
+
+### Results (W&B-verified)
+
+| Arm | n_layers | drop_path | params | epochs | best val_avg/mae_surf_p | test_avg/mae_surf_p | epoch time | VRAM | W&B run |
+|-----|----------|-----------|--------|--------|------------------------|---------------------|-----------|------|---------|
+| Baseline 5L | 5 | 0.0 | 0.66M | 14 | 132.73 | 121.78 | 132 s | 42.1 GB | `p1m774ow` |
+| deep8-dp005 | 8 | 0.05 | 1.03M | 9 | **152.30** | **137.34** | 218 s | 64.5 GB | `qyyxx33r` |
+| deep8-dp01 | 8 | 0.10 | 1.03M | 9 | 161.58 | 149.86 | 218 s | 64.5 GB | `jgaksniq` |
+
+Current advisor baseline (from PR #3091): val_avg/mae_surf_p = **109.42**.
+
+### Decision: CLOSED
+
+Both deep arms are 40–48% worse than the advisor baseline (109.42). Vs student's own stale-code 5L reference (132.73), deep8-dp005 is still 15% worse. Student's bug-fix (cruise NaN workaround) is redundant with alphonse's #3089 fix.
+
+### Analysis
+
+Root cause: **wall-clock-budget undertraining, not capacity**. 8L is ~65% slower per epoch; within SENPAI_TIMEOUT_MINUTES=30 the deeper model completes only 9 epochs vs baseline's 14. Both deep arms peaked on their final epoch (still descending), classic signature of truncated training. Per-epoch comparison: wider model is actually better through epochs 5–8, but never reaches the post-convergence regime that baseline hits around epoch 12–14.
+
+The hypothesis is **not refuted** — it's compute-bound. Under a 2× wall-clock budget, 8L+DropPath might win. Under the current budget, it cannot.
+
+### Follow-up
+
+Depth scaling is viable if we combine with a per-step speedup. Frieren's #3093 (bf16+bs=8, ~2× more epochs) could unlock this. Student reassigned to: **EMA of weights** (PR #3371) — addresses the late-epoch drift that affects all runs.
+
+---
+
+## 2026-05-15 17:30 — PR #3093: bf16 autocast + batch_size 4→8
+
+- **Student:** willowpai2i48h4-frieren (branch: `willowpai2i48h4-frieren/bf16-amp`)
+- **Hypothesis:** bf16 mixed precision + bs=8 for 1.5–2× wall-clock speedup → more epochs within 30-min budget; predicted −3% to −8% on val_avg/mae_surf_p.
+
+### Results (W&B-verified)
+
+| Run | bs | precision | epochs | best val_avg/mae_surf_p | test_avg/mae_surf_p | epoch time | VRAM | W&B run |
+|-----|----|-----------|--------|------------------------|---------------------|-----------|------|---------|
+| frieren-bf16-bs8-v3 | 8 | bf16 | 18/50 | **128.70** (ep 15) | **117.22** | 104 s | 88.8 GB | `hxslyna3` |
+
+Current advisor baseline (from PR #3091): val_avg/mae_surf_p = **109.42**.
+
+### Decision: SENT BACK for rebased confirmation arm
+
+128.70 is 17.5% worse than the 109.42 baseline, BUT this run used **stale code (lr=5e-4, no warmup, no clip)**. The speed unlock is genuine: 18 epochs vs ~14 at fp32+bs=4 stale, and training appears stable throughout (no overflow, no divergence).
+
+The comparison is apples-to-oranges. Asked student to rebase onto current advisor tip (f3a71a2 = #3091 warmup+clip+lr=1e-3) and run `--epochs 10` for composed-config benchmark. Decision rule: val < 109.42 → merge; val ∈ [109.42, 115] → TBD; val > 115 → close.
+
+### Per-split test MAE (best ckpt, stale-code run)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-------|-----------|------------|------------|
+| test_single_in_dist | 142.48 | 2.18 | 0.86 |
+| test_geom_camber_rc | 124.92 | 2.70 | 0.99 |
+| test_geom_camber_cruise | 84.93 | 1.30 | 0.54 |
+| test_re_rand | 116.55 | 1.93 | 0.82 |
+| **avg** | **117.22** | **2.03** | **0.80** |
+
+---
+
+## 2026-05-15 17:30 — PR #3090: Wider Transolver n_hidden 128→192 (+256)
+
+- **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/wider-model`)
+- **Hypothesis:** n_hidden 128→192, n_head 4→6; predicted −5% to −10% on val_avg/mae_surf_p.
+
+### Results (W&B-verified)
+
+| Run | n_hidden | bs | epochs | best val_avg/mae_surf_p | test_avg/mae_surf_p (3 splits) | epoch time | VRAM | W&B run |
+|-----|----------|----|--------|------------------------|-------------------------------|-----------|------|---------|
+| baseline-128 | 128/4 | 4 | 14 | 119.82 (ep 14) | 121.46 | 132 s | 42.1 GB | `9pj8vox8` |
+| wider-192 | 192/6 | 4 | 9 | **170.35** (ep 5) | 175.35 | 203 s | 63.0 GB | `bc3dcrmc` |
+| wider-256 | 256/8 | 2† | 8 | **169.10** (ep 8) | 174.36 | 253 s | 42.0 GB | `3ag48lmp` |
+
+†wider-256 OOM'd at bs=4; dropped to bs=2. Current advisor baseline: val=**109.42**.
+
+### Decision: CLOSED
+
+54–56% regression vs advisor baseline (109.42). Same fundamental issue as thorfinn depth: wider model is 1.5–2× slower per epoch, can't reach the late-epoch convergence regime within budget. Per-epoch, wider-192 is actually better in epochs 5–8 (170 vs baseline 197), but the baseline's rapid drop at epochs 10–14 (197→120) is unreachable for the wider model in 30 min.
+
+cruise NaN bug noted — same pre-existing issue, covered by alphonse's #3089 fix.
+
+Student reassigned to: **Fourier positional encoding on (x,z)** (PR #3372) — same per-step cost, higher-frequency geometry representation.

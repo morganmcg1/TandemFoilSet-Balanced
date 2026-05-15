@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~15:30 UTC
+- **Last updated:** 2026-05-15 ~17:55 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -32,11 +32,11 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | #3089 | alphonse | L1 loss (val=102.37 ✓ verified on pre-#3091 code) | Sent back 16:30 — rebase + flip default + composed-config re-run |
 | #3096 | tanjiro | x-axis symmetry aug (val=161.54 — 47% regression, mostly stale code) | Sent back 17:30 — rebase + 1 confirmation arm at `--epochs 10`; decision rule on result |
 | #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | WIP — sent back, has new commit |
-| #3090 | askeladd | Width: n_hidden 128→192 (+256) | WIP — has implementation commit 46 min ago |
 | #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | WIP — short Claude sessions, no commit yet |
-| #3093 | frieren | bf16 + batch_size 4→8 | WIP — repeated rate-limit storms, no commits |
-| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — repeated rate-limit storms, no commits |
-| #3097 | thorfinn | Depth: n_layers 5→8 + DropPath 0.1 | WIP — bug-fix posted but no code commit yet |
+| #3093 | frieren | bf16 + batch_size 4→8 (speed unlock — 18 epochs vs 14) | Sent back 17:50 — rebase + composed-config arm at `--epochs 10`; decision rule |
+| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — stale, no commits |
+| #3371 | thorfinn | EMA of weights (Polyak averaging for stable checkpoint selection) | NEW — just assigned |
+| #3372 | askeladd | Fourier positional encoding on (x,z) coords | NEW — just assigned |
 
 ## Merged wins
 
@@ -56,18 +56,25 @@ Edward's #3288 has `f3a71a2` (the #3091 merge commit) in its history, so it's al
 
 ## Next decisions (when in-flight PRs complete)
 
-1. **Merge alphonse #3089 ASAP once student returns with the two trivial fixes** — this is the next baseline (102.37). After merge, restack: lr=1e-3 + warmup + clip + L1.
-2. **Merge any experiment that beats the new baseline.** All in-flight PRs are running with mis-tuned cosine schedules (50-epoch T_max but ~15 epochs realized). If they still beat baseline at 15 epochs, strong signal. If close, request `--epochs 10` re-run before declaring improvement.
-3. **Edward #3288 trim:** Once alphonse's PR merges (with the more robust scoring fix), have edward drop the duplicate scoring fix and only keep the lr default bump.
-4. **Priority follow-ups (round 2):** L1 + LR sweep (alphonse suggested 3e-4, 1e-3 at different curvatures), L1 + longer schedule (training still improving at timeout), L1 + surf_weight sweep.
+1. **Merge alphonse #3089 ASAP once student returns** — next baseline (102.37). After merge: lr=1e-3 + warmup + clip + L1. Edward #3288 trims to lr-default-only after alphonse merges.
+2. **Frieren #3093 rebased confirmation arm** — bf16+bs=8 speed unlock; if val < 109.42 on rebased code → merge immediately. This enables more epoch-budget for architecture experiments.
+3. **Tanjiro #3096 rebased arm** — if val < 109.42 → merge; val 109-115 → conditional; val > 115 → close.
+4. **Fern #3092 slice_num result** — waiting for rebased --epochs 10 run.
+5. If frieren's bf16 lands: revisit depth (n_layers=7, not 8) and width (n_hidden=160, not 192) with the speed budget.
 
-## Potential next research directions (round 2+)
+## Cross-cutting observations from round 2 (depth + width + bf16)
 
-1. **Longer training runs** — model was still improving at timeout. With proper schedule (--epochs 10 + T_max=10), the cosine tail likely holds significant gains.
-2. **L1/Huber loss composition** — if alphonse wins, stack with edward's merged changes
-3. **Wider model (askeladd)** — if 192 hidden wins, stack with winning loss + optimizer
-4. **Symmetry aug (tanjiro)** — OOD generalization boost on geom_camber tracks
-5. **EMA** — stabilize best-val checkpoint selection (especially important with mis-tuned cosine)
-6. **Separate per-channel output heads** (p, Ux, Uy get distinct decoder networks)
-7. **Position encoding** — Fourier features on (x, z) or unified_pos=True
-8. **Physics-aware loss** — divergence-free penalty, near-surface gradient consistency
+- **Every architecture change tried so far (depth, width) is runtime-budget-bound**, not capacity-bound. The model's biggest val drops happen at epochs 10–14; slower models can't reach that regime in 30 min.
+- **bf16+bs=8 is the highest-leverage change in-flight** because it unlocks more epochs for all future experiments.
+- **Depth at 8L and width at 192/256 are NOT dead ends** — they failed because they couldn't complete enough epochs. If frieren's bf16 win materializes, retry n_layers=6 and n_hidden=160 (both within ~20% slower than baseline) as the next architectural steps.
+
+## Potential next research directions (round 3+)
+
+1. **L1 + LR sweep** — alphonse suggested 3e-4 and 1e-3 at different curvatures. After L1 merges.
+2. **Fourier PE (askeladd #3372)** — high-freq geometry; zero per-step cost.
+3. **EMA (thorfinn #3371)** — stabilize checkpoint selection; zero per-step cost.
+4. **Symmetry aug (tanjiro) stacked with L1** — the 47% regression was likely code+schedule; L1 may compose better with aug.
+5. **Wider model at smaller step (n_hidden=160, n_head=5)** — after bf16 unlock.
+6. **Depth at n_layers=6** — adds only ~20% per-step cost vs baseline. Within budget.
+7. **Separate per-channel output heads** — p, Ux, Uy decoupled decoders.
+8. **Physics-aware loss** — divergence-free penalty, near-surface gradient consistency.
