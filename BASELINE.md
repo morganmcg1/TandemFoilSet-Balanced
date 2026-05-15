@@ -7,22 +7,24 @@
 
 ## Current best (this branch)
 
+> ⚠️ **Note:** val_avg=92.80 was measured by thorfinn before PR #3326 (MLP dropout) merged. Current code has dropout + log1p stacked; true combined val_avg is **unverified** — use 92.80 as a lower-bound reference and verify on next run.
+
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p`              | **112.49** | PR #3326 (fern H12 MLP dropout), epoch 13 |
-| `val_single_in_dist/mae_surf_p`   | 136.83 | PR #3326 |
-| `val_geom_camber_rc/mae_surf_p`   | 118.25 | PR #3326 |
-| `val_geom_camber_cruise/mae_surf_p` | 87.31 | PR #3326 |
-| `val_re_rand/mae_surf_p`          | 107.55 | PR #3326 |
-| `test_avg/mae_surf_p`             | **104.83** | PR #3326 |
-| `test_single_in_dist/mae_surf_p`  | 126.77 | PR #3326 |
-| `test_geom_camber_rc/mae_surf_p`  | 112.01 | PR #3326 |
-| `test_geom_camber_cruise/mae_surf_p` | 75.35 | PR #3326 |
-| `test_re_rand/mae_surf_p`         | 105.20 | PR #3326 |
+| `val_avg/mae_surf_p`              | **92.80** | PR #3345 (thorfinn H11 log1p), epoch 14 (pre-dropout baseline) |
+| `val_single_in_dist/mae_surf_p`   | 115.48 | PR #3345 |
+| `val_geom_camber_rc/mae_surf_p`   | 105.48 | PR #3345 |
+| `val_geom_camber_cruise/mae_surf_p` | 63.87 | PR #3345 |
+| `val_re_rand/mae_surf_p`          | 86.36 | PR #3345 |
+| `test_avg/mae_surf_p`             | **84.11** | PR #3345 |
+| `test_single_in_dist/mae_surf_p`  | 108.91 | PR #3345 |
+| `test_geom_camber_rc/mae_surf_p`  | 91.72 | PR #3345 |
+| `test_geom_camber_cruise/mae_surf_p` | 56.73 | PR #3345 |
+| `test_re_rand/mae_surf_p`         | 79.06 | PR #3345 |
 
 ## Current baseline configuration
 
-`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout):
+`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets):
 
 - **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` (~678K trainable params + 64 non-trainable RFF buffer)
 - **Input:** RFF coordinate encoding (n_freq=32, sigma=1.0) replacing raw (x,z) — input to preprocess MLP is now 86-dim (64 RFF + 22 other features)
@@ -33,6 +35,7 @@
 - **Epochs:** 50 (cap) / `SENPAI_TIMEOUT_MINUTES=30` wall-clock cap
 - **Sampler:** WeightedRandomSampler with domain-balanced weights × Re-strat multiplier (Re>1e6 samples × 2.0; ~1303/1499 train samples)
 - **MLP dropout:** `dropout=0.1` in each `TransolverBlock.mlp` (FFN sub-layers); `PhysicsAttention`, preprocess MLP, and final head remain at `dropout=0.0`
+- **Log1p target transform:** `signed_log1p(y) = sign(y) * log1p(|y|)` applied to both `pred` and `y` before loss compute only; `evaluate_split` unchanged (metric stays in physical units)
 - **NaN workaround:** `evaluate_split` masks out and zero-fills non-finite GT samples before accumulation (fixes test_geom_camber_cruise NaN)
 - **Splits dir:** `/mnt/new-pvc/datasets/tandemfoil/splits_v2`
 
@@ -46,7 +49,26 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 
 ## Baseline history
 
-### 2026-05-15 18:20 — PR #3326: H12 MLP dropout=0.1 (fern) — **CURRENT BEST**
+### 2026-05-15 19:00 — PR #3345: H11 signed-log1p target transform (thorfinn) — **CURRENT BEST** ⚠️ measured pre-dropout
+
+- **val_avg/mae_surf_p:** 92.80 (best epoch 14, 30-min cap) — **measured on pre-dropout baseline (122.81), not combined**
+- **Per-split val:**
+  - `val_single_in_dist/mae_surf_p` = 115.48
+  - `val_geom_camber_rc/mae_surf_p` = 105.48
+  - `val_geom_camber_cruise/mae_surf_p` = 63.87
+  - `val_re_rand/mae_surf_p` = 86.36
+- **test_avg/mae_surf_p:** 84.11
+- **Per-split test:**
+  - `test_single_in_dist/mae_surf_p` = 108.91
+  - `test_geom_camber_rc/mae_surf_p` = 91.72
+  - `test_geom_camber_cruise/mae_surf_p` = 56.73
+  - `test_re_rand/mae_surf_p` = 79.06
+- **What changed:** Added `signed_log1p(y) = sign(y) * log1p(|y|)` applied to both `pred` and `y` just before loss computation (loss side only — evaluate_split unchanged). Dynamic range compressed ~3.5× (std: 1025→0.60 in slog1p-normalized space).
+- **Delta:** -24.4% val_avg vs RFF+Re-strat baseline (122.81 → 92.80). All splits massively improved: geom_camber_cruise -37.1%, re_rand -27.4%, geom_camber_rc -16.3%, single_in_dist -20.2%.
+- **Metric artifact:** `models/model-thorfinn-log1p-targets-20260515-173623/metrics.jsonl`
+- **Reproduce:** `cd target && python train.py --agent thorfinn --experiment_name "thorfinn/log1p-targets"`
+
+### 2026-05-15 18:20 — PR #3326: H12 MLP dropout=0.1 (fern)
 
 - **val_avg/mae_surf_p:** 112.49 (best epoch 13, 30-min cap)
 - **Per-split val:**
