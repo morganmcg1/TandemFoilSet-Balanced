@@ -255,7 +255,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # Pre-filter for non-finite ground truth: accumulate_batch's
+            # per-sample skip mask gets multiplied with err, but
+            # NaN * 0 == NaN, so any non-finite y poisons the accumulator
+            # (e.g. test_geom_camber_cruise/000020.pt). Apply the sample skip
+            # here by zeroing mask rows where y is non-finite, and replace
+            # the offending y values with 0 so the masked-out positions
+            # contribute cleanly to the (zeroed) sum.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            mask_for_acc = mask & y_finite_per_sample.unsqueeze(-1)
+            y_safe = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_for_acc, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
