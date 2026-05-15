@@ -21,10 +21,11 @@ Note: the val delta from the previous SmoothL1 entry (115.17 → 108.47) is
 stochastic re-roll variance. Treat ±5-10 pts as the expected single-seed
 variance on `val_avg/mae_surf_p`.
 
-## Currently in flight (7 WIP + 1 idle)
+## Currently in flight (8 WIP — 0 idle)
 
 | PR | Student | Hypothesis | Base | Theme |
 |----|---------|------------|------|-------|
+| #3299 | alphonse | OneCycleLR max_lr=1e-3, 15% warmup | SmoothL1 | schedule / LR |
 | #3280 | askeladd | SmoothL1 beta=1.0 → 0.5 | SmoothL1 | loss tuning |
 | #3116 | edward   | surf_weight 10 → 25 (MSE base) | MSE | loss alignment |
 | #3285 | fern     | EMA weights decay=0.999 | SmoothL1 | OOD generalization |
@@ -32,8 +33,6 @@ variance on `val_avg/mae_surf_p`.
 | #3129 | nezuko   | bf16 autocast | MSE | throughput |
 | #3286 | tanjiro  | SmoothL1 + surf_weight=25 stack | SmoothL1 | loss stack |
 | #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) (MSE base) | MSE | channel weighting |
-
-**Idle:** alphonse (#3279 merged — needs new R2 assignment).
 
 Note: edward, nezuko, thorfinn (#3116, #3129, #3135) were assigned before
 SmoothL1 merged, so they run on the old MSE base — results will be interpreted
