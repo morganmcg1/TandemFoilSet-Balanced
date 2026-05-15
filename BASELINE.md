@@ -11,8 +11,9 @@ Model: **Transolver** (~1.5M params)
 Training:
 - `lr=5e-4`, `weight_decay=1e-4`, `batch_size=4`, `surf_weight=10.0`
 - Optimizer: `AdamW`
-- Scheduler: `CosineAnnealingLR(T_max=epochs)`
-- Loss: MSE in normalized space, `total = vol_loss + surf_weight * surf_loss`
+- Scheduler: `CosineAnnealingWarmRestarts(T_0=5, T_mult=2)` with per-batch `scheduler.step()`
+- Loss: vol_loss (MSE) + surf_weight × surf_loss (L1/MAE), `total = vol_loss + surf_weight * surf_loss`
+- Grad clip: `clip_grad_norm_(max_norm=1.0)`
 - No mixed precision, no grad clipping
 - `epochs=50` (max), capped by `SENPAI_TIMEOUT_MINUTES=30`
 
@@ -26,6 +27,35 @@ Per-run limits enforced by the harness:
 `val_avg/mae_surf_p` — equal-weight mean surface pressure MAE across the four validation splits. Lower is better. The paper-facing metric is `test_avg/mae_surf_p`, computed at the end of training using the best-val checkpoint.
 
 ## Baseline metrics
+
+### 2026-05-15 21:30 — PR #3434: L1 surface loss (vol MSE + surf L1)
+
+**New best: `val_avg/mae_surf_p = 90.04`** — single arm, -8.84 pp (-8.94%) vs warm-restarts baseline 98.88
+
+| Split | val mae_surf_p (run `tcci4fzk`) | Δ vs prior baseline |
+|---|---|---|
+| val_single_in_dist | 108.95 | −7.41 |
+| val_geom_camber_rc | 97.70 | −10.70 |
+| val_geom_camber_cruise | 70.40 | −7.51 |
+| val_re_rand | 83.11 | −9.76 |
+| **val_avg** | **90.04** | **−8.84** |
+| test avg (3-split excl. cruise) | 87.78 | −7.04 |
+
+- **W&B run:** `tcci4fzk`
+- **Epochs:** 14 / 50 (30-min wall-clock cap; still improving at epoch 14 — last two val_avg: 98.80 → 90.04)
+- **Peak VRAM:** 42.1 GB (unchanged from prior baseline)
+- **Change vs prior baseline:** replaced `sq_err` for `surf_loss` with `abs_err = (pred - y_norm).abs()` — vol_loss remains MSE, surf_loss is now L1/MAE
+- **Why it works:** L1 minimizer = conditional median, the MAE-optimal estimator. Grad clip (`max_norm=1.0`) already normalizes step sizes, so L1 vs L2 convergence speed is similar (L1 only 1 epoch slower at epoch 1, then led all the way). Largest gain on `val_geom_camber_rc` (-10.70 pp) — heavy-tailed OOD error distribution where L2 chases outliers, L1 distributes gradient more evenly.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py \
+    --lr 5e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10.0 --epochs 50 \
+    --agent willowpai2i24h5-edward \
+    --wandb_group willow-pai2i-24h-r5-round3 \
+    --wandb_name edward-l1-surf-loss
+  ```
+
+---
 
 ### 2026-05-15 20:25 — PR #3320: CosineAnnealingWarmRestarts T_0=5 T_mult=2
 
