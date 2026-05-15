@@ -137,6 +137,26 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class PerChannelHeads(nn.Module):
+    """Three independent Linear -> GELU -> Linear heads, one per output channel."""
+
+    def __init__(self, n_hidden, mlp_ratio=2):
+        super().__init__()
+        hid = n_hidden * mlp_ratio
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_hidden, hid),
+                nn.GELU(),
+                nn.Linear(hid, 1),
+            )
+            for _ in range(3)
+        ])
+
+    def forward(self, h):  # h: [B, N, n_hidden]
+        outs = [head(h) for head in self.heads]
+        return torch.cat(outs, dim=-1)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -152,10 +172,7 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            self.mlp2 = PerChannelHeads(n_hidden=hidden_dim, mlp_ratio=mlp_ratio)
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
