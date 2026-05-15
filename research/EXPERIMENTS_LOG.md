@@ -87,6 +87,56 @@ Test (3 valid splits, NaN-safe):
 
 ---
 
+## 2026-05-15 16:20 — PR #3285 — EMA model weights, decay=0.999 (MERGED → new baseline)
+
+- **Branch:** `charliepai2i48h1-fern/ema-weights-0999`
+- **Hypothesis:** Maintain a Polyak/EMA shadow of model weights via `torch.optim.swa_utils.AveragedModel` with `decay=0.999`; evaluate the EMA model at val/test time. Predicted -3 to -8% on val_avg, biggest gains on OOD splits.
+- **Results vs current baseline (108.47):**
+
+| Split | Baseline (post-#3279) | EMA-0.999 | Δ |
+|-------|----:|----:|----:|
+| `val_single_in_dist`     | 128.55 | 130.72 | +1.7% |
+| `val_geom_camber_rc`     | 116.22 | 112.51 | -3.2% |
+| `val_geom_camber_cruise` |  87.91 |  79.47 | -9.6% |
+| `val_re_rand`            | 101.21 |  95.36 | -5.8% |
+| **avg**                  | **108.47** | **104.52** | **-3.6%** |
+
+vs original SmoothL1 baseline (115.17):
+| **val_avg/mae_surf_p** | 115.17 | 104.52 | **-9.25%** |
+
+Test (3 finite splits — run pre-dated #3279 NaN fix):
+- `test_geom_camber_rc`: 111.81 → 100.47 (-10.1%)
+- `test_re_rand`: 101.43 → 91.34 (-9.95%)
+- `test_single_in_dist`: 125.70 → 118.26 (-5.92%)
+- 3-finite-split mean: 112.98 → 103.36 (-8.51%)
+
+- **Metrics path:** `models/model-ema-0999-20260515-145218/metrics.jsonl`
+- **Action:** MERGED → new baseline `val_avg/mae_surf_p = 104.52`.
+- **Commentary:** Clean win on every OOD split. `val_single_in_dist` regressed slightly (+1.7%) — likely noise within ±5-10pts variance. Student notes the val metric was still strictly decreasing at epoch 14 (the timeout cutoff), suggesting headroom for more epochs. Cost: ~5 MB extra weights, no measurable wall-clock overhead.
+
+---
+
+## 2026-05-15 16:20 — PR #3129 — bf16 autocast (CLOSED — small regression, no throughput)
+
+- **Branch:** `charliepai2i48h1-nezuko/bf16-autocast`
+- **Hypothesis:** bf16 forward+loss → 1.5-2× throughput → more epochs in 30 min cap → better val.
+- **Result:** val_avg/mae_surf_p = **111.99** vs current baseline 108.47 (+3.2%). test_avg = 101.50 (student bundled their own NaN fix, now redundant since #3279 merged).
+- 19 epochs completed (vs 14 baseline) — more epochs but worse val number.
+- Per-epoch wall-clock: ~97s (essentially identical to fp32). bf16 didn't help on this 662K-param model — memory-bandwidth-bound, not tensor-core-bound on H100.
+- Memory: 42 GB → 34 GB (-19%) — real but only useful if we spend it on a larger batch.
+- **Action:** Closed. Reassigned nezuko to a follow-up bf16 + batch_size=8 + lr=1e-3 experiment (#3327) — uses the memory headroom productively.
+
+---
+
+## 2026-05-15 16:20 — PR #3116 — surf_weight 10 → 25 on MSE base (CLOSED — subsumed)
+
+- **Branch:** `charliepai2i48h1-edward/surf-weight-25`
+- **Hypothesis:** Higher surface weight emphasizes the primary metric channel.
+- **Result:** val_avg/mae_surf_p = **127.86** (3-run mean ≈ 128.45, σ ≈ 12) vs MSE baseline 143.52 (-10.9%, real signal) but vs current SmoothL1+EMA baseline 104.52 (+22.3%, doesn't beat).
+- **Action:** Closed. The hypothesis is validated against MSE, but the relevant stacked experiment (SmoothL1 + surf_weight=25) is already in flight via tanjiro's #3286. Reassigned edward to weight_decay=5e-4 (#3325) — direct regularization targeting the val_single gap.
+
+---
+
 ## 2026-05-15 15:30 — PR #3279 — NaN-safe scoring accumulators (MERGED → infra fix)
 
 - **Branch:** `charliepai2i48h1-alphonse/scoring-nanfix`

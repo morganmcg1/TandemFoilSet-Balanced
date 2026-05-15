@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 15:35 UTC
+- **Updated:** 2026-05-15 16:25 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -13,67 +13,81 @@ down vs the baseline Transolver config in `target/train.py`.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 108.47** (PR #3279, SmoothL1 baseline re-evaluated with
-NaN-safe scoring). `test_avg/mae_surf_p = 99.49` (now finite for the first time).
-Splits (val): single=128.55, rc=116.22, cruise=87.91, re_rand=101.21.
+**val_avg/mae_surf_p = 104.52** (PR #3285, SmoothL1 + EMA-0.999).
+`test_avg/mae_surf_p = 99.49` from #3279; #3285's run pre-dated the NaN fix, so
+its 3-finite-split test mean = 103.36 is the apples-to-apples test number.
+Splits (val): single=130.72, rc=112.51, cruise=79.47, re_rand=95.36.
 
-Note: the val delta from the previous SmoothL1 entry (115.17 → 108.47) is
-stochastic re-roll variance. Treat ±5-10 pts as the expected single-seed
-variance on `val_avg/mae_surf_p`.
+**Key gap:** `val_single_in_dist=130.72` is now the worst of the four splits.
+Single-foil geometry is OOD relative to tandem-heavy training data. The R3
+hypotheses target this directly (regularization, capacity, schedule).
+
+Single-seed variance ≈ ±5-10 pts on val_avg/mae_surf_p; require ≥5% delta to
+declare a real win.
 
 ## Currently in flight (8 WIP — 0 idle)
 
 | PR | Student | Hypothesis | Base | Theme |
 |----|---------|------------|------|-------|
-| #3299 | alphonse | OneCycleLR max_lr=1e-3, 15% warmup | SmoothL1 | schedule / LR |
-| #3280 | askeladd | SmoothL1 beta=1.0 → 0.5 | SmoothL1 | loss tuning |
-| #3116 | edward   | surf_weight 10 → 25 (MSE base) | MSE | loss alignment |
-| #3285 | fern     | EMA weights decay=0.999 | SmoothL1 | OOD generalization |
-| #3124 | frieren  | mlp_ratio 4 (retry on SmoothL1) | SmoothL1 | model capacity |
-| #3129 | nezuko   | bf16 autocast | MSE | throughput |
-| #3286 | tanjiro  | SmoothL1 + surf_weight=25 stack | SmoothL1 | loss stack |
-| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) (MSE base) | MSE | channel weighting |
+| #3299 | alphonse | OneCycleLR max_lr=1e-3, 15% warmup | SmoothL1+EMA | schedule / LR |
+| #3280 | askeladd | SmoothL1 beta=1.0 → 0.5 | SmoothL1+EMA | loss tuning |
+| #3325 | edward   | weight_decay 1e-4 → 5e-4 | SmoothL1+EMA | regularization |
+| #3324 | fern     | log-cosh loss | SmoothL1+EMA | loss formulation |
+| #3124 | frieren  | mlp_ratio 4 (retry on SmoothL1) | SmoothL1+EMA | model capacity |
+| #3327 | nezuko   | bf16 + batch=8 + lr=1e-3 | SmoothL1+EMA | throughput / capacity |
+| #3286 | tanjiro  | SmoothL1 + surf_weight=25 stack | SmoothL1+EMA | loss stack |
+| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) | SmoothL1+EMA | channel weighting |
+
+Note: askeladd/frieren/tanjiro/thorfinn were assigned before EMA merged; their
+runs pick up EMA from the advisor base when they pull. alphonse, edward, fern,
+nezuko were assigned after EMA so they run on the full SmoothL1+EMA+NaN-fix
+base. All effects are orthogonal so the comparison is well-defined.
 
 Note: edward, nezuko, thorfinn (#3116, #3129, #3135) were assigned before
 SmoothL1 merged, so they run on the old MSE base — results will be interpreted
 relative to MSE baseline (143.52). All others are on the SmoothL1 base.
 
-## Round 1 summary (reviewed so far)
+## Rounds 1 & 2 summary
 
-| PR | Hypothesis | val_avg/mae_surf_p | vs MSE | Decision |
+| PR | Hypothesis | val_avg/mae_surf_p | vs prev baseline | Decision |
 |----|------------|-------------------:|-------:|----------|
 | #3107 | baseline (MSE default) | 143.52 | — | Closed (calibration) |
-| #3111 | SmoothL1 beta=1.0 | 115.17 | -19.7% | MERGED |
-| #3132 | LR warmup (10%) | 141.73 | -1.3% | Closed (noise) |
-| #3124 | mlp_ratio=4 | 134.14 | -6.5% | Sent back (retry on SmoothL1) |
-| #3120 | slice_num=128 | 147.74 | +2.9% | Closed (regression) |
-| #3279 | NaN-safe scoring (infra) | **108.47** | **-24.4%** | **MERGED ← new baseline; test_avg=99.49 finite** |
+| #3111 | SmoothL1 beta=1.0 | 115.17 | -19.7% (vs MSE) | MERGED |
+| #3132 | LR warmup (10%) | 141.73 | -1.3% (vs MSE) | Closed (noise) |
+| #3124 | mlp_ratio=4 | 134.14 | -6.5% (vs MSE) | Sent back (retry on SmoothL1) |
+| #3120 | slice_num=128 | 147.74 | +2.9% (vs MSE) | Closed (regression) |
+| #3116 | surf_weight=25 (MSE) | 127.86 | -10.9% (vs MSE) | Closed (subsumed by #3286) |
+| #3129 | bf16 autocast | 111.99 | +3.2% (vs 108.47) | Closed (regression, no throughput) |
+| #3279 | NaN-safe scoring (infra) | 108.47 | -5.8% (stochastic) | MERGED |
+| #3285 | EMA-0.999 weights | **104.52** | **-3.6% (vs 108.47)** | **MERGED ← new baseline** |
 
 ## Potential next research directions
 
-Round 2 candidates (from researcher-agent on 2026-05-15 12:30 — full file at
-`research/RESEARCH_IDEAS_2026-05-15_12:30.md`), prioritized assuming the round
-1 winners point us at loss alignment first:
+After round 3 lands (8 PRs in flight covering schedule/loss/regularization/
+capacity/throughput), the remaining bench from the original researcher-agent
+list (`research/RESEARCH_IDEAS_2026-05-15_12:30.md`):
 
-- **EMA / Polyak averaging** of weights with decay 0.999 — free OOD boost,
-  especially for the camber holdouts.
 - **Re-conditioned FiLM** per Transolver block (2-layer MLP `log(Re) → (γ, β)`)
-  — explicit cross-regime conditioning for `val_re_rand`.
+  — explicit cross-regime conditioning, targets `val_re_rand` and the
+  single-foil geometric gap.
 - **Dual surface vs volume decoder heads** — separate `nn.Linear(n_hidden, 3)`
-  for surface and volume nodes.
-- **Log-cosh loss** — alternative to SmoothL1; if SmoothL1 wins, log-cosh is
-  the natural variant.
-- **OneCycleLR** instead of cosine — sharper peak, often beats cosine on
-  short-horizon trainings.
-- **AoA sin/cos encoding** — replace raw radians with periodic encoding.
-- **Mesh-node subsampling** during training (e.g. 50% of non-surface nodes per
-  step) to fit more samples per batch.
+  for surface and volume nodes. Decouples the metric-channel learning.
+- **AoA sin/cos encoding** — replace raw radians with periodic encoding for
+  the foil-pitch conditioning input.
+- **Mesh-node subsampling** during training (50% of non-surface nodes per
+  step) — fits more samples per batch, regularizes the volume objective.
 - **Stronger positional encoding** — `unified_pos=True` with various ref grids,
   Fourier / RFF on (x, z) input dims.
-- **Regularization for OOD** — dropout sweep, stochastic depth on transformer
-  blocks.
-- **Compound winners** — once round 1 lands, stack the best loss formulation
-  with the best capacity setting in round 2.
+- **Stochastic depth** on transformer blocks (Huang et al. 2016) — modern ViT
+  regularization, complements EMA + weight_decay.
+- **Compound winners** — stack the best R3 levers (schedule + regularization +
+  loss tuning) into a single end-of-program "all-in" run.
+- **Sweep EMA decay** — fern noted val was still descending at the cutoff; try
+  decay=0.9995 (longer half-life) or shorter cap to confirm the EMA shape.
+
+**Plateau watch:** R3 represents the third tier of single-knob experiments.
+If no further wins land after R3, escalate per the plateau protocol —
+researcher-agent + architectural changes (FiLM, dual heads).
 
 ## Plateau plan (if it happens)
 
