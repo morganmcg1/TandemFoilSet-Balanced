@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 20:27
+- **Date:** 2026-05-15 20:37
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -34,24 +34,33 @@ Key insight: frequencies barely moved from octave init (max 2.5% drift). The gai
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | re-run on new baseline (rebase requested 20:25) |
-| #3353 | frieren | `slice_num=96` with gradient checkpointing | WIP (pod picked up at it.72, auto-rebasing) |
+| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | WIP |
 | #3356 | thorfinn | Divergence-free velocity auxiliary loss | WIP |
-| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | WIP (just assigned 19:35) |
+| #3441 | frieren | `slice_num=80` WITHOUT checkpointing (memory headroom) | WIP (just assigned 20:36) |
+
+### Critical pending verification — PR #3215 (tanjiro SmoothL1)
+
+**Largest single-change improvement on this benchmark to date.** β=0.05 on OLD baseline: val_avg=90.245 (−22% vs new baseline 116.34), test_avg=82.21 (−24% vs 107.33). All 4 splits improve 21-34%. Sent back for single-arm rebased re-run (β=0.05 only) on learnable Fourier baseline. If confirmed, this becomes the new baseline by a HUGE margin and reframes the research focus.
+
+If tanjiro's rebased re-run lands anywhere near val<100, this changes everything:
+- Future hypotheses should be evaluated on top of SmoothL1
+- The MSE→SmoothL1 lever is dominant; Fourier features added only marginal gain on top
+- We should investigate whether other "data-dynamic-range" attacks (alphonse's per-sample normalization, edward's per-channel weights) become redundant or complementary
 
 ### FiLM v2 result (alphonse #3350) — pre-rebase data point
 
-Ran on OLD (fixed Fourier) baseline so not apples-to-apples vs current head:
-- val_avg = 116.96 (vs new baseline 116.34 → +0.5%, flat within noise)
-- test_avg = 104.64 (vs new baseline 107.33 → **−2.5%**, all 4 test splits improve)
+Ran on OLD (fixed Fourier) baseline. vs new baseline (learnable Fourier): val flat (+0.5%), test better (−2.5%, all 4 test splits improve). Mechanism sound. Asked for rebase + compound test. If FiLM + learnable Fourier beats both 116.34 val and 107.33 test, merge.
 
-FiLM mechanism is sound (student fixed two impl bugs: zero-init preserved after self.apply; row-0 read instead of mean-over-nodes to avoid padding contamination of log(Re) signal). Asking for rebase + compound test on learnable Fourier. If FiLM + learnable Fourier beats both 116.34 val and 107.33 test, merge.
+### Closed this cycle
+
+- **PR #3353 (frieren slice_num=96+ckpt):** CLOSED. Memory unused (16/96 GB peak); checkpoint recompute tax (+50% epoch time) caused under-convergence (10/50 epochs). Reassigned to PR #3441 slice_num=80 without checkpointing.
 
 ## Round 1 carry-overs still WIP
 
-- **PR #3194 (askeladd, warmup-cosine):** sent back for rebase + re-run on learnable Fourier baseline (20:25). Two arms: warmup=0 vs warmup=3. Beat target: val_avg < 116.34 AND test_avg < 107.33.
-- **PR #3207 (nezuko, geom-conditioned slice):** sent back earlier for rebase onto learnable Fourier baseline. Final iteration — geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
-- **PR #3215 (tanjiro, SmoothL1):** previous run (W&B `638hd0v7`, beta=0.05 on fixed Fourier baseline) didn't post terminal results before new baseline merged. Sent back at 20:25 for rebase + re-run with beta=0.05 and beta=0.10 arms.
-- **PR #3198 (edward, per-channel pressure loss weights):** previous sweep (3 arms, p_surf_weight=2.0/3.0/5.0 on fixed Fourier baseline) didn't post terminal results. Sent back at 20:25 for rebase + re-run.
+- **PR #3194 (askeladd, warmup-cosine):** sent back for rebase + re-run on learnable Fourier baseline. Two arms: warmup=0 vs warmup=3. Beat target: val_avg < 116.34 AND test_avg < 107.33.
+- **PR #3207 (nezuko, geom-conditioned slice):** pod picked up at iter 74 (20:24 UTC) and is working on rebased re-run. Geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
+- **PR #3215 (tanjiro, SmoothL1):** initial 2-arm run on fixed Fourier baseline shows massive improvement (−22% val vs new baseline). Sent back at 20:35 for **ONE single-arm rebased re-run (β=0.05)** to verify compound with learnable Fourier. HIGH PRIORITY merge candidate.
+- **PR #3198 (edward, per-channel pressure loss weights):** sent back at 20:25 for rebase + re-run of 3-arm sweep.
 
 ## Potential next research directions
 

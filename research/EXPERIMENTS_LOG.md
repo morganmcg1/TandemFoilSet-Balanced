@@ -16,6 +16,50 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-15 20:35 — PR #3215: SmoothL1 loss β=0.05 and β=0.10 (tanjiro) — sent back for rebased verification
+- student: willowpai2i24h2-tanjiro
+- branch: `willowpai2i24h2-tanjiro/smoothl1-loss`
+- hypothesis: Replace MSE with smooth-L1 (Huber) loss in normalized space; caps gradient contribution of high-Re extreme errors without zeroing them
+- W&B runs: `638hd0v7` (β=0.05, won by val), `pbvt4zsz` (β=0.10, won by test)
+
+| Metric | OLD baseline (#3200) | β=0.05 | β=0.10 | NEW baseline (#3352) | vs NEW |
+|---|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 121.4956 | **90.2450** | 91.2928 | 116.3411 | **−22.4% (β=0.05)** |
+| `test_avg/mae_surf_p` | 112.4884 | 82.2072 | **81.1592** | 107.3254 | **−24.4% (β=0.10)** |
+| best val epoch | 14 | 13 | 14 | 12 | — |
+| peak VRAM | ~42.5 GB | 42.5 GB | 42.5 GB | ~33 GB | — |
+
+Per-split val (β=0.05): single=105.40 (−25%), camber_rc=98.02 (−29%), camber_cruise=70.25 (−25%), re_rand=87.31 (−23%)
+Per-split test (β=0.10): single=96.44 (−21%), camber_rc=90.75 (−32%), camber_cruise=60.05 (−28%), re_rand=77.40 (−31%)
+
+**Largest single-change improvement on this benchmark to date.** All 4 splits improve by 21-34% on test. The β=0.05 and β=0.10 arms agree closely (within 1-2% on each metric), so the improvement is robust, not noise. Mechanism is consistent with hypothesis: high-Re extreme y-values (normalized errors up to ~5) dominate MSE gradients quadratically; SmoothL1 caps this contribution linearly above β.
+
+**Caveat:** ran on OLD baseline (fixed Fourier features). vs NEW baseline (learnable Fourier, val=116.34, test=107.33), the gain is still −22% val / −24% test — likely real and compounds with learnable Fourier, but must verify. Sent back for ONE rebased single-arm re-run (β=0.05) on the new baseline. If it confirms (anywhere near val<100, test<90), merge immediately as new baseline.
+
+**Side observation:** student noted an earlier β=0.05 run on un-rebased code (no Fourier features at all) got val_avg=99.14. That single-change improvement (SmoothL1 alone over the pre-Fourier baseline) is also dramatic. Suggests MSE→SmoothL1 is the dominant lever in the dataset, with Fourier features adding ~10-20% on top.
+
+## 2026-05-15 20:32 — PR #3353: slice_num=96 + gradient checkpointing (frieren) — CLOSED
+- student: willowpai2i24h2-frieren
+- branch: `willowpai2i24h2-frieren/slice-num-96-checkpoint`
+- W&B run: `o70g1t9p` (full), `2d9oqekh` (smoke test, OK)
+
+| Metric | This run | NEW baseline (#3352) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **130.7342** | 116.3411 | **+12.4% worse** |
+| `test_avg/mae_surf_p` | **120.7062** | 107.3254 | **+12.5% worse** |
+| Best val epoch | 10 / 50 | 12 | −4 |
+| Avg epoch time | 192.5 s | ~128 s | **+50% slower** |
+| Peak GPU memory | **16.0 GB** | ~33 GB | −52% |
+| Wall-clock | 31.9 min | 30 min | similar |
+
+Per-split test: single=152.57 (+25%), camber_rc=130.17 (**−10%** beats baseline!), camber_cruise=84.31 (+10%), re_rand=115.78 (+8%).
+
+Analysis: Gradient checkpointing was over-aggressive — peak VRAM 16 GB out of 96 GB available, ~80 GB headroom unused. The 50% epoch-time penalty (from checkpoint recomputation) ate the 30-min budget, limiting to 10/50 epochs vs baseline's 12. Model was still descending hard at epoch 10 (174→131, ~24% drop) — under-convergence dominated the result. `geom_camber_rc` actually beating baseline by 3.2 test points partially supports the slice-bump hypothesis directionally, but cannot be claimed as a win in the equal-weight mean.
+
+Decision: **CLOSED**. Wall-clock bottleneck, not memory. The student's own recommendation #1 is the right next step.
+
+Reassignment: PR #3441 — slice_num=80 **without** gradient checkpointing. Uses memory headroom (predicted ~50-55 GB peak at slice_num=80, well under 96 GB), avoids the checkpoint recompute tax (predicted +10-20% epoch time vs +50%), aims for 12+ epochs in 30 min.
+
 ## 2026-05-15 20:25 — PR #3350: FiLM-style Re conditioning per Transolver block (alphonse) — sent back for rebase
 - student: willowpai2i24h2-alphonse
 - branch: `willowpai2i24h2-alphonse/film-re-conditioning`
