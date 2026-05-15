@@ -153,7 +153,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 mlp_dropout=0.1):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -163,7 +164,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act, dropout=0.1)
+                       n_layers=0, res=False, act=act, dropout=mlp_dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -206,6 +207,7 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  rff_n_freq: int = 32, rff_sigma: float = 1.0,
+                 mlp_dropout: float = 0.1,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  geom_ctx_dim: int = 11, geom_ctx_start: int = 13):
@@ -234,6 +236,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                mlp_dropout=mlp_dropout,
             )
             for i in range(n_layers)
         ])
@@ -418,6 +421,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    dropout: float = 0.1  # MLP dropout inside each TransolverBlock.mlp
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -482,6 +486,7 @@ model_config = dict(
     mlp_ratio=2,
     rff_n_freq=32,
     rff_sigma=1.0,
+    mlp_dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
