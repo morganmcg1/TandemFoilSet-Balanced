@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import time
@@ -431,6 +432,11 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema_model = copy.deepcopy(model)
+for p in ema_model.parameters():
+    p.requires_grad_(False)
+ema_decay = 0.999
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -446,6 +452,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_decay": ema_decay,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -498,6 +505,9 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        with torch.no_grad():
+            for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -511,8 +521,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -543,7 +554,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
