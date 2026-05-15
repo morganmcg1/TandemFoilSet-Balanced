@@ -74,3 +74,63 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 - If it doesn't: capacity is not the lever at this budget — try shorter cosine T_max or larger batch with mixed precision instead
 
 ---
+
+## 2026-05-15 14:39 — PR #3108 [CLOSED, falsified]: Sweep surf_weight (10/25/50) — direct surface MAE optimization
+
+- **Student branch:** `charliepai2i48h4-askeladd/surf-weight-sweep`
+- **Hypothesis:** Raising `surf_weight` from baseline 10 to 25 or 50 redirects optimizer capacity to surface nodes (which are 100–1000× rarer than volume nodes) and reduces `val_avg/mae_surf_p`. Predicted −3% to −10%.
+- **Loss form:** MSE (this PR predated the Huber merge in #3094).
+
+### Results — hypothesis falsified, decisively
+
+| Arm | `surf_weight` | `val_avg/mae_surf_p` | `val_avg/mae_vol_p` | `test_avg/mae_surf_p` (3 finite splits) | best epoch |
+|-----|---------------|----------------------|---------------------|------------------------------------------|------------|
+| **A (baseline)** | **10** | **122.456** | **125.184** | **119.235** | 13 |
+| B | 25 | 138.185 (+12.8%) | 158.881 | 143.846 | 13 |
+| C | 50 | 136.282 (+11.3%) | 160.104 | 135.970 | 13 |
+
+Per-split val (lower is better):
+
+| Arm | single_in_dist | geom_camber_rc | geom_camber_cruise | re_rand |
+|-----|---:|---:|---:|---:|
+| A (10) | **143.565** | **131.030** | **97.675** | **117.556** |
+| B (25) | 164.834 | 148.216 | 108.052 | 131.636 |
+| C (50) | 168.287 | 145.104 | 109.377 | 122.359 |
+
+Regression is **uniform across all 4 val splits and the 3 finite test splits** — no slice hides a sweet-spot at higher weighting.
+
+### Metric artifacts
+
+- `models/model-surf-weight-baseline-20260515-124507/metrics.jsonl`
+- `models/model-charliepai2i48h4-askeladd-surf-weight-25-20260515-132543/metrics.jsonl`
+- `models/model-charliepai2i48h4-askeladd-surf-weight-50-20260515-140025/metrics.jsonl`
+
+### Analysis & conclusions
+
+- **`surf_weight=10` is conclusively the right value.** Higher weights destabilize the joint surface-volume optimization without improving surface MAE; volume MAE also degrades, ruling out a "trade-off" interpretation.
+- **Useful noise calibration:** askeladd's Arm A (MSE + surf_weight=10, 14 epochs) = 122.456. PR #3094 Arm A (same config) = 132.282. That's ~7% scatter between two seeds at this epoch count — a useful prior for evaluating future small-margin wins.
+- **NaN scoring bug** — askeladd's analysis is the most thorough version we have: `test_geom_camber_cruise` sample index 20 has `inf` in ground-truth `p`, and `inf * 0 = NaN` in IEEE 754 poisons the masked sum even when `surf_mask` is False. The `torch.where(mask, err, zeros)` patch is correct; `data/scoring.py` remains read-only per `program.md` so the fix is outside our scope. Same NaN was flagged on #3094 and #3113.
+
+### Decision
+
+**Closed** — clean falsification, no sub-region of the (10, 25, 50] axis is worth re-exploring. Askeladd reassigned to bf16 AMP mixed precision (PR #3290 below).
+
+---
+
+## 2026-05-15 14:50 — Round 2 assignments
+
+After Round 1 we have 1 merge (#3094 Huber), 2 closed misses (#3108 surf_weight, #3131 OneCycle), 1 sent-back (#3113 slice_num revision), and 6 still WIP. Three students have received Round 2 hypotheses targeting orthogonal axes:
+
+| Student | PR | Round 2 hypothesis | Axis | Mechanism |
+|---------|----|--------------------|------|-----------|
+| alphonse | #3278 | Per-channel loss weighting (Ux, Uy, p) | Loss × channel | Up-weight pressure channel in Huber loss; arms p=2× and p=4× |
+| thorfinn | #3289 | Cosine `T_max=15` to match achievable budget | LR schedule | Schedule was sized for 50 epochs but only ~14 achievable; full cosine decay needed |
+| askeladd | #3290 | bf16 AMP mixed precision | Throughput | Wrap forward+loss in autocast(bf16) — predict 1.5–2× speedup → ~21–28 epochs in 30 min |
+
+All three target the Huber baseline (`val_avg/mae_surf_p = 111.531`). All three are paired-arm comparisons. All three are composable with each other and with the 5 still-WIP Round-1 PRs (#3117 Fourier, #3122 FiLM, #3126 EMA, #3128 scale-aware loss, #3113 revised slice_num). If multiple Round-2 arms win we'll compose them in Round 3.
+
+### Operational thesis
+
+The dominant Round-1 lesson: **every run is wall-clock-truncated at ~14 epochs, not epoch-truncated**. This makes throughput and schedule-fit hypotheses (thorfinn cosine_t_max, askeladd bf16) particularly high-leverage — each one expands the effective compute budget for every subsequent experiment.
+
+---
