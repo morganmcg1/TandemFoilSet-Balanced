@@ -397,7 +397,9 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
-    huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
+    huber_delta: float = 0.5   # Huber loss transition threshold (normalized space); <=0 uses MSE
+    per_sample_norm: bool = True   # H8: divide each sample's loss by per-sample GT surface-p std
+    per_sample_sigma_floor: float = 0.01   # min sigma in normalized space to avoid div/0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -450,7 +452,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -479,6 +481,10 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_sigma_sum = 0.0
+    epoch_sigma_min = float("inf")
+    epoch_sigma_max = 0.0
+    epoch_sigma_n = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -491,24 +497,53 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
-        sq_err = torch.where(
-            abs_err < cfg.huber_delta,
-            0.5 * abs_err ** 2,
-            cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
-        )
+        if cfg.huber_delta > 0:
+            err = torch.where(
+                abs_err < cfg.huber_delta,
+                0.5 * abs_err ** 2,
+                cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
+            )
+        else:
+            err = abs_err ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Per-sample volume / surface losses (mean over valid nodes & channels)
+        n_vol_ps = vol_mask.sum(dim=1).clamp(min=1) * err.shape[-1]
+        n_surf_ps = surf_mask.sum(dim=1).clamp(min=1) * err.shape[-1]
+        vol_loss_ps = (err * vol_mask.unsqueeze(-1)).sum(dim=[1, 2]) / n_vol_ps
+        surf_loss_ps = (err * surf_mask.unsqueeze(-1)).sum(dim=[1, 2]) / n_surf_ps
+        loss_ps = vol_loss_ps + cfg.surf_weight * surf_loss_ps
+
+        if cfg.per_sample_norm:
+            # H8: divide each sample's loss by per-sample GT surface pressure std
+            # (normalized space, surface nodes only, channel 2 = pressure).
+            # Stop-gradient on sigma — model must not be able to game the divisor.
+            with torch.no_grad():
+                B = y_norm.shape[0]
+                surf_p_norm = y_norm[:, :, 2]
+                sigma = y_norm.new_ones(B)
+                for b in range(B):
+                    vals = surf_p_norm[b][surf_mask[b]]
+                    if vals.numel() > 1:
+                        sigma[b] = vals.std().clamp(min=cfg.per_sample_sigma_floor)
+                # Huber → ~linear in error → divide by sigma; MSE → quadratic → sigma^2
+                exponent = 2.0 if cfg.huber_delta <= 0 else 1.0
+            loss = (loss_ps / sigma.pow(exponent)).mean()
+            epoch_sigma_sum += sigma.sum().item()
+            epoch_sigma_n += sigma.numel()
+            epoch_sigma_min = min(epoch_sigma_min, sigma.min().item())
+            epoch_sigma_max = max(epoch_sigma_max, sigma.max().item())
+        else:
+            loss = loss_ps.mean()
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
+        epoch_vol += vol_loss_ps.mean().item()
+        epoch_surf += surf_loss_ps.mean().item()
         n_batches += 1
 
     scheduler.step()
@@ -537,7 +572,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -547,10 +582,21 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if epoch_sigma_n > 0:
+        record["train/sigma_mean"] = epoch_sigma_sum / epoch_sigma_n
+        record["train/sigma_min"] = epoch_sigma_min
+        record["train/sigma_max"] = epoch_sigma_max
+    append_metrics_jsonl(metrics_jsonl_path, record)
+    sigma_str = ""
+    if epoch_sigma_n > 0:
+        sigma_str = (
+            f"  sigma[mean={epoch_sigma_sum/epoch_sigma_n:.3f} "
+            f"min={epoch_sigma_min:.3f} max={epoch_sigma_max:.3f}]"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]{sigma_str}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
