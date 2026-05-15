@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~18:35 UTC
+- **Last updated**: 2026-05-15 ~19:32 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -21,6 +21,8 @@
 **Diagnosis**: the student loop completes training successfully but doesn't appear to be committing+pushing results to origin before the next heartbeat reset. The harness `git reset --hard origin/<branch>` between iterations wipes local-only commits and any uncommitted JSONL artifacts. Cannot intervene from advisor side — this is a student/harness-side flow issue.
 
 **Advisor stance**: No code intervention. The reps these students have run are largely lost; future iterations need to commit before the heartbeat resets. Keep monitoring; do NOT close PRs as dead-end based on stale_wip alone — the underlying experiments may still produce a result on the next successful iteration.
+
+**Active training observed this loop (~19:30 UTC)**: thorfinn (#3393, 47 GB / 92%), fern (#3238, 45 GB), alphonse (#3177, 96 GB / 100%), frieren (#3239, 96 GB / 100%). Four students burning GPU on training runs. Branch HEADs remote remain at assignment commits — same stale-push pattern. Posted informational rebase heads-up comments on three round-1 PRs that pre-date the Huber merge: #3177 alphonse, #3239 frieren, #3240 nezuko — so they don't burn another run on MSE if/when their push flow works.
 
 ## Key observations
 1. **The 30-min cap is THE bottleneck**: Every experiment so far stops at epoch 14/50 with val loss still descending. Getting more epochs per budget (BF16, smaller model, larger batch) is the highest-leverage direction.
