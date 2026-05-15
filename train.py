@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -45,6 +46,28 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Fourier position features
+# ---------------------------------------------------------------------------
+
+FOURIER_BANDS = 8
+
+
+def fourier_features(pos: torch.Tensor, bands: int = FOURIER_BANDS) -> torch.Tensor:
+    """Sinusoidal Fourier encoding of position.
+
+    pos: [..., 2] normalized (x, z). Returns [..., 4 * bands] with bands of
+    sin/cos at frequencies 2^k * pi for k=0..bands-1, applied to each of the
+    two input coords.
+    """
+    freqs = (2.0 ** torch.arange(bands, device=pos.device, dtype=pos.dtype)) * math.pi
+    phases = pos.unsqueeze(-1) * freqs  # [..., 2, bands]
+    sin_f = torch.sin(phases)
+    cos_f = torch.cos(phases)
+    out = torch.stack([sin_f, cos_f], dim=-1)  # [..., 2, bands, 2]
+    return out.reshape(*pos.shape[:-1], 4 * bands)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -217,7 +240,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   fourier_bands: int = FOURIER_BANDS) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -236,9 +260,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Robust to per-sample non-finite ground truth: zero the mask for
+            # any sample whose y has NaN/Inf and sanitize y itself. Otherwise
+            # ``inf * 0 = NaN`` (IEEE 754) leaks through the masked sums and
+            # produces NaN aggregates even when the offending sample is
+            # supposed to be skipped (see test_geom_camber_cruise[20]).
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            mask = mask & y_finite.view(B, 1)
+            y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            ff = fourier_features(x_norm[..., :2], bands=fourier_bands)
+            x_aug = torch.cat([x_norm, ff], dim=-1)
+            pred = model({"x": x_aug})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -380,6 +416,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    fourier_bands: int = FOURIER_BANDS
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -416,7 +453,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 4 * cfg.fourier_bands,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -486,7 +523,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        ff = fourier_features(x_norm[..., :2], bands=cfg.fourier_bands)
+        x_aug = torch.cat([x_norm, ff], dim=-1)
+        pred = model({"x": x_aug})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -512,7 +551,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             fourier_bands=cfg.fourier_bands)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +620,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 fourier_bands=cfg.fourier_bands)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
