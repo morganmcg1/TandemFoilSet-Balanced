@@ -355,7 +355,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    surf_p_weight_extra: float = 4.0  # additional weight on the pressure channel of surf_loss
+    surf_p_weight_extra: float = 1.0  # additional weight on the pressure channel of surf_loss
     huber_delta: float = 1.0
     cosine_t_max: int = 20
     epochs: int = 50
