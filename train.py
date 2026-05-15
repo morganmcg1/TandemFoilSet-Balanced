@@ -81,6 +81,31 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SurfaceArcLenPE(nn.Module):
+    """Learnable Fourier positional encoding over signed arc-length for surface nodes."""
+
+    def __init__(self, n_hidden: int, n_freqs: int = 16):
+        super().__init__()
+        self.freqs = nn.Parameter(torch.randn(n_freqs) * 0.01)
+        # saf is 2-d; sin/cos each produce 2*n_freqs features after flattening;
+        # plus 2 raw saf values appended.
+        self.proj = nn.Linear(4 * n_freqs + 2, n_hidden)
+
+    def forward(
+        self,
+        saf: torch.Tensor,
+        is_surface: torch.Tensor,
+    ) -> torch.Tensor:
+        freqs = self.freqs.view(1, 1, -1)
+        angles = saf.unsqueeze(-1) * freqs.unsqueeze(-2)
+        sin_enc = torch.sin(angles).flatten(-2)
+        cos_enc = torch.cos(angles).flatten(-2)
+        pe_in = torch.cat([sin_enc, cos_enc, saf], dim=-1)
+        pe = self.proj(pe_in)
+        pe = pe * is_surface.unsqueeze(-1).float()
+        return pe
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -168,6 +193,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 surface_pe_n_freqs: int = 16,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -194,6 +220,7 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.surface_pe = SurfaceArcLenPE(n_hidden=n_hidden, n_freqs=surface_pe_n_freqs)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,6 +235,9 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        saf_norm = x[..., 2:4]
+        is_surf = x[..., 12] > 0.5
+        fx = fx + self.surface_pe(saf_norm, is_surf)
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -236,8 +266,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Defeat NaN * 0 = NaN inside accumulate_batch / loss when an entire
+            # sample has non-finite ground truth (e.g. test_geom_camber_cruise/000020.pt
+            # in round 5 has 761 NaN values in the p channel).
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)  # [B]
+            mask = mask & y_finite_per_sample.view(-1, 1)
+            y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -254,7 +291,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -358,6 +395,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    surface_pe_n_freqs: int = 16
 
 
 cfg = sp.parse(Config)
@@ -395,6 +433,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    surface_pe_n_freqs=cfg.surface_pe_n_freqs,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )

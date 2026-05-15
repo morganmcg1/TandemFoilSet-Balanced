@@ -1,0 +1,40 @@
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+
+=== Re-eval model-charliepai2i24h5-askeladd-surface-pe-nfreqs16-20260515-133406 (n_freqs=16) ===
+  VAL avg_surf_p=151.1234
+    val_single_in_dist         surf_p=198.8637  vol_p=191.4867
+    val_geom_camber_rc         surf_p=155.7711  vol_p=148.4630
+    val_geom_camber_cruise     surf_p=112.4685  vol_p=105.3478
+    val_re_rand                surf_p=137.3904  vol_p=126.6603
+  TEST avg_surf_p=138.5280
+    test_single_in_dist        surf_p=172.5371  vol_p=162.6565
+    test_geom_camber_rc        surf_p=145.3216  vol_p=138.3693
+    test_geom_camber_cruise    surf_p=99.3996  vol_p=91.5189
+    test_re_rand               surf_p=136.8538  vol_p=125.6859
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+
+=== Re-eval model-charliepai2i24h5-askeladd-surface-pe-nfreqs8-20260515-142835 (n_freqs=8) ===
+  VAL avg_surf_p=139.8378
+    val_single_in_dist         surf_p=160.7615  vol_p=167.7107
+    val_geom_camber_rc         surf_p=150.4940  vol_p=145.7649
+    val_geom_camber_cruise     surf_p=117.0365  vol_p=112.7679
+    val_re_rand                surf_p=131.0593  vol_p=122.9577
+  TEST avg_surf_p=125.3364
+    test_single_in_dist        surf_p=138.7601  vol_p=149.1342
+    test_geom_camber_rc        surf_p=137.3103  vol_p=130.4302
+    test_geom_camber_cruise    surf_p=98.0692  vol_p=94.6357
+    test_re_rand               surf_p=127.2059  vol_p=122.6289
+
+Wrote summary: logs/reeval_summary.json
+{
+  "arm_a_n16": {
+    "val_avg": 151.1234146499778,
+    "test_avg": 138.5280059787183
+  },
+  "arm_b_n8": {
+    "val_avg": 139.83783480039406,
+    "test_avg": 125.3363784482606
+  }
+}
