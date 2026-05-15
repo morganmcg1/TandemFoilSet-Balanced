@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -214,6 +215,27 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Fourier positional features over (x, z) coords
+# ---------------------------------------------------------------------------
+
+def _apply_fourier(x_norm, model):
+    """Append sin/cos Fourier features of normalized (x, z) to ``x_norm``.
+
+    The projection matrix ``B`` is stored as a buffer on the model so the
+    same encoding is applied at train and eval time (it travels with
+    ``state_dict``).
+    """
+    B = getattr(model, "fourier_B", None)
+    if B is None:
+        return x_norm
+    coord = x_norm[..., :2]                       # [..., 2]
+    proj = coord @ B                              # [..., n_fourier]
+    ff = torch.cat([torch.sin(2 * math.pi * proj),
+                    torch.cos(2 * math.pi * proj)], dim=-1)
+    return torch.cat([x_norm, ff], dim=-1)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -237,6 +259,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = _apply_fourier(x_norm, model)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -386,6 +409,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    n_fourier: int = 0       # 0 disables; otherwise number of random Fourier features over (x, z)
+    fourier_sigma: float = 10.0
 
 
 cfg = sp.parse(Config)
@@ -414,9 +439,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fun_dim = X_DIM - 2 + (2 * cfg.n_fourier if cfg.n_fourier > 0 else 0)
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=fun_dim,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -428,6 +454,13 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+if cfg.n_fourier > 0:
+    fourier_gen = torch.Generator()
+    fourier_gen.manual_seed(0)
+    fourier_B = (torch.randn(2, cfg.n_fourier, generator=fourier_gen)
+                 * cfg.fourier_sigma).to(device)
+    model.register_buffer("fourier_B", fourier_B, persistent=True)
+    print(f"Fourier features: n_fourier={cfg.n_fourier}, sigma={cfg.fourier_sigma}")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
@@ -485,6 +518,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
