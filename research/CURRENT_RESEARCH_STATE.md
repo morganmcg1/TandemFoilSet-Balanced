@@ -1,12 +1,12 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 16:45 UTC
+- **Updated:** 2026-05-15 17:30 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
 - **Metrics:** local JSONL only (no remote tracking on this branch)
 - **Current round-5 baseline (PR #3281 merged):** `val_avg/mae_surf_p = 114.1704`, `test_avg/mae_surf_p = 102.0813`
-- **Previous baseline (PR #3266, now superseded):** `val_avg = 123.8778`, `test_avg = 114.3695`. Total round-5 improvement: -7.84% val, -10.74% test.
+- **Previous baseline (PR #3266, superseded):** `val_avg = 123.8778`. Total round-5 improvement: -7.84% val, -10.74% test.
 
 ## Most recent research direction from human researcher team
 (none — no Issues open or directed at this launch)
@@ -30,16 +30,17 @@ The merged baseline now stacks **scale-invariant loss (#3266) + EMA weights (#32
 | PR | Student | Status | Hypothesis |
 |----|---------|--------|-----------|
 | #3265 | fern | SENT BACK | FiLM Re/AoA/NACA conditioning every block — beat #3266 baseline; needs rebase onto EMA baseline |
-| #3267 | tanjiro | SENT BACK (today) | Separate surface decoder head — beat student's own baseline but not merged baseline; needs rebase onto EMA |
-| #3268 | alphonse | WIP | NACA camber mixup augmentation |
+| #3267 | tanjiro | SENT BACK | Separate surface decoder head — beat student's own baseline but not merged baseline; needs rebase onto EMA |
+| #3268 | alphonse | CLOSED (this loop) | NACA camber mixup — net regression; mesh-mismatch issue. Follow-up: PR #3347 manifold mixup |
 | #3269 | nezuko | WIP | Multi-scale slice attention (hourglass) |
 | #3270 | edward | WIP | Transolver capacity scale-up (256/8/8) |
-| #3271 | thorfinn | CLOSED (today) | Signed-log pressure target transform — both arms >15% worse than baseline |
-| #3272 | askeladd | CLOSED (last round) | Surface arc-length Fourier PE — both arms >12% worse than baseline |
-| #3281 | frieren | MERGED (today) | EMA weights — current baseline anchor |
+| #3271 | thorfinn | CLOSED | Signed-log pressure target transform — both arms >15% worse than baseline |
+| #3272 | askeladd | CLOSED | Surface arc-length Fourier PE — both arms >12% worse than baseline |
+| #3281 | frieren | MERGED | EMA weights — current baseline anchor |
 | #3315 | askeladd | WIP | Cautious AdamW one-line optimizer swap |
-| #3337 | frieren | WIP (new) | Surface-pressure L1 aux loss — direct alignment with MAE eval metric |
-| (pending) | thorfinn | TO BE ASSIGNED | Cosine T_max + warmup + LR=7e-4 (recovery experiment, blocked on GH rate limit) |
+| #3337 | frieren | WIP | Surface-pressure L1 aux loss — direct alignment with MAE eval metric |
+| #3346 | thorfinn | WIP (new this loop) | Cosine T_max=15 + 1-epoch warmup + LR=7e-4 (schedule recovery) |
+| #3347 | alphonse | WIP (new this loop) | Manifold mixup at random Transolver block (follow-up to closed #3268) |
 
 ## Plateau watch
 

@@ -189,3 +189,53 @@ Within-PR per-split val (surface head vs student's single-head baseline):
 The mechanism is real — surface and volume have meaningfully different signal characteristics, and a dedicated head improves both within-PR val (-5.3%) and test (-2.8%). But the student's PR runs neither the per-sample scale-invariant loss (#3266) nor the EMA weights (#3281), both of which are now part of the merged baseline. Their no-scale-inv single-head baseline (135.84) is +9.6% worse than #3266 baseline (123.88), and +18.9% worse than the EMA baseline (114.17). The surface-head improvement (-5.3% within-PR) is real but smaller than the cumulative improvement from those two merged changes (-7.84%).
 
 The natural next step is a rebase + re-run on the current advisor branch, which inherits scale-invariant loss + EMA + NaN fix. The surface head's win on val_single_in_dist (-9.3%) is exactly the split where EMA has the smallest gain (-2.6%), suggesting the two mechanisms might compound positively. Sent back with detailed rebase instructions.
+
+## 2026-05-15 16:48 — PR #3268: NACA camber mixup augmentation [CLOSED — net aggregate regression with fundamental mesh-mismatch issue]
+
+- Branch: `charliepai2i24h5-alphonse/naca-camber-mixup`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: mix two samples' global conditions (dims 13–23 of x, including camber M) and targets with a Beta(α, α) lambda, p=0.5 of the time. Idea: generate intermediate-camber virtual samples to help the OOD camber holdouts (rc, cruise).
+- Status: CLOSED. Both arms (α=0.2 and α=0.4) achieve real OOD gains on the targeted splits but with too-large in-dist regression to net positive on aggregate. Student correctly identified the underlying issue (mesh stays anchored to one sample while conditions interpolate).
+
+### Results
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | vs student's no-mixup baseline | vs merged baseline #3281 |
+|---|---:|---:|---:|---:|
+| baseline (no-mixup, this PR) | 136.50 | 123.96 | — | +19.5% val, +21.4% test |
+| α=0.2, p=0.5 | 139.07 | 126.52 | +1.9% val | +21.7% val, +23.9% test |
+| α=0.4, p=0.5 | 136.84 | 126.33 | +0.3% val | +19.7% val, +23.6% test |
+
+Per-split test mae_surf_p — both arms split improvements asymmetrically:
+- α=0.2 wins on camber_rc (-9.2%) but loses elsewhere
+- α=0.4 wins on camber_cruise (-10.5%) but loses elsewhere
+- Both regress on in_dist (+9.9% / +10.3%) and re_rand (+6.1% / +6.5%)
+
+### Analysis
+
+The student's mesh-mismatch diagnosis is sharp: input-space mixup interpolates global conditions + target fields but **keeps the original mesh**, so every mixed batch carries a consistent geometry/condition mismatch signal that hurts in-dist samples. The asymmetry between α=0.2 (favours wider camber gap, rc) and α=0.4 (favours tighter camber gap, cruise) is real and useful intuition — no single fixed α handles both gaps.
+
+The hypothesis is partially supported on the targeted axis but the technique is structurally limited for this dataset. The fundamental fix is to mix in latent space (manifold mixup) after the model has encoded the geometry — assigned as alphonse's next experiment (PR #3347).
+
+The student also discovered and patched the NaN-propagation bug independently, and committed a `test_corrected` re-evaluation pattern for the α=0.4 arm (which ran before the patch landed). Both consistent with PR #3266's workaround.
+
+Closed; alphonse reassigned to manifold mixup (PR #3347).
+
+## 2026-05-15 17:26 — PR #3337: Surface-pressure L1 auxiliary loss [ASSIGNED — frieren]
+
+- Branch: `charliepai2i24h5-frieren/surface-pressure-l1-aux-loss`
+- Student: charliepai2i24h5-frieren
+- Hypothesis: add `aux_weight * mean(|pred_surf_p - y_surf_p|)` (L1 on surface-pressure channel only, in normalized-y space) to the existing per-sample scale-invariant MSE. Directly aligns training objective with the MAE eval metric.
+- Two arms: aux_weight ∈ {1.0, 3.0}. Expected -3% to -7% on val_avg.
+
+## 2026-05-15 17:25 — PR #3346: Cosine T_max=15 + 1-epoch warmup + LR=7e-4 [ASSIGNED — thorfinn]
+
+- Branch: `charliepai2i24h5-thorfinn/cosine-tmax-fix-warmup-lr7e-4`
+- Student: charliepai2i24h5-thorfinn
+- Hypothesis: aligned cosine schedule (T_max=15 matching the ~14-epoch wall-clock budget) + 1-epoch linear warmup + raised peak LR=7e-4. Canonical schedule fix expected to give a clean -2% to -5% recovery after the signed-log dead-end.
+
+## 2026-05-15 17:27 — PR #3347: Manifold mixup at random Transolver block [ASSIGNED — alphonse]
+
+- Branch: `charliepai2i24h5-alphonse/manifold-mixup`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: instead of input-space mixup (which couples the original mesh to interpolated conditions and hurts in-dist), mix latent representations at a uniformly-random block index in [0, 3) using Beta(α, α) lambda. The mixed latent lives on the learned manifold and contains no geometry/condition mismatch signal.
+- Two arms: α ∈ {0.4, 0.2}, both with p=0.5 and max_block=3. Direct follow-up to the closed PR #3268.
