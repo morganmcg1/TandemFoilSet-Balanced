@@ -311,6 +311,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_surf_weight": cfg.p_surf_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -352,6 +353,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_surf_weight: float = 3.0   # extra weight on p channel for surface loss
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -449,7 +451,13 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        # Per-channel weight: upweight pressure (channel 2) on surface nodes only.
+        # vol_loss stays unweighted so the primary metric (surface p MAE) gets
+        # extra gradient without distorting the volume objective.
+        channel_weights = torch.ones(3, device=device)
+        channel_weights[2] = cfg.p_surf_weight
+        surf_loss = (sq_err * surf_mask.unsqueeze(-1) * channel_weights).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
