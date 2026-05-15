@@ -141,3 +141,63 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4, CosineAnnealingLR(T_max=epochs)
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-15 18:30 — PR #3289: Cosine T_max=15 — match LR schedule horizon to 30-min budget
+
+**New best `val_avg/mae_surf_p`: 100.059** ⚠️ *measured on fp32*; bf16+T_max=15 composition unverified (was: 101.519 bf16 — **−1.4%**; vs Huber fp32 111.531 — **−10.3%**)
+
+- **Scheduler:** `CosineAnnealingLR(T_max=15)` — schedule completes its full cosine decay within the ~14-epoch fp32 wall-clock budget
+- **AMP:** fp32 (this run predates the bf16 merge)
+- **Best epoch:** 14 / 14 run (wall-clock-truncated at schedule end; LR=2.16e-5 at best epoch)
+- **Mechanism confirmed:** LR-vs-epoch trace shows Arm B (T_max=15) decays 96% by ep14 vs Arm A (T_max=50) only 16%; full cosine anneal yields the refinement plateau that fp32 T_max=50 never reached
+- **Model:** 5-layer Transolver, `n_hidden=128`, `n_head=4`, `slice_num=64` (unchanged)
+- **Optimizer:** AdamW lr=5e-4 wd=1e-4, batch_size=4 (unchanged)
+
+### Val surface pressure MAE (lower is better)
+
+| Split | bf16 baseline (PR #3290) | **fp32 T_max=15** | Δ vs bf16 |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 116.096 | **118.473** | +2.0% |
+| `val_geom_camber_rc`     | 116.636 | **111.356** | −4.5% |
+| `val_geom_camber_cruise` |  76.479 |  **79.108** | +3.4% |
+| `val_re_rand`            |  96.863 |  **91.299** | −5.8% |
+| **val_avg**              | **101.519** | **100.059** | **−1.4%** |
+
+*Note: direct split comparison is noisy (different seeds, fp32 vs bf16). val_avg beats bf16 baseline, but the per-split ordering is mixed.*
+
+### Test surface pressure MAE (3 finite splits)
+
+| Split | **fp32 T_max=15** |
+|---|---:|
+| `test_single_in_dist`     | 102.084 |
+| `test_geom_camber_rc`     |  99.752 |
+| `test_re_rand`            |  88.086 |
+| **avg (3 splits)**        | **96.641** |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-thorfinn-cosine-tmax-15-20260515-163241/metrics.jsonl`
+- `models/model-charliepai2i48h4-thorfinn-cosine-tmax-15-20260515-163241/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd target/
+python train.py --experiment_name cosine-tmax-15 --cosine_t_max 15
+```
+
+### Current best config (carry forward to all new experiments)
+
+**⚠️ bf16 + T_max=15 composition not yet benchmarked.** The codebase now has both bf16 (PR #3290) and T_max=15 (PR #3289). The actual bf16+T_max=15 number is to be established in a follow-up verification run. Expected: ~93–95 if composition is additive.
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16
+# Scheduler: --cosine_t_max 15  (CosineAnnealingLR T_max=15, held at floor if epochs exceed T_max)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
+# surf_weight=10
+```
