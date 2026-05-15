@@ -136,15 +136,40 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class MultiScalePhysicsAttention(nn.Module):
+    """Two parallel PhysicsAttention branches with different slice counts.
+
+    Coarse branch captures global wake/freestream/inter-foil structure;
+    fine branch resolves boundary-layer/stagnation detail near surfaces.
+    Outputs are concatenated and merged back to ``dim`` via a linear.
+    """
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0,
+                 slice_nums=(32, 128)):
+        super().__init__()
+        self.slice_nums = tuple(slice_nums)
+        self.scales = nn.ModuleList([
+            PhysicsAttention(dim, heads=heads, dim_head=dim_head,
+                             dropout=dropout, slice_num=s)
+            for s in self.slice_nums
+        ])
+        self.merge = nn.Linear(dim * len(self.slice_nums), dim)
+
+    def forward(self, x):
+        outs = [scale(x) for scale in self.scales]
+        return self.merge(torch.cat(outs, dim=-1))
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1,
+                 slice_nums=(32, 128)):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
-        self.attn = PhysicsAttention(
+        self.attn = MultiScalePhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_nums=slice_nums,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -167,7 +192,7 @@ class TransolverBlock(nn.Module):
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
-                 slice_num=32, ref=8, unified_pos=False,
+                 slice_nums=(32, 128), ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -189,7 +214,7 @@ class Transolver(nn.Module):
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_nums=slice_nums, last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
@@ -223,11 +248,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    NaN-safety: samples whose ``y`` or ``pred`` contain non-finite values are
+    excluded from the running MAE/loss. ``accumulate_batch`` already drops
+    non-finite-y samples via its ``y_finite`` check, but ``Inf * 0 = NaN`` would
+    still leak into the masked sum if we passed raw tensors — so we also zero
+    those values in ``y`` and ``pred`` before accumulating.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_skipped_nonfinite_pred = 0
+    n_skipped_nonfinite_y = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -239,6 +272,29 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+
+            # Mark samples to drop: either y or pred non-finite anywhere.
+            B = pred.shape[0]
+            pred_finite = (
+                torch.isfinite(pred).reshape(B, -1).all(dim=-1)
+                & torch.isfinite(pred_orig).reshape(B, -1).all(dim=-1)
+            )
+            y_finite = torch.isfinite(y).reshape(B, -1).all(dim=-1)
+            keep = pred_finite & y_finite
+            n_skipped_nonfinite_pred += int((~pred_finite).sum().item())
+            n_skipped_nonfinite_y += int((~y_finite).sum().item())
+
+            if not keep.all():
+                sample_keep_n = keep[:, None].expand(-1, mask.shape[-1])
+                mask = mask & sample_keep_n
+                zero = torch.zeros_like(pred)
+                pred = torch.where(keep[:, None, None], pred, zero)
+                pred_orig = torch.where(keep[:, None, None], pred_orig, zero)
+                y_norm = torch.where(keep[:, None, None], y_norm, torch.zeros_like(y_norm))
+                # Replace bad y entries (anywhere they are non-finite) with 0
+                # so Inf*0=NaN doesn't leak via accumulate_batch.
+                y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -253,7 +309,6 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +316,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_skipped_nonfinite_pred": n_skipped_nonfinite_pred,
+           "n_skipped_nonfinite_y": n_skipped_nonfinite_y}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -358,197 +415,209 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    n_hidden: int = 128
+    n_head: int = 4
+    n_layers: int = 5
+    mlp_ratio: int = 2
+    slice_nums: str = "32,128"  # comma-separated, e.g. "32,128" for multi-scale
 
 
-cfg = sp.parse(Config)
-MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
-MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+def main():
+    cfg = sp.parse(Config)
+    MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
+    MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
-train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
-stats = {k: v.to(device) for k, v in stats.items()}
+    train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+    stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)
+    loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+                         persistent_workers=True, prefetch_factor=2)
 
-if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
-else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    if cfg.debug:
+        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+                                  shuffle=True, **loader_kwargs)
+    else:
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+                                  sampler=sampler, **loader_kwargs)
 
-val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-    for name, ds in val_splits.items()
-}
-
-model_config = dict(
-    space_dim=2,
-    fun_dim=X_DIM - 2,
-    out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
-    output_fields=["Ux", "Uy", "p"],
-    output_dims=[1, 1, 1],
-)
-
-model = Transolver(**model_config).to(device)
-n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
-
-experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
-experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
-model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
-model_dir.mkdir(parents=True, exist_ok=True)
-model_path = model_dir / "checkpoint.pt"
-metrics_jsonl_path = model_dir / "metrics.jsonl"
-with open(model_dir / "config.yaml", "w") as f:
-    yaml.safe_dump({
-        **asdict(cfg),
-        "model_config": model_config,
-        "n_params": n_params,
-        "train_samples": len(train_ds),
-        "val_samples": {k: len(v) for k, v in val_splits.items()},
-    }, f, sort_keys=True)
-
-best_avg_surf_p = float("inf")
-best_metrics: dict = {}
-train_start = time.time()
-
-for epoch in range(MAX_EPOCHS):
-    if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
-        print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
-        break
-
-    t0 = time.time()
-    model.train()
-    epoch_vol = epoch_surf = 0.0
-    n_batches = 0
-
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
-        x = x.to(device, non_blocking=True)
-        y = y.to(device, non_blocking=True)
-        is_surface = is_surface.to(device, non_blocking=True)
-        mask = mask.to(device, non_blocking=True)
-
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
-
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
-        n_batches += 1
-
-    scheduler.step()
-    epoch_vol /= max(n_batches, 1)
-    epoch_surf /= max(n_batches, 1)
-
-    # --- Validate ---
-    model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
+    val_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in val_splits.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    dt = time.time() - t0
 
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
-        }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
+    slice_nums = [int(s) for s in cfg.slice_nums.split(",") if s.strip()]
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
-        "event": "epoch",
-        "epoch": epoch + 1,
-        "seconds": dt,
-        "peak_memory_gb": peak_gb,
-        "train/vol_loss": epoch_vol,
-        "train/surf_loss": epoch_surf,
-        "val_avg/mae_surf_p": avg_surf_p,
-        "val_splits": split_metrics,
-        "is_best": tag == " *",
-    })
-    print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    model_config = dict(
+        space_dim=2,
+        fun_dim=X_DIM - 2,
+        out_dim=3,
+        n_hidden=cfg.n_hidden,
+        n_layers=cfg.n_layers,
+        n_head=cfg.n_head,
+        slice_nums=slice_nums,
+        mlp_ratio=cfg.mlp_ratio,
+        output_fields=["Ux", "Uy", "p"],
+        output_dims=[1, 1, 1],
     )
-    for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
 
-total_time = (time.time() - train_start) / 60.0
-print(f"\nTraining done in {total_time:.1f} min")
+    model = Transolver(**model_config).to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-# --- Test evaluation + local summary ---
-if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
+    experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
+    model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_path = model_dir / "checkpoint.pt"
+    metrics_jsonl_path = model_dir / "metrics.jsonl"
+    with open(model_dir / "config.yaml", "w") as f:
+        yaml.safe_dump({
+            **asdict(cfg),
+            "model_config": model_config,
+            "n_params": n_params,
+            "train_samples": len(train_ds),
+            "val_samples": {k: len(v) for k, v in val_splits.items()},
+        }, f, sort_keys=True)
 
-    test_metrics = None
-    test_avg = None
-    if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
-        test_metrics = {
+    best_avg_surf_p = float("inf")
+    best_metrics: dict = {}
+    train_start = time.time()
+
+    for epoch in range(MAX_EPOCHS):
+        if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
+            print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
+            break
+
+        t0 = time.time()
+        model.train()
+        epoch_vol = epoch_surf = 0.0
+        n_batches = 0
+
+        for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
+
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_vol += vol_loss.item()
+            epoch_surf += surf_loss.item()
+            n_batches += 1
+
+        scheduler.step()
+        epoch_vol /= max(n_batches, 1)
+        epoch_surf /= max(n_batches, 1)
+
+        # --- Validate ---
+        model.eval()
+        split_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-            for name, loader in test_loaders.items()
+            for name, loader in val_loaders.items()
         }
-        test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
-        for name in TEST_SPLIT_NAMES:
-            print_split_metrics(name, test_metrics[name])
-        append_metrics_jsonl(metrics_jsonl_path, {
-            "event": "test",
-            "best_epoch": best_metrics["epoch"],
-            "test_avg": test_avg,
-            "test_splits": test_metrics,
-        })
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        dt = time.time() - t0
 
-    write_experiment_summary(
-        model_path=model_path,
-        model_dir=model_dir,
-        cfg=cfg,
-        best_metrics=best_metrics,
-        best_avg_surf_p=best_avg_surf_p,
-        test_metrics=test_metrics,
-        test_avg=test_avg,
-        n_params=n_params,
-        model_config=model_config,
-    )
-else:
-    print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
+        tag = ""
+        if avg_surf_p < best_avg_surf_p:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            torch.save(model.state_dict(), model_path)
+            tag = " *"
+
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "epoch",
+            "epoch": epoch + 1,
+            "seconds": dt,
+            "peak_memory_gb": peak_gb,
+            "train/vol_loss": epoch_vol,
+            "train/surf_loss": epoch_surf,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "val_splits": split_metrics,
+            "is_best": tag == " *",
+        })
+        print(
+            f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        )
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, split_metrics[name])
+
+    total_time = (time.time() - train_start) / 60.0
+    print(f"\nTraining done in {total_time:.1f} min")
+
+    # --- Test evaluation + local summary ---
+    if best_metrics:
+        print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.eval()
+
+        test_metrics = None
+        test_avg = None
+        if not cfg.skip_test:
+            print("\nEvaluating on held-out test splits...")
+            test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+            test_loaders = {
+                name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+                for name, ds in test_datasets.items()
+            }
+            test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            test_avg = aggregate_splits(test_metrics)
+            print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_metrics[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "test",
+                "best_epoch": best_metrics["epoch"],
+                "test_avg": test_avg,
+                "test_splits": test_metrics,
+            })
+
+        write_experiment_summary(
+            model_path=model_path,
+            model_dir=model_dir,
+            cfg=cfg,
+            best_metrics=best_metrics,
+            best_avg_surf_p=best_avg_surf_p,
+            test_metrics=test_metrics,
+            test_avg=test_avg,
+            n_params=n_params,
+            model_config=model_config,
+        )
+    else:
+        print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
+
+
+if __name__ == "__main__":
+    main()
