@@ -228,6 +228,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    nonfinite_pred_nodes = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -239,6 +240,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+
+            # Defensive: replace non-finite preds with 0 (= y_mean in original space).
+            # No-op when preds are finite; otherwise gives a sensible "predict-mean"
+            # fallback so MAE/loss remain finite when the model goes unstable.
+            pred_finite_mask = torch.isfinite(pred)
+            if not pred_finite_mask.all():
+                pred = torch.where(pred_finite_mask, pred, torch.zeros_like(pred))
+                nonfinite_pred_nodes += int((~pred_finite_mask & mask.unsqueeze(-1)).sum().item())
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -253,7 +262,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            # Denormalize in float64 — float32 can overflow to +/-inf when pred
+            # is finite but large and y_std is large (p channel y_std = 679.45),
+            # and 0 * inf at padding positions propagates NaN through the sum.
+            pred_orig = pred.double() * stats["y_std"].double() + stats["y_mean"].double()
+            # Belt-and-braces: clamp any remaining non-finite values (would only
+            # happen if y_std/y_mean themselves were non-finite, which they are not,
+            # but keep the metric robust if anyone changes stats handling).
+            pred_orig = torch.where(torch.isfinite(pred_orig), pred_orig, torch.zeros_like(pred_orig))
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +277,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "nonfinite_pred_nodes": float(nonfinite_pred_nodes)}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -377,7 +394,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 2
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -418,9 +435,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
+    n_hidden=256,
+    n_layers=6,
+    n_head=8,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
