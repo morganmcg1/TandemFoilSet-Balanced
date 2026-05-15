@@ -1,49 +1,64 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 14:30 (after PR #3208 merge; fern's round-2 assigned)
+- **Last updated:** 2026-05-15 15:45 (after round-1 batch close; round-2 assigned to 6 students)
 - **Most recent research direction from human researcher team:** none (no open issues).
-- **Current research focus and themes:** 7 round-1 PRs still in flight; fern now on round-2 optimizer PR. De facto baseline established at `val_avg/mae_surf_p` = **116.61** via Huber loss.
+- **Current best:** `val_avg/mae_surf_p` = **109.681** (PR #3276 grad-clip + AdamW selective decay)
+- **Current focus:** round-2 — all 8 students assigned; key theme is budget-aware schedule matching + orthogonal axis isolation.
 
 ## Branch context
-`icml-appendix-charlie-pai2i-24h-r2`, round-2 advisor branch for the Charlie launch. Local JSONL metrics only. PRs target this branch.
+`icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
 
-## Established baseline
-- **val_avg/mae_surf_p = 116.61** (PR #3208, Huber loss, best epoch 13, 14 epochs / 30-min cap)
-- Per-split: single 161.69 | geom_rc 117.56 | geom_cruise 85.67 | re_rand 101.53
-- Loss form: SmoothL1 (Huber β=1.0) — merged into HEAD. All subsequent experiments must beat 116.61.
+## Established baseline stack (merged to HEAD)
+1. **PR #3208** (Huber loss) — `val_avg/mae_surf_p` 116.61
+2. **PR #3276** (grad-clip + AdamW selective decay + NaN guard) — `val_avg/mae_surf_p` **109.68** (current best)
 
-## Active PRs
-| PR | Student | Family | Hypothesis | Status |
-|----|---------|--------|-----------|--------|
-| #3179 | alphonse | Arch (width) | n_hidden 128 → 192 | WIP round 1 |
-| #3183 | askeladd | Arch (depth) | n_layers 5 → 8 | WIP round 1 |
-| #3205 | edward | Arch (attention) | slice_num 64 → 192, n_head 4 → 8 | WIP round 1 |
-| #3208 | fern | Loss | MSE → SmoothL1 (Huber) | **MERGED** — new baseline |
-| #3214 | frieren | Loss/Bias | surf_weight 10 → 30 + 2× pressure channel weight | WIP round 1 |
-| #3216 | nezuko | Feature | 32-frequency Fourier features over (x, z) | WIP round 1 |
-| #3220 | tanjiro | Schedule | 100 epochs, linear warmup 5 + cosine, lr 5e-4 → 7e-4 | WIP round 1 |
-| #3223 | thorfinn | Throughput | BF16 autocast + batch_size 4 → 8 | WIP round 1 |
-| #3276 | fern | Optimizer | Gradient clip (max_norm=1.0) + AdamW selective decay + NaN guard | WIP round 2 |
+Key config: SmoothL1 (Huber, β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (LN/bias/1D no-decay) + NaN sample guard in evaluate_split.
 
-## Round 2 candidate pool (from researcher-agent, `research/RESEARCH_IDEAS_2026-05-15_initial.md`)
-| ID | Direction | Notes |
-|----|-----------|-------|
-| H2 | Per-sample output scale normalization | Targets per-sample y-std variability (40×). Most relevant to `val_re_rand`. |
-| H1 | FiLM global-parameter conditioning | Targets `val_geom_camber_*` splits. |
-| H3 | Separate surface/volume decoder heads | Removes shared-decoder bottleneck. |
-| H4 | Per-channel loss weighting (p upweighted) | 2-line change; see also frieren #3214 results. |
-| H10 | Hierarchical two-level PhysicsAttention | Captures boundary layer + large-scale field. |
-| H13 | Log-scale pressure loss in train only | Compresses pressure dynamic range. |
+## Active PRs (round-2, all WIP)
 
-H15 (gradient clip + selective decay) is now assigned to fern (#3276).
+| PR | Student | Hypothesis | Previous result |
+|----|---------|-----------|-----------------|
+| #3276 | fern | Grad-clip + selective decay + NaN guard | **MERGED** — new baseline |
+| #3294 | tanjiro | Warmup+cosine over 14ep (budget-matched) | PR #3220: 148.20 (100ep, never annealed) |
+| #3295 | edward | Slice_num=128 (single-axis) | PR #3205: 164.38 (5ep, OOM workarounds) |
+| #3301 | alphonse | Width-192, epochs=10 (budget-matched) | PR #3179: 154.98 (10ep, cosine never annealed) |
+| #3302 | askeladd | Depth-8, epochs=9 (budget-matched) | PR #3183: 154.95 (9ep, cosine never annealed) |
+| #3304 | frieren | surf_weight=20 single-axis | PR #3214: 138.44 (surf_weight=30 + 2×p, too aggressive) |
+| #3223 | thorfinn | BF16 autocast + batch_size=8 | (round-1, still running) |
+| #3216 | nezuko | 32-freq Fourier features over (x, z) | (round-1, pod restarted after hang) |
 
-## Open questions
-- Which scaling axis (width / depth / attention slots) gives the most return? → #3179, #3183, #3205.
-- Does surf-weight bias (#3214) complement or compete with Huber loss (now baseline)?
-- Does Fourier pos-encoding (#3216) preferentially help the geometry-interpolation splits?
-- Does 100-epoch schedule (#3220) beat the 30-min-capped 14-epoch Huber baseline?
-- Does BF16 + batch8 (#3223) give meaningful wall-clock savings and variance reduction?
-- Does gradient clipping + selective decay (#3276) move val_avg/mae_surf_p 1–4% from 116.61?
+## Round-2 design rationale
+
+### Budget-matching insight (critical learning from round-1)
+Round-1 showed that training under a 30-min cap with a 50-epoch cosine schedule means the LR **never reaches its annealed floor** — we're running flat-high-LR training the whole time. Matching `epochs` to actual completable epochs so the cosine fully decays is the primary fix in round-2 for architecture PRs:
+- alphonse: epochs=10 (~185 s/epoch)
+- askeladd: epochs=9 (~206 s/epoch)
+- tanjiro: epochs=14 with 2-ep warmup (the schedule Tmax=14 now cools fully)
+
+### Optimizer leverage confirmed
+PR #3276 showed that grad-clip + selective decay gave 5.94% improvement (nearly all val splits improving). This is now baked into baseline. The per-split pattern:
+- cruise is easiest (78.85 val, 68.48 test)
+- single is hardest (148.09 val, 123.24 test)
+- geom_rc lags improvement the most (-2.3% vs -8% for others)
+
+The geom_rc underperformance is an open question — could be capacity, domain coverage, or loss balance.
+
+## Open questions for round-2
+- Does width-192 actually help when the schedule fits the budget? (alphonse #3301)
+- Does depth-8 help when the schedule fits? (askeladd #3302)
+- Does a moderate surf_weight=20 improve on 109.68? (frieren #3304)
+- Does a budget-matched warmup+cosine beat plain cosine? (tanjiro #3294)
+- Does slice_num=128 beat 64 in a fair single-axis test? (edward #3295)
+- Does BF16+batch8 give competitive results with faster throughput? (thorfinn #3223)
+- Does Fourier PE improve geometry-split generalization? (nezuko #3216 — pod restarted)
+
+## Potential round-3 directions (from RESEARCH_IDEAS_2026-05-15_initial.md)
+- H2: Per-sample output scale normalization (y-std variability is 40× across dataset)
+- H1: FiLM conditioning on global Re/geometry params
+- H3: Separate surface/volume decoder heads
+- H13: Log-scale pressure loss in train only
+- Stronger weight decay on decay group only (fern's suggestion: try weight_decay=3e-4 or 5e-4)
+- Diagnose geom_rc lagging split — possibly domain-specific capacity issue
 
 ## Plateau watch
-Not applicable — only 1 result in so far. Reassess after 4+ round-1 results land.
+Not yet — only 2 merged results, and both improved. Reassess after round-2 results land.
