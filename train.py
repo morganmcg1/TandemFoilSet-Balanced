@@ -238,9 +238,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
-
-            sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
+                sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+            pred = pred.float()
             sq_err_clean = torch.where(torch.isfinite(sq_err), sq_err, torch.zeros_like(sq_err))
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -350,9 +351,9 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-3
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 8
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -455,8 +456,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
