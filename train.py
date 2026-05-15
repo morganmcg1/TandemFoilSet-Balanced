@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -31,7 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -236,6 +237,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose ground truth contains non-finite values.
+            # data/scoring.py intends to skip such samples via ``y_finite`` but
+            # ``err * mask`` still propagates NaN (NaN * 0 == NaN); filtering
+            # here keeps both the val/test loss and the MAE accumulators clean.
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.all():
+                if not y_finite.any():
+                    continue
+                x = x[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -358,6 +372,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    curriculum_frac: float = 0.5  # fraction of epochs to use Re-sorted (ascending) order
 
 
 cfg = sp.parse(Config)
@@ -380,6 +395,26 @@ else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
+
+# Pre-scan training set for per-sample mean log(Re) (input dim 13) and sort
+# ascending to build the Reynolds-number curriculum loader.
+prescan_start = time.time()
+log_re_per_sample = []
+for idx in range(len(train_ds)):
+    xi, _, _ = train_ds[idx]
+    log_re_per_sample.append(float(xi[:, 13].mean()))
+log_re_arr = np.asarray(log_re_per_sample)
+sorted_indices = np.argsort(log_re_arr).tolist()
+curriculum_subset = Subset(train_ds, sorted_indices)
+curriculum_loader = DataLoader(curriculum_subset, batch_size=cfg.batch_size,
+                               shuffle=False, **loader_kwargs)
+prescan_dt = time.time() - prescan_start
+log_re_min = float(log_re_arr.min())
+log_re_max = float(log_re_arr.max())
+print(
+    f"Re-curriculum pre-scan: {len(train_ds)} samples in {prescan_dt:.1f}s, "
+    f"log(Re) range [{log_re_min:.3f}, {log_re_max:.3f}]"
+)
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -424,6 +459,11 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+curriculum_epochs = int(MAX_EPOCHS * cfg.curriculum_frac)
+print(
+    f"Re-curriculum: first {curriculum_epochs}/{MAX_EPOCHS} epochs use ascending log(Re) order, "
+    f"then switch to weighted-balanced sampler"
+)
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -435,7 +475,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    using_curriculum = epoch < curriculum_epochs
+    active_loader = curriculum_loader if using_curriculum else train_loader
+    for x, y, is_surface, mask in tqdm(active_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -496,6 +538,9 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "using_curriculum": using_curriculum,
+        "curriculum_frac": cfg.curriculum_frac,
+        "curriculum_epochs": curriculum_epochs,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
