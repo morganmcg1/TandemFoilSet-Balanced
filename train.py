@@ -34,6 +34,30 @@ from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
+try:
+    from timm.optim import Lion
+except (ImportError, AttributeError):
+    class Lion(torch.optim.Optimizer):
+        def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+            defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+            super().__init__(params, defaults)
+
+        @torch.no_grad()
+        def step(self, closure=None):
+            for group in self.param_groups:
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+                    grad = p.grad
+                    state = self.state[p]
+                    if "exp_avg" not in state:
+                        state["exp_avg"] = torch.zeros_like(p.data)
+                    exp_avg = state["exp_avg"]
+                    beta1, beta2 = group["betas"]
+                    update = (beta1 * exp_avg + (1 - beta1) * grad).sign()
+                    p.data.add_(update + p.data * group["weight_decay"], alpha=-group["lr"])
+                    exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+
 from data import (
     TEST_SPLIT_NAMES,
     VAL_SPLIT_NAMES,
@@ -375,8 +399,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
-    weight_decay: float = 1e-4
+    lr: float = 1e-4
+    weight_decay: float = 1e-2
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
@@ -432,7 +456,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
