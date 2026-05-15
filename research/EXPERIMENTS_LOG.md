@@ -1,5 +1,26 @@
 # SENPAI Research Results
 
+## 2026-05-15 18:30 — PR #3310: n_layers 5 → 6 — closed
+
+- Branch: `willowpai2i24h5-edward/n-layers-6`
+- Hypothesis: n_layers=6 will train stably under the inherited grad clip and capture meaningful depth gain vs. n_layers=5 baseline.
+- W&B run: `2o2fq04e`
+
+| Metric | n_layers=5 baseline | n_layers=6 this PR | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **117.16** | 127.23 | +10.07 (+8.6%, worse) |
+| val_single_in_dist | 138.19 | 153.05 | +14.86 |
+| val_geom_camber_rc | 137.91 | **124.49** | **-13.42** ✓ |
+| val_geom_camber_cruise | 85.86 | 96.71 | +10.85 |
+| val_re_rand | 106.68 | 134.66 | +27.98 |
+| Epochs / wall-clock | 14 / ~120s each | 12 / ~157s each | -2 epochs, +31% per epoch |
+| Peak VRAM | 42.1 GB | 49.6 GB | +7.5 GB |
+| test avg (excl. cruise) | 116.40 | 125.26 | +8.86 |
+
+**Analysis:** Stability hypothesis **confirmed** — no collapse, smooth descent, no Inf in test. Depth-gain hypothesis **falsified** for this budget. The deeper model runs 31% slower per epoch, completes 12 vs. 14 epochs, and lags per-epoch as well. The 30-min cap punishes depth twice. Single positive signal: val_geom_camber_rc improved by ~10% (OOD geometry), consistent with the depth → geometry-generalization hypothesis, but the cost on val_re_rand (+28) and val_single_in_dist (+15) swamps it. Key insight: the round-1 n_layers=7 "promising" signal was against the unclipped baseline (slower-converging); the clipped baseline is materially better at every epoch, so the depth gap is now negative. Next for edward: n_hidden=192 (PR #3381) — tests whether the model is capacity-limited via width rather than depth.
+
+---
+
 ## 2026-05-15 18:00 — PR #3307: OneCycleLR (max_lr=1e-3, pct_start=0.1) — sent back
 
 - Branch: `willowpai2i24h5-askeladd/onecyclelr-1e3`
