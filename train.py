@@ -217,17 +217,34 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+_CHANNELS = ("Ux", "Uy", "p")
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Also accumulates a NaN-safe parallel variant (``mae_surf_*_nansafe``,
+    ``mae_vol_*_nansafe``) that filters non-finite ground truth at the
+    node-channel level rather than dropping whole samples. Works around the
+    ``data/scoring.py`` NaN-propagation bug where ``test_geom_camber_cruise``
+    sample 000020 contains -inf in interior pressure, poisoning per-channel
+    accumulators via ``NaN * 0 = NaN``.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    mae_surf_ns = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol_ns = torch.zeros(3, dtype=torch.float64, device=device)
+    n_surf_ns = torch.zeros(3, dtype=torch.float64, device=device)
+    n_vol_ns = torch.zeros(3, dtype=torch.float64, device=device)
+    n_neginf_y_p = 0
+    n_posinf_y_p = 0
+    n_nan_y_p = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -235,6 +252,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            valid = mask.unsqueeze(-1)
+            n_neginf_y_p += ((y == float("-inf")) & valid).select(-1, 2).sum().item()
+            n_posinf_y_p += ((y == float("inf")) & valid).select(-1, 2).sum().item()
+            n_nan_y_p += (torch.isnan(y) & valid).select(-1, 2).sum().item()
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -258,11 +280,34 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_surf += ds
             n_vol += dv
 
+            y_finite = torch.isfinite(y)
+            err_safe = torch.where(
+                y_finite,
+                (pred_orig.double() - y.double()).abs(),
+                torch.zeros_like(y, dtype=torch.float64),
+            )
+            surf_valid = (mask & is_surface).unsqueeze(-1) & y_finite
+            vol_valid = (mask & ~is_surface).unsqueeze(-1) & y_finite
+            mae_surf_ns += (err_safe * surf_valid.double()).sum(dim=(0, 1))
+            mae_vol_ns += (err_safe * vol_valid.double()).sum(dim=(0, 1))
+            n_surf_ns += surf_valid.sum(dim=(0, 1)).double()
+            n_vol_ns += vol_valid.sum(dim=(0, 1)).double()
+
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
-    out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+    out: dict[str, float] = {"vol_loss": vol_loss, "surf_loss": surf_loss,
+                              "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    s_ns = mae_surf_ns / n_surf_ns.clamp(min=1)
+    v_ns = mae_vol_ns / n_vol_ns.clamp(min=1)
+    for i, ch in enumerate(_CHANNELS):
+        out[f"mae_surf_{ch}_nansafe"] = s_ns[i].item()
+        out[f"mae_vol_{ch}_nansafe"] = v_ns[i].item()
+        out[f"n_surf_nodes_{ch}_nansafe"] = int(n_surf_ns[i].item())
+        out[f"n_vol_nodes_{ch}_nansafe"] = int(n_vol_ns[i].item())
+    out["n_neginf_y_p"] = int(n_neginf_y_p)
+    out["n_posinf_y_p"] = int(n_posinf_y_p)
+    out["n_nan_y_p"] = int(n_nan_y_p)
     return out
 
 
@@ -381,6 +426,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 2.0
+    lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override CosineAnnealingLR T_max
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -433,7 +479,8 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+t_max = cfg.lr_T_max if cfg.lr_T_max > 0 else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -590,9 +637,27 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        nansafe_keys = [f"mae_{loc}_{ch}_nansafe"
+                        for loc in ("surf", "vol") for ch in _CHANNELS]
+        for k in nansafe_keys:
+            vals = [m[k] for m in test_metrics.values() if k in m]
+            if vals:
+                test_avg[f"avg_nansafe/{k.replace('_nansafe', '')}"] = sum(vals) / len(vals)
+        in_tree = test_avg.get("avg/mae_surf_p", float("nan"))
+        nansafe = test_avg.get("avg_nansafe/mae_surf_p", float("nan"))
+        print(
+            f"\n  TEST  avg_surf_p (in-tree)={in_tree:.4f}  "
+            f"avg_surf_p (nansafe)={nansafe:.4f}"
+        )
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+            m = test_metrics[name]
+            print(
+                f"      [nansafe] surf[p={m['mae_surf_p_nansafe']:.4f} "
+                f"Ux={m['mae_surf_Ux_nansafe']:.4f} Uy={m['mae_surf_Uy_nansafe']:.4f}]  "
+                f"data_bug[p_neginf={m['n_neginf_y_p']} p_posinf={m['n_posinf_y_p']} "
+                f"p_nan={m['n_nan_y_p']}]"
+            )
 
         test_log: dict[str, float] = {}
         for split_name, m in test_metrics.items():
@@ -602,6 +667,8 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        wandb.summary["data_bug/in_tree_test_avg_mae_surf_p"] = in_tree
+        wandb.summary["data_bug/nansafe_test_avg_mae_surf_p"] = nansafe
 
     save_model_artifact(
         run=run,
