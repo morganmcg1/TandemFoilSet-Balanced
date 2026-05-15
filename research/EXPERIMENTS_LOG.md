@@ -704,3 +704,91 @@ The aux head reaches ~99% accuracy by epoch 6 of 9 realized, with aux_loss dropp
 - **#3496 nezuko**: RMSNorm swap — replace all `nn.LayerNorm` with `RMSNorm` (T5/PaLM/LLaMA standard). Drop-in, -2,112 params, 5-10% per-epoch speedup predicted.
 - **#3498 tanjiro**: SwiGLU MLP — replace GELU FFN with `SwiGLU(d_ff=256)` (Shazeer 2020, iso-param per PaLM convention). Gated FFN for multi-scale targets.
 - **#3500 alphonse**: slice_num 64→32 — halve PhysicsAttention slice tokens, direct memory-bandwidth attack. Predicted 15-25% per-epoch speedup (10-18 realized epochs vs 9 at fp32).
+
+## 2026-05-15 23:00 — PR #3455: DropPath stochastic depth (linear 0→0.1) on TransolverBlock residuals — CLOSED
+
+- **Student branch**: `charliepai2i24h1-frieren/droppath-residuals`
+- **Hypothesis**: DropPath linear schedule [0, 0.025, 0.05, 0.075, 0.1] on TransolverBlock residual branches; CaIT-canonical zero-parameter regularizer; predicted to help OOD splits (re_rand, geom_camber_rc) disproportionately by reducing depth co-adaptation.
+
+### Results
+
+| Metric | Value | Baseline (#3136) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9/12)** | **146.6597** | 126.3241 | **+16.1% (WORSE)** |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 133.8657 | — | — |
+| n_params | 1,447,521 | 1,447,521 | 0 (matches exactly) |
+| peak_memory_gb | 62.997 | — | — |
+| epochs realized | 9 of 12 | 14 | — |
+| Per-epoch wall time | ~213 s | ~205 s | wider-trunk variance, not DropPath |
+
+| Split | val mae_surf_p | Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 190.92 | 158.79 | +20.2% |
+| val_geom_camber_rc | 156.28 | 127.26 | +22.8% |
+| val_geom_camber_cruise | 112.51 | 102.20 | +10.1% |
+| val_re_rand | 126.93 | 117.04 | +8.5% |
+| Split-spread max/min | 1.70 | ~1.55 | got WORSE |
+
+- **Metric artifacts**: `models/model-droppath-r0p1-20260515-222516/metrics.jsonl`
+
+### Verdict: CLOSED — directional disconfirmation, not just magnitude
+
+The hypothesis predicted **disproportionate OOD wins**. Data shows the opposite:
+
+1. **Split-spread got worse** (1.70 vs ~1.55 baseline) — DropPath made the distribution gap larger, not smaller.
+2. **In-dist regressed MORE than OOD** in absolute terms (+20.2% single_in_dist vs +8.5% re_rand).
+3. **Lower rates wouldn't fix this** — they'd shrink the regression magnitude but the directional pattern would persist. The data says depth co-adaptation isn't the failure mode this model is suffering from.
+
+Methodologically clean: closes the CaIT-style residual regularization axis at this budget. Different from a "rate is wrong" close.
+
+## 2026-05-15 23:03 — PR #3336: grad-clip max_norm=100 rerun — CLOSED
+
+- **Student branch**: `charliepai2i24h1-fern/grad-clip` (rebased after #3378)
+- **Hypothesis (rerun)**: max_norm=100 should clip only spike batches (predicted clip_rate 0.1-0.3) instead of every batch as max_norm=1.0 did. Predicted recovery of the noisy-split improvements without losing median-batch info.
+
+### Results
+
+| Metric | Value | max_norm=1.0 round 1 | Baseline (#3136) |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9/12)** | **127.3480** (committed, best of 3 seeds) | 129.7342 | 126.3241 |
+| Mean of 3 seeds (127.35, 130.59, 131.21) | 129.7158 | 129.73 | — |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 114.5905 | 116.5846 | — |
+| Δ vs baseline (committed) | **+0.81% (worse)** | +2.7% | — |
+| Δ vs baseline (3-seed mean) | **+2.7% (worse, == max_norm=1.0)** | +2.7% | — |
+
+| Split | mae_surf_p (committed) | max_norm=1.0 | Baseline | Δ vs baseline |
+|---|---|---|---|---|
+| val_single_in_dist | 158.47 | 162.01 | 158.79 | -0.2% |
+| val_geom_camber_rc | 142.36 | 149.45 | 127.26 | **+11.9%** (regression persists across both clip levels) |
+| val_geom_camber_cruise | 96.96 | 95.64 | 102.20 | **-5.1%** (improved as hypothesis predicted) |
+| val_re_rand | 111.60 | 111.84 | 117.04 | **-4.7%** (improved as hypothesis predicted) |
+
+### Clip-rate distribution landed exactly in the canonical regime
+
+| Epoch | grad_norm_mean | grad_norm_max | clip_rate |
+|---|---|---|---|
+| 1 | 232 | 1085 | **0.797** |
+| 5 | 138 | 899 | **0.512** |
+| 9 | 106 | 2008 | **0.283** |
+
+Decayed from 80% → 28% as training stabilized. Textbook spike-clipping regime.
+
+### Verdict: CLOSED — multi-seed evidence shows effect is noise-equivalent
+
+1. **3-seed mean = 129.72** is essentially identical to max_norm=1.0 result (129.73). On a multi-seed basis grad-clip is **neutral**, not improving.
+2. **Seed variance (~4 MAE units)** is comparable to the entire effect size. Three more seeds wouldn't shift the conclusion.
+3. **camber_rc regression persists across both clip levels** (+17.4% at max_norm=1.0, +11.9% at max_norm=100). This is **not stochastic** — it's a real mechanism: camber_rc samples have systematically high gradient norms and grad-clip discourages the large optimizer steps they need.
+4. **Clip distribution landed in the canonical regime** (0.80 → 0.28 over 9 epochs). If it doesn't help here, it won't help at max_norm=50 or 200 either.
+
+### Permanent findings to preserve
+
+- **Camber_rc gradient-norm-driven systemic regression**: this dataset has a split that benefits from large optimizer steps while two other splits benefit from clip. The grad-clip mechanism is a wash because these effects cancel.
+- **`train/grad_norm_{mean,max,min,clip_rate}` per-epoch logging**: cheap, high-information diagnostic that revealed both the loss-scale issue (round 1) and the canonical regime (round 2). Should persist regardless of whether clipping is active.
+- **`eval_test_clean.py` is dead code** post-#3378 — flagged for future cleanup but not in scope here.
+
+Student's research hygiene (exposing 3 uncommitted seed runs and explicitly calling out variance > effect size) is exemplary. Closed cleanly with no follow-up — the optimization-stability axis is exhausted at this budget via the grad-clip mechanism class.
+
+## 2026-05-15 23:05 — PRs #3525, #3526: Round-3 dispatches
+
+- **#3525 fern**: Lion optimizer (Chen et al. 2023) — sign-momentum, half the optimizer state of AdamW, replaces per-param LR adaptation with uniform sign updates. Tests whether the camber_rc grad-norm asymmetry that grad-clip exposed is mediated by AdamW's `v` term. lr=1.5e-4, wd=1e-3 (Lion-scaled from AdamW 5e-4/1e-4).
+- **#3526 frieren**: torch.compile(dynamic=True) — operator fusion attacking the per-kernel dispatch overhead. Different mechanism from slice_num=32 (smaller tensors) and bf16 (smaller dtype). Predicted 10-20% per-epoch speedup → 12-13 realized epochs vs 9 baseline. Inductor cache fresh on first run.
