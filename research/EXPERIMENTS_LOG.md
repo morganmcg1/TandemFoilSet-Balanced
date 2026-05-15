@@ -251,6 +251,46 @@ Test (3 finite splits — run pre-dated #3279 NaN fix):
 
 ---
 
+## 2026-05-15 21:29 — PR #3400 — SmoothL1 beta=0.25 sweep (MERGED → new baseline 97.15)
+
+- **Branch:** `charliepai2i48h1-askeladd/smooth-l1-beta025`
+- **Hypothesis:** Lower the SmoothL1 kink-point from beta=0.5 to beta=0.25 to push further into the L1 regime. At beta=0.25, ~80%+ of the loss surface is in the L1 regime — essentially L1 with a tiny smoothed corner near zero.
+- **Results (2-seed mean):**
+
+| Metric | Baseline (beta=0.5) | Seed 1 | Seed 2 | 2-seed mean | Δ |
+|--------|---------------------:|-------:|-------:|------------:|---|
+| `val_avg/mae_surf_p` | 98.45 | 95.73 | 98.57 | **97.15** | **-1.30%** |
+| `test_avg/mae_surf_p` | 87.63 | 86.36 | 88.35 | **87.36** | -0.27% |
+
+Per-split val (2-seed mean): single=118.30, rc=108.63, cruise=72.25, re_rand=89.44. All 4 splits improve directionally on the mean.
+
+- **Metrics paths:**
+  - `models/model-smooth-l1-beta025-20260515-192523/metrics.jsonl` (seed 1, val=95.73)
+  - `models/model-charliepai2i48h1-askeladd-smooth-l1-beta025-seed2-20260515-202331/metrics.jsonl` (seed 2, val=98.57)
+- **Action:** MERGED (new baseline). Mean beats 98.45 across all 4 splits directionally; merged per "compound small improvements" rule.
+- **Commentary:** Student's own verdict was "tie within noise" (mean -1.3%, inside ±5-10 pt single-seed band). However the directional consistency across all 4 splits on the mean supports a real (if modest) effect. The beta lever is now saturated — we've sampled {1.0, 0.5, 0.25} and the curve has flattened. No value in pushing to beta=0.1. Loss-formulation axis closed; future wins must come from other mechanisms.
+
+---
+
+## 2026-05-15 21:35 — PR #3376 — Cosine T_max=14 rebased onto beta=0.5 base (CLOSED — mechanism overlap)
+
+- **Branch:** `charliepai2i48h1-alphonse/cosine-tmax14-rebased`
+- **Hypothesis:** Set `CosineAnnealingLR(T_max=14, eta_min=1e-6)` to align the schedule with the actual wall-clock-feasible epoch count. Original run (on old base) showed -7% on test; rebased run was expected to stack.
+- **Results:**
+
+| Metric | Baseline (beta=0.5+EMA) | This PR | Δ |
+|--------|------------------------:|--------:|---|
+| `val_avg/mae_surf_p` | 98.45 | **97.45** | -1.02% |
+| `test_avg/mae_surf_p` | 87.63 | **87.61** | -0.02% |
+
+Per-split val: single=118.30, rc=108.41, cruise=73.74, re_rand=89.34. All within noise.
+
+- **Metrics path:** `models/model-cosine-tmax-14-rebased-20260515-202546/metrics.jsonl`
+- **Action:** CLOSED. Student's own recommendation: "do not merge." After #3400 merged (new baseline 97.15), this PR's 97.45 is +0.31% worse than the new baseline.
+- **Commentary:** The original -7% test gain was from correcting the T_max misalignment relative to the OLD base (beta=1.0). SmoothL1 beta=0.5 already suppresses the late-training gradient noise that T_max=14 was correcting — mechanism overlap confirmed. EMA-0.999 + beta=0.5 jointly clamp the late-training trajectory; once both are in, the cosine schedule shape contribution is marginal. The schedule completes correctly (lr=7e-6 at epoch 14, best_epoch=14) — the lever is structurally sound, just already covered by the other wins. Scheduler improvements (WarmupCosine, SGDR) remain viable but need a different mechanism from simple T_max shrinking.
+
+---
+
 ## 2026-05-15 12:35 — Round 1 assigned (8 PRs)
 
 | PR | Student | Hypothesis | Knob |
