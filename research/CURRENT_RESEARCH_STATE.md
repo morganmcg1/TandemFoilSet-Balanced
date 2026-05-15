@@ -1,47 +1,69 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 12:35
+- **Date:** 2026-05-15 15:30
 - **Launch:** willow-pai2i-48h-r1 (round 1, 48h horizon)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Students (8):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn (1 GPU each)
-- **Budget per run:** 30 min wall clock, 50 epochs max
+- **Budget per run:** 30 min wall clock, 50 epochs max (~14 epochs achievable at current speed)
 - **Latest direction from human team:** None (no open Issues for this launch)
 
 ## Research contract
 Beat the Transolver baseline on `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`) — the equal-weight mean surface pressure MAE across the 4 val/test splits on TandemFoilSet. Lower is better.
 
-## Round-1 strategy
-No prior results on this branch — round 1 explores the recipe-level lever set in parallel across 8 students. Pick orthogonal axes likely to compound:
+## Current best baseline
+- **val_avg/mae_surf_p = 112.9001** (PR #3159, alphonse, Huber loss delta=0.1)
+- W&B run: `bpczoejx`
+- Merged to advisor branch
 
-1. **Loss reformulation** — MSE → MAE-aligned (Huber / L1) so training and the eval metric agree.
-2. **Surface emphasis** — raise `surf_weight` so the metric we score gets more gradient.
-3. **Optimizer schedule** — warmup + tuned LR; current plain cosine starts at peak LR.
-4. **Capacity bump** — modest width increase (128 → 192/256 hidden) within the 30-min budget.
-5. **Positional encoding** — turn on `unified_pos`; raw (x,z) coords are likely under-exploited.
-6. **Spectral / Fourier features** — multi-scale positional embedding to capture flow length scales.
-7. **Channel rebalancing** — emphasize pressure channel since it's the scoring channel.
-8. **Gradient stability** — AdamW betas + clip + slightly larger batch to denoise gradients.
+Full metrics in `BASELINE.md`.
 
-## Themes / next directions to consider once round-1 returns
-- Train-time symmetry augmentation (horizontal flip with sign flips on AoA, Ux) — needs care because foils have camber.
-- Test-time augmentation (TTA) using same symmetry.
-- Physics-informed regularisers (divergence-free for volume `(Ux, Uy)`).
-- Domain-specific output heads (raceCar single vs raceCar tandem vs cruise tandem).
-- Better surface attention (cross-attention from surface nodes to volume slice tokens).
-- Per-domain or per-channel normalization (current stats are global; pressure ranges differ by domain).
-- Spectral / FNO-style operator blocks alongside Transolver attention.
-- Mesh-aware sub-sampling for training (large meshes dominate compute).
-- Multi-scale prediction (predict residual on top of a coarse prediction).
+## Round-1 status
 
-## Baseline (post round-1 first merge — PR #3188)
-- **PR #3188 merged:** slice_num 64→128 (thorfinn)
-- Transolver: 5 layers, hidden=128, heads=4, **slice_num=128**, mlp_ratio=2.
-- AdamW lr=5e-4, weight_decay=1e-4, batch=4, cosine T_max=50.
-- Loss = vol_MSE + 10·surf_MSE on normalized targets.
-- **val_avg/mae_surf_p = 134.7389** (epoch 11/50, 30-min cap, not converged)
-- ~173 s/epoch → ~11 epochs in 30-min budget at batch=4, 1 GPU.
+### Merged / Closed
+| PR | Student | Hypothesis | Result |
+|----|---------|-----------|--------|
+| #3159 ✓ MERGED | alphonse | Huber loss delta=0.1 | **112.9001** — new baseline |
+| #3188 ✗ CLOSED | thorfinn | slice_num 64→128 | 134.7389 — did not beat Huber baseline |
 
-## Known infrastructure issue
-`.test_geom_camber_cruise_gt/000020.pt` has 761 inf values in pressure channel.  
-→ `test_geom_camber_cruise/mae_surf_p` = NaN for ALL students. Val unaffected.  
-Fix: defensive `y_finite` masking in train.py assigned to thorfinn (relative-mse-bugfix).
+### In flight (WIP)
+| PR | Student | Hypothesis | Status |
+|----|---------|-----------|--------|
+| #3167 | edward | OneCycleLR max_lr=1e-3 | WIP — just un-drafted, should start soon |
+| #3171 | fern | Split pressure head (3× p weight) | WIP — just un-drafted |
+| #3174 | frieren | L1 loss + surf_weight=50 | WIP — just un-drafted |
+| #3175 | nezuko | Cosine warmup (5-ep linear) | WIP — just un-drafted |
+| #3180 | tanjiro | Wider model (hidden=192, slice_num=96) | WIP — just un-drafted |
+| #3305 | alphonse | Huber delta scan (0.05, 0.02) | WIP — fresh assignment |
+| #3309 | thorfinn | NaN bug fix in evaluate_split | WIP — fresh assignment |
+
+Note: PRs #3167–#3180 were created earlier but stuck in draft state (student pods skip draft PRs). Un-drafted at 15:30 UTC — students should pick up on next poll cycle.
+
+## Current research focus
+Round 1 explores the recipe-level lever set. The Huber(delta=0.1) win (PR #3159) establishes a clear hypothesis: **metric alignment between loss and evaluation drives significant improvement**. Key themes being tested:
+
+1. **Loss alignment** (merged: Huber; in-flight: alphonse's delta scan, frieren's L1+high surf_weight)
+2. **LR schedule** (in-flight: edward's OneCycleLR, nezuko's cosine warmup)
+3. **Output head architecture** (in-flight: fern's split pressure head)
+4. **Capacity** (in-flight: tanjiro's wider model)
+5. **Infrastructure** (in-flight: thorfinn's NaN fix — unblocks real test_avg metrics)
+
+## Key insight from round-1 so far
+- Huber loss alignment is the largest lever found so far (~16% improvement)
+- **Binding constraint**: 30-min timeout → ~14 epochs only. T_max=50 means LR is still at ~82% of peak when training stops. The cosine schedule never anneals. This is a major opportunity: any experiment that uses a schedule fitted to ~14 epochs should benefit.
+- val_geom_camber_cruise (75.85) is already well-predicted; val_geom_camber_rc (143.41) and val_single_in_dist (134.46) are hardest and drive the average up.
+
+## Infrastructure issue (partially resolved)
+`.test_geom_camber_cruise_gt/000020.pt` has 761 `-inf` values in pressure channel.  
+→ `test_geom_camber_cruise/mae_surf_p` = NaN for ALL students.  
+→ Fix in thorfinn PR #3309: defensive `y_finite` masking in `evaluate_split`.  
+Val metrics are unaffected. Once merged, real `test_avg/mae_surf_p` (4 splits) will be available.
+
+## Themes / next directions to consider
+- **T_max / schedule tuning**: Most important remaining lever. OneCycleLR (edward) and warmup (nezuko) both address this. If neither wins, explicitly tune T_max=14.
+- **Huber delta refinement**: alphonse testing delta=0.05 and 0.02. Smaller delta → more L1 regime → better MAE alignment.
+- **Compound improvements**: Once the LR schedule and loss are both dialled in, test capacity increases (slice_num=128, hidden=192) on top of the combined base.
+- **Surface-specific attention**: Cross-attention from surface to volume slice tokens.
+- **Train-time symmetry augmentation** (horizontal flip + sign flips on AoA/Ux) — needs care due to camber.
+- **Per-channel normalization**: Current stats are global; pressure ranges differ by domain.
+- **Spectral / FNO-style operator blocks** alongside Transolver attention.
+- **Relative MSE loss**: Normalises large-magnitude (raceCar) errors relative to the target scale.
