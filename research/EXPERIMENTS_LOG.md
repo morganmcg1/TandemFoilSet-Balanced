@@ -2,6 +2,65 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-15 18:20 — PR #3326: H12 MLP dropout=0.1 (fern) — **MERGED, new baseline**
+
+- Branch: `charliepai2i24h4-fern/mlp-dropout`
+- Hypothesis: Add `dropout=0.1` to `MLP` class and apply in `TransolverBlock.mlp` FFN sub-layers. `PhysicsAttention`, preprocess MLP, and final head remain at `dropout=0.0`. With only 1499 training samples, the FFN path was memorizing training-distribution feature correlations.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, epoch 13) | **112.49** |
+| `val_single_in_dist/mae_surf_p` | 136.83 |
+| `val_geom_camber_rc/mae_surf_p` | 118.25 |
+| `val_geom_camber_cruise/mae_surf_p` | 87.31 |
+| `val_re_rand/mae_surf_p` | 107.55 |
+| `test_avg/mae_surf_p` | **104.83** |
+| `test_single_in_dist/mae_surf_p` | 126.77 |
+| `test_geom_camber_rc/mae_surf_p` | 112.01 |
+| `test_geom_camber_cruise/mae_surf_p` | 75.35 |
+| `test_re_rand/mae_surf_p` | 105.20 |
+| Wall clock | 30 min cap; epoch 14 of 50; best at epoch 13 |
+
+- Metric artifact: `models/model-fern-mlp-dropout-0p1-20260515-163433/metrics.jsonl`
+- Diagnostic: Clean OOD-dominant signature: geom_camber_cruise -14.1%, re_rand -9.6%, geom_camber_rc -6.1%, single_in_dist -5.4% on val. Test single_in_dist slightly regressed (+2.3%) — classic regularizer tradeoff near the sweet spot. The regularizer reduces memorization of training-set feature correlations, which pays dividends most where the test distribution differs from train.
+- Follow-up: fern assigned H12b dropout rate sweep {0.05, 0.15, 0.20} to find optimal beyond 0.1.
+- Decision: **Merge** — -8.4% val_avg, strongest single-PR improvement so far. Clean implementation, OOD signature exactly as hypothesized.
+
+## 2026-05-15 18:20 — PR #3222: H9 Cautious AdamW (nezuko) — **sent back, v2 rerun needed**
+
+- Branch: `charliepai2i24h4-nezuko/cautious-adamw`
+- Hypothesis: Replace AdamW with from-scratch CautiousAdamW that masks update components where sign(m_t) ≠ sign(g_t).
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, epoch 13) | **118.91** |
+| `val_single_in_dist/mae_surf_p` | 143.16 |
+| `val_geom_camber_rc/mae_surf_p` | 128.82 |
+| `val_geom_camber_cruise/mae_surf_p` | 94.85 |
+| `val_re_rand/mae_surf_p` | 108.80 |
+| `test_avg/mae_surf_p` | 109.23 |
+| Wall clock | 30 min cap; epoch 14 of 50; best at epoch 13 |
+
+- Metric artifact: `models/model-charliepai2i24h4-nezuko-cautious-adamw-20260515-163837/metrics.jsonl`
+- Diagnostic: v1 beat old baseline 122.81 → 118.91 (-3.2%). But fern's dropout merged during review, raising the bar to 112.49. v1 is above the new target. CONFLICTING (needs rebase, had duplicate NaN workaround). Sent back for v2 rerun on top of new baseline (including H12 dropout) to test composition.
+- Decision: **Sent back** — mechanism is proven; v2 tests composition with dropout.
+
+## 2026-05-15 18:20 — PR #3201: H3 channel-weighted surface loss p=3 (edward) — **sent back, p=1.5 rerun**
+
+- Branch: `charliepai2i24h4-edward/channel-weighted-surf-loss-p3x`
+- Hypothesis: Weight pressure channel 3× in surface loss (ch_weights=[1,1,3] / mean), keeping surf_weight=10.0.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best run, epoch 14) | 138.39 |
+| `val_single_in_dist/mae_surf_p` | 178.75 (178.75 vs 144.70 baseline = +23.5%) |
+| `val_geom_camber_cruise/mae_surf_p` | 99.36 (-2.2% slight improvement) |
+| `test_avg/mae_surf_p` (3-split partial) | 138.95 |
+| Seeds tested | 4 runs (137.64 to 149.19 range, ~8% spread) |
+
+- Diagnostic: Over-emphasis on pressure at the cost of velocity coupling. Single_in_dist badly regressed. Only cruise improved marginally. v2 (p=1.5, milder) sent back to test: if still regresses, channel-reweighting direction closed.
+- Decision: **Sent back** — milder ratio one more try; if p=1.5 also regresses, hypothesis closed.
+
 ## 2026-05-15 17:00 — PR #3291: H7 two-branch output head (thorfinn) — **CLOSED, regressed**
 
 - Branch: `charliepai2i24h4-thorfinn/two-branch-head`
