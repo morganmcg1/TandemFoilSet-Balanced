@@ -225,6 +225,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     ``score.py`` (float64, non-finite samples skipped).
     """
     vol_loss_sum = surf_loss_sum = 0.0
+    n_nonfinite_pred = 0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
@@ -254,6 +255,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            # Sanitize: replace non-finite predictions so a single bad node cannot
+            # poison the running sum. Reports a large-but-finite error at the bad
+            # node consistent with "model failed at this node".
+            n_nonfinite_pred += int((~torch.isfinite(pred_orig)).sum().item())
+            pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=1e6, neginf=-1e6)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +267,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_nonfinite_pred": n_nonfinite_pred}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -358,11 +365,14 @@ def save_model_artifact(
 
 
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
+    nf = m.get("n_nonfinite_pred", 0)
+    nf_tag = f"  nonfinite_pred={int(nf)}" if nf else ""
     print(
         f"    {split_name:<26s} "
         f"loss={m['loss']:.4f}  "
         f"surf[p={m['mae_surf_p']:.4f} Ux={m['mae_surf_Ux']:.4f} Uy={m['mae_surf_Uy']:.4f}]  "
         f"vol[p={m['mae_vol_p']:.4f} Ux={m['mae_vol_Ux']:.4f} Uy={m['mae_vol_Uy']:.4f}]"
+        f"{nf_tag}"
     )
 
 
