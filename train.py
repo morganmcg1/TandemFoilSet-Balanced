@@ -217,6 +217,18 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def per_sample_std(y: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Per-sample, per-channel std on valid (non-padding) nodes.
+
+    y: [B, N, 3], mask: [B, N] bool. Returns [B, 3].
+    """
+    mask_f = mask.float().unsqueeze(-1)
+    n = mask_f.sum(dim=1).clamp(min=1)
+    mean = (y * mask_f).sum(dim=1) / n
+    var = (((y - mean.unsqueeze(1)) ** 2) * mask_f).sum(dim=1) / n
+    return var.clamp(min=1e-6).sqrt()
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -358,6 +370,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    scale_aware_loss: bool = False  # per-sample inv-std reweighting in train loss
 
 
 cfg = sp.parse(Config)
@@ -448,8 +461,16 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.scale_aware_loss:
+            inv_std = 1.0 / per_sample_std(y_norm, mask)
+            mean_inv = inv_std.mean(dim=0, keepdim=True).clamp(min=1e-6)
+            weight = (inv_std / mean_inv).unsqueeze(1)
+            weighted_sq_err = sq_err * weight
+            vol_loss = (weighted_sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (weighted_sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        else:
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
