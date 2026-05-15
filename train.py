@@ -386,6 +386,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    re_balance_power: float = 0.5
+    re_balance_eps: float = 1e-6
 
 
 cfg = sp.parse(Config)
@@ -489,6 +491,21 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
+        # Per-sample inverse-std loss weighting: equalize gradient pressure across
+        # the wide Re range that global normalization alone leaves badly imbalanced.
+        with torch.no_grad():
+            mask_f = mask.float().unsqueeze(-1)              # [B, N, 1]
+            n_valid = mask_f.sum(dim=1).clamp(min=1)         # [B, 1]
+            y_sum = (y * mask_f).sum(dim=1)                  # [B, 3]
+            y_mean_s = y_sum / n_valid                       # [B, 3]
+            y_diff_sq = ((y - y_mean_s.unsqueeze(1)) * mask_f) ** 2
+            y_var_s = y_diff_sq.sum(dim=1) / n_valid         # [B, 3]
+            y_std_s = y_var_s.mean(dim=-1).sqrt() + cfg.re_balance_eps   # [B]
+            global_std = stats["y_std"].mean()
+            sample_w = (global_std / y_std_s) ** cfg.re_balance_power    # [B]
+            sample_w = sample_w / sample_w.mean()             # normalize to unit mean per batch
+        sq_err = sq_err * sample_w[:, None, None]            # weight each sample's error elements
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
@@ -499,7 +516,15 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/sample_w_min": sample_w.min().item(),
+            "train/sample_w_max": sample_w.max().item(),
+            "train/sample_w_std": sample_w.std().item() if sample_w.numel() > 1 else 0.0,
+            "train/y_std_min": y_std_s.min().item(),
+            "train/y_std_max": y_std_s.max().item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
