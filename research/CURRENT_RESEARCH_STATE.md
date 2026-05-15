@@ -1,57 +1,54 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15
+- **Updated:** 2026-05-15 15:45
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
 ## Most recent direction from human researcher team
 
-No human directives received yet on this launch. Tracking the GitHub Issues feed.
+No directives received. GH issue #3292 opened to flag `test_geom_camber_cruise` NaN bug (bad sample #20 in GT with `-inf` pressure; `data/scoring.py`'s mask-by-multiply fails under IEEE-754 `0.0 * inf = NaN`).
 
 ## Current research focus
 
-Round 1 of a fresh research track on TandemFoilSet. The primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four val tracks: `val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`, `val_re_rand`). Paper-facing metric is `test_avg/mae_surf_p` (best-val checkpoint, four test tracks).
+Round 2 in progress. Round 1 established the first baseline: **`val_avg/mae_surf_p = 117.16`** (grad clip max_norm=1.0, PR #3157, merged).
 
-The launch is isolated — only inspect/cite/borrow from this branch and the assigned student PR branches. No history transfer from other tracks.
+### Round 1 results summary
 
-### Round 1 portfolio (single-axis probes)
+| PR | Change | val_avg/mae_surf_p | Outcome |
+|---|---|---|---|
+| #3157 tanjiro | grad clip max_norm=1.0 | **117.16** | **MERGED — new baseline** |
+| #3125 askeladd | lr=1e-3 + 2ep warmup + cosine | 135.06 | closed (+15%) |
+| #3164 thorfinn | dropout=0.05 | 142.51 | closed (+22%) |
+| #3133 edward | n_layers=7 | 146.62 | closed (+25%, instability) |
+| #3112 alphonse | bf16 autocast | (WIP) | — |
+| #3146 frieren | slice_num=128 | (WIP) | — |
+| #3139 fern | surf_weight=25 | (WIP) | — |
+| #3153 nezuko | Huber vol loss | (WIP) | — |
 
-Eight orthogonal one-knob changes designed to map out the local neighborhood of the baseline. Each PR isolates one knob so we can attribute deltas to the change.
+**Key insight from round 1:** The grad clip win is ambiguous — max_norm=1.0 fires on 100% of steps (median pre-clip norm 45.7), so the model is running normalized gradient descent with ~45× lower effective LR than nominal. The next priority is disentangling whether this is beneficial gradient normalization or wasteful LR throttling.
 
-| Student | Axis | Change |
-|---|---|---|
-| alphonse | compute / wall-clock | bf16 autocast on forward + backward |
-| askeladd | optimizer schedule | `lr=1e-3` + 2-epoch linear warmup + cosine to 0 |
-| edward | architecture depth | `n_layers=5 → 7` |
-| fern | loss weighting | `surf_weight=10 → 25` |
-| frieren | attention slicing | `slice_num=64 → 128` |
-| nezuko | loss formulation | Huber (smooth L1, β=1.0) on volume term |
-| tanjiro | stability | grad clipping `max_norm=1.0` |
-| thorfinn | regularization | `dropout=0.05` in Transolver blocks |
+### Round 2 portfolio (in flight)
 
-Coverage by category:
-- **Compute / throughput**: bf16 (alphonse) — directly trades precision for epochs/min
-- **Optimizer**: warmup+cosine at higher peak (askeladd), grad clip (tanjiro)
-- **Architecture**: depth (edward), attention slicing (frieren), dropout regularization (thorfinn)
-- **Loss**: surf weighting (fern), Huber on volume (nezuko)
+| Student | PR | Change | Rationale |
+|---|---|---|---|
+| tanjiro | #3306 | grad clip max_norm=1.0 → 100.0 | Loosen to spike-only clipping; tests whether normalized GD is the mechanism |
+| askeladd | #3307 | OneCycleLR (max_lr=1e-3, pct_start=0.1) | Better short-budget schedule; warmup covers 10% of batches not epochs |
+| thorfinn | #3308 | AdamW beta2=0.999 → 0.95 | Faster second-moment adaptation to large gradient scales |
+| edward | #3310 | n_layers=5 → 6 | Depth on clipped baseline; round-1 showed 7 was unstable, 6 is the safer step |
 
-Notably absent from round 1 (deliberate — keep round 1 readable): wider model, larger batch size, OneCycleLR, EMA, SWA, NACA/AoA conditioning, mesh-aware features. These are reserved as next-step candidates depending on what round 1 reveals.
+Still awaiting round-1 results from: alphonse (#3112 bf16), frieren (#3146 slice_num=128), fern (#3139 surf_weight=25), nezuko (#3153 Huber vol).
 
-## Potential next research directions
+## Known data issue
 
-After round 1 results land:
+`test_geom_camber_cruise/mae_surf_p = NaN` on all runs — sample #20 in `test_geom_camber_cruise` GT has `-inf` pressure; the scoring accumulator propagates NaN via `0.0 * inf`. Flagged in GH issue #3292. The validation splits are unaffected; `val_avg/mae_surf_p` is clean.
 
-1. **Compound wins** — if multiple round-1 levers help, the next round should stack the top 2-3 (e.g., bf16 + grad-clip + higher LR with warmup).
-2. **Wider model + bf16** — n_hidden 128 → 192, conditional on bf16 unlocking enough wall clock.
-3. **Per-channel surface weights** — the primary metric is surface pressure specifically; pull surface-`p` harder than surface-`{Ux, Uy}`.
-4. **EMA over last quarter of training** — cheap variance reduction for OOD checkpoint selection.
-5. **OneCycleLR** — alternative to warmup+cosine, known short-budget winner; only worth it if cosine baseline plateaus.
-6. **Architecture extensions** — global-scalar conditioning (FiLM on log Re, AoA, NACA, gap, stagger), since dims 13-23 of `x` are constant per-sample and currently broadcast through expensive per-node MLPs.
-7. **Loss reformulation on `p` specifically** — log-magnitude scaling or per-sample y-std-aware loss to handle the 10x cross-domain magnitude variation.
-8. **Data augmentation** — vertical flip / AoA negation pairs, mesh subsampling for cheap epochs.
+## Potential next research directions (after round 2 lands)
 
-## Dataset notes carried into round 1
-
-- Four val tracks have **very different y magnitudes** (`val_single_in_dist` extremes ~10x `val_geom_camber_cruise`). Equal-weight averaging means the in-dist track dominates `val_avg/mae_surf_p` unless predictions on it are very accurate.
-- High-Re samples drive the extremes within every split.
-- The training set is **balanced across the three physical domains** via `WeightedRandomSampler`; raceCar single would otherwise dominate.
+1. **Compound winners** — stack top round-2 levers if multiple improve (e.g., OneCycleLR + beta2=0.95 + n_layers=6).
+2. **Understand the clipping mechanism** — if max_norm=100 beats max_norm=1.0: the tight clip was wasteful and we can run with normal effective LR. If max_norm=1.0 wins again: normalized GD is genuinely useful → try explicit gradient normalization (divide by norm, no clipping).
+3. **surf_weight tuning** — fern's round-1 result (surf_weight=25) still pending; the primary metric is surface pressure, so pulling harder on it may help. If surf_weight=25 doesn't win, try intermediate 15 or per-channel weights (pull `p` harder than `Ux/Uy`).
+4. **Wider model** — n_hidden=128 → 192, conditional on bf16 (alphonse result) unlocking VRAM headroom.
+5. **Log-pressure loss** — the val magnitude varies ~10× across splits (cruise ≈ 85, single ≈ 138); a log-scaled or standardized pressure loss could reduce this imbalance.
+6. **EMA/SWA** — exponential moving average of weights over the last N epochs; cheap variance reduction for the best-checkpoint selection.
+7. **Global conditioning (FiLM)** — dims 13-23 of `x` are constant per-sample (Re, AoA, NACA params, gap, stagger); these are currently broadcast through per-node MLPs at high cost. A FiLM conditioning layer would encode them once and modulate all blocks cheaply.
+8. **Per-channel surface weighting** — currently `surf_loss = mean over (Ux, Uy, p)`. Pull `p` harder (e.g., weight p channel 3×) since it is the primary metric.

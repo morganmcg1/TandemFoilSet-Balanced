@@ -1,0 +1,66 @@
+# SENPAI Research Results
+
+## 2026-05-15 15:42 — PR #3157: Grad clipping max_norm=1.0 — **MERGED (round-1 winner)**
+
+- Branch: `willowpai2i24h5-tanjiro/gradclip-1p0`
+- Hypothesis: Gradient spikes early in training undo optimizer progress; clip_grad_norm_(max_norm=1.0) stabilizes updates.
+- W&B run: `cfp7lnaq`
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | **117.16** ← new baseline |
+| val_single_in_dist/mae_surf_p | 138.19 |
+| val_geom_camber_rc/mae_surf_p | 137.91 |
+| val_geom_camber_cruise/mae_surf_p | 85.86 |
+| val_re_rand/mae_surf_p | 106.68 |
+| test_avg/mae_surf_p | NaN (cruise bad sample) |
+| test 3-split avg (excl. cruise) | ~116.40 |
+| Epochs completed | 14/50 (~132 s/epoch) |
+| Peak VRAM | 42.1 GB |
+
+**Analysis:** max_norm=1.0 fired on 100% of steps (median pre-clip grad norm = 45.7, P90=140.6, P99=327.2). Effective LR ≈ 5e-4/45.7 ≈ 1.1e-5 — essentially normalized gradient descent. The model still converged monotonically (val: 236→117 over 14 epochs) and leads all round-1 results. Key open question: is the win from spike suppression, gradient normalization, or just a better-conditioned optimization landscape? Follow-up (PR #3306) will probe max_norm=100 to disentangle.
+
+---
+
+## 2026-05-15 15:43 — PR #3125: lr=1e-3 + 2-epoch warmup + cosine — closed
+
+- Branch: `willowpai2i24h5-askeladd/lr1e3-warmup-cosine`
+- Hypothesis: Higher peak LR with a short linear warmup to avoid early instability.
+- W&B run: (see PR comments)
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | 135.06 (+15% vs winner) |
+
+**Analysis:** 15% regression vs round-1 winner. The 2-epoch warmup spans ~750 batches, which may be too gradual relative to the 50-epoch cosine horizon — the LR is still ramping while the cosine has already started decaying. OneCycleLR (PR #3307) should fix this by scaling warmup to 10% of total *batches*, not epochs.
+
+---
+
+## 2026-05-15 15:43 — PR #3164: dropout=0.05 — closed
+
+- Branch: `willowpai2i24h5-thorfinn/dropout-0p05`
+- Hypothesis: Small dropout in Transolver blocks reduces overfitting for OOD generalization.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | 142.51 (+22% vs winner) |
+
+**Analysis:** 22% regression. With ≤14 epochs, the model hasn't overfit in the first place — regularization from dropout adds noise but no benefit in this short-budget regime. The per-channel and per-split numbers were not especially illuminating. Next assignment (PR #3308) pivots to optimizer mechanics (beta2=0.95) which has a stronger theoretical motivation given the observed gradient distribution.
+
+---
+
+## 2026-05-15 15:44 — PR #3133: n_layers 5 → 7 — closed
+
+- Branch: `willowpai2i24h5-edward/n-layers-7`
+- Hypothesis: More composition passes improve OOD geometry generalization.
+- W&B runs: `grsl0gde` (reported), `tqxnlq30` (148.37), `ibhtts8z` (145.59)
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (epoch 9) | 146.62 (+25% vs winner) |
+| val_geom_camber_cruise (best) | 107.9 ← depth helps OOD |
+| test_geom_camber_cruise/mae_surf_p | NaN (Inf prediction, reproduced across all 3 runs) |
+| Epochs completed | 10/50 (~182 s/epoch, ~38% slower than 5-layer) |
+| Peak VRAM | 57.1 GB |
+
+**Analysis:** Depth hypothesis is directionally correct — the 7-layer model made faster per-epoch progress than the 5-layer would (val dropped 242→146 in 10 epochs), and OOD-geometry cruise val (107.9) was the *best* split, consistent with the prediction. However: (a) epoch 10 shows a sharp stability regression (val_rc 149.8→344.3), and (b) end-of-run test evaluation produces Inf predictions on cruise — both symptoms of the unclipped optimizer interacting badly with the deeper network. The new baseline now includes grad clipping, so n_layers=6 (PR #3310) should test depth in a stable regime.
