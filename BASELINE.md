@@ -15,32 +15,47 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 - Loss: MSE in normalized space, `loss = vol_loss + surf_weight * surf_loss`,
   `surf_weight=10.0`
 - Optimizer: AdamW, `lr=5e-4`, `weight_decay=1e-4`
-- Schedule: `CosineAnnealingLR(T_max=epochs)` (no warmup)
+- Schedule: `SequentialLR(LinearLR warmup → CosineAnnealingLR)`,
+  `warmup_epochs=3`, `eta_min=1e-6` (**merged from PR #3150**)
 - Batch size: 4 (mesh-padded by `pad_collate`)
 - Sampler: `WeightedRandomSampler` with `sample_weights` from `load_data` for
   balanced raceCar single / raceCar tandem / cruise tandem domain coverage
 - Run budget: `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MINUTES=30.0`
 
-## Round-1 status (this launch)
+## Current best baseline result (PR #3150 winner)
 
-No merged improvements yet. Two PRs reviewed so far (#3148, #3149) — both
-contained a baseline-equivalent control arm trained from scratch on this
-launch's pods.
+| Source | wandb run | val_avg/mae_surf_p | test 3-split avg (cruise excl.) | Notes |
+|--------|-----------|--------------------|---------------------------------|-------|
+| PR #3150 arm `lr5e-4_wu3` | sb39atyp | **125.83** | **122.01** | 50-epoch / 30-min cap, best epoch 13 |
 
-| Source | wandb run | val_avg/mae_surf_p | test_avg (avail. splits) | Notes |
-|--------|-----------|--------------------|--------------------------|-------|
-| PR #3148 arm `w128`  | qmyih0vv | 128.46 | rc=141.6 / sid=129.3 / re=114.4 | 50-epoch / 30-min cap, best epoch 14 |
-| PR #3149 arm `surfp1` | 7d1rlw4w | 132.33 | rc=136.9 / sid=139.1 / re=122.5 | 50-epoch / 30-min cap, best epoch 13 |
+Per-split val at best epoch (lr5e-4_wu3, epoch 13):
+- `val_single_in_dist`     mae_surf_p = 156.63
+- `val_geom_camber_rc`     mae_surf_p = 135.87
+- `val_geom_camber_cruise` mae_surf_p =  94.04
+- `val_re_rand`            mae_surf_p = 116.79
 
-Take **val_avg/mae_surf_p ≈ 130 ± 3** as the implicit round-1 baseline (mean
-of the two baseline-equivalent runs above, std-dev ≈ run-to-run noise).
-This anchor will be replaced with a single confirmed reference run as soon
-as a merged winner appears.
+Per-split partial test (cruise excluded due to NaN bug):
+- `test_single_in_dist`    mae_surf_p = 133.07
+- `test_geom_camber_rc`    mae_surf_p = 121.81
+- `test_re_rand`           mae_surf_p = 111.15
+- `test_geom_camber_cruise` mae_surf_p = NaN (cruise-Inf data bug, known)
+
+## Pre-merge history
+
+Three baseline-equivalent control arms across closed PRs produced 128.46
+(frieren w128, #3148), 129.07 (fern depth5, #3145), 132.33 (nezuko surfp1,
+#3149) — an implicit pre-warmup baseline of **130 ± 3**. The merged warmup
+arm at 125.83 beats this by ~3.2%, and beats its own internal no-warmup
+reference (142.28, run bww3uk1z) by -11.6% — the larger within-PR gap is
+partly attributable to single-seed noise on the wu0 arm but the consistent
+per-split wins (warmup helps on every split) confirm the merge.
 
 **Note on test_avg.** `test_avg/mae_surf_p` is currently `None` for every
 run because `test_geom_camber_cruise` produces NaN due to Inf in the hidden
-test GT (see `research/EXPERIMENTS_LOG.md`). Rank by `val_avg/mae_surf_p`
-until that's resolved.
+test GT (issues #1569 / #1567 / #3292, multi-launch known data bug). Until
+that is resolved, rank by `val_avg/mae_surf_p` and use a 3-split partial
+test mean (`test_avg_3splits/mae_surf_p`) as a companion paper-facing
+metric.
 
 W&B project: `wandb-applied-ai-team/senpai-v1` — research tag
 `willow-pai2i-24h-r1`.

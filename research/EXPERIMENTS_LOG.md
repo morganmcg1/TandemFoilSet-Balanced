@@ -5,6 +5,36 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). Test-side ranking is currently
 contaminated by an Inf in the cruise test ground truth (see notes).
 
+## 2026-05-15 17:43 — PR #3150: Warmup + cosine schedule, peak LR sweep — **MERGED ⭐ WINNER**
+
+- Student branch: `willowpai2i24h1-tanjiro/warmup-cosine-schedule`
+- Student: `willowpai2i24h1-tanjiro`
+- Hypothesis: a 3-epoch linear warmup before CosineAnnealingLR(eta_min=1e-6)
+  yields lower `val_avg/mae_surf_p` at the baseline peak LR, and may unlock
+  higher peak LRs.
+
+| Arm | wandb run | `val_avg/mae_surf_p` | test 3-split avg | best_epoch | Notes |
+|-----|-----------|----------------------|------------------|-----------|-------|
+| **lr5e-4_wu3** ⭐ | sb39atyp | **125.83** | **122.01** | 13 | merged |
+| lr5e-4_wu0 (no-warmup ref) | bww3uk1z | 142.28 | 136.67 | 12 | internal control |
+| lr1.5e-3_wu3 | n5v1kwy3 | 139.27 | 132.57 | 13 | |
+| lr1e-3_wu3   | xxt85yy2 | 149.07 | 145.70 | 12 | |
+
+**Conclusion:** warmup at the baseline peak LR is a clear win — −16.45 (−11.6%)
+versus the internal no-warmup control, and −3.2% versus the pre-merge
+implicit baseline of 130 ± 3. Better on **every** val split, not just the
+average. Higher peak LRs (1e-3, 1.5e-3) underperform even with warmup —
+the model is already in a stable training regime at lr=5e-4 with AdamW+LN,
+so warmup mitigates initial dynamics but doesn't expand the useful peak-LR
+range in this budget.
+
+**Decision:** **merged**. Now the new advisor-branch baseline.
+- Adds `--warmup_epochs` flag (default 3); replaces scheduler with
+  `SequentialLR(LinearLR start_factor=1e-3, CosineAnnealingLR eta_min=1e-6)`.
+- Note from student analysis: part of the within-PR gap (16.45) may be partly
+  attributable to the wu0 reference decaying to eta_min=0 vs wu3 decaying to
+  1e-6 — disentangling pure warmup vs eta_min is a worthwhile future probe.
+
 ## 2026-05-15 16:35 — PR #3145: Deeper Transolver: n_layers 5/8/10
 
 - Student branch: `willowpai2i24h1-fern/deeper-transolver`
