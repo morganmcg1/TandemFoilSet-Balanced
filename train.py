@@ -480,6 +480,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     init_std: float = 0.07  # trunc_normal_ std for Linear weight init (σ=0.07 merged PR #2882)
     film_re_hidden: int = 128  # γ MLP hidden width for FiLM-Re (default 128 = current; PR #2948 capacity scan)
+    max_norm: float = 1.0  # Gradient clipping max norm (clip_grad_norm_); PR #3057 bracket scan
 
 
 cfg = sp.parse(Config)
@@ -529,6 +530,7 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"[init] FiLM-Re γ MLP hidden dim = {cfg.film_re_hidden} (default = 128)")
+print(f"[init] gradient clip max_norm = {cfg.max_norm} (default = 1.0)")
 
 optimizer = Lion(
     model.parameters(),
@@ -576,6 +578,9 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+run_grad_norm_sum = 0.0
+run_grad_clip_count = 0
+run_step_count = 0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -585,6 +590,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_clip_count = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -629,12 +636,16 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_norm)
         optimizer.step()
         global_step += 1
+        grad_norm_val = grad_norm.item()
+        # clip_grad_norm_ returns the PRE-clip total norm: clip engages when this > max_norm.
+        clipped = float(grad_norm_val > cfg.max_norm)
         wandb.log({
             "train/loss": loss.item(),
-            "train/grad_norm": grad_norm.item(),
+            "train/grad_norm": grad_norm_val,
+            "train/clipped": clipped,
             "train/p_signed_residual_vol": p_signed_vol.item(),
             "train/p_signed_residual_surf": p_signed_surf.item(),
             "global_step": global_step,
@@ -642,11 +653,18 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_grad_norm_sum += grad_norm_val
+        epoch_grad_clip_count += int(clipped)
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
+    epoch_clip_rate = epoch_grad_clip_count / max(n_batches, 1)
+    run_grad_norm_sum += epoch_grad_norm_sum
+    run_grad_clip_count += epoch_grad_clip_count
+    run_step_count += n_batches
 
     # --- Validate ---
     model.eval()
@@ -666,6 +684,8 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/param_l2": param_l2_epoch,
+        "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
+        "train/clip_rate_epoch": epoch_clip_rate,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -705,6 +725,15 @@ with torch.no_grad():
     param_l2_final = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
+
+run_grad_norm_mean = run_grad_norm_sum / max(run_step_count, 1)
+run_clip_rate = run_grad_clip_count / max(run_step_count, 1)
+wandb.summary["max_norm"] = cfg.max_norm
+wandb.summary["grad_norm_mean_run"] = run_grad_norm_mean
+wandb.summary["clip_rate_run"] = run_clip_rate
+print(f"\n[gradclip] max_norm={cfg.max_norm}  pre-clip grad_norm mean (run)={run_grad_norm_mean:.4f}  "
+      f"clip rate (run)={run_clip_rate*100:.2f}%  "
+      f"(clip steps {run_grad_clip_count}/{run_step_count})")
 
 # --- γ-only FiLM-Re diagnostics: per-block γ bias and weight L2 ---
 # Goal: compare to prior PR #2816 (γ+β FiLM-Re). Does γ drift more or less
