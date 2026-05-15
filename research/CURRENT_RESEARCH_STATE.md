@@ -1,112 +1,81 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~22:38 UTC
+- **Last updated**: 2026-05-15 ~22:50 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
 - **Per-run budget**: SENPAI_MAX_EPOCHS=50, SENPAI_TIMEOUT_MINUTES=30 (hard caps)
 
 ## Current best baseline
-- `val_avg/mae_surf_p` = **117.66** (PR #3237, edward, `huber-loss`, epoch 13)
-- Change from default: Huber(δ=1.0) replaces MSE. All other hyperparameters at default.
 
-## PR #3300 PENDING MERGE (rate-limit blocked at 22:35 UTC)
+- `val_avg/mae_surf_p` = **97.55** (PR #3300, edward, `bf16-mixed-precision`, epoch 17)
+- **MERGED 2026-05-15 22:45 UTC**
+- Change from Huber baseline: BF16 autocast on forward pass → 1.3x throughput, 5 more epochs in 30-min cap (14→19), VRAM 42.1→32.95 GB. No model changes.
 
-**Edward BF16 mixed-precision is a major winner — `val_avg/mae_surf_p = 97.55` (epoch 17/19), −17.1% vs current 117.66 baseline.**
-
-Per-split (all 4 improve):
-- val_single_in_dist: 147.77 → 114.41 (−22.6%)
-- val_geom_camber_rc: 125.08 → 104.96 (−16.1%)
-- val_geom_camber_cruise: 88.98 → 79.72 (−10.4%)
-- val_re_rand: 108.81 → 91.09 (−16.3%)
-
-Run economics: peak VRAM 42.11 → 33.0 GB (−21.6%), 5 extra epochs in the 30-min cap, ~1.3x throughput. No NaN, no instability. Test clean-3 = 93.99 (vs ~107.6 baseline, similar ~13% gain).
-
-Mergeability **verified locally** via `git merge --no-commit` — clean (train.py + 3 new model files). PR has terminal SENPAI-RESULT marker. `status:review` label. Not draft.
-
-**Blocker**: REST API rate limit hit during `senpai_merge_winner_preflight`. Reset at ~23:20 UTC. Retry the `senpai:merge-winner` skill on next loop after rate limit clears. Then:
-1. Update `BASELINE.md` with the new 97.55 metrics
-2. Log result in `EXPERIMENTS_LOG.md`
-3. Assign edward a follow-on experiment (likely: BF16 + larger model `n_hidden=192`, or BF16 + larger batch=8, or BF16 + `T_max=20` cosine match — see suggested follow-ups in #3300 comment)
-
-## Operational issue: training completes, results not pushed
-
-**Pattern observed in this loop (~17:30–18:25 UTC):**
-- **fern (#3238)**: pod GPU showed 92–95 GB / 99–100% utilization for 44 minutes (iterations 47–53, ~17:32–18:16 UTC) — clear evidence of a full retraining run after the rebase-on-Huber sendback. But the branch remote HEAD is still `270024d` (the original pre-Huber MSE commit). No new commits pushed, no SENPAI-RESULT comment posted. Results from the 44-minute run are likely lost when the iteration-54 heartbeat reset the branch to origin.
-- **thorfinn (#3303)**: pod showed full GPU utilization in the iteration around 17:33 UTC. GPU has been at 0% since ~17:57. No commits pushed; branch HEAD still at assignment commit `690b6ce`.
-- **edward (#3300)**: same pattern — long Claude session (243s) completed at 17:32 UTC, then GPU idle. No commits pushed; branch HEAD still at assignment commit `c162502`.
-- **tanjiro (#3241)**: rebased locally to `d30e353` after my 16:39 confirmation, but the pod restarted at iteration 1 (18:23 UTC, fresh Hivemind setup), wiping that commit. Remote HEAD is now back at assignment commit `aea79b9`.
-
-**Diagnosis**: the student loop completes training successfully but doesn't appear to be committing+pushing results to origin before the next heartbeat reset. The harness `git reset --hard origin/<branch>` between iterations wipes local-only commits and any uncommitted JSONL artifacts. Cannot intervene from advisor side — this is a student/harness-side flow issue.
-
-**Advisor stance**: No code intervention. The reps these students have run are largely lost; future iterations need to commit before the heartbeat resets. Keep monitoring; do NOT close PRs as dead-end based on stale_wip alone — the underlying experiments may still produce a result on the next successful iteration.
-
-**Active training observed in prior loop (~19:30 UTC)**: thorfinn (#3393, 47 GB / 92%), fern (#3238, 45 GB), alphonse (#3177, 96 GB / 100%), frieren (#3239, 96 GB / 100%). Four students burning GPU on training runs. Branch HEADs remote remain at assignment commits — same stale-push pattern. Posted informational rebase heads-up comments on three round-1 PRs that pre-date the Huber merge: #3177 alphonse, #3239 frieren, #3240 nezuko — so they don't burn another run on MSE if/when their push flow works.
-
-**Push-flow has recovered for thorfinn**: PR #3393 successfully posted SENPAI-RESULT at 20:24 UTC with metrics committed and pushed. This proves the system *can* work end-to-end; the other students just haven't completed a full commit+push cycle yet.
-
-**Push-flow has now recovered for fern (#3238)** as of 20:37 UTC: branch is force-pushed onto the latest advisor HEAD (`8ffa24d`) with the Huber rebase applied, plus a clean-up commit `70cf8a6` that drops the pre-rebase MSE-era metrics directory. The dual-branch code (`b959f21`) now sits cleanly on Huber loss. Branch is ready to train; fern needs to run the new experiment and post a fresh `SENPAI-RESULT`. Two of eight students have now demonstrated the end-to-end commit+push cycle.
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| val_single_in_dist | 114.41 | 1.387 | 0.674 |
+| val_geom_camber_rc | 104.96 | 2.060 | 0.851 |
+| val_geom_camber_cruise | 79.72 | 1.135 | 0.531 |
+| val_re_rand | 91.09 | 1.532 | 0.678 |
+| **val_avg** | **97.55** | 1.529 | 0.684 |
 
 ## Key observations
-1. **The 30-min cap is THE bottleneck**: Every experiment so far stops at epoch 14/50 with val loss still descending. Getting more epochs per budget (BF16, smaller model, larger batch) is the highest-leverage direction.
-2. **Huber loss is the proven win**: MSE → Huber gave 117.66 baseline. All round 2 experiments stack on Huber.
-3. **NaN bug persists** in `test_geom_camber_cruise`: `inf` in GT of sample 20 poisons the accumulator. fern's test_avg = 113.41 is the only finite one so far — may be coincidence from prediction overflow, not a real fix.
-4. **Stale_wip is now pandemic** (7 of 8 PRs): caused by the operational issue above. Even students who *complete* training (fern ran 44 min, thorfinn/edward each had complete training cycles) end up with no commits pushed. Branch remote HEADs remain at the assignment commit. Only the bookkeeping/baseline commits on the advisor branch have landed since boot.
+1. **BF16 is THE throughput unlock**: 14→19 epochs in 30-min cap, -17.1% on val_avg. This is now baked into the baseline — all future experiments start here.
+2. **Budget mismatch still persists**: T_max=50 but we only reach ~19 epochs. At best-val epoch (17), LR is still 74% of initial (not annealed). This is the next lever.
+3. **VRAM headroom opened**: 32.95 GB used out of 96 GB = 63 GB free. Enables n_hidden=192 or batch_size=8 without memory concerns.
+4. **NaN bug persists** in `test_geom_camber_cruise`: `inf` in GT of sample 20. Workaround: rank on val_avg/mae_surf_p; report test_avg as clean-3 mean.
+5. **Stale_wip is still pandemic** for 6 of 7 remaining PRs (alphonse, askeladd, frieren, nezuko, tanjiro, thorfinn). Push-flow has worked for fern (rebase pushed) and thorfinn (result pushed). Pattern: training completes but commits not pushed before harness heartbeat reset.
 
 ## Active PRs
 
 | # | Student | Slug | Status | Note |
 |---|---|---|---|---|
-| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign |
-| #3235 | askeladd | `local-re-feature` | WIP (stale) | sendback received, no rerun pushed yet |
-| #3238 | fern | `dual-branch-heads` | WIP — rebased on Huber | branch healthy, awaiting fresh training run + result |
-| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign |
-| #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
-| #3241 | tanjiro | `ema-weights` | WIP — pod restarted, prior rebase wiped | needs to redo rebase |
-| #3300 | edward | `bf16-mixed-precision` | **REVIEW** — winner, pending merge | val_avg 97.55 (−17.1%); merge blocked on REST rate limit |
-| #3303 | thorfinn | `surf-weight-50` | **CLOSED** — 3.5% regression | surf_weight=50 hurts 3/4 splits |
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back this loop | extra=4 was neutral (+0.28); trying extra=2 next — mechanism works (-15 on single_in_dist) but redistributes |
-
-## Idle students
-None right now. All 8 students have open WIP PRs.
+| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign; Huber heads-up posted |
+| #3235 | askeladd | `local-re-feature` | WIP (stale) | sendback posted; no rerun pushed |
+| #3238 | fern | `dual-branch-heads` | WIP — rebased on Huber | branch healthy (70cf8a6), awaiting fresh training run |
+| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign; Huber heads-up posted |
+| #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign; Huber heads-up posted |
+| #3241 | tanjiro | `ema-weights` | WIP (stale) | confirmed rebase direction, pod restarted; needs redo |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back | extra=4 neutral; trying extra=2 next |
+| TBD | edward | `cosine-schedule-match` | **NEW — assigning** | T_max=20 to match realistic epoch horizon |
 
 ## Human research direction
 None received yet.
 
 ## Current research themes
 
-**Budget efficiency** (edward #3300):
-- BF16 to unlock more epochs within 30-min cap
+**Budget efficiency** (edward new):
+- Cosine schedule match: T_max=20 instead of 50, so LR fully anneals within the ~19-epoch budget
+- (BF16 merged — baseline now includes it)
 
 **Loss formulation** (thorfinn #3393, alphonse #3177):
-- per-channel surface pressure weighting (surf_p_weight_extra=4, +5× on dim 2 only)
+- per-channel surface pressure weighting (surf_p_weight_extra=2, calibrated from extra=4 result)
 - per-sample-scale-norm + Huber: balance Re-regime gradient magnitudes
-- (surf_weight=50 closed — uniform scaling hurts 3/4 splits)
 
 **Architecture** (fern #3238, frieren #3239):
-- Dual surface/volume heads (re-running with Huber after rebase)
+- Dual surface/volume heads (re-running with Huber+BF16 after rebase)
 - Fourier positional encoding (multi-scale spatial features)
 
 **Features** (askeladd #3235):
-- Local-Re feature + Huber + saf surface coordinate
+- Local-Re feature + Huber (needs Huber rebase)
 
 **Augmentation / Optimization** (nezuko #3240, tanjiro #3241):
 - z-reflection symmetry
 - EMA weight averaging (rebased onto Huber)
 
-## Potential next round directions (round 3, after current PRs land)
-1. **Compose top-2 winners** — stack two best-performing changes (e.g. BF16 + best feature/arch + Huber stays implicit)
-2. **Larger model under BF16**: if BF16 works, use the freed compute for n_hidden=192 or 256
-3. **Huber delta sweep**: δ ∈ {0.5, 2.0} to test sensitivity around δ=1.0
-4. **Per-channel pressure-only auxiliary loss**: extra loss term on dim 2 (p) only
-5. **Warmup-cosine schedule**: 3-epoch warmup → cosine decay (helps with the early-LR-too-low issue from 14-epoch truncation)
-6. **Mesh-aware sampler**: weight training samples by inverse squared mesh size to balance compute
-7. **Per-domain stats**: separate (y_mean, y_std) for raceCar/cruise/single domains
-8. **Larger batch + grad accumulation**: batch_size=8 effective, paired with BF16
+## Potential next directions (round 3, after current PRs land)
+1. **Larger model under BF16**: n_hidden=192 or n_layers=6 (63 GB VRAM free — lots of room)
+2. **Larger batch (batch_size=8)**: with BF16, activation memory halved — batch=8 fits comfortably (~55 GB estimated vs 96 GB available)
+3. **Cosine schedule match (edward)**: T_max=20 — the most immediate leverage after BF16
+4. **Huber delta sweep**: δ ∈ {0.5, 2.0} to test sensitivity around δ=1.0
+5. **Per-channel pressure-only auxiliary loss**: extra loss term on dim 2 (p) only (related to thorfinn's work)
+6. **Warmup-cosine schedule**: 3-epoch warmup → cosine to zero by epoch 20
+7. **Mesh-aware sampler**: weight training samples by inverse squared mesh size
+8. **Per-domain stats**: separate (y_mean, y_std) for raceCar/cruise/single domains
 
 ## Scoring.py NaN bug (branch-wide)
 `test_geom_camber_cruise/000020.pt` has 761 `inf` values in GT. `data/scoring.py::accumulate_batch` correctly masks these but does `err = abs(pred - y)` *before* applying the per-sample mask, and `inf - finite = inf`, `inf × 0 = NaN`. The accumulator becomes NaN globally.
 
-Affects: All `test_avg/mae_surf_p` numbers on this branch are NaN (except fern which produced 113.41 — coincidence under investigation).
-
+Affects: All `test_avg/mae_surf_p` numbers on this branch are NaN.
 Fix requires modifying `data/scoring.py` (marked read-only). Workaround: rank on val_avg/mae_surf_p; report test_avg as mean over 3 finite splits in the paper.
