@@ -47,6 +47,137 @@ from data import (
     pad_collate,
 )
 
+# Domain identifiers used by per-domain target normalization.
+DOMAIN_NAMES = ["racecar_single", "racecar_tandem", "cruise"]
+DOMAIN_TO_ID = {name: i for i, name in enumerate(DOMAIN_NAMES)}
+N_DOMAINS = len(DOMAIN_NAMES)
+
+# ---------------------------------------------------------------------------
+# Per-domain target normalization helpers
+# ---------------------------------------------------------------------------
+
+# Local data manifest (read-only). Used to map each split's file index to a
+# physical domain (racecar_single / racecar_tandem / cruise) for per-domain
+# target normalization. Avoids any reliance on a flaky x-feature heuristic.
+_MANIFEST_PATH = Path(__file__).parent / "data" / "split_manifest.json"
+
+
+def _global_idx_to_domain(global_idx: int, file_sizes: list[int], pickle_files: list[str]) -> int:
+    """Map a global pickle index to a domain id.
+
+    `pickle_files[i]` is the raw source pickle whose name encodes the domain
+    (raceCar single vs raceCar tandem vs cruise). The pickle index spans
+    cumulative offsets of `file_sizes`.
+    """
+    offset = 0
+    for i, sz in enumerate(file_sizes):
+        if offset <= global_idx < offset + sz:
+            name = pickle_files[i]
+            if "single" in name:
+                return DOMAIN_TO_ID["racecar_single"]
+            if "raceCar" in name:
+                return DOMAIN_TO_ID["racecar_tandem"]
+            if "cruise" in name:
+                return DOMAIN_TO_ID["cruise"]
+            raise ValueError(f"Unrecognized pickle name: {name}")
+        offset += sz
+    raise IndexError(f"global_idx {global_idx} out of range")
+
+
+def build_split_domain_labels(split_name: str) -> list[int]:
+    """Return a list of domain ids, one per sample in the split's .pt directory.
+
+    File order in the split directory matches the order of indices in
+    `split_manifest.json::splits[split_name]` because `prepare_splits.py`
+    writes files named `seq_idx:06d.pt` for each entry. Test splits are
+    shuffled by `np.random.default_rng(123)` in prepare_splits, so the same
+    shuffle is replayed here for test splits.
+    """
+    import numpy as np
+
+    with open(_MANIFEST_PATH) as f:
+        manifest = json.load(f)
+    pickle_files = manifest["pickle_files"]
+    file_sizes = manifest["file_sizes"]
+    g_indices = list(manifest["splits"][split_name])
+    if split_name.startswith("test_"):
+        np.random.default_rng(123).shuffle(g_indices)
+    return [_global_idx_to_domain(g, file_sizes, pickle_files) for g in g_indices]
+
+
+class DomainTaggedDataset(torch.utils.data.Dataset):
+    """Thin wrapper that yields ``(x, y, is_surface, domain_id)`` per sample."""
+
+    def __init__(self, base_ds, domain_labels: list[int]):
+        assert len(base_ds) == len(domain_labels), (
+            f"len(base_ds)={len(base_ds)} != len(domain_labels)={len(domain_labels)}"
+        )
+        self.base_ds = base_ds
+        self.domain_labels = domain_labels
+
+    def __len__(self):
+        return len(self.base_ds)
+
+    def __getitem__(self, idx):
+        x, y, sf = self.base_ds[idx]
+        return x, y, sf, self.domain_labels[idx]
+
+
+def pad_collate_with_domain(batch):
+    """Pad variable-length samples + collect per-sample domain id."""
+    xs, ys, surfs, doms = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    for i, (x, y, sf) in enumerate(zip(xs, ys, surfs)):
+        n = x.shape[0]
+        x_pad[i, :n] = x
+        y_pad[i, :n] = y
+        surf_pad[i, :n] = sf
+        mask[i, :n] = True
+    domain_t = torch.tensor(doms, dtype=torch.long)
+    return x_pad, y_pad, surf_pad, mask, domain_t
+
+
+def compute_per_domain_stats(
+    train_base_ds,
+    train_domain_labels: list[int],
+    per_channel: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (domain_means, domain_stds) each shaped [N_DOMAINS, 3].
+
+    Stats are computed on **un-normalized** training y, over real (non-padded)
+    nodes, separately for each domain. With ``per_channel=True`` mean/std are
+    per channel; otherwise mean is per channel but std is a single scalar per
+    domain (mean of per-channel stds), broadcast across the 3 channels.
+    """
+    sum_y = torch.zeros(N_DOMAINS, 3, dtype=torch.float64)
+    n_nodes = torch.zeros(N_DOMAINS, dtype=torch.float64)
+    for idx in range(len(train_base_ds)):
+        _, y, _ = train_base_ds[idx]
+        d = train_domain_labels[idx]
+        sum_y[d] += y.double().sum(0)
+        n_nodes[d] += y.shape[0]
+    mean_y = sum_y / n_nodes.unsqueeze(-1)  # [N_DOMAINS, 3]
+
+    sq_y = torch.zeros(N_DOMAINS, 3, dtype=torch.float64)
+    for idx in range(len(train_base_ds)):
+        _, y, _ = train_base_ds[idx]
+        d = train_domain_labels[idx]
+        sq_y[d] += ((y.double() - mean_y[d]) ** 2).sum(0)
+    std_y = (sq_y / (n_nodes.unsqueeze(-1) - 1)).sqrt().clamp(min=1e-6)  # [N_DOMAINS, 3]
+
+    if not per_channel:
+        # Arm A: scalar std per domain (mean of per-channel stds), broadcast.
+        scalar_std = std_y.mean(dim=-1, keepdim=True).expand_as(std_y)
+        std_y = scalar_std.clone()
+
+    return mean_y.float(), std_y.float()
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -287,12 +418,17 @@ def update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
         b_ema.copy_(b_model)
 
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   domain_stats: dict | None = None) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``domain_stats`` is given, the loader is expected to yield batches that
+    include a per-sample domain id (5-tuples). Target normalization and
+    prediction un-normalization both use the sample's domain stats.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -300,7 +436,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     n_surf = n_vol = n_batches = 0
 
     with torch.no_grad():
-        for x, y, is_surface, mask in loader:
+        for batch in loader:
+            if domain_stats is not None:
+                x, y, is_surface, mask, domain_ids = batch
+                domain_ids = domain_ids.to(device, non_blocking=True)
+            else:
+                x, y, is_surface, mask = batch
+                domain_ids = None
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
@@ -317,7 +459,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
+            if domain_stats is not None:
+                y_mean_per = domain_stats["mean"][domain_ids].unsqueeze(1)
+                y_std_per = domain_stats["std"][domain_ids].unsqueeze(1)
+                y_norm = (y_clean - y_mean_per) / y_std_per
+            else:
+                y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -333,7 +480,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            if domain_stats is not None:
+                pred_orig = pred * y_std_per + y_mean_per
+            else:
+                pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -447,6 +597,12 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # Per-domain target normalization. When enabled, y is normalized per sample
+    # using stats from its physical domain (racecar_single / racecar_tandem /
+    # cruise) rather than global stats. ``per_channel_norm`` controls whether
+    # the std is per channel (True) or a scalar per domain (False).
+    per_domain_norm: bool = False
+    per_channel_norm: bool = False
 
 
 cfg = sp.parse(Config)
@@ -459,7 +615,43 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+# Per-domain target normalization setup.
+domain_stats: dict[str, torch.Tensor] | None = None
+if cfg.per_domain_norm:
+    train_domain_labels = build_split_domain_labels("train")
+    val_domain_labels = {name: build_split_domain_labels(name) for name in VAL_SPLIT_NAMES}
+    if cfg.debug:
+        # load_data() truncates train_ds.files / val ds.files in debug mode.
+        train_domain_labels = train_domain_labels[: len(train_ds)]
+        for name, ds in val_splits.items():
+            val_domain_labels[name] = val_domain_labels[name][: len(ds)]
+
+    print("Computing per-domain target stats on training data...")
+    domain_means, domain_stds = compute_per_domain_stats(
+        train_ds, train_domain_labels, per_channel=cfg.per_channel_norm
+    )
+    domain_stats = {
+        "mean": domain_means.to(device),  # [N_DOMAINS, 3]
+        "std": domain_stds.to(device),    # [N_DOMAINS, 3]
+    }
+    for d_id, name in enumerate(DOMAIN_NAMES):
+        m = domain_means[d_id].tolist()
+        s = domain_stds[d_id].tolist()
+        n_train = sum(1 for d in train_domain_labels if d == d_id)
+        print(f"  {name:<18s} n_train={n_train:4d}  "
+              f"mean=[{m[0]:7.2f},{m[1]:7.2f},{m[2]:8.2f}]  "
+              f"std=[{s[0]:7.2f},{s[1]:7.2f},{s[2]:8.2f}]")
+
+    train_ds = DomainTaggedDataset(train_ds, train_domain_labels)
+    val_splits = {
+        name: DomainTaggedDataset(ds, val_domain_labels[name])
+        for name, ds in val_splits.items()
+    }
+    collate_fn = pad_collate_with_domain
+else:
+    collate_fn = pad_collate
+
+loader_kwargs = dict(collate_fn=collate_fn, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
@@ -532,14 +724,26 @@ for epoch in range(MAX_EPOCHS):
     epoch_scale_mean = epoch_scale_std = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        if cfg.per_domain_norm:
+            x, y, is_surface, mask, domain_ids = batch
+            domain_ids = domain_ids.to(device, non_blocking=True)
+        else:
+            x, y, is_surface, mask = batch
+            domain_ids = None
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.per_domain_norm:
+            # Per-sample target normalization using the sample's domain stats.
+            y_mean_per = domain_stats["mean"][domain_ids].unsqueeze(1)  # [B, 1, 3]
+            y_std_per = domain_stats["std"][domain_ids].unsqueeze(1)    # [B, 1, 3]
+            y_norm = (y - y_mean_per) / y_std_per
+        else:
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2  # [B, N, 3]
 
@@ -596,7 +800,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate (EMA weights) ---
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                             domain_stats=domain_stats)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -654,12 +859,22 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        if cfg.per_domain_norm:
+            test_domain_labels = {name: build_split_domain_labels(name) for name in TEST_SPLIT_NAMES}
+            if cfg.debug:
+                for name, ds in test_datasets.items():
+                    test_domain_labels[name] = test_domain_labels[name][: len(ds)]
+            test_datasets = {
+                name: DomainTaggedDataset(ds, test_domain_labels[name])
+                for name, ds in test_datasets.items()
+            }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                                 domain_stats=domain_stats)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
