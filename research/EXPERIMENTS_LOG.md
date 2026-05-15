@@ -1,0 +1,47 @@
+# SENPAI Research Results — `willow-pai2i-48h-r4`
+
+## 2026-05-15 14:07 — PR #3092: More physics-attention slice tokens (slice_num 64→128, 192)
+
+- **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/more-slices`)
+- **Hypothesis:** Doubling `slice_num` from 64 to 128 raises the resolution of Transolver's physics decomposition over 74K–242K node meshes; predicted −3% to −7% on `val_avg/mae_surf_p`.
+
+### Results
+
+| Arm | slice_num | n_params | best val_avg/mae_surf_p | best epoch | total epochs | peak VRAM | epoch time | W&B run |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| A (winner) | 128 | 672,919 | **150.26** | 9 | 10 | 54.5 GB | 171 s | `yiiy92uj` |
+| B | 192 | 683,479 | 153.71 | 9 | 10 | 68.4 GB | 213 s | `l7nnvr53` |
+
+Per-split val surface pressure MAE (best ckpt, epoch 9):
+
+| Split | Arm A (128) | Arm B (192) |
+|---|---:|---:|
+| val_single_in_dist | 185.70 | 183.15 |
+| val_geom_camber_rc | 157.16 | 179.11 |
+| val_geom_camber_cruise | 127.68 | **115.40** |
+| val_re_rand | 130.51 | 137.20 |
+| **val_avg/mae_surf_p** | **150.26** | 153.71 |
+
+Per-split test: `test_geom_camber_cruise/mae_surf_p = None / NaN` on **both arms** (vol_loss=Infinity), poisoning `test_avg/mae_surf_p`. The student reported a 3-split mean (excl. cruise) of 144.76 (A) / 152.56 (B), but this is not the contract metric.
+
+### Analysis & Verdict — sent back (not merged)
+
+- Arm A (slice_num=128) beats Arm B (slice_num=192) by 3.45 on `val_avg/mae_surf_p` (−2.2% absolute), and is significantly cheaper (−20% VRAM, −20% epoch time). Higher slice_num does NOT help in this short-training regime — likely the optimization burden of more slice assignments to learn outweighs the gain.
+- **No baseline number on this branch** — we cannot establish that `slice_num=128` improves on the actual baseline `slice_num=64`. The PR documents what beats what *internally* but not against the actual reference.
+- `test_avg/mae_surf_p` is NaN — fails the full-metric-fidelity contract from CLAUDE.md.
+
+### Critical cross-cutting finding: LR schedule is mis-tuned for the wall-clock budget
+
+The student's most valuable observation: with `SENPAI_TIMEOUT_MINUTES=30` and ~170s/epoch, only ~10 epochs of the configured 50-epoch cosine schedule complete. `T_max=50` means LR is still at ~80% of peak when training stops — **no experiment on this branch is getting LR annealing**. This affects every other in-flight PR (#3089, #3090, #3091, #3093, #3095, #3096, #3097). Future PRs should pass `--epochs 10` (or whatever matches actual completed-epoch count) so `T_max` matches budget.
+
+### NaN on `test_geom_camber_cruise/mae_surf_p`
+
+The model emits inf/NaN predictions on at least one sample in the cruise test split when evaluated from a partial-training checkpoint. Identical across both arms, so doesn't affect this PR's A-vs-B comparison. Likely fixable by training to convergence (with proper LR annealing), gradient clipping, or `torch.nan_to_num` band-aid. Edward's PR #3091 (grad clip) and alphonse's PR #3089 (L1 loss) may both address this naturally.
+
+### Follow-up (sent back to fern as comment on #3092)
+
+Run 2-arm comparison at `--epochs 10` to fully anneal cosine `T_max`:
+- Arm A: `slice_num=64` (establishes the branch baseline)
+- Arm B: `slice_num=128` (confirms with proper schedule)
+
+Merge if Arm B beats Arm A on `val_avg/mae_surf_p` AND `test_avg/mae_surf_p` is finite on Arm B.

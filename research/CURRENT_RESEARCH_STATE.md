@@ -14,6 +14,12 @@ This is the inaugural round on this branch. The baseline is the Transolver in `t
 
 Round 1 goal: a broad sweep across the orthogonal levers most likely to move `val_avg/mae_surf_p`. Each PR isolates one change so we can attribute deltas cleanly and stack improvements in later rounds.
 
+## Cross-cutting finding from fern's first report (#3092) — affects ALL in-flight PRs
+
+`SENPAI_TIMEOUT_MINUTES=30` and ~170 s/epoch means only ~10 of 50 configured epochs actually complete. Cosine `T_max=50` therefore never anneals — LR remains ~80% of peak when training stops, and val numbers oscillate at the cutoff. Future PRs should pass `--epochs 10` (or whatever matches the realized epoch count) so `T_max` matches budget. Existing in-flight PRs (#3089–#3097 minus #3092) will report under the mis-tuned schedule; round-2 follow-ups will need to re-run with corrected `--epochs` for definitive comparisons.
+
+Secondary finding: model emits `inf`/`NaN` on `test_geom_camber_cruise` at partial-training checkpoints (likely on the largest extreme-Re/AoA sample). Identical across slice_num arms. May resolve naturally with grad clip (#3091) or L1 loss (#3089); otherwise will need a dedicated fix.
+
 ## Round 1 assignments (all in-flight as of 2026-05-15)
 
 | # | Student | Hypothesis | Why it matters |
@@ -21,7 +27,7 @@ Round 1 goal: a broad sweep across the orthogonal levers most likely to move `va
 | #3089 | alphonse | L1 / smooth-L1 loss in normalized space | Targets directly align with MAE metric; reduces high-Re outlier dominance |
 | #3090 | askeladd | Width: n_hidden 128→192 (+follow-up 256) | Baseline is below Transolver paper's standard width; capacity lever |
 | #3091 | edward | LR warmup + grad clip + higher peak LR | Stability primitives unlock higher LR; common transformer recipe |
-| #3092 | fern | More physics-attention slices: slice_num 64→128 (+192) | Raises resolution of physics decomposition for variable mesh sizes |
+| #3092 | fern | More physics-attention slices: slice_num 64→128 (+192) | Sent back 2026-05-15 — 128 beat 192 internally but no 64 baseline + test_cruise NaN; revised follow-up to compare 64 vs 128 at `--epochs 10` |
 | #3093 | frieren | bf16 autocast + batch_size 4→8 | Speed + better gradient estimate via larger batch |
 | #3095 | nezuko | surf_weight 10→30 + per-channel p-weighting | Direct loss-side push on the primary metric |
 | #3096 | tanjiro | x-axis symmetry augmentation (Ux/AoA/stagger flip) | Free dataset doubling; expected big OOD gains on geom_camber tracks |
