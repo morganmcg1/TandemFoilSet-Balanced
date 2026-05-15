@@ -286,3 +286,36 @@ Variant vs canonical baseline (135.30): variant is +15.9% worse.
 
 **Strategic implication:**
 If SOAP+Huber+LRwarmup stacks orthogonally (expected: val ~60-80), this is the new dominant lever and round-3 strategy pivots to (a) tuning SOAP hyperparams (LR sweep with SOAP, preconditioner frequency), (b) verifying other round-2 hypotheses still gain on the SOAP-stacked baseline.
+
+## 2026-05-15 19:10 — PR #3322 (frieren): AoA reflection augmentation (sign-flip AoA + Uy, p=0.5) — **CLOSED**
+
+- Branch: `willowpai2i48h3-frieren/aoa-reflection-aug`
+- W&B group: `aoa-reflection-aug`
+- Baseline run: `hvvk1rd6` | Variant run: `kbc0rf63`
+
+**Hypothesis:** Sign-flip AoA (dims 14, 18) and Uy (y[:,1]) at p=0.5 per sample to synthetically extend training coverage into positive-AoA regime. The raceCar domain spans AoA −10° to 0° only; z-reflection symmetry would double coverage.
+
+**Result (variant vs in-PR baseline; both on merged Huber+LRwarmup stack):**
+
+| Metric | Baseline (hvvk1rd6) ep 13 | Variant (kbc0rf63) ep 14 | Δ |
+|---|---|---|---|
+| best_val_avg/mae_surf_p | **118.31** | **132.85** | **+12.3% (worse)** |
+| val_single_in_dist/mae_surf_p | 137.70 | 168.94 | +22.7% |
+| val_geom_camber_rc/mae_surf_p (target) | 131.60 | 145.14 | +10.3% |
+| val_geom_camber_cruise/mae_surf_p | 94.12 | 96.95 | +3.0% |
+| val_re_rand/mae_surf_p | 109.83 | 120.40 | +9.6% |
+| test_single_in_dist/mae_surf_p | 125.17 | 147.50 | +17.8% |
+| test_geom_camber_rc/mae_surf_p | 114.44 | 138.22 | +20.8% |
+| test_re_rand/mae_surf_p | 108.73 | 116.70 | +7.3% |
+| test_3split_avg (excl cruise) | 116.11 | **134.14** | **+15.5%** |
+| Epochs / cap | 14 | 14 | wall-clock hit |
+
+**Decision:** CLOSED. +15.5% test regression; all splits worse.
+
+**Analysis (from student, confirmed):**
+- **The symmetry assumption breaks due to NACA camber.** `p(AoA=+θ) ≈ p(AoA=−θ)` and `Uy(AoA=+θ) ≈ −Uy(AoA=−θ)` requires z-symmetric foils. NACA cambered foils have M>0 camber that breaks this. Flipping AoA without also flipping the camber sign produces physically inconsistent (x, y) pairs.
+- Damage scales with camber: `val_single_in_dist` (M=2-9, +22.7%) >> `val_geom_camber_rc` (M=6-8, +10.3%) >> `val_geom_camber_cruise` (M=0-6, +3.0%).
+- Even with unlimited epochs the variant would need to overcome ~12-15% deficit that reflects *wrong physics*, not slow convergence.
+- W&B verified: tags clean, Huber+warmup config confirmed, numbers match student report exactly.
+
+**Implication:** AoA-reflection augmentation is not viable in its current form for this dataset. A valid z-reflection requires flipping z-position, arc-length signs, dsdf signs, AND NACA M sign simultaneously — a separate, more complex hypothesis. Assigned frieren [PR #3415] to test log-Re sinusoidal embedding instead.
