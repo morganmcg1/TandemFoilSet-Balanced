@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 12:35 UTC
+- **Updated:** 2026-05-15 14:15 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -11,32 +11,37 @@
 None on record for this launch yet. Default goal: drive `test_avg/mae_surf_p`
 down vs the baseline Transolver config in `target/train.py`.
 
-## Current research focus
+## Current best baseline
 
-**Round 1 — eight parallel single-knob PRs (in flight).** Each tests exactly
-one change from the default config so that effects are individually
-attributable. The 8 in-flight PRs:
+**val_avg/mae_surf_p = 115.17** (PR #3111, SmoothL1 Huber beta=1.0, -19.7% vs MSE default).
+Splits: single=144.61, rc=124.04, cruise=89.33, re_rand=102.70.
 
-| PR | Student | Hypothesis | Theme |
-|----|---------|------------|-------|
-| #3107 | alphonse | baseline reproduction (no code change) | calibration |
-| #3111 | askeladd | MSE → SmoothL1(beta=1.0) | loss / metric alignment |
-| #3116 | edward   | surf_weight 10 → 25 | loss / metric alignment |
-| #3120 | fern     | slice_num 64 → 128 | mesh-resolution capacity |
-| #3124 | frieren  | mlp_ratio 2 → 4 | model capacity |
-| #3129 | nezuko   | bf16 autocast | throughput |
-| #3132 | tanjiro  | linear LR warmup (10% epochs) | optim stability |
-| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) per-channel weights | loss / metric alignment |
+## Currently in flight (8 WIP PRs)
 
-Themes probed in round 1:
+| PR | Student | Hypothesis | Base | Theme |
+|----|---------|------------|------|-------|
+| #3279 | alphonse | data/scoring.py NaN-safe fix | SmoothL1 | infra bug fix |
+| #3280 | askeladd | SmoothL1 beta=1.0 → 0.5 | SmoothL1 | loss tuning |
+| #3116 | edward   | surf_weight 10 → 25 (MSE base) | MSE | loss alignment |
+| #3285 | fern     | EMA weights decay=0.999 | SmoothL1 | OOD generalization |
+| #3124 | frieren  | mlp_ratio 4 (retry on SmoothL1) | SmoothL1 | model capacity |
+| #3129 | nezuko   | bf16 autocast | MSE | throughput |
+| #3286 | tanjiro  | SmoothL1 + surf_weight=25 stack | SmoothL1 | loss stack |
+| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) (MSE base) | MSE | channel weighting |
 
-1. **Loss / metric alignment** (3 arms: askeladd, edward, thorfinn).
-2. **Capacity** (2 arms: fern slice_num, frieren mlp_ratio).
-3. **Throughput** (1 arm: nezuko bf16).
-4. **Optim stability** (1 arm: tanjiro warmup).
-5. **Calibration** (1 arm: alphonse baseline).
+Note: edward, nezuko, thorfinn (#3116, #3129, #3135) were assigned before
+SmoothL1 merged, so they run on the old MSE base — results will be interpreted
+relative to MSE baseline (143.52). All others are on the SmoothL1 base.
 
-The baseline reproduction PR is the comparison anchor for the other seven.
+## Round 1 summary (reviewed so far)
+
+| PR | Hypothesis | val_avg/mae_surf_p | vs MSE | Decision |
+|----|------------|-------------------:|-------:|----------|
+| #3107 | baseline (MSE default) | 143.52 | — | Closed (calibration) |
+| #3111 | SmoothL1 beta=1.0 | **115.17** | **-19.7%** | **MERGED ← new baseline** |
+| #3132 | LR warmup (10%) | 141.73 | -1.3% | Closed (noise) |
+| #3124 | mlp_ratio=4 | 134.14 | -6.5% | Sent back (retry on SmoothL1) |
+| #3120 | slice_num=128 | 147.74 | +2.9% | Closed (regression) |
 
 ## Potential next research directions
 

@@ -52,6 +52,41 @@ Test (3 valid splits, NaN-safe):
 
 ---
 
+## 2026-05-15 14:10 — PR #3120 — slice_num 64→128 (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-fern/slice-num-128`
+- **Hypothesis:** Double slice tokens for finer field resolution on big meshes
+- **Result:** val_avg/mae_surf_p = **147.74** (worse than MSE baseline 143.52; +2.9%)
+  - val_single_in_dist: 212.98 (regression from 181.35)
+  - val_geom_camber_rc: 138.61; val_geom_camber_cruise: 117.02; val_re_rand: 122.35
+  - Only 10 epochs completed (vs 14 for baseline) — larger model slowed training
+- **Action:** Closed. Doubled slice tokens slowed training enough to hurt convergence within the 30-min cap. In-distribution split regressed significantly.
+
+---
+
+## 2026-05-15 14:10 — PR #3124 — mlp_ratio 2→4 (REQUEST CHANGES)
+
+- **Branch:** `charliepai2i48h1-frieren/mlp-ratio-4`
+- **Hypothesis:** Restore Transolver paper's default FFN width
+- **Result:** val_avg/mae_surf_p = **134.14** vs MSE baseline 143.52 (-6.5%) — real signal
+  - val_single_in_dist: 155.57; val_geom_camber_rc: 153.16; val_geom_camber_cruise: 101.19; val_re_rand: 126.65
+  - Doesn't beat SmoothL1 baseline (115.17) since student was on old MSE codebase
+- **Action:** Sent back. Retry mlp_ratio=4 on the SmoothL1 codebase (advisor branch now has #3111 merged).
+
+---
+
+## 2026-05-15 14:10 — PR #3132 — LR warmup linear (CLOSED — within noise)
+
+- **Branch:** `charliepai2i48h1-tanjiro/lr-warmup-linear`
+- **Hypothesis:** Linear LR warmup over first 10% epochs for early stability
+- **Result:** val_avg/mae_surf_p = **141.73** vs MSE baseline 143.52 (-1.3%)
+  - val_single_in_dist: 160.31; val_geom_camber_rc: 170.24; val_geom_camber_cruise: 107.69; val_re_rand: 128.66
+  - 1.3% gap is within single-seed noise (~5-10 pts estimated)
+  - Warmup eats early cosine range; 11 epochs completed
+- **Action:** Closed. Effect not distinguishable from variance. Revisit if plateau.
+
+---
+
 ## 2026-05-15 12:35 — Round 1 assigned (8 PRs)
 
 | PR | Student | Hypothesis | Knob |
