@@ -2,6 +2,27 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-15 17:00 — PR #3291: H7 two-branch output head (thorfinn) — **CLOSED, regressed**
+
+- Branch: `charliepai2i24h4-thorfinn/two-branch-head`
+- Hypothesis: Replace the shared output MLP with two separate decoders — a wider `surf_head` (n_layers=2) and a narrower `vol_head` (n_layers=1) — to let surface and volume predictions specialize their feature pathways.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, epoch 15) | **135.74** |
+| `val_single_in_dist/mae_surf_p` | 166.35 |
+| `val_geom_camber_rc/mae_surf_p` | 139.93 |
+| `val_geom_camber_cruise/mae_surf_p` | 111.16 |
+| `val_re_rand/mae_surf_p` | 125.53 |
+| `test_avg/mae_surf_p` | NaN (run before frieren NaN fix) |
+| Param count | 670,810 (~0.67M) |
+| Wall clock | 30 min cap; epoch 15 of 50 |
+
+- Metric artifact: `models/model-charliepai2i24h4-thorfinn-two-branch-head-*/metrics.jsonl`
+- Diagnostic: 3 of 4 splits regressed vs current baseline 122.81 (+10.5% worse val_avg). Only geom_camber_rc nominally improved (139.93 vs 125.95 — but still well above baseline). Student correctly self-assessed: "hypothesis did NOT pan out."
+- Root cause analysis: The shared-decoder's cross-channel feature sharing likely provides implicit regularization that benefits generalization. Separating surface/volume decoders loses this shared representation and adds little value with only ~0.67M params. The in-dist split (166.35) regressed the most, suggesting the two-branch design does not help the bottleneck split.
+- Decision: **Closed** — unambiguous regression on all splits including the target split (single_in_dist). Thorfinn reassigned to H11 (log1p target normalization, PR #3345).
+
 ## 2026-05-15 16:25 — PR #3217: H5 RFF coord encoding + NaN fix (frieren) — **MERGED, new baseline**
 
 - Branch: `charliepai2i24h4-frieren/rff-coord-nfreq32-sigma1`
