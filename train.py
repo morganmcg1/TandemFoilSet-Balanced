@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -241,17 +242,34 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def _amp_torch_dtype(amp_dtype: str) -> torch.dtype:
+    return torch.bfloat16 if amp_dtype == "bf16" else torch.float32
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "fp32") -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Also accumulates a node-level NaN-safe surface-pressure MAE
+    (``mae_surf_p_nansafe``) which filters non-finite ground-truth / prediction
+    nodes instead of skipping the whole sample. Needed because
+    ``test_geom_camber_cruise/000020.pt`` has 761 ``-inf`` nodes in y[:,2] —
+    the in-tree scorer's per-sample finite check propagates NaN into the
+    accumulator (NaN*0=NaN), and reports None for the average.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+
+    mae_surf_p_nansafe = torch.zeros((), dtype=torch.float64, device=device)
+    n_surf_p_nansafe = 0
+
+    amp_torch_dtype = _amp_torch_dtype(amp_dtype)
+    amp_enabled = amp_dtype != "fp32"
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -262,7 +280,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.amp.autocast(device_type="cuda", dtype=amp_torch_dtype, enabled=amp_enabled):
+                pred = model({"x": x_norm})["preds"]
+            # Cast back to fp32 BEFORE loss + MAE computations.
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -282,11 +303,25 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_surf += ds
             n_vol += dv
 
+            # Node-level NaN-safe surface-pressure MAE. Filter non-finite
+            # prediction / ground-truth nodes; inf-y poisons the accumulator
+            # via NaN propagation (inf*0=NaN) in the in-tree scorer.
+            p_pred = pred_orig[..., 2].double()
+            p_true = y[..., 2].double()
+            finite_p = torch.isfinite(p_pred) & torch.isfinite(p_true)
+            effective_p = surf_mask & finite_p
+            err_p_raw = (p_pred - p_true).abs()
+            err_p = torch.nan_to_num(err_p_raw, nan=0.0, posinf=0.0, neginf=0.0)
+            mae_surf_p_nansafe += (err_p * effective_p.double()).sum()
+            n_surf_p_nansafe += int(effective_p.sum().item())
+
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    out["mae_surf_p_nansafe"] = (mae_surf_p_nansafe / max(n_surf_p_nansafe, 1)).item()
+    out["n_surf_p_nansafe"] = n_surf_p_nansafe
     return out
 
 
@@ -411,6 +446,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
+    grad_clip_norm: float = 1.0  # 0 or negative disables clipping
+    eta_min: float = 1e-5    # CosineAnnealingLR LR floor
 
 
 cfg = sp.parse(Config)
@@ -457,7 +495,18 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min
+)
+
+amp_torch_dtype = _amp_torch_dtype(cfg.amp_dtype)
+amp_enabled = cfg.amp_dtype != "fp32"
+grad_clip_enabled = cfg.grad_clip_norm is not None and cfg.grad_clip_norm > 0
+print(
+    f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}  "
+    f"grad_clip: norm={cfg.grad_clip_norm if grad_clip_enabled else 'off'}  "
+    f"cosine eta_min={cfg.eta_min}"
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -511,7 +560,11 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.amp.autocast(device_type="cuda", dtype=amp_torch_dtype, enabled=amp_enabled):
+            pred = model({"x": x_norm})["preds"]
+        # Cast back to fp32 BEFORE Huber/loss computation — keeps the loss
+        # accumulation and per-element where() in full fp32 precision.
+        pred = pred.float()
         abs_err = (pred - y_norm).abs()
         sq_err = torch.where(
             abs_err < cfg.huber_delta,
@@ -527,9 +580,17 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if grad_clip_enabled:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_norm)
+        else:
+            grad_norm = torch.zeros((), device=device)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -542,7 +603,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_dtype=cfg.amp_dtype)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -610,7 +671,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_dtype=cfg.amp_dtype)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -624,6 +685,19 @@ if best_metrics:
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        # Manual NaN-safe aggregation across test splits (cruise split's
+        # in-tree mae_surf_p is NaN from the -inf in y; the per-split
+        # nansafe value is from finite-filtered node MAE).
+        nansafe_vals = [
+            m["mae_surf_p_nansafe"]
+            for m in test_metrics.values()
+            if "mae_surf_p_nansafe" in m and math.isfinite(m["mae_surf_p_nansafe"])
+        ]
+        if nansafe_vals:
+            test_avg_nansafe_surf_p = sum(nansafe_vals) / len(nansafe_vals)
+            test_log["test_avg_nansafe/mae_surf_p"] = test_avg_nansafe_surf_p
+            test_log["test_avg_nansafe/n_splits"] = len(nansafe_vals)
+            print(f"  TEST  avg_nansafe_surf_p={test_avg_nansafe_surf_p:.4f} (over {len(nansafe_vals)}/{len(test_metrics)} splits)")
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
