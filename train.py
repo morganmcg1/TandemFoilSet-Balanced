@@ -367,6 +367,131 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lion optimizer (Chen et al. 2023, arxiv:2302.06675)
+# ---------------------------------------------------------------------------
+
+class Lion(torch.optim.Optimizer):
+    """Sign-based update with decoupled weight decay.
+
+    Update rule: ``p -= lr * sign(b1*m + (1-b1)*g)``; ``m`` then updated
+    in-place via ``m = b2*m + (1-b2)*g``. Half the optimizer state of AdamW
+    (no second-moment buffer), constant per-parameter step magnitude.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                if group["weight_decay"] != 0:
+                    p.mul_(1 - group["lr"] * group["weight_decay"])
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                b1, b2 = group["betas"]
+                update = (exp_avg * b1 + g * (1 - b1)).sign_()
+                p.add_(update, alpha=-group["lr"])
+                exp_avg.mul_(b2).add_(g, alpha=1 - b2)
+        return loss
+
+
+# ---------------------------------------------------------------------------
+# Nansafe accumulator + test eval with data-bug diagnostics
+# ---------------------------------------------------------------------------
+# data/scoring.py has a NaN-propagation bug: -inf entries in test ground truth
+# (test_geom_camber_cruise/000020.pt has 761 -inf in interior pressure) corrupt
+# the per-channel accumulator via ``NaN * 0 = NaN``. data/scoring.py is read-only,
+# so we additionally compute a per-node-finite "nansafe" MAE and log diagnostics.
+
+def _accumulate_nansafe(pred_orig, y, is_surface, mask, mae_surf, mae_vol):
+    """Per-node finite-aware accumulator. Drops only the bad nodes, not the sample."""
+    finite_per_node = torch.isfinite(y).all(dim=-1)  # [B, N]
+    effective = mask & finite_per_node
+    surf_mask = effective & is_surface
+    vol_mask = effective & ~is_surface
+    err = (pred_orig.double() - y.double()).abs()
+    err = torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)
+    mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+    mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+    return int(surf_mask.sum().item()), int(vol_mask.sum().item())
+
+
+def evaluate_test_split(model, loader, stats, surf_weight, device):
+    """Test eval — standard (in-tree-scorer-compatible) + nansafe + per-sample diag."""
+    vol_loss_sum = surf_loss_sum = 0.0
+    mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_surf_ns = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol_ns = torch.zeros(3, dtype=torch.float64, device=device)
+    n_surf = n_vol = n_surf_ns = n_vol_ns = n_batches = 0
+    per_sample_neginf_p: dict[int, int] = {}
+    sample_offset = 0
+
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+
+            sq_err = (pred - y_norm) ** 2
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss_sum += (
+                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                / vol_mask.sum().clamp(min=1)
+            ).item()
+            surf_loss_sum += (
+                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                / surf_mask.sum().clamp(min=1)
+            ).item()
+            n_batches += 1
+
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            n_surf += ds
+            n_vol += dv
+            ds_ns, dv_ns = _accumulate_nansafe(
+                pred_orig, y, is_surface, mask, mae_surf_ns, mae_vol_ns
+            )
+            n_surf_ns += ds_ns
+            n_vol_ns += dv_ns
+
+            neginf_p = torch.isneginf(y[:, :, 2]) & mask  # [B, N]
+            counts = neginf_p.sum(dim=-1)  # [B]
+            for b in range(counts.shape[0]):
+                c = int(counts[b].item())
+                if c > 0:
+                    per_sample_neginf_p[sample_offset + b] = c
+            sample_offset += counts.shape[0]
+
+    vol_loss = vol_loss_sum / max(n_batches, 1)
+    surf_loss = surf_loss_sum / max(n_batches, 1)
+    out = {
+        "vol_loss": vol_loss,
+        "surf_loss": surf_loss,
+        "loss": vol_loss + surf_weight * surf_loss,
+    }
+    out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    ns = finalize_split(mae_surf_ns, mae_vol_ns, n_surf_ns, n_vol_ns)
+    for k, v in ns.items():
+        out[f"{k}_nansafe"] = v
+    return out, per_sample_neginf_p
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -431,7 +556,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -579,12 +704,26 @@ if best_metrics:
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
-        test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-            for name, loader in test_loaders.items()
-        }
+        test_metrics = {}
+        per_split_diag: dict[str, dict[int, int]] = {}
+        for name, loader in test_loaders.items():
+            m, diag = evaluate_test_split(model, loader, stats, cfg.surf_weight, device)
+            test_metrics[name] = m
+            per_split_diag[name] = diag
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        nansafe_keys = [
+            f"mae_{loc}_{ch}_nansafe"
+            for loc in ("surf", "vol")
+            for ch in ("Ux", "Uy", "p")
+        ]
+        test_avg_nansafe: dict[str, float] = {}
+        for k in nansafe_keys:
+            vals = [m[k] for m in test_metrics.values() if k in m]
+            if vals:
+                test_avg_nansafe[f"avg_nansafe/{k.replace('_nansafe', '')}"] = sum(vals) / len(vals)
+
+        print(f"\n  TEST  avg_surf_p={test_avg.get('avg/mae_surf_p')!r}  "
+              f"avg_nansafe_surf_p={test_avg_nansafe.get('avg_nansafe/mae_surf_p'):.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
 
@@ -594,8 +733,23 @@ if best_metrics:
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        for k, v in test_avg_nansafe.items():
+            test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        # Data-bug diagnostics — per-split totals + cruise idx 20 specifically.
+        data_bug_log: dict[str, int] = {}
+        for split_name, diag in per_split_diag.items():
+            total = sum(diag.values())
+            data_bug_log[f"data_bug/{split_name}_neginf_y_p_count"] = total
+            data_bug_log[f"data_bug/{split_name}_samples_with_neginf_y_p"] = len(diag)
+            for sidx, count in diag.items():
+                data_bug_log[f"data_bug/{split_name}_idx{sidx}_p_neginf_count"] = count
+        cruise_diag = per_split_diag.get("test_geom_camber_cruise", {})
+        data_bug_log["data_bug/cruise_idx20_p_neginf_count"] = cruise_diag.get(20, 0)
+        data_bug_log["data_bug/cruise_idx20_p_neginf_flag"] = int(cruise_diag.get(20, 0) > 0)
+        wandb.summary.update(data_bug_log)
 
     save_model_artifact(
         run=run,
