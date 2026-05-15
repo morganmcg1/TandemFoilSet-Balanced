@@ -236,6 +236,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Defensive sanitization: one test_geom_camber_cruise sample has -inf
+            # in the p channel. scoring.py's per-sample filter excludes such
+            # samples, but the err = (pred - y).abs() computation still produces
+            # inf * mask=0 = NaN that corrupts the accumulator. Zero out
+            # non-finite y positions and mask out the affected samples so loss
+            # and MAE both see only finite values.
+            B = y.shape[0]
+            y_finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite_sample.all():
+                y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+                mask = mask & y_finite_sample.unsqueeze(-1)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -390,7 +402,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=192,
     n_layers=5,
     n_head=4,
     slice_num=64,
