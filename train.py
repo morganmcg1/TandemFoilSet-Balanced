@@ -157,12 +157,41 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, scale=None, shift=None):
+        h = self.ln_1(fx)
+        if scale is not None:
+            h = h * scale.unsqueeze(1) + shift.unsqueeze(1)
+        fx = self.attn(h) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
+
+
+class FiLMConditioner(nn.Module):
+    """Maps per-sample condition scalars to per-layer (scale, shift) for hidden_dim.
+
+    Zero-init the final linear so scale=1, shift=0 at start (identity init).
+    """
+
+    def __init__(self, cond_dim: int, hidden_dim: int, n_layers: int, mlp_hidden: int = 128):
+        super().__init__()
+        self.n_layers = n_layers
+        self.hidden_dim = hidden_dim
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, mlp_hidden), nn.SiLU(),
+            nn.Linear(mlp_hidden, mlp_hidden), nn.SiLU(),
+            nn.Linear(mlp_hidden, 2 * hidden_dim * n_layers),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, cond):
+        out = self.net(cond)
+        out = out.reshape(out.size(0), self.n_layers, 2, self.hidden_dim)
+        scale = 1.0 + out[:, :, 0]
+        shift = out[:, :, 1]
+        return scale, shift
 
 
 class Transolver(nn.Module):
@@ -170,7 +199,10 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 film_cond: bool = False, film_cond_dim: int = 11,
+                 film_cond_slice: tuple[int, int] = (13, 24),
+                 film_mlp_hidden: int = 128):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -186,6 +218,7 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.n_layers = n_layers
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -195,7 +228,20 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+
+        self.film_cond = film_cond
+        self.film_cond_slice = film_cond_slice
+        if film_cond:
+            self.film = FiLMConditioner(
+                cond_dim=film_cond_dim, hidden_dim=n_hidden,
+                n_layers=n_layers, mlp_hidden=film_mlp_hidden,
+            )
+
         self.apply(self._init_weights)
+        # Re-zero FiLM output head after generic init (the apply above clobbers it).
+        if film_cond:
+            nn.init.zeros_(self.film.net[-1].weight)
+            nn.init.zeros_(self.film.net[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -208,9 +254,16 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.film_cond:
+            s0, s1 = self.film_cond_slice
+            cond = x[:, 0, s0:s1]
+            scales, shifts = self.film(cond)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            if self.film_cond:
+                fx = block(fx, scale=scales[:, i], shift=shifts[:, i])
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -422,6 +475,8 @@ class Config:
     amp_dtype: str = "fp32"  # one of: "fp32", "bf16"
     use_ema: bool = False  # track an EMA shadow copy of weights for val/test/checkpoint
     ema_decay: float = 0.999  # max decay; warmup ramp protects early training
+    film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
+    film_mlp_hidden: int = 128
 
 
 cfg = sp.parse(Config)
@@ -461,6 +516,10 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    film_cond=cfg.film_cond,
+    film_cond_dim=11,
+    film_cond_slice=(13, 24),
+    film_mlp_hidden=cfg.film_mlp_hidden,
 )
 
 model = Transolver(**model_config).to(device)
