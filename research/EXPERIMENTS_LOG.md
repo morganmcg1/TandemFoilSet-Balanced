@@ -1,5 +1,35 @@
 # SENPAI Research Results
 
+## 2026-05-15 18:00 — PR #3307: OneCycleLR (max_lr=1e-3, pct_start=0.1) — sent back
+
+- Branch: `willowpai2i24h5-askeladd/onecyclelr-1e3`
+- Hypothesis: Per-batch OneCycleLR schedule covers the full training budget more precisely than epoch-based cosine; warmup over first 10% of batches avoids early instability.
+- W&B run: (see PR #3307 comments)
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | **119.25** |
+
+**Analysis:** 1.8% regression vs baseline (119.25 vs 117.16), within the high-variance noise floor (~15 pp spread observed in round-1 replications). However, a root-cause issue was identified: `total_steps = len(train_loader) * MAX_EPOCHS` (i.e., 50 epochs worth of batches), but only 14 actual epochs ran under the 30-min wall-clock cap. The scheduler reached only ~28% of its designed arc — the anneal phase never fired. **Sent back to draft** with explicit fix: change `total_steps = len(train_loader) * 14` (right-sized to actual budget) and add a guard `if global_step < scheduler.total_steps: scheduler.step()` to prevent out-of-bounds errors. Re-run with `wandb_name tanjiro-onecyclelr-1e3-rightsized`.
+
+---
+
+## 2026-05-15 17:55 — PR #3306: Grad clip max_norm=1.0 → 100.0 — closed
+
+- Branch: `willowpai2i24h5-tanjiro/gradclip-100`
+- Hypothesis: max_norm=1.0 fires on 100% of steps (normalized GD); loosening to 100.0 allows spike-only clipping and lets the optimizer run at full effective LR.
+- W&B run: (see PR #3306 comments)
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | **124.31** |
+| Clip fire rate | 20.88% of steps |
+| Median pre-clip grad norm | ~45.7 |
+
+**Analysis:** Clear regression (+7.15 pp, +6.1% vs baseline 117.16). At max_norm=100, clipping fires on only 20.88% of steps, meaning the optimizer runs at full effective LR for ~80% of steps. The result definitively confirms that the tight max_norm=1.0 clip is doing real work as a **gradient normalizer**, not just spike suppression. The ~45× effective-LR reduction from 5e-4 → ~1.1e-5 is mechanistically beneficial, not wasteful. Follow-up (PR #3360) probes max_norm=0.5 (halving effective LR further to ~5.5e-6) to determine whether max_norm=1.0 is the sweet spot or whether tighter normalization helps more.
+
+---
+
 ## 2026-05-15 16:25 — PR #3153: Huber (β=1.0) on volume loss — closed
 
 - Branch: `willowpai2i24h5-nezuko/huber-vol-beta1`
