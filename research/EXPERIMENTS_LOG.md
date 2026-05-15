@@ -22,6 +22,34 @@ Per-PR results log. Earliest at the bottom; latest at the top.
 - **Analysis**: GALE mechanism confirmed working — camber_rc split benefited most (-12.7%) as predicted (OOD geometry interpolation). T_max=15 alignment was critical: round 1 (T_max=50) showed oscillating val_avg late-training; round 2 with T_max=15 showed monotone descent to epoch 14 best. New baseline: 85.156.
 - **Note on T_max**: tanjiro's merge baked T_max=15 into train.py. Nezuko's H14 (CLI --cosine_t_max) needs to handle this correctly on rebase.
 
+## 2026-05-15 21:36 — PR #3467: H17 Attention dropout sweep 0.05/0.10 (fern) — **assigned (post H12b close)**
+
+- Branch: `charliepai2i24h4-fern/attention-dropout`
+- Hypothesis: PhysicsAttention has dropout=0.0 (fully unregularized). Sweep attn_dropout ∈ {0.05, 0.10} while keeping FFN dropout=0.1 fixed. Attention dropout regularizes the slice-token routing (different axis from FFN dropout). Predicted -2-5%.
+- Two arms: attn_dropout=0.05 and attn_dropout=0.10 via new `--attn_dropout` CLI arg wired into model_config.
+- Target to beat: val_avg/mae_surf_p < 85.16.
+
+## 2026-05-15 21:30 — PR #3375: H12b dropout rate sweep (fern) — **CLOSED, 0.10 confirmed optimal**
+
+- Branch: `charliepai2i24h4-fern/fern/dropout-sweep`
+- All 3 arms completed on OLD baseline (112.49): dropout ∈ {0.05, 0.15, 0.20}
+
+| dropout | val_avg | delta vs 0.10 |
+|---|---:|---:|
+| 0.05 | 116.77 | +3.8% |
+| **0.10 (baseline)** | **112.49** | — |
+| 0.15 | 118.47 | +5.3% |
+| 0.20 | 120.05 | +6.7% |
+
+- **Analysis**: Clear U-shape minimum at 0.10. All alternatives regress. Basin is narrow — even 0.05 regresses. FFN dropout=0.10 confirmed as optimal. Closed without rerun on new baseline because the result is mechanistically clear (orthogonal to log1p and geom-cond) and not worth 30 min GPU time to repeat.
+
+## 2026-05-15 21:30 — PR #3461: H16 FiLM geom-cond (tanjiro) — **assigned (post H13 merge)**
+
+- Branch: `charliepai2i24h4-tanjiro/film-geom-cond`
+- Hypothesis: Extend H13 additive geom-cond to FiLM: `fx ← fx ⊙ (1 + γ_i(ctx)) + β_i(ctx)`. Shared film_proj MLP(11, 256, 256) outputs 2×n_hidden (split into gamma/beta). Per-block scale/shift gates init at 0 (identity start). ~+33K params vs current baseline.
+- Single arm: beat val_avg < 85.16.
+- Predicted delta: -2-6% on top of additive baseline.
+
 ## 2026-05-15 19:35 — PR #3423: H15 SwiGLU MLP (edward) — **assigned (idle slot fill)**
 
 - Branch: `charliepai2i24h4-edward/swiglu-mlp`

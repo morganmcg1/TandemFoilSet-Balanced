@@ -34,7 +34,7 @@
 | #3417 | thorfinn | H11b log1p alpha sweep {0.5, 1.0, 2.0} | WIP (running) |
 | #3318 | frieren | H6v2 grad clip + SGDR on combined baseline | WIP (running, active at 21:24) |
 | #3197 | askeladd | H8v3 EMA on combined baseline | WIP (running, pod restarted 21:25) |
-| #3375 | fern | H12b dropout rate sweep {0.05, 0.15, 0.20} | WIP (running) |
+| **#3467** | **fern** | **H17 attention dropout sweep {0.05, 0.10}** | **WIP (just assigned)** |
 | #3421 | nezuko | H14 cosine T_max alignment {14, 20} + eta_min=1e-5 | WIP (just assigned — note: baseline now has T_max=15 baked in) |
 | #3423 | edward | H15 SwiGLU MLP (gated FFN replaces GELU) | WIP (just assigned) |
 | **#3461** | **tanjiro** | **H16 FiLM geom-cond (γ + β, extends H13 GALE)** | **WIP (just assigned)** |
@@ -48,6 +48,7 @@
 | #3210 | fern | H2 scale 4M params | Closed — cap-bound |
 | #3222 | nezuko | H9v2 Cautious AdamW | Closed — +1.0% vs H12 baseline, doesn't compose with dropout |
 | #3201 | edward | H3 channel-loss (p=3, p=1.5) | Closed — direction exhausted, severe in-dist regression |
+| #3375 | fern | H12b dropout sweep {0.05, 0.15, 0.20} | Closed — U-shape minimum at 0.10, all alternatives regress |
 
 ## Research insights so far
 
