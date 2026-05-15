@@ -487,12 +487,21 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_mask = mask & ~is_surface   # [B, N]
+        surf_mask = mask & is_surface   # [B, N]
+
+        n_vol = vol_mask.sum(dim=1).clamp(min=1).float()   # [B]
+        n_surf = surf_mask.sum(dim=1).clamp(min=1).float() # [B]
+        per_sample_vol = (
+            (sq_err * vol_mask.unsqueeze(-1)).sum(dim=(1, 2)) / (n_vol * sq_err.shape[-1])
+        )   # [B]
+        per_sample_surf = (
+            (sq_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2)) / (n_surf * sq_err.shape[-1])
+        )   # [B]
+        vol_loss = per_sample_vol.mean()
+        surf_loss = per_sample_surf.mean()
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
