@@ -337,6 +337,7 @@ def write_experiment_summary(
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "surf_head_weight_decay": cfg.surf_head_weight_decay,
+        "grad_clip": cfg.grad_clip,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
@@ -390,6 +391,9 @@ class Config:
     # If set, use this weight decay for the surface decoder head's Linear params
     # (mlp2_surf). LayerNorm/bias parameters everywhere stay out of weight decay.
     surf_head_weight_decay: float | None = None
+    # If set, clip global grad norm to this value via torch.nn.utils.clip_grad_norm_
+    # before the optimizer step. None disables clipping.
+    grad_clip: float | None = None
 
 
 cfg = sp.parse(Config)
@@ -510,6 +514,8 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
