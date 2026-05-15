@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 18:30
+- **Date:** 2026-05-15 19:35
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -12,65 +12,57 @@ None — no human directives on this launch.
 
 ## Current baseline (merged into advisor branch)
 
-**PR #3200 (fern) — Fourier position features (8 bands)** — merged 2026-05-15 17:22
+**PR #3352 (fern) — Learnable Fourier frequency bands (8 trainable freqs)** — merged 2026-05-15 19:28
 
-- `val_avg/mae_surf_p` = **121.4956**
-- `test_avg/mae_surf_p` = **112.4884**
-- W&B run: `t1ai7kzf`
-- The `evaluate_split` NaN fix is bundled — all subsequent PRs inherit finite W&B test_avg
+- `val_avg/mae_surf_p` = **116.3411**
+- `test_avg/mae_surf_p` = **107.3254**
+- W&B run: `rumqs1au`
 
-Per-split surface-p (val | test): single=139.80|122.01, camber_rc=138.71|133.37, camber_cruise=93.55|83.11, re_rand=113.93|111.46.
+Per-split surface-p (val | test): single=145.03|126.46, camber_rc=126.25|118.24, camber_cruise=88.12|76.60, re_rand=105.96|108.00.
 
-## Round 1 summary
+Key insight: frequencies barely moved from octave init (max 2.5% drift). The gain is from gradient signal through the freq parameters, not from discovering better frequencies. Octave spacing is empirically near-optimal.
 
-| PR | Student | Hypothesis | Status | val_avg |
-|---|---|---|---|---|
-| #3191 | alphonse | Per-sample scale-normalizing loss | **closed** | 148.51 (worse) |
-| #3194 | askeladd | 5-epoch LR warmup + cosine | **rebase requested** (re-run on new baseline) | 136.55 (pre-rebase) |
-| #3198 | edward | Per-channel surface loss weights | WIP (stale — no results yet, pod up) | — |
-| #3200 | fern | Fourier position features (8 bands) | **MERGED → new baseline** | **121.50** |
-| #3206 | frieren | Capacity scale-up n_hidden=256 | **closed** (OOM @ bs=4) | 160.29 |
-| #3207 | nezuko | PGOT-style geom-conditioned slice | WIP (re-running with NaN fix) | 128.34 (pre-rebase) |
-| #3215 | tanjiro | SmoothL1 (Huber) loss | WIP (stale — no results yet, pod up) | — |
-| #3218 | thorfinn | DropPath stochastic depth | **closed** | 128.90 (worse) |
+## Merge history summary
 
-**Key Round-1 learnings:**
+| PR | val_avg | test_avg | Δ val |
+|---|---|---|---|
+| #3200 (fern) Fourier 8-band | 121.4956 | 112.4884 | first baseline |
+| #3352 (fern) Learnable Fourier | **116.3411** | **107.3254** | −4.24% |
 
-1. Fourier features were the biggest single lever (input augmentation > architecture changes at this budget).
-2. All non-trivial runs hit the 30-min wall clock with val still descending — optimizer/schedule that get more out of the fixed budget are high-leverage (askeladd's warmup re-run is in this lane).
-3. `test_geom_camber_cruise` is consistently the *easiest* split (~83-110) and `val_single_in_dist` consistently the *hardest* (~140-160). Counterintuitive — likely high-Re extreme samples in the in-distribution holdout dominate.
-4. Regularization (DropPath) helps OOD splits but hurts in-dist — *directional* regularizers (physics-informed) may avoid the trade-off; that's the thorfinn re-assignment.
-5. Naive capacity scale-up at bs=4 OOMs on 96 GB. Memory-conscious capacity bumps (slice_num=96 + gradient checkpointing — frieren re-assignment) are the right way to test capacity.
+## Round 2 WIP (currently running)
 
-## Round 2 assignments (idle students reassigned)
-
-| PR | Student | Hypothesis | Angle | Status |
-|---|---|---|---|---|
-| #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | arch/conditioning | WIP |
-| #3352 | fern | Learnable Fourier frequency bands (8 trainable freqs) | features | WIP |
-| #3353 | frieren | `slice_num=96` with gradient checkpointing (memory-safe) | arch | WIP |
-| #3356 | thorfinn | Divergence-free velocity auxiliary loss (physics-informed) | loss/physics | WIP |
-
-Full hypothesis details + code snippets in `research/RESEARCH_IDEAS_2026-05-15_16:35.md`.
+| PR | Student | Hypothesis | Status |
+|---|---|---|---|
+| #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | WIP |
+| #3353 | frieren | `slice_num=96` with gradient checkpointing | WIP |
+| #3356 | thorfinn | Divergence-free velocity auxiliary loss | WIP |
+| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | WIP (just assigned) |
 
 ## Round 1 carry-overs still WIP
 
-- **PR #3194 (askeladd, warmup-cosine):** sent rebase note after fern merged. Re-run two arms (`warmup=0`, `warmup=3`) on the new baseline. Targets val_avg < 121.50.
-- **PR #3207 (nezuko, geom-conditioned slice):** re-ran with NaN fix → val_avg=127.71, test_avg=116.56 (clean from W&B). Doesn't beat new baseline 121.50, but the geom-slice mechanism is hypothesis-supported on the rc-camber split (126.58 < 133.37). Sent back for one more iteration — rebase onto new baseline (Fourier features) and re-run. If geom-slice + Fourier compounds (orthogonal mechanisms), it merges. If not, close.
-- **PR #3215 (tanjiro, SmoothL1):** stale WIP, pod alive 4.75h, heartbeat iteration 58, GPU 0%. Posted status check asking for training kickoff within the hour or PR will be closed.
-- **PR #3198 (edward, channel weights):** stale WIP, pod alive 4.75h, heartbeat iteration 57, GPU 0%. Same status check posted. If both fail to produce a run, they'll be closed and reassigned.
+- **PR #3194 (askeladd, warmup-cosine):** rebased onto Fourier baseline. Running warmup=0 vs warmup=3 arms. Branch is MERGEABLE. Beat target: val_avg < 116.34. Wait for terminal result.
+- **PR #3207 (nezuko, geom-conditioned slice):** sent back for rebase onto learnable Fourier baseline. Final iteration — geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
+- **PR #3215 (tanjiro, SmoothL1 beta=0.05):** started training at 18:39 UTC on the Fourier baseline. W&B run `638hd0v7`. Results expected soon. Second arm (beta=0.1) follows.
+- **PR #3198 (edward, per-channel pressure loss weights):** 3 arms (p_surf_weight=2.0, 3.0, 5.0) running sequentially since 18:40 UTC. arm_p2 done, arm_p3/p5 in queue.
 
-If #3215 or #3198 produce results that beat the new baseline, merge sequentially. If they fail, close and reassign in Round 3.
+## Potential next research directions
 
-## Potential next research directions (post-Round 2)
+If Round-2 surfaces winners, Round 3 will compound. Anticipated follow-ups:
 
-If Round 2 surfaces winners, Round 3 will compound. Anticipated follow-ups depending on which lever moves:
+- **If FiLM (alphonse, #3350) wins:** extend to FiLM on the slice projection (not just LN); condition on NACA geometry params in addition to Re.
+- **If slice_num=96 (frieren, #3353) wins:** try slice_num=128 with checkpointing, or pair with n_layers=8 from fern's #3413 if that also wins.
+- **If n_layers=8 AMP (fern, #3413) wins:** try n_layers=10 (with AMP always on), or combine with slice_num=96 from frieren.
+- **If divergence-free loss (thorfinn, #3356) wins:** add no-slip surface BC and far-field BC terms.
+- **If SmoothL1 (tanjiro, #3215) wins:** sweep beta ∈ {0.01, 0.1, 0.5}; try L1 surface + L2 volume combo.
+- **If per-channel weights (edward, #3198) wins:** combine with learnable per-split weight tuning.
+- **If warmup (askeladd, #3194) wins:** stack with OneCycleLR.
+- **If geom-slice + Fourier (nezuko, #3207) compound:** extend to per-block geometry conditioning.
 
-- **If FiLM (alphonse) wins:** extend to FiLM on the slice projection (not just LN), or condition on geometry features (NACA M/P/T) in addition to Re.
-- **If learnable Fourier (fern) wins:** look at learned frequencies — if they collapse to a narrow band, try a different parameterization (multi-scale Gabor); if they spread, sweep `N_FOURIER_BANDS` up.
-- **If slice_num=96 + checkpoint (frieren) wins:** try `slice_num=128` (with checkpointing always on), or extend to `n_layers=8` paired with the memory plan that worked.
-- **If divergence-free (thorfinn) wins:** add other physics constraints (no-slip at surface nodes, far-field BC), or upgrade the finite-difference approximation to use a learned local-neighborhood kernel.
-- **Carry-over (askeladd warmup):** if warmup beats no-warmup on the new baseline, stack with OneCycleLR + gradient clipping (ideas file #1).
-- **Carry-over (nezuko geom-slice):** if it wins post-rebase, extend to per-block geometry conditioning.
+**Unexplored high-priority levers (Round 3 backlog):**
+1. OneCycleLR + gradient clipping (if askeladd warmup shows scheduler is the bottleneck)
+2. Domain one-hot embedding (pure input augmentation, 3-line change)
+3. L1 surface loss (directly aligned with MAE evaluation metric)
+4. N_FOURIER_BANDS sweep (12/16 bands with learnable freqs)
+5. Per-group LR: 10× higher LR for `fourier_freqs` to let them explore more
 
-**Plateau response (5+ failed experiments in a row):** move to a different architecture entirely — GNN over the mesh, Galerkin transformer, spectral-conv hybrid. Reconsider the data normalization (per-sample relative scoring vs global stats).
+**Plateau response:** 5+ consecutive failures → shift to architecture tier (GNN over mesh, Galerkin transformer, spectral-conv hybrid) or data representation (per-sample normalization with clipping).

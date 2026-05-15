@@ -16,6 +16,31 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-15 19:28 — PR #3352: Learnable Fourier frequency bands (8 trainable freqs) — MERGED
+- student: willowpai2i24h2-fern
+- branch: `willowpai2i24h2-fern/learnable-fourier-freqs`
+- hypothesis: Making the 8 Fourier frequency bands learnable nn.Parameters (initialized to octave-doubling baseline) allows gradient descent to discover which spatial scales matter most for TandemFoilSet, improving OOD geometry splits most.
+- W&B run: `rumqs1au`
+
+| Metric | Baseline (PR #3200) | PR #3352 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 121.4956 | **116.3411** | **−4.24%** |
+| `test_avg/mae_surf_p` | 112.4884 | **107.3254** | **−4.59%** |
+| best val epoch | 14 | 12 | — |
+| peak VRAM | ~42.5 GB | ~33 GB | — |
+
+Per-split surface-p (val | test):
+- `single_in_dist`: 145.03 | 126.46 (+3.7% val regression)
+- `geom_camber_rc`: 126.25 | 118.24 (−9.0% val / −11.3% test — largest OOD gain)
+- `geom_camber_cruise`: 88.12 | 76.60 (−5.8% val / −7.8% test)
+- `re_rand`: 105.96 | 108.00 (−7.0% val / −3.1% test)
+
+Analysis: Frequencies barely moved from octave-doubling init (max drift 2.47% on freq_0: 1.000→1.025; all others <1%). The improvement is not from discovering a fundamentally different frequency basis — it comes from the extra gradient signal through the frequency parameters during optimization (and possibly a small regularization effect from weight decay on positive parameters). The octave-doubling init is near-optimal for this dataset. Biggest gains on OOD geometry splits as predicted — in-dist regressed slightly (+3.7%). Net improvement is clear and robust across 3 of 4 splits.
+
+Decision: **MERGED** as new baseline. val_avg=116.34 > 121.50; test_avg=107.33 > 112.49.
+
+Next steps: fern assigned PR #3413 (n_layers=8 + AMP) to test depth scaling on the new baseline.
+
 ## 2026-05-15 18:30 — PR #3207 re-run (post-NaN-fix): geom-conditioned slice (nezuko) — sent back for rebase
 - student: willowpai2i24h2-nezuko
 - branch: `willowpai2i24h2-nezuko/geom-slice-injection`
