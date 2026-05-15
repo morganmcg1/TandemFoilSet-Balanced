@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import time
@@ -386,6 +387,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    use_amp: bool = False
+    amp_dtype: str = "bf16"  # "bf16" or "fp16"
 
 
 cfg = sp.parse(Config)
@@ -433,6 +436,17 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# Mixed-precision setup. bf16 has fp32 exponent range so it needs no GradScaler;
+# fp16 does. The eval path stays in fp32 for metric stability.
+if cfg.use_amp:
+    amp_dtype_torch = torch.bfloat16 if cfg.amp_dtype == "bf16" else torch.float16
+    amp_ctx = torch.amp.autocast(device_type="cuda", dtype=amp_dtype_torch)
+    scaler = torch.cuda.amp.GradScaler() if cfg.amp_dtype == "fp16" else None
+    print(f"AMP enabled: dtype={cfg.amp_dtype}, batch_size={cfg.batch_size}")
+else:
+    amp_ctx = contextlib.nullcontext()
+    scaler = None
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -486,18 +500,24 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        with amp_ctx:
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
