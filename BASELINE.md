@@ -23,13 +23,24 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 
 ## Round-1 status (this launch)
 
-- No merged improvements yet. Baseline numbers will be established by the first
-  wave of student PRs; once we have a confirmed reference run we will fill in
-  the table below and update it after each merged winner.
+No merged improvements yet. Two PRs reviewed so far (#3148, #3149) — both
+contained a baseline-equivalent control arm trained from scratch on this
+launch's pods.
 
-| Round | PR | Wandb run id | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
-|-------|----|--------------|--------------------|---------------------|-------|
-| _to fill_ | – | – | – | – | – |
+| Source | wandb run | val_avg/mae_surf_p | test_avg (avail. splits) | Notes |
+|--------|-----------|--------------------|--------------------------|-------|
+| PR #3148 arm `w128`  | qmyih0vv | 128.46 | rc=141.6 / sid=129.3 / re=114.4 | 50-epoch / 30-min cap, best epoch 14 |
+| PR #3149 arm `surfp1` | 7d1rlw4w | 132.33 | rc=136.9 / sid=139.1 / re=122.5 | 50-epoch / 30-min cap, best epoch 13 |
+
+Take **val_avg/mae_surf_p ≈ 130 ± 3** as the implicit round-1 baseline (mean
+of the two baseline-equivalent runs above, std-dev ≈ run-to-run noise).
+This anchor will be replaced with a single confirmed reference run as soon
+as a merged winner appears.
+
+**Note on test_avg.** `test_avg/mae_surf_p` is currently `None` for every
+run because `test_geom_camber_cruise` produces NaN due to Inf in the hidden
+test GT (see `research/EXPERIMENTS_LOG.md`). Rank by `val_avg/mae_surf_p`
+until that's resolved.
 
 W&B project: `wandb-applied-ai-team/senpai-v1` — research tag
 `willow-pai2i-24h-r1`.
