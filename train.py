@@ -47,6 +47,16 @@ from data import (
     pad_collate,
 )
 
+
+def signed_log1p(y: torch.Tensor) -> torch.Tensor:
+    """Smooth, invertible magnitude compression with slope=1 at zero."""
+    return torch.sign(y) * torch.log1p(torch.abs(y))
+
+
+def signed_expm1(z: torch.Tensor) -> torch.Tensor:
+    return torch.sign(z) * torch.expm1(torch.abs(z))
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -489,6 +499,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+slog1p_diag_printed = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -509,7 +520,34 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+
+        # H11: signed-log1p target transform applied on the loss side only.
+        # pred stays in linear (normalized) space for the metric/eval path;
+        # both pred and y_norm are passed through slog1p before MSE so per-sample
+        # gradients are magnitude-comparable across the Re range.
+        y_log = signed_log1p(y_norm)
+        pred_log = signed_log1p(pred)
+        sq_err = (pred_log - y_log) ** 2
+
+        if not slog1p_diag_printed:
+            with torch.no_grad():
+                m = mask.unsqueeze(-1)
+                y_raw_p = y[..., 2][mask]
+                y_norm_p = y_norm[..., 2][mask]
+                y_log_p = y_log[..., 2][mask]
+                print(
+                    f"slog1p diag (pressure ch, batch 0, valid nodes):\n"
+                    f"  y raw     : min={y_raw_p.min().item():.2f} "
+                    f"max={y_raw_p.max().item():.2f} "
+                    f"std={y_raw_p.std().item():.2f}\n"
+                    f"  y_norm    : min={y_norm_p.min().item():.4f} "
+                    f"max={y_norm_p.max().item():.4f} "
+                    f"std={y_norm_p.std().item():.4f}\n"
+                    f"  slog1p(y_norm): min={y_log_p.min().item():.4f} "
+                    f"max={y_log_p.max().item():.4f} "
+                    f"std={y_log_p.std().item():.4f}"
+                )
+            slog1p_diag_printed = True
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
