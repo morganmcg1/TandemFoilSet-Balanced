@@ -362,6 +362,7 @@ def write_experiment_summary(
         "huber_delta": cfg.huber_delta,
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
+        "lr_t_max": cfg.lr_t_max,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -406,6 +407,7 @@ class Config:
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
     n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
     fourier_base: float = 2.0
+    lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS if None
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -460,7 +462,8 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -529,6 +532,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
+    current_lr = scheduler.get_last_lr()[0]
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -562,6 +566,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "current_lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": grad_norm_mean,
