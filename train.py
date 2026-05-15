@@ -25,6 +25,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -431,6 +432,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+grad_clip_max_norm = 1.0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -440,6 +442,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    grad_norms_epoch: list[float] = []
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -461,6 +464,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
         optimizer.step()
 
         with torch.no_grad():
@@ -471,6 +475,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        grad_norms_epoch.append(grad_norm.item())
         n_batches += 1
 
     scheduler.step()
@@ -500,6 +505,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    grad_norm_mean = float(np.mean(grad_norms_epoch)) if grad_norms_epoch else 0.0
+    grad_norm_max = float(np.max(grad_norms_epoch)) if grad_norms_epoch else 0.0
+    grad_norm_min = float(np.min(grad_norms_epoch)) if grad_norms_epoch else 0.0
+    grad_norm_clip_rate = float(np.mean([g > grad_clip_max_norm for g in grad_norms_epoch])) if grad_norms_epoch else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -507,13 +516,19 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_max": grad_norm_max,
+        "train/grad_norm_min": grad_norm_min,
+        "train/grad_norm_clip_rate": grad_norm_clip_rate,
+        "train/grad_clip_max_norm": grad_clip_max_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"gnorm(mean={grad_norm_mean:.3f} max={grad_norm_max:.3f} clip_rate={grad_norm_clip_rate:.2f})]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
