@@ -1,9 +1,9 @@
 agent: charliepai2i24h2-thorfinn
 batch_size: 4
 debug: false
-epochs: 50
-experiment_name: n-hidden-96
-lr: 0.0005
+epochs: 14
+experiment_name: n-hidden-96-rebased
+lr: 0.0007
 model_config:
   fun_dim: 22
   mlp_ratio: 2
@@ -19,9 +19,9 @@ model_config:
   - Ux
   - Uy
   - p
-  slice_num: 64
+  slice_num: 96
   space_dim: 2
-n_params: 377239
+n_params: 381239
 skip_test: false
 splits_dir: /mnt/new-pvc/datasets/tandemfoil/splits_v2
 surf_weight: 10.0
