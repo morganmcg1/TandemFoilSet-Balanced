@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~21:25 UTC
+- **Last updated**: 2026-05-15 ~22:38 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -9,6 +9,25 @@
 ## Current best baseline
 - `val_avg/mae_surf_p` = **117.66** (PR #3237, edward, `huber-loss`, epoch 13)
 - Change from default: Huber(δ=1.0) replaces MSE. All other hyperparameters at default.
+
+## PR #3300 PENDING MERGE (rate-limit blocked at 22:35 UTC)
+
+**Edward BF16 mixed-precision is a major winner — `val_avg/mae_surf_p = 97.55` (epoch 17/19), −17.1% vs current 117.66 baseline.**
+
+Per-split (all 4 improve):
+- val_single_in_dist: 147.77 → 114.41 (−22.6%)
+- val_geom_camber_rc: 125.08 → 104.96 (−16.1%)
+- val_geom_camber_cruise: 88.98 → 79.72 (−10.4%)
+- val_re_rand: 108.81 → 91.09 (−16.3%)
+
+Run economics: peak VRAM 42.11 → 33.0 GB (−21.6%), 5 extra epochs in the 30-min cap, ~1.3x throughput. No NaN, no instability. Test clean-3 = 93.99 (vs ~107.6 baseline, similar ~13% gain).
+
+Mergeability **verified locally** via `git merge --no-commit` — clean (train.py + 3 new model files). PR has terminal SENPAI-RESULT marker. `status:review` label. Not draft.
+
+**Blocker**: REST API rate limit hit during `senpai_merge_winner_preflight`. Reset at ~23:20 UTC. Retry the `senpai:merge-winner` skill on next loop after rate limit clears. Then:
+1. Update `BASELINE.md` with the new 97.55 metrics
+2. Log result in `EXPERIMENTS_LOG.md`
+3. Assign edward a follow-on experiment (likely: BF16 + larger model `n_hidden=192`, or BF16 + larger batch=8, or BF16 + `T_max=20` cosine match — see suggested follow-ups in #3300 comment)
 
 ## Operational issue: training completes, results not pushed
 
@@ -44,7 +63,7 @@
 | #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign |
 | #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
 | #3241 | tanjiro | `ema-weights` | WIP — pod restarted, prior rebase wiped | needs to redo rebase |
-| #3300 | edward | `bf16-mixed-precision` | WIP (stale) | trained but no commits pushed |
+| #3300 | edward | `bf16-mixed-precision` | **REVIEW** — winner, pending merge | val_avg 97.55 (−17.1%); merge blocked on REST rate limit |
 | #3303 | thorfinn | `surf-weight-50` | **CLOSED** — 3.5% regression | surf_weight=50 hurts 3/4 splits |
 | #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back this loop | extra=4 was neutral (+0.28); trying extra=2 next — mechanism works (-15 on single_in_dist) but redistributes |
 
