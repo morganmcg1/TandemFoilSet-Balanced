@@ -438,7 +438,8 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay,
+                              betas=(0.9, 0.95))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 run = wandb.init(
@@ -506,9 +507,10 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(), "train/grad_norm": grad_norm.item(), "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
