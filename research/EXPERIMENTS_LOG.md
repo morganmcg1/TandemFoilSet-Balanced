@@ -5,6 +5,62 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). Test-side ranking is currently
 contaminated by an Inf in the cruise test ground truth (see notes).
 
+## 2026-05-15 19:30 — PR #3331: Separate per-channel output heads — **CLOSED ✗**
+
+- Student branch: `willowpai2i24h1-nezuko/separate-output-heads`
+- Student: `willowpai2i24h1-nezuko`
+- Hypothesis: splitting the shared output projection (Linear 128→3) into per-channel
+  heads (separate Linear 128→1 per field) breaks a capacity bottleneck and lets
+  the model specialize the p channel (sharp at stagnation/suction peaks) vs the
+  smoother Ux/Uy.
+
+| Arm | wandb run | n_params | val_avg/mae_surf_p | best_epoch | Notes |
+|-----|-----------|----------|---------------------|-----------|-------|
+| **shared_ref** | wor5ca6f | 0.66M | **124.99** | 12 | within-PR control |
+| split_lite | 4nrycx6j | 0.66M | 141.32 | 11 | +13.1%, worse |
+| split_full | lh0ezot2 | 0.70M | 132.81 | 12 | +6.3%, worse |
+
+Per-split val at best epoch (shared_ref): single_in_dist=155.63, geom_camber_rc=126.91,
+geom_camber_cruise=102.98, re_rand=114.43.
+
+Test 3-split (shared_ref): single_in_dist=134.99, geom_camber_rc=119.18, re_rand=115.06.
+
+**Conclusion:** Hypothesis decisively rejected. Both split arms degrade every channel — p, Ux, and Uy all worsen in 7-8/8 split cells vs the shared baseline. This is the opposite of the bottleneck prediction (which would have p improving while Ux/Uy held flat). The shared output trunk encodes cross-channel features useful to all three fields — consistent with the incompressible NS coupling of mass/momentum. Forcing channel independence at the final layer destroys that shared representation.
+
+split_full > split_lite (more capacity), but both lose to shared — rules out the explanation that the split arms just needed more capacity.
+
+Branch was started on pre-warmup, pre-Charbonnier base; shared_ref at 124.99 is on par with that pre-merge baseline (~130 ± 3).
+
+**Decision:** close. Worth revisiting later with **residual heads** (`shared_proj(z) + α·per_channel_correction(z)`) which preserves cross-channel inductive bias while allowing specialization. Not the same hypothesis as this PR.
+
+---
+
+## 2026-05-15 19:26 — PR #3330: bf16 AMP mixed precision — **SENT BACK (rebase needed)**
+
+- Student branch: `willowpai2i24h1-frieren/bf16-amp`
+- Student: `willowpai2i24h1-frieren`
+- Hypothesis: wrapping the forward pass + loss in `torch.amp.autocast(dtype=bfloat16)` shortens
+  per-epoch wall time, allowing more epochs in the 30-min budget (more cosine decay).
+
+| Arm | wandb run | dtype | batch | val_avg/mae_surf_p | best_epoch | epochs | time (min) | s/epoch | Notes |
+|-----|-----------|-------|-------|---------------------|-----------|--------|------------|---------|-------|
+| **bf16_bs4** | 8hvrijbf | bf16 | 4 | **118.29** | 17 | 19 | 31.2 | 98.8 | 7125 steps |
+| fp32_ref | 35q5cfxz | fp32 | 4 | 135.94 | 14 | 14 | 30.8 | 132.1 | 5250 steps |
+| bf16_bs8 | 78as5pei | bf16 | 8 | 129.97 | 15 | 18 | 31.3 | 104.9 | 3384 steps |
+
+**Conclusion:** AMP is a real lever. bf16_bs4 at 118.29 beats fp32_ref at 135.94 by 17.65 (−13%).
+The speedup is 132s → 99s per epoch (1.34×), giving 19 epochs vs 14 in the same 30-min cap. Best epoch shifts 14→17, confirming the gain is partly "more epochs + deeper cosine decay" and partly improved training dynamics.
+
+bf16_bs8 at 129.97 is essentially baseline — doubling batch at fixed LR halves optimizer steps (3384 vs 7125 total), and the VRAM/throughput gain is modest (105s/epoch vs 99s). LR scaling would be needed to benefit from bs=8.
+
+Implementation is clean: `torch.amp.autocast(dtype=bfloat16)` wraps forward+loss, backward stays fp32, pred cast to float32 before metric accumulator, no GradScaler needed.
+
+**Note on stale baseline.** fp32_ref at 135.94 is slightly above the pre-warmup implicit baseline of 130 ± 3 — consistent with single-seed noise. The warmup (#3150) + Charbonnier (#3143) merges happened AFTER frieren branched, so these results are against the old base. bf16_bs4 at 118.29 does not beat the new merged baseline of 98.60.
+
+**Decision:** sent back to rebase + re-run. The lever is proven. Asked frieren to rebase on current advisor head and re-run 2 arms (fp32_ref_v2 + bf16_bs4_v2). With ~13% AMP gain composing onto 98.60, we expect the merge-eligible arm to land in the ~85-95 range.
+
+---
+
 ## 2026-05-15 18:25 — PR #3143: Charbonnier robust loss vs MSE — **MERGED ⭐⭐ MAJOR WIN**
 
 - Student branch: `willowpai2i24h1-edward/charbonnier-robust-loss`
