@@ -185,11 +185,19 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        if isinstance(slice_num, (list, tuple)):
+            assert len(slice_num) == n_layers, (
+                f"slice_num list must have {n_layers} entries, got {len(slice_num)}"
+            )
+            slice_nums = list(slice_num)
+        else:
+            slice_nums = [slice_num] * n_layers
+        self.slice_nums = slice_nums
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_nums[i], last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
@@ -236,8 +244,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Defeat NaN-propagation: drop any sample with non-finite y from the
+            # batch mask, then zero-out NaNs in y for safe arithmetic. The
+            # per-sample skip in accumulate_batch alone is defeated by NaN*0=NaN.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask = mask & y_finite_per_sample.view(-1, 1)
+            y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -254,7 +269,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -345,6 +360,13 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+# Per-layer slice_num schedules for multi-scale slice attention.
+SLICE_PATTERNS = {
+    "uniform": [64, 64, 64, 64, 64],
+    "hourglass": [32, 64, 128, 64, 32],
+    "ascending": [32, 48, 64, 96, 128],
+}
+
 
 @dataclass
 class Config:
@@ -358,6 +380,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    slice_pattern: str = "hourglass"  # one of SLICE_PATTERNS
 
 
 cfg = sp.parse(Config)
@@ -386,6 +409,13 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+if cfg.slice_pattern not in SLICE_PATTERNS:
+    raise ValueError(
+        f"slice_pattern must be one of {sorted(SLICE_PATTERNS)}, got {cfg.slice_pattern!r}"
+    )
+slice_nums = SLICE_PATTERNS[cfg.slice_pattern]
+print(f"slice_pattern={cfg.slice_pattern} slice_nums={slice_nums}")
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -393,7 +423,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=slice_nums,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
