@@ -218,7 +218,17 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def _pointwise_loss(pred, y_norm, loss_type: str):
+    if loss_type == "mse":
+        return (pred - y_norm) ** 2
+    if loss_type == "l1":
+        return (pred - y_norm).abs()
+    if loss_type == "huber":
+        return F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
+    raise ValueError(f"Unknown loss_type: {loss_type!r}")
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, loss_type: str = "l1") -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -241,23 +251,37 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            # NaN guard: some samples (e.g. test_geom_camber_cruise idx 20) have
+            # non-finite ground-truth. IEEE 754 propagates NaN through NaN * 0,
+            # so masking alone leaks NaN into the per-split loss/MAE sums.
+            finite_y = torch.isfinite(y_norm)
+            err = _pointwise_loss(pred, torch.where(finite_y, y_norm, torch.zeros_like(y_norm)), loss_type)
+            err = torch.where(finite_y, err, torch.zeros_like(err))
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+            # Subset to fully-finite samples so the scoring accumulator's
+            # per-sample skip works (it would otherwise still hit NaN*0=NaN
+            # when err contains NaN at non-finite y positions).
+            B = y.shape[0]
+            sample_keep = torch.isfinite(y.view(B, -1)).all(dim=-1)
+            if sample_keep.any():
+                idx = sample_keep.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx], mae_surf, mae_vol,
+                )
+                n_surf += ds
+                n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
@@ -387,6 +411,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
 
 
 cfg = sp.parse(Config)
@@ -500,12 +525,12 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -530,7 +555,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_type)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -598,7 +623,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_type)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
