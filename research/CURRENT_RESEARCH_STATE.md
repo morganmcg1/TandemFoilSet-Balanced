@@ -1,10 +1,10 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 22:40 (round-4 reviews complete; 3 closures, 1 held winner; GH rate-limit storm — waiting for 23:19Z reset)
-- **Most recent research direction from human researcher team:** none (no open issues — last verified 21:30Z).
-- **Current best (merged):** `val_avg/mae_surf_p` = **97.757** (PR #3399 slice_num=96 on warmup+cosine baseline)
-- **Pending merge:** PR #3377 (n_hidden=96) — val 96.667 (−1.12%), test 85.454; HELD pending student push of rebased commits
-- **Operational state:** GH rate-limit hit at 22:34Z, resets at 23:19Z. 5 student pods still in-flight on assigned axes; 3 students newly idle (alphonse, edward, frieren). Assignments deferred to wakeup at 23:25Z.
+- **Last updated:** 2026-05-15 23:38 (rate-limit reset cleared; relabelled 4 PRs; closed 3 stuck-on-stale-base PRs; assigned 3 fresh ones)
+- **Most recent research direction from human researcher team:** none (no open issues — last verified 23:38Z).
+- **Current best (merged):** `val_avg/mae_surf_p` = **96.667** (PR #3377 n_hidden=96 on slice_num=96 + warmup+cosine baseline)
+- **Round-5 in flight (8 students, all on new HEAD):** width-64 (alphonse #3502), mlp_ratio=4 (edward #3503), per-channel pressure loss (frieren #3505), n_layers=6 (thorfinn #3506), weight_decay=3e-4 retest (fern #3314 — branch still stale), RFF rebased (nezuko #3534), n_head=8 rebased (askeladd #3535), eta_min=1e-5 rebased (tanjiro #3536).
+- **Operational state:** GH rate-limit cleared at 23:19Z. 4 fresh PRs created by morganmcg1 had unrouted student labels (`student:<name>` not `student:charliepai2i24h2-<name>`); fixed by label-swap. 3 stale_wip PRs (#3344/#3362/#3397) had stuck pods with dirty train.py blocking checkout; closed + reassigned on fresh branches from current HEAD (PR #3534/#3535/#3536).
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
@@ -13,9 +13,10 @@
 1. **PR #3208** (Huber loss) — `val_avg/mae_surf_p` 116.61
 2. **PR #3276** (grad-clip + AdamW selective decay + NaN guard) — 109.68
 3. **PR #3294** (warmup+cosine 14ep, lr=7e-4) — 100.811
-4. **PR #3399** (slice_num=96) — **97.757** (current baseline)
+4. **PR #3399** (slice_num=96) — 97.757
+5. **PR #3377** (n_hidden=128→96) — **96.667** (current baseline)
 
-Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (wd=1e-4) + NaN guard + SequentialLR (LinearLR 2ep warmup + CosineAnnealingLR T_max=12) + lr=7e-4 + epochs=14 + **slice_num=96**.
+Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (wd=1e-4) + NaN guard + SequentialLR (LinearLR 2ep warmup + CosineAnnealingLR T_max=12, eta_min=0) + lr=7e-4 + epochs=14 + slice_num=96 + **n_hidden=96** + n_head=4 + mlp_ratio=2 + n_layers=5.
 
 ## Round-4 review verdicts (this triage cycle)
 
@@ -26,21 +27,18 @@ Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective deca
 | #3304 | frieren | surf_weight=20 (rebased) | 101.782 (+4.12%) | CLOSED — lever absorbed by new baseline |
 | #3377 | thorfinn | n_hidden=96 (rebased) | **96.667 (−1.12%)** | **HELD — winner; awaiting student push of rebased commits** |
 
-## Active PRs (in flight)
+## Round-5 active PRs (8 in flight on new HEAD)
 
-| PR | Student | Hypothesis | Status | Notes |
-|----|---------|-----------|--------|-------|
-| #3314 | fern | weight_decay=3e-4 (RETEST) | WIP (stale base) | Pod running; verify config from committed metrics.yaml |
-| #3344 | nezuko | RFF 32-freq (RETEST) | WIP (stale base) | Pod running |
-| #3362 | askeladd | n_head 4→8 | WIP | Pod running |
-| #3397 | tanjiro | eta_min=1e-5 in cosine | WIP (correct base) | Direct successor to #3453 — picks up where T_max=10 failed |
-| #3377 | thorfinn | n_hidden=96 (rebased push) | WIP — held for branch update | Must push rebased commits, then re-mark ready |
-
-## Idle students awaiting new assignments (post-rate-limit reset)
-- **alphonse** — width-192 dead-end closed. Suggested next direction: depth or attention-pattern axis (NOT width — that ladder is now monotonic ↓).
-- **edward** — T_max=10 dead-end closed. Suggested next direction: opposite end — raise eta_min, or try ReLR after cosine bottoms out. May overlap with tanjiro #3397 — pick a non-overlapping axis.
-- **frieren** — surf_weight=20 closed. Suggested next direction: try the OPPOSITE direction (downweight surface to free velocity), or a different loss reformulation (e.g. log-magnitude, gradient-of-pressure penalty, frequency-domain loss).
-- **thorfinn** — held on #3377 (not idle; will re-run after pushing).
+| PR | Student | Hypothesis | Branch base | Notes |
+|----|---------|-----------|-------------|-------|
+| #3502 | alphonse | n_hidden 96→64 (width ladder) | new HEAD | Predicted next width-ladder step; if monotone holds, width still descending |
+| #3503 | edward | mlp_ratio 2→4 (FFN expansion) | new HEAD | Orthogonal capacity axis on smaller width |
+| #3505 | frieren | per-channel pressure loss [1,1,2] | new HEAD | Direct test of pressure under-fit on single_in_dist |
+| #3506 | thorfinn | n_layers 5→6 (depth) | new HEAD | First clean depth test on optimised stack |
+| #3314 | fern | weight_decay=3e-4 (RETEST) | **stale base — branch not rebased** | Watch metrics.yaml when committed; if stale, plan reassignment |
+| #3534 | nezuko | RFF 32-freq (REASSIGNED from #3344) | new HEAD | Fresh branch after pod crash-loop |
+| #3535 | askeladd | n_head 4→8 (REASSIGNED from #3362) | new HEAD | Fresh branch after pod crash-loop |
+| #3536 | tanjiro | eta_min=1e-5 (REASSIGNED from #3397) | new HEAD | Direct successor to closed #3453 T_max=10 |
 
 ## Confirmed design insights
 
@@ -106,4 +104,7 @@ Best is 96.667 (pending merge from #3377). Total improvement: −16.4% from orig
 - #3453 edward T_max=10: +3.55% (annealing too aggressive)
 - #3301 alphonse width-192 (rebased): +8.53% (over-budget; ladder monotonic ↓)
 - #3304 frieren surf_weight=20 (rebased): +4.12% (lever absorbed)
+- #3344 nezuko RFF (stuck on stale base — pod crash-loop) → reassigned as #3534
+- #3362 askeladd n_head=8 (stuck on stale base — pod crash-loop) → reassigned as #3535
+- #3397 tanjiro eta_min=1e-5 (pod crash-loop on dirty train.py) → reassigned as #3536
 - #3205, #3179, #3183, #3214, #3216, #3220 — round-1 dead ends
