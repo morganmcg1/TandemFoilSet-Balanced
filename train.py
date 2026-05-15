@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -377,7 +378,27 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    # Re-stratify the balanced sampler: upweight high-Re samples (Re>1e6) by 2x.
+    # x dim 13 is the RAW log(Re) in the .pt files — normalization is applied at
+    # use time inside the train/eval loops, not in the stored tensors. All mesh
+    # nodes share the same value, so read node 0.
+    log_re_threshold = math.log(1e6)
+    re_multiplier = torch.ones(len(train_ds), dtype=torch.float64)
+    re_count_high = 0
+    re_loop_t0 = time.time()
+    for i in range(len(train_ds)):
+        x_i, _, _ = train_ds[i]
+        log_re = float(x_i[0, 13].item())
+        if log_re > log_re_threshold:
+            re_multiplier[i] = 2.0
+            re_count_high += 1
+    print(
+        f"Re-stratified sampler: {re_count_high}/{len(train_ds)} samples have Re>1e6 (x2 weight) "
+        f"[loop took {time.time() - re_loop_t0:.1f}s]"
+    )
+
+    adjusted_weights = sample_weights.to(torch.float64) * re_multiplier
+    sampler = WeightedRandomSampler(adjusted_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
