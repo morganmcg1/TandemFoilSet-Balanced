@@ -236,8 +236,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Skip samples whose ground-truth y has any non-finite values.
+            # Without this guard, NaN * 0 = NaN in masked sums silently
+            # propagates and produces NaN split metrics. See PR #3266 / advisor
+            # note on PR #3270.
+            y_finite_per_sample = torch.isfinite(
+                y.reshape(y.shape[0], -1)
+            ).all(dim=-1)  # [B]
+            mask = mask & y_finite_per_sample.view(-1, 1)
+            y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -254,7 +264,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
