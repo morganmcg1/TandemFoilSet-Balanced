@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-15
+- **As of:** 2026-05-15 15:50
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 3 of the appendix-willow PAI2I sub-track)
 - **Most recent human research direction:** None received this launch.
@@ -16,7 +16,8 @@ SPDX-PackageName: senpai
 Round 3 fresh-slate exploration on TandemFoilSet (Transolver surrogate for tandem-airfoil
 CFD). Goal: minimize `val_avg/mae_surf_p` — equal-weight surface-pressure MAE across the
 four validation tracks (in_dist, geom_camber_rc, geom_camber_cruise, re_rand). The
-test-time decision metric is `test_avg/mae_surf_p`.
+test-time decision metric is `test_avg/mae_surf_p` (nansafe variant, per the
+`data/scoring.py` bug below).
 
 Baseline configuration for this branch (no prior merged PRs):
 
@@ -27,95 +28,138 @@ Baseline configuration for this branch (no prior merged PRs):
 - `batch_size=4`, `epochs=50` (subject to `SENPAI_TIMEOUT_MINUTES`)
 
 **Hard budget constraint:** `SENPAI_TIMEOUT_MINUTES=30` per run. With baseline L=5 ~160–210
-s/epoch, only ~9–14 epochs of the 50-epoch cosine schedule complete before timeout —
+s/epoch, only ~11–14 epochs of the 50-epoch cosine schedule complete before timeout —
 the LR barely anneals from its peak. This shapes every round-3 result.
 
-## Round 3 dispatch + status
+**Fresh-slate baseline anchor:** edward's `7fa1s7vm` run (clean default config) hit
+`val_avg/mae_surf_p = 129.99` at epoch 14/50. This is the reference for round-3 deltas.
 
-| PR | Student | Hypothesis | Status | val_avg/mae_surf_p | test_avg/mae_surf_p (nansafe) |
-|----|---------|------------|--------|--------------------|------------------------------|
-| #3243 | alphonse | deeper-transolver (n_layers 5→8) | **review (hold)** | **147.85** (E9/9, timeout) | 138.60 |
-| #3244 | askeladd | warmup-cosine-grad-clip | WIP | — | — |
-| #3245 | edward | surf-p-weighted-loss ([1,1,3]) | WIP | — | — |
-| #3247 | fern | larger-slice-num (64→128) | WIP | — | — |
-| #3248 | frieren | huber-robust-loss (δ=2.0) | WIP | — | — |
-| #3249 | nezuko | ema-model-averaging (decay=0.999) | WIP | — | — |
-| #3250 | tanjiro | re-conditioned-loss-weighting | WIP | — | — |
-| #3251 | thorfinn | naca-camber-fourier-features | WIP | — | — |
-| #3282 | alphonse | bf16-mixed-precision (L=5 default + bf16) | WIP | — | — |
+## Round 3 cohort — interim standings (15:50)
 
-Full hypothesis specifications in `RESEARCH_IDEAS_2026-05-15_initial.md`.
+W&B-sourced ranking of finished runs (in-tree test_avg = NaN for all; per-split test
+available for 3 of 4 splits). All values are `val_avg/mae_surf_p` (lower better):
+
+| Rank | Agent | PR | Hypothesis | Best val | Status |
+|---|---|---|---|---:|---|
+| 1 | askeladd | #3244 | warmup-cosine-grad-clip | **109.99** | WIP (4th arm running) |
+| 2 | frieren | #3248 | huber-robust-loss (δ=2.0) | 124.66 | WIP (3rd arm running) |
+| 3 | tanjiro | #3250 | re-conditioned-loss-weighting | 125.07 | WIP (3rd arm running) |
+| — | edward | (closed #3245) | baseline anchor | **129.99** | reference only |
+| 4 | nezuko | #3249 | ema-model-averaging (decay=0.999) | 130.17 | WIP (3rd arm running) |
+| 5 | thorfinn | #3251 | naca-camber-fourier-features | 138.36 | WIP (3rd arm running) |
+| closed | fern | (closed #3247) | larger-slice-num (S=128) | 133.73 | test NaN, model inf |
+| closed | edward | (closed #3245) | surf-p-weighted [1,1,3] | 135.66 | +4.4% vs baseline |
+| closed | alphonse | (closed #3243) | deeper-transolver (L=8) | 147.85 | undertrained |
+
+**New WIP assignments (15:50):**
+- fern → #3312 `lion-optimizer` (Lion at lr=1.5e-4 wd=3e-4)
+- edward → #3313 `grad-accum-eff-batch-16` (accum_steps=4, eff batch 16)
+
+**Holding:** alphonse on #3282 `bf16-mixed-precision` (debug nudge sent — `1t41l8sx`
+crashed at 0.1 min; awaiting next run).
+
+### Cohort signal (preliminary)
+
+Training-stability changes dominate so far. askeladd's warmup-cosine-grad-clip leads by
+~14 over the next tier (huber loss, re-conditioned loss weighting), and all three of those
+beat the fresh-slate baseline (129.99). The lower tiers tried EMA, NACA-Fourier features,
+larger slice_num, and L=8 — all of which were neutral-to-worse.
+
+**Hypothesis-of-the-hypothesis:** the round-3 winners are eating the same lever (training
+stability at the start of the cosine ramp). Adding warmup gives the optimizer 1–2 free
+epochs at sane gradient scale; grad-clip prevents the rare spike from poisoning the rest
+of training. Huber and re-cond loss weighting are doing a softer version of the same
+thing by capping per-sample gradient magnitude.
 
 ### Decision principle for round 3
 
-No PR is merged until the cohort is in. We then rank all completed PRs by
-`val_avg/mae_surf_p` and merge the strongest. Holding PR #3243 in review for this
-reason — it is the only result so far and was severely time-limited (9 of 50 epochs,
-cosine T_max=50 means LR effectively constant). The 7 L=5 in-flight PRs will likely
-fit ~14 epochs each in the same 30-min budget; head-to-head will be informative.
+No PR is merged until the cohort is fully terminal (5 WIP students need to post terminal
+`SENPAI-RESULT` comments with final arm complete). Once cohort is in, rank by
+`val_avg/mae_surf_p` and **merge the strongest first** (likely askeladd's PR #3244),
+then assess what stacks orthogonally for round 4.
 
-## Known infra bug — data/scoring.py NaN propagation
+## Known infra bugs
 
-PR #3243 (alphonse) discovered and characterized a NaN-propagation bug in `data/scoring.py`
-(read-only file):
+### 1. `data/scoring.py` NaN propagation (read-only file, project-wide)
 
 - `test_geom_camber_cruise/000020.pt` has 761 `-inf` entries in `y[:, 2]` (interior
-  pressure nodes; **no** surface node is affected).
-- `accumulate_batch` masks the sample but computes `err = (pred - y).abs()` first, so
-  `err` is `NaN` at those nodes; `NaN * 0 = NaN` in IEEE-754, and the NaN propagates
-  into the per-channel accumulator, poisoning the entire split's surface metric.
-- Net effect: in-tree `test_avg/mae_surf_p` is reported as `None`/`NaN` for every
-  submission on this branch.
-- **Workaround adopted:** every student will additionally log a NaN-safe variant:
-  `test/<split>/mae_surf_p_nansafe` (filtered finite-only) and `test_avg_nansafe/mae_surf_p`.
-  The W&B run summary should also carry `data_bug/cruise_idx20_p_neginf_*` diagnostics.
-- The nansafe variant is the paper-facing comparison number for this round until/unless
-  `data/scoring.py` itself is patched by the human team.
+  pressure nodes; **no** surface node affected).
+- `accumulate_batch` masks the sample but computes `err = (pred - y).abs()` first;
+  `NaN * 0 = NaN` in IEEE-754, NaN propagates into the per-channel accumulator,
+  poisoning the entire split's surface metric.
+- Net effect: in-tree `test_avg/mae_surf_p` is `None`/`NaN` for every submission on
+  this branch.
+- **Workaround:** every PR must log `test/<split>/mae_surf_p_nansafe` (filtered
+  finite-only) and `test_avg_nansafe/mae_surf_p`. Nansafe is the paper-facing number.
+- Identified by alphonse on PR #3243.
 
-## Operational observations from round 3 so far
+### 2. PhysicsAttention numerical instability at `slice_num=128` (new — fern)
 
-1. **Time budget is binding.** PR #3243 ran out of clock at 30.89 min/E9. Every student
-   in this round is likely to be cut by the same cap. Future hypotheses should consider
-   throughput (bf16, torch.compile, mixed precision) as first-class levers.
-2. **Cosine T_max=epochs is too long for the actual run.** With epochs=50 in the config
-   but only ~9–14 actually completing, the LR schedule's annealing tail is never
-   exercised. A future bug-fix or assignment should set `T_max` to an estimate of
-   completed-epoch count, so the cosine actually anneals.
-3. **No GPU/system metrics in the W&B summary.** Peak VRAM was not logged automatically;
-   future assignments should request it explicitly in the results table.
+- At `slice_num=128`, the model produces `±inf` pressure predictions on at least one
+  `test_geom_camber_cruise` sample (reproducible across runs `pf6dwz1f`, `kcpsgrot`).
+- Cruise val is fine (104.24), but cruise test → `vol_loss=inf` and `mae_surf_p=NaN`.
+- Likely causes (from fern's analysis): (a) softmax temperature decaying near zero in
+  PhysicsAttention, (b) `slice_token / (slice_norm + 1e-5)` underflow with small slice
+  norms at S=128, (c) attention softmax accumulator overflow.
+- **Not currently being fixed** — future `slice_num` arms must pair with a stability
+  guard (fp32-stable softmax in slice projection, output logit clamp, or norm floor).
+- Identified by fern on PR #3247.
+
+## Operational observations from round 3
+
+1. **Time budget is binding.** Every L=5 run hits 11–14 epochs in 30 min; cosine `T_max=50`
+   means the LR schedule never anneals. Throughput levers (bf16, torch.compile) are
+   first-class research targets.
+2. **Cosine T_max should match completed-epoch count, not the nominal 50.** Future
+   variants should set `T_max=epochs_estimate` so the schedule actually exercises its
+   annealing tail.
+3. **Multi-arm per PR is the norm.** Students naturally launched 2–4 W&B runs per
+   hypothesis to sweep within the assigned lever. Working as intended; the cohort decision
+   waits on terminal `SENPAI-RESULT` per PR.
+4. **In-tree test_avg is unusable** until/unless `data/scoring.py` is patched. Nansafe is
+   the comparison number; per-split test is more informative than the broken aggregate.
 
 ## Next research directions (after round 3 cohort completes)
 
 Conditional on results coming in, plausible follow-ups (ordered by expected impact):
 
-1. **Throughput levers.** bf16 (alphonse's PR #3282 just dispatched), `torch.compile`,
-   eventual fp16 + GradScaler if bf16 wins. Doubling throughput directly addresses the
-   binding constraint that distorted PR #3243.
-2. **T_max correction.** Set cosine `T_max` to estimated completed epochs so the LR
-   actually anneals. Could be folded into the eventual winner's confirmation arm.
-3. **Stack winners.** Combine top-2 or top-3 round-3 winners (likely from different
-   tiers — e.g., loss alignment + EMA + bf16) into a confirmation run.
-4. **Larger attention bottleneck.** If `larger-slice-num` wins, try `slice_num=192` and
-   investigate per-domain slice token specialization.
-5. **Targeted geometry conditioning.** If `naca-camber-fourier-features` shows OOD gains,
-   extend to gap/stagger/AoA features and consider per-foil geometry conditioning tokens.
-6. **Physics-residual losses.** If geometry generalization remains weak, add a soft
-   divergence-free penalty on predicted velocity and an inviscid-Bernoulli surface
-   pressure consistency term.
-7. **Surface-aware architecture.** Surface-only token attention or a dedicated
-   surface-decoder head that takes `is_surface` mask as a conditioning input.
-8. **Per-channel normalization beyond global stats.** Per-domain or per-Re-bucket
-   normalization to align value magnitudes across the dataset.
-9. **Optimizers beyond AdamW.** Lion, SOAP, Muon — better effective lr-scaling under
-   heterogeneous gradient regimes.
-10. **Re-evaluate L=8.** Once bf16 unlocks ~2x epochs, re-test depth hypothesis with
-    the proper number of epochs and a sensible T_max.
+1. **Merge askeladd's warmup-cosine-grad-clip** as new baseline (assuming it terminates
+   above frontier 109.99). Then revisit which losers regress less against the new base.
+2. **Throughput levers.** bf16 (alphonse PR #3282, debugging), torch.compile, eventual
+   gradient checkpointing for larger effective batch. Doubling throughput unlocks the
+   undertrained hypotheses (L=8, larger slice_num with stability guard, longer-cosine).
+3. **T_max correction.** Set cosine `T_max` to estimated completed epochs so LR actually
+   anneals. Could be folded into the winner's confirmation arm.
+4. **Stack winners.** Once askeladd lands, try Lion + warmup (fern's lion-optimizer
+   stacks naturally with warmup), or grad-accum + warmup (edward + askeladd).
+5. **PhysicsAttention stability fix.** fp32-stable softmax in slice projection — unlocks
+   `slice_num=128/192/256` work blocked by the model-side inf bug.
+6. **Larger attention bottleneck (post-fix).** If slice_num scales smoothly after the
+   stability fix, try `slice_num=192/256` at `batch_size=2`.
+7. **Targeted geometry conditioning.** If `naca-camber-fourier-features` terminal results
+   show OOD gains on geom_camber splits, extend to gap/stagger/AoA features.
+8. **Physics-residual losses.** Soft divergence-free penalty on predicted velocity and
+   inviscid-Bernoulli surface-pressure consistency — particularly for OOD camber splits.
+9. **Surface-aware decoder.** Dedicated surface-decoder head that takes `is_surface` mask
+   as conditioning. Targets the primary metric directly.
+10. **Per-domain or per-Re-bucket normalization.** Align value magnitudes across the
+    heterogeneous dataset (raceCar ground-effect vs cruise freestream; Re spanning 110K–5M).
 
 ## Operational notes
 
 - All assignments use `--wandb_group` matching the hypothesis slug so iterations cluster
   in W&B.
-- Going forward, every PR body asks students to log NaN-safe test metrics in addition to
-  the in-tree scorer's output. The nansafe number is the paper-facing comparison.
+- Every PR body asks students to log NaN-safe test metrics in addition to the in-tree
+  scorer's output. Nansafe is the paper-facing comparison.
 - Hard limits: `SENPAI_TIMEOUT_MINUTES` and `SENPAI_MAX_EPOCHS` govern each training run.
   Do not override.
+- Active PRs (status:wip):
+  - #3244 askeladd warmup-cosine-grad-clip
+  - #3248 frieren huber-robust-loss
+  - #3249 nezuko ema-model-averaging
+  - #3250 tanjiro re-conditioned-loss-weighting
+  - #3251 thorfinn naca-camber-fourier-features
+  - #3282 alphonse bf16-mixed-precision (debug)
+  - #3312 fern lion-optimizer (new)
+  - #3313 edward grad-accum-eff-batch-16 (new)
+- All 8 student GPUs allocated; zero idle.
