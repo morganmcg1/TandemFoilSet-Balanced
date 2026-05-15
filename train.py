@@ -25,6 +25,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import schedulefree
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -279,67 +280,6 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Cautious AdamW (Liang et al., ICLR 2026)
-# ---------------------------------------------------------------------------
-
-class CautiousAdamW(torch.optim.AdamW):
-    """AdamW with cautious update masking (Liang et al., ICLR 2026).
-
-    Gates each parameter's update to zero wherever the EMA-momentum vector and
-    the current gradient disagree in sign, then rescales the masked update so
-    the average step size is preserved. ``last_mask_mean`` exposes the raw
-    pre-rescale agreement fraction for per-epoch logging.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.last_mask_mean: float = float("nan")
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        prev_params: list[tuple[torch.Tensor, torch.Tensor]] = []
-        grads: list[torch.Tensor] = []
-        for group in self.param_groups:
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                prev_params.append((p, p.data.clone()))
-                grads.append(p.grad.clone())
-
-        loss = super().step(closure)
-
-        total_agree = 0.0
-        total_count = 0
-        idx = 0
-        for group in self.param_groups:
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                _, original_data = prev_params[idx]
-                g = grads[idx]
-                idx += 1
-
-                state = self.state[p]
-                m = state.get("exp_avg")
-                if m is None:
-                    continue
-
-                mask = (m * g > 0).to(dtype=p.dtype)
-                total_agree += mask.sum().item()
-                total_count += mask.numel()
-                mask_mean = mask.mean().clamp(min=1e-3)
-                mask = mask / mask_mean
-
-                delta = p.data - original_data
-                p.data.copy_(original_data + delta * mask)
-
-        if total_count > 0:
-            self.last_mask_mean = total_agree / total_count
-
-        return loss
-
-
-# ---------------------------------------------------------------------------
 # Per-sample scale (for scale-invariant loss)
 # ---------------------------------------------------------------------------
 
@@ -507,9 +447,7 @@ def write_experiment_summary(
         "surf_p_l1_weight": cfg.surf_p_l1_weight,
         "epochs_configured": cfg.epochs,
         "ema_decay": EMA_DECAY,
-        "t_max": cfg.t_max if cfg.t_max is not None else cfg.epochs,
-        "eta_min_factor": cfg.eta_min_factor,
-        "eta_min": cfg.lr * cfg.eta_min_factor,
+        "sf_warmup_steps": cfg.sf_warmup_steps,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -558,13 +496,6 @@ class Config:
     # training objective with the L1 (MAE) eval metric. 0 disables the term.
     surf_p_l1_weight: float = 0.0
     epochs: int = 50
-    # CosineAnnealingLR T_max. Defaults to MAX_EPOCHS (matches pre-flag behaviour).
-    # Set to the wall-clock-bounded epoch count so the schedule actually reaches its
-    # low-LR tail within the run (default 50 truncated at ~19 epochs is essentially
-    # a constant LR — see PR #3465).
-    t_max: int | None = None
-    # eta_min = lr * eta_min_factor. 0.0 reproduces pre-flag default behaviour.
-    eta_min_factor: float = 0.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -575,9 +506,15 @@ class Config:
     # channel of y before normalization and added back to the denormalized
     # prediction so MAE is reported on raw p.
     bernoulli_residual: bool = False
-    # Arm B: add a per-node chord-position correction 0.5·(1-cos(2π·x)) to p_B.
-    # Only takes effect when bernoulli_residual is also True.
+    # Chord-position correction 0.5·(1-cos(2π·x)) applied to p_B. Only takes
+    # effect when bernoulli_residual is also True. (Failed in #3466 arm B; kept
+    # behind a flag for completeness.)
     bernoulli_chord_correction: bool = False
+    # Schedule-Free AdamW warmup steps (Defazio et al. 2024). SF-AdamW has no
+    # explicit LR schedule — it maintains an internal Polyak-Ruppert iterate
+    # average so the eval LR is implicitly decayed via that average. Replaces
+    # the previous AdamW/CautiousAdamW + CosineAnnealingLR pair.
+    sf_warmup_steps: int = 100
 
 
 cfg = sp.parse(Config)
@@ -677,11 +614,21 @@ ema_model.requires_grad_(False)
 ema_model.eval()
 print(f"EMA model initialized (decay={EMA_DECAY})")
 
-optimizer = CautiousAdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-t_max = cfg.t_max if cfg.t_max is not None else MAX_EPOCHS
-eta_min = cfg.lr * cfg.eta_min_factor
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=eta_min)
-print(f"CosineAnnealingLR(T_max={t_max}, eta_min={eta_min:.2e})")
+# Schedule-Free AdamW handles its own implicit schedule via a polynomial
+# iterate average — no external LR scheduler. The optimizer ships with
+# ``train_mode=False`` by default, so we must call ``optimizer.train()``
+# before the first ``step()`` (and around validation we toggle to ``eval()``
+# and back).
+optimizer = schedulefree.AdamWScheduleFree(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    warmup_steps=cfg.sf_warmup_steps,
+)
+print(
+    f"Optimizer: Schedule-Free AdamW (lr={cfg.lr}, wd={cfg.weight_decay}, "
+    f"warmup_steps={cfg.sf_warmup_steps})"
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -720,6 +667,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# Schedule-Free AdamW starts in eval mode (train_mode=False); must flip to
+# train mode before the first ``optimizer.step()`` or it raises.
+optimizer.train()
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -730,7 +681,6 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_surf_p_l1 = 0.0
     epoch_scale_mean = epoch_scale_std = 0.0
-    epoch_mask_mean = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -795,22 +745,23 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf_p_l1 += surf_p_l1.item()
         epoch_scale_mean += sample_scale.mean().item()
         epoch_scale_std += sample_scale.std(unbiased=False).item()
-        # CautiousAdamW exposes the per-step pre-rescale agreement fraction.
-        if not (optimizer.last_mask_mean != optimizer.last_mask_mean):  # not NaN
-            epoch_mask_mean += optimizer.last_mask_mean
         n_batches += 1
 
-    # Capture the LR used during this epoch's optimizer steps before stepping the scheduler.
+    # SF-AdamW: capture constant post-warmup LR for logging (no scheduler).
     epoch_lr = optimizer.param_groups[0]["lr"]
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_surf_p_l1 /= max(n_batches, 1)
     epoch_scale_mean /= max(n_batches, 1)
     epoch_scale_std /= max(n_batches, 1)
-    epoch_mask_mean /= max(n_batches, 1)
 
     # --- Validate (EMA weights) ---
+    # Schedule-Free AdamW: flip the raw model into the averaged-iterate (x) state
+    # before validation so model.parameters() is consistent with checkpointing
+    # conventions, then flip back to the lookahead (y) state for the next epoch.
+    # Validation itself runs on ``ema_model`` (independent module), so this is
+    # a hygiene step rather than a correctness requirement for the val numbers.
+    optimizer.eval()
     ema_model.eval()
     split_metrics = {
         name: evaluate_split(
@@ -820,6 +771,7 @@ for epoch in range(MAX_EPOCHS):
         )
         for name, loader in val_loaders.items()
     }
+    optimizer.train()
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
@@ -847,7 +799,6 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_p_l1": epoch_surf_p_l1,
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
-        "train/cautious_mask_mean": epoch_mask_mean,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -857,8 +808,7 @@ for epoch in range(MAX_EPOCHS):
         f"lr={epoch_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
-        f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f} "
-        f"mask={epoch_mask_mean:.3f}]  "
+        f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -871,6 +821,8 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
+    # SF-AdamW hygiene: switch to eval iterate before the final test pass.
+    optimizer.eval()
     ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     ema_model.eval()
 
