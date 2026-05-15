@@ -5,6 +5,36 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). Test-side ranking is currently
 contaminated by an Inf in the cruise test ground truth (see notes).
 
+## 2026-05-15 16:35 — PR #3145: Deeper Transolver: n_layers 5/8/10
+
+- Student branch: `willowpai2i24h1-fern/deeper-transolver`
+- Student: `willowpai2i24h1-fern`
+- Hypothesis: deepening Transolver (`n_layers` 5 → 8 → 10) improves
+  `val_avg/mae_surf_p` because more mixing stages help model multi-scale
+  CFD structure; ~1.27M params at depth 10 is still tiny for 96 GB VRAM.
+
+| Arm | wandb run | `val_avg/mae_surf_p` | best_epoch | epochs reached | partial `test_avg/mae_surf_p` (3 splits) |
+|-----|-----------|----------------------|-----------|----------------|------------------------------------------|
+| depth5  | 0g36hqgg | **129.07** | 14 | 14 | rc=120.44 / sid=140.92 / re=118.32 |
+| depth8  | 3x6sfou4 | 172.83 | 9  | 9  | rc=183.88 / sid=193.75 / re=147.69 |
+| depth10 | b539x67l | 164.10 | 8  | 8  | rc=164.56 / sid=186.37 / re=142.99 |
+
+**Conclusion:** depth5 (baseline control) wins by a wide margin. depth8 is
++34%, depth10 is +27% — both clear regressions. Per-epoch wall-clock scales
+~linearly with depth (131s → 207s → 255s), so deeper arms only complete ~half
+as many epochs before hitting the 30-min cap.
+
+**Important finding from student analysis.** Per-epoch, the deeper arms are
+*more sample-efficient*: at epoch 8, depth10 = 164.10 < depth5 = 185.67.
+But depth5's 2× faster per-epoch lets it race past at epoch ~10 and keep
+improving. **This is the same wall-clock confound as PR #3148 (width sweep)** —
+the 30-min cap is the binding constraint; any lever that scales per-step
+compute without proportional sample-efficiency gain loses in this budget.
+
+**Decision:** close. Worth revisiting after bf16 AMP (PR #3330) lands as a
+winner — that would roughly halve per-epoch time and unlock depth/width
+experiments to converge within budget.
+
 ## 2026-05-15 15:36 — PR #3148: Wider Transolver: n_hidden 128/192/256
 
 - Student branch: `willowpai2i24h1-frieren/wider-transolver`
@@ -59,12 +89,11 @@ keeps the volume loss balanced) and/or combine with a higher overall
 
 ## Cross-PR observations (round 1)
 
-- **Run-to-run variance is ~3-4 units in `mae_surf_p`.** The `w128` arm
-  (frieren) and the `surfp1` arm (nezuko) are *both* the current baseline
-  configuration (no behavioral change) but reported 128.46 vs 132.33 —
-  a 3% spread between two nominally identical configs. Improvements smaller
-  than ~3-4 mae_surf_p units should not be treated as winners on a single
-  seed.
+- **Run-to-run variance is ~3-4 units in `mae_surf_p`.** Three
+  nominally-identical baseline configs across PRs gave 128.46 (frieren w128),
+  129.07 (fern depth5), 132.33 (nezuko surfp1) — a ~4% spread. Improvements
+  smaller than ~3-4 mae_surf_p units should not be treated as winners on a
+  single seed.
 - **30-min wall-clock cap binds at 50 epochs** for the baseline width.
   All 6 reviewed runs hit ~30.4-30.8 min total, meaning training stopped
   exactly at the cap. Best-val epoch was 13-14 for the baseline-width
