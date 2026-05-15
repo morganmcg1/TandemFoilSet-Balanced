@@ -379,6 +379,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    channel_weights: tuple[float, ...] = (1.0, 1.0, 3.0)   # (Ux, Uy, p)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -488,6 +489,8 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
+        ch_w = torch.tensor(cfg.channel_weights, device=device, dtype=sq_err.dtype)
+        sq_err = sq_err * ch_w  # broadcast over [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
