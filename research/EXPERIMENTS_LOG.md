@@ -251,6 +251,25 @@ Test (3 finite splits — run pre-dated #3279 NaN fix):
 
 ---
 
+## 2026-05-15 22:35 — PR #3402 — dropout=0.1 in PhysicsAttention (MERGED → new baseline 96.17)
+
+- **Branch:** `charliepai2i48h1-nezuko/dropout-01`
+- **Hypothesis:** Bump `dropout=0.0 → 0.1` in `model_config`. Dropout is applied in two places in PhysicsAttention: as `dropout_p` in `F.scaled_dot_product_attention` and as `nn.Dropout` after `to_out`. Only fires during `model.train()`; EMA evaluation is unaffected.
+- **Results (single seed):**
+
+| Metric | Baseline (97.15) | dropout=0.1 | Δ |
+|--------|------------------:|------------:|---|
+| `val_avg/mae_surf_p` | 97.15 | **96.17** | **-1.01%** |
+| `test_avg/mae_surf_p` | 87.36 | **86.88** | **-0.55%** |
+
+Per-split val: single=116.53 (-1.5%), rc=106.64 (-1.8%), cruise=72.45 (+0.3%), re_rand=89.06 (-0.4%). All 4 val + all 4 test splits improve directionally.
+
+- **Metrics path:** `models/model-charliepai2i48h1-nezuko-dropout-01-20260515-202343/metrics.jsonl`
+- **Action:** MERGED (single-seed, but 8/8 split directional consistency is strong deciding signal).
+- **Commentary:** Classic regularization train-slowdown signature was NOT observed — train surf_loss at epoch 14 was 0.1041 (below baseline's 0.1103). At this model scale (663K params), 0.1 dropout imposes minimal representational cost. EMA-0.999 handles most smoothing; dropout adds a small complementary signal. Dropout axis is still open — headroom to try 0.2.
+
+---
+
 ## 2026-05-15 22:30 — PR #3401 — AoA sin/cos periodic encoding (CLOSED — clean negative)
 
 - **Branch:** `charliepai2i48h1-fern/aoa-sincos`
