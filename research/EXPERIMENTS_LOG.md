@@ -1,5 +1,46 @@
 # SENPAI Research Results
 
+## 2026-05-15 15:45 — PR #3162: H9: Raise surf_weight 10→25 ✗ CLOSED
+
+- Branch: `askeladd/surf-weight-25`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: Raising surf_weight from 10 to 25 emphasizes the surface (the scored region) in the gradient, should improve val_avg/mae_surf_p.
+
+### Results
+
+| Split | val mae_surf_p |
+|-------|----------------|
+| **val_avg/mae_surf_p** | **133.4123** |
+| val_single_in_dist | 163.71 |
+| val_geom_camber_rc | 194.32 |
+| val_geom_camber_cruise | 103.60 |
+| val_re_rand | 125.67 |
+
+| Split | test mae_surf_p (patched scoring) |
+|-------|----------------------------------|
+| test_single_in_dist | 134.42 |
+| test_geom_camber_rc | 141.56 |
+| test_geom_camber_cruise | 92.36 (via local patched scoring) |
+| test_re_rand | 120.00 |
+| **test_avg/mae_surf_p** | **122.0843** |
+
+W&B run: `hkka77kg` · Group: `surf_weight_sweep`
+
+### Run details
+- Epochs: **14/50** (30-min wall-clock cap; best at epoch 13)
+- Noisy trajectory: 133.63 (ep11) → 142 (ep12) → 133.41 (ep13) → 146.83 (ep14, cut)
+- Peak VRAM: 42.1 GB / 96 GB
+
+### Analysis
+- 133.41 does NOT beat the new Huber baseline (112.90). **Closed**.
+- The hypothesis was tested against the wrong baseline (MSE loss). With Huber loss already providing MAE-aligned gradients, the marginal benefit of surface emphasis is smaller than expected.
+- Loss-metric alignment (Huber) dominates surface weighting at the same compute budget.
+- Askeladd also produced an excellent independent bug report on the cruise NaN scoring issue (now being fixed in thorfinn PR #3309) — same root cause as alphonse identified.
+
+### Suggested follow-ups (taken into round 2)
+- The surf_weight knob is still worth testing on top of the Huber base (separate from askeladd's follow-up).
+- Askeladd assigned PR #3317: cosine T_max tuning to match actual epoch budget — directly addresses the LR-not-annealing observation.
+
 ## 2026-05-15 14:30 — PR #3159: H1: Huber loss (delta=0.1) — NEW BASELINE ✓ MERGED
 
 - Branch: `alphonse/huber-loss-aligned`

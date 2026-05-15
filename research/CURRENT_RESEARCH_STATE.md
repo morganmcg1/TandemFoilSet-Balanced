@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 15:30
+- **Date:** 2026-05-15 16:00
 - **Launch:** willow-pai2i-48h-r1 (round 1, 48h horizon)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Students (8):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn (1 GPU each)
@@ -24,19 +24,19 @@ Full metrics in `BASELINE.md`.
 |----|---------|-----------|--------|
 | #3159 ✓ MERGED | alphonse | Huber loss delta=0.1 | **112.9001** — new baseline |
 | #3188 ✗ CLOSED | thorfinn | slice_num 64→128 | 134.7389 — did not beat Huber baseline |
+| #3162 ✗ CLOSED | askeladd | surf_weight 10→25 (MSE) | 133.41 — loss alignment dominates surf emphasis |
 
-### In flight (WIP)
+### In flight (WIP) — 8/8 students working
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3167 | edward | OneCycleLR max_lr=1e-3 | WIP — just un-drafted, should start soon |
-| #3171 | fern | Split pressure head (3× p weight) | WIP — just un-drafted |
-| #3174 | frieren | L1 loss + surf_weight=50 | WIP — just un-drafted |
-| #3175 | nezuko | Cosine warmup (5-ep linear) | WIP — just un-drafted |
-| #3180 | tanjiro | Wider model (hidden=192, slice_num=96) | WIP — just un-drafted |
-| #3305 | alphonse | Huber delta scan (0.05, 0.02) | WIP — fresh assignment |
-| #3309 | thorfinn | NaN bug fix in evaluate_split | WIP — fresh assignment |
-
-Note: PRs #3167–#3180 were created earlier but stuck in draft state (student pods skip draft PRs). Un-drafted at 15:30 UTC — students should pick up on next poll cycle.
+| #3167 | edward | OneCycleLR max_lr=1e-3 | WIP — un-drafted 15:30 |
+| #3171 | fern | Split pressure head (3× p weight) | WIP — un-drafted 15:30 |
+| #3174 | frieren | L1 loss + surf_weight=50 | WIP — needs rebase onto Huber base |
+| #3175 | nezuko | Cosine warmup (5-ep linear) | WIP — un-drafted 15:30 |
+| #3180 | tanjiro | Wider model (hidden=192, slice_num=96) | WIP — un-drafted 15:30 |
+| #3305 | alphonse | Huber delta scan (0.05, 0.02) | WIP — fresh assignment 15:25 |
+| #3309 | thorfinn | NaN bug fix in evaluate_split | WIP — fresh assignment 15:30 |
+| #3317 | askeladd | Cosine T_max tuned (15 vs 12) | WIP — fresh assignment 15:55 |
 
 ## Current research focus
 Round 1 explores the recipe-level lever set. The Huber(delta=0.1) win (PR #3159) establishes a clear hypothesis: **metric alignment between loss and evaluation drives significant improvement**. Key themes being tested:
