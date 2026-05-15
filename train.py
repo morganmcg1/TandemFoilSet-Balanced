@@ -218,7 +218,13 @@ class TransolverBlock(nn.Module):
         self.se = SqueezeExcitation(hidden_dim, reduction=4) if use_se else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
+            # PR #3069: output head deepened by inserting ONE more Linear(hidden)+GELU
+            # before the final Linear(hidden -> out_dim). Param delta +9,312 (= 96*96 + 96)
+            # matches the PR's "+9,312 (+2.3%)" target. Tests if richer output decoder
+            # helps OOD splits (val_geom_camber_rc most-failed). Site is "after last
+            # block" — outside-block-output sub-invariant; cruise predicted preserved.
             self.mlp2 = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
@@ -584,6 +590,24 @@ print(
     f"baseline to beat: val_avg/mae_surf_p < 30.0382 (#2964 NEW baseline)"
 )
 
+# Output head structure diagnostic (PR #3069). Last-block mlp2 deepened from
+# 2-Linear (Linear+GELU+Linear) to 3-Linear (Linear+GELU+Linear+GELU+Linear).
+# +9,312 params target (= hidden^2 + hidden = 96^2 + 96).
+_inner_for_head = getattr(model, "_orig_mod", model)
+_last_block = _inner_for_head.blocks[-1]
+_mlp2_params = sum(p.numel() for p in _last_block.mlp2.parameters())
+_mlp2_linears = [m for m in _last_block.mlp2.modules() if isinstance(m, nn.Linear)]
+print(
+    f"Output head (PR #3069): last_block.mlp2 = "
+    + " -> ".join(
+        f"Linear({m.in_features},{m.out_features})" if isinstance(m, nn.Linear)
+        else type(m).__name__ for m in _last_block.mlp2
+    )
+    + f"; n_Linears={len(_mlp2_linears)} (was 2); mlp2 params={_mlp2_params}; "
+    f"+9,312 vs prior 2-Linear head (one extra Linear({_inner_for_head.n_hidden},{_inner_for_head.n_hidden})+GELU); "
+    f"baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006 NEW baseline)"
+)
+
 # SE diagnostic: count modules and added params
 _se_modules = [m for m in model.modules() if isinstance(m, SqueezeExcitation)]
 _n_se = len(_se_modules)
@@ -892,6 +916,66 @@ for epoch in range(MAX_EPOCHS):
             "alpha_values": _alphas,
             "alpha_mean": sum(_alphas) / max(len(_alphas), 1),
             "alpha_abs_mean_deviation": sum(abs(v - 1.0) for v in _alphas) / max(len(_alphas), 1),
+        })
+
+    # Output-head GELU activation diagnostic (PR #3069): probe at ep1/30/59 on a
+    # val_single_in_dist batch. Captures both GELU outputs (the inserted GELU and
+    # the existing GELU) plus the final pre-out Linear input. Useful to detect
+    # whether the inserted Linear+GELU collapses to identity (zero_frac near 0.5
+    # is the expected Gaussian baseline; very low zero_frac => GELU rarely fires).
+    if (epoch + 1) in (1, 30, 59):
+        _inner_head = getattr(model, "_orig_mod", model)
+        _last_block_head = _inner_head.blocks[-1]
+        _head_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+
+        # mlp2 is Sequential[Linear, GELU, Linear, GELU, Linear]; capture both GELU outputs.
+        _gelu_modules = [m for m in _last_block_head.mlp2 if isinstance(m, nn.GELU)]
+        _head_captures: list[dict] = []
+
+        def _make_head_hook(stage_idx: int):
+            def _hook(_module, _args, output):
+                with torch.no_grad():
+                    o = output.detach().float()
+                    _head_captures.append({
+                        "stage_idx": stage_idx,
+                        "mean": float(o.mean().cpu()),
+                        "std": float(o.std().cpu()),
+                        "abs_mean": float(o.abs().mean().cpu()),
+                        # GELU outputs are sign-preserving and pass through zero at x=0;
+                        # zero_frac captures the soft suppression region near 0.
+                        "zero_frac": float((o.abs() < 0.01).float().mean().cpu()),
+                        "neg_frac": float((o < 0.0).float().mean().cpu()),
+                    })
+            return _hook
+
+        _head_handles = [
+            g.register_forward_hook(_make_head_hook(gi))
+            for gi, g in enumerate(_gelu_modules)
+        ]
+
+        model.eval()
+        with torch.no_grad():
+            _x_h, _y_h, _is_h, _m_h = next(iter(_head_loader))
+            _x_h = _x_h.to(device, non_blocking=True)
+            _m_h = _m_h.to(device, non_blocking=True)
+            _x_norm_h = (_x_h - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _ = _inner_head({"x": _x_norm_h, "mask": _m_h})
+        for _h in _head_handles:
+            _h.remove()
+        model.train()
+
+        for _cap in _head_captures:
+            print(
+                f"  head GELU[{_cap['stage_idx']}] @ ep{epoch+1}: "
+                f"mean={_cap['mean']:.4f} std={_cap['std']:.4f} "
+                f"abs_mean={_cap['abs_mean']:.4f} zero_frac={_cap['zero_frac']:.4f} "
+                f"neg_frac={_cap['neg_frac']:.4f}"
+            )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "output_head_gelu_diagnostic",
+            "epoch": epoch + 1,
+            "gelu_stages": _head_captures,
         })
 
 total_time = (time.time() - train_start) / 60.0
