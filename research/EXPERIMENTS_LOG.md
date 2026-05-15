@@ -187,3 +187,119 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 - Also had merge conflicts (predates Huber + grad-clip merges).
 - Student again diagnosed the NaN-GT bug correctly; that's now fixed in merged PR #3276.
 - **Decision: Closed. Follow-up: corrected Fourier-PE with random Gaussian B per Tancik 2020 RFF, true 2D directional information (PR #3344).**
+
+---
+
+## 2026-05-15 17:30 — PR #3294: Warmup + cosine over 14 epochs, lr=7e-4 (WINNER — pending rebase)
+- Branch: `charliepai2i24h2-tanjiro/warmup-cosine-14ep`
+- Student: charliepai2i24h2-tanjiro
+- Hypothesis: Budget-matched 14-epoch schedule (vs 50-epoch cosine that never anneals), lr bumped 5e-4→7e-4, 2-ep linear warmup.
+
+### Results table
+
+| Metric | Value | Delta vs baseline (109.68) |
+|--------|-------|---------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 14) | **100.811** | **-8.08%** |
+| `test_avg/mae_surf_p` | NaN (3-clean 99.15) | — |
+| Epochs completed | 14/14 (30-min cap) | |
+| Per-split val mae_surf_p | single 118.74 \| geom_rc 107.10 \| geom_cruise 81.97 \| re_rand 95.43 | |
+| Per-split test mae_surf_p | single 109.88 \| geom_rc 95.54 \| geom_cruise NaN (infra) \| re_rand 92.02 | |
+| Peak VRAM | 42.1 GB | |
+| Wall-clock | ~31 min (~132 s/epoch) | |
+| Metrics artifact | `models/model-warmup-cosine-14ep-20260515-162249/metrics.{jsonl,yaml}` | |
+
+### Analysis
+- Clear winner: -8.08% val improvement (compared against prior best 109.68), budget-matching the cosine schedule was the key insight.
+- Best epoch = 14 (the last); cosine cooled fully within budget and epochs 12–14 monotonically extracted additional signal from the low-LR tail.
+- Per-split pattern: single_in_dist -26.6% (biggest lever), geom_rc -8.9%, re_rand -6.0%. Cruise slightly regressed +4.0% — same pattern as other improvements, suggests harder OOD patterns benefit most from schedule quality.
+- Two runs at same config: 99.24 and 100.81 — run-to-run variability ~1.6%, well within noise.
+- test_geom_camber_cruise still NaN (pre-existing; fern's NaN guard fixes training but test eval route has separate issue); 3-clean test mean 99.15 confirms val improvement is real.
+- PR has merge conflict (predates advisor HEAD); student asked to rebase before merge.
+
+### Decision
+- **Pending merge** — winner, sent back to student for rebase. Will become the new baseline at val=100.81 after merge.
+
+---
+
+## 2026-05-15 17:30 — PR #3304: surf_weight 10→20 (WINNER — on hold pending tanjiro merge)
+- Branch: `charliepai2i24h2-frieren/surf-weight-20`
+- Student: charliepai2i24h2-frieren
+- Hypothesis: Raise surf_weight 10→20 (single-axis, no channel weighting) — a 2× surface emphasis as a derisked follow-up to the failed 6× combined version in PR #3214.
+
+### Results table
+
+| Metric | Value | Delta vs baseline (109.68) |
+|--------|-------|---------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 14) | **103.668** | **-5.49%** |
+| `test_avg/mae_surf_p` | **93.243** | **-4.18%** |
+| Epochs completed | 14/50 (30-min cap) | |
+| Per-split val mae_surf_p | single 120.30 \| geom_rc 120.82 \| geom_cruise 77.22 \| re_rand 96.33 | |
+| Per-split test mae_surf_p | single 111.45 \| geom_rc 106.33 \| geom_cruise 65.51 \| re_rand 89.69 | |
+| Metrics artifact | `models/model-surf-weight-20-20260515-162204/metrics.{jsonl,yaml}` | |
+
+### Analysis
+- Beats baseline by 5.49% val / 4.18% test, well within predicted 1–4% range (actually slightly beat it).
+- Concentrated improvement on single_in_dist (-18.8% val / -9.6% test). Moderate cruise + re_rand gains. geom_rc regressed slightly (+5.2% val, +1.5% test — the hardest geometry-OOD split).
+- The cruise split (easiest) improved mildly (-2.1%) — confirms surf emphasis isn't over-weighting.
+- Training was healthy at epoch 14 (best epoch = final); velocity channels not visibly degraded.
+- **However**: tanjiro's warmup+cosine (#3294) achieves 100.81 — better than frieren's 103.67. Decision: hold frieren in review, request rebase+retest after tanjiro merges to see if surf_weight=20 still helps on the warmup+cosine baseline.
+
+### Decision
+- **On hold** — result beats 109.68 baseline, but pending tanjiro merge to new baseline ~100.81. Frieren will rebase+retest to confirm surf_weight=20 is orthogonally beneficial.
+
+---
+
+## 2026-05-15 17:30 — PR #3314: weight_decay 1e-4→3e-4 on decay group (ON HOLD pending tanjiro merge)
+- Branch: `charliepai2i24h2-fern/weight-decay-3e-4`
+- Student: charliepai2i24h2-fern
+- Hypothesis: Triple the weight decay on the decay group; fern's own suggestion from PR #3276 analysis.
+
+### Results table
+
+| Metric | Value | Delta vs baseline (109.68) |
+|--------|-------|---------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 13) | **105.640** | **-3.69%** |
+| `test_avg/mae_surf_p` | **94.734** | **-2.65%** |
+| Epochs completed | 14/50 (30-min cap) | |
+| Per-split val mae_surf_p | single 120.97 \| geom_rc 114.89 \| geom_cruise 88.84 \| re_rand 97.86 | |
+| Per-split test mae_surf_p | single 108.73 \| geom_rc 101.17 \| geom_cruise 75.70 \| re_rand 93.33 | |
+| Metrics artifact | `models/model-weight-decay-3e-4-20260515-162522/metrics.{jsonl,yaml}` | |
+
+### Analysis
+- Beats baseline by 3.69% val / 2.65% test (slightly above the predicted 1–3% range).
+- Concentrated gain on single_in_dist (-18.3% val / -11.8% test), while cruise **regresses** +12.7% val / +10.6% test. Other splits flat.
+- Same pattern as frieren's surf_weight=20 run: both levers improve the harder single_in_dist split by reducing overfit, while slightly over-regularizing the easier cruise distribution.
+- The favorable aggregate is because single_in_dist has the largest absolute MAE — a 27-point improvement there offsets the 10-point regression on cruise.
+- **However**: tanjiro's 100.81 beats fern's 105.64. Hold pending tanjiro merge; the optimal wd value may shift on the warmup+cosine baseline.
+
+### Decision
+- **On hold** — result beats 109.68 baseline, but pending tanjiro merge to new baseline ~100.81. Fern will rebase+retest to confirm wd=3e-4 is still the right magnitude with warmup+cosine schedule.
+
+---
+
+## 2026-05-15 17:30 — PR #3302: Depth-8 budget-matched epochs=9 (CLOSED)
+- Branch: `charliepai2i24h2-askeladd/depth-8-matched-budget`
+- Student: charliepai2i24h2-askeladd
+- Hypothesis: Depth-8 (n_layers=8) with epochs=9 budget-matched to ~205 s/epoch; follow-up to round-1 where 50-epoch cosine never annealed.
+
+### Results table
+
+| Metric | Value | Delta vs baseline (109.68) |
+|--------|-------|---------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 9) | **111.357** | +1.53% |
+| `test_avg/mae_surf_p` | **100.776** | +3.55% |
+| Epochs completed | 9/9 (30-min cap) | |
+| Per-split val mae_surf_p | single 137.19 \| geom_rc 126.59 \| geom_cruise 82.75 \| re_rand 98.91 | |
+| Per-split test mae_surf_p | single 124.31 \| geom_rc 109.95 \| geom_cruise 70.86 \| re_rand 97.99 | |
+| Param count | ~1.03M (~1.5× baseline) | |
+| Peak VRAM | 64.5 GB | |
+| Metrics artifact | `models/model-depth-8-matched-budget-20260515-162201/metrics.{jsonl,yaml}` | |
+
+### Analysis
+- Regressed +1.53% val / +3.55% test vs baseline. Budget-matching helped (was 33% regression in round-1 at 9ep) but still hasn't converged — best epoch = 9 (last), slope -6.5 mae/epoch at termination.
+- Per-split: depth-8 WINS on single_in_dist (-7.4%) but loses on geom_camber_rc (+10.2%) and cruise (+4.9%). More capacity helps in-distribution but can't generalize to geometry-OOD under this budget.
+- Student correctly diagnosed: needs more wall time than depth-5 (205 s vs 130 s per epoch). BF16 (#3223) or larger batch_size needed to compress per-epoch cost.
+- **Decision: Closed.** Architecture depth-scaling held until per-epoch cost drops (BF16 or batch8).
+
+### Decision
+- **Closed.** Reassigned askeladd to n_head=8 single-axis (#3362) — orthogonal, minimal cost overhead.
