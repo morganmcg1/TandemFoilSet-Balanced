@@ -506,3 +506,50 @@ Per-epoch pre-clip gradient L2 norms:
 ### Follow-up
 
 - Alphonse reassigned to a fresh non-schedule axis (not a warmup-variant; the hypothesis class itself is closed at this budget)
+
+## 2026-05-15 21:25 — PR #3287: Domain-conditional FiLM (gap+AoA → scale/shift on LayerNorm) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-frieren/domain-film`
+- **Hypothesis**: Three geometric regimes (single-foil, racecar-tandem, cruise-tandem) produce qualitatively distinct pressure fields. Per-block FiLM that emits `(scale, shift)` from `(gap, AoA1)` should give the model an explicit per-sample regime conditioner without requiring it to discover it implicitly. Predicted disproportionate gains on `val_geom_camber_rc` and `val_single_in_dist`.
+- **Verdict**: CLOSED. Clear negative result with thorough mechanism analysis. Hypothesis disconfirmed by the *predicted-to-improve splits being the most regressed*.
+
+### Results (canonical run, EMA-evaluated best-val checkpoint)
+
+| Metric | FiLM (#3287) | Baseline (post-#3136) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p (primary)** | **145.9856** | 126.3241 | **+15.6%** |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 138.3074 | n/a (3-split partial 123.43 pre-#3378) | n/a |
+| n_params | 1,572,513 | 1,447,521 | +8.6% |
+| peak_memory_gb | 71.20 | 42.11 | +69% |
+| epochs realized | 9 of 12 | 14 of 50 | -36% |
+| Per-epoch wall time | 223.6 s | 128 s | +75% |
+| NaN/Inf events | 0 | 0 | — |
+
+### Per-val-split mae_surf_p (best epoch=9)
+
+| Split | FiLM | Baseline | Δ | Hypothesis prediction |
+|---|---:|---:|---:|---|
+| val_single_in_dist | 184.65 | 158.79 | **+16.3%** | predicted improvement |
+| val_geom_camber_rc | 157.07 | 127.26 | **+23.4%** | predicted **largest** improvement |
+| val_geom_camber_cruise | 112.96 | 102.20 | +10.5% | secondary improvement |
+| val_re_rand | 129.26 | 117.04 | +10.4% | secondary improvement |
+
+- **Metric artifacts**: `models/model-charliepai2i24h1-frieren-domain-film-canonical-20260515-192839/{metrics.jsonl,metrics.yaml}`
+
+### Analysis
+
+- **The predicted-to-improve splits are the most degraded.** This is the strongest possible disconfirmation: if `(gap, AoA1)` is the right conditioner, raceCar tandem should improve, not regress 23.4%. Hypothesis is not budget-starved — it is wrong about which mesh features actually matter.
+- **Dual failure mode** (student's diagnosis was correct):
+  1. **Memory-induced wall-clock slowdown**: 5 blocks × 2 LayerNorms × `[4, ~200K, 192]` ≈ 6 GB of additional autograd-retained activations → peak 71 GB → 74% GPU utilization → per-epoch +75% slower. Under 30-min cap, lost 5 realized epochs.
+  2. **2-D conditioner too coarse** for the multi-modal regime. `gap=0` and AoA ranges overlap between single/tandem in ways that the cleanest taxonomy doesn't capture.
+- **Implementation quality**: zero NaN/Inf, identity-init verified, schedule-aligned (T_max=12), feature indices verified against `program.md` (no fallback path).
+
+### Verdict commentary
+
+- This is a **methodologically valuable negative result** — the disconfirmation analysis (predicted splits most degraded) is exactly what a careful reviewer would value. It rules out the *family* of low-dimensional per-sample conditioners, not just this specific implementation.
+- Student's suggested follow-ups (input-only FiLM injection, 7-scalar richer conditioner, LayerNorm-affine-fused FiLM) are noted but represent fresh hypothesis classes; not pursued in this PR.
+- The high-quality scaffolding (clean numerics, 4-way sweep, exact `program.md` feature indexing) leaves room for a fresh axis without inheriting any negative-result baggage.
+
+### Follow-up
+
+- Frieren reassigned to **DropPath (stochastic depth)** — a regularization axis, orthogonal to all conditioning work, zero param overhead, zero inference cost, compatible with LayerScale (#3404 nezuko in-flight). Different mechanism class than FiLM (regularization vs feature conditioning).
