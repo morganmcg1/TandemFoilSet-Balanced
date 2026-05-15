@@ -1,5 +1,77 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-15 23:21 — PR #3386: Re-stratified loss reweighting (1/per_sample_y_std) — CLOSED
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/restratified-loss`
+- **Hypothesis:** Per-sample inv-std reweighting on surface MAE — equalize gradient contribution across samples whose `y_norm` p-channel has wildly different dynamic range (cruise small, single_in_dist large).
+- **W&B runs:** v2 (clip+normalize) `1d39kc2y`, clip_only `d9r8l5um`, primary (no clip/no norm) `axeuhzhy`
+
+### Result (vs frieren-only #3257 baseline, val=106.67/test=94.35 — NOT against current FiLM+frieren base)
+
+| Arm | val_avg | test_avg | Δ test |
+|-----|--------:|---------:|--------|
+| baseline #3257 | 106.67 | 94.35 | — |
+| v2 (clip + normalize) | 106.53 | **95.98** | **+1.7%** |
+| clip_only | 151.56 | 140.21 | +48.6% |
+| primary (no clip/no norm) | 261.24 | 245.83 | +160.6% |
+
+### Per-split test (v2 vs baseline)
+| split | baseline | v2 | Δ | predicted |
+|-------|---------:|---:|---:|-----------|
+| `single_in_dist`     | 122.34 | 125.06 | +2.2% | flatten/slight regress ✓ |
+| `geom_camber_rc`     | 106.31 | 101.55 | −4.5% | (not predicted) |
+| `geom_camber_cruise` |  62.47 |  65.64 | **+5.1%** | predicted −5–10% ✗ |
+| `re_rand`            |  86.28 |  91.66 | **+6.2%** | predicted −5–10% ✗ |
+| **avg**              |  94.35 |  95.98 | **+1.7%** | predicted −5–8% ✗ |
+
+### Decision: CLOSED (hypothesis failed)
+
+The mechanism worked exactly as designed (`train/sample_inv_std_*` traces confirm) — cruise samples got higher gradient weight, single_in_dist got lower. But the predicted per-split improvements inverted: both cruise (+5.1%) and re_rand (+6.2%) regressed. Student recommended dropping the hypothesis.
+
+### Analysis
+- The merged loss (MAE + p_weight=3) already captures the right per-sample gradient structure for the four-split objective.
+- Re-stratification is zero-sum: boosting cruise's gradient share reduces single_in_dist's; single_in_dist is the harder split, so the model loses signal there faster than it gains on cruise.
+- The hypothesis would have been even less likely to help on the current FiLM+frieren baseline, where FiLM provides a structural Re-conditioned route that already addresses cross-regime dynamic-range variation.
+- Strong negative result for the writeup.
+
+---
+
+## 2026-05-15 23:21 — PR #3406: surf_weight sweep {5,10,20} — SENT BACK (rebase)
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/surf-weight-sweep`
+- **Hypothesis:** Sweep `surf_weight ∈ {5, 10, 20}` on the merged surf-MAE+p_weight=3 base. With p_channel_weight=3 baked in, sw=10 → 30× effective weighting on pressure, potentially over-rotating loss.
+- **W&B runs (on OLD frieren-only base):** sw5 `h3cfjdwu`, sw10 `acxfxpnj`, sw20 `pajdxlc1`
+
+### Result (vs frieren-only #3257 baseline, val=106.67/test=94.35 — NOT against current FiLM+frieren base)
+
+| Arm | val_avg | test_avg | Δ test |
+|-----|--------:|---------:|-------:|
+| **sw5** ⭐ | **98.30** | **88.80** | **−5.88%** |
+| sw10 (control) | 104.02 | 91.75 | −2.76% |
+| sw20 | 102.04 | 91.36 | −3.17% |
+
+sw5 wins decisively on the OLD base. But the experiment was on frieren-only base (#3257), not the current FiLM+frieren merged base (#3263). Cannot conclude sw5 still wins after FiLM is added without re-running.
+
+### Per-split test (sw5 vs OLD baseline)
+| split | baseline | sw5 | Δ |
+|-------|---------:|----:|---:|
+| `single_in_dist`     | 122.34 | 104.96 | **−14.2%** |
+| `geom_camber_rc`     | 106.31 | 101.83 | −4.2% |
+| `geom_camber_cruise` |  62.47 |  61.64 | −1.3% |
+| `re_rand`            |  86.28 |  86.76 | +0.6% |
+| **avg**              |  94.35 |  88.80 | **−5.88%** |
+
+### Decision: SENT BACK for rebase + rerun on new merged base
+
+The mechanism is well-supported on the old base. But sw5's numerical 88.80 vs current baseline 90.06 (−1.4%) is **not paired** — we need a paired run on the FiLM+frieren base before we can merge. Student instructed to:
+1. Rebase onto current advisor head (gets FiLM merged)
+2. Change `surf_weight` default to 5.0 in Config (codifies the sweep winner)
+3. Re-run sw5 only on the new base. The merged baseline #3263 (W&B `69jp9tvt`) is the paired control.
+
+Predicted on rebased base: hopeful val ~92–96 / test ~83–87 (sw5+FiLM stacks); conservative val ~96–100 / test ~86–89 (smaller gain because FiLM already captured some); pessimistic val ~99–102 / test ~89–92 (wash).
+
+---
+
 ## 2026-05-15 14:10 — PR #3257: Surface MAE loss + pressure-channel weight 3×
 
 - **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/surf-mae-p-weight`

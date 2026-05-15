@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-15 21:55 UTC
+- **As of:** 2026-05-15 23:25 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -20,23 +20,30 @@ Prior baseline: #3257 frieren surf-MAE+p_weight=3, val=106.67, test=94.35.
 
 All remaining PRs must beat **test_avg/mae_surf_p < 90.06**.
 
-## Full R1 portfolio status
+## Active R2 portfolio (all 8 students busy)
+
+| # | Student | PR | Hypothesis | Status |
+|---|---------|----|-----------|--------|
+| 1 | frieren  | #3504 | Richer FiLM conditioning (cond_dim=1→11: log_Re+AoA+NACA+gap+stagger) | WIP (assigned 23:23 UTC) |
+| 2 | thorfinn | #3468 | Per-block FiLM heads (5 FiLM heads, one per Transolver block) | WIP |
+| 3 | tanjiro  | #3406 | surf_weight sweep — **sw5 winner on OLD base** (test=88.80 vs 94.35); rebase + rerun on FiLM+frieren base | WIP (sent back 23:21) |
+| 4 | alphonse | #3358 | Cosine T_max=14 fix (paired −6.4%/-9.2% on old base); rebase + rerun on FiLM+frieren base | WIP (rebase in flight) |
+| 5 | askeladd | #3351 | EMA β=0.99 (shorter horizon, β=0.999 val=131.37 on old base) | WIP (CONFLICTING, pod just picked up at iter 10) |
+| 6 | edward   | #3262 | RFF σ=1.0 on (x, z) — orthogonal to FiLM, MERGEABLE | WIP |
+| 7 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — MERGEABLE post-FiLM | WIP |
+| 8 | nezuko   | #3429 | Multi-scale slice tokens (coarse-global + fine-surface) — earlier run test=106.71, may need new direction | WIP (pod picked up at iter 100) |
+
+## R1 closed/merged history
 
 | # | Student | Hypothesis | PR | Status |
 |---|---------|-----------|-----|--------|
 | 1 | frieren  | Surface MAE + p-weight 3× + NaN guard | #3257 | **MERGED (R1 winner #1)** — test=94.35 |
-| 2 | fern     | Grad-clip 1.0 + 5-epoch warmup | #3258 | **sent back for rebase** (rebased 18:35, re-running on frieren-base) |
-| 3 | edward   | RFF σ=1.0 on (x, z) | #3262 | **sent back for rebase** (rebased 18:36, re-running on frieren-base) |
-| 4 | thorfinn | FiLM log(Re) conditioning | #3263 | **MERGED (R1 winner #2)** — val=100.24, test=90.06 (−4.55% on primary) |
-| 5 | nezuko   | Multi-scale slice tokens (coarse-global + fine-surface groups) | #3429 | WIP (run finished `5wvllm86`, test=106.71 +13% worse — likely close) |
-| 6 | alphonse | Cosine T_max fix (T_max=14) | #3358 | **sent back for rebase** (paired −6.4%/-9.2% on old base; rerun on new merged base) |
-| 7 | askeladd | EMA weights β=0.999 → β=0.99 on frieren-base | #3351 | **sent back for rebase** (β=0.999 val=131.37 vs old base; rebased + retry with β=0.99 shorter horizon) |
-| 8 | frieren  | Re-stratified loss reweighting | #3386 | WIP (just assigned) |
-| 9 | tanjiro  | surf_weight sweep {5,10,20} | #3406 | WIP (just assigned, replaces closed #3256) |
-| ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%; reassigned to #3429) |
-| ✗ | tanjiro  | Huber loss delta=0.5 | #3256 | **CLOSED** (redundant with #3257; no commits in 6h) |
-| ✗ | alphonse  | Wider-shallower 256d | #3261 | **CLOSED** (+24% worse) |
-| ✗ | askeladd | Dropout p=0.1 | #3264 | **CLOSED** (+6% worse; diagnosed NaN root cause) |
+| 2 | thorfinn | FiLM log(Re) conditioning | #3263 | **MERGED (R1 winner #2)** — val=100.24, test=90.06 (−4.55%) |
+| ✗ | frieren  | Re-stratified loss (1/per_sample_y_std) | #3386 | **CLOSED 23:21** — failed (predicted −5–10%, actual +1.7% test regression) |
+| ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%) |
+| ✗ | tanjiro  | Huber loss delta=0.5 | #3256 | **CLOSED** (redundant with #3257) |
+| ✗ | alphonse | Wider-shallower 256d | #3261 | **CLOSED** (+24% worse) |
+| ✗ | askeladd | Dropout p=0.1 | #3264 | **CLOSED** (+6% worse) |
 
 ## Standings — test_avg/mae_surf_p (lower is better)
 
@@ -44,36 +51,42 @@ All remaining PRs must beat **test_avg/mae_surf_p < 90.06**.
 |------|----|------------|-------------------:|-------------|--------|
 | **1** | **#3263 (thorfinn)** | **FiLM(log_Re) on hidden state** | **90.06** | **NEW BASELINE** | **MERGED** |
 | 2 | #3257 (frieren) | Surf-MAE+p-weight 3×+NaN guard | 94.35 | +4.8% above new | MERGED |
+| — | #3406 (tanjiro, old-base) | sw=5, paired baseline 94.35 | 88.80 | (unpaired vs new) | rebase in flight |
 | — | #3358 (alphonse, old-base) | cosine T_max=14, paired baseline | 104.95 | +16.5% above new | rebase in flight |
+| — | #3386 (frieren, v2) | re-stratified loss | 95.98 | +6.6% above new | CLOSED |
 | — | #3429 (nezuko) | multi-scale slice tokens (10ep) | 106.71 | +18.5% above new | likely close |
 | — | vanilla `xfayvdk2` (alphonse) | NaN-guarded MSE | 106.23 | +18.0% above new | anchor |
 
 ## Key R2 predictions (on FiLM+frieren base, target test < 90.06)
 
-- **fern clip+warmup (#3258 rebase):** Grad norms median 56/peak 1000+ with MSE loss — likely still high under MAE+FiLM. Predicted val ~88–95, test ~80–86. **High confidence merge.**
-- **alphonse cosine T_max=14 (#3358 rebase):** Free win from schedule alignment, paired −6.4%/-9.2% confirmed on old base. Predicted 2–5% gain on new base. **Easy compound.**
-- **edward RFF σ=1.0 (#3262 rebase):** Feature encoding orthogonal to loss & FiLM. Old gain −9.8% val. Predicted val ~92–97, test ~82–88.
-- **frieren re-stratified loss (#3386):** Equalize per-sample gradient contribution by 1/std. Predicted 2–6% val, biggest on cruise.
-- **tanjiro surf_weight sweep (#3406):** Effective 30× weighting with p-weight=3 baked in. Predicted sw=5 → val ~95–100, test ~86–90.
-- **askeladd EMA β=0.99 (#3351 rebase):** Short EMA horizon ~0.3 epoch averages recent near-converged weights. Predicted val ~98–103, test ~86–92.
-- **nezuko multi-scale slice (#3429):** Run finished `5wvllm86`, test=106.71 — +18.5% above new target, likely close.
+- **tanjiro sw=5 rebased (#3406):** sw=5 wins on old base (paired −5.88% test) → if mechanism is orthogonal to FiLM, expect test ~83–87 on new base. **Strong merge candidate.**
+- **alphonse cosine T_max=14 (#3358):** Free win from schedule alignment, paired −6.4%/-9.2% on old base. Predicted 2–5% gain on new base. **Easy compound.**
+- **edward RFF σ=1.0 (#3262):** Feature encoding orthogonal to loss & FiLM. Old gain −9.8% val. Predicted val ~92–97, test ~82–88.
+- **fern grad-clip+warmup (#3258):** Grad norms median 56/peak 1000+ with MSE loss — should still help under MAE+FiLM. Predicted val ~88–95, test ~80–86. **High confidence merge.**
+- **frieren richer FiLM (#3504):** Extend cond_dim 1→11 to include AoA+NACA+gap+stagger. Predicted val ~94–98, test ~84–88. **Strong compose with #3263.**
+- **thorfinn per-block FiLM (#3468):** 5 FiLM heads, one per block. Predicted val ~95–98, test ~85–88. Orthogonal-ish to #3504 (different mechanism: depth vs conditioning width).
+- **askeladd EMA β=0.99 (#3351):** Short EMA horizon ~0.3 epoch averages recent near-converged weights. Predicted val ~98–103, test ~86–92.
+- **nezuko multi-scale slice (#3429):** Run finished `5wvllm86`, test=106.71 — +18.5% above target, likely close.
 
 ## Open issues / live diagnostics
 
 - **Canonical NaN guard: RESOLVED (in main).** All new branches inherit automatically.
-- **Cosine T_max mismatch:** Still in flight (#3358 alphonse).
-- **Huge gradient norms (median 56, peak 1000):** Not yet addressed at root. R2 candidate: soft slice-softmax temperature.
-- **GitHub API rate limit:** Intermittent 403s affecting tanjiro/nezuko pods most severely — sessions abort before reaching commit step. Auto-recovers; not blocking but costs time-per-iteration.
-- **Run-to-run variance (±5–10pt on val_avg):** Expected to improve once fern's clip+warmup merges.
+- **Cosine T_max mismatch:** In flight (#3358 alphonse rebase).
+- **Huge gradient norms (median 56, peak 1000):** In flight (#3258 fern rebase).
+- **GitHub API rate limit:** Recurring 5000-req/hr exhaustion windows; resets every ~hour. Pods training fine; advisor periodically blocked.
+- **Run-to-run variance (±3–10pt on val_avg):** Expected to improve once fern's clip+warmup merges.
 
-## Plateau-protocol queue (next R2/R3 hypotheses, ranked)
+## Plateau-protocol queue (next R3 hypotheses, ranked)
 
-1. Re-stratified loss reweighting ← **assigned to frieren #3386**
-2. surf_weight sweep {5,10,20} ← **assigned to tanjiro #3406**
-3. Per-block FiLM heads (natural follow-up to #3263 win) ← **to assign to thorfinn**
-4. Richer FiLM conditioning `(log_Re, AoA_1, AoA_2, gap, stagger)`
-5. Geometry-aware input features (node distance to nearest surface)
-6. Loss decomposition by domain (per-split loss tracking)
-7. Soft slice-softmax temperature diagnostic (addresses gradient norm root cause)
-8. AdamW betas / weight-decay sweep
-9. Variance reduction via fixed `--seed` flag (instrumentation, not a hypothesis)
+1. ✗ Re-stratified loss reweighting ← FAILED (#3386 closed)
+2. ✗ surf_weight sweep ← REBASED IN FLIGHT (#3406)
+3. ✗ Per-block FiLM heads ← IN FLIGHT (#3468)
+4. ✗ Richer FiLM conditioning ← IN FLIGHT (#3504)
+5. **Geometry-aware input features (node distance to nearest surface)** ← next free slot
+6. **Per-block × richer-FiLM compose** (only if both #3468 + #3504 land)
+7. **Loss decomposition by domain** (per-split loss tracking + dynamic per-split weight)
+8. **Soft slice-softmax temperature** (addresses gradient-norm root cause if fern's clip+warmup is insufficient)
+9. **AdamW betas / weight-decay sweep** (cheap orthogonal compose)
+10. **Volume MAE reformulation** (tanjiro's suggested follow-up — currently vol uses MSE)
+11. **Variance reduction via fixed `--seed` flag** (instrumentation, not a hypothesis)
+12. **Re-bucketed sampling via sample_weights** (frieren's suggested follow-up after #3386 close)
