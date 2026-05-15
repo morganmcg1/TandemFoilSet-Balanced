@@ -240,6 +240,21 @@ def evaluate_split(model, loader, stats, surf_weight, device, loss_fn="mse", eps
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
+            # Drop samples whose ground truth contains any non-finite value
+            # before computing loss/MAE. scoring.accumulate_batch tries to skip
+            # such samples but NaN * 0.0 == NaN poisons the float64 accumulator;
+            # filtering the batch first matches the intended "skip" semantics.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                if not y_finite_per_sample.any():
+                    continue
+                pred = pred[y_finite_per_sample]
+                y = y[y_finite_per_sample]
+                y_norm = y_norm[y_finite_per_sample]
+                is_surface = is_surface[y_finite_per_sample]
+                mask = mask[y_finite_per_sample]
+
             err = _per_node_loss(pred, y_norm, loss_fn, eps)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
