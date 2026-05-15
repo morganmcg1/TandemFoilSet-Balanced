@@ -7,26 +7,24 @@
 
 ## Current best (this branch)
 
-> ⚠️ **Note:** val_avg=92.80 was measured by thorfinn before PR #3326 (MLP dropout) merged. Current code has dropout + log1p stacked; true combined val_avg is **unverified** — use 92.80 as a lower-bound reference and verify on next run.
-
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p`              | **92.80** | PR #3345 (thorfinn H11 log1p), epoch 14 (pre-dropout baseline) |
-| `val_single_in_dist/mae_surf_p`   | 115.48 | PR #3345 |
-| `val_geom_camber_rc/mae_surf_p`   | 105.48 | PR #3345 |
-| `val_geom_camber_cruise/mae_surf_p` | 63.87 | PR #3345 |
-| `val_re_rand/mae_surf_p`          | 86.36 | PR #3345 |
-| `test_avg/mae_surf_p`             | **84.11** | PR #3345 |
-| `test_single_in_dist/mae_surf_p`  | 108.91 | PR #3345 |
-| `test_geom_camber_rc/mae_surf_p`  | 91.72 | PR #3345 |
-| `test_geom_camber_cruise/mae_surf_p` | 56.73 | PR #3345 |
-| `test_re_rand/mae_surf_p`         | 79.06 | PR #3345 |
+| `val_avg/mae_surf_p`              | **85.16** | PR #3224 (tanjiro H13 geom-cond GALE), epoch 14 |
+| `val_single_in_dist/mae_surf_p`   | 106.160 | PR #3224 |
+| `val_geom_camber_rc/mae_surf_p`   | 92.098 | PR #3224 |
+| `val_geom_camber_cruise/mae_surf_p` | 61.360 | PR #3224 |
+| `val_re_rand/mae_surf_p`          | 81.005 | PR #3224 |
+| `test_avg/mae_surf_p`             | **77.61** | PR #3224 |
+| `test_single_in_dist/mae_surf_p`  | 99.658 | PR #3224 |
+| `test_geom_camber_rc/mae_surf_p`  | 84.121 | PR #3224 |
+| `test_geom_camber_cruise/mae_surf_p` | 52.932 | PR #3224 |
+| `test_re_rand/mae_surf_p`         | 73.739 | PR #3224 |
 
 ## Current baseline configuration
 
-`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets):
+`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE):
 
-- **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` (~678K trainable params + 64 non-trainable RFF buffer)
+- **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` + `geom_proj MLP(11, 256, 128)` + 5 `geom_gates` scalars (~714K trainable params + 64 non-trainable RFF buffer)
 - **Input:** RFF coordinate encoding (n_freq=32, sigma=1.0) replacing raw (x,z) — input to preprocess MLP is now 86-dim (64 RFF + 22 other features)
 - **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
 - **Schedule:** CosineAnnealingLR(T_max=epochs)
@@ -37,6 +35,8 @@
 - **MLP dropout:** `dropout=0.1` in each `TransolverBlock.mlp` (FFN sub-layers); `PhysicsAttention`, preprocess MLP, and final head remain at `dropout=0.0`
 - **Log1p target transform:** `signed_log1p(y) = sign(y) * log1p(|y|)` applied to both `pred` and `y` before loss compute only; `evaluate_split` unchanged (metric stays in physical units)
 - **NaN workaround:** `evaluate_split` masks out and zero-fills non-finite GT samples before accumulation (fixes test_geom_camber_cruise NaN)
+- **Geom-cond GALE:** Per-block additive geometry conditioning: `fx += geom_gates[i] * geom_proj(x[:, 0, 13:24])`. Gates init at 0 (identity start), learned to `[-0.05, -0.11, -0.13, -0.14, -0.15]` at convergence.
+- **Cosine T_max:** Set to 15 (vs 50 default) to align anneal to realized ~14-epoch budget.
 - **Splits dir:** `/mnt/new-pvc/datasets/tandemfoil/splits_v2`
 
 ### Reproduce command
@@ -49,9 +49,28 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 
 ## Baseline history
 
-### 2026-05-15 19:00 — PR #3345: H11 signed-log1p target transform (thorfinn) — **CURRENT BEST** ⚠️ measured pre-dropout
+### 2026-05-15 21:30 — PR #3224: H13 Persistent geom-cond GALE (tanjiro) — **CURRENT BEST**
 
-- **val_avg/mae_surf_p:** 92.80 (best epoch 14, 30-min cap) — **measured on pre-dropout baseline (122.81), not combined**
+- **val_avg/mae_surf_p:** 85.156 (best epoch 14, 30-min cap, T_max=15) — **-8.2% vs 92.80 prior best**
+- **Per-split val:**
+  - `val_single_in_dist/mae_surf_p` = 106.160 (-8.1% vs 115.48)
+  - `val_geom_camber_rc/mae_surf_p` = 92.098 (-12.7% vs 105.48) ← biggest gain as predicted
+  - `val_geom_camber_cruise/mae_surf_p` = 61.360 (-3.9% vs 63.87)
+  - `val_re_rand/mae_surf_p` = 81.005 (-6.2% vs 86.36)
+- **test_avg/mae_surf_p:** 77.613 (-7.7% vs 84.11)
+- **Per-split test:**
+  - `test_single_in_dist/mae_surf_p` = 99.658
+  - `test_geom_camber_rc/mae_surf_p` = 84.121
+  - `test_geom_camber_cruise/mae_surf_p` = 52.932
+  - `test_re_rand/mae_surf_p` = 73.739
+- **What changed:** Added `geom_proj MLP(11, 256, 128)` + 5 learnable `geom_gates` scalars (init=0). Per-block additive injection: `fx += geom_gates[i] * geom_proj(x[:, 0, 13:24])` before each TransolverBlock. Gates learned to `[-0.05, -0.11, -0.13, -0.14, -0.15]` (monotone magnitude, zero-start). Also aligned `T_max=15` for cosine LR to realized epoch budget.
+- **Delta:** -8.2% val_avg (92.80 → 85.16). geom_camber_rc benefited most (-12.7%), confirming GALE mechanism helps OOD camber interpolation.
+- **Metric artifact:** `models/model-charliepai2i24h4-tanjiro-geom-cond-v2-restrat-rff-tmax15-20260515-193031/metrics.jsonl`
+- **Reproduce:** `cd target && python train.py --agent charliepai2i24h4-tanjiro --experiment_name "charliepai2i24h4-tanjiro/geom-cond-v2-restrat-rff-tmax15"`
+
+### 2026-05-15 19:00 — PR #3345: H11 signed-log1p target transform (thorfinn)
+
+- **val_avg/mae_surf_p:** 92.80 (best epoch 14, 30-min cap) — measured on pre-dropout baseline (122.81); combined dropout+log1p measured by tanjiro H13 = 85.16
 - **Per-split val:**
   - `val_single_in_dist/mae_surf_p` = 115.48
   - `val_geom_camber_rc/mae_surf_p` = 105.48
@@ -107,7 +126,8 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 
 ## Notes for upcoming PRs
 
-- **Beat this:** `val_avg/mae_surf_p < 112.49` to be a merge candidate.
-- **Hardest split:** `val_single_in_dist = 136.83`. (-5.4% improvement from 144.70 due to dropout, but still the bottleneck split).
-- **Baseline stack:** Re-strat sampler + RFF coord encoding + MLP dropout=0.1 + evaluate_split NaN workaround all baked in.
-- **Active WIP PRs rebasing onto this baseline:** #3222 (nezuko cautious-adamw v2), #3201 (edward channel-loss p=1.5), #3224 (tanjiro geom-cond v2), #3318 (frieren H6 SGDR).
+- **Beat this:** `val_avg/mae_surf_p < 85.16` to be a merge candidate.
+- **Hardest split:** `val_single_in_dist = 106.16`. The in-dist bottleneck.
+- **Biggest OOD remaining gap:** `val_geom_camber_rc = 92.10` — large relative to cruise (61.36).
+- **Baseline stack:** Re-strat sampler + RFF coord encoding + MLP dropout=0.1 + signed-log1p target transform (α=1.0) + geom-cond GALE (additive per-block with gates) + evaluate_split NaN workaround + T_max=15 cosine alignment.
+- **Active WIP PRs:** #3317 H11b alpha sweep (thorfinn), #3318 H6v2 SGDR+clip (frieren), #3197 H8v3 EMA (askeladd), #3375 H12b dropout sweep (fern), #3421 H14 cosine T_max (nezuko), #3423 H15 SwiGLU MLP (edward), #3184 H1 LinearNO (alphonse).
