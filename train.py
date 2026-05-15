@@ -48,13 +48,21 @@ from data import (
 )
 
 
-def signed_log1p(y: torch.Tensor) -> torch.Tensor:
-    """Smooth, invertible magnitude compression with slope=1 at zero."""
-    return torch.sign(y) * torch.log1p(torch.abs(y))
+def signed_log1p(y: torch.Tensor, alpha: float = 1.0) -> torch.Tensor:
+    """Smooth, invertible magnitude compression with slope=1 at zero.
+
+    Generalised form: sign(y) * log1p(alpha*|y|) / alpha. alpha=1 reduces
+    to the H11 transform; alpha>1 compresses harder, alpha<1 softer.
+    """
+    if alpha == 1.0:
+        return torch.sign(y) * torch.log1p(torch.abs(y))
+    return torch.sign(y) * torch.log1p(alpha * torch.abs(y)) / alpha
 
 
-def signed_expm1(z: torch.Tensor) -> torch.Tensor:
-    return torch.sign(z) * torch.expm1(torch.abs(z))
+def signed_expm1(z: torch.Tensor, alpha: float = 1.0) -> torch.Tensor:
+    if alpha == 1.0:
+        return torch.sign(z) * torch.expm1(torch.abs(z))
+    return torch.sign(z) * torch.expm1(alpha * torch.abs(z)) / alpha
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +419,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    log1p_alpha: float = 1.0  # Compression strength for signed-log1p target transform
 
 
 cfg = sp.parse(Config)
@@ -419,6 +428,7 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"log1p_alpha: {cfg.log1p_alpha}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -525,8 +535,8 @@ for epoch in range(MAX_EPOCHS):
         # pred stays in linear (normalized) space for the metric/eval path;
         # both pred and y_norm are passed through slog1p before MSE so per-sample
         # gradients are magnitude-comparable across the Re range.
-        y_log = signed_log1p(y_norm)
-        pred_log = signed_log1p(pred)
+        y_log = signed_log1p(y_norm, alpha=cfg.log1p_alpha)
+        pred_log = signed_log1p(pred, alpha=cfg.log1p_alpha)
         sq_err = (pred_log - y_log) ** 2
 
         if not slog1p_diag_printed:
@@ -536,14 +546,14 @@ for epoch in range(MAX_EPOCHS):
                 y_norm_p = y_norm[..., 2][mask]
                 y_log_p = y_log[..., 2][mask]
                 print(
-                    f"slog1p diag (pressure ch, batch 0, valid nodes):\n"
+                    f"slog1p diag (pressure ch, batch 0, valid nodes, alpha={cfg.log1p_alpha}):\n"
                     f"  y raw     : min={y_raw_p.min().item():.2f} "
                     f"max={y_raw_p.max().item():.2f} "
                     f"std={y_raw_p.std().item():.2f}\n"
                     f"  y_norm    : min={y_norm_p.min().item():.4f} "
                     f"max={y_norm_p.max().item():.4f} "
                     f"std={y_norm_p.std().item():.4f}\n"
-                    f"  slog1p(y_norm): min={y_log_p.min().item():.4f} "
+                    f"  slog1p(y_norm, alpha={cfg.log1p_alpha}): min={y_log_p.min().item():.4f} "
                     f"max={y_log_p.max().item():.4f} "
                     f"std={y_log_p.std().item():.4f}"
                 )
