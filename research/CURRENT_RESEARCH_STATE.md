@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-15 21:50
+- **As of:** 2026-05-15 23:10
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 4 active)
 - **Most recent human research direction:** None received.
@@ -19,27 +19,32 @@ Round-4 SOTA: **fern's Lion-stacked (PR #3387)**, val_avg/mae_surf_p=**94.08**, 
 
 Round-3 winner now superseded: ~~frieren's Huber loss (107.46, PR #3248)~~ — now the foundation layer that Lion stacks on.
 
-**Two potentially stronger results in flight:**
-- **alphonse `bf16-stable`** (#3427): W&B shows `to8x5txt` val=92.62, test=87.70 — would be **new SOTA (−1.46 below Lion baseline)** if terminal confirms. Nudged for terminal.
-- **edward `lr-tmax-fix`** (#3403): W&B shows val=103.30 (old Huber baseline basis), test=98.64 — didn't beat the new Lion baseline, but the T_max diagnostic has high round-5 strategic value. Nudged for terminal.
+**Strongest stack in flight:**
+- **alphonse `bf16-stable`** (#3427): **Terminal confirmed val=92.6166, test=87.6987** — beats Lion baseline by −1.46. BUT branch needs rebase onto Lion. Sent back to rebase + verify Lion+bf16+grad-clip+eta_min stack. Expect rebased rerun val ~84–92.
+- **frieren `lion-warmup`** (#3515): 2-epoch warmup on Lion baseline. Targeting val 89–92.
+- **edward `lion-tmax14`** (#3518): T_max=14 fix on Lion baseline. Targeting val 88–92.
+- **fern `lion-bf16-stacked`** (#3481): bf16 on Lion baseline — extends 14→19 epochs. Targeting val 84–91.
 
 **Current baseline (BASELINE.md):**
 - `val_avg/mae_surf_p` = **94.0803** (NEW)
 - `test_avg_nansafe/mae_surf_p` = **88.9362** (NEW, via eval_nansafe.py)
 - W&B run: `f9w6yzoq` (fern, group `lion-stacked`, PR #3387, merged 21:45 UTC)
 
-## Round 4 PRs (7 WIP, 1 merged)
+## Round 4 PRs — current status (23:10 UTC)
 
 | PR | Student | Hypothesis | Slug | Status |
 |---|---|---|---|---|
-| #3387 | fern | Lion optimizer on Huber baseline | `lion-stacked` | **MERGED 21:45 UTC** → new baseline 94.08 |
-| #3385 | askeladd | Warmup+cosine+grad-clip on Huber baseline | `warmup-cosine-stacked` | WIP — `warmup2-clip50` arm in flight |
-| #3389 | nezuko | surf_weight sweep (5, 20) | `surf-weight-sweep` | WIP — awaiting terminal |
-| #3391 | thorfinn | NACA Fourier features on Huber baseline | `naca-fourier-stacked` | WIP — awaiting terminal |
-| #3392 | tanjiro | Huber delta sweep (0.5, 1.0, 3.0) | `huber-delta-tuning` | WIP — awaiting terminal |
-| #3394 | frieren | Surface-only Huber + delta tuning | `huber-surface-only` | WIP — awaiting terminal |
-| #3403 | edward | Cosine T_max fix (round-5 idea 4) | `lr-tmax-fix` | WIP — awaiting terminal (val 103.30 observed) |
-| #3427 | alphonse | bf16 + grad-clip + LR floor on Lion baseline | `bf16-stable` | WIP — awaiting terminal (val 92.62 potential SOTA!) |
+| #3387 | fern | Lion optimizer on Huber baseline | `lion-stacked` | **MERGED 21:45** — new baseline 94.08 |
+| #3394 | frieren | Surface-only Huber + delta tuning | `huber-surface-only` | **CLOSED** val=103.20, no rebase — reassigned |
+| #3403 | edward | Cosine T_max fix | `lr-tmax-fix` | **CLOSED** val=103.30, T_max=14 diagnostic confirmed — reassigned |
+| #3427 | alphonse | bf16 + grad-clip + eta_min on Huber | `bf16-stable` | **WIP (rebase pending)** — val=92.62 confirmed, sent back to rebase onto Lion |
+| #3481 | fern | Lion + bf16 (timeout extension) | `lion-bf16-stacked` | WIP — just assigned |
+| #3515 | frieren | Lion + 2-epoch warmup | `lion-warmup` | WIP — just assigned |
+| #3518 | edward | Lion + T_max=14 | `lion-tmax14` | WIP — just assigned |
+| #3385 | askeladd | Warmup+cosine+clip (Huber) | `warmup-cosine-stacked` | WIP (needs_rebase) — nudged to rebase+run warmup2-clip50 on Lion |
+| #3389 | nezuko | surf_weight sweep | `surf-weight-sweep` | WIP — awaiting terminal |
+| #3391 | thorfinn | NACA Fourier on Huber | `naca-fourier-stacked` | WIP — 6 runs done (best 115.45, regression), nudged for terminal |
+| #3392 | tanjiro | Huber delta sweep | `huber-delta-tuning` | WIP — awaiting terminal |
 
 ## Key research signals — round 4 update
 
@@ -53,19 +58,28 @@ These are truly orthogonal — Huber limits what gets backpropped; Lion limits h
 
 **Headroom signal**: Lion val curve was still descending at epoch 14/14 (timeout). The slope at cutoff was −2.9/epoch. With more epochs (bf16 throughput would give ~19 epochs) or a better LR schedule (edward's T_max fix), the floor hasn't been reached.
 
-### Next convergence targets
+### Round-4 confirmed wins and elimination
 
-Based on what's in flight:
-- **alphonse `bf16-stable` (val 92.62 mid-flight)**: bf16 throughput + grad-clip + eta_min on Huber base. If this holds vs Lion baseline, it may stack with Lion to push further.
-- **edward `lr-tmax-fix` (val 103.30)**: Isolated T_max diagnostic. Doesn't beat Lion, but validates that the LR schedule was misconfigured — sets up Lion+T_max-fix stacking.
-- **askeladd `warmup2-clip50` (in flight)**: The revised clip ceiling (max_norm=50 vs 1.0) may give a clear val win now that clipping is sparse (only true spikes clipped vs every step).
+**New SOTA stack (confirmed terminal):**
+- **Lion+Huber (fern, 94.08)**: merged baseline. −12.4% over Huber.
+- **bf16+grad-clip+eta_min+Huber (alphonse, 92.62)**: confirmed terminal, beats Lion. Needs rebase to validate Lion+bf16+clip+floor stack.
 
-### Round-4 levers confirmed irrelevant vs new Lion baseline
+**Pending Lion-stacking arms (highest priority):**
+- **fern #3481 `lion-bf16-stacked`**: Lion+bf16, predict 84–91.
+- **alphonse #3427 rebased**: Lion+bf16+grad-clip+eta_min, predict 82–91.
+- **frieren #3515 `lion-warmup`**: Lion+warmup, predict 89–92.
+- **edward #3518 `lion-tmax14`**: Lion+T_max=14, predict 88–92.
 
-- **NACA Fourier (thorfinn, 130.99 best)**: geometry features don't provide competitive advantage at this experiment scale.
-- **Huber δ sweep (tanjiro, 111.34 best)**: Delta tuning doesn't matter much when the optimizer is the binding constraint.
-- **Surface-only Huber (frieren, 103.20 best)**: Positive result on old baseline but doesn't beat new Lion 94.08.
-- **surf_weight sweep (nezuko)**: Awaiting terminal.
+**Confirmed diagnostics (valuable but non-winning):**
+- T_max=14 gives −3.9% on AdamW+Huber baseline (edward, 103.30). Now testing on Lion.
+- bf16 throughput gives 19 vs 14 epochs (alphonse, 92.62). Now rebasing onto Lion.
+
+**Eliminated on Lion baseline:**
+- Huber δ sweep (tanjiro, 111.34 best): optimizer dominates over δ tuning.
+- Surface-only Huber (frieren, 103.20 best): vol-MSE doesn't help, surface-only hurts.
+- NACA Fourier (thorfinn, 115.45 best): geometry encoding not competitive.
+- Warmup+clip(1.0) (askeladd, 107.61 on old Huber base): clip=1.0 too aggressive.
+- Warmup+clip(50) still pending (askeladd, needs rebase onto Lion).
 
 ## Known infra bugs (unchanged)
 

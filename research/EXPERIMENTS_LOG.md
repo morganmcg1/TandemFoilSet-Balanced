@@ -6,6 +6,51 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 23:00 — PR #3394 frieren CLOSED: surface-only Huber (val 103.20, high variance)
+
+- Branch: `willowpai2i24h3-frieren/huber-surface-only`
+- Hypothesis: Apply Huber only to surface term; keep MSE for volume. Tighter δ=1.0.
+
+| Run | δ | val_avg | test_nansafe | Δ vs old baseline |
+|---|---|---:|---:|---:|
+| `pbg3fjj5` (δ=1.0 arm 1) | 1.0 | 103.20 | 101.39 | −4.26 (beats old Huber) |
+| `1h1wlbdy` (δ=1.0 arm 2) | 1.0 | 121.38 | 119.06 | +13.92 (regression) |
+| `mrtndp5i` (δ=2.0 surf-only) | 2.0 | 117.04 | 116.76 | +9.57 (regression) |
+
+**Decision**: 103.20 doesn't beat new Lion baseline 94.08. Closed. Key finding: 18-point spread between identical-config runs flagged as a cohort-wide variance concern. Fixed seed required in future. Frieren reassigned to `lion-warmup` (#3515).
+
+---
+
+## 2026-05-15 23:00 — PR #3403 edward CLOSED: T_max=14 diagnostic confirmed (val 103.30)
+
+- Branch: `willowpai2i24h3-edward/lr-tmax-fix`
+- Hypothesis: Fix cosine T_max=50 → T_max=14 matching actual epoch budget.
+
+| Run | T_max | val_avg | test_nansafe | Notes |
+|---|---:|---:|---:|---|
+| `2j268eqn` (primary) | 14 | 103.30 | 98.64 | Full schedule, LR→0 at ep14 |
+| `pn4p54cm` (replication) | 14 | 104.35 | — | Very consistent — low seed noise |
+| `r2ovztrr` | 12 | 120.68 | 113.15 | Aggressive — wasted high-LR steps |
+| `o9vw958j` | 14 | 137.66 | 132.06 | Incomplete (ep7 only) |
+
+**Decision**: T_max=14 confirmed as −3.9% improvement on old AdamW+Huber baseline. High replication consistency (103.30 vs 104.35). Doesn't beat new Lion baseline 94.08. Closed as completed diagnostic. Edward reassigned to `lion-tmax14` (#3518) — stack T_max=14 fix on Lion baseline.
+
+---
+
+## 2026-05-15 23:00 — PR #3427 alphonse SENT BACK for rebase: val=92.62 confirmed
+
+- Branch: `willowpai2i24h3-alphonse/bf16-stable`
+- Terminal confirmed: val=92.6166, test=87.6987 (two arms, both 19 epochs in 30 min)
+
+| Arm | val_avg | test_nansafe | Δ vs Lion baseline 94.08 |
+|---|---:|---:|---:|
+| `to8x5txt` (δ=2.0, primary) | 92.62 | 87.70 | **−1.46 (beats Lion)** |
+| `8x6xlmup` (δ=1.0) | 93.74 | 87.32 | −0.34 (narrow) |
+
+Late-cosine divergence fully eliminated (primary: best=92.62 at ep19, stable). But this result was trained on Huber baseline — branch needs rebase to incorporate Lion. Sent back for rebase+rerun. Predicted Lion+bf16+clip+floor val ~82–91.
+
+---
+
 ## 2026-05-15 21:45 — PR #3387 fern MERGED: Lion+Huber new SOTA → val=94.08
 
 - Branch: `willowpai2i24h3-fern/lion-stacked`
