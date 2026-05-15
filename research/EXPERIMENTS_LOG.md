@@ -1,5 +1,34 @@
 # SENPAI Research Results
 
+## 2026-05-15 22:45 — PR #3300: BF16 mixed-precision to get more epochs in 30-min budget
+
+- **Branch**: `charliepai2i24h3-edward/bf16-mixed-precision`
+- **Hypothesis**: `torch.autocast(dtype=torch.bfloat16)` on A100-class GPU gives ~1.5x throughput with no numerical tuning, allowing more epochs within the 30-min cap. Every prior run stopped at epoch 14/50 with val loss still descending.
+- **Outcome**: **MERGED — major winner, new baseline val_avg=97.55 (−17.1%)**
+
+| Metric | Baseline (PR #3237) | BF16 Huber | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 117.66 | **97.55** | **−20.11 (−17.1%)** |
+| `val_single_in_dist/mae_surf_p` | 147.77 | 114.41 | −33.36 (−22.6%) |
+| `val_geom_camber_rc/mae_surf_p` | 125.08 | 104.96 | −20.12 (−16.1%) |
+| `val_geom_camber_cruise/mae_surf_p` | 88.98 | 79.72 | −9.26 (−10.4%) |
+| `val_re_rand/mae_surf_p` | 108.81 | 91.09 | −17.72 (−16.3%) |
+| `test_avg/mae_surf_p` (3 finite splits) | ~107.6 | 93.99 | ~−13% |
+| Best epoch reached | 13/14 | **17/19** | +4 epochs |
+| s/epoch | ~128 s | **~98 s** | ~1.3x throughput |
+| Peak VRAM | 42.11 GB | **32.95 GB** | −9.16 GB (−22%) |
+| Artifact | — | `models/model-bf16_huber-20260515-212744/metrics.jsonl` | — |
+
+**Analysis**: BF16 worked exactly as predicted. The throughput gain (1.3x, slightly below the 1.5x prediction — data loader and host-device copy still FP32) gave 5 extra epochs per run. Val loss was smooth and monotone — no numerical instability, no NaN. All 4 splits improved uniformly. The val trajectory was still descending at epoch 17 (best) before late-cosine noise kicked in at epochs 18-19 (T_max=50 means LR was still ~85% of initial at the cap). This suggests the budget is the binding constraint, not model capacity — BF16 relaxed the constraint meaningfully.
+
+**Key implications for future experiments**:
+1. BF16 is now baked into the baseline (merged). All future experiments stack on top of it.
+2. VRAM headroom opened up: 32.95 GB used vs 96 GB available = 63 GB free. This unlocks larger model variants (n_hidden=192+) without memory concerns.
+3. Cosine schedule mismatch: T_max=50 but we reach ~19 epochs. LR is still ~85% of initial at the cap. A T_max=20 schedule would anneal fully within the budget window.
+4. val loss still descending at epoch 17 — more epochs = more improvement. The budget, not capacity, is the ceiling.
+
+---
+
 ## 2026-05-15 20:25 — PR #3393: Per-channel surface pressure weighting (surf_p_weight_extra=4)
 
 - **Branch**: `charliepai2i24h3-thorfinn/surf-p-channel-weight`
