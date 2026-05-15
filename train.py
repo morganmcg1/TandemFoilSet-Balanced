@@ -311,6 +311,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "ema_decay": cfg.ema_decay,
         "epochs_configured": cfg.epochs,
     }
 
@@ -358,6 +359,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    ema_decay: float = 0.999  # EMA decay for shadow model evaluated at val/test
 
 
 cfg = sp.parse(Config)
@@ -402,6 +404,15 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# EMA shadow model — evaluated at val/test time for smoother weight trajectory
+# and improved OOD generalization. avg_fn signature is (averaged, current, num_averaged).
+ema_decay = cfg.ema_decay
+ema_model = torch.optim.swa_utils.AveragedModel(
+    model,
+    avg_fn=lambda averaged, current, num_averaged: ema_decay * averaged + (1.0 - ema_decay) * current,
+)
+print(f"EMA: decay={ema_decay}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -455,6 +466,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema_model.update_parameters(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -466,8 +478,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -482,7 +495,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.module.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
