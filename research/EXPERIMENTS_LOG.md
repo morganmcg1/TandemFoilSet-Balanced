@@ -394,3 +394,63 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 
 ### Decision
 - **Closed.** Reassigned edward to slice_num=96 (#3399) — mid-point between 64 and 128. Expected ~150 s/epoch → 11-12 epochs, closer to baseline convergence.
+
+---
+
+## 2026-05-15 20:10 — PR #3377: Scale n_hidden 128→96 (width sweep, stale base)
+- Branch: `charliepai2i24h2-thorfinn/n-hidden-96`
+- Student: charliepai2i24h2-thorfinn
+- Hypothesis: Reduce hidden width from 128 to 96 to cut per-epoch cost (~10%), enabling ~2 extra cosine-tail epochs in the 30-min cap. Tests whether Transolver is capacity-overprovisioned at width=128 under truncated training.
+
+### Results table
+
+| Metric | n_hidden=96 | Baseline (#3276, OLD) | Δ vs old | Vs NEW baseline (#3294) | Δ vs new |
+|--------|------------|----------------------|----------|------------------------|----------|
+| `val_avg/mae_surf_p` | **102.082** | 109.681 | **-6.93%** | 100.811 | +1.26% (regression) |
+| `test_avg/mae_surf_p` | **91.684** | 97.315 | **-5.79%** | — | — |
+| Best epoch | 16 of 16 (timeout) | 14 | +2 | — | — |
+| Per-epoch wall-clock | ~117 s | ~132 s | **-11%** | — | — |
+| Param count | 0.377M | 0.655M | -42% | — | — |
+| Peak VRAM | 34.15 GB | ~42 GB | -19% | — | — |
+| Per-split val mae_surf_p | single 126.66 \| rc 109.21 \| cruise 78.94 \| re_rand 93.52 | single 148.09 \| rc 114.87 \| cruise 78.85 \| re_rand 96.91 | — | — | — |
+| Metrics artifact | `models/model-n-hidden-96-20260515-182809/metrics.{jsonl,yaml}` | — | — | — | — |
+
+### Analysis
+- Beat OLD baseline 109.68 by -6.93%, but student branch was based on pre-#3294 commit (lr=5e-4, T_max=50 cosine, no warmup). This is the OLD config regime — not a fair comparison against NEW baseline.
+- Model descending at timeout (epoch 16 best — "still descending"). Mechanism: T_max=50 at epoch 16 → LR at 36% of peak, effectively a partial cosine anneal. Happy accident that recreates part of what warmup+cosine does systematically.
+- `geom_camber_cruise` (+0.1%) appears saturated across widths — not a capacity bottleneck.
+- `val_single_in_dist` (-14.5%) is the main signal — smaller model benefits from cleaner schedule/budget.
+
+### Decision
+- **Sent back for rebase + retest.** Branch uses pre-#3294 config. Need clean rebase onto current HEAD (warmup+cosine + lr=7e-4 + slice_num=64) and rerun at epochs=14.
+- Predicted retest: 99–103. If ≤100.811, it's a slight win; if >100.811, capacity is the bottleneck and direction is UP (alphonse's width=192 confirms this).
+
+---
+
+## 2026-05-15 20:30 — PR #3399: slice_num 64→96 (WINNER)
+- Branch: `charliepai2i24h2-edward/slice-num-96`
+- Student: charliepai2i24h2-edward
+- Hypothesis: Mid-point slot sweep between baseline (64, 132s/ep) and failed 128 (+32% cost). slice_num=96 predicts ~151s/ep → 11-12 epochs in 30-min budget. Richer slot attention without budget starvation.
+
+### Results table
+
+| Metric | slice_num=96 | Baseline (#3294) | Δ |
+|--------|-------------|-----------------|---|
+| `val_avg/mae_surf_p` (best @ epoch 12) | **97.757** | 100.811 | **-3.03%** |
+| `test_avg/mae_surf_p` | **86.388** | ~99.15 (3-split) | **significant** |
+| Per-split val mae_surf_p | single 115.495 \| rc 110.451 \| cruise 75.398 \| re_rand 89.685 | single 118.74 \| rc 107.10 \| cruise 81.97 \| re_rand 95.43 | |
+| Epochs completed | 12 of 14 (30.2 min cutoff) | 14 | — |
+| Per-epoch wall-clock | ~150.9 s | ~132 s | +14.3% |
+| Peak VRAM | 47.56 GB | ~42 GB | +13.2% |
+| Param count | 667,639 | ~662,000 | +0.8% |
+| Metrics artifact | `models/model-slice-num-96-20260515-192511/metrics.{jsonl,yaml}` | — | — |
+
+### Analysis
+- Clear winner on correct base (post-#3294). 3 of 4 splits improved; only geom_camber_rc regressed +3.1%.
+- Model still strongly descending at cutoff (epoch 12 best, drop -7.7 from epoch 11→12). Cosine completed ~83% of T_max=12 anneal — meaningful but not complete. 1-2 more epochs would likely help.
+- slice_num=96 gives richer attention (2.25× more slots than 64) while fitting budget — the sweet spot hypothesis holds.
+- cruise and re_rand see largest gains (-8% and -6%) — geometric and Re diversity benefits from more slot resolution.
+- Follow-up: tune T_max=10 to match actual 12-epoch budget, or investigate BF16 to get 13-14 epochs within cap.
+
+### Decision
+- **MERGED** — clear winner. New baseline: val_avg/mae_surf_p = 97.757.
