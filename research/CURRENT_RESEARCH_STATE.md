@@ -1,35 +1,35 @@
 # SENPAI Research State
 
-- 2026-05-15 — round 1 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-15 — round 1/2 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 
-## Current focus
+## Baseline (BASELINE.md)
 
-Establish strong first-round improvements on the Transolver baseline by hitting orthogonal axes simultaneously. Primary metric: `val_avg/mae_surf_p` (and `test_avg/mae_surf_p` at the end of every run). No committed baseline metrics yet on this branch — first-round results will define our internal reference.
+**val_avg/mae_surf_p = 135.0153** (PR #3119 — thorfinn, merged 2026-05-15)
 
-Baseline configuration (from `train.py` at HEAD):
+Effective config: Transolver 128h/5L/4H/slice64/mlp2, AdamW lr=5e-4 wd=1e-4, CosineAnnealingLR, batch=4, surf_weight=10. ~14 effective epochs (30-min timeout cap). 42GB peak VRAM.
 
-| Field | Value |
-|------|------|
-| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 |
-| Activation / init | GELU, trunc_normal_(std=0.02) |
-| Optimizer | AdamW lr=5e-4, weight_decay=1e-4 |
-| Scheduler | CosineAnnealingLR(T_max=epochs) |
-| Loss | MSE in normalized space, vol_loss + 10·surf_loss |
-| Batch / epochs | batch_size=4, epochs=50 (capped by SENPAI_TIMEOUT_MINUTES) |
+Known issues: `test_avg/mae_surf_p` is NaN due to a pre-existing bug in `data/scoring.py:accumulate_batch` (NaN×0=NaN propagation when 1 test_cruise GT sample has NaN p). Fix is tracked as a bug-fix PR for fern.
 
-## Round 1 hypothesis assignments (all 8 GPUs active)
+## Round 1 results
 
-| PR | Student | Theme | Change |
-|----|---------|-------|--------|
-| #3099 | alphonse | Capacity | n_hidden 128→192, n_layers 5→6, n_head 4→6 |
-| #3101 | askeladd | Loss weight | surf_weight 10→30 |
-| #3102 | edward   | Scheduler | OneCycleLR(max_lr=1e-3, pct_start=0.1) replaces CosineAnnealingLR |
-| #3104 | fern     | Per-channel loss | 4× surface-p, 2× volume-p weighting in training loss |
-| #3106 | frieren  | Slice/head scale | slice_num 64→128, n_head 4→8, mlp_ratio 2→3 |
-| #3110 | nezuko   | Batch + LR | batch_size 4→8, lr 5e-4→8e-4 (sqrt scaling) |
-| #3115 | tanjiro  | Re-FiLM | Add ReFiLM(log Re) modulation after preprocess |
-| #3119 | thorfinn | Longer training | epochs 50→80, same schedule |
+| PR | Student | Theme | val_avg/mae_surf_p | Decision |
+|----|---------|-------|-------------------|----------|
+| #3119 | thorfinn | epochs 50→80 | **135.0153** ← baseline | Merged |
+| #3104 | fern | per-channel p 4× | 149.1018 (+10.4%) | Closed — regression |
+| #3099 | alphonse | capacity 192h/6L/6H | WIP | — |
+| #3101 | askeladd | surf_weight 30 | WIP | — |
+| #3102 | edward | OneCycleLR max_lr=1e-3 | WIP | — |
+| #3106 | frieren | slice_num 128, head 8 | WIP | — |
+| #3110 | nezuko | batch 8, lr 8e-4 | WIP | — |
+| #3115 | tanjiro | Re-FiLM (log Re) | WIP | — |
+
+## Round 2 assignments (idle students after round-1 reviews)
+
+| PR | Student | Theme |
+|----|---------|-------|
+| TBD | fern | Bug fix: NaN-safe evaluate_split in train.py |
+| TBD | thorfinn | SwiGLU activation in TransolverBlock MLPs |
 
 ## Potential next research directions
 
