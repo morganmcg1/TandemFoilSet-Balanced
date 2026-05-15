@@ -370,6 +370,8 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
+    n_hidden: int = 128  # Transolver hidden dim
+    n_head: int = 4  # Transolver attention heads (dim_head = n_hidden // n_head)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -403,13 +405,19 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+if cfg.n_hidden % cfg.n_head != 0:
+    raise ValueError(
+        f"n_hidden ({cfg.n_hidden}) must be divisible by n_head ({cfg.n_head}) "
+        f"so dim_head is an integer."
+    )
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
