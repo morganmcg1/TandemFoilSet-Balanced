@@ -397,6 +397,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -489,7 +490,12 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        abs_err = (pred - y_norm).abs()
+        sq_err = torch.where(
+            abs_err < cfg.huber_delta,
+            0.5 * abs_err ** 2,
+            cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
+        )
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
