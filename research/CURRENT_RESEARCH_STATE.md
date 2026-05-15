@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 22:40 UTC (Round 3 / Round 4 transition on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-15 23:32 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -35,19 +35,20 @@ Current best: **96.464 val_avg/mae_surf_p** (nezuko #3126, EMA + bf16 + T_max=15
 |----|-----------|--------|--------|
 | #3278 | Per-channel p-upweighting (alphonse) | +3-21% regression | Domain variance > channel bias |
 | #3364 | lr=1e-3+warmup on bf16 (alphonse) | +8.3% regression | bf16 noise amplifies higher LR |
+| #3321 | lr=1e-3 / 1.5e-3 + warmup on fp32 + bf16 (tanjiro) | +2.2-12% regression (6 arms) | Two-seed confirmation of higher-LR direction dead end |
 
 ## Active experiments
 
 | Student | PR | Hypothesis | Stack | Status |
 |---------|----|-----------|----|--------|
-| thorfinn | #3390 | bf16+T_max=15/20 compose verify | bf16+T_max | Training (73 GB, 22:34 log) |
-| alphonse | #3443 | lr ∈ {2.5e-4, 3.5e-4} sweep | bf16+T_max=15 | Running arms (~22:09 GPU idle) |
-| askeladd | #3365 | batch_size=6/8 | bf16 | Training (77 GB, 22:31 log) |
-| tanjiro | #3321 | lr ∈ {1e-3, 1.5e-3} sweep | fp32+Huber+bf16 | GPU idle 21:58 — likely posting results |
+| thorfinn | #3390 | bf16+T_max=15/20 compose verify | bf16+T_max | 1 arm complete 22:58, post-training idle |
+| alphonse | #3443 | lr ∈ {2.5e-4, 3.5e-4} sweep | bf16+T_max=15 | 2+ arms complete by 22:55, post-training idle |
+| askeladd | #3365 | batch_size=6/8 | bf16 | Training (77 GB previously, now 0; analysis phase) |
+| tanjiro | #3511 | grad_clip ∈ {0.5, 1.0, ∞} | bf16+T_max=15+EMA | Just assigned (after #3321 closed-falsified) |
 | nezuko | #3492 | n_hidden=192 vs 128 | bf16+T_max=15+EMA | Just assigned |
-| edward | #3113 | slice_num=96 vs 64 | bf16+Huber | Training (merge_conflict_comment stale) |
-| frieren | #3122 | FiLM conditioning | bf16 rebase | CONFLICTING — needs rebase (5+ hrs stale) |
-| fern | #3117 | Fourier scale=2/4 + concat | bf16 | CONFLICTING — pod restarted, should be resolving |
+| edward | #3113 | slice_num=96 vs 64 | bf16+Huber | Pod restarted iter 9 — picking up |
+| frieren | #3122 | FiLM conditioning | bf16+T_max=15+EMA | Rebased 23:23, launching arms |
+| fern | #3117 | Fourier scale=2/4 + concat | bf16 (no EMA) | Second rebase done; Arm A=103.370 measured, Arms B/C running |
 
 ## Key research questions
 

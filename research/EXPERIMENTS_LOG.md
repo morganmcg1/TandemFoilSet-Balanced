@@ -458,3 +458,53 @@ Merged. New best stack: `--amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_deca
 Nezuko reassigned to #3492 (n_hidden=192 capacity test on full stack).
 
 ---
+
+## 2026-05-15 23:25 — PR #3321 [CLOSED]: Higher LR (1e-3, 1.5e-3) + 3-epoch warmup
+
+- **Student branch:** `charliepai2i48h4-tanjiro/lr-warmup-higher-peak`
+- **Hypothesis:** Higher peak LR (lr=1e-3 / 1.5e-3) + 3-epoch warmup beats baseline lr=5e-4 by exploiting near-constant LR within the 14-epoch budget.
+
+### Results (6-arm sweep on fp32 Huber and bf16 Huber)
+
+| Arm | dtype | lr_peak | warmup | epochs | best ep | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` (3 finite) |
+|-----|-------|---------|--------|--------|---------|---------------------:|---------------------------------:|
+| A | fp32 | 5e-4 | 0 | 14 | 13 | **119.897** | 112.109 |
+| B | fp32 | 1e-3 | 3 | 14 | 12 | 122.950 (+2.5%) | 121.919 |
+| C | fp32 | 1.5e-3 | 3 | 14 | 13 | 122.575 (+2.2%) | 121.661 |
+| A | bf16 | 5e-4 | 0 | 19 | 17 | 100.372 | 99.132 |
+| B | bf16 | 1e-3 | 3 | 19 | 16 | 100.272 (−0.1%, tied) | 99.004 |
+| C | bf16 | 1.5e-3 | 3 | 19 | 18 | 112.399 (+12%) | 111.611 |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-tanjiro-lr-warmup-baseline-20260515-163341/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-lr-warmup-1e3-20260515-172533/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-lr-warmup-15e4-20260515-202542/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-lr-warmup-baseline-20260515-182820/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-lr-warmup-1e3-bf16-20260515-192619/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-lr-warmup-15e4-bf16-20260515-212417/metrics.jsonl`
+
+### Analysis & conclusions
+
+Higher LR axis cleanly falsified on both dtypes. The hypothesis mechanism (near-constant LR within 14-ep budget) was empirically supported (LR-at-best is 86-92% of peak in fp32), but the predicted win did not materialize.
+
+**bf16 Arm B (100.272) being tied with Arm A (100.372)** corroborates alphonse #3364's similar near-tied/regression result at the same config — combined two-seed data: lr=1e-3 sits at or past the bf16 stability edge.
+
+**Side observation:** `val_geom_camber_cruise` split actively prefers higher LR in fp32 (105 → 95-97, −10%) — a per-split signal worth flagging for future cruise-specific hypotheses.
+
+Vs the new BASELINE.md (96.464 from #3126), tanjiro's best arm (100.272) is +3.95% — far from current best. Combined with alphonse #3364's falsification, this exhausts the higher-LR direction.
+
+### Decision
+
+Closed. Tanjiro reassigned to PR #3511 (gradient clipping on current best stack — mechanistically motivated by their own bf16-noise analysis).
+
+---
+
+## 2026-05-15 23:32 — Round 4: gradient clipping assignment (tanjiro #3511)
+
+After establishing that higher LR is falsified (both seeds via #3364 + #3321), the natural complement is bounding the per-step magnitude directly. Gradient clipping caps the noise input that EMA averages on the output side — should be additive with the EMA win.
+
+Assigned tanjiro PR #3511 with 3 arms on full best stack:
+- Arm A: no clip
+- Arm B: clip_grad_norm=1.0
+- Arm C: clip_grad_norm=0.5
