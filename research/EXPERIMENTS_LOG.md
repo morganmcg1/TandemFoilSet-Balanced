@@ -16,6 +16,21 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-15 15:25 — PR #3207: PGOT-style geometry-conditioned slice assignment
+- student: willowpai2i24h2-nezuko
+- branch: `willowpai2i24h2-nezuko/geom-slice-injection`
+- hypothesis: injecting per-node geometry features (NACA M/P/T, AoA, Re, gap, stagger) into PhysicsAttention's slice projection improves generalization across the camber-holdout splits without hurting in-distribution
+- runs: `pjmkgg22` (wandb_group `willow-pai2i-24h-r2/geom-slice-injection`)
+
+| Arm | val_avg/mae_surf_p (best, ep 12) | test_avg/mae_surf_p (W&B) | val_single | val_camber_rc | val_camber_cruise | val_re_rand |
+|---|---|---|---|---|---|---|
+| geom-slice | **128.34** | NaN ⚠ | 145.96 | 142.21 | 107.66 | 117.51 |
+
+- analysis: The hypothesis is supported on validation — geom-slice beats the warmup=3 val_avg (136.55, PR #3194) by ~6% with no regression on any of the four val tracks, and `val_geom_camber_rc` drops from 152.82 → 142.21 (–7%), exactly the split the hypothesis targeted. The run completed all 50 epochs in 31.5 min (just over wall clock cap, last-epoch eval was the bottleneck) and converged cleanly with `val_avg` still falling slowly after epoch 12, suggesting more headroom with a slightly larger model or schedule adjustment. **However, `test_avg/mae_surf_p` is NaN in W&B** — same global bug as PR #3194 (data/scoring.py:48 computes `(pred - y).abs() * mask` BEFORE the per-sample skip, so `inf*0 = NaN` poisons the accumulator when GT has non-finite values; reproduced to `test_geom_camber_cruise/000020.pt` having `y[..., 2] = -inf` at 761 volume nodes). The student computed an offline-corrected `test_avg = 115.71` by re-running scoring with NaN-zeroed samples, but the program contract requires the W&B-logged metric to be the source of truth.
+- decision: **sent back** to draft with the exact `evaluate_split` patch (pre-zero non-finite y samples and exclude them from the metric via the mask/is_surface, before calling `accumulate_batch`). Asked the student to re-run the same single arm and confirm the W&B `test_avg/mae_surf_p` reads ~115.71. The hypothesis is the strongest candidate so far; if the re-run lands a finite test number, this becomes the first merge-eligible Round-1 result.
+- next steps: on a clean re-run, merge this as the new baseline (val_avg/mae_surf_p=128.34, test=115.71). Then Round 2 priorities: (a) stack geom-slice + warmup=3 (small additive risk, both target different bottlenecks), (b) per-block geometry conditioning (FiLM-style modulation), (c) sweep `slice_num` since slice-token capacity is the load-bearing component.
+
+
 ## 2026-05-15 14:45 — PR #3194: 5-epoch LR warmup + cosine annealing
 - student: willowpai2i24h2-askeladd
 - branch: `willowpai2i24h2-askeladd/lr-warmup-cosine`

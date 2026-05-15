@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 14:45
+- **Date:** 2026-05-15 15:25
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -12,14 +12,29 @@ None yet — no human directives on this launch.
 
 ## Known global issue (surfaced by Round 1)
 
-`test_geom_camber_cruise` produces `Infinity` in the pressure channel for at least one sample on the baseline training recipe, which propagates through `data/scoring.py`'s global accumulator and turns `test_avg/mae_surf_p` into NaN. `data/scoring.py` is read-only, but we can fix this defensively in `evaluate_split` in `train.py` with:
+**Root cause identified by nezuko (PR #3207):** `data/scoring.py:48` computes `err = (pred - y).abs() * mask` BEFORE the per-sample finite check, so when GT has non-finite values (e.g. `test_geom_camber_cruise/000020.pt` has `y[..., 2] = -inf` at 761 volume nodes), the `inf * 0` multiplication produces NaN, which then poisons the float64 accumulator and propagates as NaN into `test_avg/mae_surf_p`. `data/scoring.py` is read-only — fix lives in `evaluate_split` (train.py).
+
+Two equivalent workarounds in `evaluate_split`, before `accumulate_batch(...)`:
 
 ```python
+# A) Defensive sample skip (preferred — surgical, preserves intent of scoring's
+#    per-sample finite-check):
+y_bad = ~torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)  # [B]
+if y_bad.any():
+    keep = (~y_bad)
+    y = torch.where(keep[:, None, None], y, torch.zeros_like(y))
+    mask = mask & keep[:, None]
+    is_surface = is_surface & keep[:, None]
+```
+
+```python
+# B) NaN-tolerant prediction clamp (simpler, equivalent effect since the bad
+#    sample's MAE contribution gets zeroed by mask):
 pred = torch.where(mask.unsqueeze(-1), pred, torch.zeros_like(pred))
 pred = torch.nan_to_num(pred, nan=0.0, posinf=50.0, neginf=-50.0).clamp_(-50.0, 50.0)
 ```
 
-I've asked askeladd (PR #3194) to include this fix in their re-run. Once a clean baseline merges, every other PR will inherit the fix. Until then, expect other Round-1 PRs may also report NaN on `test_avg/mae_surf_p`.
+Both askeladd (PR #3194) and nezuko (PR #3207) are re-running with the fix. Once a clean baseline merges, every other PR inherits it.
 
 ## Current research focus and themes
 
@@ -39,31 +54,32 @@ Round 1 (fresh start). The goal is to beat the vanilla Transolver baseline confi
 | PR | Student | Hypothesis | Angle | Status |
 |---|---|---|---|---|
 | #3191 | alphonse | Per-sample scale-normalizing loss (relative-L2 style) | loss | WIP |
-| #3194 | askeladd | 5-epoch linear warmup + cosine remainder | optimizer | Sent back — needs `nan_to_num` fix in `evaluate_split` + no-warmup baseline arm |
+| #3194 | askeladd | 5-epoch linear warmup + cosine remainder | optimizer | Sent back — needs NaN fix in `evaluate_split` + no-warmup baseline arm |
 | #3198 | edward | Per-channel surface loss weights (upweight `p`) | loss | WIP |
 | #3200 | fern | Fourier position features on (x, z) | features | WIP |
 | #3206 | frieren | Capacity scale-up: `n_hidden=256, n_head=8, slice_num=128` | arch-tweak | WIP |
-| #3207 | nezuko | PGOT-style geometry-conditioned slice assignment | arch-tweak | WIP |
+| #3207 | nezuko | PGOT-style geometry-conditioned slice assignment | arch-tweak | Sent back — val=128.34 (best so far) but W&B test_avg=NaN; needs `evaluate_split` fix and re-run |
 | #3215 | tanjiro | SmoothL1 (Huber) loss with `beta=0.05` for outlier-robust regression | loss | WIP |
 | #3218 | thorfinn | Stochastic depth (DropPath) on Transolver blocks | regularization | WIP |
 
 Hypothesis details and references live in `research/RESEARCH_IDEAS_2026-05-15_12:35.md`.
 
-## Round 1 partial signal (from PR #3194 before bug-fix re-run)
+## Round 1 partial signal (pre-merge — all numbers from runs that still hit the W&B NaN bug)
 
-askeladd's two-arm comparison under the 30-min cap: warmup=3 reached `val_avg/mae_surf_p = 136.55` at epoch 13, warmup=5 reached 153.72. Both hit the wall clock at epoch 14. **This is a warmup-3-vs-warmup-5 comparison only — not a warmup-vs-no-warmup comparison.** The no-warmup arm is requested for the re-run. The val=136.55 number is the first reference point on this branch, but it is not yet an accepted baseline (NaN test_avg blocks merge).
+**Leaderboard (lower is better, all from a single epoch checkpoint at best val):**
 
-Per-split surface-p (warmup=3, val, epoch 13):
-- `val_single_in_dist`: 159.58
-- `val_geom_camber_rc`: 152.82
-- `val_geom_camber_cruise`: 109.78
-- `val_re_rand`: 124.01
+| Source | val_avg | val_single | val_camber_rc | val_camber_cruise | val_re_rand | W&B test_avg |
+|---|---|---|---|---|---|---|
+| **PR #3207 nezuko — geom-slice (50/50 ep)** | **128.34** | 145.96 | 142.21 | 107.66 | 117.51 | NaN (offline-corrected: 115.71) |
+| PR #3194 askeladd — warmup=3 (14/50 ep, hit wall clock) | 136.55 | 159.58 | 152.82 | 109.78 | 124.01 | NaN (test_geom_camber_cruise: NaN) |
+| PR #3194 askeladd — warmup=5 (14/50 ep, hit wall clock) | 153.72 | 207.68 | 155.53 | 116.98 | 134.70 | NaN |
 
-Per-split surface-p (warmup=3, test, best checkpoint epoch 13):
-- `test_single_in_dist`: 147.84
-- `test_geom_camber_rc`: 138.52
-- `test_geom_camber_cruise`: NaN ⚠ (poisons test_avg)
-- `test_re_rand`: 127.73
+**Observations:**
+
+- nezuko's geom-slice ran all 50 epochs (31.5 min — just over wall clock; final epoch eval was the long tail) and converged smoothly; warmup arms stopped at epoch 14 because of the eval overhead built in earlier.
+- `val_geom_camber_rc` ordering: geom-slice (142.21) < warmup=3 (152.82) — the hypothesis-targeted split moved as predicted.
+- `val_geom_camber_cruise` is the easiest split (107–117) but is also the only one with the inf-GT poisoning the W&B test metric. The offline-corrected number (115.71) is consistent with the val pattern but cannot be the source of truth.
+- **No accepted baseline yet** — both leaders are sent back for the NaN fix. The first PR that lands a finite W&B `test_avg/mae_surf_p` and improves on the configured defaults becomes the baseline.
 
 ## Potential next research directions (after Round 1)
 
