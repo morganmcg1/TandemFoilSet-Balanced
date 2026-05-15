@@ -432,7 +432,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
-grad_clip_max_norm = 1.0
+grad_clip_max_norm = 100.0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
