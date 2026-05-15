@@ -190,11 +190,23 @@ class Transolver(nn.Module):
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_num, last_layer=False,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+
+        # H7: Two-branch output head — separate decoders for surface vs volume nodes.
+        # Surface head matches baseline mlp2 capacity; volume head is narrower.
+        self.head_ln = nn.LayerNorm(n_hidden)
+        self.surf_head = nn.Sequential(
+            nn.Linear(n_hidden, n_hidden), nn.GELU(),
+            nn.Linear(n_hidden, out_dim),
+        )
+        self.vol_head = nn.Sequential(
+            nn.Linear(n_hidden, n_hidden // 2), nn.GELU(),
+            nn.Linear(n_hidden // 2, out_dim),
+        )
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,10 +220,15 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data["is_surface"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
-        return {"preds": fx}
+        fx = self.head_ln(fx)
+        surf_out = self.surf_head(fx)
+        vol_out = self.vol_head(fx)
+        preds = torch.where(is_surface.unsqueeze(-1), surf_out, vol_out)
+        return {"preds": preds}
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +256,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -464,7 +481,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
