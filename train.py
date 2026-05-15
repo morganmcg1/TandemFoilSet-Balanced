@@ -312,6 +312,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "warmup_epochs": cfg.warmup_epochs,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -348,11 +349,12 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 7e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    epochs: int = 50
+    epochs: int = 100
+    warmup_epochs: int = 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -404,7 +406,13 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+warmup_epochs = min(cfg.warmup_epochs, max(MAX_EPOCHS - 1, 0))
+warmup = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=1e-3, end_factor=1.0, total_iters=max(warmup_epochs, 1))
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
