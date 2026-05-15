@@ -63,6 +63,23 @@ ACTIVATION = {
 }
 
 
+class FourierFeatures(nn.Module):
+    """Fixed random Fourier features on coordinates (Tancik et al. 2020)."""
+
+    def __init__(self, in_dim=2, num_freqs=16, sigma=4.0):
+        super().__init__()
+        B = torch.randn(in_dim, num_freqs) * sigma
+        self.register_buffer("B", B)
+
+    @property
+    def out_dim(self):
+        return self.B.shape[1] * 2
+
+    def forward(self, coords):
+        proj = 2 * 3.141592653589793 * coords @ self.B
+        return torch.cat([proj.sin(), proj.cos()], dim=-1)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -169,6 +186,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 fourier_num_freqs=16, fourier_sigma=4.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -177,11 +195,13 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        self.fourier = FourierFeatures(in_dim=space_dim, num_freqs=fourier_num_freqs, sigma=fourier_sigma)
+
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + self.fourier.out_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -208,7 +228,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        pos = x[..., :self.space_dim]
+        fourier = self.fourier(pos)
+        x_aug = torch.cat([x, fourier], dim=-1)
+        fx = self.preprocess(x_aug) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -353,7 +376,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 25.0
-    epochs: int = 50
+    epochs: int = 12
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
