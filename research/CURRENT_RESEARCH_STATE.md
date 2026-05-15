@@ -1,54 +1,53 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-15 12:35
+- **Date**: 2026-05-15 14:35
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 1 (first experiments on this advisor branch)
+- **Round**: 1 results coming in; Round 2 assigned to nezuko
 - **Most recent human research directive**: None received yet
+
+## Current Best
+
+**PR #3166 (FiLM) — val_avg/mae_surf_p = 114.6268** (merged 2026-05-15)
+⚠ Note: this includes FiLM conditioning — not a pure baseline. Clean baseline A/B running in PR #3284.
 
 ## Current Research Focus
 
-**Phase**: Round 1 — establishing baseline and probing primary levers.
+**Phase**: Round 1 experiments still in flight (7 WIP), nezuko running R2.
 
-We are working with a Transolver baseline on TandemFoilSet: predict (Ux, Uy, p) at every mesh node given tandem airfoil geometry and flow conditions. Primary metric is `val_avg/mae_surf_p` — equal-weight mean surface pressure MAE across 4 val splits (lower is better).
+Key insight from PR #3166: `CosineAnnealingLR(T_max=50)` with 30-min timeout means LR stays near 5e-4 throughout training — all Round 1 experiments are running without LR decay. This is a systematic bias that affects comparison but does not invalidate relative ranking.
 
-The baseline model (n_hidden=128, 5 layers, 4 heads, slice_num=64, MSE loss) has **not yet been evaluated** on this branch. All 8 students are running first-round experiments.
+**Round 1 WIP** (7 in flight):
 
-**Round 1 hypothesis portfolio** (8 students, 8 hypotheses):
+| PR | Student | Hypothesis | Category |
+|----|---------|------------|----------|
+| #3154 | alphonse | H5: Wider model (n_hidden 128→256, n_head 4→8) | Architecture |
+| #3156 | askeladd | H1: p-channel surface loss upweight (3x, 5x) | Loss |
+| #3158 | edward | H2: EMA weight averaging (decay=0.999) | Training |
+| #3160 | fern | H4: Huber loss (delta=1.0, 0.5) | Loss |
+| #3163 | frieren | H3: Gradient clip + 5-epoch LR warmup | Optimization |
+| #3168 | tanjiro | H10: More slices (slice_num 64→128, 96) | Architecture |
+| #3170 | thorfinn | H11: Deeper model (5→7, 5→8 layers) | Architecture |
 
-| PR | Student | Hypothesis | Category | Risk |
-|----|---------|------------|----------|------|
-| #3154 | alphonse | H5: Wider model (n_hidden 128→256, n_head 4→8) | Architecture | Med |
-| #3156 | askeladd | H1: Per-channel surface-p loss upweight (3x, 5x) | Loss | Low |
-| #3158 | edward | H2: EMA weight averaging (decay=0.999) | Training | Low |
-| #3160 | fern | H4: Huber loss (delta=1.0, 0.5) | Loss | Low |
-| #3163 | frieren | H3: Gradient clip + 5-epoch LR warmup | Optimization | Low |
-| #3166 | nezuko | H7: FiLM Re/AoA conditioning on Transolver blocks | Architecture | Med-High |
-| #3168 | tanjiro | H10: More slices (slice_num 64→128, 96) | Architecture | Low |
-| #3170 | thorfinn | H11: Deeper model (5→7, 5→8 layers) | Architecture | Low-Med |
+**Round 2 (nezuko):**
 
-## Bottleneck Hypotheses
+| PR | Student | Hypothesis | Category |
+|----|---------|------------|----------|
+| #3284 | nezuko | H12: Clean baseline + cosine T_max=15 vs T_max=50 | Ablation/Optimization |
 
-Based on analysis of train.py and program.md (no empirical results yet):
+## Key Open Questions
 
-1. **Model capacity** (n_hidden=128 is below paper's default of 256) — H5 tests this
-2. **Loss misalignment** (all channels weighted equally, but p is the only metric) — H1 tests this
-3. **Training instability** (no gradient clipping, no LR warmup with variable-mesh batches) — H3 tests this
-4. **EMA gap** (best checkpoint ≠ smoothed trajectory for OOD splits) — H2 tests this
-5. **Slice count** (64 slices over 242K nodes may dilute surface node information) — H10 tests this
-6. **Missing flow conditioning** (log(Re)/AoA treated as generic features, not global conditioning) — H7 tests this
+1. **Is FiLM actually helping?** PR #3284 Arm A will tell us — if baseline (no FiLM) ≈ 114.63, FiLM adds nothing. If baseline >> 114.63, FiLM is a genuine improvement.
+2. **Does LR annealing matter?** PR #3284 Arm B (T_max=15) will show if cosine decay helps within the 30-min window.
+3. **Capacity bottleneck?** H5 (alphonse, wider) is the most likely winner — watch for it.
 
-## Key Discriminating Questions
+## Known Issues
 
-1. **Capacity vs. loss**: Does H5 (wider) beat H1 (p-upweight) by >8%? If yes → capacity bottleneck. If they're similar → loss formulation bottleneck.
-2. **Loss shape**: Does H4 (Huber) beat MSE baseline? If yes → heavy-tailed Re distribution is hurting.
-3. **OOD geometry**: Which split benefits most — geom_camber_rc and geom_camber_cruise (FiLM/EMA candidates) or re_rand (gradient stability)?
+- `data/scoring.py` NaN propagation: `test_geom_camber_cruise` sample 20 has non-finite GT; affects `test_avg/mae_surf_p` for all PRs. File is read-only. Students should report 3-split test avg as workaround.
 
-## Potential Next Research Directions (Round 2)
+## Potential Next Research Directions (Round 2, pending R1 results)
 
-Depending on Round 1 results:
-
-- **If H5 (wider) wins big**: compound width + depth (n_hidden=256, n_layers=7) + more slices (slice_num=128)
-- **If H1 (p-upweight) wins big**: try even higher p_surf_weight (7x, 10x); combine with Huber
-- **If H7 (FiLM) works**: stack FiLM + wider model; try domain-specific FiLM per geometry type
-- **If plateau already**: try completely different architectures (GNO/FNO, U-Net decoder, separate surface/volume streams)
-- **Novel ideas for R2**: per-sample loss normalization (H8), WSD schedule (H9), separate p decoder head (H6)
+- **If H5 (wider) wins big**: compound n_hidden=256 + FiLM + T_max fix
+- **If H1 (p-upweight) wins big**: try higher weights (7x, 10x); combine with Huber
+- **If T_max fix helps**: apply corrected schedule to ALL subsequent experiments as new default
+- **If FiLM confirmed helpful**: stack FiLM + wider model, try domain-specific conditioning
+- **Novel ideas queued**: per-sample loss normalization (H8), WSD schedule (H9), separate p decoder head (H6), FiLM + wider (H7+H5 compound)
