@@ -170,12 +170,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_surface_head: bool = True):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_surface_head = use_surface_head
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -190,10 +192,17 @@ class Transolver(nn.Module):
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_num, last_layer=False,
             )
             for i in range(n_layers)
         ])
+        # Volume head replicates the original last-block projection
+        # (LayerNorm + 2-linear MLP with GELU). When use_surface_head=True a
+        # second deeper MLP head specializes on surface nodes.
+        self.ln_out = nn.LayerNorm(n_hidden)
+        self.output_proj = MLP(n_hidden, n_hidden, out_dim, n_layers=0, res=False)
+        if use_surface_head:
+            self.surface_head = MLP(n_hidden, n_hidden, out_dim, n_layers=2, res=False)
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
@@ -211,7 +220,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
-        return {"preds": fx}
+        fx = self.ln_out(fx)
+        out = {"preds": self.output_proj(fx)}
+        if self.use_surface_head:
+            out["surf_preds"] = self.surface_head(fx)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -283,21 +296,28 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm})
+            pred_vol = out["preds"]
+            pred_surf = out.get("surf_preds", pred_vol)
 
-            sq_err = (pred - y_norm) ** 2
+            sq_err_vol = (pred_vol - y_norm) ** 2
+            sq_err_surf = (pred_surf - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (sq_err_vol * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err_surf * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
+            # Route each node to its specialized head before scoring (no-op
+            # when the model has no surface head: pred_surf == pred_vol).
+            is_surf_f = is_surface.float().unsqueeze(-1)
+            pred = pred_surf * is_surf_f + pred_vol * (1.0 - is_surf_f)
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
@@ -408,6 +428,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    use_surface_head: bool = True  # if False, run the single-head baseline
 
 
 cfg = sp.parse(Config)
@@ -447,6 +468,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_surface_head=cfg.use_surface_head,
 )
 
 model = Transolver(**model_config).to(device)
@@ -500,8 +522,11 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
+        out = model({"x": x_norm})
+        pred_vol = out["preds"]
+        pred_surf = out.get("surf_preds", pred_vol)
+        sq_err_vol = (pred_vol - y_norm) ** 2  # [B, N, 3]
+        sq_err_surf = (pred_surf - y_norm) ** 2  # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -510,8 +535,8 @@ for epoch in range(MAX_EPOCHS):
 
         n_vol = vol_mask_f.sum(dim=1).clamp(min=1)  # [B, 1]
         n_surf = surf_mask_f.sum(dim=1).clamp(min=1)  # [B, 1]
-        vol_loss_per_sample = (sq_err * vol_mask_f).sum(dim=1) / n_vol  # [B, 3]
-        surf_loss_per_sample = (sq_err * surf_mask_f).sum(dim=1) / n_surf  # [B, 3]
+        vol_loss_per_sample = (sq_err_vol * vol_mask_f).sum(dim=1) / n_vol  # [B, 3]
+        surf_loss_per_sample = (sq_err_surf * surf_mask_f).sum(dim=1) / n_surf  # [B, 3]
         vol_loss_per_sample = vol_loss_per_sample.mean(dim=-1)  # [B]
         surf_loss_per_sample = surf_loss_per_sample.mean(dim=-1)  # [B]
 
