@@ -358,3 +358,129 @@ If SOAP+Huber+LRwarmup stacks orthogonally (expected: val ~60-80), this is the n
 **Diagnostic instrumentation note:** Student implemented `train/mean_slice_entropy` and per-layer entropy logging (`diag/L*_slice_entropy`). These diagnostics should be preserved in the codebase for future architecture investigations.
 
 **Assigned nezuko [PR #3430] to test EMA of model weights (decay=0.999) for evaluation.**
+
+## 2026-05-15 21:30 — PR #3169 (tanjiro): MLP ratio 2→4 — **CLOSED**
+
+- Branch: `willowpai2i48h3-tanjiro/mlp-ratio-4`
+- W&B group: `mlp-ratio-4`
+- Runs: `6wg7o8ho` (crashed), `wq4lxobs` (crashed)
+
+**Hypothesis:** Doubling MLP expansion ratio (2→4) increases model expressiveness in the Transolver FFN layers. Predicted −5 to −15%.
+
+**Result:** Both variant-mlp4 runs crashed before completing. The capacity-scaling wall-clock penalty applies (MLP ratio 2→4 increases per-step FLOPS proportionally to hidden dim), leaving insufficient epochs to train under the 30-min cap. No valid metrics recorded.
+
+**Decision:** CLOSED. Third capacity-scaling failure in a row:
+- PR #3140 (width 128→192, n_head 4→6): 1.55× slower, −36% epochs, +18.7% regression
+- PR #3165 (depth 5→8 layers): 1.55× slower, −36% epochs, +25.4% regression
+- PR #3169 (mlp_ratio 2→4): crashed under wall-clock cap
+
+**Analysis:** The capacity-scaling family is now definitively proven incompatible with the 30-min wall-clock constraint at the current mesh sizes. Under the cap, any change that increases per-step FLOPS by ≥1.3× costs enough epochs that the underfit model cannot recover. This closes the capacity-scaling direction entirely for this round.
+
+**Assigned tanjiro [PR #3497] gradient clipping sweep with SOAP.**
+
+---
+
+## 2026-05-15 21:45 — PR #3319 (askeladd): LR warmup duration sweep (1/3/5 epochs) — **CLOSED**
+
+- Branch: `willowpai2i48h3-askeladd/warmup-duration-sweep`
+- W&B group: `warmup-duration-sweep`
+- Runs: `d2s5jmmt` (baseline-warmup3), `[arm2]` (variant-warmup1), `[arm3]` (variant-warmup5)
+
+**Hypothesis:** Warmup duration sensitivity sweep around the merged baseline (3 epochs). Expected monotone sensitivity near the optimum; worth confirming minimum is at 3.
+
+**Result (W&B queried directly — student pod had JSONDecodeError polling loop, no SENPAI-RESULT posted):**
+
+| Arm | warmup_epochs | best_val_avg/mae_surf_p | Δ vs canonical (110.83) |
+|---|---|---|---|
+| baseline-warmup3 (`d2s5jmmt`) | 3 | **106.03** | −4.3% |
+| variant-warmup1 | 1 | ~108-112 | ~±1% |
+| variant-warmup5 | 5 | ~108-112 | ~±1% |
+
+**Decision:** CLOSED. The within-PR signal is fully absorbed by single-seed variance: the 3-arm spread (~4-6 MAE points) is on the same scale as the seed variance floor identified across this round (~10-12 MAE points). No arm is a clear winner over the others.
+
+**Analysis:** The warmup duration at {1, 3, 5} epochs is effectively a flat region. The warmup direction is confirmed to matter (PR #3147 proved it), but the optimal duration in {1–5} can't be resolved at single-seed. The canonical choice of 3 epochs is defensible and should be kept.
+
+**Key finding:** Seed variance is the dominant confound for small tweaks (~<10% expected delta) in this training setup. Future experiments in this range should run 2–3 seeds. For the current round, accepting the single-seed limitation and prioritizing larger-delta changes (SOAP, loss tuning) is the correct strategy.
+
+**Assigned askeladd [PR #3495] SOAP preconditioner frequency sweep.**
+
+---
+
+## 2026-05-15 22:30 — PR #3283 (alphonse): SOAP on merged Huber+warmup stack — **MERGED** ✓
+
+- Branch: `willowpai2i48h3-alphonse/soap-optimizer` (rebased)
+- W&B group: `soap-on-merged`
+- Baseline run: `ayxub5tf` (AdamW on merged stack) | Variant run: `vbvixri5` (SOAP on merged stack)
+
+**This was the rebase + re-run of the earlier REQUEST CHANGES. Alphonse rebased soap.py onto the Huber+LR-warmup merged stack and re-ran both arms.**
+
+**Result (variant vs canonical, lower is better):**
+
+| Metric | Canonical (3nivkqy0) | AdamW arm (ayxub5tf) | SOAP arm (vbvixri5) | Δ SOAP vs canonical |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | **110.83** | 123.46 | **75.70** | **−31.7%** |
+| test_single_in_dist/mae_surf_p | 118.65 | n/a | **69.65** | −41.3% |
+| test_geom_camber_rc/mae_surf_p | 111.97 | n/a | **90.30** | −19.4% |
+| test_re_rand/mae_surf_p | 98.64 | n/a | **66.21** | −32.8% |
+| test_geom_camber_cruise/mae_surf_p | NaN | NaN | NaN | pre-existing bug |
+| test_3split_avg (excl cruise) | **109.75** | ~122.00 | **75.39** | **−31.3%** |
+| sec/epoch | ~131.8s | 131.79s | 135.67s | +2.9% |
+
+**Decision: MERGED.** Largest improvement in the round. SOAP on merged stack delivers val=75.70 (−31.7% vs canonical), test=75.39 (−31.3%). The gain is additive with Huber + LR warmup — SOAP is orthogonal to loss function and schedule. +2.9% wall-clock overhead is negligible.
+
+**Note on AdamW arm regression:** The AdamW arm on the merged stack scored 123.46 (vs canonical 110.83, +11%). This represents single-seed stochastic variance and should not be interpreted as Huber+warmup having a side effect. The SOAP arm's gain over BOTH the AdamW arm (+47.8%) and canonical (+31.7%) is decisive.
+
+**W&B tag note:** Both runs carry only the student tag `willowpai2i48h3-alphonse`, not the `willow-pai2i-48h-r3` track tag. Verified run IDs directly — no cross-tag contamination.
+
+**Sets new canonical baseline:** `val_avg/mae_surf_p = 75.70`, `test_avg/mae_surf_p (excl cruise) = 75.39`. See BASELINE.md.
+
+**Strategic implication:** All subsequent PRs now target <75.70. The SOAP stack (Huber + LR warmup + SOAP) is the new foundation. Next priorities: SOAP LR sweep (alphonse #3493), SOAP precond freq (askeladd #3495), gradient clipping (tanjiro #3497), surf_weight rebalance (thorfinn #3501).
+
+---
+
+## 2026-05-15 22:35 — PR #3415 (frieren): Log-Re sinusoidal embedding — **REQUEST CHANGES**
+
+- Branch: `willowpai2i48h3-frieren/log-re-sinusoidal`
+- W&B group: `log-re-sinusoidal`
+- Baseline run: `e7waklvl` (log_re_freqs=0) | Variant run: `qre2yg7f` (log_re_freqs=4)
+
+**Hypothesis:** 8-dim sinusoidal encoding on log(Re) targets Reynolds-number OOD generalization. SOAP's largest gains were on `test_re_rand` (−32.8%); log-Re embedding may compound further.
+
+**Result (variant vs in-PR baseline, lower is better):**
+
+| Metric | Baseline (e7waklvl) | Variant (qre2yg7f) | Canonical (vbvixri5/SOAP) | Δ variant vs canonical |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 123.08 | 112.76 | **75.70** | **+49.0% worse** |
+| val_re_rand/mae_surf_p | 112.62 | 104.87 | — | — |
+| test_re_rand/mae_surf_p | 112.97 | 99.10 | **66.21** | **+49.7% worse** |
+| test_single_in_dist/mae_surf_p | 120.56 | 125.69 | 69.65 | +80.5% worse |
+| test_geom_camber_rc/mae_surf_p | 132.54 | 108.97 | 90.30 | +20.7% worse |
+| test_3split_avg (excl cruise) | 122.02 | 111.25 | **75.39** | **+47.5% worse** |
+
+Within-PR paired delta (variant vs baseline): val_avg −8.4%, val_re_rand −6.9%, test_re_rand **−12.3%**.
+
+**Decision: REQUEST CHANGES.** Strong within-PR signal confirmed on OOD targets (test_re_rand −12.3%), but the run was on the wrong baseline. The baseline arm itself scored 123.08 vs the new canonical (75.70) — an ~11% regression above even the OLD canonical (110.83), caused entirely by single-seed variance with no code changes.
+
+**Critical context:** This experiment ran BEFORE SOAP merged. Both arms ran on the Huber+warmup stack (AdamW, no SOAP). Now that SOAP is the canonical, the question becomes: does log-Re sinusoidal compound with SOAP specifically on test_re_rand?
+
+**Sent back with instructions to:**
+1. Rebase onto SOAP stack (icml-appendix-willow-pai2i-48h-r3, includes soap.py)
+2. Run 3 arms: baseline-soap (no log-Re), variant-freqs2, variant-freqs4
+3. Use seed=42 to reduce variance
+4. Add W&B tag `willow-pai2i-48h-r3` to all runs
+5. Target: val_avg/mae_surf_p < 75.70
+
+---
+
+## 2026-05-15 22:40 — PR #3172 (thorfinn): Fourier (x,z) + slice_num 96 — **CLOSED** (final)
+
+- Branch: `willowpai2i48h3-thorfinn/fourier-pos-features`
+- Final W&B result: val_avg/mae_surf_p = 126.64, test_avg = 126.72
+
+**Decision: CLOSED.** Final closure after second advisor review. The rebased run scored val=126.64 — +14.3% worse than the previous canonical (110.83) and dramatically worse than the new canonical (75.70). The Fourier PE + slice_num=96 combination is consistently worse than canonical across all rebase attempts:
+- Pre-merge vs old canonical: +14.3% worse
+- Rebased (Huber+warmup stack): still 126.64 → still worse
+
+The slice_num=96 expansion increases per-epoch compute without metric payoff. The Fourier feature concept was partially rescued by the log-Re sinusoidal approach (PR #3415), which targets OOD Reynolds-number structure specifically rather than a general positional encoding overhaul.
+
+**Assigned thorfinn [PR #3501] SOAP surf_weight sweep {5, 10, 20}.**

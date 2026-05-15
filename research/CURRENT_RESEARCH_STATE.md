@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 (updated 20:30 after PR #3323 close + nezuko #3430 assignment)
+- **Date:** 2026-05-15 (updated 22:45 after SOAP merge + 4 new student assignments)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 110.83`, `test_avg/mae_surf_p (excl cruise) = 109.75`
-  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%)
-- **Headline candidate (pending rebase + re-run):** **SOAP optimizer (PR #3283, alphonse)** — pre-merge variant arm reached `val_avg/mae_surf_p = 78.77` (run `e731efke`), `test 3-split mean = 78.85`. That's **−28.9% from current canonical** on val *before* stacking with Huber + LR warmup. Wall-clock +3%. PR sent back for rebase + re-run on the merged stack.
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 75.70`, `test_avg/mae_surf_p (excl cruise) = 75.39`
+  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)**
+  - SOAP config: precondition_frequency=10, lr=1e-3, warmup_epochs=3
 
 ## Tracked infrastructure issue: cruise-test NaN
 
@@ -21,57 +21,68 @@
 | #3155 | fern | Huber loss (SmoothL1 delta=1.0) | **−18.1%** | **Merged ✓** |
 | #3161 | frieren | Per-sample loss normalization | +13.0% | Closed |
 | #3165 | nezuko | Depth scaling 5→8 layers | +25.4% | Closed |
-| #3169 | tanjiro | MLP ratio 2→4 | TBD | WIP |
-| #3172 | thorfinn | Fourier pos features + slice 96 | −14% in-PR, +14.3% vs canonical | Request changes (rebase needed) |
+| #3169 | tanjiro | MLP ratio 2→4 | crashed | Closed |
+| #3172 | thorfinn | Fourier pos features + slice 96 | +14.3% vs canonical | Closed |
 
-## Round-2 active state
-
-| PR | Student | Hypothesis | Family | Status |
-|---|---|---|---|---|
-| **#3283** | **alphonse** | **SOAP optimizer (drop-in AdamW replacement)** | **Optimization** | **REQUEST CHANGES — rebase + re-run on merged stack (−49.2% in-PR, −28.9% vs canonical pre-merge)** |
-| #3319 | askeladd | LR warmup duration sweep (1/3/5 epochs) | Optimization | WIP |
-| #3152 | edward | Surface-only p×3 upweight (rebase pending) | Loss formulation | WIP (rebase needed) |
-| #3316 | fern | Huber beta sensitivity (0.5/1.0/2.0) | Loss tuning | WIP |
-| **#3415** | **frieren** | **Log-Re sinusoidal embedding (re_rand OOD target)** | **Inputs** | **WIP (new assignment)** |
-| **#3430** | **nezuko** | **EMA of model weights (decay=0.999)** | **Training** | **WIP (new assignment)** |
-| #3169 | tanjiro | MLP ratio 2→4 | Capacity | WIP |
-| #3172 | thorfinn | Fourier (x,z) + slice_num 96 (rebase pending) | Inputs | WIP (rebase needed) |
-
-Zero idle students. Three PRs (#3283, #3152, #3172) require rebases onto the merged stack before they can complete.
-
-### Round-2 closed/negatives so far
+## Round-2 outcomes
 
 | PR | Student | Hypothesis | Decision | Key finding |
 |---|---|---|---|---|
 | #3322 | frieren | AoA reflection aug (sign-flip) | **Closed** | +15.5% test regression — camber breaks z-symmetry |
-| #3323 | nezuko | PhysicsAttention entropy reg (weight=0.01/0.001) | **Closed** | +7.2%/+4.5% val regression — slice specialization is a feature, not a bug |
+| #3323 | nezuko | PhysicsAttention entropy reg (weight=0.01/0.001) | **Closed** | +7.2%/+4.5% val regression — slice specialization is a feature |
+| **#3283** | **alphonse** | **SOAP optimizer (Huber+warmup stack)** | **MERGED ✓** | **val=75.70 (−31.7% vs canonical), test=75.39** |
+| #3319 | askeladd | LR warmup duration sweep (1/3/5) | **Closed** | Flat region; seed variance dominates small warmup-duration signal |
+| #3415 | frieren | Log-Re sinusoidal embedding | **Request changes** | Within-PR OOD signal strong (test_re_rand −12.3%), ran on old stack; retest on SOAP |
+
+## Round-3 active state (all on SOAP canonical)
+
+| PR | Student | Hypothesis | Family | Status |
+|---|---|---|---|---|
+| **#3430** | **nezuko** | **EMA of model weights (decay=0.999)** | **Training** | **WIP** |
+| **#3316** | **fern** | **Huber beta sweep (0.5/1.0/2.0) — SOAP rebase** | **Loss tuning** | **WIP (rebase + delta2.0 arm needed)** |
+| **#3152** | **edward** | **Surface-only p×3 upweight** | **Loss formulation** | **WIP (rebase needed onto SOAP stack)** |
+| **#3415** | **frieren** | **Log-Re sinusoidal (SOAP stack, 3 arms: freqs=0/2/4)** | **Inputs** | **WIP (request changes, seed=42)** |
+| **#3493** | **alphonse** | **SOAP LR sweep {5e-4, 1e-3, 2e-3}** | **Optimization** | **WIP (new)** |
+| **#3495** | **askeladd** | **SOAP precond_frequency sweep {5, 10, 20}** | **Optimization** | **WIP (new)** |
+| **#3497** | **tanjiro** | **Gradient clipping with SOAP {1.0, 5.0, no-clip}** | **Optimization** | **WIP (new)** |
+| **#3501** | **thorfinn** | **SOAP surf_weight sweep {5, 10, 20}** | **Optimization** | **WIP (new)** |
+
+Zero idle students.
+
+**Note:** GitHub API rate limit exhausted at 22:47 UTC, resets at 23:19 UTC. New PRs #3493, #3495, #3497, #3501 were created but label verification failed. Labels need to be confirmed post-reset.
 
 ## Key learnings so far
 
-1. **Optimizer is the dominant single lever, by far.** SOAP −49.2% in-PR (pre-merge) vs Huber −18.1% and LR warmup −8.9%. If the merged-stack rebase confirms, this resets the strategic landscape.
-2. **Robust loss matters.** Huber −18.1% on its own is the second-largest gain; signals MSE was vulnerable to outlier pressure samples.
+1. **Optimizer is the dominant single lever, by far.** SOAP −31.7% on merged stack vs Huber −18.1% and LR warmup −8.9%. New canonical is 75.70.
+2. **Robust loss matters.** Huber −18.1% on its own; MSE was vulnerable to outlier pressure samples.
 3. **LR schedule matters.** Warmup + higher peak −8.9%; orthogonal to Huber.
-4. **Capacity scaling blocked at this scale.** Width/depth/MLP-ratio all incur ~1.55× epoch-time penalty, cutting epochs ~36% under the 30-min cap. Fourier PE is intermediate (1.15× — acceptable).
+4. **Capacity scaling blocked at this scale.** Width/depth/MLP-ratio all incur ~1.55× epoch-time penalty, cutting epochs ~36% under the 30-min cap. This family is closed.
 5. **Per-sample loss normalization hurts.** Destabilizes gradient balance across variable-size meshes.
-6. **Strong generalization-gap shrinkage with SOAP.** Largest gains are on `test_re_rand` (−50.5%) and `val_geom_camber_cruise` (−55.5%) — consistent with curvature-aware steps finding flatter minima rather than just lower train loss.
+6. **Slice specialization in PhysicsAttention is functional.** Entropy regularization to destroy it fails (+4-7% regression). Layer-0 collapse (1.52 nats) is a soft cluster-head mechanism, not a bug.
+7. **Strong SOAP generalization-gap shrinkage.** Largest gains on `test_re_rand` (−32.8% vs canonical) and `test_single_in_dist` (−41.3%) — consistent with curvature-aware steps finding flatter minima.
+8. **Seed variance floor ~10-12 MAE points.** Experiments with <10% expected delta need multi-seed confirmation; single-seed warmup duration sweep was inconclusive.
+9. **AoA reflection aug inapplicable.** Camber breaks z-symmetry assumption; sign-flip produces physically inconsistent training pairs.
 
 ## Next directions
 
-### Immediate (within round-2)
-- **SOAP rebase + re-run (PR #3283).** Confirm orthogonality with Huber + LR warmup. Highest-EV experiment of the entire round.
-- **Fourier PE rebase (PR #3172).** Re-test on merged stack to see if the −14% in-PR signal survives.
-- **p×3 upweight rebase (PR #3152).** Re-test channel weighting layered on top of Huber.
+### Immediate (within round-3, all on SOAP stack)
+- **SOAP LR sweep (PR #3493, alphonse).** lr=1e-3 was tuned for AdamW; SOAP's preconditioned updates may need a different peak LR. Sweep {5e-4, 1e-3, 2e-3}.
+- **SOAP precond_frequency sweep (PR #3495, askeladd).** Default freq=10 from NLP; mesh geometry with 10× surf/vol loss ratio may prefer {5, 10, 20}. Also determines wall-clock/quality tradeoff.
+- **Gradient clipping with SOAP (PR #3497, tanjiro).** surf_weight=10 creates gradient spikes from high-Re pressure samples; test max_norm {1.0, 5.0} vs no-clip. Also a diagnostic: grad_norm trace reveals if spikes are present.
+- **SOAP surf_weight sweep (PR #3501, thorfinn).** SOAP's curvature-awareness may reduce the need for explicit surf/vol loss imbalance. Sweep {5, 10, 20}.
+- **Log-Re sinusoidal SOAP restack (PR #3415, frieren).** Strong within-PR OOD signal; retest on SOAP stack with fixed seed and freqs ∈ {0, 2, 4}.
+- **Huber beta sweep SOAP restack (PR #3316, fern).** Rebase + complete delta2.0 arm on SOAP canonical. Confirm if Huber beta sensitivity survives SOAP.
+- **EMA weights (PR #3430, nezuko).** WIP; SOAP+EMA may compound for flatter minima.
+- **Surface-only p×3 upweight (PR #3152, edward).** WIP; still needs rebase onto SOAP stack.
 
-### Post-SOAP-merge (assuming it lands)
-1. **SOAP LR sweep.** SOAP's effective LR may differ from AdamW's. Sweep {2e-4, 5e-4, 1e-3, 2e-3} with the new optimizer.
-2. **SOAP preconditioner frequency.** Default is 10 steps; try {1, 5, 10, 20} to find the wall-clock/quality knee.
-3. **SOAP × surf_weight re-balance.** With SOAP handling gradient conflict natively, is surf_weight=10 still optimal?
-4. **SOAP × AoA augmentation × entropy reg stacking.** Test whether regularizers compound or saturate against the flatter-minimum SOAP regime.
+### Post-SOAP hyperparameter stack winners
+1. **Stack all SOAP config winners.** Best LR + best precond_freq + best surf_weight + possibly gradient clipping together.
+2. **SOAP × Huber-beta optimum.** Fern's delta sweep on SOAP stack.
+3. **Alternative robust losses on SOAP.** Cauchy/Welsch/Log-cosh — Huber win signals outlier-robustness as a lever, but with SOAP's flatter minima, the optimal delta may shift.
 
 ### Further-future research themes
-1. **Alternative robust losses on SOAP.** Cauchy/Welsch/Tukey biweight — Huber win signals outlier-robustness as a lever, but with SOAP's flatter minima, MSE-with-SOAP might already match Huber-with-AdamW.
-2. **Ada-Temp slice reparameterization** — per-point temperature in PhysicsAttention softmax.
-3. **Log-Re sinusoidal embedding** — 8-dim sinusoidal on log(Re); targets re_rand OOD (currently the strongest SOAP gain — synergy possible).
-4. **Divergence-free auxiliary loss** — soft incompressibility penalty.
-5. **Physical-units scale-aware loss** — normalize each field loss by physical scale (edward's follow-up direction).
-6. **Stack winners after SOAP confirms.** Huber-optimal-delta + best-warmup + AoA-aug + entropy-reg + SOAP all together.
+1. **Ada-Temp slice reparameterization** — per-point temperature in PhysicsAttention softmax.
+2. **Divergence-free auxiliary loss** — soft incompressibility penalty.
+3. **Physical-units scale-aware loss** — normalize each field loss by physical scale (edward's follow-up direction).
+4. **SWA (Stochastic Weight Averaging)** — cycling LR to sample multiple loss-landscape minima (different mechanism from EMA; based on trajectory avg).
+5. **Slice temperature sweep** — softmax temperature in PhysicsAttention {0.5, 1.0, 2.0}.
