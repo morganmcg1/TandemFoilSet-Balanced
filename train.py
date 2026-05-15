@@ -404,6 +404,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_fn: str = "charbonnier"   # "mse" or "charbonnier"
     charbonnier_eps: float = 1e-3  # ε for Charbonnier sqrt(r² + ε²)
+    grad_clip_max_norm: float = 0.0  # 0.0 = no clipping, >0 = clip global L2 norm
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -536,9 +537,23 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip_max_norm > 0:
+            total_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip_max_norm
+            )
+            grad_norm_key = "train/grad_norm_pre_clip"
+        else:
+            total_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float("inf")
+            )
+            grad_norm_key = "train/grad_norm_unclipped"
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            grad_norm_key: total_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
