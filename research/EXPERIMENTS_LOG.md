@@ -239,3 +239,104 @@ Closed; alphonse reassigned to manifold mixup (PR #3347).
 - Student: charliepai2i24h5-alphonse
 - Hypothesis: instead of input-space mixup (which couples the original mesh to interpolated conditions and hurts in-dist), mix latent representations at a uniformly-random block index in [0, 3) using Beta(α, α) lambda. The mixed latent lives on the learned manifold and contains no geometry/condition mismatch signal.
 - Two arms: α ∈ {0.4, 0.2}, both with p=0.5 and max_block=3. Direct follow-up to the closed PR #3268.
+
+## 2026-05-15 17:45 — PR #3269: Multi-scale slice attention (per-layer slice_num) [CLOSED — within seed noise]
+
+- Branch: `charliepai2i24h5-nezuko/multi-scale-slice-attention`
+- Student: charliepai2i24h5-nezuko
+- Hypothesis: vary `slice_num` per layer — hourglass (`[32, 64, 128, 64, 32]`) or ascending (`[32, 48, 64, 96, 128]`) — to give different layers different physics-token capacity. Hourglass should help camber-OOD splits (more low-level slices to resolve sharp surface features).
+- Status: CLOSED. Best arm (hourglass run 1) lands at `val_avg/mae_surf_p = 120.49` vs the merged EMA baseline `114.17` (+5.5% worse). A second hourglass run with the same config lands at `127.94`. Seed-to-seed Δ ≈ 7.5 is more than 2× larger than the apparent hourglass-vs-uniform effect ≈ 3.4 — within noise. Student's own analysis explicitly acknowledges the variance band overwhelms the effect.
+
+### Results
+
+| Arm | slice_num | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| Baseline (uniform) | [64,64,64,64,64] | 123.92 | 111.80 |
+| Hourglass run 1 | [32,64,128,64,32] | **120.49** | **109.17** |
+| Hourglass run 2 (same config) | [32,64,128,64,32] | 127.94 | 117.65 |
+| Ascending | [32,48,64,96,128] | 125.13 | 115.92 |
+
+Metric artifacts (all committed under `models/`):
+- `models/model-charliepai2i24h5-nezuko-multiscale-slice-hourglass-20260515-132756/metrics.jsonl`
+- `models/model-charliepai2i24h5-nezuko-multiscale-slice-hourglass-20260515-152957/metrics.jsonl`
+- `models/model-charliepai2i24h5-nezuko-multiscale-slice-ascending-20260515-141315/metrics.jsonl`
+- `models/model-charliepai2i24h5-nezuko-multiscale-slice-baseline-uniform-20260515-163129/metrics.jsonl`
+
+### Analysis
+
+The mechanistic prediction (hourglass should help camber-OOD splits with finer surface features) failed in the right place to falsify the hypothesis: cruise-camber under hourglass run 1 *regressed* (90.99 vs 81.78 baseline), the opposite of the predicted direction. The split that improved most under hourglass run 1 (`single_in_dist`: 121.84 vs 138.77 baseline) is also the easiest split and where the multi-scale story shouldn't dominate. Combined with the seed-pair variance, no defensible win.
+
+Useful pattern: the student's `retest_checkpoint.py` (re-evaluate saved checkpoints with the NaN fix and append `event:"test_corrected"` to `metrics.jsonl`) is a reusable artifact for future PRs that ran before a fix landed.
+
+Closed; nezuko reassigned.
+
+## 2026-05-15 17:46 — PR #3270: Transolver capacity scale-up (256h / 8l / 8h, bs=2, lr=3e-4) [CLOSED — undertrained at 30-min wall clock]
+
+- Branch: `charliepai2i24h5-edward/transolver-capacity-scale-up`
+- Student: charliepai2i24h5-edward
+- Hypothesis: increase Transolver capacity by 6× (n_hidden=128→256, n_layers=5→8, n_head=4→8), with bs=2 to fit VRAM and lr=3e-4 to manage gradient noise.
+- Status: CLOSED. Large model `val_avg/mae_surf_p = 165.12` vs merged EMA baseline `114.17` is a +44.6% regression. Large model completes only 5 epochs in 30 min wall clock (vs 14 for the baseline), and the val curve is still descending steeply at the timeout — undertrained, not broken. At fixed wall-clock budget, capacity scale-up loses.
+
+### Results
+
+| Arm | params | sec/epoch | epochs in 30 min | best_val_avg | best_epoch |
+|---|---:|---:|---:|---:|---:|
+| Baseline (128h, 5l, 4h, bs=4) | 0.66M | 132s | 14 | 134.48 | 13 |
+| Large (256h, 8l, 8h, bs=2) | 3.94M | 388s | 5 | 165.12 | 5 |
+
+Large is worse on every single val and test split — no silver lining. Peak VRAM 64.4 GB (32 GB headroom) — bottleneck is iteration cost, not memory.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-edward-transolver-large-256h-8l-fixed-20260515-152720/metrics.jsonl`
+- `models/model-charliepai2i24h5-edward-transolver-baseline-128h-5l-20260515-162442/metrics.jsonl`
+
+### Analysis
+
+The hypothesis isn't necessarily wrong (val curve at epoch 5 was still falling −24/epoch ≈ −12%/epoch), but it's untestable under the current budget. The student's follow-up suggestions — bf16 mixed precision (to roughly halve per-epoch time), intermediate sizes (192h/6l/6h), and constant-depth variants (256h/5l/8h) — are reasonable, but bf16 is the highest-leverage next move because it unlocks capacity-revisit attempts as a whole. Reassigning edward to bf16 mixed precision as a fresh hypothesis.
+
+Closed.
+
+## 2026-05-15 17:47 — PR #3315: Cautious AdamW optimizer [SENT BACK — beat OLD baseline but lost to NEW EMA baseline; rebase to compound]
+
+- Branch: `charliepai2i24h5-askeladd/cautious-adamw-optimizer`
+- Student: charliepai2i24h5-askeladd
+- Hypothesis: replace AdamW with Cautious AdamW (Liang et al. 2024): gate each update component by the sign-agreement mask `(m * g > 0)` where `m` is the EMA momentum and `g` is the original gradient, mean-rescaled with `clamp(min=1e-3)`. Should help noisy gradient landscapes by skipping disagreed-on update directions.
+- Status: SENT BACK. Result is a real win on the OLD baseline (−4.72% val / −7.46% test vs #3266 123.88 / 114.37) but lost ground vs the NEW EMA baseline (#3281, 114.17 / 102.08). The mechanism (update-direction gating) is orthogonal to EMA (weight averaging), so a rebase + re-run should compound — predicted −2% to −5% on top of the EMA baseline.
+
+### Results
+
+| Comparison | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---:|---:|
+| Old baseline (PR #3266) | 123.88 | 114.37 |
+| Cautious AdamW (this PR) | **118.03** | **105.83** |
+| New merged baseline (PR #3281, EMA + scale-inv) | **114.17** | **102.08** |
+
+Per-split (val/test): big OOD wins (geom_camber_cruise −12.15% val, re_rand −15.24% val), in-dist regressions (+1.98%, +2.90% on single_in_dist and geom_camber_rc). The localization matches the Cautious-mask mechanism: it gates noisy update directions, which dominate the OOD-flavored splits.
+
+Mask agreement: ~0.62 across all 14 epochs, stable. This is in the predicted range (0.5–0.85) and confirms the optimizer is doing real work (~38% of update components are gated to zero each step). The flat trajectory (no rise to 0.7–0.85 as in LLM pre-training) is consistent with the multi-split foil-regression loss surface staying noisy throughout training rather than smoothing.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw-20260515-164009/metrics.jsonl`
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw-20260515-164009/metrics.yaml`
+
+### Analysis
+
+The OOD wins (cruise −12.15%, re_rand −15.24% on val) come exactly where EMA's wins are smallest, suggesting the two mechanisms are complementary on the same axes. The in-dist regressions (single_in_dist +1.98%, geom_camber_rc +2.90%) point at this being a regularization-flavored effect — gated updates miss some easy improvements on the smoother in-dist distribution but generalize better to held-out test. EMA on top should soften the in-dist regression while preserving the OOD wins.
+
+Sent back with explicit rebase instructions and predicted target val_avg ≈ 108–112.
+
+
+## 2026-05-15 17:55 — PR #3373: bf16 mixed precision (AMP) [ASSIGNED — edward]
+
+- Branch: `charliepai2i24h5-edward/bf16-mixed-precision`
+- Student: charliepai2i24h5-edward
+- Hypothesis: wrap the forward pass in `torch.autocast(device_type='cuda', dtype=torch.bfloat16)`; backward + optimizer.step stay in fp32. Expected ~30-50% per-epoch wall-clock reduction → more effective epochs within the 30-min cap → measurable val_avg improvement (predicted -2% to -5%). Compute unlock makes future capacity-revisit experiments (the 256h/8l/8h sweep that #3270 couldn't fairly test) tractable.
+- Two arms: bf16 + baseline-config (primary), bf16 + batch_size=8 (ablation, uses speed gain to double batch).
+
+## 2026-05-15 17:56 — PR #3374: Stochastic depth (DropPath) regularization [ASSIGNED — nezuko]
+
+- Branch: `charliepai2i24h5-nezuko/stochastic-depth`
+- Student: charliepai2i24h5-nezuko
+- Hypothesis: per-block DropPath during training (drop residual contribution with probability `p_drop`), all blocks active at eval. Each forward pass samples a sub-network → implicit ensemble + per-block robustness. Compounds with EMA (averaged across sub-network gradients → flat region in weight space). Predicted -1.5% to -4% val_avg, largest gains on `single_in_dist` (currently worst split at 138.48).
+- Two arms: uniform p_drop=0.1 across blocks (primary), linearly-increasing 0→0.1 by depth (DeiT-style "drop path"; secondary).
+
