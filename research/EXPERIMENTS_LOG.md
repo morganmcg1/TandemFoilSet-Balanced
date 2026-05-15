@@ -1,6 +1,75 @@
 # SENPAI Research Results
 
-## 2026-05-15 20:50 — PR #3307: OneCycleLR right-sized to actual budget — **sent back for rebase + replication (winner pending)**
+## 2026-05-15 21:30 — PR #3434: L1 surface loss (align training objective with MAE metric) — **MERGED (round-3 winner)**
+
+- Branch: `willowpai2i24h5-edward/l1-surf-loss`
+- Hypothesis: Switching surf_loss from MSE (L2) to L1 directly aligns the training objective with the evaluation metric (MAE). With grad clip already normalizing step sizes, L1 vs L2 is a choice of which minimum to approach (conditional median vs mean). L2's quadratic penalty chases outliers in heavy-tailed OOD error distributions; L1 distributes gradient more evenly.
+- W&B run: `tcci4fzk`
+
+| Split | L1 (this run) | warm-restarts baseline `oeo67jf2` | Δ |
+|---|---|---|---|
+| val_single_in_dist | 108.95 | 116.36 | −7.41 |
+| val_geom_camber_rc | 97.70 | 108.40 | −10.70 |
+| val_geom_camber_cruise | 70.40 | 77.91 | −7.51 |
+| val_re_rand | 83.11 | 92.87 | −9.76 |
+| **val_avg** | **90.04** | **98.88** | **−8.84** |
+| test 3-split (excl. cruise) | 87.78 | 94.82 | −7.04 |
+
+**Analysis:** Clean winner on single arm, -8.84 pp (-8.94%) improvement. Beats every split including OOD. L1 only 1 epoch slower at epoch 1, then led all the way (grad clip normalizes step sizes, eliminating L2's convergence-speed advantage). Largest gain on `val_geom_camber_rc` (-10.70 pp) — the heavy-tailed OOD distribution where L2 chases outliers. Model was still improving at epoch 14 (last two val_avg: 98.80 → 90.04), suggesting further headroom. Merged as **new baseline: 90.04**. Code change: 2 lines in train.py (add `abs_err = (pred - y_norm).abs()`, use it for `surf_loss`; `vol_loss` remains MSE).
+
+---
+
+## 2026-05-15 21:25 — PR #3436: CosineAnnealingWarmRestarts T_0=3 — closed
+
+- Branch: `willowpai2i24h5-alphonse/warm-restarts-T0-3`
+- Hypothesis: More frequent restarts (T_0=3 vs T_0=5) give more "fresh start" opportunities within the 14-epoch budget.
+- W&B run: `9jsom32x`
+
+| Split | T_0=3 | T_0=5 baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 144.88 | 116.36 | +28.52 |
+| val_geom_camber_rc | 131.09 | 108.40 | +22.69 |
+| val_geom_camber_cruise | 85.06 | 77.91 | +7.15 |
+| val_re_rand | 104.27 | 92.87 | +11.40 |
+| **val_avg** | **116.32** | **98.88** | **+17.6%** |
+
+**Analysis:** Decisive regression. Alphonse's per-epoch restart-boundary diagnostic is the key data: restart at epoch 4 costs +11% (180→200 val_avg), restart at epoch 10 costs +43.5% (116→167). Each restart costs ~3–6 epochs of recovery — most of the remaining 14-epoch budget. Cycle 1 (3 epochs) is too short for meaningful convergence before the reset. Mechanism is exactly the inverse of the T_0=5 hypothesis: T_0=5 fits exactly two good cycles where cycle 2 has 10 epochs to anneal; T_0=3 wastes the first 3 epochs, then ends mid-anneal in cycle 3 (timeout at epoch 14). **Locks in T_0=5 as near-optimal on the restart-period axis.**
+
+---
+
+## 2026-05-15 21:25 — PR #3416: Per-channel surf loss p×3 — closed
+
+- Branch: `willowpai2i24h5-thorfinn/per-channel-surf-loss-p3`
+- Hypothesis: Weight pressure channel 3× over Ux/Uy in surf_loss since only p is the primary metric.
+- W&B runs (from W&B query): `1hju4xkv` (121.71 best), `0pep1c67` (119.41), `8cqqphva` (118.74 best); 1 failed run `5xbj12l1`
+
+| Run | val_avg/mae_surf_p | Δ vs new baseline 90.04 |
+|---|---|---|
+| 8cqqphva (best) | 118.74 | +32.0% |
+| 0pep1c67 | 119.41 | +32.6% |
+| 1hju4xkv (best epoch) | 121.71 | +35.2% |
+| **3-arm mean** | **~119.95** | **+33.3%** |
+
+**Analysis:** Closed based on W&B data (no terminal SENPAI-RESULT comment posted). Clear regression across all 3 arms. Mechanism: per-channel reweighting (p×3, Ux/Uy×1) mostly just amplifies an already-dominant channel without preserving balance with the volume term. The structural cost mirrors fern's surf_weight=25 failure: losing volume term's inductive structure hurts. The metric-alignment goal was sound, but channel-reweighting was the wrong mechanism — PR #3434 edward's L1 loss was the right approach (which just merged at 90.04).
+
+---
+
+## 2026-05-15 21:25 — PR #3360: Grad clip max_norm=1.0 → 0.5 — sent back for rebase
+
+- Branch: `willowpai2i24h5-tanjiro/gradclip-0p5`
+- Hypothesis: Tighter clip halves the effective LR (1.1e-5 → 5.6e-6); tests if lower effective LR helps.
+- W&B runs: `zm1mfu7r` (110.85), `yeo91kch` (113.78), `qt6c29cn` (113.85). 3-arm mean: 112.83.
+
+| | val_avg | Δ vs OLD baseline 117.16 | Δ vs NEW baseline 98.88 |
+|---|---|---|---|
+| 3-arm mean | 112.83 | −4.33 (−3.7%) **beats old baseline** | +14.1% (regresses vs new) |
+| best arm | 110.85 | −6.31 | +12.1% |
+
+**Analysis:** Hypothesis confirmed on OLD baseline: tighter clip is better. But branched from pre-warm-restarts baseline (117.16), so result is stale vs current 90.04 baseline. Tanjiro sent back to rebase onto warm-restarts + L1 baseline and re-test. If max_norm=0.5 + warm-restarts + L1 beats 90.04, it would confirm a gradient-direction-only training regime stacks with better schedules and loss functions.
+
+---
+
+## 2026-05-15 20:50 — PR #3307: OneCycleLR right-sized to actual budget — **updated: winner pending with new baseline**
 
 - Branch: `willowpai2i24h5-askeladd/onecyclelr-1e3`
 - Hypothesis: First attempt with `total_steps = len(train_loader) * 50` left ~72% of the OneCycle schedule unused (best epoch hit near peak LR ~9e-4). Right-sizing `total_steps = len(train_loader) * 14` makes the peak hit at epoch 1.4 and the steep anneal phase land exactly within the 30-min wall-clock budget.

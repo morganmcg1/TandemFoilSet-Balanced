@@ -1,33 +1,36 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 20:55
+- **Updated:** 2026-05-15 21:35
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
 ## Most recent direction from human researcher team
 
-No directives received. GH issue #3292 open for `test_geom_camber_cruise` NaN bug (frieren and fern both independently pinpointed root cause: inf×0=NaN in surf_mask-zeroed pressure sum).
+No directives received. GH issue #3292 open for `test_geom_camber_cruise` NaN bug (multiple students have independently confirmed the root cause: inf×0=NaN in the surf_mask-zeroed pressure sum during evaluation).
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 98.88`** — CosineAnnealingWarmRestarts(T_0=5, T_mult=2), PR #3320, **merged** (2026-05-15 20:25)
+**`val_avg/mae_surf_p = 90.04`** — L1 surface loss + CosineAnnealingWarmRestarts(T_0=5, T_mult=2) + grad_clip max_norm=1.0, PR #3434, **merged** (2026-05-15 21:30)
 
 | Split | val mae_surf_p |
 |---|---|
-| val_single_in_dist | 116.36 |
-| val_geom_camber_rc | 108.40 |
-| val_geom_camber_cruise | 77.91 |
-| val_re_rand | 92.87 |
-| **val_avg** | **98.88** |
+| val_single_in_dist | 108.95 |
+| val_geom_camber_rc | 97.70 |
+| val_geom_camber_cruise | 70.40 |
+| val_re_rand | 83.11 |
+| **val_avg** | **90.04** |
 
-## Winner pending replication
+test 3-split (excl. cruise) = **87.78** | W&B run: `tcci4fzk`
 
-**PR #3307 askeladd OneCycleLR right-sized → val_avg=97.44 (single arm, beats current baseline by 1.44).** Sent back for (1) rebase onto warm-restarts baseline (resolve scheduler conflict by keeping OneCycleLR) and (2) 2 replication arms. If 3-arm mean beats 98.88, this becomes the new baseline (replaces warm-restarts on the scheduler axis). 3-split test (94.41) is also slightly better than current best (94.82).
+## Winners pending confirmation
+
+- **#3307 askeladd OneCycleLR right-sized → 97.44 (OLD baseline, single arm)**: Now branching from L1 baseline. Askeladd sent back to rebase (keep OneCycleLR, keep L1 surf, drop warm-restarts) and run 2 replication arms. Target: 3-arm mean < 90.04 to merge as compound winner.
 
 ## All merged results (best-first)
 
 | PR | Change | val_avg | Δ vs prior baseline |
 |---|---|---|---|
+| #3434 edward | L1 surface loss (vol MSE + surf L1) | **90.04** | −8.94% ✓ **MERGED** |
 | #3320 nezuko | CosineAnnealingWarmRestarts T_0=5 T_mult=2 | **98.88** | −15.6% ✓ **MERGED** |
 | #3157 tanjiro | grad clip max_norm=1.0 | 117.16 | baseline |
 
@@ -35,56 +38,40 @@ No directives received. GH issue #3292 open for `test_geom_camber_cruise` NaN bu
 
 | Student | PR | Change | Rationale |
 |---|---|---|---|
-| nezuko | #3431 | EMA weights (decay=0.999) | Smooth out warm-restart oscillations; may improve best checkpoint quality |
-| alphonse | #3436 | CosineAnnealingWarmRestarts T_0=3 | More frequent restarts (2→3 cycles in 14-epoch budget); direct T_0 sweep |
-| edward | #3434 | L1 surface loss (vs MSE) | Align training objective with MAE metric; L1 minimizer = L1 metric |
-| thorfinn | #3416 | Per-channel surf loss: p×3 | Directly weight primary metric channel harder vs Ux/Uy |
-| askeladd | #3307 | OneCycleLR right-sized (rebase + replicate) | Winner pending — beat single-arm baseline; replicating |
-| fern | #3462 | surf_weight 10 → 5 (multi-arm) | Test fern's own analysis: is the sweet spot below 10? Vol term provides useful structure |
-| frieren | #3464 | slice_num 64 → 32 (multi-arm) | Counter-probe to closed #3146: if 64→128 over-partitions, does 64→32 under-partition? Buys ~30% per-epoch speedup |
+| nezuko | #3431 | EMA weights (decay=0.999) | Smooth out warm-restart oscillations; launched against 98.88 baseline — will report vs both baselines |
+| askeladd | #3307 | OneCycleLR right-sized + rebase to L1 baseline | Winner pending — needs rebase + 2 replication arms against 90.04 |
+| tanjiro | #3360 | grad clip max_norm=0.5 on warm-restarts+L1 baseline | Rebase + 3-arm retest on new baseline (confirmed on old 117.16 baseline) |
+| fern | #3462 | surf_weight 10 → 5 (multi-arm) | Test if sweet spot is below 10; labels now fixed |
+| frieren | #3464 | slice_num 64 → 32 (multi-arm) | Counter-probe to closed #3146; labels now fixed |
+| alphonse | #3487 | weight_decay 1e-4 → 0 (multi-arm) | Test if wd is pure penalty in underfit regime |
+| edward | #3488 | Full L1 both vol+surf loss | Extend #3434 win: test if vol L1 also helps |
+| thorfinn | #3489 | Huber surf loss (delta={1.0, 0.5}) | Between L1 and L2: does smooth-near-zero help fine-tuning? |
 
-## Round 2 WIP still completing (multi-arm, stale labels)
+## Round 3 closed (before completion of main portfolio)
 
-| Student | PR | Change | Status |
-|---|---|---|---|
-| tanjiro | #3360 | grad clip max_norm=0.5 | Stale WIP — ran training (GPU evidence), no comment yet; nudged with new-baseline note |
-
-## Round 2 final results (closed without merge)
-
-| PR | Change | val_avg | Δ | Decision |
+| PR | Change | Best val_avg | Δ | Decision |
 |---|---|---|---|---|
-| #3146 frieren | slice_num=128 | 143.88 mean (best 133.95) | +45.5% mean | closed — over-partitions, noisier projections |
-| #3139 fern | surf_weight=25 | 159.16 mean (best 134.80) | +61.0% mean | closed — loses volume term's inductive structure, seed variance blows up |
-| #3381 edward | n_hidden=192 | 126.44 | +7.9% | closed — width not bottleneck (per-epoch identical) |
-| #3112 alphonse | bf16 autocast | 114.34 (best), ~122 (mean) | mean +4.3% | closed — speed benefit, accuracy neutral-to-negative |
-| #3310 edward | n_layers=6 | 127.23 | +8.6% | closed — depth costs more epochs than it gains |
-| #3308 thorfinn | AdamW beta2=0.95 | 134.89 | +15.1% | closed — grad noise grows, not shrinks |
-| #3306 tanjiro | grad clip max_norm=100 | 124.31 | +6.1% | closed — confirms tight clip = gradient normalizer |
-| #3153 nezuko | Huber vol loss | 127.22 (confounded) | +8.6% | closed — missing grad clip, high variance |
-| #3164 thorfinn | dropout=0.05 | 142.51 | +21.7% | closed — no overfit in this budget |
-| #3133 edward | n_layers=7 | 146.62 | +25.1% | closed — unstable without clip |
-| #3125 askeladd | lr=1e-3 + warmup + cosine | 135.06 | +15.3% | closed — cosine horizon mismatch |
+| #3436 alphonse | T_0=3 warm-restarts | 116.32 (1 arm) | +17.6% | closed — too many restart penalties for 14-epoch budget |
+| #3416 thorfinn | p×3 per-channel weighting | 118.74 (best of 3) | +32.0% | closed — same mechanism as surf_weight=25 failure |
 
 ## Key research findings
 
-1. **Schedule is the dominant lever** — warm-restarts gave 15.6% (#3320 merged), OneCycle right-sized may give another ~1.5% (#3307 pending replication). Both improvements come from giving the model multiple LR regimes within the 14-epoch budget, not from changing optimization fundamentals.
-2. **Grad clip is gradient normalization** — max_norm=1.0 fires on 100% of steps; loosening regresses. Testing max_norm=0.5 (tanjiro #3360).
-3. **Model is NOT capacity-limited** — width (n_hidden=192), depth (n_layers=6,7), and slice count (slice_num=128) all fail because they slow per-epoch time without proportional quality gain. The 30-min budget rewards configurations that finish more epochs, not those that fit more capacity per epoch.
-4. **Loss weighting has a sweet spot** — surf_weight=25 regresses badly (loses volume term's structure); testing surf_weight=5 (#3462) to find lower bound.
-5. **Slice count: 64 may not be optimal either** — 128 over-partitions (PR #3146 closed). Testing 32 (#3464) to find lower bound; expected to win on compute-saving alone.
-6. **Second-moment adaptation** — beta2=0.95 fails (more gradient noise); baseline beta2=0.999 is near-optimal for this regime.
-7. **bf16 is speed-neutral** — 29% more epochs in 30 min but accuracy neutral on average; not yet worth merging.
-8. **Run variance is real and asymmetric to lever** — base 15-pp spread reduced to 3-pp by warm-restarts; surf_weight=25 blew it back up to 66 pp. Replication matters more for any change that affects loss landscape curvature.
+1. **Loss formulation is the dominant active lever** — L1 surf loss gave 8.94% improvement (#3434 merged). Mechanism: L1 = median estimator, MAE-optimal; L2 = mean estimator, chases heavy-tailed OOD outliers. With grad clip normalizing step sizes, convergence dynamics are similar; the minimum reached is better with L1.
+2. **Schedule is the second major lever** — warm-restarts gave 15.6% on top of grad-clip baseline; T_0=5 is near-optimal (T_0=3 regresses, more restarts = more recovery penalty per budget). OneCycle right-sized pending.
+3. **Grad clip is gradient normalization** — max_norm=1.0 fires on 100% of steps; median pre-clip norm ~45 → effective LR ~1.1e-5. Tighter (0.5) improved on old baseline (-4.33 pp); testing on new baseline.
+4. **Model is NOT capacity-limited** — width, depth, and slice count increases all fail in this budget.
+5. **Loss weighting and channel-weighting hurt** — surf_weight=25 and p×3 both regress. Volume term provides inductive structure that helps surface generalization. Don't destabilize the loss balance.
+6. **Restart frequency: T_0=5 is near-optimal** — T_0=3 costs 17.6% regression (restart penalties dominate 14-epoch budget). T_0=7 not tested but theoretical argument: one restart at epoch 7 gives less exploration than two restarts at 5, 10.
+7. **Run variance is lever-dependent** — base 15-pp spread, warm-restarts reduced to ~3 pp, surf_weight=25 blew to 66 pp. L1 single-arm at 8.84 pp improvement is noise-floor robust (even assuming ±3 pp spread, still >5 pp gain).
 
 ## Potential next research directions (round 4+)
 
-1. **Schedule compounding** — once OneCycle right-sized is confirmed (replication of #3307), test OneCycle + EMA stacking (nezuko #3431 result will inform). The two are orthogonal: OneCycle is LR schedule, EMA is weight averaging.
-2. **Lion / SignSGD optimizer** — pure gradient-direction optimizer, often 1–2% over AdamW. Could compound with the schedule wins. Needs different LR (~3× lower).
-3. **FiLM conditioning of global features** — Re, AoA, NACA codes are constant across mesh; currently broadcast per-node as input features. FiLM-encode once via small MLP, modulate Transolver block activations multiplicatively (γ⊙x + β). Adds multiplicative interactions that additive concat can't represent. ~few hundred extra params.
-4. **Coordinate features** — random Fourier features `[sin(2^k π x), cos(2^k π x)]` for k∈{0..5} to help with high-frequency pressure spikes near foil surface. Cheap; could unblock the val_single_in_dist split (currently the highest at 116.36).
-5. **Slice projection regularization** — entropy bonus on slice-assignment softmax to prevent token collapse. Addresses the "smaller node clusters get noisy projections" failure mode that frieren's slice_num=128 result diagnosed.
-6. **Larger effective batch via grad accumulation** — current batch=4. Effective batch=16 via 4-step accumulation lowers gradient noise, may allow higher peak LR. Trade-off: 4× fewer optimizer steps per epoch.
-7. **Test-time augmentation** — reflect airfoil around y=0, average predictions. Zero training cost; 0.5–1% typical gain on symmetric-physics problems.
-8. **Per-domain adaptive slice_num** — the 3 physical domains have very different mesh sizes (85K, 127K, 210K nodes). Fixed slice_num gives very different node/token ratios. `slice_num ∝ sqrt(N)` would equalize granularity (frieren's follow-up #5).
-9. **Auxiliary outputs** — predict pressure gradient or vorticity as auxiliary targets, multi-task with the main output head. Provides denser supervision signal.
-10. **Log-space pressure loss** — surface pressure has wide dynamic range; MSE weights high-pressure points; log-space distributes weight per decade. May help OOD-camber generalization.
+1. **Compound stack** — if round-3 experiments win, compound: L1 + OneCycle, L1 + clip=0.5, L1 + wd=0. Stack orthogonal wins.
+2. **FiLM conditioning of global features** — Re, AoA, NACA codes encoded once via small MLP → (γ, β) → modulate Transolver block activations. Adds multiplicative interactions that additive concat can't represent. ~few hundred extra params.
+3. **Higher nominal LR** — given effective LR = lr / grad_norm ≈ 5e-4 / 45 = 1.1e-5, try lr=1e-3 to get eff_LR = 2.2e-5 without changing clip. Simple 1-line change.
+4. **Coordinate features** — random Fourier features `[sin(2^k π x), cos(2^k π x)]` for k∈{0..5} to improve high-frequency spatial representation near airfoil surface. Could help val_single_in_dist (currently highest split at 108.95).
+5. **SWA (Stochastic Weight Averaging)** — collect weights from final K epochs, average uniformly. Different from EMA (nezuko). Wider flat minimum → better generalization.
+6. **Smaller batch_size=2** — 2× more gradient updates per epoch at same wall-clock; batch variance increases but grad clip handles it; warm-restarts per-batch scheduler timing preserves.
+7. **Loss re-balancing after full L1** — if edward's vol+surf L1 changes the loss scale, surf_weight may need re-tuning (surf_weight=7 or 15 on full-L1 baseline).
+8. **Per-domain adaptive slice_num** — mesh sizes vary 3× across physical domains; fixed slice_num gives very different token/node ratios (frieren's follow-up #5).
+9. **Log-space pressure loss** — surface pressure has wide dynamic range; log-space distributes gradient weight per decade rather than per magnitude unit. May help OOD camber splits.
