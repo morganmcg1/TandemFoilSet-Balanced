@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 21:00 (edward #3399 slice_num=96 WINNER merging; new baseline ~97.757)
+- **Last updated:** 2026-05-15 21:20 (edward #3399 merged, baseline 97.757; #3453 T_max calibration assigned to edward)
 - **Most recent research direction from human researcher team:** none (no open issues).
 - **Current best (pending merge):** `val_avg/mae_surf_p` = **97.757** (PR #3399 slice_num=96 on warmup+cosine baseline)
 - **Current focus:** Verify whether frieren/fern/nezuko/askeladd axes (surf_weight, weight_decay, RFF, n_head=8) compound on top of warmup+cosine+slice_num=96 baseline.
@@ -27,7 +27,8 @@ Key config (after #3399 merge): SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + 
 | #3362 | askeladd | n_head 4→8 | WIP (stale base) | No code commit yet; recovering from rate-limit storm |
 | #3377 | thorfinn | n_hidden=96 (rebase pending) | WIP (rebase) | Sent back: rebase + retest on new HEAD (val 102.082 on old base) |
 | #3397 | tanjiro | eta_min=1e-5 in cosine | WIP (correct base) | Correct base; training in progress |
-| #3399 | edward | slice_num=96 | **WINNER (merging)** | val 97.757 (-3.03% vs 100.811) |
+| #3399 | edward | slice_num=96 | **MERGED** | val 97.757 (-3.03% vs 100.811) → new baseline |
+| #3453 | edward | T_max=10 calibration (slice96 budget) | WIP (new) | Completes cosine fully within ~12-ep cap |
 
 ## Confirmed design insights
 
