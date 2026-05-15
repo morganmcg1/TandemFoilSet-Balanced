@@ -79,4 +79,45 @@ cd target && python train.py --agent <student> \
     --surf_weight 30
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **127.4122** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** val below **127.4122**~~ — superseded by PR #3293 below.
+
+---
+
+## 2026-05-15 17:25 — PR #3293: Lion optimizer replacing AdamW (lr=1.7e-4, wd=3e-4)
+
+**Student:** charliepai2i48h2-nezuko  
+**Change:** Replace AdamW with Lion (sign-based update, single momentum buffer). lr=5e-4→1.7e-4, wd=1e-4→3e-4. All other settings baseline (including surf_weight=10 during the run; merged config now has surf_weight=30 from PR #3101 compounded automatically).
+
+| Metric | Value (measured at surf_weight=10) |
+|--------|------------------------------------|
+| **val_avg/mae_surf_p** | **117.5014** |
+| val_single_in_dist/mae_surf_p | 137.2384 |
+| val_geom_camber_rc/mae_surf_p | 124.4193 |
+| val_geom_camber_cruise/mae_surf_p | 97.3192 |
+| val_re_rand/mae_surf_p | 111.0287 |
+| **test_avg/mae_surf_p** | **NaN** (pre-merge; #3274 fix now live) |
+| test_single_in_dist/mae_surf_p | 121.5755 |
+| test_geom_camber_rc/mae_surf_p | 117.3048 |
+| test_geom_camber_cruise/mae_surf_p | NaN (scoring bug — now fixed) |
+| test_re_rand/mae_surf_p | 108.2318 |
+| test_avg (3-split proxy) | 115.7040 |
+| Best epoch | 9 |
+| Peak GPU memory | 42.11 GB |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** **Lion** lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + **30·surf_loss** (surf_weight=30 from PR #3101, compounded in merged HEAD)  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-nezuko-lion-optimizer-20260515-153522/metrics.jsonl`
+
+**Note:** val=117.50 was measured with surf_weight=10; merged HEAD has surf_weight=30 + Lion (unmeasured combined). Next experiments should compare against 117.50 and also produce a clean Lion+surf30 measurement.
+
+**Reproduce (merged config — Lion + surf_weight=30):**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name"
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **117.5014** with a terminal `SENPAI-RESULT` marker.
