@@ -250,6 +250,67 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Cautious AdamW (Liang et al., ICLR 2026)
+# ---------------------------------------------------------------------------
+
+class CautiousAdamW(torch.optim.AdamW):
+    """AdamW with cautious update masking (Liang et al., ICLR 2026).
+
+    Gates each parameter's update to zero wherever the EMA-momentum vector and
+    the current gradient disagree in sign, then rescales the masked update so
+    the average step size is preserved. ``last_mask_mean`` exposes the raw
+    pre-rescale agreement fraction for per-epoch logging.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.last_mask_mean: float = float("nan")
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        prev_params: list[tuple[torch.Tensor, torch.Tensor]] = []
+        grads: list[torch.Tensor] = []
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                prev_params.append((p, p.data.clone()))
+                grads.append(p.grad.clone())
+
+        loss = super().step(closure)
+
+        total_agree = 0.0
+        total_count = 0
+        idx = 0
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                _, original_data = prev_params[idx]
+                g = grads[idx]
+                idx += 1
+
+                state = self.state[p]
+                m = state.get("exp_avg")
+                if m is None:
+                    continue
+
+                mask = (m * g > 0).to(dtype=p.dtype)
+                total_agree += mask.sum().item()
+                total_count += mask.numel()
+                mask_mean = mask.mean().clamp(min=1e-3)
+                mask = mask / mask_mean
+
+                delta = p.data - original_data
+                p.data.copy_(original_data + delta * mask)
+
+        if total_count > 0:
+            self.last_mask_mean = total_agree / total_count
+
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Per-sample scale (for scale-invariant loss)
 # ---------------------------------------------------------------------------
 
@@ -497,7 +558,7 @@ ema_model.requires_grad_(False)
 ema_model.eval()
 print(f"EMA model initialized (decay={EMA_DECAY})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = CautiousAdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -530,6 +591,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_surf_p_l1 = 0.0
     epoch_scale_mean = epoch_scale_std = 0.0
+    epoch_mask_mean = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -584,6 +646,9 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf_p_l1 += surf_p_l1.item()
         epoch_scale_mean += sample_scale.mean().item()
         epoch_scale_std += sample_scale.std(unbiased=False).item()
+        # CautiousAdamW exposes the per-step pre-rescale agreement fraction.
+        if not (optimizer.last_mask_mean != optimizer.last_mask_mean):  # not NaN
+            epoch_mask_mean += optimizer.last_mask_mean
         n_batches += 1
 
     scheduler.step()
@@ -592,6 +657,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf_p_l1 /= max(n_batches, 1)
     epoch_scale_mean /= max(n_batches, 1)
     epoch_scale_std /= max(n_batches, 1)
+    epoch_mask_mean /= max(n_batches, 1)
 
     # --- Validate (EMA weights) ---
     ema_model.eval()
@@ -625,6 +691,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_p_l1": epoch_surf_p_l1,
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
+        "train/cautious_mask_mean": epoch_mask_mean,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -633,7 +700,8 @@ for epoch in range(MAX_EPOCHS):
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
-        f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f}]  "
+        f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f} "
+        f"mask={epoch_mask_mean:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
