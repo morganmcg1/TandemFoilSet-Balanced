@@ -278,3 +278,15 @@ Per-split test (best-val checkpoint): single=133.43, camber_rc=126.58 (**beats b
 - decision: **sent back** to the student with two requirements: (1) defensively zero out predictions in padded positions and apply `nan_to_num(...).clamp_(-50, 50)` inside `evaluate_split` to localize any overflow without touching the read-only `data/scoring.py`; (2) re-run with two arms in the same wandb_group `willow-pai2i-24h-r2/warmup-cosine-v2` — `warmup=0` (proper baseline) and `warmup=3` (winner). The warmup=5 arm is dropped.
 - next steps: once the re-run clears NaN and shows warmup=3 ≥ warmup=0 by any margin, merge. The `nan_to_num` fix will become the baseline for all subsequent PRs.
 
+
+## 2026-05-15 23:21 — PR #3198: Per-channel surface loss weights (edward) — CLOSED
+- student: willowpai2i24h2-edward
+- branch: `willowpai2i24h2-edward/p-channel-weight`
+- hypothesis: upweighting the pressure channel in the surface loss (p_surf_weight ∈ {2.0, 3.0, 5.0}) would improve surface-p prediction over the uniform 10× surface weight
+- W&B runs: arms p2, p3 (`n0c2k6j9`, val=128.66/test=119.14), p5 (`9a1p79b3`, val=130.46/test=120.21)
+
+All 3 arms worse than old baseline (116.34/107.33) and far worse than new SmoothL1 baseline (90.60/83.00).
+
+- analysis: Per-channel loss weights and SmoothL1 address the same problem (gradient domination by high-error samples) from different angles — weights reduce relative channel contribution while SmoothL1 reduces per-sample outlier gradient. With SmoothL1 already in place, the per-channel weight change is redundant: the outlier samples that dominated MSE are already downweighted by SmoothL1's linear-regime cap. The null result is mechanistically expected in retrospect.
+- decision: **closed**. Null result, redundant mechanism.
+- next steps: edward reassigned to domain one-hot embedding (PR #3523).
