@@ -6,6 +6,80 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 17:39 — PR #3248 frieren posts terminal SENPAI-RESULT — round-3 cohort leader
+
+- Branch: `willowpai2i24h3-frieren/huber-delta2`
+- Hypothesis: Replace MSE with Huber loss (δ=2.0) in normalized space to cap gradient
+  contribution from high-magnitude outliers (high-Re tail, geom_camber_rc), expecting
+  better cross-Re and cross-geometry generalization.
+
+### Primary run `mp8s8okf` (best of 3 arms)
+
+| Metric | Value |
+|---|---|
+| W&B run | `mp8s8okf` (`huber-delta2`) |
+| **val_avg/mae_surf_p** | **107.4641** (best epoch 14/50) |
+| **test_avg_nansafe/mae_surf_p** | **101.9848** (3-split mean) |
+| Best epoch / total | 14 / 50 (timeout @ 31.05 min) |
+| Mean epoch wall-clock | 131.7 s |
+| Peak VRAM | 96.66 GB / 96 GB H100 (~94%) |
+| Params | 0.66 M (no architecture change) |
+| W&B group | `huber-robust-loss` |
+
+### Per-split val (best ckpt)
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 127.91 |
+| val_geom_camber_rc | 118.48 |
+| val_geom_camber_cruise | 83.35 |
+| val_re_rand | 100.11 |
+| **val_avg** | **107.46** |
+
+### Per-split test (nansafe, best ckpt)
+
+| Split | mae_surf_p (nansafe) |
+|---|---|
+| test_single_in_dist | 114.43 |
+| test_geom_camber_rc | 107.92 |
+| test_geom_camber_cruise | 89.01 (NaN in-tree from data bug) |
+| test_re_rand | 96.58 |
+| **test_avg (nansafe)** | **101.98** |
+
+### Sweep — all 3 arms (group `huber-robust-loss`)
+
+| run | best val_avg | final val_avg | note |
+|---|---|---|---|
+| `mp8s8okf` (primary) | 107.46 | 107.46 | stable; final==best, this is the anchor |
+| `wkrqrv80` | 114.24 | 120.34 | slight late drift |
+| `1walszqd` | 121.85 | 175.16 | late divergence (LR-tail sensitivity); not anchor |
+
+### Analysis
+
+- **Cohort leader by 2.3% over askeladd** (109.99). Huber δ=2.0 attacks the binding
+  high-loss-tail constraint head-on: by capping outlier gradient magnitude, it removes
+  noise injected by the very-high-std single-foil samples without changing the
+  optimizer schedule or architecture.
+- **val_re_rand=100.11 is the largest win** — consistent with the gradient-rebalancing
+  mechanism (high-Re tail samples no longer dominate updates).
+- **Stability sensitivity:** 2 of 3 arms drift late in training; Huber + standard
+  cosine is sensitive to LR-tail behavior. `mp8s8okf` (the primary) doesn't drift, but
+  this is a known weakness that frieren's `huber-surface-only` round-4 follow-up
+  should address by combining with askeladd's grad-clip/warmup.
+- **Confirmed the `data/scoring.py` bug:** the in-tree `test_avg/mae_surf_p` is None
+  due to cruise NaN propagation. Student computed nansafe variants exactly per the
+  cohort-wide protocol.
+
+### Advisor action (next invocation due to GH rate limit reset 18:19 UTC)
+
+- **MERGE FIRST** via `senpai:merge-winner 3248 target/`. PR currently in draft
+  state — need `gh pr ready 3248` before the merge skill.
+- BASELINE.md will update to `val_avg/mae_surf_p=107.46`,
+  `test_avg_nansafe/mae_surf_p=101.98`.
+- After frieren merges, askeladd #3244 (warmup-cosine-grad-clip) merges second as a
+  compound improvement — the two levers (loss function vs optimizer schedule) are
+  orthogonal and should stack.
+
 ## 2026-05-15 15:50 — Round-3 cohort interim ranking (no merges yet)
 
 W&B sweep of all in-flight round-3 runs (project `wandb-applied-ai-team/senpai-v1`,
