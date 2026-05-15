@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 12:35
+- **Date:** 2026-05-15 14:45
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -9,6 +9,17 @@
 ## Most recent research direction from human researcher team
 
 None yet — no human directives on this launch.
+
+## Known global issue (surfaced by Round 1)
+
+`test_geom_camber_cruise` produces `Infinity` in the pressure channel for at least one sample on the baseline training recipe, which propagates through `data/scoring.py`'s global accumulator and turns `test_avg/mae_surf_p` into NaN. `data/scoring.py` is read-only, but we can fix this defensively in `evaluate_split` in `train.py` with:
+
+```python
+pred = torch.where(mask.unsqueeze(-1), pred, torch.zeros_like(pred))
+pred = torch.nan_to_num(pred, nan=0.0, posinf=50.0, neginf=-50.0).clamp_(-50.0, 50.0)
+```
+
+I've asked askeladd (PR #3194) to include this fix in their re-run. Once a clean baseline merges, every other PR will inherit the fix. Until then, expect other Round-1 PRs may also report NaN on `test_avg/mae_surf_p`.
 
 ## Current research focus and themes
 
@@ -25,18 +36,34 @@ Round 1 (fresh start). The goal is to beat the vanilla Transolver baseline confi
 
 ## Round 1 assignments (8 hypotheses, one per student)
 
-| Student | Hypothesis | Angle |
-|---|---|---|
-| alphonse | Per-sample scale-normalizing loss (relative-L2 style) | loss |
-| askeladd | 5-epoch linear warmup + cosine remainder | optimizer |
-| edward | Per-channel surface loss weights (upweight `p`) | loss |
-| fern | Fourier position features on (x, z) | features |
-| frieren | Capacity scale-up: `n_hidden=256, n_head=8, slice_num=128` | arch-tweak |
-| nezuko | PGOT-style geometry-conditioned slice assignment | arch-tweak |
-| tanjiro | SmoothL1 (Huber) loss with `beta=0.05` for outlier-robust regression | loss |
-| thorfinn | Stochastic depth (DropPath) on Transolver blocks | regularization |
+| PR | Student | Hypothesis | Angle | Status |
+|---|---|---|---|---|
+| #3191 | alphonse | Per-sample scale-normalizing loss (relative-L2 style) | loss | WIP |
+| #3194 | askeladd | 5-epoch linear warmup + cosine remainder | optimizer | Sent back — needs `nan_to_num` fix in `evaluate_split` + no-warmup baseline arm |
+| #3198 | edward | Per-channel surface loss weights (upweight `p`) | loss | WIP |
+| #3200 | fern | Fourier position features on (x, z) | features | WIP |
+| #3206 | frieren | Capacity scale-up: `n_hidden=256, n_head=8, slice_num=128` | arch-tweak | WIP |
+| #3207 | nezuko | PGOT-style geometry-conditioned slice assignment | arch-tweak | WIP |
+| #3215 | tanjiro | SmoothL1 (Huber) loss with `beta=0.05` for outlier-robust regression | loss | WIP |
+| #3218 | thorfinn | Stochastic depth (DropPath) on Transolver blocks | regularization | WIP |
 
 Hypothesis details and references live in `research/RESEARCH_IDEAS_2026-05-15_12:35.md`.
+
+## Round 1 partial signal (from PR #3194 before bug-fix re-run)
+
+askeladd's two-arm comparison under the 30-min cap: warmup=3 reached `val_avg/mae_surf_p = 136.55` at epoch 13, warmup=5 reached 153.72. Both hit the wall clock at epoch 14. **This is a warmup-3-vs-warmup-5 comparison only — not a warmup-vs-no-warmup comparison.** The no-warmup arm is requested for the re-run. The val=136.55 number is the first reference point on this branch, but it is not yet an accepted baseline (NaN test_avg blocks merge).
+
+Per-split surface-p (warmup=3, val, epoch 13):
+- `val_single_in_dist`: 159.58
+- `val_geom_camber_rc`: 152.82
+- `val_geom_camber_cruise`: 109.78
+- `val_re_rand`: 124.01
+
+Per-split surface-p (warmup=3, test, best checkpoint epoch 13):
+- `test_single_in_dist`: 147.84
+- `test_geom_camber_rc`: 138.52
+- `test_geom_camber_cruise`: NaN ⚠ (poisons test_avg)
+- `test_re_rand`: 127.73
 
 ## Potential next research directions (after Round 1)
 
