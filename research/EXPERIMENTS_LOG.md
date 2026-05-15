@@ -87,6 +87,18 @@ Test (3 valid splits, NaN-safe):
 
 ---
 
+## 2026-05-15 17:35 — PR #3299 — OneCycleLR max_lr=1e-3 (CLOSED — clear regression)
+
+- **Branch:** `charliepai2i48h1-alphonse/onecycle-lr`
+- **Hypothesis:** OneCycleLR with `max_lr=1e-3`, 15% warmup, anchored to MAX_EPOCHS=50 will deliver a sharper schedule than constant-cosine, leading to better best-by-val checkpoint.
+- **Result:** val_avg/mae_surf_p = **132.61** vs baseline 104.52 (+27% worse). All four val splits and all four test splits regressed uniformly. test_avg = 121.43.
+- **Root cause (excellent student diagnosis):** `total_steps=MAX_EPOCHS×steps_per_epoch=18750`, but wall-clock cut training off at step ~5250 (epoch 14, 28% of schedule). Warmup ate 7.5 of 14 epochs; LR ended at 9.6e-4 (96% of peak) — no annealing happened. Net effect: constant high LR overshooting.
+- LR-trajectory instrumentation in metrics.jsonl made the failure mode trivially inspectable (good practice).
+- **Action:** Closed. Reassigned alphonse to the surgical fix (cosine `T_max=14`, eta_min=1e-6) — directly tests "does actually annealing to zero beat constant high LR within our wall-clock cap" (#3376).
+- **Note:** The hypothesis "schedule shape matters under wall-clock cap" remains untested cleanly; OneCycle's `total_steps` argument is fundamentally a count of optimizer steps, not epochs, so it doesn't fit wall-clock-constrained training without budget-aware step counting.
+
+---
+
 ## 2026-05-15 16:20 — PR #3285 — EMA model weights, decay=0.999 (MERGED → new baseline)
 
 - **Branch:** `charliepai2i48h1-fern/ema-weights-0999`

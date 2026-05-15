@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 16:25 UTC
+- **Updated:** 2026-05-15 17:40 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -29,7 +29,7 @@ declare a real win.
 
 | PR | Student | Hypothesis | Base | Theme |
 |----|---------|------------|------|-------|
-| #3299 | alphonse | OneCycleLR max_lr=1e-3, 15% warmup | SmoothL1+EMA | schedule / LR |
+| #3376 | alphonse | cosine T_max=50→14 (match wall-clock budget) | SmoothL1+EMA | schedule / LR |
 | #3280 | askeladd | SmoothL1 beta=1.0 → 0.5 | SmoothL1+EMA | loss tuning |
 | #3325 | edward   | weight_decay 1e-4 → 5e-4 | SmoothL1+EMA | regularization |
 | #3324 | fern     | log-cosh loss | SmoothL1+EMA | loss formulation |
@@ -60,6 +60,7 @@ relative to MSE baseline (143.52). All others are on the SmoothL1 base.
 | #3129 | bf16 autocast | 111.99 | +3.2% (vs 108.47) | Closed (regression, no throughput) |
 | #3279 | NaN-safe scoring (infra) | 108.47 | -5.8% (stochastic) | MERGED |
 | #3285 | EMA-0.999 weights | **104.52** | **-3.6% (vs 108.47)** | **MERGED ← new baseline** |
+| #3299 | OneCycleLR max_lr=1e-3 (T_max=50 bug) | 132.61 | +27% (vs 104.52) | Closed (regression; T_max mismatch) |
 
 ## Potential next research directions
 
