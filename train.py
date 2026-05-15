@@ -157,12 +157,65 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, film_pair=None):
+        # film_pair: optional (scale, shift) each [B, D] — applied post-LN
+        if film_pair is not None:
+            scale, shift = film_pair
+            scale = scale.unsqueeze(1)  # [B, 1, D]
+            shift = shift.unsqueeze(1)  # [B, 1, D]
+            h1 = self.ln_1(fx) * scale + shift
+            fx = self.attn(h1) + fx
+            h2 = self.ln_2(fx) * scale + shift
+            fx = self.mlp(h2) + fx
+            if self.last_layer:
+                h3 = self.ln_3(fx) * scale + shift
+                return self.mlp2(h3)
+            return fx
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
+
+
+class DomainFiLM(nn.Module):
+    """Per-sample (scale, shift) generator from domain features.
+
+    Emits one (scale, shift) pair per Transolver block; the same pair is
+    applied to every LayerNorm output inside the block. Identity-initialised
+    so the model starts equivalent to the FiLM-free baseline.
+    """
+
+    def __init__(self, domain_dim, n_hidden, n_layers, hidden=64):
+        super().__init__()
+        self.n_layers = n_layers
+        self.n_hidden = n_hidden
+        self.net = nn.Sequential(
+            nn.Linear(domain_dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, 2 * n_layers * n_hidden),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, domain):  # domain: [B, domain_dim]
+        film = self.net(domain)
+        film = film.view(-1, self.n_layers, 2, self.n_hidden)  # [B, L, 2, D]
+        scale = 1.0 + film[:, :, 0, :]  # [B, L, D] — bias toward identity
+        shift = film[:, :, 1, :]        # [B, L, D]
+        return scale, shift
+
+
+class TransolverWithFiLM(nn.Module):
+    def __init__(self, transolver, film):
+        super().__init__()
+        self.transolver = transolver
+        self.film = film
+
+    def forward(self, data, **kwargs):
+        domain = data["domain"]  # [B, domain_dim]
+        scale, shift = self.film(domain)  # both [B, L, D]
+        return self.transolver(data, film=(scale, shift), **kwargs)
 
 
 class Transolver(nn.Module):
@@ -206,11 +259,16 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, film=None, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        if film is not None:
+            scale, shift = film  # each [B, L, D]
+            for i, block in enumerate(self.blocks):
+                fx = block(fx, film_pair=(scale[:, i, :], shift[:, i, :]))
+        else:
+            for block in self.blocks:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -218,12 +276,34 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+# Feature indices for domain conditioning (per program.md):
+#   14 = AoA foil 1 (radians), 22 = gap between foils (0 for single-foil)
+DOMAIN_FEATURE_IDX = (14, 22)
+
+
+def extract_domain_features(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Per-sample mean of the domain features across mesh nodes.
+
+    The selected features are constant per sample, so the masked mean is
+    exact — we use the mask to ignore padding zeros.
+    """
+    x_dom = x[..., list(DOMAIN_FEATURE_IDX)]  # [B, N, 2]
+    m = mask.unsqueeze(-1).to(x_dom.dtype)
+    return (x_dom * m).sum(dim=1) / m.sum(dim=1).clamp(min=1)
+
+
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   nan_safe: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``nan_safe`` is True, we zero out non-finite GT entries before the
+    MAE accumulation so corrupt ground-truth points (e.g. the Inf values in
+    cruise test sample 20 — see BASELINE.md issue #2) cannot poison the
+    aggregate via ``Inf * 0 = NaN``.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -237,9 +317,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            domain = extract_domain_features(x, mask)
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "domain": domain})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -255,9 +336,23 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+            if nan_safe:
+                # Per-node finite-GT mask + zero out non-finite y points so
+                # the abs-diff cannot produce NaN under masked accumulation.
+                y_node_finite = torch.isfinite(y).all(dim=-1)  # [B, N]
+                eff_mask = mask & y_node_finite
+                surf_eval = eff_mask & is_surface
+                vol_eval = eff_mask & ~is_surface
+                y_clean = torch.where(y_node_finite.unsqueeze(-1), y, torch.zeros_like(y))
+                err = (pred_orig.double() - y_clean.double()).abs()
+                mae_surf += (err * surf_eval.unsqueeze(-1).double()).sum(dim=(0, 1))
+                mae_vol += (err * vol_eval.unsqueeze(-1).double()).sum(dim=(0, 1))
+                n_surf += int(surf_eval.sum().item())
+                n_vol += int(vol_eval.sum().item())
+            else:
+                ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+                n_surf += ds
+                n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
@@ -400,9 +495,19 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = Transolver(**model_config).to(device)
+transolver = Transolver(**model_config)
+film = DomainFiLM(
+    domain_dim=len(DOMAIN_FEATURE_IDX),
+    n_hidden=model_config["n_hidden"],
+    n_layers=model_config["n_layers"],
+    hidden=64,
+)
+model = TransolverWithFiLM(transolver, film).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(
+    f"Model: Transolver+FiLM ({n_params/1e6:.2f}M params); "
+    f"domain feature indices={DOMAIN_FEATURE_IDX} (AoA1, gap)"
+)
 
 ema_decay = 0.999
 ema_model = copy.deepcopy(model).eval()
@@ -448,9 +553,10 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        domain = extract_domain_features(x, mask)
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "domain": domain})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -539,7 +645,9 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(
+                ema_model, loader, stats, cfg.surf_weight, device, nan_safe=True
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
