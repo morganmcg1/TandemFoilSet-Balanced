@@ -217,6 +217,38 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def _safe_accumulate_batch(
+    pred_orig: torch.Tensor,
+    y: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    mae_surf: torch.Tensor,
+    mae_vol: torch.Tensor,
+) -> tuple[int, int]:
+    """NaN-safe wrapper for accumulate_batch.
+
+    data/scoring.py's accumulate_batch zeros surf/vol masks for non-finite-y
+    samples but computes err before masking, so NaN in y propagates as
+    NaN * 0 = NaN into the accumulator. Applying nan_to_num to err first
+    breaks the propagation chain without changing results for finite samples.
+    """
+    B = y.shape[0]
+    y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)  # [B]
+    if not y_finite.any():
+        return 0, 0
+
+    sample_mask = y_finite.unsqueeze(-1).expand(-1, mask.shape[-1])
+    effective = mask & sample_mask
+    surf_mask = effective & is_surface
+    vol_mask = effective & ~is_surface
+
+    err = (pred_orig.double() - y.double()).abs()
+    err = torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)
+    mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+    mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+    return int(surf_mask.sum().item()), int(vol_mask.sum().item())
+
+
 def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -243,18 +275,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            sq_err_safe = torch.nan_to_num(sq_err, nan=0.0, posinf=0.0, neginf=0.0)
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (sq_err_safe * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err_safe * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = _safe_accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
