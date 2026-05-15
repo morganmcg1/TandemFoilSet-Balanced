@@ -25,7 +25,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | # | Student | Hypothesis | State | Last action |
 |---|---|---|---|---|
 | **#3372** | **askeladd** | **Fourier PE 4-freq + rebase confirmation** | wip (sent back 23:24) | Asked for rebase onto post-#3089 advisor + single confirm arm at num_freq=4 for finite test metric |
-| #3371 | thorfinn | EMA decay=0.9999 | wip (val=106.22 W&B-verified, awaiting SENPAI-RESULT) | Will close on terminal marker — +5.7% vs new baseline |
+| ~~#3371~~ | ~~thorfinn~~ | ~~EMA decay=0.9999~~ | **CLOSED** 23:31 | val=106.22 (+5.65% vs baseline), closed as dead end |
 | #3469 | tanjiro | Depth n_layers=5→6 | wip (running since ~22:00) | Awaiting results |
 | #3479 | frieren | Per-channel output heads | wip (assigned 22:23) | Awaiting results |
 | #3288 | edward | Scoring fix + lr default flip | wip (scoring fix superseded by #3089) | May close as superseded; verify run regressed (val=115.76) |
@@ -66,7 +66,7 @@ All 8 students have active WIP PRs. Zero idle.
 
 ## Close candidates (queue when SENPAI-RESULT lands)
 
-- **#3371 thorfinn EMA-9999** — val=106.22 is +5.7% vs new baseline; close as dead end.
+- ~~#3371 thorfinn EMA-9999~~ CLOSED 23:31 — val=106.22 (+5.65% vs new baseline 100.53). EMA/SWA premature; training still descending at epoch 10.
 - **#3288 edward lr-default** — scoring fix superseded by #3089; lr=1e-3 already the effective default; may close as no-op.
 
 ## Potential next research directions (round 6+)
