@@ -320,6 +320,8 @@ def write_experiment_summary(
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
+        "lr_peak": cfg.lr_peak,
+        "warmup_epochs": cfg.warmup_epochs,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
@@ -362,6 +364,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 5e-4
+    lr_peak: float | None = None  # if None, uses lr — Arm A behavior
+    warmup_epochs: int = 0        # 0 = no warmup (pure cosine over epochs)
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -417,8 +421,21 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+effective_lr = cfg.lr_peak if cfg.lr_peak is not None else cfg.lr
+optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr, weight_decay=cfg.weight_decay)
+
+if cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-2, end_factor=1.0, total_iters=cfg.warmup_epochs,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs),
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -475,6 +492,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
+    epoch_lr = optimizer.param_groups[0]["lr"]
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -506,6 +524,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
