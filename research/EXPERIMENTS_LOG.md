@@ -195,3 +195,100 @@ All target the Huber baseline (`val_avg/mae_surf_p = 111.531`). Each is a paired
 The dominant Round-1 lesson: **every run is wall-clock-truncated at ~14 epochs, not epoch-truncated**. This makes throughput and schedule-fit hypotheses (thorfinn cosine_t_max, askeladd bf16) particularly high-leverage — each one expands the effective compute budget for every subsequent experiment.
 
 ---
+
+## 2026-05-15 17:40 — PR #3290 [MERGED]: bf16 AMP mixed precision — unlock ~1.5× more epochs
+
+- **Student branch:** `charliepai2i48h4-askeladd/amp-bf16`
+- **Hypothesis:** Wrapping the forward pass and loss computation in `torch.autocast(device_type='cuda', dtype=torch.bfloat16)` reduces sec/epoch and peak VRAM, unlocking more epochs in the 30-min budget.
+
+### Results
+
+| Arm | `amp_dtype` | epochs | sec/epoch | peak VRAM | `val_avg/mae_surf_p` | best epoch | `test_avg/mae_surf_p` |
+|-----|-------------|--------|-----------|-----------|----------------------|-----------|------------------------|
+| A (fp32) | fp32 | 14 | 131.8 s | 42.1 GB | 107.801 | 14 | 105.087 |
+| B (bf16) | bf16 | **19** | **98.0 s** | **32.9 GB** | **101.519** | 16 | **98.735** |
+| **Δ (B vs Huber baseline 111.531)** | | +5 epochs | 1.345× faster | −21.8% VRAM | **−8.98%** | — | **−12.2%** |
+
+Per-split val MAE pressure:
+
+| Split | Huber baseline | bf16 Arm B | Δ (B vs Huber) |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 141.566 | **116.096** | −18.0% |
+| `val_geom_camber_rc`     | 116.797 | **116.636** |  −0.1% |
+| `val_geom_camber_cruise` |  86.222 |  **76.479** | −11.3% |
+| `val_re_rand`            | 101.539 |  **96.863** |  −4.6% |
+| **val_avg**              | **111.531** | **101.519** | **−8.98%** |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-askeladd-amp-bf16-20260515-162617/metrics.jsonl`
+- `models/model-charliepai2i48h4-askeladd-amp-bf16-20260515-162617/metrics.yaml`
+
+### Analysis & conclusions
+
+Largest single-PR gain on this track. Mechanism confirmed: bf16 unlocks 5 extra epochs (14→19), cosine schedule decays deeper, best epoch (16) is further along the anneal. VRAM reduction (−21.8%) opens headroom for bs=8 and larger capacity experiments.
+
+`val_geom_camber_rc` flat (−0.1%) is consistent with geometric-generalization being the bottleneck there, not optimization depth.
+
+**bf16 is now the new default on this branch.** All subsequent experiments must include `--amp_dtype bf16`.
+
+---
+
+## 2026-05-15 17:43 — PR #3278 [CLOSED, falsified]: Per-channel loss weighting (Ux/Uy/p)
+
+- **Student branch:** `charliepai2i48h4-alphonse/channel-weight`
+- **Hypothesis:** Up-weighting the pressure channel in Huber loss (w_p=2× or 4×) shifts gradient emphasis toward `p`, the primary metric channel.
+
+### Results (on Huber fp32 baseline)
+
+| Arm | weights | `val_avg/mae_surf_p` | `val_single_in_dist` | `val_geom_camber_cruise` |
+|-----|---------|---:|---:|---:|
+| A (1,1,1) | uniform | 112.816 | 129.27 | 93.21 |
+| B (0.5,0.5,2.0) | p×2 | 121.521 | +21% | **−11%** |
+| C (0.25,0.25,4.0) | p×4 | 114.488 | +4% | ≈0% |
+
+Arm A ≈ Huber baseline (within noise). Both weighted arms regress on average.
+
+### Analysis
+
+Static pressure upweighting helps on cruise (low-magnitude p, std≈164) but crushes `single_in_dist` (+21%) and `*_rc` (+13%), where pressure's raw error already dominates the gradient. The 10× y_std variance across splits means any fixed channel weight trades one split's gain for others' losses. Root cause: need per-domain not per-channel weighting. Closed — different axis required.
+
+---
+
+## 2026-05-15 17:45 — PR #3117 [SENT BACK ×2]: NeRF-style Fourier features on (x,z) positions
+
+- **Student branch:** `charliepai2i48h4-fern/fourier-pos-features`
+- **Hypothesis (2nd run):** NeRF-style random Fourier features (num_bands=10, scale=10.0) replacing raw (x,z) positions help the model resolve high-frequency spatial structure in the pressure field.
+
+### Results (Huber fp32 baseline, 2nd run)
+
+| Arm | features | `val_avg/mae_surf_p` | `val_single_in_dist` | `val_re_rand` | `val_geom_camber_rc` |
+|-----|----------|---:|---:|---:|---:|
+| A (raw) | raw `(x,z)` | 119.712 | 162.56 | 102.49 | 129.26 |
+| B (Fourier) | 10 bands, scale=10 | 119.932 | **143.46 (−11.75%)** | +7.65% | +9.00% |
+| **Δ (B − A)** | | **+0.18%** (nil) | | | |
+
+Both arms underperformed Huber reference (single-seed variance, 12-13 vs 14 epochs). Intra-PR is the valid signal.
+
+### Analysis
+
+Fourier features (scale=10) help `single_in_dist` (−11.75%) but hurt `*_rc` (+9%) and `re_rand` (+7.65%) — the high-frequency fixed basis aliases on multi-foil / OOD-Re layouts. scale=10 is ~6-7× over-shot for normalised foil coordinates (±1.5 range). Note: fern also included a valid `train.py` NaN-filter fix for `evaluate_split`.
+
+### Decision
+
+Sent back ×2: try fourier_scale ∈ {2.0, 4.0} + concatenate raw+Fourier + add `--amp_dtype bf16`.
+
+---
+
+## 2026-05-15 18:00 — Round 3 assignments
+
+After Round 2 partial results (bf16 merged −8.98%; channel weighting falsified; Fourier sent back), two students are newly idle.
+
+| Student | PR | Hypothesis | Axis |
+|---------|----|-----------|------|
+| alphonse | #3364 | LR=1e-3 + 3-ep warmup on bf16 baseline | LR peak × bf16 |
+| askeladd | #3365 | batch_size=6/8 on bf16 baseline | Throughput × batch |
+
+Both test single-axis changes directly on the current best baseline (bf16 + Huber, 101.519). Independent and composable. Still-WIP: tanjiro #3321, thorfinn #3289, nezuko #3126, edward #3113, frieren #3122 (rebasing), fern #3117 (sent back).
+
+---

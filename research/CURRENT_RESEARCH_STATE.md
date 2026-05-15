@@ -1,95 +1,79 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 14:55 UTC (Round 1 → Round 2 transition on `icml-appendix-charlie-pai2i-48h-r4`)
-- **Most recent human research direction:** None received yet on this track.
+- **Date:** 2026-05-15 18:00 UTC (Round 2 → Round 3 transition on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
 ## Current research focus
 
-Round 1 of TandemFoilSet — Transolver-based CFD surrogate for tandem-airfoil flow fields. Primary ranking metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 validation splits: in-dist single-foil, geom-camber-rc, geom-camber-cruise, Re-stratified). Test counterpart: `test_avg/mae_surf_p`.
+Round 2 partial results on TandemFoilSet — Transolver CFD surrogate for tandem-airfoil flow fields. Primary ranking metric: `val_avg/mae_surf_p`.
 
-**Current Huber baseline (PR #3094 merged):** `val_avg/mae_surf_p = 111.531`, `test_avg/mae_surf_p = 112.479` (3 finite splits).
+**Current best baseline (PR #3290 merged):** `val_avg/mae_surf_p = 101.519`, `test_avg/mae_surf_p = 98.735` (3 finite splits, bf16 AMP).
 
-**Dominant operational insight:** Every Round-1 run hits the 30-min wall-clock cap at epoch ~14 (out of configured 50). Runs are **wall-clock-truncated, not epoch-truncated.** This reframes the prioritization for Round 2: throughput unlocks (bf16, larger batch) and schedule-fit fixes (cosine T_max) are now first-class hypotheses, not nice-to-haves. Architectural capacity bumps that increase sec/epoch (#3113 original) regress *because* they steal epochs away.
+**Dominant operational insight (confirmed Round 2):** Every run is wall-clock-truncated at ~14 epochs fp32 / ~19 epochs bf16 (out of configured 50). bf16 is a free 1.345× throughput multiplier — it is now the mandatory default for all new experiments. New baseline exploits 5 extra epochs (cosine decays deeper into anneal).
 
-## Round 1 hypothesis matrix
+**Two key research questions for Round 3:**
+1. **LR peak on bf16**: With 19 epochs available and cosine still near peak (80% of lr=5e-4 at ep14, only slightly better at ep19), does raising lr_peak to 1e-3 unlock significant improvement?
+2. **Batch size on bf16**: 32.9 GB VRAM (vs 42.1 GB fp32) leaves room for bs=6/8. Does bigger batch reduce gradient noise enough to matter in 19 epochs?
 
-The first 8 assignments cover diverse axes simultaneously. This is a wide initial screen — each hypothesis is a single-axis change with a clear mechanism, sized to fit within 30 min × 50 epochs on a single GPU. If multiple winners emerge, follow-up rounds will test whether they compound.
+## Round 1 results summary
 
-| Axis | Student | Slug | PR | Hypothesis |
-|------|---------|------|----|------------|
-| Loss form | alphonse | huber-loss | #3094 | Huber (smooth L1) replaces MSE — better aligns with MAE eval |
-| Loss weighting | askeladd | surf-weight-sweep | #3108 | surf_weight ∈ {10, 25, 50} sweep — direct surface-MAE optimization |
-| Loss scale | tanjiro | scale-aware-loss | #3128 | Per-sample inverse-y_std loss reweighting — balances 10× y-std heterogeneity |
-| Capacity | edward | model-bigger | #3113 | n_hidden 128→192, n_layers 5→7, slice_num 64→96 |
-| Input features | fern | fourier-pos-features | #3117 | NeRF-style Fourier features on (x,z) positions |
-| Conditioning | frieren | film-conditioning | #3122 | FiLM on (log Re, AoA, NACA, gap, stagger) — explicit condition routing |
-| Optimization | nezuko | ema-weights | #3126 | EMA weights (decay=0.999) for eval/test |
-| LR schedule | thorfinn | onecycle-lr | #3131 (CLOSED, miss) | OneCycleLR max_lr=2e-3 vs cosine 5e-4 — schedule sized for 50 epochs but only ~14 achievable; stuck near peak LR. +11.1% vs cosine; closed. |
+| Hypothesis | PR | Result |
+|-----------|-----|--------|
+| Huber loss | #3094 | **MERGED** −15.7% (val 132.3 → 111.5) |
+| OneCycleLR | #3131 | Closed: schedule sized for 50 ep, only 14 ran; +11.1% |
+| surf_weight sweep | #3108 | Closed: uniform +11-13% regression vs baseline |
+| Scale-aware loss | #3128 | Closed: directional misalignment with unweighted-MAE eval |
 
-Diversification rationale: cover loss reformulation, loss weighting, scale awareness, capacity, position encoding, condition conditioning, weight averaging, and LR scheduling — eight orthogonal levers. After Round 1 we should know which 2–4 axes carry the most signal and can compound them in Round 2.
+## Round 2 status snapshot (2026-05-15 18:00)
 
-## Potential next research directions (Round 2+ ideas)
+- **Merged (1):** #3290 bf16 AMP (askeladd) → new baseline 101.519 (−8.98% vs Huber)
+- **Closed (1):** #3278 channel weighting (alphonse) — static p-upweighting regresses single_in_dist/rc; root cause is 10× y_std variance across splits, not channel imbalance
+- **Sent back (2):**
+  - #3117 Fourier features (fern, 2nd send-back) — scale=10 too high; try scale=2,4 + concat raw+Fourier + bf16
+  - #3122 FiLM conditioning (frieren, updated) — rebase onto Huber + add bf16
+- **Round 2 WIP still pending (4):**
+  - #3321 tanjiro — LR=1e-3+warmup (fp32 baseline; intra-PR delta still informative)
+  - #3289 thorfinn — cosine T_max=15 (fp32 baseline)
+  - #3126 nezuko — EMA weights (fp32 baseline)
+  - #3113 edward — slice_num=96 (fp32 baseline)
 
-These are queued for Round 2 once we have Round 1 results:
+## Round 3 assignments (2026-05-15 18:00)
 
-1. **Compose winning Round-1 axes** — e.g. larger model + Huber + EMA + best LR schedule.
-2. **Architecture variants:** RoPE/rotary positional encodings on (x, z); multi-scale Transolver with hierarchical `slice_num`; attention bias from signed distance to surface; MoE feed-forward layers.
-3. **Loss enhancements:** Sobolev loss (penalize gradient errors near the surface); pressure-gradient (∂p/∂x) auxiliary loss; per-channel adaptive weighting (predict each of Ux, Uy, p with weighted task balance).
-4. **Geometry augmentations:** small perturbations of (camber, AoA, log_Re) at train time to encourage smooth interpolation across the held-out cambers (M=6–8 raceCar, M=2–4 cruise).
-5. **Multi-task heads:** separate prediction heads for surface vs volume nodes; auxiliary lift/drag prediction from integrated surface pressure.
-6. **Mesh-aware tweaks:** subsample large meshes during training (cap N at 100K); curriculum from low-Re to high-Re samples; balanced sampling within tandem subdomains.
-7. **Physics-informed terms:** divergence-free penalty on (Ux, Uy); pressure consistency near no-slip surface; far-field decay regularizer.
-8. **Optimizer:** Lion/Adan/Sophia replacements for AdamW; LAMB-style weight scaling; larger effective batch via gradient accumulation.
-9. **Test-time tricks:** horizontal flip augmentation at eval (foils are mostly symmetric in z=0); per-split calibration; ensemble of top 3 checkpoints.
-10. **Deeper architectural rethinks:** GNN backbone instead of attention-over-slices; Universal Physics Transformer (Alkin et al. 2024); neural operator hybrids (e.g. learned signed-distance prior + Transolver refinement).
-
-A deeper hypothesis bank (15–20 ideas) is being generated by the researcher-agent and will be written to `research/RESEARCH_IDEAS_2026-05-15_initial.md` for Round-2 picking.
-
-## Round-1 + Round-2 status snapshot (2026-05-15 14:55)
-
-- **Merged (1):** #3094 Huber loss (alphonse) → new baseline `val_avg/mae_surf_p=111.531`.
-- **Closed misses (3):**
-  - #3131 OneCycleLR (thorfinn) — schedule sized for 50 ep, only 14 ep ran; +11.1% regression
-  - #3108 surf_weight sweep (askeladd) — surf_weight ∈ {25, 50} regress +11–13% vs baseline 10; uniform across all splits
-  - #3128 scale-aware loss (tanjiro) — per-sample inv-std reweighting regresses +7.4% intra-PR; metric is unweighted MAE so direction misaligned at any strength
-- **Sent back for revision (2):**
-  - #3113 capacity scale-up (edward) — original 3-axis bump ran only 7 epochs; revised to single-axis slice_num=96 on Huber (re-running)
-  - #3122 FiLM conditioning (frieren) — terminal results on MSE baseline (−1.55% intra-PR, mixed test signal); sent back to rebase onto Huber and re-run
-- **Round 1 WIP still pending (3):** #3126 nezuko (EMA), #3117 fern (Fourier features), #3113 edward (revised slice_num), plus the sent-back #3122 frieren (FiLM re-run on Huber).
-- **Round 2 WIP (4 assigned):**
-  - #3278 alphonse — per-channel loss weighting (Ux/Uy/p)
-  - #3289 thorfinn — cosine T_max=15 to match achievable budget
-  - #3290 askeladd — bf16 AMP mixed precision (throughput unlock)
-  - #3321 tanjiro — higher LR (1e-3, 1.5e-3) + 3-epoch warmup (LR peak)
+| Student | PR | Hypothesis | Axis | Baseline |
+|---------|----|-----------|-|---------|
+| alphonse | #3364 | LR=1e-3 + 3-ep warmup on bf16 | LR peak × bf16 | 101.519 |
+| askeladd | #3365 | batch_size=6/8 on bf16 | Throughput × batch | 101.519 |
 
 **All 8 students productively occupied — zero idle GPUs.**
 
-### Three converging LR-side bets (composable if multiple win)
+### LR/schedule convergence (3 experiments covering the same axis space)
 
-- **#3289 thorfinn** keeps `lr_peak=5e-4` and shortens `T_max` → fast full-decay inside 14-ep budget
-- **#3321 tanjiro** keeps `T_max=50` and raises `lr_peak` to 1e-3/1.5e-3 with 3-ep warmup → more progress per step
-- **#3290 askeladd** unlocks more epochs via bf16 → gives schedule more room to anneal
+- **#3321 tanjiro** (fp32): lr_peak=1e-3 + warmup — intra-PR delta signal
+- **#3289 thorfinn** (fp32): cosine T_max=15 — schedule decay signal
+- **#3364 alphonse** (bf16): lr_peak=1e-3 + warmup — directly on current baseline
 
-If all three win, Round 3 composes them: lr_peak=1e-3 + cosine_t_max ≈ epochs_achieved + bf16. That's a multi-percent gain compounded across orthogonal axes.
+If alphonse wins (#3364), it's immediately mergeable. If tanjiro/thorfinn win, we compose with bf16 in Round 4.
+
+## Potential next research directions (Round 3+ queue)
+
+1. **Compose Round 3 winners** — bf16 + lr_peak=1e-3 + bs=8 + cosine_T_max_fit. Each orthogonal axis contributes an independent multiplier.
+2. **Schedule-Free AdamW** — eliminates LR schedule entirely. With 19 bf16 epochs, schedule choice is less critical, but Schedule-Free removes the need for T_max tuning entirely. High risk, potentially high payoff.
+3. **Model capacity on bf16** — n_hidden=192 or n_layers=6 with bf16 might now get ~12-15 epochs. Round 1's capacity failure was "only 7 epochs"; 19 bf16 epochs may change the picture.
+4. **Fourier features lower scale** — fern's in-flight send-back. scale=2 or 4 on normalised coordinates; concat raw+Fourier.
+5. **FiLM conditioning on bf16** — frieren's in-flight rebase. If intra-PR delta was −1.55% on MSE baseline, the Huber+bf16 baseline could amplify this.
+6. **EMA weights on bf16** — nezuko's in-flight test. Evaluation with EMA should benefit from more epochs (19 vs 14).
+7. **Per-domain y normalization** — correct fix for the 10× y_std heterogeneity that closed channel weighting. Normalize loss by per-domain target std. Requires training domain labels.
+8. **SDF input features** — signed distance to foil surface as extra input channel. Direct geometry signal for surface pressure prediction. Implementation cost: KD-tree on surface nodes, precomputed.
+9. **Gradient accumulation** — effective bs=16 without VRAM cost. Alternative to actual bs=8 if OOM.
+10. **Sobolev loss** — penalize prediction-gradient errors near the surface. Pairs with surface MAE focus.
 
 ## Operational notes
 
-- All 8 GPUs productively occupied.
-- 30-min wall-clock cap × 50-epoch cap per training run — keep follow-ups feasible inside this budget.
-- **Effective epoch count per run is ~14 (not 50)** — design future experiments knowing this.
-- Local JSONL metrics only on this branch (no remote experiment tracking).
-- All branches target `icml-appendix-charlie-pai2i-48h-r4`; squash-merged winners update BASELINE.md.
-- Known scoring bug: `test_geom_camber_cruise/mae_surf_p` returns NaN due to `inf * 0 = NaN` in masked sum (sample 20 has `inf` in ground-truth `p`). `data/scoring.py` is read-only per `program.md`, so this is out-of-scope for fix; affects all arms identically so doesn't bias comparisons.
-
-## Round-3 candidate axes (queue for after Round 2 returns)
-
-Pick based on which Round-2 winners actually land. Top candidates:
-
-1. **Compose Round-2 winners** — e.g. Huber + per-channel-p + cosine_t_max=15 + bf16. Throughput unlocks compound additively with schedule fixes and loss reformulations.
-2. **bf16 + bigger batch (bs=4 → bs=8)** — if bf16 wins, VRAM headroom enables bs=8. Bigger effective batch + more epochs = better cosine annealing → likely additive.
-3. **Higher LR + warmup** — if bf16 unlocks more epochs, current `lr=5e-4` may be too small for the new effective compute budget. Try `lr=1e-3` with 2-epoch linear warmup.
-4. **Per-domain y normalization** — explicitly handle the 10× y-std variance across splits. Pairs nicely with channel weighting.
-5. **SDF features** — add signed-distance-to-surface as an input channel (geometry signal currently implicit). If fern's Fourier features land, try composing.
-6. **Schedule-Free AdamW** — eliminates LR schedule entirely, claims SOTA on transformer training. Higher implementation risk but potentially big payoff.
-7. **Sobolev loss** — penalize prediction-gradient errors near the surface. If channel-weighted Huber works, augment with derivative supervision.
+- **New baseline: val_avg/mae_surf_p = 101.519** (bf16 + Huber, PR #3290 merged 2026-05-15 17:40)
+- **All new experiments must include `--amp_dtype bf16`** — bf16 is default from here
+- **All in-flight fp32 experiments (#3321, #3289, #3126, #3113, #3122) still informative via intra-PR delta**
+- 30-min wall-clock cap × 50-epoch cap; effective ~19 epochs with bf16
+- Local JSONL metrics only (no remote experiment tracking)
+- Known scoring bug: `test_geom_camber_cruise/mae_surf_p` NaN (sample 20 inf in ground-truth p); `data/scoring.py` read-only. Affects all arms identically.
+- fern's `train.py` NaN-filter fix (merged via #3290's update) rescues test_avg from nan; `test_avg/mae_surf_p` now computable as 3-split average manually.
