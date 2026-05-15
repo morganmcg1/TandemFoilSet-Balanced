@@ -452,7 +452,7 @@ class Config:
     weight_decay: float = 3e-4
     batch_size: int = 4
     surf_weight: float = 30.0
-    epochs: int = 80
+    epochs: int = 12          # was 80 - match T_max to wall-clock cap (~12 epochs/30 min)
     ema_decay: float = 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
