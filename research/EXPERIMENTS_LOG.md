@@ -6,6 +6,36 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 18:22–18:45 — Round-3 closure + round-4 assignments
+
+### Round-3 merges and closures
+
+| PR | Student | Action | val_avg | Reason |
+|---|---|---|---:|---|
+| #3248 | frieren | **MERGED** | 107.46 | Round-3 winner. Huber δ=2.0. New baseline. |
+| #3244 | askeladd | closed | 109.99 | Doesn't beat new baseline 107.46; stacking test assigned (round-4 PR #3385) |
+| #3249 | nezuko | closed | 130.18 | EMA neutral (≈ fresh-slate baseline); lever doesn't apply at 13-epoch budget |
+| #3250 | tanjiro | closed | 124.76 | Loss reweighting regression; re-test on Huber baseline assigned (PR #3392 delta sweep) |
+| #3251 | thorfinn | closed | 123.35 | NACA Fourier +5.1% on MSE; training stability was binding constraint, not geometry; re-test on Huber (#3391) |
+| #3312 | fern | closed | 115.49 | Lion +12% on MSE; re-test stacked on Huber (#3387) |
+
+Edward (#3313, grad-accum) and alphonse (#3282, bf16) still WIP, nudged for terminal.
+
+### Round-4 assignments (2026-05-15 18:30–18:45)
+
+All 6 idle students assigned stacking experiments on the Huber baseline:
+
+| PR | Student | Slug | Key change |
+|---|---|---|---|
+| #3385 | askeladd | `warmup-cosine-stacked` | Warmup 5ep + cosine + grad-clip=1.0 |
+| #3387 | fern | `lion-stacked` | Lion lr=1e-4, wd=1e-2 |
+| #3389 | nezuko | `surf-weight-sweep` | `--surf_weight 5.0` and `20.0` (2 arms) |
+| #3391 | thorfinn | `naca-fourier-stacked` | NACA Fourier features rebased onto Huber |
+| #3392 | tanjiro | `huber-delta-tuning` | `--huber_delta 0.5 / 1.0 / 3.0` (3 arms) |
+| #3394 | frieren | `huber-surface-only` | MSE vol + Huber surf, δ=1.0 and δ=2.0 |
+
+---
+
 ## 2026-05-15 17:39 — PR #3248 frieren posts terminal SENPAI-RESULT — round-3 cohort leader
 
 - Branch: `willowpai2i24h3-frieren/huber-delta2`
