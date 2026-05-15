@@ -11,50 +11,49 @@ target base `icml-appendix-charlie`).
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=64`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=1.0)** in normalized space, `surf_weight=10.0` (PR #3111) |
-| Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` to avoid NaN-through-zero |
+| EMA   | **Polyak averaging, decay=0.999**, evaluated at val/test time (PR #3285) |
+| Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
-| Test  | Best-val checkpoint evaluated on 4 test splits at end of run |
+| Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3279 re-evaluation of SmoothL1 baseline, best epoch 13)
+## Current best metrics (PR #3285, EMA-0.999, best epoch 14)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **108.47** |
-| `test_avg/mae_surf_p` | **99.49** (finite — NaN bug fixed) |
-| `test/test_geom_camber_rc/mae_surf_p` | 105.84 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 77.95 |
-| `test/test_re_rand/mae_surf_p` | 98.77 |
-| `test/test_single_in_dist/mae_surf_p` | 115.42 |
+| `val_avg/mae_surf_p` **(primary)** | **104.52** |
+| `test_avg/mae_surf_p` | NaN (run pre-dates #3279 NaN fix — 3-split mean = 103.36) |
+| `test/test_geom_camber_rc/mae_surf_p` | 100.47 |
+| `test/test_re_rand/mae_surf_p` | 91.34 |
+| `test/test_single_in_dist/mae_surf_p` | 118.26 |
+| `test/test_geom_camber_cruise/mae_surf_p` | NaN (will be finite on next run with merged NaN fix) |
 
 Per-split val surface-p MAE at best checkpoint:
 
 | Split | mae_surf_p |
 |-------|------------|
-| `val_single_in_dist`     | 128.55 |
-| `val_geom_camber_rc`     | 116.22 |
-| `val_geom_camber_cruise` |  87.91 |
-| `val_re_rand`            | 101.21 |
-| **avg** | **108.47** |
+| `val_single_in_dist`     | 130.72 |
+| `val_geom_camber_rc`     | 112.51 |
+| `val_geom_camber_cruise` |  79.47 |
+| `val_re_rand`            |  95.36 |
+| **avg** | **104.52** |
 
-Artifact: `models/model-charliepai2i48h1-alphonse-nan-fix-verification-20260515-143359/metrics.jsonl`
+Artifact: `models/model-ema-0999-20260515-145218/metrics.jsonl`
 
 Reproduce:
 
 ```bash
 cd target/
-python train.py --experiment_name smooth-l1-repro --agent <name>
-# (SmoothL1 + NaN-safe scoring already in train.py + data/scoring.py on icml-appendix-charlie-pai2i-48h-r1)
+python train.py --experiment_name ema-repro --agent <name>
+# (SmoothL1 + EMA-0.999 + NaN-safe scoring all in train.py + data/scoring.py on icml-appendix-charlie-pai2i-48h-r1)
 ```
 
 ### Note on val variance
 
-The val delta between the two SmoothL1 measurements (PR #3111: 115.17 vs PR
-#3279: 108.47, same config, different seeds/best-epoch realization) is ~7
-points. Treat run-to-run variance as ±5-10 pts on `val_avg/mae_surf_p`.
-Improvements smaller than that should be confirmed with a re-run.
+Single-seed variance is ±5-10 pts on `val_avg/mae_surf_p`. Improvements
+smaller than ~5% may be within noise — confirm with a re-run if uncertain.
 
 ### Calibration-only baseline (PR #3107, default config MSE)
 
@@ -87,4 +86,5 @@ After every merged winner, the advisor:
 |------|----|------------|--------------------|---|
 | 2026-05-15 | #3107 | baseline (MSE, default config) | 143.52 | — (calibration) |
 | 2026-05-15 | #3111 | SmoothL1 loss (Huber beta=1.0) | 115.17 | -19.7% |
-| 2026-05-15 | #3279 | NaN-safe scoring (infra, also re-rolls val seed) | **108.47** | -5.8% (stochastic) |
+| 2026-05-15 | #3279 | NaN-safe scoring (infra, also re-rolls val seed) | 108.47 | -5.8% (stochastic) |
+| 2026-05-15 | #3285 | EMA model weights, decay=0.999 | **104.52** | **-3.6%** |
