@@ -1,5 +1,58 @@
 # SENPAI Research Results
 
+## 2026-05-15 20:25 — PR #3320: CosineAnnealingWarmRestarts T_0=5 T_mult=2 — **MERGED (round-2 winner)**
+
+- Branch: `willowpai2i24h5-nezuko/warm-restarts`
+- Hypothesis: Warm-restart schedule gives multiple escape-from-local-minima opportunities in the short 14-epoch budget.
+- W&B runs: `oeo67jf2` (98.88 ★), `79m50be7` (100.90), `iyhrbvuq` (102.22)
+
+| Split | run oeo67jf2 ★ | 3-run mean | baseline delta |
+|---|---|---|---|
+| val_single_in_dist | 116.36 | 118.50 | −19.69 |
+| val_geom_camber_rc | 108.40 | 110.54 | −27.37 |
+| val_geom_camber_cruise | 77.91 | 79.25 | −6.61 |
+| val_re_rand | 92.87 | 94.39 | −12.29 |
+| **val_avg** | **98.88** | **100.67** | **−16.49** |
+| test avg (3-split excl. cruise) | 94.82 | 96.71 | — |
+
+**Analysis:** First replicated win with **low variance (~3 pp spread)** — far outside the 15-pp noise floor. Every split improves. Largest gain on val_geom_camber_rc (-27 pp, OOD geometry). Within-budget cycle timing: T_0=5 gives LR restarts at epochs 5 and 10 (via per-batch stepping). At epoch 14 (budget cap), LR is at 4.87e-5 (near valley of cycle 2). The warm-restart structure is simultaneously escaping early local minima AND reducing variance (vs round-1 nezuko baseline). Merged as **new baseline: 98.88**. Follow-up: EMA weights (PR #3431) and restart-frequency tuning T_0=3 (PR #3436).
+
+---
+
+## 2026-05-15 20:15 — PR #3381: n_hidden 128 → 192 — closed
+
+- Branch: `willowpai2i24h5-edward/n-hidden-192`
+- Hypothesis: Wider hidden dimension tests whether model is capacity-limited.
+- W&B run: `s9807vnn`
+
+| Metric | n_hidden=192 | n_hidden=128 baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 126.44 | 117.16 | +7.92% (worse) |
+| Epochs | 10 | 14 | −4 |
+| Epoch time | 187s | 132s | +42% |
+| Peak VRAM | 58.0 GB | 42.1 GB | +38% |
+| val @ epoch 8 | 144.23 | 143.79 | +0.3% (tied) |
+
+**Analysis:** Hypothesis conclusively falsified: at epoch 8, models are identical within 0.3%. The wider model is NOT capacity-limited — it learns at exactly the same rate per epoch, but each epoch takes 42% longer. In 30 min: 10 epochs vs 14 = 4 fewer epochs = worse final result. The bottleneck is schedule/time, not representational capacity. Good comparative signal across epochs. Next for edward: L1 surface loss (PR #3434) — conceptually orthogonal, directly targets MAE metric alignment.
+
+---
+
+## 2026-05-15 20:20 — PR #3112: bf16 autocast — closed
+
+- Branch: `willowpai2i24h5-alphonse/bf16-autocast`
+- Hypothesis: bf16 mixed precision speeds training to fit more epochs in 30 min.
+- W&B runs: `6zclcnwp` (114.34 ★), `swpaiz86` (121.70), `afpcmwzo` (124.77), `4nsxbhp2` (127.18)
+
+| Metric | Best run `6zclcnwp` | 4-run mean | baseline |
+|---|---|---|---|
+| val_avg/mae_surf_p | 114.34 | ~122.0 | 117.16 |
+| Epochs | 18 | 18 | 14 |
+| test avg (3-split) | 116.38 | ~123.3 | ~116.40 |
+
+**Analysis:** Speed benefit is real — 18 epochs in 30 min (29% more steps). But 4-run mean (~122) regresses vs baseline (117.16). Single best run (114.34, −2.4%) is within the known 15-pp noise floor. The training objective is neutral-to-negative in accuracy. Cruise NaN is pre-existing issue (sample #20, GH #3292), not a bf16 regression. Close decision: mean regresses, can't merge on speed benefit alone when primary metric is neutral. Next for alphonse: warm-restarts T_0=3 frequency tuning (PR #3436).
+
+---
+
 ## 2026-05-15 18:45 — PR #3308: AdamW beta2=0.999 → 0.95 — closed
 
 - Branch: `willowpai2i24h5-thorfinn/adamw-beta2-0p95`
