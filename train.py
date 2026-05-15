@@ -385,7 +385,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 50.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -483,6 +483,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_uxuy = epoch_surf_p = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -494,29 +495,48 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+        err_huber = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+        err_l1 = (pred - y_norm).abs()                                        # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_mask_3d = vol_mask.unsqueeze(-1)
         surf_mask_3d = surf_mask.unsqueeze(-1)
-        vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-        surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+
+        # Volume: Huber on all 3 channels (unchanged baseline).
+        vol_loss = (err_huber * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+
+        # Surface: Huber on Ux/Uy (channels 0,1), L1 on pressure (channel 2).
+        # Per-node-summed across channels matches the original surf_loss normalization.
+        surf_n = surf_mask.sum().clamp(min=1).float()
+        surf_loss_uxuy = (err_huber[..., :2] * surf_mask_3d).sum() / surf_n
+        surf_loss_p    = (err_l1[..., 2:]    * surf_mask_3d).sum() / surf_n
+        surf_loss = surf_loss_uxuy + surf_loss_p
+
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/surf_loss_uxuy_step": surf_loss_uxuy.item(),
+            "train/surf_loss_p_l1_step": surf_loss_p.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_uxuy += surf_loss_uxuy.item()
+        epoch_surf_p += surf_loss_p.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_uxuy /= max(n_batches, 1)
+    epoch_surf_p /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -532,6 +552,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_uxuy": epoch_surf_uxuy,
+        "train/surf_loss_p_l1": epoch_surf_p,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
