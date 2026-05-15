@@ -63,6 +63,69 @@ ACTIVATION = {
 }
 
 
+class CautiousAdamW(torch.optim.Optimizer):
+    """AdamW with cautious update masking (Luo et al., arXiv:2411.16085).
+
+    Cautious mask: only apply the update at positions where the
+    bias-corrected Adam update direction agrees in sign with the current
+    gradient. The mask is renormalized so the mean update magnitude is
+    preserved. Also tracks the per-step mean mask (sign-agreement rate)
+    so training can log a coarse diagnostic per epoch.
+    """
+
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+                 weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+        self._mask_sum = 0.0
+        self._mask_numel = 0
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if "step" not in state:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                state["step"] += 1
+                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+                bias_correction1 = 1 - beta1 ** state["step"]
+                bias_correction2 = 1 - beta2 ** state["step"]
+                denom = (exp_avg_sq.sqrt() / (bias_correction2 ** 0.5)).add_(eps)
+                update = (exp_avg / bias_correction1) / denom
+                mask = (update * grad > 0).to(update.dtype)
+                # Track raw mask sum/numel for sign-agreement diagnostic.
+                self._mask_sum += float(mask.sum().item())
+                self._mask_numel += mask.numel()
+                mask_scale = mask.numel() / (mask.sum() + 1)
+                update = update * mask * mask_scale
+                if wd != 0:
+                    p.mul_(1 - lr * wd)
+                p.add_(update, alpha=-lr)
+        return loss
+
+    def pop_mean_mask(self) -> float:
+        """Return mean(mask) since last pop and reset counters. NaN if empty."""
+        if self._mask_numel == 0:
+            return float("nan")
+        m = self._mask_sum / self._mask_numel
+        self._mask_sum = 0.0
+        self._mask_numel = 0
+        return m
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True,
                  dropout=0.0):
@@ -468,7 +531,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = CautiousAdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -551,6 +614,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    mean_mask = optimizer.pop_mean_mask()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -558,6 +622,7 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/cautious_mean_mask": mean_mask,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -565,6 +630,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"mean_mask={mean_mask:.4f}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
