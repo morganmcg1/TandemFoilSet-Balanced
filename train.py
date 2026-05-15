@@ -54,19 +54,30 @@ from data import (
 FOURIER_BANDS = 8
 
 
-def fourier_features(pos: torch.Tensor, bands: int = FOURIER_BANDS) -> torch.Tensor:
-    """Sinusoidal Fourier encoding of position.
+class FourierEncoder(nn.Module):
+    """Learnable sinusoidal Fourier encoding of 2D position.
 
-    pos: [..., 2] normalized (x, z). Returns [..., 4 * bands] with bands of
-    sin/cos at frequencies 2^k * pi for k=0..bands-1, applied to each of the
-    two input coords.
+    Initialized to the octave-doubling baseline `[1, 2, 4, ..., 2^(n-1)]` so the
+    untrained model matches PR #3200 exactly. Frequencies are stored as a single
+    `nn.Parameter` and updated by the same optimizer as the rest of the model.
     """
-    freqs = (2.0 ** torch.arange(bands, device=pos.device, dtype=pos.dtype)) * math.pi
-    phases = pos.unsqueeze(-1) * freqs  # [..., 2, bands]
-    sin_f = torch.sin(phases)
-    cos_f = torch.cos(phases)
-    out = torch.stack([sin_f, cos_f], dim=-1)  # [..., 2, bands, 2]
-    return out.reshape(*pos.shape[:-1], 4 * bands)
+
+    def __init__(self, n_bands: int = FOURIER_BANDS):
+        super().__init__()
+        self.n_bands = n_bands
+        self.freqs = nn.Parameter(
+            torch.tensor([2.0 ** i for i in range(n_bands)], dtype=torch.float32),
+            requires_grad=True,
+        )
+
+    def forward(self, pos: torch.Tensor) -> torch.Tensor:
+        """pos: [..., 2] normalized (x, z). Returns [..., 4 * n_bands]."""
+        freqs = self.freqs.to(pos.dtype) * math.pi  # [n_bands]
+        phases = pos.unsqueeze(-1) * freqs  # [..., 2, n_bands]
+        sin_f = torch.sin(phases)
+        cos_f = torch.cos(phases)
+        out = torch.stack([sin_f, cos_f], dim=-1)  # [..., 2, n_bands, 2]
+        return out.reshape(*pos.shape[:-1], 4 * self.n_bands)
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +251,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device,
-                   fourier_bands: int = FOURIER_BANDS) -> dict[str, float]:
+def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
+                   device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -272,7 +283,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            ff = fourier_features(x_norm[..., :2], bands=fourier_bands)
+            ff = fourier_encoder(x_norm[..., :2])
             x_aug = torch.cat([x_norm, ff], dim=-1)
             pred = model({"x": x_aug})["preds"]
 
@@ -468,7 +479,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+fourier_encoder = FourierEncoder(cfg.fourier_bands).to(device)
+n_fourier_params = sum(p.numel() for p in fourier_encoder.parameters())
+print(f"Fourier encoder: {n_fourier_params} learnable freq parameters "
+      f"(init: {[round(f, 3) for f in fourier_encoder.freqs.tolist()]})")
+
+optimizer = torch.optim.AdamW(
+    list(model.parameters()) + list(fourier_encoder.parameters()),
+    lr=cfg.lr, weight_decay=cfg.weight_decay,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -523,7 +542,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        ff = fourier_features(x_norm[..., :2], bands=cfg.fourier_bands)
+        ff = fourier_encoder(x_norm[..., :2])
         x_aug = torch.cat([x_norm, ff], dim=-1)
         pred = model({"x": x_aug})["preds"]
         sq_err = (pred - y_norm) ** 2
@@ -551,8 +570,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             fourier_bands=cfg.fourier_bands)
+        name: evaluate_split(model, fourier_encoder, loader, stats,
+                             cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -560,6 +579,7 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    freqs_now = fourier_encoder.freqs.detach().cpu().tolist()
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -573,6 +593,11 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    for i, f in enumerate(freqs_now):
+        log_metrics[f"fourier/freq_{i}"] = f
+    log_metrics["fourier/freq_min"] = min(freqs_now)
+    log_metrics["fourier/freq_max"] = max(freqs_now)
+    log_metrics["fourier/freq_mean"] = sum(freqs_now) / len(freqs_now)
     wandb.log(log_metrics)
 
     tag = ""
@@ -601,11 +626,21 @@ print(f"\nTraining done in {total_time:.1f} min")
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    final_freqs = fourier_encoder.freqs.detach().cpu().tolist()
+    init_freqs = [2.0 ** i for i in range(cfg.fourier_bands)]
+    freq_deltas = [(f - init) / init for f, init in zip(final_freqs, init_freqs)]
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "fourier/final_freqs": final_freqs,
+        "fourier/init_freqs": init_freqs,
+        "fourier/relative_drift": freq_deltas,
+        "fourier/max_abs_relative_drift": max(abs(d) for d in freq_deltas),
     })
+    print("\nLearned Fourier frequencies:")
+    for i, (init, final, delta) in enumerate(zip(init_freqs, final_freqs, freq_deltas)):
+        print(f"  freq_{i}: init={init:.4f}  final={final:.4f}  Δrel={delta*100:+.2f}%")
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
@@ -620,8 +655,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 fourier_bands=cfg.fourier_bands)
+            name: evaluate_split(model, fourier_encoder, loader, stats,
+                                 cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
