@@ -398,6 +398,8 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
+    cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
+    clip_grad_norm: float = 0.0  # max grad norm for clipping; 0.0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -440,7 +442,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
-    cond_dim=X_DIM - 13,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11
+    cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -450,7 +452,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -505,6 +507,8 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.clip_grad_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.clip_grad_norm)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
