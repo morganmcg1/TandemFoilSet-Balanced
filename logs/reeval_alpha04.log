@@ -1,0 +1,22 @@
+Device: cuda
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Loading checkpoint models/model-charliepai2i24h5-alphonse-camber-mixup-alpha04-20260515-133139/checkpoint.pt
+
+Re-evaluating on validation splits (patched)...
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+  VAL  avg_surf_p=136.8432
+  val_single_in_dist         loss=5.8670 surf[p=168.5600 Ux=2.2428 Uy=0.9443] vol[p=170.1700 Ux=6.3765 Uy=2.5430]
+  val_geom_camber_rc         loss=4.4975 surf[p=151.6729 Ux=2.7326 Uy=1.1789] vol[p=164.1116 Ux=5.8292 Uy=3.1290]
+  val_geom_camber_cruise     loss=1.5115 surf[p=100.7095 Ux=1.6056 Uy=0.6224] vol[p=99.2752 Ux=4.2890 Uy=1.5930]
+  val_re_rand                loss=3.0736 surf[p=126.4304 Ux=2.2504 Uy=0.9001] vol[p=124.3366 Ux=5.1682 Uy=2.2555]
+
+Evaluating on test splits (patched)...
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+  TEST  avg_surf_p=126.3261
+  test_single_in_dist        loss=6.5754 surf[p=149.1527 Ux=2.1606 Uy=0.8942] vol[p=154.0934 Ux=5.7714 Uy=2.3492]
+  test_geom_camber_rc        loss=3.3982 surf[p=144.6349 Ux=2.8191 Uy=1.0908] vol[p=155.2301 Ux=5.7990 Uy=2.9728]
+  test_geom_camber_cruise    loss=1.0871 surf[p=83.7007 Ux=1.4683 Uy=0.5763] vol[p=83.4492 Ux=3.8956 Uy=1.4581]
+  test_re_rand               loss=2.7116 surf[p=127.8163 Ux=2.1503 Uy=0.8951] vol[p=124.2830 Ux=4.9654 Uy=2.1913]
+
+Appended test_corrected event to models/model-charliepai2i24h5-alphonse-camber-mixup-alpha04-20260515-133139/metrics.jsonl
+Updated models/model-charliepai2i24h5-alphonse-camber-mixup-alpha04-20260515-133139/metrics.yaml with *_corrected fields.
