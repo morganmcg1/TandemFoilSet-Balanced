@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -45,6 +46,30 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+def fourier_encode_camber(x: torch.Tensor, dims: list[int], n_freqs: int) -> torch.Tensor:
+    """Expand selected scalar dims into Fourier features.
+
+    Each ``dim in dims`` is replaced by ``[c, sin(2*pi*k*c), cos(2*pi*k*c) for k=1..n_freqs]``
+    (preserves identity, adds 2*n_freqs sinusoidal features per encoded dim). Other
+    dims pass through unchanged. ``x`` is expected normalized; returned shape is
+    ``[..., D + 2*n_freqs*len(dims)]``.
+    """
+    parts: list[torch.Tensor] = []
+    dims_set = set(dims)
+    for d in range(x.shape[-1]):
+        if d not in dims_set:
+            parts.append(x[..., d:d+1])
+        else:
+            c = x[..., d:d+1]
+            enc = [c]
+            for k in range(1, n_freqs + 1):
+                enc.append(torch.sin(2 * math.pi * k * c))
+                enc.append(torch.cos(2 * math.pi * k * c))
+            parts.append(torch.cat(enc, dim=-1))
+    return torch.cat(parts, dim=-1)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -217,7 +242,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, camber_fourier_freqs: int = 0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -237,6 +262,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if camber_fourier_freqs > 0:
+                x_norm = fourier_encode_camber(x_norm, dims=[15, 19], n_freqs=camber_fourier_freqs)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -386,6 +413,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    camber_fourier_freqs: int = 4
 
 
 cfg = sp.parse(Config)
@@ -414,9 +442,13 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+# Fourier encoding replaces 2 scalar camber dims with (1 + 2*n_freqs) dims each;
+# fun_dim grows by 2 * 2 * n_freqs. With default n_freqs=4 this is 22 + 16 = 38.
+_fun_dim_base = X_DIM - 2
+_fun_dim_extra = 2 * 2 * cfg.camber_fourier_freqs if cfg.camber_fourier_freqs > 0 else 0
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=_fun_dim_base + _fun_dim_extra,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -485,6 +517,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        if cfg.camber_fourier_freqs > 0:
+            x_norm = fourier_encode_camber(x_norm, dims=[15, 19], n_freqs=cfg.camber_fourier_freqs)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
@@ -512,7 +546,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.camber_fourier_freqs)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +614,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.camber_fourier_freqs)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
