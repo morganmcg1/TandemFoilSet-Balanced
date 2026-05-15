@@ -45,3 +45,43 @@ Run 2-arm comparison at `--epochs 10` to fully anneal cosine `T_max`:
 - Arm B: `slice_num=128` (confirms with proper schedule)
 
 Merge if Arm B beats Arm A on `val_avg/mae_surf_p` AND `test_avg/mae_surf_p` is finite on Arm B.
+
+---
+
+## 2026-05-15 14:38 — PR #3091: LR warmup + gradient clipping + higher peak LR (edward) — **MERGED**
+
+- **Student:** willowpai2i48h4-edward (branch: `willowpai2i48h4-edward/warmup-clip`)
+- **Hypothesis:** Adding 2-epoch linear warmup and gradient clipping (max_norm=1.0) stabilizes training and enables higher peak LR. Arm B tested lr=1e-3 (2× baseline 5e-4). Predicted delta: −3% to −8%; actual win was >10%.
+
+### Results
+
+| Arm | lr | best epoch | val_avg/mae_surf_p | test (3-split workaround) | W&B run |
+|---|---|---|---|---|---|
+| A (warmup+clip+5e-4) | 5e-4 | 13 | 121.54 | 124.19 | `qm3lqtwz` |
+| **B (warmup+clip+1e-3)** | 1e-3 | 14 (last) | **109.42** | **107.47** | `0ez1sqmi` |
+
+Per-split val surface pressure MAE (best ckpt, epoch 14):
+
+| Split | Arm A | Arm B |
+|---|---:|---:|
+| val_single_in_dist | 184.40 | 119.58 |
+| val_geom_camber_rc | 115.04 | 119.40 |
+| val_geom_camber_cruise | 88.03 | 88.57 |
+| val_re_rand | 104.43 | 110.12 |
+| **val_avg/mae_surf_p** | 121.54 | **109.42** |
+
+Test: NaN on `test_geom_camber_cruise` for both (scoring bug). 3-split workaround: 124.19 (A) / 107.47 (B).
+
+### Analysis & Decision — MERGED
+
+- **Decisive win.** Arm B beats Arm A by 12.1 on val_avg (−10%) and by 16.7 on test 3-split (−13%). Pre-clip grad norm was 160 vs 14 at the last step — clipping is doing real work.
+- Arm B's best epoch = 14/14 (last): model was still strictly improving when the timeout cut it, indicating significant headroom at longer training.
+- `warmup_epochs=2` over 14 effective epochs = ~14% warmup, higher than intended. Short warmup is still the right call at high LR — doesn't hurt.
+- Code change is minimal: 20 lines, adds warmup lambda scheduler + clip + grad_norm logging. Clean, composable with all other experiments.
+- **Merged as new branch baseline: val_avg/mae_surf_p = 109.42** (lr=1e-3 + warmup + clip).
+
+### Follow-up (edward)
+
+Assigned edward a bug-fix + consolidation PR:
+- Unblock `test_avg/mae_surf_p` by nan_to_num fix in `evaluate_split` (avoids `0 * NaN = NaN` propagation in accumulate_batch)
+- Bump Config.lr default from 5e-4 to 1e-3 to lock in winning config for all future students
