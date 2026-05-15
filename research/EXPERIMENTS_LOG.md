@@ -1,5 +1,82 @@
 # SENPAI Research Results
 
+## 2026-05-15 18:30 — PR #3317: H3b: Cosine T_max=15 tuned to actual epoch budget ✓ MERGED (NEW BASELINE)
+
+- Branch: `askeladd/cosine-tmax-tuned`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: Aligning T_max with the real ~14-epoch wall-clock budget allows the cosine schedule to fully anneal. T_max=50 with only 14 epochs leaves LR at 79% of peak — effectively no annealing.
+
+### Results
+
+| Arm | T_max | val_avg/mae_surf_p | Δ vs baseline | W&B |
+|-----|-------|--------------------|---------------|-----|
+| Baseline | 50 | 112.9001 | — | `bpczoejx` |
+| **A (winner)** | **15** | **91.3319** | **-19.1%** | `kx17n4pn` |
+| B | 12 | 103.1193 | -8.7% | `z8h5w88d` |
+
+| Test split | Arm A (T_max=15) |
+|------------|-----------------|
+| test_single_in_dist | 96.7268 |
+| test_geom_camber_rc | 88.3769 |
+| test_geom_camber_cruise | NaN (branch predates NaN fix) |
+| test_re_rand | 80.1744 |
+| **test_avg (3-split)** | **88.4260** |
+
+### Analysis
+- Biggest single improvement in the programme: -19.1% from a 1-line hyperparameter change.
+- T_max=15 matches the 14-epoch budget: epoch 14 runs at ~1.1% of peak LR (fine-tuning pass). T_max=12 crashed to 0% LR at epoch 12, leaving 2 wasted epochs; gap of 103.12 vs 91.33 = 12 MAE points.
+- The baseline T_max=50 was essentially NOT annealing — the LR was at 79% of peak at training stop.
+- Key observation: per-split improvement is uniform (single_in_dist -26, geom_camber_rc -45, cruise -3, re_rand -12), suggesting the gain is structural (schedule fix) rather than overfitting to any particular split.
+- **This result fundamentally shifts the research programme**: the binding constraint was schedule mis-alignment, not loss function or architecture. All future hypotheses should compare against this baseline.
+
+---
+
+## 2026-05-15 18:30 — PR #3305: H1b: Huber delta=0.05 scan → SENT BACK (rebase on new base)
+
+- Branch: `alphonse/huber-smaller-delta`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: Shrinking Huber δ from 0.1 to 0.05 pushes more residuals into L1 regime, improving MAE alignment.
+
+### Results (vs OLD baseline 112.90 with T_max=50)
+
+| Arm | delta | val_avg/mae_surf_p | Δ vs old baseline | W&B |
+|-----|-------|--------------------|-------------------|-----|
+| Old Baseline | 0.10 | 112.9001 | — | `bpczoejx` |
+| **A (winner)** | **0.05** | **98.1913** | **-13.0%** | `oolv8t1p` |
+| B | 0.02 | 103.7964 | -8.1% | `zlqqtxsu` |
+
+val=98.19 does NOT beat the new T_max=15 baseline (91.33). Sent back for rebase.
+
+### Analysis
+- δ=0.05 is the right direction — U-shaped response with δ=0.02 overshooting (loss landscape becomes near-constant-gradient L1, slowing late refinement).
+- Both arms were run with T_max=50 (handicapped). On the new T_max=15 base, δ=0.05 is expected to yield additional stacked improvement.
+- **Action**: rebase onto T_max=15 base, rerun with δ=0.05 only. Target: beat 91.33.
+
+---
+
+## 2026-05-15 18:27 — PR #3171: H8b: Split pressure head + 3x weight on Huber base → SENT BACK (rebase)
+
+- Branch: `fern/split-pressure-head`
+- Student: willowpai2i48h1-fern
+- Hypothesis: Dedicated output head for pressure channel with 3x Huber-weighted loss improves OOD pressure MAE.
+
+### Results v2 (rebased onto Huber base, with T_max=50)
+
+| Metric | This PR | Huber baseline | Δ |
+|--------|---------|---------------|---|
+| val_avg/mae_surf_p | 111.9988 | 112.8295 | -0.90 |
+| test_avg/mae_surf_p (all 4 splits) | **99.9669** | **106.5996** | **-6.63** |
+
+val=112.00 does NOT beat the new T_max=15 baseline (91.33). Sent back for rebase.
+
+### Analysis
+- val improvement is marginal (-0.8%), but **test improvement is genuine and consistent**: geom_camber_rc (-13.8 test), cruise test (-15.0), geom_camber_rc val (-23.4). The split head specifically improves OOD generalization.
+- v1 (MSE) failed; v2 (Huber base) succeeded — confirming loss-metric alignment is prerequisite for architectural improvements.
+- Both runs used T_max=50 (handicapped). With T_max=15, the split head should achieve further improvement.
+- **Action**: rebase onto T_max=15 base, rerun with split head + 3x pressure weight + Huber(δ=0.1). Target: beat 91.33.
+
+---
+
 ## 2026-05-15 15:45 — PR #3162: H9: Raise surf_weight 10→25 ✗ CLOSED
 
 - Branch: `askeladd/surf-weight-25`
