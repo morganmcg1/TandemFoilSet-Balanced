@@ -1,28 +1,40 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3098 (2026-05-15)
+## Current best — PR #3098 (val) + PR #3296 (test)
 
-**val_avg/mae_surf_p = 96.0548** (W&B run: `md6so639`)  
-**test_avg/mae_surf_p = NaN** ⚠️ — test_geom_camber_cruise NaN (baseline-side GT bug; fix in PR #3296)  
-**test partial (excl. cruise): 93.41** (3-split mean — in_dist 96.04, camber_rc 100.16, re_rand 84.02)
+**val_avg/mae_surf_p = 96.0548** (W&B run: `md6so639`, PR #3098 SmoothL1 β=0.05)
+**test_avg/mae_surf_p = 90.0004** (W&B run: `xvn4gllg`, PR #3296 two-pronged NaN guard on Huber)
+**val_avg from xvn4gllg = 100.75** — within ~1σ of `md6so639`'s 96.05 (σ≈4.6 from fern reruns); same configuration, run-to-run variance.
 
-| Split | val mae_surf_p | test mae_surf_p |
-|-------|---------------|-----------------|
-| single_in_dist | 109.64 | 96.04 |
-| geom_camber_rc | 112.30 | 100.16 |
-| geom_camber_cruise | **73.22** | NaN ⚠️ |
-| re_rand | 89.06 | 84.02 |
+| Split | val mae_surf_p (md6so639) | test mae_surf_p (xvn4gllg) |
+|-------|---------------------------|----------------------------|
+| single_in_dist | 109.64 | 109.30 |
+| geom_camber_rc | 112.30 | 103.19 |
+| geom_camber_cruise | **73.22** | **60.61** ¹ |
+| re_rand | 89.06 | 86.90 |
 
-Added: SmoothL1 (Huber) loss with beta=0.05 replacing MSE for both vol and surf loss terms.  
-Effect: -26.4% vs PR #3123 baseline (130.46 → 96.05). All 4 val splits improved.
+¹ 199/200 samples evaluated — `splits_v2/.test_geom_camber_cruise_gt/000020.pt` has 761 inf y-values, dropped from MAE accumulator. Pred-side `nan_to_num` guards against any model overflow.
 
-**Reproduce:**
+**PR #3098 (val):** SmoothL1 (Huber) loss with β=0.05 replacing MSE. Effect: val_avg 130.46 → 96.05 (-26.4% vs PR #3123). All 4 val splits improved.
+
+**PR #3296 (test):** Two-pronged NaN guard (pred-side `nan_to_num` + y-side sample mask) in both `evaluate_split` and the training loop, plus per-batch / split-level diagnostic logging. First valid test_avg of the launch.
+
+**Reproduce val (PR #3098):**
 ```bash
 cd target/
 python train.py --agent willowpai2i48h5-alphonse --epochs 50 \
   --wandb_group huber-surface-loss-alphonse \
   --loss_type smooth_l1 --loss_beta 0.05 \
   --wandb_name alphonse-arm-C-sl1-beta0.05
+```
+
+**Reproduce test (PR #3296 + Huber):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-thorfinn --epochs 50 \
+  --wandb_group thorfinn-rebase-confirm \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --wandb_name thorfinn-nanfix-on-huber-baseline
 ```
 
 ---
