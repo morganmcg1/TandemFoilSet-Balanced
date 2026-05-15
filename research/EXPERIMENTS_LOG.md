@@ -349,3 +349,67 @@ The sharp final-decay improvement (96 → 89 in the last epoch) shows the model 
 
 **Status: CLOSED — clear regression, dead end at this decay/budget combination.**
 
+
+---
+
+## 2026-05-15 22:30 — PR #3450: H25: Per-channel Huber loss (askeladd) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-askeladd/h25-per-channel-huber`
+- Hypothesis: The pressure channel (mae_surf_p) is the primary metric and has heavier tails than velocities at high-Re. Decoupling Huber's δ per channel — aggressive clip on p, near-MSE on velocities — should target the metric directly.
+- Two arms on H19 triple-compound base (FiLM cond_dim=11 + T_max=15):
+
+| Arm | δ_vel | δ_p | val_avg/mae_surf_p | test 3-split avg |
+|-----|-------|-----|--------------------|-----------------|
+| Arm A | 0.5 | 0.25 | 78.2286 (−5.58 vs H19) | 75.35 |
+| **Arm B** | **1.0** | **0.25** | **75.7713 (−8.04 vs H19, −9.6%)** | **73.07** |
+
+**Per-split breakdown (Arm B winner, NEW BEST):**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------|-----------------|
+| val_single_in_dist | 86.5482 | 74.5330 |
+| val_geom_camber_rc | 87.4861 | 78.8537 |
+| val_geom_camber_cruise | 55.2883 | NaN (scoring bug) |
+| val_re_rand | 73.7625 | 65.8246 |
+| **val_avg** | **75.7713** | **73.0704** (3-split) |
+
+**Why per-channel Huber works:** Pressure has heavier tails at high-Re — δ_p=0.25 clamps extremes aggressively, preventing pressure outliers from dominating optimization. Velocities follow a more Gaussian distribution; δ_vel=1.0 keeps near-MSE behavior in the well-behaved bulk. Arm B's δ_vel=1.0 beating Arm A's δ_vel=0.5 confirms velocity gradients should not be over-clipped — the asymmetry is what wins.
+
+- Artifacts: `models/model-charliepai2i48h3-askeladd-h25-perchan-huber-vel10-p025-h19-20260515-222431/metrics.yaml`
+- Best epoch: 14 / 50 (30-min wall cap; LR fully annealed via T_max=15)
+- Params: 662K + FiLM heads (cond_dim=11)
+
+**Status: MERGED — new best.** All R3 follow-ups should rebase onto this per-channel Huber base.
+
+
+---
+
+## 2026-05-15 22:35 — PR #3447: H22: Uniform Huber δ sweep on H19 (fern) — MERGED, beats H19 but not H25
+
+- Branch: `charliepai2i48h3-fern/h22-huber-delta-sweep`
+- Hypothesis: Continue the monotone δ trend (1.0 → 0.5 → ?) — does even smaller uniform δ keep improving on the H19 triple-compound base?
+- Two arms on H19 base:
+
+| Arm | δ | val_avg/mae_surf_p | test 3-split avg | Δ vs H19 (83.81) |
+|-----|---|--------------------|-----------------|------------------|
+| Arm A | 0.25 | 79.1517 | 76.19 | −4.66 |
+| **Arm B** | **0.1** | **78.8321 (won arm)** | **76.50** | **−4.98** |
+
+**Per-split breakdown (Arm B winner):**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------|-----------------|
+| val_single_in_dist | 89.2334 | 78.9430 |
+| val_geom_camber_rc | 91.7254 | 81.1670 |
+| val_geom_camber_cruise | 58.2720 | NaN |
+| val_re_rand | 76.0975 | 69.3794 |
+| **val_avg** | **78.8321** | **76.50** (3-split) |
+
+**Analysis:** Both arms beat H19, confirming the monotone δ trend (1.0 → 0.5 → 0.25 → 0.1 all improve). But the uniform approach is now superseded by H25's per-channel decoupling (δ_vel=1.0, δ_p=0.25 → 75.77). The reason: pressure benefits from aggressive clipping but velocities lose information when clipped uniformly that hard. H25 captures both effects.
+
+**Diminishing returns visible:** H19 (83.81) → H22 δ=0.25 (79.15, −4.66) → H22 δ=0.1 (78.83, −0.32). Uniform-δ knob nearly exhausted; the next gain came from changing the *shape* (per-channel) not the magnitude.
+
+- Artifacts: `models/model-h22-huber-delta01-h19-20260515-222734/`, `models/model-h22-huber-delta025-h19-20260515-212555/`
+
+**Status: MERGED.** Provides confirmation point on δ trend; per-channel Huber (H25) is the better path forward.
+
