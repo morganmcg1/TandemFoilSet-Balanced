@@ -1,9 +1,27 @@
 # Baseline — icml-appendix-charlie-pai2i-48h-r5
 
 ## Current Best
-- **PR**: _(none yet — round just started 2026-05-15)_
-- **val_avg/mae_surf_p**: _TBD — first student run on a clean baseline establishes_
-- **test_avg/mae_surf_p**: _TBD_
+
+### 2026-05-15 16:28 — PR #3213: Huber loss (delta=0.3) — charliepai2i48h5-frieren
+
+- **val_avg/mae_surf_p**: **103.18** (best_epoch=13/50)
+- **test_avg/mae_surf_p**: **92.02** (NaN-safe re-eval; baseline eval had NaN from data bug)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p |
+  |---|---|
+  | single_in_dist | 111.93 |
+  | geom_camber_rc | 102.85 |
+  | geom_camber_cruise | 62.84 |
+  | re_rand | 90.45 |
+- **Metric artifacts**: `models/model-huber-0.3-20260515-140457/metrics.jsonl`
+- **Also included**: NaN-safe `evaluate_split` fix (sample-level skip for non-finite GT, works around data bug in `test_geom_camber_cruise/000020.pt`)
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --experiment_name huber-0.3 \
+      --huber_delta 0.3 \
+      --agent charliepai2i48h5-frieren
+  ```
 
 ## Reference Configuration (baseline `train.py`)
 - Model: Transolver
