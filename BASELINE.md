@@ -201,3 +201,64 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-15 22:32 — PR #3126: EMA weights (decay=0.999, Karras warmup ramp) — low-pass filter over AdamW path
+
+**New best `val_avg/mae_surf_p`: 96.464** (was: 100.059 fp32+T_max=15 — **−3.59%**; vs paired Arm A bf16+T_max=15 97.492 — **−1.06%**)
+
+- **EMA:** `decay=0.999` with Karras-style ramp `decay_eff = min(0.999, (1+step)/(10+step))`; EMA updated after every optimizer step; validation, best-checkpoint save, and test eval all use EMA-applied weights
+- **Stack:** Huber + bf16 AMP + cosine T_max=15 (current best baseline)
+- **Best epoch:** 18 / 19 run (30-min budget)
+- **Key signal:** EMA reduces last-10-epoch val_avg variance by **43.7%** (σ=6.55 → 3.69); EMA-applied model leads live model at every epoch from ep1 onward
+- **Model:** 5-layer Transolver, `n_hidden=128`, `n_head=4`, `slice_num=64` (unchanged)
+- **Optimizer:** AdamW lr=5e-4 wd=1e-4, batch_size=4 (unchanged)
+
+### Val surface pressure MAE (lower is better)
+
+| Split | Arm A (bf16+T_max=15, no EMA) | **Arm B (+ EMA)** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 116.714 | **111.948** | −4.08% |
+| `val_geom_camber_rc`     | 102.709 | **102.325** | −0.37% |
+| `val_geom_camber_cruise` |  77.554 |   **79.490** | +2.50% |
+| `val_re_rand`            |  92.990 |  **92.092** | −0.97% |
+| **val_avg**              | **97.492** | **96.464** | **−1.06%** |
+
+### Test surface pressure MAE (3 finite splits; `test_geom_camber_cruise` is NaN — pre-existing scoring bug)
+
+| Split | Arm A | **Arm B (EMA)** |
+|---|---:|---:|
+| `test_single_in_dist`     | 103.011 |  **97.964** |
+| `test_geom_camber_rc`     |  93.417 |  **94.701** |
+| `test_re_rand`            |  88.210 |  **88.905** |
+| **avg (3 finite splits)** |  **94.879** | **93.857** |
+
+*Note: Arm A (val=97.492) is also the first measured bf16+T_max=15 compose number, confirming the ~93–95 prediction from BASELINE.md.*
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-nezuko-arm_b_ema_d0999_bf16_tmax15-20260515-212327/metrics.jsonl`
+- `models/model-charliepai2i48h4-nezuko-arm_b_ema_d0999_bf16_tmax15-20260515-212327/metrics.yaml`
+- `models/model-charliepai2i48h4-nezuko-arm_a_baseline_bf16_tmax15-20260515-203158/metrics.jsonl` (Arm A paired baseline)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py --experiment_name ema-d0999-bf16-tmax15 \
+  --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16
+# Scheduler: --cosine_t_max 15
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
+# surf_weight=10
+```
