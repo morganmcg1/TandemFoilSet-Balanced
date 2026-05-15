@@ -6,14 +6,15 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-15 (~18:55 UTC, Round 2 launching, `willow-pai2i-48h-r5`)
+- **Date:** 2026-05-15 (~20:45 UTC, Round 2 fully running, `willow-pai2i-48h-r5`)
 - **Human researcher directives:** None received as of this writing.
 
 ## Current best
 
-**val_avg/mae_surf_p = 96.05** (PR #3098, merged — SmoothL1 beta=0.05 Huber loss, W&B: `md6so639`)
-**test partial avg (excl. cruise) = 93.41** — in_dist 96.04, camber_rc 100.16, re_rand 84.02
-**test_avg/mae_surf_p = NaN** ⚠️ — cruise GT bug; fix in PR #3296 (sent back for rebase onto Huber baseline)
+**val_avg/mae_surf_p = 96.05** (PR #3098, run `md6so639`, SmoothL1 β=0.05)
+**test_avg/mae_surf_p = 90.00** (PR #3296 NaN guard, run `xvn4gllg`, on Huber baseline) ← **FIRST valid test_avg of the launch**
+
+Per-split test surf_p (xvn4gllg): in_dist 109.30, camber_rc 103.19, camber_cruise 60.61 (199/200), re_rand 86.90.
 
 Previous best: PR #3123 Fourier PE n=16 → val_avg = 130.46
 Unmodified baseline: val_avg = 135.23
@@ -55,18 +56,20 @@ Unmodified baseline: val_avg = 135.23
 | #3380 | frieren | **H4: Fourier sigma sweep** — n=16 fixed, sigma ∈ {4, 10(ref), 20} | camber_rc | 2 |
 | #3296 | thorfinn | **NaN guard rebase + clean test_avg confirm** on Huber baseline | (infrastructure) | 1 |
 
-## Round 2 — Full assignment roster (all 8 students WIP as of ~19:25 UTC)
+## Round 2 — Full assignment roster (all 8 students WIP as of ~20:45 UTC)
 
 | PR | Student | Hypothesis | Target Split |
 |----|---------|------------|--------------|
 | #3379 | alphonse | **H1: Compound stack** — EMA(0.999) + grad-clip(1.0) + Huber(β=0.05) + Fourier PE | val_avg overall |
 | #3380 | frieren | **H4: Fourier sigma sweep** — n=16 fixed, sigma ∈ {4, 10, 20} | camber_rc |
-| #3296 | thorfinn | **NaN guard rebase** — two-pronged guard on Huber baseline | (infrastructure) |
 | #3405 | nezuko | **H2: FiLM on log(Re)** — explicit Re-regime conditioning | re_rand |
 | #3407 | edward | **H3: Per-sample Relative L2** — cross-sample scale invariance | re_rand, camber_cruise |
 | #3409 | fern | **H6: AoA reflection augmentation** — double RaceCar training data | in_dist, camber_rc |
 | #3410 | tanjiro | **H5: 1st-Order SAM** — flat-minima OOD optimizer | OOD splits |
 | #3412 | askeladd | **H7: DropPath stochastic depth** — implicit ensemble regularizer | OOD splits |
+| #3444 | thorfinn | **H9: Cosine T_max recalibration** — match wall-clock epoch cap (T_max 50→14/18) | val_avg overall |
+
+**Round 1+#3296 merged. New baseline: val 96.05 / test 90.00.** Eight Round 2 hypotheses now in flight.
 
 ## Reserved for Round 3 / plateau triggers
 
