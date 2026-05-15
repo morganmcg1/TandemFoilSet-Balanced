@@ -413,6 +413,39 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+class EMA:
+    """Exponential moving average of model parameters for evaluation.
+
+    Maintains a shadow copy of model.state_dict() that tracks a running
+    exponential average. Call .update(model) after each optimizer.step().
+    Call .apply_to(model) / .restore(model) around evaluation to swap in
+    the EMA weights without disturbing the live training weights.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        self.backup: dict | None = None
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for k, v in model.state_dict().items():
+            if v.dtype.is_floating_point:
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                self.shadow[k].copy_(v.detach())
+
+    def apply_to(self, model: nn.Module) -> None:
+        self.backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.shadow, strict=True)
+
+    def restore(self, model: nn.Module) -> None:
+        if self.backup is None:
+            return
+        model.load_state_dict(self.backup, strict=True)
+        self.backup = None
+
+
 @dataclass
 class Config:
     lr: float = 1.7e-4
@@ -420,6 +453,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 30.0
     epochs: int = 80
+    ema_decay: float = 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -472,6 +506,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+ema = EMA(model, decay=cfg.ema_decay)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -527,6 +562,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -538,10 +574,12 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    ema.apply_to(model)
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
+    ema.restore(model)
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
@@ -554,7 +592,9 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA shadow (the weights used for this val) so that the test loop
+        # reproduces the same checkpoint when loading from disk.
+        torch.save(ema.shadow, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
