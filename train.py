@@ -484,6 +484,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    div_weight: float = 0.01  # auxiliary divergence penalty; 0 = disabled
     epochs: int = 50
     fourier_bands: int = FOURIER_BANDS
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -635,16 +636,66 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Divergence-free auxiliary loss (physics-informed). Steady 2D
+        # incompressible flow satisfies dUx/dx + dUy/dz = 0. Approximate the
+        # divergence with central differences along nodes sorted by x.
+        #
+        # DEVIATION FROM PR SPEC: compute in normalized space (pred + x_norm)
+        # rather than physical units. The original spec denormalized velocity
+        # and used raw x/z, but with 242K-node meshes the boundary-layer
+        # pairs have |dx| down to ~1e-5 chord, blowing up dux/dx to 1e5-1e6
+        # and swamping the O(1) normalized MSE losses (verified empirically
+        # in run jusr31k1 — div_loss reached 1e5-1e7 with div_weight=0.001).
+        # Floor on |dx|, |dz| prevents the remaining boundary-layer outliers.
+        if cfg.div_weight > 0.0:
+            ux_pred = pred[..., 0]  # [B, N], normalized
+            uy_pred = pred[..., 1]
+            x_pos = x_norm[..., 0]  # [B, N], normalized position
+            z_pos = x_norm[..., 1]
+
+            sort_idx = x_pos.argsort(dim=1)
+            ux_sorted = ux_pred.gather(1, sort_idx)
+            uy_sorted = uy_pred.gather(1, sort_idx)
+            x_sorted = x_pos.gather(1, sort_idx)
+            z_sorted = z_pos.gather(1, sort_idx)
+            mask_sorted = mask.gather(1, sort_idx).float()
+            pair_valid = mask_sorted[:, 2:] * mask_sorted[:, :-2]
+
+            eps_dx = 1e-2  # normalized-space floor (~0.6% chord)
+            # After x-sort dx >= 0; dz can be either sign so preserve it.
+            dx = (x_sorted[:, 2:] - x_sorted[:, :-2]).clamp(min=eps_dx)
+            dz_raw = z_sorted[:, 2:] - z_sorted[:, :-2]
+            dz_sign = torch.where(dz_raw >= 0, torch.ones_like(dz_raw), -torch.ones_like(dz_raw))
+            dz = dz_sign * dz_raw.abs().clamp(min=eps_dx)
+
+            dux_dx = (ux_sorted[:, 2:] - ux_sorted[:, :-2]) / dx
+            duy_dz = (uy_sorted[:, 2:] - uy_sorted[:, :-2]) / dz
+            divergence = (dux_dx + duy_dz) * pair_valid
+            div_loss = (divergence.pow(2) * pair_valid).sum() / pair_valid.sum().clamp(min=1.0)
+        else:
+            div_loss = torch.zeros((), device=device)
+
+        loss = vol_loss + cfg.surf_weight * surf_loss + cfg.div_weight * div_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        vol_loss_val = vol_loss.item()
+        surf_loss_val = surf_loss.item()
+        div_loss_val = div_loss.item()
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/vol_loss_step": vol_loss_val,
+            "train/surf_loss_step": surf_loss_val,
+            "train/div_loss": div_loss_val,
+            "train/div_to_vol_ratio": (cfg.div_weight * div_loss_val) / max(vol_loss_val, 1e-8),
+            "global_step": global_step,
+        })
 
-        epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
+        epoch_vol += vol_loss_val
+        epoch_surf += surf_loss_val
         n_batches += 1
 
     scheduler.step()
