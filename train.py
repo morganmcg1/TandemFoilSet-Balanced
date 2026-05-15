@@ -214,6 +214,31 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Per-sample scale (for scale-invariant loss)
+# ---------------------------------------------------------------------------
+
+def per_sample_field_scale(y: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Per-sample scalar field scale: mean over channels of per-channel std.
+
+    Computed only over real (non-padded) nodes. ``y`` is the globally-normalized
+    target so the per-sample std ratio across samples is preserved.
+
+    Args:
+        y: [B, N, 3] — normalized target.
+        mask: [B, N] — True for real nodes.
+    Returns:
+        scale: [B] — per-sample scalar scale, clamped to avoid division blowups.
+    """
+    mask_f = mask.float().unsqueeze(-1)  # [B, N, 1]
+    n = mask_f.sum(dim=1, keepdim=True).clamp(min=1)  # [B, 1, 1]
+    mean = (y * mask_f).sum(dim=1, keepdim=True) / n  # [B, 1, 3]
+    var = ((y - mean) ** 2 * mask_f).sum(dim=1, keepdim=True) / n  # [B, 1, 3]
+    std = var.sqrt()  # [B, 1, 3]
+    scale = std.mean(dim=-1).squeeze(-1).squeeze(-1)  # [B]
+    return scale.clamp(min=1e-4)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -236,8 +261,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose y is non-finite (e.g. test_geom_camber_cruise idx=20
+            # has 761 NaN in the p channel). accumulate_batch tries to skip them via
+            # its y_finite check, but ``err = |pred - NaN| = NaN`` then propagates
+            # through ``NaN * 0 = NaN`` in the sum. Mask them out here so neither
+            # loss nor MAE sees the NaN.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)  # [B]
+            sample_keep = y_finite_per_sample.view(-1, 1)
+            mask = mask & sample_keep
+            y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -254,7 +289,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -433,6 +468,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_scale_mean = epoch_scale_std = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -444,25 +480,44 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        vol_mask_f = vol_mask.float().unsqueeze(-1)  # [B, N, 1]
+        surf_mask_f = surf_mask.float().unsqueeze(-1)  # [B, N, 1]
+
+        n_vol = vol_mask_f.sum(dim=1).clamp(min=1)  # [B, 1]
+        n_surf = surf_mask_f.sum(dim=1).clamp(min=1)  # [B, 1]
+        vol_loss_per_sample = (sq_err * vol_mask_f).sum(dim=1) / n_vol  # [B, 3]
+        surf_loss_per_sample = (sq_err * surf_mask_f).sum(dim=1) / n_surf  # [B, 3]
+        vol_loss_per_sample = vol_loss_per_sample.mean(dim=-1)  # [B]
+        surf_loss_per_sample = surf_loss_per_sample.mean(dim=-1)  # [B]
+
+        combined_per_sample = vol_loss_per_sample + cfg.surf_weight * surf_loss_per_sample  # [B]
+        sample_scale = per_sample_field_scale(y_norm, mask)  # [B]
+        loss = (combined_per_sample / sample_scale.detach()).mean()
+
+        # Aggregate logging stats: batch-mean of per-sample vol/surf losses
+        # (for parity with the previous epoch_vol/epoch_surf scalars).
+        vol_loss_log = vol_loss_per_sample.mean()
+        surf_loss_log = surf_loss_per_sample.mean()
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
+        epoch_vol += vol_loss_log.item()
+        epoch_surf += surf_loss_log.item()
+        epoch_scale_mean += sample_scale.mean().item()
+        epoch_scale_std += sample_scale.std(unbiased=False).item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_scale_mean /= max(n_batches, 1)
+    epoch_scale_std /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -493,13 +548,16 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/sample_scale_mean": epoch_scale_mean,
+        "train/sample_scale_std": epoch_scale_std,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
