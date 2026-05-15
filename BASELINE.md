@@ -10,39 +10,40 @@ target base `icml-appendix-charlie`).
 |-------|-------|
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=64`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
-| Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400 — tuned from beta=0.5 of #3280) |
+| Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.999**, evaluated at val/test time (PR #3285) |
+| Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
 | Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3400, SmoothL1 beta=0.25, 2-seed mean, best epoch 14)
+## Current best metrics (PR #3402, dropout=0.1, single-seed, best epoch 14)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **97.15** |
-| `test_avg/mae_surf_p` | **87.36** |
-| `test/test_geom_camber_rc/mae_surf_p` | 95.82 |
-| `test/test_re_rand/mae_surf_p` | 84.99 |
-| `test/test_single_in_dist/mae_surf_p` | 106.80 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 61.81 |
+| `val_avg/mae_surf_p` **(primary)** | **96.17** |
+| `test_avg/mae_surf_p` | **86.88** |
+| `test/test_geom_camber_rc/mae_surf_p` | 94.69 |
+| `test/test_re_rand/mae_surf_p` | 85.06 |
+| `test/test_single_in_dist/mae_surf_p` | 105.49 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 62.30 |
 
-Per-split val surface-p MAE at best checkpoint (2-seed mean):
+Per-split val surface-p MAE at best checkpoint (single seed):
 
 | Split | mae_surf_p |
 |-------|------------|
-| `val_single_in_dist`     | 118.30 |
-| `val_geom_camber_rc`     | 108.63 |
-| `val_geom_camber_cruise` |  72.25 |
-| `val_re_rand`            |  89.44 |
-| **avg** | **97.15** |
+| `val_single_in_dist`     | 116.53 |
+| `val_geom_camber_rc`     | 106.64 |
+| `val_geom_camber_cruise` |  72.45 |
+| `val_re_rand`            |  89.06 |
+| **avg** | **96.17** |
 
-Artifacts (both seeds):
-- `models/model-smooth-l1-beta025-20260515-192523/metrics.jsonl` (seed 1, val=95.73)
-- `models/model-charliepai2i48h1-askeladd-smooth-l1-beta025-seed2-20260515-202331/metrics.jsonl` (seed 2, val=98.57)
+Artifact: `models/model-charliepai2i48h1-nezuko-dropout-01-20260515-202343/metrics.jsonl`
+
+Note: single-seed merge; 8/8 split directional consistency was the deciding signal.
 
 Reproduce:
 
@@ -91,4 +92,5 @@ After every merged winner, the advisor:
 | 2026-05-15 | #3279 | NaN-safe scoring (infra, also re-rolls val seed) | 108.47 | -5.8% (stochastic) |
 | 2026-05-15 | #3285 | EMA model weights, decay=0.999 | 104.52 | -3.6% |
 | 2026-05-15 | #3280 | SmoothL1 beta=0.5 (tuned from 1.0) | 98.45 | -5.81% |
-| 2026-05-15 | #3400 | SmoothL1 beta=0.25 (2-seed mean; beta lever saturated) | **97.15** | **-1.32%** |
+| 2026-05-15 | #3400 | SmoothL1 beta=0.25 (2-seed mean; beta lever saturated) | 97.15 | -1.32% |
+| 2026-05-15 | #3402 | dropout=0.1 in PhysicsAttention (8/8 split consistency) | **96.17** | **-1.01%** |
