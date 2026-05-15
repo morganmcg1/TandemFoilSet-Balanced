@@ -402,3 +402,65 @@ The pre-rebase win came primarily from the surface head reducing cross-task inte
 - Hypothesis: replace AdamW + CosineAnnealingLR(T_max=50) with `schedulefree.AdamWScheduleFree` to fix the schedule-budget mismatch (current cosine decays only 14% by epoch 14 wall-clock cap). SF-AdamW maintains an implicit polynomial-average iterate that adapts to any stopping time. Pairs with EMA (different time-scale averaging filters). RANK #1 in the latest research agenda.
 - Two arms: SF-AdamW lr=5e-4 (drop-in at merged-baseline LR), SF-AdamW lr=7e-4 (test the higher-LR cliff that schedule-free typically tolerates).
 
+## 2026-05-15 20:26 — PR #3265: FiLM per-block global-condition modulation [MERGED — new round-5 baseline]
+
+- Branch: `charliepai2i24h5-fern/film-flow-condition-every-block`
+- Student: charliepai2i24h5-fern
+- Hypothesis (rebased): per-block FiLM scale+shift conditioning on the global flow vector (log Re, AoAs, NACAs, gap, stagger) injected after each of the 5 Transolver blocks' residuals. Gives every layer direct access to the global regime state rather than relying on the input MLP alone. Compounds with scale-invariant loss (orthogonal: loss-side vs architecture-side) and EMA (orthogonal: parameter-averaging vs conditioning).
+- Status: MERGED. Code includes EMA + scale-inv + FiLM (pre-#3337 run, but mergeable CLEAN with #3337 code). Note: validated metrics are for FiLM-on-#3281 baseline; merged code also includes #3337 surf-L1.
+
+### Results (rebased run on #3281 baseline, tip 1211ee5)
+
+| Metric | #3281 baseline | Rebased FiLM | Δ% |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 114.1704 | **103.0171** | **−9.77%** |
+| `test_avg/mae_surf_p` | 102.0813 | **92.1617** | **−9.74%** |
+
+Per-split val: single_in_dist −13.5% (122.19), geom_camber_rc −7.7% (120.72), cruise −22.0% (76.89), re_rand −16.8% (92.26). Largest gains on cruise and re_rand (unseen camber/Re regime) where explicit condition injection matters most.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-fern-film_flow_condition_every_block_rebased-20260515-184444/metrics.jsonl`
+
+### Analysis
+
+FiLM addresses a different failure mode than the prior wins: the model's spatial pathway (Transolver sliced attention) must simultaneously encode physical geometry and regime adaption. By providing an explicit per-layer condition pathway, FiLM lets the spatial path focus on geometry while regime-specific scaling handles the aerodynamic regime. The 24% re_rand win is the clearest signal: re_rand varies the Reynolds number, which is the most "global" condition (pure Re change, same geometry), and FiLM provides exactly that explicit Re-dependent scaling.
+
+Note: merged code includes #3337 surf-L1. Next validation run (askeladd #3315 rebase) will establish the compound FiLM + surf-L1 + Cautious-AdamW + EMA metric.
+
+## 2026-05-15 20:20 — PR #3347: Manifold mixup (follow-up to #3268) [CLOSED — regression, mesh-correspondence problem]
+
+- Branch: `charliepai2i24h5-alphonse/manifold-mixup`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: mix latent representations at a random Transolver block (not input space), solving the mesh-mismatch problem of input-space mixup (PR #3268). Predicted that latent mixing would preserve OOD camber wins from #3268 without the in-dist regression.
+- Status: CLOSED. Both arms regressed +7.4% / +8.1% val_avg vs #3281 baseline.
+
+### Results
+
+| Arm | val_avg | Δ% | test_avg | Δ% |
+|---|---:|---:|---:|---:|
+| Arm A (α=0.4, p=0.5) | 122.57 | **+7.36%** | 109.63 | **+7.40%** |
+| Arm B (α=0.2, p=0.5) | 123.44 | **+8.11%** | 110.73 | **+8.47%** |
+
+### Analysis
+
+Student correctly diagnosed root cause: manifold mixup assumes canonical position correspondence across the batch (position i in sample A corresponds to position i in sample B). For variable-mesh point clouds with padding-up-to-max collation, this assumption is false — position i in sample A is a completely different physical node than position i in sample B. Mixing creates non-physical gradient targets. The ~30% slower convergence (val_avg 122 vs baseline 114 at epoch 14) is the fingerprint of half-wasted gradient signal per mixup-active batch. The slice-token mixup follow-up (mixing in the learned global-feature space where tokens ARE permutation-invariant) is the right next step for this family.
+
+## 2026-05-15 20:28 — PR #3315: Cautious AdamW (second send-back — rebase onto #3337) [SENT BACK — needs rebase again]
+
+- Updated: askeladd's rebased Cautious AdamW run gave val_avg=103.02 on #3281 baseline (−9.77%). Very strong result. However, #3337 (surf-L1) merged after askeladd's run, and the branch now has merge conflicts (DIRTY). Sending back for third-and-final rebase to include surf-L1 + FiLM.
+- Predicted outcome: val_avg ~96–100 (−3% to −6% on current 103.02 baseline).
+
+## 2026-05-15 20:28 — PR #3432: SEMA / Switch EMA [ASSIGNED — fern]
+
+- Branch: `charliepai2i24h5-fern/sema-switch-ema`
+- Student: charliepai2i24h5-fern
+- Hypothesis: after each epoch's EMA accumulation, copy EMA weights back into the live model (`model.load_state_dict(ema_model.state_dict())`). This ensures gradient steps always start from the flat-minimum region found by EMA rather than the raw noisy iterate. RANK #2 in current research agenda. Zero extra compute.
+- Two arms: SEMA every epoch (freq=1, warmup=5 epochs), SEMA every 2 epochs (freq=2, warmup=5).
+
+## 2026-05-15 20:30 — PR #3433: Per-domain target normalization [ASSIGNED — alphonse]
+
+- Branch: `charliepai2i24h5-alphonse/per-domain-target-norm`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: replace global y_mean/y_std normalization with per-domain statistics (raceCar single / raceCar tandem / cruise computed from training data at startup). Equalizes baseline gradient magnitudes across domains, specifically targeting the single_in_dist anomaly (worst split at val=122.19 despite being in-distribution). RANK #3 in current research agenda.
+- Two arms: per-domain hard labels (gap==0 → single), per-domain + per-channel (Ux/Uy/p separate).
+
