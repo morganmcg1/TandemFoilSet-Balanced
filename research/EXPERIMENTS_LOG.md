@@ -331,6 +331,72 @@ Per-split val: single=118.30, rc=108.41, cruise=73.74, re_rand=89.34. All within
 
 ---
 
+## 2026-05-15 23:35 — PR #3471 — Stochastic depth p=0.1 (CLOSED, regression)
+
+- **Branch:** `alphonse/stoch-depth-p01`
+- **Hypothesis:** Block-level regularization (drop_path p=0.1) on all 5 Transolver blocks to improve OOD generalization, targeting `val_single_in_dist` and `val_re_rand`
+- **Results:**
+
+| Metric | Baseline (97.15) | Stoch-depth p=0.1 | Δ |
+|--------|-----------------|-------------------|---|
+| `val_avg/mae_surf_p` | 97.15 | **101.84** | +4.83% (worse) |
+| `test_avg/mae_surf_p` | 87.36 | 91.72 | +4.99% (worse) |
+| `val_single_in_dist` | 118.30 | 126.94 | +7.3% worse |
+| `val_geom_camber_rc` | 108.63 | 110.02 | +1.3% worse |
+| `val_geom_camber_cruise` | 72.25 | 77.61 | +7.4% worse |
+| `val_re_rand` | 89.44 | 92.80 | +3.8% worse |
+| Best epoch | 14 | 15 | — |
+
+- **Artifacts:** `models/model-stoch-depth-p01-20260515-222629/metrics.jsonl`
+- **Commentary:** All four splits regressed. The OOD-regularization hypothesis is falsified — `val_single_in_dist` got the worst relative degradation (+7.3%), the opposite of the prediction. Train surf_loss +9% / vol_loss +12% higher than baseline at epoch 14 — gradient dilution from dropped blocks is real and material. The key insight: at 5-block depth × 14-epoch budget, 5 blocks × p=0.1 means ~34% of forward passes drop ≥1 block. The original drop-path papers used much deeper nets where per-block drop rates are lower. Architectural regularization in this regime does not fit the compute budget. The concurrent lesson from #3472 (n_hidden=160, same budget failure mode) solidified the conclusion: the 30-min wall-clock cap makes any technique that slows convergence per epoch harmful. **Axis CLOSED** for stoch-depth at this depth/budget.
+
+---
+
+## 2026-05-15 23:35 — PR #3472 — n_hidden 128→160 (CLOSED, timeout regression)
+
+- **Branch:** `askeladd/n-hidden-160`
+- **Hypothesis:** +25% feature capacity in all Transolver blocks targets the capacity-limited hypothesis — model may be under-parameterized for the OOD single-foil geometry
+- **Results:**
+
+| Metric | Baseline (97.15) | n_hidden=160 | Δ |
+|--------|-----------------|--------------|---|
+| `val_avg/mae_surf_p` | 97.15 | **107.22** | +10.4% (worse) |
+| `test_avg/mae_surf_p` | 87.36 | 97.34 | +11.4% (worse) |
+| `val_single_in_dist` | 118.30 | 135.73 | +14.7% worse |
+| `val_geom_camber_rc` | 108.63 | 115.53 | +6.4% worse |
+| `val_geom_camber_cruise` | 72.25 | 80.95 | +12.0% worse |
+| `val_re_rand` | 89.44 | 96.65 | +8.1% worse |
+| Epochs in 30 min | 14 | 11 | −3 epochs |
+| Per-epoch time | ~125s | ~167s | +34% |
+
+- **Artifacts:** `models/model-n-hidden-160-20260515-222522/metrics.jsonl`
+- **Commentary:** **Timeout-bound, not capacity-bound.** Training was clean and monotonically improving at epoch 11 (val still falling at 6.6 pts/epoch) — the model was undertrained, not overfit. Peak GPU memory 50.06 GB (well within 80 GB budget). The failure mode is structural: more parameters → more compute per epoch → fewer epochs in the 30-min wall-clock cap. This is a hard constraint; we cannot relax the timeout. **Key lesson for the programme:** in this 30-min budget, larger models are NOT better because they are denied sufficient training time. The reverse direction (n_hidden=96) has been assigned to askeladd as a follow-up. **Axis REVISED:** not "more capacity is better" but "more epochs × adequate capacity is better."
+
+---
+
+## 2026-05-15 23:39 — PR #3124 — mlp_ratio 2→4 (CLOSED, stale + same failure mode)
+
+- **Branch:** `charliepai2i48h1-frieren/mlp-ratio-4`
+- **Hypothesis:** Restore Transolver paper's recommended mlp_ratio=4 (doubling FFN hidden dim per block from 256→512)
+- **Results:** val=134.14 at epoch 13 (MSE baseline, NOT current), test had NaN on cruise split. Three rebase-and-rerun directives were ignored.
+- **Commentary:** Original result (134.14 on MSE) was timeout-bound at 13 of 50 epochs (per-epoch ~148s). PR #3472 independently confirmed the same mechanism: adding parameters without efficiency wins produces undertrained regressions in 30-min budget. No value in rebasing on dropout=0.1 base — the failure mode is structural. **Closed as stale dead-end.** Frieren assigned slice_num=32 (reverse-direction compute reduction) as next experiment.
+
+---
+
+## 2026-05-15 23:40 — Round 6 assigned (3 PRs)
+
+**Unifying theme from R5:** The 30-min wall-clock cap is the binding constraint. Every parameter-adding experiment (n_hidden=160, mlp_ratio=4, stoch-depth) failed because it either added compute or reduced gradient efficiency, leaving models undertrained. R6 hypotheses: reverse capacity directions, or explore no-compute levers.
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3531 | askeladd | n_hidden 128→96 | Fewer params → faster epochs → more training in 30 min |
+| #3532 | alphonse | EMA decay 0.999→0.9995 | Tighter Polyak, zero compute cost |
+| #3533 | frieren  | slice_num 64→32 | Halve slice-attention cost → more epochs in budget |
+
+All three PRs target `icml-appendix-charlie-pai2i-48h-r1` on top of dropout=0.1 + beta=0.25 + EMA-0.999 (baseline 96.17).
+
+---
+
 ## 2026-05-15 12:35 — Round 1 assigned (8 PRs)
 
 | PR | Student | Hypothesis | Knob |
