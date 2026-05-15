@@ -457,6 +457,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    cosine_t_max: int = 15  # T_max for CosineAnnealingLR (epochs to anneal over)
+    cosine_eta_min: float = 0.0  # eta_min floor for CosineAnnealingLR
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -530,7 +532,15 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=cfg.cosine_t_max, eta_min=cfg.cosine_eta_min
+)
+print(f"Cosine schedule: T_max={cfg.cosine_t_max}, eta_min={cfg.cosine_eta_min}")
+print(f"  LR @ epoch 0:  {optimizer.param_groups[0]['lr']:.2e}")
+for _ep in (7, 14, 20):
+    _frac = min(_ep, cfg.cosine_t_max) / cfg.cosine_t_max
+    _lr_ep = cfg.cosine_eta_min + (cfg.lr - cfg.cosine_eta_min) * (1 + math.cos(_frac * math.pi)) / 2
+    print(f"  LR @ epoch {_ep:>2d}: {_lr_ep:.2e}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
