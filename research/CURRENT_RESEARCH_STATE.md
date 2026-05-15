@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-15 12:35 UTC
+- **As of:** 2026-05-15 14:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -16,14 +16,14 @@ This is round 1 (R1) of the willow-pai2i-24h-r4 track. **No baseline measurement
 
 | # | Student | Hypothesis | Axis | PR |
 |---|---------|-----------|------|-----|
-| 1 | tanjiro  | Huber loss (delta=0.5) instead of MSE | Loss-metric alignment | #3256 |
-| 2 | frieren  | Surface MAE + per-channel p-weight 3× | Loss-metric alignment | #3257 |
-| 3 | fern     | Grad-clip 1.0 + 5-epoch LR warmup     | Training stability     | #3258 |
-| 4 | nezuko   | Surface-biased slice routing (`is_surface` into slice projection) | Architectural — attention   | #3260 |
-| 5 | alphonse | Wider-shallower (256d, 3 layers, 8 heads) | Architectural — capacity | #3261 |
-| 6 | edward   | Random Fourier Features on (x, z)     | Input/feature encoding | #3262 |
-| 7 | thorfinn | FiLM log(Re) conditioning on hidden state | Physics conditioning | #3263 |
-| 8 | askeladd | Dropout p=0.1 in MLP and attention    | Regularization (OOD)   | #3264 |
+| 1 | tanjiro  | Huber loss (delta=0.5) instead of MSE | Loss-metric alignment | #3256 — WIP |
+| 2 | frieren  | Surface MAE + per-channel p-weight 3× | Loss-metric alignment | #3257 — **sent back** (val_avg=99.91 promising, but test_avg=NaN; need NaN guard + rerun) |
+| 3 | fern     | Grad-clip 1.0 + 5-epoch LR warmup     | Training stability     | #3258 — WIP |
+| 4 | nezuko   | Surface-biased slice routing (`is_surface` into slice projection) | Architectural — attention   | #3260 — WIP |
+| 5 | alphonse | Wider-shallower (256d, 3 layers, 8 heads) | Architectural — capacity | #3261 — WIP |
+| 6 | edward   | Random Fourier Features on (x, z)     | Input/feature encoding | #3262 — WIP |
+| 7 | thorfinn | FiLM log(Re) conditioning on hidden state | Physics conditioning | #3263 — WIP |
+| 8 | askeladd | Dropout p=0.1 in MLP and attention    | Regularization (OOD)   | #3264 — WIP |
 
 ## Predicted top performers (advisor read)
 
@@ -49,11 +49,17 @@ If R1 plateaus or only narrow wins land, the next-round backlog (in rough priori
 7. **AdamW betas / weight-decay sweep** — cheap finalization once we have a competitive architecture.
 8. **Test-time augmentation via mesh perturbation** — small geometric jitter at inference for OOD robustness.
 
+## Open issues spotted
+
+- **Eval NaN-poisoning** (surfaced via #3257). `data/scoring.py:accumulate_batch` only filters non-finite ground truth, not non-finite predictions. A single bad predicted value contaminates the entire split sum. Read-only file, so the fix has to live in `train.py:evaluate_split` via `torch.nan_to_num`. Sent #3257 back with the patch. The same bug likely affects every other R1 PR — when they come back for review, expect to find NaN test metrics from runs that drift even slightly out of distribution; reuse the same fix.
+- **Cosine LR schedule mismatch.** `T_max=cfg.epochs=50` but every run is timeout-capped at ~14 epochs (30-min wall clock with batch_size=4 on full meshes). The model never sees the low-LR tail of the schedule — implicit under-annealing for everyone in R1. Candidate R2 hypothesis: set `T_max` to an estimated *real* epoch count (e.g., 12–14) rather than the 50 nominal max. Cheap, applies to every run.
+
 ## Next checkpoint
 
 When students complete their R1 runs and post terminal `SENPAI-RESULT` markers, the priority order for review is:
-1. Rank by `val_avg/mae_surf_p` (best validation checkpoint).
+1. Rank by `val_avg/mae_surf_p` (best validation checkpoint) — only PRs with finite `test_avg/mae_surf_p` are merge-eligible.
 2. Verify each result against the W&B run (don't trust the PR comment alone).
 3. Merge winners in order, starting with the best. Each merged win updates the baseline that R2 hypotheses must beat.
 4. Send promising-but-not-winning PRs back with a specific next variation under the same `wandb_group`.
 5. Close clear dead ends (>5% regression or fundamentally broken) and immediately re-assign that student a fresh hypothesis from the R2 queue.
+6. For any PR that lands with a NaN test metric, paste the same `torch.nan_to_num` evaluate_split patch as #3257 and ask for a single rerun.
