@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import time
@@ -46,6 +47,32 @@ from data import (
     pad_collate,
 )
 from soap import SOAP
+
+# ---------------------------------------------------------------------------
+# EMA helper
+# ---------------------------------------------------------------------------
+
+
+class EMAModel:
+    """Exponential moving average of model weights for improved eval generalization."""
+
+    def __init__(self, model: torch.nn.Module, decay: float):
+        self.decay = decay
+        self.ema_model = copy.deepcopy(model)
+        for p in self.ema_model.parameters():
+            p.requires_grad_(False)
+        self.ema_model.eval()
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module):
+        msd = model.state_dict()
+        esd = self.ema_model.state_dict()
+        for k, v in msd.items():
+            if v.dtype.is_floating_point:
+                esd[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                esd[k].copy_(v)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -389,11 +416,22 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     optimizer: str = "adamw"  # "adamw" or "soap" — single-variable A/B for PR #3283
+    ema_decay: float = 0.0   # EMA decay (0 = disabled, 0.999 = recommended)
+    seed: int = 0            # RNG seed (used for torch + cuda + numpy)
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed != 0:
+    import random
+    import numpy as np
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    np.random.seed(cfg.seed)
+    random.seed(cfg.seed)
+    print(f"Seed: {cfg.seed}")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -433,6 +471,10 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema = EMAModel(model, decay=cfg.ema_decay) if cfg.ema_decay > 0.0 else None
+if ema is not None:
+    print(f"EMA enabled: decay={cfg.ema_decay} (effective window ~{1.0 / (1.0 - cfg.ema_decay):.0f} steps)")
 
 if cfg.optimizer == "adamw":
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -532,6 +574,8 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -544,9 +588,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
-    model.eval()
+    # When EMA is active, evaluate the EMA copy instead of the live model.
+    # The live model continues to train; do NOT evaluate it (clean A/B).
+    eval_model = ema.ema_model if ema is not None else model
+    eval_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -577,7 +624,8 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save the weights that were just evaluated (EMA when active, else live).
+        torch.save(eval_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
