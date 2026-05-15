@@ -31,6 +31,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.amp import autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -384,7 +385,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 8
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -393,6 +394,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    amp_dtype: str = "bfloat16"  # "bfloat16", "float16", or "float32" to disable autocast
 
 
 cfg = sp.parse(Config)
@@ -441,6 +443,11 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
+_AMP_DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+amp_dtype = _AMP_DTYPES[cfg.amp_dtype]
+amp_enabled = amp_dtype != torch.float32 and device.type == "cuda"
+print(f"AMP: {cfg.amp_dtype} (enabled={amp_enabled})")
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -486,29 +493,42 @@ for epoch in range(MAX_EPOCHS):
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        step_t0 = time.time()
+
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
-
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_mask_3d = vol_mask.unsqueeze(-1)
-        surf_mask_3d = surf_mask.unsqueeze(-1)
-        vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-        surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
-
         optimizer.zero_grad()
+        with autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_enabled):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_mask_3d = vol_mask.unsqueeze(-1)
+            surf_mask_3d = surf_mask.unsqueeze(-1)
+            vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+            surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
+
         loss.backward()
         optimizer.step()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        step_dt_ms = (time.time() - step_t0) * 1000.0
+
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/step_time_ms": step_dt_ms,
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
