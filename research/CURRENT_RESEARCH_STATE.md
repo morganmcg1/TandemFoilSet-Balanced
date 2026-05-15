@@ -32,6 +32,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | #3490 | nezuko | L1 LR sweep ∈ {3e-4, 2e-3, 4e-3} | wip (assigned 22:36) | Awaiting results |
 | **#3507** | **alphonse** | **Width n_hidden=128→160** | wip (assigned 23:22) | Awaiting results |
 | **#3508** | **fern** | **Cosine warm restarts (SGDR, T_0=4)** | wip (assigned 23:24) | Awaiting results |
+| **#3524** | **thorfinn** | **Huber (smooth L1) loss β=1.0** | wip (assigned 23:31) | Awaiting results |
 
 All 8 students have active WIP PRs. Zero idle.
 
