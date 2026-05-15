@@ -251,6 +251,27 @@ Test (3 finite splits — run pre-dated #3279 NaN fix):
 
 ---
 
+## 2026-05-15 22:30 — PR #3401 — AoA sin/cos periodic encoding (CLOSED — clean negative)
+
+- **Branch:** `charliepai2i48h1-fern/aoa-sincos`
+- **Hypothesis:** Replace raw AoA radians (input dims 14, 18) with `[sin(aoa), cos(aoa)]` pairs — cyclic encoding to remove linear discontinuities and give the model direct access to trigonometric lift/drag features. 4 extra input dims appended to x_norm; fun_dim bumped by 4.
+- **Results (2 seeds):**
+
+| Metric | Baseline | Seed 1 | Seed 2 | Mean | Δ (mean vs new 97.15 baseline) |
+|--------|----------:|-------:|-------:|-----:|-------:|
+| `val_avg/mae_surf_p` | 98.45 | 99.64 | 98.91 | 99.27 | **+2.2%** |
+| `test_avg/mae_surf_p` | 87.63 | 88.60 | 88.67 | 88.63 | **+1.5%** |
+
+Per-split val (seed 1): single=121.43, rc=111.12, cruise=73.92, re_rand=92.07. All worse or flat vs baseline.
+
+- **Metrics paths:**
+  - `models/model-charliepai2i48h1-fern-aoa-sincos-20260515-212313/metrics.jsonl` (primary)
+  - `models/model-charliepai2i48h1-fern-aoa-sincos-20260515-202705/` (seed 2)
+- **Action:** CLOSED. +2.2% worse than new 97.15 baseline. Clear negative result.
+- **Commentary:** Student diagnosis is correct — AoA range in this dataset (-10° to +6°) is far from wrapping 2π. In this narrow range, sin(AoA) ≈ AoA (linear), so the cyclic features add no geometric information beyond the raw scalar. The model already has enough capacity (663K params) to learn any implicit AoA representation needed. The 4 extra dims acted as mild noise. Cyclic-encoding axis closed for this dataset and AoA range.
+
+---
+
 ## 2026-05-15 21:29 — PR #3400 — SmoothL1 beta=0.25 sweep (MERGED → new baseline 97.15)
 
 - **Branch:** `charliepai2i48h1-askeladd/smooth-l1-beta025`
