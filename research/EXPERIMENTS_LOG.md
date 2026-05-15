@@ -598,5 +598,109 @@ Per-epoch pre-clip gradient L2 norms:
 ## 2026-05-15 22:33 — PR #3404 nezuko LayerScale: NUDGE (no commits in 3h)
 
 - **Student branch**: `charliepai2i24h1-nezuko/layerscale-residual`
-- **Status**: assigned 19:25 UTC. Only one commit on the branch (the assignment commit `a605cf6a`). No comments, no metrics, no training output. Pod started seeing the assignment at iteration 90 (22:22 UTC) but training hasn't begun.
+- **Status**: assigned 19:25 UTC. Only one commit on the branch (the assignment commit `a605cf6a`). No comments, no metrics, no training output. Pod started seeing the assignment at iteration 90 (22:22 UTC) but training hadn't begun.
 - **Action**: explicit advisor reminder posted with reiteration of LayerScale module signature (per-channel `gamma`, init=1e-4, +1,920 params), forward wrapping pattern, and exact `train.py` command. Pod monitoring will catch the next iteration's status.
+
+## 2026-05-15 22:38 — PR #3404: LayerScale residual gating (CaIT init=1e-4) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-nezuko/layerscale-residual`
+- **Hypothesis**: CaIT-style learnable per-channel scalar gate on each residual branch (init=1e-4) should act as a cold-start curriculum — blocks contribute ~0 at init, training ramps them up, with late blocks predicted to activate first. +1,920 params, zero compute overhead.
+
+### Results
+
+| Metric | Value | Baseline (#3136) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9/12)** | **135.1100** | 126.3241 | **+6.9% (WORSE)** |
+| epochs realized | 9 of 12 | 14 of 50 | — |
+| peak_memory_gb | 70.45 GB | — | — |
+| NaN/Inf events | None | — | — |
+
+| Block | ls_attn gamma (ep9) | ls_mlp gamma (ep9) |
+|---|---|---|
+| Block 1 | ~0.010 | ~0.019 |
+| Block 5 | ~0.006 | ~0.015 |
+
+### Verdict: CLOSED — both pre-registered predictions disconfirmed
+
+1. **Block-curriculum failed**: late blocks (closer to readout) should activate first per the CaIT cold-start rationale. Opposite observed: `ls_attn` block 1 gamma > block 5. MLP gammas uniform across depth.
+2. **Convergence speed didn't improve**: val at epoch 1 = 330, descending at a **slowing** rate (44→35→30→26→20→15→14→11 per epoch) — classic signature of a model whose residual branches haven't unfolded. At epoch 9 gammas are still ~0.01–0.02 (50–200× smaller than 1.0).
+
+**Root cause**: CaIT uses init=1e-4 for 36-layer transformers with ~300 training epochs. Our 5-layer, 12-epoch, 30-min-cap setup cannot give the gammas time to grow. The model wasted its entire compute budget on gate-growing rather than CFD optimization.
+
+**Methodological value**: cleanly rules out the CaIT cold-start axis at this budget. A larger init (1e-2 or 1.0) would be a regularization hypothesis, not a cold-start curriculum, and belongs as a fresh PR if ever revisited. Student's per-block gamma instrumentation made the close decision unambiguous.
+
+## 2026-05-15 22:40 — PR #3141: Random Fourier features on (x,z) position (rebased rerun) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-tanjiro/fourier-pos-rebased`
+- **Hypothesis**: Random Fourier feature mapping σ=4.0 on (x,z) coordinates injects high-frequency spatial basis into the Transolver input, counteracting spectral bias. Predicted improvement on surface pressure captures near sharp geometry edges.
+
+### Results
+
+| Metric | Value | Baseline (#3136) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9/12)** | **133.6001** | 126.3241 | **+5.7% (WORSE)** |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 121.5384 | — | — |
+| epochs realized | 9 of 12 | 14 | — |
+| peak_memory_gb | 63.22 GB | — | — |
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| single_in_dist | 160.6934 | 144.6801 |
+| geom_camber_rc | 145.2853 | 129.7991 |
+| geom_camber_cruise | 107.8672 | 89.7765 |
+| re_rand | 120.5545 | 121.8979 |
+| **avg** | **133.60** | **121.54** |
+
+- **Metric artifacts**: `models/model-charliepai2i24h1-tanjiro-fourier-pos-rebased-20260515-212626/metrics.jsonl`
+
+### Verdict: CLOSED — two-run negative signal confirms closure
+
+- Pre-rebase: val=136.14; post-rebase (current advisor stack): val=133.60. Improvement of 2.5 points from rebasing, but still +5.7% above baseline. The direction is **stable in the regression band** across both runs.
+- Budget was correctly aligned (T_max=12). Schedule misalignment cannot explain the gap.
+- **Spectral-bias pattern confirmed**: surface `p` MAE far higher than `Ux`/`Uy` across splits — Fourier encoding didn't close the gap, but the diagnosis was correct.
+- σ sweep (σ ∈ {2, 4, 8}) would be a different hypothesis for a future PR if positional encoding is revisited.
+
+## 2026-05-15 22:42 — PR #3435: Aux task — predict is_surface indicator (BCE, aux_weight=0.1) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-alphonse/aux-issurface`
+- **Hypothesis**: Predicting a binary `is_surface` indicator alongside the primary CFD regression (aux_weight=0.1, BCE loss) should improve boundary-layer representations, sharpening surface pressure accuracy. +193 params for the aux head.
+
+### Results
+
+| Metric | Value | Baseline (#3136) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9/12)** | **141.2732** | 126.3241 | **+11.8% (WORSE)** |
+| test_avg/mae_surf_p (NaN-safe 4-split) | 128.6019 | — | — |
+| n_params | 1,447,714 | 1,447,521 | +193 (exactly as predicted) |
+| peak_memory_gb | 63.0 GB | — | — |
+
+| Split | val mae_surf_p | Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 180.9047 | 158.79 | +13.9% |
+| val_geom_camber_rc | 151.6076 | 127.26 | +19.1% |
+| val_geom_camber_cruise | 108.4551 | 102.20 | +6.1% |
+| val_re_rand | 124.1254 | 117.04 | +6.1% |
+
+### Aux head diagnostics
+
+| Epoch | aux_acc | aux_loss |
+|---|---|---|
+| 1 | 0.8997 | 0.5889 |
+| 6 | 0.9892 | 0.0988 |
+| 9 | 0.9909 | 0.0595 |
+
+- **Metric artifacts**: `models/model-aux-issurface-w0p1-20260515-212151/metrics.jsonl`
+
+### Verdict: CLOSED — aux head saturates early; learning signal diminishes before primary task converges
+
+The aux head reaches ~99% accuracy by epoch 6 of 9 realized, with aux_loss dropping 10× by epoch 3. Once the head saturates, the aux_weight=0.1 gradient signal becomes trivially small — the model gets no additional supervision. Meanwhile the primary regression task (surface pressure) regressed on all 4 splits. The 11.8% regression exceeds the 5% threshold.
+
+**Note on label discipline**: student didn't swap `status:wip` → `status:review` after posting the SENPAI-RESULT. PR was reviewed in the `status:wip` queue after identifying the committed metrics. Future PRs should invoke the label-swap or `senpai:submit-experiment-results` skill as documented in the PR body.
+
+**Mechanism insight**: aux task saturation at epoch 6 means the representation-shaping effect only operates for the first half of training. With a later-saturating target (e.g., `near_surface_distance` regression rather than binary classification), this might behave differently. Closed without a follow-up — representation-shaping via aux supervision has other active routes (DropPath, RMSNorm).
+
+## 2026-05-15 22:44 — PRs #3496, #3498, #3500: New round-2 dispatches
+
+- **#3496 nezuko**: RMSNorm swap — replace all `nn.LayerNorm` with `RMSNorm` (T5/PaLM/LLaMA standard). Drop-in, -2,112 params, 5-10% per-epoch speedup predicted.
+- **#3498 tanjiro**: SwiGLU MLP — replace GELU FFN with `SwiGLU(d_ff=256)` (Shazeer 2020, iso-param per PaLM convention). Gated FFN for multi-scale targets.
+- **#3500 alphonse**: slice_num 64→32 — halve PhysicsAttention slice tokens, direct memory-bandwidth attack. Predicted 15-25% per-epoch speedup (10-18 realized epochs vs 9 at fp32).
