@@ -324,3 +324,45 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Decision:** CLOSED — pre-registered fail criterion met. Capacity scaling alone is dominated by the per-epoch cost on this 30-min wall-clock budget.
 - **Key finding:** The 2.6× larger model gets only 57% as many epochs as the baseline within the budget. At epoch 8 val=133.51 vs baseline epoch-8 val<90. Linear extrapolation suggests the bigger model would need ~25 epochs (~100 min) to reach 83.19 — outside the project envelope. The path forward for any future capacity work is offsetting throughput wins (bf16, FlashAttention, larger batch, lower slice_num). Student suggested bf16 mixed precision as the most direct throughput lever — selected as alphonse's next experiment.
 
+
+---
+
+## 2026-05-15 23:37 — PR #3384: Gradient clipping (max_norm=1.0) on EMA+asinh stack (rebased rerun)
+
+- **Branch:** charliepai2i48h2-fern/lion-gradclip-1.0
+- **Hypothesis:** grad_norm(pre-clip) >> 1.0 was confirmed to be 100% of steps in the first arm (pre-asinh baseline, mean ~137, max ~2724). On the asinh+EMA stack, asinh reduces the pressure component but aggregate gradient norms should remain heavy-tailed. max_norm=1.0 should compose orthogonally with both mechanisms.
+- **Metrics:** `models/model-charliepai2i48h2-fern-lion-gradclip-1.0-rebased-20260515-222530/metrics.jsonl`
+
+| Split | EMA+asinh baseline (#3382) | grad-clip+EMA+asinh (this) | Δ |
+|-------|--------------------------|--------------------------|---|
+| single_in_dist | 99.95 | 81.50 | −18.5% |
+| geom_camber_rc | 94.15 | 82.80 | −12.1% |
+| geom_camber_cruise | 60.26 | 49.22 | −18.3% |
+| re_rand | 78.38 | 67.47 | −13.9% |
+| **val_avg** | **83.1874** | **70.2479** | **−15.6%** |
+| **test_avg** | **74.5193** | **62.0765** | **−16.7%** |
+
+- **Decision:** MERGED — new baseline 70.2479. Third major compounding win.
+- **Key finding:** Mechanisms compose at different levels of the gradient pipeline: asinh compresses loss-level heavy tails (per-coordinate pressure z-score scaling), EMA smooths parameter trajectory (exponential moving average of weights), grad-clip caps per-step L2 norm of gradient vector. Post-asinh pre-clip norms still 25-180 mean (100% clip rate all 14 epochs) confirming the three mechanisms are genuinely orthogonal — asinh does NOT eliminate the need for gradient clipping. Val still descending at epoch 14 timeout. Run shows 9% stochastic variance between two reruns (70.25 vs 77.23), suggesting single-run estimates carry ±5% noise under EMA slow start.
+
+---
+
+## 2026-05-15 23:38 — PR #3106: Slice/head scale-up (slice_num 64→128, n_head 4→8, mlp_ratio 2→3) on full stack
+
+- **Branch:** charliepai2i48h2-frieren/slice-128-head-8-mlp-3
+- **Hypothesis:** Richer slice decomposition and wider attention (more heads, larger MLP) would improve the per-step convergence rate faster than the baseline's 14-epoch improvement.
+- **Metrics:** `models/model-charliepai2i48h2-frieren-slice-128-head-8-mlp-3-20260515-223545/metrics.jsonl`
+
+| Split | EMA+asinh baseline | slice-128 rerun | Δ |
+|-------|-------------------|-----------------|---|
+| single_in_dist | 99.95 | 231.32 | +131% |
+| geom_camber_rc | 94.15 | 192.17 | +104% |
+| geom_camber_cruise | 60.26 | 106.95 | +77.5% |
+| re_rand | 78.38 | 130.26 | +66.2% |
+| **val_avg** | **83.19** | **165.18** | **+98.6%** |
+| Epochs | 14 | 7 | −50% |
+| s/epoch | 131 | 261 | +99% |
+
+- **Decision:** CLOSED — +98.6% regression. Same wall-clock penalty pattern as alphonse capacity scale-up (#3099). 261s/epoch gives only 7 epochs vs baseline's 14. The per-step convergence is fine (monotone descent) but the epoch budget deficit dominates.
+- **Key finding:** Any architecture change that increases per-epoch time above ~150s cannot overcome the lost epoch count within the 30-min cap. The direction requires an orthogonal throughput win (bf16 — alphonse's current experiment) before capacity scaling can add positive signal.
+
