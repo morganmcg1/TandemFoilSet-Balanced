@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -79,6 +80,30 @@ class MLP(nn.Module):
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
         return self.linear_post(x)
+
+
+class FourierPositionalEncoding(nn.Module):
+    """Sinusoidal position encoding for the first ``space_dim`` channels of x.
+
+    gamma(x) = [sin(2^k pi x), cos(2^k pi x)] for k=0..L-1, applied to each
+    spatial dimension independently. Output dim = 2 * space_dim * num_freqs.
+    Non-spatial channels (idx >= space_dim) pass through unchanged.
+    """
+
+    def __init__(self, space_dim: int, num_freqs: int):
+        super().__init__()
+        self.space_dim = space_dim
+        self.num_freqs = num_freqs
+        freqs = 2.0 ** torch.arange(num_freqs).float()  # [1, 2, 4, ..., 2^(L-1)]
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, x):
+        pos = x[..., : self.space_dim]
+        feats = x[..., self.space_dim :]
+        arg = pos.unsqueeze(-1) * (math.pi * self.freqs)
+        sin = torch.sin(arg).flatten(-2)
+        cos = torch.cos(arg).flatten(-2)
+        return torch.cat([sin, cos, feats], dim=-1)
 
 
 class PhysicsAttention(nn.Module):
@@ -169,18 +194,32 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 pos_enc_mode: str = "raw",
+                 pos_enc_num_freqs: int = 8):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.pos_enc_mode = pos_enc_mode
 
         if self.unified_pos:
+            self.pos_enc = None
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            if pos_enc_mode == "raw":
+                self.pos_enc = None
+                preprocess_in = fun_dim + space_dim
+            elif pos_enc_mode in ("fourier_basic", "fourier_rich"):
+                num_freqs = (pos_enc_num_freqs if pos_enc_mode == "fourier_basic"
+                             else pos_enc_num_freqs + 4)
+                self.pos_enc = FourierPositionalEncoding(space_dim, num_freqs)
+                preprocess_in = fun_dim + 2 * space_dim * num_freqs
+            else:
+                raise ValueError(f"Unknown pos_enc_mode={pos_enc_mode!r}")
+            self.preprocess = MLP(preprocess_in, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -207,6 +246,8 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.pos_enc is not None:
+            x = self.pos_enc(x)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -405,6 +446,8 @@ class Config:
     loss_fn: str = "charbonnier"   # "mse" or "charbonnier"
     charbonnier_eps: float = 1e-3  # ε for Charbonnier sqrt(r² + ε²)
     grad_clip_max_norm: float = 0.0  # 0.0 = no clipping, >0 = clip global L2 norm
+    pos_enc_mode: str = "raw"        # "raw" | "fourier_basic" | "fourier_rich"
+    pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -454,6 +497,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    pos_enc_mode=cfg.pos_enc_mode,
+    pos_enc_num_freqs=cfg.pos_enc_num_freqs,
 )
 
 model = Transolver(**model_config).to(device)
@@ -507,6 +552,7 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+_logged_x_range = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -526,6 +572,22 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if not _logged_x_range:
+            valid = mask
+            pos = x_norm[..., :2][valid]
+            xn_min = pos.min(dim=0).values.tolist()
+            xn_max = pos.max(dim=0).values.tolist()
+            xn_mean = pos.mean(dim=0).tolist()
+            xn_std = pos.std(dim=0).tolist()
+            print(
+                f"x_norm[:, :2] first-batch valid-node stats: "
+                f"min={xn_min} max={xn_max} mean={xn_mean} std={xn_std}"
+            )
+            wandb.summary["x_norm_pos_min"] = xn_min
+            wandb.summary["x_norm_pos_max"] = xn_max
+            wandb.summary["x_norm_pos_mean"] = xn_mean
+            wandb.summary["x_norm_pos_std"] = xn_std
+            _logged_x_range = True
         pred = model({"x": x_norm})["preds"]
         err = _per_node_loss(pred, y_norm, cfg.loss_fn, cfg.charbonnier_eps)
 
