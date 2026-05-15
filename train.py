@@ -236,6 +236,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Defensive: replace non-finite GT values with 0, exclude affected nodes.
+            # Prevents inf*0=NaN when scoring.py's accumulate_batch masks them out.
+            _y_fin = torch.isfinite(y).all(dim=-1)  # [B, N]
+            if not _y_fin.all():
+                y = torch.where(_y_fin.unsqueeze(-1), y, torch.zeros_like(y))
+                mask = mask & _y_fin
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
