@@ -13,40 +13,56 @@ down vs the baseline Transolver config in `target/train.py`.
 
 ## Current research focus
 
-**Round 1 (round-trip baseline + first knob sweep).** Establish numerical
-baseline and probe the four highest-leverage knobs in parallel:
+**Round 1 — eight parallel single-knob PRs (in flight).** Each tests exactly
+one change from the default config so that effects are individually
+attributable. The 8 in-flight PRs:
 
-1. **Loss / metric alignment** (MSE → SmoothL1 / Huber; higher surf_weight;
-   per-channel pressure boost).
-2. **Mesh-resolution capacity** (slice_num 64 → 128; mlp_ratio 2 → 4).
-3. **Throughput** (bf16 autocast for more iterations per epoch).
-4. **Optimization stability** (LR warmup; possibly grad clipping).
+| PR | Student | Hypothesis | Theme |
+|----|---------|------------|-------|
+| #3107 | alphonse | baseline reproduction (no code change) | calibration |
+| #3111 | askeladd | MSE → SmoothL1(beta=1.0) | loss / metric alignment |
+| #3116 | edward   | surf_weight 10 → 25 | loss / metric alignment |
+| #3120 | fern     | slice_num 64 → 128 | mesh-resolution capacity |
+| #3124 | frieren  | mlp_ratio 2 → 4 | model capacity |
+| #3129 | nezuko   | bf16 autocast | throughput |
+| #3132 | tanjiro  | linear LR warmup (10% epochs) | optim stability |
+| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) per-channel weights | loss / metric alignment |
 
-Each round 1 PR changes exactly one knob from the baseline config. We assign
-one student to a clean baseline reproduction so subsequent comparisons have a
-ground-truth number on this hardware.
+Themes probed in round 1:
+
+1. **Loss / metric alignment** (3 arms: askeladd, edward, thorfinn).
+2. **Capacity** (2 arms: fern slice_num, frieren mlp_ratio).
+3. **Throughput** (1 arm: nezuko bf16).
+4. **Optim stability** (1 arm: tanjiro warmup).
+5. **Calibration** (1 arm: alphonse baseline).
+
+The baseline reproduction PR is the comparison anchor for the other seven.
 
 ## Potential next research directions
 
-After round 1 numbers settle, candidate themes:
+Round 2 candidates (from researcher-agent on 2026-05-15 12:30 — full file at
+`research/RESEARCH_IDEAS_2026-05-15_12:30.md`), prioritized assuming the round
+1 winners point us at loss alignment first:
 
-- **Loss compounding**: stack the winning round 1 loss formulation with the
-  winning capacity setting; explore per-domain reweighting.
-- **Stronger positional encoding**: `unified_pos=True` with various ref grids,
+- **EMA / Polyak averaging** of weights with decay 0.999 — free OOD boost,
+  especially for the camber holdouts.
+- **Re-conditioned FiLM** per Transolver block (2-layer MLP `log(Re) → (γ, β)`)
+  — explicit cross-regime conditioning for `val_re_rand`.
+- **Dual surface vs volume decoder heads** — separate `nn.Linear(n_hidden, 3)`
+  for surface and volume nodes.
+- **Log-cosh loss** — alternative to SmoothL1; if SmoothL1 wins, log-cosh is
+  the natural variant.
+- **OneCycleLR** instead of cosine — sharper peak, often beats cosine on
+  short-horizon trainings.
+- **AoA sin/cos encoding** — replace raw radians with periodic encoding.
+- **Mesh-node subsampling** during training (e.g. 50% of non-surface nodes per
+  step) to fit more samples per batch.
+- **Stronger positional encoding** — `unified_pos=True` with various ref grids,
   Fourier / RFF on (x, z) input dims.
-- **Decoder ergonomics**: per-channel output heads; surface-specific decoder
-  trunk; surface-only auxiliary loss.
-- **Regularization for OOD**: EMA / SWA of weights, dropout sweep, stochastic
-  depth on transformer blocks.
-- **Capacity / scaling**: n_hidden 128 → 192/256, n_layers 5 → 6/7, slice_num
-  → 256 (paired with mlp_ratio).
-- **Optimizer**: Lion (manual implementation if needed since PyTorch lacks a
-  native Lion in older versions), Sophia, Adan; LR schedule variants.
-- **Sampling / augmentation**: mesh-node subsampling during training, AoA-
-  symmetric augmentation if physically valid for symmetric foils, per-domain
-  curriculum.
-- **Physical priors**: divergence-free penalty on (Ux, Uy), boundary-layer-
-  aware weighting (sample weighting by distance to nearest surface node).
+- **Regularization for OOD** — dropout sweep, stochastic depth on transformer
+  blocks.
+- **Compound winners** — once round 1 lands, stack the best loss formulation
+  with the best capacity setting in round 2.
 
 ## Plateau plan (if it happens)
 
