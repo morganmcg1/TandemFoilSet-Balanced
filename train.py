@@ -47,6 +47,30 @@ from data import (
     pad_collate,
 )
 
+
+def xflip_collate(batch):
+    """Apply random x-axis reflection to ~50% of samples before padding.
+
+    Reflection: x → -x, Ux → -Ux, AoA1/AoA2 → -AoA1/-AoA2, stagger → -stagger,
+    saf → -saf (sign of arc-length). dsdf, log(Re), NACA shape, gap, is_surface unchanged.
+    Feature dims (program.md): 0=pos_x, 1=pos_z, 2-3=saf, 4-11=dsdf, 12=is_surf,
+    13=log(Re), 14=AoA1, 15-17=NACA1, 18=AoA2, 19-21=NACA2, 22=gap, 23=stagger.
+    """
+    aug_batch = []
+    for x, y, sf in batch:
+        if torch.rand(1).item() < 0.5:
+            x = x.clone()
+            y = y.clone()
+            x[:, 0] = -x[:, 0]      # flip x-position
+            x[:, 2] = -x[:, 2]      # flip saf x-component (dim 2 of saf pair)
+            x[:, 14] = -x[:, 14]    # negate AoA foil 1
+            x[:, 18] = -x[:, 18]    # negate AoA foil 2
+            x[:, 23] = -x[:, 23]    # negate stagger
+            y[:, 0] = -y[:, 0]      # negate Ux
+        aug_batch.append((x, y, sf))
+    return pad_collate(aug_batch)
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -401,14 +425,15 @@ stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
+train_loader_kwargs = {**loader_kwargs, "collate_fn": xflip_collate}
 
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+                              shuffle=True, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+                              sampler=sampler, **train_loader_kwargs)
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
