@@ -336,3 +336,61 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 
 ### Decision
 - **Closed.** Combined hypothesis regressed. Reassigned thorfinn to n_hidden=96 (#3377) — orthogonal architectural axis, completes the 3-point width sweep {96, 128, 192}.
+
+---
+
+## 2026-05-15 18:24 — PR #3344: Random Fourier Features over (x, z) with correct 2D encoding (ON HOLD — retest needed)
+- Branch: `charliepai2i24h2-nezuko/fourier-pe-rff-32`
+- Student: charliepai2i24h2-nezuko
+- Hypothesis: Corrected RFF with random Gaussian B (Tancik 2020), true 2D independent frequencies. Fixed the collapsed `x+z` bug from PR #3216.
+
+### Results table (vs OLD baseline 109.68)
+
+| Metric | Value | Delta vs old baseline (109.68) |
+|--------|-------|-------------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 13) | **103.891** | **-5.28%** |
+| `test_avg/mae_surf_p` | **94.178** | **-3.22%** |
+| Epochs completed | 13/14 (30.8 min) | |
+| Per-epoch wall clock | ~132 s | no overhead |
+| Param count | ~0.68M (+15K vs baseline) | minimal increase |
+| Per-split val mae_surf_p | single 131.79 \| geom_rc 114.70 \| geom_cruise 74.97 \| re_rand 94.10 | |
+| Per-split test mae_surf_p | single 115.96 \| geom_rc 106.56 \| geom_cruise 64.75 \| re_rand 89.43 | |
+| Metrics artifact | `models/model-fourier-pe-rff-32-20260515-173713/metrics.{jsonl,yaml}` | |
+
+### Analysis
+- Corrected RFF works: -5.28% val improvement over old baseline. The fix from PR #3216's collapsed basis (x+z) to proper 2D random Gaussian B is validated.
+- Improvement concentrated on single_in_dist (-11.0% val) and geom_cruise (-4.9%). Geom_camber_rc flat (-0.15%) — the persistent laggard remains hard.
+- Interpretation: RFF acts as a generic high-frequency feature enrichment for the input projection rather than a geometry-specific fix. Benefits dense surface gradient regions.
+- **However**: tanjiro's warmup+cosine merged with new baseline 100.811. Nezuko's 103.891 is now +3.1% above new baseline. Sent back to rebase+retest — RFF is orthogonal to schedule and likely compounds.
+
+### Decision
+- **Retest pending.** val 103.891 beats old 109.68 but misses new 100.81 baseline. RFF hypothesis remains promising. Nezuko sent back to rebase+retest on new baseline.
+
+---
+
+## 2026-05-15 18:29 — PR #3295: slice_num 64→128 single-axis (CLOSED)
+- Branch: `charliepai2i24h2-edward/slice-num-128`
+- Student: charliepai2i24h2-edward
+- Hypothesis: Double the attention slots (64→128), keeping n_head=4. Single-axis from the confounded PR #3205 (which combined heads+slots).
+
+### Results table
+
+| Metric | Value | Delta vs Huber baseline (116.61) |
+|--------|-------|----------------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 6/11, canonical) | **140.577** | **+20.5%** |
+| `test_avg/mae_surf_p` | NaN (infra bug) | — |
+| Best seed of 3 runs | 119.320 | +2.3% (still worse) |
+| Mean of 3 runs val | 127.65 ± 10.6 | +9.5% |
+| Epochs completed | 10–11/50 (30-min cap) | |
+| Per-epoch wall clock | ~172 s | +32% vs baseline |
+| Peak VRAM | 54.5 GB | |
+| Metrics artifact | `models/model-slice-num-128-20260515-172243/metrics.{jsonl,yaml}` (canonical) + 2 prior seeds | |
+
+### Analysis
+- Clear regression: canonical +20.5%, best seed +2.3% — all 3 runs worse than Huber baseline. High seed variance (119–140 spread) signals undertrained regime.
+- Budget-mismatch: +32% per-epoch cost reduces from 14 to 11 completable epochs. Both surviving runs (11 epochs) are still descending at cutoff.
+- Architecture not broken — starved of budget. Geom_camber_rc (+36%) and re_rand (+22%) are the most damaged splits (geometry/Re generalization hardest under truncated training).
+- Param count essentially unchanged (+10K, +1.6%) — the overhead is compute, not parameters.
+
+### Decision
+- **Closed.** Reassigned edward to slice_num=96 (#3399) — mid-point between 64 and 128. Expected ~150 s/epoch → 11-12 epochs, closer to baseline convergence.

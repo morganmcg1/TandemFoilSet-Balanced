@@ -1,76 +1,71 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 17:55 (tanjiro #3294 awaiting rebase; thorfinn #3223 closed; thorfinn assigned n_hidden=96)
+- **Last updated:** 2026-05-15 18:45 (tanjiro #3294 merged; 6 new assignments dispatched)
 - **Most recent research direction from human researcher team:** none (no open issues).
-- **Current best (in-flight, pending merge):** `val_avg/mae_surf_p` = **100.811** (PR #3294 warmup+cosine 14ep, lr=7e-4) — rebasing
-- **Official baseline:** `val_avg/mae_surf_p` = **109.681** (PR #3276 grad-clip + AdamW selective decay)
-- **Current focus:** merge tanjiro's #3294 (new baseline ~100.81), then retest frieren/fern's orthogonal axes on new baseline.
+- **Current best:** `val_avg/mae_surf_p` = **100.811** (PR #3294 warmup+cosine 14ep, lr=7e-4)
+- **Current focus:** Verify whether frieren/fern/nezuko axes (surf_weight, weight_decay, RFF) compound on top of the new schedule baseline.
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
 
 ## Established baseline stack (merged to HEAD)
 1. **PR #3208** (Huber loss) — `val_avg/mae_surf_p` 116.61
-2. **PR #3276** (grad-clip + AdamW selective decay + NaN guard) — `val_avg/mae_surf_p` **109.68** (current best)
+2. **PR #3276** (grad-clip + AdamW selective decay + NaN guard) — `val_avg/mae_surf_p` 109.68
+3. **PR #3294** (warmup+cosine 14ep, lr=7e-4) — `val_avg/mae_surf_p` **100.811** (current best, -8.08%)
 
-Key config: SmoothL1 (Huber, β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (LN/bias/1D no-decay) + NaN sample guard in evaluate_split.
+Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective decay (wd=1e-4) + NaN guard + SequentialLR (LinearLR 2ep warmup + CosineAnnealingLR T_max=12) + lr=7e-4 + epochs=14.
 
 ## Active PRs
 
-| PR | Student | Hypothesis | Status | Result |
-|----|---------|-----------|--------|--------|
-| #3294 | tanjiro | Warmup+cosine 14ep, lr=7e-4 | WIP (rebase) | **100.811 val (-8.08%)** → pending merge |
-| #3304 | frieren | surf_weight=20 | REVIEW HOLD | 103.668 val (-5.49%) → retest after #3294 merges |
-| #3314 | fern | weight_decay=3e-4 | REVIEW HOLD | 105.640 val (-3.69%) → retest after #3294 merges |
-| #3295 | edward | slice_num=128 | WIP | — |
-| #3301 | alphonse | width-192, epochs=10 | WIP | — |
-| #3344 | nezuko | Random Fourier Features (Tancik 2020 RFF) | WIP | — |
-| #3362 | askeladd | n_head 4→8 (single-axis) | WIP (new) | — |
-| #3377 | thorfinn | n_hidden=96 (width sweep counterpart to #3301) | WIP (new) | replaces #3223 (closed, BF16+batch=8 regressed +34%) |
+| PR | Student | Hypothesis | Status | Notes |
+|----|---------|-----------|--------|-------|
+| #3304 | frieren | surf_weight=20 single-axis (RETEST) | WIP (rebase) | Beat old baseline 109.68; retesting on new 100.81 |
+| #3314 | fern | weight_decay=3e-4 (RETEST) | WIP (rebase) | Beat old baseline 109.68; retesting on new 100.81 |
+| #3344 | nezuko | RFF Tancik 2020 (RETEST) | WIP (rebase) | Beat old baseline 109.68; retesting on new 100.81 |
+| #3301 | alphonse | width-192, epochs=10 | WIP (active training) | GPU 100%, training in progress |
+| #3362 | askeladd | n_head 4→8 single-axis | WIP (new) | — |
+| #3377 | thorfinn | n_hidden=96 (width sweep) | WIP (new) | — |
+| #3397 | tanjiro | eta_min=1e-5 in cosine | WIP (new) | Follow-up to merged #3294 |
+| #3399 | edward | slice_num=96 (mid-point) | WIP (new) | Follow-up to closed #3295 |
 
-## Confirmed design insights (from completed rounds)
+## Confirmed design insights
 
-### Budget-matching (critical from round-1)
-Under a 30-min cap with 50-epoch cosine, LR never anneals. Matching epochs to completable epochs so cosine cools fully is the key fix. Tanjiro's #3294 confirms: warmup+cosine over 14 epochs gives the best epoch = epoch 14 with monotonically improving late-stage checkpoints.
+### Schedule is the dominant lever
+- Budget-matched warmup+cosine (14ep, lr=7e-4) → -8.08% improvement (PR #3294, merged)
+- Without budget-matching, 50-epoch cosine never anneals → flat high-LR training throughout
 
-### Regularization levers both help independently (round-2 partial)
-- grad-clip + selective decay: +5.94% (PR #3276, merged baseline)
-- surf_weight=20: +5.49% vs old baseline (frieren #3304, on hold)
-- weight_decay=3e-4: +3.69% vs old baseline (fern #3314, on hold)
-- warmup+cosine 14ep: +8.08% vs old baseline (tanjiro #3294, pending merge)
+### Regularization axes both helped vs old baseline (need retest on new)
+- surf_weight=20: val 103.668 vs old 109.68 baseline (-5.49%, frieren #3304)
+- weight_decay=3e-4: val 105.640 vs old 109.68 baseline (-3.69%, fern #3314)
+- RFF 32-freq: val 103.891 vs old 109.68 baseline (-5.28%, nezuko #3344)
+- All three improvements concentrate on single_in_dist (hardest split). Mild cruise regression.
 
-All improvements concentrate on `single_in_dist` (hardest split) with minor cruise regression.
+### Depth and slot-width fail under the wall-clock budget
+- slice_num=128: +20% regression (budget-mismatch, too slow per-epoch)
+- depth-8: +1.5% regression (same issue)
+- Both need per-epoch cost reduction to be viable
 
-### Depth-8 needs more budget
-Depth-8 at ~205 s/epoch is squeezed into 9 epochs — still descending. Hold until BF16/batch8 reduces per-epoch cost.
+### Width sweep in progress
+- n_hidden=128 (baseline)
+- n_hidden=192 (alphonse #3301, actively training)
+- n_hidden=96 (thorfinn #3377, just assigned)
 
-## Open questions (in-flight)
-- Does width-192 actually help when schedule fits? (alphonse #3301)
-- Does width-96 help via faster training + less overfitting? (thorfinn #3377)
-- Does slice_num=128 beat 64 single-axis? (edward #3295)
-- Does corrected RFF improve geometry-split generalization? (nezuko #3344)
-- Does n_head=8 help at current slice_num=64? (askeladd #3362)
-- Does surf_weight=20 still help ON TOP of tanjiro's warmup+cosine? (frieren #3304 on hold)
-- Does weight_decay=3e-4 still optimal on warmup+cosine? (fern #3314 on hold)
-
-## Closed/regressed (round-2/3)
-- #3302 askeladd depth-8: +1.53% regression (budget-bound; revisit if BF16/batch8 lands)
-- #3223 thorfinn BF16+batch=8: +34% regression (padding overhead dominates; bug-fix work merged via #3276)
-
-## Next priorities (round-3+)
-
-Immediate next steps after tanjiro #3294 merges (~100.81 baseline):
-1. Release frieren/fern holds → rebase+retest on new baseline
-2. Process alphonse/edward/thorfinn results as they land
-3. If thorfinn's BF16+batch8 gives speedup → depth-8 becomes viable again
-4. Tanjiro's own follow-ups: per-step cosine LR, eta_min>0, lr sweep around 7e-4
-
-Longer-term research directions:
-- H2: Per-sample output scale normalization (y-std variability is 40× across dataset) — likely high impact
-- H1: FiLM conditioning on global Re/geometry params
-- H3: Separate surface/volume decoder heads
-- H13: Log-scale pressure loss in train only
-- Diagnose why geom_rc lags — harder geometry-OOD split, capacity or domain coverage
+## Open questions
+- Does surf_weight=20 still help ON TOP of warmup+cosine? (frieren #3304 retesting)
+- Does weight_decay=3e-4 still optimal with lr=7e-4 + cosine? (fern #3314 retesting)
+- Does corrected RFF compound with schedule? (nezuko #3344 retesting)
+- Does eta_min=1e-5 extract more from the cosine tail? (tanjiro #3397 new)
+- Does slice_num=96 balance slot-count vs per-epoch cost? (edward #3399 new)
+- Does n_head=8 help? (askeladd #3362)
+- Does n_hidden=96/192 expand or contract the right capacity? (thorfinn #3377, alphonse #3301)
 
 ## Plateau watch
-Not yet — tanjiro's result (-8.08%) is the largest single improvement so far. Next threshold: can we reach val_avg/mae_surf_p < 95 by compounding schedule + surf_weight + weight_decay?
+Not yet — best is 100.81 after 3 rounds; ~8% total improvement per round. 
+Theoretical floor: compression ratio of pressure field, not well-defined without ablations.
+Next threshold: can we reach val < 95 by stacking schedule + surf_weight + weight_decay + RFF?
+
+## Closed/regressed
+- #3302 askeladd depth-8: +1.53% (budget-bound)
+- #3223 thorfinn BF16+batch=8: +34% (padding overhead)
+- #3295 edward slice_num=128: +20% (budget-mismatch, too slow)
+- #3205, #3179, #3183, #3214, #3216, #3220 — round-1 dead ends
