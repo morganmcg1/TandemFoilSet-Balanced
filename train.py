@@ -312,7 +312,15 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
     }
+    if cfg.use_onecycle:
+        summary["onecycle"] = {
+            "max_lr": cfg.onecycle_max_lr,
+            "pct_start": cfg.onecycle_pct_start,
+            "div_factor": cfg.onecycle_div_factor,
+            "final_div_factor": cfg.onecycle_final_div_factor,
+        }
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
@@ -358,6 +366,16 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # OneCycleLR options. When `use_onecycle=False` (default), the trainer keeps
+    # the original CosineAnnealingLR scheduler stepped once per epoch. When
+    # enabled, OneCycleLR is constructed for MAX_EPOCHS * steps_per_epoch total
+    # steps and stepped once per training batch; the AdamW initial lr is set to
+    # `onecycle_max_lr / onecycle_div_factor` to match the OneCycle ramp.
+    use_onecycle: bool = False
+    onecycle_max_lr: float = 2e-3
+    onecycle_pct_start: float = 0.1
+    onecycle_div_factor: float = 25.0
+    onecycle_final_div_factor: float = 1e4
 
 
 cfg = sp.parse(Config)
@@ -403,8 +421,29 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.use_onecycle:
+    init_lr = cfg.onecycle_max_lr / cfg.onecycle_div_factor
+    optimizer = torch.optim.AdamW(model.parameters(), lr=init_lr, weight_decay=cfg.weight_decay)
+    steps_per_epoch = len(train_loader)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.onecycle_max_lr,
+        epochs=MAX_EPOCHS,
+        steps_per_epoch=steps_per_epoch,
+        pct_start=cfg.onecycle_pct_start,
+        anneal_strategy="cos",
+        div_factor=cfg.onecycle_div_factor,
+        final_div_factor=cfg.onecycle_final_div_factor,
+    )
+    print(
+        f"Scheduler: OneCycleLR max_lr={cfg.onecycle_max_lr:.2e} pct_start={cfg.onecycle_pct_start} "
+        f"div_factor={cfg.onecycle_div_factor} final_div_factor={cfg.onecycle_final_div_factor:.0e} "
+        f"steps_per_epoch={steps_per_epoch}"
+    )
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"Scheduler: CosineAnnealingLR T_max={MAX_EPOCHS} init_lr={cfg.lr:.2e}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -455,12 +494,15 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if cfg.use_onecycle:
+            scheduler.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not cfg.use_onecycle:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -486,6 +528,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    lr_after_epoch = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -493,6 +536,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "lr": lr_after_epoch,
+        "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
