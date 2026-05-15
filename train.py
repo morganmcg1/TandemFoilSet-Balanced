@@ -106,6 +106,24 @@ class FourierPositionalEncoding(nn.Module):
         return torch.cat([sin, cos, feats], dim=-1)
 
 
+class GLUMLP(nn.Module):
+    """Gated-Linear-Unit MLP (Shazeer 2020). Drop-in for the in-block MLP.
+
+    SwiGLU/GeGLU: w_down( act(w_gate(x)) * w_up(x) ). Same hidden width as the
+    vanilla MLP — accepts ~33% more params in the MLP block for simpler ablation.
+    """
+    def __init__(self, n_input, n_hidden, n_output, glu_act="silu"):
+        super().__init__()
+        act_fn = {"silu": nn.SiLU, "gelu": nn.GELU}[glu_act]
+        self.w_gate = nn.Linear(n_input, n_hidden)
+        self.w_up = nn.Linear(n_input, n_hidden)
+        self.w_down = nn.Linear(n_hidden, n_output)
+        self.act = act_fn()
+
+    def forward(self, x):
+        return self.w_down(self.act(self.w_gate(x)) * self.w_up(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -163,7 +181,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 mlp_type="vanilla"):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -172,8 +191,17 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        if mlp_type == "vanilla":
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                           n_layers=0, res=False, act=act)
+        elif mlp_type == "swiglu":
+            self.mlp = GLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                              glu_act="silu")
+        elif mlp_type == "geglu":
+            self.mlp = GLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                              glu_act="gelu")
+        else:
+            raise ValueError(f"unknown mlp_type={mlp_type}")
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -196,7 +224,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  pos_enc_mode: str = "raw",
-                 pos_enc_num_freqs: int = 8):
+                 pos_enc_num_freqs: int = 8,
+                 mlp_type: str = "vanilla"):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -229,6 +258,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                mlp_type=mlp_type,
             )
             for i in range(n_layers)
         ])
@@ -451,6 +481,7 @@ class Config:
     pos_enc_mode: str = "raw"        # "raw" | "fourier_basic" | "fourier_rich"
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
     amp_dtype: str = "fp32"   # "fp32" | "bf16"
+    mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -516,6 +547,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     pos_enc_mode=cfg.pos_enc_mode,
     pos_enc_num_freqs=cfg.pos_enc_num_freqs,
+    mlp_type=cfg.mlp_type,
 )
 
 model = Transolver(**model_config).to(device)
