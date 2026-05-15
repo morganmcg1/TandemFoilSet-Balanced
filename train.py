@@ -64,15 +64,19 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True,
+                 dropout=0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
+        self.linear_pre = nn.Sequential(
+            nn.Linear(n_input, n_hidden), act_fn(), nn.Dropout(dropout)
+        )
         self.linear_post = nn.Linear(n_hidden, n_output)
         self.linears = nn.ModuleList(
-            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
+            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn(), nn.Dropout(dropout))
+             for _ in range(n_layers)]
         )
 
     def forward(self, x):
@@ -149,7 +153,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, dropout=0.1)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
