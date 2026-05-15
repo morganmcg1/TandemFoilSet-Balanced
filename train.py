@@ -150,17 +150,34 @@ class TransolverBlock(nn.Module):
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
+            assert out_dim == 3, f"split output head expects out_dim=3 [Ux,Uy,p], got {out_dim}"
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+            # Split output head: shared torso → dedicated velocity / pressure branches.
+            self.shared_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim * 2),
+                nn.GELU(),
+                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.GELU(),
+            )
+            self.vel_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.GELU(),
+                nn.Linear(hidden_dim // 2, 2),
+            )
+            self.pres_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.GELU(),
+                nn.Linear(hidden_dim // 2, 1),
             )
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            shared = self.shared_head(self.ln_3(fx))
+            vel = self.vel_head(shared)
+            pres = self.pres_head(shared)
+            return torch.cat([vel, pres], dim=-1)
         return fx
 
 
@@ -386,6 +403,9 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    # Per-channel loss weights for [Ux, Uy, p]. Pressure is the only scored
+    # channel, so it gets a higher weight.
+    pres_loss_weight: float = 3.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -483,7 +503,13 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_p = epoch_surf_p = 0.0
+    epoch_vol_uv = epoch_surf_uv = 0.0
     n_batches = 0
+
+    ch_weights = torch.tensor(
+        [1.0, 1.0, cfg.pres_loss_weight], device=device, dtype=torch.float32
+    )
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -500,8 +526,11 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_mask_3d = vol_mask.unsqueeze(-1)
         surf_mask_3d = surf_mask.unsqueeze(-1)
-        vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-        surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+        # Per-channel weighting: pressure (channel 2) gets cfg.pres_loss_weight,
+        # velocity channels stay at 1.0. Surface terms still get cfg.surf_weight on top.
+        err_w = err * ch_weights
+        vol_loss = (err_w * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+        surf_loss = (err_w * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -512,11 +541,25 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        # Per-channel diagnostics (unweighted Huber, for inspection only).
+        with torch.no_grad():
+            n_vol_nodes = vol_mask_3d.sum().clamp(min=1)
+            n_surf_nodes = surf_mask_3d.sum().clamp(min=1)
+            vol_per_ch = (err * vol_mask_3d).sum(dim=(0, 1)) / n_vol_nodes
+            surf_per_ch = (err * surf_mask_3d).sum(dim=(0, 1)) / n_surf_nodes
+            epoch_vol_uv += 0.5 * (vol_per_ch[0].item() + vol_per_ch[1].item())
+            epoch_vol_p += vol_per_ch[2].item()
+            epoch_surf_uv += 0.5 * (surf_per_ch[0].item() + surf_per_ch[1].item())
+            epoch_surf_p += surf_per_ch[2].item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol_p /= max(n_batches, 1)
+    epoch_surf_p /= max(n_batches, 1)
+    epoch_vol_uv /= max(n_batches, 1)
+    epoch_surf_uv /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -532,6 +575,10 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_huber_p": epoch_vol_p,
+        "train/surf_huber_p": epoch_surf_p,
+        "train/vol_huber_uv": epoch_vol_uv,
+        "train/surf_huber_uv": epoch_surf_uv,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
