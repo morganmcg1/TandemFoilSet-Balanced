@@ -73,6 +73,28 @@ ACTIVATION = {
 }
 
 
+class SwiGLUMLP(nn.Module):
+    """Gated FFN: linear_in -> SiLU(gate) * value -> dropout -> linear_out.
+
+    The input projection produces 2*n_hidden activations, split into a gate
+    stream (passed through SiLU) and a value stream. Output is gate*value
+    projected back to n_output. Replaces the standard linear -> GELU -> linear
+    pattern in TransolverBlock.mlp.
+    """
+
+    def __init__(self, n_input, n_hidden, n_output, dropout=0.0):
+        super().__init__()
+        self.fc_in = nn.Linear(n_input, 2 * n_hidden)
+        self.fc_out = nn.Linear(n_hidden, n_output)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        gate, value = self.fc_in(x).chunk(2, dim=-1)
+        x = F.silu(gate) * value
+        x = self.dropout(x)
+        return self.fc_out(x)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True,
                  dropout=0.0):
@@ -162,8 +184,8 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act, dropout=0.1)
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                             dropout=0.1)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
