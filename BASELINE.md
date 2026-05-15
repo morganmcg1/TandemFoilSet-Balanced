@@ -1,45 +1,65 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3098 (val) + PR #3296 (test)
+## Current best — PR #3444 (Cosine T_max=14)
+
+**val_avg/mae_surf_p = 93.1996** (W&B run: `1hx2rm1n`, PR #3444 cosine T_max=14 on Huber + Fourier σ=10)
+**test_avg/mae_surf_p = 83.5377** (same run `1hx2rm1n`, clean 4-split thanks to merged #3296)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 114.80 | 105.93 |
+| geom_camber_rc | 104.16 | 90.03 |
+| geom_camber_cruise | **68.17** | **57.65** ¹ |
+| re_rand | 85.66 | 80.55 |
+
+¹ 199/200 samples evaluated — `splits_v2/.test_geom_camber_cruise_gt/000020.pt` has 761 inf y-values, dropped from MAE accumulator. Pred-side `nan_to_num` guards against any model overflow.
+
+**Comparison vs prior best (PR #3098 + #3296):**
+
+| Split | Prior test mae (xvn4gllg) | New test mae (1hx2rm1n) | Δ |
+|-------|---------------------------:|--------------------------:|---:|
+| single_in_dist | 109.30 | 105.93 | −3.1% |
+| geom_camber_rc | 103.19 | 90.03 | **−12.8%** |
+| geom_camber_cruise | 60.61 | 57.65 | −4.9% |
+| re_rand | 86.90 | 80.55 | −7.3% |
+| **avg** | **90.00** | **83.54** | **−7.2%** |
+
+Every test split improves; the biggest win is on `geom_camber_rc` (−12.8%), the previously hardest split.
+
+**PR #3444 (cosine T_max=14):** 1-LOC scheduler period change. The 30-min wall-clock binds at ~epoch 14, but the cosine schedule was tuned for T_max=50 → LR never decayed below 82% of peak. Setting T_max=14 lets the cosine schedule complete inside the wall-clock budget, giving the final 2-4 epochs proper fine-tuning at low LR.
+
+**Reproduce (PR #3444):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-thorfinn --epochs 50 \
+  --wandb_group round2-cosine-tmax-thorfinn \
+  --cosine_t_max 14 \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 16 --fourier_sigma 10.0 \
+  --wandb_name thorfinn-arm-B-tmax-14
+```
+
+---
+
+## PR #3098 + #3296 (prior best) — Huber + NaN guard
 
 **val_avg/mae_surf_p = 96.0548** (W&B run: `md6so639`, PR #3098 SmoothL1 β=0.05)
 **test_avg/mae_surf_p = 90.0004** (W&B run: `xvn4gllg`, PR #3296 two-pronged NaN guard on Huber)
-**val_avg from xvn4gllg = 100.75** — within ~1σ of `md6so639`'s 96.05 (σ≈4.6 from fern reruns); same configuration, run-to-run variance.
 
 | Split | val mae_surf_p (md6so639) | test mae_surf_p (xvn4gllg) |
 |-------|---------------------------|----------------------------|
 | single_in_dist | 109.64 | 109.30 |
 | geom_camber_rc | 112.30 | 103.19 |
-| geom_camber_cruise | **73.22** | **60.61** ¹ |
+| geom_camber_cruise | **73.22** | **60.61** |
 | re_rand | 89.06 | 86.90 |
-
-¹ 199/200 samples evaluated — `splits_v2/.test_geom_camber_cruise_gt/000020.pt` has 761 inf y-values, dropped from MAE accumulator. Pred-side `nan_to_num` guards against any model overflow.
 
 **PR #3098 (val):** SmoothL1 (Huber) loss with β=0.05 replacing MSE. Effect: val_avg 130.46 → 96.05 (-26.4% vs PR #3123). All 4 val splits improved.
 
-**PR #3296 (test):** Two-pronged NaN guard (pred-side `nan_to_num` + y-side sample mask) in both `evaluate_split` and the training loop, plus per-batch / split-level diagnostic logging. First valid test_avg of the launch.
-
-**Reproduce val (PR #3098):**
-```bash
-cd target/
-python train.py --agent willowpai2i48h5-alphonse --epochs 50 \
-  --wandb_group huber-surface-loss-alphonse \
-  --loss_type smooth_l1 --loss_beta 0.05 \
-  --wandb_name alphonse-arm-C-sl1-beta0.05
-```
-
-**Reproduce test (PR #3296 + Huber):**
-```bash
-cd target/
-python train.py --agent willowpai2i48h5-thorfinn --epochs 50 \
-  --wandb_group thorfinn-rebase-confirm \
-  --loss_type smooth_l1 --loss_beta 0.05 \
-  --wandb_name thorfinn-nanfix-on-huber-baseline
-```
+**PR #3296 (test):** Two-pronged NaN guard (pred-side `nan_to_num` + y-side sample mask) in both `evaluate_split` and the training loop. First valid test_avg of the launch.
 
 ---
 
-## PR #3123 (2026-05-15) — previous best
+## PR #3123 (2026-05-15) — earlier reference
 
 **val_avg/mae_surf_p = 130.46** (W&B run: `24yldhv7`)  
 **test_avg/mae_surf_p = NaN** ⚠️ — test_geom_camber_cruise split produces NaN for all runs (baseline-side bug, not introduced by this PR — tracked in follow-up NaN-fix PR)

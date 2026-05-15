@@ -344,6 +344,63 @@ Mean Arm B val_avg ≈ 149.4 (+55% vs 96.05).
 
 ---
 
+---
+
+## 2026-05-15 23:37 — PR #3444: Cosine LR T_max=14 recalibration — MERGED ✅
+
+- Branch: `willowpai2i48h5-thorfinn/round2-cosine-tmax`
+- Hypothesis: 30-min wall clock binds at ~epoch 14, but cosine schedule was set for T_max=50 → LR never decayed below 82% of peak. Setting T_max=14 lets cosine complete in-budget, giving fine-tuning at low LR for the final epochs.
+
+| Arm | W&B run | T_max | val_avg | test_avg | best_ep |
+|-----|---------|-------|---------|----------|---------|
+| A | zcjww6dy | 50 (reference) | 104.19 | 91.95 | 14 |
+| **B** | **1hx2rm1n** | **14** | **93.20** ★ | **83.54** ★ | 14 |
+| C | (aborted) | 18 | — | — | — |
+
+Arm C aborted per advisor sign-off — Arm B not under-converged.
+
+**Per-split (Arm B run `1hx2rm1n`):**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 114.80 | 105.93 |
+| geom_camber_rc | 104.16 | 90.03 |
+| geom_camber_cruise | 68.17 | **57.65** |
+| re_rand | 85.66 | 80.55 |
+| **avg** | **93.20** | **83.54** |
+
+**Test delta vs merged baseline #3296 `xvn4gllg`:** −7.2% overall (90.00 → 83.54). Biggest gain on `geom_camber_rc` (−12.8%, 103.19 → 90.03) — previously the hardest split.
+
+**Decision: MERGED** (squash commit `53105ae`, 2026-05-15 23:37 UTC).
+
+**Analysis:**
+- 1-LOC change (added `cosine_t_max` config flag). Pure scheduler-period change, no model architecture or loss change.
+- Single-mechanism result with magnitude comparable to alphonse's compound EMA stack — confirms LR schedule was the under-tuned dial.
+- Validates frieren's bf16+batch observation: the cosine LR schedule was indeed poorly calibrated against 14-epoch wall clock.
+- Mechanism orthogonal to EMA (alphonse #3379), Huber loss (#3098), NaN guard (#3296). Expected to compound: EMA + T_max=14 is the natural Round 4 experiment.
+- Thorfinn's analysis explicitly suggests "Compose with EMA / other LR-related techniques" — exactly the next assignment.
+
+---
+
+## 2026-05-15 23:25 — PR #3412: DropPath stochastic depth (CLOSED — regresses)
+
+- Branch: `willowpai2i48h5-askeladd/round2-droppath`
+- Hypothesis: DropPath provides ensemble-like regularization, expected 2-5% improvement on OOD splits.
+
+| Run | W&B run | Config | val_avg | test 3-split partial |
+|-----|---------|--------|---------|----------------------|
+| Arm B (uniform 0.1, Huber, no Fourier) | 2if2scsr | Huber only | 102.34 | 100.36 |
+| Arm C (linear 0→0.2, Huber, no Fourier) | 9sdchdtq | Huber only | 105.88 | 105.48 |
+| Arm B' (confounded by Fourier) | btbi5pzy | Huber + Fourier | 112.24 | — |
+
+**Decision: CLOSED.** All DropPath configs regress baseline by 6.5-10%. Mechanism explanation: under 14-epoch under-trained regime, every gradient signal matters; skipping entire residual branches (DropPath) starves the model of training signal it can't afford to lose.
+
+**Important sub-finding from askeladd's investigation:** the original PR body misread BASELINE.md — claimed baseline was "Huber + Fourier" when actually it was Huber only (no Fourier). Askeladd correctly rerun on the actual baseline. Their negative result stands: DropPath alone doesn't help.
+
+Per-split test (best arm B): in_dist=111.28, camber_rc=99.67, re_rand=90.14. The camber_rc result (99.67) is interestingly the only split that *slightly* improves vs baseline (100.16) — but the average is dragged down by single_in_dist regression.
+
+---
+
 <!-- Template:
 ## <YYYY-MM-DD HH:MM> — PR #<number>: <title>
 - Branch: <student-branch-name>
