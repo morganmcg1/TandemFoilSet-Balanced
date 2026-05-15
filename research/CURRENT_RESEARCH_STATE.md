@@ -1,8 +1,23 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 12:45 UTC
+- **Last updated:** 2026-05-15 14:55 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None on this launch.
+
+## Round 1 status (8 PRs in flight)
+
+| PR | Student | Hypothesis | Status | val_avg/mae_surf_p |
+|----|---------|-----------|--------|---------------------|
+| #3173 | alphonse | surf-weight-scan (25, 50) | wip | — |
+| #3176 | askeladd | pressure-channel-weight (3×, 5×) | wip | — |
+| #3181 | edward | grad-clip-huber (max_norm=1.0) | **sent back** — sweep 5.0/10.0 | 110.55 @ epoch 11 (under-converged) |
+| #3186 | fern | ema-weights | wip | — |
+| #3190 | frieren | slice-num-128 | wip | — |
+| #3196 | nezuko | hidden-256-depth6 | wip | — |
+| #3202 | tanjiro | lr-warmup-cosine | wip | — |
+| #3211 | thorfinn | per-channel-output-heads | wip | — |
+
+**Operational alert — `data/scoring.py` NaN bug.** PR #3181 found that `.test_geom_camber_cruise_gt/000020.pt` contains `inf` in the pressure channel, and the scoring code multiplies `err` by `sample_mask` AFTER computing `err`, so `inf * 0 = NaN` propagates. This NaNs out `test_avg/mae_surf_p` for every run on this branch. Needs an advisor-routed fix; for now students should report `test_avg/mae_surf_p` from the 3 clean splits.
 
 ## Current research focus
 
