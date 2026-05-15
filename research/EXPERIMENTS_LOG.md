@@ -411,3 +411,98 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - **Cost**: 1920 added params (+0.13% over 1.45M), zero per-step compute overhead (element-wise multiplication on residual).
 - **Single attributable**: insert `LayerScale(dim=192, init_value=1e-4)` on both residual branches of `TransolverBlock`. No other changes — same trunk config, EMA, surf_weight, optimizer, schedule.
 - **Diagnostic to track**: per-block `ls_attn.gamma.mean()` and `ls_mlp.gamma.mean()` over training. Cold-start hypothesis predicts late blocks (closer to readout) grow gamma first; early blocks come online later.
+
+## 2026-05-15 20:25 — PR #3378: NaN-safe `data/scoring.py` fix — MERGED (system fix)
+
+- **Student branch**: `charliepai2i24h1-thorfinn/scoring-nan-safe`
+- **Hypothesis**: Bug fix with advisor waiver. `data/scoring.py::accumulate_batch` computes `err = (pred - y).abs()` before masking, then multiplies by mask. When GT contains Inf (cruise test sample 20 has 761 Inf values in `p`), IEEE-754 `Inf × 0 = NaN` poisons the accumulator. Replace element-wise product with `torch.where(mask, err, 0)`. Mathematically identical on finite GT; never reads `err` where mask=False on Inf GT.
+- **Verdict**: MERGED. System fix that doesn't change val_avg (validation has no Inf, behavior identical). Unblocks `test_avg/mae_surf_p` finite reporting paper-wide.
+
+### Results
+
+| Metric | Value | Baseline |
+|---|---|---|
+| **val_avg/mae_surf_p (primary, best @ ep9)** | **148.4154** | 126.32 (gap is schedule effect, not fix attribution) |
+| **test_avg/mae_surf_p (NOW FINITE, 4-split)** | **136.0053** | NaN (was 3-split partial 123.43) |
+| test_geom_camber_cruise.mae_surf_p | **97.4897** | NaN (previously broken under bug) |
+| Unit test (`tests/test_scoring_nan_safe.py`) | PASS | n/a |
+| epochs realized | 9 of 12 | n/a |
+| peak_memory_gb | 63.00 | 42.11 |
+
+### Verdict commentary
+
+- **Val gap is purely schedule-effect**: 148.42 (9 ep, T_max=12) matches the schedule-truncation trajectory of every other budget-aligned wider-trunk run. Validation GT is finite, so the fix is bytewise identical there.
+- **Test reporting unblocked**: cruise term goes from NaN → 97.49 (lower than the other three splits, consistent with that being the "easier" cruise regime per `program.md`). All future PRs on this track now report 4-split finite test_avg directly from `metrics.jsonl`.
+- **Unit test catches the failure mode**: passes with NaN-safe code, fails with old code on Inf GT input.
+- **Acknowledged side note**: `train.py`'s eval-loss aggregation (separate from scoring) has the same Inf×0=NaN pattern. Doesn't affect paper-facing MAE metric. Logged for a future one-spot patch.
+- **Excellent PR discipline**: kept the change atomic (only `accumulate_batch`, no `aggregate_splits` or `finalize_split` touched), flagged the residual issue without expanding scope.
+
+## 2026-05-15 20:30 — PR #3336: Gradient norm clipping `max_norm=1.0` — SENT BACK
+
+- **Student branch**: `charliepai2i24h1-fern/grad-clip-1p0`
+- **Hypothesis**: Per-batch `clip_grad_norm_(max_norm=1.0)` would damp rare high-Re gradient spikes that drive instability in re_rand and cruise splits while leaving median batches alone. Predicted 2-5% improvement.
+- **Verdict**: SENT BACK with max_norm sweep recipe. Direction signal correct but `max_norm=1.0` was 100× too aggressive.
+
+### Results
+
+| Metric | Value | Baseline |
+|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9 of 12)** | **129.7342** | 126.32 → +2.7% |
+| **test_avg/mae_surf_p (NaN-safe clean, 4-split)** | **116.5846** | (was NaN under bug; clean 3-split=129.08) |
+| val_re_rand | 111.84 | 117.04 → **-4.4%** (improved) |
+| val_geom_camber_cruise | 95.64 | 102.20 → **-6.4%** (improved) |
+| val_geom_camber_rc | 149.45 | 127.26 → +17.4% (regressed) |
+| val_single_in_dist | 162.01 | 158.79 → +2.0% |
+| Per-epoch wallclock | ~204s | n/a |
+
+### Diagnostic punchline
+
+Per-epoch pre-clip gradient L2 norms:
+- min: 4-20, mean: 100-200, max: 600-1900
+- **clip_rate = 1.00 EVERY EPOCH** — every batch hit the clip threshold
+- `max_norm=1.0` renormalized every gradient to a unit vector; optimizer saw direction only, never magnitude
+
+### Send-back recipe
+
+- **Single arm**: `max_norm=100.0` (not a 4-way sweep). Based on observed distribution, this should clip ~5-20% of batches.
+- **Rebase** onto current advisor branch to pick up #3378 (no more eval_test_clean.py needed)
+- **Keep grad_norm logging permanently** — it's the diagnostic that made this PR valuable
+- Same recipe otherwise: budget-aligned epochs=12, T_max=12, n_hidden=192, EMA=0.999, surf_weight=25
+
+### Verdict commentary
+
+- **Direction signal is real**: re_rand and camber_cruise (high-Re spike-prone splits) improved exactly as the hypothesis predicted. The other two splits regressed due to median-batch info loss.
+- **`max_norm=1.0` is not the regime the hypothesis lives in**: clipping every batch is not "damp the spikes" — it's "kill all magnitude signal". The 100× scaling fix should isolate the spike-damping benefit.
+- **Grad-norm logging is the killer feature**: every future PR should expose `train/grad_norm_{mean,max,min,clip_rate}` per epoch. Cheap, gives mechanism-level insight on what optimization looks like.
+
+## 2026-05-15 20:35 — PR #3121: Linear warmup + cosine annealing (rebased, budget-aligned) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-alphonse/warmup-cosine-12ep`
+- **Hypothesis**: 2-epoch linear warmup from 5e-7 → 5e-4 followed by cosine annealing (T_max=10) over remaining epochs would stabilize early training and improve val_avg by 3-8% relative.
+- **Verdict**: CLOSED. val=158.75 vs baseline 126.32 = **+25.7% regression**. Schedule axis exhausted under 30-min cap.
+
+### Results
+
+| Metric | Value | Baseline |
+|---|---|---|
+| **val_avg/mae_surf_p (best @ ep9 of 12)** | **158.7495** | 126.32 → +25.7% |
+| **test_avg/mae_surf_p (NaN-safe clean, 4-split)** | **143.8544** | (was NaN under bug; clean 3-split = 123.43) |
+| val_single_in_dist | 203.45 | 158.79 → +28.1% |
+| val_geom_camber_rc | 172.78 | 127.26 → +35.8% |
+| val_geom_camber_cruise | 121.21 | 102.20 → +18.6% |
+| val_re_rand | 137.56 | 117.04 → +17.5% |
+| Realized epochs | 9 of 12 | 14 of 50 |
+| Peak memory | 62.97 GB | 42.11 GB |
+
+### Verdict commentary
+
+- **Uniform regression across splits** (17-36%) — consistent with a uniform schedule cost, not a per-split feature interaction
+- **Epoch 1 burned at lr=5e-7** (start_factor=1e-3) — 1/9 of realized budget wasted on near-zero LR
+- **Cosine never reached floor**: at epoch 9 LR was still 35% of peak (1.73e-4); the "low-lr fine-tune at end of cosine" never happened
+- **Val curve still decreasing at -10/epoch** when timeout hit — model is in rapid-improvement phase; burning an epoch on warmup is net-negative at this budget
+- **Three-way confirmation of schedule-axis exhaustion**: combined with #3273/#3298/#3144 (wider-trunk-budget wall) and #3277 (memory-bandwidth wall), schedule perturbations cannot improve val_avg in the current regime
+- **Student's analysis is correct and articulate**: "the real lever is the budget, not the schedule" — exactly right. Schedule axis goes back on the shelf until bf16+bs=8 unlocks 21-24 epochs of realized training.
+
+### Follow-up
+
+- Alphonse reassigned to a fresh non-schedule axis (not a warmup-variant; the hypothesis class itself is closed at this budget)
