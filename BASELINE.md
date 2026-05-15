@@ -3,38 +3,43 @@
 **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 **Last updated:** 2026-05-15
 
-## Current best
-
-No winners merged yet on this branch. The first reproducible baseline run was
-re-run by `willowpai2i48h2-askeladd` inside PR #3176 (the baseline-w1 reference arm).
+## Current best — PR #3186: EMA weights (fern)
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p` | **136.8873** | run `07efagec` (best @ epoch 14) |
-| `test_avg/mae_surf_p` | NaN (cruise GT contains inf — scoring.py bug) | run `07efagec` |
-| `test_avg/mae_surf_p` (3 valid splits) | 137.6945 | run `07efagec` |
+| `val_avg/mae_surf_p` | **121.6850** | run `2i7tmbir` (best @ epoch 14) |
+| `test_avg/mae_surf_p` (3 valid splits; cruise=NaN) | **118.2810** | run `2i7tmbir` |
 
 Per-split validation (best @ epoch 14):
 
-| Split | mae_surf_p |
-|---|---|
-| val_single_in_dist | 151.8490 |
-| val_geom_camber_rc | 173.9127 |
-| val_geom_camber_cruise | 101.4053 |
-| val_re_rand | 120.3820 |
+| Split | mae_surf_p | Δ vs prev baseline |
+|---|---|---|
+| val_single_in_dist | 147.552 | −2.83% |
+| val_geom_camber_rc | 137.679 | −20.83% |
+| val_geom_camber_cruise | 92.418 | −8.86% |
+| val_re_rand | 109.092 | −9.38% |
 
 Per-split test (best ckpt):
 
-| Split | mae_surf_p |
-|---|---|
-| test_single_in_dist | 136.5218 |
-| test_geom_camber_rc | 157.5912 |
-| test_geom_camber_cruise | NaN (data/scoring.py bug — `inf * 0 = NaN`) |
-| test_re_rand | 118.9706 |
+| Split | mae_surf_p | Δ vs prev baseline |
+|---|---|---|
+| test_single_in_dist | 124.921 | −8.50% |
+| test_geom_camber_rc | 121.909 | −22.64% |
+| test_geom_camber_cruise | NaN (data/scoring.py bug — `inf * 0 = NaN`) | — |
+| test_re_rand | 108.013 | −9.21% |
 
-W&B run: `07efagec` — `baseline-w1-ref`, wandb_group `pressure-channel-weight`.
+W&B runs: `2i7tmbir` (primary), `kji1tmn4`, `no0se6tm` — all three within ±0.7 of each other.
+Merged from PR #3186, student `willowpai2i48h2-fern`.
 
-## Baseline configuration
+## Current best configuration
+
+EMA (Polyak) shadow-weight averaging added on top of the baseline config:
+- `ema_decay = 0.999`; EMA model updated after every `optimizer.step()`
+- Validation, checkpoint selection, and test eval all use the **EMA shadow weights**, not the live model
+- Checkpoint (`model_path`) saves EMA `state_dict`
+- All other settings unchanged from baseline config
+
+## Baseline configuration (before EMA)
 
 - Model: Transolver — `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
 - Optimizer: AdamW — `lr=5e-4, weight_decay=1e-4`
@@ -47,7 +52,17 @@ W&B run: `07efagec` — `baseline-w1-ref`, wandb_group `pressure-channel-weight`
 ## Reproduce
 
 ```bash
-cd target/ && python train.py --wandb_name baseline --agent <student>
+cd target/ && python train.py \
+  --wandb_group ema-weights \
+  --wandb_name ema-weights \
+  --agent <student>
 ```
+
+## History
+
+| Date | PR | val_avg/mae_surf_p | Δ | Notes |
+|---|---|---|---|---|
+| 2026-05-15 (seed) | ref run `07efagec` | 136.8873 | — | askeladd baseline-w1 reference arm |
+| 2026-05-15 17:30 | #3186 fern EMA | **121.6850** | **−11.10%** | All 4 val splits improve; 3 reproducible runs |
 
 Update this file every time a PR improves on `val_avg/mae_surf_p` and is merged. Record the PR number and the new metric value with the W&B run id.
