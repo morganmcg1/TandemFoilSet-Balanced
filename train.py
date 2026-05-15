@@ -117,10 +117,18 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
-        slice_norm = slice_weights.sum(2)
+        # Keep slice_weights softmax + normalization in fp32 — bf16 softmax
+        # with the small learned temperature can produce non-finite weights
+        # on edge-case samples (PR #3129 risk note). Cast back to bf16 for
+        # the downstream einsums so SDPA stays in autocast bf16.
+        with torch.autocast(device_type="cuda", enabled=False):
+            slice_weights_fp32 = self.softmax(
+                self.in_project_slice(x_mid.float()) / self.temperature.float()
+            )
+            slice_norm = slice_weights_fp32.sum(2)
+        slice_weights = slice_weights_fp32.to(fx_mid.dtype)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
-        slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
+        slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head)).to(slice_token.dtype)
 
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
@@ -236,23 +244,39 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Sanitize: some test split ground truths (e.g. test_geom_camber_cruise
+            # sample 20 has 761 inf values in the p channel) contain non-finite y.
+            # accumulate_batch tries to skip such samples via a sample-level
+            # y_finite check, but `inf * 0 = NaN` defeats its mask multiplication
+            # and poisons the per-channel sum. Pre-mask bad samples here and
+            # zero out their y so neither the val-loss nor the accumulator inherits
+            # non-finite contributions.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            mask = mask & y_finite_per_sample.unsqueeze(-1)
+            y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+                sq_err = (pred - y_norm) ** 2
+                vol_mask = mask & ~is_surface
+                surf_mask = mask & is_surface
+                vol_loss_val = (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                )
+                surf_loss_val = (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                )
+            vol_loss_sum += vol_loss_val.float().item()
+            surf_loss_sum += surf_loss_val.float().item()
             n_batches += 1
 
+            pred = pred.float()
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
@@ -443,14 +467,15 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
