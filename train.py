@@ -217,7 +217,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, ch_weights=None) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -241,15 +241,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            if ch_weights is not None:
+                sq_err_w = sq_err * ch_weights[None, None, :]
+            else:
+                sq_err_w = sq_err
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
+                (sq_err_w * vol_mask.unsqueeze(-1)).sum()
+                / (vol_mask.sum().clamp(min=1) * 3)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
+                (sq_err_w * surf_mask.unsqueeze(-1)).sum()
+                / (surf_mask.sum().clamp(min=1) * 3)
             ).item()
             n_batches += 1
 
@@ -358,6 +362,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    w_Ux: float = 1.0
+    w_Uy: float = 1.0
+    w_p: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -425,6 +432,11 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+ch_weights_raw = torch.tensor([cfg.w_Ux, cfg.w_Uy, cfg.w_p], device=device)
+ch_weights = ch_weights_raw * (3.0 / ch_weights_raw.sum())
+print(f"Channel weights (raw): Ux={cfg.w_Ux} Uy={cfg.w_Uy} p={cfg.w_p}")
+print(f"Channel weights (normalized to sum=3): {ch_weights.tolist()}")
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -446,10 +458,12 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
 
+        sq_err_w = sq_err * ch_weights[None, None, :]
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (sq_err_w * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum().clamp(min=1) * 3)
+        surf_loss = (sq_err_w * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum().clamp(min=1) * 3)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -467,7 +481,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, ch_weights)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -525,7 +539,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, ch_weights)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
