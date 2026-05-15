@@ -267,3 +267,78 @@ Test (3 splits): (120.577 + 106.550 + 98.577) / 3 = **108.568** vs EMA test 118.
 
 Edward was nudged to post a terminal SENPAI-RESULT once arm b6t3344j finishes. Pending formal submission of #3181.
 
+---
+
+## 2026-05-15 18:30 — edward #3181 arm b6t3344j FINISHED — new strongest pre-EMA result
+
+| run | grad_clip | huber_delta | val_avg | best_val_avg | Δ vs EMA baseline 121.685 |
+|---|---|---|---|---|---|
+| `b6t3344j` | 5.0 | 1.0 | 110.28 (last) | **106.7216** | **−12.3%** |
+| `36gcpryh` | 5.0 | 1.0 | 109.449 | 109.449 | −10.1% |
+| `ik82u6qo` | 5.0 | 1.0 | 114.380 | 114.380 | −6.2% |
+
+Three-run reproducibility on the clip=5 + Huber=1 config: 106.72, 109.45, 114.38 (mean 110.18, std 3.16). All beat EMA baseline by 5–12%.
+
+Test (b6t3344j, 3-split): test_single=117.34, test_rc=106.12, test_re=94.12 → mean **105.86** (cruise=NaN data bug).
+
+Edward re-nudged at 18:30 to post terminal SENPAI-RESULT with b6t3344j as primary. This run is on pre-EMA codebase, so PR #3366 (fern, EMA + grad_clip + Huber stack) could compound further below 106.
+
+---
+
+## 2026-05-15 18:30 — askeladd #3176 (pressure-channel-weight retry) — CLOSED
+
+| run | p_surf_weight | val_avg/mae_surf_p | Δ vs EMA baseline 121.685 |
+|---|---|---|---|
+| `e5jk8n98` | 1.5 | 131.6828 | +8.21% |
+| `2umfqqij` | 2.0 | 132.5725 | +8.94% |
+| `g0n1r7pq` | 3.0 | 134.6330 | +10.64% |
+| `8pizb0t7` | 5.0 | 165.2153 | +35.78% |
+
+Monotonic degradation with weight — best (w=1.5) still +8% above EMA baseline. Test 3-split mean for w=1.5 = 130.11 (also +10% above EMA test baseline 118.28).
+
+Closed as dead-end. Pattern (single-split RC-camber win at cost of in-dist regression) is now confirmed across three loss-redirection hypotheses (PR #3173 surf_weight=50, PR #3211 per_channel_heads, PR #3176 pressure_channel_weight). The loss-redirection family does not beat EMA's globally smoothing approach.
+
+Askeladd will be reassigned a fresh hypothesis (TBD — likely H-04 dropout, H-02 weight-decay, or asinh-pressure output normalization).
+
+---
+
+## 2026-05-15 18:30 — tanjiro #3202 arm 3kervu49 (budget-aware warmup) — BEATS BASELINE
+
+| run | warmup_epochs | cosine_t_max | sf | val_avg/mae_surf_p | Δ vs EMA baseline 121.685 |
+|---|---|---|---|---|---|
+| `3kervu49` | 3 | 9 | 0.1 | **119.7996** | **−1.55%** |
+| `dhtoffp3` | 5 | (T_max=50) | 0.01 | 137.498 | +13.0% |
+| `dqpeoznv` | 2 | (T_max=50) | 0.01 | 132.130 (best) | +8.6% |
+| `kg5wb8av` | 5 | (T_max=50) | 0.01 | 149.845 | +23.1% |
+| `dyi1encx` | 2 | — | 0.01 | CRASHED at 219.6 | — |
+
+Per-split for `3kervu49`:
+
+| Split | val | test |
+|---|---|---|
+| single_in_dist | 142.70 | 128.70 |
+| geom_camber_rc | 131.99 | 119.24 |
+| geom_camber_cruise | 92.73 | NaN (data bug) |
+| re_rand | 111.78 | 110.60 |
+| **avg** | **119.7996** | **119.5145** |
+
+**Key technical finding:** The configuration that worked is **T_max=9 aligned to realized epoch count**, NOT T_max=50. With T_max=50 the cosine never decays in the 14-epoch budget; with T_max=9 the LR fully decays and the model converges to a better minimum. This validates one of nezuko's Round-2 assignments (PR #3369 cosine-tmax-align).
+
+Branch state check: tanjiro's branch does NOT contain the EMA merge (PR #3186). So this −1.55% gain is from the schedule reformulation alone, on the *pre-EMA* code path. The combination (EMA + tmax-aligned cosine + warmup) is currently in flight as nezuko's PR #3369.
+
+Tanjiro nudged at 18:30 to post terminal SENPAI-RESULT for `3kervu49`. Mergeable subject to terminal submission and edward's stronger result not landing first.
+
+---
+
+## 2026-05-15 18:30 — Round-2 assignments: PR #3388 (frieren, SWA)
+
+Frieren was idle after PR #3190 closure. Assigned H-01 `swa-plateau-average` from `RESEARCH_IDEAS_2026-05-15_17:40.md`:
+- Add `torch.optim.swa_utils.AveragedModel` + `SWALR` ALONGSIDE existing EMA
+- `swa_start_epoch=6`, `swa_lr=1e-4`, `anneal_epochs=2` (cosine anneal)
+- Track BOTH EMA and SWA at each epoch; checkpoint the better
+- Mechanism orthogonal to EMA: EMA = exponentially-weighted centroid; SWA = uniform snapshot average
+
+Expected: 1–10% gain over EMA baseline if SWA finds flatter minima. No regression risk since better-of-two is always chosen.
+
+Round-2 status now: 5 PRs in flight on EMA stack (#3366 fern, #3367 alphonse, #3368 thorfinn, #3369 nezuko, #3388 frieren) + 2 PRs awaiting terminal result (#3181 edward, #3202 tanjiro) + 1 student idle (askeladd, just freed by #3176 close).
+
