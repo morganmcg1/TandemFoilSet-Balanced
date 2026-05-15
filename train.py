@@ -433,7 +433,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-    optimizer, T_0=5, T_mult=2, eta_min=1e-6
+    optimizer, T_0=3, T_mult=2, eta_min=1e-6
 )
 
 run = wandb.init(
