@@ -162,3 +162,108 @@ Retry assignment: sweep `max_norm` ∈ {5.0, 10.0} with Huber δ=1.0. Same wandb
 
 - **`data/scoring.py` NaN propagation bug.** Sample `.test_geom_camber_cruise_gt/000020.pt` contains `inf` in the pressure channel. The current code computes `err = (pred - y).abs()` (which becomes `inf`) and THEN multiplies by `sample_mask`, but IEEE-754 `inf * 0 = NaN`, so the NaN propagates into the accumulator. Affects `test_avg/mae_surf_p` for any run on this branch.
   Fix: zero out non-finite-y samples in `err` before the mask multiply. Not addressed in this PR (data/scoring.py is read-only for students); needs a separate advisor-routed fix.
+
+## 2026-05-15 17:30 — PR #3186: EMA weights (fern) — MERGED
+
+- Branch: `willowpai2i48h2-fern/ema-weights`
+- Hypothesis: EMA (Polyak) shadow-weight averaging with decay=0.999 — validate EMA shadow weights each epoch; save EMA weights as checkpoint.
+
+| run | val_avg/mae_surf_p | Δ vs baseline 136.887 |
+|---|---|---|
+| `2i7tmbir` (primary) | **121.685** | **−11.10%** |
+| `kji1tmn4` | 122.638 | −10.41% |
+| `no0se6tm` | 123.131 | −10.06% |
+
+Per-split val (primary run `2i7tmbir` vs baseline `07efagec`):
+
+| Split | EMA | baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 147.552 | 151.849 | **−2.83%** |
+| val_geom_camber_rc | 137.679 | 173.913 | **−20.83%** |
+| val_geom_camber_cruise | 92.418 | 101.405 | **−8.86%** |
+| val_re_rand | 109.092 | 120.382 | **−9.38%** |
+| **val_avg** | **121.685** | **136.887** | **−11.10%** |
+
+Per-split test (3 clean splits; cruise=NaN fleet-wide):
+
+| Split | EMA | baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 124.921 | 136.522 | **−8.50%** |
+| test_geom_camber_rc | 121.909 | 157.591 | **−22.64%** |
+| test_re_rand | 108.013 | 118.971 | **−9.21%** |
+| **test_avg (3 splits)** | **118.281** | **137.694** | **−14.10%** |
+
+**Analysis:** The strongest result of Round 1. All 4 val splits and all 3 clean test splits improve. The mechanism (trajectory averaging over the late cosine-LR oscillation) generalizes across ALL distribution shifts — unlike the "redirect loss" approaches which only win on val_geom_camber_rc at the expense of in-dist. Three independent reproducibility runs cluster within ±0.7 MAE (~0.6%) confirming the result is not seed luck.
+
+**Decision: MERGED.** New baseline val_avg=121.685, test_avg=118.281. BASELINE.md updated.
+
+---
+
+## 2026-05-15 17:35 — PR #3211: Per-channel output heads (thorfinn) — CLOSED
+
+- Branch: `willowpai2i48h2-thorfinn/per-channel-output-heads`
+- Hypothesis: Separate linear projection heads for velocity (Ux/Uy) and pressure (p) channels
+
+Best result: val_avg=133.701 (run `x3h1o3id`, confirmed by `2676t1tz`=133.824). Confirmed reproducible by two clean runs after identifying GPU contention as cause of the observed variance.
+
+**Against new EMA baseline (121.685): +9.9% regression. Closed.** The direction (−2.3% on old baseline) was real and reproducible, but the same single-split-carries pattern as the other loss-redirect hypotheses: RC-camber wins (−15.8%) at the cost of in-dist regression (+8.6%). With EMA now in baseline, per-channel heads no longer offer a net gain.
+
+**Follow-up assigned:** PR #3368 — EMA + per-channel heads combination.
+
+---
+
+## 2026-05-15 17:35 — PR #3173: Surface weight scan (alphonse) — CLOSED
+
+- Branch: `willowpai2i48h2-alphonse/surf-weight-scan`
+- Hypothesis: Increase surf_weight from 10 to 25 or 50 to improve surface MAE
+
+Best result: val_avg=130.294 (run `mdkp6avx`, surf_weight=50). Against new EMA baseline (121.685): +7.1% regression. Closed.
+
+**The structural pattern confirmed again:** w=50 wins strongly on val_geom_camber_rc (−21.4%) while regressing on val_single_in_dist (+11.4%). This pattern (redirect-to-surface → OOD-camber gain / in-dist regression) appeared in #3173, #3176, and #3211 — it is structural, not noise.
+
+**Follow-up assigned:** PR #3367 — EMA decay scan (0.9995, 0.9999).
+
+---
+
+## 2026-05-15 17:35 — PR #3196: Scale model n_hidden=256, n_layers=6 (nezuko) — CLOSED
+
+- Branch: `willowpai2i48h2-nezuko/hidden-256-depth6`
+- Hypothesis: Larger Transolver (n_hidden=128→256, n_layers=5→6, n_head=4→8) for more capacity
+
+Best result: val_avg=152.480 (run `8mb6sqt8`, bs=2). All 4 splits regress. Against new EMA baseline (121.685): +25.3%.
+
+**Analysis:** Clear dead-end at this budget. The scaled model requires bs=2 to fit 96 GB VRAM (peak ~90 GB), which doubles iteration time per epoch. Only 6–7 epochs complete in 30 min vs 14 for baseline. The cosine schedule barely decays; the model never reaches low-LR convergence. Three early crashes at bs=4 further confirm OOM instability.
+
+**Lesson for future capacity experiments:** scaling up without a longer budget (≥2× T_min) always under-converges at fixed 30-min cap. If attempted again, pair with explicit budget increase (or use a smaller intermediate scaling, e.g. n_hidden=192, n_layers=5).
+
+**Follow-up assigned:** PR #3369 — cosine T_max alignment.
+
+---
+
+## 2026-05-15 17:40 — edward #3181 retry W&B surfacing (grad_clip=5 + Huber)
+
+Running arms since the send-back instruction at 14:53:
+
+| run | grad_clip | huber_delta | val_avg/mae_surf_p | Δ vs EMA baseline 121.685 |
+|---|---|---|---|---|
+| `36gcpryh` | 5.0 | 1.0 | **109.449** | **−10.1%** |
+| `ik82u6qo` | 5.0 | 1.0 | 114.380 | −6.2% |
+| `p9iio40u` | 1.0 | 1.0 | 113.101 | −7.0% |
+| `b6t3344j` | 5.0 | 1.0 | running (~118.78 current) | — |
+
+Per-split for best run `36gcpryh` vs EMA baseline:
+
+| Split | 36gcpryh | EMA baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 132.278 | 147.552 | **−10.4%** |
+| val_geom_camber_rc | 118.018 | 137.679 | **−14.3%** |
+| val_geom_camber_cruise | 82.744 | 92.418 | **−10.5%** |
+| val_re_rand | 104.754 | 109.092 | **−4.0%** |
+| **val_avg** | **109.449** | **121.685** | **−10.1%** |
+
+Test (3 splits): (120.577 + 106.550 + 98.577) / 3 = **108.568** vs EMA test 118.281 (−8.2%).
+
+**Critical finding:** grad_clip=5 + Huber WITHOUT EMA already beats the EMA baseline. Once combined with EMA (PR #3366 assigned to fern), the stack has high potential to push val_avg below ~108.
+
+Edward was nudged to post a terminal SENPAI-RESULT once arm b6t3344j finishes. Pending formal submission of #3181.
+
