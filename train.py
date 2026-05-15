@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -383,6 +384,13 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     )
 
 
+def update_ema(model: nn.Module, ema_model: nn.Module, decay: float) -> None:
+    """In-place EMA update: ema = decay * ema + (1-decay) * model."""
+    with torch.no_grad():
+        for param, ema_param in zip(model.parameters(), ema_model.parameters()):
+            ema_param.data.mul_(decay).add_(param.data, alpha=1.0 - decay)
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -399,6 +407,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
+    ema_decay: float = 0.999   # EMA decay for shadow weights; 0 disables EMA
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -449,6 +458,17 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+use_ema = cfg.ema_decay > 0.0
+if use_ema:
+    ema_model = copy.deepcopy(model)
+    ema_model.eval()
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    print(f"EMA: shadow copy created, decay={cfg.ema_decay}")
+else:
+    ema_model = None
+eval_model = ema_model if use_ema else model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
@@ -507,6 +527,8 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if use_ema:
+            update_ema(model, ema_model, cfg.ema_decay)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -518,8 +540,10 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    if use_ema:
+        ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -534,7 +558,10 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        ckpt = {"model_state_dict": model.state_dict()}
+        if use_ema:
+            ckpt["ema_state_dict"] = ema_model.state_dict()
+        torch.save(ckpt, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -564,8 +591,12 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
+    if use_ema:
+        ema_model.load_state_dict(ckpt["ema_state_dict"])
+        ema_model.eval()
 
     test_metrics = None
     test_avg = None
@@ -577,7 +608,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
