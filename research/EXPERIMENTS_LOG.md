@@ -160,3 +160,38 @@ Same NaN-poisoning blocker as #3257 and #3262 — `test_avg/mae_surf_p = NaN` (4
 - **Run-to-run variance is large (~13pt on val_avg).** Edward's vanilla baseline `17fia1vd` reported 128.34, fern's vanilla baseline `nylo2tvd` reported 141.94 — same code, same config, ~9–13pt gap. This is purely stochastic; with median grad norm ~56 and peaks >1000, an unclipped baseline naturally lands in different local minima per run. A consequence: **a "win" of <10% may be partial regression-to-the-mean** from a bad-luck baseline draw. The clip1.0-wu5 win at 115.73 beats *either* baseline by 9.8–18.5%, so the gain is real.
 - **#3258 and #3262 produce nearly identical val_avg (115.73 vs 115.78).** When both reruns land cleanly, we should test whether grad-clip+warmup and RFF compound or are redundant. Merge fern first (foundational training fix), then re-evaluate edward's RFF on the new baseline.
 - **R2 follow-up queue (from fern's diagnostics):** (1) investigate gradient-norm sources (PhysicsAttention softmax temperature 0.5, surf_weight=10); (2) longer warmup (10 epochs) + lower clip (0.5); (3) log post-clip grad_norm and clip ratio.
+
+## 2026-05-15 18:25 — PR #3257 (MERGED): Surface MAE loss + p-weight 3× — rerun with canonical NaN guard
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/surf-mae-p-weight`
+- **Hypothesis:** Switch surface loss from MSE to MAE with per-channel weight [1, 1, 3] on (Ux, Uy, p). Volume loss stays MSE. Frieren also independently traced and fixed the cruise-NaN root cause (commit `34600cf`).
+- **W&B run:** `szru1ogx` (https://wandb.ai/wandb-applied-ai-team/senpai-v1/runs/szru1ogx)
+
+### Result (best checkpoint at epoch 13/14; 30-min timeout cap)
+
+| Split | val mae_surf_p | test mae_surf_p | n_skipped_y_samples |
+|-------|---------------:|----------------:|--------------------:|
+| `single_in_dist`       | 124.31 | 122.34 | 0 |
+| `geom_camber_rc`       | 131.21 | 106.31 | 0 |
+| `geom_camber_cruise`   |  78.23 |  62.47 | 1 |
+| `re_rand`              |  92.92 |  86.28 | 0 |
+| **avg (4-split)**      | **106.67** | **94.35** | — |
+
+Beats prior baseline `xfayvdk2` (val_avg=117.89, test_avg=106.23) by **−9.5% val / −11.2% test**.
+
+### Decision: MERGED as R1 winner #1 (commit `a059a65`)
+
+Per CLAUDE.md, this beats the baseline on the primary ranking metric (`test_avg/mae_surf_p`) with a finite 4-split mean and a terminal SENPAI-RESULT marker. New BASELINE.md anchor.
+
+### Analysis
+
+- **The cruise split swung the most.** Test cruise = 62.47 (vs prior 78.72, −20.6%). This is the split where pressure dynamic range is largest relative to other test splits, so the p-weight=3 had the biggest leverage exactly where MAE-vs-MSE matters most.
+- **Per-split shape mirrors the hypothesis.** Frieren predicted cruise/re_rand would lead the gain on val, and they did on test too (cruise leads at −20.6%, re_rand at −18.6% vs prior baseline). Single_in_dist gained least (−3.4%), consistent with MAE-on-p being most valuable where the p distribution is heavy-tailed.
+- **Canonical NaN guard works as designed.** `n_skipped_y_samples=1` on cruise, 0 everywhere else — confirms exactly one bad-GT sample (`000020.pt`) is skipped and the masking is precise.
+- **Cosine T_max=50 mismatch is still unaddressed for this run.** Frieren's run uses the same cosine schedule the rest of R1 used (T_max=50 nominal, ~14 epochs actual). Implicit under-annealing across the board — alphonse's #3358 will address.
+- **Run-to-run variance still applies.** Frieren's win margin vs the alphonse baseline (also NaN-guarded) is ~11pt val / ~12pt test. Edward's and fern's unclipped baselines were 128/142 on val — frieren's improvement is robust against any of these reference points.
+
+### Two PRs sent back due to base change (rebase required)
+
+- **#3258 (fern, grad-clip+warmup)** — already reran with the corrected NaN guard, returned `val_avg=117.31, test_avg=105.70` on the OLD MSE base. Beats the old baseline by 0.5% on test_avg but regresses against the new merged baseline by 12%. Sent back for rebase onto frieren's loss + rerun. Mechanism (clipping median-56 gradients with peak >1000) is orthogonal to loss reformulation, so should compose.
+- **#3262 (edward, RFF σ=1.0)** — never got to corrected-patch rerun before frieren merged. Posted note: rebase onto new base + apply NaN guard + rerun RFF σ=1.0 (skip σ=4.0 which already lost).
