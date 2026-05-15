@@ -62,6 +62,18 @@ ACTIVATION = {
 }
 
 
+def fourier_position_features(coords: torch.Tensor, n_freqs: int = 8) -> torch.Tensor:
+    """NeRF-style Fourier features for spatial coordinates.
+
+    Lifts (x, z) into a 4*n_freqs-dim sinusoidal feature space at geometric
+    frequencies 2^0..2^(n_freqs-1) * pi, applying sin and cos to each scaled
+    coordinate.
+    """
+    freqs = (2.0 ** torch.arange(n_freqs, dtype=coords.dtype, device=coords.device)) * torch.pi
+    scaled = coords.unsqueeze(-1) * freqs
+    return torch.cat([scaled.sin(), scaled.cos()], dim=-1).flatten(-2)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -237,6 +249,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_fourier = fourier_position_features(x_norm[..., :2], n_freqs=_FOURIER_FREQS)
+            x_norm = torch.cat([x_norm, x_fourier], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -414,14 +428,17 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+_FOURIER_FREQS = 8
+_FOURIER_DIM = 4 * _FOURIER_FREQS  # = 32
+
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + _FOURIER_DIM,  # 22 + 32 = 54
     out_dim=3,
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=96,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -485,6 +502,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_fourier = fourier_position_features(x_norm[..., :2], n_freqs=_FOURIER_FREQS)
+        x_norm = torch.cat([x_norm, x_fourier], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
