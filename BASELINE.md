@@ -2,10 +2,46 @@
 
 ## Current Best
 
-**PR #3408 — H19: FiLM + Huber δ=0.5 + T_max=15 triple compound (nezuko)**
+**PR #3450 — H25: Per-channel Huber δ_vel=1.0, δ_p=0.25 on H19 stack (askeladd)**
 Merged 2026-05-15. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **75.7713** | PR #3450 Arm B |
+| val_single_in_dist/mae_surf_p | 86.5482 | PR #3450 Arm B |
+| val_geom_camber_rc/mae_surf_p | 87.4861 | PR #3450 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 55.2883 | PR #3450 Arm B |
+| val_re_rand/mae_surf_p | 73.7625 | PR #3450 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3450 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **73.0704** | PR #3450 Arm B |
+| test_single_in_dist/mae_surf_p | 74.5330 | PR #3450 Arm B |
+| test_geom_camber_rc/mae_surf_p | 78.8537 | PR #3450 Arm B |
+| test_re_rand/mae_surf_p | 65.8246 | PR #3450 Arm B |
+
+**Configuration:** FiLM cond_dim=11 (default) + per-channel Huber δ_vel=1.0, δ_p=0.25 + CosineAnnealingLR T_max=15 (default).
+
+**Why per-channel Huber works:** Pressure has heavier tails at high-Re — clamping extremes aggressively (δ_p=0.25) prevents pressure outliers from dominating optimization. Velocities are better treated near-MSE (δ_vel=1.0) because their distribution is more Gaussian. Decoupling the clipping thresholds per output channel yields a 9.6% improvement in val_avg over the uniform-Huber H19 baseline.
+
+**Note on Arm A (δ_vel=0.5, δ_p=0.25):** val_avg=78.2286 — also beats H19, but Arm B (δ_vel=1.0) is the winner.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT; `test_avg/mae_surf_p = NaN` for all PRs. File is read-only.
+
+**Artifacts:** `models/model-charliepai2i48h3-askeladd-h25-perchan-huber-vel10-p025-h19-20260515-222431/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h25-perchan-huber-vel10-p025-h19 --agent <student> \
+  --huber_delta_vel 1.0 --huber_delta_p 0.25
+# FiLM cond_dim=11 and CosineAnnealingLR T_max=15 are now the merged defaults
+```
+
+## Previous Best (overridden by #3450)
+
+**PR #3408 — H19: FiLM + Huber δ=0.5 + T_max=15 triple compound (nezuko)**
+Merged 2026-05-15. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -22,21 +58,9 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 
 **Configuration:** FiLM cond_dim=11 (default on) + Huber δ=0.5 + T_max=15 (default). FiLM was ON during this run.
 
-**Why triple stacking works:** FiLM conditions the model on Re/AoA, reducing cross-regime variance. Huber δ=0.5 clips extreme gradient contributions from high-Re samples. T_max=15 ensures LR fully anneals within the ~14-epoch timeout window, enabling stable Huber-regime refinement. All three improvements compound multiplicatively.
-
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT; `test_avg/mae_surf_p = NaN` for all PRs. File is read-only.
-
 **Artifacts:** `models/model-h19-film-huber-tmax15-triple-20260515-193153/`
 
-**Reproduce:**
-```bash
-cd target/ && python train.py --epochs 50 \
-  --experiment_name h19-film-huber-tmax15-triple --agent <student> \
-  --huber_delta 0.5
-# FiLM cond_dim=11 and CosineAnnealingLR T_max=15 are now the merged defaults
-```
-
-## Previous Best (overridden by #3408)
+## Previous Bests (overridden by #3408)
 
 **PR #3335 — H15: Huber δ=0.5 + T_max=15 compound (nezuko)**
 Merged 2026-05-15. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
@@ -60,6 +84,7 @@ Merged 2026-05-15. 14 epochs completed (30-min timeout cap; LR fully annealed �
 
 | PR | Experiment | val_avg/mae_surf_p | Status |
 |----|------------|--------------------|--------|
+| #3408 | H19: FiLM+Huber δ=0.5+T_max=15 triple compound (nezuko) | 83.8136 | Merged 2026-05-15, overridden by #3450 |
 | #3335 | H15: Huber δ=0.5 + T_max=15, no FiLM (nezuko) | 94.6764 | Merged 2026-05-15, overridden by #3408 |
 | #3160 | H4: Huber loss δ=0.5, no FiLM (fern) | 112.8406 | Merged 2026-05-15, overridden |
 | #3166 | H7: FiLM Re/AoA conditioning (nezuko) | 114.6268 | Merged 2026-05-15, overridden |
@@ -111,4 +136,5 @@ cd target/ && python train.py --epochs 50 --experiment_name baseline --agent <st
 | R2 | #3342 | H2b: EMA decay=0.999 (edward) | — | — | WIP |
 | R2 | #3343 | H17: Per-channel Huber (fern) | — | — | WIP |
 | R2 | #3349 | H18: Grad clip=1.0, no warmup (frieren) | — | — | WIP |
-| R3 | #3408 | H19: FiLM+Huber+T_max=15 triple compound (nezuko) | **83.8136** | **80.2415** (3-split) | **MERGED — NEW BEST** |
+| R3 | #3408 | H19: FiLM+Huber+T_max=15 triple compound (nezuko) | **83.8136** | **80.2415** (3-split) | **MERGED — overridden by #3450** |
+| R3 | #3450 | H25: Per-channel Huber δ_vel=1.0/δ_p=0.25 on H19 (askeladd) | **75.7713** | **73.0704** (3-split) | **MERGED — NEW BEST** |
