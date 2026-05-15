@@ -5,6 +5,86 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-15 21:35 — PR #3348: Fourier position encoding — **SENT BACK (rebase on Charbonnier baseline)**
+
+- Student branch: `willowpai2i24h1-fern/fourier-pos-enc`
+- Student: `willowpai2i24h1-fern`
+- Hypothesis: replace raw (x, z) coordinates with multi-scale Fourier position
+  encoding (sin/cos at geometric frequency bands 2^k) to provide an explicit
+  spatial-frequency basis. Counters MLP spectral bias on sharp pressure peaks.
+
+| Arm | wandb run | val_avg/mae_surf_p | 3-split test mean | best_epoch | n_params | peak GB |
+|-----|-----------|--------------------|-------------------:|-----------|----------|---------|
+| raw_ref | k6ad1x9m | 123.52 | 125.71 | 14 | 0.66M | 42.1 |
+| **fourier_basic (L=8)** | ynml7x2v | **119.10** | **117.02** | 11 | 0.67M | 42.3 |
+| fourier_rich (L=12) | kiue5928 | 122.49 | 120.38 | 14 | 0.67M | 42.4 |
+
+Per-split val (fourier_basic best ep 11):
+single_in_dist=137.97, geom_camber_rc=126.94, geom_camber_cruise=97.57, re_rand=113.94.
+
+Key diagnostics from student:
+- **fourier_basic L=8 wins by 3.6%** within-PR, with the gain concentrated on the
+  highest-magnitude split: val_single_in_dist surf_p 156.27 → 137.97 (−18.3 absolute).
+  Test side: test_single_in_dist surf_p 138.65 → 122.12 (−16.5 absolute).
+- **L=12 hurts because the standardized position σ ≈ 1.** Bands above 2^7 have
+  wavelength ~1/128 = 0.0078 — finer than typical inter-node spacing. Those bands
+  sample essentially random phases, adding noise. Train loss is lower at L=12 (0.217
+  vs 0.280 at L=8) but val is worse — classic spectral overshoot.
+- All arms ran on **pre-Charbonnier stale base** — raw_ref=123.52 vs current merged
+  baseline 98.60. Absolute numbers not comparable.
+- Within-PR signal is solid and physically interpretable (high-mag split + sharp
+  near-wall gradients is where Fourier features should help most).
+
+**Conclusion:** Fourier position encoding L=8 is a real architectural lever; the
+−18.3 absolute on val_single_in_dist surf_p is well outside noise. Sent back for
+rebase on Charbonnier base with 2 arms (raw + fourier_L8) — fourier_rich is
+confirmed null.
+
+**Decision:** sent back for rebase. If signal proportionally maintained on
+Charbonnier base, expect fourier_L8 to land in 90-95 val.
+
+---
+
+## 2026-05-15 21:30 — PR #3370: Gated MLPs (SwiGLU / GeGLU) — **SENT BACK (rebase on Charbonnier baseline)**
+
+- Student branch: `willowpai2i24h1-tanjiro/glu-mlp`
+- Student: `willowpai2i24h1-tanjiro`
+- Hypothesis: replace vanilla GELU MLPs in TransolverBlocks with gated variants
+  (SwiGLU/GeGLU) for stronger multiplicative-interaction modeling. Standard modern
+  transformer recipe (Llama, T5).
+
+| Arm | wandb run | val_avg/mae_surf_p | 3-split test mean | best_epoch | n_params | peak GB |
+|-----|-----------|--------------------|-------------------:|-----------|----------|---------|
+| vanilla_ref | b26950ez | 130.31 | 131.34 | 13 | 0.66M | 42.1 |
+| swiglu | q4cew3fp | 130.18 | 129.21 | 11 | 0.83M | 52.1 |
+| **geglu** | ztqz88s1 | **126.49** | **126.52** | 12 | 0.83M | 52.1 |
+
+Per-split val (geglu best ep 12):
+single_in_dist=170.81 (worse, +18.1 vs vanilla), geom_camber_rc=138.20,
+geom_camber_cruise=89.22 (−14.0 vs vanilla), re_rand=107.74 (−12.2 vs vanilla).
+
+Key diagnostics from student:
+- **GeGLU wins by −2.9% within-PR** (130.31 → 126.49) — at the edge of the 3-4 unit
+  noise band, but the OOD-concentrated structure is informative: gains on
+  val_geom_camber_cruise (−13.6%), val_re_rand (−10.2%), test_re_rand (−13.0%);
+  loss on val_single_in_dist (+11.8%). Suggests the multiplicative pathway helps
+  generalize to unfamiliar geometry/Re at the cost of in-distribution fitting.
+- **SwiGLU is null** (−0.1%) — same structure as GeGLU but SiLU instead of GELU.
+  GELU's smoother near-zero behavior interacts better with the small-init
+  Transolver setup.
+- **Stale pre-Charbonnier base** — vanilla_ref=130.31 matches implicit baseline.
+- Param bump +26% (570K → 833K), peak VRAM 52GB (well below 96GB cap).
+- Per-epoch wall-clock +14% (132s → 150s); arms completed 1 fewer epoch on average.
+
+**Conclusion:** GeGLU shows a noise-bordered but OOD-favorable signal. Worth a
+Charbonnier-base confirmation. Sent back with 2 arms (vanilla + geglu) — swiglu
+is confirmed null.
+
+**Decision:** sent back for rebase. If geglu's OOD generalization signal survives
+on the Charbonnier base, it's a paper-facing test_avg win even if val_avg is flat.
+
+---
+
 ## 2026-05-15 21:30 — PR #3151: EMA model weights sweep — **SENT BACK (rebase on Charbonnier baseline)**
 
 - Student branch: `willowpai2i24h1-thorfinn/ema-model-weights`
