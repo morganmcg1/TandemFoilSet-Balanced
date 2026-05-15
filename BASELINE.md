@@ -87,3 +87,57 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4, CosineAnnealingLR(T_max=epochs)
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-15 17:40 — PR #3290: bf16 AMP mixed precision — unlock ~1.5x more epochs in 30-min budget
+
+**New best `val_avg/mae_surf_p`: 101.519** (was: 111.531 Huber baseline — **−8.98%**)
+
+- **AMP:** `torch.autocast(device_type='cuda', dtype=torch.bfloat16)` wrapping forward+loss; no GradScaler
+- **Best epoch:** 16 / 19 run (30-min budget, 50-epoch cap; 5 more epochs than fp32)
+- **Throughput:** 131.8 → 98.0 sec/epoch (1.345×); peak VRAM 42.1 → 32.9 GB (−21.8%)
+- **Model:** 5-layer Transolver, `n_hidden=128`, `n_head=4`, `slice_num=64` (unchanged)
+- **Optimizer:** AdamW lr=5e-4 wd=1e-4, batch_size=4, CosineAnnealingLR T_max=50 (unchanged)
+
+### Val surface pressure MAE (lower is better)
+
+| Split | Huber (PR #3094) | **Best (bf16)** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 141.566 | **116.096** | −18.0% |
+| `val_geom_camber_rc`     | 116.797 | **116.636** |  −0.1% |
+| `val_geom_camber_cruise` |  86.222 |  **76.479** | −11.3% |
+| `val_re_rand`            | 101.539 |  **96.863** |  −4.6% |
+| **val_avg**              | **111.531** | **101.519** | **−8.98%** |
+
+### Test surface pressure MAE (3 finite splits; `test_geom_camber_cruise` is NaN — pre-existing scoring bug)
+
+| Split | Huber (PR #3094) | **Best (bf16)** |
+|---|---:|---:|
+| `test_single_in_dist`     | 130.147 | **101.200** |
+| `test_geom_camber_rc`     | 106.293 | **106.199** |
+| `test_re_rand`            | 100.996 |  **88.806** |
+| **avg (3 splits)**        | **112.479** | **98.735** |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-askeladd-amp-bf16-20260515-162617/metrics.jsonl`
+- `models/model-charliepai2i48h4-askeladd-amp-bf16-20260515-162617/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd target/
+python train.py --experiment_name amp-bf16 --amp_dtype bf16
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss (in train.py, replace sq_err computation):
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16  (torch.autocast on forward+loss, no GradScaler)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4, CosineAnnealingLR(T_max=epochs)
+# surf_weight=10
+```
