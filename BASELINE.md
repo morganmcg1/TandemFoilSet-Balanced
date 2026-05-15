@@ -209,4 +209,46 @@ cd target && python train.py --agent <student> \
     --experiment_name "<student>/your-experiment-name"
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **83.1874** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **83.1874**~~ — superseded by PR #3384 below.
+
+---
+
+## 2026-05-15 23:37 — PR #3384: Gradient clipping (max_norm=1.0) on full EMA+asinh stack
+
+**Student:** charliepai2i48h2-fern  
+**Change:** `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` inserted between `loss.backward()` and `optimizer.step()` in the training loop. Rebased on full stack: Lion lr=1.7e-4, wd=3e-4, surf_weight=30, asinh pressure-loss, EMA(0.999).
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **70.2479** |
+| val_single_in_dist/mae_surf_p | 81.5014 |
+| val_geom_camber_rc/mae_surf_p | 82.7986 |
+| val_geom_camber_cruise/mae_surf_p | 49.2201 |
+| val_re_rand/mae_surf_p | 67.4712 |
+| **test_avg/mae_surf_p** | **62.0765** |
+| test_single_in_dist/mae_surf_p | 73.2488 |
+| test_geom_camber_rc/mae_surf_p | 73.2597 |
+| test_geom_camber_cruise/mae_surf_p | 41.3097 |
+| test_re_rand/mae_surf_p | 60.4878 |
+| Best epoch | 14 (timeout-bound; val still descending) |
+| Peak GPU memory | 42.12 GB |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + 30·surf_loss, with asinh(z) on pressure channel  
+**EMA:** decay=0.999, applied at val/test passes  
+**Gradient clipping:** max_norm=1.0 (inserted before optimizer.step())  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-fern-lion-gradclip-1.0-rebased-20260515-222530/metrics.jsonl`
+
+**Note:** −15.6% on val (70.25 vs 83.19), −16.7% on test (62.08 vs 74.52). All 4 splits improved 12-19%. Mechanisms compose cleanly: asinh compresses loss-level heavy tails, EMA smooths parameter trajectory, grad-clip caps per-step gradient norm. Post-asinh pre-clip norms still 25-180 (100% of steps clip) — the three mechanisms target different points in the gradient pipeline. Val curve still descending at epoch 14 timeout.
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name"
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **70.2479** with a terminal `SENPAI-RESULT` marker.
