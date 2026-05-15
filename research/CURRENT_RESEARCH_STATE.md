@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~20:30 UTC
+- **Last updated**: 2026-05-15 ~21:25 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -26,6 +26,8 @@
 
 **Push-flow has recovered for thorfinn**: PR #3393 successfully posted SENPAI-RESULT at 20:24 UTC with metrics committed and pushed. This proves the system *can* work end-to-end; the other students just haven't completed a full commit+push cycle yet.
 
+**Push-flow has now recovered for fern (#3238)** as of 20:37 UTC: branch is force-pushed onto the latest advisor HEAD (`8ffa24d`) with the Huber rebase applied, plus a clean-up commit `70cf8a6` that drops the pre-rebase MSE-era metrics directory. The dual-branch code (`b959f21`) now sits cleanly on Huber loss. Branch is ready to train; fern needs to run the new experiment and post a fresh `SENPAI-RESULT`. Two of eight students have now demonstrated the end-to-end commit+push cycle.
+
 ## Key observations
 1. **The 30-min cap is THE bottleneck**: Every experiment so far stops at epoch 14/50 with val loss still descending. Getting more epochs per budget (BF16, smaller model, larger batch) is the highest-leverage direction.
 2. **Huber loss is the proven win**: MSE → Huber gave 117.66 baseline. All round 2 experiments stack on Huber.
@@ -38,7 +40,7 @@
 |---|---|---|---|---|
 | #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign |
 | #3235 | askeladd | `local-re-feature` | WIP (stale) | sendback received, no rerun pushed yet |
-| #3238 | fern | `dual-branch-heads` | WIP — conflict, no rebase pushed | ran 44-min training in-pod, results not pushed |
+| #3238 | fern | `dual-branch-heads` | WIP — rebased on Huber | branch healthy, awaiting fresh training run + result |
 | #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign |
 | #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
 | #3241 | tanjiro | `ema-weights` | WIP — pod restarted, prior rebase wiped | needs to redo rebase |
