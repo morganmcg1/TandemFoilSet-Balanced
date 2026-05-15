@@ -194,7 +194,78 @@ _New entries appended as each PR is reviewed._
 
 ---
 
-## Still WIP (original assignments)
+## 2026-05-15 19:52 — PR #3221 (charliepai2i48h5-nezuko): Fourier positional features — **MERGED** (new best)
 
-- PR #3192 (edward): EMA checkpoint averaging
-- PR #3221 (nezuko): Fourier positional features
+- branch: `charliepai2i48h5-nezuko/fourier-positional-features`
+- hypothesis: replacing raw (x,z) coordinates with multi-frequency log-spaced Fourier positional embeddings lifts spatial representation quality, benefiting all splits
+
+- arms:
+
+  | arm | n_freqs | space_dim | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|---|---|
+  | fourier-n6 | 6 | 26 | 98.20 | 88.91 | 12/14 |
+  | **fourier-n10** | **10** | **42** | **89.27** | **79.43** | **14/14** |
+
+- artifacts: `models/model-charliepai2i48h5-nezuko-fourier-n6-20260515-183742/metrics.jsonl`, `models/model-charliepai2i48h5-nezuko-fourier-n10-20260515-191358/metrics.jsonl`
+- per-split test surf_p (n=10): single=93.65, rc=88.94, cruise=56.92, re_rand=78.20
+- n_params: 668K (n=6) / 673K (n=10) — Fourier adds ~4K params, near zero overhead
+- peak VRAM: ~46 GB (both arms)
+- both runs were wall-clock capped at epoch 14 (not epoch-budget capped) — best checkpoint at last epoch in both cases; model was still improving
+- analysis: 6→10 freqs shows continued scaling (val gap 98.20→89.27, 9.1pts). High-freq channels did not hurt despite aliasing concern — slice-attention is learning to filter. Cruise camber split shows largest gain from going 6→10 (cruise test: 69.20→56.92). arm-1 (n=6) has regression on cruise vs Huber baseline (+10.1%), arm-2 fixes this. Hypothesis strongly confirmed.
+- verdict: **MERGED** as new round-5 baseline. val_avg=89.27, test_avg=79.43.
+
+---
+
+## 2026-05-15 19:52 — PR #3333 (charliepai2i48h5-frieren): LR T_max alignment — SENT BACK (new baseline test)
+
+- branch: `charliepai2i48h5-frieren/lr-schedule-alignment`
+- hypothesis: cosine annealing with T_max=14 or T_max=20 (aligned to wall-clock budget) outperforms T_max=50 (near-constant LR)
+
+- arms:
+
+  | arm | T_max | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | LR at best |
+  |---|---|---|---|---|---|
+  | huber03-tmax14 | 14 | 95.40 | 86.76 | 14/14 | 6.27e-6 |
+  | **huber03-tmax20** | **20** | **94.21** | **86.01** | **14/14** | **1.37e-4** |
+
+- artifacts: `models/model-huber03-tmax14-20260515-172631/metrics.jsonl`, `models/model-huber03-tmax20-20260515-182450/metrics.jsonl`
+- per-split test surf_p (T_max=20): single=103.44, rc=95.98, cruise=61.94, re_rand=82.68
+- LR trajectory confirmed via per-epoch logging. T_max=50 → near-constant LR at 5e-4 for all 14 epochs. T_max=14 → decays to ~0 by last epoch. T_max=20 → retains 1.37e-4 at epoch 14.
+- analysis: T_max=20 beats T_max=14 because model is still in an active learning regime at the 14-epoch cutoff — decaying to ~0 too early (T_max=14) leaves capability on the table. Free-lunch improvement: pure LR schedule change, no architecture/loss changes.
+- verdict: Both arms beat old baseline (98.62). But PR #3221 (Fourier n=10, val=89.27) also merged in this review pass, setting a higher bar. T_max=20 result (94.21) does NOT beat new Fourier baseline (89.27). **Sent back** to combine: Fourier n=10 + Huber-0.3 + clip-0.25 + T_max=20.
+
+---
+
+## 2026-05-15 20:00 — PR #3199 (charliepai2i48h5-fern): Dualhead decoder (rebased onto Huber) — CLOSED
+
+- branch: `charliepai2i48h5-fern/dualhead-surface-volume`
+- hypothesis (rebased): dualhead architecture (separate LayerNorm+MLP for surface/volume) + Huber-0.3 compound over Huber-only baseline
+
+- arms:
+
+  | arm | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|
+  | dualhead+huber03 (no clip) | 106.62 | 95.69 | 13/14 |
+  | dualhead+huber03+gc05 | 102.36 | 93.18 | 13/14 |
+
+- artifacts: `models/model-charliepai2i48h5-fern-dualhead-huber03-20260515-173939/metrics.jsonl`, `models/model-charliepai2i48h5-fern-dualhead-huber03-gc05-20260515-183440/metrics.jsonl`
+- per-split test surf_p (arm-2): single=110.54, rc=111.32, cruise=63.53, re_rand=87.34
+- analysis: arm-1 (dualhead+Huber only) is WORSE than Huber-only baseline (106.62 vs 103.18). arm-2 (adds gc-0.5) barely beats old Huber baseline (102.36 vs 103.18, -0.8% val) but worse on test (93.18 vs 92.02). Huber and dualhead both address the surface/volume heavy-tail specialization problem — they are redundant. Once Huber stabilizes the surface gradient signal, the single shared head adapts implicitly. Grad-clip only partially compensates for the training instability dualhead introduces.
+- new baseline for comparison: Fourier n=10 val=89.27 (merged PR #3221). Both arms are >14% behind.
+- verdict: **Closed**. Dualhead not competitive with current stack. Fern reassigned to Gaussian random Fourier features (#3439).
+
+---
+
+## Wave-4 new assignments (2026-05-15 20:00)
+
+- PR #3438 — charliepai2i48h5-nezuko: Fourier freq sweep n_freqs∈{12,14} + grad_clip=0.25 (continuation of Fourier scaling)
+- PR #3439 — charliepai2i48h5-fern: Gaussian random Fourier features σ∈{1.0,5.0} (alternative Fourier basis from Tancik 2020)
+
+## WIP tracking
+
+- PR #3192 (edward): EMA checkpoint averaging — stale, requested rebase + rerun on new Fourier baseline
+- PR #3227 (thorfinn): Surf-weight curriculum anneal — needs_rebase, sent back to rebase on Fourier baseline
+- PR #3333 (frieren): LR T_max=20 — sent back to test on Fourier+clip stack
+- PR #3419 (tanjiro): n_hidden=160 + T_max-aligned LR — WIP
+- PR #3420 (alphonse): Log-space pressure loss — WIP
+- PR #3424 (askeladd): Tighter clip sweep max_norm=0.1 × Huber delta — WIP
