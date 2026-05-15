@@ -239,10 +239,13 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
 
-        self.geom_proj = MLP(geom_ctx_dim, n_hidden * 2, n_hidden,
+        # FiLM geometry conditioning (replaces H13 additive-only geom_proj + geom_gates).
+        # film_proj outputs 2*n_hidden: first half is gamma (scale), second is beta (shift).
+        self.film_proj = MLP(geom_ctx_dim, n_hidden * 2, n_hidden * 2,
                              n_layers=0, res=False, act=act)
-        # Gates init at 0 so the injection starts as a no-op and recovers baseline.
-        self.geom_gates = nn.Parameter(torch.zeros(n_layers))
+        # Per-block learnable gates init at 0 → identity start (model recovers baseline at init).
+        self.film_gates_scale = nn.Parameter(torch.zeros(n_layers))
+        self.film_gates_shift = nn.Parameter(torch.zeros(n_layers))
 
         self.apply(self._init_weights)
 
@@ -263,9 +266,12 @@ class Transolver(nn.Module):
         x_rff = torch.cat([pos_rff, rest], dim=-1)
         fx = self.preprocess(x_rff) + self.placeholder[None, None, :]
         geom_ctx = x[:, 0, self.geom_ctx_start:self.geom_ctx_start + self.geom_ctx_dim]
-        g = self.geom_proj(geom_ctx).unsqueeze(1)
+        film = self.film_proj(geom_ctx)                        # [B, 2*n_hidden]
+        gamma = film[:, :self.n_hidden].unsqueeze(1)           # [B, 1, n_hidden]
+        beta = film[:, self.n_hidden:].unsqueeze(1)            # [B, 1, n_hidden]
         for i, block in enumerate(self.blocks):
-            fx = fx + self.geom_gates[i] * g
+            # FiLM: multiplicative scale + additive shift, both gated and zero-init.
+            fx = fx * (1 + self.film_gates_scale[i] * gamma) + self.film_gates_shift[i] * beta
             fx = block(fx)
         return {"preds": fx}
 
@@ -490,6 +496,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# FiLM identity-start sanity: with zero gates, output must be unchanged.
+with torch.no_grad():
+    assert model.film_gates_scale.abs().max().item() < 1e-6, "film_gates_scale not zero-init"
+    assert model.film_gates_shift.abs().max().item() < 1e-6, "film_gates_shift not zero-init"
+print("FiLM identity-start check passed.")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
@@ -636,12 +648,15 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    gate_values = model.geom_gates.detach().cpu().tolist()
-    print(f"Final geom_gates (from best checkpoint): {gate_values}")
+    scale_gates = model.film_gates_scale.detach().cpu().tolist()
+    shift_gates = model.film_gates_shift.detach().cpu().tolist()
+    print(f"Final film_gates_scale (from best checkpoint): {scale_gates}")
+    print(f"Final film_gates_shift (from best checkpoint): {shift_gates}")
     append_metrics_jsonl(metrics_jsonl_path, {
-        "event": "geom_gates",
-        "best_epoch": best_metrics["epoch"],
-        "geom_gates": gate_values,
+        "event": "film_gates",
+        "epoch": best_metrics["epoch"],
+        "film_gates_scale": scale_gates,
+        "film_gates_shift": shift_gates,
     })
 
     test_metrics = None
