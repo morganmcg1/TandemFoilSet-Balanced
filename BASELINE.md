@@ -168,4 +168,45 @@ cd target && python train.py --agent <student> \
     --experiment_name "<student>/your-experiment-name"
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **84.9819** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **84.9819**~~ — superseded by PR #3382 below.
+
+---
+
+## 2026-05-15 21:34 — PR #3382: EMA weights (decay=0.999) on asinh baseline
+
+**Student:** charliepai2i48h2-askeladd  
+**Change:** EMA shadow (decay=0.999) applied at every val and test pass on top of Lion + surf_weight=30 + asinh baseline. Live weights unchanged during training; EMA shadow loaded for all evaluation passes.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **83.1874** |
+| val_single_in_dist/mae_surf_p | 99.9507 |
+| val_geom_camber_rc/mae_surf_p | 94.1543 |
+| val_geom_camber_cruise/mae_surf_p | 60.2646 |
+| val_re_rand/mae_surf_p | 78.3801 |
+| **test_avg/mae_surf_p** | **74.5193** |
+| test_single_in_dist/mae_surf_p | 88.9512 |
+| test_geom_camber_rc/mae_surf_p | 85.8766 |
+| test_geom_camber_cruise/mae_surf_p | 50.9533 |
+| test_re_rand/mae_surf_p | 72.2961 |
+| Best epoch | 14 (timeout-bound; every epoch a new best, shadow still converging) |
+| Peak GPU memory | 42.12 GB |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + 30·surf_loss, with asinh(z) on pressure channel  
+**EMA:** decay=0.999, applied at val/test passes only — live weights unchanged  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-askeladd-ema-weights-decay-0999-rebased-20260515-203115/metrics.jsonl`
+
+**Note:** −2.11% on val (83.19 vs 84.98), −2.13% on test (74.52 vs 76.14). All 4 val splits improved. Smoothness diagnostic: 0 sign flips in val curve (vs 8 for Lion baseline), every epoch a new best — EMA shadow still catching up at timeout. Mechanisms compose cleanly: asinh smooths loss landscape, EMA then smooths parameter trajectory on top.
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name"
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **83.1874** with a terminal `SENPAI-RESULT` marker.
