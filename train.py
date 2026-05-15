@@ -381,6 +381,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    ema_decay: float = 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -435,7 +436,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
     p.requires_grad_(False)
-ema_decay = 0.999
+ema_decay = cfg.ema_decay
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
