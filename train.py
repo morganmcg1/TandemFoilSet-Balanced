@@ -28,6 +28,7 @@ import simple_parsing as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as cp
 import wandb
 import yaml
 from einops import rearrange
@@ -179,12 +180,15 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def _forward_inner(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
+
+    def forward(self, fx):
+        return self._forward_inner(fx)
 
 
 class Transolver(nn.Module):
@@ -228,11 +232,14 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, use_checkpoint=False, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            if use_checkpoint and self.training:
+                fx = cp.checkpoint(block._forward_inner, fx, use_reentrant=False)
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -458,7 +465,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=96,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -525,7 +532,7 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         ff = fourier_features(x_norm[..., :2], bands=cfg.fourier_bands)
         x_aug = torch.cat([x_norm, ff], dim=-1)
-        pred = model({"x": x_aug})["preds"]
+        pred = model({"x": x_aug}, use_checkpoint=True)["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
