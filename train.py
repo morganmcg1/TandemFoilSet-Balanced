@@ -82,6 +82,28 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class FiLMConditioner(nn.Module):
+    """Predicts per-block FiLM scale and shift from global flow condition."""
+
+    def __init__(self, cond_dim: int, n_hidden: int, n_blocks: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, n_hidden),
+            nn.SiLU(),
+            nn.Linear(n_hidden, 2 * n_hidden * n_blocks),
+        )
+        self.n_blocks = n_blocks
+        self.n_hidden = n_hidden
+
+    def forward(self, cond: torch.Tensor):
+        # cond: [B, cond_dim]
+        out = self.net(cond)  # [B, 2 * n_hidden * n_blocks]
+        out = out.view(cond.shape[0], self.n_blocks, 2, self.n_hidden)
+        scale = out[:, :, 0, :]  # [B, n_blocks, n_hidden]
+        shift = out[:, :, 1, :]  # [B, n_blocks, n_hidden]
+        return scale, shift
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -157,12 +179,17 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, film_scale=None, film_shift=None):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
+        if film_scale is not None and film_shift is not None:
+            fx = fx * (1.0 + film_scale.unsqueeze(1)) + film_shift.unsqueeze(1)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
+
+
+COND_DIMS = slice(13, 24)  # dims 13-23: log Re, AoAs, NACAs, gap, stagger (11 dims, constant per sample)
 
 
 class Transolver(nn.Module):
@@ -186,6 +213,7 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.n_layers = n_layers
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -195,6 +223,8 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        cond_dim = COND_DIMS.stop - COND_DIMS.start
+        self.film = FiLMConditioner(cond_dim=cond_dim, n_hidden=n_hidden, n_blocks=n_layers)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,9 +238,14 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # Dims 13-23 are constant per sample. pad_collate puts padding at the END,
+        # so node 0 is always a real node. Read the condition there to avoid
+        # mean-with-zero bias from padded positions.
+        cond = x[:, 0, COND_DIMS]  # [B, cond_dim]
+        film_scale, film_shift = self.film(cond)  # each [B, n_blocks, n_hidden]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            fx = block(fx, film_scale=film_scale[:, i, :], film_shift=film_shift[:, i, :])
         return {"preds": fx}
 
 
