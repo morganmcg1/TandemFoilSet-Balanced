@@ -217,7 +217,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -240,9 +240,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            # Drop samples whose GT has any non-finite value (e.g. corrupted CFD output).
+            # Without this guard, Inf in y_norm makes sq_err Inf, and Inf*mask=NaN even
+            # where mask is False — propagating NaN into the loss/metric accumulators.
+            sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            safe = mask & sample_finite.unsqueeze(-1)
+            y_norm = torch.where(
+                sample_finite.view(-1, 1, 1).expand_as(y_norm),
+                y_norm, torch.zeros_like(y_norm),
+            )
+
+            sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=huber_delta)
+            vol_mask = safe & ~is_surface
+            surf_mask = safe & is_surface
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -254,7 +264,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # Pass `safe` (which masks out the entire bad sample) so scoring sees the
+            # bad sample as padding; also replace its y with zeros so |pred-y| stays finite.
+            y_for_scoring = torch.where(
+                sample_finite.view(-1, 1, 1).expand_as(y),
+                y, torch.zeros_like(y),
+            )
+            ds, dv = accumulate_batch(pred_orig, y_for_scoring, is_surface, safe, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -353,6 +369,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -444,7 +461,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -467,7 +484,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -525,7 +542,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
