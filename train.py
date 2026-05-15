@@ -380,6 +380,8 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    grad_clip: float = 1.0  # max grad norm; 0 disables
+    huber_delta: float = 1.0  # transition from L2 to L1; 0 disables (pure MSE)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -494,7 +496,15 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        abs_err = (pred - y_norm).abs()
+        if cfg.huber_delta > 0:
+            sq_err = torch.where(
+                abs_err < cfg.huber_delta,
+                0.5 * abs_err.pow(2),
+                cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
+            )
+        else:
+            sq_err = abs_err.pow(2)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -504,12 +514,20 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        else:
+            grad_norm = torch.tensor(0.0)
         optimizer.step()
         with torch.no_grad():
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
