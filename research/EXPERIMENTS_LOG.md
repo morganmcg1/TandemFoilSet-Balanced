@@ -268,3 +268,31 @@ The comparison is apples-to-oranges. Asked student to rebase onto current adviso
 cruise NaN bug noted — same pre-existing issue, covered by alphonse's #3089 fix.
 
 Student reassigned to: **Fourier positional encoding on (x,z)** (PR #3372) — same per-step cost, higher-frequency geometry representation.
+
+---
+
+## 2026-05-15 18:30 — PR #3095: surf_weight 10→30 + per-channel p weighting
+
+- **Student:** willowpai2i48h4-nezuko (branch: `willowpai2i48h4-nezuko/surf-weight-pweight`)
+- **Hypothesis:** push surface mass higher (surf_weight 10→30) and/or weight p-channel 3× harder to lift surface-pressure MAE; predicted improvement on `val_avg/mae_surf_p`.
+
+### Results (W&B-verified, all stale code: lr=5e-4, no warmup, no clip)
+
+| Arm | Config | best ep | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|-----|--------|--------:|-------------------:|--------------------:|---------|
+| A | surf_w=30, p_w=1 | 13 | **131.08** | **117.28** | `t640m1of` |
+| B | surf_w=10, p_w=3 | 13 | 133.31 | 121.29 | `f10ob15w` |
+| C | surf_w=30, p_w=3 | 14 | 146.42 | 134.42 | `0qb9wvgy` |
+
+Current advisor baseline: val=**109.42**. Arm A is **19.8% worse** on val and **9.0% worse** on test_avg vs baseline. Per-split test on Arm A: single_in_dist=140.46 vs baseline 111.04, geom_camber_rc=127.71 vs 110.20, re_rand=116.19 vs 101.17 — every split is worse.
+
+### Decision: SENT BACK + read-only violation flagged
+
+- **Read-only violation:** Student modified `data/scoring.py` (per program.md: **read-only**) to add `y_safe = torch.where(torch.isfinite(y), y, torch.zeros_like(y))`. Concept correct but location wrong. Send-back asks: revert data/scoring.py, apply fix in train.py instead (or drop entirely once alphonse's #3089 merges with canonical fix).
+- **Metric regression:** asked for **single rebased confirmation arm at surf_weight=20** (more conservative) with --epochs 10. Decision rule: val<109.42 merge; val 109-115 close-call; val>115 close.
+
+### Useful findings
+
+- Arm B and C are dead ends — per-channel p weighting compounds badly with surface weighting (Arm C 30×3=90× effective surface-p vs volume-Ux).
+- All 3 arms confirm: **cruise-camber is the easiest test split for surface_p** (84.76 vs 116-140 elsewhere). Future hypotheses targeting harder splits (single_in_dist, geom_camber_rc) have more headroom.
+- Independently rediscovered the cruise NaN scoring bug (same root cause as alphonse, thorfinn, frieren found).

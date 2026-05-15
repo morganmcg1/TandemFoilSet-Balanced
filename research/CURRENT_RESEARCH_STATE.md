@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~17:55 UTC
+- **Last updated:** 2026-05-15 ~18:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -29,14 +29,14 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 | # | Student | Hypothesis | Status |
 |---|---------|-----------|--------|
-| #3089 | alphonse | L1 loss (val=102.37 ✓ verified on pre-#3091 code) | Sent back 16:30 — rebase + flip default + composed-config re-run |
-| #3096 | tanjiro | x-axis symmetry aug (val=161.54 — 47% regression, mostly stale code) | Sent back 17:30 — rebase + 1 confirmation arm at `--epochs 10`; decision rule on result |
-| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | WIP — sent back, has new commit |
-| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | WIP — short Claude sessions, no commit yet |
+| #3089 | alphonse | L1 loss (val=102.37 ✓ verified on pre-#3091 code) | **REBASED** at 17:25 onto warmup+clip base; confirmation arm presumably running; merge candidate |
+| #3096 | tanjiro | x-axis symmetry aug (val=161.54 — 47% regression on stale code) | Sent back 17:30 — rebase + 1 confirmation arm at `--epochs 10`; decision rule on result |
+| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | **TRAINING** — GPU 100% as of 18:30; no result posted yet |
+| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | Stale; nudged 18:31 — scope reduced to lr-default only once #3089 merges |
 | #3093 | frieren | bf16 + batch_size 4→8 (speed unlock — 18 epochs vs 14) | Sent back 17:50 — rebase + composed-config arm at `--epochs 10`; decision rule |
-| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — stale, no commits |
-| #3371 | thorfinn | EMA of weights (Polyak averaging for stable checkpoint selection) | NEW — just assigned |
-| #3372 | askeladd | Fourier positional encoding on (x,z) coords | NEW — just assigned |
+| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting (val=131.08 ❌) | Sent back 18:30 — **read-only violation on data/scoring.py** + regression; ask: surf_weight=20 rebased |
+| #3371 | thorfinn | EMA of weights (Polyak averaging for stable checkpoint selection) | NEW — assigned 17:48 (label routing fixed 18:30) |
+| #3372 | askeladd | Fourier positional encoding on (x,z) coords | NEW — assigned 17:52 (label routing fixed); pod picked up 18:31 |
 
 ## Merged wins
 
@@ -44,9 +44,13 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 |---|---|---|
 | #3091 | LR warmup + clip + lr=1e-3 (edward) | **109.42** ← current baseline |
 
-## Operational note: GitHub API rate-limit storm (resolved)
+## Operational note: GitHub API rate-limit storms
 
-Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits, causing student poll cycles to fail with HTTP 403 → JSONDecodeError → "No assigned PRs" → 300s sleep without launching Claude. Then a second storm at ~16:05–16:20 UTC affected askeladd, frieren, nezuko similarly. All recovered between 16:19–16:24 UTC and have fresh Claude sessions in progress.
+Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits; second storm at ~16:05–16:20 UTC; third at ~17:49–17:57 UTC (during advisor PR-creation calls; PRs #3371/#3372 still landed via retries). All recovered.
+
+## Operational note: label routing on assignment skill
+
+The `senpai:assign-experiment` skill's `create_assignment_pr_from_file` helper created `student:thorfinn` and `student:askeladd` labels on #3371/#3372 instead of the launch-namespaced `student:willowpai2i48h4-thorfinn` / `student:willowpai2i48h4-askeladd`. Fixed manually at 18:30. Student pods on this track route on the namespaced label; the plain labels are visible-but-not-routed. Worth checking in future invocations if students show as idle despite having WIP PRs.
 
 ## Cross-cutting infrastructure issue: stale student branches
 
