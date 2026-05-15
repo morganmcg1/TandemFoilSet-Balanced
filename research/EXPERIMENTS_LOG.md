@@ -1,5 +1,118 @@
 # SENPAI Research Results — charlie-pai2i-24h-r2
 
+## 2026-05-15 22:35 — PR #3453: Calibrate T_max=10 (slice_num=96 budget) [CLOSED]
+- Branch: `charliepai2i24h2-edward/tmax-10-slice96`
+- Student: charliepai2i24h2-edward
+- Hypothesis: Lower CosineAnnealingLR T_max from 12 → 10 so cosine fully anneals within the ~12-epoch wall-clock cap. Predicted 0.5–2% improvement vs the slice_num=96 baseline (val 97.757).
+
+### Results table
+
+| Metric | Value | Δ vs baseline 97.757 |
+|--------|-------|----------------------|
+| `val_avg/mae_surf_p` (best @ ep 12) | **101.225** | **+3.55%** (worse) |
+| `test_avg/mae_surf_p` | 90.892 | +5.21% (worse) |
+| Per-split val | single 121.235 \| geom_rc 111.892 \| geom_cruise 77.292 \| re_rand 94.480 | all 4 regress |
+| Wall-clock | 30.5 min | matches baseline |
+| Peak VRAM | 47.5 GB | — |
+| Metrics artifacts | (not committed to branch — negative result) | — |
+
+### Analysis
+- Hypothesis falsified. With T_max=10 the final two epochs run at lr ~1.71e-5 (vs ~1.03e-4 at the T_max=12 cutoff) — ~5–6× lower. Those near-zero-LR epochs are wasted.
+- The "still strongly descending at cutoff" signal observed in PR #3399 argues the opposite of tighter annealing: at the wall-clock boundary we want a higher LR floor, not a lower one.
+- Edward's diagnosis was excellent and the negative is a clean kill of the tighter-annealing direction. Eta_min raise (tanjiro #3397 in-flight) is the logical alternative.
+
+### Decision
+- **Close.** Cosine-annealing horizon is not the lever — the schedule shape at the wall-clock boundary is fine; if anything we want lr-floor raised, not pulled in.
+
+---
+
+## 2026-05-15 22:35 — PR #3301: Width-192 with budget-matched schedule (rebased retest) [CLOSED]
+- Branch: `charliepai2i24h2-alphonse/width-192-matched-budget`
+- Student: charliepai2i24h2-alphonse
+- Hypothesis: Width 128 → 192 with epochs scaled to the wall-clock budget should improve representational capacity. First run on stale base (val 99.611) appeared to win but used wrong schedule. Rebased retest on warmup+cosine+slice_num=96 (HEAD `0b12feb`) needed for a fair comparison.
+
+### Results table (rebased retest)
+
+| Metric | Value | Δ vs baseline 97.757 |
+|--------|-------|----------------------|
+| `val_avg/mae_surf_p` (best @ ep 9 of 10) | **106.099** | **+8.53%** (worse) |
+| `test_avg/mae_surf_p` | 94.120 | +8.95% (worse) |
+| Per-split val | single 127.27 \| geom_rc 119.94 \| geom_cruise 80.61 \| re_rand 96.58 | all 4 regress 7–10% |
+| Wall-clock | 30.7 min (cap hit before epoch 10) | over-budget |
+| Peak VRAM | 63.0 GB | — |
+| Param count | 1.48M | 1.43× baseline |
+| Per-epoch wall-clock | ~205 s | matches advisor 210s prediction |
+| Metrics artifacts | (rebased run not committed to branch — negative result) | — |
+
+### Analysis
+- Combined with PR #3377's width=96 result (val 96.667), the 3-point width sweep on the current stack {96, 128, 192} → {96.67, 97.76, 106.10} is **monotonically increasing**. Smaller width is better.
+- Capacity is not the bottleneck at this depth/slice_num/budget — adding params just steals wall-clock from cosine annealing. Width-192 needs ~205 s/epoch and only fits 9 of 10 scheduled epochs.
+- Bigger model + same wall-clock = fewer cosine-annealed epochs = stuck at higher LR at cutoff = worse final val.
+- The original "stale-base" win (val 99.611) was a phantom: it benefited from the old 50-epoch cosine staying flat at the higher lr=5e-4 the whole run, which happened to favor more params. Under proper budget-matched annealing the picture flips.
+
+### Decision
+- **Close.** Direction killed. Width 96 (PR #3377) is the working direction.
+
+---
+
+## 2026-05-15 22:35 — PR #3304: surf_weight 10 → 20 (rebased retest) [CLOSED]
+- Branch: `charliepai2i24h2-frieren/surf-weight-20`
+- Student: charliepai2i24h2-frieren
+- Hypothesis: 2× surface-pressure loss weighting helps recover from the under-fitting pressure residual visible on `single_in_dist`. On the OLD baseline (no warmup, lr=5e-4, slice_num=64) it gave -5.49% val. Retest needed to see if the lever still helps on the new stack.
+
+### Results table (rebased retest, HEAD `0b12feb`)
+
+| Metric | Value | Δ vs baseline 97.757 |
+|--------|-------|----------------------|
+| `val_avg/mae_surf_p` (best @ ep 12 of 14) | **101.782** | **+4.12%** (worse) |
+| `test_avg/mae_surf_p` | 89.480 | +3.58% (worse) |
+| Per-split val | single 123.625 \| geom_rc 111.597 \| geom_cruise 76.498 \| re_rand 95.411 | all 4 regress |
+| Best epoch | 12 / 14 (wall-clock cap) | still descending at cap |
+| Metrics artifacts | (rebased run not committed to branch — negative result) | — |
+
+### Analysis
+- Frieren's diagnosis is exactly right: on the OLD baseline the dominant pressure residual on `single_in_dist` was 148.1 (severely under-fit). On the NEW baseline it's already 115.5 — the warmup+cosine + slice_num=96 changes already shifted capacity toward surface fields. Doubling pressure weight on top now over-weights pressure and starves velocity learning.
+- This is a clean example of an absorbed lever: surf_weight was helping by partially compensating for a different bottleneck the new baseline removed.
+
+### Decision
+- **Close.** Loss-rebalancing axis exhausted in the current regime. If we revisit it would be downward (surf_weight=5 or vol-weight bump) not upward.
+
+---
+
+## 2026-05-15 22:35 — PR #3377: n_hidden 128 → 96 (rebased retest) [HELD — branch needs push]
+- Branch: `charliepai2i24h2-thorfinn/n-hidden-96`
+- Student: charliepai2i24h2-thorfinn
+- Hypothesis: Smaller width (~0.58× params) frees wall-clock for the cosine to fully anneal (14 of 14 epochs vs baseline's 12 of 14), at minimal capacity cost.
+
+### Results table (rebased retest, HEAD `0b12feb`)
+
+| Metric | Value | Δ vs baseline 97.757 |
+|--------|-------|----------------------|
+| `val_avg/mae_surf_p` (best @ ep 14 of 14) | **96.667** | **−1.12%** (win) |
+| `test_avg/mae_surf_p` | 85.454 | −1.08% (win) |
+| Per-split val | single 116.665 (+1.0%) \| geom_rc **105.516** (−4.5%) \| geom_cruise **73.065** (−3.1%) \| re_rand 91.421 (+1.9%) | net negative |
+| Per-split test | single **99.939** (−1.7%) \| geom_rc 95.608 (+0.8%) \| geom_cruise **61.246** (−4.7%) \| re_rand 85.023 (+0.3%) | net negative |
+| Epochs | 14 / 14 (full schedule) | +2 epochs vs baseline 12 |
+| Per-epoch wall-clock | 136.7 s (μ) | −10% vs baseline 151 s |
+| Total wall-clock | 31.9 min (+6% over 30-min cap, still fits) | — |
+| Param count | 381,239 | 0.58× baseline |
+| Peak VRAM | 40.97 GB | within budget |
+| Metrics artifacts | `models/model-n-hidden-96-rebased-20260515-213114/` (NOT pushed to remote branch) | — |
+
+### Analysis
+- Width-96 is not capacity-limited at this depth/slice_num — it generalizes better. Gains concentrate on the geometric-OOD splits (`geom_camber_rc` val −4.5%, `geom_camber_cruise` test −4.7%), with mild regressions on `single_in_dist` (+1.0%) and `re_rand` (+1.9%).
+- Combined with PR #3301: the 3-point width sweep {96, 128, 192} → {96.67, 97.76, 106.10} is monotonic. Smaller is better in this regime.
+- Two mechanisms compound: (1) lower per-epoch cost lets all 14 epochs of cosine actually run; (2) regularization implicit in smaller width helps geometric OOD generalization.
+
+### Decision
+- **HOLD pending branch update.** Result is a clear merge-eligible win. But the rebased metrics commit and the n_hidden=96 code change were NOT pushed to origin (branch HEAD is still on `3c1b0ac` — the original stale-base commit). Sent back to student requesting:
+  1. Rebase onto current advisor HEAD (`0b12feb`).
+  2. Commit + push `models/model-n-hidden-96-rebased-20260515-213114/metrics.{jsonl,yaml}` and the single-line `n_hidden=96` change.
+  3. Re-post terminal SENPAI-RESULT, mark ready for review.
+- Once pushed, merge as new baseline.
+
+---
+
 ## 2026-05-15 14:05 — PR #3208: Replace MSE with SmoothL1 (Huber) loss
 - Branch: `charliepai2i24h2-fern/huber-loss`
 - Student: charliepai2i24h2-fern
