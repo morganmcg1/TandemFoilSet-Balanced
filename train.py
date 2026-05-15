@@ -46,6 +46,55 @@ from data import (
     pad_collate,
 )
 
+
+def augment_x_with_local_re(x: torch.Tensor) -> torch.Tensor:
+    """x: [B, N, 24] in PHYSICAL (unnormalized) space. Returns [B, N, 25].
+
+    Adds Re_x = log1p(Re * |x_chord|) gated to surface nodes only — a
+    boundary-layer-motivated local-Reynolds feature that varies along the
+    foil surface, in contrast to the existing global log(Re) at dim 13.
+    """
+    log_re = x[..., 13:14]
+    re = torch.exp(log_re)
+    x_pos = x[..., 0:1].abs()           # |x_chord|
+    is_surf = x[..., 12:13]             # 0/1
+    re_x = torch.log1p(re * x_pos) * is_surf
+    return torch.cat([x, re_x], dim=-1)
+
+
+def compute_re_x_stats(
+    train_ds, batch_size: int = 4, num_workers: int = 4, n_samples: int = 100,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Single-pass scan over the train set to compute mean/std of the new feature.
+
+    Aggregates over all valid (non-padded) nodes — the gated zeros from non-surface
+    nodes are included so the normalization captures the full input distribution.
+    """
+    from torch.utils.data import Subset
+    subset = Subset(train_ds, range(min(n_samples, len(train_ds))))
+    loader = DataLoader(
+        subset, batch_size=batch_size, num_workers=num_workers, shuffle=False,
+        collate_fn=pad_collate,
+    )
+    total_sum = 0.0
+    total_sum_sq = 0.0
+    total_n = 0
+    for x, _y, _is_surf, mask in loader:
+        x_aug = augment_x_with_local_re(x)
+        re_x = x_aug[..., 24]
+        re_x_valid = re_x[mask].double()
+        total_sum += re_x_valid.sum().item()
+        total_sum_sq += (re_x_valid ** 2).sum().item()
+        total_n += int(mask.sum().item())
+    mean = total_sum / max(total_n, 1)
+    var = max(total_sum_sq / max(total_n, 1) - mean ** 2, 1e-8)
+    std = var ** 0.5
+    return (
+        torch.tensor([mean], dtype=torch.float32),
+        torch.tensor([std], dtype=torch.float32),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -236,7 +285,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_aug = augment_x_with_local_re(x)
+            x_norm = (x_aug - stats["x_mean_aug"]) / stats["x_std_aug"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
                 pred = model({"x": x_norm})["preds"]
@@ -371,6 +421,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+
+# Compute normalization stats for the local-Re feature on the training set.
+re_x_mean_cpu, re_x_std_cpu = compute_re_x_stats(
+    train_ds, batch_size=4, num_workers=4, n_samples=100,
+)
+print(f"local-Re feature stats: mean={re_x_mean_cpu.item():.4f}, std={re_x_std_cpu.item():.4f}")
+stats["re_x_mean"] = re_x_mean_cpu
+stats["re_x_std"] = re_x_std_cpu
+# Precompute the concatenated mean/std for the augmented 25-dim input.
+stats["x_mean_aug"] = torch.cat([stats["x_mean"], stats["re_x_mean"]], dim=-1)
+stats["x_std_aug"] = torch.cat([stats["x_std"], stats["re_x_std"]], dim=-1)
 stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -391,7 +452,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 1,  # +1 for the appended local-Re feature
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -444,7 +505,8 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_aug = augment_x_with_local_re(x)
+        x_norm = (x_aug - stats["x_mean_aug"]) / stats["x_std_aug"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
             pred = model({"x": x_norm})["preds"]
