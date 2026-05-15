@@ -16,6 +16,64 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-15 22:41 — PR #3441: slice_num=80 without gradient checkpointing (frieren) — CLOSED
+- student: willowpai2i24h2-frieren
+- branch: `willowpai2i24h2-frieren/slice-num-80-no-checkpoint`
+- hypothesis: removing gradient checkpointing at slice_num=80 trades VRAM headroom for convergence speed vs PR #3353
+- W&B run: `o1wv46oq`
+
+| Metric | This run | Baseline (PR #3352) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 130.17 | 116.34 | **+11.9% worse** |
+| `test_avg/mae_surf_p` | 120.26 | 107.33 | **+12.0% worse** |
+| Best epoch | 11 | 12 | — |
+| Peak VRAM | 90.6 GB (94.8%) | ~33 GB | 2.7× more |
+| Avg epoch time | 142.6s | ~128s | +11% |
+
+Per-split val: single=150.35, camber_rc=142.71, camber_cruise=100.86, re_rand=126.78 — all regress.
+
+- analysis: The key failure is the memory model. PR #3353 (slice_num=96+ckpt) used only 16 GB with checkpointing, but that was HIDING ~80 GB of activation memory. Removing checkpointing at slice_num=80 demands the full activation footprint (~90.6 GB), leaving ~5 GB headroom. Epoch time is +11% worse (not better), and convergence is noisy (±20–30 val swing between consecutive epochs). The slice_num axis is not the model's bottleneck at this dataset scale.
+- decision: **closed**. Clear regression on all splits. The student's own VRAM analysis was correct — the slice attention cost grows quadratically and dominates without checkpointing.
+- next steps: Abandon the slice_num scaling direction for now. frieren reassigned to new hypothesis.
+
+## 2026-05-15 22:30 — PR #3356: Divergence-free velocity auxiliary loss (thorfinn) — beats OLD baseline, needs rebase on SmoothL1
+- student: willowpai2i24h2-thorfinn
+- branch: `willowpai2i24h2-thorfinn/divergence-free-aux-loss`
+- hypothesis: adding a normalized-space divergence penalty on predicted velocity fields biases the model toward physically-realizable solutions, improving OOD generalization
+- W&B runs: `ilylzwo5` (div_weight=0.01, winner), `2w40di7q` (div_weight=0.001, fails), `4ws0rum6` (div_weight=0.01 replication)
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | vs OLD baseline (121.50/112.49) | vs NEW baseline (116.34/107.33) |
+|---|---|---|---|---|
+| div_weight=0.01 (ilylzwo5) | **113.41** | **102.86** | −6.7%/−8.6% | −2.5%/−4.2% |
+| div_weight=0.01 (4ws0rum6 replication) | 117.20 | 108.05 | −3.5%/−4.0% | +0.7%/+0.7% |
+| div_weight=0.001 (2w40di7q) | 133.48 | 122.17 | +9.9%/+8.6% | +14.7%/+13.8% |
+
+Per-split val (div_weight=0.01, best run): single=142.61 (+2%), camber_rc=121.19 (−12.6%), camber_cruise=85.88 (−8.2%), re_rand=103.97 (−8.7%)
+
+- analysis: The hypothesis is well-supported in direction: OOD splits (camber_rc, camber_cruise, re_rand) improve dramatically at div_weight=0.01 while in-dist (single) is slightly worse — the classic signature of useful regularization. **Key implementation finding**: naive denormalized divergence with raw x/z coordinates explodes to 1e5–1e7 on boundary-layer mesh pairs (|dx|~1e-5); student switched to normalized-space divergence with eps floor on |dx|,|dz|, giving div_loss in the 50–250 range and div_weight*div_loss balanced against vol_loss. **Caveat**: two runs at div_weight=0.01 disagree — best run beats new baseline (−2.5%/−4.2%), replication at +0.7%/+0.7% (barely misses). This variance is concerning for a definitive merge decision. The run was on the current learnable-Fourier baseline, BUT now that tanjiro's SmoothL1 is about to become the new baseline at val=90.60/test=83.00, even the best div-free result (113.41/102.86) doesn't beat the incoming baseline.
+- decision: **sent back for rebase on SmoothL1 baseline** (pending tanjiro merge). The physics-informed direction is promising; must verify compound effect with SmoothL1.
+- next steps: rebase onto SmoothL1 baseline. Single arm div_weight=0.01 (best arm from this round). A 10% sweep (0.005, 0.01, 0.02) would also clarify whether 0.01 is near-optimal.
+
+## 2026-05-15 22:27 — PR #3215: SmoothL1 β=0.05 on learnable Fourier baseline (tanjiro) — PENDING MERGE (rate-limited)
+- student: willowpai2i24h2-tanjiro
+- branch: `willowpai2i24h2-tanjiro/smooth-l1-loss`
+- hypothesis: replacing MSE with Huber/SmoothL1 (β=0.05) in normalized space caps the gradient contribution of extreme y-values, reducing the distortion from large-Re samples
+- W&B run: `iofja54s`
+
+| Metric | Baseline (PR #3352, learnable Fourier) | SmoothL1 β=0.05 (rebased) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 116.3411 | **90.6039** | **−22.13%** |
+| `test_avg/mae_surf_p` | 107.3254 | **83.0029** | **−22.66%** |
+| Best epoch | 12 | 14 | +2 epochs |
+| Peak VRAM | ~33 GB | ~42.5 GB | — |
+
+Per-split val: single=112.03 (−22.8%), camber_rc=104.42 (−17.3%), camber_cruise=62.07 (−29.6%), re_rand=83.89 (−20.8%)
+Per-split test: single=101.95 (−19.4%), camber_rc=97.84 (−17.2%), camber_cruise=55.10 (−28.1%), re_rand=77.11 (−28.6%)
+
+- analysis: **Largest single-change improvement on this benchmark to date** — −22% on both headline metrics with all 4 splits improving 17-30%. Confirmed compound with learnable Fourier: magnitudes nearly identical to pre-rebase arms (val 90.24→90.60, test 82.21→83.00), confirming SmoothL1 and learnable Fourier are additive on this dataset. The improvement is largest on the highest-range splits (re_rand test −28.6%, camber_cruise −28%). Mechanism clear: MSE squares large normalized residuals, creating gradient domination from the most extreme Re/geometry samples; SmoothL1 with β=0.05 transitions to linear beyond |err|>0.05, effectively downweighting the outlier-sample gradient contribution. Best epoch was the LAST completed epoch (14/50, wall-clock limited) — val curve still declining, suggesting more headroom with extended training.
+- decision: **PENDING MERGE** — blocked by GitHub API rate limit (5000/5000 exhausted; resets 23:19 UTC). PR is not-draft, status:review, MERGEABLE — ready as soon as rate limit allows.
+- next steps: After merge, this becomes the new baseline (val=90.60, test=83.00). All in-flight PRs should be re-evaluated against this threshold. High-priority follow-ups: β sweep (0.02, 0.075, 0.10, L1 limit), per-channel β, SmoothL1+FiLM compound.
+
 ## 2026-05-15 20:35 — PR #3215: SmoothL1 loss β=0.05 and β=0.10 (tanjiro) — sent back for rebased verification
 - student: willowpai2i24h2-tanjiro
 - branch: `willowpai2i24h2-tanjiro/smoothl1-loss`
