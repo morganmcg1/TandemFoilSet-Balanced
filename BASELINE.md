@@ -1,6 +1,33 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-15 16:00)
+## Current best (as of 2026-05-15 22:30) — PR #3283: SOAP optimizer
+
+Three round-1/2 winners merged: **Huber loss** (PR #3155, fern, −18.1%) + **LR warmup + peak 1e-3** (PR #3147, askeladd, −8.9%) + **SOAP optimizer** (PR #3283, alphonse, **−31.7% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **75.70** (run `vbvixri5`, alphonse SOAP, best epoch)
+
+**Per-val-split surface pressure MAE (SOAP run vbvixri5):**
+- `val_single_in_dist/mae_surf_p` ≈ n/a (avg reported; per-split not separately confirmed)
+- `val_re_rand/mae_surf_p` — strong OOD generalization (re_rand test=66.21)
+
+**Test (paper-facing, from run vbvixri5):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **75.39**
+  - `test_single_in_dist/mae_surf_p` = 69.65
+  - `test_geom_camber_rc/mae_surf_p` = 90.30
+  - `test_re_rand/mae_surf_p` = 66.21
+  - `test_geom_camber_cruise/mae_surf_p` = **NaN** (pre-existing bug, excluded)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (Shampoo eigenbasis + Adam updates, precondition_frequency=10) lr=1e-3, warmup_epochs=3 (LinearLR) then CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, Huber loss (SmoothL1 beta=1.0) `vol_loss + 10*surf_loss`
+- Wall-clock: ~135.7 s/epoch (+2.9% vs AdamW)
+- `param count = 0.66M`
+
+---
+
+## Previous best (as of 2026-05-15 16:00) — Huber + LR warmup
 
 Two round-1 winners merged: **Huber loss** (PR #3155, fern, −18.1%) and **LR warmup + peak 1e-3** (PR #3147, askeladd, −8.9%). New canonical baseline on the merged branch combines both changes.
 
