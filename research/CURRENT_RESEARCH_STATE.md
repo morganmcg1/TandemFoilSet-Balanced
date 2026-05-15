@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 20:37
+- **Date:** 2026-05-15 21:25
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -31,12 +31,14 @@ Key insight: frequencies barely moved from octave init (max 2.5% drift). The gai
 
 ## Round 2 WIP (currently running)
 
-| PR | Student | Hypothesis | Status |
+| PR | Student | Hypothesis | Status (21:25 UTC) |
 |---|---|---|---|
-| #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | re-run on new baseline (rebase requested 20:25) |
-| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | WIP |
-| #3356 | thorfinn | Divergence-free velocity auxiliary loss | WIP |
-| #3441 | frieren | `slice_num=80` WITHOUT checkpointing (memory headroom) | WIP (just assigned 20:36) |
+| #3350 | alphonse | FiLM-style Reynolds conditioning on each Transolver block | rebased; pod picked up at 21:20; preparing run |
+| #3413 | fern | `n_layers=8` + AMP mixed precision (depth scaling) | pod picked up at 21:22; preparing run |
+| #3356 | thorfinn | Divergence-free velocity auxiliary loss | pod picked up at 21:20; preparing run |
+| #3441 | frieren | `slice_num=80` WITHOUT checkpointing (memory headroom) | pod picked up at 21:22; preparing run |
+
+**Note on pod polling-lag pattern:** From 20:24-21:19 UTC the GitHub API was rate-limited for the advisor, but the student pods continued polling normally. All 8 students' Claude Code sessions started fresh iterations at 21:20-21:24 UTC and switched to their assigned branches. Expect first GPU activity by ~21:35 UTC, training results around 22:00-22:30 UTC. The "stale_wip" flag on PR #3207 from this cycle was actually polling lag — nezuko's pod is active.
 
 ### Critical pending verification — PR #3215 (tanjiro SmoothL1)
 
@@ -57,10 +59,12 @@ Ran on OLD (fixed Fourier) baseline. vs new baseline (learnable Fourier): val fl
 
 ## Round 1 carry-overs still WIP
 
-- **PR #3194 (askeladd, warmup-cosine):** sent back for rebase + re-run on learnable Fourier baseline. Two arms: warmup=0 vs warmup=3. Beat target: val_avg < 116.34 AND test_avg < 107.33.
-- **PR #3207 (nezuko, geom-conditioned slice):** pod picked up at iter 74 (20:24 UTC) and is working on rebased re-run. Geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
-- **PR #3215 (tanjiro, SmoothL1):** initial 2-arm run on fixed Fourier baseline shows massive improvement (−22% val vs new baseline). Sent back at 20:35 for **ONE single-arm rebased re-run (β=0.05)** to verify compound with learnable Fourier. HIGH PRIORITY merge candidate.
-- **PR #3198 (edward, per-channel pressure loss weights):** sent back at 20:25 for rebase + re-run of 3-arm sweep.
+All 4 carry-over PRs flagged as `merge_conflict_comment` or `needs_rebase` at this cycle's survey have now been picked up by their student pods at 21:20-21:24 UTC. Branch states:
+
+- **PR #3194 (askeladd, warmup-cosine):** branch MERGEABLE; pod picked up at 21:20, preparing rebase + 2-arm re-run (warmup=0 vs warmup=3) on learnable Fourier baseline. Beat target: val_avg < 116.34 AND test_avg < 107.33.
+- **PR #3207 (nezuko, geom-conditioned slice):** branch MERGEABLE; pod picked up at 21:20, preparing rebased re-run. Geom-slice + learnable Fourier compound test. If beats 116.34, merge; if not, close.
+- **PR #3215 (tanjiro, SmoothL1):** branch still **CONFLICTING**; pod picked up at 21:21, will need to resolve `fourier_features → fourier_encoder` conflict before launching the single-arm β=0.05 re-run. HIGH PRIORITY merge candidate.
+- **PR #3198 (edward, per-channel pressure loss weights):** branch MERGEABLE (already rebased before the rate limit); pod picked up at 21:23, preparing 3-arm re-run of {p=2.0, 3.0, 5.0}.
 
 ## Potential next research directions
 
