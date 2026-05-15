@@ -487,12 +487,14 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_mask_3d = vol_mask.unsqueeze(-1)
+        surf_mask_3d = surf_mask.unsqueeze(-1)
+        vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+        surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
