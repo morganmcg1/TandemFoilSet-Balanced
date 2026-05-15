@@ -155,12 +155,18 @@ class PhysicsAttention(nn.Module):
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        # PGOT-style geometry bias for slice assignment. Zero-init so init
+        # behavior matches baseline; bias is learned during training.
+        self.geom_project = nn.Linear(9, slice_num)
+        nn.init.zeros_(self.geom_project.weight)
+        nn.init.zeros_(self.geom_project.bias)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+    def forward(self, x, geom_feats):
+        # x: [B, N, dim]; geom_feats: [B, 9] (broadcast across heads and nodes)
         B, N, _ = x.shape
 
         fx_mid = (
@@ -175,7 +181,10 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_logits = self.in_project_slice(x_mid) / self.temperature
+        geom_bias = self.geom_project(geom_feats)  # [B, slice_num]
+        slice_logits = slice_logits + geom_bias[:, None, None, :]
+        slice_weights = self.softmax(slice_logits)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -219,8 +228,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, re_cond=None):
-        h = self.attn(self.ln_1(fx))
+    def forward(self, fx, geom_feats, re_cond=None):
+        h = self.attn(self.ln_1(fx), geom_feats)
         if self.use_film and re_cond is not None:
             h = self.film1(h, re_cond)
         fx = h + fx
@@ -268,6 +277,11 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # apply() overwrites geom_project with trunc_normal_; re-zero so the
+        # PGOT geometry bias is an exact no-op at initialization.
+        for block in self.blocks:
+            nn.init.zeros_(block.attn.geom_project.weight)
+            nn.init.zeros_(block.attn.geom_project.bias)
 
         # self.apply re-initialises every Linear (incl. FiLM's last linear)
         # with trunc_normal_, which would erase the zero init from
@@ -299,9 +313,12 @@ class Transolver(nn.Module):
             # normalised value -mean/std ≈ -19 for log(Re), which would
             # dominate the mean for samples with lots of padding).
             re_cond = x[:, 0, self.re_feature_idx:self.re_feature_idx + 1]
+        # Geometry conditioning: NACA1 (15-17), AoA2 (18), NACA2 (19-21),
+        # gap (22), stagger (23). Per-sample constant — take from node 0.
+        geom_feats = x[:, 0, 15:24].contiguous()
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx, re_cond=re_cond)
+            fx = block(fx, geom_feats, re_cond=re_cond)
         return {"preds": fx}
 
 
