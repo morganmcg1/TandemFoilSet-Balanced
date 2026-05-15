@@ -236,6 +236,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Sanitize: one sample in test_geom_camber_cruise has Inf in y (CFD
+            # divergence?). `accumulate_batch` filters those samples per-sample,
+            # but the subsequent masked-multiplication uses `Inf * 0 = NaN`
+            # under IEEE 754 and propagates NaN to the final metrics. We mask
+            # such samples here so the read-only `data/scoring.py` sees only
+            # finite inputs. Flagged to advisor in a separate bug-fix comment.
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)  # [B]
+            if not y_finite_sample.all():
+                keep = y_finite_sample[:, None, None].expand_as(y)
+                y = torch.where(keep, y, torch.zeros_like(y))
+                mask = mask & y_finite_sample[:, None]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -358,6 +370,13 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # Per-sample pressure-scale normalization in the loss (PR #3178). When True,
+    # the per-sample y std (over real nodes, per channel) re-scales the
+    # residual *for the loss only*. Validation/test metrics are unchanged.
+    per_sample_scale: bool = True
+    loss_type: str = "mse"   # "mse" or "huber"
+    huber_delta: float = 1.0  # delta for huber loss when loss_type == "huber"
+    clip_grad_norm: float = 1.0  # PR #3178: max_norm for gradient clipping (0 disables)
 
 
 cfg = sp.parse(Config)
@@ -434,6 +453,11 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    ps_std_min_epoch = float("inf")
+    ps_std_max_epoch = 0.0
+    ps_std_p_sum = 0.0  # mean of per-batch mean pressure ps_std across the epoch
+    grad_norm_sum = 0.0
+    grad_norm_max = 0.0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -442,19 +466,69 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+
+        if cfg.per_sample_scale:
+            with torch.no_grad():
+                mask_f = mask.unsqueeze(-1).float()
+                valid_count = mask.sum(dim=1, keepdim=True).unsqueeze(-1).clamp(min=1).float()  # [B,1,1]
+                y_masked = y * mask_f
+                ps_mean = y_masked.sum(dim=1, keepdim=True) / valid_count                       # [B,1,3]
+                ps_var = ((y - ps_mean) * mask_f) ** 2
+                ps_var = ps_var.sum(dim=1, keepdim=True) / valid_count                          # [B,1,3]
+                ps_std = ps_var.sqrt().clamp(min=1e-3)                                          # [B,1,3]
+
+            if epoch == 0 and n_batches == 0:
+                assert ps_std.min().item() > 1e-4, "Per-sample y_std collapsed to 0"
+
+            pred_phys = pred * stats["y_std"] + stats["y_mean"]
+            pred_ps = (pred_phys - ps_mean) / ps_std
+            y_ps    = (y         - ps_mean) / ps_std
+
+            if cfg.loss_type == "mse":
+                elem_err = (pred_ps - y_ps) ** 2
+            elif cfg.loss_type == "huber":
+                elem_err = F.huber_loss(pred_ps, y_ps, reduction="none", delta=cfg.huber_delta)
+            else:
+                raise ValueError(f"Unknown loss_type: {cfg.loss_type}")
+
+            with torch.no_grad():
+                ps_std_min_epoch = min(ps_std_min_epoch, ps_std.min().item())
+                ps_std_max_epoch = max(ps_std_max_epoch, ps_std.max().item())
+                ps_std_p_sum += ps_std[:, :, 2].mean().item()
+        else:
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            if cfg.loss_type == "mse":
+                elem_err = (pred - y_norm) ** 2
+            elif cfg.loss_type == "huber":
+                elem_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            else:
+                raise ValueError(f"Unknown loss_type: {cfg.loss_type}")
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (elem_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
+        # PR #3178: gradient clipping added as a stability guard. Per-sample-std
+        # loss occasionally produces large residuals when a sample has small
+        # ps_std, causing the prior run to spike train loss ~200x and leave a
+        # NaN-prone weight state at the end of training.
+        if cfg.clip_grad_norm and cfg.clip_grad_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.clip_grad_norm,
+            )
+        else:
+            grad_norm = torch.tensor(0.0, device=device)
         optimizer.step()
+
+        with torch.no_grad():
+            gn = float(grad_norm.detach().item()) if torch.isfinite(grad_norm) else float("nan")
+            grad_norm_sum += gn if gn == gn else 0.0  # skip NaN
+            grad_norm_max = max(grad_norm_max, gn if gn == gn else grad_norm_max)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -486,7 +560,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -496,7 +570,17 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+        "loss_type": cfg.loss_type,
+        "per_sample_scale": cfg.per_sample_scale,
+    }
+    if cfg.per_sample_scale and n_batches > 0:
+        record["ps_std/min"] = ps_std_min_epoch
+        record["ps_std/max"] = ps_std_max_epoch
+        record["ps_std_p/mean"] = ps_std_p_sum / max(n_batches, 1)
+    if n_batches > 0:
+        record["grad_norm/mean"] = grad_norm_sum / max(n_batches, 1)
+        record["grad_norm/max"] = grad_norm_max
+    append_metrics_jsonl(metrics_jsonl_path, record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
