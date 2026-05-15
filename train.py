@@ -32,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -437,8 +438,23 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 ema_decay = 0.999
 
+# SWA: uniform-snapshot weight averaging starting partway through training.
+# AveragedModel keeps an equal running mean of parameter snapshots.
+# Per-epoch updates (canonical Izmailov 2018 / torch.optim.swa_utils docstring example);
+# the PR text suggested per-batch but PyTorch docs and the original paper both prescribe
+# per-epoch — see the PR comment for the cite-driven rationale.
+swa_model = AveragedModel(model)
+for p in swa_model.parameters():
+    p.requires_grad_(False)
+swa_start_epoch = 8       # arm-3: post-anneal averaging only — start AFTER SWALR anneal completes for stable-LR snapshots (Izmailov 2018 §3)
+swa_lr = 1e-4             # one-fifth of base lr 5e-4
+swa_anneal_epochs = 2
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+swa_scheduler = SWALR(
+    optimizer, swa_lr=swa_lr, anneal_epochs=swa_anneal_epochs, anneal_strategy="cos",
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -453,6 +469,10 @@ run = wandb.init(
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "ema_decay": ema_decay,
+        "swa_start_epoch": swa_start_epoch,
+        "swa_lr": swa_lr,
+        "swa_anneal_epochs": swa_anneal_epochs,
+        "swa_update_freq": "per_epoch",
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -515,19 +535,50 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    # Per-epoch SWA snapshot update (canonical Izmailov 2018 / PyTorch docs).
+    # Active only once we've crossed swa_start_epoch.
+    if epoch >= swa_start_epoch:
+        swa_model.update_parameters(model)
+        swa_scheduler.step()
+    else:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
     ema_model.eval()
-    split_metrics = {
+    swa_model.eval()
+    ema_split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+
+    if epoch >= swa_start_epoch:
+        swa_split_metrics = {
+            name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_split_metrics)
+        swa_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+    else:
+        swa_split_metrics = None
+        swa_val_avg = None
+        swa_avg_surf_p = float("inf")
+
+    if swa_avg_surf_p < ema_avg_surf_p:
+        split_metrics = swa_split_metrics
+        val_avg = swa_val_avg
+        avg_surf_p = swa_avg_surf_p
+        best_averager = "swa"
+    else:
+        split_metrics = ema_split_metrics
+        val_avg = ema_val_avg
+        avg_surf_p = ema_avg_surf_p
+        best_averager = "ema"
+
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
@@ -535,10 +586,23 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
-        "lr": scheduler.get_last_lr()[0],
+        "lr": optimizer.param_groups[0]["lr"],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+        "swa_val_avg/mae_surf_p": swa_avg_surf_p if swa_split_metrics is not None else float("nan"),
+        "best_averager": 1 if best_averager == "swa" else 0,
     }
+    # Per-averager per-split detail so we can attribute end-of-run gains.
+    for split_name, m in ema_split_metrics.items():
+        for k, v in m.items():
+            log_metrics[f"ema/{split_name}/{k}"] = v
+    if swa_split_metrics is not None:
+        for split_name, m in swa_split_metrics.items():
+            for k, v in m.items():
+                log_metrics[f"swa/{split_name}/{k}"] = v
+    # Keep the legacy `{split}/{metric}` keys pointed at the chosen averager (the
+    # checkpointed model), so existing dashboards keep tracking the active model.
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -553,15 +617,22 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "best_averager": best_averager,
         }
-        torch.save(ema_model.state_dict(), model_path)
-        tag = " *"
+        if best_averager == "swa":
+            torch.save(swa_model.module.state_dict(), model_path)
+        else:
+            torch.save(ema_model.state_dict(), model_path)
+        tag = f" * [{best_averager}]"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    swa_str = (
+        f" swa={swa_avg_surf_p:.4f}" if swa_split_metrics is not None else " swa=(off)"
+    )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"ema={ema_avg_surf_p:.4f}{swa_str}  -> val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -575,6 +646,7 @@ if best_metrics:
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_averager": best_metrics.get("best_averager", "ema"),
         "total_train_minutes": total_time,
     })
 
