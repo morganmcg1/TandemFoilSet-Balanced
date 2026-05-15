@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -432,7 +433,16 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+warmup_epochs = 2
+def lr_lambda(epoch):
+    if epoch < warmup_epochs:
+        return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
+    progress = (epoch - warmup_epochs) / max(MAX_EPOCHS - warmup_epochs, 1)
+    return 0.5 * (1 + math.cos(math.pi * progress))  # cosine to 0 after warmup
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+GRAD_CLIP_MAX_NORM = 1.0
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -446,6 +456,9 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "warmup_epochs": warmup_epochs,
+        "grad_clip_max_norm": GRAD_CLIP_MAX_NORM,
+        "scheduler": "linear_warmup_then_cosine",
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -497,9 +510,14 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
