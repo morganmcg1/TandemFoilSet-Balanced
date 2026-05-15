@@ -239,20 +239,34 @@ def _apply_fourier(x_norm, model):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   split_name: str = "") -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Two-pronged defensive guard (advisor update on PR #3296):
+      1. Non-finite model predictions (overflow) → ``nan_to_num`` to 0 so the
+         denormalized prediction stays finite. Bad-node MAE becomes ``|y_true|``.
+      2. Non-finite *ground truth* values (one known bad sample in
+         ``test_geom_camber_cruise``: ``.test_geom_camber_cruise_gt/000020.pt``
+         has 761 Inf p-channel values) → drop entire bad samples from the
+         mask and replace their y values with 0 so ``(pred - y).abs() * mask``
+         does not produce ``inf * 0 = NaN`` that poisons the accumulator.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    nf_pred_total = 0
+    nf_pred_orig_total = 0
+    nf_y_samples_total = 0
+    nf_y_nodes_total = 0
 
     with torch.no_grad():
-        for x, y, is_surface, mask in loader:
+        for batch_idx, (x, y, is_surface, mask) in enumerate(loader):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
@@ -263,9 +277,62 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = _residual_err(pred, y_norm, cfg.loss_type, cfg.loss_beta)
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            # Diagnostic: model produced non-finite values in normalized space?
+            nf_pred = (~torch.isfinite(pred)) & mask.unsqueeze(-1)
+            if nf_pred.any():
+                n_bad = int(nf_pred.sum().item())
+                nf_pred_total += n_bad
+                finite_p = pred[torch.isfinite(pred)]
+                max_abs_finite = (
+                    finite_p.abs().max().item() if finite_p.numel() else float("nan")
+                )
+                print(
+                    f"[DIAGNOSTIC] {split_name} batch {batch_idx}: "
+                    f"{n_bad} non-finite normalized pred nodes (model output overflow), "
+                    f"pred.shape={tuple(pred.shape)}, max_abs_finite={max_abs_finite:.3e}"
+                )
+                for i in range(pred.shape[0]):
+                    sample_nf = nf_pred[i]
+                    if sample_nf.any():
+                        ch_counts = sample_nf.sum(dim=0).tolist()  # [Ux, Uy, p]
+                        n_bad_surf = int(
+                            (sample_nf & is_surface[i].unsqueeze(-1)).sum().item()
+                        )
+                        print(
+                            f"  sample {i}: {int(sample_nf.sum().item())} bad nodes "
+                            f"({n_bad_surf} surface), per-channel(Ux,Uy,p)={ch_counts}"
+                        )
+
+            # Guard against inf/nan predictions corrupting normalized loss.
+            pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # Y-side guard: detect samples with non-finite ground-truth values
+            # and substitute zeros + drop them from the effective mask so the
+            # masked accumulator never sees inf*0 = NaN.
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if (~y_finite_sample).any():
+                bad_samples = int((~y_finite_sample).sum().item())
+                nf_y_samples_total += bad_samples
+                nf_y_mask = ~torch.isfinite(y)
+                n_bad_y_nodes = int(nf_y_mask.sum().item())
+                nf_y_nodes_total += n_bad_y_nodes
+                # Per-sample, per-channel breakdown
+                for i in range(y.shape[0]):
+                    if not y_finite_sample[i].item():
+                        nf_i = nf_y_mask[i]
+                        ch_counts = nf_i.sum(dim=0).tolist()  # [Ux, Uy, p]
+                        print(
+                            f"[DIAGNOSTIC] {split_name} batch {batch_idx} sample {i}: "
+                            f"non-finite GROUND TRUTH ({int(nf_i.sum().item())} nodes), "
+                            f"per-channel(Ux,Uy,p)={ch_counts} — sample dropped from MAE"
+                        )
+            y_norm_safe = torch.where(torch.isfinite(y_norm), y_norm, torch.zeros_like(y_norm))
+            y_safe = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+            mask_safe = mask & y_finite_sample[:, None].expand_as(mask)
+
+            sq_err = _residual_err(pred, y_norm_safe, cfg.loss_type, cfg.loss_beta)
+            vol_mask = mask_safe & ~is_surface
+            surf_mask = mask_safe & is_surface
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -277,9 +344,35 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+
+            # Diagnostic: catches denorm overflow (pred finite but pred_orig inf)
+            nf_orig = (~torch.isfinite(pred_orig)) & mask.unsqueeze(-1)
+            if nf_orig.any():
+                n_bad_o = int(nf_orig.sum().item())
+                nf_pred_orig_total += n_bad_o
+                only_denorm = nf_orig & ~nf_pred
+                if only_denorm.any():
+                    print(
+                        f"[DIAGNOSTIC] {split_name} batch {batch_idx}: "
+                        f"{int(only_denorm.sum().item())} extra non-finite nodes "
+                        f"introduced by denormalization (pred finite, pred_orig inf)"
+                    )
+
+            # Defensive: zero out non-finite preds so the float64 MAE accumulator
+            # stays finite. Bad-node MAE becomes |y_true - 0| = |y_true|.
+            pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=0.0, neginf=0.0)
+
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_safe, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
+
+    if nf_pred_total or nf_pred_orig_total or nf_y_samples_total:
+        print(
+            f"[DIAGNOSTIC] {split_name}: totals — "
+            f"non-finite pred (norm)={nf_pred_total}, "
+            f"non-finite pred (denorm)={nf_pred_orig_total}, "
+            f"non-finite y samples={nf_y_samples_total} ({nf_y_nodes_total} nodes)"
+        )
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
@@ -532,10 +625,19 @@ for epoch in range(MAX_EPOCHS):
         x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = _residual_err(pred, y_norm, cfg.loss_type, cfg.loss_beta)
+        # Two-pronged guard (advisor update on PR #3296):
+        #   1. Replace inf/nan predictions with 0 (prevents inf gradients).
+        #   2. Drop samples whose GT y is non-finite (one known bad sample
+        #      lives in test_geom_camber_cruise; this is purely defensive in
+        #      the training loop in case any train sample is similarly bad).
+        pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
+        y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+        y_norm_safe = torch.where(torch.isfinite(y_norm), y_norm, torch.zeros_like(y_norm))
+        mask_safe = mask & y_finite_sample[:, None].expand_as(mask)
+        sq_err = _residual_err(pred, y_norm_safe, cfg.loss_type, cfg.loss_beta)
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
+        vol_mask = mask_safe & ~is_surface
+        surf_mask = mask_safe & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
@@ -557,7 +659,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, split_name=name)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -625,7 +727,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, split_name=name)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
