@@ -418,6 +418,10 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    restratify_loss: bool = True  # per-sample inv-std reweighting on surface MAE
+    inv_std_floor: float = 1e-3  # absolute floor on per-sample y_norm p-std
+    clip_inv_std: bool = True  # cap sample_inv_std at 4x batch median before normalization
+    normalize_inv_std: bool = False  # rescale per-batch sample_inv_std to mean=1 (preserves surf_loss scale)
 
 
 cfg = sp.parse(Config)
@@ -509,6 +513,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    inv_std_batches: list[torch.Tensor] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -527,11 +532,40 @@ for epoch in range(MAX_EPOCHS):
         sq_err = (pred - y_norm) ** 2
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
 
-        # Surface loss: MAE with per-channel p weight (aligns with ranking metric)
-        surf_err = (pred - y_norm).abs()
+        # Surface loss: per-channel-weighted MAE, optionally per-sample inv-std reweighted.
         ch_w = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=pred.device)
-        surf_err = surf_err * ch_w[None, None, :]
-        surf_loss = (surf_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_err = (pred - y_norm).abs() * ch_w[None, None, :]
+
+        if cfg.restratify_loss:
+            # Per-sample inverse-std reweighting on surface MAE — gives small-dynamic-range
+            # samples (cruise) a fairer gradient share than the global-pool MAE alone.
+            # Use y_norm (loss-space) rather than raw y so the std and surf MAE share units;
+            # raw y would shrink surf_loss by ~global p_std (~200) and break surf_weight balance.
+            n_surf_per_sample = surf_mask.sum(dim=1).clamp(min=1).float()  # (B,)
+            y_p_norm = y_norm[..., 2]  # (B, N) — normalized p channel
+            y_p_sum = (y_p_norm * surf_mask).sum(dim=1)
+            y_p_mean = y_p_sum / n_surf_per_sample
+            y_p_var = ((y_p_norm - y_p_mean.unsqueeze(1)) ** 2 * surf_mask).sum(dim=1) / n_surf_per_sample
+            y_p_std = y_p_var.sqrt().clamp(min=cfg.inv_std_floor)
+            sample_inv_std = (1.0 / y_p_std).detach()
+            # First arm of #3386 ran un-clipped + un-normalized; median was ~1.8 but
+            # p99 was ~500 and the un-normalized batch mean was ~20, which silently
+            # multiplied surf_loss by ~20× and unbalanced surf_weight=10 vs vol. We
+            # now (a) clip extreme outliers at 4× batch median and (b) rescale to
+            # mean=1 so surf_loss magnitude matches baseline and only the relative
+            # per-sample weighting changes.
+            if cfg.clip_inv_std:
+                sample_inv_std = sample_inv_std.clamp(max=sample_inv_std.median() * 4.0)
+            if cfg.normalize_inv_std:
+                sample_inv_std = sample_inv_std / sample_inv_std.mean().clamp(min=1e-6)
+            inv_std_batches.append(sample_inv_std.detach().cpu())
+
+            # Per-sample surf MAE — divide by n_surf_per_sample (not n*3) to preserve the
+            # existing aggregation scale and leave surf_weight tuning intact.
+            surf_err_per_sample = (surf_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2)) / n_surf_per_sample
+            surf_loss = (surf_err_per_sample * sample_inv_std).mean()
+        else:
+            surf_loss = (surf_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
 
         loss = vol_loss + cfg.surf_weight * surf_loss
 
@@ -568,6 +602,13 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if inv_std_batches:
+        all_inv_std = torch.cat(inv_std_batches)
+        log_metrics["train/sample_inv_std_mean"] = float(all_inv_std.mean())
+        log_metrics["train/sample_inv_std_min"] = float(all_inv_std.min())
+        log_metrics["train/sample_inv_std_max"] = float(all_inv_std.max())
+        log_metrics["train/sample_inv_std_median"] = float(all_inv_std.median())
+        log_metrics["train/sample_inv_std_p99"] = float(all_inv_std.quantile(0.99))
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
