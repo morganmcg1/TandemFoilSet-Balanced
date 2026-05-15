@@ -2,7 +2,46 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-15 16:23 — PR #3281: EMA model weights for checkpoint selection and test eval (current best)
+## 2026-05-15 19:31 — PR #3337: Surface-pressure L1 auxiliary loss (current best)
+
+Stacks on top of PR #3281's EMA + PR #3266's scale-invariant loss + NaN workaround. Adds a single auxiliary L1 term on the pressure channel of surface nodes (in normalized-y space) at weight w=1.0 of the existing per-sample scale-invariant MSE loss. The L1 aggregation is pooled `Σ|err| / n_surf`, identical in shape to the eval-time `mae_surf_p` metric — so the gradient direction is the sign-of-error that directly minimizes MAE. Compounds cleanly with EMA (loss-side vs parameter-trajectory mechanisms) and with the scale-invariant loss (the L1 term is added post-normalization).
+
+**Primary**
+- `val_avg/mae_surf_p` = **106.8550** (best epoch 14 / 50, run cut by 30-min wall clock; **-6.41% vs PR #3281**)
+- `test_avg/mae_surf_p` = **96.8671** (**-5.11% vs PR #3281**)
+
+**Per-split surface pressure MAE**
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 127.8497 | 115.6571 |
+| geom_camber_rc | 121.1106 | 108.6600 |
+| geom_camber_cruise | 81.3908 | 68.2457 |
+| re_rand | 97.0689 | 94.9055 |
+| **avg** | **106.8550** | **96.8671** |
+
+**Model config** (unchanged from #3281)
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+- 662 359 parameters; EMA shadow copy at decay=0.999
+- AdamW lr=5e-4, wd=1e-4, batch_size=4, surf_weight=10.0, CosineAnnealingLR(T_max=50)
+- Loss: per-sample scale-invariant MSE + `surf_p_l1_weight=1.0 * surf_p_l1` (new aux term)
+
+**Cumulative round-5 improvement:** -13.74% val_avg (123.88 → 106.86) and -15.30% test_avg (114.37 → 96.87) over the pre-round-5 baseline.
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-frieren-surf_p_l1_aux_w1.0-20260515-172842/metrics.jsonl`
+- `models/model-charliepai2i24h5-frieren-surf_p_l1_aux_w1.0-20260515-172842/metrics.yaml`
+- `models/model-charliepai2i24h5-frieren-surf_p_l1_aux_w1.0-20260515-172842/config.yaml`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --experiment_name "round5_baseline_repro_pr3337" \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+
+## 2026-05-15 16:23 — PR #3281: EMA model weights for checkpoint selection and test eval (previous baseline)
 
 Stacks on top of PR #3266's scale-invariant loss + NaN workaround. Maintains a shadow EMA copy of the model with decay=0.999 (≈1000-step averaging window ≈ 2.7 epochs at batch_size=4), updated after every `optimizer.step()`. Validation, checkpoint selection, and final test eval all run from the EMA weights rather than the raw final-iterate model. The flat-minimum effect of weight averaging compounds with the undercooked training horizon (14/50 epochs by wall clock): gains concentrate strongly on the OOD splits.
 
