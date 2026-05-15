@@ -325,3 +325,27 @@ The sharp final-decay improvement (96 → 89 in the last epoch) shows the model 
 
 **Status: SENT BACK FOR REBASE + VERIFY.** thorfinn's branch was 4 commits behind the current advisor (pre-H15 merge), causing conflicts that reverted advisor-owned files (BASELINE.md, research/*.md) and removed merged H15 artifacts. Asked thorfinn to: (1) rebase carefully keeping their WSD code; (2) re-run Arm B to verify 89.04 holds on rebased branch; (3) optionally also run a controlled arm (WSD + `--huber_delta 0.5 --cond_dim 0`) to isolate WSD vs cosine T_max=15 effect cleanly. Merge once rebase + re-run confirms.
 
+
+---
+
+## 2026-05-15 21:30 — PR #3449: H24: EMA weight averaging (d=0.999) on H19 stack (edward) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-edward/h24-ema0999`
+- Hypothesis: EMA shadow weights at decay=0.999 should improve OOD generalization on the H19 triple-compound base.
+- Single arm, FiLM+Huber δ=0.5+T_max=15 + EMA shadow weights for eval.
+
+| Metric | H19 baseline | H24 EMA d=0.999 | Δ |
+|--------|--------------|-----------------|---|
+| val_avg/mae_surf_p | 83.8136 | 91.4897 | **+7.68 (+9.2% regression)** |
+| val_single_in_dist | 96.4406 | 106.3657 | +9.93 |
+| val_geom_camber_rc | 93.7378 | 103.7417 | +10.00 |
+| val_geom_camber_cruise | 62.8339 | 69.6562 | +6.82 |
+| val_re_rand | 82.2422 | 86.1954 | +3.95 |
+| test_avg (3-split) | 80.2415 | 88.9924 | +8.75 |
+
+**Why EMA failed:** Per edward's own analysis: 13 epochs × 375 steps = 4,875 optimizer steps total; EMA decay=0.999 has ~1,000-step half-life. Validation MAE is dropping 30%+ between epochs 5 and 13 — the model is still rapidly improving, so shadow weights lag a regime where the live model is materially better. The lagging shadow weights become a strictly-worse estimator. EMA literature (diffusion, ViT) uses 100k–1M+ steps where the late-training plateau dominates; that regime does not apply at 4,875 steps.
+
+**Pivot:** SWA (Stochastic Weight Averaging) captures the same idea (averaging late-training weights) but with equal-weight averaging of the FINAL K epochs only, skipping the rapidly-improving early phase. Reassigned to edward as H28.
+
+**Status: CLOSED — clear regression, dead end at this decay/budget combination.**
+
