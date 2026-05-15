@@ -1,5 +1,37 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
+## Current best (as of 2026-05-15 16:00)
+
+Two round-1 winners merged: **Huber loss** (PR #3155, fern, −18.1%) and **LR warmup + peak 1e-3** (PR #3147, askeladd, −8.9%). New canonical baseline on the merged branch combines both changes.
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **110.83** (run `3nivkqy0`, fern Huber, epoch 13)
+
+**Per-val-split surface pressure MAE (Huber variant, run 3nivkqy0):**
+- `val_single_in_dist/mae_surf_p` = 132.06
+- `val_geom_camber_rc/mae_surf_p` = 124.13
+- `val_geom_camber_cruise/mae_surf_p` = 82.72
+- `val_re_rand/mae_surf_p` = 104.40
+
+**Test (paper-facing, from run 3nivkqy0):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **109.75**
+  - `test_single_in_dist/mae_surf_p` = 118.65
+  - `test_geom_camber_rc/mae_surf_p` = 111.97
+  - `test_re_rand/mae_surf_p` = 98.64
+  - `test_geom_camber_cruise/mae_surf_p` = **NaN** (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- AdamW lr=1e-3, warmup_epochs=3 (LinearLR) then CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, Huber loss (SmoothL1 beta=1.0) `vol_loss + 10*surf_loss`
+- `param count = 0.66M`
+
+**Note:** The LR warmup run `gyl9qikv` was tested on the pre-Huber baseline. The Huber+LR-warmup combined gain has not yet been directly measured — it should compound (−8.9% + −18.1% are from largely orthogonal changes). Next round validates this directly.
+
+---
+
+## Previous best: round-3 launch baseline (PR #3140, run xehwt9bi)
+
 Round-3 baseline established by `willowpai2i48h3-alphonse` in PR #3140 (closed; baseline arm xehwt9bi).
 
 ## Best baseline metrics (run xehwt9bi, epoch 13/14 under 30-min cap)
