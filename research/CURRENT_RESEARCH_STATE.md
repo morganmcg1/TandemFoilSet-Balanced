@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~15:45 UTC
+- **Last updated**: 2026-05-15 ~16:30 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -8,29 +8,32 @@
 
 ## Current best baseline
 - `val_avg/mae_surf_p` = **117.66** (PR #3237, edward, `huber-loss`, epoch 13)
-- Per-split: single=147.77, camber_rc=125.08, camber_cruise=88.98, re_rand=108.81
-- Change from default: Huber(δ=1.0) instead of MSE. Everything else at default.
+- Change from default: Huber(δ=1.0) replaces MSE. All other hyperparameters at default.
 
-## Key observations from round 1
-1. **30-min cap is the main bottleneck**: Every student hit the 30-min wall-clock cap at epoch 14/50. The val loss was still descending at timeout. Getting more epochs per budget is high-priority.
-2. **Huber loss works**: 2-line change, cleanly improves over MSE. Now the default on this branch.
-3. **Local-Re feature is promising** but needs Huber on top. With MSE it lands at 124.27 (askeladd, PR #3235 sent back for revision with Huber + saf arc-length variant).
-4. **Curriculum failed**: Re-sorted ascending order without domain balance hurt generalization badly. The design was also never fully tested (curriculum phase never finished in 30 min). Closed.
-5. **NaN bug in test metric**: `test_geom_camber_cruise/000020.pt` has `inf` in GT. `data/scoring.py` correctly identifies it but `inf * 0 = NaN` poisons the accumulator. All `test_avg/mae_surf_p` values are NaN. Ranking on `val_avg/mae_surf_p` is unaffected. See EXPERIMENTS_LOG.md.
-6. **5 other experiments still in progress**: alphonse (per-sample-scale-norm), fern (dual-branch-heads), frieren (fourier-pos-enc), nezuko (hflip-augment), tanjiro (ema-weights) — all running.
+## Latest changes this loop
+- **PR #3238 (fern, dual-branch-heads)** — sent back. Result was 124.52 but used MSE (pre-Huber merge). Awaiting rebase + Huber re-run for apples-to-apples comparison. The dual-branch architecture itself looks well-implemented; we need clean data.
+
+## Key observations
+1. **The 30-min cap is THE bottleneck**: Every experiment so far stops at epoch 14/50 with val loss still descending. Getting more epochs per budget (BF16, smaller model, larger batch) is the highest-leverage direction.
+2. **Huber loss is the proven win**: MSE → Huber gave 117.66 baseline. All round 2 experiments stack on Huber.
+3. **NaN bug persists** in `test_geom_camber_cruise`: `inf` in GT of sample 20 poisons the accumulator. fern's test_avg = 113.41 is the only finite one so far — may be coincidence from prediction overflow, not a real fix.
+4. **Infrastructure issue**: charliepai2i24h3-frieren is hitting GitHub API rate limits in its PR-routing query and reports "no work assigned" repeatedly. The PR (#3239) is correctly labeled. Recovery will be automatic when rate limits reset.
 
 ## Active PRs
 
-| # | Student | Slug | Status |
-|---|---|---|---|
-| #3177 | alphonse | `per-sample-scale-norm` | WIP |
-| #3235 | askeladd | `local-re-feature` | WIP — rerun with Huber + saf coord |
-| #3238 | fern | `dual-branch-heads` | WIP |
-| #3239 | frieren | `fourier-pos-enc` | WIP |
-| #3240 | nezuko | `hflip-augment` | WIP |
-| #3241 | tanjiro | `ema-weights` | WIP |
-| #3300 | edward | `bf16-mixed-precision` | WIP |
-| #3303 | thorfinn | `surf-weight-50` | WIP |
+| # | Student | Slug | Status | Note |
+|---|---|---|---|---|
+| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale, no commits since assign) | edits exist in pod but not committed |
+| #3235 | askeladd | `local-re-feature` | WIP — re-running with Huber + saf coord | sent back with feedback last loop |
+| #3238 | fern | `dual-branch-heads` | WIP — rebase + Huber re-run | sent back this loop |
+| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | gh rate-limited; PR routing OK |
+| #3240 | nezuko | `hflip-augment` | WIP (stale, no commits) | edits exist in pod but not committed |
+| #3241 | tanjiro | `ema-weights` | WIP (stale, no commits) | edits exist in pod but not committed |
+| #3300 | edward | `bf16-mixed-precision` | WIP | assigned last loop |
+| #3303 | thorfinn | `surf-weight-50` | WIP | assigned last loop |
+
+## Idle students
+None right now. fern was the only idle; now back to WIP after the sendback.
 
 ## Human research direction
 None received yet.
@@ -38,33 +41,36 @@ None received yet.
 ## Current research themes
 
 **Budget efficiency** (edward #3300):
-- BF16 mixed precision to get ~20–25 epochs in 30 min vs. current 14
-- If this works, it becomes the new baseline and unlocks the true potential of all other techniques
+- BF16 to unlock more epochs within 30-min cap
 
 **Loss formulation** (thorfinn #3303, alphonse #3177):
-- surf_weight=50 with Huber: maximize surface focus at expense of vol accuracy (which doesn't rank)
-- per-sample-scale-norm: equalize Re-regime gradient magnitudes (complementary to Huber)
+- surf_weight=50 + Huber: extreme surface focus
+- per-sample-scale-norm + Huber: balance Re-regime gradient magnitudes
 
-**Features / Architecture** (askeladd #3235, fern #3238, frieren #3239):
-- local-Re feature + Huber: boundary-layer physics signal on surface nodes
-- dual-branch heads: specialized surface/volume output MLPs
-- Fourier positional encoding: multi-scale spatial features over (x, z)
+**Architecture** (fern #3238, frieren #3239):
+- Dual surface/volume heads (re-running with Huber)
+- Fourier positional encoding (multi-scale spatial features)
 
-**Data / Augmentation** (nezuko #3240):
-- z-reflection symmetry: physical symmetry of NS equations, free 2x effective data
+**Features** (askeladd #3235):
+- Local-Re feature + Huber + saf surface coordinate
 
-**Optimization** (tanjiro #3241):
-- EMA weight averaging: smoother checkpoint, reduces late-training noise
+**Augmentation / Optimization** (nezuko #3240, tanjiro #3241):
+- z-reflection symmetry
+- EMA weight averaging
 
-## Potential round 3 directions (post-round 2 results)
-1. **Compose winners**: stack BF16 + Huber + best-performing feature/arch change
-2. **Per-channel pressure loss**: extra loss term on channel 2 (p) only, since mae_surf_p is the metric
-3. **Warmup-cosine schedule**: 3-epoch linear warmup then cosine — helps if model diverges early
-4. **Larger model** (n_hidden=192 or 256): test if capacity is the remaining bottleneck
-5. **Per-domain normalization**: separate (y_mean, y_std) per domain to remove cross-domain scaling artifacts
-6. **Huber delta sweep** (δ=0.5, 2.0): test sensitivity around the current δ=1.0
-7. **Larger batch** (batch_size=8): reduces gradient variance, pairs well with BF16
-8. **Fix scoring.py NaN bug**: unblock paper-facing test_avg/mae_surf_p (requires read-only waiver or human coordinator action)
+## Potential next round directions (round 3, after current PRs land)
+1. **Compose top-2 winners** — stack two best-performing changes (e.g. BF16 + best feature/arch + Huber stays implicit)
+2. **Larger model under BF16**: if BF16 works, use the freed compute for n_hidden=192 or 256
+3. **Huber delta sweep**: δ ∈ {0.5, 2.0} to test sensitivity around δ=1.0
+4. **Per-channel pressure-only auxiliary loss**: extra loss term on dim 2 (p) only
+5. **Warmup-cosine schedule**: 3-epoch warmup → cosine decay (helps with the early-LR-too-low issue from 14-epoch truncation)
+6. **Mesh-aware sampler**: weight training samples by inverse squared mesh size to balance compute
+7. **Per-domain stats**: separate (y_mean, y_std) for raceCar/cruise/single domains
+8. **Larger batch + grad accumulation**: batch_size=8 effective, paired with BF16
 
-## No idle students
-All 8 students are assigned.
+## Scoring.py NaN bug (branch-wide)
+`test_geom_camber_cruise/000020.pt` has 761 `inf` values in GT. `data/scoring.py::accumulate_batch` correctly masks these but does `err = abs(pred - y)` *before* applying the per-sample mask, and `inf - finite = inf`, `inf × 0 = NaN`. The accumulator becomes NaN globally.
+
+Affects: All `test_avg/mae_surf_p` numbers on this branch are NaN (except fern which produced 113.41 — coincidence under investigation).
+
+Fix requires modifying `data/scoring.py` (marked read-only). Workaround: rank on val_avg/mae_surf_p; report test_avg as mean over 3 finite splits in the paper.

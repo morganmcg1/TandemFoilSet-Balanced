@@ -1,5 +1,30 @@
 # SENPAI Research Results
 
+## 2026-05-15 16:25 — PR #3238: Dual surface/volume output heads in final TransolverBlock
+
+- **Branch**: `charliepai2i24h3-fern/dual-branch-heads`
+- **Hypothesis**: Replace the single output MLP in the final TransolverBlock with two parallel MLPs (one for surface nodes, one for volume nodes), gated by `is_surface`. Predicted 4–10% improvement.
+- **Outcome**: **SENT BACK — not apples-to-apples (used MSE; baseline uses Huber)**
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` | 124.52 (best epoch 14, +5.8% over baseline) |
+| `val_single_in_dist/mae_surf_p` | 147.74 |
+| `val_geom_camber_rc/mae_surf_p` | 133.47 |
+| `val_geom_camber_cruise/mae_surf_p` | 99.46 |
+| `val_re_rand/mae_surf_p` | 117.41 |
+| `test_avg/mae_surf_p` | 113.41 (finite — only test result without NaN!) |
+| Epochs run | 14/50 (30-min cap) |
+| Peak VRAM | 43.13 GB |
+| Params | 0.68M (+17K vs single head) |
+| Artifact | `models/model-charliepai2i24h3-fern-dual_branch_heads-20260515-143202/metrics.jsonl` |
+
+**Analysis**: 5.8% above baseline, but the comparison is not clean — this run used MSE loss (the old default), while the new baseline uses Huber(δ=1.0). The architecture+MSE combination is plausibly less optimal than architecture+Huber. Also notable: val curve had a sharp ep13→ep14 drop (183.21 → 124.52), suggesting the last-epoch number may be noisier than the trajectory implies. Sent back for rebase + re-run with the merged Huber loss.
+
+The test_avg = 113.41 (finite) is interesting — fern's run is the only one so far with a non-NaN test number. Either the dual-branch architecture happens to produce a finite output for the bad sample, or fern's predictions for `test_geom_camber_cruise/000020.pt` happen to be inf themselves (giving `(inf - inf).abs() = NaN` only in scoring.py's per-element step). Investigating after the rebase.
+
+---
+
 ## 2026-05-15 15:25 — PR #3237: Huber loss (delta=1.0) to cap high-Re gradient outliers
 
 - **Branch**: `charliepai2i24h3-edward/huber-loss`
