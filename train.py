@@ -448,7 +448,7 @@ class EMA:
 
 @dataclass
 class Config:
-    lr: float = 1.7e-4
+    lr: float = 3.4e-4
     weight_decay: float = 3e-4
     batch_size: int = 4
     surf_weight: float = 30.0
@@ -491,9 +491,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
+    n_hidden=192,
+    n_layers=6,
+    n_head=6,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
