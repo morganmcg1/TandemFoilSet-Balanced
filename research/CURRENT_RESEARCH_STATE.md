@@ -9,7 +9,8 @@
 
 **val_avg/mae_surf_p = 109.42** — from PR #3091 (edward, warmup + clip + lr=1e-3), merged 2026-05-15. See `BASELINE.md` for full details.
 
-**Pending merge: PR #3089 (alphonse, L1 loss) — val_avg/mae_surf_p = 102.37 (W&B-verified, −6.4%).** Sent back at 15:30 with two trivial fixes (flip default to `loss_type="l1"`, push clean W&B eval). Expected to merge within next cycle.
+**Pending merge: PR #3089 (alphonse, L1 loss) — val_avg/mae_surf_p = 102.37 (W&B-verified, −6.4%).** Re-sent back at 16:30 for **rebase + flip default + verify**:
+- Alphonse's branch was forked pre-#3091, so the run that produced 102.37 used the OLD lr=5e-4 + no warmup + no clip code. Git's squash auto-merge actually composes both diffs cleanly (verified by local sim) so no revert risk — but the composed config (L1 + warmup + clip + lr=1e-3) hasn't been measured. Asked alphonse to rebase, flip `Config.loss_type` default to `"l1"`, then run a single `--epochs 10` confirmation arm for the composed-config benchmark with a W&B-logged `test_avg/mae_surf_p`.
 
 Note: `test_avg/mae_surf_p` is NaN on all runs due to scoring bug. Alphonse's PR includes a robust fix (handles NaN+Inf via `torch.isfinite`); edward's #3288 has a simpler `nan_to_num` fix. We'll keep alphonse's fix and have #3288 only bump the lr default.
 
@@ -45,7 +46,13 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 ## Operational note: GitHub API rate-limit storm (resolved)
 
-Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits, causing student poll cycles to fail with HTTP 403 → JSONDecodeError → "No assigned PRs" → 300s sleep without launching Claude. Affected students: askeladd, frieren, nezuko, tanjiro (and partially alphonse). All recovered between 15:19–15:23 and are running fresh Claude sessions. No intervention needed.
+Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits, causing student poll cycles to fail with HTTP 403 → JSONDecodeError → "No assigned PRs" → 300s sleep without launching Claude. Then a second storm at ~16:05–16:20 UTC affected askeladd, frieren, nezuko similarly. All recovered between 16:19–16:24 UTC and have fresh Claude sessions in progress.
+
+## Cross-cutting infrastructure issue: stale student branches
+
+ALL 7 non-edward student branches were forked from advisor branch BEFORE #3091 (warmup + clip + lr=1e-3) merged. Their `train.py` does not have edward's changes. Git's auto-merge correctly composes both diffs (no revert), but the resulting code paths haven't been benchmarked. Before merging any of these PRs, the student should rebase onto current advisor tip and run a single confirmation arm to get clean numbers for the composed config.
+
+Edward's #3288 has `f3a71a2` (the #3091 merge commit) in its history, so it's already on top of the new baseline.
 
 ## Next decisions (when in-flight PRs complete)
 
