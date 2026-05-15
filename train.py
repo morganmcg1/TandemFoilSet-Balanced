@@ -239,10 +239,30 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            # Two sources of non-finite values can poison the masked accumulator
+            # in scoring.py via the (err * mask).sum() pattern (0 * inf = NaN):
+            #   1. Model emits inf on the p-channel for OOD cruise samples (e.g.
+            #      softmax-temperature × slice-norm × output linears overflow on
+            #      200K-node meshes with unseen camber).
+            #   2. Ground truth y itself can be non-finite: test_geom_camber_cruise
+            #      sample 000020.pt has 761 inf values in the p-channel. scoring.py's
+            #      per-sample y_finite skip flags the sample, but the (err * 0) mul
+            #      still produces NaN because err = |pred - inf| = inf at those
+            #      positions, and inf * 0 = NaN.
+            # Fix: sanitize pred (zero out non-finite), then for any sample whose y
+            # is non-finite anywhere, replace its y with 0 and drop it from the
+            # mask we hand to the scorer. y_safe is finite everywhere so err is
+            # finite; mask_safe excludes the bad sample, preserving scoring.py's
+            # per-sample-skip semantics without the NaN propagation.
+            pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            y_safe = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+            y_norm_safe = torch.where(torch.isfinite(y_norm), y_norm, torch.zeros_like(y_norm))
+            mask_safe = mask & y_finite_sample[:, None].expand_as(mask)
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            sq_err = (pred - y_norm_safe) ** 2
+            vol_mask = mask_safe & ~is_surface
+            surf_mask = mask_safe & is_surface
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -254,7 +274,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_safe, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -380,6 +400,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    slice_num: int = 64
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -421,7 +442,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
