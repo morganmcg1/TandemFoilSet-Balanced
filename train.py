@@ -236,13 +236,19 @@ class ReScaler(nn.Module):
 
 
 class TransolverWithReScaler(nn.Module):
-    def __init__(self, transolver, re_scaler):
+    def __init__(self, transolver, re_scaler, pre_scale_clamp=50.0):
         super().__init__()
         self.transolver = transolver
         self.re_scaler = re_scaler
+        self.pre_scale_clamp = pre_scale_clamp
 
     def forward(self, data, **kwargs):
         preds = self.transolver(data)["preds"]
+        # Defensive clamp on the trunk's normalized output before per-sample
+        # scaling. Far outside any normal training value (~|y_norm| <= a few),
+        # but catches single-sample spikes that would otherwise overflow float32
+        # after denormalization by the cruise split's large y_std.
+        preds = preds.clamp(-self.pre_scale_clamp, self.pre_scale_clamp)
         log_re = data["log_re"]
         scale = self.re_scaler(log_re)
         return {"preds": preds * scale.unsqueeze(1)}
@@ -302,6 +308,78 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     return out
 
 
+def evaluate_split_nan_safe(model, loader, stats, surf_weight, device) -> dict[str, float]:
+    """NaN-safe alternative to ``evaluate_split`` for test splits.
+
+    Works around the ``Inf*0 = NaN`` bug in ``data/scoring.py::accumulate_batch``
+    when a sample's ground truth contains ``Inf`` (e.g. cruise test sample 20
+    has 761 ``Inf`` values in GT ``p``). The bug: ``err = (pred - y).abs()`` is
+    computed before masking, so ``(finite - Inf) = Inf``, then ``Inf * 0 = NaN``
+    propagates into the per-channel accumulator.
+
+    Mitigation here (does not modify ``data/scoring.py``):
+      1. Identify samples whose GT is non-finite and zero them out in the mask
+         we pass to ``accumulate_batch``.
+      2. Replace non-finite GT values with 0 before any arithmetic so no Inf
+         can enter the (pred - y) computation.
+
+    The combined effect is that corrupt samples contribute zero to the
+    accumulators while finite samples score identically to ``evaluate_split``.
+    A separate ``n_samples_skipped`` count is returned so the caller can audit.
+    """
+    vol_loss_sum = surf_loss_sum = 0.0
+    mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
+    n_surf = n_vol = n_batches = 0
+    n_samples_skipped = 0
+
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            n_samples_skipped += int((~y_finite_per_sample).sum().item())
+
+            sample_keep = y_finite_per_sample.unsqueeze(-1).expand(-1, mask.shape[-1])
+            effective_mask = mask & sample_keep
+            y_clean = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
+            log_re = (x[..., 13] * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm, "log_re": log_re})["preds"]
+
+            sq_err = (pred - y_norm) ** 2
+            vol_mask = effective_mask & ~is_surface
+            surf_mask = effective_mask & is_surface
+            vol_loss_sum += (
+                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                / vol_mask.sum().clamp(min=1)
+            ).item()
+            surf_loss_sum += (
+                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                / surf_mask.sum().clamp(min=1)
+            ).item()
+            n_batches += 1
+
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, effective_mask, mae_surf, mae_vol)
+            n_surf += ds
+            n_vol += dv
+
+    vol_loss = vol_loss_sum / max(n_batches, 1)
+    surf_loss = surf_loss_sum / max(n_batches, 1)
+    out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
+           "loss": vol_loss + surf_weight * surf_loss}
+    out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    out["n_samples_skipped"] = n_samples_skipped
+    return out
+
+
 def _sanitize_path_token(s: str) -> str:
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
     return out.strip("-_.") or "experiment"
@@ -332,6 +410,8 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    test_metrics_safe: dict | None = None,
+    test_avg_safe: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -359,6 +439,12 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+    if test_avg_safe is not None and "avg/mae_surf_p" in test_avg_safe:
+        summary["test_avg_nan_safe/mae_surf_p"] = test_avg_safe["avg/mae_surf_p"]
+        if test_metrics_safe is not None:
+            for split_name, m in test_metrics_safe.items():
+                for k, v in m.items():
+                    summary[f"test_nan_safe/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -388,7 +474,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 25.0
-    epochs: int = 50
+    epochs: int = 8
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -438,11 +524,12 @@ model_config = dict(
 rescaler_config = dict(
     hidden=32,
     out_channels=3,
-    max_log_scale=2.0,
+    max_log_scale=1.0,
 )
+pre_scale_clamp = 50.0
 transolver = Transolver(**model_config)
 re_scaler = ReScaler(**rescaler_config)
-model = TransolverWithReScaler(transolver, re_scaler).to(device)
+model = TransolverWithReScaler(transolver, re_scaler, pre_scale_clamp=pre_scale_clamp).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_transolver = sum(p.numel() for p in transolver.parameters())
 n_params_rescaler = sum(p.numel() for p in re_scaler.parameters())
@@ -469,6 +556,7 @@ with open(model_dir / "config.yaml", "w") as f:
         **asdict(cfg),
         "model_config": model_config,
         "rescaler_config": rescaler_config,
+        "pre_scale_clamp": pre_scale_clamp,
         "n_params": n_params,
         "n_params_transolver": n_params_transolver,
         "n_params_rescaler": n_params_rescaler,
@@ -580,6 +668,8 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_metrics_safe = None
+    test_avg_safe = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -602,6 +692,27 @@ if best_metrics:
             "test_splits": test_metrics,
         })
 
+        # NaN-safe re-eval (works around data/scoring.py Inf*0=NaN bug on
+        # the cruise test split where sample 20 has 761 Inf values in GT p).
+        print("\nNaN-safe test re-evaluation (corrupt-GT samples skipped)...")
+        test_metrics_safe = {
+            name: evaluate_split_nan_safe(ema_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        test_avg_safe = aggregate_splits(test_metrics_safe)
+        print(f"  TEST (NaN-safe)  avg_surf_p={test_avg_safe['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, test_metrics_safe[name])
+            n_skipped = test_metrics_safe[name].get("n_samples_skipped", 0)
+            if n_skipped:
+                print(f"      [n_samples_skipped={n_skipped}]")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "test_nan_safe",
+            "best_epoch": best_metrics["epoch"],
+            "test_avg": test_avg_safe,
+            "test_splits": test_metrics_safe,
+        })
+
     write_experiment_summary(
         model_path=model_path,
         model_dir=model_dir,
@@ -612,6 +723,8 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        test_metrics_safe=test_metrics_safe,
+        test_avg_safe=test_avg_safe,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
