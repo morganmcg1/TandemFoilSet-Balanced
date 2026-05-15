@@ -46,6 +46,25 @@ from data import (
     pad_collate,
 )
 
+
+def log_cosh_loss(pred: torch.Tensor, target: torch.Tensor, reduction: str = 'none') -> torch.Tensor:
+    """Numerically-stable log-cosh loss.
+
+    log(cosh(x)) = |x| + log(1 + exp(-2|x|)) - log(2)
+
+    This formulation avoids overflow for large |x| while preserving the
+    standard log-cosh shape.
+    """
+    diff = pred - target
+    abs_diff = diff.abs()
+    loss = abs_diff + torch.nn.functional.softplus(-2.0 * abs_diff) - 0.6931471805599453  # log(2)
+    if reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'sum':
+        return loss.sum()
+    return loss
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -240,7 +259,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+            sq_err = log_cosh_loss(pred, y_norm, reduction='none')
             sq_err_clean = torch.where(torch.isfinite(sq_err), sq_err, torch.zeros_like(sq_err))
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -456,7 +475,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
+        sq_err = log_cosh_loss(pred, y_norm, reduction='none')
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
