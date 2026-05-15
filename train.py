@@ -402,7 +402,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    loss_fn: str = "mse"           # "mse" or "charbonnier"
+    loss_fn: str = "charbonnier"   # "mse" or "charbonnier"
     charbonnier_eps: float = 1e-3  # ε for Charbonnier sqrt(r² + ε²)
 
 
