@@ -195,3 +195,50 @@ Per CLAUDE.md, this beats the baseline on the primary ranking metric (`test_avg/
 
 - **#3258 (fern, grad-clip+warmup)** — already reran with the corrected NaN guard, returned `val_avg=117.31, test_avg=105.70` on the OLD MSE base. Beats the old baseline by 0.5% on test_avg but regresses against the new merged baseline by 12%. Sent back for rebase onto frieren's loss + rerun. Mechanism (clipping median-56 gradients with peak >1000) is orthogonal to loss reformulation, so should compose.
 - **#3262 (edward, RFF σ=1.0)** — never got to corrected-patch rerun before frieren merged. Posted note: rebase onto new base + apply NaN guard + rerun RFF σ=1.0 (skip σ=4.0 which already lost).
+
+## 2026-05-15 19:23 — PR #3263: FiLM log(Re) conditioning (send-back, needs rebase)
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/film-re-cond`
+- **Hypothesis:** Inject a FiLM (Feature-wise Linear Modulation) module conditioned on log(Re) after the Transolver preprocess layer, before the attention blocks. FiLM adds a learned affine gate `(γ, β) = MLP(log(Re))` applied to the preprocess hidden state, giving the model a direct low-rank route to modulate all 128 channels by global Re.
+- **W&B runs:** `zjogv9vn` (film-re-v1), `rlildyv4` (film-re-v2), `joszk2jg` (film-re-v3 best), `vsuqhyt5` (fresh baseline)
+
+### Result (vs own fresh baseline `vsuqhyt5`, all runs hit 30-min timeout cap at epoch 14)
+
+| Split | Baseline `vsuqhyt5` | FiLM v3 `joszk2jg` | Δ (rel) |
+|-------|--------------------:|-------------------:|--------:|
+| `val_single_in_dist`      | 161.82 | 142.03 | **−12.2%** |
+| `val_geom_camber_rc`      | 137.18 | 125.03 | **−8.9%** |
+| `val_geom_camber_cruise`  | 121.72 |  95.99 | **−21.1%** |
+| `val_re_rand`             | 129.41 | 111.15 | **−14.1%** |
+| **`val_avg/mae_surf_p`**  | **137.53** | **118.55 (−13.8%)** | — |
+| `test_single_in_dist`     | 137.69 | 126.24 | −8.3% |
+| `test_geom_camber_rc`     | 126.39 | 120.84 | −4.4% |
+| `test_re_rand`            | 127.87 | 110.98 | −13.2% |
+| `test_geom_camber_cruise` | NaN    | NaN    | pre-existing (run pre-fix) |
+| **3-split test mean**     | 130.65 | 119.35 | **−8.6%** |
+
+Seed spread across 3 FiLM runs: 133.34 / 127.89 / 118.55 (best). 3-seed mean: 126.59. All seeds beat baseline on val_avg.
+
+### Decision: sent back for rebase + rerun on frieren-base
+
+Thorfinn's fresh baseline was `vsuqhyt5` (val=137.53) — a high-variance unclipped run. While thorfinn was running, frieren's #3257 merged (val=106.67, test=94.35). FiLM v3's val=118.55 does NOT beat the new merged baseline (106.67). Mechanism is orthogonal (Re conditioning vs. loss reformulation), so should compose. Sent back to rebase and rerun v3 on the new base.
+
+### Analysis
+
+- **Directional signal is strong.** −21.1% on val_cruise (the split with widest Re range 122K–5M) and −14.1% on val_re_rand exactly matches the prediction that FiLM leverages Re most where Re varies most. The mechanism is working as intended.
+- **Seed variance is large (133→127→118).** This is the unclipped baseline variance. The rebased rerun should reduce variance if clip+warmup lands (orthogonal merge candidate via #3258).
+- **The test_3split=119.35 vs merged baseline test_4split=94.35 gap is 27%** — but these are against different loss configurations. The rebased run on frieren's loss may close most of this gap.
+- **NaN guard was NOT applied** (run pre-merge). The rebased run will automatically inherit the canonical guard from the merged head — test_avg will be 4-split finite.
+
+### R2 follow-ups (from thorfinn's suggestions, saved)
+
+1. Per-block FiLM heads (standard recipe in conditional generation) — natural R2 extension after rebase win
+2. Richer conditioning vector `(log_Re, AoA_1, AoA_2, gap, stagger)` — all global scalars, same mechanism
+3. ~~NaN fix~~ — RESOLVED in #3257 merge
+
+## 2026-05-15 19:25 — PR #3256 (CLOSED): Huber loss delta=0.5 (redundant with #3257 merge)
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/huber-loss`
+- **Hypothesis:** Replace MSE with Huber loss (δ=0.5) for outlier-robust loss metric alignment.
+- **Outcome:** No results produced. Closed as redundant — frieren's #3257 empirically validated the L1-style robustness direction, and pure MAE+p-weight=3 is a superset of the Huber approach. Pod was blocked by GitHub API rate-limit cycling for 6+ hours with no commits pushed.
+- **Reassignment:** #3406 surf_weight sweep {5,10,20} on merged baseline.
