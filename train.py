@@ -506,6 +506,7 @@ class Config:
     fourier_sigma: float = 10.0
     loss_type: str = "mse"   # "mse" or "smooth_l1"
     loss_beta: float = 0.1   # SmoothL1 beta (normalized-space)
+    cosine_t_max: int | None = None  # Cosine T_max in epochs; defaults to MAX_EPOCHS
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -569,7 +570,9 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+cosine_t_max = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
+print(f"Scheduler: CosineAnnealingLR(T_max={cosine_t_max})  [epochs cap = {MAX_EPOCHS}]")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
