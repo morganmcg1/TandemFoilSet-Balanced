@@ -464,3 +464,95 @@ Student correctly diagnosed root cause: manifold mixup assumes canonical positio
 - Hypothesis: replace global y_mean/y_std normalization with per-domain statistics (raceCar single / raceCar tandem / cruise computed from training data at startup). Equalizes baseline gradient magnitudes across domains, specifically targeting the single_in_dist anomaly (worst split at val=122.19 despite being in-distribution). RANK #3 in current research agenda.
 - Two arms: per-domain hard labels (gap==0 → single), per-domain + per-channel (Ux/Uy/p separate).
 
+## 2026-05-15 21:26 — PR #3373: bf16 mixed-precision AMP [MERGED — new round-5 baseline]
+
+- Branch: `charliepai2i24h5-edward/bf16-mixed-precision`
+- Student: charliepai2i24h5-edward
+- Hypothesis: wrap forward pass in `torch.autocast(device_type="cuda", dtype=torch.bfloat16)`; cast pred and sq_err back to fp32 before all reductions. Expected ~20-30% per-epoch speedup → more effective epochs in 30-min cap.
+- Status: MERGED. Arm A (batch_size=4, bf16) wins. Arm B (batch_size=8) regressed.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | epochs | sec/epoch | peak VRAM |
+|---|---:|---:|---:|---:|---:|
+| Baseline (#3281, fp32) | 114.1704 | 102.0813 | 14 | ~125s | 42 GB |
+| Arm A (bf16, bs=4) | **99.1251** | **89.1198** | **19** | **~98s** | **33 GB** |
+| Arm B (bf16, bs=8) | 122.4724 | 110.8305 | 18 | ~105s | 66 GB |
+
+Per-split val (Arm A vs #3281): single_in_dist 119.86 (−13.5%), geom_camber_rc 112.45 (−14.1%), geom_camber_cruise 74.04 (−12.5%), re_rand 90.15 (−12.3%). Uniform improvement across all splits.
+
+Note: run was on tip `1211ee5` (pre-surf-L1, pre-FiLM). Standalone bf16 result (99.13) already beats current best FiLM baseline (103.02). Full compound expected in high-80s/low-90s val_avg.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-edward-bf16-baseline-config-20260515-182527/metrics.jsonl`
+- `models/model-charliepai2i24h5-edward-bf16-batch8-20260515-192457/metrics.jsonl`
+
+### Analysis
+
+bf16 delivers exactly the predicted ~21% per-epoch speedup, 5 additional effective training epochs in the wall-clock budget (14 → 19), and 9 GB VRAM reduction (42 → 33 GB). The mechanism is purely a compute unlock: more passes over the data with the same training recipe. The improvement is broad-based (10-14% per split) consistent with "same training, more data passes" rather than any per-split optimization. Arm B regression is well-explained: batch_size=8 at bf16 has fewer optimizer steps per epoch, but doesn't save wall-clock (because compute per step is larger), so total gradient steps drops by ~50%. Per-sample scale-invariant loss already equalizes residual gradient noise; removing additional noise at batch=8 isn't helpful. VRAM headroom (33 GB) enables capacity-revisit experiments (n_hidden=192/256).
+
+## 2026-05-15 21:26 — PR #3346: Cosine T_max=15 + 1-epoch warmup + LR=7e-4 [CLOSED — regression]
+
+- Branch: `charliepai2i24h5-thorfinn/cosine-tmax-fix-warmup-lr7e-4`
+- Student: charliepai2i24h5-thorfinn
+- Hypothesis: align cosine schedule to wall-clock budget (T_max=15) + 1-epoch warmup + raised peak LR=7e-4. Predicted −2% to −5% on val_avg.
+- Status: CLOSED. All 3 seeds regress +6.45% to +9.30% vs merged baseline (#3281).
+
+### Results
+
+| Run | val_avg/mae_surf_p | Δ vs #3281 baseline |
+|---|---:|---:|
+| Baseline (#3281) | 114.1704 | — |
+| Best seed (20260515-192741) | 120.6238 | +6.45% worse |
+| Seed 2 (20260515-182633) | 123.4285 | +9.26% worse |
+| Seed 3 (20260515-202725) | 123.4680 | +9.30% worse |
+
+Cross-seed std ≈ 1.6; the underperformance well outside noise. Schedule executed correctly (verified via per-epoch LR logging).
+
+### Analysis
+
+Student's post-mortem is comprehensive and correct:
+1. **Warmup epoch wastes budget.** With only ~14 epochs of wall-clock, epoch 1 training at LR=7e-7 is a ~7% throughput cost with zero return.
+2. **The "flat" baseline cosine is a feature, not a bug.** `CosineAnnealingLR(T_max=50)` truncated at epoch 14 gives LR≈4.7e-4 throughout — essentially constant. This maximizes early-training gradient signal in the undercooked regime.
+3. **eta_min=7e-6 is too aggressive.** Reaches LR=4.13e-5 at epoch 14 while baseline is still at 4.45e-4.
+
+The "drop the warmup, T_max=19 (match bf16 horizon)" variant is the natural follow-up, assigned to thorfinn as PR #3465.
+
+## 2026-05-15 21:29 — PR #3315: Cautious AdamW on full merged stack [MERGED — new best, current baseline]
+
+- Branch: `charliepai2i24h5-askeladd/cautious-adamw-optimizer`
+- Student: charliepai2i24h5-askeladd
+- Hypothesis (third rebase — onto b5760af with FiLM + surf-L1 + EMA + scale-inv): Cautious AdamW gates ~38% of updates each step via `(m * g > 0)` agreement mask; mechanisms are orthogonal to all four merged techniques.
+- Status: MERGED. Decisive win, new round-5 best.
+
+### Results
+
+| Comparison | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---:|---:|
+| #3337 surf-L1 baseline | 106.8550 | 96.8671 |
+| #3265 FiLM baseline | 103.0171 | 92.1617 |
+| **Cautious AdamW + full stack (this run)** | **90.3428** | **80.1674** |
+| Δ vs #3265 (pre-merge best) | **−12.31%** | **−13.01%** |
+
+Per-split val vs #3265: single_in_dist −10.05% (109.91), geom_camber_rc −14.37% (103.37), geom_camber_cruise −14.57% (65.69), re_rand −10.69% (82.40). All 8 val/test cells improve by 10–15%.
+
+Mask agreement: mean ≈ 0.620, flat across all 13 training epochs and across all three run variants (standalone, +EMA, +EMA+surf-L1+FiLM). This is direct evidence the cautious mechanism operates on disjoint state from all other merged techniques.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw_on_ema_v2-20260515-203741/metrics.jsonl`
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw_on_ema_v2-20260515-203741/metrics.yaml`
+
+### Analysis
+
+Five compounding wins in round 5: scale-inv → EMA → surf-L1 → FiLM → Cautious AdamW. Cumulative: −27.06% val_avg (123.88 → 90.34), −29.91% test_avg (114.37 → 80.17). The 12.31% jump from FiLM→Cautious AdamW was larger than predicted (96–100 expected; 90.34 delivered), driven by FiLM landing alongside surf-L1 between the second and third rebase — the compound FiLM+surf-L1+cautious stack is multiplicatively better than any two-mechanism compound tested so far.
+
+Key finding: EMA + FiLM together stabilize the iterate trajectory enough that cautious masking becomes a net positive on every split — in the standalone run, single_in_dist regressed (+2%) while OOD splits won big (−15%); with the full stack, every split wins (10–15% uniformly). The interaction is mechanistically clear: FiLM reduces per-step regime-conditioning variance (less gradient noise from condition-switch), EMA smooths the iterate to avoid sharp minima, and cautious masking then gates the remaining ~38% of disagreed-on directions.
+
+Steep epoch-13 descent (94.7 → 90.3 in final epoch) plus flat mask agreement curve signals training is still in cold-start. bf16 (#3373) will compound here, giving ~6 more effective epochs.
+
+## 2026-05-15 21:30 — New assignments (3 idle students after merges and close)
+
+- **PR #3463 (edward): Capacity revisit with bf16** — sweep n_hidden=192 (Arm A) and n_hidden=256 (Arm B) at batch_size=4 with bf16 and the full merged stack. bf16 brought peak VRAM to 33 GB, making these tests fair (previous #3270 capacity run completed only 5/50 epochs in the same budget). Expected −2% to −8% on best arm.
+- **PR #3465 (thorfinn): Schedule T_max alignment** — T_max=19 (match bf16 wall-clock epoch count), no warmup, eta_min=lr*0.05 (Arm A); T_max=25, eta_min=lr*0.1 (Arm B). Direct follow-up to the #3346 negative result: the "drop warmup, match T_max to budget" variant identified in thorfinn's own post-mortem.
+- **PR #3466 (askeladd): Bernoulli pressure residual** — predict `p − p_Bernoulli(Re, AoA)` instead of raw p. Removes the analytic dynamic-range component; model specializes on the viscous residual. Arm A: free-stream Bernoulli only (per-sample scalar subtraction). Arm B: free-stream + chord-position correction. Highest-novelty unexplored direction; targets the single_in_dist gap (val=109.91 after Cautious AdamW win).
+
