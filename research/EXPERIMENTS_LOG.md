@@ -553,3 +553,50 @@ Per-epoch pre-clip gradient L2 norms:
 ### Follow-up
 
 - Frieren reassigned to **DropPath (stochastic depth)** — a regularization axis, orthogonal to all conditioning work, zero param overhead, zero inference cost, compatible with LayerScale (#3404 nezuko in-flight). Different mechanism class than FiLM (regularization vs feature conditioning).
+
+## 2026-05-15 22:30 — PR #3332: bf16 + bs=8 retry — CLOSED
+
+- **Student branch**: `charliepai2i24h1-edward/bf16-amp`
+- **Hypothesis (retry arm)**: With peak memory 49 GB / 96 GB at bs=4, bs=8 should give 1.7-1.9× per-epoch speedup → 21-24 epochs realized at the wider trunk. Combined with cosine T_max=22, would unlock the first wider-trunk run with fully-annealed cosine.
+- **Verdict**: CLOSED. bs=8 axis cleanly refuted — Transolver is memory-bandwidth-bound, not compute-bound. bs=8 was ~10% **slower** per-epoch and hit the 96 GB HBM ceiling (98.42 GB peak with `expandable_segments`).
+
+### Results (two arms in one PR)
+
+| Arm | val_avg/mae_surf_p | test_avg (NaN-safe 4-split) | epochs realized | s/epoch | peak_GB |
+|---|---:|---:|---:|---:|---:|
+| **bf16-bs8 (latest, T_max=22)** | **187.83** | 172.03 | 12/22 | 158.9 | **98.42** |
+| bf16-bs8 (1st relaunch, T_max=22) | 178.45 | — | 12/22 | 160.6 | 98+ |
+| bf16-bs4 (prior arm, T_max=12) | 129.76 | 117.76 | 12/12 | 143.7 | 49.24 |
+| Baseline #3136 (fp32 narrow, T_max=50) | 126.32 | NaN (3-split=123.43 pre-fix) | 14/50 | ~205 (wider fp32) | 42.11 |
+
+- **Metric artifacts**: `models/model-bf16-bs8-20260515-{192740,202644}/{metrics.jsonl,metrics.yaml}`
+
+### Mechanism findings
+
+1. **bs=8 is slower than bs=4** on this model. Per-batch time 382 ms (bs=4) → 846 ms (bs=8) — doubling the batch more than doubled per-batch time. The Transolver is **memory-bandwidth-bound**, so the bs=8 GEMM density gain doesn't compensate for the doubled memory traffic.
+2. **Peak memory jumps to 98 GB at bs=8**, hitting the HBM ceiling and forcing `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to avoid OOM. bs=12/16 would OOM hard.
+3. **Schedule misalignment compounds the regression**: T_max=22 with 12 realized epochs leaves LR at ~30% of peak at "best epoch" — cosine never anneals. All 4 val splits regress substantially (single_in_dist 285 vs baseline 159, geom_camber_rc 197 vs 127, etc.).
+4. **bf16 plumbing remains clean**: zero NaN/Inf, channel ratios well-behaved. Not a precision damage event; purely a schedule + batch-size mismatch.
+
+### Verdict commentary
+
+- **bs=8 axis is exhausted.** Memory-bandwidth bound + HBM ceiling = no future for batch-size throughput unlocks on this stack. bs=12/16 OOMs; bs=8 already underperforms bs=4.
+- **bf16 alone (the prior arm) was +2.7% on val** — close but not winning. Not enough to merge bf16 as standalone infrastructure.
+- **Stop/pivot criterion fires**: BASELINE.md stacking note documented that if bf16+bs=8 retry still doesn't beat 126.32, the wider-trunk thesis itself should be tested by reverting to narrow+bf16 (~18-20 epochs in cap). That test gets dispatched as the next PR.
+- **Student's analysis was excellent** — per-batch-time breakdown (382→846 ms) was the cleanest possible diagnostic. The 10-point run-to-run noise on bs=8 (178.45 vs 187.83) is concerning but not blocking the close decision.
+
+### Follow-up
+
+- Edward reassigned to **narrow trunk (n_h=128, n_head=4) + bf16** (PR #3478) — directly tests the stop/pivot criterion. If narrow+bf16 at 18-20 epochs beats 126.32, we revert the wider-trunk merge (#3130). If it ties, width is a wash and we keep the merged wider config. If narrow+bf16 regresses, the wider thesis is confirmed and we need throughput unlocks (torch.compile) as the next axis.
+
+## 2026-05-15 22:32 — PR #3127 askeladd SmoothL1 rerun: NUDGE (no rebased commits in 7h)
+
+- **Student branch**: `charliepai2i24h1-askeladd/smoothl1-loss`
+- **Status**: still on `status:wip`. Original result (val=114.14, big -9.6% improvement) was on pre-merge config (pre-#3130 narrow, pre-#3136 surf_weight=10, pre-#3137 no EMA, pre-#3378 NaN-safe). Sent back at 15:33 UTC for rebase + rerun on current advisor stack. No new commits or training output since.
+- **Action**: explicit advisor reminder posted. Confirmed exact `train.py` command and emphasis on canonical `beta=1.0` arm. Pod is heartbeating but Claude sessions are short — likely waiting on a clarifying instruction.
+
+## 2026-05-15 22:33 — PR #3404 nezuko LayerScale: NUDGE (no commits in 3h)
+
+- **Student branch**: `charliepai2i24h1-nezuko/layerscale-residual`
+- **Status**: assigned 19:25 UTC. Only one commit on the branch (the assignment commit `a605cf6a`). No comments, no metrics, no training output. Pod started seeing the assignment at iteration 90 (22:22 UTC) but training hasn't begun.
+- **Action**: explicit advisor reminder posted with reiteration of LayerScale module signature (per-channel `gamma`, init=1e-4, +1,920 params), forward wrapping pattern, and exact `train.py` command. Pod monitoring will catch the next iteration's status.
