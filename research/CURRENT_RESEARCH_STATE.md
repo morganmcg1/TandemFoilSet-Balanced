@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~17:55 UTC
+- **Last updated:** 2026-05-15 ~20:32 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -25,18 +25,18 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 3. **Grad norm:** Pre-clip gradient norm was 160 at lr=5e-4 in edward's Arm A. Now clipped at max_norm=1.0 (merged). Future PRs benefit automatically.
 4. **Model is not converged** at the 30-min timeout — edward's Arm B best epoch was the last completed epoch (14/15). There is significant headroom at longer training or larger epoch budgets.
 
-## In-flight experiments
+## In-flight experiments — all 7 actively training as of 20:31 UTC
 
-| # | Student | Hypothesis | Status |
+| # | Student | Hypothesis | Status / W&B run |
 |---|---------|-----------|--------|
-| #3089 | alphonse | L1 loss (val=102.37 ✓ verified on pre-#3091 code) | Sent back 16:30 — rebase + flip default + composed-config re-run |
-| #3096 | tanjiro | x-axis symmetry aug (val=161.54 — 47% regression, mostly stale code) | Sent back 17:30 — rebase + 1 confirmation arm at `--epochs 10`; decision rule on result |
-| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | WIP — sent back, has new commit |
-| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | WIP — short Claude sessions, no commit yet |
-| #3093 | frieren | bf16 + batch_size 4→8 (speed unlock — 18 epochs vs 14) | Sent back 17:50 — rebase + composed-config arm at `--epochs 10`; decision rule |
-| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — stale, no commits |
-| #3371 | thorfinn | EMA of weights (Polyak averaging for stable checkpoint selection) | NEW — just assigned |
-| #3372 | askeladd | Fourier positional encoding on (x,z) coords | NEW — just assigned |
+| #3089 | alphonse | L1 + warmup + clip + lr=1e-3 confirmation arm (target: val < 109.42) | **TRAINING** — `alphonse-l1-rebased` (ydztkz9s) started 20:22 |
+| #3414 | tanjiro | SWA: stochastic weight averaging over last K checkpoints | **TRAINING** — `…/swa-la…` (udfmekyw) started 20:26 |
+| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | **TRAINING** — `fern-slices-64-baseline-e10` (d62uhu5g) started 20:28 (restart after API storm) |
+| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | Correctly idle — waiting for #3089 to merge; scope reduced to lr-default only |
+| #3093 | frieren | bf16 + bs=8 rebased confirmation arm | **TRAINING** — `frieren-bf16-bs8-rebased` (ytpl95nk) started 20:29 |
+| #3095 | nezuko | surf_weight 10→20 rebased confirmation arm | **TRAINING** — `nezuko-surf20-rebased` (6amjj7jr) started 20:23 |
+| #3371 | thorfinn | EMA of weights (Polyak averaging decay=0.9999) | **TRAINING** — `thorfinn-ema-999` (yr4bbbg8) started 20:28 |
+| #3372 | askeladd | Fourier positional encoding on (x,z) coords | **TRAINING** — `askeladd-fourier-pe-4freq-lr1e` (xmcndd46) started 20:28 |
 
 ## Merged wins
 
@@ -44,9 +44,15 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 |---|---|---|
 | #3091 | LR warmup + clip + lr=1e-3 (edward) | **109.42** ← current baseline |
 
-## Operational note: GitHub API rate-limit storm (resolved)
+## Operational note: GitHub API rate-limit storms
 
-Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits, causing student poll cycles to fail with HTTP 403 → JSONDecodeError → "No assigned PRs" → 300s sleep without launching Claude. Then a second storm at ~16:05–16:20 UTC affected askeladd, frieren, nezuko similarly. All recovered between 16:19–16:24 UTC and have fresh Claude sessions in progress.
+Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits; second storm at ~16:05–16:20 UTC; third at ~17:49–17:57 UTC (during advisor PR-creation calls; PRs #3371/#3372 still landed via retries). **Fourth storm at ~20:10–20:25 UTC** — all 8 student pods saw "No assigned PRs" for 2–3 cycles because their assignment-polling helper failed with `JSONDecodeError` on the 403 response. Recovered by 20:23; all 7 active students kicked off training in the post-storm cycle (20:22–20:29).
+
+## Operational note: label routing on assignment skill
+
+**Persistent bug:** The `senpai:assign-experiment` skill's `create_assignment_pr_from_file` helper creates `student:<name>` (plain) instead of `student:willowpai2i48h4-<name>` (namespaced). Affected: #3371 (thorfinn), #3372 (askeladd), #3414 (tanjiro). All fixed manually with `gh pr edit --remove-label / --add-label`. Student pods on this track route on the namespaced label; the plain labels are visible-but-not-routed.
+
+**Workaround rule for this track:** After every new PR assignment, run: `gh pr edit <pr#> --repo morganmcg1/TandemFoilSet-Balanced --remove-label "student:<name>" --add-label "student:willowpai2i48h4-<name>"`
 
 ## Cross-cutting infrastructure issue: stale student branches
 
