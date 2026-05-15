@@ -2,34 +2,40 @@
 
 ## Current Best
 
-**PR #3166 — H7: FiLM Re/AoA conditioning (nezuko)**  
-Merged 2026-05-15. 14 epochs completed (30-min timeout cap; model not converged — still improving at cutoff).
+**PR #3160 — H4: Huber loss δ=0.5 (fern)**  
+Merged 2026-05-15. 14 epochs completed (30-min timeout cap; not converged).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| val_avg/mae_surf_p | **114.6268** | PR #3166 / metrics.yaml |
-| val_single_in_dist/mae_surf_p | 129.7991 | PR #3166 |
-| val_geom_camber_rc/mae_surf_p | 129.0683 | PR #3166 |
-| val_geom_camber_cruise/mae_surf_p | 94.8233 | PR #3166 |
-| val_re_rand/mae_surf_p | 104.8163 | PR #3166 |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3166 |
-| test_avg/mae_surf_p (3-split, excl. cruise) | 111.155 | PR #3166 |
+| val_avg/mae_surf_p | **112.8406** | PR #3160 / Huber δ=0.5 |
+| val_single_in_dist/mae_surf_p | 144.92 | PR #3160 |
+| val_geom_camber_rc/mae_surf_p | 125.53 | PR #3160 |
+| val_geom_camber_cruise/mae_surf_p | 81.82 | PR #3160 |
+| val_re_rand/mae_surf_p | 99.10 | PR #3160 |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3160 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | 113.44 | PR #3160 |
 
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample index 20 has non-finite GT; `nan * 0 = nan` propagates through the masked sum in `accumulate_batch`. `test_avg/mae_surf_p` is NaN as a result. All val metrics are clean. This affects any PR's test numbers until the bug is resolved.
+**Important:** fern's run used the pre-FiLM-merge train.py — i.e. **Huber δ=0.5 ALONE, no FiLM**. The current merged train.py contains both FiLM and Huber together, but the FiLM+Huber compound has not been tested yet. The 112.84 number is **Huber δ=0.5 only**.
 
-**Note on FiLM baseline validity:** No unmodified Transolver has been run on this branch yet. The 114.63 value includes FiLM conditioning (cond_dim=11). Future PRs beating 114.63 may be beating FiLM, not the raw baseline. A clean baseline run (cond_dim=0) is tracked as a Round 2 priority.
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT; `nan * 0 = nan` propagates through the masked sum. `test_avg/mae_surf_p = NaN` for all PRs. File is read-only.
 
-**Artifacts:** `models/model-charliepai2i48h3-nezuko-h7-film-re-aoa-cond-20260515-131301/`
+**Artifacts:** `models/model-h4-huber-delta-0.5-20260515-135951/`
 
 **Reproduce:**
 ```bash
-# FiLM-conditioned (current best)
+# Huber δ=0.5 (current best, no FiLM)
 cd target/ && python train.py --epochs 50 \
-  --experiment_name h7-film-re-aoa-cond --agent <student>
-# Note: model_config must include cond_dim=11 (see merged train.py)
+  --experiment_name h4-huber-delta-0.5 --agent <student> --huber_delta 0.5
+# Note: merged train.py has cond_dim=11 by default (FiLM on); fern's run was BEFORE FiLM merge
 ```
+
+## Previous best (overridden)
+
+| PR | Experiment | val_avg/mae_surf_p | Status |
+|----|------------|--------------------|--------|
+| #3166 | H7: FiLM Re/AoA conditioning (nezuko) | 114.6268 | Merged, outperformed by #3160 |
 
 ## Default Transolver Config (Unmodified)
 
@@ -62,8 +68,8 @@ cd target/ && python train.py --epochs 50 --experiment_name baseline --agent <st
 | R1 | #3154 | H5: n_hidden=256 (alphonse) | — | — | WIP |
 | R1 | #3156 | H1: p-channel surf upweight x3,x5 (askeladd) | — | — | WIP |
 | R1 | #3158 | H2: EMA decay=0.999 (edward) | — | — | WIP |
-| R1 | #3160 | H4: Huber loss delta=1.0,0.5 (fern) | — | — | WIP |
+| R1 | #3160 | H4: Huber loss δ=0.5 (fern) | **112.8406** | NaN | **MERGED — NEW BEST** |
 | R1 | #3163 | H3: Grad clip + LR warmup (frieren) | — | — | WIP |
 | R1 | #3166 | H7: FiLM Re/AoA conditioning (nezuko) | **114.6268** | NaN (scoring bug) | **MERGED** |
-| R1 | #3168 | H10: slice_num=128,96 (tanjiro) | — | — | WIP |
+| R1 | #3168 | H10: slice_num=128,96 (tanjiro) | 149.27 (no FiLM) | 137.35 (3-split) | Closed |
 | R1 | #3170 | H11: n_layers=7,8 (thorfinn) | — | — | WIP |

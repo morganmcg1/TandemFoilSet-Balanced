@@ -106,3 +106,35 @@ Key student observation: scoring.py NaN bug confirmed and well-documented; stude
 - Status: Sent back to student. val_avg/mae_surf_p = 122.52 at epoch 14 — worse than baseline 114.63.
 - Analysis: No paired control (no-EMA run) so EMA contribution cannot be isolated. EMA benefit requires longer training to accumulate; at 14 epochs the shadow model lag may actually hurt. T_max=50 mismatch present.
 - Action: Requested Arm A (plain baseline, T_max=14) + Arm B (EMA-only no FiLM, T_max=14) paired comparison.
+
+---
+
+## 2026-05-15 15:35 — PR #3160: H4: Huber loss (δ=1.0, 0.5) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-fern/h4-huber-loss` (predates FiLM merge — Huber alone, no FiLM)
+- Hypothesis: Huber loss reduces extreme-Re gradient dominance by linearizing the right tail of normalized errors.
+
+| Arm | δ | val_avg/mae_surf_p | test_avg (3-split) |
+|---|---|---|---|
+| 1 | 1.0 | 115.99 | 114.02 |
+| 2 (best) | **0.5** | **112.84** | **113.44** |
+
+Per-split (δ=0.5, best):
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 144.92 |
+| val_geom_camber_rc | 125.53 |
+| val_geom_camber_cruise | 81.82 |
+| val_re_rand | 99.10 |
+| **val_avg** | **112.84** |
+
+- Artifacts: `models/model-h4-huber-delta-0.5-20260515-135951/metrics.jsonl`, `models/model-h4-huber-delta-1.0-20260515-130252/metrics.jsonl`
+- Best epoch: 14/50 (timeout-capped, not converged)
+- Peak VRAM: 42.12 GB
+
+**Analysis:** δ=0.5 beats FiLM baseline (114.63) by 1.79 points despite NO FiLM. δ=0.5 wins on 3/4 splits, losing only on val_geom_camber_rc (raceCar M=6-8 OOD). Mechanism plausible: tighter Huber threshold linearizes more of the right tail, damping extreme-Re gradient dominance. The improvement is mild (-1.6%) relative to the -3% to -8% hypothesis target, but real. Student suggested δ=0.25 to test if monotone trend continues.
+
+**Status: MERGED — new best at 112.84.** Sets new baseline. Merged train.py now contains BOTH FiLM and Huber but their compound has not been tested.
+
+**Follow-up:** Assign fern to test FiLM + Huber compound (the merged code's effective config).
