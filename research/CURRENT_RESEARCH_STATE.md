@@ -29,14 +29,14 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 | # | Student | Hypothesis | Status |
 |---|---------|-----------|--------|
-| #3089 | alphonse | L1 loss (val=102.37 ✓ verified) | **Sent back for 2 trivial fixes — merge candidate** |
-| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | WIP — consolidation (training observed) |
-| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | WIP — sent back |
-| #3090 | askeladd | Width: n_hidden 128→192 (+256) | WIP — recovering from rate-limit storm |
-| #3093 | frieren | bf16 + batch_size 4→8 | WIP — recovering from rate-limit storm |
-| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — recovering from rate-limit storm |
-| #3096 | tanjiro | x-axis symmetry augmentation | WIP — recovering from rate-limit storm |
-| #3097 | thorfinn | Depth: n_layers 5→8 + DropPath 0.1 | WIP — bug-fix posted, training |
+| #3089 | alphonse | L1 loss (val=102.37 ✓ verified on pre-#3091 code) | Sent back 16:30 — rebase + flip default + composed-config re-run |
+| #3096 | tanjiro | x-axis symmetry aug (val=161.54 — 47% regression, mostly stale code) | Sent back 17:30 — rebase + 1 confirmation arm at `--epochs 10`; decision rule on result |
+| #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | WIP — sent back, has new commit |
+| #3090 | askeladd | Width: n_hidden 128→192 (+256) | WIP — has implementation commit 46 min ago |
+| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | WIP — short Claude sessions, no commit yet |
+| #3093 | frieren | bf16 + batch_size 4→8 | WIP — repeated rate-limit storms, no commits |
+| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — repeated rate-limit storms, no commits |
+| #3097 | thorfinn | Depth: n_layers 5→8 + DropPath 0.1 | WIP — bug-fix posted but no code commit yet |
 
 ## Merged wins
 

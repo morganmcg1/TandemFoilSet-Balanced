@@ -134,3 +134,50 @@ Alphonse trained on `lr=5e-4` + no warmup + no clip (pre-#3091 advisor branch). 
 ### Coordination with #3288
 
 Alphonse's scoring fix (sub-select + torch.where) is more robust than edward's (`nan_to_num`). When alphonse's PR merges first, edward's #3288 should drop the duplicate scoring fix and only keep the lr default bump.
+
+---
+
+## 2026-05-15 17:30 — PR #3096: x-axis reflection symmetry augmentation (tanjiro) — **SENT BACK** (regression, conditional re-run)
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/xflip-aug`)
+- **Hypothesis:** Per-sample x-flip aug with Ux/AoA/stagger negation; predicted gains on geom_camber OOD splits.
+- **W&B run:** `a7kc6xxi` (verified)
+
+### Results
+
+| Arm | val_avg/mae_surf_p | test 3-clean-split | best epoch | total epochs |
+|---|---:|---:|---:|---:|
+| Single arm (xflip aug) | **161.54** | 162.46 | 12 | 14 |
+
+Compared to current baseline (109.42 from PR #3091): **+47% regression**. But branch was forked pre-#3091 (lr=5e-4, no warmup, no clip), so most of the gap is the stale-branch infrastructure. On the same pre-#3091 code, fern's slice_num=128 baseline (#3092) landed at val=150.26 — tanjiro is ~7% worse than that with augmentation.
+
+Per-split val surface MAE (best epoch 12):
+
+| Split | Tanjiro xflip | fern slice_num=128 (same code) |
+|---|---:|---:|
+| val_single_in_dist | **203.61** | 185.70 |
+| val_geom_camber_rc | 173.37 | 157.16 |
+| val_geom_camber_cruise | 125.17 | 127.68 |
+| val_re_rand | 143.99 | 130.51 |
+| **val_avg/mae_surf_p** | **161.54** | 150.26 |
+
+### Three concerning signals
+
+1. **Model peaked at epoch 12 and rose for epochs 13–14** (163.0 → 167.0). The wall clock didn't cut mid-improvement; the model was overfitting. With higher LR (lr=1e-3 in current advisor) it'll likely overfit even earlier.
+2. **`val_single_in_dist = 203.61` is the WORST split** — the easiest split (in-distribution) is being hurt by augmentation. xflip is making in-dist samples harder while only marginally helping OOD.
+3. **`val_geom_camber_cruise` ≈ identical to fern's number** (125.17 vs 127.68). The predicted OOD gain isn't showing up in absolute numbers; the relative-easier-than-in-dist signal is plausible but not symmetry-specific.
+
+### Bug-fix analysis
+
+Tanjiro independently identified the same `0 * NaN = NaN` propagation in `accumulate_batch` that edward and alphonse flagged. Same root cause, same path (read-only `data/scoring.py`).
+
+### Decision rule for the rebased confirmation arm
+
+- val < 109.42 → merge
+- val ∈ [109.42, 115] → merge only if geom_camber_cruise is clearly the best split (OOD-aug story still holds)
+- val > 115 → close. Hypothesis empirically unsupported at this scale.
+
+### Notes
+
+- Augmentation halves effective gradient signal per orientation; could benefit from longer schedule, but within 30-min budget the unaugmented baseline gets twice the effective per-orientation samples.
+- Symmetry aug is theoretically sound; the result here is most likely an interaction with: (a) stale code, (b) wall-clock cap, (c) MSE loss (L1 might compose better with aug). Worth re-investigating in round 2 stacked with alphonse's L1 + edward's warmup.
