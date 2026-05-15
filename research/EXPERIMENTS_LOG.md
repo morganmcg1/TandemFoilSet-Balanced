@@ -169,3 +169,69 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - The student also delivered a working NaN-safe re-eval (`eval_test_clean.py`) which respects the read-only constraint on `data/scoring.py`. **This pattern is now the recommended standard for reporting test numbers** until the scoring bug is patched.
 - Send back asks for: (a) rebase onto post-#3137 advisor (wider+EMA+surf_weight=25), (b) consider a sigma sweep (σ ∈ {2, 4, 8}) since σ=4 may not be optimal at this dataset's spatial frequency content, (c) re-run with longer effective horizon (the cosine schedule was sized for 50 but only ~15 ran — at minimum, request `T_max=epochs` alignment).
 - If the rebased rerun shows Fourier + EMA + surf_weight=25 beats 126.32 val_avg, we merge.
+
+## 2026-05-15 16:35 — PR #3134: slice_num 64->128 — CLOSED
+
+- **Student branch**: `charliepai2i24h1-fern/slice-num-128`
+- **Hypothesis**: Doubling the number of physics-attention slice tokens from 64 to 128 should give the model finer-grained representation of mesh-local physics regimes, with predicted 3-6% improvement on `val_avg/mae_surf_p`.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best) | 191.65 (epoch 7 of 7 realized) |
+| Δ vs pre-#3130 baseline (#3130 n_hidden=192 = 166.50) | +15% (WORSE) |
+| Δ vs current baseline (#3136, 126.32) | +52% (WORSE — much worse) |
+| trunk config used by student | n_hidden=128, n_head=4, surf_weight=10 (pre-#3130) |
+| epochs completed | 7 of 50 (cut by 30-min cap) |
+| Per-epoch wall time | ~4.3 min (≈2× #3130 baseline) |
+
+- **Metric artifacts**: `models/model-charliepai2i24h1-fern-slice-num-128-20260515-132506/metrics.jsonl`
+
+### Verdict: closed
+
+- Doubling `slice_num` doubles the per-epoch cost (~4.3 min/epoch vs ~2.2 min on baseline). Under the 30-min cap, this means only ~7 epochs realize instead of ~14. The capacity gain (more slice tokens) is more than offset by the budget loss (fewer epochs). At fixed wall-clock, finer slice resolution is strictly worse here.
+- Fern also independently diagnosed the cruise-test NaN root cause (Inf in `test_geom_camber_cruise/sample_20` GT × scoring-bug `Inf*0=NaN`) — same chain as nezuko #3137, tanjiro #3141, frieren #3136. The diagnostic agreement across 4 independent students is conclusive evidence; the read-only-waiver scoring-fix PR is overdue.
+- Closed rather than sent back: the cost-benefit math doesn't work under the 30-min cap. Even with budget alignment (T_max=epochs=7), the floor is the wall-clock budget, not the schedule. Fern reassigned to round-2 `p_surf_weight` (#3298, see below).
+
+## 2026-05-15 16:42 — PR #3127: SmoothL1 (Huber) loss — SENT BACK (strong-but-stale result)
+
+- **Student branch**: `charliepai2i24h1-askeladd/smoothl1-loss`
+- **Hypothesis**: MSE-in-normalized-space squares residuals; with per-sample y_std varying 10× within a split, a handful of high-Re samples dominate the gradient. Switching to SmoothL1 (Huber, beta=1.0) — quadratic near zero, linear in the tails — better matches the L1-in-physical-space evaluation metric and de-emphasizes outliers. Predicted 3-8% relative improvement, biggest on `val_re_rand` and `val_geom_camber_cruise`.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best) | **114.1433** (epoch 13 of 14 realized) |
+| test_avg/mae_surf_p (NaN-safe via per-sample y_finite filter) | **102.3205** |
+| Δ vs current baseline (#3136, 126.32) | **-9.6%** (BIG win) |
+| Δ vs nominal old-config-MSE (#3130, 166.50) | -31% |
+| trunk config used by student | n_hidden=128, n_head=4, surf_weight=10, no EMA (PRE-#3130) |
+| epochs completed | 14 of 50 (cut by 30-min cap) |
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| single_in_dist | 129.90 | 112.53 |
+| geom_camber_rc | 129.94 | 112.80 |
+| geom_camber_cruise | **92.61** | **80.85** |
+| re_rand | 104.12 | 103.11 |
+| **avg** | **114.14** | **102.32** |
+
+- **Metric artifacts**: `models/model-charliepai2i24h1-askeladd-smoothl1-loss-20260515-140900/metrics.jsonl`
+
+### Verdict: send back for rebase + budget-align
+
+- **The hypothesis is strongly validated**: SmoothL1 vs MSE is clearly a big win on the same architecture — 114.14 vs the closest comparable MSE measurement (#3130 = 166.50, wider but no EMA) is -31%.
+- **But the reported 114.14 is on the OLD pre-merge config** (n_hidden=128, n_head=4, surf_weight=10, no EMA — i.e., 4 axes different from current baseline), so it isn't a clean drop-in measurement for the merged stack. GitHub shows `mergeStateStatus: CLEAN` because the merge base is far enough back that nothing conflicts textually, but a hypothetical squash-merge would land SmoothL1 onto wider+EMA+surf_weight=25 — a recipe nobody has measured. The published 114.14 would not reproduce.
+- **Notable askeladd contribution**: a per-sample `y_finite` filter in `evaluate_split` (lines 236-249 of their `train.py`) — drops any sample with non-finite GT before accumulator math. Lives in `train.py` (not `data/scoring.py`), so it respects the read-only constraint. Different from tanjiro's mask-before-sum approach (#3141), but functionally equivalent. Either pattern is acceptable.
+- Send-back asks for: (a) `git rebase origin/icml-appendix-charlie-pai2i-24h-r1` to inherit wider+EMA+surf_weight=25, (b) keep SmoothL1 and the NaN-safe shim, (c) `--epochs 12` with `T_max=12` for proper cosine annealing, (d) re-report `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
+- **If the rebased rerun beats 126.32**, we merge — and given the magnitude of the gap opened on the old config, this is one of the higher-probability merges queued.
+
+## 2026-05-15 16:50 — PR #3298: per-channel p_surf_weight=3.0 on surface MSE (Idea 2 refinement) — DISPATCHED
+
+- **Student**: charliepai2i24h1-fern (round 2 reassignment after #3134 close)
+- **Hypothesis**: Now that surf_weight=25 is in the merged baseline, the surface loss dominates the total objective — but within surface loss all 3 channels (Ux, Uy, p) contribute equally. The primary metric only cares about p. Add a `p_surf_weight=3.0` multiplier inside the surface loss so the p channel gets 3× the gradient weight inside surf_loss (which is then multiplied by surf_weight=25 against vol_loss). Per-channel decomposition is the natural follow-up to frieren's global surf_weight win.
+- **Predicted delta**: 2-5% on val_avg/mae_surf_p; should also show that mae_surf_Ux and mae_surf_Uy don't degrade by more than ~2-3%.
+- **Schedule**: budget-aligned `epochs=12, T_max=12`.
+- Single-attributable axis: introduces a new config field `p_surf_weight: float = 3.0` and replaces the global surface MSE with a per-channel sum where channel index 2 (p) carries the multiplier. At `p_surf_weight=1.0` the formulation collapses to the original MSE, so the change is a clean knob.
