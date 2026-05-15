@@ -494,7 +494,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+        err = F.huber_loss(pred, y_norm, delta=0.05, reduction="none")  # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
