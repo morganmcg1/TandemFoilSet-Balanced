@@ -49,3 +49,37 @@ All 8 students idle; no PRs in flight. First round of assignments dispatched (ea
 **Pre-existing bug surfaced:** `test_geom_camber_cruise/mae_surf_p` returns NaN on the baseline arm. Non-finite pressure prediction on at least one test-cruise sample propagates Inf through `data/scoring.py:accumulate_batch`. Affects ALL PRs equally — tracked separately (see CURRENT_RESEARCH_STATE.md).
 
 **Sets the canonical round-3 baseline:** `val_avg/mae_surf_p = 135.30`, `test_avg/mae_surf_p (excl cruise) = 135.54`. See BASELINE.md.
+
+## 2026-05-15 15:00 — PR #3152 (edward): Per-channel loss weighting (p ×3 in MSE) — **REQUEST CHANGES**
+
+- Branch: `willowpai2i48h3-edward/channel-loss-weight-p`
+- W&B group: [`channel-loss-weight-p`](https://wandb.ai/wandb-applied-ai-team/senpai-v1/groups/channel-loss-weight-p)
+- Baseline run: `sw37lp52` | Variant run: `4rt8g0xb`
+
+**Hypothesis:** Upweight the p channel by 3× in MSE to align gradients with the primary metric `mae_surf_p`. Predicted −5 to −15%.
+
+**Result (variant minus baseline, lower is better):**
+
+| Metric | Baseline (1:1:1) | Variant (1:1:3) | Δ% |
+|---|---|---|---|
+| best_val_avg/mae_surf_p | **137.63** (ep 11) | 138.51 (ep 14) | +0.6% |
+| val_geom_camber_rc/mae_surf_p | 146.58 | 170.86 | **+16.6%** |
+| val_geom_camber_cruise/mae_surf_p | 107.67 | 100.75 | −6.4% |
+| val_re_rand/mae_surf_p | 127.19 | 117.40 | −7.7% |
+| val_single_in_dist/mae_surf_p | 169.09 | 165.01 | −2.4% |
+| val_avg/mae_surf_Ux | 2.207 | 2.658 | +20.4% |
+| val_avg/mae_surf_Uy | 0.928 | 1.056 | +13.9% |
+| val_avg/mae_vol_p | 137.72 | 145.15 | +5.4% |
+| 3-split test mean (excl cruise) | 136.36 | 140.57 | +3.1% |
+| Epochs reached / 50 (30-min cap) | 18 (best @11) | 18 (best @14) | — |
+
+**Decision:** REQUEST CHANGES. Sent back as draft with surface-only upweight follow-up.
+
+**Reason for not closing despite regression:**
+- Headline Δ on val_avg is only +0.6% — within the noise floor revealed by truncation (both arms stopped at 18/50 epochs).
+- Per-split deltas show real signal: cruise and re_rand benefit (-6.4%, -7.7%), suggesting p-focus helps on the smoother/easier OOD geometry, but rc regresses sharply (+16.6%) because the shared velocity-pressure representation is needed for rc.
+- Cross-check: this PR's baseline arm hits 137.63 vs canonical baseline 135.30 (+1.7%). Single-seed dual-arm comparisons are noisy at the few-percent level under wall-clock truncation.
+
+**Follow-up requested:** Run a third arm `variant-p3x-surf-only` in the same wandb_group. Apply [1,1,3] weighting **only to the surface portion** of the loss (vol_loss stays balanced [1,1,1]). This preserves velocity learning on volume nodes (~99% of mesh) while targeting surface-p specifically. Decision rule: merge if surface-only variant beats baseline by ≥2% on val_avg/mae_surf_p AND velocity MAEs degrade <5%; close otherwise.
+
+**Notable:** Student independently identified the cruise-test NaN bug (matches alphonse's earlier observation in PR #3140). Cross-channel coupling analysis is a useful contribution — confirms that *normalized-space* MSE underweights p relative to its physical contribution (suggests a future hypothesis around physical-units / scale-aware loss).
