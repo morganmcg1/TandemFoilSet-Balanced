@@ -2,7 +2,20 @@
 
 ## Current best
 
-### 2026-05-15 17:30 — PR #3294: Warmup + cosine over 14 epochs, lr=7e-4
+### 2026-05-15 21:15 — PR #3399: Scale slice_num 64→96 (warmup+cosine baseline)
+
+- **val_avg/mae_surf_p:** 97.757 (best @ epoch 12; 12 epochs completed under 30-min cap, still descending at cutoff)
+- **test_avg/mae_surf_p:** 86.388
+- **Per-split val mae_surf_p:** single 115.495 | geom_rc 110.451 | geom_cruise 75.398 | re_rand 89.685
+- **Per-split test mae_surf_p:** single 101.647 | geom_rc 94.849 | geom_cruise 64.297 | re_rand 84.757
+- **Changes:** slice_num 64→96 (single-axis)
+- **Loss/optimizer/schedule:** carried forward from PR #3294 stack (warmup+cosine 14ep, lr=7e-4, AdamW selective decay, grad-clip, NaN guard)
+- **Wall-clock:** 30.2 min (~151 s/epoch, fits 12 of 14 scheduled epochs)
+- **Metric artifacts:** `models/model-slice-num-96-20260515-192511/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name slice-num-96 --agent charliepai2i24h2-edward --epochs 14`
+- **Delta vs previous best (#3294):** -3.03% val_avg/mae_surf_p (100.811 → 97.757)
+
+### 2026-05-15 17:30 — PR #3294: Warmup + cosine over 14 epochs, lr=7e-4 (superseded)
 
 - **val_avg/mae_surf_p:** 100.811 (best @ epoch 14; 14 epochs completed under 30-min cap)
 - **test_avg/mae_surf_p:** NaN (pre-existing infra issue on test_geom_camber_cruise); 3-clean-split mean 99.15
@@ -42,18 +55,18 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=96,    # updated by PR #3399
     mlp_ratio=2,
 )
 ```
 ~1M params.
 
-## Reference training config (current baseline stack — PR #3208 + #3276 + #3294)
+## Reference training config (current baseline stack — PR #3208 + #3276 + #3294 + #3399)
 - AdamW: lr=7e-4, weight_decay=1e-4 (decay group only), no-decay group for LN/bias/1D
 - grad-clip: clip_grad_norm_(max_norm=1.0)
 - batch_size=4
 - surf_weight=10.0 (additional surface loss weight in normalized space)
-- epochs=14 (budget-matched; wall-clock cap ~30 min → ~14 epochs at ~132 s/epoch)
+- epochs=14 (budget-matched; wall-clock cap ~30 min → ~12 epochs at ~151 s/epoch with slice_num=96)
 - Scheduler: SequentialLR (LinearLR warmup start_factor=1e-3 over 2 ep, then CosineAnnealingLR T_max=12)
 - Loss: SmoothL1 (Huber, β=1.0) in normalized target space; vol_loss + surf_weight * surf_loss
 - NaN guard in evaluate_split (pre-sanitize y, mask bad samples before scoring)
