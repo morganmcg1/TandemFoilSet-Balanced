@@ -57,3 +57,52 @@ Results will be appended as PRs complete.
 **Status: MERGED** — establishes first val baseline at 114.63.
 
 **Follow-up for R2:** Run clean cond_dim=0 baseline to isolate FiLM's true contribution. Fix T_max to match actual training duration for all students.
+
+---
+
+## 2026-05-15 15:30 — PR #3168: H10: More Transolver slices (64→128) for finer flow representation
+
+- Branch: `charliepai2i48h3-tanjiro/h10-more-slices-128`
+- Hypothesis: Increasing slice_num from 64 to 128 (or 96) would give the model more representational bandwidth to capture finer pressure gradients along foil surfaces.
+- Artifacts: `models/model-charliepai2i48h3-tanjiro-h10-slices-128-20260515-130242/metrics.jsonl`, `models/model-h10-slices-96-20260515-140030/metrics.jsonl`
+
+| Arm | slice_num | val_avg/mae_surf_p | test_avg (NaN-safe) | Best epoch | Peak VRAM |
+|---|---|---|---|---|---|
+| Arm 1 | 128 | 151.62 | 142.60 | 9 | 54.5 GB |
+| Arm 2 (best) | 96 | 149.27 | 137.35 | 12 | 47.6 GB |
+
+Per-split (best arm, slice_num=96):
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 189.22 |
+| val_geom_camber_rc | 153.69 |
+| val_geom_camber_cruise | 114.65 |
+| val_re_rand | 139.51 |
+| **val_avg** | **149.27** |
+
+**Analysis:** Both arms significantly worse than FiLM baseline (114.63). However, this is the first **clean unmodified Transolver** result on this branch — the current best includes FiLM conditioning, and 149.27 at slice_num=96 is now our true no-conditioning reference. FiLM conditioning accounts for roughly -35 points (149 → 114) — a very large effect. The "more slices = better" hypothesis did not hold: slice_num=128 is actually slightly worse than 96, and the sweet spot may be at or below 96. Per-split split: 128 is better on val_geom_camber_cruise (large meshes, 108 vs 115) but much worse on val_geom_camber_rc (185 vs 154), showing a mesh-size-dependent slice tradeoff.
+
+Key student observation: scoring.py NaN bug confirmed and well-documented; student used `recompute_test.py` workaround successfully. `torch.where` fix proposed but not authorized (read-only file).
+
+**Status: CLOSED** — not merge-eligible (30% regression vs baseline). Useful clean-baseline data point.
+
+**Follow-up:** Assign tanjiro H13 (surface dual-head).
+
+---
+
+## 2026-05-15 15:26 — PR #3154: H5: Wider Transolver (n_hidden 128→256, n_head 4→8) — Sent back
+
+- Branch: `charliepai2i48h3-alphonse/h5-wider-hidden-256`
+- Status: Sent back to student. Insufficient epoch budget — only 7/50 epochs completed (4.4 min/epoch × 7 = 30 min). val_avg/mae_surf_p = 157.25 at epoch 7.
+- Analysis: The comparison is invalid because the baseline ran 14 epochs vs 7 for wider model. Hypothesis not disproven — undertested. Actual param count 2.54M (not ~5.5M as estimated), peak VRAM 83.89 GB (not 18 GB as estimated).
+- Action: Requested matched-budget paired comparison — Arm A (standard, T_max=14, 14 epochs) vs Arm B (wider, T_max=7, 7 epochs), both without FiLM.
+
+---
+
+## 2026-05-15 15:24 — PR #3158: H2: EMA weight averaging (decay=0.999) — Sent back
+
+- Branch: `charliepai2i48h3-edward/h2-ema-weight-averaging`
+- Status: Sent back to student. val_avg/mae_surf_p = 122.52 at epoch 14 — worse than baseline 114.63.
+- Analysis: No paired control (no-EMA run) so EMA contribution cannot be isolated. EMA benefit requires longer training to accumulate; at 14 epochs the shadow model lag may actually hurt. T_max=50 mismatch present.
+- Action: Requested Arm A (plain baseline, T_max=14) + Arm B (EMA-only no FiLM, T_max=14) paired comparison.
