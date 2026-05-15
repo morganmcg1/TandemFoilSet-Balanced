@@ -418,6 +418,12 @@ class Config:
     optimizer: str = "adamw"  # "adamw" or "soap" — single-variable A/B for PR #3283
     ema_decay: float = 0.0   # EMA decay (0 = disabled, 0.999 = recommended)
     seed: int = 0            # RNG seed (used for torch + cuda + numpy)
+    # Per-channel loss weighting for [Ux, Uy, p]. Modes:
+    #   "none"      → no channel weighting (baseline)
+    #   "all"       → apply [1, 1, p_channel_weight] to the entire loss
+    #   "surf-only" → apply [1, 1, p_channel_weight] only to surf_loss; vol stays balanced
+    channel_weight_mode: str = "none"
+    p_channel_weight: float = 3.0
 
 
 cfg = sp.parse(Config)
@@ -537,6 +543,10 @@ model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
+channel_weights = torch.tensor(
+    [1.0, 1.0, cfg.p_channel_weight], dtype=torch.float32, device=device
+)  # [Ux, Uy, p] — gated by cfg.channel_weight_mode
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
@@ -567,8 +577,17 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.channel_weight_mode == "all":
+            sq_err_vol = sq_err * channel_weights[None, None, :]
+            sq_err_surf = sq_err * channel_weights[None, None, :]
+        elif cfg.channel_weight_mode == "surf-only":
+            sq_err_vol = sq_err
+            sq_err_surf = sq_err * channel_weights[None, None, :]
+        else:
+            sq_err_vol = sq_err
+            sq_err_surf = sq_err
+        vol_loss = (sq_err_vol * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (sq_err_surf * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
