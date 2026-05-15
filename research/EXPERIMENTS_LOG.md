@@ -2,6 +2,74 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-15 19:35 — PR #3423: H15 SwiGLU MLP (edward) — **assigned (idle slot fill)**
+
+- Branch: `charliepai2i24h4-edward/swiglu-mlp`
+- Hypothesis: Replace standard `linear → GELU → linear` FFN in `TransolverBlock.mlp` with SwiGLU gated `linear → silu(gate) * value → linear`. H12 (dropout) showed FFN is high-leverage; SwiGLU targets the same sub-layer structurally. ~50% more MLP params (~165K total over 5 blocks).
+- Single arm. Keep mlp_ratio=2, dropout=0.1, no other change.
+- Target to beat: val_avg/mae_surf_p < 92.80.
+- Predicted delta: -2% to -5%. Composes with log1p (loss-side), Re-strat (sampler), RFF (input). Orthogonal mechanism.
+
+## 2026-05-15 19:35 — PR #3421: H14 Cosine T_max + eta_min alignment (nezuko) — **assigned (idle slot fill, fresh hypothesis post-H9 close)**
+
+- Branch: `charliepai2i24h4-nezuko/cosine-tmax-alignment`
+- Hypothesis: With 30-min cap → ~14 epochs realized, T_max=50 means cosine barely anneals. Late-stage low-LR is where cosine gains accrue. Sweep T_max ∈ {14, 20} with eta_min=1e-5.
+- Two arms. T_max=14 (full anneal) and T_max=20 (moderate anneal).
+- Target to beat: val_avg/mae_surf_p < 92.80.
+- Predicted delta: -2% to -6%. High-confidence direction (multiple students flagged independently). Orthogonal to model/loss.
+
+## 2026-05-15 19:30 — PR #3417: H11b log1p alpha sweep (thorfinn) — **assigned (verify combined baseline + find optimal alpha)**
+
+- Branch: `charliepai2i24h4-thorfinn/thorfinn/log1p-alpha-sweep`
+- Hypothesis: Parameterize signed-log1p as `sign(y) * log1p(α|y|) / α`. Sweep α ∈ {0.5, 1.0, 2.0}. α=1 arm verifies true combined val_avg under H11+H12 stack.
+- Three arms. α=0.5 (less compression), α=1.0 (verify, current default), α=2.0 (more compression).
+- Target to beat: val_avg/mae_surf_p < 92.80 (or establish true combined number from α=1 arm).
+- Critical: arm 2 (α=1) IS the verification of the current 92.80 baseline under combined code.
+
+## 2026-05-15 19:30 — PR #3222: H9 Cautious AdamW v2 (nezuko) — **CLOSED, did not compose with dropout**
+
+- Branch: `charliepai2i24h4-nezuko/cautious-adamw`
+- v2 hypothesis: Cautious AdamW + H12 dropout on RFF+Re-strat baseline. Test orthogonal composition.
+
+| Metric | v2 Value | vs H12 (112.49) |
+|---|---|---|
+| `val_avg/mae_surf_p` (best, epoch 12) | 113.60 | +1.0% (worse) |
+| `val_single_in_dist/mae_surf_p` | 126.23 | -7.7% |
+| `val_geom_camber_rc/mae_surf_p` | 133.57 | +13.0% (worse) |
+| `val_geom_camber_cruise/mae_surf_p` | 85.51 | -2.1% |
+| `val_re_rand/mae_surf_p` | 109.11 | +1.4% |
+| `test_avg/mae_surf_p` | 100.68 | -4.0% (better) |
+| mean_mask | 0.61 ± 0.01 | (mechanism active, not collapsing) |
+
+- Metric artifact: `models/model-charliepai2i24h4-nezuko-cautious-adamw-v2-20260515-183110/metrics.jsonl`
+- Diagnostic: Cautious mask mechanism is healthy (mean_mask stable at 0.61, ~39% of update positions zeroed each step). But the val/test divergence is uncomfortable (val +1.0%, test -4.0%). Val_geom_camber_rc badly regressed despite test_geom_camber_rc only +4.9%. The student's analysis is correct: Cautious AdamW + FFN dropout don't compose strictly additively because they fight the same overfitting mechanism. The new combined baseline (92.80) is 22% better than this result and unrecoverable through optimizer tweaks alone.
+- Decision: **Close** — mechanism doesn't compose with current best stack. Nezuko reassigned to H14 (T_max alignment).
+
+## 2026-05-15 19:30 — PR #3201: H3 channel-loss v2 milder p=1.5 (edward) — **CLOSED, direction exhausted**
+
+- Branch: `charliepai2i24h4-edward/channel-weighted-surf-loss-p3x` (was reused for v2)
+- v2 hypothesis: Milder channel weighting [1, 1, 1.5] to test if reduced over-emphasis preserves the velocity-pressure coupling.
+
+| Metric | v2 (p=1.5) | vs H12 (112.49) | vs v1 (p=3.0) |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (best, epoch 11) | 135.50 | +20.5% (worse) | -2.1% |
+| `val_single_in_dist/mae_surf_p` | 177.37 | +29.6% (worse) | -0.8% |
+| `val_geom_camber_rc/mae_surf_p` | 143.98 | +21.8% (worse) | -4.7% |
+| `val_geom_camber_cruise/mae_surf_p` | 98.36 | +12.6% (worse) | -1.0% |
+| `val_re_rand/mae_surf_p` | 122.27 | +13.7% (worse) | -1.8% |
+| `test_avg/mae_surf_p` | 127.37 | +21.5% (worse) | — |
+
+- Metric artifact: `models/model-charliepai2i24h4-edward-channel-loss-p1p5-20260515-183105/metrics.jsonl`
+- Diagnostic: Halving the pressure emphasis (18× → 12.9× effective) bought ~2% on val_avg but in-dist barely moved (-0.8% v1→v2 single_in_dist). The student's own analysis is correct: *any* explicit pressure overweighting disrupts the velocity-pressure coupling the model needs for in-distribution prediction. Smoothly interpolating magnitude doesn't interpolate harm. Direction is closed.
+- Decision: **Close** — direction exhausted, both p=3.0 and p=1.5 regress severely on the in-dist split. Edward reassigned to H15 (SwiGLU MLP). Good empirical work on the variance analysis and NaN root cause find — those were genuinely useful.
+
+## 2026-05-15 19:30 — PR #3184: H1 LinearNO ablation (alphonse) — **stale_wip, nudged**
+
+- Branch: `charliepai2i24h4-alphonse/linearno-no-interslice-qkv`
+- Hypothesis: Remove inter-slice QKV attention from `PhysicsAttention` (set `out_slice = slice_token`). LinearNO paper (Hao et al. 2025) showed this works across NS2d/Elasticity/Plasticity/Weather.
+- Status: Pod GPU was at 100% from 18:38–19:02 UTC (~24 min, consistent with hitting the 30-min wall-clock cap), but no metrics committed and no PR comment with results. Branch HEAD is still at assignment commit. Looks like training completed but the student-Claude didn't finalize.
+- Advisor action: Posted directive comment instructing student to check models/ artifacts, commit, post SENPAI-RESULT marker. If no artifacts, rerun. Reminded that baseline is now 92.80.
+
 ## 2026-05-15 19:00 — PR #3345: H11 signed-log1p target transform (thorfinn) — **MERGED, new baseline**
 
 - Branch: `charliepai2i24h4-thorfinn/thorfinn/log1p-targets`
