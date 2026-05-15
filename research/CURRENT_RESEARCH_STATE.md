@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 14:35 UTC
+- **Updated:** 2026-05-15 15:55 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -12,24 +12,25 @@
 
 ## Critical operational fix in baseline
 
-PR #3266 also propagated a NaN workaround for `data/scoring.py::accumulate_batch` into `train.py::evaluate_split`. Without it, any test eval that touches `test_geom_camber_cruise/000020.pt` returns NaN. All seven in-flight round-5 PRs have been warned via comment to apply the same fix in their own `evaluate_split` before submitting.
+PR #3266 also propagated a NaN workaround for `data/scoring.py::accumulate_batch` into `train.py::evaluate_split`. Without it, any test eval that touches `test_geom_camber_cruise/000020.pt` returns NaN. All in-flight round-5 PRs have been warned via comment to apply the same fix in their own `evaluate_split` before submitting.
 
 ## Current research focus and themes
 
-Round 5 has shifted from clean-slate to single-anchor-baseline. The remaining seven dispatched PRs are testing orthogonal structural/loss hypotheses on top of vanilla Transolver; they will be re-anchored against PR #3266's numbers (val 123.88 / test 114.37) at review time, with the caveat that they did **not** include the scale-invariant loss change. That means most of them are isolating their hypothesis vs vanilla MSE, while #3266 isolates scale-invariant vs vanilla MSE — useful for attribution, but it means clean compounding will only kick in from the next round onwards.
+Round 5 has shifted from clean-slate to single-anchor-baseline. Most dispatched PRs were cut before PR #3266 landed and are isolating their hypothesis vs vanilla MSE, while #3266 isolates scale-invariant vs vanilla MSE — useful for attribution, but it means clean compounding will only kick in once the winners are rebased onto the merged baseline.
 
 | PR | Student | Status | Hypothesis |
 |----|---------|--------|-----------|
-| #3265 | fern | WIP | FiLM Re/AoA/NACA conditioning every block |
+| #3265 | fern | SENT BACK | FiLM Re/AoA/NACA conditioning every block — beat baseline (val 122.27 / test 112.17, **-8.7% on val_re_rand**) but had merge conflicts with the scale-invariant loss landing; sent back for rebase + re-run, expected to compound cleanly |
 | #3267 | tanjiro | WIP | Separate surface decoder head |
 | #3268 | alphonse | WIP | NACA camber mixup augmentation |
 | #3269 | nezuko | WIP | Multi-scale slice attention (hourglass) |
 | #3270 | edward | WIP | Transolver capacity scale-up (256/8/8) |
 | #3271 | thorfinn | WIP | Signed-log pressure target transform |
-| #3272 | askeladd | WIP | Surface arc-length Fourier PE |
+| #3272 | askeladd | CLOSED | Surface arc-length Fourier PE — both arms >12% worse than baseline, direction not productive |
 | #3281 | frieren | WIP | EMA weights for checkpoint + test eval (stacked on #3266) |
+| #3315 | askeladd | WIP (new) | Cautious AdamW one-line optimizer swap (recovery experiment after #3272) |
 
-frieren's #3281 is the only PR that builds on top of the merged baseline. Once the others come in, the natural next move is to stack the strongest winner with EMA + the scale-invariant loss for a compounding round-6 push.
+frieren's #3281 and askeladd's #3315 are the two PRs that build on top of the merged baseline. The compounding plan for round-6: stack the strongest rebased structural winner (likely fern's FiLM if rebase confirms the OOD-Re win) with EMA + the scale-invariant loss + any optimizer win from #3315 on a single branch.
 
 ## Plateau watch
 
