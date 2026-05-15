@@ -10,44 +10,44 @@ target base `icml-appendix-charlie`).
 |-------|-------|
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=64`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
-| Loss  | **SmoothL1 (Huber, beta=1.0)** in normalized space, `surf_weight=10.0` (PR #3111) |
+| Loss  | **SmoothL1 (Huber, beta=0.5)** in normalized space, `surf_weight=10.0` (PR #3280 — tuned from beta=1.0 of #3111) |
 | EMA   | **Polyak averaging, decay=0.999**, evaluated at val/test time (PR #3285) |
 | Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3285, EMA-0.999, best epoch 14)
+## Current best metrics (PR #3280, SmoothL1 beta=0.5, best epoch 14)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **104.52** |
-| `test_avg/mae_surf_p` | NaN (run pre-dates #3279 NaN fix — 3-split mean = 103.36) |
-| `test/test_geom_camber_rc/mae_surf_p` | 100.47 |
-| `test/test_re_rand/mae_surf_p` | 91.34 |
-| `test/test_single_in_dist/mae_surf_p` | 118.26 |
-| `test/test_geom_camber_cruise/mae_surf_p` | NaN (will be finite on next run with merged NaN fix) |
+| `val_avg/mae_surf_p` **(primary)** | **98.45** |
+| `test_avg/mae_surf_p` | **87.63** |
+| `test/test_geom_camber_rc/mae_surf_p` | 94.91 |
+| `test/test_re_rand/mae_surf_p` | 86.17 |
+| `test/test_single_in_dist/mae_surf_p` | 106.01 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 63.44 |
 
 Per-split val surface-p MAE at best checkpoint:
 
 | Split | mae_surf_p |
 |-------|------------|
-| `val_single_in_dist`     | 130.72 |
-| `val_geom_camber_rc`     | 112.51 |
-| `val_geom_camber_cruise` |  79.47 |
-| `val_re_rand`            |  95.36 |
-| **avg** | **104.52** |
+| `val_single_in_dist`     | 119.70 |
+| `val_geom_camber_rc`     | 108.17 |
+| `val_geom_camber_cruise` |  74.09 |
+| `val_re_rand`            |  91.84 |
+| **avg** | **98.45** |
 
-Artifact: `models/model-ema-0999-20260515-145218/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-askeladd-smooth-l1-beta05-20260515-173606/metrics.jsonl`
 
 Reproduce:
 
 ```bash
 cd target/
-python train.py --experiment_name ema-repro --agent <name>
-# (SmoothL1 + EMA-0.999 + NaN-safe scoring all in train.py + data/scoring.py on icml-appendix-charlie-pai2i-48h-r1)
+python train.py --experiment_name smooth-l1-beta05-repro --agent <name>
+# (SmoothL1 beta=0.5 + EMA-0.999 + NaN-safe scoring all in train.py on icml-appendix-charlie-pai2i-48h-r1)
 ```
 
 ### Note on val variance
@@ -87,4 +87,5 @@ After every merged winner, the advisor:
 | 2026-05-15 | #3107 | baseline (MSE, default config) | 143.52 | — (calibration) |
 | 2026-05-15 | #3111 | SmoothL1 loss (Huber beta=1.0) | 115.17 | -19.7% |
 | 2026-05-15 | #3279 | NaN-safe scoring (infra, also re-rolls val seed) | 108.47 | -5.8% (stochastic) |
-| 2026-05-15 | #3285 | EMA model weights, decay=0.999 | **104.52** | **-3.6%** |
+| 2026-05-15 | #3285 | EMA model weights, decay=0.999 | 104.52 | -3.6% |
+| 2026-05-15 | #3280 | SmoothL1 beta=0.5 (tuned from 1.0) | **98.45** | **-5.81%** |
