@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-15 20:05 UTC
+- **As of:** 2026-05-15 20:35 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -28,7 +28,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 94.35**.
 | 4 | thorfinn | FiLM log(Re) conditioning | #3263 | **sent back for rebase** (v3 val=118.55 vs old base; rebased, re-running) |
 | 5 | nezuko   | Multi-scale slice tokens (coarse-global + fine-surface groups) | #3429 | WIP (replaces closed #3260; #3260 was −0.05% paired) |
 | 6 | alphonse | Cosine T_max fix (T_max=14) | #3358 | WIP |
-| 7 | askeladd | EMA weights β=0.999 | #3351 | WIP |
+| 7 | askeladd | EMA weights β=0.999 → β=0.99 on frieren-base | #3351 | **sent back for rebase** (β=0.999 val=131.37 vs old base; rebased + retry with β=0.99 shorter horizon) |
 | 8 | frieren  | Re-stratified loss reweighting | #3386 | WIP (just assigned) |
 | 9 | tanjiro  | surf_weight sweep {5,10,20} | #3406 | WIP (just assigned, replaces closed #3256) |
 | ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%; reassigned to #3429) |
@@ -53,7 +53,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 94.35**.
 - **thorfinn FiLM log(Re) (#3263 rebase):** Re conditioning largest on cruise/re_rand splits. Predicted val ~92–98, test ~83–88.
 - **frieren re-stratified loss (#3386):** Equalize per-sample gradient contribution by 1/std. Predicted 2–6% val, biggest on cruise.
 - **tanjiro surf_weight sweep (#3406):** Effective 30× weighting with p-weight=3 baked in. Predicted sw=5 → val ~100–104, test ~88–92.
-- **askeladd EMA (#3351):** Free 2–4% from weight averaging.
+- **askeladd EMA (#3351 rebase):** β=0.999 was 2.7 epoch horizon — too long for 14-epoch training. β=0.99 gives ~0.3 epoch horizon, averaging recent near-converged weights. Predicted val ~103–106, test ~90–94.
 - **nezuko surf-biased slice (#3260):** Architectural, high-variance bet. Needs rebase.
 
 ## Open issues / live diagnostics

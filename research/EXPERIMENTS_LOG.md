@@ -279,3 +279,31 @@ Nezuko traced cruise-NaN to non-finite **predictions** — same incorrect diagno
 ### Reassignment
 
 Reassigned nezuko to **#3429 Multi-scale slice tokens** (parallel coarse-global + fine-surface slice groups). Different architectural lever — adds dedicated slice capacity per regime instead of informing the routing.
+
+## 2026-05-15 20:35 — PR #3351: EMA weights β=0.999 (old-base result)
+
+- **Student/branch:** willowpai2i24h4-askeladd / `willowpai2i24h4-askeladd/ema-weights-beta-0.999`
+- **Hypothesis:** Apply Polyak/EMA averaging on model weights with β=0.999; evaluate with EMA-swapped weights to recover 2–4% from averaging late-training oscillations.
+- **W&B run:** `4v7imfa8`
+- **Ran against:** OLD pre-#3257 baseline (MSE loss), NOT the merged frieren base.
+
+### Result (best checkpoint at epoch 14/14, 30-min cap)
+
+| Metric | EMA-β0.999 run | Reference (old MSE base) |
+|---|---:|---:|
+| `val_avg/mae_surf_p` | **131.37** | edward 128.34 / fern 141.94 (variance band) |
+| `test_avg/mae_surf_p` (4-split, finite) | **118.65** | — (NaN guard helped; askeladd was diagnoser) |
+| `ema/avg_diff_norm` | 0.30 | EMA materially diverged from live weights ✓ |
+| `n_skipped_y_samples` (cruise) | 1 | canonical NaN guard inherited ✓ |
+
+### Decision: send back for rebase + retry with β=0.99
+
+Mechanism (EMA shadow weights, `update_ema`, `eval_with_ema_swap`) is correctly implemented — `ema/avg_diff_norm=0.30` confirms divergence from live. But result is on OLD MSE base, +25.7% above new merged target 94.35. Within seed variance of old-base anchors (128.34 / 141.94), so β=0.999 didn't deliver on the old base either.
+
+### Askeladd's own analysis (correct)
+
+β=0.999 effective horizon ≈ 1000 steps ≈ 2.7 epochs of 14-epoch training — too long, averages over high-LR pre-converged weights. β=0.99 effective horizon ≈ 100 steps ≈ 0.3 epoch — averages over only recent near-converged low-LR weights. This is the right diagnosis.
+
+### Send-back instructions
+
+Rebase onto new advisor head (merged frieren surf-MAE + p-weight=3 + canonical NaN guard). Conflicts in `train.py` loss + eval regions — keep frieren's content. EMA logic is separate. Re-run with `--ema_beta 0.99`; skip 0.999 and 0.9995. Predicted val ~103–106, test ~90–94 (−1–4% gain typical for EMA on well-tuned baselines).
