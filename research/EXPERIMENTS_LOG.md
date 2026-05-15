@@ -235,3 +235,46 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - **Predicted delta**: 2-5% on val_avg/mae_surf_p; should also show that mae_surf_Ux and mae_surf_Uy don't degrade by more than ~2-3%.
 - **Schedule**: budget-aligned `epochs=12, T_max=12`.
 - Single-attributable axis: introduces a new config field `p_surf_weight: float = 3.0` and replaces the global surface MSE with a per-channel sum where channel index 2 (p) carries the multiplier. At `p_surf_weight=1.0` the formulation collapses to the original MSE, so the change is a clean knob.
+
+## 2026-05-15 17:00 — PR #3273: log(Re)-conditioned output scaler (ReScaler) rebased rerun — CLOSED
+
+- **Student branch**: `charliepai2i24h1-edward/rescaler-logre` (rebased on advisor branch with `max_log_scale=2.0→1.0`, pre-scale `clamp(±50)`, schedule `epochs=8, T_max=8`)
+- **Hypothesis (rebased rerun)**: ReScaler with tightened bound + clamp defense, layered onto the merged wider+EMA+surf_w25 stack, should beat 126.32. Schedule budget-aligned for the realized 8-epoch horizon.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, epoch 8 of 8 realized) | **152.7870** |
+| test_avg/mae_surf_p (NaN-safe re-eval) | 138.7311 |
+| Δ vs current baseline (#3136, 126.32) | **+20.9% (WORSE)** |
+| Δ vs #3136 at matched epoch 8 | -2.7% (BETTER at matched-epoch) |
+| trunk config used by student | wider+EMA+surf_w25+ReScaler (post-#3136 rebase, correctly inherited) |
+| epochs completed | 8 of 8 (cosine T_max=8 fully annealed) |
+| Per-epoch wallclock | ~205 s (wider trunk) |
+
+| Split | val mae_surf_p (best) | test mae_surf_p (NaN-safe) |
+|---|---|---|
+| single_in_dist | 187.40 | 162.54 |
+| geom_camber_rc | 169.25 | 152.58 |
+| geom_camber_cruise | 118.44 | **101.80** (cruise sample 20 skipped) |
+| re_rand | 136.05 | 137.99 |
+| **avg** | **152.79** | **138.73** |
+
+- **Metric artifacts**: `models/model-rescaler-logre-tight-20260515-154035/metrics.jsonl` + `metrics.yaml`
+
+### Verdict: closed — schedule/budget tradeoff dominates
+
+- The ReScaler hypothesis is **technically validated**: at matched epoch 8, ReScaler+wider+EMA+surf_w25 (152.79) beats no-ReScaler+narrow+EMA+surf_w25 (#3136 at epoch 8 ≈ 157.02) by ~3% — but the trunk axis differs, so the comparison isn't perfectly apples-to-apples.
+- **The absolute number doesn't beat baseline** (-21% regression vs 126.32). Per CLAUDE.md decision criteria (>5% regression → close), this is a clear close.
+- **Edward's analysis identified the real blocker**: at n_hidden=192, only 8 epochs fit in the 30-min cap; the narrower trunk fit 14 epochs and got further along the val descent curve, even with a partially-annealed cosine. The wider trunk's capacity advantage cannot manifest within the current per-epoch wallclock budget. **This is now the binding systemic constraint.**
+- **Useful artifacts produced**: `ReScaler` module (163 params, clean implementation), `max_log_scale=1.0` + `pre_scale clamp(±50)` defense, and `evaluate_split_nan_safe()` — the third NaN-safe re-eval pattern on this track (alongside tanjiro's `eval_test_clean.py` and askeladd's `y_finite` filter).
+- **Edward reassigned to bf16 mixed-precision** (#3332) — directly addresses the per-epoch wallclock budget that ReScaler couldn't overcome.
+
+## 2026-05-15 17:05 — PR #3332: bf16 mixed-precision training — DISPATCHED
+
+- **Student**: charliepai2i24h1-edward (round 2 reassignment after #3273 close)
+- **Hypothesis**: The dominant bottleneck is now schedule/budget alignment at the wider trunk (identified directly by edward's #3273 analysis). bf16 autocast on forward + loss is expected to deliver ~30-40% per-epoch speedup on the 96GB GPU, unlocking ~12-13 epochs in the 30-min cap (vs 8 at fp32). Combined with budget-aligned scheduling (`epochs=12, T_max=12`), this finally lets the wider trunk realize its capacity advantage.
+- **Predicted delta on val_avg**: 2-5% better than 126.32 baseline (i.e., 119-123), with the gain attributable to (a) wider trunk capacity finally usable, (b) cosine fully annealing through 12 epochs.
+- Single attributable: wrap forward + loss in `torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)` in both the training loop and `evaluate_split`. No GradScaler (bf16 has the dynamic range), no parameter conversion, no batch_size change. EMA stays fp32 by default since autocast doesn't affect parameter storage.
+- Critical instrumentation requested: **per-epoch wallclock** (the directly-attributable measurement) and **epochs realized in 30-min cap** (the lever this PR is pulling). If bf16 speedup is <20%, that's an important systems-level finding informing whether the next throughput unlock should be `batch_size=8` instead.
