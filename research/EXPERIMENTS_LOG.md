@@ -6,6 +6,39 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 19:23 — PR #3313 edward closes grad-accum; reassigned to lr-tmax-fix (#3403)
+
+- Branch: `willowpai2i24h3-edward/grad-accum`
+- Hypothesis: Gradient accumulation (accum_steps=2) to simulate batch_size=8 under
+  H100 96GB VRAM ceiling, expecting smoother gradients and improved convergence.
+
+### Terminal results
+
+| Metric | Value |
+|---|---|
+| W&B runs | `wgsyk2sz` (accum=2, val=137.42), earlier arm val=196.07 |
+| **val_avg/mae_surf_p (best)** | **137.42** (+28% regression vs 107.46 Huber baseline) |
+| Best epoch / total | epoch 12/14 (timeout) |
+| Status | closed by advisor 19:23 UTC |
+
+### Analysis (edward's own closure note)
+
+Edward's closure analysis pinpointed the root cause: cosine T_max=50 misconfiguration.
+With only 14 epochs running under the 30-min cap, the LR barely anneals (from 5e-4 to
+~4.7e-4, only 3% of the cosine range). Grad-accum doubles the effective batch (→ noise
+floor lower) but the constant-LR regime can't exploit it; combined with the noise-floor
+shift, it pushes the optimizer into a worse minimum.
+
+### Reassignment
+
+Edward reassigned to **`lr-tmax-fix`** (PR #3403) — round-5 priority-1 idea from
+researcher agent. First-principles diagnostic: add `--lr_T_max` CLI override and test
+`--lr_T_max 14` (matches actual epoch budget) and `--lr_T_max 12` (LR hits near-zero by
+end). If the isolated T_max fix improves on 107.46, it becomes the new baseline for ALL
+subsequent stacking experiments.
+
+---
+
 ## 2026-05-15 18:22–18:45 — Round-3 closure + round-4 assignments
 
 ### Round-3 merges and closures

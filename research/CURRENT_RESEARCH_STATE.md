@@ -6,25 +6,27 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-15 18:45
+- **As of:** 2026-05-15 19:30
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
-- **Research tag:** `willow-pai2i-24h-r3` (round 4 now active)
+- **Research tag:** `willow-pai2i-24h-r3` (round 4 + 5-extras active)
 - **Most recent human research direction:** None received.
 
 ## Current focus
 
-**Round 3 closed. Round 4 running.**
+**Round 3 closed. Round 4 running. Edward starting round-5 idea early.**
 
 Round-3 winner: **frieren's Huber loss (δ=2.0)**, val_avg/mae_surf_p=**107.46**, test_nansafe=**101.98** (PR #3248, merged 18:22 UTC). The binding constraint in round 3 was training instability under the 30-min cap — high-std surface pressure samples under MSE caused noisy gradient updates. Huber directly addressed this by capping outlier gradient magnitude.
 
-Round-4 experiments test **stacking** — taking the Huber baseline and layering orthogonal improvement levers on top. All 6 idle students assigned round-4 PRs; 2 students (alphonse, edward) still have round-3 WIP pending terminal results.
+Round-4 experiments test **stacking** — taking the Huber baseline and layering orthogonal improvement levers on top. 7 round-4 PRs active (6 fresh assignments + edward's round-5 T_max diagnostic). 1 round-3 PR still WIP pending terminal + rebase (alphonse #3282).
+
+**Edward's round-3 grad-accum #3313 closed at 19:23 UTC** — val 137.42 = regression (+28% vs Huber baseline). His detailed closure analysis confirmed the cosine T_max=50 problem: with only 14 epochs running, the LR never anneals. Reassigned edward to **`lr-tmax-fix`** (#3403) — the round-5 idea #4 from the researcher agent. This is a first-principles diagnostic: if T_max=14 isolation gives meaningful improvement, it becomes the new baseline for all subsequent stacking experiments.
 
 **Current baseline (BASELINE.md):**
 - `val_avg/mae_surf_p` = 107.4641
 - `test_avg_nansafe/mae_surf_p` = 101.9848
 - W&B run: `mp8s8okf` (frieren, group `huber-robust-loss`)
 
-## Round 4 active PRs
+## Round 4 active PRs (7 students working)
 
 | PR | Student | Hypothesis | Slug | Key change |
 |---|---|---|---|---|
@@ -34,17 +36,15 @@ Round-4 experiments test **stacking** — taking the Huber baseline and layering
 | #3391 | thorfinn | NACA Fourier features on Huber baseline | `naca-fourier-stacked` | Rebase round-3 NACA branch onto Huber |
 | #3392 | tanjiro | Huber delta sweep (0.5, 1.0, 3.0) | `huber-delta-tuning` | `--huber_delta 0.5 / 1.0 / 3.0` (3 arms) |
 | #3394 | frieren | Surface-only Huber + delta tuning | `huber-surface-only` | MSE for vol, Huber for surf; test δ=1.0 and δ=2.0 |
+| #3403 | edward | Cosine T_max fix (round-5 idea 4) | `lr-tmax-fix` | `--lr_T_max 14` and `12` (isolated annealing test) |
 
-## Round 3 pending WIP (still running)
+## Round 3 pending WIP
 
 | PR | Student | Hypothesis | State |
 |---|---|---|---|
-| #3282 | alphonse | bf16 mixed precision | WIP — nudged for terminal; best run `tup20e60` val=111.6, late-divergence noted |
-| #3313 | edward | grad-accum eff-batch-16 | WIP — nudged for terminal; best run `z31a2q9r` val=137.42 (regression) |
+| #3282 | alphonse | bf16 mixed precision | WIP — needs rebase onto current advisor branch; best run `tup20e60` val=111.6, late-divergence noted; nudged for terminal |
 
-Both will be closed after terminal results are posted. Round-4 assignments for alphonse and edward TBD:
-- **alphonse** → `bf16-stable` (bf16 + grad_clip + LR floor to fix late-epoch divergence)
-- **edward** → TBD after reviewing grad-accum result; likely a fresh direction
+Once alphonse posts terminal + rebases, the PR will be closed and he'll be reassigned to `bf16-stable` (bf16 + grad_clip + LR floor to fix late-epoch divergence).
 
 ## Key research signals from round 3
 
@@ -76,18 +76,18 @@ Model produces `±inf` predictions at `slice_num=128` (reproducible). Not curren
 ### 3. Late-training Huber divergence
 Both alphonse `tup20e60` (best=111.6, final=171.4) and frieren `1walszqd` (best=121.85, final=175.16) show late-epoch divergence under Huber + cosine. The primary run `mp8s8okf` was stable — likely a gradient/momentum accumulation issue in the LR tail. Grad-clip (askeladd's lever) should address this when stacked.
 
-## Active PRs summary (18:45 UTC)
+## Active PRs summary (19:30 UTC)
 
 | PR | Student | Status | Next action |
 |---|---|---|---|
-| #3385 | askeladd | wip (just assigned) | wait for training |
-| #3387 | fern | wip (just assigned) | wait for training |
-| #3389 | nezuko | wip (just assigned) | wait for training |
-| #3391 | thorfinn | wip (just assigned) | wait for training |
-| #3392 | tanjiro | wip (just assigned) | wait for training |
-| #3394 | frieren | wip (just assigned) | wait for training |
-| #3282 | alphonse | wip | wait for terminal; close + reassign `bf16-stable` |
-| #3313 | edward | wip | wait for terminal; close + reassign new direction |
+| #3385 | askeladd | wip | wait for terminal |
+| #3387 | fern | wip | wait for terminal |
+| #3389 | nezuko | wip | wait for terminal |
+| #3391 | thorfinn | wip | wait for terminal |
+| #3392 | tanjiro | wip | wait for terminal |
+| #3394 | frieren | wip | wait for terminal |
+| #3403 | edward | wip (just assigned 19:25 UTC) | wait for training |
+| #3282 | alphonse | needs_rebase | wait for terminal + rebase; nudge already posted 18:35 UTC |
 
 ## Operational notes
 
