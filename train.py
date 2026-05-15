@@ -439,7 +439,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
-    cond_dim=X_DIM - 13,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11
+    cond_dim=0,  # FiLM disabled — pure baseline (H12 Arm A)
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -449,7 +449,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
