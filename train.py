@@ -164,17 +164,38 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class ReFiLM(nn.Module):
+    """FiLM modulation: y = (1 + gamma(c)) * x + beta(c), with c = log(Re) scalar per sample."""
+
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 2 * hidden_dim),
+        )
+        nn.init.zeros_(self.fc[-1].weight)
+        nn.init.zeros_(self.fc[-1].bias)
+
+    def forward(self, fx: torch.Tensor, log_re: torch.Tensor) -> torch.Tensor:
+        params = self.fc(log_re.unsqueeze(-1))
+        gamma, beta = params.chunk(2, dim=-1)
+        return (1.0 + gamma.unsqueeze(1)) * fx + beta.unsqueeze(1)
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_film: bool = True):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_film = use_film
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -194,7 +215,13 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        if self.use_film:
+            self.film = ReFiLM(n_hidden)
         self.apply(self._init_weights)
+        if self.use_film:
+            # Re-zero the FiLM output; self.apply ran trunc_normal_ over it.
+            nn.init.zeros_(self.film.fc[-1].weight)
+            nn.init.zeros_(self.film.fc[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -208,6 +235,10 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.use_film:
+            # Feature 13 is normalized log(Re); same scalar across all real
+            # nodes in a sample, and position 0 is always a real node.
+            fx = self.film(fx, x[:, 0, 13])
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -358,6 +389,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    use_film: bool = True    # FiLM modulation on fx after preprocess via log(Re)
 
 
 cfg = sp.parse(Config)
@@ -397,6 +429,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_film=cfg.use_film,
 )
 
 model = Transolver(**model_config).to(device)
