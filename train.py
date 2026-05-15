@@ -312,6 +312,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_surf_weight": cfg.p_surf_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -353,6 +354,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 25.0
+    p_surf_weight: float = 3.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -456,7 +458,14 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        surf_count = surf_mask.sum().clamp(min=1)
+        sq_err_surf = sq_err * surf_mask.unsqueeze(-1)
+        mse_surf_Ux = sq_err_surf[..., 0].sum() / surf_count
+        mse_surf_Uy = sq_err_surf[..., 1].sum() / surf_count
+        mse_surf_p = sq_err_surf[..., 2].sum() / surf_count
+        surf_loss = mse_surf_Ux + mse_surf_Uy + cfg.p_surf_weight * mse_surf_p
+
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
