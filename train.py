@@ -379,10 +379,44 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer from Chen et al. 2023 (arxiv.org/abs/2302.06675).
+
+    Sign-based update with single momentum buffer. Use lr ~= 1/3 of AdamW's
+    and wd ~= 3-10x of AdamW's to match effective step size.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+        for group in self.param_groups:
+            lr = group["lr"]
+            b1, b2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                if wd != 0:
+                    p.mul_(1 - lr * wd)
+                update = (m * b1 + g * (1 - b1)).sign_()
+                p.add_(update, alpha=-lr)
+                m.mul_(b2).add_(g, alpha=1 - b2)
+        return loss
+
+
 @dataclass
 class Config:
-    lr: float = 5e-4
-    weight_decay: float = 1e-4
+    lr: float = 1.7e-4
+    weight_decay: float = 3e-4
     batch_size: int = 4
     surf_weight: float = 30.0
     epochs: int = 80
@@ -436,7 +470,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
