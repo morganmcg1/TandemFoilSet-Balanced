@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-15 18:35
+- **Date**: 2026-05-15 19:25
 - **Track**: `charlie-pai2i-24h-r1` on advisor branch `icml-appendix-charlie-pai2i-24h-r1`
 - **Latest direction from human researcher team**: none received
 - **Per-student GPU budget**: 1 × 96GB, 30-min wall-clock per training run
@@ -25,7 +25,7 @@ Active advisor config: `n_hidden=192, n_head=6, n_layers=5, slice_num=64, mlp_ra
 | #3121 | alphonse | LR schedule | Linear warmup + cosine annealing, budget-aligned (post-#3136 stack) | 1→rerun | running |
 | #3127 | askeladd | Loss formulation | SmoothL1 (Huber) rebased rerun — completed training, results pending | 1→rerun | training done |
 | #3141 | tanjiro | Input encoding | Random Fourier features on (x, z) position (rebased rerun) | 1→rerun | training done |
-| #3277 | nezuko | Output decoupling | Separate Linear→GELU→Linear head per channel (Ux, Uy, p) | 2 | training (2nd cycle) |
+| #3404 | nezuko | Architecture (cold-start) | LayerScale residual gating (CaIT, init 1e-4) on TransolverBlock | 2 | dispatched (after #3277 close) |
 | #3287 | frieren | Domain conditioning | Per-sample FiLM (scale, shift) on LayerNorm from gap+AoA features | 2 | recovering (no training yet) |
 | #3332 | edward | Throughput + batch | bf16 + bs=8 retry (after bf16-alone +2.7% val regression) | 2→rerun | sent back |
 | #3336 | fern | Optimization stability | Global gradient norm clipping (`max_norm=1.0`) | 2 | training done |
@@ -40,7 +40,10 @@ All 8 students have active PRs. **Zero idle GPUs.** 4 students completed trainin
 - **#3144 (thorfinn deeper-l8) CLOSED**: val=177.60 vs baseline 126.32 = +40% regression. Third independent confirmation of the wider-trunk-budget wall; n_layers=8 also drove VRAM to ceiling (96.61/96 GB). Depth-axis is gated on bf16 landing first.
 - **#3332 (edward bf16) SENT BACK**: val=129.76 (+2.7%, can't merge), test=117.76 (paper-facing wins). Infrastructure unlock clean (30% speedup, zero NaN/Inf, per-channel intact). Sent back with bs=8 + epochs=22 + T_max=22 recipe.
 - **#3378 (thorfinn scoring-fix) DISPATCHED**: advisor-waivered system fix to `data/scoring.py`. Replaces `err * mask` with `torch.where(mask, err, 0)` — eliminates Inf×0=NaN propagation. Unblocks `test_avg/mae_surf_p` reporting paper-wide.
-- **#3121 (alphonse warmup) confirmation posted**: both deviations (rebase + budget-align) approved. Alphonse's pod just restarted (iter 1 at 18:21) and is freshly starting.
+- **#3121 (alphonse warmup) confirmation posted**: both deviations (rebase + budget-align) approved.
+- **#3277 (nezuko separate-heads) CLOSED**: val=148.83 vs baseline 129.42 = +15% regression. +12.8% params → +75% per-epoch wallclock (memory-bandwidth dominated). Nezuko's analysis was excellent — monotonic descent at termination, clearly under-budgeted.
+- **#3404 (nezuko LayerScale) DISPATCHED**: 1920 added params, zero compute overhead. Tests the cold-start hypothesis explicitly. Per-block gamma growth is the primary diagnostic.
+- **Stale_wip pods (fern #3336, frieren #3287, tanjiro #3141)**: training completed 1+ hour ago but no SENPAI-RESULT yet. Branches not pushed (404 on origin). Likely stuck on push step after the 18:50-19:15 UTC GH rate-limit storm. Nudge comment posted on #3336; let #3287 and #3141 ride one more iteration.
 
 ## Systemic constraints (known issues)
 

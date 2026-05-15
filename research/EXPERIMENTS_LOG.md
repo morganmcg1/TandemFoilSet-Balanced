@@ -378,3 +378,36 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - **Advisor waiver**: explicit permission to edit `data/scoring.py` (normally a protected file). Scoped to `accumulate_batch` only, one-spot substitution. Adds unit test `tests/test_scoring_nan_safe.py` to verify Inf-in-GT doesn't propagate NaN.
 - **Project value**: unblocks `test_avg/mae_surf_p` reporting paper-wide. Edward's `evaluate_split_nan_safe` (in #3332) and tanjiro's `eval_test_clean.py` (#3141) are workarounds; this is the source-level fix.
 - 5 students have independently diagnosed this issue (nezuko, tanjiro, frieren, fern, edward). Three NaN-safe patterns established as workarounds; tanjiro's element-mask is the cleanest and what this PR adopts.
+
+## 2026-05-15 18:41 — PR #3277: Separate per-channel prediction heads — CLOSED
+
+- **Student branch**: `charliepai2i24h1-nezuko/separate-heads`
+- **Hypothesis**: Three independent `Linear→GELU→Linear` heads (one per Ux/Uy/p channel) on the shared trunk can specialize per-channel non-linearities, addressing the channel-scale-mismatch problem. Total parameter increase predicted to be tiny.
+- **Verdict**: CLOSED. val_avg/mae_surf_p = **148.83** (epoch 9 of 9 realized) vs baseline 129.42 = **+15% regression**. Wider-trunk-budget pattern again — though the dominant cost driver here was activation traffic (three [B, N, 384] hidden states), not parameter count.
+
+### Results
+
+| Metric | Value | Baseline |
+|---|---|---|
+| **val_avg/mae_surf_p (primary, best @ ep9)** | **148.8304** | 129.42 → +15% regression |
+| test_avg/mae_surf_p | NaN (cruise bug); 3-split partial = 149.92 | (baseline partial 128.44) |
+| Per-epoch wallclock | ~218 s (~75% slower than 125s baseline) | n/a |
+| n_params | 1,633,377 (+12.8% over 1.45M) | 1,447,521 |
+| peak_memory_gb | **71.21** | 42.11 |
+| epochs realized in 30-min cap | 9 | 14 |
+
+### Verdict commentary
+
+- **Memory-bandwidth issue, not parameter-count issue**: +12.8% params → +75% per-epoch wallclock. Three [B, N=242K, 384] hidden states at mlp_ratio=2 carry ~3× the activation traffic of the baseline's single [B, N, 192] head. The architecture works in principle but doesn't fit the compute budget.
+- **Strict monotonic descent at termination**: every epoch was a new best (338→285→248→218→198→182→168→157→149); model is far from converged at the 30-min cap.
+- **Nezuko's analysis is excellent**: correctly identified the +75% slowdown vs +12.8% param change as the dominant signal. Three of four suggested follow-ups are sound (mlp_ratio=1 cheaper heads, matched-epoch confirmation, channel-wise LR/scale). One (per-channel scalar gain) is mathematically redundant.
+- **Nezuko reassigned to LayerScale (#3404)** — orthogonal architectural change with ~1920 added params and zero compute overhead. Tests the "cold-start" hypothesis directly.
+
+## 2026-05-15 19:20 — PR #3404: LayerScale residual gating (CaIT) — DISPATCHED
+
+- **Student**: charliepai2i24h1-nezuko (round 2 reassignment after #3277 close)
+- **Hypothesis**: At budget-limited training (12 epochs, monotonically descending at termination), the cold-start problem dominates. LayerScale (Touvron et al. CaIT 2021) adds a learnable per-channel multiplicative gate on each residual branch, initialized at `1e-4`, so each TransolverBlock contributes ≈0 to the residual stream at init. Training learns to scale up each block's contribution as evidence accumulates — natural curriculum across depth.
+- **Predicted delta**: 2-5% on val_avg/mae_surf_p, with the biggest effect on early-epoch val (faster initial descent translates to better final number at the 30-min cap).
+- **Cost**: 1920 added params (+0.13% over 1.45M), zero per-step compute overhead (element-wise multiplication on residual).
+- **Single attributable**: insert `LayerScale(dim=192, init_value=1e-4)` on both residual branches of `TransolverBlock`. No other changes — same trunk config, EMA, surf_weight, optimizer, schedule.
+- **Diagnostic to track**: per-block `ls_attn.gamma.mean()` and `ls_mlp.gamma.mean()` over training. Cold-start hypothesis predicts late blocks (closer to readout) grow gamma first; early blocks come online later.
