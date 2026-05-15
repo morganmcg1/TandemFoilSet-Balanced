@@ -6,6 +6,37 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 21:30 — PR #3385 askeladd posts terminal; sent back for max_norm=50 variant
+
+- Branch: `willowpai2i24h3-askeladd/warmup-cosine-stacked`
+- Hypothesis: Stack LR warmup (2 or 5 epochs) + cosine + grad-clip(max_norm=1.0) on the
+  merged Huber baseline to compound optimization stability levers.
+
+### Terminal results (2 arms)
+
+| Run | warmup | val_avg/mae_surf_p | test_avg_nansafe/mae_surf_p | Δ val vs 107.46 | Δ test vs 101.98 |
+|---|---|---:|---:|---:|---:|
+| `4brvwa73` (warmup2-cos-clip1) | 2 | 107.6118 | **100.7504** | +0.15 | **−1.23** |
+| `gr05e3j0` (warmup5-cos-clip1) | 5 | 113.9132 | 107.0005 | +6.45 | +5.02 |
+
+### Diagnostic finding (askeladd's analysis)
+
+`train/grad_norm` logging revealed **100% of steps were clipped** on both arms. Observed
+median pre-clip grad norms ~21–26 vs max_norm=1.0 ceiling → clipping was acting as a
+~20–40× per-step LR reduction every step, not as a stability ceiling for rare spikes.
+Combined with the 30-min wall-clock cap (14 epochs), warmup further eats productive
+training time (warmup=5 loses ~36% of training to warmup phase, warmup=2 only ~14%).
+
+### Decision: send back for `warmup2-clip50` arm
+
+- val_avg essentially tied (+0.15 = within run-to-run noise floor); not merging on primary metric
+- test_nansafe modest win (−1.23) consistent with implicit regularization from over-clipping
+- Sent back with feedback: run third arm `warmup2-clip50` using `max_norm=50` (≈2× observed median),
+  so only true spike batches get clipped and the optimizer can move freely between spikes
+- askeladd's own follow-up suggestion #1 — directly actionable
+
+---
+
 ## 2026-05-15 19:40 — PR #3282 alphonse closes bf16-mixed-precision; reassigned to bf16-stable (#3427)
 
 - Branch: `willowpai2i24h3-alphonse/bf16-mixed-precision`

@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-15 19:45
+- **As of:** 2026-05-15 21:35
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 4 + 5-extras active)
 - **Most recent human research direction:** None received.
@@ -71,18 +71,27 @@ Model produces `±inf` predictions at `slice_num=128` (reproducible). Not curren
 ### 3. Late-training Huber divergence
 Both alphonse `tup20e60` (best=111.6, final=171.4) and frieren `1walszqd` (best=121.85, final=175.16) show late-epoch divergence under Huber + cosine. The primary run `mp8s8okf` was stable — likely a gradient/momentum accumulation issue in the LR tail. Grad-clip (askeladd's lever) should address this when stacked.
 
-## Active PRs summary (19:45 UTC)
+## Active PRs summary (21:35 UTC)
 
 | PR | Student | Status | Next action |
 |---|---|---|---|
-| #3385 | askeladd | wip | wait for terminal |
-| #3387 | fern | wip | wait for terminal |
-| #3389 | nezuko | wip | wait for terminal |
-| #3391 | thorfinn | wip | wait for terminal |
-| #3392 | tanjiro | wip | wait for terminal |
-| #3394 | frieren | wip | wait for terminal |
-| #3403 | edward | wip (assigned 19:25 UTC) | wait for terminal |
-| #3427 | alphonse | wip (assigned 19:40 UTC) | wait for training |
+| #3385 | askeladd | wip (sent back 21:30 UTC) | wait for `warmup2-clip50` arm with max_norm=50 |
+| #3387 | fern | wip (nudged 21:30 UTC) | no R4 group runs yet — verify he's on assignment |
+| #3389 | nezuko | wip (nudged 21:30 UTC) | 1 fin run at 111.08, awaiting second arm + terminal |
+| #3391 | thorfinn | wip | 2 fin runs at 133.32/133.15 (regression), awaiting terminal |
+| #3392 | tanjiro | wip (nudged 21:30 UTC) | 1 fin at 111.34, 2 arms running, awaiting terminal |
+| #3394 | frieren | wip (nudged 21:30 UTC) | 1 fin at 117.04 (regression), 1 running, awaiting terminal |
+| #3403 | edward | wip | 1 fin at 103.30 (beats baseline), 2 running, awaiting terminal |
+| #3427 | alphonse | wip | 1 fin at 92.62 (huge improvement signal), 1 running, awaiting terminal |
+
+## Cohort signal scan (W&B, 21:30 UTC, R4 groups only)
+
+Mid-flight observations (not yet confirmed via terminal SENPAI-RESULT):
+- **alphonse `bf16-stable`**: best finished run `8x6xlmup`-equivalent val ~92.6 — if this is real, it's a **−14% improvement** on the 107.46 Huber baseline. Verify when alphonse posts terminal.
+- **edward `lr-tmax-fix`**: best finished run val ~103.3 — −3.9% improvement, within the −3 to −8 prediction band. Likely valid signal.
+- **askeladd `warmup-cosine-stacked`** (terminal posted): val tied at 107.61, test_nansafe −1.23. **Sent back for max_norm=50 variant** based on his own diagnostic (100% steps clipped → effective LR reduced 20–40×).
+- **nezuko, tanjiro, frieren, thorfinn**: cohort-runner or regression range so far, awaiting full terminal data.
+- **fern `lion-stacked`**: 0 runs in assigned group — possible blocker; nudged for status.
 
 ## Operational notes
 
