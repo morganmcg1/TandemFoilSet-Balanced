@@ -31,7 +31,7 @@ import torch.nn.functional as F
 import wandb
 import yaml
 from einops import rearrange
-from timm.layers import trunc_normal_
+from timm.layers import DropPath, trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -139,7 +139,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -150,6 +151,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0.0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -158,8 +160,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -170,7 +172,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path_rates: list[float] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -186,11 +189,17 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        if drop_path_rates is None:
+            drop_path_rates = [0.0] * n_layers
+        assert len(drop_path_rates) == n_layers, (
+            f"drop_path_rates must have length {n_layers}, got {len(drop_path_rates)}"
+        )
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -413,6 +422,8 @@ class Config:
     fourier_sigma: float = 10.0
     loss_type: str = "mse"   # "mse" or "smooth_l1"
     loss_beta: float = 0.1   # SmoothL1 beta (normalized-space)
+    drop_path_rate: float = 0.0          # max stochastic depth rate (0 = disabled)
+    drop_path_schedule: str = "uniform"  # "uniform" or "linear" (0 -> drop_path_rate)
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -451,17 +462,32 @@ val_loaders = {
 }
 
 fun_dim = X_DIM - 2 + (2 * cfg.n_fourier if cfg.n_fourier > 0 else 0)
+_n_layers = 5
+if cfg.drop_path_rate <= 0.0:
+    drop_path_rates = [0.0] * _n_layers
+elif cfg.drop_path_schedule == "uniform":
+    drop_path_rates = [cfg.drop_path_rate] * _n_layers
+elif cfg.drop_path_schedule == "linear":
+    # Linear interpolation from 0 to drop_path_rate across n_layers.
+    drop_path_rates = [
+        cfg.drop_path_rate * i / max(_n_layers - 1, 1) for i in range(_n_layers)
+    ]
+else:
+    raise ValueError(f"Unknown drop_path_schedule: {cfg.drop_path_schedule}")
+print(f"DropPath rates per layer: {drop_path_rates}")
+
 model_config = dict(
     space_dim=2,
     fun_dim=fun_dim,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=_n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path_rates=drop_path_rates,
 )
 
 model = Transolver(**model_config).to(device)
