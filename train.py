@@ -207,12 +207,15 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  rff_n_freq: int = 32, rff_sigma: float = 1.0,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 geom_ctx_dim: int = 11, geom_ctx_start: int = 13):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.geom_ctx_dim = geom_ctx_dim
+        self.geom_ctx_start = geom_ctx_start
 
         self.rff = RFFEncoding(n_freq=rff_n_freq, sigma=rff_sigma)
         rff_dim = self.rff.out_dim
@@ -235,6 +238,12 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+
+        self.geom_proj = MLP(geom_ctx_dim, n_hidden * 2, n_hidden,
+                             n_layers=0, res=False, act=act)
+        # Gates init at 0 so the injection starts as a no-op and recovers baseline.
+        self.geom_gates = nn.Parameter(torch.zeros(n_layers))
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -253,7 +262,10 @@ class Transolver(nn.Module):
         pos_rff = self.rff(pos)
         x_rff = torch.cat([pos_rff, rest], dim=-1)
         fx = self.preprocess(x_rff) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        geom_ctx = x[:, 0, self.geom_ctx_start:self.geom_ctx_start + self.geom_ctx_dim]
+        g = self.geom_proj(geom_ctx).unsqueeze(1)
+        for i, block in enumerate(self.blocks):
+            fx = fx + self.geom_gates[i] * g
             fx = block(fx)
         return {"preds": fx}
 
@@ -479,7 +491,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -516,6 +528,12 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if epoch == 0 and n_batches == 0:
+            geom = x[:, :, 13:24]
+            geom0 = geom[:, 0:1, :]
+            diff = ((geom - geom0).abs() * mask.unsqueeze(-1).float()).max().item()
+            assert diff < 1e-5, f"global features (dims 13-23) not per-sample constant (max diff {diff})"
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -617,6 +635,14 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+
+    gate_values = model.geom_gates.detach().cpu().tolist()
+    print(f"Final geom_gates (from best checkpoint): {gate_values}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "geom_gates",
+        "best_epoch": best_metrics["epoch"],
+        "geom_gates": gate_values,
+    })
 
     test_metrics = None
     test_avg = None
