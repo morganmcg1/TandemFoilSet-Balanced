@@ -379,6 +379,9 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    surf_w_ux: float = 1.0
+    surf_w_uy: float = 1.0
+    surf_w_p: float = 1.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -433,6 +436,11 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+surf_ch_w = torch.tensor(
+    [cfg.surf_w_ux, cfg.surf_w_uy, cfg.surf_w_p],
+    dtype=torch.float32, device=device,
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -492,7 +500,10 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (
+            (sq_err * surf_ch_w * surf_mask.unsqueeze(-1)).sum()
+            / surf_mask.sum().clamp(min=1) / surf_ch_w.sum() * 3.0
+        )
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
