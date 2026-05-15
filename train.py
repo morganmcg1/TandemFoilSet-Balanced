@@ -118,6 +118,7 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        self.last_slice_weights = slice_weights  # [B, heads, N, K] — stored for entropy reg
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -380,6 +381,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    entropy_reg_weight: float = 0.0   # PhysicsAttention entropy regularization weight (per-node, max log(K))
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -512,11 +514,30 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
+        # Per-node entropy of slice-assignment distributions, averaged over valid
+        # nodes/heads/blocks. Always compute for diagnostic logging; only add to
+        # loss when entropy_reg_weight > 0. Higher entropy => more uniform slice
+        # usage (max = log(slice_num)).
+        mean_entropy_terms = []
+        for block in model.blocks:
+            sw = block.attn.last_slice_weights  # [B, heads, N, K]
+            entropy = -(sw * (sw + 1e-8).log()).sum(dim=-1)  # [B, heads, N]
+            valid = mask.float().unsqueeze(1)  # [B, 1, N]
+            mean_e = (entropy * valid).sum() / (valid.sum().clamp(min=1) * sw.size(1))
+            mean_entropy_terms.append(mean_e)
+        mean_entropy = torch.stack(mean_entropy_terms).mean()
+        if cfg.entropy_reg_weight > 0.0:
+            loss = loss - cfg.entropy_reg_weight * mean_entropy
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/mean_slice_entropy": mean_entropy.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -545,6 +566,16 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    # Per-layer diagnostics: slice-weight entropy (last training batch) and
+    # learnable softmax temperature mean. Logged to catch temperature-gaming
+    # of the entropy regularizer (model can trivially inflate temperature to
+    # flatten the softmax and satisfy the entropy term without structural change).
+    for i, block in enumerate(model.blocks):
+        sw = block.attn.last_slice_weights  # [B, heads, N, K] — from last train batch
+        with torch.no_grad():
+            ent = -(sw * (sw + 1e-8).log()).sum(dim=-1).mean().item()
+        log_metrics[f"diag/slice_entropy_layer{i}"] = ent
+        log_metrics[f"diag/temperature_layer{i}"] = block.attn.temperature.detach().mean().item()
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
