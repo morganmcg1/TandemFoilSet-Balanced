@@ -205,3 +205,35 @@ Variant vs canonical baseline (135.30): variant is +15.9% worse.
 - Confirms the pattern from PR #3140: any capacity scaling that slows per-epoch time by ~1.55× loses ~36% of the epoch budget, and the under-trained deeper model cannot compensate.
 - The cruise split is worst (+49.8%) — OOD geometry is most sensitive to under-training.
 - **Implication:** Capacity scaling of any kind (width, depth, MLP ratio) is essentially disallowed under the 30-min wall-clock cap with the current mesh sizes. Future capacity experiments should either (a) target faster operation per step or (b) explicitly test at epoch-matched (not wall-clock-matched) comparisons in a longer run.
+
+## 2026-05-15 16:55 — PR #3172 (thorfinn): Fourier (x,z) features + slice_num 64→96 — **REQUEST CHANGES**
+
+- Branch: `willowpai2i48h3-thorfinn/fourier-pos-features`
+- W&B group: `fourier-pos-features`
+- Baseline run: `umu6lu65` | Variant run: `aeelhxbk`
+
+**Hypothesis:** NeRF-style Fourier positional encoding on (x, z) coordinates with bumped slice_num (64→96) gives richer high-frequency spatial features for the PhysicsAttention to attend over. Predicted −5 to −15%.
+
+**Result (variant vs in-PR baseline):**
+
+| Metric | Baseline (umu6lu65) | Variant (aeelhxbk) | Δ vs in-PR baseline | Δ vs new canonical (110.83/109.75) |
+|---|---|---|---|---|
+| best_val_avg/mae_surf_p | 147.26 | 126.64 | **−14.0%** | **+14.3% worse** |
+| test_single_in_dist/mae_surf_p | 169.20 | 132.60 | −21.6% | |
+| test_geom_camber_rc/mae_surf_p | 135.76 | 135.30 | −0.3% | |
+| test_re_rand/mae_surf_p | 133.44 | 112.25 | −15.9% | |
+| test_geom_camber_cruise/mae_surf_p | NaN | NaN | — | pre-existing |
+| test 3-split avg (excl cruise) | 146.14 | 126.72 | **−13.3%** | **+15.5% worse** |
+| sec/epoch | 132.2s | 151.6s | 1.15× | — |
+| Epochs (30-min cap) | ~14 | ~12 | −14% | — |
+
+**Decision:** REQUEST CHANGES. Variant has real signal vs its own baseline (−14%, mild 1.15× wall-clock penalty), but the in-PR baseline (147.26) was pre-merge — trained without Huber + LR warmup. Against the new canonical baseline (110.83), the variant is 14.3% worse.
+
+**Reason for not closing:**
+- The Fourier PE + slice_num=96 direction shows genuine signal: −14% on val and −13% on test vs the same-PR baseline. Both arms ran on the SAME unmerged codebase (pre-Huber, pre-warmup), so the within-PR comparison is clean.
+- Only 1.15× sec/epoch overhead (vs 1.55× for width/depth) — slice_num=96 is wall-clock-acceptable.
+- The student's delayed pod start (JSON parse bug, ~3.5 h delay) meant their run happened against the pre-merge baseline. We need a re-test on top of the merged stack to know if the Fourier representation gain is additive with Huber + LR warmup.
+
+**Follow-up requested:** Rebase branch onto current `icml-appendix-willow-pai2i-48h-r3` (which now has Huber + LR warmup). Re-run dual arm in new wandb_group `fourier-pos-features-v2`: baseline (no Fourier, slice_num=64) + variant (Fourier ON, slice_num=96). Decision rule: merge if rebased variant beats new canonical baseline by ≥1% on val_avg/mae_surf_p AND test 3-split also improves.
+
+**Notable:** Within-PR delta on `test_re_rand` was particularly strong (−15.9%), suggesting Fourier features help with the Reynolds-number generalization split. Worth tracking specifically on the rebased re-test.
