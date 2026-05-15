@@ -164,10 +164,33 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class RFFEncoding(nn.Module):
+    """Fixed Random Fourier Feature encoding for 2D coordinates.
+
+    Lifts (x, z) into a 2*n_freq-dimensional Fourier basis using a fixed
+    Gaussian projection matrix B ~ N(0, sigma^2). Per Tancik et al. (NeurIPS
+    2020), the projection is computed as gamma(v) = [sin(2*pi*B*v), cos(2*pi*B*v)]
+    and B is registered as a non-learnable buffer so the spectral guarantee holds.
+    """
+
+    def __init__(self, n_freq: int = 32, sigma: float = 1.0, seed: int = 42):
+        super().__init__()
+        gen = torch.Generator().manual_seed(seed)
+        B = torch.randn(2, n_freq, generator=gen) * sigma  # [2, n_freq]
+        self.register_buffer("B", B)
+        self.out_dim = 2 * n_freq
+
+    def forward(self, xy):  # xy: [..., 2]
+        proj = xy @ self.B  # [..., n_freq]
+        return torch.cat([torch.sin(2 * torch.pi * proj),
+                          torch.cos(2 * torch.pi * proj)], dim=-1)
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 rff_n_freq: int = 32, rff_sigma: float = 1.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -176,11 +199,14 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        self.rff = RFFEncoding(n_freq=rff_n_freq, sigma=rff_sigma)
+        rff_dim = self.rff.out_dim
+
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(rff_dim + fun_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -207,7 +233,11 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        pos = x[..., :2]
+        rest = x[..., 2:]
+        pos_rff = self.rff(pos)
+        x_rff = torch.cat([pos_rff, rest], dim=-1)
+        fx = self.preprocess(x_rff) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -235,6 +265,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            # Workaround for non-finite GT propagating through masked accumulation
+            # (NaN*0 == NaN). Exclude any sample whose y contains non-finite values
+            # entirely via mask, and zero-fill those positions so the multiplication
+            # in loss/accumulate_batch is finite. Matches scoring.py's intent.
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask = mask & y_finite_sample.unsqueeze(-1)
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -395,6 +433,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    rff_n_freq=32,
+    rff_sigma=1.0,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
