@@ -96,16 +96,77 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-15 19:26 — PR #3182 (charliepai2i48h5-askeladd): Huber-0.3 + gradient clipping (clip=0.25) — **MERGED** (new best)
+
+- branch: `charliepai2i48h5-askeladd/gradient-clipping-heavy-tail`
+- hypothesis: Huber-0.3 + grad_clip_max_norm=0.25 are additive — attack heavy-tail gradients at different levels (per-sample residual vs batch-level update magnitude)
+
+- arms:
+
+  | arm | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|
+  | huber-0.3 + clip-0.5 | 102.35 | 94.84 | 12/50 |
+  | **huber-0.3 + clip-0.25** | **98.62** | **88.14** | 14/50 |
+
+- artifacts: `models/model-charliepai2i48h5-askeladd-huber-0.3-clip-0.25-20260515-182526/`, `models/model-charliepai2i48h5-askeladd-huber-0.3-clip-0.5-20260515-172602/`
+- per-split test surf_p (arm-2/clip-0.25): single=104.75, rc=104.65, cruise=59.24, re_rand=83.90
+- n_params: 662K, peak VRAM 42.12GB, clip_frac=1.00 at BOTH thresholds
+- gradient diagnostics: mean pre-clip norm ~7 (vs ~46 pre-Huber); max ~25. Huber tames per-sample tail but batch-level heavy-tail variance remains, so clipping is still doing real work on top.
+- single regression: val_geom_camber_rc slightly worse with clip-0.25 (119.3 vs 107.2 for clip-0.5 val); tighter clipping discards more of the high-pressure gradient signal on that hardest split.
+- verdict: **MERGED** as new round-5 baseline. val_avg=98.62, test_avg=88.14.
+
+---
+
+## 2026-05-15 19:30 — PR #3334 (charliepai2i48h5-tanjiro): Wider Transolver n_hidden=192 — CLOSED
+
+- branch: `charliepai2i48h5-tanjiro/wider-transolver-192`
+- hypothesis: n_hidden=192 with Huber-0.3 reduces val_avg by 5–10%
+- arms:
+
+  | arm | val_avg/mae_surf_p | test_avg/mae_surf_p | s/epoch | best_epoch |
+  |---|---|---|---|---|
+  | wider-192-huber03 (n_head=4) | 117.88 | 109.12 | 186 | 9/10 |
+  | wider-192-heads6-huber03 (n_head=6) | 123.19 | 112.40 | 204 | 9/9 |
+
+- artifacts: `models/model-wider-192-huber03-20260515-172706/`, `models/model-wider-192-heads6-huber03-20260515-182607/`
+- analysis: 5× per-epoch slowdown (36s→186s). Only 9-10 epochs fit in budget vs 14 for baseline. Both arms still improving monotonically at timeout — mechanism is sound but budget is the constraint.
+- n_head=4 (dim_head=48) beats n_head=6 (dim_head=32) by 5 val points.
+- verdict: **Closed**. Tanjiro reassigned to n_hidden=160 + T_max-aligned schedule (#3419) — same width-scaling direction, smaller step + proper LR cycle within budget.
+
+---
+
+## 2026-05-15 19:30 — PR #3355 (charliepai2i48h5-alphonse): Physics-informed input features — CLOSED
+
+- branch: `charliepai2i48h5-alphonse/physics-features`
+- hypothesis: Re_x proxy, gap×log(Re), sin/cos AoA features reduce val_avg 4–8%
+- arms:
+
+  | arm | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|
+  | physfeat-all-huber03 (6 features) | 109.80 | 100.88 | 14/50 |
+  | physfeat-rephys-huber03 (2 features: Re_x, gap_re) | 105.04 | 93.18 | 14/50 |
+
+- n_params: 663.9K (+1.8K), same s/epoch as baseline (~132s)
+- analysis (from student): cos(aoa) std=0.0038 → near-constant input, zero information gain. log_re_x and gap_re are arithmetic combinations of existing features — Transolver MLP synthesizes these in one pass, no inductive bias advantage. 5-layer attention gives global context the MLP would need multiple hops for in a GNN. B-GNN transfer failed because GNNs need explicit feature bridges; attention doesn't.
+- arm-2 beats baseline on cruise (75.26 vs 77.24 val) and rc (115.13 vs 116.40) but regresses on single (+7.8) and re_rand (+2.8), netting -1.8% overall.
+- verdict: **Closed**. Alphonse reassigned to log-space pressure loss (#3420) — different mechanism targeting the training loss dynamic-range problem at residual level.
+
+---
+
 ## Wave-2 new assignments (2026-05-15)
 
 - PR #3333 — charliepai2i48h5-frieren: LR schedule alignment (T_max=14 vs T_max=20 with huber_delta=0.3)
-- PR #3334 — charliepai2i48h5-tanjiro: Wider Transolver n_hidden=192 (arms: n_head=4 and n_head=6, both huber_delta=0.3)
+- PR #3334 — charliepai2i48h5-tanjiro: Wider Transolver n_hidden=192 (CLOSED, see above)
 
 ## Currently rebasing+combining (sent back)
 
-- PR #3199 (fern): dualhead + Huber-0.3
-- PR #3182 (askeladd): grad-clip-0.5 + Huber-0.3 + try max_norm=0.25
-- PR #3227 (thorfinn): surf-anneal + Huber-0.3 + try terminal weight=30
+- PR #3199 (fern): dualhead + Huber-0.3 (WIP)
+- PR #3227 (thorfinn): surf-anneal + Huber-0.3 + try terminal weight=30 (WIP)
+
+## Wave-3 new assignments (2026-05-15)
+
+- PR #3419 — charliepai2i48h5-tanjiro: n_hidden=160 + T_max-aligned LR schedule (both huber_delta=0.3 + clip-0.25)
+- PR #3420 — charliepai2i48h5-alphonse: log-space pressure loss with sign-preserving log transform
 
 ## 2026-05-15 17:10 — PR #3178 (charliepai2i48h5-alphonse): Per-sample pressure-scale normalization — CLOSED
 
