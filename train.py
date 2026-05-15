@@ -252,7 +252,8 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
-                   smooth_l1_beta, device) -> dict[str, float]:
+                   smooth_l1_beta, device,
+                   p_surf_weight: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -290,12 +291,15 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=smooth_l1_beta, reduction="none")
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            channel_w = torch.tensor(
+                [1.0, 1.0, p_surf_weight], device=device, dtype=sq_err.dtype
+            )
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err * channel_w[None, None, :] * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -373,6 +377,7 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_surf_weight": cfg.p_surf_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -426,6 +431,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_surf_weight: float = 3.0  # extra multiplier on p in the surface MSE block
     epochs: int = 50
     fourier_bands: int = FOURIER_BANDS
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -550,8 +556,13 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
+        channel_w = torch.tensor(
+            [1.0, 1.0, cfg.p_surf_weight], device=device, dtype=sq_err.dtype
+        )
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (
+            sq_err * channel_w[None, None, :] * surf_mask.unsqueeze(-1)
+        ).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -572,7 +583,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+                             cfg.surf_weight, cfg.smooth_l1_beta, device,
+                             p_surf_weight=cfg.p_surf_weight)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -657,7 +669,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, fourier_encoder, loader, stats,
-                                 cfg.surf_weight, cfg.smooth_l1_beta, device)
+                                 cfg.surf_weight, cfg.smooth_l1_beta, device,
+                                 p_surf_weight=cfg.p_surf_weight)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
