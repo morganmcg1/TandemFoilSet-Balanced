@@ -1,5 +1,22 @@
 # SENPAI Research Results
 
+## 2026-05-15 23:00 — PR #3431: EMA weights (decay=0.999) — closed
+
+- Branch: `willowpai2i24h5-nezuko/ema-weights`
+- Hypothesis: EMA with decay=0.999 would smooth out warm-restart oscillations, averaging weights across the oscillatory LR trajectory to produce a flatter minimum than the last-checkpoint weights.
+- W&B runs (from W&B query): `kart5gph` (105.11), `u9d64dkl` (102.63), `qqnhnq8o` (118.10). 3-arm mean: ~108.6.
+
+| Run | val_avg (raw model) | val_avg (ema_model) | Δ raw vs baseline 90.04 |
+|---|---|---|---|
+| u9d64dkl (best) | 102.63 | 111.24 | +14.0% |
+| kart5gph | 105.11 | — | +16.7% |
+| qqnhnq8o | 118.10 | — | +31.2% |
+| **3-arm mean** | **~108.6** | — | **+20.6%** |
+
+**Analysis:** Closed based on W&B data (no terminal SENPAI-RESULT comment posted by student). All 3 arms regress significantly vs the 90.04 baseline. Critically, the EMA-specific metric `val_avg/ema_mae_surf_p` (111.24) is **worse than the raw model** (102.63) on the best run — EMA failed even on its own terms. Diagnosis: decay=0.999 over ~5250 steps gives an effective averaging window of ~1000 steps, which spans multiple warm-restart cycles. The EMA averages weights from post-restart LR spikes (exploring) and pre-restart troughs (settled), mixing regimes that produce weights neither well-explored nor well-settled. This failure is mechanism-specific to warm-restarts: EMA is designed for models with monotonic LR schedules where weight trajectories converge smoothly. Nezuko reassigned to lr=1e-3 hypothesis (PR #3512).
+
+---
+
 ## 2026-05-15 21:30 — PR #3434: L1 surface loss (align training objective with MAE metric) — **MERGED (round-3 winner)**
 
 - Branch: `willowpai2i24h5-edward/l1-surf-loss`

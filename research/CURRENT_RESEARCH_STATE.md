@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 21:35
+- **Updated:** 2026-05-15 23:05
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -38,7 +38,7 @@ test 3-split (excl. cruise) = **87.78** | W&B run: `tcci4fzk`
 
 | Student | PR | Change | Rationale |
 |---|---|---|---|
-| nezuko | #3431 | EMA weights (decay=0.999) | Smooth out warm-restart oscillations; launched against 98.88 baseline — will report vs both baselines |
+| nezuko | #3512 | Higher nominal LR: 5e-4 → 1e-3 (3-arm) | Grad clip normalizes step magnitude; doubling lr doubles effective LR from 1.1e-5 to 2.2e-5 while preserving warm-restart structure |
 | askeladd | #3307 | OneCycleLR right-sized + rebase to L1 baseline | Winner pending — needs rebase + 2 replication arms against 90.04 |
 | tanjiro | #3360 | grad clip max_norm=0.5 on warm-restarts+L1 baseline | Rebase + 3-arm retest on new baseline (confirmed on old 117.16 baseline) |
 | fern | #3462 | surf_weight 10 → 5 (multi-arm) | Test if sweet spot is below 10; labels now fixed |
@@ -51,13 +51,14 @@ test 3-split (excl. cruise) = **87.78** | W&B run: `tcci4fzk`
 
 | PR | Change | Best val_avg | Δ | Decision |
 |---|---|---|---|---|
+| #3431 nezuko | EMA weights (decay=0.999) | 102.63 (best of 3) | +14.0% | closed — EMA incompatible with warm-restarts; ema metric worse than raw model |
 | #3436 alphonse | T_0=3 warm-restarts | 116.32 (1 arm) | +17.6% | closed — too many restart penalties for 14-epoch budget |
 | #3416 thorfinn | p×3 per-channel weighting | 118.74 (best of 3) | +32.0% | closed — same mechanism as surf_weight=25 failure |
 
 ## Key research findings
 
 1. **Loss formulation is the dominant active lever** — L1 surf loss gave 8.94% improvement (#3434 merged). Mechanism: L1 = median estimator, MAE-optimal; L2 = mean estimator, chases heavy-tailed OOD outliers. With grad clip normalizing step sizes, convergence dynamics are similar; the minimum reached is better with L1.
-2. **Schedule is the second major lever** — warm-restarts gave 15.6% on top of grad-clip baseline; T_0=5 is near-optimal (T_0=3 regresses, more restarts = more recovery penalty per budget). OneCycle right-sized pending.
+2. **Schedule is the second major lever** — warm-restarts gave 15.6% on top of grad-clip baseline; T_0=5 is near-optimal (T_0=3 regresses, more restarts = more recovery penalty per budget). OneCycle right-sized pending. EMA (decay=0.999) is incompatible with warm-restarts — the averaging window spans multiple restart cycles and the EMA metric was worse than the raw model.
 3. **Grad clip is gradient normalization** — max_norm=1.0 fires on 100% of steps; median pre-clip norm ~45 → effective LR ~1.1e-5. Tighter (0.5) improved on old baseline (-4.33 pp); testing on new baseline.
 4. **Model is NOT capacity-limited** — width, depth, and slice count increases all fail in this budget.
 5. **Loss weighting and channel-weighting hurt** — surf_weight=25 and p×3 both regress. Volume term provides inductive structure that helps surface generalization. Don't destabilize the loss balance.
