@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -217,17 +218,34 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def _amp_torch_dtype(amp_dtype: str) -> torch.dtype:
+    return torch.bfloat16 if amp_dtype == "bf16" else torch.float32
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "fp32") -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Also accumulates a node-level NaN-safe surface-pressure MAE
+    (``mae_surf_p_nansafe``) which filters non-finite ground-truth / prediction
+    nodes instead of skipping the whole sample. This is needed because the
+    ``test_geom_camber_cruise`` split has 761 ``-inf`` nodes in y[:,2] of
+    sample 000020 — the in-tree scorer skips the sample entirely (NaN
+    propagates from NaN*0), but the NaN-safe variant gives a usable number.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+
+    mae_surf_p_nansafe = torch.zeros((), dtype=torch.float64, device=device)
+    n_surf_p_nansafe = 0
+
+    amp_torch_dtype = _amp_torch_dtype(amp_dtype)
+    amp_enabled = amp_dtype != "fp32"
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -238,7 +256,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.amp.autocast(device_type="cuda", dtype=amp_torch_dtype, enabled=amp_enabled):
+                pred = model({"x": x_norm})["preds"]
+            # Cast pred back to float32 BEFORE the float64 accumulation in accumulate_batch
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -258,11 +279,28 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_surf += ds
             n_vol += dv
 
+            # Node-level NaN-safe surface pressure MAE.
+            # Sanitize both predictions and ground truth: a non-finite value
+            # anywhere can poison the sum via inf*0=NaN. Replace with 0 in
+            # the difference and exclude from the count.
+            p_pred = pred_orig[..., 2].double()
+            p_true = y[..., 2].double()
+            finite_p = torch.isfinite(p_pred) & torch.isfinite(p_true)
+            effective_p = surf_mask & finite_p
+            err_p_raw = (p_pred - p_true).abs()
+            # Final safety net: any non-finite err_p (inf from -inf y, NaN from
+            # inf*0, or NaN from bf16 numerical issues) collapses to 0.
+            err_p = torch.nan_to_num(err_p_raw, nan=0.0, posinf=0.0, neginf=0.0)
+            mae_surf_p_nansafe += (err_p * effective_p.double()).sum()
+            n_surf_p_nansafe += int(effective_p.sum().item())
+
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    out["mae_surf_p_nansafe"] = (mae_surf_p_nansafe / max(n_surf_p_nansafe, 1)).item()
+    out["n_surf_p_nansafe"] = n_surf_p_nansafe
     return out
 
 
@@ -387,6 +425,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
+    n_layers: int = 5         # Transolver depth; published default is 5
 
 
 cfg = sp.parse(Config)
@@ -420,7 +460,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -434,6 +474,10 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+amp_torch_dtype = _amp_torch_dtype(cfg.amp_dtype)
+amp_enabled = cfg.amp_dtype != "fp32"
+print(f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -485,21 +529,22 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs()
-        sq_err = torch.where(
-            abs_err < cfg.huber_delta,
-            0.5 * abs_err ** 2,
-            cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
-        )
+        with torch.amp.autocast(device_type="cuda", dtype=amp_torch_dtype, enabled=amp_enabled):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            abs_err = (pred - y_norm).abs()
+            sq_err = torch.where(
+                abs_err < cfg.huber_delta,
+                0.5 * abs_err ** 2,
+                cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
+            )
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -518,7 +563,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_dtype=cfg.amp_dtype)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -586,7 +631,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_dtype=cfg.amp_dtype)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -600,6 +645,16 @@ if best_metrics:
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        nansafe_vals = [
+            m["mae_surf_p_nansafe"]
+            for m in test_metrics.values()
+            if "mae_surf_p_nansafe" in m and math.isfinite(m["mae_surf_p_nansafe"])
+        ]
+        if nansafe_vals:
+            test_avg_nansafe_surf_p = sum(nansafe_vals) / len(nansafe_vals)
+            test_log["test_avg_nansafe/mae_surf_p"] = test_avg_nansafe_surf_p
+            test_log["test_avg_nansafe/n_splits"] = len(nansafe_vals)
+            print(f"  TEST  avg_nansafe_surf_p={test_avg_nansafe_surf_p:.4f} (over {len(nansafe_vals)}/{len(test_metrics)} splits)")
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
