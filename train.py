@@ -280,6 +280,22 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop whole samples whose ground truth contains any non-finite
+            # value (matches accumulate_batch's per-sample skip semantics).
+            # Without this, 0 * Inf during the masked accumulation poisons
+            # MAE and loss with NaN even though the bad sample is "masked
+            # out". One sample in test_geom_camber_cruise has Inf in p.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                keep = y_finite_per_sample.nonzero(as_tuple=True)[0]
+                if keep.numel() == 0:
+                    continue
+                x = x.index_select(0, keep)
+                y = y.index_select(0, keep)
+                is_surface = is_surface.index_select(0, keep)
+                mask = mask.index_select(0, keep)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -398,6 +414,9 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
+    huber_delta_ux: float | None = None  # Per-channel Huber δ for Ux; falls back to huber_delta when None
+    huber_delta_uy: float | None = None  # Per-channel Huber δ for Uy; falls back to huber_delta when None
+    huber_delta_p: float | None = None   # Per-channel Huber δ for p; falls back to huber_delta when None
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -450,7 +469,18 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+# Per-channel Huber thresholds; each falls back to the global huber_delta when not set.
+huber_deltas = torch.tensor(
+    [
+        cfg.huber_delta_ux if cfg.huber_delta_ux is not None else cfg.huber_delta,
+        cfg.huber_delta_uy if cfg.huber_delta_uy is not None else cfg.huber_delta,
+        cfg.huber_delta_p  if cfg.huber_delta_p  is not None else cfg.huber_delta,
+    ],
+    device=device, dtype=torch.float32,
+)
+print(f"Huber deltas (Ux, Uy, p): {huber_deltas.tolist()}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -465,6 +495,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "huber_deltas_effective": huber_deltas.tolist(),
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -492,9 +523,9 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
         sq_err = torch.where(
-            abs_err < cfg.huber_delta,
+            abs_err < huber_deltas,
             0.5 * abs_err ** 2,
-            cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
+            huber_deltas * (abs_err - 0.5 * huber_deltas),
         )
 
         vol_mask = mask & ~is_surface
