@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 18:35 UTC
+- **Last updated:** 2026-05-15 18:45 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 - **Most recent direction from human researcher team:** None (checked at 17:45 UTC — no open issues).
 
@@ -15,7 +15,7 @@
 - **edward `b6t3344j` (NEW STRONGEST):** `best_val_avg = 106.7216` (−12.3% below EMA baseline), pre-EMA codebase, awaiting terminal SENPAI-RESULT.
 - **tanjiro `3kervu49`:** val_avg = 119.7996 (−1.55% below EMA baseline), pre-EMA codebase, awaiting terminal SENPAI-RESULT. Mergeable but likely superseded by edward.
 
-## Round 2 status (5 PRs in flight, 2 pending terminal, 1 student to assign)
+## Round 2 status (6 PRs newly in flight, 2 pending terminal, 0 idle students)
 
 | PR | Student | Hypothesis | Status | Latest result |
 |----|---------|-----------|--------|---------------|
@@ -24,9 +24,9 @@
 | #3368 | thorfinn | ema-per-channel-heads | wip | not yet running |
 | #3369 | nezuko | cosine-tmax-align (T_max=9/12/16) | wip | not yet running |
 | #3388 | frieren | swa-plateau-average (SWA alongside EMA) | wip — just assigned | — |
+| #3396 | askeladd | weight-decay-sweep (1e-3, 5e-3, 1e-2 vs 1e-4) | wip — just assigned | — |
 | #3181 | edward | grad-clip-huber retry | wip — awaiting terminal | **NEW STRONGEST: b6t3344j best_val_avg=106.72** |
 | #3202 | tanjiro | lr-warmup-cosine retry | wip — awaiting terminal | 3kervu49: val_avg=119.80 (BEATS baseline by −1.55%) |
-| TBD | askeladd | (to assign — H-02 weight-decay-sweep candidate) | — | #3176 closed |
 
 ## Confirmed winners (merged)
 
@@ -63,7 +63,6 @@ n_hidden=256/n_layers=6 and slice_num=128 both regress: larger models under-conv
 - **Cosine T_max alignment** (PR #3369, nezuko): tanjiro's 119.80 result validates this works *without* EMA — does it stack with EMA?
 
 ### Tier 3: Pending assignment / queued for future rounds
-- **Weight decay sweep** (H-02 — to assign to askeladd next): 1e-3 / 5e-3 / 1e-2 vs current 1e-4
 - **Asinh pressure output normalization** (H-03): compress heavy-tail pressure distribution
 - **Dropout regularization** (H-04)
 - **Physics-informed continuity loss** (H-06): ∂Ux/∂x + ∂Uy/∂y ≈ 0 on volume nodes
@@ -87,4 +86,4 @@ Goal for Round 2 is to push below val_avg=110, with the long-term target sub-100
 - **data/scoring.py NaN bug**: `test_geom_camber_cruise_gt/000020.pt` has inf GT pressure → `test_avg/mae_surf_p=NaN` fleet-wide. Students report 3-split test mean. Fix needed in scoring.py (advisor-routed).
 - Per-run budget: 30 min wall clock, 50 epoch cap. Wall clock binds (~14 epochs). 
 - **REST rate limit**: Recovered (~3000/5000 remaining; resets at 18:19 UTC have passed). GraphQL preferred for label and comment mutations.
-- 1 student to assign (askeladd, freed by #3176 close). Zero idle students otherwise.
+- **Zero idle students** — all 8 are now on Round-2 work (or awaiting terminal SENPAI-RESULT).
