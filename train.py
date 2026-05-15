@@ -217,7 +217,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, scale_eps: float = 1e-6) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -241,6 +241,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
+            # Per-sample, per-channel variance of normalized targets over valid nodes.
+            # Detached so it acts only as a scale; eps floor avoids div-by-zero.
+            mask_f = mask.unsqueeze(-1).float()
+            n_valid = mask_f.sum(dim=1).clamp(min=1)
+            y_mean_b = (y_norm * mask_f).sum(dim=1) / n_valid
+            y_var_b = (((y_norm - y_mean_b.unsqueeze(1)) ** 2) * mask_f).sum(dim=1) / n_valid
+            scale = (y_var_b.unsqueeze(1) + scale_eps).detach()
+            sq_err = sq_err / scale
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -386,6 +394,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    scale_eps: float = 1e-6  # eps floor for per-sample scale-normalizing loss
 
 
 cfg = sp.parse(Config)
@@ -489,6 +498,15 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
+        # Per-sample, per-channel variance of normalized targets over valid nodes.
+        # Detached so it acts only as a scale; eps floor avoids div-by-zero.
+        mask_f = mask.unsqueeze(-1).float()
+        n_valid = mask_f.sum(dim=1).clamp(min=1)
+        y_mean_b = (y_norm * mask_f).sum(dim=1) / n_valid
+        y_var_b = (((y_norm - y_mean_b.unsqueeze(1)) ** 2) * mask_f).sum(dim=1) / n_valid
+        scale = (y_var_b.unsqueeze(1) + cfg.scale_eps).detach()
+        sq_err = sq_err / scale
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
@@ -512,7 +530,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.scale_eps)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +598,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.scale_eps)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
