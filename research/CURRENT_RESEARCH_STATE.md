@@ -17,10 +17,10 @@ Known issues: `test_avg/mae_surf_p` is NaN due to a pre-existing bug in `data/sc
 |----|---------|-------|-------------------|----------|
 | #3119 | thorfinn | epochs 50→80 | **135.0153** ← baseline | Merged |
 | #3104 | fern | per-channel p 4× | 149.1018 (+10.4%) | Closed — regression |
-| #3099 | alphonse | capacity 192h/6L/6H | WIP | — |
+| #3099 | alphonse | capacity 192h/6L/6H | 169.99 at ep7 (sent back; rerun lr=1e-3) | Sent back |
 | #3101 | askeladd | surf_weight 30 | WIP | — |
 | #3102 | edward | OneCycleLR max_lr=1e-3 | WIP | — |
-| #3106 | frieren | slice_num 128, head 8 | WIP | — |
+| #3106 | frieren | slice_num 128, head 8 | 163.98 at ep6 (sent back; rerun lr=1e-3) | Sent back |
 | #3110 | nezuko | batch 8, lr 8e-4 | WIP | — |
 | #3115 | tanjiro | Re-FiLM (log Re) | WIP | — |
 

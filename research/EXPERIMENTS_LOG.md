@@ -42,3 +42,37 @@ Entries are appended chronologically as PRs return terminal `SENPAI-RESULT` mark
 - **Decision:** CLOSED — 10.4% regression vs baseline (149.10 vs 135.02). Exceeds the >5% close threshold.
 - **Key finding:** Per-channel weighting at [1,1,4]/[1,1,2] was too aggressive; converged to a worse local minimum in the same 14-epoch window. Also hit same 30-min timeout. Student produced recompute_test.py with NaN-safe accumulation and confirmed the scoring bug. Val was still descending at cutoff — the run may not be representative of the steady-state per-channel weight effect.
 - **Follow-up:** Try lighter weights [1,1,2]/[1,1,1.5] after the NaN-safe scoring fix is merged. Or try surf_weight=30 (askeladd, PR #3101, still WIP) which adjusts surface emphasis globally rather than per-channel.
+
+---
+
+## 2026-05-15 14:15 — PR #3099: Capacity scale-up: n_hidden 128→192, n_layers 5→6, n_head 4→6
+
+- **Branch:** charliepai2i48h2-alphonse/capacity-scale-192h-6l-6head
+- **Hypothesis:** Larger residual stream (1.7M vs 0.66M params) generalizes better across 3 physical domains.
+- **Metrics (committed):** `models/model-charliepai2i48h2-alphonse-capacity-192h-6l-6head-20260515-124549/metrics.jsonl`
+
+| Epoch | Per-epoch time | val_avg/mae_surf_p |
+|-------|---------------|-------------------|
+| 7 (best) | ~242s | 169.99 |
+| 8 | ~241s | 171.0 |
+
+| Baseline epoch 7 | val_avg/mae_surf_p=210 | Alphonse epoch 7 | 170 ← 40 pts better at equal epoch count |
+
+- **Decision:** SENT BACK — not a regression at equal epoch count. Per-epoch time ~242s vs baseline ~131s → only 8 epochs in 30-min cap vs baseline's 14. Ask student to rerun with lr=1e-3 to compress convergence into the budget window.
+
+---
+
+## 2026-05-15 14:15 — PR #3106: Slice/head scale-up: slice_num 64→128, n_head 4→8, mlp_ratio 2→3
+
+- **Branch:** charliepai2i48h2-frieren/slice-128-head-8-mlp-3
+- **Hypothesis:** Finer spatial decomposition (128 slices) and wider heads improve surface pressure accuracy.
+- **Metrics (committed):** `models/model-charliepai2i48h2-frieren-slice-128-head-8-mlp-3-20260515-124520/metrics.jsonl`
+
+| Epoch | Per-epoch time | val_avg/mae_surf_p |
+|-------|---------------|-------------------|
+| 6 (best) | ~259s | 163.98 |
+| 7 | ~261s | 191.7 |
+
+| Baseline epoch 6 | val_avg/mae_surf_p=171 | Frieren epoch 6 | 164 ← 7 pts better at equal epoch count |
+
+- **Decision:** SENT BACK — not a regression at equal epoch count. Per-epoch time ~261s → only 7 epochs in 30-min cap. Ask student to rerun with lr=1e-3 to compress convergence into fewer epochs.
