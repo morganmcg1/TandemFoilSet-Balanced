@@ -320,3 +320,61 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - **Schedule**: budget-aligned `--epochs 12 --T_max=12` (matching the post-#3136 rerun policy).
 - Single attributable: one line inserted between `loss.backward()` and `optimizer.step()`. Instrumentation: track `train/grad_norm_mean`, `_max`, `_min` per epoch — primary diagnostic for whether clipping is actually firing.
 - Designed to be orthogonal to bf16, separate-heads, FiLM, SmoothL1, warmup, Fourier, and deeper — none of those control gradient norm.
+
+## 2026-05-15 17:40 — PR #3144: Deeper Transolver: n_layers 5->8 (rebased) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-thorfinn/deeper-l8`
+- **Hypothesis**: At the merged wider trunk, n_layers 5→8 should deliver capacity gains (more transformer block depth).
+- **Verdict**: CLOSED. val_avg/mae_surf_p = **177.6026** (epoch 6) vs baseline 126.32 = **+40.6% regression**, well above the 5% close threshold. **Same wider-trunk-budget wall as #3273 and #3298** — third independent diagnosis of the pattern.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p (primary, best)** | **177.6026** (epoch 6 of 8 realized) |
+| test_avg/mae_surf_p | NaN (cruise scoring bug); 3-split finite mean = 177.1244 |
+| n_params | 2,242,995 (2.24M — more than doubled from 1.03M baseline) |
+| peak_memory_gb | **96.61 / 96** (at the hardware ceiling) |
+| Per-epoch wallclock | ~317 s (~5.3 min/epoch — vs ~205s baseline) |
+| epochs realized | 6 of 8 (still mid-descent: 193→177 between epochs 5→6) |
+
+### Verdict commentary
+
+- **The capacity gain isn't testable at current budget**: wider × deeper drove per-step cost +55% AND pushed VRAM to 96.61/96 GB ceiling. The model is clearly still mid-descent at termination (8% val improvement between epochs 5→6).
+- **Thorfinn's analysis was excellent**: correctly identified depth=8 is gated on bf16 (or bs=2, or both) landing first. After bf16 lands and unlocks ~30% more budget, this hypothesis becomes testable as part of a depth sweep (5/6/7/8).
+- Per-channel: mae_surf_Ux=3.83, mae_surf_Uy=1.10 — not damaged, consistent with baseline rails (3.65 / 1.04). The pressure channel just isn't getting enough training.
+- **Thorfinn reassigned to scoring-fix PR (#3378)** — system-fix with advisor waiver to edit `data/scoring.py`. Unblocks `test_avg/mae_surf_p` reporting paper-wide.
+
+## 2026-05-15 18:20 — PR #3332: bf16 mixed-precision (autocast forward + loss) — SENT BACK
+
+- **Student branch**: `charliepai2i24h1-edward/bf16-amp`
+- **Hypothesis**: Wrap forward + loss in `torch.amp.autocast(dtype=torch.bfloat16)`; ~30-40% per-epoch speedup → 12-13 epochs realized at wider trunk; wider trunk's capacity manifests with the extra epochs.
+- **Verdict**: SENT BACK. The infrastructure unlock is clean and works as predicted, but val_avg/mae_surf_p = 129.76 is +2.7% over baseline 126.32 — doesn't pass the merge-must-improve-primary rule. Sent back with bs=8 + epochs=22 retry recipe.
+
+### Results
+
+| Metric | Value (bf16, 12 epochs) | Baseline #3136 |
+|---|---|---|
+| **val_avg/mae_surf_p (primary, best)** | **129.7591** (epoch 12) | 126.3241 (epoch 14) → **+2.7% regression** |
+| test_avg/mae_surf_p | **117.7643** (full 4-split, NaN-safe) | NaN (3-split partial 123.43) → **+5.7 better, full coverage** |
+| Per-epoch wallclock | **143.7s** (~30% speedup) | 205s (fp32 wider) → 30% landed (low end of 30-40% prediction) |
+| epochs realized in 30-min cap | **12** | 8 (wider fp32) → +4 epochs |
+| peak_memory_gb | **49.24** / 96 | (vs 63 fp32) → ~22% memory savings, lots of headroom for bs=8 |
+| nonfinite_loss_count | 0 | n/a |
+
+### Verdict commentary
+
+- **bf16 itself is fully clean**: zero NaN/Inf events across 12 epochs and 4 test splits. Per-channel ratios (Ux=2.12, Uy=0.86) intact, no precision damage.
+- **Val regression is concentrated** on `val_geom_camber_rc` (+12.3 vs baseline; other 3 splits move <1 point). Wider trunk still mid-descent on the geometry-unseen split at 12 epochs.
+- **30% speedup confirmed as predicted** — peer-epoch 205s → 143.7s. Memory-bandwidth-bound parts absorbed some of the GEMM/conv speedup (compute would have given 40%).
+- **NaN-safe eval working**: all 4 test splits finite, test_avg covers all 4 splits (vs baseline's 3-split partial). This pattern is now standardized via thorfinn's scoring-fix PR (#3378).
+- **batch_size=8 is the natural next step**: peak memory 49 GB / 96 GB means there's a clean 2× headroom. Doubling batch at bf16 → ~75-85s/epoch (memory-bandwidth-bound so not full 2×) → 21-24 epochs realized.
+- Sent back with: bs=8, epochs=22, T_max=22, keep bf16 plumbing, keep lr=5e-4 (no scaling for now to keep bs axis attributable).
+
+## 2026-05-15 18:30 — PR #3378: NaN-safe scoring fix (torch.where, advisor waiver) — DISPATCHED
+
+- **Student**: charliepai2i24h1-thorfinn (round 2 reassignment after #3144 close)
+- **Hypothesis**: `data/scoring.py::accumulate_batch` uses `err * mask.double()` which propagates Inf×0=NaN when GT contains Inf (cruise sample 20). Replace with `torch.where(mask, err, 0)` — preserves documented per-sample-skip semantic, eliminates NaN propagation. **Not expected to change val** (val GT is finite); **expected to change test** from NaN to a finite 4-split mean.
+- **Advisor waiver**: explicit permission to edit `data/scoring.py` (normally a protected file). Scoped to `accumulate_batch` only, one-spot substitution. Adds unit test `tests/test_scoring_nan_safe.py` to verify Inf-in-GT doesn't propagate NaN.
+- **Project value**: unblocks `test_avg/mae_surf_p` reporting paper-wide. Edward's `evaluate_split_nan_safe` (in #3332) and tanjiro's `eval_test_clean.py` (#3141) are workarounds; this is the source-level fix.
+- 5 students have independently diagnosed this issue (nezuko, tanjiro, frieren, fern, edward). Three NaN-safe patterns established as workarounds; tanjiro's element-mask is the cleanest and what this PR adopts.
