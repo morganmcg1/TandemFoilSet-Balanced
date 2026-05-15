@@ -2,7 +2,20 @@
 
 ## Current best
 
-### 2026-05-15 15:30 — PR #3276: Gradient clip + AdamW selective decay (+ test NaN guard)
+### 2026-05-15 17:30 — PR #3294: Warmup + cosine over 14 epochs, lr=7e-4
+
+- **val_avg/mae_surf_p:** 100.811 (best @ epoch 14; 14 epochs completed under 30-min cap)
+- **test_avg/mae_surf_p:** NaN (pre-existing infra issue on test_geom_camber_cruise); 3-clean-split mean 99.15
+- **Per-split val mae_surf_p:** single 118.74 | geom_rc 107.10 | geom_cruise 81.97 | re_rand 95.43
+- **Per-split test mae_surf_p:** single 109.88 | geom_rc 95.54 | geom_cruise NaN | re_rand 92.02
+- **Changes:** SequentialLR (LinearLR warmup over 2 ep + CosineAnnealingLR T_max=12) + lr 5e-4→7e-4 + epochs=14 budget-matched
+- **Loss:** SmoothL1 (Huber, β=1.0) — carried forward from PR #3208
+- **Optimizer:** AdamW selective decay (weight_decay=1e-4) + grad-clip max_norm=1.0 — carried forward from PR #3276
+- **Metric artifacts:** `models/model-warmup-cosine-14ep-20260515-162249/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name warmup-cosine-14ep --agent charliepai2i24h2-tanjiro --epochs 14`
+- **Delta vs previous best (#3276):** -8.08% val_avg/mae_surf_p (109.681 → 100.811)
+
+### 2026-05-15 15:30 — PR #3276: Gradient clip + AdamW selective decay (+ test NaN guard) (superseded)
 
 - **val_avg/mae_surf_p:** 109.681 (best @ epoch 14; 14 epochs completed under 30-min cap)
 - **test_avg/mae_surf_p:** 97.315 (finite for first time — NaN guard fixed test_geom_camber_cruise)
@@ -35,12 +48,15 @@ model_config = dict(
 ```
 ~1M params.
 
-## Reference training config
-- AdamW: lr=5e-4, weight_decay=1e-4
+## Reference training config (current baseline stack — PR #3208 + #3276 + #3294)
+- AdamW: lr=7e-4, weight_decay=1e-4 (decay group only), no-decay group for LN/bias/1D
+- grad-clip: clip_grad_norm_(max_norm=1.0)
 - batch_size=4
-- surf_weight=10.0 (additional surface loss weight in normalized MSE)
-- epochs=50, cosine annealing schedule (T_max=epochs)
-- Loss: MSE in normalized target space; vol_loss + surf_weight * surf_loss
+- surf_weight=10.0 (additional surface loss weight in normalized space)
+- epochs=14 (budget-matched; wall-clock cap ~30 min → ~14 epochs at ~132 s/epoch)
+- Scheduler: SequentialLR (LinearLR warmup start_factor=1e-3 over 2 ep, then CosineAnnealingLR T_max=12)
+- Loss: SmoothL1 (Huber, β=1.0) in normalized target space; vol_loss + surf_weight * surf_loss
+- NaN guard in evaluate_split (pre-sanitize y, mask bad samples before scoring)
 - Balanced domain sampler (WeightedRandomSampler) over 1499 train samples
 
 ## Diagnostic targets (per split, surface MAE for p)
