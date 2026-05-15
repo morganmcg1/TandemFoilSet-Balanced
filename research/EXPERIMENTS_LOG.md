@@ -1,5 +1,31 @@
 # SENPAI Research Results
 
+## 2026-05-15 18:26 — PR #3303: Increase surf_weight from 10 to 50 with Huber baseline
+
+- **Branch**: `charliepai2i24h3-thorfinn/surf-weight-50`
+- **Hypothesis**: Increasing `surf_weight` from 10 to 50 (5× surface node emphasis) would focus gradient more on the boundary-layer region and improve surface pressure prediction across all splits.
+- **Outcome**: **CLOSED — negative result (3.5% regression), hypothesis falsified at this magnitude**
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` | **121.79** (best epoch 13; baseline 117.66) |
+| `val_single_in_dist/mae_surf_p` | 155.27 (+7.50 vs baseline) |
+| `val_geom_camber_rc/mae_surf_p` | 124.28 (−0.80 vs baseline — only split improved) |
+| `val_geom_camber_cruise/mae_surf_p` | 93.70 (+4.72 vs baseline) |
+| `val_re_rand/mae_surf_p` | 113.90 (+5.09 vs baseline) |
+| `test_avg/mae_surf_p` (partial, 3 splits) | 123.88 |
+| Epochs run | 13/50 (30-min cap) |
+| Peak VRAM | 42.11 GB |
+| Artifact | `models/model-surf_weight_50_huber-20260515-172709/metrics.jsonl` |
+
+**Analysis**: The 5× surface-node scaling (uniform over Ux, Uy, p) degraded 3 of 4 splits, including the predicted-best (`val_geom_camber_cruise` went from 88.98 → 93.70). The only marginal improvement was `val_geom_camber_rc` (−0.80 pts). Model also produced NaN in `test_geom_camber_cruise` surface pressure predictions — a prediction-side instability triggered by the aggressive gradient, separate from the existing GT-side NaN bug.
+
+Root cause: scalar `surf_weight` boosts all 3 surface channels together. With a fixed-capacity model, this is mostly zero-sum across surface channels vs volume. The gradient to the ranking channel (pressure) only receives 1/3 of the additional surface budget; the rest goes to Ux/Uy surface losses which were already well-optimized.
+
+→ Closed. thorfinn reassigned to **per-channel surface pressure weighting** (PR #3393): concentrate the extra gradient specifically on the pressure channel (dim 2), leaving Ux/Uy surface losses unchanged. This is qualitatively different from the uniform-scalar approach.
+
+---
+
 ## 2026-05-15 16:25 — PR #3238: Dual surface/volume output heads in final TransolverBlock
 
 - **Branch**: `charliepai2i24h3-fern/dual-branch-heads`

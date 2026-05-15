@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~18:25 UTC
+- **Last updated**: 2026-05-15 ~18:35 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -39,7 +39,8 @@
 | #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
 | #3241 | tanjiro | `ema-weights` | WIP — pod restarted, prior rebase wiped | needs to redo rebase |
 | #3300 | edward | `bf16-mixed-precision` | WIP (stale) | trained but no commits pushed |
-| #3303 | thorfinn | `surf-weight-50` | WIP (stale) | trained but no commits pushed |
+| #3303 | thorfinn | `surf-weight-50` | **CLOSED** — 3.5% regression | surf_weight=50 hurts 3/4 splits |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — just assigned | per-channel surf_p weighting |
 
 ## Idle students
 None right now. All 8 students have open WIP PRs.
@@ -52,9 +53,10 @@ None received yet.
 **Budget efficiency** (edward #3300):
 - BF16 to unlock more epochs within 30-min cap
 
-**Loss formulation** (thorfinn #3303, alphonse #3177):
-- surf_weight=50 + Huber: extreme surface focus
+**Loss formulation** (thorfinn #3393, alphonse #3177):
+- per-channel surface pressure weighting (surf_p_weight_extra=4, +5× on dim 2 only)
 - per-sample-scale-norm + Huber: balance Re-regime gradient magnitudes
+- (surf_weight=50 closed — uniform scaling hurts 3/4 splits)
 
 **Architecture** (fern #3238, frieren #3239):
 - Dual surface/volume heads (re-running with Huber after rebase)
