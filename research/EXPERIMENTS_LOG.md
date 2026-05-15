@@ -1,5 +1,29 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-15 21:37 — PR #3414: SWA (stochastic weight averaging) over last K checkpoints
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `tanjiro/swa-checkpoint-averaging`)
+- **Hypothesis:** Averaging the weights of the last K checkpoints (K=3 or K=5) produces a smoother loss landscape than any single checkpoint, reducing overfitting and improving val_avg/mae_surf_p.
+
+### Results
+
+| Arm | SWA window | raw val_avg/mae_surf_p (best ckpt) | swa_val_avg/mae_surf_p | Δ vs 109.42 baseline | W&B run |
+|---|---|---:|---:|---:|---|
+| A — SWA last 5 | K=5 (epochs 6–10) | **103.72** | 111.09 | +1.5% ✗ | `gduowc1p` |
+| B — SWA last 3 | K=3 (epochs 8–10) | **108.01** | 109.48 | ~flat (+0.06%) | `udfmekyw` |
+
+**SENPAI-RESULT (terminal):** `swa_val_avg/mae_surf_p = 109.48`, `swa_test_avg 3-split = 106.34` (Arm B).
+
+### Analysis
+
+SWA did NOT improve the primary metric on either arm. The SWA-averaged checkpoint was consistently **worse** than the best raw checkpoint in both arms. The mechanism is clear: with `--epochs 10` and cosine annealing to 0, the loss is still descending at the final epoch. Averaging the last K checkpoints includes sub-optimal earlier states from the middle of descent, which drags the average above the best single checkpoint.
+
+The Arm A raw val (103.72) is better than baseline but that's just run variance — it's an unintended observation from a re-run of the baseline config. The proposed feature (SWA averaging) consistently regressed both arms.
+
+**Conclusion:** SWA is only beneficial when the training curve has plateaued — which requires more epochs than our 30-min budget allows at the current batch size. The experiment correctly identified this limitation in the writeup.
+
+**Closed as dead end** at 21:37 UTC. New hypothesis assigned to tanjiro: depth n_layers=5→6 (#3469).
+
 ## 2026-05-15 14:07 — PR #3092: More physics-attention slice tokens (slice_num 64→128, 192)
 
 - **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/more-slices`)
@@ -268,3 +292,57 @@ The comparison is apples-to-oranges. Asked student to rebase onto current adviso
 cruise NaN bug noted — same pre-existing issue, covered by alphonse's #3089 fix.
 
 Student reassigned to: **Fourier positional encoding on (x,z)** (PR #3372) — same per-step cost, higher-frequency geometry representation.
+
+---
+
+## 2026-05-15 19:30 — PR #3096: x-axis reflection symmetry augmentation (rebased confirmation)
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/xflip-aug`)
+- **Hypothesis:** x-axis symmetry flip augmentation (p=0.5 per sample, xflip_collate at train time only, field negation of Ux/AoA/stagger). Predicted OOD generalization boost.
+
+### Results (W&B-verified — rebased confirmation arm)
+
+| Run | config | epochs | best val_avg/mae_surf_p | test_avg (3 splits) | W&B run |
+|-----|--------|--------|------------------------|--------------------|---------|
+| tanjiro-xflip-rebased | lr=1e-3 + warmup + clip + xflip | 10/10 | **140.67** | **144.70** | `du7tx8dy` |
+
+Current advisor baseline: val=**109.42**. **+28.5% regression.** Wall clock 22.4 min, full 10 epochs, no truncation.
+
+### Decision: CLOSED
+
+Per decision rule (val>115→close): clear close. Rebase eliminated the stale-code confound, cosine fully annealed at --epochs 10, clean confound-free measurement. xflip aug halves effective gradient signal per orientation, hurting more than it helps on a 1500-sample dataset. Every split worse.
+
+### Useful findings from the symmetry aug experiments
+
+- xflip aug fails convincingly at two independent code/schedule configurations (stale + rebased)
+- If revisiting augmentation: **mild affine perturbations** (AoA jitter, stagger jitter) are more promising than discrete symmetries
+- The `xflip_collate` + field-negation code is clean and could be repurposed for **TTA (test-time augmentation)** if desired — same model, ensembled predictions on original + flipped input at inference
+- Tanjiro reassigned to **SWA** (PR #3414) — different best-checkpoint strategy, zero per-step cost
+
+---
+
+## 2026-05-15 18:30 — PR #3095: surf_weight 10→30 + per-channel p weighting
+
+- **Student:** willowpai2i48h4-nezuko (branch: `willowpai2i48h4-nezuko/surf-weight-pweight`)
+- **Hypothesis:** push surface mass higher (surf_weight 10→30) and/or weight p-channel 3× harder to lift surface-pressure MAE; predicted improvement on `val_avg/mae_surf_p`.
+
+### Results (W&B-verified, all stale code: lr=5e-4, no warmup, no clip)
+
+| Arm | Config | best ep | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|-----|--------|--------:|-------------------:|--------------------:|---------|
+| A | surf_w=30, p_w=1 | 13 | **131.08** | **117.28** | `t640m1of` |
+| B | surf_w=10, p_w=3 | 13 | 133.31 | 121.29 | `f10ob15w` |
+| C | surf_w=30, p_w=3 | 14 | 146.42 | 134.42 | `0qb9wvgy` |
+
+Current advisor baseline: val=**109.42**. Arm A is **19.8% worse** on val and **9.0% worse** on test_avg vs baseline. Per-split test on Arm A: single_in_dist=140.46 vs baseline 111.04, geom_camber_rc=127.71 vs 110.20, re_rand=116.19 vs 101.17 — every split is worse.
+
+### Decision: SENT BACK + read-only violation flagged
+
+- **Read-only violation:** Student modified `data/scoring.py` (per program.md: **read-only**) to add `y_safe = torch.where(torch.isfinite(y), y, torch.zeros_like(y))`. Concept correct but location wrong. Send-back asks: revert data/scoring.py, apply fix in train.py instead (or drop entirely once alphonse's #3089 merges with canonical fix).
+- **Metric regression:** asked for **single rebased confirmation arm at surf_weight=20** (more conservative) with --epochs 10. Decision rule: val<109.42 merge; val 109-115 close-call; val>115 close.
+
+### Useful findings
+
+- Arm B and C are dead ends — per-channel p weighting compounds badly with surface weighting (Arm C 30×3=90× effective surface-p vs volume-Ux).
+- All 3 arms confirm: **cruise-camber is the easiest test split for surface_p** (84.76 vs 116-140 elsewhere). Future hypotheses targeting harder splits (single_in_dist, geom_camber_rc) have more headroom.
+- Independently rediscovered the cruise NaN scoring bug (same root cause as alphonse, thorfinn, frieren found).
