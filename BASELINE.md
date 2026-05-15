@@ -1,6 +1,33 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3123 (2026-05-15)
+## Current best — PR #3098 (2026-05-15)
+
+**val_avg/mae_surf_p = 96.0548** (W&B run: `md6so639`)  
+**test_avg/mae_surf_p = NaN** ⚠️ — test_geom_camber_cruise NaN (baseline-side GT bug; fix in PR #3296)  
+**test partial (excl. cruise): 93.41** (3-split mean — in_dist 96.04, camber_rc 100.16, re_rand 84.02)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------|-----------------|
+| single_in_dist | 109.64 | 96.04 |
+| geom_camber_rc | 112.30 | 100.16 |
+| geom_camber_cruise | **73.22** | NaN ⚠️ |
+| re_rand | 89.06 | 84.02 |
+
+Added: SmoothL1 (Huber) loss with beta=0.05 replacing MSE for both vol and surf loss terms.  
+Effect: -26.4% vs PR #3123 baseline (130.46 → 96.05). All 4 val splits improved.
+
+**Reproduce:**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-alphonse --epochs 50 \
+  --wandb_group huber-surface-loss-alphonse \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --wandb_name alphonse-arm-C-sl1-beta0.05
+```
+
+---
+
+## PR #3123 (2026-05-15) — previous best
 
 **val_avg/mae_surf_p = 130.46** (W&B run: `24yldhv7`)  
 **test_avg/mae_surf_p = NaN** ⚠️ — test_geom_camber_cruise split produces NaN for all runs (baseline-side bug, not introduced by this PR — tracked in follow-up NaN-fix PR)
