@@ -511,7 +511,12 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+
+        # asinh loss compression on pressure channel (index 2) only.
+        # Compresses heavy-tail z-scores; Ux/Uy channels unchanged.
+        sq_err_uxuy = (pred[..., :2] - y_norm[..., :2]) ** 2
+        sq_err_p = (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
+        sq_err = torch.cat([sq_err_uxuy, sq_err_p], dim=-1)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
