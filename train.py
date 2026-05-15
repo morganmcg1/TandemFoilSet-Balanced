@@ -195,6 +195,7 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.aux_head = nn.Linear(n_hidden, 1)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -209,9 +210,10 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        aux_logits = self.aux_head(fx).squeeze(-1)
         for block in self.blocks:
             fx = block(fx)
-        return {"preds": fx}
+        return {"preds": fx, "aux_logits": aux_logits}
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +241,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm})
+            pred = out["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -353,6 +356,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 25.0
+    aux_weight: float = 0.1
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -440,6 +444,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux_loss = epoch_aux_acc = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -450,14 +455,19 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        out = model({"x": x_norm})
+        pred = out["preds"]
+        aux_logits = out["aux_logits"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        aux_target = is_surface.float()
+        aux_bce = F.binary_cross_entropy_with_logits(aux_logits, aux_target, reduction='none')
+        aux_loss = (aux_bce * mask.float()).sum() / mask.sum().clamp(min=1)
+        loss = vol_loss + cfg.surf_weight * surf_loss + cfg.aux_weight * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -469,6 +479,12 @@ for epoch in range(MAX_EPOCHS):
             for eb, b in zip(ema_model.buffers(), model.buffers()):
                 eb.copy_(b)
 
+            aux_pred = (aux_logits.sigmoid() > 0.5)
+            aux_correct = ((aux_pred == is_surface) & mask).sum().float()
+            aux_total = mask.sum().float().clamp(min=1)
+            epoch_aux_loss += aux_loss.item()
+            epoch_aux_acc += (aux_correct / aux_total).item()
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -476,6 +492,8 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux_loss /= max(n_batches, 1)
+    epoch_aux_acc /= max(n_batches, 1)
 
     # --- Validate (using EMA model) ---
     model.eval()
@@ -507,13 +525,15 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_loss": epoch_aux_loss,
+        "train/aux_acc": epoch_aux_acc,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux_loss:.4f} acc={epoch_aux_acc:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
