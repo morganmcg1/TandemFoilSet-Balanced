@@ -1,58 +1,61 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15
+- **Date:** 2026-05-15 14:45
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
 - **Primary metric:** `val_avg/mae_surf_p` (lower is better)
-- **Baseline status:** to-be-established by first PR round on this branch (no prior committed metrics)
+- **Current baseline:** `val_avg/mae_surf_p = 127.84` (PR #3226 thorfinn H10 Re-strat, merged 2026-05-15)
+
+## Round-1 results summary
+
+Four PRs landed for review. Ranking by `val_avg/mae_surf_p`:
+
+| # | Student | Hypothesis | val_avg | Outcome |
+|---|---------|------------|---------|---------|
+| 3226 | thorfinn | H10 Re-strat sampler | **127.84** | **MERGED → new baseline** |
+| 3197 | askeladd | H8 EMA (decay=0.999) | 132.17 | Send back: re-run on merged baseline |
+| 3224 | tanjiro  | H13 gated geom-cond | 134.31 | Send back: re-run on merged baseline + fix cap |
+| 3210 | fern     | H2 scale to 4M params | 158.40 | Send back: add grad clip + lower lr + smaller variant |
+
+Four PRs still WIP from round 1: alphonse (H1 LinearNO), edward (H3 channel-weighted loss), frieren (H5 RFF), nezuko (H9 Cautious AdamW). They will likely come in for review during the next iteration.
 
 ## Current research focus
 
-Round 1 of this 24h research track. The branch starts fresh from
-`icml-appendix-charlie`. We attack the unmodified Transolver baseline
-(~1M params, n_hidden=128, n_layers=5, slice_num=64) along 8 distinct
-mechanisms in parallel to maximize information gain:
+Round 2 begins with the Re-strat sampler in the baseline. The dominant signal so far:
 
-1. **Architecture simplification** — LinearNO ablation (remove inter-slice QKV) to test whether inter-slice attention is signal or noise on this dataset.
-2. **Architecture scaling** — width/depth scaling under a small learning-rate adjustment.
-3. **Optimizer regularization** — EMA weight averaging for OOD robustness.
-4. **Optimizer stability** — Cautious AdamW for OOD generalization.
-5. **Objective alignment** — pressure-channel weighting in the surface loss term to align the optimization signal with the primary ranking metric.
-6. **Spatial representation** — Random Fourier Feature coordinate encoding to lift spectral bandwidth for boundary-layer gradients.
-7. **OOD geometry conditioning** — simple persistent global-feature injection per Transolver block (additive GALE-style).
-8. **Sample distribution** — high-Re upweighting in the WeightedRandomSampler to address the dynamic-range imbalance across Re regimes.
+- **High-Re upweighting works** — best val_re_rand (111.08) and val_geom_camber_cruise (91.50) among submitted PRs.
+- **OOD vs in-dist asymmetry persists** — `val_single_in_dist` is the hardest split at ~160 mae_surf_p for the merged baseline. This is the obvious next target.
+- **All three completed-but-not-merged ideas (EMA, geom-cond, scale-up)** are orthogonal mechanisms that should compose with Re-strat — re-running them on the merged baseline closes that experiment cleanly.
 
-## Why these picks
+## Known branch-wide quirk
 
-All 8 are concrete single-file changes in `train.py` with concrete
-implementation guidance. Together they span all the high-leverage attack
-vectors (architecture, optimizer, loss, input rep, sampling), giving us
-broad coverage in a single 30-min training batch. The two leading
-hypotheses (LinearNO ablation, EMA) carry the highest literature-backed
-confidence; the remaining 6 are independent mechanisms whose effects can
-stack with any winner. Composability is explicit — EMA and channel
-weighting are orthogonal to architectural winners.
+`test_avg/mae_surf_p` is currently **NaN** for every PR on this branch. Root cause: `data/scoring.py` (read-only, can't modify) accumulates `(pred - y).abs() * surf_mask`. Sample 20 in `test_geom_camber_cruise` has 761 `inf` values in `y[..., 2]` (p channel). Because `NaN * 0 = NaN` (IEEE 754), the infinity propagates through the mask multiplication into the accumulator, contaminating `test_avg`. Three of four students independently spotted this. **Workaround:** rank on `val_avg/mae_surf_p`, report the 3 finite test splits separately.
 
-## Potential next research directions
+## Round-2 priorities
 
-After this batch lands and we know what improved:
+1. **Get round-1 reruns on the new baseline** — askeladd (EMA), tanjiro (geom-cond fixed cap), fern (smaller variant + grad clip). These are essentially free information: known mechanisms tested over a known better baseline.
 
-- **Compounding round:** stack the round-1 winners (e.g. EMA + best-arch + best-loss) into a single PR.
-- **Asymmetric Q/K projections (LinearNO H4):** alternative architectural step if H1 underperforms.
+2. **New mechanism for newly-idle thorfinn** — H7 two-branch output head (surface vs volume decoder), targeting `val_single_in_dist` and `val_geom_camber_rc` which are still the two hardest splits at 160 / 149. Dedicated surface decoder capacity should help the metric we're actually scored on.
+
+3. **Watchlist for incoming round-1 PRs** — alphonse, edward, frieren, nezuko. If any beat 127.84, merge then chain.
+
+## Potential next research directions (round 3+)
+
+- **Compounding round:** stack the round-1+2 winners into a single bundled PR.
+- **Asymmetric Q/K projections (H4):** orthogonal attention modification.
+- **Gradient clipping + SGDR (H6):** stability + warm restarts.
+- **MLP dropout (H12) or log1p target normalization (H11):** lightweight regularization.
 - **GeoTransolver GALE (full):** multi-scale ball queries + full cross-attention conditioning if simple H13 shows OOD gains.
-- **Loss reformulation:** Huber on surface pressure, per-domain loss normalization, log1p compression.
-- **Spectral targeting:** SIREN-style learned coordinate encoding, multi-band RFF sweep on σ.
-- **Optimizer ladder:** SOAP, Sophia, Lion variants (after Cautious AdamW signal).
-- **Output decoder:** two-branch (surface vs volume) decoder if surface-specific capacity is the bottleneck.
+- **Loss reformulation:** Huber on surface pressure, per-domain loss normalization.
 - **Curriculum/mining:** hard-sample mining by per-sample MAE during training.
+- **Spectral targeting:** SIREN-style learned coordinate encoding, multi-band RFF sweep on σ if frieren H5 shows traction.
 
-## Open questions for the next round
+## Open questions
 
-- Which of (architecture, loss, optimizer, input rep) yields the largest single-knob improvement?
-- Does removing inter-slice QKV survive the tandem-foil interaction structure (foil-foil wake coupling)?
-- Does EMA's gain on the OOD splits exceed its gain on the in-dist split?
-- Do high-Re samples actually drive the metric, or is the camber OOD the dominant axis?
+- Does EMA's gain on top of Re-strat reach val_avg < 125?
+- Is the two-branch head the right level of capacity allocation, or is the surface task too small to need a dedicated decoder?
+- The `val_single_in_dist` split is the hardest now (160.10) — what's different about it from val_re_rand (111.08)? Worth a data audit before round 3.
 
 ## Living document
 
