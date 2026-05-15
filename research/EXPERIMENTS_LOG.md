@@ -342,3 +342,57 @@ Expected: 1–10% gain over EMA baseline if SWA finds flatter minima. No regress
 
 Round-2 status now: 5 PRs in flight on EMA stack (#3366 fern, #3367 alphonse, #3368 thorfinn, #3369 nezuko, #3388 frieren) + 2 PRs awaiting terminal result (#3181 edward, #3202 tanjiro) + 1 student idle (askeladd, just freed by #3176 close).
 
+
+---
+
+## 2026-05-15 20:40 — PR #3366: MERGED — EMA + grad_clip=5 + Huber δ=1.0 (fern)
+
+**New baseline: val_avg/mae_surf_p = 94.4199 (−22.4% below prior EMA baseline 121.685)**
+
+| run | grad_clip | huber_delta | val_avg | test_3split | Δ vs EMA baseline |
+|---|---|---|---|---|---|
+| `m6hkf8el` | 5.0 | 1.0 | **94.4199** | **92.3626** | **−22.4%** |
+| `eq4osquw` | 5.0 | 1.0 | 94.868 | 93.388 | −22.0% |
+
+Per-split (m6hkf8el):
+
+| Split | val | test |
+|---|---|---|
+| single_in_dist | 111.794 | 99.797 |
+| geom_camber_rc | 110.162 | 96.252 |
+| geom_camber_cruise | 69.012 | NaN |
+| re_rand | 86.712 | 81.040 |
+
+**All 4 val splits improve by ≥20%.** Val trajectory is monotone-decreasing through epoch 14 (still improving at wall-clock cutoff).
+
+**Key mechanistic findings:**
+- At clip=5, gradient bites ~92–99% of steps (median pre-clip norm ~16–34×). Nearly all steps are in the clipped regime. Raising clip from 1 to 5 allows 5× larger effective LR steps without destabilizing training (Huber caps per-sample loss influence).
+- Huber + clip + EMA compound orthogonally: each targets a different aspect of the optimization challenge (loss robustness, gradient norm, trajectory smoothing).
+- Fern's report: val trajectory still monotone at epoch 14. Longer budget (if allowed) could improve further.
+
+---
+
+## 2026-05-15 21:30 — Round-2 closures (superseded by fern's 94.42 new baseline)
+
+| PR | Student | val_avg | Δ vs NEW baseline 94.42 | Verdict |
+|---|---|---|---|---|
+| #3181 edward | grad-clip-huber rebased | 97.23 | +2.9% | CLOSE — superseded by identical config in fern's #3366 |
+| #3202 tanjiro | lr-warmup-cosine rebased | 118.17 | +25.2% | CLOSE — superseded |
+| #3368 thorfinn | ema-per-channel-heads | 128.92 | +36.5% | CLOSE — structural bias confirmed dead-end |
+| #3369 nezuko | cosine-tmax-12/16 | 123.39 (T_max=16) | +30.7% | CLOSE — T_max=9 is sweet spot (see tanjiro's finding) |
+| #3367 alphonse | ema-decay-scan (0.9995/0.9999) | 157.50 (best) | +66.8% | PENDING close after terminal SENPAI-RESULT |
+| #3388 frieren | swa-plateau-average | 121.46 (swa_start=8) | +28.7% | PENDING close after terminal SENPAI-RESULT |
+| #3396 askeladd | weight-decay-sweep (1e-3→1e-2) | 123.77 (wd=1e-3) | +31.1% | PENDING close after terminal SENPAI-RESULT |
+
+---
+
+## 2026-05-15 21:30 — Round-3 assignments
+
+New baseline: 94.4199. Three idle students assigned hypotheses targeting the EMA+clip5+Huber stack:
+
+| PR | Student | Hypothesis | Key question |
+|---|---|---|---|
+| #3454 | edward | lr-sweep-clip-huber (lr=1e-3, 2e-3, 5e-3) | Can higher LR overcome clip-suppressed effective step size? |
+| #3456 | nezuko | tmax9-clip-huber (T_max=14 + T_max=9 on full stack) | Does aligned cosine decay compound with EMA+clip+Huber? |
+| #3458 | tanjiro | huber-delta-sweep (δ=0.5, 1.0, 2.0, 0.0) | What is the optimal Huber transition threshold? |
+
