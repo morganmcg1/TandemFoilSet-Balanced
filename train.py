@@ -348,7 +348,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 3e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -390,9 +390,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
+    n_hidden=256,
+    n_layers=6,
+    n_head=8,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
