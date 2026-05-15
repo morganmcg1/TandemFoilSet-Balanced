@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~21:28 UTC
+- **Last updated:** 2026-05-15 ~21:40 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -32,11 +32,12 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | **#3372** | **askeladd** | **Fourier PE on (x,z) coords** | xmcndd46 | finished | **94.491** | n/a (no scoring fix) | **−13.6% 🏆 best** |
 | #3089 | alphonse | L1 + warmup + clip + lr=1e-3 | ydztkz9s | finished | **104.878** | **94.629** | **−4.1% ✓** |
 | #3092 | fern | slice_num=64 baseline e=10 | d62uhu5g | finished | **106.821** | n/a | −2.4% ✓ marginal |
-| #3414 | tanjiro | SWA last K | udfmekyw | finished | **108.014** | n/a | −1.3% ✓ marginal |
+| ~~#3414~~ | ~~tanjiro~~ | ~~SWA last K~~ | udfmekyw | **CLOSED** | swa=109.48 | — | +0.06% ✗ (SWA worsened raw val=108.01) |
 | #3095 | nezuko | surf_weight=20 rebased | 6amjj7jr | finished | 111.916 | 97.702 | +2.3% ✗ narrowly worse |
 | #3093 | frieren | bf16 + bs=8 rebased | ytpl95nk | finished | 143.842 | n/a | +31.4% ✗ regressed |
 | #3371 | thorfinn | EMA decay=0.9999 | yr4bbbg8 | **crashed** | 150.897 | n/a | crashed at epoch ≈ early |
-| #3288 | edward | Scoring fix + lr default | (no run) | idle | — | — | waiting for #3089 merge |
+| #3288 | edward | lr default 5e-4→1e-3 (only change) | n/a | **RUNNING** — commit pushed 21:25, GPU 46.5/97 GB | — | — | waiting for #3089 merge to rebase |
+| **#3469** | **tanjiro** | **Depth n_layers=5→6** | new | **NEW** — assigned 21:39 | — | — | n/a |
 
 **4 of 7 PRs are merge candidates** (val < 109.42): askeladd (best), alphonse, fern, tanjiro.
 
@@ -75,6 +76,7 @@ Merge order once SENPAI-RESULT markers land (compound improvements; best last to
 4. **#3414 tanjiro SWA (val=108.014)** — marginal; merge if it still beats post-merges. Re-confirm if it lands after 3 baseline changes.
 
 **Close as dead end:**
+- **#3414 tanjiro SWA** ✓ CLOSED 21:37
 - **#3093 frieren bf16+bs=8 (val=143.84, +31%)** — composed config regressed badly. The speed unlock is genuine, but the bf16 numerics at lr=1e-3 + clip=1 + warmup might be incompatible; needs a different schedule. Close this arm; revisit bf16 as separate experiment.
 
 **Send back / investigate:**

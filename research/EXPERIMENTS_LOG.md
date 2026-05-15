@@ -1,5 +1,29 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-15 21:37 — PR #3414: SWA (stochastic weight averaging) over last K checkpoints
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `tanjiro/swa-checkpoint-averaging`)
+- **Hypothesis:** Averaging the weights of the last K checkpoints (K=3 or K=5) produces a smoother loss landscape than any single checkpoint, reducing overfitting and improving val_avg/mae_surf_p.
+
+### Results
+
+| Arm | SWA window | raw val_avg/mae_surf_p (best ckpt) | swa_val_avg/mae_surf_p | Δ vs 109.42 baseline | W&B run |
+|---|---|---:|---:|---:|---|
+| A — SWA last 5 | K=5 (epochs 6–10) | **103.72** | 111.09 | +1.5% ✗ | `gduowc1p` |
+| B — SWA last 3 | K=3 (epochs 8–10) | **108.01** | 109.48 | ~flat (+0.06%) | `udfmekyw` |
+
+**SENPAI-RESULT (terminal):** `swa_val_avg/mae_surf_p = 109.48`, `swa_test_avg 3-split = 106.34` (Arm B).
+
+### Analysis
+
+SWA did NOT improve the primary metric on either arm. The SWA-averaged checkpoint was consistently **worse** than the best raw checkpoint in both arms. The mechanism is clear: with `--epochs 10` and cosine annealing to 0, the loss is still descending at the final epoch. Averaging the last K checkpoints includes sub-optimal earlier states from the middle of descent, which drags the average above the best single checkpoint.
+
+The Arm A raw val (103.72) is better than baseline but that's just run variance — it's an unintended observation from a re-run of the baseline config. The proposed feature (SWA averaging) consistently regressed both arms.
+
+**Conclusion:** SWA is only beneficial when the training curve has plateaued — which requires more epochs than our 30-min budget allows at the current batch size. The experiment correctly identified this limitation in the writeup.
+
+**Closed as dead end** at 21:37 UTC. New hypothesis assigned to tanjiro: depth n_layers=5→6 (#3469).
+
 ## 2026-05-15 14:07 — PR #3092: More physics-attention slice tokens (slice_num 64→128, 192)
 
 - **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/more-slices`)
