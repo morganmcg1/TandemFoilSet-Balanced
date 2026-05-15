@@ -206,10 +206,18 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, mixup_lam=None, mixup_perm=None, mixup_block_idx=None):
+        """Forward pass with optional manifold mixup.
+
+        If mixup_lam is not None, the hidden state is mixed with a permuted
+        copy of the batch at block mixup_block_idx before that block runs.
+        Training only — eval always calls without mixup args.
+        """
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            if mixup_lam is not None and i == mixup_block_idx:
+                fx = mixup_lam * fx + (1.0 - mixup_lam) * fx[mixup_perm]
             fx = block(fx)
         return {"preds": fx}
 
@@ -408,6 +416,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    mixup_alpha: float = 0.0  # 0.0 = disabled; >0 enables manifold mixup
+    mixup_prob: float = 0.5   # fraction of batches that get mixup applied
+    mixup_max_block: int = 3  # mix at block index in [0, mixup_max_block)
 
 
 cfg = sp.parse(Config)
@@ -475,6 +486,11 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "ema_decay": EMA_DECAY,
+        "manifold_mixup": {
+            "alpha": cfg.mixup_alpha,
+            "prob": cfg.mixup_prob,
+            "max_block": cfg.mixup_max_block,
+        },
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -500,11 +516,27 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
+        # Manifold mixup: mix hidden state at a random block, mix targets in y-space.
+        # Mesh/geometry features (x_norm) come from the original sample only.
+        mm_lam = mm_perm = mm_block = None
+        y_for_loss = y_norm
+        mask_for_loss = mask
+        is_surface_for_loss = is_surface
+        B = x.shape[0]
+        if cfg.mixup_alpha > 0 and B >= 2 and torch.rand(1).item() < cfg.mixup_prob:
+            mm_lam = float(torch.distributions.Beta(cfg.mixup_alpha, cfg.mixup_alpha).sample())
+            mm_perm = torch.randperm(B, device=device)
+            mm_block = int(torch.randint(0, cfg.mixup_max_block, (1,)).item())
+            y_for_loss = mm_lam * y_norm + (1.0 - mm_lam) * y_norm[mm_perm]
+            mask_for_loss = mask | mask[mm_perm]
+            is_surface_for_loss = is_surface | is_surface[mm_perm]
+
+        pred = model({"x": x_norm}, mixup_lam=mm_lam, mixup_perm=mm_perm, mixup_block_idx=mm_block)["preds"]
+        sq_err = (pred - y_for_loss) ** 2  # [B, N, 3]
+
+        vol_mask = mask_for_loss & ~is_surface_for_loss
+        surf_mask = mask_for_loss & is_surface_for_loss
         vol_mask_f = vol_mask.float().unsqueeze(-1)  # [B, N, 1]
         surf_mask_f = surf_mask.float().unsqueeze(-1)  # [B, N, 1]
 
@@ -516,7 +548,7 @@ for epoch in range(MAX_EPOCHS):
         surf_loss_per_sample = surf_loss_per_sample.mean(dim=-1)  # [B]
 
         combined_per_sample = vol_loss_per_sample + cfg.surf_weight * surf_loss_per_sample  # [B]
-        sample_scale = per_sample_field_scale(y_norm, mask)  # [B]
+        sample_scale = per_sample_field_scale(y_for_loss, mask_for_loss)  # [B]
         loss = (combined_per_sample / sample_scale.detach()).mean()
 
         # Aggregate logging stats: batch-mean of per-sample vol/surf losses
