@@ -485,6 +485,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_epochs: int = 5
     fourier_bands: int = FOURIER_BANDS
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -548,7 +549,21 @@ optimizer = torch.optim.AdamW(
     list(model.parameters()) + list(fourier_encoder.parameters()),
     lr=cfg.lr, weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+WARMUP_EPOCHS = min(cfg.warmup_epochs, max(MAX_EPOCHS - 1, 0))
+if WARMUP_EPOCHS > 0:
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.02, end_factor=1.0, total_iters=WARMUP_EPOCHS
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(MAX_EPOCHS - WARMUP_EPOCHS, 1)
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[WARMUP_EPOCHS],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
