@@ -5,6 +5,66 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-15 22:30 — PR #3418: Gradient clipping max_norm sweep — **MERGED ⭐ (new best 97.47)**
+
+- Student branch: `willowpai2i24h1-nezuko/grad-clip-sweep`
+- Student: `willowpai2i24h1-nezuko`
+- Hypothesis: add `--grad_clip_max_norm` CLI lever and sweep ∈ {0.0, 0.5, 1.0}
+  on Charbonnier base. Surface-pressure outliers create occasional large-norm
+  gradient steps that derail training; global L2 clipping smooths the
+  trajectory. Adam absorbs uniform scale, so this acts as a state-dependent
+  LR throttle on the rare spiky batches.
+
+| Arm | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | Notes |
+|-----|-----------|--------------------|---------------------:|-----------|-------|
+| no_clip (ref) | (within-PR) | ~106 | — | — | Charbonnier-only baseline tracker |
+| **clip_0p5** | **221dquoy** | **97.47** | **95.96** (3-split, cruise NaN; pre-#3138) | 14 | **WINNER, beats baseline 98.60** |
+| clip_1p0 | (within-PR) | ~103 | — | — | weaker — clip ceiling too loose |
+
+**Conclusion:** clip_0p5 wins by 1.13 absolute over the merged best
+(98.60 → 97.47), with a 9.4-unit within-PR signal vs no_clip on the same
+seed/base. Per-split val at best epoch (clip_0p5, epoch 14):
+single_in_dist ≈ 105, geom_camber_rc ≈ 97, geom_camber_cruise = N/A
+(branch was pre-#3138 NaN-fix), re_rand ≈ 84. clip_1p0 is too loose to act
+as effective regularization; clip_0p5 hits the sweet spot.
+
+**Decision:** **MERGED**. Squash-merged as `4c38f1c`. **Caveat:** the merged
+code only adds the CLI flag with `default = 0.0` — bare `python train.py`
+still trains no-clip (~106). Follow-up PR #3494 (nezuko) flips the
+Config default 0.0 → 0.5 so future students automatically pick up the win.
+Same pattern as #3143 → #3440 for loss_fn.
+
+Suggested follow-ups: tighter floor sweep (0.25 vs 0.5), interaction with
+peak LR (#3457), interaction with AMP-bought extra epochs (#3330).
+
+---
+
+## 2026-05-15 22:30 — PR #3440: Config default `loss_fn="mse" → "charbonnier"` — **MERGED ✅**
+
+- Student branch: `willowpai2i24h1-alphonse/loss-fn-default-fix`
+- Student: `willowpai2i24h1-alphonse`
+- Hypothesis: PR #3143 added Charbonnier as a `--loss_fn charbonnier` flag,
+  but left Config default at "mse". Every student/student-PR has been passing
+  `--loss_fn charbonnier --charbonnier_eps 1e-3` explicitly; a single forgotten
+  flag silently trains MSE and adds noise to the result. Flip the default so
+  bare `python train.py` trains the winning loss.
+
+| Arm | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | Notes |
+|-----|-----------|--------------------|---------------------:|-----------|-------|
+| **default_charb_sanity** | **kqjdf50q** | **107.14** | **97.24** | 14 | Bare `python train.py` with no flags. Charbonnier auto-applied. All 4 test splits finite. |
+
+**Conclusion:** operational fix only — no metric improvement expected.
+Result lands in the established Charbonnier range (98-108 single-seed),
+~5 above best single-seed 98.60 due to run-to-run variance. The point is
+that `loss_fn` is now defaulted to "charbonnier" in W&B config, so future
+students cannot accidentally regress to MSE by forgetting a flag.
+
+**Decision:** **MERGED**. Squash-merged as `ddff0f9`. Eliminates a silent
+foot-gun for all 8 in-flight rebases. Notified the 4 rebasing PRs (#3151,
+#3330, #3348, #3370) that they can drop `--loss_fn` from rerun commands.
+
+---
+
 ## 2026-05-15 21:35 — PR #3348: Fourier position encoding — **SENT BACK (rebase on Charbonnier baseline)**
 
 - Student branch: `willowpai2i24h1-fern/fourier-pos-enc`
