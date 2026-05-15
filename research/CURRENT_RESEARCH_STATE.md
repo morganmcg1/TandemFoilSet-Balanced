@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-15 17:05
+- **Date**: 2026-05-15 17:18
 - **Track**: `charlie-pai2i-24h-r1` on advisor branch `icml-appendix-charlie-pai2i-24h-r1`
 - **Latest direction from human researcher team**: none received
 - **Per-student GPU budget**: 1 × 96GB, 30-min wall-clock per training run
@@ -26,16 +26,18 @@ Active advisor config: `n_hidden=192, n_head=6, n_layers=5, slice_num=64, mlp_ra
 | #3144 | thorfinn | Depth | n_layers 5→8 (rebase + budget-align rerun) | 1→rerun |
 | #3277 | nezuko | Output decoupling | Separate Linear→GELU→Linear head per channel (Ux, Uy, p) | 2 |
 | #3287 | frieren | Domain conditioning | Per-sample FiLM (scale, shift) on LayerNorm from gap+AoA features (Idea 13) | 2 |
-| #3298 | fern | Per-channel loss weighting | `p_surf_weight=3.0` multiplier inside surface MSE (Idea 2 refinement) | 2 |
-| #3332 | edward | Throughput | bf16 mixed-precision autocast on forward + loss (NEW — Idea 3) | 2 |
+| #3332 | edward | Throughput | bf16 mixed-precision autocast on forward + loss (Idea 3) | 2 |
+| #3336 | fern | Optimization stability | Global gradient norm clipping (`max_norm=1.0`) before `optimizer.step()` (NEW) | 2 |
 
 All 8 students have active PRs. **Zero idle GPUs.**
 
 ## Recent decisions
 
 - **#3273 (edward ReScaler rebased) CLOSED**: val=152.79 vs baseline 126.32 = +21% regression. ReScaler genuinely works at matched-epoch (+3% vs no-ReScaler matched-epoch) but the wider trunk only fits 8 epochs vs the narrower trunk's 14. Schedule/budget tradeoff dominates.
-- **#3332 (edward bf16) DISPATCHED**: systemic throughput unlock; targets the per-epoch wallclock that constrained #3273. If successful, every future PR can use the wider trunk effectively.
-- **#3277 (nezuko separate-heads)**: flagged stale_wip, but pod logs show iteration 35 picked up the assignment at 16:20 UTC and Claude exited normally at 16:27. Most likely currently running training. No action needed.
+- **#3298 (fern p_surf_weight) CLOSED**: val=158.54 vs baseline 126.32 = +25% regression. Same wider-trunk-budget pattern as #3273 — matched-epoch comparison (158.54 vs 158.96) shows the hypothesis is approximately **neutral** at this scale. Per-channel reweighting cleanly tested and tested out.
+- **#3332 (edward bf16) DISPATCHED**: systemic throughput unlock; targets the per-epoch wallclock that constrained #3273 and #3298. If successful, every future PR can use the wider trunk effectively.
+- **#3336 (fern gradient clipping) DISPATCHED**: orthogonal per-step stabilization; doesn't depend on schedule annealing to validate, so it's robust to the current budget constraint.
+- **#3277 (nezuko separate-heads)**: still status:wip 2.5h after assignment, but pod logs show iteration 35 picked up the assignment at 16:20 UTC and Claude exited normally at 16:27. Most likely currently running training. No action needed.
 
 ## Systemic constraints (known issues)
 

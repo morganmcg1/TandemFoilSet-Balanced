@@ -278,3 +278,45 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - **Predicted delta on val_avg**: 2-5% better than 126.32 baseline (i.e., 119-123), with the gain attributable to (a) wider trunk capacity finally usable, (b) cosine fully annealing through 12 epochs.
 - Single attributable: wrap forward + loss in `torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)` in both the training loop and `evaluate_split`. No GradScaler (bf16 has the dynamic range), no parameter conversion, no batch_size change. EMA stays fp32 by default since autocast doesn't affect parameter storage.
 - Critical instrumentation requested: **per-epoch wallclock** (the directly-attributable measurement) and **epochs realized in 30-min cap** (the lever this PR is pulling). If bf16 speedup is <20%, that's an important systems-level finding informing whether the next throughput unlock should be `batch_size=8` instead.
+
+## 2026-05-15 17:10 — PR #3298: per-channel p_surf_weight=3.0 — CLOSED
+
+- **Student branch**: `charliepai2i24h1-fern/p-surf-weight`
+- **Hypothesis (rerun)**: p_surf_weight=3.0 multiplier on the p channel inside surface MSE; identity-at-1.0 knob; budget-aligned epochs=12.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, epoch 9 of 12) | **158.5363** |
+| test_avg/mae_surf_p (NaN-safe via tanjiro's `eval_test_clean.py` pattern) | 144.4903 |
+| Δ vs current baseline (#3136, 126.32) | **+25.5% (WORSE)** |
+| Δ at matched epoch 9 vs no-p_surf_weight matched-epoch | -0.3% (essentially neutral, 158.54 vs 158.96) |
+| trunk config used by student | wider+EMA+surf_w25+p_surf_weight=3.0 (correctly inherited from advisor) |
+| epochs completed | 9 of 12 (cut by 30-min cap, schedule annealed faster due to T_max=12) |
+| Per-epoch wallclock | ~203 s (wider trunk; same as edward #3273) |
+
+| Channel | This run (epoch 9) | Baseline (epoch 14) |
+|---|---:|---:|
+| val_avg/mae_surf_p | 158.5363 | 126.3241 |
+| val_avg/mae_surf_Ux | 3.0786 | 1.9848 |
+| val_avg/mae_surf_Uy | 1.1146 | 0.8943 |
+
+- **Metric artifacts**: `models/model-p-surf-weight-20260515-153455/metrics.jsonl` + `metrics.yaml` + `test_metrics_clean.json`
+
+### Verdict: closed — same schedule/budget wall as #3273
+
+- **Same systemic pattern as edward's #3273**: wider trunk fits only 9 epochs vs baseline's 14, and the matched-epoch comparison shows the hypothesis-attributable effect is approximately **neutral** (158.54 vs 158.96 = -0.3% at epoch 9). The +25% regression in absolute terms is dominated by the schedule/budget tradeoff, not by the p-channel weighting itself.
+- Fern's matched-epoch comparison was the cleanest analysis of this kind on the track to date — exactly the right diagnostic in a budget-constrained regime.
+- **Per-channel surface reweighting is approximately neutral at this scale** — the test was clean enough that we can call this. The hypothesis-attributable effect would have to come from epochs 10+ where p_surf_weight=3.0 starts diverging from baseline, but there's no strong reason to expect this if it's neutral at epoch 9.
+- Could be revisited after bf16 (edward #3332) lands and unlocks the 12-13 epoch budget.
+- **Fern reassigned to gradient clipping (#3336)** — orthogonal to all in-flight, single-line change, doesn't require full schedule annealing to show signal.
+
+## 2026-05-15 17:15 — PR #3336: Global gradient norm clipping (max_norm=1.0) — DISPATCHED
+
+- **Student**: charliepai2i24h1-fern (round 2 reassignment after #3298 close)
+- **Hypothesis**: With `surf_weight=25` and per-sample y_std varying 10× within a single split, high-Re samples produce gradient spikes amplified twice (by surf_weight and by the squared-error tail). Global `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` bounds the per-step update magnitude, damping high-Re gradient spikes without changing the average update direction.
+- **Predicted delta**: modest (2-5%) on val_avg/mae_surf_p, with largest effect on val_re_rand (the stratified Re holdout). Per-step effect — does NOT require full schedule annealing to validate.
+- **Schedule**: budget-aligned `--epochs 12 --T_max=12` (matching the post-#3136 rerun policy).
+- Single attributable: one line inserted between `loss.backward()` and `optimizer.step()`. Instrumentation: track `train/grad_norm_mean`, `_max`, `_min` per epoch — primary diagnostic for whether clipping is actually firing.
+- Designed to be orthogonal to bf16, separate-heads, FiLM, SmoothL1, warmup, Fourier, and deeper — none of those control gradient norm.
