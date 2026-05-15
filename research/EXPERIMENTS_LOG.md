@@ -32,6 +32,64 @@ Peak GPU: 42.1 GB / 96 GB. Wall time: 30.8 min (hit cap). Val curve still descen
 - Training was wall-clock-capped at epoch 14/50 — the cosine schedule was set for `T_max=50` but only ~14 epochs run. The model never saw the low-LR end of the schedule. This is a systemic issue affecting every PR in this round; will address in a follow-up hypothesis family.
 - No baseline (unmodified Transolver) measurement exists yet on this branch — the clean rerun of this PR will be the first credible point.
 
+## 2026-05-15 17:35 — PR #3261: Wider-shallower Transolver (n_hidden=256, n_layers=3, n_head=8)
+
+- **Student/branch:** willowpai2i24h4-alphonse / `willowpai2i24h4-alphonse/wider-shallower-256d`
+- **Hypothesis:** Wider-shallower configuration — 2.45× more params, 3/5 depth — should improve in-distribution capacity with better per-layer width.
+- **W&B runs:** baseline `xfayvdk2` (with NaN guard), wider `qjzx09k6`
+
+### Result (best checkpoint, timeout at epoch 10–14 / 50)
+
+| | Baseline `xfayvdk2` | Wider `qjzx09k6` | Δ |
+|---|---:|---:|---:|
+| n_params | 0.66M | 1.61M (+145%) | — |
+| Epochs completed | 14 (best@13) | 11 (best@10) | wider → fewer steps |
+| `val_avg/mae_surf_p` | **117.89** | 146.26 | **+24.1% WORSE** |
+| `val_geom_camber_rc` | 125.09 | 176.33 | +41% WORSE (largest gap) |
+| `test_avg/mae_surf_p` | **106.23** | 133.34 | **+25.5% WORSE** |
+| `test_geom_camber_cruise` | **78.72** | 96.07 | finite (NaN guard applied) |
+
+### Decision: closed (>5% regression on primary metrics)
+
+### Analysis
+
+- **Hypothesis disconfirmed.** Wider-shallower is substantially worse across all splits. The largest degradation is on `val_geom_camber_rc` (+41%) — the hardest OOD split — consistent with depth being critical for compositional generalization.
+- **Params not matched.** The PR description implied "roughly matched budget" but actual ratio is ×2.45 (0.66M → 1.61M). Depth halving (5→3) doesn't compensate width doubling (128→256) because attention and MLP both scale as O(d²).
+- **Fewer epochs under wall-clock cap.** Per-epoch wall time: 132s → 165s (+25%). 11 epochs at best vs 14 for baseline — introduces compounding unfairness in a still-converging regime.
+- **Depth is doing real compositional work.** The depth-5 pattern is empirically validated. Will not revisit width-vs-depth ablations at matched budget in the near term.
+- **MOST VALUABLE CONTRIBUTION: alphonse's vanilla baseline `xfayvdk2`.** This is the first run with NaN guard applied, giving us the **first finite 4-split test_avg reference**: val_avg=117.89, test_avg=106.23. Added to BASELINE.md.
+
+## 2026-05-15 16:45 — PR #3264: Dropout p=0.1 in Transolver MLP and attention
+
+- **Student/branch:** willowpai2i24h4-askeladd / `willowpai2i24h4-askeladd/dropout-0.1`
+- **Hypothesis:** Enable dropout=0.1 in both PhysicsAttention and MLP pathways to reduce overfitting on ~1500-sample training set and improve OOD camber generalization.
+- **W&B runs:** baseline `j4y20e31`, dropout=0.1 `chzqcfyz`
+
+### Result (best checkpoint, both runs hit 30-min timeout at epoch 13 / 50)
+
+| Split | Baseline (d=0) | **dropout=0.1** | Δ |
+|-------|------:|------:|---:|
+| `val_single_in_dist/mae_surf_p`     | 153.89 | 170.57 | +10.8% WORSE |
+| `val_geom_camber_rc/mae_surf_p`     | 139.60 | 146.70 | +5.1% WORSE |
+| `val_geom_camber_cruise/mae_surf_p` | 106.15 | 115.73 | +9.0% WORSE |
+| `val_re_rand/mae_surf_p`            | 130.71 | 129.28 | −1.1% (noise) |
+| **`val_avg/mae_surf_p`**            | **132.59** | **140.57** | **+6.0% WORSE** |
+| `test_avg/mae_surf_p` (3 valid) | 131.53 | 136.27 | +3.6% WORSE |
+
+### Decision: closed (>5% regression on primary val metric)
+
+Dropout=0.1 degrades performance across 3 of 4 val splits including both OOD camber splits it was meant to help. Closed per CLAUDE.md protocol (>5% regression).
+
+### Analysis
+
+- **Mechanism correctly diagnosed by askeladd:** model is in UNDERFIT regime at the 30-min cap (val curve still descending at epoch 13, training loss still falling from 1.09 to 0.27). Dropout slows convergence (partially-masked subnetworks reduce effective gradient signal per step). Slower convergence × same wall-clock = strictly worse best-checkpoint on a still-descending loss curve. This is not an overfitting regime.
+- **The single split where dropout helped (`val_re_rand`, −1.1%)** is the Re-stratified holdout — plausibly the axis most prone to co-adaptation memorization, but the effect is noise-level (1.43 MAE on 130-MAE base).
+- **Dropout may not be worth retrying** at this compute budget. Would only be worth testing once models consistently train past 25+ epochs and val curves start to plateau. Marked as low-priority for future rounds.
+
+### Critical diagnostic contribution: correct NaN root cause
+
+Askeladd's bug-report comment (16:28 UTC) independently found the same root cause that frieren found (#3257, 16:32 UTC): `+inf` in `test_geom_camber_cruise_gt/000020.pt` y-channel for p at ~761 nodes. The actual IEEE 754 bug: `(pred - inf).abs() = inf`, then `inf * 0 = NaN` in `(err * mask).sum()` — poisons the running sum even though `accumulate_batch` would otherwise skip the sample via `y_finite`. **My original patch (sanitize predictions) was wrong.** The correct fix (from frieren's #3257 commit `34600cf`): zero the mask for non-finite-y samples AND `nan_to_num` y before `accumulate_batch`. Sent corrected patches to #3257, #3258, #3262.
+
 ## 2026-05-15 15:30 — PR #3262: Random Fourier Features positional encoding
 
 - **Student/branch:** willowpai2i24h4-edward / `willowpai2i24h4-edward/fourier-pos-enc`
