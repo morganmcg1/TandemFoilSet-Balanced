@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -399,6 +400,17 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
+    # H9 WSD scheduler + AdamW beta2 controls.
+    # scheduler="wsd": warmup_epochs + stable_epochs + cosine decay over wsd_total_epochs.
+    # scheduler="cosine": CosineAnnealingLR(T_max=15) baseline (current advisor default).
+    scheduler: str = "wsd"
+    beta2: float = 0.999
+    wsd_warmup_epochs: int = 3
+    wsd_stable_epochs: int = 8
+    # Schedule horizon for the WSD decay tail. Must roughly match the actual
+    # wall-clock-bounded epoch count for the decay phase to activate (the
+    # 30-min cap currently produces ~14 epochs).
+    wsd_total_epochs: int = 15
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -450,8 +462,41 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+optimizer = torch.optim.AdamW(
+    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.beta2),
+)
+
+
+def wsd_schedule(epoch: int, warmup_epochs: int, stable_epochs: int, total_epochs: int) -> float:
+    """WSD: linear warmup, stable plateau at peak LR, then cosine decay to 0."""
+    decay_start = warmup_epochs + stable_epochs
+    if epoch < warmup_epochs:
+        return (epoch + 1) / max(1, warmup_epochs)
+    if epoch < decay_start:
+        return 1.0
+    progress = (epoch - decay_start) / max(1, total_epochs - decay_start)
+    progress = min(1.0, progress)
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+if cfg.scheduler == "wsd":
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda e: wsd_schedule(
+            e, cfg.wsd_warmup_epochs, cfg.wsd_stable_epochs, cfg.wsd_total_epochs,
+        ),
+    )
+    print(
+        f"Scheduler: WSD (warmup={cfg.wsd_warmup_epochs}, "
+        f"stable={cfg.wsd_stable_epochs}, total={cfg.wsd_total_epochs}); "
+        f"AdamW betas=(0.9, {cfg.beta2})"
+    )
+elif cfg.scheduler == "cosine":
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+    print(f"Scheduler: CosineAnnealingLR(T_max=15); AdamW betas=(0.9, {cfg.beta2})")
+else:
+    raise ValueError(f"Unknown scheduler: {cfg.scheduler}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -538,11 +583,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
