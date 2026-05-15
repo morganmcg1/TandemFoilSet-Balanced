@@ -1,0 +1,57 @@
+{
+  "test_metrics": {
+    "test_single_in_dist": {
+      "vol_loss": 0.7429742652177811,
+      "surf_loss": 0.5250897129252553,
+      "loss": 16.49566565297544,
+      "mae_surf_Ux": 2.1318533409347022,
+      "mae_vol_Ux": 5.753268251072141,
+      "mae_surf_Uy": 0.8873645598641753,
+      "mae_vol_Uy": 2.4970174441880317,
+      "mae_surf_p": 136.68359611024263,
+      "mae_vol_p": 164.78574776510243
+    },
+    "test_geom_camber_rc": {
+      "vol_loss": 0.6170017123222351,
+      "surf_loss": 0.2267722237110138,
+      "loss": 7.420168423652649,
+      "mae_surf_Ux": 2.861494886030405,
+      "mae_vol_Ux": 6.904481105705379,
+      "mae_surf_Uy": 1.0796374159367845,
+      "mae_vol_Uy": 3.166184066691166,
+      "mae_surf_p": 123.03100389974443,
+      "mae_vol_p": 148.22453490662073
+    },
+    "test_geom_camber_cruise": {
+      "vol_loss": 0.9213518197834492,
+      "surf_loss": 0.42322660438716414,
+      "loss": 13.618149951398374,
+      "mae_surf_Ux": 1.5791320617378577,
+      "mae_vol_Ux": 4.8270630045258525,
+      "mae_surf_Uy": 0.5956441429512057,
+      "mae_vol_Uy": 1.9135938368102345,
+      "mae_surf_p": 88.116840115025,
+      "mae_vol_p": 131.06600163881984
+    },
+    "test_re_rand": {
+      "vol_loss": 0.5126157519221306,
+      "surf_loss": 0.1943389693647623,
+      "loss": 6.342784832865,
+      "mae_surf_Ux": 1.9792997927507263,
+      "mae_vol_Ux": 5.599596880317231,
+      "mae_surf_Uy": 0.8710772534485743,
+      "mae_vol_Uy": 2.5201666796541704,
+      "mae_surf_p": 119.50724436522614,
+      "mae_vol_p": 155.26412414985364
+    }
+  },
+  "test_avg": {
+    "avg/mae_surf_Ux": 2.1379450203634227,
+    "avg/mae_surf_Uy": 0.8584308430501849,
+    "avg/mae_surf_p": 116.83467112255956,
+    "avg/mae_vol_Ux": 5.771102310405151,
+    "avg/mae_vol_Uy": 2.5242405068359006,
+    "avg/mae_vol_p": 149.83510211509918
+  },
+  "note": "Recomputed test metrics: data/scoring.py NaN propagation (NaN*0==NaN) caused test_geom_camber_cruise/mae_*_p to be NaN because GT sample 000020.pt has 761 non-finite p values. This corrected eval sanitizes NaN GT before err computation."
+}
