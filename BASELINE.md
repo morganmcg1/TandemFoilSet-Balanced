@@ -1,43 +1,33 @@
 # BASELINE — TandemFoilSet (willow-pai2i-24h-r4)
 
-## Current best (unmodified Transolver, NaN-guard applied)
+## Current best — PR #3257 (frieren, merged 2026-05-15 18:25 UTC)
 
-**As of 2026-05-15 17:30 UTC — no experiment has merged yet. This is the vanilla reference.**
+**Surface MAE loss + pressure-channel weight 3× + canonical NaN guard.**
 
-| Metric | Value | W&B run | Notes |
-|--------|------:|---------|-------|
-| `val_avg/mae_surf_p` | 117.89 | `xfayvdk2` (alphonse) | Best of measured unclipped vanilla runs |
-| `test_avg/mae_surf_p` | **106.23** | `xfayvdk2` (alphonse) | First finite 4-split test_avg (NaN guard applied) |
-| `test_single_in_dist/mae_surf_p` | 126.60 | `xfayvdk2` | |
-| `test_geom_camber_rc/mae_surf_p` | 113.67 | `xfayvdk2` | |
-| `test_geom_camber_cruise/mae_surf_p` | 78.72 | `xfayvdk2` | NaN on all other runs without NaN guard |
-| `test_re_rand/mae_surf_p` | 105.92 | `xfayvdk2` | |
+| Metric | Value | W&B run | Δ vs prior baseline |
+|--------|------:|---------|---------------------|
+| `val_avg/mae_surf_p` | **106.67** | `szru1ogx` (frieren) | **−9.5%** (from 117.89) |
+| `test_avg/mae_surf_p` | **94.35** | `szru1ogx` (frieren) | **−11.2%** (from 106.23) |
+| `test_single_in_dist/mae_surf_p` | 122.34 | `szru1ogx` | |
+| `test_geom_camber_rc/mae_surf_p` | 106.31 | `szru1ogx` | |
+| `test_geom_camber_cruise/mae_surf_p` | 62.47 | `szru1ogx` | |
+| `test_re_rand/mae_surf_p` | 86.28 | `szru1ogx` | |
 
-### Model config (vanilla Transolver)
+### What changed
+- **Loss reformulation:** `train.py` loss replaced MSE with surface-volume MAE + per-channel weight `[1, 1, 3]` on (Ux, Uy, p). Surface nodes still weighted 10× via `surf_weight`.
+- **Canonical NaN fix:** `evaluate_split` skips non-finite-y samples in the mask and `nan_to_num`s y before `accumulate_batch`. Root cause was `+inf` in GT at `test_geom_camber_cruise_gt/000020.pt` (y[..., p] at ~761 nodes) → `inf * 0 = NaN` would otherwise poison the masked sum.
+
+### Model config (unchanged from vanilla)
 - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
 - `lr=5e-4, weight_decay=1e-4, batch_size=4, surf_weight=10, epochs=50`
-- `dropout=0.0, grad_clip=none, warmup=none, MSE loss`
-- Wall-clock: 30-min cap, ~13–14 epochs of 50 completed
-
-### Run-to-run variance (unclipped baseline, important caveat)
-
-Without grad clipping, the vanilla Transolver shows large run-to-run variance (~13pt on val_avg):
-
-| Run | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | NaN-guard applied |
-|-----|---------------------:|----------------------:|:-----------------:|
-| `xfayvdk2` (alphonse) | 117.89 | **106.23** | ✓ |
-| `17fia1vd` (edward) | 128.34 | 127.29 (3-split) | ✗ |
-| `nylo2tvd` (fern) | 141.94 | 139.34 (3-split) | ✗ |
-
-Fern's #3258 (grad-clip+warmup) demonstrates that the gradient norms are median 56, peak 1110 — this is why variance is so high. Once fern's clip+warmup lands, the baseline will be more reproducible.
+- `dropout=0.0, grad_clip=none, warmup=none`, cosine LR `T_max=50` (still mismatched at ~14 epochs trained)
+- Wall-clock: 30-min cap, 13/14 epochs of 50 completed
 
 ### Reproduce command
 
 ```bash
-cd target && python train.py
+cd target && python train.py --wandb_group surf-mae-pweight --wandb_name surf-mae-pweight3
 ```
-
-Apply the NaN guard in `evaluate_split` to get finite test metrics (see frieren's #3257 commit `34600cf` for the canonical patch).
 
 ---
 
@@ -45,4 +35,9 @@ Apply the NaN guard in `evaluate_split` to get finite test metrics (see frieren'
 
 | Date | PR | Hypothesis | val_avg | test_avg | Merge |
 |------|----|------------|--------:|--------:|:-----:|
-| — | vanilla | Starting point (no improvement merged yet) | 117.89 | **106.23** | pre-R1 |
+| 2026-05-15 | #3257 (frieren) | Surface MAE + p-weight 3× + NaN guard | **106.67** | **94.35** | ✓ R1#1 |
+| — | vanilla (`xfayvdk2`, alphonse) | NaN-guarded baseline | 117.89 | 106.23 | pre-R1 anchor |
+| — | vanilla (`17fia1vd`, edward) | unguarded baseline | 128.34 | NaN | ref only |
+| — | vanilla (`nylo2tvd`, fern) | unguarded baseline | 141.94 | NaN | ref only |
+
+Run-to-run variance on unclipped vanilla baselines is ~13pt on val_avg (fern's #3258 grad-norm trace shows median 56, peak 1110). Frieren's win should be reproducible on a fresh seed but margin may shrink ±3pt.
