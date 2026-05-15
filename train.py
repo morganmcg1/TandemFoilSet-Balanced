@@ -236,9 +236,31 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop any samples whose ground-truth `y` contains non-finite
+            # values. `accumulate_batch` already excludes such samples from the
+            # MAE sum, but `(pred - y).abs() * mask` is computed before the
+            # mask is applied, and `NaN * 0 = NaN` would poison the whole
+            # split's MAE. The same trap exists for the loss reduction below,
+            # so we filter the batch up front.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                keep = y_finite_per_sample
+                if not keep.any():
+                    continue
+                x, y, is_surface, mask = x[keep], y[keep], is_surface[keep], mask[keep]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            # Zero out padded positions and any non-finite predictions so a
+            # single NaN/Inf prediction cannot poison the MAE/loss via
+            # `NaN * 0 = NaN` propagation in masked sums.
+            pred = torch.where(
+                mask.unsqueeze(-1) & torch.isfinite(pred),
+                pred,
+                torch.zeros_like(pred),
+            )
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -386,6 +408,11 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    n_hidden: int = 128
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: int = 2
 
 
 cfg = sp.parse(Config)
@@ -418,11 +445,11 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -449,6 +476,8 @@ run = wandb.init(
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
+
+wandb.summary["n_params"] = n_params
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
