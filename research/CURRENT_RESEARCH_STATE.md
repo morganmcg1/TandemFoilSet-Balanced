@@ -43,6 +43,7 @@ H15 super-linear stacking: −18.16 pts vs previous best. Naive additive predict
 | #3342 | edward | H2b: EMA weight averaging (decay=0.999) | Active WIP |
 | #3343 | fern | H17: Per-channel adaptive Huber (δ_p=0.25 vs δ_Ux/Uy=0.5) | Active WIP |
 | #3349 | frieren | H18: Gradient clipping alone (clip=1.0, no warmup) + FiLM+Huber | Active WIP |
+| #3408 | nezuko | H19: FiLM + Huber δ=0.5 + T_max=15 triple compound | Just assigned 2026-05-15 18:40 |
 
 **Note:** All 7 active PRs use cond_dim=11 (FiLM on) + Huber δ=0.5 as the merged default, **plus T_max=15** (merged from PR #3335). This means every future run benefits from the schedule fix automatically.
 
@@ -62,7 +63,7 @@ H15 super-linear stacking: −18.16 pts vs previous best. Naive additive predict
 
 ## Highest-Priority Next Hypothesis
 
-**H19: FiLM + Huber δ=0.5 + T_max=15 triple compound** — This is the single most important experiment now. Baseline PR #3335 deliberately ran with `--cond_dim 0` (FiLM off). The expected configuration that becomes the new default is all three improvements together. Assign to next idle student.
+**H19: FiLM + Huber δ=0.5 + T_max=15 triple compound** — Assigned to nezuko (PR #3408). Run the merged default with only `--huber_delta 0.5` (FiLM on by default, T_max=15 hardcoded). This completes the triple-compound picture: Baseline PR #3335 ran with FiLM off deliberately; H19 adds FiLM back.
 
 ## Potential Next Research Directions
 
