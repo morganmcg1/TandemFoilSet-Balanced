@@ -1,10 +1,16 @@
 # Baseline Metrics — icml-appendix-charlie-pai2i-24h-r2
 
 ## Current best
-- **Source:** initial Transolver baseline (`train.py` at branch HEAD `abc2559`)
-- **Primary validation metric (lower is better):** `val_avg/mae_surf_p` — not yet measured on this branch.
-- **Primary test metric:** `test_avg/mae_surf_p` — not yet measured on this branch.
-- **Notes:** no PRs merged on this branch yet. The first round of experiments will both establish concrete baseline numbers and probe orthogonal improvement axes.
+
+### 2026-05-15 14:05 — PR #3208: Replace MSE with SmoothL1 (Huber) loss
+
+- **val_avg/mae_surf_p:** 116.611 (best @ epoch 13; 14 epochs completed under 30-min cap)
+- **test_avg/mae_surf_p:** NaN (pre-existing infra bug); 3 clean splits avg 114.59
+- **Per-split val mae_surf_p:** single 161.69 | geom_rc 117.56 | geom_cruise 85.67 | re_rand 101.53
+- **Per-split test mae_surf_p:** single 139.80 | geom_rc 104.38 | geom_cruise NaN | re_rand 99.60
+- **Loss:** SmoothL1 (Huber, β=1.0) replacing MSE; everything else at reference config
+- **Metric artifacts:** `models/model-charliepai2i24h2-fern-huber-loss-20260515-130151/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name huber-loss --agent fern --epochs 50`
 
 ## Reference model config
 ```python
