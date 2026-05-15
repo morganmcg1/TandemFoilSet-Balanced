@@ -214,6 +214,40 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class ReScaler(nn.Module):
+    """Per-sample, per-channel multiplicative output scaler conditioned on log(Re)."""
+
+    def __init__(self, hidden=32, out_channels=3, max_log_scale=2.0):
+        super().__init__()
+        self.max_log_scale = max_log_scale
+        self.net = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, out_channels),
+        )
+        # init last layer to zero so output starts at exp(0)=1 (identity scaling)
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, log_re):
+        log_scale = self.net(log_re.unsqueeze(-1))
+        log_scale = self.max_log_scale * torch.tanh(log_scale / self.max_log_scale)
+        return log_scale.exp()
+
+
+class TransolverWithReScaler(nn.Module):
+    def __init__(self, transolver, re_scaler):
+        super().__init__()
+        self.transolver = transolver
+        self.re_scaler = re_scaler
+
+    def forward(self, data, **kwargs):
+        preds = self.transolver(data)["preds"]
+        log_re = data["log_re"]
+        scale = self.re_scaler(log_re)
+        return {"preds": preds * scale.unsqueeze(1)}
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -237,9 +271,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            log_re = (x[..., 13] * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "log_re": log_re})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -400,9 +435,19 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = Transolver(**model_config).to(device)
+rescaler_config = dict(
+    hidden=32,
+    out_channels=3,
+    max_log_scale=2.0,
+)
+transolver = Transolver(**model_config)
+re_scaler = ReScaler(**rescaler_config)
+model = TransolverWithReScaler(transolver, re_scaler).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+n_params_transolver = sum(p.numel() for p in transolver.parameters())
+n_params_rescaler = sum(p.numel() for p in re_scaler.parameters())
+print(f"Model: TransolverWithReScaler ({n_params/1e6:.2f}M params; "
+      f"transolver={n_params_transolver/1e6:.2f}M, rescaler={n_params_rescaler})")
 
 ema_decay = 0.999
 ema_model = copy.deepcopy(model).eval()
@@ -423,7 +468,10 @@ with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
         "model_config": model_config,
+        "rescaler_config": rescaler_config,
         "n_params": n_params,
+        "n_params_transolver": n_params_transolver,
+        "n_params_rescaler": n_params_rescaler,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
@@ -448,9 +496,10 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        log_re = (x[..., 13] * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "log_re": log_re})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
