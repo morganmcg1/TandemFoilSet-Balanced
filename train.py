@@ -48,6 +48,47 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Exponential Moving Average of model weights (Polyak averaging)
+# ---------------------------------------------------------------------------
+
+class ModelEMA:
+    """EMA of model parameters with timm-style step warmup.
+
+    Effective decay at step t is ``min(decay, (1+t) / (10+t))`` so the shadow
+    tracks the model closely in the first ~100 steps and only then asymptotes
+    to the target decay. Without this warmup, the shadow at step 1300 with
+    ``decay=0.9999`` would still be ~88% initialization weights.
+    """
+
+    def __init__(self, model, decay=0.9999):
+        self.decay = decay
+        self.step = 0
+        self.shadow = {k: v.clone().detach().float()
+                       for k, v in model.state_dict().items()}
+
+    def _effective_decay(self):
+        return min(self.decay, (1 + self.step) / (10 + self.step))
+
+    @torch.no_grad()
+    def update(self, model):
+        self.step += 1
+        d = self._effective_decay()
+        for k, v in model.state_dict().items():
+            self.shadow[k].mul_(d).add_(v.float(), alpha=1.0 - d)
+
+    def apply(self, model):
+        """Copy EMA shadow weights into ``model`` (for eval). Caller is
+        responsible for stashing the original state and restoring it after."""
+        target_dtypes = {k: v.dtype for k, v in model.state_dict().items()}
+        model.load_state_dict(
+            {k: v.to(target_dtypes[k]) for k, v in self.shadow.items()}
+        )
+
+    def restore(self, model, original_state):
+        model.load_state_dict(original_state)
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -322,7 +363,10 @@ def save_model_artifact(
         "n_params": n_params,
         "model_config": model_config,
         "best_epoch": best_metrics["epoch"],
-        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_val_ema_avg/mae_surf_p": best_metrics.get("val_ema_avg/mae_surf_p", best_avg_surf_p),
+        "best_val_avg/mae_surf_p": best_metrics.get("val_avg/mae_surf_p", best_avg_surf_p),
+        "best_metric_used_for_selection": "val_ema_avg/mae_surf_p",
+        "ema_decay": cfg.ema_decay,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
@@ -331,8 +375,8 @@ def save_model_artifact(
     }
 
     description = (
-        f"Transolver checkpoint — best val_avg/mae_surf_p = {best_avg_surf_p:.4f} "
-        f"at epoch {best_metrics['epoch']}"
+        f"Transolver checkpoint (EMA weights) — best val_ema_avg/mae_surf_p = "
+        f"{metadata['best_val_ema_avg/mae_surf_p']:.4f} at epoch {best_metrics['epoch']}"
     )
 
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
@@ -381,6 +425,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    ema_decay: float = 0.9999  # target asymptotic EMA decay (with step warmup)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -434,6 +479,9 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
+ema = ModelEMA(model, decay=cfg.ema_decay)
+print(f"EMA: target decay={cfg.ema_decay} with step-warmup (effective decay = min(target, (1+step)/(10+step)))")
+
 warmup_epochs = 2
 def lr_lambda(epoch):
     if epoch < warmup_epochs:
@@ -466,8 +514,11 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("val_ema/*", step_metric="global_step")
+wandb.define_metric("ema/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
+    wandb.define_metric(f"{_name}_ema/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -512,10 +563,12 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
+        ema.update(model)
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "ema/effective_decay": ema._effective_decay(),
             "global_step": global_step,
         })
 
@@ -527,7 +580,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (raw weights) ---
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
@@ -536,12 +589,29 @@ for epoch in range(MAX_EPOCHS):
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+    # --- Validate (EMA weights) ---
+    original_state = {k: v.clone() for k, v in model.state_dict().items()}
+    ema.apply(model)
+    model.eval()
+    ema_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+    ema_val_loss_mean = sum(m["loss"] for m in ema_split_metrics.values()) / len(ema_split_metrics)
+    ema.restore(model, original_state)
+
     dt = time.time() - t0
 
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
+        "val_ema/loss": ema_val_loss_mean,
+        "ema/effective_decay_epoch_end": ema._effective_decay(),
+        "ema/delta_mae_surf_p": ema_avg_surf_p - avg_surf_p,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
@@ -549,42 +619,66 @@ for epoch in range(MAX_EPOCHS):
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
+    for split_name, m in ema_split_metrics.items():
+        for k, v in m.items():
+            log_metrics[f"{split_name}_ema/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    for k, v in ema_val_avg.items():
+        log_metrics[f"val_ema_{k}"] = v  # val_ema_avg/mae_surf_p etc.
     wandb.log(log_metrics)
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
+    # Best checkpoint is selected on the EMA val metric (the model we will
+    # eventually evaluate on test). Save the EMA shadow weights.
+    if ema_avg_surf_p < best_avg_surf_p:
+        best_avg_surf_p = ema_avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
+            "val_ema_avg/mae_surf_p": ema_avg_surf_p,
             "per_split": split_metrics,
+            "per_split_ema": ema_split_metrics,
         }
+        # Save EMA weights (cast to model dtype) as the checkpoint
+        original_state = {k: v.clone() for k, v in model.state_dict().items()}
+        ema.apply(model)
         torch.save(model.state_dict(), model_path)
+        ema.restore(model, original_state)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}  "
+        f"val_ema_avg_surf_p={ema_avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+    print("  [EMA val splits]")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, ema_split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(
+        f"\nBest val: epoch {best_metrics['epoch']}, "
+        f"val_ema_avg/mae_surf_p = {best_metrics['val_ema_avg/mae_surf_p']:.4f}  "
+        f"(raw val_avg/mae_surf_p at that epoch = {best_metrics['val_avg/mae_surf_p']:.4f})"
+    )
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
-        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_val_ema_avg/mae_surf_p": best_metrics["val_ema_avg/mae_surf_p"],
+        "best_val_avg/mae_surf_p": best_metrics["val_avg/mae_surf_p"],
+        "best_metric_used_for_selection": "val_ema_avg/mae_surf_p",
         "total_train_minutes": total_time,
     })
 
+    # The checkpoint we saved already contains EMA weights (cast to model dtype).
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
