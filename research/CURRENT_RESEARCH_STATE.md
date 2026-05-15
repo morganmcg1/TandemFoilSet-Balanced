@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 18:45 (tanjiro #3294 merged; 6 new assignments dispatched)
+- **Last updated:** 2026-05-15 19:30 (round-3 fanout: 8 students all bootstrapping training as of ~19:24 after GH rate-limit cleared)
 - **Most recent research direction from human researcher team:** none (no open issues).
 - **Current best:** `val_avg/mae_surf_p` = **100.811** (PR #3294 warmup+cosine 14ep, lr=7e-4)
 - **Current focus:** Verify whether frieren/fern/nezuko axes (surf_weight, weight_decay, RFF) compound on top of the new schedule baseline.
@@ -22,7 +22,7 @@ Key config: SmoothL1 (Huber β=1.0) + clip_grad_norm(1.0) + AdamW selective deca
 | #3304 | frieren | surf_weight=20 single-axis (RETEST) | WIP (rebase) | Beat old baseline 109.68; retesting on new 100.81 |
 | #3314 | fern | weight_decay=3e-4 (RETEST) | WIP (rebase) | Beat old baseline 109.68; retesting on new 100.81 |
 | #3344 | nezuko | RFF Tancik 2020 (RETEST) | WIP (rebase) | Beat old baseline 109.68; retesting on new 100.81 |
-| #3301 | alphonse | width-192, epochs=10 | WIP (active training) | GPU 100%, training in progress |
+| #3301 | alphonse | width-192, epochs=10 | WIP (just bootstrapped) | Pod idle until 19:22 due to GH rate-limit; now training |
 | #3362 | askeladd | n_head 4→8 single-axis | WIP (new) | — |
 | #3377 | thorfinn | n_hidden=96 (width sweep) | WIP (new) | — |
 | #3397 | tanjiro | eta_min=1e-5 in cosine | WIP (new) | Follow-up to merged #3294 |
