@@ -30,15 +30,23 @@ Each PR includes an internal baseline arm (arm A) for within-PR comparison.
 
 ## Potential next research directions (Round 2+)
 
-Once Round 1 results are in, compound the winners. Priority order:
+Informed by literature scan (`research/RESEARCH_IDEAS_2026-05-15_initial.md`).
 
-1. **Combine the top two winners** — architecture scale-up + best loss variant, or scale-up + EMA.
-2. **Larger architecture grid** — push n_hidden up to 320/512 if 192→256 helps significantly.
-3. **Relative error loss** — `|pred - true| / (|true| + ε)` to handle cross-Re heteroskedasticity.
-4. **Sobolev loss** — penalize gradient of predictions on surface nodes (physics-regularized).
-5. **Surface-node-only training split** — ablate whether predicting volume nodes at all helps pressure.
-6. **Domain-conditional normalization** — separate y_mean/y_std per domain group (raceCar vs cruise).
-7. **Attention head dimensionality sweep** — dim_head=64 vs 96 vs 128 at fixed param budget.
-8. **Stochastic depth** — drop layers during training for implicit ensembling.
-9. **Multi-scale slice decomposition** — coarse + fine slice levels per attention block.
-10. **Larger batch + more epochs** — if bf16 frees enough VRAM for bs=16, try --epochs 50 with full cosine decay in budget.
+**Compound winners from Round 1.** First priority: combine the best loss + architecture + optimization winners into a single PR (Round 2A).
+
+**New mechanisms not covered in Round 1:**
+
+1. **FiLM conditioning on log(Re)** (AeroDiT 2024, arXiv:2412.17394). Directly addresses `val_re_rand` weakness — add `(gamma, beta) = MLP(log_re_global)` modulation in each Transolver block. Higher effort (~50 LOC) but uniquely targets cross-Re generalization.
+2. **Per-sample relative L2 loss** (FNO/GNOT standard). Divide each sample's loss by `y.std(dim=1)` to equalize gradient magnitude across the Re spectrum. Distinct mechanism from Huber.
+3. **1st-Order SAM** (Kaddour 2024, arXiv:2411.01714). Flat minima → better OOD on 3 of 4 val splits. Cost: 2x forward passes — must budget epochs against 30-min wall clock.
+4. **AoA reflection symmetry augmentation** (NeuralFoil 2025, arXiv:2503.16323). Doubles RaceCar single-foil samples via horizontal mirror. Gotcha: dsdf features (dims 4-11) are distance-based — verify symmetry handling for those before flipping.
+5. **STRING 2D RoPE** (Schenck 2025, arXiv:2502.02562, ICML spotlight). Relative spatial encoding in PhysicsAttention. Higher implementation risk — defer to Round 3 if simpler ideas plateau.
+
+**Other levers if plateau hits:**
+
+- **Larger architecture grid** — push n_hidden up to 320/512 if 192→256 helps significantly.
+- **Sobolev loss** — penalize gradient of predictions on surface nodes (physics-regularized).
+- **Domain-conditional normalization** — separate y_mean/y_std per domain group.
+- **DPOT-style denoising** (arXiv:2403.03542) — diffusion-style training paradigm.
+- **Stochastic depth** — drop layers during training for implicit ensembling.
+- **Multi-scale slice decomposition** — coarse + fine slice levels per attention block.
