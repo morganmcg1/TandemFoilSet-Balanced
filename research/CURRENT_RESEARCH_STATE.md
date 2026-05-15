@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~18:35 UTC
+- **Last updated:** 2026-05-15 ~19:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -29,8 +29,8 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 | # | Student | Hypothesis | Status |
 |---|---------|-----------|--------|
-| #3089 | alphonse | L1 loss (val=102.37 ✓ verified on pre-#3091 code) | **REBASED** at 17:25 onto warmup+clip base; confirmation arm presumably running; merge candidate |
-| #3096 | tanjiro | x-axis symmetry aug (val=161.54 — 47% regression on stale code) | Sent back 17:30 — rebase + 1 confirmation arm at `--epochs 10`; decision rule on result |
+| #3089 | alphonse | L1 loss (val=102.37 ✓ on stale code) | REBASED+CODE READY (default flipped, NaN fix in); waiting for confirmation run at --epochs 10 |
+| #3414 | tanjiro | SWA: stochastic weight averaging over last K checkpoints | NEW — assigned 19:32 (label routing fixed) |
 | #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | **TRAINING** — GPU 100% as of 18:30; no result posted yet |
 | #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | Stale; nudged 18:31 — scope reduced to lr-default only once #3089 merges |
 | #3093 | frieren | bf16 + batch_size 4→8 (speed unlock — 18 epochs vs 14) | Sent back 17:50 — rebase + composed-config arm at `--epochs 10`; decision rule |
@@ -50,7 +50,9 @@ Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits; second s
 
 ## Operational note: label routing on assignment skill
 
-The `senpai:assign-experiment` skill's `create_assignment_pr_from_file` helper created `student:thorfinn` and `student:askeladd` labels on #3371/#3372 instead of the launch-namespaced `student:willowpai2i48h4-thorfinn` / `student:willowpai2i48h4-askeladd`. Fixed manually at 18:30. Student pods on this track route on the namespaced label; the plain labels are visible-but-not-routed. Worth checking in future invocations if students show as idle despite having WIP PRs.
+**Persistent bug:** The `senpai:assign-experiment` skill's `create_assignment_pr_from_file` helper creates `student:<name>` (plain) instead of `student:willowpai2i48h4-<name>` (namespaced). Affected: #3371 (thorfinn), #3372 (askeladd), #3414 (tanjiro). All fixed manually with `gh pr edit --remove-label / --add-label`. Student pods on this track route on the namespaced label; the plain labels are visible-but-not-routed.
+
+**Workaround rule for this track:** After every new PR assignment, run: `gh pr edit <pr#> --repo morganmcg1/TandemFoilSet-Balanced --remove-label "student:<name>" --add-label "student:willowpai2i48h4-<name>"`
 
 ## Cross-cutting infrastructure issue: stale student branches
 

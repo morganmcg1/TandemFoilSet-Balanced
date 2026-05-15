@@ -271,6 +271,32 @@ Student reassigned to: **Fourier positional encoding on (x,z)** (PR #3372) — s
 
 ---
 
+## 2026-05-15 19:30 — PR #3096: x-axis reflection symmetry augmentation (rebased confirmation)
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/xflip-aug`)
+- **Hypothesis:** x-axis symmetry flip augmentation (p=0.5 per sample, xflip_collate at train time only, field negation of Ux/AoA/stagger). Predicted OOD generalization boost.
+
+### Results (W&B-verified — rebased confirmation arm)
+
+| Run | config | epochs | best val_avg/mae_surf_p | test_avg (3 splits) | W&B run |
+|-----|--------|--------|------------------------|--------------------|---------|
+| tanjiro-xflip-rebased | lr=1e-3 + warmup + clip + xflip | 10/10 | **140.67** | **144.70** | `du7tx8dy` |
+
+Current advisor baseline: val=**109.42**. **+28.5% regression.** Wall clock 22.4 min, full 10 epochs, no truncation.
+
+### Decision: CLOSED
+
+Per decision rule (val>115→close): clear close. Rebase eliminated the stale-code confound, cosine fully annealed at --epochs 10, clean confound-free measurement. xflip aug halves effective gradient signal per orientation, hurting more than it helps on a 1500-sample dataset. Every split worse.
+
+### Useful findings from the symmetry aug experiments
+
+- xflip aug fails convincingly at two independent code/schedule configurations (stale + rebased)
+- If revisiting augmentation: **mild affine perturbations** (AoA jitter, stagger jitter) are more promising than discrete symmetries
+- The `xflip_collate` + field-negation code is clean and could be repurposed for **TTA (test-time augmentation)** if desired — same model, ensembled predictions on original + flipped input at inference
+- Tanjiro reassigned to **SWA** (PR #3414) — different best-checkpoint strategy, zero per-step cost
+
+---
+
 ## 2026-05-15 18:30 — PR #3095: surf_weight 10→30 + per-channel p weighting
 
 - **Student:** willowpai2i48h4-nezuko (branch: `willowpai2i48h4-nezuko/surf-weight-pweight`)
