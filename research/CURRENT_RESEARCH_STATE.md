@@ -55,15 +55,18 @@ Unmodified baseline: val_avg = 135.23
 | #3380 | frieren | **H4: Fourier sigma sweep** — n=16 fixed, sigma ∈ {4, 10(ref), 20} | camber_rc | 2 |
 | #3296 | thorfinn | **NaN guard rebase + clean test_avg confirm** on Huber baseline | (infrastructure) | 1 |
 
-## Round 2 — Queued assignments (REST-blocked until ~19:19 UTC)
+## Round 2 — Full assignment roster (all 8 students WIP as of ~19:25 UTC)
 
-| Student | Hypothesis | Target Split | PR Body Drafted |
-|---------|------------|--------------|-----------------|
-| nezuko | **H2: FiLM on log(Re)** | re_rand | `/tmp/senpai-prs/nezuko-round2-film-logre.md` |
-| edward | **H3: Per-sample Relative L2** | re_rand, camber_cruise | `/tmp/senpai-prs/edward-round2-relative-l2.md` |
-| fern | **H6: AoA reflection augmentation** | in_dist, camber_rc | `/tmp/senpai-prs/fern-round2-aoa-reflection.md` |
-| tanjiro | **H5: 1st-Order SAM** | OOD splits | `/tmp/senpai-prs/tanjiro-round2-sam.md` |
-| askeladd | **H7: DropPath stochastic depth** | OOD splits | `/tmp/senpai-prs/askeladd-round2-droppath.md` |
+| PR | Student | Hypothesis | Target Split |
+|----|---------|------------|--------------|
+| #3379 | alphonse | **H1: Compound stack** — EMA(0.999) + grad-clip(1.0) + Huber(β=0.05) + Fourier PE | val_avg overall |
+| #3380 | frieren | **H4: Fourier sigma sweep** — n=16 fixed, sigma ∈ {4, 10, 20} | camber_rc |
+| #3296 | thorfinn | **NaN guard rebase** — two-pronged guard on Huber baseline | (infrastructure) |
+| #3405 | nezuko | **H2: FiLM on log(Re)** — explicit Re-regime conditioning | re_rand |
+| #3407 | edward | **H3: Per-sample Relative L2** — cross-sample scale invariance | re_rand, camber_cruise |
+| #3409 | fern | **H6: AoA reflection augmentation** — double RaceCar training data | in_dist, camber_rc |
+| #3410 | tanjiro | **H5: 1st-Order SAM** — flat-minima OOD optimizer | OOD splits |
+| #3412 | askeladd | **H7: DropPath stochastic depth** — implicit ensemble regularizer | OOD splits |
 
 ## Reserved for Round 3 / plateau triggers
 
@@ -74,6 +77,7 @@ Unmodified baseline: val_avg = 135.23
 
 ## Operational notes
 
-- **REST API exhausted** at 18:49 UTC, resets at 19:19 UTC. Scheduled wakeup at ~19:20 UTC to fire Round 2 assignments via `senpai:assign-experiment`.
-- **Label cleanup needed** post-REST-reset for 5 closed PRs (still carry `status:review` instead of `status:closed`) and #3296 (still `status:review` despite being a draft).
-- **All 8 students will be active by 19:25 UTC**: alphonse #3379, frieren #3380, thorfinn rebase + 5 new Round 2 PRs.
+- **All 8 students active as of 19:25 UTC.** Zero idle GPUs.
+- **#3296 thorfinn** — rebase-in-flight. Has detailed advisor instructions. Once thorfinn pushes rebase + confirmation run on Huber baseline, this merges immediately (critical NaN guard for paper test_avg).
+- **Expected merge order**: #3296 first (fixes test_avg), then whichever of H1–H7 beats 96.05.
+- **Round 1 mechanisms confirmed orthogonal**: Huber (loss), clip+EMA (optimization), Fourier PE (positional). Compound stack (alphonse #3379) will confirm stacking.
