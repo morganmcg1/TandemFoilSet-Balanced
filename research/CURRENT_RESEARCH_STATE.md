@@ -28,8 +28,8 @@ Known issues: `test_avg/mae_surf_p` is NaN due to a pre-existing bug in `data/sc
 
 | PR | Student | Theme |
 |----|---------|-------|
-| TBD | fern | Bug fix: NaN-safe evaluate_split in train.py |
-| TBD | thorfinn | SwiGLU activation in TransolverBlock MLPs |
+| #3274 | fern | Bug fix: NaN-safe evaluate_split in train.py (nan_to_num before masked sum) |
+| #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (replaces GELU) |
 
 ## Potential next research directions
 
