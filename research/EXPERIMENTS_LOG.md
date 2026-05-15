@@ -85,3 +85,52 @@ Test: NaN on `test_geom_camber_cruise` for both (scoring bug). 3-split workaroun
 Assigned edward a bug-fix + consolidation PR:
 - Unblock `test_avg/mae_surf_p` by nan_to_num fix in `evaluate_split` (avoids `0 * NaN = NaN` propagation in accumulate_batch)
 - Bump Config.lr default from 5e-4 to 1e-3 to lock in winning config for all future students
+
+---
+
+## 2026-05-15 15:30 — PR #3089: L1 loss vs Huber β=1.0 (alphonse) — **SENT BACK** (close to merge)
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/l1-loss`)
+- **Hypothesis:** Replace MSE with L1 loss in normalized space; align training objective with MAE metric. Predicted −8% to −15%.
+
+### Results
+
+| Arm | Loss | best epoch | val_avg/mae_surf_p (W&B-verified) | test_avg/mae_surf_p (claim) | W&B run |
+|---|---|---|---|---|---|
+| **A (winner)** | L1 | 13 | **102.37** | 89.67 (offline re-eval) | `lb2ly5g3` |
+| B | Huber β=1.0 | 13 | 117.47 | 106.03 | `9gh0e13m` |
+
+Per-split val surface pressure MAE (Arm A, best epoch 13, alphonse's report):
+
+| Split | Arm A (L1) | Arm B (Huber) |
+|---|---:|---:|
+| val_single_in_dist | 133.71 | 138.99 |
+| val_geom_camber_rc | 108.91 | 118.50 |
+| val_geom_camber_cruise | 76.50 | 102.26 |
+| val_re_rand | 90.37 | 110.13 |
+| **val_avg/mae_surf_p** | **102.37** | 117.47 |
+
+W&B verification (subagent):
+- Arm A: val_avg/mae_surf_p = 102.37 (best_val_avg) ✓ VERIFIED — beats baseline (109.42) by **−6.4%**.
+- Arm A: test_avg/mae_surf_p = `None` in W&B summary; alphonse's claimed 89.67 came from offline re-eval after adding the fix post-training.
+- Arm A: val_geom_camber_cruise/mae_surf_p = 84.79 in W&B (real number) ← alphonse's nan_to_num/sub-select fix DOES work for val.
+- 3-split test mean (excl. cruise): test_re_rand=86.10, test_geom_camber_rc=96.20, test_single_in_dist=111.43 → mean ≈ **97.91** vs edward's 107.47.
+
+### Bug-fix included
+
+Alphonse correctly identified the `0 * NaN = NaN` propagation in `accumulate_batch` (same as edward's #3288 but more robust — handles both NaN and Inf in y via `torch.isfinite` + sub-select fully finite samples).
+
+### Decision — Sent back with two specific asks
+
+1. **Flip Config default `loss_type: str = "mse"` → `"l1"`** so future runs compose on L1 automatically.
+2. **Push a clean W&B-logged eval with the fix in place** so `test_avg/mae_surf_p` is verifiable (not just offline re-eval). Quick `--debug --epochs 1` pass is sufficient.
+
+After: transition to `status:review`, mark ready, merge.
+
+### Composition with #3091
+
+Alphonse trained on `lr=5e-4` + no warmup + no clip (pre-#3091 advisor branch). When merged into post-#3091 branch, future runs get: `lr=1e-3 + warmup + clip + L1`. Likely further headroom — these changes are orthogonal.
+
+### Coordination with #3288
+
+Alphonse's scoring fix (sub-select + torch.where) is more robust than edward's (`nan_to_num`). When alphonse's PR merges first, edward's #3288 should drop the duplicate scoring fix and only keep the lr default bump.

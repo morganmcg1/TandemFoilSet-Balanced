@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 ~14:40 UTC
+- **Last updated:** 2026-05-15 ~15:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -9,7 +9,9 @@
 
 **val_avg/mae_surf_p = 109.42** — from PR #3091 (edward, warmup + clip + lr=1e-3), merged 2026-05-15. See `BASELINE.md` for full details.
 
-Note: `test_avg/mae_surf_p` is NaN on all runs due to scoring bug (fixed in PR #3288, in progress).
+**Pending merge: PR #3089 (alphonse, L1 loss) — val_avg/mae_surf_p = 102.37 (W&B-verified, −6.4%).** Sent back at 15:30 with two trivial fixes (flip default to `loss_type="l1"`, push clean W&B eval). Expected to merge within next cycle.
+
+Note: `test_avg/mae_surf_p` is NaN on all runs due to scoring bug. Alphonse's PR includes a robust fix (handles NaN+Inf via `torch.isfinite`); edward's #3288 has a simpler `nan_to_num` fix. We'll keep alphonse's fix and have #3288 only bump the lr default.
 
 ## Most recent research direction from human researcher team
 
@@ -26,14 +28,14 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 | # | Student | Hypothesis | Status |
 |---|---------|-----------|--------|
-| #3288 | edward | Scoring-bug fix (nan_to_num) + bump lr default to 1e-3 | WIP — consolidation |
+| #3089 | alphonse | L1 loss (val=102.37 ✓ verified) | **Sent back for 2 trivial fixes — merge candidate** |
+| #3288 | edward | Scoring-bug fix + bump lr default to 1e-3 | WIP — consolidation (training observed) |
 | #3092 | fern | slice_num 64 vs 128 at --epochs 10 (proper schedule) | WIP — sent back |
-| #3089 | alphonse | L1 / smooth-L1 loss | WIP |
-| #3090 | askeladd | Width: n_hidden 128→192 (+256) | WIP |
-| #3093 | frieren | bf16 + batch_size 4→8 | WIP |
-| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP |
-| #3096 | tanjiro | x-axis symmetry augmentation | WIP |
-| #3097 | thorfinn | Depth: n_layers 5→8 + DropPath 0.1 | WIP |
+| #3090 | askeladd | Width: n_hidden 128→192 (+256) | WIP — recovering from rate-limit storm |
+| #3093 | frieren | bf16 + batch_size 4→8 | WIP — recovering from rate-limit storm |
+| #3095 | nezuko | surf_weight 10→30 + per-channel p weighting | WIP — recovering from rate-limit storm |
+| #3096 | tanjiro | x-axis symmetry augmentation | WIP — recovering from rate-limit storm |
+| #3097 | thorfinn | Depth: n_layers 5→8 + DropPath 0.1 | WIP — bug-fix posted, training |
 
 ## Merged wins
 
@@ -41,11 +43,16 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 |---|---|---|
 | #3091 | LR warmup + clip + lr=1e-3 (edward) | **109.42** ← current baseline |
 
+## Operational note: GitHub API rate-limit storm (resolved)
+
+Between ~14:55 and ~15:20 UTC the GitHub API hit secondary rate limits, causing student poll cycles to fail with HTTP 403 → JSONDecodeError → "No assigned PRs" → 300s sleep without launching Claude. Affected students: askeladd, frieren, nezuko, tanjiro (and partially alphonse). All recovered between 15:19–15:23 and are running fresh Claude sessions. No intervention needed.
+
 ## Next decisions (when in-flight PRs complete)
 
-1. **Merge any experiment that beats val_avg/mae_surf_p=109.42.** All in-flight PRs are running with mis-tuned cosine schedules — if they still beat 109.42 at 15 epochs, that's a strong signal. If they're close, request a re-run at `--epochs 10` with proper annealing before declaring improvement.
-2. **Compose winners.** Once consolidation PR #3288 lands (lr default=1e-3, scoring fix), all subsequent runs will start from a clean baseline with proper defaults.
-3. **Priority for round 2:** L1/Huber loss (alphonse #3089) is still the highest-conviction untested hypothesis. If it wins, stack L1 + warmup + clip + higher LR as the new platform.
+1. **Merge alphonse #3089 ASAP once student returns with the two trivial fixes** — this is the next baseline (102.37). After merge, restack: lr=1e-3 + warmup + clip + L1.
+2. **Merge any experiment that beats the new baseline.** All in-flight PRs are running with mis-tuned cosine schedules (50-epoch T_max but ~15 epochs realized). If they still beat baseline at 15 epochs, strong signal. If close, request `--epochs 10` re-run before declaring improvement.
+3. **Edward #3288 trim:** Once alphonse's PR merges (with the more robust scoring fix), have edward drop the duplicate scoring fix and only keep the lr default bump.
+4. **Priority follow-ups (round 2):** L1 + LR sweep (alphonse suggested 3e-4, 1e-3 at different curvatures), L1 + longer schedule (training still improving at timeout), L1 + surf_weight sweep.
 
 ## Potential next research directions (round 2+)
 
