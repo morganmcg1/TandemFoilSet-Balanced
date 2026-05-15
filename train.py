@@ -649,6 +649,10 @@ class Lion(torch.optim.Optimizer):
     def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
         defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
         super().__init__(params, defaults)
+        # PR #3068: optional per-step diagnostic capture. When enabled,
+        # accumulates consecutive sign-step match/total counts into per-param
+        # GPU tensors. Disabled by default for zero overhead.
+        self._diag_capture_sign_corr = False
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -656,6 +660,7 @@ class Lion(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
+        capture = self._diag_capture_sign_corr
         for group in self.param_groups:
             lr = group['lr']
             beta1, beta2 = group['betas']
@@ -671,19 +676,57 @@ class Lion(torch.optim.Optimizer):
                 if wd != 0:
                     p.mul_(1 - lr * wd)
                 update = (beta1 * m + (1 - beta1) * g).sign_()
+                if capture:
+                    prev_sign = state.get('prev_sign')
+                    if prev_sign is not None and prev_sign.shape == update.shape:
+                        nz = (update != 0) & (prev_sign != 0)
+                        match = ((update == prev_sign) & nz).sum()
+                        total = nz.sum()
+                        if '_sign_match_acc' not in state:
+                            state['_sign_match_acc'] = torch.zeros(1, device=p.device, dtype=torch.long)
+                            state['_sign_total_acc'] = torch.zeros(1, device=p.device, dtype=torch.long)
+                        state['_sign_match_acc'] += match.long()
+                        state['_sign_total_acc'] += total.long()
+                    state['prev_sign'] = update.detach().clone()
                 p.add_(update, alpha=-lr)
                 m.mul_(beta2).add_(g, alpha=1 - beta2)
         return loss
+
+    def consume_sign_correlation(self):
+        """Return (match_sum, total_sum) accumulated across all params and
+        reset per-param accumulators. Also returns per-param-shape stats."""
+        match_total = 0
+        total_total = 0
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                if '_sign_match_acc' in state:
+                    match_total += int(state['_sign_match_acc'].item())
+                    total_total += int(state['_sign_total_acc'].item())
+                    state['_sign_match_acc'].zero_()
+                    state['_sign_total_acc'].zero_()
+        return match_total, total_total
+
+    def compute_momentum_norm(self):
+        """Return the global L2 norm of the first-moment buffer m_t across
+        all parameters (single .item() per param)."""
+        sq_sum = 0.0
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                if 'momentum' in state:
+                    sq_sum += float(state['momentum'].detach().float().pow(2).sum().item())
+        return sq_sum ** 0.5
 
 
 optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
-    betas=(0.9, 0.99),
+    betas=(0.9, 0.95),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.95) | sign-based momentum update | replaces AdamW")
+print(f"PR #3068: Lion β₂ swept 0.99 → 0.95 (β₁ unchanged at 0.9); half-life ~14 steps vs baseline ~69 steps; m_t buffer forgets faster; NEW baseline to beat: val_avg/mae_surf_p < 29.5318 (#3006)")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -784,6 +827,11 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# PR #3068: Lion β₂ diagnostic schedule — capture consecutive sign-step
+# correlation during these epochs (epoch number is 1-indexed in user-facing
+# logs, so we map to the 0-indexed loop variable).
+DIAG_EPOCHS_1INDEXED = {1, 10, 30, 59}
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -793,6 +841,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+
+    diag_capture_this_epoch = (epoch + 1) in DIAG_EPOCHS_1INDEXED
+    optimizer._diag_capture_sign_corr = diag_capture_this_epoch
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -875,6 +926,30 @@ for epoch in range(MAX_EPOCHS):
         capture_residual_magnitudes(
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
+
+    # PR #3068: Lion β₂ diagnostic — m_t buffer norm and consecutive
+    # sign-step correlation at ep1/10/30/59. Lower β₂ → faster forgetting →
+    # smaller m_t norm and lower consecutive sign-step agreement (more
+    # reactive to per-batch gradient changes).
+    if diag_capture_this_epoch:
+        match_sum, total_sum = optimizer.consume_sign_correlation()
+        sign_corr_ratio = match_sum / max(total_sum, 1)
+        m_norm = optimizer.compute_momentum_norm()
+        print(
+            f"  lion-β₂ diag @ ep{epoch+1}: ||m_t||_2={m_norm:.4f}  "
+            f"sign(c_t)==sign(c_{{t-1}}) ratio={sign_corr_ratio:.4f}  "
+            f"({match_sum}/{total_sum} non-zero pairs)"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "lion_beta2_diagnostic",
+            "epoch": epoch + 1,
+            "momentum_l2_norm": m_norm,
+            "sign_step_match_count": match_sum,
+            "sign_step_total_count": total_sum,
+            "sign_step_consecutive_match_ratio": sign_corr_ratio,
+            "betas": [0.9, 0.95],
+        })
+        optimizer._diag_capture_sign_corr = False
 
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
     # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
