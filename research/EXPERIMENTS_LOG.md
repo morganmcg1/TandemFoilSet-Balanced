@@ -2,6 +2,59 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-15 23:00 — PR #3517: H19 DropPath stochastic depth (frieren) — **assigned**
+
+- Branch: `charliepai2i24h4-frieren/droppath`
+- Hypothesis: DropPath (stochastic depth) randomly drops entire block residual contributions per-sample. Targets block co-adaptation: after H15 SwiGLU, each block is more expressive — DropPath forces independent learning. Linear drop-rate schedule from 0.0 (block 0) to max_drop_prob (block 4). Complementary to FFN dropout=0.1 (within-block) and LayerScale (H18, edward, block-output scaling).
+- Two arms: max_drop_prob ∈ {0.10, 0.20}. DeiT survival_prob=0.9 (0.10 drop) as reference.
+- Target to beat: val_avg/mae_surf_p < 80.21 (current best, H15 SwiGLU).
+- References: Huang et al. ECCV 2016, Touvron et al. DeiT ICML 2021.
+
+## 2026-05-15 23:00 — PR #3514: H18 LayerScale residual scaling (edward) — **assigned**
+
+- Branch: `charliepai2i24h4-edward/layerscale`
+- Hypothesis: LayerScale (CaIT, Touvron 2021) adds learnable per-channel diagonal scaling on each residual connection: `x += gamma * Block(norm(x))`, where gamma is init at 1e-6. Starts as near-identity, gradually activates depth. Synergistic with SwiGLU: each block now has higher capacity (gated FFN), and LayerScale's controlled depth activation should help the optimizer benefit from that capacity.
+- Single arm: SwiGLU + LayerScale (1280 extra scalars, ~843K → ~844K params).
+- Diagnostic: log gamma norms per block to verify monotone growth (deeper = larger gamma).
+- Target to beat: val_avg/mae_surf_p < 80.21 (current best, H15 SwiGLU).
+- References: Touvron et al. CaIT ICCV 2021 (arXiv:2103.17239), DeiT III (2022).
+
+## 2026-05-15 22:50 — PR #3318: H6v2 Grad clip + SGDR (frieren) — **CLOSED, SGDR doesn't compose**
+
+- Branch: `charliepai2i24h4-frieren/gradclip-sgdr`
+- H6v1 result on old baseline: val_avg=99.85 (-18.7% vs RFF baseline 122.81). Grad clip eliminated oscillation; SGDR drove best to cosine bottom (epoch 10). Strong mechanism.
+- H6v2 result on H13 baseline (post-GALE): val_avg=86.21 vs current baseline 80.21.
+
+| Split | H13 baseline (85.16) | H6v2 | Delta |
+|---|---:|---:|---:|
+| val_single_in_dist | — | 103.22 | — |
+| val_geom_camber_rc | — | 97.23 | — |
+| val_geom_camber_cruise | — | 62.58 | — |
+| val_re_rand | — | 81.81 | — |
+| **val_avg** | **85.16** | **86.21** | **+1.2%** |
+| test_avg | — | 76.42 | — |
+
+- Note: H15 SwiGLU merged while v2 was running; current baseline is now 80.21, making H6v2 (86.21) +7.5% above target.
+- **Analysis**: SGDR's mechanism requires ≥2 LR restart cycles; only 1 fires in 13 realized epochs. Log1p + dropout absorb grad-clip's stability benefit. Sub-additive composition. Student's honest analysis confirmed the mechanism: SGDR restart fired cleanly (lr jump at epoch 11), but the combined baseline already reaches a lower minimum via architectural mechanisms. Closing the SGDR direction.
+- **Decision**: Closed (+7.5% regression vs current 80.21 baseline). Student reassigned to H19 DropPath.
+
+## 2026-05-15 22:45 — PR #3421: H14 Cosine T_max sweep (nezuko) — **sent back for v2 (single-arm retest)**
+
+- Branch: `charliepai2i24h4-nezuko/cosine-tmax-alignment`
+- Hypothesis: Align cosine T_max to realized epoch budget (~14 epochs under 30-min cap). Two arms: T_max=14 (full anneal) and T_max=20 (partial anneal) vs T_max=50 baseline.
+- Both arms ran on PRE-GALE codebase (before T_max=15 was baked in by H13 merge).
+
+| T_max | val_avg | test_avg | best_epoch | delta vs old 92.80 |
+|---|---:|---:|---:|---:|
+| 50 (old base) | 92.80 | 84.11 | 14 | — |
+| **14 (arm 1)** | **88.43** | **80.24** | **14** | **-4.7%** |
+| 20 (arm 2) | 90.21 | 78.59 | 14 | -2.8% |
+| 15 (new baked baseline) | 85.16 | — | 14 | — |
+
+- Metrics: `models/model-charliepai2i24h4-nezuko-cosine-t14-etamin1e5-20260515-202657/metrics.jsonl`, `models/model-charliepai2i24h4-nezuko-cosine-t20-etamin1e5-20260515-212210/metrics.jsonl`
+- **Analysis**: Direction validated (T_max=14 > T_max=20 > T_max=50). However, baseline has shifted twice (92.80 → 85.16 → 80.21) since assignment. Arms ran on pre-GALE pre-SwiGLU code and cannot be directly compared. Student correctly identified that T_max=15 is now hardcoded, making T_max=14 + eta_min=1e-5 the cheapest next test on the current code.
+- **Decision**: Sent back for single-arm v2 retest: T_max=14 + eta_min=1e-5 on current post-H15 train.py. Target: val_avg < 80.21. Expected delta modest (sub-percent, given T_max=14 vs T_max=15 is marginal change); confirm vs seed variance.
+
 ## 2026-05-15 21:30 — PR #3224: H13 Geom-cond GALE (tanjiro) — **MERGED, new best**
 
 - Branch: `charliepai2i24h4-tanjiro/geom-cond-additive`
