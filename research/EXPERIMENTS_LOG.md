@@ -1,5 +1,30 @@
 # SENPAI Research Results
 
+## 2026-05-15 20:20 — PR #3359: H13: Pressure channel-weighted surf loss (p=3x) ✗ CLOSED
+
+- Branch: `edward/pressure-ch-weight`
+- Student: willowpai2i48h1-edward
+- Hypothesis: Per-channel surf loss weighting (p=3x, Ux/Uy=1x) to emphasize the scored metric.
+
+### Results (W&B only — code never committed to PR)
+
+| Config | val_avg/mae_surf_p | test_avg |
+|--------|-------------------|---------|
+| pressure_ch_w3 (18:28) | 133.32 | 101.23 |
+| pressure_ch_w3 (19:22, crashed) | 163.59 | — |
+| pressure_ch_w5 (19:33) | 112.22 | 94.86 |
+
+W&B runs: `(see wandb group)`
+
+### Analysis
+- Best val=112.22 (w=5), which is +23% worse than new baseline (91.33).
+- Pressure weighting ALONE (without architectural specialization) fails to help. The 3x weight on the pressure channel distorts the vol+surf_Ux/Uy gradient budget without providing a separate learning pathway.
+- Compare to fern's result: split head + 3x weight DID help (-6.2% test), confirming that architectural specialization is the missing ingredient.
+- Increasing W from 3→5 showed slight improvement (133→112), but diminishing returns suggest diminishing gradient signal for Ux/Uy.
+- **Note**: Student iterated without committing code to PR — made advisor review impossible. New assignment instructs explicit commit-before-run discipline.
+
+---
+
 ## 2026-05-15 19:30 — PR #3361: H10b: slice_num=128 retry on Huber+NaN base ✗ CLOSED
 
 - Branch: `thorfinn/slice128-retrial`
