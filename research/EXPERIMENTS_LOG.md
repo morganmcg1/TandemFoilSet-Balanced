@@ -287,3 +287,41 @@ Test splits (from best-val-epoch checkpoint):
 
 **Status: MERGED — NEW BEST (94.6764)**
 
+
+---
+
+## 2026-05-15 19:35 — PR #3340: H9: WSD schedule + AdamW beta2=0.98 (thorfinn) — PENDING VERIFICATION (sent back for rebase)
+
+- Branch: `thorfinn/h9-wsd-schedule-beta2`
+- Hypothesis: WSD (Warmup-Stable-Decay) schedule with warmup=3, stable=8, decay over epochs 11–14 outperforms cosine T_max=15 in the fixed ~14-epoch wall-budget regime. AdamW β2=0.98 should stabilize faster for short runs.
+- Two arms (paired comparison):
+
+| Arm | Scheduler | β2 | best epoch | val_avg/mae_surf_p | test 3-split avg |
+|-----|-----------|----|-----------|--------------------|-----------------|
+| Arm A: WSD + β2=0.98 | WSD (3/8/4) | 0.98 | 12/13 | 102.20 (+7.52 vs 94.68) | 102.55 |
+| **Arm B: WSD + β2=0.999** | **WSD (3/8/4)** | **0.999** | **14/14** | **89.04 (−5.64 vs 94.68)** | **85.90** |
+
+**Per-split breakdown (Arm B winner):**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------|-----------------|
+| val_single_in_dist | 109.74 | 95.50 |
+| val_geom_camber_rc | 98.22 | 87.39 |
+| val_geom_camber_cruise | 66.30 | NaN |
+| val_re_rand | 81.89 | 74.80 |
+| **val_avg** | **89.04** | **85.90** (3-split) |
+
+**Key observation (LR trajectory in Arm B):** per-epoch lr after `scheduler.step()`:
+- ep 1–2 warmup (1.67e-4 → 5e-4)
+- ep 3–11 stable plateau (5e-4)
+- ep 12–14 decay (5e-4 → 4.27e-4 → 2.5e-4 → 7.32e-5)
+- val descent during decay: ep 11 → 113.30, ep 12 → 117.22, ep 13 → 96.18, **ep 14 → 89.04**
+
+The sharp final-decay improvement (96 → 89 in the last epoch) shows the model was still converging at the wall cap. **WSD's sharp-decay shape vs cosine's smooth-decay shape appears to drive the win.**
+
+**Why β2=0.98 underperformed:** thorfinn's analysis is correct — at ~5250 steps/run, β2=0.98 (~50-step half-life) has too high preconditioner variance for the long-tailed surf_weight=10 loss. β2=0.999 (~1000-step half-life) tracks better and is the right scale for this loss landscape.
+
+**Confound:** Arm B used the merged default (FiLM on cond_dim=11, Huber δ=1.0) while the 94.68 baseline used `--cond_dim 0 --huber_delta 0.5`. So 5.64 pt gain includes WSD effect + potential FiLM/δ effect. Need a controlled re-run.
+
+**Status: SENT BACK FOR REBASE + VERIFY.** thorfinn's branch was 4 commits behind the current advisor (pre-H15 merge), causing conflicts that reverted advisor-owned files (BASELINE.md, research/*.md) and removed merged H15 artifacts. Asked thorfinn to: (1) rebase carefully keeping their WSD code; (2) re-run Arm B to verify 89.04 holds on rebased branch; (3) optionally also run a controlled arm (WSD + `--huber_delta 0.5 --cond_dim 0`) to isolate WSD vs cosine T_max=15 effect cleanly. Merge once rebase + re-run confirms.
+

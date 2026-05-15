@@ -1,9 +1,10 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-15 18:30
+- **Date**: 2026-05-15 19:40
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
 - **Round**: 2 active (compounds + variants)
 - **Most recent human research directive**: None received
+- **Pending verification:** PR #3340 (thorfinn H9 WSD, val_avg=89.04) — sent back for rebase + verify. If holds, becomes new best.
 
 ## Current Best
 
@@ -38,7 +39,7 @@ H15 super-linear stacking: −18.16 pts vs previous best. Naive additive predict
 |----|---------|------------|--------|
 | #3338 | askeladd | H16: FiLM + Surface Head compound (depth=2/3) | Active WIP |
 | #3339 | tanjiro | H8: Per-sample adaptive loss normalization | Active WIP |
-| #3340 | thorfinn | H9: WSD schedule + AdamW beta2=0.98 | Active WIP (Arm A running) |
+| #3340 | thorfinn | H9: WSD schedule + AdamW beta2=0.98 | **Sent back for rebase** — pending val_avg=89.04 result needs verify on rebased branch |
 | #3341 | alphonse | H5b: Wider model n_hidden=256 matched-budget | Active WIP |
 | #3342 | edward | H2b: EMA weight averaging (decay=0.999) | Active WIP |
 | #3343 | fern | H17: Per-channel adaptive Huber (δ_p=0.25 vs δ_Ux/Uy=0.5) | Active WIP |
