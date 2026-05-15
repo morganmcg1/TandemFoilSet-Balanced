@@ -1,5 +1,65 @@
 # SENPAI Research Results
 
+## 2026-05-15 16:28 — W&B surfacing on 5 stale-WIP PRs (#3173 #3186 #3190 #3196 #3211)
+
+A scheduled wakeup at 16:21 UTC flagged 5 PRs as `stale_wip`. Their branch HEADs all still pointed at the original assignment commit from 12:52 UTC — no code commits and no `SENPAI-RESULT` markers — yet each student had **multiple completed W&B training runs** in their hypothesis's `wandb_group`. Surfacing W&B as the source of truth revealed substantial work hidden from the PR review queue:
+
+| PR | Student | wandb_group | Runs | Best val_avg/mae_surf_p | Δ vs baseline 136.89 | All-splits-improve? |
+|---|---|---|---|---|---|---|
+| #3186 | fern | ema-weights | 3 × finished | **121.69** (run `2i7tmbir`) | **−11.10%** | **YES** |
+| #3173 | alphonse | surf-weight-scan | 4 × finished | 130.29 (run `mdkp6avx`, w=50) | −4.82% | no — +11.4% on val_single_in_dist |
+| #3211 | thorfinn | per-channel-output-heads | 4 finished + 1 crashed | 133.70 (run `x3h1o3id`) | −2.33% | no — +8.6% on val_single_in_dist |
+| #3190 | frieren | slice-num-128 | 3 × finished | 140.96 (best) | +2.98% | no — regression |
+| #3196 | nezuko | hidden-256-depth6 | 2 finished + 3 failed | 152.48 (best `8mb6sqt8`) | +11.4% | no — regression |
+
+### Per-split breakdown (W&B summary values)
+
+**fern EMA (`2i7tmbir`, decay=0.999, surf_weight=10):**
+
+| Split | EMA | baseline (`07efagec`) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 147.55 | 151.85 | −2.83% |
+| val_geom_camber_rc | 137.68 | 173.91 | **−20.83%** |
+| val_geom_camber_cruise | 92.42 | 101.41 | −8.86% |
+| val_re_rand | 109.09 | 120.38 | −9.38% |
+| **val_avg** | **121.69** | 136.89 | **−11.10%** |
+
+Three independent EMA runs (121.69, 122.64, 123.13) cluster within ±0.7 — high reproducibility. **This is the strongest candidate Round-1 winner.**
+
+**alphonse surf_weight=50 (`mdkp6avx`):**
+
+| Split | w=50 | baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 169.20 | 151.85 | **+11.4%** |
+| val_geom_camber_rc | 136.69 | 173.91 | −21.4% |
+| val_geom_camber_cruise | 98.42 | 101.41 | −2.9% |
+| val_re_rand | 116.86 | 120.38 | −2.9% |
+| val_avg | 130.29 | 136.89 | −4.82% |
+
+Same single-split-carries-headline pattern as PR #3176 (askeladd) and PR #3211 (thorfinn) — RC-camber wins big, in-dist regresses. Structural across loss-redirection hypotheses.
+
+**thorfinn per-channel-heads (`x3h1o3id`):** val_avg 133.70, val_single_in_dist +8.6%, val_geom_camber_rc −15.8%. Same pattern. Run-to-run variance huge (133.70 vs 168.42 in the same wandb_group — likely architectural variant differences).
+
+**frieren slice_num=128:** best 140.96 (+2.98%), worst 171.89 (+25.6%). All three runs regress. High variance suggests the extra physics tokens hurt training stability at this budget.
+
+**nezuko hidden-256-depth6:** best finished 152.48 (+11.4%), 3 failures (likely OOM or train-divergence on bs=2 small-batch + larger model). Architecture scaling under-converges under the realized epoch budget.
+
+### Actions taken at 16:28 UTC
+
+Posted advisor nudge comments on all 5 PRs identifying the W&B runs and instructing each student to:
+1. Commit their `train.py` changes (which exist as uncommitted working-tree edits)
+2. Push to origin
+3. Post a `SENPAI-RESULT` marker with the relevant run IDs
+4. Invoke `senpai:submit-experiment-results` to swap label `wip → review`
+
+Without committed code in the branch HEAD, neither merge nor review is possible — there is literally nothing to merge even when the W&B data shows a strong winner. This was the gap that hid fern's −11% win for ~3.5 hours.
+
+### Operational lesson
+
+W&B should be part of the advisor's PR-review surface. When a PR sits at `status:wip` with no commits for ≥2 hours, query the `wandb_group` for that student's agent and surface any completed runs. Multiple training runs in W&B with no PR activity is the "student trained but didn't submit" failure mode and needs an explicit prod, not just patience.
+
+---
+
 ## 2026-05-15 15:42 — PR #3202: Linear warmup (5 epochs) + cosine annealing
 - Branch: `willowpai2i48h2-tanjiro/lr-warmup-cosine`
 - Student: willowpai2i48h2-tanjiro
