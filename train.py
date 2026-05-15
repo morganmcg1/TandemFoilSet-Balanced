@@ -381,6 +381,9 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_epochs: int = 5
+    warmup_start_factor: float = 0.01
+    cosine_t_max: int | None = None  # if None, falls back to epochs - warmup_epochs
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -438,7 +441,16 @@ for p in ema_model.parameters():
 ema_decay = 0.999
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+cosine_t_max = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS - cfg.warmup_epochs
+warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=cfg.warmup_start_factor, end_factor=1.0, total_iters=cfg.warmup_epochs
+)
+cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=cosine_t_max, eta_min=1e-6
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[cfg.warmup_epochs]
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
