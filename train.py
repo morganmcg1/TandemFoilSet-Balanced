@@ -236,23 +236,21 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Per-sample skip for non-finite y (matches accumulate_batch semantics).
+            # Inf/NaN in y would otherwise propagate through err*0 -> NaN in scoring,
+            # even though those samples should be excluded entirely.
+            B = y.shape[0]
+            sample_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)  # [B]
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            mask_eff = mask & sample_finite.unsqueeze(-1)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            # Drop samples whose GT has any non-finite value (e.g. corrupted CFD output).
-            # Without this guard, Inf in y_norm makes sq_err Inf, and Inf*mask=NaN even
-            # where mask is False — propagating NaN into the loss/metric accumulators.
-            sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
-            safe = mask & sample_finite.unsqueeze(-1)
-            y_norm = torch.where(
-                sample_finite.view(-1, 1, 1).expand_as(y_norm),
-                y_norm, torch.zeros_like(y_norm),
-            )
-
             sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=huber_delta)
-            vol_mask = safe & ~is_surface
-            surf_mask = safe & is_surface
+            vol_mask = mask_eff & ~is_surface
+            surf_mask = mask_eff & is_surface
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -264,13 +262,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            # Pass `safe` (which masks out the entire bad sample) so scoring sees the
-            # bad sample as padding; also replace its y with zeros so |pred-y| stays finite.
-            y_for_scoring = torch.where(
-                sample_finite.view(-1, 1, 1).expand_as(y),
-                y, torch.zeros_like(y),
-            )
-            ds, dv = accumulate_batch(pred_orig, y_for_scoring, is_surface, safe, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -327,6 +319,8 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_weight_final": cfg.surf_weight_final,
+        "surf_weight_anneal_frac": cfg.surf_weight_anneal_frac,
         "epochs_configured": cfg.epochs,
     }
 
@@ -368,6 +362,8 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    surf_weight_final: float = 10.0
+    surf_weight_anneal_frac: float = 0.0
     epochs: int = 50
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -441,11 +437,18 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+anneal_epochs = max(1, int(cfg.surf_weight_anneal_frac * MAX_EPOCHS))
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    if epoch < anneal_epochs:
+        progress = epoch / anneal_epochs
+        current_surf_weight = cfg.surf_weight + (cfg.surf_weight_final - cfg.surf_weight) * progress
+    else:
+        current_surf_weight = cfg.surf_weight_final
 
     t0 = time.time()
     model.train()
@@ -467,7 +470,7 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        loss = vol_loss + current_surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -484,7 +487,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+        name: evaluate_split(model, loader, stats, current_surf_weight, device, cfg.huber_delta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -510,12 +513,14 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "current_surf_weight": current_surf_weight,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"surf_w={current_surf_weight:.2f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
@@ -542,7 +547,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight_final, device, cfg.huber_delta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
