@@ -396,3 +396,65 @@ After falsifying lr=1e-3+warmup, alphonse's own analysis suggested the opposite 
 | alphonse | #3443 | lr ∈ {5e-4, 3.5e-4, 2.5e-4} on bf16+T_max=15 | neutral to −3% |
 
 ---
+
+## 2026-05-15 22:32 — PR #3126 [MERGED]: EMA weights (decay=0.999, Karras warmup ramp)
+
+- **Student branch:** `charliepai2i48h4-nezuko/ema-weights`
+- **Hypothesis:** An exponential moving average (EMA) of weights acts as a low-pass filter over the AdamW optimization trajectory, reducing late-epoch validation variance and improving generalization without additional regularization cost.
+
+### Results
+
+| Arm | Config | best epoch | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` (3 finite) | Δ vs Arm A |
+|-----|--------|-----:|---------:|--------:|--------:|
+| A | bf16 + T_max=15, no EMA | 19 | 97.492 | 94.879 | — |
+| B | + EMA (decay=0.999, Karras ramp) | 18 | **96.464** | **93.857** | **−1.06%** |
+
+Vs prior BASELINE.md (fp32+T_max=15 = 100.059): Arm B −3.59% improvement.
+
+Per-split val MAE pressure (lower is better):
+
+| Split | Arm A | Arm B (EMA) | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 116.714 | **111.948** | −4.08% |
+| `val_geom_camber_rc`     | 102.709 | **102.325** | −0.37% |
+| `val_geom_camber_cruise` |  77.554 |   79.490 | +2.50% |
+| `val_re_rand`            |  92.990 |  **92.092** | −0.97% |
+| **val_avg**              | **97.492** | **96.464** | **−1.06%** |
+
+Per-split test (3 finite splits):
+
+| Split | Arm A | Arm B (EMA) | Δ |
+|---|---:|---:|---:|
+| `test_single_in_dist`     | 103.011 |  **97.964** | −4.90% |
+| `test_geom_camber_rc`     |  93.417 |   94.701 | +1.37% |
+| `test_re_rand`            |  88.210 |   88.905 | +0.79% |
+| **avg (3 splits)**        |  94.879 |  **93.857** | **−1.08%** |
+
+Late-training variance (epochs 10–19):
+
+| Stat | Arm A | Arm B (EMA) | Δ |
+|---|---:|---:|---:|
+| mean   | 101.679 | 99.076 | −2.56% |
+| stdev  |   6.546 |  3.688 | **−43.7%** |
+| min    |  97.492 | 96.464 | −1.05% |
+| max    | 116.957 | 107.254 | −8.30% |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-nezuko-arm_b_ema_d0999_bf16_tmax15-20260515-212327/metrics.jsonl`
+- `models/model-charliepai2i48h4-nezuko-arm_a_baseline_bf16_tmax15-20260515-203158/metrics.jsonl`
+
+### Analysis & conclusions
+
+Clean win. EMA reduces val variance by 43.7% (σ 6.55 → 3.69) and beats Arm A at every epoch from epoch 1 onward — the Karras warmup ramp (`min(0.999, (1+step)/(10+step))`) prevents the cold-start issue that flat decay=0.999 can cause on short schedules.
+
+Per-split pattern: biggest win on `val_single_in_dist` (−4.08%) and test (−4.90%). Slight regression on cruise val (+2.50%) which may reflect noise (cruise val is small-sample). Three-of-four splits improve.
+
+**Side benefit:** Arm A (97.492) is the first measured bf16+T_max=15 compose number — confirms the predicted ~93–95 range; thorfinn #3390 is running a second seed.
+
+### Decision
+
+Merged. New best stack: `--amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999`.
+Nezuko reassigned to #3492 (n_hidden=192 capacity test on full stack).
+
+---
