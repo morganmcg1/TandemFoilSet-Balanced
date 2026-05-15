@@ -29,6 +29,32 @@
 
 ---
 
+## 2026-05-15 22:55 — PR #3393 (round 2): surf_p_weight_extra sweep {2.0, 1.0}
+
+- **Branch**: `charliepai2i24h3-thorfinn/surf-p-channel-weight`
+- **Hypothesis**: Reduce the per-channel pressure-weight from `extra=4` (round 1, neutral) toward zero to find the U-curve minimum. Per the previous sendback's analysis, the redistribution mechanism is real but the balance was wrong at extra=4.
+- **Outcome**: **SENT BACK — mechanism confirmed; needs rerun on BF16-merged baseline before merging**
+
+| Run | val_avg/mae_surf_p | Δ vs Huber-only baseline (117.66) | Notes |
+|---|---|---|---|
+| extra=4.0 (round 1) | 117.95 | +0.29 | neutral wash |
+| extra=2.0 (round 2 primary) | 117.58 | -0.08 | borderline |
+| **extra=1.0** (round 2 companion sweep) | **115.87** | **-1.79** | small win on Huber baseline |
+
+Per-split at extra=1.0 vs Huber baseline:
+- val_single_in_dist: 147.77 → 141.77 (-6.00)
+- val_geom_camber_rc: 125.08 → 121.52 (-3.56)
+- val_geom_camber_cruise: 88.98 → 94.09 (+5.11 regression)
+- val_re_rand: 108.81 → 106.12 (-2.69)
+
+**Why sent back, not merged**: This experiment trained on the Huber-only baseline (117.66). Between my round-1 sendback (20:29 UTC) and thorfinn's result (22:36 UTC), PR #3300 (BF16) merged at 22:45 UTC. The new baseline is 97.55. Thorfinn's 115.87 is +18.7% above the new baseline — fails the merge criterion despite being a small win against the stale comparison point.
+
+**The mechanism is independent of BF16**, so the gain should stack. Sent back with rebase-on-BF16 + rerun extra=1.0 instructions. Expected stacked outcome: val_avg ~95-97 (BF16 baseline 97.55 + ~-1.79 from extra=1 if linear). U-shape confirms the optimum sits between extra=0 and extra=2.
+
+**Cleanup**: Thorfinn killed a redundant in-flight extra=2 run from a prior session (epoch 4) and committed `surf_p_weight_extra=1.0` as the new default in train.py. The rebased run will inherit this default.
+
+---
+
 ## 2026-05-15 20:25 — PR #3393: Per-channel surface pressure weighting (surf_p_weight_extra=4)
 
 - **Branch**: `charliepai2i24h3-thorfinn/surf-p-channel-weight`
