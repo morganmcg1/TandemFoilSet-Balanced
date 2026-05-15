@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 18:45
+- **Date:** 2026-05-15 19:45
 - **Launch:** willow-pai2i-48h-r1 (round 2 in progress)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~14 epochs achievable)
@@ -23,48 +23,45 @@ Full metrics in `BASELINE.md`.
 | #3309 | NaN fix (cruise test) | 112.8295 | **106.5996** (4/4 valid) |
 | #3317 | Cosine T_max=15 | **91.3319** | 88.4260 (3/4, cruise NaN) |
 
+## Closed PRs (dead ends)
+| PR | Hypothesis | val | Reason |
+|----|-----------|-----|--------|
+| #3162 | surf_weight=25 (MSE) | 133.41 | Loss misalignment dominates |
+| #3188 | slice_num=128 (MSE) | 134.74 | Predates Huber; retried in #3361 |
+| #3167 | OneCycleLR max_lr=1e-3 | 137.12 | 9-ep budget too short |
+| #3180 | h=192 wider model | 150.38 | Capacity not bottleneck |
+| #3361 | slice_num=128 (Huber+NaN) | 116.19 | 30% slower/ep, budget wins |
+
 ## Round-2 WIP — 8/8 students assigned
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3305 | alphonse | Huber δ=0.05 rebase on T_max=15 base | WIP — rebase in progress |
-| #3395 | askeladd | Peak LR scan: 3e-4 vs 8e-4 on T_max=15 base | WIP — fresh |
-| #3359 | edward | Pressure channel-weighted surf loss (p=3×) | WIP — running |
-| #3171 | fern | Split pressure head + 3x p weight, rebase on T_max=15 | WIP — rebase in progress |
-| #3174 | frieren | L1 surf pressure + surf_weight=50 | WIP — running |
-| #3175 | nezuko | Cosine warmup (5-ep linear) | WIP — started 18:33 |
-| #3361 | thorfinn | slice_num 64→128 on Huber+NaN base | WIP — running |
-| #3363 | tanjiro | AdamW β2=0.95 + grad clip 1.0 | WIP — running |
+| #3305 | alphonse | Huber δ=0.05 rebase on T_max=15 | WIP — rebase |
+| #3395 | askeladd | Peak LR scan: 3e-4 vs 8e-4 | WIP — training |
+| #3359 | edward | Pressure channel-weighted surf loss (p=3×) | WIP — training (GPU 100%) |
+| #3171 | fern | Split pressure head + 3x p weight on T_max=15 | WIP — rebase |
+| #3174 | frieren | L1 surf + surf_weight=50 | WIP — running |
+| #3175 | nezuko | Cosine warmup — rebase needed (bad code state) | WIP — rebase |
+| #3426 | thorfinn | Cosine warm restarts T_0=5 | WIP — fresh |
+| #3363 | tanjiro | AdamW β2=0.95 + grad clip, rebase on T_max=15 | WIP — rebase |
 
-## Key insight from round 2 so far
-**Schedule alignment is the dominant lever.** T_max=50 with 14 achievable epochs means the cosine schedule decays only to 79% of peak LR — essentially no annealing. T_max=15 gave a 19% improvement in one line. This suggests:
-- Experiments running with T_max=50 (edward, frieren, thorfinn, tanjiro, nezuko) are handicapped — each losing ~12 MAE points of "lost annealing"
-- The true baseline to beat for any hypothesis is now 91.33 on the T_max=15 base
-- WIP PRs without T_max=15 will likely need rebase after results come in
+## Key signal: what empirically wins on this problem
+1. **Schedule alignment** (T_max=15): -19.1% — the dominant single lever
+2. **Huber δ=0.05** (alphonse, in rebase): -13% on old base, highly likely to stack
+3. **Cosine warmup** (nezuko, W&B run dpqo4wej): val=89.02, test_avg=82.91 — empirically beats current baseline, pending proper push+verify
+4. **AdamW β2=0.95+clip** (tanjiro, in rebase): -9.4% on old base — orthogonal to schedule, likely to stack
+5. **Split pressure head** (fern, in rebase): strong OOD test gains; pending verify on T_max=15 base
 
-## Active hypotheses being tested
-1. **Smaller Huber delta on T_max=15 base** (alphonse): δ=0.05 proved -13% on old base; stacking on T_max=15 should compound
-2. **Peak LR scan** (askeladd): optimal peak LR may shift now the schedule actually anneals; testing 3e-4 vs 8e-4
-3. **Pressure channel weighting** (edward): 3× gradient on scored channel (T_max=50 — rebase needed if promising)
-4. **Split pressure head + 3x weight** (fern): OOD gains of -14 to -23 MAE in v2; rebase onto T_max=15 base
-5. **L1 surf + surf_weight=50** (frieren): surface-pressure gradient amplification (T_max=50)
-6. **Cosine warmup** (nezuko): 5-epoch linear warmup into peak LR
-7. **slice_num=128 on Huber+NaN base** (thorfinn): capacity retrial (T_max=50)
-8. **AdamW stability** (tanjiro): β2=0.95 + grad clip 1.0 (T_max=50)
-
-## Expected next decisions
-- When edward, frieren, thorfinn, tanjiro results land:
-  - Beat new baseline (91.33) → merge
-  - Beat old baseline (112.90) but not new → send back for rebase on T_max=15
-  - Failed even old baseline → close with analysis
-- alphonse rebase + fern rebase: likely winners if δ=0.05 and split-head compound with T_max=15
-- askeladd LR scan: may give further ~2-5% improvement
+## Priority hypotheses most likely to advance state of art
+After all rebases complete, expect:
+- T_max=15 + δ=0.05: estimated val ~78-84
+- T_max=15 + warmup: empirically 89.02, likely more after rebase
+- T_max=15 + β2+clip: estimated ~82-85
 
 ## Next research directions after round 2
-1. **Combine δ=0.05 + T_max=15** — stack orthogonal improvements (alphonse rebase)
-2. **Split head + T_max=15** — confirm OOD improvement carries on new base (fern rebase)
-3. **T_max fine-tuning** (14 vs 15 vs 16) — exact-match epoch budget
-4. **surf_weight tuning on T_max=15 base** — optimal surface emphasis with proper annealing
-5. **Cosine warm restarts (T_0=5)** — multiple cycles in 14-epoch budget
-6. **Per-domain normalization** — pressure ranges differ by split
-7. **Train-time symmetry augmentation** — horizontal flip (camber-aware)
-8. **Unified positional encoding** — unified_pos=True toggle
+1. **Triple-stack**: T_max=15 + δ=0.05 + warmup + β2+clip
+2. **surf_weight tuning** on T_max=15 base (orthogonal channel emphasis)
+3. **Cosine warm restarts T_0=5** (thorfinn, running): escape local minima
+4. **Peak LR tuning** (askeladd, running): optimal LR after proper annealing
+5. **Per-domain normalization** — pressure ranges differ by split
+6. **Train-time symmetry augmentation** — horizontal flip (camber-aware)
+7. **Unified positional encoding** — unified_pos=True toggle

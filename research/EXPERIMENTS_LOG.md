@@ -1,5 +1,55 @@
 # SENPAI Research Results
 
+## 2026-05-15 19:30 — PR #3361: H10b: slice_num=128 retry on Huber+NaN base ✗ CLOSED
+
+- Branch: `thorfinn/slice128-retrial`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: slice_num=128 on correct (Huber+NaN) base. Round-1 retry tested on MSE base.
+
+### Results
+
+| Metric | slice=128 | baseline slice=64 | Δ |
+|--------|-----------|-------------------|---|
+| val_avg/mae_surf_p | 116.1928 | 112.8295 | **+3.36 worse** |
+| test_avg/mae_surf_p | 112.5640 | 106.5996 | **+5.96 worse** |
+| val_geom_camber_rc | 117.74 | 133.69 | **-15.96 better** |
+
+W&B: `z8pyszfb` · 11 epochs (171s/ep, T_max=50, peaked 95GB VRAM)
+
+### Analysis
+- Capacity-budget tradeoff confirmed again (see also #3180 h=192): slice=128 is 30% slower, only 11 epochs vs baseline's 14.
+- LR barely decayed (T_max=50, 22% consumed). Model still improving at timeout. Not "slice=128 fails" — it's budget-constrained.
+- OOD gain: val_geom_camber_rc improved -15.96, supporting that richer physics-state helps hardest splits, but aggregate is negative within budget.
+- VRAM ceiling: 95GB at slice=128 (98% of 96GB H100).
+- **Conclusion**: capacity not the bottleneck at this wall-clock budget. Close.
+
+---
+
+## 2026-05-15 19:30 — PR #3363: H8: AdamW β2=0.95 + grad clip 1.0 → SENT BACK (rebase on T_max=15)
+
+- Branch: `tanjiro/adamw-stability`
+- Student: willowpai2i48h1-tanjiro
+- Hypothesis: β2=0.95 + grad clip 1.0 reduces gradient instability and improves convergence.
+
+### Results (vs OLD Huber+NaN baseline, T_max=50)
+
+| Metric | This run | Old baseline | New baseline (91.33) |
+|--------|---------|--------------|----------------------|
+| val_avg/mae_surf_p | 102.2436 | 112.8295 | 91.3319 |
+| test_avg/mae_surf_p | 97.6239 | 106.5996 | 88.4260 |
+| val_single_in_dist | 115.16 | 142.47 | **-19.2% best split** |
+
+W&B: `44lht7xd` · 14 epochs · 99.7% of steps clipped (median grad_norm=3.71)
+
+### Analysis
+- Genuine optimizer improvement: val=102.24 (-9.4%), test=97.62 (-8.4%) vs old baseline.
+- Grad clip at 1.0 is aggressive (binding on 99.7% of steps, median pre-clip norm 3.71). Clipping confirms the hypothesis that large gradient spikes were destabilizing training.
+- Best epoch is epoch 14 (final, still descending) — suggests more budget would help further.
+- Does NOT beat new T_max=15 baseline (91.33). Orthogonal to schedule fix — stacking should compound.
+- **Action**: rebase on T_max=15 base, re-run with β2=0.95 + clip 1.0.
+
+---
+
 ## 2026-05-15 18:30 — PR #3317: H3b: Cosine T_max=15 tuned to actual epoch budget ✓ MERGED (NEW BASELINE)
 
 - Branch: `askeladd/cosine-tmax-tuned`
