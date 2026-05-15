@@ -82,7 +82,8 @@ Both alphonse `tup20e60` (best=111.6, final=171.4) and frieren `1walszqd` (best=
 
 | PR | Student | Status | Next action |
 |---|---|---|---|
-| #3387 | fern | **MERGED** 21:45 UTC | New baseline 94.08. Fern idle — assign next |
+| #3387 | fern | **MERGED** 21:45 UTC | New baseline 94.08. Reassigned to `lion-bf16-stacked` (PR #3481) |
+| #3481 | fern | WIP (assigned 21:55 UTC) | lion-bf16-stacked: add bf16 to extend val descent past timeout |
 | #3385 | askeladd | WIP — `warmup2-clip50` in flight | await terminal |
 | #3389 | nezuko | WIP — awaiting terminal | 2 arms (sw5, sw20) in flight |
 | #3391 | thorfinn | WIP — awaiting terminal | best 130.99, regression vs Lion baseline |

@@ -6,6 +6,52 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 21:45 — PR #3387 fern MERGED: Lion+Huber new SOTA → val=94.08
+
+- Branch: `willowpai2i24h3-fern/lion-stacked`
+- Hypothesis: Lion optimizer (sign-based update rule, `lr=1e-4, wd=1e-2`) stacked on
+  the merged Huber loss (δ=2.0) baseline, to compound two orthogonal gradient-capping
+  mechanisms: Huber at the loss level, Lion at the optimizer level.
+
+### Terminal results (1 arm `f9w6yzoq`)
+
+| Metric | Lion+Huber | Huber baseline | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **94.0803** | 107.4641 | **−13.38** |
+| **test_avg_nansafe/mae_surf_p** | **88.9362** | 101.9848 | **−13.05** |
+| val_single_in_dist | 108.0536 | 127.9121 | −19.86 |
+| val_geom_camber_rc | 109.6926 | 118.4850 | −8.79 |
+| val_geom_camber_cruise | 69.3504 | 83.3455 | −13.99 |
+| val_re_rand | 89.2247 | 100.1139 | −10.89 |
+
+Total epochs: 14 in 31 min (timeout). Best epoch = last epoch (val still descending). Peak VRAM: 42.1 GB.
+
+### Analysis
+
+Lion's sign-based update rule bounds the per-parameter gradient magnitude uniformly,
+complementing Huber's per-sample loss-level bound. Result: every val split and every test
+split improved. The −12.4% improvement substantially exceeded the −3 to −8% prediction.
+
+**Critical signal**: Val curve slope at timeout was −2.9/epoch, still descending without
+plateau. Best epoch = epoch 14 (the last one). Material headroom remains — the curve was
+cut off by the 30-min wall-clock, not by convergence.
+
+### Decision: MERGED as new round-4 SOTA
+
+- val_avg 94.08 beats prior baseline 107.46 by −13.38 (−12.4%) ✓ 
+- test_nansafe 88.94 beats 101.98 by −13.05 (−12.8%) ✓
+- Terminal SENPAI-RESULT: `{"terminal":true,"status":"complete","pending_arms":false,...}` ✓
+- All 4 val splits improved, all 4 test splits improved ✓
+- Merged 21:45 UTC, new BASELINE.md entry created
+
+### Reassignment
+
+Fern reassigned to `lion-bf16-stacked` (PR #3481) — add bf16 mixed precision to extend
+~14 epochs to ~19 epochs in the same 30-min budget. The descending val curve makes this
+the highest-confidence next lever in the cohort.
+
+---
+
 ## 2026-05-15 21:30 — PR #3385 askeladd posts terminal; sent back for max_norm=50 variant
 
 - Branch: `willowpai2i24h3-askeladd/warmup-cosine-stacked`
