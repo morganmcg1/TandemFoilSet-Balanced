@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -164,10 +165,33 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class FourierPosFeatures(nn.Module):
+    """Concat sin/cos of 2D position at multiple frequencies.
+
+    Output dims for input pos of shape [B, N, 2] are 2 + 4 * n_freqs:
+    the raw position plus sin/cos at K frequencies in each of 2 spatial axes.
+    Frequencies are geometric: [base^0, base^1, ..., base^(K-1)] scaled by pi.
+    """
+
+    def __init__(self, n_freqs: int = 6, base: float = 2.0):
+        super().__init__()
+        freqs = base ** torch.arange(n_freqs).float()
+        self.register_buffer("freqs", freqs.view(1, 1, 1, -1))
+        self.n_freqs = n_freqs
+        self.base = base
+
+    def forward(self, pos):  # pos: [B, N, 2]  (normalized x, z)
+        xz = pos.unsqueeze(-1) * self.freqs * math.pi  # [B, N, 2, K]
+        sin = xz.sin().flatten(-2)  # [B, N, 2K]
+        cos = xz.cos().flatten(-2)  # [B, N, 2K]
+        return torch.cat([pos, sin, cos], dim=-1)  # [B, N, 2 + 4K]
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 n_freqs: int = 0, fourier_base: float = 2.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -175,6 +199,8 @@ class Transolver(nn.Module):
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.n_freqs = n_freqs
+        self.fourier = FourierPosFeatures(n_freqs=n_freqs, base=fourier_base) if n_freqs > 0 else None
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -207,6 +233,11 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.fourier is not None:
+            pos = x[..., :2]
+            feat = x[..., 2:]
+            pos_enc = self.fourier(pos)
+            x = torch.cat([pos_enc, feat], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -328,6 +359,9 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "huber_delta": cfg.huber_delta,
+        "n_freqs": cfg.n_freqs,
+        "fourier_base": cfg.fourier_base,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -370,6 +404,8 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
+    n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
+    fourier_base: float = 2.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -405,7 +441,7 @@ val_loaders = {
 }
 
 model_config = dict(
-    space_dim=2,
+    space_dim=2 + 4 * cfg.n_freqs if cfg.n_freqs > 0 else 2,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
@@ -413,6 +449,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    n_freqs=cfg.n_freqs,
+    fourier_base=cfg.fourier_base,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
