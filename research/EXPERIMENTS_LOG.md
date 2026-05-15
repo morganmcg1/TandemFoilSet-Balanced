@@ -2,6 +2,66 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-15 19:00 — PR #3345: H11 signed-log1p target transform (thorfinn) — **MERGED, new baseline**
+
+- Branch: `charliepai2i24h4-thorfinn/thorfinn/log1p-targets`
+- Hypothesis: Apply `signed_log1p(y) = sign(y)*log1p(|y|)` to both pred and y before loss computation. Compress the 13× per-sample y-std dynamic range (164→2077) to ~3×. Eval path untouched.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, epoch 14) | **92.80** |
+| `val_single_in_dist/mae_surf_p` | 115.48 |
+| `val_geom_camber_rc/mae_surf_p` | 105.48 |
+| `val_geom_camber_cruise/mae_surf_p` | 63.87 |
+| `val_re_rand/mae_surf_p` | 86.36 |
+| `test_avg/mae_surf_p` | **84.11** |
+| `test_single_in_dist/mae_surf_p` | 108.91 |
+| `test_geom_camber_rc/mae_surf_p` | 91.72 |
+| `test_geom_camber_cruise/mae_surf_p` | 56.73 |
+| `test_re_rand/mae_surf_p` | 79.06 |
+| Wall clock | 30 min cap; epoch 14 of 50 |
+
+- Metric artifact: `models/model-thorfinn-log1p-targets-20260515-173623/metrics.jsonl`
+- Diagnostic: Massive win across all splits. geom_camber_cruise -37.1%, re_rand -27.4%, single_in_dist -20.2%. The student's slog1p diagnostic confirmed 3.5× std compression (y_norm std 1.51 → slog1p std 0.60). OOD splits improved more than in-dist, suggesting that the high-Re gradient domination was most severely distorting OOD learning. Effect exceeded prediction (-24% vs -3 to -7%).
+- Caveat: run was on pre-dropout baseline (122.81). After squash merge the code has dropout + log1p; combined val_avg needs verification.
+- Decision: **Merge** — largest single-PR improvement in this round by far. Fundamental improvement to optimization landscape.
+
+## 2026-05-15 19:00 — PR #3318: H6 grad clip + SGDR warm restarts (frieren) — **sent back, v2 on combined baseline**
+
+- Branch: `charliepai2i24h4-frieren/gradclip-sgdr`
+- Hypothesis: Add `clip_grad_norm_(max_norm=1.0)` + `CosineAnnealingWarmRestarts(T_0=10, T_mult=2)` per-batch with fractional epoch stepping. Targets noisy training curve.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, epoch 10) | 99.85 |
+| `val_single_in_dist/mae_surf_p` | 113.87 |
+| `val_geom_camber_rc/mae_surf_p` | 107.71 |
+| `val_geom_camber_cruise/mae_surf_p` | 77.55 |
+| `val_re_rand/mae_surf_p` | 100.28 |
+| `test_avg/mae_surf_p` | 89.75 |
+| Wall clock | 30 min cap; epoch 14 of 50; best at epoch 10 |
+
+- Diagnostic: SGDR fired perfectly (LR sawtooth at epoch 11, eta_min at epoch 10). Grad clip eliminated oscillation — monotone descent vs prior sawtoothed curve. Both mechanisms confirmed. val_avg -18.7% vs RFF baseline. Run was on pre-dropout, pre-log1p baseline (122.81). Against new combined baseline (92.80), the 99.85 is a regression.
+- Decision: **Sent back** — mechanism validated, needs rerun on combined baseline (dropout + log1p + SGDR + gradclip).
+
+## 2026-05-15 19:00 — PR #3197: H8 EMA v2 (askeladd) — **sent back, v3 on combined baseline**
+
+- Branch: `charliepai2i24h4-askeladd/ema-weights-decay-0p999`
+- Hypothesis: Shadow EMA (decay=0.999) of model weights, evaluate on EMA model. v2 rebased on RFF+Re-strat baseline.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best EMA, epoch 13) | 114.89 |
+| `val_single_in_dist/mae_surf_p` | 140.88 |
+| `val_geom_camber_rc/mae_surf_p` | 118.24 |
+| `val_geom_camber_cruise/mae_surf_p` | 90.13 |
+| `val_re_rand/mae_surf_p` | 110.32 |
+| `test_avg/mae_surf_p` | 105.64 |
+| EMA gain over live | ~7.4% (best live 116.82 → best EMA 114.89) |
+
+- Diagnostic: EMA gain confirmed and widening in second half (EMA wins 6/7 epochs 7-13). Clean implementation. Run on RFF+Re-strat baseline (122.81). Against new combined baseline (92.80), 114.89 is a regression. EMA mechanism is orthogonal — should compose with dropout and log1p.
+- Decision: **Sent back** — v3 rerun on combined baseline (dropout + log1p + EMA).
+
 ## 2026-05-15 18:20 — PR #3326: H12 MLP dropout=0.1 (fern) — **MERGED, new baseline**
 
 - Branch: `charliepai2i24h4-fern/mlp-dropout`
