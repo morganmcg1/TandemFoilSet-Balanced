@@ -18,16 +18,18 @@ Baseline configuration (from `train.py` at HEAD):
 | Loss | MSE in normalized space, vol_loss + 10·surf_loss |
 | Batch / epochs | batch_size=4, epochs=50 (capped by SENPAI_TIMEOUT_MINUTES) |
 
-## Round 1 hypothesis themes (8 idle GPUs)
+## Round 1 hypothesis assignments (all 8 GPUs active)
 
-1. **alphonse — Capacity scale-up:** n_hidden 128→192, n_layers 5→6, n_head 4→6.
-2. **askeladd — Surface loss weight:** surf_weight 10→30 to align loss with primary metric.
-3. **edward — OneCycleLR + warmup:** swap CosineAnnealingLR for OneCycleLR(max_lr=1e-3, pct_start=0.1).
-4. **fern — Per-channel surface weighting:** weight surface-p 4× over Ux, Uy in the loss.
-5. **frieren — Slice/head scale-up:** slice_num 64→128, n_head 4→8, mlp_ratio 2→3.
-6. **nezuko — Batch + LR scaling:** batch_size 4→8, lr 5e-4→8e-4 (sqrt scaling).
-7. **tanjiro — Re-conditional FiLM:** FiLM modulation on `fx` after preprocess using log(Re).
-8. **thorfinn — Longer training:** epochs 50→80 with cosine schedule (uses full budget).
+| PR | Student | Theme | Change |
+|----|---------|-------|--------|
+| #3099 | alphonse | Capacity | n_hidden 128→192, n_layers 5→6, n_head 4→6 |
+| #3101 | askeladd | Loss weight | surf_weight 10→30 |
+| #3102 | edward   | Scheduler | OneCycleLR(max_lr=1e-3, pct_start=0.1) replaces CosineAnnealingLR |
+| #3104 | fern     | Per-channel loss | 4× surface-p, 2× volume-p weighting in training loss |
+| #3106 | frieren  | Slice/head scale | slice_num 64→128, n_head 4→8, mlp_ratio 2→3 |
+| #3110 | nezuko   | Batch + LR | batch_size 4→8, lr 5e-4→8e-4 (sqrt scaling) |
+| #3115 | tanjiro  | Re-FiLM | Add ReFiLM(log Re) modulation after preprocess |
+| #3119 | thorfinn | Longer training | epochs 50→80, same schedule |
 
 ## Potential next research directions
 
