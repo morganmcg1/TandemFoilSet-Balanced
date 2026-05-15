@@ -1,0 +1,46 @@
+{
+  "note": "NaN-safe recompute of test metrics using existing checkpoint. Confirms intent of sample-skip in data/scoring.py: 1 sample in test_geom_camber_cruise has non-finite p on volume nodes; scoring.py masks the sample but NaN*0=NaN propagates, so the official run shows NaN. These numbers exclude that sample.",
+  "test_splits": {
+    "test_single_in_dist": {
+      "mae_surf_Ux": 1.7764143674355495,
+      "mae_vol_Ux": 5.488380943759904,
+      "mae_surf_Uy": 0.932171059942976,
+      "mae_vol_Uy": 2.2958576147630434,
+      "mae_surf_p": 160.17389290103245,
+      "mae_vol_p": 150.5587745552025
+    },
+    "test_geom_camber_rc": {
+      "mae_surf_Ux": 2.810134390139095,
+      "mae_vol_Ux": 6.115294079705053,
+      "mae_surf_Uy": 1.1131260035840684,
+      "mae_vol_Uy": 2.9785515082348666,
+      "mae_surf_p": 146.86388851244422,
+      "mae_vol_p": 131.17266010653998
+    },
+    "test_geom_camber_cruise": {
+      "mae_surf_Ux": 1.5918621783467268,
+      "mae_vol_Ux": 4.54805852444964,
+      "mae_surf_Uy": 0.6553980408555009,
+      "mae_vol_Uy": 1.6188707795907888,
+      "mae_surf_p": 91.55099926906091,
+      "mae_vol_p": 87.1719434189081
+    },
+    "test_re_rand": {
+      "mae_surf_Ux": 2.202634888125564,
+      "mae_vol_Ux": 5.254674154760764,
+      "mae_surf_Uy": 0.8919247215274246,
+      "mae_vol_Uy": 2.188781612521551,
+      "mae_surf_p": 122.78099721808888,
+      "mae_vol_p": 116.04427507328808
+    }
+  },
+  "test_avg": {
+    "avg/mae_surf_Ux": 2.095261456011734,
+    "avg/mae_surf_Uy": 0.8981549564774927,
+    "avg/mae_surf_p": 130.3424444751566,
+    "avg/mae_vol_Ux": 5.35160192566884,
+    "avg/mae_vol_Uy": 2.2705153787775623,
+    "avg/mae_vol_p": 121.23691328848466
+  },
+  "samples_skipped": 1
+}
