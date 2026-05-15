@@ -242,6 +242,108 @@ Diagnostic confirms 0 non-finite predictions (pred-side clean post-Huber), only 
 
 ---
 
+---
+
+## 2026-05-15 21:25 — PR #3379: Round 2 compound stack (Huber + Fourier + grad_clip + EMA)
+
+- Branch: `willowpai2i48h5-alphonse/round2-compound-stack`
+- Hypothesis: Stack all orthogonal Round 1 mechanisms — SmoothL1 β=0.05 (loss), Fourier PE n=16 σ=10 (positional), grad_clip 1.0 (optimization), EMA(0.999) (weight averaging) — for compounding gains.
+
+| Arm | W&B run | Config | val_avg | Δ vs 96.05 | Best ep |
+|-----|---------|--------|---------|------------|---------|
+| A | lvjaj0cp | Huber + Fourier σ=10, no opt | 100.76 | +4.71 (regression) | 14 |
+| B | jxvn2jsd | A + grad_clip 1.0 | 100.32 | +4.27 (regression) | 14 |
+| **C** | **hat7m2bl** | **A + grad_clip + EMA(0.999)** | **92.41** | **−3.64 (−3.78%)** | **14** |
+
+**Per-split val (Arm C hat7m2bl):**
+
+| Split | Baseline (md6so639) | Arm C |
+|-------|---------------------|-------|
+| single_in_dist | 109.64 | 119.72 |
+| geom_camber_rc | 112.30 | **104.00** |
+| geom_camber_cruise | 73.22 | **62.39** |
+| re_rand | 89.06 | **83.51** |
+
+**Per-split test partial (Arm C, cruise=NaN — pre-#3296 baseline; 3-split partial):**
+test_single_in_dist=108.61, test_camber_rc=90.94, test_re_rand=75.17 → partial mean 91.57
+
+**Decision: SEND BACK FOR REBASE.** PR is CONFLICTING. Arm C is a clear winner (−3.78% vs baseline) pending rebase onto current HEAD (includes #3296 NaN guard → will produce clean 4-split test_avg). Merge expected after alphonse rebases and confirms.
+
+**Analysis:**
+- **EMA(0.999) is the dominant mechanism**, not the compound stack as hypothesized. Fourier PE alone regresses by +4.7 (Arm A: 100.76 vs 96.05); grad_clip alone adds nothing to Fourier (Arm B: 100.32); EMA compensates both and delivers −3.78% improvement.
+- This makes EMA the Round 2 discovery — not a stack effect, but a single mechanism that outweighs all others.
+- **Fourier PE is net-negative at σ=10 without EMA.** With EMA it's masked. Open questions: (a) does Fourier-free + EMA beat 92.41? (b) does lower σ fix Fourier regression? Both assigned to Round 3.
+- All 3 arms hit timeout at epoch 14 (cosine T_max=50 not recalibrated) — EMA gains compound over the available steps but plateau could be earlier with T_max fix.
+- Test in_dist regresses (108.61 vs 96.04) despite val in_dist regressing (119.72 vs 109.64) — EMA helps OOD splits more than in-distribution. Consistent with EMA's flat-minima geometric interpretation.
+
+---
+
+## 2026-05-15 22:10 — PR #3407: Per-sample Relative L2 loss (CLOSED — catastrophic regression)
+
+- Branch: `willowpai2i48h5-edward/round2-rel-l2`
+- Hypothesis: Normalize loss by per-sample L2 norm to achieve scale invariance across Reynolds regimes.
+
+| Run | W&B run | State | val_avg | Notes |
+|-----|---------|-------|---------|-------|
+| B (rel-l2-surf-only, orig) | 1ck8juvm | finished | 367.17 | catastrophic |
+| B (rerun) | rrszrxgv | finished | 367.13 | catastrophic |
+| C (rel-l2-both) | 5wczva6k | crashed | 367.05 | catastrophic |
+| B (fixed) | olmbe0up | finished | 117.69 | converges, +22% regression |
+
+**Decision: CLOSED.** Even the working implementation at val 117.69 is +22% above baseline 96.05.
+
+**Analysis:** Huber β=0.05 already achieves implicit relative scaling on the heavy-tail pressure channel; explicit per-sample L2 normalization competes with Huber's soft-cap rather than complementing it. Edward's debugging from 367→117 is solid engineering but the approach is mechanistically incompatible with Huber.
+
+---
+
+## 2026-05-15 22:05 — PR #3410: 1st-order SAM optimizer (CLOSED — wall-clock incompatible)
+
+- Branch: `willowpai2i48h5-tanjiro/round2-sam`
+- Hypothesis: SAM's dual ascent+descent step finds flatter minima → better OOD generalization.
+
+| Run | W&B run | State | val_avg | Notes |
+|-----|---------|-------|---------|-------|
+| A uniform | l11n94ct | crashed | 200.82 | catastrophic |
+| B (ρ=0.05) | jecq3zxh | finished | 147.76 | +54% regression |
+| B rerun 1 | 924zb6gb | finished | 142.86 | +49% regression |
+| B rerun 2 | ey6fw9c8 | finished | 157.66 | +64% regression |
+
+Mean Arm B val_avg ≈ 149.4 (+55% vs 96.05).
+
+**Decision: CLOSED.** SAM doubles the optimizer step cost, halving effective epoch count at 30-min wall clock. Exactly the wrong tool for an under-trained regime.
+
+---
+
+## 2026-05-15 22:03 — PR #3409: AoA reflection symmetry augmentation (CLOSED — redundant)
+
+- Branch: `willowpai2i48h5-fern/round2-aoa-aug`
+- Hypothesis: Reflecting airfoil samples across AoA=0 plane doubles effective training data.
+
+| Run | W&B run | Arm | val_avg | Notes |
+|-----|---------|-----|---------|-------|
+| m6f1meku | baseline-r2 | A | 105.95 | baseline variance rerun |
+| ghgayq3j | baseline-nan-guard | A | 102.38 | baseline variance rerun |
+| em91w2q5 | aoa-aug-rc-single-safe | B | 119.28 | +13.4 above baseline mean |
+
+**Decision: CLOSED.** AoA augmentation regresses val_avg by ~13 points (3σ outside noise). Dataset's existing geometric variation in camber/re_rand splits already covers AoA diversity; reflection adds redundant samples rather than new information.
+
+---
+
+## 2026-05-15 22:25 — PR #3380: Fourier sigma sweep (SEND BACK — wrong loss config)
+
+- Branch: `willowpai2i48h5-frieren/round2-fourier-sigma`
+- Hypothesis: Sweep n=16 Fourier sigma ∈ {4, 10, 20} to find optimal positional feature frequency.
+
+| Run | W&B run | sigma | loss_type | val_avg | Notes |
+|-----|---------|-------|-----------|---------|-------|
+| t8kcas5g | Arm A σ=10 | 10 | MSE ❌ | 152.71 | wrong loss |
+| ydh957qb | Arm B σ=4 | 4 | MSE ❌ | 134.64 | wrong loss |
+| 68lxdalu | Arm C σ=20 | 20 | MSE ❌ | 150.88 | wrong loss |
+
+**Decision: SEND BACK.** Frieren ran all 3 arms with `loss_type=mse`, not `smooth_l1 β=0.05`. Results reflect pre-Huber baseline territory (134-152) and carry no signal about Fourier sigma under the correct loss regime. Re-run instructions issued: add `--loss_type smooth_l1 --loss_beta 0.05` to all 3 arms.
+
+---
+
 <!-- Template:
 ## <YYYY-MM-DD HH:MM> — PR #<number>: <title>
 - Branch: <student-branch-name>

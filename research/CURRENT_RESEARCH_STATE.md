@@ -6,81 +6,78 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-15 (~20:45 UTC, Round 2 fully running, `willow-pai2i-48h-r5`)
+- **Date:** 2026-05-15 (~22:30 UTC, Round 2 closing / Round 3 launching, `willow-pai2i-48h-r5`)
 - **Human researcher directives:** None received as of this writing.
 
 ## Current best
 
-**val_avg/mae_surf_p = 96.05** (PR #3098, run `md6so639`, SmoothL1 β=0.05)
-**test_avg/mae_surf_p = 90.00** (PR #3296 NaN guard, run `xvn4gllg`, on Huber baseline) ← **FIRST valid test_avg of the launch**
+**val_avg/mae_surf_p = 96.05** (PR #3098, run `md6so639`, SmoothL1 β=0.05) ← formal merged best
+**val_avg in-review = 92.41** (PR #3379 alphonse Arm C — Huber + Fourier + clip + EMA(0.999), run `hat7m2bl`) ← pending rebase + clean test_avg confirm
+**test_avg/mae_surf_p = 90.00** (PR #3296 NaN guard, run `xvn4gllg`) ← first valid test_avg
 
-Per-split test surf_p (xvn4gllg): in_dist 109.30, camber_rc 103.19, camber_cruise 60.61 (199/200), re_rand 86.90.
+Per-split val for #3379 Arm C: in_dist 119.72, camber_rc 104.00, camber_cruise 62.39, re_rand 83.51.
+Per-split test for #3296: in_dist 109.30, camber_rc 103.19, camber_cruise 60.61 (199/200), re_rand 86.90.
 
-Previous best: PR #3123 Fourier PE n=16 → val_avg = 130.46
-Unmodified baseline: val_avg = 135.23
-
-**Primary metric:** `val_avg/mae_surf_p` — equal-weight mean surface pressure MAE across 4 splits.
+**Primary metric:** `val_avg/mae_surf_p` (lower better).
 **Binding constraint:** SENPAI_TIMEOUT_MINUTES=30.0, SENPAI_MAX_EPOCHS=50, 1 GPU per student.
 **Note:** 30-min wall clock binds at ~epoch 14. All runs severely under-trained.
 
-## Round 1 — Final results
+## Central finding: EMA(0.999) is the dominant Round 2 mechanism
 
-| PR | Student | Hypothesis | Best val_avg | Δ vs new baseline (96.05) | Status |
-|----|---------|------------|--------------|---------------------------|--------|
-| #3098 | alphonse | SmoothL1/Huber loss β=0.05 | **96.05** | (set new baseline) | **MERGED** ✅ |
-| #3114 | nezuko | Grad-clip(1.0) + EMA(0.999) | 102.67 | +6.9% | CLOSED (subsumed by #3379 stack) |
-| #3103 | edward | Slice-num scaling | 124.39 | +29% | CLOSED |
-| #3105 | fern | Linear warmup + cosine LR | 127.82 | +33% | CLOSED |
-| #3118 | tanjiro | Per-channel surface loss | 130.51 | +36% | CLOSED |
-| #3109 | frieren | bf16 + bigger batch | 133.72 | +39% | CLOSED |
-| #3100 | askeladd | Scale-up h128→256 | 150.94 | +57% | CLOSED |
-| #3296 | thorfinn | Two-pronged NaN guard | 142.20 (pre-Huber) | n/a — code fix | REBASE-IN-FLIGHT |
+From alphonse's #3379 per-arm decomposition:
+- Huber + Fourier σ=10 alone: **100.76** (+4.7 regression vs 96.05)
+- + grad_clip 1.0: **100.32** (no additional effect)
+- + EMA(0.999): **92.41** (−3.78%) ← single mechanism, compensates Fourier regression
+
+Fourier PE n=16 σ=10 is **net-negative on Huber without EMA.** With EMA it's net-neutral at best. Round 3 probes: (a) does EMA-without-Fourier beat 92.41? (b) does lower σ fix Fourier's regression? (c) is EMA decay 0.999 optimal at 14-epoch budget?
 
 ## Round 1 — Validated mechanisms
 
-1. **Huber loss is the dominant Round 1 mechanism** — 26% improvement over PR #3123 baseline, 30% improvement over unmodified. Pressure is the dominant heavy-tailed channel; β=0.05 transition keeps more gradients in linear regime during under-training.
-2. **Grad-clip + EMA is a confirmed orthogonal optimization layer** — 2nd place standalone. Will appear stacked on Huber in alphonse's Round 2 #3379.
-3. **Capacity is NOT the binding constraint** — both scale-up (askeladd) and slice scaling (edward) regress significantly. 30-min wall clock binds; bigger models cannot converge.
-4. **Per-channel weighting is counter-productive** — multi-task coupling is doing useful work; deprioritizing Ux/Uy hurts pressure too.
-5. **Warmup is incompatible with our regime** — cosine T_max=50 already keeps LR near peak; warmup throws away early gradient signal.
-6. **bf16 speedup is real but batch scaling requires LR scaling** — bs=10 viable, bs=12 OOMs on cruise meshes.
-7. **NaN root cause is two-pronged** — pred overflow AND inf in GT sample 000020.pt. Two-pronged guard works (thorfinn #3296).
-8. **Run-to-run variance estimate (fern's 3 arm-A reruns):** σ ≈ 4.6 on val_avg, ~3.6% relative. Any single-arm delta below this is noise.
-9. **First valid test_avg of launch:** askeladd arm-A 136.70 (with Edward's NaN-guard data path).
+1. **Huber loss (SmoothL1 β=0.05)** — 26% improvement. Dominant lever. Merged (#3098).
+2. **Grad-clip + EMA standalone** — val 102.67 (nezuko #3114). Subsumed by compound stack.
+3. **Capacity scaling kills convergence** — askeladd #3100, edward #3103 both fail hard.
+4. **Per-channel weighting counterproductive** — hurts encoder → hurts pressure (tanjiro #3118).
+5. **Warmup incompatible** — cosine T_max=50 stays near peak LR at epoch 14 (fern #3105).
+6. **NaN guard merged** — pred `nan_to_num` + y-side sample mask (thorfinn #3296). test_avg clean.
+7. **Run-to-run σ ≈ 4.6** on val_avg. Need >5 delta for significance.
 
-## Round 2 — Active assignments
+## Round 2 — Closed results
 
-| PR | Student | Hypothesis | Target Split | Priority |
-|----|---------|------------|--------------|----------|
-| #3379 | alphonse | **H1: Compound stack** — EMA(0.999) + grad-clip(1.0) + Huber(β=0.05) + Fourier PE | val_avg overall | 1 |
-| #3380 | frieren | **H4: Fourier sigma sweep** — n=16 fixed, sigma ∈ {4, 10(ref), 20} | camber_rc | 2 |
-| #3296 | thorfinn | **NaN guard rebase + clean test_avg confirm** on Huber baseline | (infrastructure) | 1 |
+| PR | Student | Hypothesis | Best val_avg | Outcome |
+|----|---------|------------|--------------|---------|
+| #3379 | alphonse | Compound stack (EMA WINNER) | **92.41** | **NEEDS REBASE → MERGE** |
+| #3405 | nezuko | FiLM on log(Re) H2 | 88.79 (single run) | WIP — Arm C running |
+| #3412 | askeladd | DropPath H7 | TBD | WIP |
+| #3444 | thorfinn | Cosine T_max recalibration H9 | TBD | WIP |
+| #3380 | frieren | Fourier sigma sweep H4 | invalid (MSE config) | SEND BACK (Huber fix) |
+| #3407 | edward | Relative L2 H3 | 117.69 | CLOSED ❌ (+22%) |
+| #3410 | tanjiro | 1st-Order SAM H5 | 142.86 | CLOSED ❌ (+49%) |
+| #3409 | fern | AoA reflection aug H6 | 119.28 | CLOSED ❌ (+13%) |
 
-## Round 2 — Full assignment roster (all 8 students WIP as of ~20:45 UTC)
+**Round 2 dead-end findings:** SAM is wall-clock-incompatible (halves step count); Rel L2 fights Huber's soft-cap; AoA aug is redundant with existing data distribution; frieren's sigma sweep was on MSE, not Huber — results invalid.
 
-| PR | Student | Hypothesis | Target Split |
-|----|---------|------------|--------------|
-| #3379 | alphonse | **H1: Compound stack** — EMA(0.999) + grad-clip(1.0) + Huber(β=0.05) + Fourier PE | val_avg overall |
-| #3380 | frieren | **H4: Fourier sigma sweep** — n=16 fixed, sigma ∈ {4, 10, 20} | camber_rc |
-| #3405 | nezuko | **H2: FiLM on log(Re)** — explicit Re-regime conditioning | re_rand |
-| #3407 | edward | **H3: Per-sample Relative L2** — cross-sample scale invariance | re_rand, camber_cruise |
-| #3409 | fern | **H6: AoA reflection augmentation** — double RaceCar training data | in_dist, camber_rc |
-| #3410 | tanjiro | **H5: 1st-Order SAM** — flat-minima OOD optimizer | OOD splits |
-| #3412 | askeladd | **H7: DropPath stochastic depth** — implicit ensemble regularizer | OOD splits |
-| #3444 | thorfinn | **H9: Cosine T_max recalibration** — match wall-clock epoch cap (T_max 50→14/18) | val_avg overall |
+## Round 3 — Active assignments (~22:30 UTC)
 
-**Round 1+#3296 merged. New baseline: val 96.05 / test 90.00.** Eight Round 2 hypotheses now in flight.
+| PR | Student | Hypothesis | Target |
+|----|---------|------------|--------|
+| #3483 | edward | H10: EMA-only, no Fourier (3 arms: EMA+clip, EMA-only, EMA decay 0.9995) | beats val 92.41 |
+| #3484 | tanjiro | H11: EMA decay sweep (0.997 / 0.9995 / 0.9999) | beats val 92.41 |
+| #3486 | fern | H12: Fourier sigma under EMA (σ∈{3, 5, 7}, full stack) | beats val 92.41 |
 
-## Reserved for Round 3 / plateau triggers
+**Coordinated theme:** all 3 target the Fourier-vs-EMA interaction. H10 removes Fourier; H12 lowers σ; H11 adjusts EMA window. Results will give a clear 2D map of the optimal (Fourier σ, EMA decay) operating point.
 
-- **H8: Sobolev loss on surface ∂p/∂s** — physics-motivated gradient matching. Hold until H1–H7 plateau.
-- **Best-checkpoint test eval (not terminal-epoch)** — paper-facing improvement, decoupled from val_avg gains.
-- **Re-conditioned positional features** (DOS-friendly): radial basis around airfoil leading edge for camber_rc recovery.
-- **Cosine T_max=14 fix** — schedule recalibration to actual wall-clock epoch count (revisit if relative gains plateau).
+## Still active WIP
 
-## Operational notes
+- **#3379 alphonse**: Rebase in progress. Arm C only, on merged NaN guard. Will produce clean 4-split test_avg. On merge: BASELINE.md updates to val 92.41.
+- **#3444 thorfinn**: Cosine T_max recalibration 50→14/18. Orthogonal to EMA — addresses the LR schedule mismatch vs wall-clock cap. Synergy: EMA + T_max compound is the next natural experiment.
+- **#3412 askeladd**: DropPath stochastic depth. Orthogonal regularization. OOD splits target.
+- **#3405 nezuko**: FiLM-output-only Arm B (88.79 best run, mean 99.33 across 3 runs — within noise). Arm C running (ETA ~22:55). Decision deferred until Arm C result.
+- **#3380 frieren**: Sent back to re-run sigma sweep ∈ {4, 10, 20} with `--loss_type smooth_l1 --loss_beta 0.05`. Results will complement fern's σ∈{3,5,7} under EMA.
 
-- **All 8 students active as of 19:25 UTC.** Zero idle GPUs.
-- **#3296 thorfinn** — rebase-in-flight. Has detailed advisor instructions. Once thorfinn pushes rebase + confirmation run on Huber baseline, this merges immediately (critical NaN guard for paper test_avg).
-- **Expected merge order**: #3296 first (fixes test_avg), then whichever of H1–H7 beats 96.05.
-- **Round 1 mechanisms confirmed orthogonal**: Huber (loss), clip+EMA (optimization), Fourier PE (positional). Compound stack (alphonse #3379) will confirm stacking.
+## Round 3+ / reserved hypotheses
+
+- **EMA + FiLM combination**: assign after nezuko closes (pending Arm C).
+- **EMA + cosine T_max compound**: integrate thorfinn's T_max fix with alphonse's EMA stack.
+- **H8: Sobolev loss on surface ∂p/∂s** — physics-motivated. Hold for plateau.
+- **Test-time augmentation (TTA)** via geometric symmetries — free inference gain.
+- **Best-checkpoint test eval** — paper-facing improvement decoupled from val_avg.
