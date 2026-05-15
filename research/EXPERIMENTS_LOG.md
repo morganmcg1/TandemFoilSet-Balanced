@@ -1,5 +1,86 @@
 # SENPAI Research Results
 
+## 2026-05-15 23:30 — PR #3174: H2: L1 on surface-p + surf_weight=50 (rebased) ✗ CLOSED
+
+- Branch: `frieren/surf-p-l1-weight50`
+- Student: willowpai2i48h1-frieren
+- Hypothesis: Replace Huber-on-surf-p with L1 and bump surf_weight 10→50 to align gradient mass with the scored metric.
+
+### Results (rebased onto T_max=15 base, NaN fix included)
+
+| Metric | Baseline (#3317) | This run | Δ |
+|--------|------------------|----------|---|
+| **val_avg/mae_surf_p** | 91.3319 | **99.5140** | **+8.9%** |
+| **test_avg/mae_surf_p** | 88.4260 (3-split) | **95.0505** (4-split) | +7.5% |
+
+W&B run: `5ua30jfv` · Group: `surf_p_l1_w50`
+
+### Per-split val (best epoch=14)
+| Split | Baseline | This | Δ |
+|-------|----------|------|---|
+| val_single_in_dist | 108.16 | 124.58 | +15.2% |
+| val_geom_camber_rc | 98.45 | 108.61 | +10.3% |
+| val_geom_camber_cruise | 72.87 | **75.13** | **+3.1%** |
+| val_re_rand | 85.85 | 89.73 | +4.5% |
+
+### Analysis
+- **Loss-mass budget at surf_weight=50** (per frieren's diagnostic): vol: ~1%, surf_uxuy (50×): ~5%, surf_p (50×): ~94%. Volume features starved → velocity-dominated splits regressed (in_dist +15%, geom_camber_rc +10%).
+- **Cruise OOD signal** is the takeaway: val_geom_camber_cruise within 3% of baseline despite the gradient-starvation. L1-on-surf-p may genuinely help on the hardest OOD split where pressure extremes dominate.
+- Confounded experiment (two levers at once). Follow-up assigned to isolate L1-on-surf-p alone at surf_weight=10 (PR #3522).
+
+## 2026-05-15 23:30 — PR #3459: H: EMA of model weights (decay=0.999) ✗ CLOSED
+
+- Branch: `willowpai2i48h1-thorfinn/ema-weights`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: EMA averaging smooths epoch-to-epoch noise and lands in flatter minima.
+
+### Results
+
+| Variant | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---------|---------------------|---------------------|
+| Baseline (#3317, raw) | 91.3319 | 88.4260 (3-split) |
+| **EMA (decay=0.999, best ep=13)** | **100.9222** | **96.3945** (4-split) |
+| Raw weights (best ep=13, same run) | 94.79 | 90.67 (4-split) |
+
+W&B run: `0p3chv4v` · Group: `ema_weights`
+
+### Per-epoch EMA-vs-raw lag
+| Epoch | val_avg [EMA] | val_avg [raw] | Δ |
+|------:|--------------:|--------------:|--:|
+| 1 | 334.71 | 221.39 | +113.32 |
+| 7 | 152.79 | 125.52 | +27.27 |
+| 13 (best) | 100.92 | 94.79 | +6.13 |
+
+### Analysis
+- **Root cause (thorfinn's diagnosis, correct)**: decay=0.999 has half-life ~693 steps = ~1.85 epochs. With monotonic 2.3× improvement over 13 epochs, EMA is always a weighted average of much-worse-early + current-good → permanent lag.
+- Raw weights tracked baseline (94.79 vs 91.33 = +3.8%, within noise).
+- decay=0.999 is the wrong setting for 13-epoch monotonic-descent regime. Follow-up assigned with decay=0.99 (half-life ~0.18 epoch) in PR #3521.
+
+## 2026-05-15 22:30 — PR #3460: H: bf16 autocast + batch_size=8 ✗ CLOSED
+
+- Branch: `willowpai2i48h1-askeladd/bf16-bs8`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: bf16 + bs=8 unlocks more epochs in 30-min budget.
+
+### Results
+
+| Metric | Baseline | bf16+bs8 | Δ |
+|--------|----------|----------|---|
+| **val_avg/mae_surf_p** | 91.3319 | **110.7168** | **+21.2%** |
+| **test_avg/mae_surf_p** (4-split) | n/a baseline | 102.6659 | — |
+| Wall-clock per epoch | ~128 s | 106 s | -17% (faster) |
+| Total epochs in 30 min | 14 | 17 | +21% |
+| **Optimizer updates** | ~5,250 | **3,212** | **-39%** |
+| Peak VRAM | ~78.5 GB | 65.9 GB | -16% |
+
+W&B run: `skyzqfme` · Group: `bf16_throughput`
+
+### Analysis
+- **Root cause** (askeladd's diagnosis, correct): doubling batch_size halved gradient updates per epoch. -39% update count starved AdamW even with +21% more epochs.
+- bf16 itself was numerically stable (no NaNs, smooth loss curve).
+- Speedup was 17% (not the predicted 30-40%) because Transolver has many bandwidth-limited softmax/einsum ops alongside the GEMM-heavy paths that benefit from tensor cores.
+- Follow-up: bf16 alone at bs=4 in PR #3480 — isolates the bf16 throughput lever without starving updates.
+
 ## 2026-05-15 21:25 — PR #3395: H: Peak LR scan (3e-4 vs 8e-4) on T_max=15 ✗ CLOSED
 
 - Branch: `askeladd/lr-peak-scan`
