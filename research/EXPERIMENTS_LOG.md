@@ -303,3 +303,36 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 
 ### Decision
 - **Closed.** Reassigned askeladd to n_head=8 single-axis (#3362) — orthogonal, minimal cost overhead.
+
+---
+
+## 2026-05-15 17:50 — PR #3223: BF16 autocast + batch_size=8 (CLOSED)
+- Branch: `charliepai2i24h2-thorfinn/bf16-batch8`
+- Student: charliepai2i24h2-thorfinn
+- Hypothesis: BF16 mixed precision + batch_size 4→8 for ~2× throughput; preserve 50-epoch cosine schedule.
+
+### Results table
+
+| Metric | Value | Delta vs baseline (109.68) |
+|--------|-------|---------------------------|
+| `val_avg/mae_surf_p` (best @ epoch 16, primary run) | **147.328** | **+34.30%** |
+| `test_avg/mae_surf_p` (post-hoc) | **133.364** | +37.04% |
+| Mean of 4 runs val | 140.18 ± 10.0 | +27.8% |
+| Mean of 4 runs test | 126.57 ± 9.8 | +30.1% |
+| Epochs completed | 15–17 / 50 (30-min cap, run-dependent) | |
+| Per-epoch wall clock | ~106 s (vs baseline ~130 s) | |
+| Peak VRAM | 65.87 GB | |
+| Per-split val mae_surf_p (primary) | single 205.77 \| geom_rc 168.76 \| geom_cruise 95.99 \| re_rand 118.79 | |
+| Metrics artifacts | `models/model-charliepai2i24h2-thorfinn-bf16-batch8-20260515-162822/metrics.{jsonl,yaml}` (primary) + 3 prior runs | |
+
+### Analysis
+- Significant regression: +34% val on primary run, +27% mean across 4 runs. Large run-to-run variance (10-point std) because truncated 50-epoch cosine never anneals — different stopping points hit different LR points.
+- BF16 was numerically clean end-to-end (no NaN/Inf in training). The regression is from the *combined* change, not BF16 itself.
+- Per-epoch cost (~106 s) was lower than baseline (~130 s) but per-step cost was higher: 188 batches/epoch × 564 ms/batch vs baseline 376 batches × ~345 ms. The variable-mesh padding overhead dominates batch=8 cost; each large-mesh sample (242K nodes) forces padding for the whole batch.
+- The combined effect = (modest per-epoch speedup) + (larger gradient noise reduction) + (truncated cosine schedule) → net loss.
+- **Bug-fix bonus**: Student correctly diagnosed and fixed the `evaluate_split` NaN bug (Inf×False=NaN in test_geom_camber_cruise sample 20). Identical to fern's #3276 fix already in HEAD. Useful confirmation.
+- Student also added `eval_test_only.py` for post-hoc checkpoint re-evaluation. Useful tool but not pulled into baseline (extra surface area).
+- Student's follow-up analysis is excellent: (1) decouple precision and batch knobs; (2) the wall-clock is the bottleneck; (3) padding overhead is the architectural blocker for batch scaling.
+
+### Decision
+- **Closed.** Combined hypothesis regressed. Reassigned thorfinn to n_hidden=96 (#3377) — orthogonal architectural axis, completes the 3-point width sweep {96, 128, 192}.
