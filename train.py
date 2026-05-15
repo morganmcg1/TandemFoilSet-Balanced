@@ -164,6 +164,27 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class FiLM(nn.Module):
+    """Feature-wise Linear Modulation (Perez et al. 2018, arXiv:1709.07871).
+
+    Zero-init keeps the module at identity (gamma=0, beta=0 → fx*(1+0)+0 = fx)
+    at initialization so training starts equivalent to the unmodulated baseline.
+    """
+
+    def __init__(self, cond_dim: int, hidden_dim: int, mid_dim: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, mid_dim), nn.SiLU(),
+            nn.Linear(mid_dim, 2 * hidden_dim),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, cond, fx):
+        g, b = self.net(cond).chunk(2, dim=-1)
+        return fx * (1.0 + g) + b
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -208,6 +229,23 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        for block in self.blocks:
+            fx = block(fx)
+        return {"preds": fx}
+
+
+class TransolverFiLM(Transolver):
+    """Transolver with single-point FiLM conditioning on log(Re) (dim 13)."""
+
+    def __init__(self, *args, film_mid: int = 64, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.film = FiLM(cond_dim=1, hidden_dim=self.n_hidden, mid_dim=film_mid)
+
+    def forward(self, data, **kwargs):
+        x = data["x"]
+        re_cond = x[..., 13:14]
+        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        fx = self.film(re_cond, fx)
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -459,9 +497,9 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = Transolver(**model_config).to(device)
+model = TransolverFiLM(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
