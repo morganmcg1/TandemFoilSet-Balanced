@@ -252,7 +252,7 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
-                   device) -> dict[str, float]:
+                   smooth_l1_beta, device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -287,7 +287,7 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             x_aug = torch.cat([x_norm, ff], dim=-1)
             pred = model({"x": x_aug})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=smooth_l1_beta, reduction="none")
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -434,6 +434,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    smooth_l1_beta: float = 0.05  # quadratic-to-linear transition in normalized y space
 
 
 cfg = sp.parse(Config)
@@ -545,7 +546,7 @@ for epoch in range(MAX_EPOCHS):
         ff = fourier_encoder(x_norm[..., :2])
         x_aug = torch.cat([x_norm, ff], dim=-1)
         pred = model({"x": x_aug})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.smooth_l1_beta, reduction="none")
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -571,7 +572,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, device)
+                             cfg.surf_weight, cfg.smooth_l1_beta, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -656,7 +657,7 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, fourier_encoder, loader, stats,
-                                 cfg.surf_weight, device)
+                                 cfg.surf_weight, cfg.smooth_l1_beta, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
