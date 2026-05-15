@@ -245,3 +245,45 @@ Useful negative signal: simple per-channel surface upweighting on top of surf_we
 - Hypothesis: CosineAnnealingLR(T_max=50) never anneals in the ~14-epoch wall budget. WSD (Warmup-Stable-Decay) schedule with warmup=3, stable=8, decay=rest ensures a proper decay phase regardless of timeout. AdamW beta2=0.98 stabilizes second-moment estimates faster (~50 steps vs ~1000) for the short run.
 - Arms: Arm A (WSD + beta2=0.98), Arm B (WSD + default beta2=0.999) to isolate effects.
 - Status: WIP
+
+---
+
+## 2026-05-15 18:30 — PR #3335: H15: Huber δ=0.5 + T_max=15 compound (nezuko) — MERGED NEW BEST
+
+- Branch: `nezuko/h15-huber-tmax15-compound`
+- Hypothesis: The two independently confirmed improvements (Huber δ=0.5 and T_max=15 schedule fix) are mechanistically orthogonal and should stack. Prediction: ~105-110 val_avg (additive estimate).
+- Artifacts: `models/model-h15-huber-tmax15-compound-20260515-172641/metrics.jsonl`, `metrics.yaml`
+- Note: FiLM was **OFF** (`cond_dim=0`) in this run — student disabled via `--cond_dim 0`. Only Huber δ=0.5 + T_max=15 were active.
+
+| Config | val_avg/mae_surf_p | Δ vs prev best |
+|--------|---------------------|----------------|
+| H15: Huber δ=0.5 + T_max=15 (no FiLM) | **94.6764** | **−18.16 (−16.1%)** |
+| Prev best: PR #3160 (Huber δ=0.5, no FiLM) | 112.8406 | — |
+| Naive additive prediction from 125.90 | ~101.1 | — |
+
+Per-split breakdown:
+
+| Split | H15 val_avg | Prev (PR #3160) | Δ |
+|-------|-------------|-----------------|---|
+| val_single_in_dist | 112.48 | 144.92 | −32.44 |
+| val_geom_camber_rc | 102.48 | 125.53 | −23.05 |
+| val_geom_camber_cruise | 72.96 | 81.82 | −8.86 |
+| val_re_rand | 90.79 | 99.10 | −8.31 |
+| **val_avg** | **94.68** | **112.84** | **−18.16** |
+
+Test splits (from best-val-epoch checkpoint):
+
+| Split | test mae_surf_p |
+|-------|----------------|
+| test_single_in_dist | 100.67 |
+| test_geom_camber_rc | 93.19 |
+| test_re_rand | 83.42 |
+| test_geom_camber_cruise | NaN (scoring bug) |
+| test_avg (3-split, excl. cruise) | **92.42** |
+
+**Analysis:** Super-linear stacking: observed 94.68 vs naive additive prediction ~101.1 (6.5 pts better than additive). Mechanism: broken T_max=50 schedule kept LR high throughout, washing out Huber's tail-damping benefit via persistent gradient noise. With T_max=15 annealing to ~0 at epoch 14, the model enters a stable low-LR refinement phase where Huber's balanced gradient bias (resisting over-correction on extreme-Re samples) pays off most. Every split improved by 8–32 pts — broad-spectrum gain, not artefact. Largest absolute gain on val_single_in_dist (−32.4 pts), previously highest-error split.
+
+**Key open question from this result:** FiLM was off. Adding FiLM on top of (Huber δ=0.5 + T_max=15) is the highest-priority next experiment. FiLM alone gave ~35 pts over raw baseline; with the properly annealed schedule, the conditioning benefit may be much larger.
+
+**Status: MERGED — NEW BEST (94.6764)**
+
