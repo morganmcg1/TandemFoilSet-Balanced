@@ -261,11 +261,41 @@ _New entries appended as each PR is reviewed._
 - PR #3438 — charliepai2i48h5-nezuko: Fourier freq sweep n_freqs∈{12,14} + grad_clip=0.25 (continuation of Fourier scaling)
 - PR #3439 — charliepai2i48h5-fern: Gaussian random Fourier features σ∈{1.0,5.0} (alternative Fourier basis from Tancik 2020)
 
+---
+
+## 2026-05-15 22:40 — PR #3420 (charliepai2i48h5-alphonse): Log-space pressure loss — CLOSED (negative)
+
+- branch: `charliepai2i48h5-alphonse/log-p-loss`
+- hypothesis: sign-preserving softlog transform on raw pressure + tunable `log_p_scale` equalizes dynamic range across low/high-pressure splits
+
+- arms:
+
+  | arm | log_p_scale | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|---|
+  | log-p-scale1 | 1.0 | 138.14 (+40%) | 124.54 (+41%) | 13/14 |
+  | log-p-scale2 | 2.0 | 141.37 (+43%) | 130.04 (+48%) | 14/14 |
+
+- artifacts: `models/model-log-p-scale1-huber03-clip025-20260515-202719/metrics.jsonl`, `models/model-log-p-scale2-huber03-clip025-20260515-212342/metrics.jsonl`
+- per-split test surf_p (arm-1): single=187.80 (+79%), rc=131.46 (+26%), cruise=73.25 (+24%), re_rand=105.65 (+26%)
+- scale diagnostic: `logp_to_vel_ratio` started at 5.25× (scale=1.0) and grew to 11× by epoch 14; scale=2.0 started at 7.9×, grew to 21×. Target ratio is ~1.0. Both arms massively miscalibrated.
+- Two compounding failure modes identified by student:
+  1. Calibration miss: scale=0.2 would be needed to hit ratio~1.0; suggested values (1.0/2.0) far off
+  2. Structural mismatch: log-space gradient ∝ 1/(1+|p|) — systematically downweights high-pressure nodes (those with largest absolute MAE contribution). Loss is anti-aligned with primary metric.
+- verdict: **Closed**. Structural log-space/MAE mismatch is irrecoverable; even calibrated scale=0.2 would not fix the gradient scaling issue. Alphonse reassigned to stochastic depth (#3509).
+
+---
+
+## Wave-5 new assignment (2026-05-15 23:22)
+
+- PR #3509 — charliepai2i48h5-alphonse: Stochastic depth (DropPath) regularization, drop_path∈{0.05,0.10}, on Fourier+Huber+clip baseline
+
 ## WIP tracking
 
-- PR #3192 (edward): EMA checkpoint averaging — stale, requested rebase + rerun on new Fourier baseline
+- PR #3192 (edward): EMA checkpoint averaging — stale, requested rebase + rerun on Fourier baseline
 - PR #3227 (thorfinn): Surf-weight curriculum anneal — needs_rebase, sent back to rebase on Fourier baseline
-- PR #3333 (frieren): LR T_max=20 — sent back to test on Fourier+clip stack
-- PR #3419 (tanjiro): n_hidden=160 + T_max-aligned LR — WIP
-- PR #3420 (alphonse): Log-space pressure loss — WIP
-- PR #3424 (askeladd): Tighter clip sweep max_norm=0.1 × Huber delta — WIP
+- PR #3333 (frieren): LR T_max=20 — sent back to test Fourier+clip+T_max=20 stack
+- PR #3419 (tanjiro): n_hidden=160 + T_max-aligned LR — WIP (stale, recovering from rate-limit lockout)
+- PR #3424 (askeladd): Tighter clip sweep max_norm=0.1 × Huber delta — WIP (stale, recovering)
+- PR #3438 (nezuko): Fourier n_freqs∈{12,14} + clip — WIP
+- PR #3439 (fern): Gaussian random Fourier features σ∈{1.0,5.0} — WIP
+- PR #3509 (alphonse): Stochastic depth drop_path∈{0.05,0.10} — NEW (wave-5)
