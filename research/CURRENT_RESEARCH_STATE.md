@@ -1,57 +1,70 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~13:00 UTC
+- **Last updated**: 2026-05-15 ~15:45 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
-- **Target**: TandemFoilSet 2D CFD surrogate; Transolver baseline
-- **Primary metric**: `val_avg/mae_surf_p` (paper: `test_avg/mae_surf_p`) — lower is better
+- **Target**: TandemFoilSet 2D CFD surrogate; Transolver
+- **Primary metric**: `val_avg/mae_surf_p` — lower is better
 - **Per-run budget**: SENPAI_MAX_EPOCHS=50, SENPAI_TIMEOUT_MINUTES=30 (hard caps)
 
-## Most recent human research direction
-None — no human GitHub Issues are addressed to this branch / team in the current launch.
+## Current best baseline
+- `val_avg/mae_surf_p` = **117.66** (PR #3237, edward, `huber-loss`, epoch 13)
+- Per-split: single=147.77, camber_rc=125.08, camber_cruise=88.98, re_rand=108.81
+- Change from default: Huber(δ=1.0) instead of MSE. Everything else at default.
 
-## Current research focus (Round 1)
+## Key observations from round 1
+1. **30-min cap is the main bottleneck**: Every student hit the 30-min wall-clock cap at epoch 14/50. The val loss was still descending at timeout. Getting more epochs per budget is high-priority.
+2. **Huber loss works**: 2-line change, cleanly improves over MSE. Now the default on this branch.
+3. **Local-Re feature is promising** but needs Huber on top. With MSE it lands at 124.27 (askeladd, PR #3235 sent back for revision with Huber + saf arc-length variant).
+4. **Curriculum failed**: Re-sorted ascending order without domain balance hurt generalization badly. The design was also never fully tested (curriculum phase never finished in 30 min). Closed.
+5. **NaN bug in test metric**: `test_geom_camber_cruise/000020.pt` has `inf` in GT. `data/scoring.py` correctly identifies it but `inf * 0 = NaN` poisons the accumulator. All `test_avg/mae_surf_p` values are NaN. Ranking on `val_avg/mae_surf_p` is unaffected. See EXPERIMENTS_LOG.md.
+6. **5 other experiments still in progress**: alphonse (per-sample-scale-norm), fern (dual-branch-heads), frieren (fourier-pos-enc), nezuko (hflip-augment), tanjiro (ema-weights) — all running.
 
-Fresh launch. No experiments have been merged on this branch yet. Round 1 covers eight diverse, orthogonal directions chosen to maximize the chance that *something* improves on the Transolver baseline and to map the landscape of what works:
+## Active PRs
 
-| # | Student | PR | Slug | Lever |
-|---|---|---|---|---|
-| 1 | alphonse | [#3177](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3177) | `per-sample-scale-norm` | Loss reweighting — equalize per-sample gradient magnitude across Re regimes |
-| 2 | askeladd | [#3235](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3235) | `local-re-feature` | Input augmentation — `Re×|x|` boundary-layer feature gated to surface nodes |
-| 3 | edward | [#3237](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3237) | `huber-loss` | Loss formulation — Huber (δ=1.0) instead of MSE to cap outlier gradients |
-| 4 | fern | [#3238](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3238) | `dual-branch-heads` | Architecture — split final output into surface/volume MLPs |
-| 5 | frieren | [#3239](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3239) | `fourier-pos-enc` | Architecture — log-spaced Fourier features over (x, z) |
-| 6 | nezuko | [#3240](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3240) | `hflip-augment` | Augmentation — z-reflection symmetry of NS equations |
-| 7 | tanjiro | [#3241](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3241) | `ema-weights` | Optimization — EMA model averaging (decay=0.9999) |
-| 8 | thorfinn | [#3242](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3242) | `re-curriculum` | Curriculum — low-Re-first ordering for first 50% of epochs |
+| # | Student | Slug | Status |
+|---|---|---|---|
+| #3177 | alphonse | `per-sample-scale-norm` | WIP |
+| #3235 | askeladd | `local-re-feature` | WIP — rerun with Huber + saf coord |
+| #3238 | fern | `dual-branch-heads` | WIP |
+| #3239 | frieren | `fourier-pos-enc` | WIP |
+| #3240 | nezuko | `hflip-augment` | WIP |
+| #3241 | tanjiro | `ema-weights` | WIP |
+| #3300 | edward | `bf16-mixed-precision` | WIP |
+| #3303 | thorfinn | `surf-weight-50` | WIP |
 
-## Hypothesis themes
+## Human research direction
+None received yet.
 
-- **Re-regime balance** (alphonse, edward, thorfinn): Three different mechanisms to address the same observation — per-sample target variance spans an order of magnitude across Reynolds numbers, biasing MSE gradients toward high-Re extremes. Their interaction will tell us whether the bottleneck is loss-side or sampling-side.
-- **Surface emphasis / physics priors** (askeladd, fern): Push the model toward better surface-pressure predictions, which is the primary metric.
-- **Representational capacity** (frieren): Test whether the Transolver's linear (x, z) encoding bottlenecks fine spatial structure.
-- **Data efficiency** (nezuko): Free 2× effective dataset via physical symmetry.
-- **Training stability** (tanjiro): Low-risk, complementary gain via EMA.
+## Current research themes
 
-## Potential next research directions (Round 2 candidates)
+**Budget efficiency** (edward #3300):
+- BF16 mixed precision to get ~20–25 epochs in 30 min vs. current 14
+- If this works, it becomes the new baseline and unlocks the true potential of all other techniques
 
-Will be selected based on Round 1 results, but currently in the queue:
+**Loss formulation** (thorfinn #3303, alphonse #3177):
+- surf_weight=50 with Huber: maximize surface focus at expense of vol accuracy (which doesn't rank)
+- per-sample-scale-norm: equalize Re-regime gradient magnitudes (complementary to Huber)
 
-1. **Composition winners** — stack the best 2–3 of Round 1 (e.g., per-sample-scale-norm + EMA + dual-heads if all three work)
-2. **Per-channel loss weighting** — give pressure (`p`) a heavier weight than `Ux`, `Uy` since `mae_surf_p` is the metric of record
-3. **Surface-only auxiliary loss** — wall pressure gradient regularization
-4. **Larger model** — n_hidden=192 or 256, depth=6, slice_num=128 (timing permitting)
-5. **Warmup + cosine** — short linear warmup before cosine decay
-6. **Mixed-precision training** — bf16 to allow larger batches within 96GB VRAM
-7. **Better sampler weighting** — refine the WeightedRandomSampler to include Re stratification (the natural follow-up if thorfinn's curriculum hypothesis is confirmed)
-8. **Slice attention scaling** — slice_num sweep (32, 64, 128) if Round 1 shows model capacity is the bottleneck
-9. **Per-domain normalization stats** — separate (y_mean, y_std) for raceCar / cruise / single
-10. **GNN-style local message passing** — k-nearest-neighbor attention as an alternative to slice attention
-11. **Physics-informed regularization** — divergence-free constraint on (Ux, Uy) in volume nodes
+**Features / Architecture** (askeladd #3235, fern #3238, frieren #3239):
+- local-Re feature + Huber: boundary-layer physics signal on surface nodes
+- dual-branch heads: specialized surface/volume output MLPs
+- Fourier positional encoding: multi-scale spatial features over (x, z)
 
-## Open uncertainties
-- We do not yet have a measured baseline `val_avg/mae_surf_p` value on this exact (branch × GPU × code) configuration — Round 1 PRs will produce it.
-- Whether the WeightedRandomSampler's domain balancing implicitly handles Re bias, or only domain bias. The trio of Re-targeted experiments (alphonse, edward, thorfinn) will disambiguate.
-- Whether slice attention's learned routing already specializes on surface vs volume nodes — if yes, dual-heads (fern) is redundant; if no, it should win.
+**Data / Augmentation** (nezuko #3240):
+- z-reflection symmetry: physical symmetry of NS equations, free 2x effective data
 
-## Idle students
-None.
+**Optimization** (tanjiro #3241):
+- EMA weight averaging: smoother checkpoint, reduces late-training noise
+
+## Potential round 3 directions (post-round 2 results)
+1. **Compose winners**: stack BF16 + Huber + best-performing feature/arch change
+2. **Per-channel pressure loss**: extra loss term on channel 2 (p) only, since mae_surf_p is the metric
+3. **Warmup-cosine schedule**: 3-epoch linear warmup then cosine — helps if model diverges early
+4. **Larger model** (n_hidden=192 or 256): test if capacity is the remaining bottleneck
+5. **Per-domain normalization**: separate (y_mean, y_std) per domain to remove cross-domain scaling artifacts
+6. **Huber delta sweep** (δ=0.5, 2.0): test sensitivity around the current δ=1.0
+7. **Larger batch** (batch_size=8): reduces gradient variance, pairs well with BF16
+8. **Fix scoring.py NaN bug**: unblock paper-facing test_avg/mae_surf_p (requires read-only waiver or human coordinator action)
+
+## No idle students
+All 8 students are assigned.
