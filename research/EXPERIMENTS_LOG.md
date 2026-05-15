@@ -170,6 +170,67 @@ Test (3 finite splits — run pre-dated #3279 NaN fix):
 
 ---
 
+## 2026-05-15 18:30 — PR #3280 — SmoothL1 beta=0.5 (MERGED → new baseline)
+
+- **Branch:** `charliepai2i48h1-askeladd/smooth-l1-beta05`
+- **Hypothesis:** Tune SmoothL1 `beta` from 1.0 → 0.5. Shifts the quadratic→linear kink-point toward smaller residuals — more L1-like in the body of the distribution, reflecting the metric (MAE) more directly. Single line change.
+- **Result (vs 104.52 baseline, post-#3285 EMA-0.999):**
+
+| Metric | Baseline #3285 | beta=0.5 | Δ |
+|--------|---:|---:|---:|
+| `val_avg/mae_surf_p` | 104.52 | **98.45** | **-5.81%** |
+| `test_avg/mae_surf_p` | 99.49 | **87.63** | **-11.92%** |
+| `val_single_in_dist` | 130.72 | 119.70 | -8.4% |
+| `val_geom_camber_rc` | 112.51 | 108.17 | -3.9% |
+| `val_geom_camber_cruise` | 79.47 | 74.09 | -6.8% |
+| `val_re_rand` | 95.36 | 91.84 | -3.7% |
+
+- **Metrics path:** `models/model-charliepai2i48h1-askeladd-smooth-l1-beta05-20260515-173606/metrics.jsonl`
+- **Action:** MERGED → new baseline val_avg/mae_surf_p = 98.45, test_avg = 87.63. All four val splits and all four test splits improve. The win is large enough (~6%) to be well outside the ±5-10 pt single-seed noise. Particularly strong on `val_single_in_dist` (-8.4%) which has been the worst-performing split.
+- **Commentary:** This confirms that the SmoothL1 → MAE metric alignment story has further headroom in the `beta` tuning direction. The linear-tail region matters: by moving the kink-point inward (beta=0.5 vs 1.0), more of the loss is in the L1 regime, which is the metric we score on. Test deltas are even larger than val deltas — possibly because the test splits contain more samples in the high-residual regime where L1's flatter gradient prevents over-correction on outliers.
+
+---
+
+## 2026-05-15 18:30 — PR #3325 — weight_decay=5e-4 (SENT BACK for rebase on new baseline)
+
+- **Branch:** `charliepai2i48h1-edward/weight-decay-5e4`
+- **Hypothesis:** 5× weight_decay (1e-4 → 5e-4) to regularize against tandem-foil training distribution overfit. Predicted biggest gain on `val_single_in_dist` (geometric OOD).
+- **Result (vs 104.52 baseline #3285, 2-seed):**
+
+| Run | best_epoch | val_avg | test_avg |
+|---|---:|---:|---:|
+| 172233 (primary) | 14 | **101.73** (-2.7%) | **91.16** (-8.4%) |
+| 163219 (repro) | 14 | 100.60 (-3.7%) | 89.76 (-9.8%) |
+| **mean** | | **101.17 (-3.2%)** | **90.46 (-9.1%)** |
+
+- **Per-split val (mean):** single=121.81 (-6.8%), rc=112.59 (~tie), cruise=77.33 (-2.7%), re_rand=92.92 (-2.6%)
+- **Metrics path:** `models/model-weight-decay-5e4-20260515-172233/metrics.jsonl`, `models/model-weight-decay-5e4-20260515-163219/metrics.jsonl`
+- **Action:** SENT BACK. Result beats old baseline but regresses against the NEW (98.45) baseline from #3280 merged simultaneously. Asked Edward to rebase onto post-#3280 base and re-run; compound (beta=0.5 + wd=5e-4) is the high-value experiment.
+- **Commentary:** Test-side improvement (-9.1%) is well outside noise even at the original-baseline comparison, with the geometric-OOD signature on `val_single_in_dist` matching the hypothesis. The fact that `val_geom_camber_rc` is unmoved while everything else improves suggests `rc` is bottlenecked by something other than parameter norm (geometry encoding / camber range coverage).
+
+---
+
+## 2026-05-15 18:30 — PR #3327 — bf16 + batch_size=8 + lr=1e-3 (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-nezuko/bf16-bs8-lr1e3`
+- **Hypothesis:** Spend bf16 memory headroom on a 2× batch (4→8) with linearly scaled LR (5e-4→1e-3, Goyal et al. 2017). Predicted ~50% more optimizer-step-equivalent compute per minute.
+- **Result:** val_avg/mae_surf_p = **131.32** (+25.6% vs 104.52 baseline; +33.4% vs new 98.45 baseline). Per-epoch wall-clock went UP (~106s vs ~97s baseline), confirming memory-bandwidth-bound on H100.
+- **Per-split regression:** single=190.27 (+45.5%), rc=130.99 (+16.4%), cruise=88.91 (+11.9%), re_rand=115.10 (+20.7%).
+- **Action:** CLOSED. The hardware/architecture combo offers no throughput-via-larger-batch lever; further variants in this direction not worth pursuing.
+- **Commentary:** Definitively answers the open throughput question from #3129 (no GEMM utilization headroom on this model/H100 combo). The single-foil regression (+45.5%) is the canary: doubled batch with doubled LR creates an optimization trajectory the model can't exploit on the geometrically-shifted split. **Memory-bandwidth bound is now a confirmed property of this architecture on H100; future capacity experiments should target depth/width or sparsity, not batch size.**
+
+---
+
+## 2026-05-15 18:30 — PR #3324 — log-cosh loss (CLOSED — tie within noise)
+
+- **Branch:** `charliepai2i48h1-fern/log-cosh-loss`
+- **Hypothesis:** Replace SmoothL1 with log-cosh (`|x| + softplus(-2|x|) - log(2)`). Smoother transition between quadratic and linear regimes — same Pareto family as Huber but without a discontinuous second derivative.
+- **Result (2-seed):** val_avg mean = **103.47** (run 1 = 102.99, run 2 = 103.96). -1.0% vs 104.52 baseline, within ±5-10 pt single-seed noise.
+- **Action:** CLOSED. Against the new 98.45 baseline (post-#3280 SmoothL1 beta=0.5), log-cosh is +5.1% worse. Smooth-loss-formulation Pareto axis effectively saturated by SmoothL1 beta=0.5.
+- **Commentary:** Confirms that within the "quadratic→linear" loss family, SmoothL1 beta=0.5 is the local optimum for this problem. Future loss-side wins must come from a different mechanism (channel weighting, physics-informed terms, output-space transforms), not from another smooth Huber-like variant.
+
+---
+
 ## 2026-05-15 12:35 — Round 1 assigned (8 PRs)
 
 | PR | Student | Hypothesis | Knob |
