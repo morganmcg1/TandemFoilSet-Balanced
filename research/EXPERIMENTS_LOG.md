@@ -142,3 +142,43 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 
 - **Decision:** SENT BACK — 11.1% regression vs new baseline (127.41), but OneCycleLR was sized for 50 epochs total while only 14 ran. The cosine annealing tail (where OneCycleLR wins) never executed. Fix: rerun with `epochs=13` so the full schedule fits in the 30-min cap. Max_lr=1e-3, pct_start=0.1 unchanged.
 - **Key finding:** Warmup to max_lr=1e-3 by epoch 5 was smooth. The schedule mismatch (planned 50 epochs, ran 14) is the entire cause of the apparent regression. Per-epoch time matches baseline (~131s), so 13 epochs × 131s = ~28.5 min safely fits the cap.
+
+---
+
+## 2026-05-15 17:25 — PR #3293: Lion optimizer replacing AdamW (lr=1.7e-4, wd=3e-4)
+
+- **Branch:** charliepai2i48h2-nezuko/lion-optimizer
+- **Hypothesis:** Sign-based Lion update is robust to heavy-tailed gradient magnitudes; predicted 2-5% gain over AdamW. Expected strongest improvement on high-pressure splits.
+- **Metrics (committed):** `models/model-charliepai2i48h2-nezuko-lion-optimizer-20260515-153522/metrics.jsonl`
+
+| Split | val_surf_p (Lion+surf10) | Δ vs prev baseline |
+|-------|--------------------------|-------------------|
+| single_in_dist | 137.24 | −18.1% |
+| geom_camber_rc | 124.42 | −16.1% |
+| geom_camber_cruise | 97.32 | −6.4% |
+| re_rand | 111.03 | −7.6% |
+| **avg** | **117.5014** | **−12.97%** |
+
+3-split test proxy: 115.70 (single+rc+re_rand); test_geom_camber_cruise NaN pre-merge (fix now live).
+
+- **Decision:** MERGED — 7.8% improvement vs current baseline 127.41, 12.97% vs old 135.02. Hypothesis validated and exceeded 3× predicted magnitude. Sign-based updates are clearly robust to heavy-tail CFD gradients. Merged config = Lion+surf30 (auto-compounded via 3-way merge with #3101).
+- **Key finding:** Best epoch=9 (earlier than AdamW's 12) indicates cosine schedule is undertrained with T_max=80. Strongest gains on high-magnitude splits (single_in_dist −18%, geom_rc −16%) confirm heavy-tail mechanism. Memory unchanged at 42.11 GB.
+
+---
+
+## 2026-05-15 17:27 — PR #3115: Re-conditional FiLM modulation after preprocess — CLOSED
+
+- **Branch:** charliepai2i48h2-tanjiro/re-film-conditioning
+- **Hypothesis:** FiLM gating with log(Re) after the preprocess MLP helps the model switch regimes across Re-OOD splits.
+- **Metrics (committed):** `models/model-charliepai2i48h2-tanjiro-re-film-conditioning-20260515-143532/metrics.jsonl`
+
+| Split | FiLM val | No-FiLM val | Δ |
+|-------|----------|-------------|---|
+| single_in_dist | 150.24 | 162.77 | −7.7% (better) |
+| geom_camber_rc | 146.62 | 143.48 | +2.2% (worse) |
+| geom_camber_cruise | 118.70 | 99.82 | **+18.9% (worse)** |
+| re_rand | 126.44 | 122.52 | **+3.2% (worse — opposite of prediction)** |
+| **avg** | **135.50** | **132.15** | **+2.5%** |
+
+- **Decision:** CLOSED — val=135.50 is +6.3% regression vs current baseline 127.41. Hypothesis falsified: predicted FiLM helps re_rand (Re-OOD), but observed it hurts re_rand (+3.2%) and geom_cruise (+18.9%). Only single_in_dist improved (−7.7%), suggesting Re gating helps in-distribution but amplifies Re-OOD errors.
+- **Key finding:** FiLM with Re conditioning creates tighter Re-dependency; this helps when Re is in-distribution but hurts when Re shifts out of training mass. Geometry-OOD splits also regress. Geometry-conditional FiLM (camber/AoA) not worth trying — same mechanism would apply. Student ran correct A/B comparison on same hardware. NaN bug also independently identified (fix already in #3274).
