@@ -96,3 +96,49 @@ Entries are appended chronologically as PRs return terminal `SENPAI-RESULT` mark
 - **Decision:** CLOSED — 11.4% regression vs baseline (150.44 vs 135.02). Per-epoch time ~180s → only 14 epochs in 30-min cap (same as baseline), but scheduler is undertrained because B=8 produces fewer gradient steps per epoch. The hypothesis is sound but timing makes it lose per wall-clock.
 - **Key finding:** With batch=8, ~14 epochs fit in the 30-min cap but cosine schedule never reaches low-LR window. Peak memory 84.2 GB confirms B=8 is feasible. Student independently identified the NaN scoring bug and produced corrected test metrics (134.978 via nan_to_num). Cap-aware `batch=6, lr=6e-4` noted as a possible softer variant but deprioritized (same schedule-vs-cap tension; better to try orthogonal direction).
 - **Follow-up:** Assigned to nezuko: Lion optimizer (PR #3293).
+
+---
+
+## 2026-05-15 16:25 — PR #3274: Bug fix: NaN-safe evaluate_split (nan_to_num before masked sum)
+
+- **Branch:** charliepai2i48h2-fern/nan-safe-eval-fix
+- **Hypothesis:** Infrastructure fix only — no metric change expected on val (val splits have no NaN-y samples). Fix enables valid test_avg/mae_surf_p for all future runs.
+- **Metrics (debug mode):** `models/model-charliepai2i48h2-fern-nan-safe-eval-fix-20260515-142502/metrics.jsonl`
+
+val_avg/mae_surf_p = 486.5309 (debug mode, 3 epochs, 2-sample dataset — NOT comparable to baseline)
+
+- **Decision:** MERGED (infrastructure fix). val=486 is debug-mode garbage, not a regression. The fix adds `_safe_accumulate_batch` to train.py, replaces the `accumulate_batch` call in `evaluate_split`, and adds `nan_to_num` to the `vol_loss_sum`/`surf_loss_sum` blocks. Fix verified with independent NaN-injection unit test: fixed version gives finite mae_surf_p where buggy version gives NaN; bit-identical on clean data (max diff=0.0). After merge, all future runs on this branch report a valid 4-split `test_avg/mae_surf_p`.
+- **Key finding:** Fern also provided a standalone validation confirming exactly 761 NaN values in the pressure channel of sample 20 of test_geom_camber_cruise (Ux/Uy finite). Fix is minimal and semantics-preserving.
+
+---
+
+## 2026-05-15 16:26 — PR #3101: Surface loss weight 10→30 (3× surface loss emphasis)
+
+- **Branch:** charliepai2i48h2-askeladd/surf-weight-30
+- **Hypothesis:** Tripling the surface loss weight aligns training gradients with val_avg/mae_surf_p, the primary metric. Standard technique for task-aligned fine-tuning in PDE surrogate models.
+- **Metrics (committed):** `models/model-charliepai2i48h2-askeladd-surf-weight-30-20260515-124531/metrics.jsonl`
+
+| Split | val_surf_p | test_surf_p (corrected) |
+|-------|-----------|--------------------------|
+| single_in_dist | 152.82 | 136.68 |
+| geom_camber_rc | 134.85 | 123.03 |
+| geom_camber_cruise | 102.60 | 88.12 |
+| re_rand | 119.38 | 119.51 |
+| **avg** | **127.4122** | **116.83** |
+
+- **Decision:** MERGED — 5.6% improvement over previous baseline (127.41 vs 135.02). New baseline. Val curve still descending at epoch 14; significant headroom remaining at convergence.
+- **Key finding:** 3× surface weight is stable (no vol metric degradation), training converged smoothly. Best epoch = 14 (last trained). The surf_weight sweep is worth continuing: try 50, 75. Corrected test=116.83 uses the independent recompute script; raw test is NaN (pre-#3274 fix). BASELINE.md updated.
+
+---
+
+## 2026-05-15 16:27 — PR #3102: OneCycleLR (max_lr=1e-3, pct_start=0.1) — SENT BACK
+
+- **Branch:** charliepai2i48h2-edward/onecycle-maxlr-1e-3
+- **Hypothesis:** OneCycleLR with aggressive warmup to max_lr=1e-3 compresses convergence into the early epochs, using momentum decay in the annealing phase to improve generalization.
+- **Metrics (committed):** `models/model-charliepai2i48h2-edward-onecycle-maxlr-1e-3-20260515-142245/metrics.jsonl`
+
+val_avg/mae_surf_p = 141.7713 (best at epoch 12 of 14 trained)
+test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
+
+- **Decision:** SENT BACK — 11.1% regression vs new baseline (127.41), but OneCycleLR was sized for 50 epochs total while only 14 ran. The cosine annealing tail (where OneCycleLR wins) never executed. Fix: rerun with `epochs=13` so the full schedule fits in the 30-min cap. Max_lr=1e-3, pct_start=0.1 unchanged.
+- **Key finding:** Warmup to max_lr=1e-3 by epoch 5 was smooth. The schedule mismatch (planned 50 epochs, ran 14) is the entire cause of the apparent regression. Per-epoch time matches baseline (~131s), so 13 epochs × 131s = ~28.5 min safely fits the cap.
