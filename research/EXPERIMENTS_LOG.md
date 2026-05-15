@@ -76,3 +76,23 @@ Entries are appended chronologically as PRs return terminal `SENPAI-RESULT` mark
 | Baseline epoch 6 | val_avg/mae_surf_p=171 | Frieren epoch 6 | 164 ← 7 pts better at equal epoch count |
 
 - **Decision:** SENT BACK — not a regression at equal epoch count. Per-epoch time ~261s → only 7 epochs in 30-min cap. Ask student to rerun with lr=1e-3 to compress convergence into fewer epochs.
+
+---
+
+## 2026-05-15 15:30 — PR #3110: Batch + LR scaling: batch_size 4→8, lr 5e-4→8e-4 (sqrt scaling)
+
+- **Branch:** charliepai2i48h2-nezuko/batch-8-lr-8e-4
+- **Hypothesis:** Doubling batch to 8 with sqrt-scaled LR (5e-4→8e-4) gives cleaner gradient estimates per step; the 96GB GPU has headroom for B=8.
+- **Metrics (committed):** `models/model-charliepai2i48h2-nezuko-batch-8-lr-8e-4-20260515-132234/metrics.jsonl`
+
+| Split | val_surf_p | test_surf_p (corrected) |
+|-------|-----------|--------------------------|
+| single_in_dist | 219.798 | 186.691 |
+| geom_camber_rc | 154.321 | 138.748 |
+| geom_camber_cruise | 109.275 | 94.368 |
+| re_rand | 118.355 | 120.105 |
+| **avg** | **150.4371** | **134.978** |
+
+- **Decision:** CLOSED — 11.4% regression vs baseline (150.44 vs 135.02). Per-epoch time ~180s → only 14 epochs in 30-min cap (same as baseline), but scheduler is undertrained because B=8 produces fewer gradient steps per epoch. The hypothesis is sound but timing makes it lose per wall-clock.
+- **Key finding:** With batch=8, ~14 epochs fit in the 30-min cap but cosine schedule never reaches low-LR window. Peak memory 84.2 GB confirms B=8 is feasible. Student independently identified the NaN scoring bug and produced corrected test metrics (134.978 via nan_to_num). Cap-aware `batch=6, lr=6e-4` noted as a possible softer variant but deprioritized (same schedule-vs-cap tension; better to try orthogonal direction).
+- **Follow-up:** Assigned to nezuko: Lion optimizer (PR #3293).
