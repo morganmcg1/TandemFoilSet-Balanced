@@ -97,3 +97,95 @@ Arm B beats Arm A on every split, indicating the larger PE bandwidth (n_freqs=16
 The arc-length signed-distance features are already in dims 2–3 of the raw input x and pass through the preprocessor MLP. Adding a sin/cos Fourier expansion of the same dims as a separate additive embedding did not help the model — the preprocessor is apparently already extracting the relevant frequencies. The hypothesis assumed under-utilisation of arc-length, but the data shows the opposite. Surface arc-length Fourier PE is not a productive direction for this benchmark.
 
 Important caveat: this PR ran on vanilla MSE (the branch was cut before PR #3266 landed). Even applying the scale-invariant loss on rebase is very unlikely to close a >12% gap; the scale-invariant loss alone moved baseline numbers by only ~1.3% on val_avg in the merged result. Closed as clear regression.
+
+## 2026-05-15 16:23 — PR #3281: EMA model weights for checkpoint + test eval [MERGED — new round-5 baseline]
+
+- Branch: `charliepai2i24h5-frieren/ema-weights-checkpoint`
+- Student: charliepai2i24h5-frieren
+- Hypothesis: maintain a shadow EMA copy of the model (decay=0.999, ~1000-step averaging window ≈ 2.7 epochs) updated after every `optimizer.step()`; use the EMA weights for validation, checkpoint selection, and final test eval. Stacks on top of the merged scale-invariant loss baseline (#3266).
+- Status: MERGED as the new round-5 baseline. Strongest result so far, with the gain concentrated on the OOD splits exactly as the flat-minimum hypothesis predicts.
+
+### Results
+
+| Metric | Baseline (PR #3266) | EMA (#3281) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 123.8778 | **114.1704** | **-7.84%** |
+| test_avg/mae_surf_p | 114.3695 | **102.0813** | **-10.74%** |
+
+Per-split val surface pressure MAE:
+
+| Split | Baseline | EMA | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 142.19 | 138.48 | -2.6% |
+| geom_camber_rc | 136.12 | 130.84 | -3.9% |
+| geom_camber_cruise | 95.76 | 84.60 | -11.7% |
+| re_rand | 121.44 | 102.77 | **-15.4%** ← big OOD win |
+
+Per-split test surface pressure MAE:
+
+| Split | Baseline | EMA | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 125.85 | 121.81 | -3.2% |
+| geom_camber_rc | 130.85 | 115.66 | **-11.6%** |
+| geom_camber_cruise | 85.29 | 71.60 | **-16.1%** |
+| re_rand | 115.50 | 99.26 | **-14.0%** |
+
+Best epoch 14/50, run cut at epoch 14 by 30-min wall clock. ~0.4 GB extra VRAM for shadow weights, no other overhead.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-frieren-ema_weights_checkpoint-20260515-153007/metrics.jsonl`
+- `models/model-charliepai2i24h5-frieren-ema_weights_checkpoint-20260515-153007/metrics.yaml`
+
+### Analysis
+
+EMA does exactly what Morningstar et al. (TMLR 2024) describes: averaging the noisy SGD/AdamW iterate gives a flatter-minimum weight that generalizes better to OOD samples. The gradient of improvement matches the predicted shape — in-distribution (-2.6% / -3.2%) is the smallest gain, OOD splits are 4-7× larger (re_rand val -15.4%, cruise test -16.1%). The 4-track score is now substantially more balanced (val splits range 84.6–138.5 vs baseline 95.8–142.2).
+
+The val curve was still monotonically dropping at ~-4/epoch when the wall clock cut training (epoch 14, val=114). This confirms the "EMA helps most when training is undercooked" intuition: the EMA is already living near the flat minimum that the raw weights have not yet found. Compounding with the cosine-T_max fix (next round) is the obvious follow-up.
+
+Implementation is exactly the spec: deepcopy at init, requires_grad_(False), update_ema after every optimizer.step() with decay=0.999, EMA used for val + checkpoint + test eval. No other hyperparameters touched; per-sample scale-invariant loss and `evaluate_split` NaN sanitization preserved.
+
+## 2026-05-15 16:32 — PR #3271: Signed-log pressure target transform [CLOSED — regression]
+
+- Branch: `charliepai2i24h5-thorfinn/log-transform-pressure-target`
+- Student: charliepai2i24h5-thorfinn
+- Hypothesis: apply `signed_log(p) = sign(p) * log(1 + |p|/eps)` to the pressure target before normalization, then invert at eval. Idea: compress the ~2500× Re-driven dynamic range into a more uniform scale so the loss signal isn't dominated by high-Re extremes.
+- Status: CLOSED. Both arms (eps=1.0 and eps=0.1) regressed >15% from baseline. Direction not productive for this benchmark.
+
+### Results
+
+| Metric | Baseline (PR #3266) | eps=1.0 | eps=0.1 (best arm) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 123.88 | 151.72 (+22.5%) | 144.12 (+16.3%) |
+| test_avg/mae_surf_p | 114.37 | 136.54 (+19.4%) | 132.17 (+15.6%) |
+
+### Analysis
+
+The signed-log transform did the opposite of what was hoped: it broke the model's ability to track absolute pressure scale. The single_in_dist split (largest Re range) was supposed to benefit most from log compression — but it regressed worst (val 142.2 → 213.3, +50%). The transform is decoupling the pressure prediction from its physical magnitude in a way that the post-hoc invert can't recover.
+
+The student's two-arm sweep was well-designed (eps=1.0 vs eps=0.1 explored the compression-strength axis cleanly). The NaN workaround was correctly applied. Just the hypothesis was wrong. Closed.
+
+## 2026-05-15 15:52 — PR #3267: Separate surface decoder head [SENT BACK — beat student's own baseline but not the merged baseline]
+
+- Branch: `charliepai2i24h5-tanjiro/separate-surface-decoder-head`
+- Student: charliepai2i24h5-tanjiro
+- Hypothesis: add a dedicated MLP head for surface-node predictions, separate from the volume head. Surface and volume signals differ (surface has sharp gradients, volume is smoother), so separating heads should let each task learn its own optimal mapping without interference.
+- Status: SENT BACK. The hypothesis works in the student's own ablation (-5.3% val_avg vs their no-scale-inv-loss baseline) but the absolute val_avg = 128.70 is +12.7% worse than the merged baseline (114.17) because the student's branch was cut before PR #3281 landed.
+
+### Results
+
+| Metric | Student's own baseline | Surface head (this PR) | Δ (within PR) | Merged baseline #3281 |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 135.84 | 128.70 | -5.3% | **114.17** |
+| test_avg/mae_surf_p | 122.49 | 119.01 | -2.8% | **102.08** |
+
+Within-PR per-split val (surface head vs student's single-head baseline):
+- val_single_in_dist: 164.16 → 148.88 (-9.3%) ← largest within-PR gain, matches the "sharper local gradients" mechanism
+- val_geom_camber_rc: 142.77 → 140.23 (-1.8%)
+- val_geom_camber_cruise: 111.85 → 105.88 (-5.3%)
+- val_re_rand: 124.60 → 119.81 (-3.8%)
+
+### Analysis
+
+The mechanism is real — surface and volume have meaningfully different signal characteristics, and a dedicated head improves both within-PR val (-5.3%) and test (-2.8%). But the student's PR runs neither the per-sample scale-invariant loss (#3266) nor the EMA weights (#3281), both of which are now part of the merged baseline. Their no-scale-inv single-head baseline (135.84) is +9.6% worse than #3266 baseline (123.88), and +18.9% worse than the EMA baseline (114.17). The surface-head improvement (-5.3% within-PR) is real but smaller than the cumulative improvement from those two merged changes (-7.84%).
+
+The natural next step is a rebase + re-run on the current advisor branch, which inherits scale-invariant loss + EMA + NaN fix. The surface head's win on val_single_in_dist (-9.3%) is exactly the split where EMA has the smallest gain (-2.6%), suggesting the two mechanisms might compound positively. Sent back with detailed rebase instructions.
