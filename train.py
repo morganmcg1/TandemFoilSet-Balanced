@@ -356,6 +356,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_p_l1_weight": cfg.surf_p_l1_weight,
         "epochs_configured": cfg.epochs,
         "ema_decay": EMA_DECAY,
     }
@@ -402,6 +403,9 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    # Auxiliary L1 loss on surface-node pressure (normalized space). Aligns the
+    # training objective with the L1 (MAE) eval metric. 0 disables the term.
+    surf_p_l1_weight: float = 0.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -489,6 +493,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_p_l1 = 0.0
     epoch_scale_mean = epoch_scale_std = 0.0
     n_batches = 0
 
@@ -519,6 +524,16 @@ for epoch in range(MAX_EPOCHS):
         sample_scale = per_sample_field_scale(y_norm, mask)  # [B]
         loss = (combined_per_sample / sample_scale.detach()).mean()
 
+        # Auxiliary L1 loss on surface-node pressure (normalized space). Computed
+        # as a pooled mean over all surface nodes in the batch — matches the
+        # eval-side aggregation more directly than the per-sample-then-average
+        # scheme used by the MSE term.
+        surf_mask_l1 = (mask & is_surface).float()  # [B, N]
+        p_err_abs = (pred[..., 2] - y_norm[..., 2]).abs()  # [B, N]
+        surf_p_l1 = (p_err_abs * surf_mask_l1).sum() / surf_mask_l1.sum().clamp(min=1)
+        if cfg.surf_p_l1_weight != 0.0:
+            loss = loss + cfg.surf_p_l1_weight * surf_p_l1
+
         # Aggregate logging stats: batch-mean of per-sample vol/surf losses
         # (for parity with the previous epoch_vol/epoch_surf scalars).
         vol_loss_log = vol_loss_per_sample.mean()
@@ -531,6 +546,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss_log.item()
         epoch_surf += surf_loss_log.item()
+        epoch_surf_p_l1 += surf_p_l1.item()
         epoch_scale_mean += sample_scale.mean().item()
         epoch_scale_std += sample_scale.std(unbiased=False).item()
         n_batches += 1
@@ -538,6 +554,7 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_p_l1 /= max(n_batches, 1)
     epoch_scale_mean /= max(n_batches, 1)
     epoch_scale_std /= max(n_batches, 1)
 
@@ -570,6 +587,7 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_p_l1": epoch_surf_p_l1,
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -579,6 +597,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"surf_p_l1={epoch_surf_p_l1:.4f} "
         f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
