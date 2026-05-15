@@ -237,6 +237,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # AoA periodic encoding: dims 14 (AoA foil 1) and 18 (AoA foil 2) are radians.
+            aoa1 = x[..., 14:15]
+            aoa2 = x[..., 18:19]
+            aoa_sincos = torch.cat([aoa1.sin(), aoa1.cos(), aoa2.sin(), aoa2.cos()], dim=-1)
+            x_norm = torch.cat([x_norm, aoa_sincos], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -391,7 +396,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 4,  # +4 for sin/cos of two AoAs
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -454,6 +459,11 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        # AoA periodic encoding: dims 14 (AoA foil 1) and 18 (AoA foil 2) are radians.
+        aoa1 = x[..., 14:15]
+        aoa2 = x[..., 18:19]
+        aoa_sincos = torch.cat([aoa1.sin(), aoa1.cos(), aoa2.sin(), aoa2.cos()], dim=-1)
+        x_norm = torch.cat([x_norm, aoa_sincos], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.5)
