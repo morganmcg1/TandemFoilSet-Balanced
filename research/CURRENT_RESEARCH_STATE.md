@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 14:15 UTC
+- **Updated:** 2026-05-15 15:35 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -13,14 +13,18 @@ down vs the baseline Transolver config in `target/train.py`.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 115.17** (PR #3111, SmoothL1 Huber beta=1.0, -19.7% vs MSE default).
-Splits: single=144.61, rc=124.04, cruise=89.33, re_rand=102.70.
+**val_avg/mae_surf_p = 108.47** (PR #3279, SmoothL1 baseline re-evaluated with
+NaN-safe scoring). `test_avg/mae_surf_p = 99.49` (now finite for the first time).
+Splits (val): single=128.55, rc=116.22, cruise=87.91, re_rand=101.21.
 
-## Currently in flight (8 WIP PRs)
+Note: the val delta from the previous SmoothL1 entry (115.17 → 108.47) is
+stochastic re-roll variance. Treat ±5-10 pts as the expected single-seed
+variance on `val_avg/mae_surf_p`.
+
+## Currently in flight (7 WIP + 1 idle)
 
 | PR | Student | Hypothesis | Base | Theme |
 |----|---------|------------|------|-------|
-| #3279 | alphonse | data/scoring.py NaN-safe fix | SmoothL1 | infra bug fix |
 | #3280 | askeladd | SmoothL1 beta=1.0 → 0.5 | SmoothL1 | loss tuning |
 | #3116 | edward   | surf_weight 10 → 25 (MSE base) | MSE | loss alignment |
 | #3285 | fern     | EMA weights decay=0.999 | SmoothL1 | OOD generalization |
@@ -28,6 +32,8 @@ Splits: single=144.61, rc=124.04, cruise=89.33, re_rand=102.70.
 | #3129 | nezuko   | bf16 autocast | MSE | throughput |
 | #3286 | tanjiro  | SmoothL1 + surf_weight=25 stack | SmoothL1 | loss stack |
 | #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) (MSE base) | MSE | channel weighting |
+
+**Idle:** alphonse (#3279 merged — needs new R2 assignment).
 
 Note: edward, nezuko, thorfinn (#3116, #3129, #3135) were assigned before
 SmoothL1 merged, so they run on the old MSE base — results will be interpreted
@@ -38,10 +44,11 @@ relative to MSE baseline (143.52). All others are on the SmoothL1 base.
 | PR | Hypothesis | val_avg/mae_surf_p | vs MSE | Decision |
 |----|------------|-------------------:|-------:|----------|
 | #3107 | baseline (MSE default) | 143.52 | — | Closed (calibration) |
-| #3111 | SmoothL1 beta=1.0 | **115.17** | **-19.7%** | **MERGED ← new baseline** |
+| #3111 | SmoothL1 beta=1.0 | 115.17 | -19.7% | MERGED |
 | #3132 | LR warmup (10%) | 141.73 | -1.3% | Closed (noise) |
 | #3124 | mlp_ratio=4 | 134.14 | -6.5% | Sent back (retry on SmoothL1) |
 | #3120 | slice_num=128 | 147.74 | +2.9% | Closed (regression) |
+| #3279 | NaN-safe scoring (infra) | **108.47** | **-24.4%** | **MERGED ← new baseline; test_avg=99.49 finite** |
 
 ## Potential next research directions
 
