@@ -283,7 +283,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
+            # Compute surface-pressure MAE and the normalized loss in fp32
+            # to avoid loss-of-precision in the aggregation over many nodes.
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -500,8 +504,12 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2  # [B, N, 3] — bf16
+        # Promote to fp32 so per-sample sums and scale-invariant loss avoid
+        # mantissa truncation in the reductions over up to ~242K nodes.
+        sq_err = sq_err.float()
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
