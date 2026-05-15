@@ -221,6 +221,26 @@ Test (3 finite splits — run pre-dated #3279 NaN fix):
 
 ---
 
+## 2026-05-15 19:30 — PR #3376 — cosine T_max=14 (SENT BACK for rebase on new baseline)
+
+- **Branch:** `charliepai2i48h1-alphonse/cosine-tmax-14`
+- **Hypothesis:** Surgical fix for the `T_max=MAX_EPOCHS=50` vs 14-epoch wall-clock mismatch. Set `T_max=14, eta_min=1e-6` so cosine annealing actually completes by the wall-clock timeout.
+- **Result (vs OLD 104.52 baseline; pre-#3280 beta=1.0 base):**
+
+| Metric | Old baseline | This PR | Δ |
+|--------|---:|---:|---:|
+| `val_avg/mae_surf_p` | 104.52 | **103.35** | -1.12% (within noise) |
+| `test_avg/mae_surf_p` | 99.49 | **92.52** | -7.01% (clear win) |
+| best_epoch | 14 | 14 (final) | schedule alignment confirmed |
+
+- **Per-split val:** single=125.42 (-4.05%), rc=112.32 (~tie), cruise=80.40 (+1.17%), re_rand=95.25 (~tie). Win concentrated on the worst split.
+- **Per-epoch LR trajectory:** Annealed from 5e-4 → 7e-6 by epoch 14, val monotonically improving. Schedule and wall-clock now aligned.
+- **Metrics path:** `models/model-cosine-tmax-14-20260515-182953/metrics.jsonl`
+- **Action:** SENT BACK. Against the NEW 98.45 baseline (post-#3280 beta=0.5 merge), val=103.35 is +5.0% worse and test=92.52 is +5.6% worse. Asked alphonse to rebase onto post-#3280 base (which has beta=0.5) and re-run; compound (beta=0.5 + T_max=14) is high-value.
+- **Commentary:** This is the second R3 PR (after #3325 edward) whose results were good against the OLD baseline but were caught by the simultaneous #3280 merge. The val/test gap widened (val Δ -1.12% but test Δ -7%) — a classic signature of a flatter / better-generalizing minimum, consistent with the "sharper final epochs + EMA captures a more converged point" mechanism. T_max=14 should stack with beta=0.5 because they're orthogonal mechanisms (loss shape vs LR schedule).
+
+---
+
 ## 2026-05-15 18:30 — PR #3324 — log-cosh loss (CLOSED — tie within noise)
 
 - **Branch:** `charliepai2i48h1-fern/log-cosh-loss`

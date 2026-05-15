@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 18:40 UTC
+- **Updated:** 2026-05-15 19:35 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -41,8 +41,8 @@ declare a real win.
 
 | PR | Student | Hypothesis | Base | Theme |
 |----|---------|------------|------|-------|
-| #3376 | alphonse | cosine T_max=14 (match wall-clock) | SmoothL1 beta=0.5 + EMA | schedule |
-| #3325 | edward   | weight_decay 5e-4 on new base | SmoothL1 beta=0.5 + EMA | regularization |
+| #3376 | alphonse | cosine T_max=14 RETRY on new base | SmoothL1 beta=0.5 + EMA | schedule (sent back 19:30) |
+| #3325 | edward   | weight_decay 5e-4 RETRY on new base | SmoothL1 beta=0.5 + EMA | regularization (sent back 18:30) |
 | #3400 | askeladd | SmoothL1 beta=0.25 sweep | SmoothL1 beta=0.5 + EMA | loss tuning |
 | #3401 | fern     | AoA sin/cos periodic encoding | SmoothL1 beta=0.5 + EMA | feature engineering |
 | #3402 | nezuko   | dropout=0.1 in Transolver blocks | SmoothL1 beta=0.5 + EMA | regularization |
@@ -63,8 +63,10 @@ comments to both 2026-05-15 19:20 UTC.
 - **Throughput / batch size:** Confirmed memory-bandwidth-bound on H100. No
   batch-size lever. Future capacity changes must target depth/width/sparsity.
 - **NaN-safe scoring + EMA-0.999:** Banked. Stable infra base going forward.
-- **Schedule shape (alphonse #3376):** Open — first valid cosine T_max
-  experiment pending result.
+- **Schedule shape (alphonse #3376):** Initial run (on old beta=1.0 base) showed
+  -7% on test and -1% on val (within noise), with the best epoch landing on
+  the final epoch as predicted. Sent back to rebase + re-run on new beta=0.5
+  base — compound should stack (orthogonal mechanisms).
 - **Regularization (weight_decay):** Open — single-knob result was marginal
   on val but strong on test; compound test on top of beta=0.5 pending.
 - **Channel weighting (tanjiro #3286 / thorfinn #3135):** Open — pending
