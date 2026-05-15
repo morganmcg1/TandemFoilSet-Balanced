@@ -399,6 +399,8 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
+    warmup_epochs: int = 2     # WSD warmup phase length (LinearLR 0.1 -> 1.0)
+    stable_epochs: int = 9     # WSD stable phase length (ConstantLR factor=1.0)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -451,7 +453,25 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+# WSD (Warmup-Stable-Decay) schedule: ramp up, hold at peak, then cosine-decay
+# the tail. Budget assumes a roughly 14-epoch wall-clock window inside the
+# overall cfg.epochs cap; decay phase covers the remaining epochs.
+decay_epochs = max(cfg.epochs - cfg.warmup_epochs - cfg.stable_epochs, 1)
+warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=0.1, end_factor=1.0, total_iters=cfg.warmup_epochs
+)
+stable_sched = torch.optim.lr_scheduler.ConstantLR(
+    optimizer, factor=1.0, total_iters=cfg.stable_epochs
+)
+decay_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=decay_epochs
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_sched, stable_sched, decay_sched],
+    milestones=[cfg.warmup_epochs, cfg.warmup_epochs + cfg.stable_epochs],
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -538,11 +558,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
