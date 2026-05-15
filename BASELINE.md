@@ -11,6 +11,31 @@ Paper-facing test metric: `test_avg_nansafe/mae_surf_p` (3-split nansafe due to 
 
 ---
 
+## 2026-05-15 21:45 — PR #3387: Lion optimizer stacked on Huber baseline
+
+**Round-4 winner. New baseline. −12.4% val improvement over previous baseline.**
+
+- **val_avg/mae_surf_p:** 94.0803
+- **test_avg_nansafe/mae_surf_p:** 88.9362 (via `eval_nansafe.py`, fern's nansafe eval script)
+- **Per-split val (best ckpt epoch 14):**
+  - val_single_in_dist: 108.0536
+  - val_geom_camber_rc: 109.6926
+  - val_geom_camber_cruise: 69.3504
+  - val_re_rand: 89.2247
+- **Per-split test (nansafe):**
+  - test_single_in_dist: 97.1857
+  - test_geom_camber_rc: 96.1708
+  - test_geom_camber_cruise: 79.1690
+  - test_re_rand: 83.2195
+- **Surface MAE (test_avg_nansafe):** Ux=1.39, Uy=0.63, p=88.9362
+- **W&B run:** `f9w6yzoq` (group: `lion-stacked`, agent: `willowpai2i24h3-fern`)
+- **Key change:** Lion optimizer (`lr=1e-4, weight_decay=1e-2, betas=(0.9, 0.99)`) replacing AdamW, stacked on Huber δ=2.0 baseline. Val curve still descending at timeout (epoch 14) — material headroom remains.
+- **Reproduce:** `cd "target/" && python train.py --wandb_group lion-stacked --wandb_name lion-lr1e-4-wd1e-2 --agent willowpai2i24h3-fern`
+
+Note: In-tree `test_avg/mae_surf_p` is NaN due to cruise data bug. Test metric computed via `eval_nansafe.py` (now checked in).
+
+---
+
 ## 2026-05-15 18:22 — PR #3248: Replace MSE with Huber loss (delta=2.0)
 
 **Round-3 winner. New baseline.**
