@@ -1,5 +1,69 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-15 22:35 — PR #3095: Higher surf_weight + per-channel p weighting (nezuko) — CLOSED
+
+- **Student:** willowpai2i48h4-nezuko (branch: `willowpai2i48h4-nezuko/surface-weight`)
+- **Hypothesis:** Increasing `surf_weight` from 10 to 20-30 pushes the optimizer to focus more on surface pressure prediction; adding per-channel `p` weighting (3×) further boosts the primary metric.
+
+### Results — rebased confirmation arm (surf_weight=20, W&B run `6amjj7jr`)
+
+| Metric | Value | Δ vs baseline (109.42) | Δ vs new baseline (100.53) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 111.92 | +2.3% ✗ | +11.3% ✗ |
+| test_avg/mae_surf_p | 97.70 | (was NaN) | +8.4% ✗ |
+
+Earlier arm sweep (stale pre-#3091 code):
+
+| Arm | Config | val_avg/mae_surf_p |
+|---|---|---:|
+| A (surf_weight=30) | surf_w=30 | 131.08 |
+| B (pchan=3) | surf_w=10, p_w=3 | 133.31 |
+| C (combined) | surf_w=30, p_w=3 | 146.42 |
+
+### Analysis
+
+All arms regressed vs both old and new baselines. surf_weight=20 on the rebased (warmup+clip+lr=1e-3+L1) code gave val=111.92 — nominally +2.3% above the 109.42 old baseline, and decisively worse (+11.3%) against the current 100.53 baseline. surf_weight=30 and the pchan knob are both clearly worse. The student's per-split analysis shows the regression concentrated in `single_in_dist` while `re_rand` and `geom_camber_rc` actually improve — suggesting surf_weight tuning shifts a per-split tradeoff rather than moving the aggregate down.
+
+The train.py NaN fix in `evaluate_split` was correctly implemented; subsumed by alphonse #3089 merge.
+
+**Closed** at 22:35 UTC. surf_weight hypothesis exhausted at {10, 20, 30}; optimum appears at ≤10. Nezuko reassigned to L1 LR sweep.
+
+---
+
+## 2026-05-15 22:31 — PR #3089: L1 loss + NaN scoring fix (alphonse) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/l1-loss`)
+- **Hypothesis:** Replacing MSE loss with L1 in the normalized-prediction space aligns the training objective with the MAE evaluation metric; predicted −5% to −10% on `val_avg/mae_surf_p`.
+
+### Results — final rebased confirmation arm (W&B run `14w7wdyb`, `alphonse-l1-rebased`)
+
+| Metric | Value | Δ vs baseline (109.42) |
+|---|---:|---:|
+| **val_avg/mae_surf_p** | **100.5275** | **−8.1% ✓** |
+| **test_avg/mae_surf_p** | **90.1489** | first clean finite number |
+
+Per-split test surface pressure MAE:
+
+| Split | test/mae_surf_p |
+|---|---:|
+| single_in_dist | 112.07 |
+| geom_camber_rc | 98.04 |
+| geom_camber_cruise | 64.21 |
+| re_rand | 86.28 |
+| **avg** | **90.15** |
+
+Config: L1 loss (`Config.loss_type = "l1"`, default flipped) + warmup + grad-clip + lr=1e-3 + 10 epochs (fully annealed cosine). Also includes `_pointwise_loss` helper for MSE/L1/Huber dispatch and `torch.isfinite` per-sample mask in `evaluate_split` (canonical scoring NaN fix).
+
+### Analysis
+
+L1 loss clearly improves val_avg/mae_surf_p (−8.1%) and delivers the first clean test metric. The composition of L1 with warmup+clip+lr=1e-3 works well — the levers are orthogonal (L1 addresses objective mismatch; warmup+clip+lr addresses optimization stability). Single best experiment so far by absolute Δ.
+
+The scoring NaN fix is particularly valuable — `test_avg/mae_surf_p = 90.15` is now a reliable paper-facing metric for all future runs.
+
+**Merged** at 22:31 UTC as new baseline. All in-flight students need to rebase to get L1 default + scoring fix.
+
+---
+
 ## 2026-05-15 21:37 — PR #3414: SWA (stochastic weight averaging) over last K checkpoints
 
 - **Student:** willowpai2i48h4-tanjiro (branch: `tanjiro/swa-checkpoint-averaging`)
