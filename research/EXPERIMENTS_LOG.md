@@ -239,3 +239,23 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 
 - **Decision:** CLOSED — +10.8% regression (AdamW+sw30 baseline); +20% vs Lion baseline 117.50. Both arms of OneCycleLR failed. Round 2 val (141.12) vs round 1 (141.77) — essentially identical despite schedule running to completion.
 - **Key finding:** At 13 epochs, warmup window is ~1.3 steps (degenerate), model spends first half at peak LR (>5e-4) while cosine baseline anneals through that period. Schedule shape structurally poorly matched to 14-epoch budget. The bottleneck was schedule shape, not truncation. Student's analysis: CosineAnnealingLR wins on short budgets because it spends more time at moderate-to-low LR.
+
+---
+
+## 2026-05-15 18:45 — PR #3357: asinh loss transform for surface pressure
+
+- **Branch:** charliepai2i48h2-tanjiro/asinh-pressure-loss
+- **Hypothesis:** Heavy-tail pressure z-scores dominate the gradient under standard squared-error loss. `torch.asinh()` applied to pressure z-scores compresses gradient for |z|≫1 (∝ 1/|z|), letting the optimizer focus on the bulk distribution rather than rare extreme samples.
+- **Metrics:** `models/model-charliepai2i48h2-tanjiro-asinh-pressure-loss-20260515-173315/metrics.jsonl`
+
+| Split | Lion+sw30 baseline | asinh-pressure | Δ |
+|-------|-------------------|----------------|---|
+| single_in_dist | 137.24 | 108.04 | −21.3% |
+| geom_camber_rc | 124.42 | 90.63 | −27.2% |
+| geom_camber_cruise | 97.32 | 62.68 | −35.6% |
+| re_rand | 111.03 | 78.58 | −29.2% |
+| **val_avg** | **117.5014** | **84.9819** | **−27.7%** |
+| **test_avg** | **115.70 (3-split proxy)** | **76.1441** | **−34.2%** |
+
+- **Decision:** MERGED — new baseline 84.9819. Largest single-PR improvement in the research history.
+- **Key finding:** Asinh-compressed loss is a fundamental improvement in the optimization landscape, not just a regularization trick. Val curve was still descending at epoch 14 (timeout bound). Improvements are uniform across all 4 val/test splits (20-36%), confirming this is not a localized fix to one pathological split but a systemic improvement in gradient quality. Model unchanged — no architecture, optimizer, or scheduler modifications. The 7-line code change applies `torch.asinh()` to only the pressure channel z-scores before computing squared error; evaluation MAE in physical units is unchanged, so the improvement is genuine.
