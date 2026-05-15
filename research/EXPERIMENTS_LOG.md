@@ -556,3 +556,35 @@ Steep epoch-13 descent (94.7 → 90.3 in final epoch) plus flat mask agreement c
 - **PR #3465 (thorfinn): Schedule T_max alignment** — T_max=19 (match bf16 wall-clock epoch count), no warmup, eta_min=lr*0.05 (Arm A); T_max=25, eta_min=lr*0.1 (Arm B). Direct follow-up to the #3346 negative result: the "drop warmup, match T_max to budget" variant identified in thorfinn's own post-mortem.
 - **PR #3466 (askeladd): Bernoulli pressure residual** — predict `p − p_Bernoulli(Re, AoA)` instead of raw p. Removes the analytic dynamic-range component; model specializes on the viscous residual. Arm A: free-stream Bernoulli only (per-sample scalar subtraction). Arm B: free-stream + chord-position correction. Highest-novelty unexplored direction; targets the single_in_dist gap (val=109.91 after Cautious AdamW win).
 
+## 2026-05-15 22:33 — PR #3425: Schedule-Free AdamW [SENT BACK — strong standalone, conflicts with Cautious AdamW; needs head-to-head rebase]
+
+- Branch: `charliepai2i24h5-tanjiro/schedule-free-adamw`
+- Student: charliepai2i24h5-tanjiro
+- Hypothesis: replace AdamW + CosineAnnealingLR with `schedulefree.AdamWScheduleFree` — implicit polynomial-average iterate, no schedule-budget mismatch. RANK #1 in latest research agenda.
+- Status: SENT BACK. Standalone result is the strongest single-arm round-5 gain yet (val_avg=87.24, −18.39% on #3337 baseline). But measured on a baseline without FiLM and pre-Cautious AdamW. Sent back for direct head-to-head replacement of Cautious AdamW on the current merged stack.
+
+### Standalone results (Arm A, lr=5e-4, on tip `ac5df20` — pre-FiLM, pre-Cautious-AdamW, pre-bf16)
+
+| Comparison | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---:|---:|
+| #3337 baseline (tested-against) | 106.8550 | 96.8671 |
+| **Arm A (SF-AdamW lr=5e-4)** | **87.2407** | **78.4670** |
+| Arm B (SF-AdamW lr=7e-4) | 89.5096 | 81.2350 |
+| Δ Arm A vs #3337 | **−18.39%** | **−19.00%** |
+
+Per-split val (Arm A vs #3337): single_in_dist −21.51% (largest gain — directly attacked the worst split), geom_camber_rc −20.52%, geom_camber_cruise −15.85%, re_rand −13.60%. All splits improve, in-dist splits gain most.
+
+LR ablation: lr=5e-4 beats lr=7e-4 by 2.5% on val_avg. The higher-LR arm converges faster for the first 2 epochs only, then arm A overtakes. The "drop the cosine schedule unlocks higher LR" prediction was wrong for this problem.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-tanjiro-sf_adamw_lr5e-4-20260515-203510/metrics.jsonl`
+- `models/model-charliepai2i24h5-tanjiro-sf_adamw_lr7e-4-20260515-212710/metrics.jsonl`
+
+### Decision rationale
+
+SF-AdamW and Cautious AdamW (current merged #3315) both replace the optimizer — they cannot stack. Code-level: SF-AdamW's `AdamWScheduleFree` instantiation conflicts with #3315's `CautiousAdamW` class + instantiation. Mechanistically: SF-AdamW averages iterates via polynomial mean (smooth in time); Cautious AdamW gates per-step update components (per-step quality filter). These are competing approaches to the same problem (noisy iterate quality).
+
+The decision: do a head-to-head on identical full-merged-stack baseline. Send back for rebase that REPLACES Cautious AdamW with SF-AdamW (delete the CautiousAdamW class, remove the cosine scheduler, keep bf16 + FiLM + surf-L1 + EMA + scale-inv unchanged). If the rebased run beats current best (90.34 val), revert #3315 and merge SF-AdamW. If not, close — Cautious AdamW's per-step gating interacts with FiLM better than SF-AdamW's polynomial averaging.
+
+Predicted rebased outcome on full merged stack: val_avg **82–86**, test **74–78**. Two arms requested: lr=5e-4 (direct) and lr=5e-4 + warmup_steps=500 (student's suggestion #3, matching the 5-10% of total steps recommendation).
+
