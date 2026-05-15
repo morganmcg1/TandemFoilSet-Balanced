@@ -32,7 +32,7 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 | test_re_rand | 92.7597 | 1.3172 | 0.5779 |
 | **test_avg (3/4 splits, excl. cruise)** | **115.7589** | 1.4730 | 0.5756 |
 
-*NaN due to data corruption in `.test_geom_camber_cruise_gt/000020.pt` (761 `-inf` values in pressure channel). Fix pending in separate PR.
+*NaN due to data corruption — fixed in PR #3309 (see entry below).
 
 ### Model config
 - Transolver: 5 layers, hidden=128, heads=4, slice_num=64, mlp_ratio=2
@@ -45,4 +45,50 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 cd target/ && python train.py --agent willowpai2i48h1-alphonse \
   --wandb_name "willowpai2i48h1-alphonse/huber_delta01" \
   --wandb_group huber_loss_delta01
+```
+
+---
+
+## 2026-05-15 17:00 — PR #3309: Bugfix: prevent inf*0=NaN in evaluate_split (cruise test fix)
+
+- **Student:** willowpai2i48h1-thorfinn
+- **Branch:** `thorfinn/nanbug-fix`
+- **W&B run:** `g48284pc`
+- **Epochs:** 12/14 best (30-min cap, model unchanged from PR #3159)
+- **Type:** Infrastructure bugfix — val unchanged (within noise), test_avg now valid
+
+### Validation metrics (same model as PR #3159)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **112.8295** |
+| val_single_in_dist | 142.4737 |
+| val_geom_camber_rc | 133.6949 |
+| val_geom_camber_cruise | 77.0254 |
+| val_re_rand | 98.1238 |
+
+### Test metrics (all 4 splits now valid — cruise NaN fixed)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-------|-----------|------------|------------|
+| test_single_in_dist | 129.2485 | — | — |
+| test_geom_camber_rc | 118.9903 | — | — |
+| test_geom_camber_cruise | **83.4377** ← was NaN | — | — |
+| test_re_rand | 94.7221 | — | — |
+| **test_avg (all 4 splits)** | **106.5996** | — | — |
+
+### Fix applied
+In `train.py:evaluate_split`, 4 lines added after `mask = mask.to(device)`:
+```python
+_y_fin = torch.isfinite(y).all(dim=-1)  # [B, N]
+if not _y_fin.all():
+    y = torch.where(_y_fin.unsqueeze(-1), y, torch.zeros_like(y))
+    mask = mask & _y_fin
+```
+
+### Reproduce
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
+  --wandb_name "willowpai2i48h1-thorfinn/nanbug_fix" \
+  --wandb_group nanbug_fix
 ```
