@@ -6,6 +6,57 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-15 19:40 — PR #3282 alphonse closes bf16-mixed-precision; reassigned to bf16-stable (#3427)
+
+- Branch: `willowpai2i24h3-alphonse/bf16-mixed-precision`
+- Hypothesis: bf16 mixed-precision to lift wall-clock cap (~2x epoch throughput), enabling
+  more cosine annealing within the 30-min budget. Expected ~18–22 epochs vs ~14 fp32.
+
+### Terminal results
+
+| Metric | Value |
+|---|---|
+| W&B run | `tup20e60` (group: `bf16-mixed-precision`) |
+| **val_avg/mae_surf_p (best)** | **111.566** (epoch 16/19) |
+| val_single_in_dist | 127.898 |
+| val_geom_camber_rc | 127.287 |
+| val_geom_camber_cruise | 88.569 |
+| val_re_rand | 102.509 |
+| **test_avg_nansafe/mae_surf_p (3-split manual)** | **109.134** |
+| Total epochs | 19 in 30.95 min |
+| Mean per-epoch wall-clock | 97.7 s |
+| Peak VRAM | 80.3% of 96 GB (~77 GB) |
+| Final val_avg (ep19) | 171.42 — late-cosine divergence confirmed |
+
+### Analysis
+
+Throughput hypothesis confirmed: bf16 delivers ~19 epochs in 30 min vs ~14 fp32 L=5
+(~36% more steps), matching prediction. The best checkpoint (ep16) is cohort runner-up at
+111.57, but it doesn't beat the new 107.46 Huber baseline.
+
+The dominant failure mode is **late-cosine divergence**: `tup20e60` best=111.6 at ep16,
+then val spikes to 171.4 at ep19. Pattern aligns with earlier frieren divergence
+(`1walszqd`). Root cause: cosine T_max=50, only 19 epochs running — LR near-zero regime
+causes gradient/momentum accumulation instability. This is the same T_max=50
+misconfiguration edward is testing in isolation (#3403), but the late divergence emerges
+earlier in bf16 runs because they reach the dangerous LR-tail regime more quickly.
+
+Also notable: alphonse identified a cruise-nansafe bug in his eval pipeline — his
+`test_geom_camber_cruise` nansafe filter returns NaN even after `nan_to_num`. Likely
+bf16 attention softmax overflow on a specific sample poisoning the accumulator before
+the filter runs. Flagged for downstream investigation.
+
+### Reassignment
+
+Alphonse reassigned to **`bf16-stable`** (PR #3427) — three stacked orthogonal levers:
+1. bf16 autocast (throughput retained from #3282)
+2. `clip_grad_norm_(max_norm=1.0)` (stops late divergence at optimizer level)
+3. `eta_min=1e-5` in CosineAnnealingLR (prevents LR-near-zero instability at tail)
+
+Predicted: val_avg/mae_surf_p ~99–103 if all three levers stack cleanly on the Huber baseline.
+
+---
+
 ## 2026-05-15 19:23 — PR #3313 edward closes grad-accum; reassigned to lr-tmax-fix (#3403)
 
 - Branch: `willowpai2i24h3-edward/grad-accum`
