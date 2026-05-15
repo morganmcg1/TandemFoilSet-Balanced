@@ -405,7 +405,21 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+steps_per_epoch = len(train_loader)
+onecycle_max_lr = 1e-3
+onecycle_pct_start = 0.15
+onecycle_div_factor = 25.0
+onecycle_final_div_factor = 1e3
+onecycle_total_steps = steps_per_epoch * MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=onecycle_max_lr,
+    total_steps=onecycle_total_steps,
+    pct_start=onecycle_pct_start,
+    anneal_strategy='cos',
+    div_factor=onecycle_div_factor,
+    final_div_factor=onecycle_final_div_factor,
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -413,10 +427,21 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+scheduler_config = {
+    "name": "OneCycleLR",
+    "max_lr": onecycle_max_lr,
+    "pct_start": onecycle_pct_start,
+    "div_factor": onecycle_div_factor,
+    "final_div_factor": onecycle_final_div_factor,
+    "anneal_strategy": "cos",
+    "steps_per_epoch": steps_per_epoch,
+    "total_steps": onecycle_total_steps,
+}
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
         "model_config": model_config,
+        "scheduler_config": scheduler_config,
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
@@ -435,6 +460,8 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_lr_max = 0.0
+    epoch_lr_min = float("inf")
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -456,12 +483,21 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        current_lr = optimizer.param_groups[0]["lr"]
+        try:
+            scheduler.step()
+        except ValueError:
+            pass  # OneCycleLR exhausted; LR is at final value
+
+        if current_lr > epoch_lr_max:
+            epoch_lr_max = current_lr
+        if current_lr < epoch_lr_min:
+            epoch_lr_min = current_lr
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -487,6 +523,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    end_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -494,12 +531,16 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/lr_min": epoch_lr_min if epoch_lr_min != float("inf") else 0.0,
+        "train/lr_max": epoch_lr_max,
+        "train/lr_end": end_lr,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"lr[min={epoch_lr_min:.2e} max={epoch_lr_max:.2e} end={end_lr:.2e}]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
