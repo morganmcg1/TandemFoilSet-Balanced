@@ -47,6 +47,45 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# EMA of model parameters (for evaluation only)
+# ---------------------------------------------------------------------------
+
+
+class EMAModel:
+    """Exponential moving average of model parameters. Updated after each
+    optimizer step; swapped into the model for evaluation only."""
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.ema = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.buffers = {n: b.detach().clone() for n, b in model.named_buffers()}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        d = self.decay
+        for n, p in model.named_parameters():
+            if p.requires_grad:
+                self.ema[n].mul_(d).add_(p.detach(), alpha=1.0 - d)
+        for n, b in model.named_buffers():
+            self.buffers[n].copy_(b.detach())
+
+    def store_and_swap(self, model: nn.Module):
+        """Save live params, swap EMA params into model. Returns saved live params."""
+        saved = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        with torch.no_grad():
+            for n, p in model.named_parameters():
+                if p.requires_grad:
+                    p.copy_(self.ema[n])
+        return saved
+
+    @torch.no_grad()
+    def restore(self, model: nn.Module, saved):
+        for n, p in model.named_parameters():
+            if p.requires_grad and n in saved:
+                p.copy_(saved[n])
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -484,6 +523,8 @@ class Config:
     fourier_n_freqs: int = 16
     fourier_sigma: float = 1.0
     film_mid: int = 128  # FiLM head mid-dim (R2 winning arm)
+    ema_beta: float = 0.999  # EMA β; effective horizon ~1/(1-β) steps
+    ema_start_step: int = 100  # don't start EMA before this step (model still rapidly changing)
 
 
 cfg = sp.parse(Config)
@@ -532,6 +573,8 @@ model = TransolverFiLM(film_mid=cfg.film_mid, **model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
+ema = EMAModel(model, decay=cfg.ema_beta)
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 warmup = LinearLR(optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs)
@@ -560,6 +603,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("ema/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -615,6 +659,8 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
         optimizer.step()
         global_step += 1
+        if global_step >= cfg.ema_start_step:
+            ema.update(model)
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
@@ -629,18 +675,30 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (on EMA model) ---
     model.eval()
+    saved_live = ema.store_and_swap(model)
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, pos_enc)
         for name, loader in val_loaders.items()
     }
+    ema.restore(model, saved_live)
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
     current_lr = optimizer.param_groups[0]['lr']
+
+    # EMA diagnostic: L2 norm of (live − EMA), averaged across parameters.
+    with torch.no_grad():
+        diffs = [
+            (p - ema.ema[n]).norm().item()
+            for n, p in model.named_parameters()
+            if p.requires_grad and n in ema.ema
+        ]
+    ema_diff_norm = sum(diffs) / len(diffs) if diffs else 0.0
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -650,6 +708,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "epoch_time_s": dt,
         "global_step": global_step,
+        "ema/avg_diff_norm": ema_diff_norm,
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
@@ -666,7 +725,10 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        # Save the EMA model state (matching the model that produced avg_surf_p).
+        saved_live_ckpt = ema.store_and_swap(model)
         torch.save(model.state_dict(), model_path)
+        ema.restore(model, saved_live_ckpt)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
