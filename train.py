@@ -387,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    swa_start: int = 5  # average state_dicts from the last `swa_start` realized epochs
 
 
 cfg = sp.parse(Config)
@@ -478,6 +479,7 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+all_epoch_weights: list[dict] = []  # CPU clones of state_dict per realized epoch (for SWA)
 global_step = 0
 train_start = time.time()
 
@@ -564,6 +566,8 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    all_epoch_weights.append({k: v.detach().cpu().clone() for k, v in model.state_dict().items()})
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -627,6 +631,67 @@ if best_metrics:
         n_params=n_params,
         model_config=model_config,
     )
+
+    # --- SWA: average last K state_dicts and re-evaluate ---
+    swa_k = min(max(cfg.swa_start, 1), len(all_epoch_weights))
+    if swa_k >= 2:
+        swa_window = all_epoch_weights[-swa_k:]
+        swa_state: dict[str, torch.Tensor] = {}
+        for key in swa_window[0].keys():
+            stacked = torch.stack([w[key].float() for w in swa_window], dim=0)
+            avg = stacked.mean(dim=0)
+            if swa_window[0][key].dtype in (torch.long, torch.int):
+                avg = avg.round().long()
+            swa_state[key] = avg
+        param_dtype = next(model.parameters()).dtype
+        model.load_state_dict({k: v.to(param_dtype) for k, v in swa_state.items()})
+        model.eval()
+        print(f"\nSWA: averaged last {swa_k} of {len(all_epoch_weights)} epoch state_dicts")
+
+        swa_val_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_val_metrics)
+        print(f"  SWA  val_avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f} "
+              f"(best raw={best_avg_surf_p:.4f}, "
+              f"delta={swa_val_avg['avg/mae_surf_p'] - best_avg_surf_p:+.4f})")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_metrics[name])
+
+        swa_log: dict[str, float] = {}
+        for split_name, m in swa_val_metrics.items():
+            for k, v in m.items():
+                swa_log[f"swa_val/{split_name}/{k}"] = v
+        for k, v in swa_val_avg.items():
+            swa_log[f"swa_val_{k}"] = v  # swa_val_avg/mae_surf_p etc.
+        swa_log["swa_k"] = swa_k
+        swa_log["swa_realized_epochs"] = len(all_epoch_weights)
+
+        if not cfg.skip_test:
+            print("\nEvaluating SWA model on held-out test splits...")
+            swa_test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"  SWA  test_avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    swa_log[f"swa_test/{split_name}/{k}"] = v
+            for k, v in swa_test_avg.items():
+                swa_log[f"swa_test_{k}"] = v
+
+        wandb.log(swa_log)
+        wandb.summary.update(swa_log)
+
+        swa_ckpt = model_dir / "swa_checkpoint.pt"
+        torch.save({k: v.cpu() for k, v in model.state_dict().items()}, swa_ckpt)
+    else:
+        print(f"\nSWA skipped: only {len(all_epoch_weights)} realized epoch(s); need >=2.")
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
 
