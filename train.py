@@ -379,6 +379,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_channel_weight: float = 3.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -487,12 +488,20 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
+
+        # Volume loss: MSE (unchanged) — rich-mesh gradient signal
+        sq_err = (pred - y_norm) ** 2
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        # Surface loss: MAE with per-channel p weight (aligns with ranking metric)
+        surf_err = (pred - y_norm).abs()
+        ch_w = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=pred.device)
+        surf_err = surf_err * ch_w[None, None, :]
+        surf_loss = (surf_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
