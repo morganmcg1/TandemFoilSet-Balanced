@@ -50,6 +50,15 @@ declare a real win.
 **Idle after R3 reviews:** askeladd, fern, nezuko (PRs closed/merged).
 Edward sent back, so likely returns to WIP shortly.
 
+**Pending assignments (rate-limited at 18:42 UTC, GH core resets 19:19 UTC):**
+PR bodies prepared and ready to submit at `/tmp/pr_bodies/`:
+- `askeladd_smoothl1_beta025.md` — SmoothL1 beta=0.25 sweep continuation (build on own R3 win)
+- `fern_aoa_sincos.md` — AoA periodic encoding (cyclic features for foil pitch)
+- `nezuko_dropout01.md` — dropout=0.1 inside Transolver blocks (regularization orthogonal to wd)
+
+Also need to verify #3135 (thorfinn) state on next invocation — was rate-limited
+last cycle.
+
 **Note on rebase risk:** PRs #3376, #3124, #3286 were authored against earlier
 bases (SmoothL1 beta=1.0 + EMA-0.999). On merge of #3280 (beta=0.5), they
 should rebase or their results need to be re-interpreted against the new
