@@ -237,3 +237,52 @@ Variant vs canonical baseline (135.30): variant is +15.9% worse.
 **Follow-up requested:** Rebase branch onto current `icml-appendix-willow-pai2i-48h-r3` (which now has Huber + LR warmup). Re-run dual arm in new wandb_group `fourier-pos-features-v2`: baseline (no Fourier, slice_num=64) + variant (Fourier ON, slice_num=96). Decision rule: merge if rebased variant beats new canonical baseline by ≥1% on val_avg/mae_surf_p AND test 3-split also improves.
 
 **Notable:** Within-PR delta on `test_re_rand` was particularly strong (−15.9%), suggesting Fourier features help with the Reynolds-number generalization split. Worth tracking specifically on the rebased re-test.
+
+## 2026-05-15 17:30 — PR #3283 (alphonse): SOAP optimizer drop-in for AdamW — **REQUEST CHANGES (rebase)**
+
+- Branch: `willowpai2i48h3-alphonse/soap-optimizer`
+- W&B group: [`soap-optimizer`](https://wandb.ai/wandb-applied-ai-team/senpai-v1/groups/soap-optimizer)
+- Baseline run: `7whq4pg2` | Variant run: `e731efke`
+
+**Hypothesis:** Replace AdamW with SOAP (Shampoo-with-Adam in eigenbasis preconditioner, Vyas et al. arXiv:2409.11321). The composite `vol_loss + 10*surf_loss` creates Type-I (magnitude) and Type-II (direction) gradient conflicts between heads; SOAP's per-layer Hessian-style preconditioner should resolve both. Predicted −5 to −20% with ≤5% wall-clock overhead at precondition_frequency=10.
+
+**Result (variant vs in-PR baseline; same lr=5e-4, MSE loss, cosine schedule on BOTH arms — pre-merge config):**
+
+| Metric | baseline-adamw (7whq4pg2) | variant-soap (e731efke) | Δ vs in-PR baseline | Δ vs new canonical (110.83/109.75) |
+|---|---|---|---|---|
+| best_val_avg/mae_surf_p | 155.05 (ep 14) | **78.77 (ep 12)** | **−49.2%** | **−28.9%** |
+| val_single_in_dist/mae_surf_p | 200.99 | 110.15 | −45.2% | |
+| val_geom_camber_rc/mae_surf_p | 159.89 | 93.20 | −41.7% | |
+| val_geom_camber_cruise/mae_surf_p | 124.96 | 55.64 | −55.5% | |
+| val_re_rand/mae_surf_p | 134.35 | 71.11 | −47.1% | |
+| test_single_in_dist/mae_surf_p | 171.05 | 87.70 | −48.7% | |
+| test_geom_camber_rc/mae_surf_p | 145.95 | 81.46 | −44.2% | |
+| test_re_rand/mae_surf_p | 136.20 | 67.38 | −50.5% | |
+| test_geom_camber_cruise/mae_surf_p | NaN | NaN | — | pre-existing bug |
+| test 3-split mean (excl cruise) | 151.07 | **78.85** | **−47.8%** | **−28.2%** |
+| sec/epoch | 133.05s | 137.01s | +3.0% | +3.9% |
+| Peak VRAM | OK (96 GB) | OK | +<50 MB | — |
+| Epochs reached / cap | 14 / 50 | 14 / 50 | — | — |
+
+**Decision:** REQUEST CHANGES — branch has merge conflicts with merged Huber + LR-warmup changes. The result is verified (W&B numbers match student report exactly; tags confirm `willowpai2i48h3-alphonse` only — no cross-tag contamination). However, both arms ran on pre-merge config (MSE + cosine, no warmup), so the comparison against the new canonical baseline (110.83) requires re-running on the merged stack.
+
+**Why this is the most consequential result this round (and likely to merge):**
+- **Largest single-knob improvement seen.** Even comparing the pre-merge SOAP arm (78.77) against the post-merge canonical (110.83), variant beats by **−28.9% on val**. That's larger than Huber (−18.1%) and LR-warmup (−8.9%) combined.
+- **Wall-clock neutral.** +3% per-epoch is negligible — does not eat into the 30-min cap.
+- **Generalization gap shrinks proportionally.** The largest test gain is on `test_re_rand` (−50.5%), and val_geom_camber_cruise drops −55.5%. This is consistent with the curvature-aware step finding flatter minima, not just lower train loss.
+- **No instability or NaN issues** — the SOAP arm completes the full 14-epoch budget cleanly under the wall-clock cap.
+
+**Mechanism (student analysis, plausible):**
+- AdamW's diagonal preconditioner approximates 1/sqrt(diag(Fisher)). Under the 10× surf_weight scaling, the off-diagonal coupling between layers becomes important — SOAP's L/R eigenbasis captures per-layer cross-parameter curvature, which is the right structure.
+- The flatter-minimum hypothesis would predict that the gain compounds with regularizers (Huber, AoA aug, entropy reg) rather than being subsumed by them. Worth verifying empirically.
+
+**Action requested (full instructions in PR comment):**
+1. Rebase `willowpai2i48h3-alphonse/soap-optimizer` onto current `icml-appendix-willow-pai2i-48h-r3` (which has Huber + LR warmup merged).
+2. Resolve `train.py` conflicts: keep Huber loss, keep SequentialLR(LinearLR, CosineAnnealingLR) schedule, wire SOAP as alternative inside `--optimizer` switch. Keep `target/soap.py` and Config additions verbatim.
+3. Re-run BOTH arms on the merged stack in new wandb_group `soap-on-merged`:
+   - `baseline-adamw-merged` (Huber + warmup + AdamW)
+   - `variant-soap-merged` (Huber + warmup + SOAP)
+4. Decision rule for merge: SOAP variant beats new canonical 110.83 on `val_avg/mae_surf_p`. Given the pre-merge SOAP arm already achieved 78.77 standalone, this is a high-probability outcome.
+
+**Strategic implication:**
+If SOAP+Huber+LRwarmup stacks orthogonally (expected: val ~60-80), this is the new dominant lever and round-3 strategy pivots to (a) tuning SOAP hyperparams (LR sweep with SOAP, preconditioner frequency), (b) verifying other round-2 hypotheses still gain on the SOAP-stacked baseline.
