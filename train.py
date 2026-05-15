@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -38,6 +39,7 @@ from data import (
     TEST_SPLIT_NAMES,
     VAL_SPLIT_NAMES,
     X_DIM,
+    SplitDataset,
     accumulate_batch,
     aggregate_splits,
     finalize_split,
@@ -45,6 +47,42 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Pressure target transform (signed-log)
+# ---------------------------------------------------------------------------
+# Pressure spans ~3 orders of magnitude with Re (100K-5M). signed-log compresses
+# tail magnitude while preserving sign so high- and low-Re samples contribute
+# more equally to the normalized-space loss.
+PRESSURE_EPS = 1.0           # linear-to-log crossover (m^2/s^2)
+PRED_LOG_CLIP = 15.0         # clip pred in log-pressure space before invert
+
+
+def signed_log(x: torch.Tensor, eps: float = PRESSURE_EPS) -> torch.Tensor:
+    return torch.sign(x) * torch.log1p(torch.abs(x) / eps)
+
+
+def signed_log_inv(x: torch.Tensor, eps: float = PRESSURE_EPS) -> torch.Tensor:
+    return torch.sign(x) * torch.expm1(torch.abs(x)) * eps
+
+
+def transform_target(y: torch.Tensor, eps: float = PRESSURE_EPS) -> torch.Tensor:
+    """Apply signed-log to the pressure channel (y[..., 2])."""
+    out = y.clone()
+    out[..., 2] = signed_log(y[..., 2], eps=eps)
+    return out
+
+
+def invert_target(
+    y_logspace: torch.Tensor,
+    eps: float = PRESSURE_EPS,
+    clip: float = PRED_LOG_CLIP,
+) -> torch.Tensor:
+    """Invert signed-log on the pressure channel, with clip to avoid expm1 overflow."""
+    out = y_logspace.clone()
+    p_log = torch.clamp(y_logspace[..., 2], -clip, clip)
+    out[..., 2] = signed_log_inv(p_log, eps=eps)
+    return out
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -217,7 +255,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, pressure_eps: float) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -236,8 +274,22 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Sample-level finite check matches the skip semantics in
+            # ``data/scoring.accumulate_batch``. We drop non-finite samples
+            # from the batch before any further math so NaN/inf in y or pred
+            # cannot poison loss or MAE accumulators (NaN * 0 = NaN in IEEE 754).
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_sample.any():
+                continue
+            if not y_finite_sample.all():
+                x = x[y_finite_sample]
+                y = y[y_finite_sample]
+                is_surface = is_surface[y_finite_sample]
+                mask = mask[y_finite_sample]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_trans = transform_target(y, eps=pressure_eps)
+            y_norm = (y_trans - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -253,7 +305,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_logspace = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = invert_target(pred_logspace, eps=pressure_eps)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -358,6 +411,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    pressure_eps: float = PRESSURE_EPS
 
 
 cfg = sp.parse(Config)
@@ -368,6 +422,50 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+
+
+def compute_log_pressure_stats(
+    splits_dir: str, eps: float, debug: bool, num_workers: int = 8
+) -> tuple[float, float, int]:
+    """Stream training set and compute mean/std of signed-log(p) over finite nodes."""
+    ds = SplitDataset(Path(splits_dir) / "train")
+    if debug:
+        ds.files = ds.files[:6]
+    loader = DataLoader(
+        ds, batch_size=1, num_workers=num_workers,
+        collate_fn=lambda b: b[0], shuffle=False,
+    )
+    n = 0
+    s = 0.0
+    s2 = 0.0
+    for _, y, _ in tqdm(loader, desc="log-p stats"):
+        p_log = signed_log(y[:, 2], eps=eps).double()
+        m = torch.isfinite(p_log)
+        if not m.any():
+            continue
+        p = p_log[m]
+        n += p.numel()
+        s += p.sum().item()
+        s2 += (p * p).sum().item()
+    mean = s / max(n, 1)
+    var = s2 / max(n, 1) - mean * mean
+    std = math.sqrt(max(var, 1e-12))
+    return mean, std, n
+
+
+log_p_mean, log_p_std, log_p_n = compute_log_pressure_stats(
+    cfg.splits_dir, cfg.pressure_eps, cfg.debug
+)
+print(
+    f"log-pressure stats (eps={cfg.pressure_eps}): "
+    f"mean={log_p_mean:.4f} std={log_p_std:.4f} n={log_p_n} "
+    f"(raw was mean={stats['y_mean'][2].item():.2f} std={stats['y_std'][2].item():.2f})"
+)
+stats["y_mean"] = stats["y_mean"].clone()
+stats["y_std"] = stats["y_std"].clone()
+stats["y_mean"][2] = log_p_mean
+stats["y_std"][2] = log_p_std
+
 stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -419,7 +517,27 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "pressure_transform": {
+            "type": "signed_log",
+            "eps": cfg.pressure_eps,
+            "pred_log_clip": PRED_LOG_CLIP,
+            "log_p_mean": log_p_mean,
+            "log_p_std": log_p_std,
+            "log_p_n_finite_nodes": log_p_n,
+        },
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "config",
+    "pressure_transform": {
+        "type": "signed_log",
+        "eps": cfg.pressure_eps,
+        "pred_log_clip": PRED_LOG_CLIP,
+        "log_p_mean": log_p_mean,
+        "log_p_std": log_p_std,
+        "log_p_n_finite_nodes": log_p_n,
+    },
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -442,7 +560,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_trans = transform_target(y, eps=cfg.pressure_eps)
+        y_norm = (y_trans - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
@@ -467,7 +586,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.pressure_eps)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -525,7 +644,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.pressure_eps)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
