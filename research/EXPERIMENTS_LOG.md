@@ -79,3 +79,93 @@ Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 - **Nezuko's next PR (separate per-channel prediction heads).** Researcher-agent Idea 12; addresses channel-scale mismatch (p has 10× the dynamic range of Ux/Uy). Independent of all in-flight round-1 PRs.
 - **Scoring bug-fix PR.** One-line `nan_to_num` patch on `data/scoring.py`. Will fix `test_avg/mae_surf_p` for every future result. Needs advisor waiver of read-only — separate from regular experiment PRs.
 - **EMA-vs-raw delta logging.** Cheap to add to the trainer (one extra `evaluate_split` per epoch). Would have made the EMA hypothesis test cleaner; folding into a future infra PR.
+
+## 2026-05-15 14:35 — PR #3136: Increase surf_weight 10->25 to bias toward primary metric — MERGED
+
+- **Student branch**: `charliepai2i24h1-frieren/surfw25`
+- **Hypothesis**: The primary metric is surface pressure MAE but the trainer uses `loss = vol_loss + 10 * surf_loss`. Surface nodes are only a small fraction of mesh nodes, so even at surf_weight=10 the volumetric loss may dominate the gradient. Raising the weight should make the model prioritize surface accuracy.
+- **Verdict**: MERGED. Beat current baseline (#3137 EMA at 129.42) by 2.4% relative.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p (primary, best)** | **126.3241** (epoch 14) |
+| test_avg/mae_surf_p | NaN (same cruise GT bug; 3-split mean = 123.43) |
+| peak_memory_gb | 42.11 / 96 |
+| epochs completed | 14 of 50 (cut by `SENPAI_TIMEOUT_MINUTES=30`) |
+| trunk config used by student | n_hidden=128, n_head=4 (pre-#3130) |
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| single_in_dist | 158.79 | 136.67 |
+| geom_camber_rc | 127.26 | 117.86 |
+| geom_camber_cruise | **102.20** | **NaN** (corrupt GT) |
+| re_rand | 117.04 | 115.75 |
+| **avg** | **126.32** | **NaN (123.43 over valid 3)** |
+
+- **Metric artifacts**: `models/model-surfw25-20260515-132819/metrics.jsonl`, `metrics.yaml`, `config.yaml`
+
+### Analysis
+
+- Single attributable change applied cleanly. Training stable, no NaN/Inf in val for any of 14 epochs.
+- Per-split surface pressure improved on every val split vs the #3137 baseline numbers (most notably val_geom_camber_rc 145.10 → 127.26, -12.3%). This is consistent with the surf_weight knob directly biasing the optimizer toward surface accuracy.
+- **Stacking note**: frieren ran with n_hidden=128 (pre-#3130). The squash-merge layers only the surf_weight change onto the merged wider+EMA. Active recipe is now **wider + EMA + surf_weight=25** — a 3-axis stack that has never been measured end-to-end. The first PR based on this new advisor branch will produce the first true measurement; documented in BASELINE.md.
+- Same cruise-test NaN as every other PR. Frieren's diagnostic chain (`Inf * 0 = NaN` through the mask) matches nezuko's and tanjiro's independently. The pattern is now well-established and a fix is overdue.
+
+### Follow-ups queued
+
+- **Idea 2 refinement (per-channel p_surf_weight).** With surf_weight=25 now in the baseline, layer a per-channel weight specifically on the p component of surf_loss (e.g. `p_surf_weight=3`). This isolates the channel-level boost without further raising the global surface weight.
+- **Schedule alignment for round 2.** The cosine T_max=50 issue continues to affect every run.
+
+## 2026-05-15 14:35 — PR #3273: log(Re)-conditioned output scaler (ReScaler) — SENT BACK
+
+- **Student branch**: `charliepai2i24h1-edward/rescaler-logre`
+- **Hypothesis**: Per-sample target std varies by 10× within a single domain (e.g., `val_single_in_dist` y_std range 458/2077). A learned MLP(log_Re) → exp(scale) per-sample output multiplier should let the trunk predict a small normalized residual while the scaler recovers physical magnitude. Predicted 5-12% improvement on val_avg/mae_surf_p, with biggest gain on Re_rand and geom_camber_cruise splits. Predicted side benefit: eliminate the cruise-test NaN.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best) | 153.3094 (epoch 9 of 9 realized) |
+| Δ vs pre-#3137 baseline (166.50) | -7.9% (matches predicted 5-12% range) |
+| Δ vs current baseline (#3137, 129.42) | +18.5% (WORSE; no EMA in student's run) |
+| test_avg/mae_surf_p | NaN (cruise pressure still overflowed → 3-split mean 154.42) |
+| peak_memory_gb | 63.0 / 96 |
+| epochs completed | 9 of 50 (cut by 30-min cap) |
+| trunk config used by student | n_hidden=192, n_head=6 (post-#3130, pre-#3137) |
+| Per-split val Δ vs #3130 | single_in_dist -8.9%, rc -6.1%, cruise -7.2%, re_rand -9.3% |
+
+- **Metric artifacts**: `models/model-rescaler-logre-20260515-135045/metrics.jsonl`, `metrics.yaml`
+
+### Verdict: send back for rebase + tighter bound
+
+- The hypothesis was validated on its own terms (-7.9% vs the baseline that existed when assigned). But the current baseline now includes EMA, and the student didn't see EMA — so 153.31 doesn't beat 129.42.
+- The ReScaler approach is independent of EMA, so the combined effect is likely additive. The send-back asks for: (a) rebase onto the post-#3137 advisor branch (wider+EMA+surf_weight=25), (b) tighten `max_log_scale` from 2.0 → 1.0 (the y-std ratio across splits is only ~3×, so exp(±1)=[0.37, 2.72] is plenty), (c) optional `pred.clamp(-50, 50)` defense before scaling to prevent trunk overflow on outlier samples.
+- If the rebased rerun shows ReScaler + EMA + surf_weight=25 beats 126.32, we merge.
+
+## 2026-05-15 14:35 — PR #3141: Random Fourier features on position coordinates — SENT BACK
+
+- **Student branch**: `charliepai2i24h1-tanjiro/fourier-pos`
+- **Hypothesis**: Position coordinates fed directly through the preprocess MLP suffer from neural-network spectral bias — the network struggles to fit high-frequency surface-pressure variation. Random Fourier features (num_freqs=16, sigma=4.0) on (x, z) before preprocess should let the network express higher-frequency content cleanly. Predicted 5-8% improvement.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best) | 136.1451 (epoch 14 of 15 realized) |
+| Δ vs current baseline (#3137, 129.42) | +5.2% (WORSE) |
+| test_avg/mae_surf_p (raw) | NaN |
+| **test_avg/mae_surf_p (NaN-safe re-eval)** | **122.9001** |
+| peak_memory_gb | 42.33 / 96 |
+| epochs completed | 15 of 50 |
+| trunk config used by student | n_hidden=128, n_head=4 (pre-#3130) |
+
+- **Metric artifacts**: `models/model-charliepai2i24h1-tanjiro-fourier-pos-20260515-131052/metrics.jsonl`, `test_metrics_clean.json`, `eval_test_clean.py`
+
+### Verdict: send back for rebase + longer-budget rerun
+
+- Val didn't beat current baseline (136.14 vs 129.42), BUT the NaN-safe test re-eval (122.90) is the lowest test number we've ever seen on this branch — and val was still descending at the cutoff (best was epoch 14 of 15 realized).
+- The student also delivered a working NaN-safe re-eval (`eval_test_clean.py`) which respects the read-only constraint on `data/scoring.py`. **This pattern is now the recommended standard for reporting test numbers** until the scoring bug is patched.
+- Send back asks for: (a) rebase onto post-#3137 advisor (wider+EMA+surf_weight=25), (b) consider a sigma sweep (σ ∈ {2, 4, 8}) since σ=4 may not be optimal at this dataset's spatial frequency content, (c) re-run with longer effective horizon (the cosine schedule was sized for 50 but only ~15 ran — at minimum, request `T_max=epochs` alignment).
+- If the rebased rerun shows Fourier + EMA + surf_weight=25 beats 126.32 val_avg, we merge.
