@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 21:35 UTC
+- **Last updated:** 2026-05-15 21:55 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (checked at 21:30 UTC — no open issues).
+- **Most recent direction from human researcher team:** None (checked at 21:30 UTC — no open issues for this advisor branch).
 
 ## Current best baseline
 
@@ -22,16 +22,25 @@ Per-split validation:
 
 All 4 splits improve by ≥20%. Val trajectory strictly monotone at epoch 14 (no plateau — longer training budget might improve further).
 
-## Round 3 status (3 new assignments + 3 awaiting terminal close)
+## Round 3 status (8 active assignments, zero idle students)
 
-| PR | Student | Hypothesis | Status | Latest result |
-|----|---------|-----------|--------|---------------|
-| #3454 | edward | lr-sweep-clip-huber (lr=1e-3, 2e-3, 5e-3) | wip — just assigned | — |
-| #3456 | nezuko | tmax9-clip-huber (T_max=14+9 on full stack) | wip — just assigned | — |
-| #3458 | tanjiro | huber-delta-sweep (δ=0.5, 1.0, 2.0, 0.0) | wip — just assigned | — |
-| #3367 | alphonse | ema-decay-scan | wip — awaiting terminal (all arms done: 157.50, 311.03, 156.53) | will close |
-| #3388 | frieren | swa-plateau-average | wip — awaiting terminal (swa_start=8: 121.46) | will close |
-| #3396 | askeladd | weight-decay-sweep | wip — awaiting terminal (best wd=1e-3: 123.77) | will close |
+### Tier 1 — extend the EMA+clip+Huber stack (assigned earlier in round)
+
+| PR | Student | Hypothesis | Status |
+|----|---------|-----------|--------|
+| #3454 | edward | lr-sweep-clip-huber (lr=1e-3, 2e-3, 5e-3) | wip |
+| #3456 | nezuko | tmax9-clip-huber (T_max=14+9 on full stack) | wip |
+| #3458 | tanjiro | huber-delta-sweep (δ=0.5, 1.0, 2.0, 0.0) | wip |
+
+### Tier 2 — orthogonal mechanisms (assigned 21:50 UTC)
+
+| PR | Student | Hypothesis | Mechanism | EV |
+|----|---------|-----------|-----------|-----|
+| #3473 | fern | geometry-augmentation-vertical-mirror (single-foil, AUGMENT_PROB=0.5) | Data | Medium-High |
+| #3474 | alphonse | ema-decay-fast (0.997, 0.995, 0.99) | Optim | Low-Medium |
+| #3475 | askeladd | asinh-pressure (heavy-tail compression on p channel) | Output rep | Medium |
+| #3476 | frieren | swa-on-full-stack (SWA + EMA dual-shadow, min-val checkpoint selection) | Optim | Low-Medium |
+| #3477 | thorfinn | physics-continuity-loss (∂Ux/∂x + ∂Uy/∂z = 0 soft penalty) | Loss | Medium |
 
 ## Confirmed winners (merged)
 
@@ -49,40 +58,35 @@ EMA trajectory averaging (decay=0.999): −11.1% val_avg, all 4 splits improve. 
 - **grad_clip=5 + Huber=1.0 on EMA baseline: −22.4% val_avg** — largest single-round improvement in program
 - Mechanism: EMA baseline had clip=1.0 biting 100% of steps (median pre-clip norm ~16×). Raising to 5.0 allows 5× larger effective steps. Huber δ=1.0 caps per-sample loss influence from high-Re outliers. Three mechanisms (EMA, clip, Huber) are orthogonal.
 - Budget-aware cosine (T_max=9): −2.9% on EMA+warmup; finds wider minima but weaker than clip+Huber
-- EMA decay sweep (0.9995/0.9999): fails — slower averaging doesn't converge in 14-epoch budget
-- SWA (swa_start=6/8): marginally positive vs EMA-only (121.46 vs 121.68) but far from new baseline
+- EMA decay sweep slow-direction (0.9995/0.9999): fails — slower averaging doesn't converge in 14-epoch budget. Round-3 retries the opposite direction (alphonse #3474).
+- SWA on EMA-only baseline (swa_start=6/8): marginally positive vs EMA-only (121.46 vs 121.68) but far from new baseline. Round-3 retries on full stack (frieren #3476).
 - Weight decay (1e-3→1e-2): all regress; EMA+Huber already handles the regularization axes
 - Per-channel heads: confirmed dead-end (Round 1 finding holds with EMA)
 
 ### Architecture insight: effective LR under clip
-At clip=5, the gradient bites ~92–99% of steps (median pre-clip norm 16–34×). The effective per-step update is 5/16 × 5e-4 ≈ 1.6e-4. Higher lr (1e-3, 2e-3) on the same clipped config could proportionally accelerate convergence.
+At clip=5, the gradient bites ~92–99% of steps (median pre-clip norm 16–34×). The effective per-step update is 5/16 × 5e-4 ≈ 1.6e-4. Higher lr (1e-3, 2e-3) on the same clipped config could proportionally accelerate convergence (tested by edward #3454).
 
 ## Round 3 research themes
 
-### Tier 1: Extend EMA + clip + Huber stack
-- **LR sweep** (PR #3454, edward): lr=1e-3, 2e-3, 5e-3 on new baseline; expected val_avg ∈ [88, 94] for best arm
-- **T_max alignment + full stack** (PR #3456, nezuko): T_max=14 (realized budget exact) + clip + Huber; expected ~90
-- **Huber delta sweep** (PR #3458, tanjiro): δ=0.5, 1.0, 2.0, 0.0 ablation; find optimal transition threshold
+### Theme A — Hyperparameter tuning of the merged stack
+Three sweeps directly probe the stack's optimal operating point: LR (edward), cosine T_max (nezuko), Huber δ (tanjiro). All expected to deliver 0–6% improvement if the new baseline is near-optimal; >6% would indicate one of the merged hyperparams was sub-optimal.
 
-### Tier 2: Orthogonal mechanisms (queued for future rounds)
-- **Geometry augmentation** (H-10): vertical mirror for single-foil (+AoA flip, Uy flip) — doubles effective dataset, orthogonal to all current experiments
-- **Asinh pressure normalization** (H-03): compress heavy-tail pressure distribution
-- **Physics continuity loss** (H-06): ∂Ux/∂x + ∂Uy/∂y ≈ 0 soft constraint on volume nodes
-- **SWA on full EMA+clip+Huber stack**: SWA was tested on EMA-only; worth testing on the new stack
-- **EMA decay tuning** (0.99, 0.995): slower average decay (faster convergence) for 14-epoch budget
+### Theme B — Orthogonal mechanisms with compounding potential
+- **Geometry augmentation** (fern #3473): pressure-symmetric data doubling — orthogonal to all optimizer/loss changes
+- **Asinh pressure** (askeladd #3475): output-representation change targeting the heavy-tail pressure distribution
+- **Physics-informed continuity** (thorfinn #3477): soft constraint on divergence — orthogonal regularizer
+- **SWA on full stack** (frieren #3476): captures wider-minimum geometry that EMA's exponential averaging may smooth over
 
-### Tier 3: Architecture changes (not worth exploring until Tier 1 plateau)
-- Higher lr + larger batch (if VRAM allows) — avoid Tier 3 until simple levers exhausted
-
-## Current focus
-
-**Round 3 goal: push val_avg below 90.** Key lever is LR (effective LR suppressed by clip at ~1.6e-4). Secondary lever is T_max alignment (cosine must decay in realized window). Huber delta is a precision sweep to optimize the already-strong baseline.
-
-Three students (alphonse, frieren, askeladd) are pending terminal SENPAI-RESULT submission; their PRs will close as dead-ends upon submission. When they close, 3 more students will be idle and need Round-3 assignments (geometry augmentation, asinh pressure, SWA-on-clip-stack are the top candidates).
+### Theme C — Re-explore failed axes from the opposite direction
+- **Fast EMA decay** (alphonse #3474): the opposite direction from her slow-decay sweep. Hypothesis: with the new much faster-converging stack, decay=0.999 may be too smoothing.
 
 ## Operational notes
 
 - **data/scoring.py NaN bug**: `test_geom_camber_cruise_gt/000020.pt` has inf GT pressure → `test_avg/mae_surf_p=NaN` fleet-wide. Students report 3-split test mean.
 - Per-run budget: 30 min wall clock, 50 epoch cap. Wall clock binds (~14 epochs). Val still monotone at ep14 — each epoch adds value.
-- **Zero idle students** (3 fresh Round-3 + 3 awaiting terminal + 2 still WIP from Round-2 assignments not closed yet: #3367, #3388, #3396)
-- REST API: healthy (~4100/5000). GraphQL: healthy (~4600/5000).
+- **Zero idle students**: 8/8 student slots occupied with WIP PRs.
+- REST API: was at 0/5000 during assignment burst (~21:46–21:55 UTC); PRs created successfully via GraphQL path. GraphQL: healthy (~3200/5000).
+
+## Round 3 goal
+
+Push `val_avg/mae_surf_p` below 90. Realistic best-case: a 3–6% compound win combining a Tier-2 orthogonal mechanism (fern's geometry mirror is the highest-EV candidate) with one of the Tier-1 sweep winners (edward LR sweep most likely). Worst-case: Tier-1 confirms the merged stack is already at the local optimum, and Tier-2 mechanisms become the next merge candidates.

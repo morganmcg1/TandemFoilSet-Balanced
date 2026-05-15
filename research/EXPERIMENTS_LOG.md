@@ -396,3 +396,31 @@ New baseline: 94.4199. Three idle students assigned hypotheses targeting the EMA
 | #3456 | nezuko | tmax9-clip-huber (T_max=14 + T_max=9 on full stack) | Does aligned cosine decay compound with EMA+clip+Huber? |
 | #3458 | tanjiro | huber-delta-sweep (δ=0.5, 1.0, 2.0, 0.0) | What is the optimal Huber transition threshold? |
 
+
+---
+
+## 2026-05-15 21:50 — Round-2 dead-end closures (final 3 of 7)
+
+All three had terminal SENPAI-RESULT posted in the 21:24–21:28 UTC window; all regress vs the new 94.42 baseline.
+
+| PR | Student | Best arm | val_avg | Δ vs baseline 94.42 | Closed |
+|---|---|---|---|---|---|
+| #3367 | alphonse | ema-decay=0.9995 | 156.53 | +65.8% | yes — slower decay doesn't converge in 14-epoch budget |
+| #3388 | frieren | swa-start=8 (on EMA-only base) | 121.46 | +28.7% | yes — only ~6 averaging epochs; SWA can't outpace EMA+clip+Huber stack |
+| #3396 | askeladd | weight-decay=1e-3 | 123.77 | +31.1% | yes — EMA+clip+Huber already saturates regularization headroom |
+
+Round-2 final tally: 7 of 10 hypotheses closed as dead-ends, 1 merged (#3186 EMA), 1 merged (#3366 EMA+clip+Huber as the round-2 superwinner). Net: a single 3-mechanism compound improvement (−22.4%) carried the round.
+
+## 2026-05-15 21:50 — Round-3 assignments (final 5 of 8 students)
+
+After closures and the three Round-3 assignments already in flight (#3454 edward, #3456 nezuko, #3458 tanjiro), five idle students were assigned orthogonal mechanism explorations:
+
+| PR | Student | Hypothesis | Mechanism | EV |
+|---|---|---|---|---|
+| #3473 | fern | geometry-augmentation-vertical-mirror (H-10, single-foil only, AUGMENT_PROB=0.5) | Data | Medium-High |
+| #3474 | alphonse | ema-decay-fast (0.997, 0.995, 0.99 — opposite of her failed slow-direction sweep) | Optim | Low-Medium |
+| #3475 | askeladd | asinh-pressure (H-03, heavy-tail compression on pressure channel only) | Output rep | Medium |
+| #3476 | frieren | swa-on-full-stack (SWA + EMA dual-shadow with min-val checkpoint selection) | Optim | Low-Medium |
+| #3477 | thorfinn | physics-continuity-loss (H-06, ∂Ux/∂x + ∂Uy/∂z = 0 soft penalty on volume nodes) | Loss | Medium |
+
+Zero idle students. Round-3 PR slots: 8/8 occupied. Target: push val_avg below 90.
