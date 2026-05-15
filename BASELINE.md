@@ -2,6 +2,31 @@
 
 ## Current Best
 
+### 2026-05-15 19:26 — PR #3182: Huber loss + gradient clipping (clip=0.25) — charliepai2i48h5-askeladd
+
+- **val_avg/mae_surf_p**: **98.62** (best_epoch=14/50)
+- **test_avg/mae_surf_p**: **88.14** (NaN-safe eval)
+- **Improvement over prior best**: -4.4% val / -4.2% test vs Huber-only (103.18/92.02)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p |
+  |---|---|
+  | single_in_dist | 104.75 |
+  | geom_camber_rc | 104.65 |
+  | geom_camber_cruise | 59.24 |
+  | re_rand | 83.90 |
+- **Metric artifacts**: `models/model-charliepai2i48h5-askeladd-huber-0.3-clip-0.25-20260515-182526/metrics.jsonl`
+- **Key finding**: Huber-0.3 + grad_clip=0.25 are additive — both attack heavy-tail gradients at different scales (per-sample residual vs batch-level update). clip_frac=1.0 at both 0.5 and 0.25; residual tail pressure signal still present after Huber, so clipping contributes genuine variance reduction.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --experiment_name huber-0.3-clip-0.25 \
+      --huber_delta 0.3 \
+      --grad_clip_max_norm 0.25 \
+      --agent charliepai2i48h5-askeladd
+  ```
+
+---
+
 ### 2026-05-15 16:28 — PR #3213: Huber loss (delta=0.3) — charliepai2i48h5-frieren
 
 - **val_avg/mae_surf_p**: **103.18** (best_epoch=13/50)
