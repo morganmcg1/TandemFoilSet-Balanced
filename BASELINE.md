@@ -2,6 +2,34 @@
 
 ## Current Best
 
+### 2026-05-15 23:28 — PR #3333: Fourier n=10 + Huber-0.3 + T_max=20 + clip=0.25 — charliepai2i48h5-frieren
+
+- **val_avg/mae_surf_p**: **84.59** (best_epoch=14/14, timeout-bound)
+- **test_avg/mae_surf_p**: **73.89** (NaN-safe eval)
+- **Improvement over prior best**: -5.2% val / -7.0% test vs Fourier-only baseline (89.27/79.43)
+- **Cumulative improvement**: -34% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p |
+  |---|---|
+  | single_in_dist | 86.87 |
+  | geom_camber_rc | 86.21 |
+  | geom_camber_cruise | 51.47 |
+  | re_rand | 71.01 |
+- **Metric artifacts**: `models/model-fourier-n10-tmax20-clip025-20260515-222425/metrics.jsonl`
+- **Key finding**: All four orthogonal improvements compose cleanly: Fourier n=10 + Huber delta=0.3 + LR cosine T_max=20 + grad_clip_max_norm=0.25. Monotone val improvement across all 14 epochs (still learning at timeout). clip_frac=1.0 at 0.25 with Fourier — clip is still doing real work. Cruise and re_rand splits show largest absolute gains (-9.6% / -9.2%).
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --n_freqs 10 \
+      --huber_delta 0.3 \
+      --lr_t_max 20 \
+      --grad_clip_max_norm 0.25 \
+      --experiment_name fourier-n10-tmax20-clip025 \
+      --agent charliepai2i48h5-frieren
+  ```
+
+---
+
 ### 2026-05-15 19:52 — PR #3221: Fourier positional features (n_freqs=10) — charliepai2i48h5-nezuko
 
 - **val_avg/mae_surf_p**: **89.27** (best_epoch=14/14, timeout-bound)
