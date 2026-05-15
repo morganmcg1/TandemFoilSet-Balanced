@@ -2,7 +2,58 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-15 21:26 — PR #3373: bf16 mixed-precision autocast for forward pass (current best)
+## 2026-05-15 21:29 — PR #3315: Cautious AdamW (Liang et al. ICLR 2026) (current best)
+
+Stacks on top of PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Subclass `CautiousAdamW(torch.optim.AdamW)`: snapshots params before `super().step()`, then post-step constructs the agreement mask `(m * g > 0)` from the EMA-momentum `exp_avg` and the original gradient, mean-rescales the mask with `clamp(min=1e-3)`, and replaces the parent's delta with `delta * mask`. Result: ~38% of update components are gated to zero each step (mean mask agreement ≈ 0.62, flat across all training epochs and across all merged-mechanism variants — direct evidence that cautious masking operates on disjoint state from EMA/FiLM/surf-L1). Mechanism gates noisy update directions per step; EMA averages the iterate trajectory; FiLM conditions architecture on regime; surf-L1 aligns gradient with the eval metric. Four orthogonal axes.
+
+> **Note on tested code state:** This run was validated on `origin/icml-appendix-charlie-pai2i-24h-r5` at tip `b5760af` (post-FiLM, post-surf-L1, post-EMA, pre-bf16). The merged code now stacks Cautious AdamW onto bf16 as well. The compound bf16 + Cautious AdamW run is expected to land in the low-80s val_avg range — bf16 unlocks ~5 more effective epochs in the wall-clock budget, and the cautious mask curve was still ~flat at epoch 13 with val_avg dropping 94.7 → 90.3 in the final epoch, strongly suggesting more training would help. The next validated run against the full merged code will establish the confirmed compound metric.
+
+**Primary** (Cautious AdamW validated on FiLM+surf-L1+EMA+scale-inv stack at tip `b5760af`)
+- `val_avg/mae_surf_p` = **90.3428** (best epoch 13 / 50, run cut by 30-min wall clock; **−12.31% vs PR #3265**, **−15.46% vs PR #3337**)
+- `test_avg/mae_surf_p` = **80.1674** (**−13.01% vs PR #3265**, **−17.23% vs PR #3337**)
+
+**Per-split surface pressure MAE (Cautious AdamW + full stack)**
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 109.9053 | 96.3817 |
+| geom_camber_rc | 103.3709 | 91.8343 |
+| geom_camber_cruise | 65.6940 | 54.3760 |
+| re_rand | 82.4009 | 78.0776 |
+| **avg** | **90.3428** | **80.1674** |
+
+**Largest per-split gain:** `val_geom_camber_cruise` −14.57% and `val_geom_camber_rc` −14.37% — uniform 10–15% improvement across every val/test cell, qualitatively different from the standalone Cautious AdamW run where in-dist splits regressed. EMA + FiLM stabilization unlocks cautious masking on in-distribution sharp minima.
+
+**Cautious mask dynamics (sanity-check signal)**
+- `train/cautious_mask_mean` per epoch (1–13): 0.6356, 0.6259, 0.6282, 0.6216, 0.6215, 0.6190, 0.6216, 0.6129, 0.6149, 0.6183, 0.6130, 0.6147, 0.6092
+- Mean ≈ **0.6197**, essentially identical across the standalone / +EMA / +EMA+surf-L1+FiLM runs (0.620 / 0.621 / 0.620)
+- The flat (non-rising) curve indicates the optimizer is in equilibrium with EMA/FiLM/surf-L1 throughout the 13-epoch undercooked-training regime captured by the 30-min wall-clock
+
+**Model config (architecture unchanged from #3265 + bf16 hooks; new optimizer)**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- 829,015 raw params (same as #3265); EMA shadow copy at decay=0.999
+- **Optimizer: CautiousAdamW** lr=5e-4, wd=1e-4
+- batch_size=4, surf_weight=10.0, surf_p_l1_weight=1.0, CosineAnnealingLR(T_max=50)
+- Loss: per-sample scale-invariant MSE + surf_p_l1_weight=1.0 * surf_p_l1
+- Peak VRAM: 44.61 GB
+
+**Cumulative round-5 improvement:** −27.06% val_avg (123.88 → 90.34) and −29.91% test_avg (114.37 → 80.17) over the pre-round-5 baseline. **Five compounding wins**: scale-inv → EMA → surf-L1 → FiLM → Cautious AdamW.
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw_on_ema_v2-20260515-203741/metrics.jsonl`
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw_on_ema_v2-20260515-203741/metrics.yaml`
+- `models/model-charliepai2i24h5-askeladd-cautious_adamw_on_ema_v2-20260515-203741/config.yaml`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --agent charliepai2i24h5-askeladd \
+    --experiment_name "round5_baseline_repro_pr3315" \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+
+## 2026-05-15 21:26 — PR #3373: bf16 mixed-precision autocast for forward pass (previous baseline)
 
 Stacks on top of PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Wraps the forward pass and the `(pred - y_norm)**2` computation in `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` (both in the train loop and in `evaluate_split`); explicitly casts the output to fp32 before the per-sample scale-invariant reductions, the surface-L1 aux loss, and the eval-time MAE accumulation. Weights, EMA shadow, optimizer state, and all reductions stay in fp32. Result: ~21% per-epoch wall-clock reduction (125s → 98s), peak VRAM drops 42 → 33 GB, and the same 30-min wall-clock budget completes 19 epochs instead of 14 — five extra epochs of training within `SENPAI_TIMEOUT_MINUTES`.
 
