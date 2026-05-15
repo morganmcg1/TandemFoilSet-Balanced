@@ -16,3 +16,36 @@ All 8 students idle; no PRs in flight. First round of assignments dispatched (ea
 | nezuko | [#3165](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3165) | Depth scaling (5->8 layers) | Capacity |
 | tanjiro | [#3169](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3169) | MLP ratio (2->4) | Capacity |
 | thorfinn | [#3172](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/3172) | Fourier position features + slice_num 64->96 | Inputs |
+
+## 2026-05-15 14:30 — PR #3140 (alphonse): Widen Transolver n_hidden 128->192, n_head 4->6 — **CLOSED**
+
+- Branch: `willowpai2i48h3-alphonse/capacity-width-heads`
+- W&B group: [`capacity-width-heads`](https://wandb.ai/wandb-applied-ai-team/senpai-v1/groups/capacity-width-heads)
+- Baseline run: `xehwt9bi` | Variant run: `t2z5ya27`
+
+**Hypothesis:** Widening Transolver capacity (n_hidden 128->192, n_head 4->6) would reduce val_avg/mae_surf_p by 3-8% if the baseline were underfit.
+
+**Result (variant vs baseline, lower is better):**
+
+| Metric | Baseline | Variant | Δ |
+|---|---|---|---|
+| best_val_avg/mae_surf_p | **135.30** (ep 13) | 160.61 (ep 8) | +18.7% |
+| val_geom_camber_cruise/mae_surf_p | 109.77 | 140.94 | +28.4% |
+| val_geom_camber_rc/mae_surf_p | 135.88 | 171.21 | +26.0% |
+| val_re_rand/mae_surf_p | 127.66 | 139.93 | +9.6% |
+| val_single_in_dist/mae_surf_p | 167.88 | 190.37 | +13.4% |
+| test_avg/mae_surf_p (excl cruise) | 135.54 | 154.32 | +13.9% |
+| Params | 0.66M | 1.45M | 2.19× |
+| Sec/epoch | 131.8 | 203.8 | 1.55× |
+| Epochs reached / 50 (30-min cap) | 14 (best @13) | 9 (best @8) | -36% |
+
+**Decision:** Closed. Variant >5% worse on every track, well past the merge threshold.
+
+**Analysis:**
+- The wider variant is uniformly worse on val and test under the 30-min wall-clock cap.
+- Student's epoch-matched comparison (variant ep 8 vs baseline ep 8) suggests per-epoch the wider model may be slightly better, but the 1.55× slower epoch time costs ~36% of epoch count under the wall-clock budget. The variant best-checkpointed at epoch 8/9 — almost certainly still under-trained.
+- **Implication for round 2:** width-side scaling is wall-clock-penalized in this regime. Future round assignments should bias toward changes that don't increase per-step cost (optimizers, losses, data aug, input feature engineering).
+
+**Pre-existing bug surfaced:** `test_geom_camber_cruise/mae_surf_p` returns NaN on the baseline arm. Non-finite pressure prediction on at least one test-cruise sample propagates Inf through `data/scoring.py:accumulate_batch`. Affects ALL PRs equally — tracked separately (see CURRENT_RESEARCH_STATE.md).
+
+**Sets the canonical round-3 baseline:** `val_avg/mae_surf_p = 135.30`, `test_avg/mae_surf_p (excl cruise) = 135.54`. See BASELINE.md.

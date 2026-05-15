@@ -1,8 +1,26 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15
+- **Date:** 2026-05-15 (updated 14:30 after PR #3140 close)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
+- **Canonical baseline:** `val_avg/mae_surf_p = 135.30`, `test_avg/mae_surf_p (excl cruise) = 135.54` (W&B `xehwt9bi`).
+
+## Tracked infrastructure issue: cruise-test NaN
+
+`test_geom_camber_cruise/mae_surf_p` returns NaN on the baseline arm because at least one test-cruise sample produces a non-finite pressure prediction whose squared error propagates Inf through `data/scoring.py:accumulate_batch`. Affects all PRs identically. Validation cruise is finite — only test cruise is broken. Until fixed, every PR uses the 3-split `test_avg/mae_surf_p (excl cruise)` for paper-facing comparison.
+
+Fix would land in `train.py:evaluate_split` (data/scoring.py is read-only per program.md): mask out samples whose pred contains non-finite values before calling `accumulate_batch`. Targeted as a dedicated small PR after round 1 finishes — not bundled into a hypothesis to keep single-variable comparisons clean.
+
+## Round 1 → Round 2 hand-off
+
+**Round 1 first result (PR #3140, alphonse, closed):** widening Transolver capacity is wall-clock-penalized under the 30-min cap. Width adds ~1.55× per-epoch cost, reducing reachable epochs by ~36%; the variant best-checkpointed early at epoch 8/9 and was uniformly worse on val and test.
+
+**Updated strategic prior:** within a hard wall-clock cap, hypotheses that add per-step cost are intrinsically penalized. Round 2 should favor:
+- Optimizer / training-recipe changes that don't slow each step (SOAP, Lion).
+- Loss reformulations (already partially in flight: Huber, p-weight, per-sample).
+- Data augmentation (AoA reflection).
+- Input feature engineering (log-Re sinusoidal, per-domain normalization).
+- Architecture *modifications* that don't add depth/width (Ada-Temp slice reparam, attention entropy reg, separate surface decoder head).
 
 ## Current research focus
 
