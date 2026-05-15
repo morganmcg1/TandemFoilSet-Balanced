@@ -375,6 +375,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    grad_clip_max_norm: float | None = None  # None disables clipping
 
 
 cfg = sp.parse(Config)
@@ -450,6 +451,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    grad_norm_sum = 0.0
+    grad_norm_max = 0.0
+    n_clipped = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -471,8 +475,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip_max_norm is not None:
+            gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_max_norm)
+            if gnorm.item() > cfg.grad_clip_max_norm:
+                n_clipped += 1
+        else:
+            gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
         optimizer.step()
 
+        gnorm_val = gnorm.item()
+        grad_norm_sum += gnorm_val
+        if gnorm_val > grad_norm_max:
+            grad_norm_max = gnorm_val
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -503,6 +517,8 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    grad_norm_mean = grad_norm_sum / max(n_batches, 1)
+    clip_frac = n_clipped / max(n_batches, 1) if cfg.grad_clip_max_norm is not None else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -510,6 +526,10 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_max": grad_norm_max,
+        "train/clip_frac": clip_frac,
+        "grad_clip_max_norm": cfg.grad_clip_max_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
