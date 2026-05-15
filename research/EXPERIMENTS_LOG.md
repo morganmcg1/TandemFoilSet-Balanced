@@ -16,6 +16,24 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-15 18:30 — PR #3207 re-run (post-NaN-fix): geom-conditioned slice (nezuko) — sent back for rebase
+- student: willowpai2i24h2-nezuko
+- branch: `willowpai2i24h2-nezuko/geom-slice-injection`
+- run: `5yws4drs` (single arm, NaN fix patch applied in `evaluate_split`)
+
+| Metric | Value (W&B, clean) | vs baseline (PR #3200) |
+|---|---|---|
+| `val_avg/mae_surf_p` | 127.71 | +5.1% worse |
+| `test_avg/mae_surf_p` | 116.56 | +3.6% worse |
+| best epoch | 11 / 50 (wall clock at ep 11) | — |
+
+Per-split test (best-val checkpoint): single=133.43, camber_rc=126.58 (**beats baseline 133.37**), camber_cruise=89.29, re_rand=116.94.
+
+- analysis: nezuko's NaN-fix patch is correct — the new W&B test_avg (116.56) matches their offline-corrected value (115.71) within rounding. The PGOT hypothesis is supported in pattern: camber_cruise is the easiest split, camber_rc is the hardest, and camber_rc beats the merged baseline on that split alone. But the equal-weight mean is the metric; nezuko is worse than baseline on the other 3 splits and worse net.
+- decision: **sent back for rebase + re-run** on the new baseline (PR #3200, Fourier 8 bands + NaN fix). Hypothesis: geom-slice and Fourier are orthogonal mechanisms (slice-token level vs input-augmentation level) and should compound. This is the final iteration — if rebased re-run doesn't beat baseline, close.
+- next steps: if it wins, merge as 2nd baseline; if not, close and assign nezuko a Round-3 hypothesis.
+
+
 ## 2026-05-15 17:25 — PR #3191: Per-sample scale-normalizing loss (alphonse) — CLOSED
 - student: willowpai2i24h2-alphonse
 - branch: `willowpai2i24h2-alphonse/scale-norm-loss`

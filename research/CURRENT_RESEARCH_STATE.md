@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 17:25
+- **Date:** 2026-05-15 18:30
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -56,9 +56,9 @@ Full hypothesis details + code snippets in `research/RESEARCH_IDEAS_2026-05-15_1
 ## Round 1 carry-overs still WIP
 
 - **PR #3194 (askeladd, warmup-cosine):** sent rebase note after fern merged. Re-run two arms (`warmup=0`, `warmup=3`) on the new baseline. Targets val_avg < 121.50.
-- **PR #3207 (nezuko, geom-conditioned slice):** re-running with NaN fix. Targets val_avg < 121.50 (their pre-rebase value of 128.34 already beat warmup=3, so this is a real candidate).
-- **PR #3215 (tanjiro, SmoothL1):** stale WIP, pod up. No reported terminal results yet.
-- **PR #3198 (edward, channel weights):** stale WIP, pod up. No reported terminal results yet.
+- **PR #3207 (nezuko, geom-conditioned slice):** re-ran with NaN fix → val_avg=127.71, test_avg=116.56 (clean from W&B). Doesn't beat new baseline 121.50, but the geom-slice mechanism is hypothesis-supported on the rc-camber split (126.58 < 133.37). Sent back for one more iteration — rebase onto new baseline (Fourier features) and re-run. If geom-slice + Fourier compounds (orthogonal mechanisms), it merges. If not, close.
+- **PR #3215 (tanjiro, SmoothL1):** stale WIP, pod alive 4.75h, heartbeat iteration 58, GPU 0%. Posted status check asking for training kickoff within the hour or PR will be closed.
+- **PR #3198 (edward, channel weights):** stale WIP, pod alive 4.75h, heartbeat iteration 57, GPU 0%. Same status check posted. If both fail to produce a run, they'll be closed and reassigned.
 
 If #3215 or #3198 produce results that beat the new baseline, merge sequentially. If they fail, close and reassign in Round 3.
 
