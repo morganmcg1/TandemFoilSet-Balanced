@@ -45,6 +45,7 @@ from data import (
     load_test_data,
     pad_collate,
 )
+from soap import SOAP
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -387,6 +388,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    optimizer: str = "adamw"  # "adamw" or "soap" — single-variable A/B for PR #3283
 
 
 cfg = sp.parse(Config)
@@ -432,7 +434,22 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+elif cfg.optimizer == "soap":
+    optimizer = SOAP(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(0.95, 0.95),
+        weight_decay=cfg.weight_decay,
+        precondition_frequency=10,
+        shampoo_beta=0.95,
+        eps=1e-8,
+        normalize_grads=False,
+    )
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'soap')")
+print(f"Optimizer: {cfg.optimizer}")
 warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
     optimizer,
     start_factor=1e-6 / cfg.lr,   # start near-zero
