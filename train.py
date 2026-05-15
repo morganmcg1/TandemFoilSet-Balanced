@@ -137,9 +137,23 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class LayerScale(nn.Module):
+    """Per-channel learnable residual gate (CaIT, Touvron et al. 2021).
+
+    Init at a tiny value so each block's residual contribution starts ≈0.
+    """
+    def __init__(self, dim, init_value=1e-4):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
+
+    def forward(self, x):
+        return x * self.gamma
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layerscale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -150,6 +164,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.ls_attn = LayerScale(hidden_dim, init_value=layerscale_init)
+        self.ls_mlp = LayerScale(hidden_dim, init_value=layerscale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -158,8 +174,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ls_attn(self.attn(self.ln_1(fx))) + fx
+        fx = self.ls_mlp(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -264,6 +280,57 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    return out
+
+
+def _accumulate_batch_nansafe(pred_orig, y, is_surface, mask, mae_surf, mae_vol):
+    """NaN-safe per-channel accumulator that zeroes out non-finite GT elements.
+
+    Mirrors ``data.scoring.accumulate_batch`` but tolerates a corrupted GT
+    channel inside an otherwise valid sample (e.g. cruise test sample 20's
+    pressure column has 761 Inf values). Returns per-channel valid-node
+    counts [3] for surf and vol so the divisor matches the surviving values.
+    """
+    y_finite = torch.isfinite(y)
+    err = (pred_orig.double() - y.double()).abs()
+    err = torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)
+    surf_mask = mask & is_surface
+    vol_mask = mask & ~is_surface
+    surf_keep = surf_mask.unsqueeze(-1) & y_finite
+    vol_keep = vol_mask.unsqueeze(-1) & y_finite
+    mae_surf += (err * surf_keep.double()).sum(dim=(0, 1))
+    mae_vol += (err * vol_keep.double()).sum(dim=(0, 1))
+    return surf_keep.sum(dim=(0, 1)).to(torch.int64), vol_keep.sum(dim=(0, 1)).to(torch.int64)
+
+
+def evaluate_split_nansafe(model, loader, stats, device) -> dict[str, float]:
+    """Like ``evaluate_split`` but with per-element NaN-safe MAE accumulation.
+
+    Used only for the final test report — keeps cruise_test pressure finite
+    when the GT has Inf values on the pressure channel.
+    """
+    mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
+    mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
+    n_surf = torch.zeros(3, dtype=torch.int64, device=device)
+    n_vol = torch.zeros(3, dtype=torch.int64, device=device)
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            pred = model({"x": x_norm})["preds"]
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            ds, dv = _accumulate_batch_nansafe(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            n_surf += ds
+            n_vol += dv
+    out: dict[str, float] = {}
+    for i, ch in enumerate(("Ux", "Uy", "p")):
+        out[f"mae_surf_{ch}"] = (mae_surf[i] / n_surf[i].clamp(min=1)).item()
+        out[f"mae_vol_{ch}"] = (mae_vol[i] / n_vol[i].clamp(min=1)).item()
+        out[f"n_surf_{ch}"] = int(n_surf[i].item())
+        out[f"n_vol_{ch}"] = int(n_vol[i].item())
     return out
 
 
@@ -500,6 +567,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    ls_attn_gamma = [b.ls_attn.gamma.detach().abs().mean().item() for b in model.blocks]
+    ls_mlp_gamma = [b.ls_mlp.gamma.detach().abs().mean().item() for b in model.blocks]
+    ls_attn_gamma_ema = [b.ls_attn.gamma.detach().abs().mean().item() for b in ema_model.blocks]
+    ls_mlp_gamma_ema = [b.ls_mlp.gamma.detach().abs().mean().item() for b in ema_model.blocks]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -510,6 +581,10 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "ls_attn_gamma_abs_mean_per_block": ls_attn_gamma,
+        "ls_mlp_gamma_abs_mean_per_block": ls_mlp_gamma,
+        "ls_attn_gamma_abs_mean_per_block_ema": ls_attn_gamma_ema,
+        "ls_mlp_gamma_abs_mean_per_block_ema": ls_mlp_gamma_ema,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -546,11 +621,25 @@ if best_metrics:
         print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+
+        # NaN-safe re-eval (cruise test sample 20 has Inf in GT p; standard
+        # accumulator emits NaN via Inf*0). Reports the clean 4-split mean.
+        test_metrics_clean = {
+            name: evaluate_split_nansafe(ema_model, loader, stats, device)
+            for name, loader in test_loaders.items()
+        }
+        test_avg_clean = aggregate_splits(test_metrics_clean)
+        print(f"  TEST(NaN-safe)  avg_surf_p={test_avg_clean['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print(f"    NaN-safe {name:<26s} surf_p={test_metrics_clean[name]['mae_surf_p']:.4f}")
+
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "test_avg_nansafe": test_avg_clean,
+            "test_splits_nansafe": test_metrics_clean,
         })
 
     write_experiment_summary(
