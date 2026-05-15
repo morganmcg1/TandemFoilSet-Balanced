@@ -588,3 +588,36 @@ The decision: do a head-to-head on identical full-merged-stack baseline. Send ba
 
 Predicted rebased outcome on full merged stack: val_avg **82–86**, test **74–78**. Two arms requested: lr=5e-4 (direct) and lr=5e-4 + warmup_steps=500 (student's suggestion #3, matching the 5-10% of total steps recommendation).
 
+## 2026-05-15 23:20 — PR #3374: Stochastic depth regularization [CLOSED — robust 3-seed negative result]
+
+- Branch: `charliepai2i24h5-nezuko/stochastic-depth`
+- Student: charliepai2i24h5-nezuko
+- Hypothesis: per-block DropPath regularization (`p_drop=0.1`) to address overfitting on single_in_dist; arm A uniform, arm B linear-by-depth (DeiT schedule).
+- Status: CLOSED. Three seeds at identical config all regressed; both arms regressed across every val and test split; central single_in_dist-improves-most prediction was contradicted.
+
+### Results vs the student's tested baseline (PR #3281: EMA, val_avg=114.17)
+
+| Run | val_avg/mae_surf_p | Δ | test_avg/mae_surf_p | Δ |
+|---|---:|---:|---:|---:|
+| Arm A: uniform p=0.1 | 130.33 | **+14.16%** | 117.88 | +15.47% |
+| Arm B: linear 0→0.1 | 122.68 | **+7.45%** | 111.04 | +8.78% |
+| (PR-predicted range) | 110–113 | −1.5 to −4% | — | — |
+
+Per-split: ALL splits regressed in both arms. `geom_camber_rc` (not single_in_dist) regressed the most in absolute val terms for arm A (+27.92), indicating the baseline's worst-split MAE is not primarily driven by feature-memorization that drop-path could disrupt. Seed variance ±2 on val_avg confirmed the negative result is robust (3 seeds at arm A: 126.53 / 129.01 / 130.33; all >baseline).
+
+Per-epoch wall-clock: arms were ~2-3% *slower* than baseline, not faster as predicted. `timm.layers.DropPath` scales the residual by `1/keep_prob` rather than skipping the residual subgraph entirely, so random-tensor generation overhead dominates the marginal forward-pass cost saved.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-nezuko-stochastic-depth-uniform-20260515-213318/metrics.jsonl`
+- `models/model-charliepai2i24h5-nezuko-stochastic-depth-linear-20260515-203439/metrics.jsonl`
+
+### Analysis
+
+The hypothesis is fundamentally fine theory in a longer-training regime, but at p_drop_max=0.1 and ~14 epochs wall-clock cap, the regularization is too strong relative to training time. Best epoch was 14/50 in every run, identical to baseline — the network never gets to recover capacity from the regularization. This matches risk #1 in the hypothesis ("p_drop too high → underfitting in 14-epoch regime"), but the data falsifies the prediction that linear-by-depth would land near baseline.
+
+The current merged baseline has moved much further out of reach (90.34 vs 114.17 tested-against), so a rebase or p=0.05 follow-up would still leave the result ~3-5% below baseline — not worth the GPU. Closed; nezuko reassigned to Fourier-embedded FiLM (#3519).
+
+## 2026-05-15 23:25 — New assignment for newly-idle nezuko
+
+- **PR #3519 (nezuko): Fourier-embedded FiLM conditioning** — replace the raw 11-dim flow-condition vector with a multi-frequency sin/cos Fourier embedding (Tancik et al. 2020 style) before feeding into the FiLM MLP. Concat raw+Fourier for residual safety. Arm A: 4 frequencies, sigma=1 (Tancik default). Arm B: 8 frequencies, sigma=2 (rich basis). Targets the single_in_dist split by giving FiLM richer angular resolution on AoA and Re×geometry interactions. Orthogonal to all 7 in-flight experiments.
+

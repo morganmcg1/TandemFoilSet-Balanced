@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 21:35 UTC
+- **Updated:** 2026-05-15 23:30 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -35,9 +35,11 @@ Strongest remaining axes (in priority order):
 4. **Bernoulli pressure residual** (#3466 askeladd): high-novelty physics-informed target reformulation — predict viscous residual only, removing analytic dynamic range from the prediction target.
 5. **EMA refinement**: SEMA (#3432 fern) — copy EMA weights back each epoch.
 6. **Domain-specific normalization**: per-domain target norm (#3433 alphonse) — directly targets single_in_dist gap.
-7. **Loss refinement**: Huber aux (#3422 frieren) — smoother gradient near zero for surface-pressure L1.
-8. **Regularization**: Stochastic depth (#3374 nezuko).
-9. **Alternate optimizer**: Schedule-Free AdamW (#3425 tanjiro) — now competing with Cautious AdamW; if it wins it should be merged on top.
+7. **Conditioning richness** (#3519 nezuko new this loop): Fourier-embedded FiLM — Tancik-style multi-frequency sin/cos encoding of the 11-dim flow vector before FiLM MLP; targets single_in_dist via richer angular resolution on AoA.
+8. **Loss refinement**: Huber aux (#3422 frieren) — smoother gradient near zero for surface-pressure L1.
+9. **Alternate optimizer head-to-head**: Schedule-Free AdamW (#3425 tanjiro) — needs rebase before head-to-head can complete; standalone 87.24 vs current best 90.34 says it's plausible.
+
+**Closed in this loop**: #3374 stochastic depth — 3-seed robust negative (both arms regressed +7-14%); regularization too strong for 14-epoch cold-start regime.
 
 | PR | Student | Status | Hypothesis |
 |----|---------|--------|-----------|
@@ -49,20 +51,23 @@ Strongest remaining axes (in priority order):
 | #3315 | askeladd | MERGED (this loop) | Cautious AdamW — new best: val_avg 90.34 |
 | #3347 | alphonse | CLOSED | Manifold mixup — mesh-correspondence problem |
 | #3346 | thorfinn | CLOSED (this loop) | Cosine T_max=15 + warmup + LR=7e-4 — clear regression (3 seeds) |
-| #3374 | nezuko | WIP | Stochastic depth (DropPath) — 2 arms |
+| #3374 | nezuko | CLOSED (this loop) | Stochastic depth — 3-seed robust negative; both arms regressed +7-14% vs old #3281 baseline |
 | #3422 | frieren | WIP | Huber loss for surf-pressure aux — 2 arms (δ=1.0, δ=0.5) |
-| #3425 | tanjiro | WIP | Schedule-Free AdamW — 2 arms (lr=5e-4, lr=7e-4) |
+| #3425 | tanjiro | WIP (rebase pending) | Schedule-Free AdamW — head-to-head vs Cautious AdamW after rebase |
 | #3432 | fern | WIP | SEMA: copy EMA weights back each epoch — 2 arms (freq=1, freq=2) |
 | #3433 | alphonse | WIP | Per-domain target normalization — 2 arms (hard labels, per-channel) |
-| #3463 | edward | WIP (new this loop) | Capacity revisit with bf16: n_hidden=192, n_hidden=256 |
-| #3465 | thorfinn | WIP (new this loop) | T_max alignment: T_max=19 no-warmup, T_max=25 — schedule fix |
-| #3466 | askeladd | WIP (new this loop) | Bernoulli pressure residual — physics-informed target reformulation |
+| #3463 | edward | WIP | Capacity revisit with bf16: n_hidden=192, n_hidden=256 |
+| #3465 | thorfinn | WIP | T_max alignment: T_max=19 no-warmup, T_max=25 — schedule fix |
+| #3466 | askeladd | WIP | Bernoulli pressure residual — physics-informed target reformulation |
+| #3519 | nezuko | WIP (new this loop) | Fourier-embedded FiLM conditioning — 2 arms (k=4 σ=1, k=8 σ=2) |
 
 ## Plateau watch
 
-Round 5 now shows 6 compounding wins totaling −27.1% val_avg. No plateau signal. The val_single_in_dist split improved from 122.19 (post-FiLM) to 109.91 (post-Cautious-AdamW) — still the worst split, but no longer an outlier in % gap. Three new WIPs (#3433, #3466, #3463) directly target this split. Schedule-Free AdamW (#3425) remains the most similar to Cautious AdamW (alternate optimizer) and should be considered a confirm-or-supersede experiment.
+Round 5 now shows 6 compounding wins totaling −27.1% val_avg. No plateau signal. The val_single_in_dist split improved from 122.19 (post-FiLM) to 109.91 (post-Cautious-AdamW) — still the worst split, but no longer an outlier in % gap. Four WIPs (#3433, #3466, #3463, #3519) directly target this split. Schedule-Free AdamW (#3425) is the most similar to Cautious AdamW (alternate optimizer) and should be considered a confirm-or-supersede experiment after rebase.
 
-Note: all currently running WIPs (#3374, #3422, #3425, #3432, #3433) were started pre-bf16 and pre-Cautious-AdamW. They will need rebases when terminal results come in. Cautious AdamW's mask invariance (flat at 0.62 regardless of merged mechanisms) suggests the rebase will compound cleanly for optimizer-orthogonal ideas (SEMA, per-domain norm, Huber, stochastic depth). Schedule-Free AdamW conflicts with Cautious AdamW at the optimizer level — if SF-AdamW wins standalone, it should replace Cautious AdamW in a fresh comparison before merging.
+Note: WIPs started pre-bf16 / pre-Cautious-AdamW (#3422, #3425, #3432, #3433) still need rebases when their terminal results come in. Cautious AdamW's mask invariance (flat at 0.62 regardless of merged mechanisms) suggests the rebase will compound cleanly for optimizer-orthogonal ideas (SEMA, per-domain norm, Huber). Schedule-Free AdamW (#3425) conflicts with Cautious AdamW at the optimizer level — if SF-AdamW wins on rebase, it should replace Cautious AdamW in a fresh comparison before merging.
+
+**Operational note (this loop):** The three stale_wip flags on #3433/#3432/#3422 traced to a github API rate-limit storm at 22:10-23:20 UTC that interrupted the students' result-posting cycle after training completed (GPU dropped from 99-100% to 0% across all three pods coincident with the rate-limit timestamp). All three pods recovered from rate limit by iteration ~100 and are now back in heartbeat mode — they should detect their completed-but-unposted training and post results on the next iteration. No advisor action needed; will re-check at next loop.
 
 ## Potential next research directions (post-current batch)
 
@@ -70,9 +75,10 @@ Note: all currently running WIPs (#3374, #3422, #3425, #3432, #3433) were starte
 2. **T_max alignment** (#3465): the schedule has never actually annealed within the wall-clock budget; matching T_max=19 to the bf16 epoch count is the most defensible schedule fix and could give another −2% to −4%.
 3. **Capacity revisit** (#3463): n_hidden=192/256 — now the first fair test of model capacity since bf16 unlocked 9 GB VRAM headroom. If capacity wins, the next natural question is whether to push n_hidden=384 with gradient checkpointing.
 4. **Bernoulli pressure residual** (#3466): if the viscous-residual reformulation works, it opens a physics-informed target family: Cp coefficient prediction, lift/drag residual, boundary-layer displacement thickness correction.
-5. **Domain-conditional FiLM**: extend the merged FiLM with domain-specific condition MLPs that also take domain ID; extends the FiLM hypothesis beyond shared-MLP.
-6. **Cautious Lion + EMA + FiLM + surf-L1**: askeladd's suggestion. Liang et al. show the agreement trick generalizes to Lion. With the compound mechanism confirmed, Lion's signed-gradient updates + cautious masking would test whether optimizer-internals contribution can be further improved.
+5. **Fourier-embedded FiLM** (#3519, this loop): if multi-frequency sin/cos conditioning helps, next steps are learnable Random Fourier Features (RFF) and spatial Fourier embedding of point coordinates.
+6. **Cautious Lion + EMA + FiLM + surf-L1**: askeladd's suggestion. Liang et al. show the agreement trick generalizes to Lion. With the compound mechanism confirmed, Lion's signed-gradient updates + cautious masking would test whether optimizer-internals contribution can be further improved. (Conflicts with current Cautious AdamW; defer until SF-AdamW vs Cautious head-to-head is resolved.)
 7. **Per-block mask-mean logging**: with FiLM also modulating per-block, per-block cautious mask logging would reveal whether gating fires more in FiLM-modulated layers — useful for architecture-mask co-design.
+8. **torch.compile() on top of bf16** (edward's #3373 suggestion #3): pure speed-up, may unlock 22+ effective epochs. Risk: compatibility with CautiousAdamW custom optimizer step.
 
 ## If plateau hits (5 consecutive no-improvement)
 
