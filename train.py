@@ -138,9 +138,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 head_mode="shared"):
         super().__init__()
         self.last_layer = last_layer
+        self.head_mode = head_mode
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -151,16 +153,39 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            if head_mode == "shared":
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+            elif head_mode == "split_full":
+                self.mlp2 = nn.ModuleList([
+                    nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                        nn.Linear(hidden_dim, 1),
+                    ) for _ in range(out_dim)
+                ])
+            elif head_mode == "split_lite":
+                self.hidden_trunk = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                )
+                self.mlp2 = nn.ModuleList([
+                    nn.Linear(hidden_dim, 1) for _ in range(out_dim)
+                ])
+            else:
+                raise ValueError(f"Unknown head_mode: {head_mode!r}")
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            z = self.ln_3(fx)
+            if isinstance(self.mlp2, nn.Sequential):
+                return self.mlp2(z)
+            if hasattr(self, "hidden_trunk"):
+                h = self.hidden_trunk(z)
+                return torch.cat([head(h) for head in self.mlp2], dim=-1)
+            return torch.cat([head(z) for head in self.mlp2], dim=-1)
         return fx
 
 
@@ -169,12 +194,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 head_mode: str = "shared"):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.head_mode = head_mode
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -190,6 +217,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                head_mode=head_mode,
             )
             for i in range(n_layers)
         ])
@@ -386,6 +414,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    head_mode: str = "shared"   # "shared" | "split_full" | "split_lite"
 
 
 cfg = sp.parse(Config)
@@ -425,6 +454,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    head_mode=cfg.head_mode,
 )
 
 model = Transolver(**model_config).to(device)
