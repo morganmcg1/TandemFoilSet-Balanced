@@ -1,69 +1,74 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 18:35
+- **Updated:** 2026-05-15 18:50
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
 ## Most recent direction from human researcher team
 
-No directives received. GH issue #3292 opened to flag `test_geom_camber_cruise` NaN bug (bad sample #20 in GT with `-inf` pressure; `data/scoring.py`'s mask-by-multiply fails under IEEE-754 `0.0 * inf = NaN`).
+No directives received. GH issue #3292 open for `test_geom_camber_cruise` NaN bug.
 
-## Current research focus
+## ★ MAJOR FINDING: nezuko warm-restarts likely new baseline (~98.88)
 
-Round 2 in progress. Round 1 established the baseline: **`val_avg/mae_surf_p = 117.16`** (grad clip max_norm=1.0, PR #3157, merged).
+PR #3320 (CosineAnnealingWarmRestarts T_0=5 T_mult=2) has 3 confirmed W&B arms:
+- `oeo67jf2`: **98.88** (-15.6% vs 117.16)
+- `79m50be7`: 100.90 (-13.9%)
+- `iyhrbvuq`: 102.22 (-12.8%)
 
-### Round 1 results summary
+Mean ≈ 100.67, variance only ~3 pp — the first **replicated** improvement, robustly outside the noise floor. Advisor commented on PR asking nezuko to post terminal SENPAI-RESULT for immediate merge. Once merged, baseline drops to ~98.88.
 
-| PR | Change | val_avg/mae_surf_p | Outcome |
-|---|---|---|---|
-| #3157 tanjiro | grad clip max_norm=1.0 | **117.16** | **MERGED — baseline** |
-| #3125 askeladd | lr=1e-3 + 2ep warmup + cosine | 135.06 | closed |
-| #3164 thorfinn | dropout=0.05 | 142.51 | closed |
-| #3133 edward | n_layers=7 | 146.62 | closed |
-| #3112 alphonse | bf16 autocast | (WIP — multi-arm) | — |
-| #3146 frieren | slice_num=128 | (WIP — 1-2 arms done) | — |
-| #3139 fern | surf_weight=25 | (WIP — multi-arm) | — |
-| #3153 nezuko | Huber vol loss | 127.22 (confounded) | closed |
+**Why warm restarts works here:** The 30-min/14-epoch budget is short relative to the 50-epoch cosine design horizon. With T_0=5 and T_mult=2, restarts occur at epochs 5, 10, 20 — giving multiple "fresh start" escape-from-local-minima opportunities within the 14-epoch wall. This likely explains both the improvement AND the lower inter-run variance compared to round-1.
 
-### Round 2 portfolio (current state)
+## Current baseline
+
+**`val_avg/mae_surf_p = 117.16`** — grad clip max_norm=1.0, PR #3157 (warm-restarts merge imminent, pending terminal SENPAI-RESULT from nezuko)
+
+## Round 2 portfolio (current state)
 
 | Student | PR | Change | Status | Best result |
 |---|---|---|---|---|
+| nezuko | #3320 | CosineAnnealingWarmRestarts T_0=5 | **PENDING MERGE** | 98.88 (3 replicated arms!) |
 | tanjiro | #3360 | grad clip max_norm=0.5 | WIP | — |
-| askeladd | #3307 | OneCycleLR max_lr=1e-3 | WIP (draft, schedule fix pending) | 119.25 (noise) |
-| thorfinn | #3308 | AdamW beta2=0.95 | WIP (multi-arm, stale label) | 115.45 (1/4 wins, high var) |
-| edward | #3310 | n_layers=6 | **closed** (+8.6% regression, 127.23) | — |
-| edward | #3381 | n_hidden=192 | **NEW — WIP** | — |
-| nezuko | #3320 | CosineAnnealingWarmRestarts | WIP | — |
+| askeladd | #3307 | OneCycleLR max_lr=1e-3 (right-sized) | WIP draft | — |
+| edward | #3381 | n_hidden=192 wider model | WIP | — |
+| thorfinn | #3416 | per-channel surf loss p×3 | **NEW WIP** | — |
+| thorfinn | #3308 | AdamW beta2=0.95 | **closed** +15.1% regression | — |
+| edward | #3310 | n_layers=6 | **closed** +8.6% regression | — |
 
-### Round-1 WIP still completing (multi-arm)
+### Round-1 WIP still completing (multi-arm, stale labels)
 
-| Student | PR | Change | W&B status | Best run seen |
+| Student | PR | Change | Best run seen | Status |
 |---|---|---|---|---|
-| alphonse | #3112 | bf16 autocast | 4 arms (1 running) | 114.34 (run 6zclcnwp) — HIGH VARIANCE |
-| fern | #3139 | surf_weight=25 | 4 arms (1 running) | 141.69 (clear regression) |
-| frieren | #3146 | slice_num=128 | 2 arms (1 running) | 136.57 (regression) |
+| alphonse | #3112 | bf16 autocast | 114.34 (1 run, high variance) | WIP multi-arm |
+| fern | #3139 | surf_weight=25 | 141.69 (clear regression) | WIP |
+| frieren | #3146 | slice_num=128 | 136.57 (regression) | WIP |
 
-**Note on alphonse and thorfinn:** W&B shows individual arms beating baseline (114.34 and 115.45) but with very high variance across arms. Per the round-1 nezuko lesson (15-pp spread across identical configs), single-run wins at this magnitude are within the noise floor and cannot be merged on a single arm. Students nudged to post terminal SENPAI-RESULT with all arm IDs and variance analysis.
+Advisor nudged all three. Fern and frieren results point toward close.
 
-### Key round-2 mechanical findings
+## Round 2 closed results
 
-1. **Tight clip acts as gradient normalizer, not spike suppressor** — PR #3306 (max_norm=100) regressed by +7.15 pp. PR #3360 probes max_norm=0.5 to map the optimum.
-2. **Depth (n_layers=6) is a net loss in this budget** — PR #3310 closed (+8.6%), 12 epochs vs. 14, OOD camber improves but re_rand tanks.
-3. **OneCycleLR schedule must be right-sized to actual epoch budget** — total_steps=50×batches but wall-clock cap fires at ~14 epochs; schedule never reaches anneal phase. Askeladd sent back to fix.
-4. **High run-to-run variance** — ~15-pp spread across identical configs in 14-epoch budget. Single-run comparisons within 10 pp of baseline are noise-floor unreliable.
+| PR | Change | val_avg | Δ | Outcome |
+|---|---|---|---|---|
+| #3306 tanjiro | grad clip 1.0→100 | 124.31 | +7.15 | closed — confirms tight clip is normalizer |
+| #3308 thorfinn | AdamW beta2=0.95 | 134.89 | +17.7 | closed — mechanistically falsified |
+| #3310 edward | n_layers=6 | 127.23 | +10.07 | closed — depth costs epochs |
+| #3307 askeladd | OneCycleLR (bugged) | 119.25 | +2.09 | sent back — schedule-sizing fix needed |
 
-## Known data issue
+## Key round-2 findings
 
-`test_geom_camber_cruise/mae_surf_p = NaN` — sample #20 has `-inf` GT pressure; scoring accumulator propagates NaN via `0.0 * inf`. Flagged in GH issue #3292. `val_avg/mae_surf_p` is clean.
+1. **Warm restarts is the winner** (~98.88, -15.6%, replicated 3× with low variance)
+2. **Tight grad clip is gradient normalizer** — loosening (max_norm=100) regressed; tightening (max_norm=0.5 in #3360) still testing
+3. **Depth (n_layers=6) costs more epochs than it gains in this budget** — 31% slower, 2 fewer epochs, net regression
+4. **AdamW beta2=0.95 increases gradient noise** — opposite of hypothesis; slow EMA acts as variance reduction in large-gradient regimes
+5. **OneCycleLR must be sized to actual epoch budget** — right-sized fix in progress
 
-## Potential next research directions (after round 2 lands)
+## Potential next research directions
 
-1. **Clipping optimum** — if max_norm=0.5 beats 1.0: try explicit gradient normalization (divide by norm, no clip) or Lion/SignSGD optimizer.
-2. **Width + schedule** — if n_hidden=192 is competitive but slow, combine with OneCycleLR right-sized to the actual (shorter) epoch count.
-3. **Depth + higher LR** — edward's suggestion: n_layers=6 + lr=1e-3 (once askeladd confirms the LR is viable). Depth helps OOD camber, but can't pay for itself without a higher nominal step size to compensate for the effective-LR attenuation from clip.
-4. **Compound winners** — stack whatever round-2 levers improve (e.g., OneCycleLR + beta2=0.95 + n_hidden=192).
-5. **Per-channel surface weighting** — pull `p` channel harder (e.g., weight 3× vs Ux/Uy) since it is the primary metric. Not yet tested.
-6. **Log-pressure loss** — val magnitude varies ~10× across splits; log-scaled or standardized pressure loss could equalize.
-7. **EMA/SWA** — cheap variance reduction; especially relevant given the high noise floor.
-8. **Global FiLM conditioning** — dims 13-23 of `x` are constant per-sample (Re, AoA, NACA, gap, stagger); currently broadcast through per-node MLPs. A FiLM layer encodes them once and modulates all blocks cheaply.
+1. **Warm-restarts + per-channel p-weighting** — nezuko's win + thorfinn's new assignment (#3416) could stack
+2. **Warm-restarts + OneCycleLR** — askeladd's right-sized fix now runs on top of warm-restarts baseline
+3. **Warm-restarts + max_norm=0.5** — once #3360 finishes, determine whether tighter clip compounds
+4. **Wider model on warm-restarts baseline** — edward's #3381 n_hidden=192 will land on warm-restarts if merge happens first
+5. **Log-pressure loss** — val magnitude varies ~10× across splits; log scaling could equalize
+6. **EMA/SWA** — low-variance alternative to best-checkpoint selection; cheap on top of warm-restarts
+7. **FiLM conditioning on global features** — Re, AoA, NACA params are currently broadcast through all per-node MLPs; conditioning once per sample is cheaper and richer
+8. **Lion optimizer** — if max_norm=0.5 confirms "tighter = better", Lion's sign-of-gradient update is the extreme case

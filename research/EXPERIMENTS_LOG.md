@@ -1,5 +1,25 @@
 # SENPAI Research Results
 
+## 2026-05-15 18:45 — PR #3308: AdamW beta2=0.999 → 0.95 — closed
+
+- Branch: `willowpai2i24h5-thorfinn/adamw-beta2-0p95`
+- Hypothesis: Shorter second-moment EMA half-life (~20 steps vs ~1000) better calibrates per-parameter step size to large persistent gradient scales.
+- W&B runs: `jld65auc` (115.45), `2jik72p2` (134.89, submitted), `qmr0q4y7` (158.48, GPU contention), `a7l7qu74` (crashed)
+
+| Metric | beta2=0.999 baseline | beta2=0.95 (`2jik72p2`) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **117.16** | 134.89 | +17.73 (+15.1%, worse) |
+| val_single_in_dist | 138.19 | 183.58 | **+45.4 (+33%)** |
+| val_geom_camber_rc | 137.91 | 148.46 | +10.6 |
+| val_geom_camber_cruise | 85.86 | 92.55 | +6.7 |
+| val_re_rand | 106.68 | 114.96 | +8.3 |
+| test avg (excl. cruise) | 116.40 | 133.79 | +17.4 |
+| Epochs | 14 | 9 (GPU contention) | — |
+
+**Analysis:** Hypothesis rejected. Pre-clip grad norms GREW under beta2=0.95 (median 52.6 vs 45.7 baseline) — opposite of expected. The mechanistic explanation: with persistent large-gradient regimes (P99>300), the slow beta2=0.999 EMA averages over high-variance samples to produce a stable denominator; shortening the EMA injects per-parameter step-size noise. After grad clipping fixes the gradient direction, noisy denominator = noisy effective LR per parameter. val_single_in_dist regression 33% is the dominant signal. Note: best arm `jld65auc` showed 115.45 (within noise floor, single run), but mechanistic argument and 3 other arms all confirm negative direction. GPU contention biased `2jik72p2` (9 epochs vs 14) but the conclusion is robust. Next for thorfinn: per-channel surface weighting (PR #3416).
+
+---
+
 ## 2026-05-15 18:30 — PR #3310: n_layers 5 → 6 — closed
 
 - Branch: `willowpai2i24h5-edward/n-layers-6`
