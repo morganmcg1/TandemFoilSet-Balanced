@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-15 20:35 — round 8 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-15 21:35 — round 9 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 
 ## Baseline progression
@@ -10,22 +10,28 @@
 | #3119 (thorfinn, epochs=80) | 135.0153 | initial | AdamW lr=5e-4, surf_weight=10 |
 | #3101 (askeladd, surf_weight=30) | 127.4122 | −5.6% | surf_weight: 10→30 |
 | #3293 (nezuko, Lion) | 117.5014 | −7.8% | AdamW→Lion, lr: 5e-4→1.7e-4, wd: 1e-4→3e-4 |
-| **#3357 (tanjiro, asinh-loss)** | **84.9819** | **−27.7%** | **asinh(z) on pressure channel z-scores in training loss** |
+| #3357 (tanjiro, asinh-loss) | 84.9819 | −27.7% | asinh(z) on pressure channel z-scores in training loss |
+| **#3382 (askeladd, EMA+asinh)** | **83.1874** | **−2.1%** | **EMA shadow decay=0.999 at val/test passes** |
 
-**Current HEAD:** Lion + surf_weight=30 + NaN-safe eval + asinh pressure-loss. val=84.98 at epoch 14 (timeout-bound, curve still descending at cutoff).
+**Current HEAD:** Lion + surf_weight=30 + NaN-safe eval + asinh pressure-loss + EMA(0.999). val=83.19 at epoch 14 (timeout-bound, curve still descending, EMA shadow still converging).
 
 ## Active experiments
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3442 | tanjiro | signed log1p on pressure (stronger tail compression than asinh) | WIP — NEW | On asinh baseline 84.98 |
-| #3354 | nezuko | Lion + cap-matched cosine (T_max=12) | WIP | Notified of 84.98 target |
-| #3382 | askeladd | EMA weights (decay=0.999) — RERUN with asinh | SENT BACK | First arm: 105.79 (on pre-asinh code) |
-| #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP | Notified of 84.98 target |
+| #3442 | tanjiro | signed log1p on pressure (stronger tail compression than asinh) | WIP | On asinh baseline 84.98; new target 83.19 |
+| #3354 | nezuko | Lion + cap-matched cosine (T_max=12) | WIP | Notified of 84.98 target; new target 83.19 |
 | #3384 | fern | Gradient clipping (max_norm=1.0) — RERUN with asinh | SENT BACK | First arm: 87.98 (on pre-asinh code) |
-| #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs | WIP | Notified of 84.98 target |
-| #3106 | frieren | Slice128/head8/mlp3 + Lion lr=3.4e-4 rerun | WIP | Notified of 84.98 target |
-| #3099 | alphonse | Capacity 192h/6L/6H + Lion lr=3.4e-4 rerun | WIP | Notified of 84.98 target |
+| #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP | Notified of 84.98 target; new target 83.19 |
+| #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs | WIP | Notified of 84.98 target; new target 83.19 |
+| #3106 | frieren | Slice128/head8/mlp3 + Lion lr=3.4e-4 rerun | WIP | Notified of 84.98 target; new target 83.19 |
+| #3099 | alphonse | Capacity 192h/6L/6H + Lion lr=3.4e-4 rerun | WIP | Notified of 84.98 target; new target 83.19 |
+
+## Students awaiting new assignments
+
+| Student | Status |
+|---------|--------|
+| askeladd | IDLE — PR #3382 just merged; needs new experiment |
 
 ## Closed / falsified experiments this round
 
@@ -37,38 +43,34 @@
 | #3102 (edward OneCycleLR) | +20% regression; schedule shape wrong for 14-epoch budget |
 | #3411 (tanjiro asinh-all-channels) | +5.8% regression; velocity z-scores are light-tailed, asinh compresses meaningful velocity gradient signal |
 
-## Critical insight: asinh loss transform is a fundamental win
+## Critical insight: stacking wins
 
-The -27.7% improvement from asinh is larger than the entire prior improvement history combined. The mechanism: heavy-tail pressure z-scores dominate the gradient under standard squared error, causing the model to over-optimize for rare extreme samples. asinh compresses these z-scores such that the optimization gradient is proportional to 1/|z| for extreme samples, making the loss landscape smoother and faster to converge.
+**Two compounding wins so far:**
+1. asinh pressure-loss: −27.7% (the dominant mechanism — heavy-tail gradient compression)
+2. EMA weights: −2.1% on top of asinh (parameter trajectory smoothing on an already smoother landscape)
 
-Val curve was STILL DESCENDING at epoch 14 (timeout cap), meaning:
-1. The optimization landscape is genuinely easier — convergence is faster
-2. More budget (longer wall-clock) would yield further improvements
-3. The new frontier is to compound this with architectural/optimizer improvements
+The val curve continues to descend at epoch 14 (timeout-bound) for both mechanisms. More headroom exists with longer training budgets.
 
-## Pending verification on asinh baseline (round 7)
+**Key observation:** EMA gain was reduced from −10% (pre-asinh) to −2.1% (post-asinh), confirming the advisor's prediction that asinh already reduces the gradient variance EMA corrects. Both mechanisms are orthogonal and compose cleanly.
 
-Two PRs returned terminal results in round 7, but both trained on the **pre-asinh** code (their branches were created in round 5 before the asinh merge, and the student pods did not rebase before training). Both demonstrate strong, real mechanisms but the absolute numbers don't beat the current 84.98 baseline.
+## Pending verification (round 7 sent-backs)
 
-**#3384 fern grad-clip (max_norm=1.0):** val=87.98 on pre-asinh code (would be −25.1% vs 117.50 old baseline). 100% of training steps had pre-clip grad norm > 1.0 (mean ~137, max ~2724) — decisively confirms the heavy-tail mechanism. Monotonic descent across all 14 epochs. Sent back for rebase + rerun with asinh.
+**#3384 fern grad-clip (max_norm=1.0):** val=87.98 on pre-asinh code. 100% clip rate confirmed heavy-tail mechanism. Must rerun on new HEAD (Lion + asinh + EMA). If EMA already smooths Lion's update variance, grad-clip may add less; but the mechanisms differ (per-step norm cap vs parameter trajectory averaging) — likely to compose.
 
-**#3382 askeladd EMA (decay=0.999):** val=105.79 on pre-asinh code (would be −9.96% vs 117.50). Smoothness diagnostic clean: 0 sign flips in val curve vs 8 for baseline Lion. Best epoch was final — EMA shadow still catching up to live weights. Sent back for rebase + rerun with asinh.
+## Key open questions (round 9)
 
-**Expectation:** grad-clip is more likely to compound with asinh (different mechanisms: per-step norm cap vs per-coordinate z-score compression). EMA may compound less because asinh already produces smoother gradients, so EMA's variance-reduction has less room to add. Both reruns are essential to verify.
+1. **Does signed log1p beat asinh?** (tanjiro #3442) — more aggressive tail compression; predicted ±2% from 84.98. Now also needs to beat new 83.19 EMA baseline.
+2. **Does grad-clip compose with asinh+EMA?** (fern #3384 rerun) — mechanism orthogonal to EMA but may overlap with asinh's gradient-scale reduction.
+3. **Do architecture changes (SwiGLU, capacity, Slice128) beat 83.19?** — architectural capacity may matter less now that loss landscape is smoother.
+4. **Does schedule shape (cosine T_max, warmup) matter on the asinh+EMA landscape?** — with faster convergence, schedule may need re-calibration.
 
-## Key open questions (round 7)
+## Potential next research directions
 
-1. **Extend asinh to Ux/Uy?** (tanjiro #3411) — if velocity also has heavy-tail z-scores, extending compression to all channels could yield further 3-10% improvement
-2. **Does asinh interact with architecture scale-up?** (alphonse #3099, frieren #3106) — larger models + Lion lr compression + asinh may stack
-3. **Does asinh interact with schedule shape?** (nezuko #3354, edward #3383) — with faster convergence from asinh, does T_max or warmup matter differently?
-4. **Does asinh interact with optimization tricks?** (askeladd EMA, fern gradclip) — EMA may help less because val curve is already smoother; gradclip may help less because asinh reduces gradient magnitude variance
-
-## Potential next research directions (post-round-6)
-
-- **asinh tau parameter**: `asinh(z/tau)*tau` with learnable or annealed tau per channel — optimizes the compression knee
-- **Longer run confirmation**: at current 84.98 (curve still descending at timeout), a 45-min run or cosine T_max=12 would push into the 70-80 range
-- **surf_weight ablation with asinh**: the 30× weighting was set before asinh — if asinh already compresses pressure extremes, surf_weight may need reducing (askeladd's analysis suggested 30 was optimal vs 50, but on the old MSE loss)
-- **WeightedRandomSampler toward hard samples**: inverse-error reweighting after epoch 1 — the mechanism is different from asinh and could stack
-- **Channel-decoupled output heads**: separate mlp2 for Ux/Uy vs p — the pressure-specific inductive bias argument is even stronger now that we know pressure z-scores are the bottleneck
-- **Geometry-aware features**: LE distance, signed normal distance — after FiLM failure, direct feature injection more promising
-- **Learnable per-channel output scaling**: scale + offset per output channel, jointly learned
+- **EMA decay ablation:** 0.995 vs 0.999 — at ~5k steps, 0.995 EMA horizon (~200 steps) may fully converge within budget while 0.999 (~1000 steps) is still catching up at timeout. Faster decay could give same benefit earlier.
+- **EMA warmup-start:** Skip EMA tracking for first 2-3 epochs (weights changing fastest) so shadow doesn't drag in early-LR noise.
+- **Signed log1p tau sweep:** asinh(z/tau)*tau with tau>1 weakens compression, tau<1 strengthens — sweep for optimal pressure-channel compression knee.
+- **Grad-clip (max_norm=1.0) on asinh+EMA HEAD:** Third mechanism in the stack — if orthogonal, could push below 80.
+- **surf_weight ablation on asinh+EMA stack:** surf_weight=30 was tuned on vanilla MSE. With asinh, heavy-tail pressure samples are already de-emphasized — may want lower weight (e.g. 20) to avoid double-downweighting.
+- **WeightedRandomSampler:** Inverse-error reweighting after epoch 1 — different mechanism from all above, could stack.
+- **Channel-decoupled output heads:** Separate mlp2 for Ux/Uy vs p — stronger inductive bias for pressure-specific modeling.
+- **asinh tau parameter:** Learnable or annealed per-channel compression knee.

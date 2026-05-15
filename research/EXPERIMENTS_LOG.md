@@ -279,3 +279,24 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 
 - **Decision:** CLOSED — +5.8% regression across all splits except single_in_dist (marginal). Hypothesis falsified.
 - **Key finding:** Velocity z-scores are light-tailed (|z|<1 for most samples), so asinh compresses meaningful velocity gradient signal rather than suppressing outliers. The asymmetry between pressure (heavy tails) and velocity (light tails) makes the per-channel choice in PR #3357 load-bearing. Strongest regression on val_geom_camber_rc (+14.7%) — the high-Re raceCar split with the largest |Ux| magnitudes, where velocity gradient signal is most informative. The val loss landscape is also noisier than the pressure-only baseline (oscillatory curve vs monotonic descent in #3357). Confirmed: pressure-only asinh is the correct design choice.
+
+---
+
+## 2026-05-15 21:34 — PR #3382: EMA weights (decay=0.999) on asinh baseline (rebased rerun)
+
+- **Branch:** charliepai2i48h2-askeladd/ema-weights-decay-0999
+- **Hypothesis:** EMA shadow (decay=0.999) applied at val/test passes reduces Lion optimizer's sign-based update variance. First run was on pre-asinh baseline (val=105.79 on old 117.50 ref). Sent back for rebase; this is the confirmed rerun on current 84.98 asinh baseline.
+- **Metrics:** `models/model-charliepai2i48h2-askeladd-ema-weights-decay-0999-rebased-20260515-203115/metrics.jsonl`
+
+| Split | asinh-p baseline (#3357) | EMA+asinh (this) | Δ |
+|-------|--------------------------|------------------|---|
+| single_in_dist | 108.04 | 99.95 | −7.5% |
+| geom_camber_rc | 90.63 | 94.15 | +3.9% |
+| geom_camber_cruise | 62.68 | 60.26 | −3.9% |
+| re_rand | 78.58 | 78.38 | −0.3% |
+| **val_avg** | **84.9819** | **83.1874** | **−2.11%** |
+| **test_avg** | **76.1441** | **74.5193** | **−2.13%** |
+
+- **Decision:** MERGED — new baseline 83.1874. Mechanisms compose cleanly: asinh smooths the loss landscape; EMA then smooths parameter trajectory on top.
+- **Key finding:** EMA still adds value on top of asinh, but the gain is reduced (−2.1% here vs −9.96% for EMA on the pre-asinh baseline). This confirms the advisor's hypothesis: asinh already reduces the variance EMA was correcting, but EMA provides an orthogonal variance-reduction layer (parameter trajectory vs gradient scale). Smoothness diagnostic: 0 sign flips in val curve, every epoch a new best — consistent with both mechanisms composing. Best epoch=14 (final, timeout-bound) with EMA shadow still catching up at 0.999 decay over ~5k steps. Mixed-split picture: single_in_dist improved strongly (-7.5%), geom_camber_rc slightly regressed (+3.9%), geom_camber_cruise improved (-3.9%), re_rand near-flat. Net improvement is real but smaller in magnitude than pressure-only asinh.
+
