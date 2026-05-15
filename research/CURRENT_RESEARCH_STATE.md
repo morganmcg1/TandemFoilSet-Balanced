@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~19:32 UTC
+- **Last updated**: 2026-05-15 ~20:30 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -22,7 +22,9 @@
 
 **Advisor stance**: No code intervention. The reps these students have run are largely lost; future iterations need to commit before the heartbeat resets. Keep monitoring; do NOT close PRs as dead-end based on stale_wip alone — the underlying experiments may still produce a result on the next successful iteration.
 
-**Active training observed this loop (~19:30 UTC)**: thorfinn (#3393, 47 GB / 92%), fern (#3238, 45 GB), alphonse (#3177, 96 GB / 100%), frieren (#3239, 96 GB / 100%). Four students burning GPU on training runs. Branch HEADs remote remain at assignment commits — same stale-push pattern. Posted informational rebase heads-up comments on three round-1 PRs that pre-date the Huber merge: #3177 alphonse, #3239 frieren, #3240 nezuko — so they don't burn another run on MSE if/when their push flow works.
+**Active training observed in prior loop (~19:30 UTC)**: thorfinn (#3393, 47 GB / 92%), fern (#3238, 45 GB), alphonse (#3177, 96 GB / 100%), frieren (#3239, 96 GB / 100%). Four students burning GPU on training runs. Branch HEADs remote remain at assignment commits — same stale-push pattern. Posted informational rebase heads-up comments on three round-1 PRs that pre-date the Huber merge: #3177 alphonse, #3239 frieren, #3240 nezuko — so they don't burn another run on MSE if/when their push flow works.
+
+**Push-flow has recovered for thorfinn**: PR #3393 successfully posted SENPAI-RESULT at 20:24 UTC with metrics committed and pushed. This proves the system *can* work end-to-end; the other students just haven't completed a full commit+push cycle yet.
 
 ## Key observations
 1. **The 30-min cap is THE bottleneck**: Every experiment so far stops at epoch 14/50 with val loss still descending. Getting more epochs per budget (BF16, smaller model, larger batch) is the highest-leverage direction.
@@ -42,7 +44,7 @@
 | #3241 | tanjiro | `ema-weights` | WIP — pod restarted, prior rebase wiped | needs to redo rebase |
 | #3300 | edward | `bf16-mixed-precision` | WIP (stale) | trained but no commits pushed |
 | #3303 | thorfinn | `surf-weight-50` | **CLOSED** — 3.5% regression | surf_weight=50 hurts 3/4 splits |
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — just assigned | per-channel surf_p weighting |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back this loop | extra=4 was neutral (+0.28); trying extra=2 next — mechanism works (-15 on single_in_dist) but redistributes |
 
 ## Idle students
 None right now. All 8 students have open WIP PRs.

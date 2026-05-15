@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-05-15 20:25 — PR #3393: Per-channel surface pressure weighting (surf_p_weight_extra=4)
+
+- **Branch**: `charliepai2i24h3-thorfinn/surf-p-channel-weight`
+- **Hypothesis**: Concentrate the extra surface gradient on the pressure channel (dim 2) only, leaving Ux/Uy surface losses and the vol loss unchanged. Effective pressure-channel weight = `surf_weight * (1 + surf_p_weight_extra) = 10 * 5 = 50`. Predicted 2-6% improvement, especially on val_single_in_dist (the hardest pressure split).
+- **Outcome**: **SENT BACK — mechanism works but balance wrong; trying surf_p_weight_extra=2.0**
+
+| Metric | Baseline | This run | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 117.66 | **117.95** | +0.28 (neutral wash) |
+| `val_single_in_dist/mae_surf_p` | 147.77 | **132.70** | **-15.07 (big win)** |
+| `val_geom_camber_rc/mae_surf_p` | 125.08 | 131.68 | +6.60 (regression) |
+| `val_geom_camber_cruise/mae_surf_p` | 88.98 | 99.62 | +10.64 (regression on easiest split) |
+| `val_re_rand/mae_surf_p` | 108.81 | 107.80 | -1.01 (slight gain) |
+| `test_avg/mae_surf_p` (partial, 3 finite splits) | ~107.6 | 114.51 | +6.91 |
+| Epochs run | 13/50 | 14/50 (still descending) | — |
+| Peak VRAM | 42.11 GB | 42.11 GB | — |
+| Artifact | — | `models/model-surf_p_weight_extra_4-20260515-192333/metrics.jsonl` | — |
+
+**Analysis**: This is the most informative result so far. The gain mechanism works exactly as predicted — pressure-channel gradient redirection produces a 15-point improvement on val_single_in_dist (the hardest pressure split). But the gain is offset by losses on the easier splits (cruise +10.64, rc +6.60). At `extra=4`, the optimizer redistributes capacity from low-magnitude pressure splits toward high-magnitude ones; with a fixed-capacity model this is roughly zero-sum across splits when averaged.
+
+Implementation is correct (vol metrics largely unchanged, Ux/Uy surface metrics unchanged in spirit, only pressure surface metrics moved). The PR is qualitatively different from #3303 in the right way — it doesn't break everything, just redistributes.
+
+**Decision: send back with `surf_p_weight_extra=2.0`**. The PR's original decision rule pointed to 8.0 next, but the per-split data shows that doubling the redirection will make the redistribution worse, not better. The optimum lives *below* 4, not above. Asked thorfinn to try 2.0 (and 1.0 as a companion if GPU available) to find the curve shape.
+
+Adjacent direction: this is the per-channel analogue of alphonse's #3177 (per-sample-scale-norm). Together they triangulate whether the right lever for hard-pressure splits is per-channel or per-sample.
+
+---
+
 ## 2026-05-15 18:26 — PR #3303: Increase surf_weight from 10 to 50 with Huber baseline
 
 - **Branch**: `charliepai2i24h3-thorfinn/surf-weight-50`
