@@ -182,3 +182,60 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 
 - **Decision:** CLOSED — val=135.50 is +6.3% regression vs current baseline 127.41. Hypothesis falsified: predicted FiLM helps re_rand (Re-OOD), but observed it hurts re_rand (+3.2%) and geom_cruise (+18.9%). Only single_in_dist improved (−7.7%), suggesting Re gating helps in-distribution but amplifies Re-OOD errors.
 - **Key finding:** FiLM with Re conditioning creates tighter Re-dependency; this helps when Re is in-distribution but hurts when Re shifts out of training mass. Geometry-OOD splits also regress. Geometry-conditional FiLM (camber/AoA) not worth trying — same mechanism would apply. Student ran correct A/B comparison on same hardware. NaN bug also independently identified (fix already in #3274).
+
+---
+
+## 2026-05-15 18:30 — PR #3328: Surface loss weight sweep: surf_weight 30→50
+
+- **Branch:** charliepai2i48h2-askeladd/surf-weight-50
+- **Hypothesis:** Increasing surf_weight 30→50 would further align training loss with the primary metric (surface pressure MAE) and improve especially single_in_dist and geom_camber_rc (higher-magnitude splits).
+- **Metrics:** `models/model-charliepai2i48h2-askeladd-surf-weight-50-20260515-163202/metrics.jsonl`
+
+| Split | surf_weight=30 baseline | surf_weight=50 | Δ |
+|-------|------------------------|----------------|---|
+| single_in_dist | 152.82 | 178.79 | +17.0% |
+| geom_camber_rc | 134.85 | 173.38 | +28.6% |
+| geom_camber_cruise | 102.60 | 109.56 | +6.8% |
+| re_rand | 119.38 | 126.69 | +6.1% |
+| **avg** | **127.4122** | **147.1046** | **+15.5%** |
+
+- **Decision:** CLOSED — +15.5% regression vs AdamW+surf30 baseline (127.41); +25% vs current Lion baseline (117.50). All 4 splits regressed. val curve highly oscillatory (±50 between adjacent epochs) vs monotone descent at surf_weight=30.
+- **Key finding:** surf_weight=10→30 was the sweet spot. Pushing to 50 crosses into optimization instability: surface-loss curvature swamps volume-loss directions (train_vol_loss elevated at 0.95 vs 0.60 for sw=30 at same point), decoupling loss from the val metric. Tested on AdamW — not directly comparable to Lion baseline, but regression magnitude is decisive.
+
+---
+
+## 2026-05-15 18:30 — PR #3329: AdamW β2 tuning 0.999→0.95 for faster moment adaptation
+
+- **Branch:** charliepai2i48h2-fern/adamw-beta2-095
+- **Hypothesis:** Lowering β2 from 0.999 to 0.95 (PaLM/T5 default) would speed up second-moment adaptation and help on a short ~5k-step training run.
+- **Metrics:** `models/model-charliepai2i48h2-fern-adamw-beta2-095-20260515-163840/metrics.jsonl`
+
+| Split | β2=0.999 (baseline) | β2=0.95 | Δ |
+|-------|---------------------|---------|---|
+| single_in_dist | 152.82 | 174.41 | +14.1% |
+| geom_camber_rc | 134.85 | 152.38 | +13.0% |
+| geom_camber_cruise | 102.60 | 111.27 | +8.5% |
+| re_rand | 119.38 | 131.56 | +10.2% |
+| **avg** | **127.4122** | **142.4049** | **+11.8%** |
+
+- **Decision:** CLOSED — +11.8% regression; all 4 splits worse on both val and test. Direction doubly off-axis since the optimizer has since moved to Lion.
+- **Key finding:** With B=4 and variable-mesh heavy-tailed gradients, β2=0.95 is wrong direction — we need more smoothing, not less. PaLM/T5-style β2 is tuned for batch-millions regimes. Val best at epoch 10 then degrades (noisier trajectory consistent with under-smoothed v_t).
+
+---
+
+## 2026-05-15 18:30 — PR #3102: OneCycleLR (epochs=13 rerun, max_lr=1e-3)
+
+- **Branch:** charliepai2i48h2-edward/onecycle-maxlr-1e-3
+- **Hypothesis (round 2):** Sizing OneCycleLR total_steps to match wall-clock cap (13 epochs) would let the schedule execute its full warmup→peak→cosine arc, recovering from the truncation failure of round 1 (total_steps=50 while only 14 ran).
+- **Metrics:** `models/model-charliepai2i48h2-edward-onecycle-maxlr-1e-3-ep13-20260515-163625/metrics.jsonl`
+
+| Split | Cosine baseline (sw=30) | OneCycleLR ep13 | Δ |
+|-------|------------------------|-----------------|---|
+| single_in_dist | 152.82 | 177.71 | +24.9 |
+| geom_camber_rc | 134.85 | 152.61 | +17.8 |
+| geom_camber_cruise | 102.60 | 108.36 | +5.8 |
+| re_rand | 119.38 | 125.81 | +6.4 |
+| **avg** | **127.4122** | **141.1231** | **+10.8%** |
+
+- **Decision:** CLOSED — +10.8% regression (AdamW+sw30 baseline); +20% vs Lion baseline 117.50. Both arms of OneCycleLR failed. Round 2 val (141.12) vs round 1 (141.77) — essentially identical despite schedule running to completion.
+- **Key finding:** At 13 epochs, warmup window is ~1.3 steps (degenerate), model spends first half at peak LR (>5e-4) while cosine baseline anneals through that period. Schedule shape structurally poorly matched to 14-epoch budget. The bottleneck was schedule shape, not truncation. Student's analysis: CosineAnnealingLR wins on short budgets because it spends more time at moderate-to-low LR.
