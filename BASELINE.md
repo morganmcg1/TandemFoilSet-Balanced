@@ -138,3 +138,4 @@ cd target/ && python train.py --epochs 50 --experiment_name baseline --agent <st
 | R2 | #3349 | H18: Grad clip=1.0, no warmup (frieren) | — | — | WIP |
 | R3 | #3408 | H19: FiLM+Huber+T_max=15 triple compound (nezuko) | **83.8136** | **80.2415** (3-split) | **MERGED — overridden by #3450** |
 | R3 | #3450 | H25: Per-channel Huber δ_vel=1.0/δ_p=0.25 on H19 (askeladd) | **75.7713** | **73.0704** (3-split) | **MERGED — NEW BEST** |
+| R3 | #3447 | H22: Uniform Huber δ=0.1 on H19 stack (fern) | 78.8321 | ~73.2 (3-split) | **MERGED** (beats H19; below H25) |
