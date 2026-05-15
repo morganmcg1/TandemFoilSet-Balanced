@@ -2,8 +2,87 @@
 
 Rolling log of completed experiment PRs reviewed by the advisor. Metrics
 sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
-`val_avg/mae_surf_p` (lower is better). Test-side ranking is currently
-contaminated by an Inf in the cruise test ground truth (see notes).
+`val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
+is now valid for all future runs.
+
+## 2026-05-15 21:30 — PR #3151: EMA model weights sweep — **SENT BACK (rebase on Charbonnier baseline)**
+
+- Student branch: `willowpai2i24h1-thorfinn/ema-model-weights`
+- Student: `willowpai2i24h1-thorfinn`
+- Hypothesis: maintaining an EMA shadow of model weights and evaluating with
+  it instead of the live optimizer iterate provides a smoother, lower-variance
+  solution, especially under truncated training.
+
+| Arm | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs no_ema (test) |
+|-----|-----------|--------------------|--------------------|---------------------|
+| no_ema | 6xqa30qf | 146.63 | 135.75 | baseline |
+| **ema999** | e9rsxven | **118.99** | **111.55** | **−17.8%** |
+| ema9999 | bhsc0dw2 | 122.99 | 114.76 | −15.5% |
+
+Per-split test at best epoch (ema999):
+single_in_dist=125.45, geom_camber_rc=119.09, geom_camber_cruise=94.55, re_rand=107.09.
+
+Key diagnostics from student:
+- EMA gives **−17.8% test, −18.8% val** vs no_ema — far exceeding the 1-3% prediction.
+  The outsized gain is expected: with training truncated at 14/50 epochs (before LR
+  decays), the iterate is still noisy; EMA captures a substantially better minimum.
+- ema999 ≈ ema9999 are identical because the Karras warmup caps effective decay at
+  0.9983 at 5250 optimizer steps — well below both target values. The two arms ran
+  the same effective schedule; differences are noise.
+- Student independently found the same NaN bug as alphonse (#3138) and applied an
+  equivalent call-site fix; #3138's evaluate_split boundary fix is now merged.
+- Student wrapped training loop in `if __name__ == "__main__":` for clean import safety.
+- All arms trained on the **pre-Charbonnier stale base** — no_ema=146.63 vs new merged
+  baseline of 98.60 makes absolute numbers non-comparable.
+
+**Conclusion:** EMA is a high-confidence lever. −17.8% within-PR signal on stale base
+is too large to close. Sent back for rebase on current advisor head (Charbonnier +
+warmup + NaN fix) with explicit `--loss_fn charbonnier --charbonnier_eps 1e-3`. Once
+on composed base, we expect no_ema ≈ 98-105, ema999 landing in the ~80-90 range if
+the within-PR gap is proportionally maintained.
+
+**Decision:** sent back for rebase. Also suggested disabling Karras warmup on one arm
+to verify ema9999 actually differs from ema999 at longer run durations.
+
+---
+
+## 2026-05-15 21:25 — PR #3142: Surface loss weight sweep (surf_weight ∈ {10,30,80}) — **CLOSED ✗**
+
+- Student branch: `willowpai2i24h1-askeladd/surf-weight-sweep`
+- Student: `willowpai2i24h1-askeladd`
+- Hypothesis: increasing `surf_weight` from 10 (default) to 30 or 80 reallocates
+  gradient capacity to surface nodes and directly reduces `mae_surf_p`.
+
+| Arm | wandb run | val_avg/mae_surf_p | Δ vs sw10 | test 3-split avg | mae_vol_p avg |
+|-----|-----------|--------------------|-----------|-----------------:|---------------|
+| sw10 (control) | 9m3xl5ls | 125.28 | — | 124.51 | 122.83 |
+| sw30 | mwkvs001 | 139.26 | +11.2% | 140.11 | 161.20 |
+| **sw80** | wnh939lg | **124.42** | **−0.69%** | **120.44** | 166.53 |
+
+Per-split val at best epoch (sw80 arm, best arm):
+single_in_dist=152.70, geom_camber_rc=135.13, geom_camber_cruise=96.80, re_rand=113.03.
+
+Key diagnostics:
+- **Direction is correct but magnitude is noise-level.** sw80 beats sw10 by 0.69% — well
+  inside run-to-run variance (~3-4 units). Not attributable to the lever.
+- **Non-monotonic in the middle.** sw30 is worse than BOTH sw10 and sw80 on every split.
+  Two plausible causes: (1) 3× surface signal disrupts the volume backbone but doesn't
+  dominate; (2) all runs truncated at best_epoch=14 — early-stage noise confounds ordering.
+- **Volume tradeoff is real.** mae_vol_p rises ~+39% from sw10→sw80 (confirmed expected
+  tradeoff); the ranking metric ignores this.
+- **Stale base.** sw10=125.28 on pre-Charbonnier base vs current merged baseline 98.60.
+  Charbonnier rebalances the per-node gradient, which changes the effective surf_weight
+  sensitivity; the optimal weight post-Charbonnier may differ.
+- **NaN bug confirmed independently** by askeladd — same diagnosis as alphonse. Both
+  trace the `NaN * 0 = NaN` IEEE path through `accumulate_batch`. #3138 is now merged.
+
+**Conclusion:** Weak signal (0.69%) on stale base. Non-monotonic ordering adds noise.
+`surf_weight` tuning may be revisited after AMP and EMA land, when training reaches
+deeper cosine decay and the gradient rebalancing from Charbonnier is better characterized.
+
+**Decision:** close. Zero-sum re-run is not worth the GPU time in the current round.
+
+---
 
 ## 2026-05-15 20:45 — PR #3138: NaN bug fix in evaluate_split — **MERGED ✅ CRITICAL FIX**
 
