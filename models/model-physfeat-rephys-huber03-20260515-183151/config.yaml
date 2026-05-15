@@ -1,0 +1,62 @@
+agent: charliepai2i48h5-alphonse
+batch_size: 4
+debug: false
+epochs: 50
+experiment_name: physfeat-rephys-huber03
+huber_delta: 0.3
+lr: 0.0005
+model_config:
+  fun_dim: 28
+  mlp_ratio: 2
+  n_head: 4
+  n_hidden: 128
+  n_layers: 5
+  out_dim: 3
+  output_dims:
+  - 1
+  - 1
+  - 1
+  output_fields:
+  - Ux
+  - Uy
+  - p
+  slice_num: 64
+  space_dim: 2
+n_params: 663895
+physics_feature_calibration_batches: 20
+physics_feature_stats:
+  mean:
+  - 9.6380033493042
+  - 2.8816263675689697
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  mode: rephys
+  n_batches: 20
+  names:
+  - log_re_x
+  - gap_re
+  - sin_aoa0
+  - cos_aoa0
+  - sin_aoa1
+  - cos_aoa1
+  std:
+  - 3.1812000274658203
+  - 8.301444053649902
+  - 0.0010000000474974513
+  - 0.0010000000474974513
+  - 0.0010000000474974513
+  - 0.0010000000474974513
+physics_features: true
+physics_features_mode: rephys
+skip_test: false
+splits_dir: /mnt/new-pvc/datasets/tandemfoil/splits_v2
+surf_weight: 10.0
+train_samples: 1499
+val_samples:
+  val_geom_camber_cruise: 100
+  val_geom_camber_rc: 100
+  val_re_rand: 100
+  val_single_in_dist: 100
+weight_decay: 0.0001

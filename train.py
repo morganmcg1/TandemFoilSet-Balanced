@@ -214,10 +214,91 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Physics-derived input features
+# ---------------------------------------------------------------------------
+
+PHYSICS_FEATURE_NAMES = ["log_re_x", "gap_re", "sin_aoa0", "cos_aoa0", "sin_aoa1", "cos_aoa1"]
+
+
+def augment_physics_features(
+    x_raw: torch.Tensor, mode: str = "all", eps: float = 1e-4,
+) -> torch.Tensor:
+    """Append 6 physics-derived features to raw x (24-dim) -> 30-dim.
+
+    Features at positions 24..29:
+        24: log_re_x = log_Re + log(|saf_foil1| + eps)
+        25: gap_re   = gap * log_Re
+        26: sin(aoa0), 27: cos(aoa0)
+        28: sin(aoa1), 29: cos(aoa1)
+
+    mode="all":    all 6 features active.
+    mode="rephys": zero out the 4 sin/cos AoA features (isolate pure-physics
+                   features); model_config stays the same so the no-op columns
+                   are absorbed by normalization (mean=0, std=clamped to 1e-6
+                   keeps them at 0 after z-score).
+    """
+    log_Re = x_raw[..., 13:14]
+    saf1   = x_raw[..., 2:3]
+    aoa0   = x_raw[..., 14:15]
+    aoa1   = x_raw[..., 18:19]
+    gap    = x_raw[..., 22:23]
+
+    log_re_x = log_Re + torch.log(saf1.abs().clamp(min=eps))
+    gap_re   = gap * log_Re
+    if mode == "all":
+        sin_a0 = torch.sin(aoa0)
+        cos_a0 = torch.cos(aoa0)
+        sin_a1 = torch.sin(aoa1)
+        cos_a1 = torch.cos(aoa1)
+    elif mode == "rephys":
+        sin_a0 = torch.zeros_like(aoa0)
+        cos_a0 = torch.zeros_like(aoa0)
+        sin_a1 = torch.zeros_like(aoa1)
+        cos_a1 = torch.zeros_like(aoa1)
+    else:
+        raise ValueError(f"Unknown physics_features_mode: {mode}")
+
+    return torch.cat([x_raw, log_re_x, gap_re, sin_a0, cos_a0, sin_a1, cos_a1], dim=-1)
+
+
+def compute_physics_feature_stats(
+    loader, device, mode: str = "all", n_batches: int = 20, eps: float = 1e-4,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Z-score stats for the 6 new physics features over a training-data calibration pass.
+
+    Uses ``mask`` to skip padded positions so stats reflect real mesh nodes only.
+    """
+    sums = torch.zeros(6, device=device, dtype=torch.float64)
+    sqs  = torch.zeros(6, device=device, dtype=torch.float64)
+    n = 0
+    for i, batch in enumerate(loader):
+        if i >= n_batches:
+            break
+        x, _, _, mask = batch
+        x = x.to(device, non_blocking=True)
+        mask = mask.to(device, non_blocking=True)
+        x_aug = augment_physics_features(x, mode=mode, eps=eps)
+        new_feats = x_aug[..., 24:]                  # [B, N, 6]
+        valid = new_feats[mask].double()             # [N_valid, 6]
+        sums += valid.sum(0)
+        sqs  += (valid ** 2).sum(0)
+        n    += valid.shape[0]
+    if n == 0:
+        raise RuntimeError("compute_physics_feature_stats: no valid nodes encountered")
+    mean = sums / n
+    var  = (sqs / n) - mean ** 2
+    std  = var.clamp(min=1e-6).sqrt()
+    return mean.float(), std.float()
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float) -> dict[str, float]:
+def evaluate_split(
+    model, loader, stats, surf_weight, device, huber_delta: float,
+    physics_features: bool = False, physics_features_mode: str = "all",
+) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -236,6 +317,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            if physics_features:
+                x = augment_physics_features(x, mode=physics_features_mode)
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -370,6 +453,9 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
+    physics_features: bool = False  # append 6 physics-derived features to x (24 -> 30 dims)
+    physics_features_mode: str = "all"  # "all" or "rephys" (zero out sin/cos AoA features)
+    physics_feature_calibration_batches: int = 20  # # batches used to compute z-score stats for new features
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -403,9 +489,35 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+# Calibration pass for the 6 new physics features. Must run before training so
+# the stats vector matches the augmented x.
+physics_feature_stats: dict | None = None
+if cfg.physics_features:
+    new_mean, new_std = compute_physics_feature_stats(
+        train_loader, device, mode=cfg.physics_features_mode,
+        n_batches=cfg.physics_feature_calibration_batches,
+    )
+    stats["x_mean"] = torch.cat([stats["x_mean"], new_mean])
+    stats["x_std"]  = torch.cat([stats["x_std"],  new_std])
+    physics_feature_stats = {
+        "mode": cfg.physics_features_mode,
+        "names": PHYSICS_FEATURE_NAMES,
+        "mean": new_mean.cpu().tolist(),
+        "std":  new_std.cpu().tolist(),
+        "n_batches": cfg.physics_feature_calibration_batches,
+    }
+    print(
+        f"Physics features ({cfg.physics_features_mode}): "
+        + ", ".join(
+            f"{name}=N({m:.3f},{s:.3f})"
+            for name, m, s in zip(PHYSICS_FEATURE_NAMES, physics_feature_stats["mean"], physics_feature_stats["std"])
+        )
+    )
+
+extra_dims = 6 if cfg.physics_features else 0
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + extra_dims,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -436,7 +548,14 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "physics_feature_stats": physics_feature_stats,
     }, f, sort_keys=True)
+
+if physics_feature_stats is not None:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "physics_feature_calibration",
+        **physics_feature_stats,
+    })
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -458,6 +577,8 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        if cfg.physics_features:
+            x = augment_physics_features(x, mode=cfg.physics_features_mode)
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
@@ -484,7 +605,11 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device, cfg.huber_delta,
+            physics_features=cfg.physics_features,
+            physics_features_mode=cfg.physics_features_mode,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -542,7 +667,11 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device, cfg.huber_delta,
+                physics_features=cfg.physics_features,
+                physics_features_mode=cfg.physics_features_mode,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
