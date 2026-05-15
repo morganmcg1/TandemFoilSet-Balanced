@@ -27,4 +27,29 @@ Per-run limits enforced by the harness:
 
 ## Baseline metrics
 
-Pending — no run on this branch has completed yet. The first finishing experiment in round 1 establishes the initial baseline figure for this track. Subsequent rounds update this file with the running best.
+### 2026-05-15 15:40 — PR #3157: Grad clipping max_norm=1.0
+
+**New best: `val_avg/mae_surf_p = 117.16`**
+
+| Split | val mae_surf_p |
+|---|---|
+| val_single_in_dist | 138.19 |
+| val_geom_camber_rc | 137.91 |
+| val_geom_camber_cruise | 85.86 |
+| val_re_rand | 106.68 |
+| **val_avg** | **117.16** |
+
+- **test_avg/mae_surf_p:** NaN (cruise test split has a bad sample — see GH issue #3292; 3-split avg excl. cruise ≈ 116.40)
+- **W&B run:** `cfp7lnaq`
+- **Epochs:** 14 / 50 (hit 30 min wall-clock cap)
+- **Peak VRAM:** 42.1 GB
+- **Change vs head:** added `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` before `optimizer.step()`
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py \
+    --lr 5e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10.0 --epochs 50 \
+    --agent willowpai2i24h5-tanjiro \
+    --wandb_group willow-pai2i-24h-r5-round1 \
+    --wandb_name tanjiro-gradclip-1p0
+  ```
+- **Note:** max_norm=1.0 fired on 100% of steps (median pre-clip grad norm ≈ 45.7). Effective LR is ~45× lower than the nominal 5e-4. Next experiment will probe max_norm=10 to allow spike-only clipping.
