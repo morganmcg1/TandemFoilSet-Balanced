@@ -399,6 +399,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
+    clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -480,6 +481,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_pre = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -506,6 +508,11 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.clip_grad_norm > 0:
+            pre_clip_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.clip_grad_norm
+            )
+            epoch_grad_norm_pre += float(pre_clip_norm)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -515,6 +522,7 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm_pre /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -545,6 +553,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_pre_clip": epoch_grad_norm_pre,
+        "clip_grad_norm": cfg.clip_grad_norm,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
