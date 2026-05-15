@@ -2,6 +2,26 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-15 21:30 — PR #3224: H13 Geom-cond GALE (tanjiro) — **MERGED, new best**
+
+- Branch: `charliepai2i24h4-tanjiro/geom-cond-additive`
+- Hypothesis: Persistent additive geometry conditioning at every TransolverBlock, GALE-style. Global dims 13-23 (Re, AoA, NACA params, gap, stagger) extracted once per sample and projected via MLP. Learnable per-block scalar gates init at 0 (identity start). Predicted -3% to -8%, camber splits expected to benefit most.
+- Round 2 results (full combined baseline stack + T_max=15 cosine alignment):
+
+| Split | Baseline (92.80) | H13 v2 | Delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 115.48 | 106.160 | -8.1% |
+| val_geom_camber_rc | 105.48 | 92.098 | **-12.7%** ← biggest |
+| val_geom_camber_cruise | 63.87 | 61.360 | -3.9% |
+| val_re_rand | 86.36 | 81.005 | -6.2% |
+| **val_avg** | **92.80** | **85.156** | **-8.2%** |
+| test_avg | 84.11 | 77.613 | -7.7% |
+
+- Metrics: `models/model-charliepai2i24h4-tanjiro-geom-cond-v2-restrat-rff-tmax15-20260515-193031/metrics.jsonl`
+- Learned gates: `[-0.05, -0.11, -0.13, -0.14, -0.15]` — monotone with depth, all non-zero. Mechanism active at every block.
+- **Analysis**: GALE mechanism confirmed working — camber_rc split benefited most (-12.7%) as predicted (OOD geometry interpolation). T_max=15 alignment was critical: round 1 (T_max=50) showed oscillating val_avg late-training; round 2 with T_max=15 showed monotone descent to epoch 14 best. New baseline: 85.156.
+- **Note on T_max**: tanjiro's merge baked T_max=15 into train.py. Nezuko's H14 (CLI --cosine_t_max) needs to handle this correctly on rebase.
+
 ## 2026-05-15 19:35 — PR #3423: H15 SwiGLU MLP (edward) — **assigned (idle slot fill)**
 
 - Branch: `charliepai2i24h4-edward/swiglu-mlp`
