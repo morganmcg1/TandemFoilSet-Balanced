@@ -1,45 +1,50 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-15 13:30 UTC
+- **Updated:** 2026-05-15 14:35 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
 - **Metrics:** local JSONL only (no remote tracking on this branch)
+- **Current round-5 baseline (PR #3266 merged):** `val_avg/mae_surf_p = 123.8778`, `test_avg/mae_surf_p = 114.3695`
 
 ## Most recent research direction from human researcher team
-(none — no Issues open or directed at this launch as of this update)
+(none — no Issues open or directed at this launch)
+
+## Critical operational fix in baseline
+
+PR #3266 also propagated a NaN workaround for `data/scoring.py::accumulate_batch` into `train.py::evaluate_split`. Without it, any test eval that touches `test_geom_camber_cruise/000020.pt` returns NaN. All seven in-flight round-5 PRs have been warned via comment to apply the same fix in their own `evaluate_split` before submitting.
 
 ## Current research focus and themes
 
-Clean-slate round 5 on the Charlie 24h pai2i track. Baseline is the default Transolver (`n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, AdamW lr=5e-4 wd=1e-4, batch=4, surf_weight=10, CosineAnnealing, 50 epochs). Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across 4 val splits) and the test-time deciding metric is `test_avg/mae_surf_p`.
+Round 5 has shifted from clean-slate to single-anchor-baseline. The remaining seven dispatched PRs are testing orthogonal structural/loss hypotheses on top of vanilla Transolver; they will be re-anchored against PR #3266's numbers (val 123.88 / test 114.37) at review time, with the caveat that they did **not** include the scale-invariant loss change. That means most of them are isolating their hypothesis vs vanilla MSE, while #3266 isolates scale-invariant vs vanilla MSE — useful for attribution, but it means clean compounding will only kick in from the next round onwards.
 
-This round attacks the problem from **eight orthogonal angles**, biased toward bold structural changes rather than further hyperparameter tuning, with each hypothesis targeting either (a) the primary surf-pressure objective, (b) the unseen-camber generalization splits, or (c) the cross-Re generalization split:
+| PR | Student | Status | Hypothesis |
+|----|---------|--------|-----------|
+| #3265 | fern | WIP | FiLM Re/AoA/NACA conditioning every block |
+| #3267 | tanjiro | WIP | Separate surface decoder head |
+| #3268 | alphonse | WIP | NACA camber mixup augmentation |
+| #3269 | nezuko | WIP | Multi-scale slice attention (hourglass) |
+| #3270 | edward | WIP | Transolver capacity scale-up (256/8/8) |
+| #3271 | thorfinn | WIP | Signed-log pressure target transform |
+| #3272 | askeladd | WIP | Surface arc-length Fourier PE |
+| #3281 | frieren | WIP | EMA weights for checkpoint + test eval (stacked on #3266) |
 
-| PR | Student | Hypothesis | Predicted δ | Targets |
-|----|---------|-----------|-------------|---------|
-| #3265 | fern | FiLM Re/AoA/NACA conditioning every block | −8 to −15% | Re-rand + unseen-camber |
-| #3266 | frieren | Per-sample scale-invariant loss | −6 to −14% | Re-rand |
-| #3267 | tanjiro | Separate surface decoder head | −5 to −12% | All splits, surf_p focus |
-| #3268 | alphonse | NACA camber mixup augmentation | −5 to −12% | Unseen-camber |
-| #3269 | nezuko | Multi-scale slice attention (hourglass) | −6 to −12% | All splits |
-| #3270 | edward | Transolver capacity scale-up (256/8/8) | −5 to −10% | All splits |
-| #3271 | thorfinn | Signed-log pressure target transform | −4 to −10% | Re-rand |
-| #3272 | askeladd | Surface arc-length Fourier PE | −4 to −9% | Surf_p focus |
+frieren's #3281 is the only PR that builds on top of the merged baseline. Once the others come in, the natural next move is to stack the strongest winner with EMA + the scale-invariant loss for a compounding round-6 push.
 
-Full ideas list with motivations and references: `research/RESEARCH_IDEAS_2026-05-15_12:43.md`.
+## Plateau watch
+
+If <3 of the remaining 7 in-flight PRs beat `val_avg/mae_surf_p = 123.88` by ≥3%, treat as a soft plateau and escalate:
+1. Diagnose: read the worst per-split predictions in committed metrics; identify whether failure is OOD camber, OOD Re, or both.
+2. Take bigger swings: drop the Transolver entirely and try a different backbone (UPT, Galerkin Transformer, OFormer), or change the problem framing (predict residual-to-Bernoulli surface pressure).
+3. Revisit normalization: try per-channel per-domain stats, or learn the normalization.
 
 ## Potential next research directions (post-round-5)
 
-If results compound, the next round should explore:
-
-1. **Compound winners** — stack the best 2–3 wins from this round (e.g. FiLM + EMA + larger model) into a single PR to test orthogonality.
-2. **Optimizer changes** — Lion / C-AdamW / Schedule-Free AdamW once architecture is settled. Lowest risk additions but largest deltas only kick in after structure is right.
-3. **Warmup + extended cosine schedule** + gradient clipping — polishing move, expected −2 to −5% on top of any architectural win.
-4. **EMA / SWA for checkpoint selection** — near-free win, expected −3 to −7% especially on OOD splits.
-5. **Huber loss + higher surf_weight** — direct train-eval metric alignment, expected −4 to −8%.
-6. **Output reparameterization** — per-channel separate heads, or predict residual-from-analytic-Bernoulli surface pressure.
-7. **Domain-conditional FiLM** — extend FiLM to also condition on (raceCar single / raceCar tandem / cruise tandem) domain ID derived from feature gating.
-8. **Self-distillation / model soups** — final round polish if compute permits.
-
-## Plateau watch
-This is round 5 of the charlie-pai2i series. If <2 of the 8 PRs beat baseline by ≥3% in this round, treat as plateau and escalate to first-principles re-examination: read worst per-split predictions, attempt physics-loss / Bernoulli residual modeling, or revisit data normalization choices.
+1. **Compound winners.** Stack the round-5 winner(s) with frieren's EMA result and consider a follow-on PR combining all three on a single branch.
+2. **Schedule fix.** Set `cosine T_max = epochs_actually_completed` (~14) so LR fully decays in the 30-min wall clock. Frieren's analysis suggests ~5-point improvement at zero risk.
+3. **Optimizer.** Lion / Schedule-Free AdamW / Cautious-AdamW once architecture is set.
+4. **Warmup + LR scaling.** Add a 1-2 epoch linear warmup, raise peak LR to 7e-4 or 1e-3, jointly with a larger model.
+5. **Huber loss + higher surf_weight.** Direct train-eval metric alignment, expected -4 to -8%.
+6. **Domain-conditional FiLM.** If fern's FiLM wins, extend it to also condition on the (raceCar single / raceCar tandem / cruise tandem) domain ID derived from feature gating.
+7. **Per-channel target normalization** so Ux, Uy, p each get equal per-sample-scale treatment (frieren's own follow-up #3).
+8. **Test-time augmentation + EMA + model soups** for late-round polish.
