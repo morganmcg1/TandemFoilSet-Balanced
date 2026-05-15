@@ -37,32 +37,22 @@ declare a real win.
 | #3327 | bf16 + bs=8 + lr=1e-3 | 131.32 | +33.4% | Closed (regression; H100 bandwidth-bound) |
 | #3324 | log-cosh loss | 103.47 (mean of 2) | +5.1% | Closed (tie within noise, loss Pareto saturated) |
 
-## Currently in flight (4 WIP — 4 newly idle after R3 reviews)
+## Currently in flight (8 WIP — all students active)
 
 | PR | Student | Hypothesis | Base | Theme |
 |----|---------|------------|------|-------|
-| #3376 | alphonse | cosine T_max=14 (match wall-clock) | SmoothL1 beta=1.0 + EMA | schedule (will need re-eval on new base) |
-| #3325 | edward   | weight_decay 5e-4 RETRY on new base | SmoothL1 beta=0.5 + EMA | regularization compound |
-| #3124 | frieren  | mlp_ratio=4 retry | SmoothL1 beta=1.0 + EMA | capacity (will need re-eval) |
-| #3286 | tanjiro  | SmoothL1 + surf_weight=25 stack | SmoothL1 beta=1.0 + EMA | loss stack (will need re-eval) |
-| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) | MSE (pre-SmoothL1) | channel weighting (was rate-limited) |
+| #3376 | alphonse | cosine T_max=14 (match wall-clock) | SmoothL1 beta=0.5 + EMA | schedule |
+| #3325 | edward   | weight_decay 5e-4 on new base | SmoothL1 beta=0.5 + EMA | regularization |
+| #3400 | askeladd | SmoothL1 beta=0.25 sweep | SmoothL1 beta=0.5 + EMA | loss tuning |
+| #3401 | fern     | AoA sin/cos periodic encoding | SmoothL1 beta=0.5 + EMA | feature engineering |
+| #3402 | nezuko   | dropout=0.1 in Transolver blocks | SmoothL1 beta=0.5 + EMA | regularization |
+| #3124 | frieren  | mlp_ratio=4 retry | SmoothL1 beta=1.0 + EMA | capacity (baseline-update sent) |
+| #3286 | tanjiro  | surf_weight=25 stack | SmoothL1 beta=1.0 + EMA | loss stack (baseline-update sent) |
+| #3135 | thorfinn | surf-loss (Ux,Uy,p)=(1,1,3) | SmoothL1 beta=0.5 + EMA | channel weighting |
 
-**Idle after R3 reviews:** askeladd, fern, nezuko (PRs closed/merged).
-Edward sent back, so likely returns to WIP shortly.
-
-**Pending assignments (rate-limited at 18:42 UTC, GH core resets 19:19 UTC):**
-PR bodies prepared and ready to submit at `/tmp/pr_bodies/`:
-- `askeladd_smoothl1_beta025.md` — SmoothL1 beta=0.25 sweep continuation (build on own R3 win)
-- `fern_aoa_sincos.md` — AoA periodic encoding (cyclic features for foil pitch)
-- `nezuko_dropout01.md` — dropout=0.1 inside Transolver blocks (regularization orthogonal to wd)
-
-Also need to verify #3135 (thorfinn) state on next invocation — was rate-limited
-last cycle.
-
-**Note on rebase risk:** PRs #3376, #3124, #3286 were authored against earlier
-bases (SmoothL1 beta=1.0 + EMA-0.999). On merge of #3280 (beta=0.5), they
-should rebase or their results need to be re-interpreted against the new
-baseline 98.45.
+**Note on frieren/tanjiro base:** They were assigned before beta=0.5 merged.
+Results should be compared against new 98.45 baseline; sent baseline-update
+comments to both 2026-05-15 19:20 UTC.
 
 ## Plateau / saturation map (R1-R3)
 
@@ -82,24 +72,24 @@ baseline 98.45.
 
 ## Potential next research directions
 
-### Highest priority (target idle students next)
+### R4 in-flight (now covered)
+
+1. ~~**Dropout=0.1** — nezuko #3402~~ (assigned)
+2. ~~**AoA sin/cos encoding** — fern #3401~~ (assigned)
+3. ~~**SmoothL1 beta=0.25 sweep** — askeladd #3400~~ (assigned)
+
+### Next after R4 (for R5)
 
 1. **Stochastic depth** on transformer blocks (Huang et al. 2016, ~p=0.1) —
-   modern ViT regularization, orthogonal to EMA + weight_decay. Single-knob
-   change in Transolver block forward pass. Targets the single-foil OOD gap
-   the same way wd does, via a different mechanism.
+   modern ViT regularization, orthogonal to EMA + dropout + weight_decay.
+   Single-knob change in `TransolverBlock.forward`.
 
-2. **Dropout=0.1 inside Transolver MLP blocks** — paired naturally with the
-   `weight_decay` retry; if both regularizers work, a future compound
-   experiment becomes the next assignment.
-
-3. **AoA sin/cos encoding** — replace raw radians with periodic encoding for
-   the foil-pitch conditioning input. Cheap, principled, addresses the
-   geometric conditioning gap directly.
-
-4. **Re-conditioned FiLM** per Transolver block (2-layer MLP
+2. **Re-conditioned FiLM** per Transolver block (2-layer MLP
    `log(Re) → (γ, β)`) — explicit cross-regime conditioning, targets
    `val_re_rand` and the single-foil geometric gap.
+
+3. **Compound winners** — once R4 results land, stack the best knobs
+   (schedule + regularization + loss tuning) into a compound run.
 
 ### Architectural (escalate if R4 hits plateau)
 
