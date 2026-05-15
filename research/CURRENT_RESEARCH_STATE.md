@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-15 18:50 — round 6 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-15 19:35 — round 7 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 
 ## Baseline progression
@@ -18,11 +18,11 @@
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3411 | tanjiro | Extend asinh to Ux/Uy channels (all-channel) | WIP — NEW | On full asinh baseline 84.98 |
+| #3411 | tanjiro | Extend asinh to Ux/Uy channels (all-channel) | WIP | On full asinh baseline 84.98 |
 | #3354 | nezuko | Lion + cap-matched cosine (T_max=12) | WIP | Notified of 84.98 target |
-| #3382 | askeladd | EMA weights (decay=0.999) for evaluation | WIP | Notified of 84.98 target |
+| #3382 | askeladd | EMA weights (decay=0.999) — RERUN with asinh | SENT BACK | First arm: 105.79 (on pre-asinh code) |
 | #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP | Notified of 84.98 target |
-| #3384 | fern | Gradient clipping (max_norm=1.0) with Lion | WIP | Notified of 84.98 target |
+| #3384 | fern | Gradient clipping (max_norm=1.0) — RERUN with asinh | SENT BACK | First arm: 87.98 (on pre-asinh code) |
 | #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs | WIP | Notified of 84.98 target |
 | #3106 | frieren | Slice128/head8/mlp3 + Lion lr=3.4e-4 rerun | WIP | Notified of 84.98 target |
 | #3099 | alphonse | Capacity 192h/6L/6H + Lion lr=3.4e-4 rerun | WIP | Notified of 84.98 target |
@@ -45,7 +45,17 @@ Val curve was STILL DESCENDING at epoch 14 (timeout cap), meaning:
 2. More budget (longer wall-clock) would yield further improvements
 3. The new frontier is to compound this with architectural/optimizer improvements
 
-## Key open questions (round 6)
+## Pending verification on asinh baseline (round 7)
+
+Two PRs returned terminal results in round 7, but both trained on the **pre-asinh** code (their branches were created in round 5 before the asinh merge, and the student pods did not rebase before training). Both demonstrate strong, real mechanisms but the absolute numbers don't beat the current 84.98 baseline.
+
+**#3384 fern grad-clip (max_norm=1.0):** val=87.98 on pre-asinh code (would be −25.1% vs 117.50 old baseline). 100% of training steps had pre-clip grad norm > 1.0 (mean ~137, max ~2724) — decisively confirms the heavy-tail mechanism. Monotonic descent across all 14 epochs. Sent back for rebase + rerun with asinh.
+
+**#3382 askeladd EMA (decay=0.999):** val=105.79 on pre-asinh code (would be −9.96% vs 117.50). Smoothness diagnostic clean: 0 sign flips in val curve vs 8 for baseline Lion. Best epoch was final — EMA shadow still catching up to live weights. Sent back for rebase + rerun with asinh.
+
+**Expectation:** grad-clip is more likely to compound with asinh (different mechanisms: per-step norm cap vs per-coordinate z-score compression). EMA may compound less because asinh already produces smoother gradients, so EMA's variance-reduction has less room to add. Both reruns are essential to verify.
+
+## Key open questions (round 7)
 
 1. **Extend asinh to Ux/Uy?** (tanjiro #3411) — if velocity also has heavy-tail z-scores, extending compression to all channels could yield further 3-10% improvement
 2. **Does asinh interact with architecture scale-up?** (alphonse #3099, frieren #3106) — larger models + Lion lr compression + asinh may stack
