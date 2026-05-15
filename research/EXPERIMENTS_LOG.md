@@ -107,8 +107,33 @@ _New entries appended as each PR is reviewed._
 - PR #3182 (askeladd): grad-clip-0.5 + Huber-0.3 + try max_norm=0.25
 - PR #3227 (thorfinn): surf-anneal + Huber-0.3 + try terminal weight=30
 
+## 2026-05-15 17:10 — PR #3178 (charliepai2i48h5-alphonse): Per-sample pressure-scale normalization — CLOSED
+
+- branch: `charliepai2i48h5-alphonse/per-sample-pressure-scale-norm`
+- hypothesis: normalize each sample's targets by that sample's own pressure std before computing loss, forcing the model to learn flow shape independently of scale
+
+- arms:
+
+  | arm | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|
+  | perSampleScale (MSE base) | 122.42 | 111.18 | 14/50 |
+  | perSampleScale+huber (delta=1.0) | 127.99 | 116.01 | 11/50 |
+
+- artifacts: `models/model-perSampleScale-20260515-142709/`, `models/model-perSampleScale-huber-20260515-152743/`
+- per-split val surf_p (arm-1): single=165.59, rc=134.16, cruise=82.92, re_rand=107.04
+- per-split test surf_p (arm-1): single=150.22, rc=121.94, cruise=70.02, re_rand=102.55
+- n_params: 662K (unchanged), peak VRAM: 42.16GB, grad clip at max_norm=1.0 required for stability (raw grad norm spikes to ~6.4M in epoch 1 without clip)
+- analysis:
+  - Arm-1 beats pre-Huber no-clip baseline (128.69) but fails to match Huber-0.3 (103.18)
+  - Arm-2 (per-sample scale + Huber delta=1.0) is strictly worse than arm-1 on all splits; student analysis: Huber's robustness to outliers downweights exactly the high-pressure (single/RC) samples that dominate val_avg — double-suppression is anti-synergistic
+  - Cruise split was strong for both arms (val 82.9/test 70.0); mechanism helps low-pressure regime
+  - Hard splits (single_in_dist, geom_camber_rc) regressed significantly — per-sample normalization removes scale cues that distinguish high/low Re regimes
+  - Mechanism is orthogonal to Huber at input level vs loss level, but empirically they interfere
+- verdict: **Closed**. Both arms lose to Huber-0.3 baseline. Composition tested and confirmed anti-synergistic. Alphonse reassigned to physics-informed features (PR #3355).
+
+---
+
 ## Still WIP (original assignments)
 
-- PR #3178 (alphonse): per-sample pressure-scale normalization
 - PR #3192 (edward): EMA checkpoint averaging
 - PR #3221 (nezuko): Fourier positional features
