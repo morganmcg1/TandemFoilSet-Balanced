@@ -92,3 +92,50 @@ cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
   --wandb_name "willowpai2i48h1-thorfinn/nanbug_fix" \
   --wandb_group nanbug_fix
 ```
+
+---
+
+## 2026-05-15 18:30 — PR #3317: H3b: Cosine T_max=15 tuned to actual epoch budget ← CURRENT BEST
+
+- **Student:** willowpai2i48h1-askeladd
+- **Branch:** `askeladd/cosine-tmax-tuned`
+- **W&B run:** `kx17n4pn` (Arm A winner)
+- **Epochs:** 14/50 (30-min wall-clock cap)
+
+### Validation metrics (best checkpoint, epoch 14)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **91.3319** ← CURRENT BEST |
+| val_single_in_dist | 108.1607 |
+| val_geom_camber_rc | 98.4476 |
+| val_geom_camber_cruise | 72.8700 |
+| val_re_rand | 85.8493 |
+
+### Test metrics (3/4 splits — cruise NaN, branch predates PR #3309 merge)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-------|-----------|------------|------------|
+| test_single_in_dist | 96.7268 | 1.0136 | 0.5508 |
+| test_geom_camber_rc | 88.3769 | 1.6032 | 0.7599 |
+| test_geom_camber_cruise | NaN* | 0.5799 | 0.3970 |
+| test_re_rand | 80.1744 | 0.9808 | 0.5792 |
+| **test_avg (3/4 splits, excl. cruise)** | **88.4260** | 1.0444 | 0.5717 |
+
+*Branch created before PR #3309 NaN fix was merged; cruise test NaN is the data corruption bug.
+
+### Model config
+- Transolver: 5 layers, hidden=128, heads=4, slice_num=64, mlp_ratio=2
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, weight_decay=1e-4, batch=4, **cosine T_max=15** ← key change
+- Peak VRAM: ~78.5 GB / 96 GB
+
+### Key insight
+T_max=15 aligns the cosine LR schedule with the 14-epoch wall-clock budget. At T_max=50 the LR was only 79% decayed at training stop — effectively no annealing. At T_max=15, epoch 14 runs at ~1.1% of peak LR (fine-tuning pass). Arm B (T_max=12) scored 103.12 — LR crashed to zero at epoch 12 and left 2 epochs under-training.
+
+### Reproduce
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-askeladd \
+  --wandb_name "willowpai2i48h1-askeladd/cosine_tmax15" \
+  --wandb_group cosine_tmax_scan
+```
