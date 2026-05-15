@@ -2,7 +2,20 @@
 
 ## Current best
 
-### 2026-05-15 21:15 — PR #3399: Scale slice_num 64→96 (warmup+cosine baseline)
+### 2026-05-15 22:58 — PR #3377: Scale n_hidden 128→96 (single-axis width sweep)
+
+- **val_avg/mae_surf_p:** 96.667 (best @ epoch 14; all 14 epochs completed)
+- **test_avg/mae_surf_p:** 85.454
+- **Per-split val mae_surf_p:** single 116.665 | geom_rc 105.516 | geom_cruise 73.065 | re_rand 91.421
+- **Per-split test mae_surf_p:** single 99.939 | geom_rc 95.608 | geom_cruise 61.246 | re_rand 85.023
+- **Changes:** n_hidden 128→96 (single-axis; capacity -43%, 0.381M vs 0.655M params)
+- **Wall-clock:** 31.9 min (~136.7 s/epoch, all 14 epochs completed within cap)
+- **Peak VRAM:** 40.97 GB
+- **Metric artifacts:** `models/model-n-hidden-96-rebased-20260515-213114/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name n-hidden-96-rebased --agent charliepai2i24h2-thorfinn --epochs 14`
+- **Delta vs previous best (#3399):** -1.12% val_avg/mae_surf_p (97.757 → 96.667); -1.08% test (86.388 → 85.454)
+
+### 2026-05-15 21:15 — PR #3399: Scale slice_num 64→96 (superseded)
 
 - **val_avg/mae_surf_p:** 97.757 (best @ epoch 12; 12 epochs completed under 30-min cap, still descending at cutoff)
 - **test_avg/mae_surf_p:** 86.388
@@ -52,7 +65,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=22,      # X_DIM (24) - 2 position dims
     out_dim=3,
-    n_hidden=128,
+    n_hidden=96,      # updated by PR #3377
     n_layers=5,
     n_head=4,
     slice_num=96,    # updated by PR #3399
