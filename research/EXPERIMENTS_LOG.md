@@ -1,5 +1,63 @@
 # SENPAI Research Results
 
+## 2026-05-15 21:25 — PR #3395: H: Peak LR scan (3e-4 vs 8e-4) on T_max=15 ✗ CLOSED
+
+- Branch: `askeladd/lr-peak-scan`
+- Student: willowpai2i48h1-askeladd
+- Hypothesis: Sweep peak LR ±60% around 5e-4 to find the true basin minimum for the T_max=15 schedule.
+
+### Results
+
+| Arm | lr | val_avg/mae_surf_p | test_avg (3-split, excl. cruise) | W&B |
+|-----|------|---------------------|-----------------------------------|------|
+| Baseline | 5e-4 | **91.3319** | **88.4260** | `kx17n4pn` |
+| A | 3e-4 | 94.1772 (+3.11%) | 91.5037 (+3.48%) | `q3tmsyp8` |
+| B | 8e-4 | 94.4638 (+3.43%) | 92.5502 (+4.66%) | `c9ue2the` |
+
+### Analysis
+- Both directions regress; lr=5e-4 confirmed at or very near the basin minimum.
+- **Per-split asymmetry at high LR**: 8e-4 hurts in_dist (+12.0%) but improves cruise (-4.7%) and re_rand (-1.4%). The in_dist split dominates val_avg.
+- This asymmetry is a research clue: split-specific schedules or training-data re-weighting could exploit it.
+- Both runs hit best_epoch=14 (final) — schedule horizon is well-matched to data.
+- VRAM at 8e-4 was 93.2 GiB / 96 GiB — close to the cap but not OOM.
+
+### Suggested follow-ups
+- Finer scan in [4e-4, 6e-4] (low priority — basin appears narrow).
+- Warmup + slightly higher peak (e.g. 6e-4 with 500-step linear warmup) to recover cruise/re_rand wins without in_dist regression. **Note**: nezuko is testing warmup on the new base.
+- The in_dist-vs-OOD asymmetry suggests rethinking the val_avg metric weighting.
+
+## 2026-05-15 21:25 — PR #3426: H: Cosine warm restarts (T_0=5) ✗ CLOSED
+
+- Branch: `thorfinn/cosine-warm-restarts`
+- Student: willowpai2i48h1-thorfinn
+- Hypothesis: SGDR T_0=5 cycles inject periodic high-LR exploration to escape local basins; each cycle ends near eta_min=1e-6 for fine-tuning.
+
+### Results
+
+| Metric | Baseline (T_max=15) | Warm restarts T_0=5 | Δ |
+|--------|---------------------|---------------------|------|
+| **val_avg/mae_surf_p** | 91.3319 | **103.0659** | **+12.85%** |
+| **test_avg/mae_surf_p** | 88.4260 | **99.1128** | **+12.08%** |
+
+W&B run: `fgaa946g` · Group: `cosine_warm_restarts`
+
+### Per-cycle best
+| Cycle | Best val_avg | Restart bounce |
+|-------|--------------|-----------------|
+| 1 (e1-5) | 135.40 | — |
+| 2 (e6-10) | 110.99 | +40.5% at e6 |
+| 3 (e11-14, partial) | 103.07 | +21.2% at e11 |
+
+### Analysis
+- 12.85% regression — clear close.
+- **Key failure mode**: 5-epoch cycles too short for convergence. Within-cycle trajectory shows model still actively descending when cycle ends. Each restart throws away ~25-40% of progress.
+- SGDR's theoretical advantage (escaping bad basins) requires bad basins to escape. The single-cycle baseline monotonically descends to 91.33 — no evidence of stuck dynamics.
+- Excellent diagnostic work by thorfinn: per-epoch LR + val_avg table, per-cycle best decomposition, restart-bounce quantification.
+
+### Implication for the program
+- Warm restarts are wrong tool for 14-epoch regime. If revisited later, T_0=7 with T_mult=2 (one restart in budget) might be marginally better but still likely worse than single-cycle.
+- EMA of weights (next assignment for thorfinn) directly addresses the "epoch-noise" motivation without throwing away progress.
+
 ## 2026-05-15 20:20 — PR #3359: H13: Pressure channel-weighted surf loss (p=3x) ✗ CLOSED
 
 - Branch: `edward/pressure-ch-weight`
