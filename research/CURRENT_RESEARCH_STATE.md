@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 15:45 (after round-1 batch close; round-2 assigned to 6 students)
+- **Last updated:** 2026-05-15 16:55 (round-1 fully closed; round-2 assigned to all 8 students)
 - **Most recent research direction from human researcher team:** none (no open issues).
 - **Current best:** `val_avg/mae_surf_p` = **109.681** (PR #3276 grad-clip + AdamW selective decay)
 - **Current focus:** round-2 — all 8 students assigned; key theme is budget-aware schedule matching + orthogonal axis isolation.
@@ -19,13 +19,14 @@ Key config: SmoothL1 (Huber, β=1.0) + clip_grad_norm(1.0) + AdamW selective dec
 | PR | Student | Hypothesis | Previous result |
 |----|---------|-----------|-----------------|
 | #3276 | fern | Grad-clip + selective decay + NaN guard | **MERGED** — new baseline |
+| #3314 | fern | weight_decay 1e-4→3e-4 on decay group (round-3, single-axis) | follow-up to #3276 |
 | #3294 | tanjiro | Warmup+cosine over 14ep (budget-matched) | PR #3220: 148.20 (100ep, never annealed) |
 | #3295 | edward | Slice_num=128 (single-axis) | PR #3205: 164.38 (5ep, OOM workarounds) |
 | #3301 | alphonse | Width-192, epochs=10 (budget-matched) | PR #3179: 154.98 (10ep, cosine never annealed) |
 | #3302 | askeladd | Depth-8, epochs=9 (budget-matched) | PR #3183: 154.95 (9ep, cosine never annealed) |
 | #3304 | frieren | surf_weight=20 single-axis | PR #3214: 138.44 (surf_weight=30 + 2×p, too aggressive) |
 | #3223 | thorfinn | BF16 autocast + batch_size=8 | (round-1, still running) |
-| #3216 | nezuko | 32-freq Fourier features over (x, z) | (round-1, pod restarted after hang) |
+| #3344 | nezuko | 32-freq Random Fourier Features (Tancik 2020 RFF) | PR #3216: 137.94 (prescription bug — collapsed to x+z) |
 
 ## Round-2 design rationale
 
@@ -50,7 +51,8 @@ The geom_rc underperformance is an open question — could be capacity, domain c
 - Does a budget-matched warmup+cosine beat plain cosine? (tanjiro #3294)
 - Does slice_num=128 beat 64 in a fair single-axis test? (edward #3295)
 - Does BF16+batch8 give competitive results with faster throughput? (thorfinn #3223)
-- Does Fourier PE improve geometry-split generalization? (nezuko #3216 — pod restarted)
+- Does corrected Random Fourier Features (true 2D directions) improve geometry-split generalization? (nezuko #3344)
+- Does weight_decay=3e-4 outperform 1e-4 on the decay group? (fern #3314)
 
 ## Potential round-3 directions (from RESEARCH_IDEAS_2026-05-15_initial.md)
 - H2: Per-sample output scale normalization (y-std variability is 40× across dataset)

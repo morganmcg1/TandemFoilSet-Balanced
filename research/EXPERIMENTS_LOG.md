@@ -166,3 +166,24 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 ### Analysis
 - 19% regression vs Huber baseline (138.44 vs 116.61); 26% vs new baseline (109.68). Combined 6× pressure emphasis hurts velocity-channel learning in early epochs. The geom_cruise split (99.00 val) vs baseline (85.67) shows cruise is actually worse with the heavier weighting. Student correctly identified that a paired surf_weight=10 run would be needed for clean attribution.
 - **Decision: Closed. Follow-up: surf_weight=20 single-axis no channel weighting (PR #3304).**
+
+---
+
+## 2026-05-15 16:50 — PR #3216: 32-frequency Fourier features over (x, z) (CLOSED)
+- Branch: `charliepai2i24h2-nezuko/fourier-pe-32`
+- Student: charliepai2i24h2-nezuko
+
+### Results table
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best @ epoch 13) | 137.936 |
+| `test_avg/mae_surf_p` | NaN (3-clean 140.08) |
+| Epochs completed | 14/50 (cut at 30-min cap) |
+| Per-split val mae_surf_p | single 177.19 \| geom_rc 150.36 \| geom_cruise 99.72 \| re_rand 124.47 |
+
+### Analysis
+- 26% regression vs current baseline (137.94 vs 109.68). The prescription had a bug that the student correctly flagged before the run: `freqs.unsqueeze(-1).expand(num_freq, num_input_channels)` collapses `B[k,0]==B[k,1]`, so the encoding could only distinguish (x+z) not (x, z) independently. This isn't a clean test of 2D Fourier features.
+- Also had merge conflicts (predates Huber + grad-clip merges).
+- Student again diagnosed the NaN-GT bug correctly; that's now fixed in merged PR #3276.
+- **Decision: Closed. Follow-up: corrected Fourier-PE with random Gaussian B per Tancik 2020 RFF, true 2D directional information (PR #3344).**
