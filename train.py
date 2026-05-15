@@ -387,6 +387,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    grad_clip: float = 0.0  # max grad norm; 0 disables
+    huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
 
 
 cfg = sp.parse(Config)
@@ -494,22 +496,33 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        if cfg.huber_delta > 0:
+            elem_loss = F.huber_loss(pred, y_norm, delta=cfg.huber_delta, reduction="none")
+        else:
+            elem_loss = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm_preclip: float | None = None
+        if cfg.grad_clip > 0:
+            grad_norm_preclip = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), cfg.grad_clip
+            ).item()
         optimizer.step()
         with torch.no_grad():
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        if grad_norm_preclip is not None:
+            step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
