@@ -340,3 +340,59 @@ After merging #3289 (thorfinn wins), thorfinn is idle and assigned a compose-ver
 **Current state:** 3 Round 3 experiments in flight (alphonse #3364 lr-warmup-bf16, askeladd #3365 bigger-batch, thorfinn #3390 bf16-tmax-compose). Remaining Round 2 WIP: tanjiro #3321, nezuko #3126, edward #3113, frieren #3122 (rebasing), fern #3117 (sent back). All 8 GPUs occupied.
 
 ---
+
+## 2026-05-15 20:34 — PR #3364 [CLOSED, falsified]: Higher peak LR (1e-3 + 3-ep warmup) on bf16
+
+- **Student branch:** `charliepai2i48h4-alphonse/lr-warmup-bf16`
+- **Hypothesis:** Raising peak LR from 5e-4 to 1e-3 with 3-epoch linear warmup would exploit the near-constant-LR regime under wall-clock truncation (both arms sit near peak throughout 19 bf16 epochs), yielding more effective parameter movement per budget.
+
+### Results (Huber + bf16 baseline, T_max=50)
+
+| Arm | `lr_peak` | `warmup_epochs` | `amp_dtype` | epochs | LR at best epoch | `val_avg/mae_surf_p` | best epoch | `test_avg/mae_surf_p` (3-finite) |
+|-----|-----------|-----------------|-------------|--------|------------------|----------------------|-----------|----------------------------------|
+| A (baseline) | 5e-4 | 0 | bf16 | 19/50 | 3.56e-4 | **99.218** | 19 | **93.976** |
+| B (higher LR) | 1e-3 | 3 | bf16 | 19/50 | 7.69e-4 | 107.457 | 19 | 101.584 |
+| **Δ (B − A)** | — | — | — | — | — | **+8.31%** | — | **+8.09%** |
+
+Per-split val MAE:
+
+| Split | Arm A | Arm B | Δ% |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 113.129 | 132.053 | **+16.7%** worse |
+| `val_geom_camber_rc`     | 114.383 | 110.954 | −3.0% better |
+| `val_geom_camber_cruise` |  78.335 |  89.124 | **+13.8%** worse |
+| `val_re_rand`            |  91.027 |  97.696 | +7.3% worse |
+| **val_avg**              | **99.218** | **107.457** | **+8.31%** worse |
+
+### Metric artifacts
+
+- Arm A: `models/model-lr-warmup-bf16-baseline-20260515-182519/{metrics.jsonl,metrics.yaml,config.yaml}`
+- Arm B: `models/model-charliepai2i48h4-alphonse-lr-warmup-bf16-1e3-20260515-192542/{metrics.jsonl,metrics.yaml,config.yaml}`
+
+### Analysis & conclusions
+
+**Hypothesis cleanly falsified.** 3 of 4 splits regress under higher LR; regression is consistent across both val and test. `best_epoch=last_epoch` for both arms — neither reached its loss floor.
+
+**Mechanism:** bf16's 7-bit mantissa truncates gradient information, making each step noisier than fp32. Doubling peak LR doubles noise amplitude. The "near-constant LR" framing was also wrong about direction: Arm B still runs near-constant LR (7.69e-4, 77% of peak) — the same structural problem as Arm A, just at 2× magnitude.
+
+**Cross-check with tanjiro #3321 (in-flight):** tanjiro's bf16 Arm B (same config) measured 100.272 vs Arm A 100.372 — essentially tied (different seed). Two-seed result: lr=1e-3+warmup is either neutral or harmful on bf16. Falsification is robust.
+
+**Note on Arm A:** 99.218 is −2.3% below the committed bf16 baseline (101.519). Run-to-run seed variance on bf16 is ~±2%.
+
+### Decision
+
+Closed. alphonse reassigned to PR #3443 (lower peak LR: 2.5e-4 and 3.5e-4 on bf16+T_max=15 stack).
+
+---
+
+## 2026-05-15 20:40 — Round 3b: lower LR assignment (alphonse #3443)
+
+After falsifying lr=1e-3+warmup, alphonse's own analysis suggested the opposite direction: **lower the peak LR**. Assigned #3443 to test lr ∈ {5e-4, 3.5e-4, 2.5e-4} on current best stack (bf16+T_max=15).
+
+**Rationale:** bf16 noisier gradients may shift the stability optimum downward vs fp32. T_max=15 means the schedule fully decays regardless of peak; peak magnitude sets absolute step sizes. If 5e-4 is at the stability edge under bf16, 2.5-3.5e-4 may be inside it without losing convergence speed (cosine still completes annealing within budget).
+
+| Student | PR | Arms | Expected delta |
+|---------|----|----|----------------|
+| alphonse | #3443 | lr ∈ {5e-4, 3.5e-4, 2.5e-4} on bf16+T_max=15 | neutral to −3% |
+
+---
