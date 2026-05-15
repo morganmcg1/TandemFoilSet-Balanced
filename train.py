@@ -376,6 +376,9 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
+    n_hidden: int = 128
+    n_head: int = 4
+    lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS when None
 
 
 cfg = sp.parse(Config)
@@ -408,9 +411,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -422,7 +425,8 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
