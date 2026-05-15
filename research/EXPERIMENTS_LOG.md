@@ -307,3 +307,76 @@ Mechanism (EMA shadow weights, `update_ema`, `eval_with_ema_swap`) is correctly 
 ### Send-back instructions
 
 Rebase onto new advisor head (merged frieren surf-MAE + p-weight=3 + canonical NaN guard). Conflicts in `train.py` loss + eval regions — keep frieren's content. EMA logic is separate. Re-run with `--ema_beta 0.99`; skip 0.999 and 0.9995. Predicted val ~103–106, test ~90–94 (−1–4% gain typical for EMA on well-tuned baselines).
+
+## 2026-05-15 21:55 — PR #3263: FiLM(log_Re) conditioning on Transolver hidden state — **R1 WINNER #2, MERGED**
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/film-re-cond` (rebased)
+- **Hypothesis:** Add a FiLM (Feature-wise Linear Modulation) gate after the preprocess MLP, conditioned on log(Re). Zero-init the FiLM head so training starts as identity. Gives the model an explicit, low-rank affine route from the global Re scalar into every channel of the trunk's hidden state.
+- **W&B run (rebased on frieren base):** `69jp9tvt`
+- **First-run W&B runs (old MSE base, pre-rebase):** `joszk2jg` (v3), `rlildyv4` (v2), `zjogv9vn` (v1), `vsuqhyt5` (baseline)
+
+### Result (best checkpoint at epoch 14/50, 31.8 min wall-clock)
+
+| Metric | Frieren base | FiLM-on-frieren | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 106.67 | **100.24** | **−6.03%** |
+| `test_avg/mae_surf_p` (4-split, finite) | 94.35 | **90.06** | **−4.55%** |
+
+### Per-split test (all finite, n_skipped_y_samples=1 on cruise as expected)
+
+| Split | Frieren base | FiLM-on-frieren | Δ |
+|---|---:|---:|---:|
+| `test_single_in_dist` | 122.34 | 119.11 | −2.6% |
+| `test_geom_camber_rc` | 106.31 | 100.27 | −5.7% |
+| `test_geom_camber_cruise` | 62.47 | **58.62** | **−6.2%** |
+| `test_re_rand` | 86.28 | 82.27 | −4.6% |
+| **`test_avg`** | **94.35** | **90.06** | **−4.55%** |
+
+### Decision: MERGED (R1 winner #2)
+
+Clean merge winner. All 4 test splits improve. Mechanism is mechanically orthogonal to frieren's loss reformulation — FiLM adds a structural affine route from log_Re into the hidden state, while the MAE+p_weight=3 loss reweights per-channel gradient contributions. Both target Re-dependent pressure physics through different mechanisms; they compose with diminishing returns (old base FiLM gain was −13.8% val; new base FiLM gain is −6.0% val — confirming partial overlap, but the structural route still adds robust value beyond loss reweighting).
+
+### Per-split shape carries
+
+Hypothesis predicted "biggest impact on splits with widest Re spread (cruise, re_rand)". Confirmed: cruise (−6.2%) is largest absolute reduction on the new base, re_rand (−4.6%) and rc (−5.7%) also gain meaningfully. Single (−2.6%) gains the least, consistent with its narrower test distribution.
+
+### Thorfinn's own bug-diagnosis credit
+
+In his first comment (before frieren's #3257 merged), thorfinn independently traced the cruise-NaN to `y` having `+inf` values and proposed `torch.nan_to_num` on y before the masked sum. Same root cause askeladd and frieren independently identified — three students converged on the diagnosis simultaneously. The canonical fix is frieren's; thorfinn inherited it via rebase.
+
+### Suggested follow-ups (rerouted to R2)
+
+1. Per-block FiLM heads (each Transolver block gets own FiLM head) — natural next step ← **next assignment for thorfinn**
+2. Richer conditioning vector `(log_Re, AoA_1, AoA_2, gap, stagger)` — composes with #1
+3. Combine FiLM + Re-stratified augmentation — extra Re coverage during training
+4. Variance reduction via fixed `--seed` flag — separate instrumentation patch
+
+## 2026-05-15 21:55 — PR #3358: Cosine LR T_max=14 (old-base result, sent back for rebase)
+
+- **Student/branch:** willowpai2i24h4-alphonse / `willowpai2i24h4-alphonse/cosine-tmax-fix`
+- **Hypothesis:** Cosine schedule `T_max=50` mismatches actual ~14-epoch wall-clock cap. LR stays at 82% of peak when training ends. Setting `T_max=14` gives proper annealing tail.
+- **W&B runs (old MSE base):** `8d2gpkjn` (tmax14 primary), `9i62w0t4` (tmax50 paired baseline), `qrzzn3mw` (tmax10 aggressive)
+
+### Result (paired comparison on old base)
+
+| Arm | val_avg | test_avg | W&B |
+|---|---:|---:|---|
+| `cosine-tmax14` | **117.67** | **104.95** | `8d2gpkjn` |
+| `cosine-tmax50-baseline` | 125.67 | 115.62 | `9i62w0t4` |
+| `cosine-tmax10` | 129.79 | 117.45 | `qrzzn3mw` |
+
+**Paired Δ:** val −6.37%, test −9.22% (clean mechanism win on old base).
+
+### LR trace confirms mechanism
+
+| Epoch | tmax14 LR | tmax50 LR |
+|---|---:|---:|
+| 7 | 2.50e-04 | 4.76e-04 |
+| 13 | 6.27e-06 | 4.21e-04 (82% of peak!) |
+| 14 | 0.0 | 4.09e-04 |
+
+tmax10 fails because `CosineAnnealingLR` continues into the next half-period after T_max, so LR rebounds (0→1.03e-04→1.73e-04 in last 4 epochs) — useful negative result.
+
+### Decision: send back for rebase + retry on new merged base
+
+Result test=104.95 is on OLD MSE base, +16.5% above new target 90.06. The schedule fix is mechanically orthogonal to both frieren's loss and thorfinn's FiLM (both are merged on the new base). Sending back with rebase + rerun-primary-arm-only instructions. Predicted val ~92–99, test ~81–89 on new base.
