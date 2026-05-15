@@ -150,8 +150,15 @@ class TransolverBlock(nn.Module):
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
+            # Dual-head decoder: separate norm + MLP for surface vs volume nodes.
+            # Routed at the Transolver level via is_surface.
+            self.ln_3_surf = nn.LayerNorm(hidden_dim)
+            self.ln_3_vol = nn.LayerNorm(hidden_dim)
+            self.mlp2_surf = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                nn.Linear(hidden_dim, out_dim),
+            )
+            self.mlp2_vol = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
@@ -160,7 +167,9 @@ class TransolverBlock(nn.Module):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            out_surf = self.mlp2_surf(self.ln_3_surf(fx))
+            out_vol = self.mlp2_vol(self.ln_3_vol(fx))
+            return out_surf, out_vol
         return fx
 
 
@@ -207,10 +216,16 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return {"preds": fx}
+        out_surf, out_vol = self.blocks[-1](fx)
+        if is_surface is None:
+            preds = out_vol
+        else:
+            preds = torch.where(is_surface.unsqueeze(-1), out_surf, out_vol)
+        return {"preds": preds}
 
 
 # ---------------------------------------------------------------------------
@@ -236,19 +251,19 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
-
             # Drop samples whose GT has any non-finite value (e.g. corrupted CFD output).
             # Without this guard, Inf in y_norm makes sq_err Inf, and Inf*mask=NaN even
             # where mask is False — propagating NaN into the loss/metric accumulators.
             sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
             safe = mask & sample_finite.unsqueeze(-1)
-            y_norm = torch.where(
-                sample_finite.view(-1, 1, 1).expand_as(y_norm),
-                y_norm, torch.zeros_like(y_norm),
+            y_safe = torch.where(
+                sample_finite.view(-1, 1, 1).expand_as(y),
+                y, torch.zeros_like(y),
             )
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=huber_delta)
             vol_mask = safe & ~is_surface
@@ -265,12 +280,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
             # Pass `safe` (which masks out the entire bad sample) so scoring sees the
-            # bad sample as padding; also replace its y with zeros so |pred-y| stays finite.
-            y_for_scoring = torch.where(
-                sample_finite.view(-1, 1, 1).expand_as(y),
-                y, torch.zeros_like(y),
-            )
-            ds, dv = accumulate_batch(pred_orig, y_for_scoring, is_surface, safe, mae_surf, mae_vol)
+            # bad sample as padding; y_safe has already had its non-finite values zeroed.
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, safe, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -325,6 +336,7 @@ def write_experiment_summary(
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
+        "surf_head_weight_decay": cfg.surf_head_weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
@@ -375,6 +387,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # If set, use this weight decay for the surface decoder head's Linear params
+    # (mlp2_surf). LayerNorm/bias parameters everywhere stay out of weight decay.
+    surf_head_weight_decay: float | None = None
 
 
 cfg = sp.parse(Config)
@@ -420,7 +435,31 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.surf_head_weight_decay is not None:
+    surf_head_decay_params: list[nn.Parameter] = []
+    surf_head_decay_ids: set[int] = set()
+    for name, p in model.blocks[-1].mlp2_surf.named_parameters():
+        # AdamW best practice: keep LayerNorm/bias out of weight decay; mlp2_surf
+        # has no LayerNorm internally, but skip biases here too.
+        if p.requires_grad and name.endswith("weight"):
+            surf_head_decay_params.append(p)
+            surf_head_decay_ids.add(id(p))
+    other_params = [p for p in model.parameters()
+                    if p.requires_grad and id(p) not in surf_head_decay_ids]
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": other_params, "weight_decay": cfg.weight_decay},
+            {"params": surf_head_decay_params,
+             "weight_decay": cfg.surf_head_weight_decay},
+        ],
+        lr=cfg.lr,
+    )
+    print(
+        f"AdamW split: {len(surf_head_decay_params)} surf-head Linear weight "
+        f"tensors at wd={cfg.surf_head_weight_decay}; rest at wd={cfg.weight_decay}"
+    )
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -460,7 +499,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
 
         vol_mask = mask & ~is_surface
