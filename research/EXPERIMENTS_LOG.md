@@ -292,3 +292,51 @@ After Round 2 partial results (bf16 merged −8.98%; channel weighting falsified
 Both test single-axis changes directly on the current best baseline (bf16 + Huber, 101.519). Independent and composable. Still-WIP: tanjiro #3321, thorfinn #3289, nezuko #3126, edward #3113, frieren #3122 (rebasing), fern #3117 (sent back).
 
 ---
+
+## 2026-05-15 18:30 — PR #3289 [MERGED]: Cosine T_max=15 — match LR schedule horizon to 30-min budget
+
+- **Student branch:** `charliepai2i48h4-thorfinn/cosine-tmax`
+- **Hypothesis:** CosineAnnealingLR(T_max=50) barely decays in 14 fp32 epochs (only 16% drop from peak); setting T_max=15 lets the schedule complete its full cosine anneal within the wall-clock budget, giving the optimizer the low-LR refinement phase it was never reaching.
+
+### Results (Huber fp32 baseline, 3-arm sweep)
+
+| Arm | `cosine_t_max` | epochs | LR at best ep | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` (3 finite) |
+|-----|----------------|--------|--------------|---:|---:|
+| A | 50 (default) | 14 | 4.32e-4 (−16%) | 107.466 | 107.328 |
+| B | **15** | **14** | **2.16e-5 (−96%)** | **100.059** | **96.641** |
+| C | 20 | 14 | 1.37e-4 (−73%) | 101.758 | 102.433 |
+
+Per-split val (Arm B, best):
+
+| Split | Huber baseline | **T_max=15** | Δ % |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 141.566 | **118.473** | −16.3% |
+| `val_geom_camber_rc`     | 116.797 | **111.356** |  −4.7% |
+| `val_geom_camber_cruise` |  86.222 |  **79.108** |  −8.3% |
+| `val_re_rand`            | 101.539 |  **91.299** | −10.1% |
+| **val_avg**              | **111.531** | **100.059** | **−10.3%** |
+
+### Analysis & conclusions
+
+The mechanism is exactly as predicted. LR-vs-epoch trace confirms:
+- Arm A T_max=50: LR=4.32e-4 at ep14 (near-constant throughout — model never enters refinement)
+- Arm B T_max=15: LR=2.16e-5 at ep14 (full cosine decay, 96% drop — refinement phase fully exploited)
+- Arm C T_max=20: LR=1.37e-4 at ep14 (73% decay — most of the gain but missing final low-LR window)
+
+Monotonic A > C > B on val_avg across 3 of 4 splits, confirming this is a real signal not noise. The optimum at T_max=15 is calibrated for ~14 fp32 epochs.
+
+**Post-merge note:** the codebase now has bf16 (PR #3290) + T_max=15 (PR #3289). Thorfinn's measured value (100.059) beats the bf16 baseline (101.519) even though it's fp32. The bf16+T_max=15 compose needs direct verification — assigned to thorfinn in Round 3 (#3390). Expected: ~93–95.
+
+---
+
+## 2026-05-15 18:35 — Round 3 continuation assignment
+
+After merging #3289 (thorfinn wins), thorfinn is idle and assigned a compose-verification run.
+
+| Student | PR | Hypothesis | Axis |
+|---------|----|-----------|------|
+| thorfinn | #3390 | bf16+T_max=15/20 composition verify | Schedule × bf16 compose |
+
+**Current state:** 3 Round 3 experiments in flight (alphonse #3364 lr-warmup-bf16, askeladd #3365 bigger-batch, thorfinn #3390 bf16-tmax-compose). Remaining Round 2 WIP: tanjiro #3321, nezuko #3126, edward #3113, frieren #3122 (rebasing), fern #3117 (sent back). All 8 GPUs occupied.
+
+---

@@ -1,79 +1,74 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 18:00 UTC (Round 2 → Round 3 transition on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-15 18:35 UTC (Round 2 → Round 3 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
 ## Current research focus
 
-Round 2 partial results on TandemFoilSet — Transolver CFD surrogate for tandem-airfoil flow fields. Primary ranking metric: `val_avg/mae_surf_p`.
+Two Round 2 axes confirmed and merged. The primary thesis — "wall-clock-truncated runs mean throughput and schedule-fit are first-class levers" — is now validated:
 
-**Current best baseline (PR #3290 merged):** `val_avg/mae_surf_p = 101.519`, `test_avg/mae_surf_p = 98.735` (3 finite splits, bf16 AMP).
+- **bf16 AMP (PR #3290):** 1.345× throughput, 14→19 epochs, val_avg = 101.519 (−8.98% vs Huber)
+- **Cosine T_max=15 (PR #3289):** full LR schedule decay inside the wall-clock budget, val_avg = 100.059 on fp32 (−10.3% vs Huber)
+- **Compose (pending verification):** bf16+T_max=15 expected ~93–95; thorfinn assigned to verify (#3390)
 
-**Dominant operational insight (confirmed Round 2):** Every run is wall-clock-truncated at ~14 epochs fp32 / ~19 epochs bf16 (out of configured 50). bf16 is a free 1.345× throughput multiplier — it is now the mandatory default for all new experiments. New baseline exploits 5 extra epochs (cosine decays deeper into anneal).
+**Current best measured val_avg/mae_surf_p: 100.059** (fp32 + Huber + T_max=15, PR #3289)
+**Best measured with bf16: 101.519** (bf16 + Huber + T_max=50, PR #3290)
+**Expected after compose: ~93–95** (bf16 + Huber + T_max=15, to be measured by thorfinn #3390)
 
-**Two key research questions for Round 3:**
-1. **LR peak on bf16**: With 19 epochs available and cosine still near peak (80% of lr=5e-4 at ep14, only slightly better at ep19), does raising lr_peak to 1e-3 unlock significant improvement?
-2. **Batch size on bf16**: 32.9 GB VRAM (vs 42.1 GB fp32) leaves room for bs=6/8. Does bigger batch reduce gradient noise enough to matter in 19 epochs?
+**Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
-## Round 1 results summary
+## Merged winners (chronological)
 
-| Hypothesis | PR | Result |
-|-----------|-----|--------|
-| Huber loss | #3094 | **MERGED** −15.7% (val 132.3 → 111.5) |
-| OneCycleLR | #3131 | Closed: schedule sized for 50 ep, only 14 ran; +11.1% |
-| surf_weight sweep | #3108 | Closed: uniform +11-13% regression vs baseline |
-| Scale-aware loss | #3128 | Closed: directional misalignment with unweighted-MAE eval |
+| PR | Hypothesis | val_avg delta | New val_avg |
+|----|-----------|------------|---------|
+| #3094 | Huber loss (alphonse) | −15.7% vs MSE | 111.531 |
+| #3290 | bf16 AMP (askeladd) | −8.98% vs Huber | 101.519 |
+| #3289 | Cosine T_max=15 (thorfinn) | −10.3% vs Huber fp32 / −1.4% vs bf16 | 100.059 (fp32) |
 
-## Round 2 status snapshot (2026-05-15 18:00)
+## Round 3 assignments (active)
 
-- **Merged (1):** #3290 bf16 AMP (askeladd) → new baseline 101.519 (−8.98% vs Huber)
-- **Closed (1):** #3278 channel weighting (alphonse) — static p-upweighting regresses single_in_dist/rc; root cause is 10× y_std variance across splits, not channel imbalance
-- **Sent back (2):**
-  - #3117 Fourier features (fern, 2nd send-back) — scale=10 too high; try scale=2,4 + concat raw+Fourier + bf16
-  - #3122 FiLM conditioning (frieren, updated) — rebase onto Huber + add bf16
-- **Round 2 WIP still pending (4):**
-  - #3321 tanjiro — LR=1e-3+warmup (fp32 baseline; intra-PR delta still informative)
-  - #3289 thorfinn — cosine T_max=15 (fp32 baseline)
-  - #3126 nezuko — EMA weights (fp32 baseline)
-  - #3113 edward — slice_num=96 (fp32 baseline)
+| Student | PR | Hypothesis | Expected val_avg |
+|---------|----|-----------|--------------------|
+| thorfinn | #3390 | bf16+T_max={15,20} composition verify | ~93–95 |
+| alphonse | #3364 | LR=1e-3 + 3-ep warmup on bf16 | ~93–96 |
+| askeladd | #3365 | batch_size=6/8 on bf16 | ~95–99 |
 
-## Round 3 assignments (2026-05-15 18:00)
+**All 8 GPUs occupied — zero idle students.**
 
-| Student | PR | Hypothesis | Axis | Baseline |
-|---------|----|-----------|-|---------|
-| alphonse | #3364 | LR=1e-3 + 3-ep warmup on bf16 | LR peak × bf16 | 101.519 |
-| askeladd | #3365 | batch_size=6/8 on bf16 | Throughput × batch | 101.519 |
+## Round 2 still in-flight
 
-**All 8 students productively occupied — zero idle GPUs.**
+| PR | Student | Hypothesis | Status |
+|----|---------|-----------|--------|
+| #3321 | tanjiro | LR=1e-3+warmup (fp32) | WIP, running |
+| #3126 | nezuko | EMA weights | WIP, running |
+| #3113 | edward | slice_num=96 (fp32) | WIP, student just resumed |
+| #3122 | frieren | FiLM conditioning | WIP, needs Huber+bf16 rebase |
+| #3117 | fern | Fourier lower scale + concat | WIP (sent back ×2, needs rebase+bf16) |
 
-### LR/schedule convergence (3 experiments covering the same axis space)
+## Key research questions for Round 3+
 
-- **#3321 tanjiro** (fp32): lr_peak=1e-3 + warmup — intra-PR delta signal
-- **#3289 thorfinn** (fp32): cosine T_max=15 — schedule decay signal
-- **#3364 alphonse** (bf16): lr_peak=1e-3 + warmup — directly on current baseline
+1. **Does bf16+T_max=15 compose additively?** If both give ~-10% independently, does the compose give ~-18%? (thorfinn #3390)
+2. **What's the LR optimum on bf16?** alphonse's #3364 tests lr=1e-3+warmup directly on bf16 — if tanjiro's fp32 LR result also lands, it will tell us whether the LR axis is additive with T_max.
+3. **Does bigger batch help?** askeladd's #3365 tests bs=6/8 — the bf16 VRAM headroom finally enables this.
+4. **Three-way compose:** if all three Round 3 experiments win, Round 4 targets bf16+T_max=15+lr=1e-3+bs=8 in a single config.
 
-If alphonse wins (#3364), it's immediately mergeable. If tanjiro/thorfinn win, we compose with bf16 in Round 4.
+## Potential Round 4+ directions
 
-## Potential next research directions (Round 3+ queue)
-
-1. **Compose Round 3 winners** — bf16 + lr_peak=1e-3 + bs=8 + cosine_T_max_fit. Each orthogonal axis contributes an independent multiplier.
-2. **Schedule-Free AdamW** — eliminates LR schedule entirely. With 19 bf16 epochs, schedule choice is less critical, but Schedule-Free removes the need for T_max tuning entirely. High risk, potentially high payoff.
-3. **Model capacity on bf16** — n_hidden=192 or n_layers=6 with bf16 might now get ~12-15 epochs. Round 1's capacity failure was "only 7 epochs"; 19 bf16 epochs may change the picture.
-4. **Fourier features lower scale** — fern's in-flight send-back. scale=2 or 4 on normalised coordinates; concat raw+Fourier.
-5. **FiLM conditioning on bf16** — frieren's in-flight rebase. If intra-PR delta was −1.55% on MSE baseline, the Huber+bf16 baseline could amplify this.
-6. **EMA weights on bf16** — nezuko's in-flight test. Evaluation with EMA should benefit from more epochs (19 vs 14).
-7. **Per-domain y normalization** — correct fix for the 10× y_std heterogeneity that closed channel weighting. Normalize loss by per-domain target std. Requires training domain labels.
-8. **SDF input features** — signed distance to foil surface as extra input channel. Direct geometry signal for surface pressure prediction. Implementation cost: KD-tree on surface nodes, precomputed.
-9. **Gradient accumulation** — effective bs=16 without VRAM cost. Alternative to actual bs=8 if OOM.
-10. **Sobolev loss** — penalize prediction-gradient errors near the surface. Pairs with surface MAE focus.
+1. **Full compose** — bf16 + T_max=15 + lr=1e-3 + bs=8. If each axis wins independently, this is the high-value compounding experiment.
+2. **Model capacity** — n_hidden=192 or n_layers=6 with bf16+T_max=15. Round 1's capacity failure was fp32 only 7 epochs; 19 bf16 epochs changes the picture.
+3. **Fourier features** (lower scale) — fern's in-flight send-back. scale=2/4 + concat raw, on bf16.
+4. **FiLM conditioning** — frieren's in-flight rebase. If −1.55% on MSE holds on Huber+bf16, it's a merge.
+5. **EMA weights** — nezuko's in-flight. Should be a positive or neutral result.
+6. **SDF input features** — signed distance to surface as geometry signal. Untested; high-value for surface-pressure prediction.
+7. **Schedule-Free AdamW** — eliminates T_max tuning entirely. After nailing down the schedule optimum, test removing it.
+8. **Sobolev loss** — gradient supervision near the surface. Pairs with Huber and may help `single_in_dist`.
 
 ## Operational notes
 
-- **New baseline: val_avg/mae_surf_p = 101.519** (bf16 + Huber, PR #3290 merged 2026-05-15 17:40)
-- **All new experiments must include `--amp_dtype bf16`** — bf16 is default from here
-- **All in-flight fp32 experiments (#3321, #3289, #3126, #3113, #3122) still informative via intra-PR delta**
-- 30-min wall-clock cap × 50-epoch cap; effective ~19 epochs with bf16
-- Local JSONL metrics only (no remote experiment tracking)
-- Known scoring bug: `test_geom_camber_cruise/mae_surf_p` NaN (sample 20 inf in ground-truth p); `data/scoring.py` read-only. Affects all arms identically.
-- fern's `train.py` NaN-filter fix (merged via #3290's update) rescues test_avg from nan; `test_avg/mae_surf_p` now computable as 3-split average manually.
+- **Current BASELINE.md entries:** PR #3094 (Huber fp32, 111.531), PR #3290 (bf16, 101.519), PR #3289 (T_max=15 fp32, 100.059)
+- **bf16+T_max=15 compose unverified** — thorfinn #3390 will establish this number
+- All new experiments must include `--amp_dtype bf16`
+- T_max=15 is the current best schedule; for bf16 (19 epochs), T_max=20 may be slightly better — #3390 will determine
+- 30-min wall-clock cap × 50-epoch cap; ~19 epochs with bf16
+- Local JSONL metrics only; known `test_geom_camber_cruise` NaN bug in read-only `data/scoring.py`
