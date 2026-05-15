@@ -1,63 +1,67 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 14:45
+- **Date:** 2026-05-15 16:30
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
 - **Primary metric:** `val_avg/mae_surf_p` (lower is better)
-- **Current baseline:** `val_avg/mae_surf_p = 127.84` (PR #3226 thorfinn H10 Re-strat, merged 2026-05-15)
+- **Current baseline:** `val_avg/mae_surf_p = 122.81`, `test_avg/mae_surf_p = 111.16` (PR #3217 frieren H5 RFF, merged 2026-05-15 16:25)
 
-## Round-1 results summary
+## Merged improvements so far (baseline stack)
 
-Four PRs landed for review. Ranking by `val_avg/mae_surf_p`:
+| PR | Hypothesis | val_avg delta | Cumulative val_avg |
+|---|---|---|---|
+| #3226 thorfinn H10 | Re-strat sampler (Re>1e6 ×2) | — (1st merge) | 127.84 |
+| #3217 frieren H5 | RFF coord encoding (n_freq=32) + NaN fix | -5.03 (-3.9%) | **122.81** |
 
-| # | Student | Hypothesis | val_avg | Outcome |
-|---|---------|------------|---------|---------|
-| 3226 | thorfinn | H10 Re-strat sampler | **127.84** | **MERGED → new baseline** |
-| 3197 | askeladd | H8 EMA (decay=0.999) | 132.17 | Send back: re-run on merged baseline |
-| 3224 | tanjiro  | H13 gated geom-cond | 134.31 | Send back: re-run on merged baseline + fix cap |
-| 3210 | fern     | H2 scale to 4M params | 158.40 | Send back: add grad clip + lower lr + smaller variant |
+**Baseline now includes:** Re-strat sampler + RFF coord encoding + evaluate_split NaN workaround.
 
-Four PRs still WIP from round 1: alphonse (H1 LinearNO), edward (H3 channel-weighted loss), frieren (H5 RFF), nezuko (H9 Cautious AdamW). They will likely come in for review during the next iteration.
+## Per-split current best
 
-## Current research focus
+| Split | val | test |
+|---|---|---|
+| `single_in_dist` | 144.70 | 123.91 |
+| `geom_camber_rc` | 125.95 | 114.82 |
+| `geom_camber_cruise` | 101.61 | 88.14 |
+| `re_rand` | 119.00 | 117.78 |
+| **avg** | **122.81** | **111.16** |
 
-Round 2 begins with the Re-strat sampler in the baseline. The dominant signal so far:
+## Current active WIP PRs (round 2)
 
-- **High-Re upweighting works** — best val_re_rand (111.08) and val_geom_camber_cruise (91.50) among submitted PRs.
-- **OOD vs in-dist asymmetry persists** — `val_single_in_dist` is the hardest split at ~160 mae_surf_p for the merged baseline. This is the obvious next target.
-- **All three completed-but-not-merged ideas (EMA, geom-cond, scale-up)** are orthogonal mechanisms that should compose with Re-strat — re-running them on the merged baseline closes that experiment cleanly.
+| PR | Student | Hypothesis | Status |
+|---|---|---|---|
+| #3291 | thorfinn | H7 two-branch head (surface vs volume) | WIP (just assigned) |
+| #3222 | nezuko | H9 Cautious AdamW | WIP (training, GPU 99%) |
+| #3224 | tanjiro | H13 geom-cond v2 (re-run + T_max=15) | WIP (re-running on baseline) |
+| #3217 | frieren | **MERGED** — now assigned H6 | (see below) |
+| #3210 | fern | H2 scale v2 (grad clip + n_hidden=192) | WIP (revising) |
+| #3201 | edward | H3 channel-weighted loss | WIP (training, GPU 99%) |
+| #3197 | askeladd | H8 EMA (re-run over merged baseline) | WIP (re-running) |
+| #3184 | alphonse | H1 LinearNO ablation | WIP (setup) |
 
-## Known branch-wide quirk
+## Upcoming new work
 
-`test_avg/mae_surf_p` is currently **NaN** for every PR on this branch. Root cause: `data/scoring.py` (read-only, can't modify) accumulates `(pred - y).abs() * surf_mask`. Sample 20 in `test_geom_camber_cruise` has 761 `inf` values in `y[..., 2]` (p channel). Because `NaN * 0 = NaN` (IEEE 754), the infinity propagates through the mask multiplication into the accumulator, contaminating `test_avg`. Three of four students independently spotted this. **Workaround:** rank on `val_avg/mae_surf_p`, report the 3 finite test splits separately.
+- **frieren → H6**: grad clip (max_norm=1.0) + CosineAnnealingWarmRestarts (T_0=10, T_mult=2). Targets the noisy training curve seen in the RFF run (216→189→198→... before cosine annealed); SGDR gives multiple LR restarts vs. one monotone decay. (PR being created this session.)
 
-## Round-2 priorities
+## Research insights so far
 
-1. **Get round-1 reruns on the new baseline** — askeladd (EMA), tanjiro (geom-cond fixed cap), fern (smaller variant + grad clip). These are essentially free information: known mechanisms tested over a known better baseline.
-
-2. **New mechanism for newly-idle thorfinn** — H7 two-branch output head (surface vs volume decoder), targeting `val_single_in_dist` and `val_geom_camber_rc` which are still the two hardest splits at 160 / 149. Dedicated surface decoder capacity should help the metric we're actually scored on.
-
-3. **Watchlist for incoming round-1 PRs** — alphonse, edward, frieren, nezuko. If any beat 127.84, merge then chain.
+1. **Spectral bias matters**: RFF gave -3.9% val_avg, acting on boundary-layer gradients that raw (x,z) coordinates can't represent efficiently.
+2. **High-Re upweighting works**: Re-strat sampler gave -5.03% val_avg in its first pass; val_re_rand (119.00) and val_geom_camber_cruise (101.61) are the two strongest splits.
+3. **val_single_in_dist is the remaining bottleneck**: at 144.70 it's 20% above the best other split. Two-branch head (thorfinn H7) is the most targeted mechanism for this.
+4. **Test metrics now reliable**: frieren's NaN fix means test_avg is a real number. The test-val gap is significant (111.16 vs 122.81, -9.5%) — test consistently lower (better) than val, suggesting val is harder or that the test-optimal checkpoint differs from val-optimal.
 
 ## Potential next research directions (round 3+)
 
-- **Compounding round:** stack the round-1+2 winners into a single bundled PR.
-- **Asymmetric Q/K projections (H4):** orthogonal attention modification.
-- **Gradient clipping + SGDR (H6):** stability + warm restarts.
-- **MLP dropout (H12) or log1p target normalization (H11):** lightweight regularization.
-- **GeoTransolver GALE (full):** multi-scale ball queries + full cross-attention conditioning if simple H13 shows OOD gains.
-- **Loss reformulation:** Huber on surface pressure, per-domain loss normalization.
-- **Curriculum/mining:** hard-sample mining by per-sample MAE during training.
-- **Spectral targeting:** SIREN-style learned coordinate encoding, multi-band RFF sweep on σ if frieren H5 shows traction.
+After round-2 WIP resolves:
+- **Stacking round** — compose any round-2 winners (EMA + two-branch head + cautious adamw, etc.)
+- **H4 asymmetric Q/K**: orthogonal attention modification
+- **H11 log1p target normalization**: y values span orders of magnitude; compressing y space may help optimization
+- **H12 MLP dropout 0.1**: lightweight regularization
+- **Architecture search**: try slice_num=128 or n_layers=6 with the same 1M param budget repartitioned
+- **val_single_in_dist targeted**: data analysis to understand why in-distribution single foil is harder than OOD camber splits
 
 ## Open questions
 
-- Does EMA's gain on top of Re-strat reach val_avg < 125?
-- Is the two-branch head the right level of capacity allocation, or is the surface task too small to need a dedicated decoder?
-- The `val_single_in_dist` split is the hardest now (160.10) — what's different about it from val_re_rand (111.08)? Worth a data audit before round 3.
-
-## Living document
-
-Update this file each round with the latest research focus, themes, and
-open questions. Prune stale entries; merge winners into the baseline.
+- Will EMA + RFF + Re-strat compose to sub-120 val_avg?
+- Does Cautious AdamW's masking benefit increase or decrease after the optimizer has stable RFF gradients?
+- What explains the 20% harder val_single_in_dist vs. other splits? Is it the wake-interaction complexity, sample count imbalance, or Re distribution within that split?

@@ -2,7 +2,31 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
-## 2026-05-15 14:35 — PR #3226: H10 Re-stratified sampler (thorfinn) — **MERGED, new baseline**
+## 2026-05-15 16:25 — PR #3217: H5 RFF coord encoding + NaN fix (frieren) — **MERGED, new baseline**
+
+- Branch: `charliepai2i24h4-frieren/rff-coord-nfreq32-sigma1`
+- Hypothesis: Replace raw (x,z) positional dims 0-1 with a fixed 64-dim Random Fourier Feature expansion (n_freq=32, sigma=1.0) to lift spectral bandwidth for boundary-layer gradients. Bonus: added a `y_finite_sample` mask + `nan_to_num` in `evaluate_split` to resolve the branch-wide `test_avg` NaN.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, epoch 12) | **122.81** |
+| `val_single_in_dist/mae_surf_p` | 144.70 |
+| `val_geom_camber_rc/mae_surf_p` | 125.95 |
+| `val_geom_camber_cruise/mae_surf_p` | 101.61 |
+| `val_re_rand/mae_surf_p` | 119.00 |
+| `test_avg/mae_surf_p` (now finite!) | **111.16** |
+| `test_single_in_dist/mae_surf_p` | 123.91 |
+| `test_geom_camber_rc/mae_surf_p` | 114.82 |
+| `test_geom_camber_cruise/mae_surf_p` | 88.14 |
+| `test_re_rand/mae_surf_p` | 117.78 |
+| Wall clock | 30 min cap; epoch 12 of 50 |
+
+- Metric artifact: `models/model-frieren-rff-nfreq32-sigma1-20260515-140556/metrics.jsonl`
+- Diagnostic: Training curve showed pronounced noise until cosine annealing began to bite at epoch 11, with a sharp ~30-point drop then plateau (156→125→122→122). The RFF expansion gave the preprocess MLP a higher-frequency vocabulary for boundary-layer features; the gain shows up most in `val_geom_camber_rc` (-22.7 vs Re-strat baseline) and `val_single_in_dist` (-15.4).
+- NaN fix: `evaluate_split` now masks and zero-fills samples where `isfinite(y).all(dim=-1)` is False before computing `err = (pred - y).abs()`. This resolves the IEEE 754 `NaN * 0 = NaN` propagation through `surf_mask` for test_geom_camber_cruise sample 20.
+- Decision: **Merge** — -4.3% val_avg improvement, clean RFF implementation with buffer-registered B matrix (non-trainable), plus a valuable branch-wide bug fix now baked in.
+
+## 2026-05-15 14:35 — PR #3226: H10 Re-stratified sampler (thorfinn) — **MERGED**
 
 - Branch: `charliepai2i24h4-thorfinn/re-strat-high2x`
 - Hypothesis: Upweight Re>1e6 samples by 2x in the `WeightedRandomSampler`, on top of the existing domain-balanced weights. Targets the higher-error high-Re regime which dominates `val_avg/mae_surf_p` via the per-sample y std (164→2077 across the dataset).
