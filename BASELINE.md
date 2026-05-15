@@ -2,15 +2,23 @@
 
 ## Current best
 
-### 2026-05-15 14:05 — PR #3208: Replace MSE with SmoothL1 (Huber) loss
+### 2026-05-15 15:30 — PR #3276: Gradient clip + AdamW selective decay (+ test NaN guard)
+
+- **val_avg/mae_surf_p:** 109.681 (best @ epoch 14; 14 epochs completed under 30-min cap)
+- **test_avg/mae_surf_p:** 97.315 (finite for first time — NaN guard fixed test_geom_camber_cruise)
+- **Per-split val mae_surf_p:** single 148.09 | geom_rc 114.87 | geom_cruise 78.85 | re_rand 96.91
+- **Per-split test mae_surf_p:** single 123.24 | geom_rc 104.76 | geom_cruise 68.48 | re_rand 92.79
+- **Changes:** torch.nn.utils.clip_grad_norm\_(max_norm=1.0) + AdamW selective decay (LN/bias/1D no-decay) + NaN sample guard in evaluate_split
+- **Optimizer groups:** decay=49 groups (0.655M params), no_decay=62 groups (0.008M params)
+- **Loss:** SmoothL1 (Huber, β=1.0) — carried forward from PR #3208
+- **Metric artifacts:** `models/model-grad-clip-selective-decay-20260515-142950/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name grad-clip-selective-decay --agent fern --epochs 50`
+- **Delta vs PR #3208 baseline:** -5.94% val_avg/mae_surf_p (116.61 → 109.68)
+
+### 2026-05-15 14:05 — PR #3208: Replace MSE with SmoothL1 (Huber) loss (superseded)
 
 - **val_avg/mae_surf_p:** 116.611 (best @ epoch 13; 14 epochs completed under 30-min cap)
-- **test_avg/mae_surf_p:** NaN (pre-existing infra bug); 3 clean splits avg 114.59
-- **Per-split val mae_surf_p:** single 161.69 | geom_rc 117.56 | geom_cruise 85.67 | re_rand 101.53
-- **Per-split test mae_surf_p:** single 139.80 | geom_rc 104.38 | geom_cruise NaN | re_rand 99.60
-- **Loss:** SmoothL1 (Huber, β=1.0) replacing MSE; everything else at reference config
 - **Metric artifacts:** `models/model-charliepai2i24h2-fern-huber-loss-20260515-130151/metrics.{jsonl,yaml}`
-- **Reproduce:** `cd target && python train.py --experiment_name huber-loss --agent fern --epochs 50`
 
 ## Reference model config
 ```python
