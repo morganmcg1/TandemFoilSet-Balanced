@@ -81,6 +81,31 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class ConditionMLP(nn.Module):
+    """Produces (gamma, beta) FiLM parameters for a hidden_dim layer.
+
+    Identity at init: final linear is zero-init except gamma bias = 1, so the
+    block computes 1*fx + 0 = fx until training shapes the conditioning.
+    """
+
+    def __init__(self, cond_dim, hidden_dim):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 2 * hidden_dim),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+        self.net[-1].bias.data[:hidden_dim] = 1.0
+
+    def forward(self, cond):
+        out = self.net(cond)
+        gamma, beta = out.chunk(2, dim=-1)
+        return gamma, beta
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -138,7 +163,7 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -149,6 +174,9 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.cond_dim = cond_dim
+        if cond_dim > 0:
+            self.film = ConditionMLP(cond_dim, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -156,8 +184,11 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, cond=None):
         fx = self.attn(self.ln_1(fx)) + fx
+        if self.cond_dim > 0 and cond is not None:
+            gamma, beta = self.film(cond)
+            fx = gamma.unsqueeze(1) * fx + beta.unsqueeze(1)
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -167,7 +198,7 @@ class TransolverBlock(nn.Module):
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
-                 slice_num=32, ref=8, unified_pos=False,
+                 slice_num=32, ref=8, unified_pos=False, cond_dim=0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -185,16 +216,25 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.cond_dim = cond_dim
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                cond_dim=cond_dim,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Re-apply FiLM identity init since apply() above overwrites the
+        # zero-init final layer of every ConditionMLP via trunc_normal_.
+        for block in self.blocks:
+            if hasattr(block, "film"):
+                nn.init.zeros_(block.film.net[-1].weight)
+                nn.init.zeros_(block.film.net[-1].bias)
+                block.film.net[-1].bias.data[:n_hidden] = 1.0
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,9 +247,13 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # Condition values (Re, AoA, NACA, gap, stagger) are sample-level
+        # constants stored per-node; node 0 is always real (padding appended
+        # at the end by pad_collate) so we read the global condition from it.
+        cond = x[:, 0, 13:] if self.cond_dim > 0 else None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, cond=cond)
         return {"preds": fx}
 
 
@@ -395,6 +439,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    cond_dim=X_DIM - 13,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
