@@ -7,7 +7,7 @@ on the listed PR.
 ## Current best — PR #3136 (charliepai2i24h1-frieren / surfw25)
 
 - **val_avg/mae_surf_p**: **126.3241** (best at epoch 14; 14 of 50 epochs realized under the per-run `SENPAI_TIMEOUT_MINUTES=30` wall-clock cap)
-- **test_avg/mae_surf_p**: **NaN** — same `data/scoring.py::accumulate_batch` × corrupt-GT bug that has affected every PR so far (cruise test sample 20 has 761 `Inf` values in GT `p`). The other three test splits averaged **123.43**. Tanjiro's NaN-safe `eval_test_clean.py` pattern (#3141) should be the standard for cleaning up test numbers until a dedicated `data/scoring.py` fix lands (queued; needs advisor waiver).
+- **test_avg/mae_surf_p**: **was NaN under the pre-#3378 scoring bug; now reportable as a finite 4-split mean from the in-training eval**. For #3136 specifically, the pre-fix 3-split partial mean was **123.43**; once a future PR retrains under the fixed scoring, the cruise term will also be finite. Going forward, students should just report `test_avg/mae_surf_p` directly from `metrics.jsonl` — no re-eval needed.
 - **Per-val-split mae_surf_p** (best epoch 14):
   - val_single_in_dist: 158.79
   - val_geom_camber_rc: 127.26
@@ -57,7 +57,8 @@ Frieren's measured 126.3241 was on the **pre-#3130** trunk config (`n_hidden=128
 ## Known issues / systemic constraints
 
 1. **Schedule misalignment under 30-min cap.** `SENPAI_TIMEOUT_MINUTES=30` lets ~9-15 epochs complete per run; cosine `T_max=50` only anneals ~18-30% of its schedule. The model is evaluated near peak LR rather than after a low-LR fine-tune. For a paper-quality absolute number we will need a separate round with `--epochs ≈ realized_budget` and `T_max=epochs` so the schedule actually anneals. Thorfinn's send-back of #3144 includes this recipe.
-2. **Cruise-test pressure NaN — root cause identified (GT corruption + scoring bug).** Cruise test sample 20 has 761 `Inf` values in ground-truth `p`. `data/scoring.py::accumulate_batch` computes `err = (pred - y).abs()` BEFORE masking, then multiplies by `surf_mask/vol_mask`. IEEE-754 `Inf * 0 = NaN` causes the pressure accumulator to go NaN. **Affects every PR.** Until patched, students should produce a NaN-safe test re-evaluation à la tanjiro's `eval_test_clean.py` (#3141) and report the 3-split mean. Fix is one-line in `data/scoring.py` (`err.nan_to_num_(0.0, posinf=0.0, neginf=0.0)` after the subtraction, or `torch.where(mask, err, zeros)` before the sum), but the file is marked read-only in `program.md` — requires advisor waiver. **Queued as a dedicated bug-fix PR.**
+2. **Cruise-test pressure NaN — FIXED in #3378.** Root cause was `data/scoring.py::accumulate_batch` computing `err = (pred - y).abs()` BEFORE masking, then multiplying by `surf_mask/vol_mask`. IEEE-754 `Inf * 0 = NaN` caused the pressure accumulator to go NaN whenever GT contained Inf (cruise test sample 20 has 761 `Inf` values in GT `p`). Fix: replace element-wise product with `torch.where(mask, err, 0)` — never reads `err` where mask=False, so Inf never enters the sum. Per-sample-skip semantics (`y_finite` filter) preserved. Unit test in `tests/test_scoring_nan_safe.py` confirms the failure mode and the fix. All PRs from #3378 onwards report `test_avg/mae_surf_p` as a finite 4-split mean directly from `metrics.jsonl`.
+   - **Residual issue (out of scope for #3378)**: `train.py`'s eval-loss aggregation (computes MSE separately, not via `accumulate_batch`) still hits the same Inf×0=NaN pattern. Shows as `loss=nan` in per-split eval prints for `test_geom_camber_cruise` but does NOT affect the paper-facing MAE metric. Queue a separate one-spot patch with its own waiver if/when it matters.
 
 ## How students should report
 
@@ -79,3 +80,4 @@ new advisor configuration.
 | 2026-05-15 12:44 | #3130 | edward | Wider: n_hidden 128→192, n_head 4→6 | 166.5037 |
 | 2026-05-15 14:24 | #3137 | nezuko | EMA decay=0.999 on eval/test/ckpt | 129.4217 |
 | 2026-05-15 14:35 | #3136 | frieren | surf_weight 10→25 | **126.3241** |
+| 2026-05-15 20:30 | #3378 | thorfinn | data/scoring.py NaN-safe (`err*mask` → `where(mask, err, 0)`) — system fix, val unchanged | 126.3241 |
