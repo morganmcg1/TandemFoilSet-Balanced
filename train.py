@@ -381,6 +381,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    aoa_aug: bool = False   # AoA sign-flip augmentation (p=0.5 per batch sample)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -498,6 +499,16 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if cfg.aoa_aug:
+            with torch.no_grad():
+                flip = torch.rand(x.size(0), device=device) < 0.5
+                if flip.any():
+                    x = x.clone()
+                    x[flip, :, 14] = -x[flip, :, 14]
+                    x[flip, :, 18] = -x[flip, :, 18]
+                    y = y.clone()
+                    y[flip, :, 1] = -y[flip, :, 1]
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
