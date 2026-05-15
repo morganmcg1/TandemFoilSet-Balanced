@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-15 15:50
+- **As of:** 2026-05-15 16:30
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 3 of the appendix-willow PAI2I sub-track)
 - **Most recent human research direction:** None received this launch.
@@ -34,42 +34,58 @@ the LR barely anneals from its peak. This shapes every round-3 result.
 **Fresh-slate baseline anchor:** edward's `7fa1s7vm` run (clean default config) hit
 `val_avg/mae_surf_p = 129.99` at epoch 14/50. This is the reference for round-3 deltas.
 
-## Round 3 cohort — interim standings (15:50)
+## Round 3 cohort — interim standings (16:30)
 
-W&B-sourced ranking of finished runs (in-tree test_avg = NaN for all; per-split test
-available for 3 of 4 splits). All values are `val_avg/mae_surf_p` (lower better):
+W&B-sourced ranking of finished runs. All values are `val_avg/mae_surf_p` (lower better).
+Each cohort student has 3-4 finished arms; each just launched a *new* arm (2-5 min in)
+and none have posted terminal SENPAI-RESULT yet. Nudge comments sent at 16:30 asking
+each to post terminal SENPAI-RESULT once their current arm completes.
 
 | Rank | Agent | PR | Hypothesis | Best val | Status |
 |---|---|---|---|---:|---|
-| 1 | askeladd | #3244 | warmup-cosine-grad-clip | **109.99** | WIP (4th arm running) |
-| 2 | frieren | #3248 | huber-robust-loss (δ=2.0) | 124.66 | WIP (3rd arm running) |
-| 3 | tanjiro | #3250 | re-conditioned-loss-weighting | 125.07 | WIP (3rd arm running) |
-| — | edward | (closed #3245) | baseline anchor | **129.99** | reference only |
-| 4 | nezuko | #3249 | ema-model-averaging (decay=0.999) | 130.17 | WIP (3rd arm running) |
-| 5 | thorfinn | #3251 | naca-camber-fourier-features | 138.36 | WIP (3rd arm running) |
+| 1 | **frieren** | #3248 | **huber-robust-loss (δ=2.0)** | **107.5** | WIP (4th arm running) |
+| 2 | askeladd | #3244 | warmup-cosine-grad-clip | 110.0 | WIP (4th arm running) |
+| 3 | **alphonse** | #3282 | **bf16-mixed-precision** | **111.6** | WIP (2nd arm running) |
+| — | edward | (closed #3245) | baseline anchor | 129.99 | reference only |
+| 4 | thorfinn | #3251 | naca-camber-fourier-features | 123.3 | WIP (4th arm running) |
+| 5 | tanjiro | #3250 | re-conditioned-loss-weighting | 124.8 | WIP (4th arm running) |
+| 6 | nezuko | #3249 | ema-model-averaging (decay=0.999) | 130.2 | WIP (4th arm running) |
 | closed | fern | (closed #3247) | larger-slice-num (S=128) | 133.73 | test NaN, model inf |
 | closed | edward | (closed #3245) | surf-p-weighted [1,1,3] | 135.66 | +4.4% vs baseline |
 | closed | alphonse | (closed #3243) | deeper-transolver (L=8) | 147.85 | undertrained |
 
+**Key shift since 15:50:**
+- **frieren `mp8s8okf` displaced askeladd as cohort leader at 107.5** (was 124.66 before).
+- **alphonse's bf16 is now working cleanly** — `tup20e60` at best_val=111.6 (full bf16 run).
+  Note: `1t41l8sx` earlier was a clean debug run, not a crash — my misdiagnosis (corrected
+  on PR #3282). bf16 at L=5 trains cleanly; the L=8 revisit is now viable.
+- alphonse's `tup20e60` has best_val=111.6 vs final_val=171.4 — late-cosine divergence,
+  best checkpoint covers it for paper-facing but signals bf16+grad-clip stacks could help.
+- thorfinn jumped from 138 → 123.3 with `n2i46t6r` — what config? need terminal result.
+
 **New WIP assignments (15:50):**
-- fern → #3312 `lion-optimizer` (Lion at lr=1.5e-4 wd=3e-4)
-- edward → #3313 `grad-accum-eff-batch-16` (accum_steps=4, eff batch 16)
+- fern → #3312 `lion-optimizer` (Lion at lr=1.5e-4 wd=3e-4) — picked up iter 38 at 16:20
+- edward → #3313 `grad-accum-eff-batch-16` (accum_steps=4, eff batch 16) — picked up iter 38 at 16:22
 
-**Holding:** alphonse on #3282 `bf16-mixed-precision` (debug nudge sent — `1t41l8sx`
-crashed at 0.1 min; awaiting next run).
+### Cohort signal (updated 16:30)
 
-### Cohort signal (preliminary)
+Top-3 are tightly bunched (107.5, 110.0, 111.6) and reflect three independent levers:
+- **Loss-side stability** (frieren's Huber δ=2.0 — caps gradient magnitude on outlier samples)
+- **Schedule-side stability** (askeladd's warmup + cosine + grad-clip — sane LR ramp + clip)
+- **Throughput** (alphonse's bf16 — same baseline config but ~17 epochs in 30 min vs 14)
 
-Training-stability changes dominate so far. askeladd's warmup-cosine-grad-clip leads by
-~14 over the next tier (huber loss, re-conditioned loss weighting), and all three of those
-beat the fresh-slate baseline (129.99). The lower tiers tried EMA, NACA-Fourier features,
-larger slice_num, and L=8 — all of which were neutral-to-worse.
+All three attack the **same root cause** from different angles: the 30-min cap forces
+training to live in the high-LR, high-gradient-noise early regime where outliers dominate.
+Huber dampens outlier loss; warmup gives a cleaner ramp; bf16 buys more steps to escape
+the noisy regime. This is consistent with the lower-tier results (EMA, NACA-Fourier, larger
+slice_num, L=8) all being moderate — they tried to add capacity or features *to* a noisy
+training regime that hadn't been fixed.
 
-**Hypothesis-of-the-hypothesis:** the round-3 winners are eating the same lever (training
-stability at the start of the cosine ramp). Adding warmup gives the optimizer 1–2 free
-epochs at sane gradient scale; grad-clip prevents the rare spike from poisoning the rest
-of training. Huber and re-cond loss weighting are doing a softer version of the same
-thing by capping per-sample gradient magnitude.
+**Implication for round 4:** the top-3 levers are likely **complementary**, not redundant.
+A round-4 confirmation run that stacks Huber + warmup-cosine-grad-clip + bf16 should
+plausibly clear 100 if the levers are orthogonal. Lion (fern, in flight) and grad-accum
+(edward, in flight) attack the same family (optimizer + effective-batch stability) — if
+they show competitive results, they extend the menu.
 
 ### Decision principle for round 3
 
