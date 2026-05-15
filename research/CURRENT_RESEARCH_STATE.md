@@ -43,7 +43,7 @@ Huber δ=0.5 beats FiLM by 1.79 pts. Two confirmed independent improvements (FiL
 | #3341 | alphonse | H5: Wider model n_hidden=256 matched-budget comparison (A: 128, B: 256) | Just assigned 2026-05-15 17:30 |
 | #3342 | edward | H2: EMA weight averaging (decay=0.999) paired comparison | Just assigned 2026-05-15 17:30 |
 | #3343 | fern | H17: Per-channel adaptive Huber loss (δ_p=0.25 vs δ_Ux/Uy=0.5 or 1.0) | Just assigned 2026-05-15 17:30 |
-| #3344 | frieren | H18: Gradient clipping alone (clip=1.0, no warmup) + FiLM+Huber compound | Just assigned 2026-05-15 |
+| #3349 | frieren | H18: Gradient clipping alone (clip=1.0, no warmup) + FiLM+Huber compound | Active WIP |
 
 ## Key Open Questions
 
@@ -53,7 +53,7 @@ Huber δ=0.5 beats FiLM by 1.79 pts. Two confirmed independent improvements (FiL
 4. **Does FiLM context enable surface head specialization (PR #3338)?** H13 failed without FiLM; H16 adds FiLM as enabling context.
 5. **Can per-sample normalization fix Re-range gradient imbalance (PR #3339)?** y_std varies 50-2077 Pa (40x); MSE gives ~1700x more gradient to high-Re samples. Normalization by sample std should equalize.
 6. **Does WSD schedule help the short budget (PR #3340)?** WSD provides warmup+stable plateau then decay — better suited to 14-epoch effective window than cosine.
-7. **Does grad-clip alone (no warmup) provide a net gain?** H3 showed warmup is the culprit; clip=1.0 + no warmup is a one-line change that could be additive on top of FiLM+Huber. Assigned to frieren (PR #3344).
+7. **Does grad-clip alone (no warmup) provide a net gain?** H3 showed warmup is the culprit; clip=1.0 + no warmup is a one-line change that could be additive on top of FiLM+Huber. Assigned to frieren (PR #3349).
 
 ## Known Issues
 
@@ -61,7 +61,7 @@ Huber δ=0.5 beats FiLM by 1.79 pts. Two confirmed independent improvements (FiL
 
 ## Potential Next Research Directions
 
-- **Gradient clipping alone (no warmup)**: H3 showed 5-epoch warmup is the culprit for regression; clip=1.0 with warmup=0 on top of FiLM+Huber is a low-risk one-line change (frieren PR #3344).
+- **Gradient clipping alone (no warmup)**: H3 showed 5-epoch warmup is the culprit for regression; clip=1.0 with warmup=0 on top of FiLM+Huber is a low-risk one-line change (frieren PR #3349).
 - **FiLM + T_max=15 + Huber triple compound**: The three individually confirmed improvements combined; if PR #3335 shows this, it becomes the new default config.
 - **Per-split or per-channel Huber**: Huber wins on 3/4 splits but hurts val_geom_camber_rc. Adaptive per-split threshold could maximize coverage.
 - **Graph-based positional encoding**: Current coordinates (x,z,sdf,dsdf) are Euclidean. Geodesic distances along the foil surface could help surface node specialization.
