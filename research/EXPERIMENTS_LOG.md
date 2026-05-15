@@ -1,5 +1,49 @@
 # SENPAI Research Results
 
+## 2026-05-15 14:30 — PR #3159: H1: Huber loss (delta=0.1) — NEW BASELINE ✓ MERGED
+
+- Branch: `alphonse/huber-loss-aligned`
+- Student: willowpai2i48h1-alphonse
+- Hypothesis: Replace MSE loss with Huber(delta=0.1) to align training objective with the MAE evaluation metric. At delta=0.1 in normalized space, residuals above 0.1 are in the L1 (MAE-equivalent) regime, creating direct gradient alignment with the scoring metric.
+
+### Results
+
+| Split | val mae_surf_p |
+|-------|----------------|
+| **val_avg/mae_surf_p** | **112.9001** |
+| val_single_in_dist | 134.4612 |
+| val_geom_camber_rc | 143.4094 |
+| val_geom_camber_cruise | 75.8516 |
+| val_re_rand | 97.8785 |
+
+| Split | test mae_surf_p | test mae_surf_Ux | test mae_surf_Uy |
+|-------|-----------------|-----------------|-----------------|
+| test_single_in_dist | 120.1970 | 1.4079 | 0.5594 |
+| test_geom_camber_rc | 134.3200 | 2.2348 | 0.7179 |
+| test_geom_camber_cruise | NaN (data corruption) | 0.9322 | 0.4473 |
+| test_re_rand | 92.7597 | 1.3172 | 0.5779 |
+| **test 3-split avg (excl. cruise)** | **115.7589** | 1.4730 | 0.5756 |
+
+W&B run: `bpczoejx` · Group: `huber_loss_delta01`
+
+### Run details
+- Epochs: **14/50** (hit 30-min wall-clock cap; ~173 s/epoch)
+- Best checkpoint: epoch 14 — val still falling (248 → 113 over run; healthy monotonic decrease)
+- Peak VRAM: 42.1 GB (well within 96 GB budget)
+
+### Analysis
+- **Clear winner**: 112.9 vs 134.7 (thorfinn's slice_num=128), improvement of ~16%.
+- MAE alignment works: Huber loss directly creates gradient alignment with the scoring metric. The model learns to minimize mean absolute error rather than mean squared error, which is exactly what's being measured.
+- **LR schedule mismatch**: T_max=50 with only 14 epochs completed means LR was still at ~82% of peak (≈0.00041) when training stopped. The cosine schedule never annealed. This is the biggest remaining optimization opportunity — the model is undertrained relative to schedule.
+- **Delta regime**: With trained residuals O(0.05–0.2) at epoch 14, many residuals are still below delta=0.1 and in the L2 regime. Smaller delta (0.05 or 0.01) would push more residuals into L1, potentially improving MAE alignment further.
+- Per-split pattern: cruise val best (75.85), then re_rand (97.88), while single_in_dist (134.46) and geom_camber_rc (143.41) remain hardest — high-Re raceCar samples dominate absolute error.
+
+### Student suggested follow-ups
+1. Tune T_max to actual epoch budget (~14-15 epochs)
+2. Smaller Huber delta (0.05, 0.01) or pure L1 to push fully into MAE-aligned regime
+3. Per-channel loss weighting (emphasize pressure channel)
+4. Patch the cruise-gt NaN bug (separate PR, affects all test metrics)
+
 ## 2026-05-15 14:10 — PR #3188: H10: Increase slice_num from 64 to 128
 
 - Branch: `thorfinn/slice-num-128`
