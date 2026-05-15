@@ -472,6 +472,8 @@ class Config:
     p_channel_weight: float = 3.0
     epochs: int = 50
     cosine_tmax: int = 14  # match observed wall-clock ceiling (~13-14 epochs)
+    grad_clip: float = 1.0
+    warmup_epochs: int = 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -529,7 +531,10 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_tmax)
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+warmup = LinearLR(optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs)
+cosine = CosineAnnealingLR(optimizer, T_max=max(cfg.cosine_tmax - cfg.warmup_epochs, 1))
+scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs])
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -605,9 +610,14 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
