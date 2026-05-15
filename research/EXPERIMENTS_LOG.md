@@ -319,3 +319,42 @@ If SOAP+Huber+LRwarmup stacks orthogonally (expected: val ~60-80), this is the n
 - W&B verified: tags clean, Huber+warmup config confirmed, numbers match student report exactly.
 
 **Implication:** AoA-reflection augmentation is not viable in its current form for this dataset. A valid z-reflection requires flipping z-position, arc-length signs, dsdf signs, AND NACA M sign simultaneously — a separate, more complex hypothesis. Assigned frieren [PR #3415] to test log-Re sinusoidal embedding instead.
+
+## 2026-05-15 19:55 — PR #3323 (nezuko): PhysicsAttention entropy regularization — **CLOSED**
+
+- Branch: `willowpai2i48h3-nezuko/attn-entropy-reg`
+- W&B group: `attn-entropy-reg`
+- Baseline run: `3nhewu3e` | Variant-0.01 run: `cy3zdddn` | Variant-0.001 run: `328tqt31`
+
+**Hypothesis:** Entropy regularization on PhysicsAttention slice-weight distributions prevents slice collapse and improves OOD generalization. `entropy_reg_weight ∈ {0.01, 0.001}` tested.
+
+**Result (variant vs in-PR baseline):**
+
+| Run | entropy_w | best_val_avg | test_3split | val_re_rand | Δ val (vs baseline) |
+|---|---|---|---|---|---|
+| baseline (`3nhewu3e`) | 0.0 | **115.37** (ep 12) | **114.91** | 101.69 | — |
+| variant-0.01 (`cy3zdddn`) | 0.01 | 123.62 (ep 11) | 123.44 | 111.84 | **+7.2%** |
+| variant-0.001 (`328tqt31`) | 0.001 | 120.52 (ep 11) | 122.84 | 104.04 | **+4.5%** |
+
+**Decision:** CLOSED. Both variants regress; monotone with regularizer strength. W&B verified (all tags clean, config confirmed, numbers match exactly).
+
+**Per-layer slice entropy diagnostics (end of training; max = log(64) ≈ 4.16 nats):**
+
+| Run | L0 | L1 | L2 | L3 | L4 |
+|---|---|---|---|---|---|
+| baseline | 1.52 | 2.79 | 3.96 | 2.58 | 2.98 |
+| variant-0.01 | 3.27 | 4.00 | 4.01 | 3.99 | 4.16 |
+| variant-0.001 | 3.05 | 2.62 | 2.46 | 3.59 | 3.84 |
+
+**Analysis:**
+1. **Slice collapse is real on the baseline** — L0 = 1.52 nats ≈ effective use of only 5 of 64 slices per head. The hypothesis premise is empirically confirmed.
+2. **But specialization is a feature, not a bug.** Forcing uniformity removes routing information. The model uses slice collapse to implement soft cluster heads, which is functional.
+3. The monotone regression (val: 115 → 120 → 124 as weight: 0 → 0.001 → 0.01) plus the per-layer entropy curves confirm this is a real slice-flattening effect, not training instability.
+4. Test/val co-move — no OOD benefit from slice uniformity. The hoped-for "more uniform = better OOD generalization" does not materialize on this dataset.
+5. Variant-0.001 caused L2 to *decrease* below baseline (2.46 vs 3.96) — likely interaction between entropy reg and temperature learning that warped the regularization landscape.
+
+**Key insight preserved for future reference:** The layer-0 collapse pattern (1.52 nats) is dramatically lower than upper layers (3.96 at L2). Anti-collapse interventions targeted at L0 only (weight ≤1e-4) or temperature-based approaches may be worth revisiting in a later round without flattening upper layers.
+
+**Diagnostic instrumentation note:** Student implemented `train/mean_slice_entropy` and per-layer entropy logging (`diag/L*_slice_entropy`). These diagnostics should be preserved in the codebase for future architecture investigations.
+
+**Assigned nezuko [PR #3430] to test EMA of model weights (decay=0.999) for evaluation.**

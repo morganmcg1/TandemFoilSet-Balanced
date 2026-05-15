@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 (updated 19:15 after PR #3322 close + frieren #3415 assignment)
+- **Date:** 2026-05-15 (updated 20:30 after PR #3323 close + nezuko #3430 assignment)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 110.83`, `test_avg/mae_surf_p (excl cruise) = 109.75`
@@ -33,7 +33,7 @@
 | #3152 | edward | Surface-only p×3 upweight (rebase pending) | Loss formulation | WIP (rebase needed) |
 | #3316 | fern | Huber beta sensitivity (0.5/1.0/2.0) | Loss tuning | WIP |
 | **#3415** | **frieren** | **Log-Re sinusoidal embedding (re_rand OOD target)** | **Inputs** | **WIP (new assignment)** |
-| #3323 | nezuko | PhysicsAttention entropy reg | Architecture | WIP |
+| **#3430** | **nezuko** | **EMA of model weights (decay=0.999)** | **Training** | **WIP (new assignment)** |
 | #3169 | tanjiro | MLP ratio 2→4 | Capacity | WIP |
 | #3172 | thorfinn | Fourier (x,z) + slice_num 96 (rebase pending) | Inputs | WIP (rebase needed) |
 
@@ -44,6 +44,7 @@ Zero idle students. Three PRs (#3283, #3152, #3172) require rebases onto the mer
 | PR | Student | Hypothesis | Decision | Key finding |
 |---|---|---|---|---|
 | #3322 | frieren | AoA reflection aug (sign-flip) | **Closed** | +15.5% test regression — camber breaks z-symmetry |
+| #3323 | nezuko | PhysicsAttention entropy reg (weight=0.01/0.001) | **Closed** | +7.2%/+4.5% val regression — slice specialization is a feature, not a bug |
 
 ## Key learnings so far
 
