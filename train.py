@@ -223,9 +223,11 @@ def _apply_fourier(x_norm, model):
 
     The projection matrix ``B`` is stored as a buffer on the model so the
     same encoding is applied at train and eval time (it travels with
-    ``state_dict``).
+    ``state_dict``). When the EMA wrapper (``AveragedModel``) is passed in,
+    its base model lives under ``.module`` and that is where the buffer is.
     """
-    B = getattr(model, "fourier_B", None)
+    inner = getattr(model, "module", model)
+    B = getattr(inner, "fourier_B", None)
     if B is None:
         return x_norm
     coord = x_norm[..., :2]                       # [..., 2]
@@ -543,6 +545,8 @@ class Config:
     optimizer_name: str = "adamw"  # "adamw" or "lion"
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    ema_decay: float = 0.0   # 0.0 disables EMA; 0.999 = standard EMA window ~1000 steps
+    grad_clip: float = 0.0   # 0.0 disables; otherwise max-norm threshold for clip_grad_norm_
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -615,6 +619,17 @@ elif cfg.optimizer_name == "adamw":
     print(f"Optimizer: AdamW(lr={cfg.lr}, wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer_name: {cfg.optimizer_name!r}")
+
+ema_model = None
+if cfg.ema_decay > 0:
+    ema_model = torch.optim.swa_utils.AveragedModel(
+        model,
+        multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(cfg.ema_decay),
+    )
+    print(f"EMA enabled: decay={cfg.ema_decay}")
+
+if cfg.grad_clip > 0:
+    print(f"Grad clip enabled: max_norm={cfg.grad_clip}")
 cosine_t_max = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 print(f"Scheduler: CosineAnnealingLR(T_max={cosine_t_max})  [epochs cap = {MAX_EPOCHS}]")
@@ -692,9 +707,23 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip,
+            )
+        else:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float("inf"),
+            )
         optimizer.step()
+        if ema_model is not None:
+            ema_model.update_parameters(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -706,8 +735,13 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    if ema_model is not None:
+        ema_model.eval()
+        eval_model = ema_model
+    else:
+        eval_model = model
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, split_name=name)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, split_name=name)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -738,7 +772,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # When EMA is active, the val score above came from the EMA weights
+        # — persist those, not the base model — so test eval reproduces it.
+        state_to_save = (
+            ema_model.module.state_dict() if ema_model is not None else model.state_dict()
+        )
+        torch.save(state_to_save, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
