@@ -27,15 +27,17 @@ Each PR runs **dual-arm** (baseline + variant in same wandb_group) so we simulta
 
 ## Potential next research directions
 
-After round-1 results come in:
+After round-1 results come in, **stack winners** (compatible interventions can compound).
 
-- **Stack winners.** If multiple families of intervention win, the next round should combine compatible winners (e.g., wider model + Huber loss + p-upweighted loss).
-- **Loss reformulations beyond Huber.** Log-cosh, gradient-matching (Sobolev), frequency-domain MSE, signed-loss for high-magnitude regions.
-- **Position-aware tricks.** RoPE on slice tokens, learned global tokens, NeRF-style multiresolution hash encoding.
-- **Slice-side experiments.** Slice attention variants (cross-attention between slices), slice-token initialization, slice dropout, slice-num scaling > 96.
-- **Better samplers.** Re-stratified sampling within the balanced sampler, harder-domain upweighting, curriculum from low-Re to high-Re.
-- **Data augmentation.** Reflection / sign-flipping augmentation (CFD has reflection symmetry across the chord), modest geometry / scale jitter.
-- **Optimizer alternatives.** Lion, Shampoo / SOAP, Muon.
-- **EMA + SWA.** Exponential moving average and stochastic weight averaging at the end of cosine.
-- **Mixed precision.** bf16 training to free VRAM for bigger batches / wider models.
-- **Surface-conditioned heads.** Separate output MLP for surface vs volume nodes.
+A separate researcher-agent has compiled a shortlist of 18 candidate hypotheses in `research/RESEARCH_IDEAS_2026-05-15_initial.md`. The top 8 by expected value are:
+
+1. **SOAP optimizer** (S, −5% to −20%) — drop-in AdamW replacement; Hessian preconditioning resolves gradient conflicts between vol/surf loss terms. Highest single risk-adjusted EV.
+2. **Ada-Temp slice reparameterization** (M, −8% to −15%) — per-point learned temperature offset in PhysicsAttention softmax; directly targets slice-collapse failure mode documented in Transolver++.
+3. **AoA reflection augmentation** (S, −3% to −8%) — negate AoA + flip z + sign-flip Uy for raceCar samples; doubles effective raceCar training data, helps `val_geom_camber_rc`.
+4. **Attention entropy regularization** (S, −3% to −7%) — diagnostic + light fix for slice uniformity.
+5. **Log-Re sinusoidal embedding** (S, −3% to −8%) — 8-dim sinusoidal features replacing raw normalized log(Re); targets `val_re_rand` OOD.
+6. **Divergence-free auxiliary loss** (M, −5% to −12%) — soft penalty on `‖∂Ux/∂x + ∂Uy/∂z‖` via finite differences on the irregular mesh; encodes incompressible continuity.
+7. **Per-domain normalization** (S, −3% to −8%) — domain-conditioned y stats instead of global pooling of raceCar + cruise.
+8. **Separate surface decoder head** (M, −4% to −10%) — dedicated 2× width MLP for surface nodes; orthogonal to loss-side surface upweighting.
+
+These will be dispatched as students become idle after round 1.
