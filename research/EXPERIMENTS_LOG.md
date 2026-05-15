@@ -123,3 +123,68 @@ W&B run: `912m0995` · Group: `slice_num_128`
 - No concurrent slice_num=64 baseline yet. Other round-1 students effectively provide the reference.
 - VRAM cost of 128 vs 64 is negligible.
 - Merged as Round-1 reference — establishes first measured val_avg/mae_surf_p on this advisor branch.
+
+## 2026-05-15 17:00 — PR #3309: Bugfix: inf*0=NaN in evaluate_split ✓ MERGED
+
+- Branch: `thorfinn/nanbug-fix`
+- Student: willowpai2i48h1-thorfinn
+- Type: Infrastructure bugfix — 4 defensive lines in evaluate_split; model unchanged
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **112.8295** (=baseline, within noise) |
+| **test_avg/mae_surf_p** | **106.5996** ← was NaN (all 4 splits now valid) |
+| test_geom_camber_cruise/mae_surf_p | **83.4377** ← was NaN |
+
+W&B run: `g48284pc` · Group: `nanbug_fix`
+
+### Analysis
+- Model unchanged; val reproduces baseline within Δ=0.07 (noise).
+- **Critical outcome**: test_geom_camber_cruise/mae_surf_p is now 83.44 (finite) and test_avg/mae_surf_p=106.60 is the first valid 4-split test score on this branch.
+- Fix: `_y_fin` masking before arithmetic in evaluate_split prevents `pred - (-inf) = inf` → `inf * 0 = NaN` propagation via `data/scoring.py:accumulate_batch`.
+
+## 2026-05-15 17:05 — PR #3180: H4: Wider model (hidden=192, slice_num=96) ✗ CLOSED
+
+- Branch: `tanjiro/wider-model-h192`
+- Student: willowpai2i48h1-tanjiro
+
+### Results
+
+| Run | val_avg/mae_surf_p |
+|-----|-------------------|
+| `a8p3g73s` (h=192 run 1) | **150.3762** (best of 2) |
+| `nj0chxr6` (h=192 run 2) | 156.3125 |
+| Baseline (h=128 Huber) | 112.9001 |
+
+W&B runs: `a8p3g73s`, `nj0chxr6` · Group: `wider_model_h192`
+
+### Analysis
+- 150.38 vs 112.90 = 33% regression. Closed.
+- h=192 is 1.6× slower/epoch → only 9 epochs vs baseline's 14. But per-epoch metrics are also worse (150 at ep8 vs ~145 for baseline at ep8 per historical data).
+- ~2.2× more params (1.48M vs 0.66M) did not help at this budget.
+- Bottleneck is clearly loss/schedule/features, not capacity.
+- Seed variance ~4% (156.31 vs 150.38) is significant — future capacity tests should pin a seed.
+
+## 2026-05-15 17:10 — PR #3167: H12: OneCycleLR max_lr=1e-3 ✗ CLOSED
+
+- Branch: `edward/onecycle-lr`
+- Student: willowpai2i48h1-edward
+
+### Results
+
+| Run | epochs | val_avg/mae_surf_p | Notes |
+|-----|--------|-------------------|-------|
+| `x9mygbcm` | 9 | 192.6188 | schedule misconfigured (total_steps sized for 50 ep) |
+| `27mfh19o` | 9 | 172.9975 | same misconfiguration |
+| `xn1ad9ka` | 9 | **137.1218** | fixed: --epochs 9, schedule fully annealed |
+| Baseline (Huber cosine) | 14 | 112.9001 | — |
+
+W&B runs: `xn1ad9ka` (final) · Group: `onecycle_lr`
+
+### Analysis
+- 137.12 vs 112.90 = 21% regression after correct schedule setup. Closed.
+- **Key insight**: Edward diagnosed the schedule mismatch himself and reran with --epochs 9. The schedule fully annealed (4e-5 → 1e-3 → ~0), so the hypothesis was correctly tested.
+- OneCycleLR fails because: (a) 9-epoch total budget means no prolonged low-LR refinement phase, and (b) cosine starts at peak LR and descends immediately, giving better use of the budget.
+- NaN on test_geom_camber_cruise is a model-quality issue (extreme prediction on under-converged model at high LR), not the data corruption bug.
