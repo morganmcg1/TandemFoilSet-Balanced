@@ -446,6 +446,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "surf_channel_weights": [1.0, 1.0, 3.0],
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -492,7 +493,9 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Weight p channel 3x in surface loss (Ux=1, Uy=1, p=3) to direct gradients toward the primary metric val_avg/mae_surf_p
+        channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device)
+        surf_loss = (sq_err * channel_weights * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
