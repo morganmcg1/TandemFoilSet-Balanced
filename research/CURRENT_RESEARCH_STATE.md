@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-15 19:30 UTC
+- **As of:** 2026-05-15 20:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -26,11 +26,12 @@ All remaining PRs must beat **test_avg/mae_surf_p < 94.35**.
 | 2 | fern     | Grad-clip 1.0 + 5-epoch warmup | #3258 | **sent back for rebase** (rebased 18:35, re-running on frieren-base) |
 | 3 | edward   | RFF σ=1.0 on (x, z) | #3262 | **sent back for rebase** (rebased 18:36, re-running on frieren-base) |
 | 4 | thorfinn | FiLM log(Re) conditioning | #3263 | **sent back for rebase** (v3 val=118.55 vs old base; rebased, re-running) |
-| 5 | nezuko   | Surface-biased slice routing | #3260 | WIP (rate-limit-recovered, rebase reminder sent) |
+| 5 | nezuko   | Multi-scale slice tokens (coarse-global + fine-surface groups) | #3429 | WIP (replaces closed #3260; #3260 was −0.05% paired) |
 | 6 | alphonse | Cosine T_max fix (T_max=14) | #3358 | WIP |
 | 7 | askeladd | EMA weights β=0.999 | #3351 | WIP |
 | 8 | frieren  | Re-stratified loss reweighting | #3386 | WIP (just assigned) |
 | 9 | tanjiro  | surf_weight sweep {5,10,20} | #3406 | WIP (just assigned, replaces closed #3256) |
+| ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%; reassigned to #3429) |
 | ✗ | tanjiro  | Huber loss delta=0.5 | #3256 | **CLOSED** (redundant with #3257; no commits in 6h) |
 | ✗ | alphonse  | Wider-shallower 256d | #3261 | **CLOSED** (+24% worse) |
 | ✗ | askeladd | Dropout p=0.1 | #3264 | **CLOSED** (+6% worse; diagnosed NaN root cause) |

@@ -242,3 +242,40 @@ Thorfinn's fresh baseline was `vsuqhyt5` (val=137.53) — a high-variance unclip
 - **Hypothesis:** Replace MSE with Huber loss (δ=0.5) for outlier-robust loss metric alignment.
 - **Outcome:** No results produced. Closed as redundant — frieren's #3257 empirically validated the L1-style robustness direction, and pure MAE+p-weight=3 is a superset of the Huber approach. Pod was blocked by GitHub API rate-limit cycling for 6+ hours with no commits pushed.
 - **Reassignment:** #3406 surf_weight sweep {5,10,20} on merged baseline.
+
+## 2026-05-15 20:05 — PR #3260 (CLOSED): Surface-biased slice routing in PhysicsAttention
+
+- **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/surf-biased-slice`
+- **Hypothesis:** Concat `is_surface` (per-node bool) into the slice assignment projection, threading through `Transolver → TransolverBlock → PhysicsAttention`. The routing should learn to specialize slices for surface vs volume regimes.
+- **W&B runs:** `j9cz0wkn` (baseline-control), `kmmcoz9f` (surf-bias-v1), `a9tcw7t2` (seed-A), `hg44hunu` (seed-C best), `q8bmjltf` (baseline-v2)
+
+### Result (vs paired baseline `j9cz0wkn`, run pre-merge against OLD MSE loss)
+
+| | baseline-control `j9cz0wkn` | surf-bias-v1 `kmmcoz9f` | Δ |
+|---|---:|---:|---:|
+| best_val_avg/mae_surf_p | 131.42 | 131.36 | −0.05% (essentially unchanged) |
+| best_epoch | 12 | 13 | — |
+
+3-seed mean of surf-bias = 129.20 vs baseline 2-seed mean = 140.12. But baseline-vs-baseline range is 131.4–148.8 = 13%, so seed variance dominates the observed effect.
+
+| split (test) | baseline | surf-bias-v1 | Δ |
+|---|---:|---:|---:|
+| `test_single_in_dist` | 133.92 | 136.95 | +2.3% (worse) |
+| `test_geom_camber_rc` | 128.55 | 130.79 | +1.7% (worse) |
+| `test_geom_camber_cruise` | NaN | NaN | (pre-existing bug, run pre-merge) |
+| `test_re_rand` | 123.52 | 114.75 | **−7.1% (better)** |
+| **3-split mean (excl cruise)** | 128.66 | 127.50 | −0.9% |
+
+### Decision: CLOSED
+
+Paired comparison shows −0.05% on the primary metric — effectively no change. The 3-seed mean appears favorable but is dominated by baseline seed variance. Per-split test eval is mixed: only `test_re_rand` clearly improves (−7.1%), while in-distribution and geom-camber are slightly worse. Best seed val=126.08 doesn't approach the new merged baseline val=106.67 either. Compared against merged #3257 baseline (test=94.35), nezuko's result is ~+33% above target on 3-split test mean.
+
+The mechanism (binary surface flag at slice routing layer) doesn't add specialization capacity — it just informs existing slices. R2 path with more potential: dedicated parameters per regime (multi-scale slice tokens).
+
+### NaN diagnosis note
+
+Nezuko traced cruise-NaN to non-finite **predictions** — same incorrect diagnosis I initially had. Actual root cause (per askeladd, frieren) is `+inf` in **ground truth** at `test_geom_camber_cruise_gt/000020.pt`. Nezuko's run was pre-merge so the canonical fix wasn't inherited.
+
+### Reassignment
+
+Reassigned nezuko to **#3429 Multi-scale slice tokens** (parallel coarse-global + fine-surface slice groups). Different architectural lever — adds dedicated slice capacity per regime instead of informing the routing.
