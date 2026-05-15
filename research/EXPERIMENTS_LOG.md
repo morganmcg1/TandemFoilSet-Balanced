@@ -5,6 +5,36 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). Test-side ranking is currently
 contaminated by an Inf in the cruise test ground truth (see notes).
 
+## 2026-05-15 20:45 — PR #3138: NaN bug fix in evaluate_split — **MERGED ✅ CRITICAL FIX**
+
+- Student branch: `willowpai2i24h1-alphonse/slice-num-sweep` (repurposed from slice_num)
+- Student: `willowpai2i24h1-alphonse`
+- Fix: filter non-finite ground truth samples in `train.py:evaluate_split` before the
+  `err * surf_mask` step. Root cause: `NaN * 0.0 == NaN` under IEEE float — when
+  `test_geom_camber_cruise` GT contains Inf values, the float64 accumulator gets
+  poisoned and `test_avg/mae_surf_p` finalizes as NaN for every run on this launch.
+
+| Sanity run | wandb run | val_avg/mae_surf_p | **test_avg/mae_surf_p** | test_cruise/mae_surf_p |
+|------------|-----------|--------------------|-----------------------|------------------------|
+| `nan_fix_sanity` | u2k87wan | 102.25 | **92.71** ← first finite value | **63.99** ← formerly NaN |
+
+Per-split test (all finite for the first time):
+single_in_dist=103.60, geom_camber_rc=117.05, geom_camber_cruise=63.99, re_rand=86.20.
+
+**Conclusion:** Bug is conclusively fixed. 15 lines of code in `evaluate_split`.
+Val_avg/mae_surf_p at 102.25 is within noise of merged baseline 98.60, confirming
+clean compose of warmup + Charbonnier + NaN fix. **Unblocks `test_avg/mae_surf_p`
+as a reliable paper-facing metric for all future runs on this launch.**
+
+Alphonse also identified a critical config issue: `Config.loss_fn` default is still
+`"mse"` on the advisor branch even though Charbonnier is the documented baseline.
+Assigned alphonse follow-up PR #3440 to flip the default. Notified edward (#3398),
+nezuko (#3418), frieren (#3330) to pass `--loss_fn charbonnier` explicitly.
+
+**Decision:** merged. Advisor branch now includes the NaN filter.
+
+---
+
 ## 2026-05-15 19:30 — PR #3331: Separate per-channel output heads — **CLOSED ✗**
 
 - Student branch: `willowpai2i24h1-nezuko/separate-output-heads`
