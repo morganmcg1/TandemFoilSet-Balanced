@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.utils.checkpoint import checkpoint
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -169,12 +170,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 gradient_checkpointing: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.gradient_checkpointing = gradient_checkpointing
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -209,7 +212,10 @@ class Transolver(nn.Module):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            if self.gradient_checkpointing and self.training:
+                fx = checkpoint(block, fx, use_reentrant=False)
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -236,9 +242,20 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite.any():
+                continue
+            if not y_finite.all():
+                keep = torch.where(y_finite)[0]
+                x = x[keep]; y = y[keep]
+                is_surface = is_surface[keep]; mask = mask[keep]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -392,11 +409,12 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
-    slice_num=64,
+    n_head=8,
+    slice_num=192,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    gradient_checkpointing=True,
 )
 
 model = Transolver(**model_config).to(device)
@@ -443,7 +461,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+        pred = pred.float()
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
