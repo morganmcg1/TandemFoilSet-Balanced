@@ -226,6 +226,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     """
     vol_loss_sum = surf_loss_sum = 0.0
     n_nonfinite_pred = 0
+    n_skipped_y_samples = 0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
@@ -236,6 +237,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            # data/scoring.py:accumulate_batch tries to drop samples whose ground
+            # truth is non-finite, but it does so by zeroing the mask — and
+            # Inf*0 = NaN poisons the running sum anyway (this is what produced
+            # the NaN on test_geom_camber_cruise in the prior arm: 1 sample has
+            # 761 Inf values in the p channel of y). Pre-skip those samples at
+            # the mask level and sanitize y so the loss math is also clean.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            n_skipped_y_samples += int((~y_finite_per_sample).sum().item())
+            keep = y_finite_per_sample.view(B, 1).expand_as(mask)
+            mask = mask & keep
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -255,9 +269,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            # Sanitize: replace non-finite predictions so a single bad node cannot
-            # poison the running sum. Reports a large-but-finite error at the bad
-            # node consistent with "model failed at this node".
+            # Sanitize predictions so a single bad node cannot poison the sum.
+            # Reports a large-but-finite error at the bad node consistent with
+            # "model failed at this node".
             n_nonfinite_pred += int((~torch.isfinite(pred_orig)).sum().item())
             pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=1e6, neginf=-1e6)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
@@ -268,7 +282,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss,
-           "n_nonfinite_pred": n_nonfinite_pred}
+           "n_nonfinite_pred": n_nonfinite_pred,
+           "n_skipped_y_samples": n_skipped_y_samples}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -366,13 +381,19 @@ def save_model_artifact(
 
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     nf = m.get("n_nonfinite_pred", 0)
-    nf_tag = f"  nonfinite_pred={int(nf)}" if nf else ""
+    sk = m.get("n_skipped_y_samples", 0)
+    tags = []
+    if nf:
+        tags.append(f"nonfinite_pred={int(nf)}")
+    if sk:
+        tags.append(f"skipped_y_samples={int(sk)}")
+    tag_str = ("  " + " ".join(tags)) if tags else ""
     print(
         f"    {split_name:<26s} "
         f"loss={m['loss']:.4f}  "
         f"surf[p={m['mae_surf_p']:.4f} Ux={m['mae_surf_Ux']:.4f} Uy={m['mae_surf_Uy']:.4f}]  "
         f"vol[p={m['mae_vol_p']:.4f} Ux={m['mae_vol_Ux']:.4f} Uy={m['mae_vol_Uy']:.4f}]"
-        f"{nf_tag}"
+        f"{tag_str}"
     )
 
 
