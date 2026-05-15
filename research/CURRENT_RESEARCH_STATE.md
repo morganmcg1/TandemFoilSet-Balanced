@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-15 19:35 — round 7 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-15 20:35 — round 8 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 
 ## Baseline progression
@@ -18,7 +18,7 @@
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3411 | tanjiro | Extend asinh to Ux/Uy channels (all-channel) | WIP | On full asinh baseline 84.98 |
+| #3442 | tanjiro | signed log1p on pressure (stronger tail compression than asinh) | WIP — NEW | On asinh baseline 84.98 |
 | #3354 | nezuko | Lion + cap-matched cosine (T_max=12) | WIP | Notified of 84.98 target |
 | #3382 | askeladd | EMA weights (decay=0.999) — RERUN with asinh | SENT BACK | First arm: 105.79 (on pre-asinh code) |
 | #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP | Notified of 84.98 target |
@@ -35,6 +35,7 @@
 | #3328 (askeladd surf_weight=50) | +25% regression; instability above sw=30 |
 | #3329 (fern AdamW β2=0.95) | +21% regression; wrong smoothing direction for B=4 |
 | #3102 (edward OneCycleLR) | +20% regression; schedule shape wrong for 14-epoch budget |
+| #3411 (tanjiro asinh-all-channels) | +5.8% regression; velocity z-scores are light-tailed, asinh compresses meaningful velocity gradient signal |
 
 ## Critical insight: asinh loss transform is a fundamental win
 

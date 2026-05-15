@@ -259,3 +259,23 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 
 - **Decision:** MERGED — new baseline 84.9819. Largest single-PR improvement in the research history.
 - **Key finding:** Asinh-compressed loss is a fundamental improvement in the optimization landscape, not just a regularization trick. Val curve was still descending at epoch 14 (timeout bound). Improvements are uniform across all 4 val/test splits (20-36%), confirming this is not a localized fix to one pathological split but a systemic improvement in gradient quality. Model unchanged — no architecture, optimizer, or scheduler modifications. The 7-line code change applies `torch.asinh()` to only the pressure channel z-scores before computing squared error; evaluation MAE in physical units is unchanged, so the improvement is genuine.
+
+---
+
+## 2026-05-15 20:30 — PR #3411: Extend asinh to Ux/Uy channels (all-channel asinh loss)
+
+- **Branch:** charliepai2i48h2-tanjiro/asinh-all-channels
+- **Hypothesis:** If velocity z-scores also have heavy tails, extending asinh compression to Ux/Uy would further improve val_avg/mae_surf_p beyond the pressure-only baseline.
+- **Metrics:** `models/model-charliepai2i48h2-tanjiro-asinh-all-channels-20260515-193258/metrics.jsonl`
+
+| Split | asinh-p baseline | asinh-all | Δ |
+|-------|-----------------|-----------|---|
+| single_in_dist | 108.04 | 107.19 | −0.8% |
+| geom_camber_rc | 90.63 | 103.98 | +14.7% |
+| geom_camber_cruise | 62.68 | 66.85 | +6.7% |
+| re_rand | 78.58 | 81.48 | +3.7% |
+| **val_avg** | **84.9819** | **89.8741** | **+5.8%** |
+| **test_avg** | **76.1441** | **80.5842** | **+5.8%** |
+
+- **Decision:** CLOSED — +5.8% regression across all splits except single_in_dist (marginal). Hypothesis falsified.
+- **Key finding:** Velocity z-scores are light-tailed (|z|<1 for most samples), so asinh compresses meaningful velocity gradient signal rather than suppressing outliers. The asymmetry between pressure (heavy tails) and velocity (light tails) makes the per-channel choice in PR #3357 load-bearing. Strongest regression on val_geom_camber_rc (+14.7%) — the high-Re raceCar split with the largest |Ux| magnitudes, where velocity gradient signal is most informative. The val loss landscape is also noisier than the pressure-only baseline (oscillatory curve vs monotonic descent in #3357). Confirmed: pressure-only asinh is the correct design choice.
