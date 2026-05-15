@@ -214,6 +214,41 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# EMA of model weights
+# ---------------------------------------------------------------------------
+
+class EMAModel:
+    """Exponential moving average of model weights.
+
+    After every ``optimizer.step()``, ``update`` blends each floating-point
+    parameter with the current model state: ``shadow = decay·shadow + (1-decay)·param``.
+    Non-floating buffers (int counters, etc.) are copied verbatim. ``apply_to``
+    swaps the model's state_dict to the EMA weights and returns a backup so
+    ``restore`` can return to the raw weights after evaluation.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for k, v in model.state_dict().items():
+            if v.dtype.is_floating_point:
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                self.shadow[k].copy_(v.detach())
+
+    def apply_to(self, model: nn.Module) -> dict:
+        backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.shadow)
+        return backup
+
+    def restore(self, model: nn.Module, backup: dict) -> None:
+        model.load_state_dict(backup)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -300,15 +335,22 @@ def save_model_artifact(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    ema_path: Path | None = None,
+    raw_test_metrics: dict | None = None,
+    raw_test_avg: dict | None = None,
+    best_val_raw_avg_surf_p: float | None = None,
 ) -> None:
     """Log the best checkpoint as a wandb model artifact.
 
     Name: ``model-<agent-or-wandb_name>-<run.id>`` (run.id guarantees uniqueness).
     Aliases: ``best`` + ``epoch-N`` so the best checkpoint is addressable
     both by role and by the epoch it came from.
-    Payload: ``checkpoint.pt`` + ``config.yaml`` (if present).
-    Metadata: run context, selected val metric, optional test metrics, git
-    commit, model config, and hyperparams — enough to trace and reload.
+    Payload: ``checkpoint.pt`` (raw) + ``checkpoint_ema.pt`` (EMA, when present)
+    + ``config.yaml``. EMA is the primary, but both are uploaded so the raw
+    weights are retrievable for diagnostics.
+    Metadata: run context, selected val metric (EMA), raw diagnostic val,
+    optional test metrics for both EMA and raw, git commit, model config, and
+    hyperparams — enough to trace and reload.
     """
     if cfg.wandb_name:
         base = _sanitize_artifact_token(cfg.wandb_name)
@@ -334,11 +376,14 @@ def save_model_artifact(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_decay": cfg.ema_decay,
     }
+    if best_val_raw_avg_surf_p is not None:
+        metadata["best_val_raw_avg/mae_surf_p"] = best_val_raw_avg_surf_p
 
     description = (
-        f"Transolver checkpoint — best val_avg/mae_surf_p = {best_avg_surf_p:.4f} "
-        f"at epoch {best_metrics['epoch']}"
+        f"Transolver checkpoint (EMA primary) — best val_avg/mae_surf_p = "
+        f"{best_avg_surf_p:.4f} at epoch {best_metrics['epoch']}"
     )
 
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
@@ -346,7 +391,14 @@ def save_model_artifact(
         if test_metrics is not None:
             for split_name, m in test_metrics.items():
                 metadata[f"test/{split_name}/mae_surf_p"] = m["mae_surf_p"]
-        description += f" | test_avg/mae_surf_p = {test_avg['avg/mae_surf_p']:.4f}"
+        description += f" | test_avg/mae_surf_p[ema] = {test_avg['avg/mae_surf_p']:.4f}"
+
+    if raw_test_avg is not None and "avg/mae_surf_p" in raw_test_avg:
+        metadata["test_raw_avg/mae_surf_p"] = raw_test_avg["avg/mae_surf_p"]
+        if raw_test_metrics is not None:
+            for split_name, m in raw_test_metrics.items():
+                metadata[f"test/{split_name}/raw_mae_surf_p"] = m["mae_surf_p"]
+        description += f" | test_raw_avg/mae_surf_p = {raw_test_avg['avg/mae_surf_p']:.4f}"
 
     artifact = wandb.Artifact(
         name=artifact_name,
@@ -355,6 +407,8 @@ def save_model_artifact(
         metadata=metadata,
     )
     artifact.add_file(str(model_path), name="checkpoint.pt")
+    if ema_path is not None and ema_path.exists():
+        artifact.add_file(str(ema_path), name="checkpoint_ema.pt")
     config_yaml = model_dir / "config.yaml"
     if config_yaml.exists():
         artifact.add_file(str(config_yaml), name="config.yaml")
@@ -387,6 +441,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    ema_decay: float = 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -440,6 +495,8 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+ema = EMAModel(model, decay=cfg.ema_decay)
+print(f"EMA: decay={cfg.ema_decay}, shadow init from current model state")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -467,10 +524,11 @@ wandb.define_metric("lr", step_metric="global_step")
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+ema_path = model_dir / "checkpoint_ema.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
-best_avg_surf_p = float("inf")
+best_avg_surf_p = float("inf")  # tracked on EMA weights (primary)
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
@@ -507,6 +565,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -518,30 +577,52 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (raw + EMA) ---
     model.eval()
-    split_metrics = {
+    raw_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    raw_val_avg = aggregate_splits(raw_split_metrics)
+    raw_avg_surf_p = raw_val_avg["avg/mae_surf_p"]
+
+    backup = ema.apply_to(model)
+    model.eval()
+    ema_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema.restore(model, backup)
+
+    # EMA is primary; raw is diagnostic.
+    split_metrics = ema_split_metrics
+    val_avg = ema_val_avg
+    avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+    val_loss_mean = sum(m["loss"] for m in ema_split_metrics.values()) / len(ema_split_metrics)
+    raw_val_loss_mean = sum(m["loss"] for m in raw_split_metrics.values()) / len(raw_split_metrics)
     dt = time.time() - t0
 
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
+        "val/loss_raw": raw_val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
-    for split_name, m in split_metrics.items():
+    # EMA per-split (primary) and raw per-split (diagnostic, prefixed `raw_`)
+    for split_name, m in ema_split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
-    for k, v in val_avg.items():
-        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    for split_name, m in raw_split_metrics.items():
+        for k, v in m.items():
+            log_metrics[f"{split_name}/raw_{k}"] = v
+    for k, v in ema_val_avg.items():
+        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p — EMA primary
+    for k, v in raw_val_avg.items():
+        log_metrics[f"val_raw_{k}"] = v  # val_raw_avg/mae_surf_p — raw diagnostic
     wandb.log(log_metrics)
 
     tag = ""
@@ -550,59 +631,91 @@ for epoch in range(MAX_EPOCHS):
         best_metrics = {
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+            "val_raw_avg/mae_surf_p": raw_avg_surf_p,
+            "per_split": ema_split_metrics,
+            "per_split_raw": raw_split_metrics,
         }
+        # Save BOTH the raw weights (current optimizer state) and the EMA shadow.
         torch.save(model.state_dict(), model_path)
+        torch.save(ema.shadow, ema_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p[ema={avg_surf_p:.4f} raw={raw_avg_surf_p:.4f}]{tag}"
     )
     for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        print_split_metrics(f"{name} [ema]", ema_split_metrics[name])
+        print_split_metrics(f"{name} [raw]", raw_split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    raw_best = best_metrics.get("val_raw_avg/mae_surf_p", float("nan"))
+    print(
+        f"\nBest val (selected by EMA): epoch {best_metrics['epoch']}, "
+        f"val_avg/mae_surf_p[ema]={best_avg_surf_p:.4f}  val_raw_avg/mae_surf_p={raw_best:.4f}"
+    )
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_val_raw_avg/mae_surf_p": raw_best,
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
-
     test_metrics = None
     test_avg = None
+    raw_test_metrics = None
+    raw_test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (EMA + raw)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+
+        # EMA test (primary)
+        model.load_state_dict(torch.load(ema_path, map_location=device, weights_only=True))
+        model.eval()
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST [ema] avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
-            print_split_metrics(name, test_metrics[name])
+            print_split_metrics(f"{name} [ema]", test_metrics[name])
+
+        # Raw test (diagnostic)
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.eval()
+        raw_test_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        raw_test_avg = aggregate_splits(raw_test_metrics)
+        print(f"\n  TEST [raw] avg_surf_p={raw_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(f"{name} [raw]", raw_test_metrics[name])
 
         test_log: dict[str, float] = {}
+        # EMA test (primary path, matches baseline naming)
         for split_name, m in test_metrics.items():
             for k, v in m.items():
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        # Raw test (diagnostic)
+        for split_name, m in raw_test_metrics.items():
+            for k, v in m.items():
+                test_log[f"test/{split_name}/raw_{k}"] = v
+        for k, v in raw_test_avg.items():
+            test_log[f"test_raw_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
@@ -617,6 +730,10 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        ema_path=ema_path,
+        raw_test_metrics=raw_test_metrics,
+        raw_test_avg=raw_test_avg,
+        best_val_raw_avg_surf_p=raw_best,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
