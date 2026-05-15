@@ -386,6 +386,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    grad_clip: float = 0.0  # 0 disables; typical 1.0
+    ema_decay: float = 0.0  # 0 disables; typical 0.999 or 0.9995
 
 
 cfg = sp.parse(Config)
@@ -433,6 +435,17 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+ema_model = None
+if cfg.ema_decay > 0:
+    ema_decay = cfg.ema_decay
+    ema_model = torch.optim.swa_utils.AveragedModel(
+        model,
+        avg_fn=lambda avg, p, n: ema_decay * avg + (1.0 - ema_decay) * p,
+    )
+    print(f"EMA enabled: decay={cfg.ema_decay}")
+if cfg.grad_clip > 0:
+    print(f"Gradient clipping enabled: max_norm={cfg.grad_clip}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -497,9 +510,20 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm_val = None
+        if cfg.grad_clip > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip
+            )
+            grad_norm_val = grad_norm.item()
         optimizer.step()
+        if ema_model is not None:
+            ema_model.update_parameters(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        log_payload = {"train/loss": loss.item(), "global_step": global_step}
+        if grad_norm_val is not None:
+            log_payload["train/grad_norm"] = grad_norm_val
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -510,9 +534,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
-    model.eval()
+    eval_model = ema_model if ema_model is not None else model
+    eval_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -543,7 +568,10 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        if ema_model is not None:
+            torch.save(ema_model.module.state_dict(), model_path)
+        else:
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
