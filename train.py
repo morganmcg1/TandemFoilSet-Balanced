@@ -263,7 +263,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            sq_err = _residual_err(pred, y_norm, cfg.loss_type, cfg.loss_beta)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -411,6 +411,17 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     n_fourier: int = 0       # 0 disables; otherwise number of random Fourier features over (x, z)
     fourier_sigma: float = 10.0
+    loss_type: str = "mse"   # "mse" or "smooth_l1"
+    loss_beta: float = 0.1   # SmoothL1 beta (normalized-space)
+
+
+def _residual_err(pred, target, loss_type, beta):
+    """Per-element residual: squared for MSE, smooth_l1 (Huber) otherwise."""
+    if loss_type == "mse":
+        return (pred - target) ** 2
+    if loss_type == "smooth_l1":
+        return F.smooth_l1_loss(pred, target, reduction="none", beta=beta)
+    raise ValueError(loss_type)
 
 
 cfg = sp.parse(Config)
@@ -521,7 +532,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = _residual_err(pred, y_norm, cfg.loss_type, cfg.loss_beta)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
