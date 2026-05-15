@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -169,18 +170,32 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 rff_num_freq: int = 0, rff_scale: float = 10.0,
+                 rff_seed: int = 0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        # Random Fourier Features over (x, z) coords. Tancik 2020 RFF: each row
+        # of B is a random 2D direction, scaled by rff_scale (bandwidth). Fixed
+        # seed so the basis is identical across runs.
+        self.rff_num_freq = rff_num_freq
+        self.rff_scale = rff_scale
+        rff_dim = 2 * rff_num_freq  # sin + cos
+        if rff_num_freq > 0:
+            g = torch.Generator()
+            g.manual_seed(rff_seed)
+            B = torch.randn(rff_num_freq, space_dim, generator=g) * rff_scale
+            self.register_buffer("rff_B", B)
+
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + rff_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + rff_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -207,6 +222,11 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.rff_num_freq > 0:
+            coords = x[..., : self.space_dim]
+            proj = 2 * math.pi * coords @ self.rff_B.T
+            rff = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+            x = torch.cat([x, rff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -407,6 +427,9 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    rff_num_freq=32,
+    rff_scale=10.0,
+    rff_seed=0,
 )
 
 model = Transolver(**model_config).to(device)
