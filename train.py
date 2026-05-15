@@ -151,17 +151,22 @@ class TransolverBlock(nn.Module):
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
+            assert out_dim == 3, "per-channel heads expect out_dim=3 (Ux, Uy, p)"
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
+            self.head_pre = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
             )
+            self.vel_head = nn.Linear(hidden_dim, 2)   # Ux, Uy
+            self.pres_head = nn.Linear(hidden_dim, 1)  # p
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            hidden = self.head_pre(self.ln_3(fx))
+            vel_out = self.vel_head(hidden)
+            pres_out = self.pres_head(hidden)
+            return torch.cat([vel_out, pres_out], dim=-1)
         return fx
 
 
