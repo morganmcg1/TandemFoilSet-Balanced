@@ -33,8 +33,15 @@ No prior results on this branch — round 1 explores the recipe-level lever set 
 - Mesh-aware sub-sampling for training (large meshes dominate compute).
 - Multi-scale prediction (predict residual on top of a coarse prediction).
 
-## Baseline (current `train.py` head config)
-- Transolver: 5 layers, hidden=128, heads=4, slice_num=64, mlp_ratio=2, ~ small model.
+## Baseline (post round-1 first merge — PR #3188)
+- **PR #3188 merged:** slice_num 64→128 (thorfinn)
+- Transolver: 5 layers, hidden=128, heads=4, **slice_num=128**, mlp_ratio=2.
 - AdamW lr=5e-4, weight_decay=1e-4, batch=4, cosine T_max=50.
 - Loss = vol_MSE + 10·surf_MSE on normalized targets.
-- 30-min wall-clock cap typically yields fewer than 50 epochs at batch=4 on 1 GPU.
+- **val_avg/mae_surf_p = 134.7389** (epoch 11/50, 30-min cap, not converged)
+- ~173 s/epoch → ~11 epochs in 30-min budget at batch=4, 1 GPU.
+
+## Known infrastructure issue
+`.test_geom_camber_cruise_gt/000020.pt` has 761 inf values in pressure channel.  
+→ `test_geom_camber_cruise/mae_surf_p` = NaN for ALL students. Val unaffected.  
+Fix: defensive `y_finite` masking in train.py assigned to thorfinn (relative-mse-bugfix).
