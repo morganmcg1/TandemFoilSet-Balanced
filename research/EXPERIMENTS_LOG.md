@@ -340,3 +340,65 @@ Sent back with explicit rebase instructions and predicted target val_avg ≈ 108
 - Hypothesis: per-block DropPath during training (drop residual contribution with probability `p_drop`), all blocks active at eval. Each forward pass samples a sub-network → implicit ensemble + per-block robustness. Compounds with EMA (averaged across sub-network gradients → flat region in weight space). Predicted -1.5% to -4% val_avg, largest gains on `single_in_dist` (currently worst split at 138.48).
 - Two arms: uniform p_drop=0.1 across blocks (primary), linearly-increasing 0→0.1 by depth (DeiT-style "drop path"; secondary).
 
+## 2026-05-15 19:31 — PR #3337: Surface-pressure L1 auxiliary loss [MERGED — new round-5 baseline]
+
+- Branch: `charliepai2i24h5-frieren/surface-pressure-l1-aux-loss`
+- Student: charliepai2i24h5-frieren
+- Hypothesis: add a pooled L1 term on the pressure channel of surface nodes (in normalized-y space) to the per-sample scale-invariant MSE objective. L1 aggregation `Σ|err|/n_surf` is shape-identical to the eval-time `mae_surf_p` metric, so gradient direction is sign-of-error which directly minimizes MAE. Compounds with EMA (loss-side vs parameter-trajectory mechanism).
+- Status: MERGED. Best round-5 single-PR improvement.
+
+### Results
+
+| Metric | Baseline (#3281) | Arm A (w=1.0) | Δ% | Arm B (w=3.0) | Δ% |
+|---|---:|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | 114.1704 | **106.8550** | **−6.41%** | 109.9254 | −3.72% |
+| `test_avg/mae_surf_p` | 102.0813 | **96.8671** | **−5.11%** | 98.5929 | −3.42% |
+
+Per-split val (Arm A, winner): single_in_dist −7.68%, geom_camber_rc −7.43%, geom_camber_cruise −3.79%, re_rand −5.55%.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-frieren-surf_p_l1_aux_w1.0-20260515-172842/metrics.jsonl`
+- `models/model-charliepai2i24h5-frieren-surf_p_l1_aux_w3.0-20260515-182332/metrics.jsonl`
+
+### Analysis
+
+Per-split ordering matched the heavy-tail prediction: largest gains on the splits with the largest |p| dynamic range (single_in_dist and geom_camber_rc), smallest on cruise (smallest |p| range). Arm B's collapse on single_in_dist (−2.74% vs Arm A's −7.68%) suggests w=3.0 over-rides the per-sample scale-invariance specifically on surface pressure, undoing the regime balancing that PR #3266 provides. The two ideas compose at moderate weighting (w=1.0) but not at high weighting.
+
+Cumulative round-5: −13.74% val_avg (123.88 → 106.86) and −15.30% test_avg (114.37 → 96.87) over the pre-round-5 baseline.
+
+## 2026-05-15 19:35 — PR #3267: Separate surface decoder head (rebased) [CLOSED — clear regression on merged baseline]
+
+- Branch: `charliepai2i24h5-tanjiro/separate-surface-decoder-head`
+- Student: charliepai2i24h5-tanjiro
+- Hypothesis (rebased re-run, after pre-EMA send-back): add a dedicated 2-layer surface decoder head alongside the volume head; the surface MLP's extra capacity gives sharper pressure prediction. Pre-rebase ablation showed −5.3% val vs single-head sibling baseline. Predicted compound effect vs #3281 EMA baseline: clear `single_in_dist` win, possibly clearing val_avg=110.
+- Status: CLOSED. Rebased run was worse than the merged baseline on every split (+5.83% val_avg, +7.41% test_avg).
+
+### Results
+
+| Metric | Merged baseline (#3281) | Rebased surface head | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 114.1704 | 120.8263 | +5.83% worse |
+| `test_avg/mae_surf_p` | 102.0813 | 109.6483 | +7.41% worse |
+
+Per-split val: single_in_dist +7.6%, geom_camber_rc +7.7%, cruise +4.0%, re_rand +2.5%. Worst regressions exactly where the pre-rebase ablation showed the largest wins.
+
+Metric artifact: `models/model-charliepai2i24h5-tanjiro-separate_surface_decoder_head_v2-20260515-172556/metrics.jsonl`.
+
+### Analysis
+
+The pre-rebase win came primarily from the surface head reducing cross-task interference in the single-shared-output regime. EMA + scale-invariant loss already provides much of that decoupling implicitly: EMA's ~2.7-epoch averaging smooths surface predictions on a similar time-scale, and the per-sample scale-invariant loss equalizes gradient contributions across the velocity/pressure magnitude gap. With those two mechanisms in the baseline, the surface head's specialization becomes redundant — and the extra ~50K head parameters (+7.5%) compete for the same 14-epoch undertrained budget. Closed as a standalone idea; the surface-pressure-only aux-loss alternative (frieren's PR #3337) captures the same intent at zero parameter cost.
+
+## 2026-05-15 19:50 — PR #3422: Huber loss replacement for surface-pressure aux term [ASSIGNED — frieren]
+
+- Branch: `charliepai2i24h5-frieren/surf-pressure-huber-aux`
+- Student: charliepai2i24h5-frieren
+- Hypothesis: replace the merged L1 surface-pressure aux with Huber to smooth out the discontinuous gradient at zero (frieren's PR #3337 noted oscillation in train_surf_p_l1 at convergence). Keeps the L1 tail behavior for the heavy-pressure splits while giving stable small-residual gradients. Predicted −1% to −3% on top of the new merged baseline.
+- Two arms: Huber δ=1.0 (transitions to linear at 1 normalized std), Huber δ=0.5 (more L1-like). Weight held at 1.0 for clean comparison to merged result.
+
+## 2026-05-15 19:55 — PR #3425: Schedule-Free AdamW [ASSIGNED — tanjiro]
+
+- Branch: `charliepai2i24h5-tanjiro/schedule-free-adamw`
+- Student: charliepai2i24h5-tanjiro
+- Hypothesis: replace AdamW + CosineAnnealingLR(T_max=50) with `schedulefree.AdamWScheduleFree` to fix the schedule-budget mismatch (current cosine decays only 14% by epoch 14 wall-clock cap). SF-AdamW maintains an implicit polynomial-average iterate that adapts to any stopping time. Pairs with EMA (different time-scale averaging filters). RANK #1 in the latest research agenda.
+- Two arms: SF-AdamW lr=5e-4 (drop-in at merged-baseline LR), SF-AdamW lr=7e-4 (test the higher-LR cliff that schedule-free typically tolerates).
+
