@@ -217,6 +217,11 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def softlog(t: torch.Tensor) -> torch.Tensor:
+    """Sign-preserving log: sign(t) * log(1 + |t|). Maps 0->0, monotone."""
+    return t.sign() * (t.abs() + 1.0).log()
+
+
 def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -376,6 +381,8 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
+    log_p_loss: bool = False       # use sign-preserving log transform on p residual (in raw physical units)
+    log_p_scale: float = 1.0       # weight multiplier on the log-p loss term
 
 
 cfg = sp.parse(Config)
@@ -451,6 +458,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vel_loss = epoch_logp_loss = 0.0  # separately tracked when log_p_loss=True
     grad_norm_sum = 0.0
     grad_norm_max = 0.0
     n_clipped = 0
@@ -465,13 +473,37 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+
+        if cfg.log_p_loss:
+            # Velocity channels (Ux, Uy): standard Huber in normalized space.
+            vel_err = F.huber_loss(pred[..., :2], y_norm[..., :2], reduction="none", delta=cfg.huber_delta)
+            # Pressure channel: denormalize prediction, take softlog of pred/true (raw physical units),
+            # then Huber in log-space. Sign-preserving log equalizes multiplicative error across scales.
+            p_pred_raw = pred[..., 2:3] * stats["y_std"][2] + stats["y_mean"][2]
+            p_true_raw = y[..., 2:3]
+            log_err_p = F.huber_loss(
+                softlog(p_pred_raw), softlog(p_true_raw),
+                reduction="none", delta=cfg.huber_delta,
+            )
+            sq_err = torch.cat([vel_err, log_err_p * cfg.log_p_scale], dim=-1)
+        else:
+            sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        if cfg.log_p_loss:
+            # Track velocity vs log-p component magnitudes (mean over surface nodes) so we can
+            # judge whether the loss scales are balanced and tune log_p_scale.
+            with torch.no_grad():
+                surf_count = surf_mask.sum().clamp(min=1)
+                vel_part = (vel_err * surf_mask.unsqueeze(-1)).sum() / surf_count
+                logp_part = (log_err_p * cfg.log_p_scale * surf_mask.unsqueeze(-1)).sum() / surf_count
+                epoch_vel_loss += vel_part.item()
+                epoch_logp_loss += logp_part.item()
 
         optimizer.zero_grad()
         loss.backward()
@@ -494,6 +526,8 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vel_loss /= max(n_batches, 1)
+    epoch_logp_loss /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -519,7 +553,7 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = grad_norm_sum / max(n_batches, 1)
     clip_frac = n_clipped / max(n_batches, 1) if cfg.grad_clip_max_norm is not None else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -533,7 +567,16 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if cfg.log_p_loss:
+        epoch_record["log_p_loss"] = True
+        epoch_record["log_p_scale"] = cfg.log_p_scale
+        epoch_record["train/surf_vel_loss"] = epoch_vel_loss
+        epoch_record["train/surf_logp_loss"] = epoch_logp_loss
+        epoch_record["train/logp_to_vel_ratio"] = (
+            epoch_logp_loss / max(epoch_vel_loss, 1e-12)
+        )
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
