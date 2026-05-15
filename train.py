@@ -95,14 +95,14 @@ class PhysicsAttention(nn.Module):
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
+        self.in_project_slice = nn.Linear(dim_head + 1, slice_num)  # +1 for is_surface
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+    def forward(self, x, is_surface=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -117,7 +117,13 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        if is_surface is not None:
+            surf = is_surface.to(x_mid.dtype).unsqueeze(1).unsqueeze(-1)  # [B,1,N,1]
+            surf = surf.expand(-1, self.heads, -1, -1)                    # [B,heads,N,1]
+        else:
+            surf = torch.zeros(B, self.heads, N, 1, dtype=x_mid.dtype, device=x_mid.device)
+        x_mid_cat = torch.cat([x_mid, surf], dim=-1)                       # [B,heads,N,dim_head+1]
+        slice_weights = self.softmax(self.in_project_slice(x_mid_cat) / self.temperature)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -156,8 +162,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, is_surface=None):
+        fx = self.attn(self.ln_1(fx), is_surface=is_surface) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -207,9 +213,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, is_surface=is_surface)
         return {"preds": fx}
 
 
@@ -238,7 +245,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -486,7 +493,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
