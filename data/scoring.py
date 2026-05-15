@@ -46,8 +46,10 @@ def accumulate_batch(
     vol_mask = effective & ~is_surface
 
     err = (pred_orig.double() - y.double()).abs()
-    mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
-    mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+    err_surf = torch.where(surf_mask.unsqueeze(-1), err, torch.zeros_like(err))
+    err_vol = torch.where(vol_mask.unsqueeze(-1), err, torch.zeros_like(err))
+    mae_surf += err_surf.sum(dim=(0, 1))
+    mae_vol += err_vol.sum(dim=(0, 1))
     return int(surf_mask.sum().item()), int(vol_mask.sum().item())
 
 
