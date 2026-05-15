@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-05-15 22:31 — PR #3089: L1 loss + NaN scoring fix (alphonse)
+
+- **val_avg/mae_surf_p: 100.5275** (best epoch 10/10, W&B run `14w7wdyb`)
+- **test_avg/mae_surf_p: 90.1489** — first clean finite test metric (scoring NaN bug fixed)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not logged) | 112.07 |
+| geom_camber_rc | (not logged) | 98.04 |
+| geom_camber_cruise | (not logged) | 64.21 |
+| re_rand | (not logged) | 86.28 |
+| **avg** | **100.5275** | **90.1489** |
+
+- **Model config:** Transolver `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
+- **Loss:** L1 (`Config.loss_type = "l1"`) — replaces MSE; dispatched via `_pointwise_loss` helper
+- **Optimizer:** AdamW, lr=1e-3, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs (0.1→1.0), then cosine to 0 over remaining epochs (T_max=10)
+- **Grad clip:** max_norm=1.0
+- **Batch:** 4, surf_weight=10.0
+- **Scoring fix:** `torch.isfinite` per-sample mask in `evaluate_split` (train.py) — makes `test_avg/mae_surf_p` finite for all splits
+- **Budget:** 30-min wall clock → 10 epochs (T_max=10, cosine fully anneals)
+
+**Reproduce command:**
+```bash
+cd target/ && python train.py --epochs 10 --lr 1e-3 \
+  --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(No `--loss_type` flag needed — `Config.loss_type` default is now `"l1"`)*
+
+---
+
 ## 2026-05-15 14:38 — PR #3091: LR warmup + gradient clipping + lr=1e-3
 
 - **val_avg/mae_surf_p: 109.4166** (best epoch 14/15, W&B run `0ez1sqmi`)
