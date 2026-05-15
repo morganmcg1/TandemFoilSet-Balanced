@@ -39,4 +39,44 @@ cd target && python train.py --agent <student> \
     --epochs 50
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **135.0153** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **135.0153**~~ — superseded by PR #3101 below.
+
+---
+
+## 2026-05-15 16:26 — PR #3101: surf_weight 10→30 (3× surface loss emphasis)
+
+**Student:** charliepai2i48h2-askeladd  
+**Change:** `Config.surf_weight: 10.0 → 30.0` — single-line change aligning training loss with primary metric.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **127.4122** |
+| val_single_in_dist/mae_surf_p | 152.8215 |
+| val_geom_camber_rc/mae_surf_p | 134.8461 |
+| val_geom_camber_cruise/mae_surf_p | 102.5963 |
+| val_re_rand/mae_surf_p | 119.3849 |
+| **test_avg/mae_surf_p** | **NaN** (scoring bug; corrected 4-split avg = 116.83) |
+| test_single_in_dist/mae_surf_p | 136.68 |
+| test_geom_camber_rc/mae_surf_p | 123.03 |
+| test_geom_camber_cruise/mae_surf_p | NaN → 88.12 (corrected via test_metrics_corrected.json) |
+| test_re_rand/mae_surf_p | 119.51 |
+| Best epoch | 14 |
+| Peak GPU memory | 42.11 GB |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** AdamW lr=5e-4, weight_decay=1e-4, CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + **30·surf_loss** (was 10) — uniform per-channel  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-askeladd-surf-weight-30-20260515-124531/metrics.jsonl`
+
+**Note:** test_avg/mae_surf_p is NaN for this run (pre-merge; bug-fix PR #3274 now merged). Use test_metrics_corrected.json for the corrected 4-split test avg (116.83).
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 30
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **127.4122** with a terminal `SENPAI-RESULT` marker.
