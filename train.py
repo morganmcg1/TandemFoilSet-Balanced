@@ -250,7 +250,7 @@ class Transolver(nn.Module):
         # Condition values (Re, AoA, NACA, gap, stagger) are sample-level
         # constants stored per-node; node 0 is always real (padding appended
         # at the end by pad_collate) so we read the global condition from it.
-        cond = x[:, 0, 13:] if self.cond_dim > 0 else None
+        cond = x[:, 0, 13:13 + self.cond_dim] if self.cond_dim > 0 else None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, cond=cond)
