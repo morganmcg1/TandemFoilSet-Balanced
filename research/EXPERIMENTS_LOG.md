@@ -300,3 +300,27 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Decision:** MERGED — new baseline 83.1874. Mechanisms compose cleanly: asinh smooths the loss landscape; EMA then smooths parameter trajectory on top.
 - **Key finding:** EMA still adds value on top of asinh, but the gain is reduced (−2.1% here vs −9.96% for EMA on the pre-asinh baseline). This confirms the advisor's hypothesis: asinh already reduces the variance EMA was correcting, but EMA provides an orthogonal variance-reduction layer (parameter trajectory vs gradient scale). Smoothness diagnostic: 0 sign flips in val curve, every epoch a new best — consistent with both mechanisms composing. Best epoch=14 (final, timeout-bound) with EMA shadow still catching up at 0.999 decay over ~5k steps. Mixed-split picture: single_in_dist improved strongly (-7.5%), geom_camber_rc slightly regressed (+3.9%), geom_camber_cruise improved (-3.9%), re_rand near-flat. Net improvement is real but smaller in magnitude than pressure-only asinh.
 
+
+---
+
+## 2026-05-15 22:30 — PR #3099: Capacity scale-up 192h/6L/6H (rerun on EMA+asinh baseline)
+
+- **Branch:** charliepai2i48h2-alphonse/capacity-scale-192h-6l-6head
+- **Hypothesis:** Scale model capacity (n_hidden 128→192, n_layers 5→6, n_head 4→6, lr 1.7e-4→3.4e-4) on top of the full EMA+asinh stack would give the larger model enough optimization signal to land below 83.19 baseline within the 30-min cap.
+- **Metrics:** `models/model-charliepai2i48h2-alphonse-capacity-192h-6l-6head-lion-3p4e4-20260515-213703/metrics.jsonl`
+
+| Split | EMA+asinh baseline | 192h/6L/6H rerun | Δ |
+|-------|--------------------|-------------------|---|
+| single_in_dist | 99.95 | 179.12 | +79% |
+| geom_camber_rc | 94.15 | 156.16 | +66% |
+| geom_camber_cruise | 60.26 | 87.87 | +46% |
+| re_rand | 78.38 | 110.89 | +42% |
+| **val_avg** | **83.19** | **133.51** | **+60.5%** |
+| **test_avg** | **74.52** | **123.17** | **+65.3%** |
+| Epochs reached | 14 | 8 | −43% |
+| s/epoch | 131 | 242 | +85% |
+| n_params | 0.66M | 1.71M | +159% |
+
+- **Decision:** CLOSED — pre-registered fail criterion met. Capacity scaling alone is dominated by the per-epoch cost on this 30-min wall-clock budget.
+- **Key finding:** The 2.6× larger model gets only 57% as many epochs as the baseline within the budget. At epoch 8 val=133.51 vs baseline epoch-8 val<90. Linear extrapolation suggests the bigger model would need ~25 epochs (~100 min) to reach 83.19 — outside the project envelope. The path forward for any future capacity work is offsetting throughput wins (bf16, FlashAttention, larger batch, lower slice_num). Student suggested bf16 mixed precision as the most direct throughput lever — selected as alphonse's next experiment.
+
