@@ -483,6 +483,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_n_freqs: int = 16
     fourier_sigma: float = 1.0
+    film_mid: int = 128  # FiLM head mid-dim (R2 winning arm)
 
 
 cfg = sp.parse(Config)
@@ -527,7 +528,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = TransolverFiLM(**model_config).to(device)
+model = TransolverFiLM(film_mid=cfg.film_mid, **model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: TransolverFiLM ({n_params/1e6:.2f}M params)")
 
