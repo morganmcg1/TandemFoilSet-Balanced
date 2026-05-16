@@ -709,6 +709,31 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 13:30 — PR #3950 — slice_num=16→12 triangulation (MERGED → new baseline)
+
+- **Branch:** `charliepai2i48h1-alphonse/slice-num-12`
+- **Hypothesis:** Probe slice_num=12 to triangulate the discrete optimum between sn=16 (optimal at 84.44) and sn=8 (regression at +1.52%). May reveal optimum hiding between 8 and 16.
+- **Results vs baseline (val=80.88, test=71.18):**
+
+| Metric | Baseline (sn=16, EMA-0.997) | sn=12 | Δ |
+|--------|----------------------------:|---------:|--:|
+| `val_avg/mae_surf_p` | 80.88 | **80.60** | **-0.34%** |
+| `test_avg/mae_surf_p` | 71.18 | **71.14** | **-0.05%** |
+| `val_single_in_dist` | 94.59 | 93.82 | -0.81% |
+| `val_geom_camber_rc` | 90.88 | 93.06 | +2.40% |
+| `val_geom_camber_cruise` | 61.04 | 60.47 | -0.93% |
+| `val_re_rand` | 77.02 | 75.05 | -2.55% |
+| sec/epoch | 105.2 | 103.1 | -2.0% |
+| epochs | 18 | 18 | 0 |
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-slice-num-12-20260516-123207/metrics.jsonl`
+- **Decision:** MERGED. 6/8 split metrics improved, both primary metrics moved in correct direction, single-line change.
+- **Analysis:** Student's honest assessment: "sn=12 ties sn=16 within noise" — per-epoch trajectories indistinguishable. Merge per CLAUDE.md policy (compound small wins). The 2% sec/epoch saving didn't yield extra epochs. **Slice_num axis now confirmed closed at [12, 16] — both effectively tied, expressiveness floor in this range.**
+- **New baseline: val=80.60, test=71.14.**
+- **Key insight:** FFN/projection overhead dominates so completely that 256→144 attention pairs (sn=16→12) only saves 2% wall-clock. The O(K²) savings are negligible vs the constant FFN matmul budget.
+
+---
+
 ## 2026-05-16 12:30 — PR #3885 — n_head=4→2 probe (CLOSED, n_head axis closed)
 
 - **Branch:** `charliepai2i48h1-alphonse/n-head-2`
