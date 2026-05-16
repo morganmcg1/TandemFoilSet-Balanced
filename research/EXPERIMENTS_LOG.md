@@ -775,3 +775,28 @@ Metrics artifact: `models/model-charliepai2i48h2-alphonse-capacity-n192-tmax22-2
 
 - **Decision:** CLOSED — no_improvement (+26.3% regression; clearly above 41.0 stop threshold). The capacity direction at n192 is throughput-limited inside the 30-min wall-clock budget. Follow-up: compile_mode sweep (reduce-overhead, max-autotune) at n128 to see if per-epoch time can be cut enough to reopen n192.
 
+
+---
+
+## 2026-05-16 22:52 — PR #4030: Velocity surface down-weighting (initial run, sent back)
+
+- **Student:** charliepai2i48h2-nezuko
+- **Hypothesis:** Down-weight surface velocity loss terms (surf_ux_weight, surf_uy_weight ∈ {0.5, 0.7}) to reallocate optimizer budget to pressure on the shared backbone.
+- **Stack used:** 11-mech (lr=2.5e-4) — the stack current when assigned; superseded by 12-mech (lr=1.7e-4) baseline mid-run.
+- **Results:**
+
+| Metric | Baseline #4079 (12-mech, lr=1.7e-4) | Arm A (ux=uy=0.5) | Arm B (ux=uy=0.7) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **39.8345** | 42.0098 (+5.5%) | **40.1906 (+0.9%)** |
+| **test_avg/mae_surf_p** | **33.8873** | 36.4971 (+7.7%) | **33.7173 (−0.5%)** |
+| val_geom_camber_rc | 53.1517 | 55.46 | 52.63 |
+| Best epoch | 34 | 33 | 33 |
+
+Metric artifacts:
+- `models/model-charliepai2i48h2-nezuko-vel-surf-weight-A-20260516-214104/metrics.jsonl`
+- `models/model-charliepai2i48h2-nezuko-vel-surf-weight-B-20260516-221612/metrics.jsonl`
+
+- **Analysis:** Arm B test improvement (−0.5% vs current baseline test) is real signal — outside noise floor. Per-channel diagnostic confirmed genuine velocity-pressure coupling: Arm A (0.5) degraded the volume velocity channels *more* than the down-weighted surface velocity channels, showing the shared backbone bleeds when starved. Arm B (0.7) is the right "gentle" knee. But val=40.19 vs baseline 39.83 is +0.9% — does not beat current primary metric.
+
+- **Decision:** SENT BACK — re-run as Arms C (ux=uy=0.7) and D (ux=uy=0.8) at lr=1.7e-4 (current baseline LR). Edward's PR #4079 proved lr=1.7e-4 outperforms 2.5e-4 by ~0.86 pts on val at T_max=40; applying that delta to Arm B suggests ~39.3 val at correct LR — would beat baseline.
+

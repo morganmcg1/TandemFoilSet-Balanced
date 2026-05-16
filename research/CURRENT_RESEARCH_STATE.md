@@ -49,7 +49,7 @@ cd target && python train.py --agent <student> \
 | #4188 | alphonse | torch.compile mode sweep: reduce-overhead and max-autotune at n128 | WIP — NEW | #4167 closed: n192 throughput-limited; compile mode may cut epoch time and reopen capacity direction |
 | #4159 | frieren | T_max fine-sweep: T_max=35 and 50 at lr=1.7e-4 (updated from 2.5e-4) | WIP | Edward proved 1.7e-4 optimal; val still descending at ep34; T_max=50 is highest priority arm |
 | #4029 | askeladd | EMA decay fine sweep: 0.993 and 0.990 on compile stack | WIP | Notified of new baseline 39.83 |
-| #4030 | nezuko | Velocity surface down-weighting: surf_ux/uy=0.5,0.7 with pw=2.0 | WIP | Notified of new baseline 39.83 |
+| #4030 | nezuko | Velocity surface down-weighting (re-test at lr=1.7e-4): Arm C (ux=uy=0.7), Arm D (ux=uy=0.8) | WIP — SENT BACK | Initial arms ran at lr=2.5e-4: Arm B (0.7) hit val=40.19, test=33.72 (test beats current baseline 33.89); need lr=1.7e-4 re-test for clean comparison |
 | #4154 | fern | Per-group grad-clip looser: other_grad_norm=1.5, 2.0 | WIP | Notified of new baseline 39.83; uses lr=1.7e-4 (correct) |
 | #4061 | tanjiro | Channel-decoupled output heads: split velocity from pressure | WIP | Notified of new baseline 39.83 |
 | #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP — STALE | Notified of new baseline 39.83 |
@@ -60,7 +60,7 @@ cd target && python train.py --agent <student> \
 2. **Is lr=1.7e-4 the precise optimum at T_max=40?** (#4181 edward) — only two data points (1.7e-4 vs 2.5e-4); bracket with 1.5e-4 and 2.0e-4 to characterize the LR landscape under T_max=40.
 3. **Can compile_mode=reduce-overhead or max-autotune cut per-epoch time?** (#4188 alphonse) — n192 is throughput-limited at 79s/epoch; if we can cut n128's 54s/epoch, we gain epochs at the proven optimum (val still descending at ep34) and may reopen the capacity direction.
 4. **Is EMA decay 0.993/0.990 better under T_max=40?** (#4029 askeladd) — EMA optimal decay may shift under gentler annealing.
-5. **Can velocity surface down-weighting free gradient budget?** (#4030 nezuko)
+5. **Can velocity surface down-weighting free gradient budget?** (#4030 nezuko) — Arm B (ux=uy=0.7) at lr=2.5e-4 hit test=33.72 (beats baseline test 33.89); val=40.19 fails at lr=2.5e-4. Re-running Arms C/D (0.7 and 0.8) at lr=1.7e-4 for clean comparison.
 6. **Do per-group clip (looser MLP budget) improve on the 12-mech stack?** (#4154 fern)
 7. **Do channel-decoupled output heads improve pressure specialization?** (#4061 tanjiro)
 8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn)
