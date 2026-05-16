@@ -82,6 +82,27 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth: randomly zero an entire residual branch.
+
+    With keep_prob = 1 - drop_prob, the surviving branches are scaled by 1/keep_prob
+    so the residual's expected value is preserved at train time. No-op at eval time.
+    """
+
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()
+        return x.div(keep_prob) * random_tensor
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -139,7 +160,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -150,6 +172,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -158,8 +181,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = fx + self.drop_path(self.attn(self.ln_1(fx)))
+        fx = fx + self.drop_path(self.mlp(self.ln_2(fx)))
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -192,6 +215,7 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  n_freqs: int = 0, fourier_base: float = 2.0,
+                 drop_path: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -211,11 +235,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear stochastic depth schedule: layer 0 -> 0, last layer -> drop_path.
+        if n_layers > 1:
+            drop_path_rates = torch.linspace(0.0, drop_path, n_layers).tolist()
+        else:
+            drop_path_rates = [drop_path]
+        self.drop_path_rates = drop_path_rates
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path=drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -362,6 +393,8 @@ def write_experiment_summary(
         "huber_delta": cfg.huber_delta,
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
+        "drop_path": cfg.drop_path,
+        "drop_path_rates": list(model_config.get("drop_path_rates", [])),
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -406,6 +439,7 @@ class Config:
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
     n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
     fourier_base: float = 2.0
+    drop_path: float = 0.0  # max stochastic-depth drop rate; linear schedule across blocks (0 at layer 0, drop_path at last layer)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -451,11 +485,14 @@ model_config = dict(
     mlp_ratio=2,
     n_freqs=cfg.n_freqs,
     fourier_base=cfg.fourier_base,
+    drop_path=cfg.drop_path,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
+model_config["drop_path_rates"] = list(model.drop_path_rates)
+print(f"DropPath schedule across {len(model.drop_path_rates)} layers: {model.drop_path_rates}")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
