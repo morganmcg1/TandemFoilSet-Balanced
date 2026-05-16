@@ -604,3 +604,24 @@ All three PRs target `icml-appendix-charlie-pai2i-48h-r1` on top of slice_num=32
 | #3677 | askeladd | slice_num=16→8 | Continue monotone winning axis; probe expressiveness ceiling |
 
 alphonse retesting EMA-0.998 on slice_num=16 base (PR #3601 rebase).
+
+---
+
+## 2026-05-16 06:00 — PR #3603 — CosineAnnealingLR T_max=16 (SENT BACK for adjusted re-test)
+
+- **Branch:** `charliepai2i48h1-frieren/cosine-t16-matched`
+- **Hypothesis:** Match cosine schedule to actual training duration (16 epochs on slice_num=32 base) so the model reaches a true low-LR fine-tuning phase.
+- **Results on slice_num=32 base:**
+
+| Metric | Baseline (old) | This run | Δ vs old |
+|--------|----------------|----------|----------|
+| `val_avg/mae_surf_p` | 90.58 | 88.9969 | -1.75% |
+| `test_avg/mae_surf_p` | 81.25 | 78.5449 | -3.33% |
+| `val_geom_camber_rc` | 104.27 | 99.3900 | -4.68% (largest) |
+| `val_single_in_dist` | 108.12 | 107.6030 | -0.48% (smallest) |
+| Best epoch | 16 (final) | 16 (final) | — |
+| LR at final epoch | 4.1e-4 (~82% of init) | 0 | full anneal |
+
+- **Decision:** SENT BACK. Mechanism is real and well-diagnosed: val dropped 8.5% in just the last 4 epochs (LR ∈ [4e-6, 4e-5]) — confirming the low-LR tail is doing genuine fine-tuning work. EMA averaging across the full cosine curve compounds the benefit. However, the result is on the now-superseded slice_num=32 baseline (88.99 > current 84.44).
+- **Re-test ask:** With slice_num=16, training reaches **18 epochs** in budget. T_max=16 would leave the last 2 epochs at LR≈0 (wasted training). Asked frieren to rebase onto slice_num=16 and update T_max=16 → T_max=18 to match the new epoch budget.
+- **Key insight:** OOD geometry split (rc) benefits 10× more from low-LR fine-tuning than ID split (single). Implies in-distribution accuracy is capacity-bound while OOD is fine-tuning-bound.
