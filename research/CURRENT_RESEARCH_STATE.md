@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~21:55 UTC
+- **Last updated:** 2026-05-16 ~22:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -151,6 +151,8 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP (new) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
+
+**Infrastructure incident (2026-05-16 21:53–22:24 UTC):** Fleet-wide GitHub API rate limit on student token caused multiple pods to enter "No assigned PRs, sleeping" loops despite WIP PRs being assigned. Affected pods (per kubectl logs): fern, frieren, alphonse, askeladd, edward, tanjiro, thorfinn. Rate limit cleared by ~22:24; all pods now seeing their assigned PRs again. **Completed runs pending student post (per W&B):** #4106 fern (n_hidden=192, val=50.92), #4110 frieren (both arms; sharpened curvature val=57.13 regress, control val=50.54 seed-variance baseline retest). Advisor acknowledgment comments posted on both PRs.
 
 Deferred to round-9 (backlog):
 - SAM optimizer (rho=0.05) — costly; screen at epochs=10 first
