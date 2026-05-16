@@ -4,7 +4,36 @@
 
 ---
 
-## 2026-05-16 14:25 — PR #3908: SwiGLU mlp_ratio=3 (alphonse) — ← CURRENT BEST
+## 2026-05-16 15:30 — PR #4002: SwiGLU mlp_ratio=3 + epochs=14 (alphonse) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 57.3537** (best epoch 14/14, W&B run `vuod53pk`) — **−2.80% vs previous best 59.0038**
+- **test_avg/mae_surf_p: 49.8024** — **−1.84% vs previous best 50.7368**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not per-split logged) | 55.8769 |
+| geom_camber_rc | (not per-split logged) | 60.9186 |
+| geom_camber_cruise | (not per-split logged) | 33.9840 |
+| re_rand | (not per-split logged) | 48.4299 |
+| **avg** | **57.3537** | **49.8024** |
+
+- **Model config:** SwiGLU FFN, n_hidden=160, n_layers=5, n_head=4, slice_num=64, **mlp_ratio=3**, inner_dim=320, ~1.285M params
+- **Change from previous baseline:** `--epochs 14` (extended training; ep13→ep14 delta = −1.28, still descending)
+- **Val curve (selected epochs):** ep12=61.60, ep13=58.63, ep14=**57.35** — still descending at budget end
+- **Wall time:** 44.4 min; Peak GPU ~98.5% of 96GB VRAM
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=14); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+- **Note:** 3 of 4 test splits improved; geom_camber_cruise marginally regressed (+0.32, within run-to-run noise ~2.5)
+
+**Reproduce command:**
+```bash
+cd "target/" && SENPAI_TIMEOUT_MINUTES=50 python train.py --epochs 14 --mlp_ratio 3
+```
+
+---
+
+## 2026-05-16 14:25 — PR #3908: SwiGLU mlp_ratio=3 (alphonse)
 
 - **val_avg/mae_surf_p: 59.0038** (best epoch 12/12, W&B run `4n7z1mwm`) — **−2.83% vs previous best 60.7195**
 - **test_avg/mae_surf_p: 50.7368** — **−2.35% vs previous best 51.9559**
