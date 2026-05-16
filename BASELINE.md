@@ -1,6 +1,35 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3843 (Lion lr=1e-4 — larger LR doubles improvement over spec_norm)
+## Current best — PR #3954 (spec_norm output + lr=1e-4 combined — marginal improvement over lr-only)
+
+**val_avg/mae_surf_p = 64.6812** (W&B run: `pc7lsis0`, PR #3954 Lion lr=1e-4 + spec_norm(output, n_power_iter=1) + n_fourier=0 + FiLM-output log(Re) + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14)
+**test_avg/mae_surf_p = 56.1746** (same run `pc7lsis0`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 69.26 | 61.06 |
+| geom_camber_rc | 78.64 | 69.24 |
+| geom_camber_cruise | **46.37** | **38.56** |
+| re_rand | 64.47 | 55.83 |
+
+**Note:** val improvement over PR #3843 is −0.73, within seed noise (σ≈2.77). Test slightly worse (+0.11). Spec_norm at lr=1e-4 is orthogonal but not additive — Lion's sign-update already bounds output growth; the Lipschitz cap adds little. Multiple reproductions of lr=1e-4 without spec_norm cluster at val ~64.2–64.8, so the true zero-spec_norm baseline is closer to 64.5 than 65.41.
+
+**Reproduce (PR #3954 hypothesis arm):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-nezuko --epochs 50 \
+  --wandb_group round8-specnorm-lr-nezuko \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 14 \
+  --optimizer_name lion --lr 1e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --spec_norm_target output --spec_norm_n_power_iter 1 \
+  --wandb_name nezuko-r8-specnorm-lr1e-4
+```
+
+---
+
+## Prior best — PR #3843 (Lion lr=1e-4 — larger LR doubles improvement over spec_norm)
 
 **val_avg/mae_surf_p = 65.4142** (W&B run: `bw38ym4h`, PR #3843 Lion lr=1e-4 + n_fourier=0 + FiLM-output log(Re) + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14; NO spec_norm)
 **test_avg/mae_surf_p = 56.0627** (same run `bw38ym4h`, clean 4-split)
