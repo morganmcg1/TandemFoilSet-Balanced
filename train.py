@@ -390,6 +390,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
+    n_layers: int = 5  # Transolver depth; baseline 5
 
 
 cfg = sp.parse(Config)
@@ -423,7 +424,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -555,12 +556,17 @@ for epoch in range(MAX_EPOCHS):
         model_norm = model_norm_sq ** 0.5
         ema_lag_rel = ema_lag / max(model_norm, 1e-12)
 
+    peak_gpu_mb = (
+        torch.cuda.max_memory_allocated() / 1e6 if torch.cuda.is_available() else 0.0
+    )
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/ema_lag": ema_lag,
         "train/ema_lag_rel": ema_lag_rel,
         "train/model_param_norm": model_norm,
+        "train/wall_time_per_epoch": dt,
+        "train/peak_gpu_mb": peak_gpu_mb,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
