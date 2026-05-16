@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -449,9 +451,15 @@ class Config:
     amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
+    lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override
 
 
 cfg = sp.parse(Config)
+
+torch.manual_seed(42)
+torch.cuda.manual_seed_all(42)
+np.random.seed(42)
+random.seed(42)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -495,8 +503,9 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+t_max = cfg.lr_T_max if cfg.lr_T_max > 0 else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min
+    optimizer, T_max=t_max, eta_min=cfg.eta_min
 )
 
 amp_torch_dtype = _amp_torch_dtype(cfg.amp_dtype)
@@ -505,7 +514,7 @@ grad_clip_enabled = cfg.grad_clip_norm is not None and cfg.grad_clip_norm > 0
 print(
     f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}  "
     f"grad_clip: norm={cfg.grad_clip_norm if grad_clip_enabled else 'off'}  "
-    f"cosine eta_min={cfg.eta_min}"
+    f"cosine T_max={t_max} eta_min={cfg.eta_min}"
 )
 
 run = wandb.init(
