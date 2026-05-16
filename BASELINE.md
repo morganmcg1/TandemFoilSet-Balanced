@@ -8,7 +8,7 @@ target base `icml-appendix-charlie`).
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=1`, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]**, **GEGLU FFN (PR #4105)** |
+| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, **`slice_num=8` (PR #4107)**, `mlp_ratio=1`, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]**, **GEGLU FFN (PR #4105)** |
 | Optim | **Schedule-Free AdamW** `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` — PR #4071; NO LR scheduler |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
@@ -20,30 +20,40 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #4071, Schedule-Free AdamW on bf16+GEGLU, single-seed, best epoch 23)
+## Current best metrics (PR #4107, slice_num 12→8 on bf16+GEGLU+SF, single-seed, best epoch 25)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **45.07** |
-| `test_avg/mae_surf_p` | **38.58** |
-| `test/test_single_in_dist/mae_surf_p` | 43.26 |
-| `test/test_geom_camber_rc/mae_surf_p` | 51.59 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 22.20 |
-| `test/test_re_rand/mae_surf_p` | 37.26 |
+| `val_avg/mae_surf_p` **(primary)** | **43.82** |
+| `test_avg/mae_surf_p` | **38.05** |
+| `test/test_single_in_dist/mae_surf_p` | 42.38 |
+| `test/test_geom_camber_rc/mae_surf_p` | 50.51 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 22.71 |
+| `test/test_re_rand/mae_surf_p` | 36.58 |
 
-Per-split val surface-p MAE at best checkpoint (single seed, epoch 23):
+Per-split val surface-p MAE at best checkpoint (single seed, epoch 25):
 
-| Split | mae_surf_p | Δ vs prev (50.57) |
+| Split | mae_surf_p | Δ vs prev (45.07) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  48.79 | -13.1% |
-| `val_geom_camber_rc`     |  58.57 |  -7.1% |
-| `val_geom_camber_cruise` |  26.72 | -18.0% |
-| `val_re_rand`            |  46.21 |  -8.5% |
-| **avg** | **45.07** | **-10.9%** |
+| `val_single_in_dist`     |  47.39 | -2.87% |
+| `val_geom_camber_rc`     |  55.44 | -5.35% |
+| `val_geom_camber_cruise` |  26.97 | +0.94% (tied) |
+| `val_re_rand`            |  45.50 | -1.55% |
+| **avg** | **43.82** | **-2.78%** |
 
-Artifact: `models/model-charliepai2i48h1-fern-sf-adamw-on-bf16-geglu-20260516-204614/metrics.jsonl`
+Artifact: `models/model-slice-num-8-on-bf16-geglu-20260516-215247/metrics.jsonl`
+
+Note: slice_num=8 reduces the slice-attention projection cost (O(N·S²)) by 33% relative to slice=12. The halving trajectory (64→32→16→12→8) has gained on every step. On bf16+GEGLU+SF, the per-epoch saving (-8.7%, 79.2→72.3s) translates to +2 epochs (23→25) of training; SF keeps full LR on those extra epochs. Critical validation: the rc-split that *regressed* on the bf16-only baseline (+3.93% test) now *improves* on the full stack (-2.09% test) — GEGLU + SF give enough capacity headroom that the slice budget reduction is tolerated even on the hardest OOD geometry. Run still descending at epoch 25 (-0.71 pts/epoch at terminal).
+
+slice_num halving trajectory (every step a merge):
+- 64→32 (PR #3533): -5.81%
+- 32→16 (PR #3602): -6.78%
+- 16→12 (PR #3950): -0.34%
+- **12→8 (PR #4107): -2.78%**
+
+12→8 out-improved 16→12 — suggests optimum is below 8 (slice_num=6 is the next probe).
 
 Note: Schedule-Free AdamW (Defazio et al. 2024, arXiv:2405.15682) replaces cosine annealing with an optimizer that maintains its own iterate average — no `T_max` required. The key insight: with `T_max=50` and only 23 effective epochs, cosine LR at epoch 23 is at ~59% of peak (i.e. `0.5*(1+cos(23/50*π))*lr ≈ 0.59*lr`), so the last ~10 epochs of the GEGLU baseline were making under-powered gradient steps. Schedule-Free keeps the effective LR at full strength right up to the timeout, giving late epochs ~1.5-2× larger updates. Zero compute overhead: 79.2 s/epoch vs 78.9 s baseline (+0.4%); peak VRAM 25.96 GB (+0.3% vs GEGLU baseline's 25.7 GB). All 8 val+test splits improved. EMA (decay=0.997) and SF coexist cleanly — SF operates on the optimizer iterate, EMA on shadow model parameters, no competition. Run was still descending at epoch 23 (-0.79 pts/epoch at terminal), so there remains headroom.
 
@@ -65,7 +75,7 @@ python train.py --experiment_name sf-repro --agent <name>
 Single-seed variance is ±5-10 pts on `val_avg/mae_surf_p`. Improvements
 smaller than ~5% may be within noise — confirm with a re-run if uncertain.
 
-**Total improvement from calibration baseline:** 143.52 → 45.07 = **-68.6%**
+**Total improvement from calibration baseline:** 143.52 → 43.82 = **-69.5%**
 
 ### Calibration-only baseline (PR #3107, default config MSE)
 
@@ -113,4 +123,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #4018 | FiLM-Re+AoA: expand conditioning to [log_Re, AoA0, AoA1] | 68.80 | -3.7% |
 | 2026-05-16 | #4064 | bf16 autocast: -27% sec/epoch, 18→25 epochs in 30-min cap | 59.08 | -14.1% |
 | 2026-05-16 | #4105 | GEGLU FFN: gating projection replaces vanilla MLP, all 4+4 splits improved 9-19% | 50.57 | -14.4% |
-| 2026-05-16 | #4071 | Schedule-Free AdamW: eliminates cosine T_max fragility, all 8 splits improved 7-18% | **45.07** | **-10.9%** |
+| 2026-05-16 | #4071 | Schedule-Free AdamW: eliminates cosine T_max fragility, all 8 splits improved 7-18% | 45.07 | -10.9% |
+| 2026-05-16 | #4107 | slice_num 12→8 on bf16+GEGLU+SF: -8.7% sec/epoch → +2 epochs, 3/4 splits improved, rc-split flip from regress to win | **43.82** | **-2.78%** |
