@@ -1,9 +1,9 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:45 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 12:34 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
-- **Rate limit blackout:** GH API exhausted, resets 12:21 UTC. Two strong pre-clip-stack results identified locally during blackout window (see below).
+- **Rate-limit storm cleared at 12:21 UTC.** Two PRs (#3758 fern n_layers=4, #3492 nezuko n_hidden=192) sent back for R3 rebase with clip in both arms. All 8 students have active WIP PRs (no idle GPUs).
 
 ## Current research focus
 
@@ -17,15 +17,18 @@
 
 Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th axis. All experiments now must include `--grad_clip_norm 1.0` to beat the new baseline.
 
-### 🔥 Strong pre-clip-stack signals identified locally (awaiting rate limit reset to send back)
+### 🔥 Sent back for R3 clip-compose rebase (12:24 UTC)
 
-- **🔥🔥 n_hidden=192 (nezuko #3492 R2):** Results committed at commit `88d013a` — Arm A 97.232, Arm B 89.252, **paired Δ −8.21% val_avg, −8.00% test_avg**. PR not yet marked ready_for_review (rate-limit blackout). Send-back drafted at `/tmp/sendback_3492_capacity.md` — rebase with clip in both arms. If even half the paired Δ survives, this drops us into mid-70s.
-- **n_layers=4 (fern #3758 seed-2):** Result committed at `4ba1483` — Arm B seed=2 val_avg=88.441 (better than pre-clip baseline 89.784). Combined with R1 seed-1 paired Δ −1.21%, the depth hypothesis is real. Send-back drafted at `/tmp/sendback_3758_seed2.md` — rebase with clip in both arms.
+- **🔥🔥 n_hidden=192 (nezuko #3492 R2 → R3):** R2 paired Δ −8.21% val_avg / −8.00% test (strongest signal of round). Sent back to rebase with `--grad_clip_norm 1.0` in BOTH arms. If even a fraction of −8.21% survives, this is the biggest single hop available — could plausibly land mid-70s.
+- **n_layers=4 (fern #3758 R2 → R3):** R2 seed-2 = 88.441 (mean of two n_layers=4 seeds = 89.32, below pre-clip baseline). Combined with R1 paired Δ −1.21%, depth hypothesis is real. Sent back for clip-compose R3. Saves ~18% params + ~19% sec/epoch if it composes.
 
-### Other high-priority signals running on stale stacks
+### Other in-flight experiments (all on stale stack, no clip)
 
-- **🔥 T_max=20 (thorfinn #3390 R2):** Pod actively training (GPU 100%) on commit ff96c64. Likely no clip flag in command. If paired Δ positive → rebase with clip. Tanjiro R1 predicted T_max=20 could reach ~80-85 on full stack.
-- **🔥 SF-AdamW (alphonse #3594 R2):** Pod actively training (GPU 99%) on commit 9e6264b. Likely no clip flag in command. R1 showed −20.75%. If paired Δ reproduces → rebase with clip. Could be transformative.
+- **🔥 T_max=20 (thorfinn #3390 R2):** Actively training (97% GPU @ 12:33 UTC). R1 showed 88.229 on bf16-only; R2 should test on FiLM stack. Will need rebase with clip if paired Δ positive.
+- **🔥 SF-AdamW (alphonse #3594 R2):** Actively training (98% GPU). R1 showed −20.75% pre-FiLM; R2 needs FiLM-stack verify. Will need rebase with clip if paired Δ positive.
+- **Per-block FiLM (frieren #3829):** Actively training (100% GPU). Will need rebase with clip if paired Δ positive.
+- **Lookahead (edward #3830):** Actively training (99% GPU). Will need rebase with clip if paired Δ positive.
+- **SDF features (askeladd #3777):** Pod restarted 12:28 UTC; needs to spin up training.
 
 ### Confirmed closed axes
 
@@ -36,16 +39,16 @@ Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th 
 
 ### Key in-flight experiments
 
-| Student | PR | Hypothesis | Status (11:45 UTC) | Action |
-|---------|----|-----------|--------------------|--------|
-| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | Training (GPU 100%) on clipthresh-r1 | Wait |
-| nezuko | #3492 | n_hidden=192 on FiLM stack (no clip) | **Results committed; paired Δ −8.21%; awaiting mark-ready (rate limit)** | Send back for clip rebase 🔥 |
-| fern | #3758 | n_layers=4 seed-2 confirm (no clip) | **In review (seed-2: 88.441)** | Send back for clip rebase |
-| thorfinn | #3390 | T_max=20 on FiLM stack (no clip) | Training (GPU 100%) | Wait for results |
-| alphonse | #3594 | SF-AdamW on FiLM stack (no clip) | Training (GPU 99%) | Wait for results |
-| edward | #3830 | Lookahead optimizer (no clip) | Training (GPU 99%) | Wait for results |
-| frieren | #3829 | Per-block FiLM heads (no clip) | Training (GPU 99%) | Wait for results |
-| askeladd | #3777 | SDF input features (no clip) | Idle/restarted (GPU 0%) | Verify training resumes |
+| Student | PR | Hypothesis | Status (12:34 UTC) |
+|---------|----|-----------|--------------------|
+| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | Training (GPU 100%) on clipthresh-r1 |
+| thorfinn | #3390 | T_max=20 on FiLM stack (R2) | Training (GPU 97%) on bf16-tmax-compose |
+| alphonse | #3594 | SF-AdamW on FiLM stack (R2) | Training (GPU 98%) on schedule-free-adamw |
+| edward | #3830 | Lookahead optimizer | Training (GPU 99%) |
+| frieren | #3829 | Per-block FiLM heads | Training (GPU 100%) |
+| nezuko | #3492 | n_hidden=192 + clip (R3 rebase) | Just sent back at 12:24 UTC; pod will pick up |
+| fern | #3758 | n_layers=4 + clip (R3 rebase) | Just sent back at 12:24 UTC; pod will pick up |
+| askeladd | #3777 | SDF input features | Pod restarted 12:28 UTC; spinning up |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
