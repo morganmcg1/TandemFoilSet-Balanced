@@ -32,7 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -335,7 +335,10 @@ def evaluate_split(model, loader, stats, surf_weight, device,
     nf_y_nodes_total = 0
 
     with torch.no_grad():
-        for batch_idx, (x, y, is_surface, mask) in enumerate(loader):
+        for batch_idx, batch in enumerate(loader):
+            # collate may emit (x, y, is_surface, mask) or the extended
+            # 7-tuple from pad_collate_sobolev — eval only needs the first 4.
+            x, y, is_surface, mask = batch[:4]
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
@@ -617,6 +620,8 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
+    sobolev_weight: float = 0.0  # 0 disables; surface-pressure gradient penalty
+    sobolev_k: int = 2       # number of surface k-NN neighbors per surface node
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -626,6 +631,124 @@ def _residual_err(pred, target, loss_type, beta):
     if loss_type == "smooth_l1":
         return F.smooth_l1_loss(pred, target, reduction="none", beta=beta)
     raise ValueError(loss_type)
+
+
+# ---------------------------------------------------------------------------
+# Sobolev surface-pressure gradient loss (PR #3695)
+# ---------------------------------------------------------------------------
+
+class SobolevDatasetWrapper(Dataset):
+    """Wraps a base dataset and lazily computes per-sample surface k-NN.
+
+    For every sample we identify surface nodes via ``is_surface``, then for
+    each surface node we compute the indices of its ``k`` nearest surface
+    neighbors using physical (x, z) Euclidean distance. Indices are cached
+    in-process so each worker pays the cost once per sample for its lifetime.
+
+    Returns ``(x, y, is_surface, surf_idx, surf_neighbor_idx)`` where
+    ``surf_idx`` is ``[N_surf]`` global node indices and
+    ``surf_neighbor_idx`` is ``[N_surf, k]`` global indices of the k nearest
+    surface neighbors (self excluded).
+    """
+
+    def __init__(self, base_ds, sobolev_k: int):
+        self.base = base_ds
+        self.k = sobolev_k
+        self._cache: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        cached = self._cache.get(idx)
+        if cached is None:
+            surf_idx_all = torch.where(is_surface)[0].long()  # [N_surf]
+            n_surf = int(surf_idx_all.numel())
+            xz = x[surf_idx_all, :2]
+            k_eff = min(self.k, max(n_surf - 1, 1))
+            d = torch.cdist(xz, xz)
+            d.fill_diagonal_(float("inf"))
+            _, neigh_local = d.topk(k_eff, dim=-1, largest=False)  # [N_surf, k_eff]
+            if k_eff < self.k:
+                pad_cols = neigh_local[:, -1:].expand(-1, self.k - k_eff)
+                neigh_local = torch.cat([neigh_local, pad_cols], dim=-1)
+            surf_neighbor_global = surf_idx_all[neigh_local].long()  # [N_surf, k]
+            cached = (surf_idx_all, surf_neighbor_global)
+            self._cache[idx] = cached
+        surf_idx, surf_neighbor_idx = cached
+        return x, y, is_surface, surf_idx, surf_neighbor_idx
+
+
+def pad_collate_sobolev(batch):
+    """Pad variable-length mesh samples that include per-sample surface k-NN.
+
+    Returns ``(x, y, is_surface, mask, surf_idx, surf_neighbor_idx,
+    surf_valid_mask)``. Padding indices default to 0 (safe to gather; masked
+    out before reduction).
+    """
+    xs, ys, surfs, surf_idxs, surf_neighbor_idxs = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    for i, (x, y, sf) in enumerate(zip(xs, ys, surfs)):
+        n = x.shape[0]
+        x_pad[i, :n] = x
+        y_pad[i, :n] = y
+        surf_pad[i, :n] = sf
+        mask[i, :n] = True
+
+    max_n_surf = max(si.shape[0] for si in surf_idxs)
+    k = surf_neighbor_idxs[0].shape[1]
+    surf_idx_pad = torch.zeros(B, max_n_surf, dtype=torch.long)
+    surf_neighbor_pad = torch.zeros(B, max_n_surf, k, dtype=torch.long)
+    surf_valid_mask = torch.zeros(B, max_n_surf, dtype=torch.bool)
+    for i, (si, sn) in enumerate(zip(surf_idxs, surf_neighbor_idxs)):
+        n_surf = si.shape[0]
+        surf_idx_pad[i, :n_surf] = si
+        surf_neighbor_pad[i, :n_surf] = sn
+        surf_valid_mask[i, :n_surf] = True
+    return x_pad, y_pad, surf_pad, mask, surf_idx_pad, surf_neighbor_pad, surf_valid_mask
+
+
+def sobolev_surface_loss(
+    pred_p, gt_p, x_phys, surf_idx, surf_neighbor_idx, surf_valid_mask, beta
+):
+    """Huber loss on (∂p/∂s)_pred − (∂p/∂s)_gt over surface k-NN edges.
+
+    All tensors batched. Pressures live in normalized space (matching the
+    data Huber loss); coordinates are physical so ``ds`` is in real units.
+    Padded surface entries are masked out before reduction.
+    """
+    B, N_surf_max = surf_idx.shape
+    k = surf_neighbor_idx.shape[-1]
+
+    p_pred_surf = torch.gather(pred_p, dim=1, index=surf_idx)            # [B, S]
+    p_gt_surf = torch.gather(gt_p, dim=1, index=surf_idx)
+
+    nbr_flat = surf_neighbor_idx.reshape(B, N_surf_max * k)
+    p_pred_neigh = torch.gather(pred_p, dim=1, index=nbr_flat).reshape(B, N_surf_max, k)
+    p_gt_neigh = torch.gather(gt_p, dim=1, index=nbr_flat).reshape(B, N_surf_max, k)
+
+    coords = x_phys[..., :2]                                              # [B, N, 2]
+    surf_idx_2 = surf_idx.unsqueeze(-1).expand(-1, -1, 2)
+    coords_surf = torch.gather(coords, dim=1, index=surf_idx_2)           # [B, S, 2]
+    nbr_flat_2 = nbr_flat.unsqueeze(-1).expand(-1, -1, 2)
+    coords_neigh = torch.gather(coords, dim=1, index=nbr_flat_2).reshape(B, N_surf_max, k, 2)
+
+    dp_pred = p_pred_neigh - p_pred_surf.unsqueeze(-1)                    # [B, S, k]
+    dp_gt = p_gt_neigh - p_gt_surf.unsqueeze(-1)
+    ds = (coords_neigh - coords_surf.unsqueeze(2)).norm(dim=-1).clamp_min(1e-6)
+
+    grad_pred = dp_pred / ds
+    grad_gt = dp_gt / ds
+
+    edge_mask = surf_valid_mask.unsqueeze(-1).expand_as(grad_pred).float()
+    elem = F.smooth_l1_loss(grad_pred, grad_gt, reduction="none", beta=beta)
+    return (elem * edge_mask).sum() / edge_mask.sum().clamp_min(1.0)
 
 
 cfg = sp.parse(Config)
@@ -638,7 +761,15 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+# Wrap datasets so each sample carries cached surface k-NN indices.
+# The same wrapper is used for all arms (incl. sobolev_weight=0 control)
+# to keep the training/eval data path identical across the sweep.
+train_ds = SobolevDatasetWrapper(train_ds, cfg.sobolev_k)
+val_splits = {
+    name: SobolevDatasetWrapper(ds, cfg.sobolev_k) for name, ds in val_splits.items()
+}
+
+loader_kwargs = dict(collate_fn=pad_collate_sobolev, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
@@ -746,14 +877,18 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_sob = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        x, y, is_surface, mask, surf_idx_p, surf_neigh_p, surf_valid = batch
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+        surf_idx_p = surf_idx_p.to(device, non_blocking=True)
+        surf_neigh_p = surf_neigh_p.to(device, non_blocking=True)
+        surf_valid = surf_valid.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = _apply_fourier(x_norm, model)
@@ -775,7 +910,20 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask_safe & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        data_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        if cfg.sobolev_weight > 0:
+            # Restrict valid surface edges to samples with finite GT so the
+            # known bad sample never contributes a NaN gradient.
+            surf_valid_safe = surf_valid & y_finite_sample[:, None].expand_as(surf_valid)
+            sob_loss = sobolev_surface_loss(
+                pred[..., 2], y_norm_safe[..., 2], x,
+                surf_idx_p, surf_neigh_p, surf_valid_safe, cfg.loss_beta,
+            )
+            loss = data_loss + cfg.sobolev_weight * sob_loss
+        else:
+            sob_loss = torch.zeros((), device=device)
+            loss = data_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -788,17 +936,21 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/data_loss": data_loss.item(),
+            "train/sob_loss": sob_loss.item(),
             "train/grad_norm": grad_norm,
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_sob += sob_loss.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_sob /= max(n_batches, 1)
 
     # --- Validate ---
     # With EMA enabled, evaluate the EMA shadow (the actual predictor we'll
@@ -818,6 +970,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/sob_loss_epoch": epoch_sob,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -859,7 +1012,7 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} sob={epoch_sob:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -885,6 +1038,10 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        test_datasets = {
+            name: SobolevDatasetWrapper(ds, cfg.sobolev_k)
+            for name, ds in test_datasets.items()
+        }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
