@@ -562,14 +562,13 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
 
-        # Volume loss: MSE (unchanged) — rich-mesh gradient signal
-        sq_err = (pred - y_norm) ** 2
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        # Volume loss: MAE — unify L1 family with surface loss
+        abs_err = (pred - y_norm).abs()
+        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
 
         # Surface loss: MAE with per-channel p weight (aligns with ranking metric)
-        surf_err = (pred - y_norm).abs()
         ch_w = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=pred.device)
-        surf_err = surf_err * ch_w[None, None, :]
+        surf_err = abs_err * ch_w[None, None, :]
         surf_loss = (surf_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
 
         loss = vol_loss + cfg.surf_weight * surf_loss
@@ -600,9 +599,14 @@ for epoch in range(MAX_EPOCHS):
     dt = time.time() - t0
 
     current_lr = optimizer.param_groups[0]['lr']
+    # surf/vol ratio diagnostics — track loss balance after switching vol_loss to MAE
+    surf_vol_ratio = epoch_surf / max(epoch_vol, 1e-12)
+    weighted_surf_vol_ratio = (cfg.surf_weight * epoch_surf) / max(epoch_vol, 1e-12)
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_vol_ratio": surf_vol_ratio,
+        "train/weighted_surf_vol_ratio": weighted_surf_vol_ratio,
         "train/lr": current_lr,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
