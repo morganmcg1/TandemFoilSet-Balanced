@@ -1,5 +1,36 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 07:03 — PR #3761: Slice_num capacity sweep {96, 128} — ASSIGNED to thorfinn
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/slice_num_cap`
+- **Hypothesis:** `test_single_in_dist` (78.65 on current baseline) is the dominant bottleneck and may be partition-limited. slice_num=64 creates 64 physics partitions per block; bumping to 96/128 gives the model more granularity to separate laminar, turbulent, and near-foil flow regimes, especially on the widest Re range (104K–5M). Orthogonal to all in-flight optimizer/loss/depth experiments.
+- **Motivation:** Drawn from thorfinn's #3468 analysis: "the mechanism overlap pattern suggests we're approaching the capacity ceiling of the current 5-block × 128-hidden trunk on single_in_dist." Slice_num is the most direct architectural attack on this ceiling.
+- **Status:** WIP, smoke test mandatory before full run
+
+---
+
+## 2026-05-16 07:03 — PR #3468: Per-block FiLM v2 on RFF+cosine+FiLM stack — CLOSED
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/per_block_film`
+- **Hypothesis:** Per-block FiLM heads (all 5 Transolver blocks) stacks with RFF+cosine+FiLM base.
+- **W&B run:** `g7f1m73s` (name: `per-block-film-v2-on-rff-base`, group: `per-block-film`)
+
+| Metric | Baseline #3258 | PR #3468 | Δ |
+|--------|-------------:|-------:|---|
+| val_avg/mae_surf_p | 77.65 | 79.66 | +2.57% |
+| **test_avg/mae_surf_p** | **66.87** | **69.87** | **+4.49%** |
+| test_single_in_dist | 78.65 | 80.60 | +2.43% |
+| test_geom_camber_rc | 77.66 | 79.77 | +2.72% |
+| test_geom_camber_cruise | 46.17 | 49.21 | +6.58% |
+| test_re_rand | 65.00 | 69.91 | +7.56% |
+
+*(Thorfinn compared to #3262 RFF baseline 69.27; re-stated above vs current merged baseline 66.87)*
+
+- **Result commentary:** Negative result — full mechanism overlap with RFF on `test_single_in_dist`. The per-block FiLM mechanism that gave −6.73% on the #3263-only base was attacking the same capacity bottleneck that RFF + cosine now exploit. +67K params (+9.7%) without orthogonal mechanism = small regularization tax. Thorfinn's self-analysis was precise: "the whole regression comes from test_single_in_dist (+2.43%)" with other splits flat (±0.1-0.4%). Classic stacking failure due to mechanism overlap.
+- **Decision:** CLOSED — clear regression vs both old and new baselines. Thorfinn reassigned to slice_num capacity bump (#3761).
+
+---
+
 ## 2026-05-16 06:40 — PR #3746: Grad-clip cap sweep {10.0, 100.0} — ASSIGNED to fern
 
 - **Student/branch:** willowpai2i24h4-fern / `willowpai2i24h4-fern/clip_cap_sweep`

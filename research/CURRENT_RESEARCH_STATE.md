@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 06:45 UTC
+- **As of:** 2026-05-16 07:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -28,7 +28,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 66.87**.
 |---|---------|----|-----------|--------|
 | 1 | nezuko   | #3618 | **Surface-only decoder head (parallel zero-init residual on surface nodes)** | WIP (assigned 02:00; stale — API rate-limit blocked) |
 | 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (stale — API rate-limit blocked) |
-| 3 | thorfinn | #3468 | Per-block FiLM heads — v2; needs rebase onto new baseline | WIP (CONFLICTING; stale) |
+| 3 | **thorfinn** | **#3761** | **Slice_num capacity sweep {96, 128} — targets single_in_dist ceiling** | **WIP (assigned 07:03; fresh)** |
 | 4 | tanjiro  | #3658 | **Transolver depth test: n_layers 5 → 6 with matched cosine_tmax** | WIP (stale) |
 | 5 | alphonse | #3693 | **Peak LR sweep {1e-3, 2.5e-4} on full stack** (baseline lr=5e-4 untested) | WIP (assigned 04:41) |
 | 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — needs rebase | WIP |
@@ -50,6 +50,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 66.87**.
 | ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%) |
 | ✗ | nezuko   | Volume MAE reformulation (L1 on both) | #3550 | **CLOSED** — failed (+4.7% test regression on old base, +21% above 69.27) |
 | ✓ | fern     | Grad-clip 1.0 + 5-epoch warmup on full stack | #3258 | **MERGED (R3 winner #1)** — val=77.65, test=66.87 (−3.47%) |
+| ✗ | thorfinn | Per-block FiLM v2 on full RFF+cosine+FiLM stack | #3468 | **CLOSED** — +0.87% regression on RFF base (+4.49% on new baseline); full mechanism overlap with RFF on single_in_dist |
 | ✗ | tanjiro  | surf_weight sweep re-run (sw5) on FiLM+RFF base | #3406 | **CLOSED** — failed (+4.17% test on new stack, mechanism absorbed by FiLM+RFF) |
 | ✗ | tanjiro  | Huber loss delta=0.5 | #3256 | **CLOSED** (redundant with #3257) |
 | ✗ | alphonse | Wider-shallower 256d | #3261 | **CLOSED** (+24% worse) |
@@ -77,6 +78,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 66.87**.
 - **alphonse LR sweep (#3693):** Peak LR {1e-3, 2.5e-4} bracketing untested default 5e-4. No code changes (CLI flag). Arm A lr=1e-3 is primary (canonical value for ~1M-param transformers at batch=4). Predicted Arm A: test ~66–68 (2–4% gain); Arm B lr=2.5e-4: expected slight regression. #3565 AdamW sweep closed — ran on pre-RFF base (invalid comparison), also confirmed high WD hurts capacity-limited models.
 - **askeladd EMA β=0.99 (#3351):** β=0.99 (100-step horizon) on new stacked base. Cosine T_max=14 anneals LR→0, which may reduce oscillation benefit. Conservative expectation: small gain (~1–2%) or wash. Rebasing now (branch CONFLICTING).
 - **fern grad-clip cap sweep (#3746):** clip={10.0, 100.0} vs winning clip=1.0. Pre-clip norm: median=70, max=432, clips 100% steps. Arm A (10.0) tests moderate loosening (still clips everything, 10× larger effective steps). Arm B (100.0) targets only outlier batches (~30% clipped, typical batches pass through). Predicted: one arm recovers in-dist regression (+4.1% val) while preserving OOD gains. Test target <66.87.
+- **thorfinn slice_num capacity bump (#3761):** slice_num {96, 128} vs baseline 64. Targets `test_single_in_dist` (78.65, biggest absolute error on baseline) which spans widest Re range (104K–5M). Smoke test mandatory for cosine_tmax calibration. +33K–65K params. Predicted hopeful test ~62-64 (5-8% gain), conservative ~65-66 (1-3%). Orthogonal to all in-flight experiments.
 - **edward RFF σ/n_freqs sweep (#3599):** σ {0.5, 2.0} × n_freqs {16, 32}, brackets the winning σ=1.0 / n_freqs=16. CLI-only, no code changes. Conservative: σ=1.0 was already optimal → wash. Hopeful: n_freqs=32 doubles spatial resolution → modest 1–2% gain.
 
 ## Open issues / live diagnostics
@@ -118,11 +120,11 @@ All remaining PRs must beat **test_avg/mae_surf_p < 66.87**.
 **All 8 students active.** New baseline: test=66.87 (fern #3258, merged). All stale PRs need re-comparison vs new baseline.
 
 Key monitors:
+- #3761 thorfinn slice_num {96,128}: predicted test ~62-64 if single_in_dist is partition-limited (hopeful)
 - #3746 fern clip-cap sweep: predicted 1-3% improvement over 66.87 if outlier-only mechanism confirmed
 - #3693 alphonse LR sweep: predicted test ~64-68 (Arm A lr=1e-3)
 - #3658 tanjiro depth n_layers=6: predicted test ~65-66 hopeful
 - #3618 nezuko surface-only decoder head: predicted test ~62-65 hopeful
-- #3468 thorfinn per-block FiLM v2 on full stack: needs rebase first
 - #3599 edward RFF σ sweep: σ=0.5 and σ=2.0 bracket around the winning σ=1.0
 - #3618 nezuko surface-only decoder head: predicted hopeful test ~64–66 (architectural surface specialization)
 - #3658 tanjiro Transolver depth n_layers=6: predicted hopeful test ~65–66 (architectural capacity)
