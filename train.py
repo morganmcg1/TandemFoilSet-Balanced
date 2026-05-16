@@ -89,6 +89,7 @@ class PhysicsAttention(nn.Module):
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -136,15 +137,52 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class DualScalePhysicsAttention(nn.Module):
+    """Dual-scale wrapper: G_fine + G_coarse PhysicsAttention with a learned gate.
+
+    The fine branch captures local surface-gradient structure; the coarse branch
+    captures global circulation structure. Outputs are concatenated and gated
+    through a linear projection back to ``dim``.
+    """
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0,
+                 slice_num_fine=64, slice_num_coarse=16):
+        super().__init__()
+        self.attn_fine = PhysicsAttention(
+            dim, heads=heads, dim_head=dim_head,
+            dropout=dropout, slice_num=slice_num_fine,
+        )
+        self.attn_coarse = PhysicsAttention(
+            dim, heads=heads, dim_head=dim_head,
+            dropout=dropout, slice_num=slice_num_coarse,
+        )
+        self.gate = nn.Linear(2 * dim, dim)
+        self._logged = False
+
+    def forward(self, x):
+        x_fine = self.attn_fine(x)
+        x_coarse = self.attn_coarse(x)
+        if not self._logged:
+            print(
+                f"  DualScale: fine slice_num={self.attn_fine.slice_num}, "
+                f"coarse slice_num={self.attn_coarse.slice_num}"
+            )
+            self._logged = True
+        return self.gate(torch.cat([x_fine, x_coarse], dim=-1))
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 slice_num_coarse=16):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
-        self.attn = PhysicsAttention(
+        self.attn = DualScalePhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout,
+            slice_num_fine=slice_num,
+            slice_num_coarse=slice_num_coarse,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -167,7 +205,7 @@ class TransolverBlock(nn.Module):
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
-                 slice_num=32, ref=8, unified_pos=False,
+                 slice_num=32, slice_num_coarse=16, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -189,7 +227,8 @@ class Transolver(nn.Module):
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_num, slice_num_coarse=slice_num_coarse,
+                last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
@@ -398,6 +437,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
+    slice_num_coarse=16,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
