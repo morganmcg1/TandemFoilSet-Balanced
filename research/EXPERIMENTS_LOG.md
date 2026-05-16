@@ -1,5 +1,103 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 00:25 — PR #3429: Multi-scale slice tokens — CLOSED
+
+- **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/multi-scale-slice`
+- **Hypothesis:** Parallel coarse-global (slice_num=64) + fine-surface (slice_num_surf=32) groups, with a separate routing softmax for the surface group.
+- **W&B runs:** primary `n7qecihj`, control (multi-scale OFF) `8pogqq8d`
+
+### Result vs OLD #3263 baseline (val=100.24, test=90.06)
+
+| Arm | val_avg | test_avg | s/epoch | epochs in 30min | best epoch |
+|-----|--------:|---------:|--------:|----------------:|-----------:|
+| ms-slice-32 (primary) | 115.21 | **104.60** (+16.7%) | 163 | 11 | 11 |
+| ms-slice-control | 99.93 | 89.62 | 131 | 14 | 13 |
+
+### Equal-epoch comparison (at epoch 11)
+| Arm | val_avg/mae_surf_p |
+|-----|---:|
+| ms-slice-32 | 115.21 |
+| ms-slice-control | 114.87 |
+
+Within 0.3% — the multi-scale routing added NO architectural quality. The headline regression came entirely from the +24% per-epoch wall-clock cost stealing 3 epochs from the timeout-capped training.
+
+### Decision: CLOSED (hypothesis failed)
+
+### Analysis
+- **Slice routing is not the right lever for surface specialization.** 64 global slices already cover surface structure adequately; adding 32 routing-disjoint slices creates redundant tokens.
+- **`is_surface` is already in `x[..., 12]`** — features carry surface info pre-routing. Routing-layer specialization is too shallow.
+- **Architectural changes that slow per-epoch wall-clock get punished by the 30-min cap.** ms-slice-32 used +35% peak VRAM (57.1 GB vs 42.1 GB control) AND +24% s/epoch.
+- **Future surface specialization should go deeper:** separate Q/K/V heads, surface-only decoder branching after the trunk.
+- **Useful side observation:** the control vs published baseline (89.62 vs 90.06 test) suggests single-seed run-to-run variance is ~±5% on this metric — worth recording for future borderline calls.
+
+---
+
+## 2026-05-16 00:24 — PR #3358: Cosine LR T_max=14 (matched to wall-clock cap) — MERGED (R2 WINNER #1)
+
+- **Student/branch:** willowpai2i24h4-alphonse / `willowpai2i24h4-alphonse/cosine-tmax-fix`
+- **Hypothesis:** Align cosine `T_max` to the wall-clock 14-epoch cap (was set to 50 epochs). Mechanically orthogonal to loss + architecture.
+- **W&B run:** `b9qv36aq`
+
+### Result vs prior #3263 baseline (val=100.24, test=90.06)
+
+| Metric | Baseline #3263 | **#3358** | Δ |
+|--------|---------------:|----------:|---:|
+| `val_avg/mae_surf_p` | 100.24 | **90.4369** | **−9.78%** |
+| `test_avg/mae_surf_p` | 90.06 | **80.0794** | **−11.08%** |
+| `test_single_in_dist/mae_surf_p` | 119.11 | 96.49 | **−19.0%** |
+| `test_geom_camber_rc/mae_surf_p` | 100.27 | 90.24 | −10.0% |
+| `test_geom_camber_cruise/mae_surf_p` | 58.62 | 55.95 | −4.6% |
+| `test_re_rand/mae_surf_p` | 82.27 | 77.65 | −5.6% |
+
+### Decision: **MERGED as R2 winner #1**
+
+Wins all 4 val splits and all 4 test splits. The new baseline.
+
+### Analysis
+- **Mechanism cleanly verified.** LR trace decays to 0 at epoch 14 (was at 4.09e-04 = 82% of peak at termination under T_max=50).
+- **Larger gain than predicted hopeful case** (val 92–96 / test 81–87 predicted; actual val 90.44 / test 80.08).
+- **Stacks additively with R1 winners.** Cumulative: vanilla 106.23 → #3257 frieren loss 94.35 → #3263 single FiLM 90.06 → #3358 cosine T_max=14 80.08 (−24.6% from vanilla in 3 PRs).
+- **The single_in_dist reversal is the strongest evidence of mechanism.** On the old MSE base this was the only split where T_max=14 *lost* vs T_max=50. On the new FiLM+MAE base it's the biggest winner. The schedule fix interacts constructively with the merged base.
+
+---
+
+## 2026-05-16 00:24 — PR #3468: Per-block FiLM heads — SENT BACK (rebase)
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/per_block_film`
+- **Hypothesis:** Extend single FiLM (#3263) to per-block heads (4 heads gating blocks 0–3 outputs; block 4 is last_layer so output is 3-dim).
+- **W&B runs:** v1 post-block `1pggtz8o`, pre-block `nogqo7co`
+
+### Result vs OLD #3263 baseline (val=100.24, test=90.06)
+
+| Arm | val_avg | test_avg | Δ test |
+|-----|--------:|---------:|-------:|
+| **v1 post-block (4 heads)** | **94.011** | **84.001** | **−6.73%** |
+| pre-v1 pre-block (5 heads) | 101.700 | 91.371 | +1.46% |
+
+### Per-split (v1 vs OLD #3263)
+| split | baseline | v1 | Δ |
+|-------|---------:|---:|---:|
+| `test_single_in_dist`     | 119.11 |  99.75 | **−16.25%** |
+| `test_geom_camber_rc`     | 100.27 |  99.01 | −1.25% |
+| `test_geom_camber_cruise` |  58.62 |  56.94 | −2.87% |
+| `test_re_rand`            |  82.27 |  80.30 | −2.39% |
+
+### Decision: SENT BACK for rebase + rerun on new #3358 baseline
+
+Clean win on the OLD base (−6.73%) but new baseline is now test=80.08 (#3358 cosine fix merged). Per-block FiLM mechanism is orthogonal to cosine schedule, but biggest per-split gains (single_in_dist) OVERLAP — both per-block FiLM (−16.25%) and cosine fix (−19.0%) target the same split.
+
+Student to rebase + rerun v1 only on new baseline. Predicted on rebased base:
+- Hopeful (full stacking): test ~73–77 (massive merge)
+- Conservative (partial overlap on single_in_dist): test ~76–80 (strong merge)
+- Pessimistic (full overlap): test ~78–82 (marginal)
+
+### Strong implementation notes
+- Student self-resolved the `last_layer=True` issue (block 4 outputs 3-dim, not 128-dim).
+- Pre-block placement loss (+1.46%) is a useful negative result — confirms post-block is the right design.
+- Zero-init identity verified vs un-FiLM'd Transolver with shared weights (max abs diff = 0.0).
+
+---
+
 ## 2026-05-15 23:21 — PR #3386: Re-stratified loss reweighting (1/per_sample_y_std) — CLOSED
 
 - **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/restratified-loss`
