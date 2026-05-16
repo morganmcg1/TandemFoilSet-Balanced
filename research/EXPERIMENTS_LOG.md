@@ -887,3 +887,77 @@ Mix reaches uniform at epoch 7 as designed. val_avg/mae_surf_p still descending 
 
 - **#3555 alphonse**: coordinate jitter augmentation (σ=0.01 Gaussian noise on input (x,z) coords during training, identity at eval). Data-axis regularizer attacking camber_rc overfitting from input side. Untouched mechanism class on this track.
 - **#3556 thorfinn**: mixed MSE+L1 surface loss (0.7*MSE + 0.3*L1). Loss-formulation axis, distinct mechanism from askeladd's in-flight SmoothL1 (smooth blend vs linear combination). Attacks heavy-tailed pressure residual distribution + the camber_rc gradient-norm asymmetry fern uncovered.
+
+## 2026-05-16 — Loop 6: PR #3525 fern Lion CLOSED
+
+- **Student branch**: `charliepai2i24h1-fern/lion-optimizer`
+- **Hypothesis**: Lion optimizer (sign-momentum, lr=1.5e-4, wd=1e-3) as drop-in for AdamW — tests whether camber_rc's high gradient norms depend on AdamW's per-param v adaptation.
+- **Result**: val_avg/mae_surf_p = 126.7473 (best ep 9/9 realized, 30-min cap), +0.33% vs baseline 126.3241. test_avg = 113.4676 (NaN-safe 4-split).
+
+| Split | Lion | Baseline | Delta |
+|---|---|---|---|
+| single_in_dist | 152.19 | 158.79 | -4.16% improved |
+| geom_camber_rc | 141.06 | 127.26 | +10.84% REGRESSED |
+| geom_camber_cruise | 99.02 | 102.20 | -3.11% improved |
+| re_rand | 114.72 | 117.04 | -1.98% improved |
+
+- Metric artifacts: `models/model-charliepai2i24h1-fern-lion-optimizer-20260515-234226/metrics.jsonl`
+
+**Analysis**: 3 of 4 splits improved; camber_rc regressed +10.84%. This is the **third mechanism class** to produce a camber_rc-specific regression (after grad-clip max_norm=1.0 and max_norm=100 from #3336). Lion removes AdamW's per-parameter v adaptation (sign-only momentum, no adaptive scaling) — the same pattern holds. Throughput prediction (2-5% speedup) did not materialize; 204.7 s/ep vs baseline ~205 s. Schedule alignment caveat: Lion got T_max=12 vs baseline T_max=50, so Lion actually got a more aggressive low-LR phase — this probably *helped* Lion vs a fair matched-schedule comparison.
+
+**Verdict**: CLOSED. Headline ~neutral (within seed variance), but camber_rc-as-discriminator-3rd-mechanism-class is the permanent finding. Closing optimizer-swap axis as primary lever per student's own recommendation.
+
+## 2026-05-16 — Loop 6: PR #3498 tanjiro SwiGLU CLOSED
+
+- **Student branch**: `charliepai2i24h1-tanjiro/swiglu-mlp`
+- **Hypothesis**: SwiGLU FFN (iso-param d_ff=256, no biases) as drop-in for GELU FFN — tests whether gated activation improves generalization and gives 5-10% throughput speedup at wider trunk.
+- **Result**: val_avg/mae_surf_p = 132.3848 (best ep 9/9 realized, 30-min cap), +4.79% vs baseline. test_avg = 118.4290.
+
+| Split | SwiGLU | Baseline | Delta |
+|---|---|---|---|
+| single_in_dist | 169.58 | 158.79 | +6.8% |
+| geom_camber_rc | 146.69 | 127.26 | +15.3% |
+| geom_camber_cruise | 100.29 | 102.20 | -1.9% |
+| re_rand | 112.98 | 117.04 | -3.5% |
+
+- Metric artifacts: `models/model-swiglu-mlp-20260515-232558/metrics.jsonl`
+
+**Analysis**: Throughput unchanged (~211 s/ep) — MLP is small fraction of FLOPs on n_hidden=192 trunk vs PhysicsAttention on 74K-242K node meshes. PaLM-cited 5-10% speedup is a large-hidden LLM regime result. Budget cut at 9/12 epochs (211s × 12 = 42 min > 30 min cap) noted; but even with budget cut, per-split signature does not support the hypothesis (camber_rc worst at +15.3%, cruise and re_rand the small winners). n_params = 1,444,641 (-2,880, near iso-param as intended).
+
+**Verdict**: CLOSED. Gated-FFN axis exhausted at n_hidden=192: no throughput win, no quality win, and camber_rc remains discriminator-worst.
+
+## 2026-05-16 — Loop 6: PR #3556 thorfinn MSE+L1 mix CLOSED
+
+- **Student branch**: `charliepai2i24h1-thorfinn/mse-l1-mix`
+- **Hypothesis**: Mixed surface loss 0.7*MSE + 0.3*L1 — attacks heavy-tail pressure residuals + camber_rc gradient-norm asymmetry by linearizing the tail gradient.
+- **Result**: val_avg/mae_surf_p = 137.3291 (best ep 9/9 realized, 30-min cap), +8.7% vs baseline. test_avg = 123.7493.
+
+| Split | MSE+L1 | Baseline | Delta | Hypothesis predicted |
+|---|---|---|---|---|
+| single_in_dist | 179.21 | 158.79 | +12.9% | neutral |
+| geom_camber_rc | 149.42 | 127.26 | +17.4% | biggest WIN — INVERTED |
+| geom_camber_cruise | 101.11 | 102.20 | -1.1% | biggest win — tiny |
+| re_rand | 119.58 | 117.04 | +2.2% | — |
+
+- Metric artifacts: `models/model-surf-mse-l1-mix-20260516-003558/metrics.jsonl`
+- Diagnostics: mix functionally engaged (train_surf_l1 0.34 > train_surf_mse 0.27 at ep 9, not degenerating to pure MSE). Per-epoch wall ~203 s, VRAM 63.0 GB — both unchanged.
+
+**Analysis**: Hypothesis falsified directionally: the L1 gradient-floor term `0.3*sign(r)` rotates the gradient toward sign(r) on heavy-tail rc residuals, *destroying* useful curvature instead of providing outlier robustness. This is the **fifth mechanism class** to regress camber_rc when gradient-magnitude information is flattened or replaced.
+
+**5-way camber_rc-as-discriminator synthesis**:
+
+| Mechanism class | camber_rc regression | What is removed from gradient |
+|---|---|---|
+| slice_num=32 (#3500) | +18.9% | attention capacity |
+| grad-clip max_norm=1.0 (#3336) | +17.4% | gradient L2 magnitude (clipped) |
+| MSE+L1 mix 0.7/0.3 (this PR) | +17.4% | partial sign(r) replacement |
+| grad-clip max_norm=100 (#3336) | +11.9% | gradient L2 magnitude (loose) |
+| Lion sign-momentum (#3525) | +10.84% | AdamW per-param v adaptation |
+
+**Verdict**: CLOSED. +8.7% regression (well above 5% close threshold). Closes the linear-combination-loss axis. SmoothL1 (#3127 askeladd, still WIP) is a separate mechanism class (quadratic-near-zero smooth blend) and is unaffected by this close.
+
+## 2026-05-16 — Loop 6: New dispatches #3585, #3588, #3589
+
+- **#3585 fern per-domain-loss-weight**: multiply racecar_tandem surface loss by 2.0× during training. First data-distribution-side attack on the 5-way camber_rc-as-discriminator finding; all prior 5 mechanism classes touched gradient-flow side. Upweights the training domain most structurally similar to held-out geom_camber_rc.
+- **#3588 tanjiro lookahead-optimizer**: Lookahead(AdamW, k=5, alpha=0.5). Meta-optimizer wrapper preserving AdamW's v adaptation (which the 5-way finding says camber_rc needs) while adding slow-weight trajectory smoothing. Distinct from Lion (which replaced AdamW) and from grad-clip (which rate-limits gradient magnitude).
+- **#3589 thorfinn swa-tail**: Stochastic Weight Averaging over last 3 epochs via torch.optim.swa_utils. Uniform tail averaging complementing EMA's exponential decay. Single-line addition (AveragedModel), evaluated as min(val_ema, val_swa) at end of training.
