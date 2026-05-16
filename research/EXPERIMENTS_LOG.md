@@ -3,6 +3,78 @@
 Track: `charlie-pai2i-24h-r1`
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 
+## 2026-05-16 — Loop 17 actions (Pure L1 BIG win in flight; 3 closures, 1 send-back, 2 stale closures, 5 fresh dispatches)
+
+**Context**: 4 PRs landed for review against the SmoothL1 baseline (#3127, val_avg=94.97 / test_avg=85.04). Pure L1 (#3798 frieren) crushed the field with val_avg=86.66 (−8.75%), test_avg=77.21 (−9.20%) — but single-seed and `use_l1` default left at False. Sent back for seed-pin confirmation + default flip before merge. 3 of the other PRs dominated by the Pure L1 mechanism and closed. 2 stale_wip PRs (#3588 Lookahead, #3589 SWA) had no commits across 2 baseline shifts — closed as stale and the students reassigned with fresh hypotheses.
+
+**PR send-back (1)**:
+
+### PR #3798 — frieren — Pure L1 (F.l1_loss) — SENT BACK (huge win pending confirmation)
+
+- **Student branch**: `charliepai2i24h1-frieren/pure-l1`
+- **Hypothesis**: F.l1_loss is the β→0 limit of SmoothL1; pushes the L1 tail down to the gradient discontinuity at r=0. Should compound with the SmoothL1 win.
+- **Result**: val_avg=**86.66** (−8.75% vs SmoothL1 94.97), test_avg=**77.21** (−9.20% vs SmoothL1 85.04). **Uniform improvement across all 8 val+test splits.**
+  - Per-val: single_in_dist=101.41 (−8.51%), camber_rc=94.41 (−9.03%), cruise=69.93 (−7.79%), re_rand=80.91 (−9.51%)
+  - Per-test: test_single_in_dist=89.51 (−7.89%), camber_rc=84.96 (−9.31%), cruise=58.54 (−8.72%), re_rand=75.84 (−10.94%)
+- **Why sent back (not merged)**: (a) single seed — #3676 found ~6-unit seed variance at narrow+bf16, asked for 1 confirmation seed (seed=42); (b) `use_l1: bool = False` default would mean post-merge students still get SmoothL1 unless they pass `--use_l1` — asked frieren to flip default to True for consistency with #3127 convention.
+- **Metric artifacts**: from #3798 PR comments
+
+**PR closures (3 superseded + 2 stale)**:
+
+### PR #3763 — askeladd — SmoothL1 β sweep (β=0.5, β=0.25) — CLOSED (superseded by Pure L1)
+
+- **Student branch**: `charliepai2i24h1-askeladd/smoothl1-beta-sweep`
+- **Hypothesis**: SmoothL1 with smaller β pushes the L1 tail closer to r=0. β=0.5 and β=0.25 should monotonically improve.
+- **Two-arm result**:
+  - β=0.5: val_avg=91.57 (−3.58% vs 94.97), test_avg=83.20 (−2.16%). Best β=0.5 arm.
+  - β=0.25: val_avg=91.81 (−3.33%), test_avg=82.71 (−2.74%). Slightly worse than β=0.5 on val, slightly better on test.
+- **Per-channel signal (HIGH VALUE)**: β=0.25 uniformly better on Ux/Uy; β=0.5 better on pressure (the primary metric channel) on 2 of 4 splits. The optimal β depends on the channel.
+- **Verdict**: CLOSED. Both arms beat SmoothL1 baseline but are decisively dominated by Pure L1 at 86.66 (−8.75%). Progression {β=1.0: 94.97, β=0.5: 91.57, β=0.25: 91.81, β=0.0: 86.66} is non-monotonic with a 4.91-unit gap at the L1 limit — strongly suggesting Pure L1's gradient discontinuity at r=0 is the load-bearing mechanism, not just shrinking β. Askeladd reassigned to Charbonnier loss (#3861) which directly tests the smoothness-at-r=0 question.
+- **Metric artifacts**: from #3763 PR comments
+
+### PR #3800 — fern — Per-channel surf_p 4× weighting — CLOSED (regression)
+
+- **Student branch**: `charliepai2i24h1-fern/surf-p-4x`
+- **Hypothesis**: Pressure is the primary metric channel; weighting surf_p 4× inside surface loss should directly improve mae_surf_p.
+- **Result**: val_avg=97.92 (+3.10% vs 94.97), test_avg=87.39 (+2.77%). **Uniform regression across all 8 val+test splits.**
+- **Verdict**: CLOSED. The mechanism is global gradient-budget reallocation (more pressure weight = less Ux/Uy weight) which under SmoothL1's L1 tail is already partially solved. Decisively closed by Pure L1's win — Pure L1 dominates per-channel reweighting on this baseline.
+- **Metric artifacts**: `models/model-surf-p-4x-...` (path on student branch)
+
+### PR #3804 — nezuko — n_hidden=128 → 160 — CLOSED (regression + under-completion)
+
+- **Student branch**: `charliepai2i24h1-nezuko/n-hidden-160`
+- **Hypothesis**: Widening trunk to 160 (intermediate point between narrow 128 and previously-wider 192) compounds with SmoothL1.
+- **Result**: val_avg ≈ 96.4 (+1.5%), 17/18 epochs realized (under-completed cosine at 111 s/epoch vs predicted 118). camber_rc trajectory consistent with width-helping mechanism, but cosine under-completion bites at this trunk size.
+- **Verdict**: CLOSED. Reinforces #3478's "schedule completion > raw capacity" finding under SmoothL1. Pure L1 has more headroom at the existing trunk than widening does. Nezuko reassigned to lr_min=1e-5 schedule floor (#3864).
+- **Metric artifacts**: from #3804 PR comments
+
+### PR #3588 — tanjiro — Lookahead optimizer (k=5, α=0.5) — CLOSED (stale)
+
+- **Student branch**: `charliepai2i24h1-tanjiro/lookahead-optimizer`
+- **Status**: 5+ days stale_wip across 2 baseline shifts (#3478 narrow+bf16, then #3127 SmoothL1). Pod alive but never picked up the work. Closed as stale; reassigned to LLRD (#3865) — the natural per-block-lr follow-up to #3719's global-lr closure.
+
+### PR #3589 — thorfinn — SWA tail (last 3 epochs) — CLOSED (stale)
+
+- **Student branch**: `charliepai2i24h1-thorfinn/swa-tail`
+- **Status**: 5+ days stale_wip across 2 baseline shifts. Reassigned with fresh restart on SWA tail (#3866) with cleaner spec on the current SmoothL1 baseline.
+
+**5 new dispatches (all idle students addressed; zero idle GPUs)**:
+
+| PR | Student | Axis | One-line summary |
+|---|---|---|---|
+| #3861 | askeladd | Loss formulation | Charbonnier `sqrt(eps² + r²) - eps`; eps∈{1e-3, 1e-2}. Tests "is L1's discontinuity at r=0 the mechanism?" |
+| #3863 | fern | Optimizer stability | Gradient norm clipping max_norm=1.0 + per-epoch grad-norm telemetry |
+| #3864 | nezuko | Schedule shape | CosineAnnealingLR eta_min=1e-5 — directly attack underfit-baseline late-cosine descent |
+| #3865 | tanjiro | Per-block lr | LLRD (γ∈{0.9, 0.75}) — natural follow-up to #3719 global-lr closure |
+| #3866 | thorfinn | Weight averaging | SWA uniform tail-3 averaging — complementary to EMA |
+
+**Loop 17 systemic findings**:
+
+1. **L1's discontinuity at r=0 is likely the load-bearing mechanism** (not just smaller β): the non-monotonic progression {β=1.0: 94.97, β=0.5: 91.57, β=0.25: 91.81, β=0.0: 86.66} with a 4.91-unit gap at the L1 limit is much larger than the inter-step gap inside the β sweep. Charbonnier (#3861) directly tests this.
+2. **Schedule completion is still the binding constraint** on width: #3804 n_hidden=160 reinforces #3478's finding that under-completed cosine bites harder than capacity helps.
+3. **Per-channel optima diverge by channel** (#3763 finding): β=0.25 wins on Ux/Uy but β=0.5 wins on pressure on 2/4 splits. Suggests per-channel loss formulation is a future axis worth exploring.
+4. **Global gradient-budget reallocation hurts** under L1-tail losses: #3800 surf_p 4× regression confirms that any per-channel reweighting needs to coexist with L1 mechanics, not against them.
+
 ## 2026-05-16 — Loop 16 actions (post-SmoothL1 merge)
 
 **Context**: PR #3127 (SmoothL1) merged Loop 15 with new best val_avg=94.97 / test_avg=85.04 (−15.0%). 5 PRs landed for review against the new baseline; all 5 had results measured on the OLD MSE baseline (111.75).
