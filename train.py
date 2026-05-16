@@ -363,6 +363,7 @@ def write_experiment_summary(
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
         "lr_t_max": cfg.lr_t_max,
+        "adam_beta2": cfg.adam_beta2,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -414,6 +415,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
+    adam_beta2: float = 0.999  # AdamW second-moment EMA rate; lower = faster forgetting of past sq grads
 
 
 cfg = sp.parse(Config)
@@ -461,7 +463,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.adam_beta2),
+)
 cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
@@ -573,6 +580,7 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_max": grad_norm_max,
         "train/clip_frac": clip_frac,
         "grad_clip_max_norm": cfg.grad_clip_max_norm,
+        "adam_beta2": cfg.adam_beta2,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
