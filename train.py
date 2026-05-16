@@ -344,6 +344,8 @@ def write_experiment_summary(
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
+        "adamw_beta1": 0.9,
+        "adamw_beta2": 0.95,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
@@ -461,6 +463,7 @@ optimizer = torch.optim.AdamW(
         {"params": no_decay_params, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
+    betas=(0.9, 0.95),
 )
 warmup_epochs = 2
 warmup = torch.optim.lr_scheduler.LinearLR(
