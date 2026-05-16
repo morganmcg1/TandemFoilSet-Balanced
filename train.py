@@ -284,7 +284,9 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             ff = fourier_encoder(x_norm[..., :2])
-            x_aug = torch.cat([x_norm, ff], dim=-1)
+            is_tandem = (x[:, 0, 18:24].abs().sum(dim=-1) > 0.01).float()
+            domain_feat = is_tandem.view(-1, 1, 1).expand(-1, x_norm.shape[1], 1)
+            x_aug = torch.cat([x_norm, ff, domain_feat], dim=-1)
             pred = model({"x": x_aug})["preds"]
 
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=smooth_l1_beta, reduction="none")
@@ -465,7 +467,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + 4 * cfg.fourier_bands,
+    fun_dim=X_DIM - 2 + 4 * cfg.fourier_bands + 1,  # +1 = binary tandem indicator
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -479,6 +481,22 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# Verify the domain-indicator heuristic on a small slice of the train set:
+# raw x dims 18-23 should be exactly 0 for single-foil samples and non-zero
+# for tandem samples. This sanity-checks the |sum|>0.01 threshold.
+_n_check = min(16, len(train_ds))
+_tandem_flags, _norms = [], []
+for _i in range(_n_check):
+    _x, _y, _isf = train_ds[_i]
+    _norm = _x[0, 18:24].abs().sum().item()
+    _norms.append(_norm)
+    _tandem_flags.append(_norm > 0.01)
+print(
+    f"Domain-indicator sanity check (n={_n_check}): "
+    f"|sum| min={min(_norms):.4f} max={max(_norms):.4f}; "
+    f"tandem count={sum(_tandem_flags)}/{_n_check}"
+)
 
 fourier_encoder = FourierEncoder(cfg.fourier_bands).to(device)
 n_fourier_params = sum(p.numel() for p in fourier_encoder.parameters())
@@ -544,7 +562,13 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         ff = fourier_encoder(x_norm[..., :2])
-        x_aug = torch.cat([x_norm, ff], dim=-1)
+        # Domain indicator computed from RAW x (single-foil has exact 0 in dims
+        # 18-23 by dataset design; normalization shifts these to a non-zero
+        # constant, so we read the raw values). Index 0 is always a real node
+        # because pad_collate pads at the end.
+        is_tandem = (x[:, 0, 18:24].abs().sum(dim=-1) > 0.01).float()  # [B]
+        domain_feat = is_tandem.view(-1, 1, 1).expand(-1, x_norm.shape[1], 1)
+        x_aug = torch.cat([x_norm, ff, domain_feat], dim=-1)
         pred = model({"x": x_aug})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.smooth_l1_beta, reduction="none")
 
