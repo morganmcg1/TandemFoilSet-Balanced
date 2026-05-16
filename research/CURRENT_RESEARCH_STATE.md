@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 07:30 (PR #3643 n_head=2 merged — new baseline 70.925; #3727 GEGLU sent back for compound retest; #3639 EMA + #3646 DropPath closed; assigning askeladd/alphonse/fern new experiments)
+- **Last updated:** 2026-05-16 07:45 (PR #3643 n_head=2 merged — new baseline 70.925; #3639 EMA + #3646 DropPath closed; #3727 GEGLU sent back; askeladd/alphonse/fern assigned new experiments #3773/#3774/#3775)
 - **Most recent research direction from human researcher team:** none (no open issues — verified 06:30Z).
 - **Current best (merged):** `val_avg/mae_surf_p` = **70.925** (PR #3643 n_head=2 head_dim=48)
 - **GH rate-limit status:** ~3500/5000 remaining.
@@ -14,9 +14,9 @@
 | #3655 | nezuko | RFF σ=3 + learnable-σ 2-arm | WIP (rebase) | Positional encoding axis |
 | #3727 | frieren | GEGLU at hidden_inner=192 | WIP (sent back for retest on n_head=2 stack) | Was −3.10% standalone win |
 | #3744 | tanjiro | hidden_inner=192→256 | WIP | Capacity ceiling probe |
-| **(new)** | askeladd | n_head=1 head_dim=96 (extend trend) | pending PR creation | Follow-up to #3643 win |
-| **(new)** | alphonse | attention dropout p=0.1 | pending PR creation | New regularization axis on attention path |
-| **(new)** | fern | n_layers=6 on SwiGLU + n_head=2 | pending PR creation | Depth retest on new stack |
+| #3773 | askeladd | n_head=1 head_dim=96 (extend wider-head trend) | WIP (newly assigned) | Follow-up to #3643 win |
+| #3774 | alphonse | attention dropout p=0.1 | WIP (newly assigned) | New regularization axis on attention path |
+| #3775 | fern | n_layers=6 on SwiGLU + n_head=2 | WIP (newly assigned) | Depth retest on new stack |
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
