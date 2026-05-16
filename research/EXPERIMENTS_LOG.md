@@ -16,6 +16,73 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 08:10 — PR #3207: FiLM-Re + geom-slice v2 (nezuko) — CLOSED
+- student: willowpai2i24h2-nezuko
+- branch: `willowpai2i24h2-nezuko/geom-slice-injection`
+- hypothesis (cycle 18 rebased compound): per-block PhysicsAttention.geom_project(Linear(9, slice_num) zero-init) injecting NACA/AoA/gap/stagger into slice_logits, compounded with FiLM-Re + SmoothL1 β=0.05
+- W&B runs (group `willow-pai2i-24h-r2/film-re-geomslice`): `usqypjfh` (v2 primary), `hw2aksew` / `8anpzcjq` (v1), `0afjmq8j` / `h40iutne` (v2 OOM)
+
+| Run | label | val_avg | test_avg | best ep | state |
+|---|---|---|---|---|---|
+| `usqypjfh` | v2 primary | **81.90** | **73.82** | 13 | finished |
+| `hw2aksew` | v1 | 84.41 | 77.99 | 13 | finished |
+| `8anpzcjq` | v1 | 85.71 | 77.40 | 13 | finished |
+| `h40iutne` | v2 | — | — | — | OOM ep1 step 239 |
+| `0afjmq8j` | v2 | — | — | — | OOM ep0 step 0 |
+| **New SWA baseline** | — | **76.61** | **68.20** | — | — |
+
+Per-split deltas on the v2 primary (`usqypjfh`) against old FiLM-Re baseline:
+- val: `single_in_dist` **−6.2%** (87.94 vs 93.78), `geom_camber_rc` parity, `geom_camber_cruise` **+13.7%** worse (62.47 vs 54.93), `re_rand` **+8.1%** worse (80.93 vs 74.83).
+- test: `single_in_dist` **−9.5%** (75.35 vs 83.21), `geom_camber_rc` **+11.4%** worse, `geom_camber_cruise` **+19.6%** worse, `re_rand` **+11.2%** worse.
+
+**Analysis:** v2 primary val=81.90, test=73.82 — misses new SWA baseline by +7.0% val / +8.2% test. The per-split signature is decisive: in-dist improves substantially but the three OOD splits all regress significantly. This means the additive `geom_project` zero-init perturbation is *fitting* in-distribution geometry signal at the expense of generalization — exactly the opposite of what an inductive-bias improvement should do. Mechanistically: FiLM-Re's per-block gamma/beta on `log(Re)` already provides the regime-aware conditioning that geometry-slice mixing was supposed to add; their composition introduces noise rather than orthogonal signal, and the gradient signal pushes the model to overfit local geometry shortcuts.
+
+Nezuko also produced two genuinely valuable artifacts during this PR's lifetime: (a) the data/scoring.py NaN-poisoning bug fix that became infrastructure for all subsequent PRs, and (b) a five-arm variance sweep with W&B archive `train.py` diffs for v1/v2 hash comparison. The fact that v2 (81.90) beat v1 (84.41-85.71) by 3-4 absolute val units confirms the v2 implementation is cleaner, but the cleaned-up mechanism still does not compound with FiLM-Re.
+
+**Decision:** CLOSED. Direction has now been tested both standalone (val=85.60) and in compound (val=81.90). Two rounds of falsification on independent baselines is conclusive.
+
+**Reassignment:** nezuko → PR #3820 (residual learning over linear baseline — Idea 2 from researcher-agent cycle-15 ideas).
+
+---
+
+## 2026-05-16 08:10 — PR #3356: Divergence-free auxiliary loss (thorfinn) — CLOSED
+- student: willowpai2i24h2-thorfinn
+- branch: `willowpai2i24h2-thorfinn/divergence-free-aux-loss`
+- hypothesis: divergence-free penalty `|∇·U|²` on FiLM-Re-conditioned model would compound with the Re-aware prior — physics-informed regularization
+- best result reported: val=79.82, test=71.28 (single seed; sister seeds varied across the high 80s)
+
+**Analysis (from student's reply Option A):** Thorfinn's own diagnosis is the cleanest articulation: FiLM-Re's per-block Re-conditioning effectively *imposes its own physics-aware prior* (per-layer gamma/beta on log Re acts as an implicit regime-tracking regularizer). Stacking the divergence-free penalty *competes with rather than complements* that mechanism — the penalty surface gets noisier across seeds without adding orthogonal signal. The signature (high seed variance, best arm marginal, sister seeds significantly worse) is the classic fingerprint of a constraint that is redundant against an already-strong prior.
+
+This experiment thus rules out an entire compound family: physics-loss-on-conditioning. It clarifies that future physics-informed losses should either (a) target a quantity NOT already addressed by FiLM-Re (e.g. Bernoulli or boundary-layer-specific constraints), or (b) replace FiLM-Re rather than add to it.
+
+**Decision:** CLOSED per student's recommendation (Option A) with explicit mechanistic reasoning.
+
+**Reassignment:** thorfinn → PR #3813 (per-sample Re-scaled loss normalization — Idea 1, ranked #1 by researcher-agent for highest impact/risk ratio).
+
+---
+
+## 2026-05-16 08:10 — PR #3653: Fourier bands 16 on FiLM-Re (frieren) — CLOSED
+- student: willowpai2i24h2-frieren
+- branch: `willowpai2i24h2-frieren/fourier-bands-16-film-re`
+- hypothesis: increasing learnable Fourier bands from 8 → 16 on the FiLM-Re baseline adds positional capacity that should help the 4-channel splits with stronger spatial structure
+- W&B runs: 3 seeds (bands=16); bands=12 arm intentionally skipped after bands=16 missed
+
+3-seed mean for bands=16:
+| Metric | bands=16 (3-seed mean) | Δ vs old baseline (79.90 / 69.33) | Δ vs new SWA baseline (76.61 / 68.20) |
+|---|---|---|---|
+| val_avg/mae_surf_p | 85.25 | **+6.69%** worse | **+11.3%** worse |
+| test_avg/mae_surf_p | 76.04 | **+9.69%** worse | **+11.5%** worse |
+
+**Analysis (from student's terminal SENPAI-RESULT):** All 3 seeds miss in the same direction at a margin too large to be variance. Mechanistically consistent with the researcher-agent's plateau diagnosis that at 13 effective epochs the model is *sample-complexity-limited*, not capacity-limited. Adding positional capacity (16 bands → +12% input dim → larger preprocess MLP, larger channel-mixing FLOPs in every block) increases the parameter-to-gradient-step ratio at exactly the wrong moment of the training budget. Frieren's earlier MERGED PR #3352 (learnable bands=8) established that *learnable* Fourier bands beat fixed; this PR's null result shows that *more* learnable bands do not help under the wall-clock cap.
+
+The student's decision to skip the bands=12 arm given the bands=16 magnitude is correct experimental hygiene — a falsified middle point would not change the conclusion.
+
+**Decision:** CLOSED per student's own recommendation.
+
+**Reassignment:** frieren → PR #3816 (Stochastic Depth / LayerDrop sweep — Idea 6, low risk, regularization-as-orthogonal-mechanism).
+
+---
+
 ## 2026-05-16 08:00 — PR #3669: SWA on FiLM-Re (edward) — MERGED (NEW BASELINE)
 - student: willowpai2i24h2-edward
 - branch: `willowpai2i24h2-edward/swa-film-re`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 08:05 UTC (Cycle 18 — NEW BASELINE from SWA; 3 students idle)
+- **Date:** 2026-05-16 08:15 UTC (Cycle 19 — plateau-break round launched; 0 idle students)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -19,9 +19,7 @@ None — no human directives on this launch.
 - W&B run: `dqe95m2e`
 - Per-split (val | test): single=87.96|77.57, camber_rc=89.40|80.45, camber_cruise=55.59|47.92, re_rand=73.48|66.86
 
-**SWA mechanism:** `AveragedModel` with per-step updates starting at epoch 8/13 (swa_start_epoch=7, 0-indexed). Best-val ckpt alone (val=80.62, test=71.96) does NOT beat prior baseline — the SWA averaging is the key. Zero GPU memory overhead.
-
-**Progress:** val=76.61 vs prior 79.90 (−4.12%); test=68.20 vs prior 69.33 (−1.63%).
+**SWA mechanism:** `AveragedModel` with per-step updates starting at epoch 8/13 (swa_start_epoch=7, 0-indexed). Best-val ckpt alone (val=80.62, test=71.96) does NOT beat prior baseline — the SWA averaging is the key. Zero GPU memory overhead. Now default in `train.py`.
 
 ### Merge history
 | Date | PR | Title | val_avg | test_avg | Δ val_avg |
@@ -32,59 +30,51 @@ None — no human directives on this launch.
 | 2026-05-16 03:30 | #3350 | FiLM-Re conditioning | 79.90 | 69.33 | −11.8% |
 | **2026-05-16 08:00** | **#3669** | **SWA on FiLM-Re** | **76.61** | **68.20** | **−4.1%** |
 
-## Active Research Directions
+## Cycle 19 actions (just executed)
 
-### Compound experiments still WIP (awaiting SENPAI-RESULT)
+**Closed** (no longer compounding against new SWA baseline):
+- PR #3356 (thorfinn) — divergence-free aux loss; student replied "Option A — closing" with mechanistic reasoning that FiLM-Re's per-block Re-conditioning already imposes a physics-aware prior the div-free penalty competes with.
+- PR #3653 (frieren) — Fourier bands=16; student's own SENPAI-RESULT recommended closure (3-seed mean misses both baselines by 6-11%; sample-complexity-limited at 13 epochs, not capacity-limited).
+- PR #3207 (nezuko) — FiLM-Re + geom-slice v2 compound; v2 primary (usqypjfh) val=81.90 / test=73.82 vs SWA 76.61/68.20. Per-split signature shows OOD splits regressing while in-dist improves — exactly the wrong direction for an inductive-bias improvement.
 
-| PR | Student | Hypothesis | Best val so far | Best test | Status |
-|---|---|---|---|---|---|
-| #3356 | thorfinn | FiLM-Re + div_weight=0.01/0.005 | 79.82 | 71.28 | WIP, merge_conflict |
-| #3207 | nezuko | FiLM-Re + geom-slice v2 | 81.90 | 73.82 | WIP, merge_conflict |
-| #3653 | frieren | FiLM-Re + Fourier bands=16 | 81.29 | 72.73 | WIP, SENPAI-RESULT pending |
-| #3657 | alphonse | Multi-signal FiLM cond_dim=5 | 81.87 | 73.24 | WIP, SENPAI-RESULT pending |
-| #3670 | askeladd | surf_weight=15 on FiLM-Re | 82.56 | 76.05 | WIP, SENPAI-RESULT pending |
+**Assigned** (3 new plateau-break experiments now running):
 
-**Against the new SWA baseline (76.61/68.20), all 5 above currently FAIL both metrics.** Will likely be closed when SENPAI-RESULTs arrive.
+| Student | PR | Idea | Why this student |
+|---|---|---|---|
+| thorfinn | #3813 | Per-Sample Re-Scaled Normalization (Idea 1, ranked #1 by researcher-agent) | Strong physics-loss/scaling instincts; this is the loss-side analog of FiLM-Re |
+| frieren | #3816 | Stochastic Depth / LayerDrop sweep {0.05, 0.10, 0.15} (Idea 6) | Has demonstrated clean multi-seed sweep methodology |
+| nezuko | #3820 | Residual learning over linear baseline (Idea 2, DeltaPhi-style) | Meticulous data-side work; found the scoring.py NaN bug |
 
-### Idle students (need assignment)
-- willowpai2i24h2-edward — freed after SWA merge
-- willowpai2i24h2-fern — freed after OneCycleLR close
-- willowpai2i24h2-tanjiro — freed after β=0.02 close
+## Active Research Directions — Cycle 19 in-flight (8 WIP)
 
-## Key mechanistic findings from plateau round
+| PR | Student | Hypothesis | Status |
+|---|---|---|---|
+| #3657 | alphonse | Multi-signal FiLM cond_dim=5/9 (geometry-augmented FiLM) | WIP, SENPAI-RESULT pending |
+| #3670 | askeladd | surf_weight sweep {5,15,20} on FiLM-Re | WIP, SENPAI-RESULT pending |
+| #3799 | edward | EMA vs uniform SWA (decay sweep) | WIP |
+| #3803 | tanjiro | SWA start epoch sweep {4,6,8,10} | WIP |
+| #3806 | fern | Surface-Dedicated Refinement MLP (Idea 3) | WIP |
+| **#3813** | **thorfinn** | **Per-Sample Re-Scaled Norm (Idea 1)** | **NEW — just assigned** |
+| **#3816** | **frieren** | **Stochastic Depth / LayerDrop sweep (Idea 6)** | **NEW — just assigned** |
+| **#3820** | **nezuko** | **Residual learning over linear baseline (Idea 2)** | **NEW — just assigned** |
 
-1. **SWA wins despite simple implementation**: Cosine-annealed training stops at epoch 13/50 due to wall-clock. SWA averages the last 6 epochs, approximating a lower-LR converged point. Works better on high-variance splits (single_in_dist, geom_camber_rc).
+## Plateau-break strategy (this cycle)
 
-2. **β-tuning and FiLM-Re are substitutes**: β=0.02 compounds-out with FiLM-Re (all 4 seeds regress test by mean +7.55%). FiLM-Re's conditioning mechanism requires the quadratic-to-linear transition of β=0.05 to operate effectively.
+The researcher-agent's cycle-15 diagnosis identifies three orthogonal axes that haven't been pulled:
 
-3. **Compounding saturated vs FiLM-Re baseline**: 10+ compound experiments, none beat both metrics on best-val ckpt. The plateau was real at val=79.90.
+1. **Loss-side** — directly condition the OBJECTIVE on Re (per-sample normalization), not just the model weights. (#3813 thorfinn)
+2. **Regularization-side** — stochastic depth implicitly ensembles sub-networks and reduces per-step compute. Orthogonal to FiLM-Re and SWA. (#3816 frieren)
+3. **Target-side** — residualize the target with a linear baseline, reducing magnitude and freeing capacity for the nonlinear physics. (#3820 nezuko)
 
-4. **SWA broke the plateau**: val=76.61, test=68.20. A technique from the researcher-agent's Idea 7 (checkpoint averaging) operationalized as online SWA — zero additional training cost.
-
-## Next research directions (plateau-break assignments)
-
-Priority order for assignment to edward/fern/tanjiro:
-
-1. **SWA + EMA sweep** (edward): The SWA win is real — the mechanism needs to be pushed further. Key variants:
-   - Earlier SWA start (epoch 5 instead of 7 — the standard recipe recommends 75% of training, but with 13 actual epochs, earlier start means more averaging)
-   - EMA with decay=0.999 (exponential moving average weights recent epochs more — often a +1-2% over uniform SWA)
-   - SWALR: constant flat LR after swa_start rather than continuing cosine decay
-
-2. **Per-Sample Re-Scaled Normalization** (frieren — from RESEARCH_IDEAS Idea 1): normalize targets per-sample by Re-conditioned scale factors before loss computation; denormalize for metrics. Could address the heavy-tail problem more fundamentally than β-tuning.
-
-3. **Residual Learning over Analytic Baseline** (tanjiro — from RESEARCH_IDEAS Idea 2): predict the DELTA between the model and a simple analytic approximation (flat-plate pressure theory), not the raw pressure. Reduces the dynamic range of targets.
-
-4. **Surface-Dedicated Refinement Sub-Network** (fern — from RESEARCH_IDEAS Idea 3): small MLP that takes Transolver's latent tokens + Re + geometry and refines only the surface-node predictions. +65K params focused entirely on the ranking metric.
-
-5. **Stochastic Depth / LayerDrop** (askeladd — from RESEARCH_IDEAS Idea 6): randomly skip Transolver blocks during training with p=0.05-0.15. Acts as implicit ensemble, reduces training variance.
+In parallel, edward (#3799), tanjiro (#3803), and fern (#3806) are exploring SWA mechanism variants and surface-specialized capacity. Total coverage: 8 active experiments spanning 5 orthogonal mechanisms.
 
 ## Goal
 
-Push val < 72, test < 65. SWA establishes a new plateau floor at 76.61/68.20. Next target: can SWA + EMA / SWA + extended budget / architecture sweeps break into the 72-74 val range?
+Push val < 72, test < 65. SWA broke the 79.90 → 76.61 plateau. The next break needs to come from one of the 8 active mechanisms above — most likely loss-side or target-side (Idea 1 or 2 in the researcher-agent's ranking).
 
-## Architecture tier (if current approaches saturate)
+## Architecture tier (if plateau-break round stalls)
 
-- GNN over mesh
-- Galerkin transformer
-- Spectral-conv (FNO) hybrid
-- Per-sample normalization with clipping
+- Hypernetwork Re conditioning (Idea 4) — only after low-risk ideas have results
+- Multiscale mesh pooling / domain-aware coarsening (Idea 5) — staged probe first
+- Bernoulli consistency aux loss (Idea 8) — if ideas 1-4 fail
+- GNN over mesh / Galerkin transformer / FNO hybrid — architecture-tier reset
