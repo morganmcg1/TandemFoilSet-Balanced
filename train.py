@@ -592,6 +592,49 @@ class Lion(torch.optim.Optimizer):
         return loss
 
 
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead Optimizer (Zhang et al. 2019, arXiv 1907.08610).
+
+    Wraps an inner optimizer with slow-weight averaging every k steps.
+    Reduces variance of the inner-optimizer trajectory without changing memory
+    layout beyond one extra copy of weights.
+    """
+
+    def __init__(self, base_optimizer, k=6, alpha=0.5):
+        self.optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.param_groups = base_optimizer.param_groups
+        self.state = base_optimizer.state
+        self.defaults = base_optimizer.defaults
+        self._slow_weights = [
+            [p.detach().clone() for p in group["params"]]
+            for group in self.optimizer.param_groups
+        ]
+        self._step_counter = 0
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.optimizer.step(closure)
+        self._step_counter += 1
+        if self._step_counter % self.k == 0:
+            for group, slow_list in zip(self.optimizer.param_groups, self._slow_weights):
+                for fast, slow in zip(group["params"], slow_list):
+                    slow.add_(fast.data - slow, alpha=self.alpha)
+                    fast.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none=True):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        return {
+            "inner": self.optimizer.state_dict(),
+            "slow": [[s.clone() for s in g] for g in self._slow_weights],
+            "step_counter": self._step_counter,
+        }
+
+
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -617,6 +660,9 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
+    use_lookahead: bool = False
+    lookahead_k: int = 6
+    lookahead_alpha: float = 0.5
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -701,6 +747,9 @@ elif cfg.optimizer_name == "adamw":
     print(f"Optimizer: AdamW(lr={cfg.lr}, wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer_name: {cfg.optimizer_name!r}")
+if cfg.use_lookahead:
+    optimizer = Lookahead(optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Lookahead enabled (k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})")
 cosine_t_max = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 print(f"Scheduler: CosineAnnealingLR(T_max={cosine_t_max})  [epochs cap = {MAX_EPOCHS}]")
