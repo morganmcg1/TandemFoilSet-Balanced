@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -247,6 +248,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = encode_with_rff(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -368,6 +370,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    n_rff_freqs: int = 32   # Random Fourier Features over normalized (x, z)
+    rff_scale: float = 10.0
+    rff_seed: int = 42
 
 
 cfg = sp.parse(Config)
@@ -379,6 +384,31 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# Random Fourier Features over normalized (x, z) — fixed Gaussian frequencies.
+if cfg.n_rff_freqs > 0:
+    rff_gen = torch.Generator()
+    rff_gen.manual_seed(cfg.rff_seed)
+    rff_B = (torch.randn(cfg.n_rff_freqs, 2, generator=rff_gen) * cfg.rff_scale).to(device)
+    rff_dim = 2 * cfg.n_rff_freqs
+    print(
+        f"RFF: n_freqs={cfg.n_rff_freqs}, scale={cfg.rff_scale}, "
+        f"seed={cfg.rff_seed}, added_dim={rff_dim}"
+    )
+else:
+    rff_B = None
+    rff_dim = 0
+
+
+def encode_with_rff(x_norm: torch.Tensor) -> torch.Tensor:
+    """Concat RFF cos/sin features (computed from normalized (x, z)) to x_norm."""
+    if rff_B is None:
+        return x_norm
+    pos = x_norm[..., :2]
+    proj = pos @ rff_B.T  # (..., n_freqs)
+    two_pi = 2.0 * math.pi
+    rff = torch.cat([torch.cos(two_pi * proj), torch.sin(two_pi * proj)], dim=-1)
+    return torch.cat([x_norm, rff], dim=-1)
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -398,7 +428,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=(X_DIM - 2) + rff_dim,
     out_dim=3,
     n_hidden=96,
     n_layers=5,
@@ -457,6 +487,24 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "config",
+    "model_config": model_config,
+    "n_params": n_params,
+    "rff": {
+        "n_freqs": cfg.n_rff_freqs,
+        "scale": cfg.rff_scale,
+        "seed": cfg.rff_seed,
+        "added_dim": rff_dim,
+    },
+    "lr": cfg.lr,
+    "weight_decay": cfg.weight_decay,
+    "batch_size": cfg.batch_size,
+    "surf_weight": cfg.surf_weight,
+    "epochs": cfg.epochs,
+    "warmup_epochs": warmup_epochs,
+})
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -478,6 +526,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_norm = encode_with_rff(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=1.0)
