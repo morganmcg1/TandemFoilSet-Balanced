@@ -431,7 +431,7 @@ model_config = dict(
     slice_num=96,
     mlp_ratio=2,
     ffn_type="swiglu",
-    ffn_hidden_inner=128,
+    ffn_hidden_inner=192,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
