@@ -1,5 +1,62 @@
 # SENPAI Research Results
 
+## 2026-05-16 01:30 — PR #3175: H3: Cosine schedule with 5-epoch linear warmup ✗ CLOSED (noise-limited)
+
+- Branch: `nezuko/cosine-warmup`
+- Student: willowpai2i48h1-nezuko
+- Hypothesis: 5-epoch linear warmup followed by cosine T_max=15 should help by avoiding cold-start at peak LR.
+
+### Results (3-seed variance characterization vs new baseline 87.91)
+
+| Run | wandb_name | val_avg/mae_surf_p | Δ vs 87.91 |
+|-----|------------|---------------------|-------------|
+| `pdg0untr` | warmup=5, T_max=15 | **89.65** (best) | +1.97% (within σ) |
+| `jdq23bfi` | warmup=5, T_max=15 | 100.41 | +14.2% |
+| `hyxr9xiu` | warmup=5, T_max=15 v2 | 95.41 | +8.5% |
+| `hrqnte88` | warmup=2, T_max=12 | 92.89 | +5.7% |
+| **3-seed mean** | (identical config) | **95.16** | **+8.2%** (firmly worse) |
+
+### Analysis
+- **Strong second piece of variance evidence.** Three identical-config seeds spanned ~5pt std on val_avg — independent confirmation of alphonse's σ≈1.80 finding (PR #3305). Best-of-N appears to win; mean does not.
+- **Student's own conclusion is correct:** "on average this hypothesis does NOT beat baseline 91.33" (and certainly not the new 87.91 baseline).
+- **Mechanism check:** with T_max=15 and 14-epoch budget, the bare cosine schedule already provides a soft warmup-like ramp in the first ~5 epochs (LR ratios 0.95, 0.78, 0.59, 0.40, 0.21). Explicit linear warmup adds little incremental signal and gets drowned in seed variance.
+- **Schedule warmup lever is exhausted** for this configuration. Reliable warmup wins would require a higher peak LR (which we already tested in PR #3395 and found worse).
+
+### Closure rationale
+Test_avg = 84.66 (best seed) vs new baseline 83.38 → +1.5% worse. Across all measured arms, no result < 87.91 baseline. Hypothesis falsified at the noise floor.
+
+### Follow-up assigned (PR #3580)
+Stochastic Weight Averaging (SWA) over the last 5 checkpoints — pure variance-reduction lever, addresses the same noise problem from a different angle than thorfinn's in-flight EMA (#3521).
+
+---
+
+## 2026-05-16 01:15 — PR #3363: H8: AdamW β2=0.95 + grad clip 1.0 for training stability ✗ CLOSED (rebased noise, merge conflict)
+
+- Branch: `tanjiro/adamw-stability`
+- Student: willowpai2i48h1-tanjiro
+- Hypothesis: AdamW β2=0.95 + grad clip 1.0 should stabilize training and reduce per-epoch trajectory variance.
+
+### Results (rebased onto T_max=15 base — student's W&B but no terminal SENPAI-RESULT posted)
+
+| Base | wandb_name | val_avg/mae_surf_p |
+|------|------------|---------------------|
+| OLD (#3159 base, T_max=50) | `44lht7xd` | 102.24 (-9.4% vs OLD 112.83 baseline) |
+| Rebased (T_max=15) | `1i0kr8lr` | 92.43 |
+| Rebased (T_max=15, retry) | `qpreskuu` | 92.61 |
+
+### Analysis
+- **The OLD-base win (-9.4%) was largely the schedule fix in disguise** — when rebased onto T_max=15, the β2+clip lever produced val=92.43, which is within σ=1.80 of OLD baseline 91.33 but +5.1% worse than the NEW post-bf16 baseline 87.91.
+- Tanjiro's grad-norm telemetry analysis (99.7% of steps with grad_norm > 1.0, p99 ~10.6) was excellent diagnostic work — confirmed clip was binding and active, but the effect didn't compound with the schedule fix.
+- Branch developed a merge conflict and student did not respond to nudges. Effectively the experiment ran (W&B), just not formally submitted.
+
+### Closure rationale
+The optimizer-stability lever is exhausted for this configuration. The gain on the OLD base was the schedule fix in disguise. Merge conflict + no terminal makes this PR a dead end.
+
+### Follow-up assigned (PR #3574)
+Per-channel Huber-δ (δ_p=0.05 on surface-p only, δ=0.1 elsewhere) — frieren's suggested follow-up from #3522. Single-bit experiment building on tanjiro's per-channel analysis strengths.
+
+---
+
 ## 2026-05-16 00:30 — PR #3480: H: bf16 autocast alone (bs=4 preserved) ✓ MERGED — NEW BASELINE
 
 - Branch: `willowpai2i48h1-askeladd/bf16-bs4-only`

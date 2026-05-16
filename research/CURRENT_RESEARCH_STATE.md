@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 01:00
+- **Date:** 2026-05-16 01:35
 - **Launch:** willow-pai2i-48h-r1 (round 4 in progress)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~18 epochs achievable in bf16 at bs=4)
@@ -43,6 +43,8 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Primary 
 | #3428 | surf_weight scan (15, 20) | 91.6 / 92.07 | Within σ — surf_weight lever exhausted |
 | #3522 | L1-on-p ONLY w=10 | 103.07 | L1-shape weaker small-residual grads |
 | #3171 | Split pressure head v3 | 100.78 | Capacity cost > 14-ep payback |
+| #3363 | AdamW β2=0.95 + clip 1.0 | 92.43 (rebased) | Compounded with schedule fix into noise |
+| #3175 | Cosine warmup (3 replicates) | mean 95.16, best 89.65 | Within noise — mean firmly worse than baseline |
 
 ## Active WIP — 8/8 students assigned (zero idle GPUs)
 | PR | Student | Hypothesis | Status |
@@ -52,28 +54,30 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Primary 
 | #3542 | edward | **TTA via horizontal-flip symmetry (eval-time)** | NEW after #3428 close |
 | #3566 | fern | **Unified positional encoding (Transolver unified_pos=True)** | NEW after #3171 close |
 | #3563 | frieren | **Train-time horizontal-flip augmentation** | NEW after #3522 close |
-| #3175 | nezuko | Cosine warmup on T_max=15 base | Stale — multiple nudges, no terminal |
-| #3363 | tanjiro | AdamW β2=0.95 + grad clip on T_max=15 | Stale — only OLD-base result posted |
+| #3580 | nezuko | **SWA over last 5 checkpoints (variance reduction)** | NEW after #3175 close |
+| #3574 | tanjiro | **Per-channel Huber-δ (δ_p=0.05 on surf-p only)** | NEW after #3363 close |
 | #3521 | thorfinn | EMA decay=0.99 (faster forgetting) | Assigned 2026-05-15 23:35 |
 
 ## Key insights from round 3
 1. **bf16 is a clean orthogonal win** (PR #3480). 18 epochs/30min, 32.9GB VRAM. Now in canonical train.py. Stacks with all other levers.
-2. **Noise floor is σ ≈ 1.80** (alphonse PR #3305). Many "close to baseline" results across the program are statistically indistinguishable. train.py has no seed control — alphonse's #3546 adds it as a permanent fixture.
+2. **Noise floor is σ ≈ 1.80** (alphonse PR #3305) — **independently confirmed by nezuko's PR #3175** (3 identical-config seeds, ~5pt std). Two pieces of strong evidence. train.py has no seed control — alphonse's #3546 adds it as a permanent fixture.
 3. **L1-on-surf-p lever fully exhausted** across both `surf_weight=50` (#3174 gradient starvation) and `surf_weight=10` (#3522 weak small-residual grads). The cruise OOD signal from #3174 was confounded with the surf_weight boost.
-4. **Marginal hyperparameter tweaks plateau within σ of baseline.** Surf_weight scan, β2+clip, Huber δ scan all came back within ±2%. Time to bigger swings.
+4. **Marginal hyperparameter tweaks plateau within σ of baseline.** Surf_weight scan, β2+clip, Huber δ scan, cosine warmup — all came back within ±2σ. Time to bigger swings.
 5. **Capacity scaling under unfavorable conditions failed** (#3180 h=192 T_max=50, #3188 slice=128 fp32). bf16's VRAM unlock + T_max=18 budget enables a real retest (askeladd #3562).
+6. **Schedule warmup lever is dead** (#3175). The bare cosine T_max=15 already provides a soft warmup-like LR ramp; explicit warmup adds nothing measurable.
+7. **Optimizer-stability lever is dead** (#3363). β2+clip gain on the OLD base was the schedule fix in disguise.
 
-## Round 4 active levers (orthogonal classes)
+## Round 4 active levers (8/8 orthogonal classes — ZERO idle)
 1. **Noise-floor characterization** (alphonse #3546) — seed control + 4-replicate baseline σ̂.
-2. **Capacity scaling** (askeladd #3562) — bigger model, more epochs, matched schedule.
+2. **Capacity scaling** (askeladd #3562) — bigger model (h=192 slice=96 T_max=18), bf16.
 3. **Inference-time symmetry (TTA)** (edward #3542) — h-flip + average.
-4. **Train-time symmetry augmentation** (frieren #3563) — h-flip during training.
-5. **Architectural — unified positional encoding** (fern #3566).
-6. **Weight averaging** (thorfinn #3521) — EMA decay=0.99 matched to horizon.
-7. **Optimizer stability** (tanjiro #3363, stale) — AdamW β2 + grad clip.
-8. **Schedule warmup** (nezuko #3175, stale) — linear warmup before cosine.
+4. **Architectural — unified positional encoding** (fern #3566).
+5. **Train-time symmetry augmentation** (frieren #3563) — h-flip during training.
+6. **Weight averaging — SWA** (nezuko #3580) — average last 5 checkpoints (post-training).
+7. **Loss shape — per-channel Huber-δ** (tanjiro #3574) — δ_p=0.05 on surface-p only.
+8. **Weight averaging — EMA** (thorfinn #3521) — decay=0.99 during training.
 
-Levers 1-6 are fresh round 4 assignments; 7-8 are carrying over and need terminal results or close/reassign next round.
+Note: items 6 and 8 both test weight-averaging at different granularities (post-hoc uniform vs in-training EMA). These complement rather than duplicate.
 
 ## Next research directions (post round 4)
 1. **Triple-stack winners** (bf16 + TTA + train-aug if all three land) — biggest paper-facing impact.
