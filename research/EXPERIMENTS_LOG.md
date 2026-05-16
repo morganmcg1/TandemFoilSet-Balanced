@@ -878,4 +878,29 @@ Per-split Arm B (wd=5e-5):
 
 **Status: MERGED — new best (68.1932). Frieren reassigned to H44 (β₁ sweep). All future assignments use wd=5e-5 as default at lr=1e-3.**
 
+---
+
+## 2026-05-16 07:35 — PR #3623: H35: slice_num sweep (96, 128) on H20 base (edward) — CLOSED, walltime-confounded
+
+- Branch: `charliepai2i48h3-edward/slice-num-sweep-h20`
+- Hypothesis: Increasing slice_num (64→96, 64→128) gives Transolver more physics-state tokens to represent distinct flow regimes.
+
+| Arm | slice_num | val_avg | best_ep | epochs/30min | vs H20 (75.50) |
+|-----|-----------|---------|---------|---------------|----------------|
+| Baseline (H20) | 64 | 75.4955 | 14 | 14 | 0 (ref) |
+| Arm A | 96 | 80.3092 | 12 | 12 | +4.81 |
+| Arm B | 128 | 82.1475 | 11 | 11 | +6.65 |
+
+**Walltime-confounded:** slice96 ran at 160 s/epoch (+15.6% vs baseline 138 s/epoch). slice128 ran at 179 s/epoch (+29.3%). The 30-min timeout cap meant slice96 only got 12 epochs (vs baseline 14) and slice128 only got 11 epochs — losing 2-3 epochs of LR anneal at the steepest part of the loss curve.
+
+**Per-epoch trajectory (edward's analysis):** slice128 was *ahead of baseline at every common epoch from 4 to 11* (e.g., ep7: 104.3 vs 114.4; ep11: 82.1 vs 92.3). slice96 was within ~7 points at all common epochs. The 'regression' is a budget artifact, not a representation failure. n_params barely changes (+1.3%) — slices are soft-partition assignments, not learned tokens.
+
+**Mechanism:** Compute scales linearly with slice_num because the soft-partitioning matrix multiplications add O(N × slice_num) ops per layer. At our 30-min walltime + T_max=15 regime, the binding constraint is wall epochs completed × LR anneal, not representation capacity.
+
+Note: Edward's redirect comment (run on H38 base) arrived 41 seconds AFTER their result was submitted, so this experiment is on the old H20 base. Cannot directly compare to current best 68.19.
+
+- Artifacts: `models/model-charliepai2i48h3-edward-h35-slice96-h20-20260516-042324/`, `models/model-charliepai2i48h3-edward-h35-slice128-h20-20260516-052443/`
+
+**Status: CLOSED — walltime-confounded, slice_num direction shelved until more compute headroom. Edward reassigned to H45 (DropPath / stochastic depth).**
+
 **Status: CLOSED — informative negative. cond_dim=11 remains optimal on clipped stack.**

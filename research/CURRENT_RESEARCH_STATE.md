@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 06:45
+- **Date**: 2026-05-16 07:40
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 active (H38 new best → continuing R5 + new H43/H44)
+- **Round**: 5 active (H38 new best → continuing R5 + new H43/H44/H45)
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -50,7 +50,7 @@
 | #3685 | nezuko | H40: Clip sweep (2.0, 3.0) at lr=1e-3 | WIP |
 | #3688 | fern | H41: T_max sweep (20, 18) on lr=1e-3 base | WIP |
 | #3689 | alphonse | H42: n_layers sweep (7, 3) on lr=1e-3 base | WIP |
-| #3623 | edward | H35b: slice_num sweep (96, 128) on H38 base | WIP (redirected to lr=1e-3 + wd=5e-5) |
+| #3767 | edward | **H45: DropPath (0.1, 0.2) on H38 base** | NEW (stochastic depth regularizer) |
 
 **Note on wd for in-flight experiments:** H37b, H43, and all H39-H42 were assigned before H38 merged. If any of these win, compare against 68.1932. If they only beat H32 (69.44) but not H38, request a wd=5e-5 retest before deciding merge/close.
 
@@ -68,6 +68,7 @@
 ## Key Closed Dead Ends This Round
 
 - **H36 (β₂ sweep)**: β₂=0.95 hurts (+3.93 vs H20). β₂=0.999 stays.
+- **H35 (slice_num sweep)**: Walltime-confounded — slice96/128 lose 2-3 epochs of LR anneal at our 30-min cap. Per-epoch trajectory shows representation is fine, but budget is binding. Shelved.
 - **H34 (element-wise clip)**: clip_grad_value=1.0 too aggressive.
 - **H31 (δ_p push)**: δ_p=0.25 is optimal, both directions confirmed worse.
 - **H26b (cond_dim reduction)**: FiLM path weakened by clip. cond_dim=11 stays.
