@@ -1,6 +1,48 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3405 (FiLM conditioning + Lion + EMA)
+## Current best — PR #3672 (Fourier ablation: n_fourier=0 under FiLM+Lion+EMA)
+
+**val_avg/mae_surf_p = 70.3432** (W&B run: `297qot5r`, PR #3672 n_fourier=0 + FiLM-output log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14)
+**test_avg/mae_surf_p = 61.6253** (same run `297qot5r`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 79.64 | 69.97 |
+| geom_camber_rc | 82.43 | 73.96 |
+| geom_camber_cruise | **51.50** | **42.22** |
+| re_rand | 67.80 | 60.35 |
+
+**Comparison vs prior best (PR #3405 FiLM+Lion+EMA, val 71.6544 / test 62.1091):**
+
+| Split | Prior val (ksltdq7a) | New val (297qot5r) | Δval | Prior test | New test | Δtest |
+|-------|---------------------:|--------------------:|-----:|-----------:|---------:|------:|
+| single_in_dist | 81.17 | 79.64 | −1.53 | 71.30 | 69.97 | −1.33 |
+| geom_camber_rc | 84.45 | 82.43 | −2.02 | 73.87 | 73.96 | +0.09 |
+| geom_camber_cruise | 51.99 | 51.50 | −0.49 | 42.84 | 42.22 | −0.62 |
+| re_rand | 69.01 | 67.80 | −1.21 | 60.43 | 60.35 | −0.08 |
+| **avg** | **71.65** | **70.34** | **−1.31** | **62.11** | **61.63** | **−0.48** |
+
+All 4 val splits improve; 3/4 test splits improve (camber_rc +0.09 test, within noise).
+
+**PR #3672 (Fourier ablation — n_fourier=0):** Under FiLM+Lion+EMA, dropping Fourier positional features entirely (n_fourier=0) slightly outperforms both σ=3 (val 71.28) and σ=10 baseline (val 71.65). FiLM conditioning on log(Re) already encodes the flow-regime information that Fourier PE was providing, making Fourier redundant and slightly harmful. Dropping Fourier simplifies the architecture (removes ~1.1K RFF params, one hyperparameter, one coordinate transform per forward pass).
+
+**Reproduce (PR #3672):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-alphonse --epochs 50 \
+  --wandb_group round5-film-fourier-alphonse \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 \
+  --cosine_t_max 14 \
+  --optimizer_name lion --lr 5e-5 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --wandb_name alphonse-r5-film-nofourier
+```
+
+---
+
+## Prior best — PR #3405 (FiLM conditioning + Lion + EMA)
 
 **val_avg/mae_surf_p = 71.6544** (W&B run: `ksltdq7a`, PR #3405 FiLM-output on log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) on Huber + Fourier σ=10 + T_max=14)
 **test_avg/mae_surf_p = 62.1091** (same run `ksltdq7a`, clean 4-split)
