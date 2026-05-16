@@ -5,6 +5,8 @@
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/SwiGLU, ~13ep at h=192+SwiGLU)
 - **Latest direction from human team:** None (no open issues as of 07:45)
+- **Round 6 PR closures so far:** #3724 tanjiro corrected h-flip (val 103.91, catastrophic; ground-effect physics breaks z-symmetry — 3rd z-flip-class failure)
+- **Pending REST rate-limit reset:** ~08:30 UTC (REST 0/5000, GraphQL 2978/5000 still available)
 
 ## Research contract
 
@@ -36,23 +38,24 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 | #3562 | h=192/slice=96/T_max=18 | 86.81 | 81.35 |
 | **#3680** | **SwiGLU activation** | **65.44** | **62.04** |
 
-## Active WIP — 8/8 students (zero idle)
+## Active WIP — 7/8 students (1 idle: tanjiro, GeGLU assignment pending REST rate-limit reset)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3764 | thorfinn | **h=192+SwiGLU stacking** | **NEW — assigned 07:30** |
-| #3765 | fern | **SwiGLU h=128 seed confirm (seeds 1+2)** | **NEW — assigned 07:32** |
-| #3768 | frieren | **Inverse-LLRD+SwiGLU stacking** | **NEW — assigned 07:40** |
+| #3764 | thorfinn | **h=192+SwiGLU stacking** | NEW (running) |
+| #3765 | fern | **SwiGLU h=128 seed confirm (seeds 1+2)** | NEW (running) |
+| #3768 | frieren | **Inverse-LLRD+SwiGLU stacking** | NEW (running) |
 | #3735 | askeladd | h=192 4-seed σ̂ variance char | WIP (running) |
 | #3678 | alphonse | Dropout 0.1 on h=128+GELU (2-seed) | **STALE — nudged for status** |
 | #3611 | edward | Per-channel β_p=20 (rebasing onto h=192) | WIP (rebasing) |
-| #3724 | tanjiro | Corrected h-flip aug | WIP |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | WIP (rebasing) |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | **STALE rebase — firmer nudge issued 07:40, 1hr deadline** |
+| TBD | tanjiro | **GeGLU activation (planned)** | **Idle — assignment hypothesis drafted at `/tmp/tanjiro_geglu_hypothesis.md`; PR creation pending REST rate-limit reset** |
 
 ## Recently closed PRs
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
+| **#3724** | **Corrected h-flip (z-flip + Uy/AoA/gap sign-flip, skip cruise)** | **103.91** | **Catastrophic regression; per-split diagnostic decisive (flipped splits regress 40-50%, skipped cruise fine). Ground-effect physics breaks z-symmetry — 3rd z-flip-class failure (#3542, #3563, #3724). All 5 sanity checks passed; the physics premise itself was incomplete.** |
 | #3721 | DropPath rate=0.1 | 92.06 | Regression on h=128 GELU; regularization not the bottleneck |
 | #3722 | Inverse-LLRD γ_inv=1.176 | 88.03 | 1σ win on GELU but far above SwiGLU 65.44. Queued as #3768 on SwiGLU. |
 | #3642 | LLRD γ=0.85 | 92.45 | Inverted gradient profile; block_0 needs highest LR |
@@ -83,15 +86,17 @@ The SwiGLU result (val 90.77→65.44, −27.9%) reframes the entire programme:
 1. **Wider SwiGLU (h=192/256+SwiGLU)** — stacking gating with capacity, testing #3764.
 2. **SwiGLU + dropout** — if alphonse #3678 shows dropout helps GELU, test dropout+SwiGLU.
 3. **SwiGLU + per-channel surf weight β_p=20** — stacking edward's #3611 lever with the new activation.
-4. **SwiGLU + corrected h-flip** — test tanjiro's #3724 on the SwiGLU baseline.
+4. ~~**SwiGLU + corrected h-flip**~~ — **DEAD** (z-flip family closed via #3724; ground effect breaks z-symmetry).
 5. **SwiGLU + constant-tail SWA** — once nezuko #3644 finishes rebase, test SWA on SwiGLU.
-6. **GeGLU / ReGLU alternatives** — other gating variants (Geometric Linear Unit, ReLU-gated) may outperform SwiGLU on specific splits.
-7. **Per-layer SwiGLU** — selective gating in only some blocks (e.g., only bottom 2 or 3 layers where geometry encoding is primary).
-8. **T_max scan on SwiGLU** — optimal cosine schedule may differ under the new activation's convergence profile.
+6. **GeGLU activation** — tanjiro pending (PR TBD): isolates whether SwiGLU's +25pt comes from gating-in-general or SiLU-specifically. One-line swap of SiLU → GELU in the gate.
+7. **ReGLU / Bilinear gate alternatives** — follow-up to GeGLU if gating-mechanism theory confirmed.
+8. **Per-layer SwiGLU** — selective gating in only some blocks (e.g., only bottom 2 or 3 layers where geometry encoding is primary).
+9. **T_max scan on SwiGLU** — optimal cosine schedule may differ under the new activation's convergence profile.
+10. **Non-z-flip augmentations** (parked): x-translation, Re-jitter, inlet velocity perturbations — preserve ground-effect physics, no z-mirror needed.
 
 ## Dead-end lever classes (do not revisit in GELU regime)
 
-1. **Naive horizontal-flip** — #3542, #3563. Dataset NOT z-symmetric.
+1. **Z-flip augmentation family (ALL VARIANTS)** — #3542 naive, #3563 train-time naive, **#3724 corrected w/ sign-flips**. Ground-effect physics breaks z-symmetry for raceCar (no-slip wall at z=0). 3 independent failures across naive + corrected variants exhaust the family.
 2. **SWA/EMA on frozen tail** — #3580, #3521. Needs non-frozen tail.
 3. **Uniform surf_weight scan** — #3428, #3174, #3522.
 4. **LLRD standard** — #3642. Inverted gradient profile in Transolver.

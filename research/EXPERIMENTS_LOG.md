@@ -1,5 +1,62 @@
 # SENPAI Research Results
 
+## 2026-05-16 07:30 — PR #3724: H: Corrected h-flip aug (z-flip + Uy/AoA/gap sign-flip, preserve NACA, skip cruise) ✗ CLOSED (catastrophic regression — ground-effect physics breaks z-symmetry)
+
+- Branch: `willowpai2i48h1-tanjiro/corrected-hflip-uy-aoa`
+- Student: willowpai2i48h1-tanjiro
+- Hypothesis: PR #3542 and #3563 failed because the naive flip didn't sign-flip Uy/AoA/gap/saf_z; the *corrected* flip respecting all per-channel sign rules (but preserving unsigned NACA, skipping cruise) should recover the +2× data benefit. Predicted val < 89.2 (1σ win).
+
+### Results (run `fxddrp7x`, seed 0, ep 15 best, ~17 epochs, 30.3 min wall)
+
+| Metric | Baseline (old GELU μ̂) | Corrected h-flip | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | μ̂=90.77 (σ̂=1.54), best 87.91 | **103.91** | +14.5% (catastrophic) |
+| test_avg/mae_surf_p | 83.38 (#3480 best) | **98.54** | +18.2% (catastrophic) |
+| Peak VRAM | — | ~83 GB | — |
+
+### Per-split diagnostic (decisive)
+
+| Split | Augmented? | val/mae_surf_p (ep 15) | test/mae_surf_p |
+|---|---|---|---|
+| `single_in_dist` (raceCar single) | **YES (flipped)** | **137.08** | 126.87 |
+| `geom_camber_rc` (raceCar tandem) | **YES (flipped)** | **118.89** | 103.65 |
+| `geom_camber_cruise` (cruise) | NO (skipped) | **70.00** | 77.43 |
+| `re_rand` (mixed, partial flip) | partial | 89.69 | 86.22 |
+
+The skipped split is fine; the flipped splits regress 40-50%. Decisive proof the flip operation itself is destroying signal, not a training-budget or hyperparameter issue.
+
+### 5 sanity checks (all passed before training)
+1. ✅ z is `pos[:, 1]` (raceCar pos_z range [0.04, 9.59], cruise [-9.6, +9.6])
+2. ✅ Uy is `y[:, 1]` (sample Uy range [-34.1, 5.3], pressure ch 2 range [-758, 53])
+3. ✅ NACA unsigned (0/1499 samples have any negative value)
+4. ✅ Flip operation correct (17 channel checks pass — sign-flip pos_z/saf_z/AoA1/AoA2/gap/Uy; preserve pos_x/saf_x/Ux/p/NACA/stagger/Re/is_surface/dsdf)
+5. ✅ Cruise skip works (no-op across 20 random seeds at flip_prob=1.0)
+
+### Mechanism: ground-effect physics, not channel mapping
+
+RaceCar has a no-slip ground wall at z=0 (per program.md: "Single inverted airfoil with ground effect"). Flipping pos_z → -pos_z puts the foil at z ∈ [-9.6, -0.04] — **below the ground**. Not a valid Navier–Stokes configuration under any rigid transformation. The flipped raceCar samples aren't a mirror of any real flow; they're samples in a non-physical regime.
+
+Cruise samples have pos_z ∈ [-9.6, +9.6] (genuinely freestream / z-symmetric), so flipping IS valid there — but the PR correctly skips cruise (no information gain since already symmetric). So the only flips actually applied are exactly the invalid ones.
+
+The PR's decision tree said catastrophic failure implies "sanity check (1) or (2) was wrong — the wrong channel got flipped." That is **not** what happened. The flip faithfully implemented the spec. The physics premise was incomplete.
+
+### Independent confirmation
+
+Earlier identical-config run `hmowvs0j` (different RNG state at model init): val=98.78, test=93.14, same per-split pattern (single_in=129.18, camb_rc=113.47, cruise=66.85, re_rand=88.05). Two independent confirmations of catastrophic failure with the same per-split fingerprint.
+
+### Closure rationale
+
+**Third independent z-flip-class failure** (#3542, #3563, #3724) — the z-flip augmentation family for raceCar is now retired with a clean mechanistic story: ground-effect physics breaks z-symmetry, period. Augmentation lever class moved to permanent dead-ends.
+
+### Suggested follow-ups (parked for future rounds)
+
+Student-flagged physically valid raceCar augmentation candidates: x-translation (ground stays put), Re-jitter on log(Re), inlet velocity perturbations. None require z-mirror, so all preserve ground-effect physics. These need new infrastructure and are deprioritized while SwiGLU stacking experiments dominate.
+
+### Next assignment for tanjiro: GeGLU activation (PR #TBD)
+Isolate whether SwiGLU's +25pt win comes from the gating mechanism (any gate works) or SiLU specifically (other gate activations underperform). GeGLU is the canonical alternative — one-line swap of `nn.SiLU()` → `nn.GELU()` inside the same SwiGLUMlp structure. Same param count, same architecture, different gate nonlinearity.
+
+---
+
 ## 2026-05-16 01:30 — PR #3175: H3: Cosine schedule with 5-epoch linear warmup ✗ CLOSED (noise-limited)
 
 - Branch: `nezuko/cosine-warmup`
