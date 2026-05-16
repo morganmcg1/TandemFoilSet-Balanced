@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~05:30 UTC
+- **Last updated:** 2026-05-16 ~05:55 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -44,26 +44,20 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 05:30 UTC)
+## Active in-flight PRs (status as of 05:55 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
 | **#3632** | tanjiro | Coord noise augmentation std=0.01 | **MERGED** 04:30 → baseline | 83.495 🏆 |
-| **#3637** | thorfinn | Width n_hidden=176 | CLOSED (val=88.45) | — |
-| **#3635** | edward | Depth n_layers=6 | CLOSED (val=94.50) | — |
-| **#3479** | frieren | Per-channel output heads | CLOSED (val=88.55 at lr=1e-3 on new stack) | — |
-| **#3633** | askeladd | Learnable Fourier freqs | CLOSED (val=87.97) | — |
-| **#3634** | fern | slice_num=96 | CLOSED (val=89.10) | — |
-| **#3636** | nezuko | num_freq sweep | CLOSED (val=88.51, num_freq=6 crashed) | — |
-| **#3638** | alphonse | p_weight=3 | CLOSED (val=85.35, best round-3 retry) | — |
-| **#3690** | edward | lr=1e-3 + coord noise | WIP (running: `96tusrhs` started 05:22) | awaiting |
-| **#3691** | thorfinn | --epochs 12 longer training | WIP (running: `zqxkh9np` started 05:22) | awaiting |
-| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | WIP (running: `xu5e6cul` started 05:23) | awaiting |
-| **#3714** | alphonse | **surf_weight=15 sweep** | WIP (assigned 05:28) | awaiting |
-| **#3715** | askeladd | **mlp_ratio=4 (FFN capacity)** | WIP (assigned 05:28) | awaiting |
-| **#3716** | fern | **n_head=8 (attention diversity)** | WIP (assigned 05:28) | awaiting |
-| **#3717** | frieren | **coord_noise_std sweep (0.03, 0.005)** | WIP (assigned 05:28) | awaiting |
-| **#3718** | nezuko | **AoA jitter augmentation** | WIP (assigned 05:30) | awaiting |
+| **#3716** | fern | n_head=8 (attention diversity) | CLOSED (val=93.17, head_dim=20 too narrow) | — |
+| **#3690** | edward | lr=1e-3 + coord noise | WIP (W&B `96tusrhs` val~86.32 — failed) | awaiting submission |
+| **#3691** | thorfinn | --epochs 12 longer training | WIP (W&B `zqxkh9np` val~82.50 = **WINNER**) | awaiting submission |
+| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | WIP (W&B `xu5e6cul` val~85.98 — failed) | awaiting submission |
+| **#3714** | alphonse | surf_weight=15 sweep | WIP (assigned 05:28) | running |
+| **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | WIP (assigned 05:28) | running |
+| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP (assigned 05:28) | running |
+| **#3718** | nezuko | AoA jitter augmentation | WIP (assigned 05:30) | running |
+| **#3741** | fern | **eta_min=1e-5 cosine floor** | WIP (assigned 05:55) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
@@ -97,13 +91,24 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | #3692 | tanjiro | Feature noise aug on condition cols 2:24 | −1–3% (OOD splits) |
 
 ### Round-4b (assigned 05:28-30 UTC, after round-3 closes)
-| PR | Student | Hypothesis | Expected gain |
-|---|---|---|---|
-| #3714 | alphonse | surf_weight=15 sweep (single flag) | −1–3% (direct metric alignment) |
-| #3715 | askeladd | mlp_ratio=4 (FFN capacity, untested arch lever) | −2–5% (if FFN-bottlenecked) |
-| #3716 | fern | n_head=8 (attention head diversity) | −1–3% (speculative) |
-| #3717 | frieren | coord_noise_std sweep (0.03, 0.005) | −0–2% (pin augmentation optimum) |
-| #3718 | nezuko | AoA jitter augmentation std=0.02 | −1–3% (OOD splits) |
+| PR | Student | Hypothesis | Expected gain | Status |
+|---|---|---|---|---|
+| #3714 | alphonse | surf_weight=15 sweep (single flag) | −1–3% (direct metric alignment) | running |
+| #3715 | askeladd | mlp_ratio=4 (FFN capacity, untested arch lever) | −2–5% (if FFN-bottlenecked) | running |
+| #3716 | fern | n_head=8 (attention head diversity) | −1–3% (speculative) | CLOSED (val=93.17, head_dim=20 too narrow) |
+| #3717 | frieren | coord_noise_std sweep (0.03, 0.005) | −0–2% (pin augmentation optimum) | running |
+| #3718 | nezuko | AoA jitter augmentation std=0.02 | −1–3% (OOD splits) | running |
+
+### Round-4c (assigned 05:55 UTC, after #3716 close)
+| PR | Student | Hypothesis | Expected gain | Status |
+|---|---|---|---|---|
+| #3741 | fern | eta_min=1e-5 cosine LR floor | −0.5–2% (meaningful gradients in last epoch) | running |
+
+## Round-4a observation (W&B only, awaiting SENPAI-RESULT submissions)
+
+- **#3691 thorfinn epochs=12** — W&B `zqxkh9np` val≈82.50, test≈74.10 → **WINNER vs 83.50/73.79**. Single-flag change, zero code risk. Merge when terminal SENPAI-RESULT arrives.
+- **#3690 edward lr=1e-3 + coord noise** — W&B `96tusrhs` val≈86.32 → regression. lr=5e-4 (Config default) is now optimal with coord noise. Close on terminal submission.
+- **#3692 tanjiro feature noise std=0.005** — W&B `xu5e6cul` val≈85.98 → regression. Feature noise hurts at this scale. Close on terminal submission.
 
 ## Potential next research directions (round 5+)
 
