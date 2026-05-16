@@ -961,3 +961,68 @@ Mix reaches uniform at epoch 7 as designed. val_avg/mae_surf_p still descending 
 - **#3585 fern per-domain-loss-weight**: multiply racecar_tandem surface loss by 2.0× during training. First data-distribution-side attack on the 5-way camber_rc-as-discriminator finding; all prior 5 mechanism classes touched gradient-flow side. Upweights the training domain most structurally similar to held-out geom_camber_rc.
 - **#3588 tanjiro lookahead-optimizer**: Lookahead(AdamW, k=5, alpha=0.5). Meta-optimizer wrapper preserving AdamW's v adaptation (which the 5-way finding says camber_rc needs) while adding slow-weight trajectory smoothing. Distinct from Lion (which replaced AdamW) and from grad-clip (which rate-limits gradient magnitude).
 - **#3589 thorfinn swa-tail**: Stochastic Weight Averaging over last 3 epochs via torch.optim.swa_utils. Uniform tail averaging complementing EMA's exponential decay. Single-line addition (AveragedModel), evaluated as min(val_ema, val_swa) at end of training.
+
+## 2026-05-16 — Loop 7: PR #3478 edward narrow+bf16 MERGED ← NEW BEST
+
+- **Student branch**: `charliepai2i24h1-edward/narrow-bf16-confirm`
+- **Hypothesis**: Revert wider trunk (#3130) to n_hidden=128, n_head=4; add bf16 autocast. Stop/pivot test — does narrower trunk + bf16 + budget-aligned cosine beat wider trunk fp32?
+- **Result**: val_avg/mae_surf_p = **111.7473** (epoch 18 of 18, full cosine anneal). test_avg = **99.3066** (NaN-safe 4-split — first sub-100 on this track). **-11.5% vs baseline 126.32.**
+
+| Split | Narrow+bf16 | Old baseline (#3136) | Delta |
+|---|---|---|---|
+| single_in_dist | 133.64 | 158.79 | -15.8% |
+| geom_camber_rc | 121.33 | 127.26 | -4.7% |
+| geom_camber_cruise | 88.92 | 102.20 | -13.0% |
+| re_rand | 103.10 | 117.04 | -11.9% |
+
+- n_params: 662,359 (vs 1,447,521 wider — 54% smaller)
+- peak_memory: 32.95 GB (vs 42.11 GB wider)
+- per_epoch_wall: ~98 s (vs ~205 s wider — 52% faster)
+- Metric artifacts: `models/model-narrow-bf16-aligned-20260516-002225/metrics.jsonl`
+
+**Analysis**: The budget constraint was the binding factor. Wider trunk at fp32 got 8-9 epochs at ~205s/ep (28% cosine annealed). Narrow+bf16 gets 18 full epochs at ~98s/ep (100% annealed). The model crossed the old baseline at epoch 13, then kept improving through 18. camber_rc improved least (-4.7%) vs -12-16% for others — consistent with camber_rc remaining the discriminator gap even after the budget fix.
+
+**Verdict**: MERGED. New best. Active config reverted to n_hidden=128, n_head=4, bf16, T_max=18, epochs=18.
+
+## 2026-05-16 — Loop 7: PR #3526 frieren torch.compile CLOSED
+
+- **Student branch**: `charliepai2i24h1-frieren/torch-compile-dynamic`
+- **Hypothesis**: torch.compile(dynamic=True) gives 22% throughput speedup via operator fusion.
+- **Result**: val_avg = 135.4121 (+7.2% regression). 22% speedup confirmed (160s vs 205s). 12 epochs realized.
+
+| Split | Compile | Baseline | Delta |
+|---|---|---|---|
+| single_in_dist | 170.55 | 158.79 | +7.4% |
+| geom_camber_rc | 141.42 | 127.26 | +11.1% |
+| geom_camber_cruise | 107.78 | 102.20 | +5.5% |
+| re_rand | 121.91 | 117.04 | +4.2% |
+
+- Metric artifacts: `models/model-torch-compile-dynamic-20260516-002538/metrics.jsonl`
+
+**Analysis**: Throughput win is real (22% speedup, 12 epochs realized, zero graph breaks). Quality regression comes from kernel fusion reordering reduction operations in PhysicsAttention's slice-attention — cumulative numerical drift. Train loss upticks at ep 4 and ep 9 indicate noisier optimization landscape. Note: this PR ran on the WIDER trunk baseline; irrelevant post-#3478 merge since the architecture has changed.
+
+**Verdict**: CLOSED. Throughput win is real but quality regression is unacceptable (+7.2%). Axis not permanently closed — torch.compile + determinism check is a valid follow-up on the new narrow+bf16 config.
+
+## 2026-05-16 — Loop 7: PR #3496 nezuko RMSNorm CLOSED
+
+- **Student branch**: `charliepai2i24h1-nezuko/rmsnorm-swap`
+- **Hypothesis**: RMSNorm replaces LayerNorm for throughput + quality gain.
+- **Result**: val_avg = 144.7053 (+14.5% regression, best of fused arm). 53% wall-time regression killed it.
+
+Two arms: naive (+91% wall), fused F.rms_norm (+53% wall). Fused arm: 9 epochs realized vs baseline 14.
+
+**Key permanent finding**: matched-epoch comparison shows RMSNorm fused BETTER than LayerNorm by ~8% from ep≥5 onward. The channel-mean preservation effect in RMSNorm (no mean subtraction) is real — but the backward kernel for F.rms_norm on this Blackwell stack is missing a aten::native_rms_norm_backward equivalent, causing 53% wall-time regression.
+
+**Diagnostic**: isolated micro-benchmark showed norm-kernel 3% faster; end-to-end 53% slower → secondary autograd effect dominates. The RMSNorm quality benefit is real but inaccessible in this PyTorch/hardware configuration.
+
+**Student follow-up flagged**: scale-only LayerNorm (bias=False, keeps mean-subtraction, keeps fused kernel) would isolate whether the bias-drop or mean-subtraction drives the quality gain. Assigned as nezuko's next PR (#3624).
+
+**Verdict**: CLOSED. Full RMSNorm axis closed. "Channel-mean preservation" question survives as a separate test.
+
+## 2026-05-16 — Loop 7: New dispatches #3620, #3621, #3624
+
+- **#3620 edward depth-nlayers7**: n_layers 5→7 at narrow+bf16 baseline. camber_rc improved least (-4.7%) from the big win — testing whether it's capacity-limited. Budget-adjusted epochs=13 (est. 137s/ep × 13 ≈ 30 min).
+- **#3621 frieren batch-size-8**: batch_size 4→8 at narrow+bf16. 63 GB VRAM headroom makes this feasible. Targets gradient variance reduction; different from per-domain weighting. Estimated ~66 GB peak, ~12 epochs in 30 min.
+- **#3624 nezuko scale-only-layernorm**: LayerNorm bias=False, keeps fused aten::native_layer_norm kernel. Tests whether bias-drop alone explains the 8% matched-epoch RMSNorm quality gain from #3496. -1,408 params.
+
+All 5 in-flight WIPs (#3127, #3555, #3585, #3588, #3589) notified of new baseline 111.75, new config (n_hidden=128, bf16, epochs=18), and instructed to rebase before training.

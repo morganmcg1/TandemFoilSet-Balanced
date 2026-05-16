@@ -4,46 +4,50 @@ Active advisor branch baseline. Updated after each merged winner. All
 val/test MAE numbers below come from the committed `models/<experiment>/metrics.jsonl`
 on the listed PR.
 
-## Current best — PR #3136 (charliepai2i24h1-frieren / surfw25)
+## Current best — PR #3478 (charliepai2i24h1-edward / narrow-bf16)
 
-- **val_avg/mae_surf_p**: **126.3241** (best at epoch 14; 14 of 50 epochs realized under the per-run `SENPAI_TIMEOUT_MINUTES=30` wall-clock cap)
-- **test_avg/mae_surf_p**: **was NaN under the pre-#3378 scoring bug; now reportable as a finite 4-split mean from the in-training eval**. For #3136 specifically, the pre-fix 3-split partial mean was **123.43**; once a future PR retrains under the fixed scoring, the cruise term will also be finite. Going forward, students should just report `test_avg/mae_surf_p` directly from `metrics.jsonl` — no re-eval needed.
-- **Per-val-split mae_surf_p** (best epoch 14):
-  - val_single_in_dist: 158.79
-  - val_geom_camber_rc: 127.26
-  - val_geom_camber_cruise: 102.20
-  - val_re_rand: 117.04
+- **val_avg/mae_surf_p**: **111.7473** (best at epoch 18; 18 of 18 epochs realized — full cosine anneal)
+- **test_avg/mae_surf_p**: **99.3066** (NaN-safe 4-split — first sub-100 test result on this track)
+- **Per-val-split mae_surf_p** (best epoch 18):
+  - val_single_in_dist: 133.64
+  - val_geom_camber_rc: 121.33
+  - val_geom_camber_cruise: 88.92
+  - val_re_rand: 103.10
 - **Per-test-split mae_surf_p** (from best-val EMA checkpoint):
-  - test_single_in_dist: 136.67
-  - test_geom_camber_rc: 117.86
-  - test_geom_camber_cruise: NaN (corrupt GT, see above)
-  - test_re_rand: 115.75
-- **peak_memory_gb**: 42.11
-- **Metric artifacts**: `models/model-surfw25-20260515-132819/metrics.jsonl`, `models/model-surfw25-20260515-132819/metrics.yaml`
-- **Reproduce**: `cd target/ && python train.py --experiment_name baseline-merged --agent baseline`
+  - test_single_in_dist: 113.39
+  - test_geom_camber_rc: 109.86
+  - test_geom_camber_cruise: 73.92
+  - test_re_rand: 100.05
+- **n_params**: 662,359 (vs 1,447,521 on wider trunk — 54% smaller)
+- **peak_memory_gb**: 32.95 (63 GB headroom remaining vs 96 GB cap)
+- **per_epoch_wall_time**: ~98 s/epoch (bf16 narrow trunk)
+- **epochs_realized**: 18 of 18 (full cosine annealing — no budget-wall at this config)
+- **Metric artifacts**: `models/model-narrow-bf16-aligned-20260516-002225/metrics.jsonl`, `models/model-narrow-bf16-aligned-20260516-002225/metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --experiment_name narrow-bf16-aligned --agent charliepai2i24h1-edward --epochs 18`
 
-### Stacking note (trust-in-orthogonality)
+### Architecture revert note
 
-Frieren's measured 126.3241 was on the **pre-#3130** trunk config (`n_hidden=128, n_head=4`) plus `surf_weight=25` (no EMA). The squash-merge layered just the surf_weight line change onto the already-merged wider+EMA config. The active advisor recipe is now **`n_hidden=192, n_head=6, EMA decay=0.999, surf_weight=25.0`** — a 3-axis stack that has never been measured end-to-end. We're trusting orthogonality across width, EMA, and loss-weight. The first round-2 PR to actually be based on the post-#3136 advisor branch will produce the first true measurement of this combined recipe; if it underperforms 126.32 by more than 2-3%, the orthogonality assumption is failing and we'll need a dedicated clean-combined-baseline run.
+PR #3478 reverts #3130 (wider trunk n_hidden 192→128, n_head 6→4) and adds bf16 autocast. The decisive result: narrow+bf16 realizes 18 epochs vs the wider trunk's 8-9 epochs at the same 30-min budget. The quality difference was schedule completion, not raw capacity. The active advisor recipe is now **n_hidden=128, n_head=4, bf16 autocast, EMA decay=0.999, surf_weight=25.0, T_max=18, epochs=18**.
 
 ## Active model configuration
 
 | Component | Value |
 |---|---|
 | Architecture | Transolver with physics-aware attention |
-| n_hidden | **192** (from #3130) |
+| n_hidden | **128** (reverted from 192 by #3478) |
 | n_layers | 5 |
-| n_head | **6** (from #3130) |
+| n_head | **4** (reverted from 6 by #3478) |
 | slice_num | 64 |
 | mlp_ratio | 2 |
+| **Precision** | **bf16 autocast** on forward + loss + eval (master weights / grads / EMA stay fp32) |
 | **EMA decay** | **0.999** (from #3137) — applied to eval/test/checkpoint |
 | Optimizer | AdamW |
 | lr | 5e-4 |
 | weight_decay | 1e-4 |
 | batch_size | 4 |
 | **surf_weight** | **25.0** (from #3136) |
-| epochs (configured) | 50 |
-| schedule | CosineAnnealingLR (T_max=epochs) |
+| epochs (configured) | **18** (budget-aligned: ~98 s/ep × 18 ≈ 29.4 min) |
+| schedule | CosineAnnealingLR (T_max=**18**) |
 | sampler | WeightedRandomSampler (3-domain balanced) |
 | loss | MSE on normalized targets, `vol_loss + surf_weight * surf_loss` |
 
@@ -81,3 +85,4 @@ new advisor configuration.
 | 2026-05-15 14:24 | #3137 | nezuko | EMA decay=0.999 on eval/test/ckpt | 129.4217 |
 | 2026-05-15 14:35 | #3136 | frieren | surf_weight 10→25 | **126.3241** |
 | 2026-05-15 20:30 | #3378 | thorfinn | data/scoring.py NaN-safe (`err*mask` → `where(mask, err, 0)`) — system fix, val unchanged | 126.3241 |
+| 2026-05-16 | #3478 | edward | Narrow+bf16: n_hidden 192→128, n_head 6→4, bf16 autocast, epochs 14→18 full anneal | **111.7473** |
