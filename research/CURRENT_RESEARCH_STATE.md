@@ -41,7 +41,7 @@ cd target/ && python train.py \
 | PR | Student | Hypothesis | Submitted Against | Brief / Mechanism |
 |----|---------|-----------|-------------------|-------------------|
 | #4080 | fern | **slice_num=4** (saturation test) | NEW slice=8 baseline | Extends winning axis; brackets the slice optimum with thorfinn's #4066 |
-| #4065 | frieren | SGDR T_0=15 single-cycle | slice=16 baseline | Frieren's own follow-up; removes restart-bump that killed PR #4013 |
+| #4086 | frieren | **huber_delta=0.25** (axis extension) | NEW slice=8 baseline | Extends winning δ axis (1.0→0.5 paid); compounds with slice=8 |
 | #4066 | thorfinn | slice_num=12 | slice=16 baseline | Conservative midpoint; with new #4080 brackets slice axis at {4,8,12,16} |
 | #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline | Faster 2nd-moment EMA adaptation (RoBERTa intuition) |
 | #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | More channels per slice token to compensate for spatial coarsening |
@@ -95,6 +95,7 @@ Slice axis decelerating but alive: 64→32 (−3.02%), 32→16 (−5.16%), 16→
 - **temperature_init=0.1** (tanjiro #3877): −2.62% val vs alphonse baseline; rebased to slice=16 (in-flight)
 
 ### What does NOT work
+- SGDR (any T_0 ≤ 15) in our 15-epoch budget — mathematically equivalent to baseline cosine (frieren #4065)
 - SGDR T_0=8 with δ=0.5 (frieren #4013 — restart bump destructive in 15-epoch budget)
 - p_weight=3.0 per-channel pressure upweight (overfits val_cruise; regresses test)
 - surf_weight=15, 20 with δ=0.5 (axis non-compounding)

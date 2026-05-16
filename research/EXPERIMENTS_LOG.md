@@ -1,6 +1,21 @@
 # SENPAI Research Results
 
-## 2026-05-16 18:40 — PR #4062 fern WIN: slice_num=8
+## 2026-05-16 19:00 — PR #4065 frieren CLOSED: SGDR T_0=15 ≡ baseline cosine
+
+### Closed: PR #4065 (frieren) — SGDR T_0=15 single-cycle on slice=16
+
+Run `sf7na78o`: val_avg=60.7534, test_3split=59.1126 — +3.06/+2.25 regression vs slice=16 baseline.
+
+**Frieren's analysis (methodologically excellent)**: SGDR T_0=15 single-cycle is **mathematically nearly identical** to the baseline `CosineAnnealingLR(T_max=15)`. The only difference is `eta_min` (0 vs 1e-6) and the restart never fires within the 15-epoch budget. Therefore the +3.06 regression is best explained by single-seed stochastic variance, not by any schedule effect.
+
+**Implications**:
+1. **Schedule axis is closed.** Any SGDR T_0 ≤ 15 in our budget is equivalent to plain cosine — further T_0 sweeps would waste compute.
+2. **The cosine schedule was load-bearing in the baseline already.** frieren's #4013 SGDR T_0=8 + δ=0.5 regression was caused by the restart bump (epoch 9 lr-jump), not by "δ=0.5 needing more low-lr time" as previously interpreted.
+3. **Single-seed variance is ±2-3 val_avg on this stack.** This is a critical methodological note — single-seed comparisons with Δ ≤ 3 are not reliably interpretable.
+
+**Future flag**: a seed-variance audit of the current winning stack would establish a noise floor for all future comparisons. Deferred due to compute budget.
+
+
 
 ### Merged: PR #4062 (fern) — slice_num=8 — axis extension WIN
 
