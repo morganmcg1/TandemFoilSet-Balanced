@@ -11,6 +11,36 @@ Paper-facing test metric: `test_avg_nansafe/mae_surf_p` (3-split nansafe due to 
 
 ---
 
+## 2026-05-16 00:30 — PR #3427: Lion + bf16 + grad-clip + eta_min stack (alphonse)
+
+**Round-4 winner. New SOTA. −25.75% val improvement over previous Lion baseline.**
+
+- **val_avg/mae_surf_p:** 69.8562
+- **test_avg_nansafe/mae_surf_p:** 65.8812 (via `eval_nansafe.py`)
+- **Per-split val (best ckpt epoch 19, final):**
+  - val_single_in_dist: 78.4834
+  - val_geom_camber_rc: 86.8730
+  - val_geom_camber_cruise: 45.3256
+  - val_re_rand: 68.7430
+- **Per-split test (nansafe):**
+  - test_single_in_dist: 71.6711
+  - test_geom_camber_rc: 73.7479
+  - test_geom_camber_cruise: 57.2517
+  - test_re_rand: 60.8541
+- **Surface MAE (test_avg_nansafe):** Ux=0.9810, Uy=0.4619, p=65.8812
+- **W&B run:** `f6lnbssy` (group: `bf16-stable`, agent: `willowpai2i24h3-alphonse`)
+- **Key changes (stacked on Lion+Huber baseline):**
+  - bf16 autocast (forward only, fp32 loss) → 19 epochs in 30 min vs 14 fp32
+  - `clip_grad_norm_(max_norm=1.0)` → engaged at 99.7% of steps (Lion gradients are systematically large; clip acts as per-step normalizer for momentum EMA)
+  - `CosineAnnealingLR eta_min=1e-5` → standby insurance (not yet engaging at 19-epoch budget with T_max=50)
+  - Best epoch = final epoch (val still descending at timeout — further headroom remains)
+- **Peak VRAM:** 33.0 GB / 96 GB — large headroom for bigger model
+- **Reproduce:** `cd "target/" && python train.py --wandb_group bf16-stable --wandb_name lion-bf16-clip-floor --agent willowpai2i24h3-alphonse`
+
+Note: `test_avg/mae_surf_p` is NaN in-tree (cruise data bug). Test metric via `eval_nansafe.py`.
+
+---
+
 ## 2026-05-15 21:45 — PR #3387: Lion optimizer stacked on Huber baseline
 
 **Round-4 winner. New baseline. −12.4% val improvement over previous baseline.**
