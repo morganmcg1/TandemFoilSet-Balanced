@@ -478,6 +478,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    use_curvature_weight: bool = False  # weight surface loss by squared DSDF-norm (curvature proxy, mean=1)
 
 
 cfg = sp.parse(Config)
@@ -615,7 +616,21 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.use_curvature_weight:
+            # Squared DSDF-norm proxy: mean over channels 4-11, squared, renormalized
+            # so the surface-node mean weight = 1 (preserves total surface gradient mass).
+            # Hypothesis: amplifies weight on high-curvature regions (LE/TE) vs #4042's
+            # linear proxy (max/mean ~1.45 → ~2.1 after squaring).
+            dsdf_norm = x[..., 4:12].mean(dim=-1)  # [B, N], raw unnormalized DSDF magnitude
+            dsdf_sharp = dsdf_norm.pow(2)
+            surf_mask_f = surf_mask.to(dsdf_sharp.dtype)
+            n_surf_total = surf_mask_f.sum().clamp(min=1)
+            sharp_surf_sum = (dsdf_sharp * surf_mask_f).sum().clamp(min=1)
+            curv_weights = dsdf_sharp * (n_surf_total / sharp_surf_sum)  # mean=1 over surface
+            surf_loss = (err * (curv_weights * surf_mask_f).unsqueeze(-1)).sum() / n_surf_total
+        else:
+            curv_weights = None
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -623,11 +638,25 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
         global_step += 1
-        wandb.log({
+        log_entry = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if curv_weights is not None:
+            w_surf = curv_weights[surf_mask].float()
+            if w_surf.numel() > 0:
+                w_mean = w_surf.mean()
+                log_entry.update({
+                    "diag/curv_weight_min": w_surf.min().item(),
+                    "diag/curv_weight_p50": w_surf.median().item(),
+                    "diag/curv_weight_mean": w_mean.item(),
+                    "diag/curv_weight_p99": torch.quantile(w_surf, 0.99).item(),
+                    "diag/curv_weight_max": w_surf.max().item(),
+                    "diag/curv_weight_std": w_surf.std().item(),
+                    "diag/curv_weight_max_over_mean": (w_surf.max() / w_mean.clamp(min=1e-8)).item(),
+                })
+        wandb.log(log_entry)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
