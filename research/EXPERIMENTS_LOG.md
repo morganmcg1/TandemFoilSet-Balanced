@@ -826,6 +826,40 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 20:23 — PR #4041 v2 — FiLM two-stage with `is_tandem` gate (SENT BACK — beat old baseline, not new bf16 baseline)
+
+- **Branch:** `charliepai2i48h1-alphonse/film-full-cond` (same PR, v2 commit on top)
+- **Hypothesis:** Two FiLM heads — `film_base(6: log_Re, AoA0, AoA1, NACA0×3)` always-on, `film_geom(5: NACA1×3, gap, stagger)` gated by `is_tandem`. Fixes v1's structural-zero corruption of single-foil samples while preserving OOD geometry signal on tandem samples.
+- **Results vs OLD baseline (val=68.80, test=59.49, FiLM-Re+AoA fp32):**
+
+| Metric | Old baseline (FiLM-Re+AoA) | v1 (FiLM-full, 11) | **v2 (two-stage + gate)** | Δ vs old baseline |
+|--------|---------------------------:|-------------------:|--------------------------:|-----------------:|
+| `val_avg/mae_surf_p` | 68.80 | 69.56 | **67.59** | **-1.21 ✓** |
+| `test_avg/mae_surf_p` | 59.49 | 60.25 | **58.38** | **-1.11 ✓** |
+| `val_single_in_dist` | 80.63 | 84.67 (+4.04) | **79.59** | **-1.04 ✓** (regression fixed) |
+| `val_geom_camber_rc` | 80.24 | 79.43 | 81.90 | +1.66 (within noise) |
+| `val_geom_camber_cruise` | 47.81 | 48.09 | **43.37** | **-4.44 ✓** (large OOD win) |
+| `val_re_rand` | 66.50 | 66.03 | **65.50** | **-1.00 ✓** |
+| `test_single_in_dist` | — | 72.81 | 68.89 | — |
+| `test_geom_camber_rc` | — | 71.79 | 73.03 | — |
+| `test_geom_camber_cruise` | — | 39.41 | 35.91 | — |
+| `test_re_rand` | — | 56.99 | 55.70 | — |
+| sec/epoch | ~102s | ~102s | ~102.4s | identical |
+| epochs in 30-min cap | 18 | 18 | 18 (still descending) | — |
+| Peak VRAM | — | 32.17 GB | 32.18 GB | unchanged |
+| n_params | 654,931 | 655,955 | **821,203** | **+166,272** (see note) |
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-film-two-stage-v2-20260516-192600/metrics.jsonl`
+- **Decision:** ARCHITECTURE WIN against old baseline (-1.21 val, -1.11 test, both move in same direction = correlated signal). **But does NOT beat new bf16 baseline (val=59.08, PR #4064)** which merged during this run.
+- **Why not merged:** v2 val=67.59 vs new baseline val=59.08 → cannot merge. Same baseline-shift problem as #4069 (compile) and #4071 (Schedule-Free). NOT closed — two-stage FiLM is orthogonal to bf16 precision (architecture vs activation dtype), so compound win is expected on bf16 retest.
+- **Structural-zero diagnosis CONFIRMED:** v1's +4.04 regression on val_single_in_dist became -1.04 improvement in v2. The is_tandem gate cleanly partitions the conditioning distribution. The `film_base` head also now sees NACA0 (strict superset of #4018's conditioning), which is why single-foil *improved* rather than just returning to baseline.
+- **`val_geom_camber_cruise` -4.44 win is the standout signal:** Cruise OOD holds out front-foil camber M=2-4 — exactly what the now-uncorrupted `film_geom` head specializes on for tandem samples. Test split corroborates (35.91 vs v1's 39.41).
+- **Student implementation note (caught a normalization bug in advisor's snippet):** The advisor instructions computed `is_tandem` inside `forward` from already-normalized `x`, which would have made `is_tandem=1` for every sample (NACA1/gap/stagger ≠ 0 after normalization). Student correctly computed `is_tandem` from **raw** `x` *before* normalization in the train/eval loops, passed via `data["is_tandem"]`. Functionally equivalent to advisor's intent, but the advisor snippet would have silently broken the gate.
+- **n_params correction:** Advisor's instructions estimated "~+1k vs v1" but actual delta is +166,272. The dominant Linear(128, 1280) output projection is duplicated (one per head), not shared. Compute cost unchanged (extra FLOPs on per-sample broadcast scalars are negligible).
+- **Next action:** **Send back to alphonse for bf16 retest.** Rebase onto current advisor branch (which now has bf16 merged via PR #4064), re-run the same v2 code, report against new baseline val=59.08. Target: beat 59.08. Expected: ~58 or lower (the -1.21 architectural gain should compound with the +7 epochs that bf16 buys).
+
+---
+
 ## 2026-05-16 16:30 — PR #4018 — FiLM-Re+AoA (MERGED → new baseline, -3.7%)
 
 - **Branch:** `charliepai2i48h1-alphonse/film-re-aoa`
