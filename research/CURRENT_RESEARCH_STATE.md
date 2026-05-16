@@ -1,21 +1,21 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~18:40 UTC
+- **Last updated:** 2026-05-16 ~19:45 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 53.8221, test_avg/mae_surf_p = 47.2742** — from PR #3981 (thorfinn, **bf16 + epochs=18** cut at ep16/18), merged 2026-05-16 ~16:42 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 50.9008, test_avg/mae_surf_p = 43.8989** — from PR #4082 (fern, **n_hidden=176 + bf16 + epochs=18**), merged 2026-05-16 ~19:32 UTC. See `BASELINE.md` for full details.
 
-Per-split test (b9h4bvnm): single_in_dist=54.72, geom_camber_rc=59.71, geom_camber_cruise=29.13, re_rand=45.53.
+Per-split test (mgu3m5v2): single_in_dist=48.97, geom_camber_rc=55.45, geom_camber_cruise=28.27, re_rand=42.91.
 
-ALL four test splits improve vs #3969. Largest gains: geom_camber_cruise (32.02→29.13, −9.0%), re_rand (47.10→45.53, −3.3%). Val curve still descending at ep16 cut.
+ALL four test splits improve vs #3981. Largest gain: single_in_dist (54.72→48.97, −10.5%). Val curve still descending at ep18 cut (ep17=52.28, ep18=50.90, Δ=−1.38).
 
-**Throughput finding:** bf16 autocast gives 1.47× per-epoch speedup vs fp32; 41.9 GB peak VRAM. This effectively converts ~50% more training epochs into the same wall clock budget.
+**Width frontier finding:** n_hidden=160 → 176 (+18% params) wins +5.4% val / +7.1% test on the bf16+ep18 stack. The earlier n_hidden=176 regress (on mlp_ratio=3+fp32+ep12) was a joint budget+capacity artifact — bf16 unlocked it. Peak VRAM at n_hidden=176 was 44.6 GB; ~50 GB headroom remains.
 
-New reproduce command: `cd target/ && SENPAI_TIMEOUT_MINUTES=35 python train.py --epochs 18 --use_bf16`
+New reproduce command: `cd target/ && SENPAI_TIMEOUT_MINUTES=45 python train.py --n_hidden 176 --epochs 18 --use_bf16`
 
 Baseline progression (val_avg/mae_surf_p):
 - #3091: 109.42 (warmup + clip + lr=1e-3, MSE)
@@ -29,7 +29,8 @@ Baseline progression (val_avg/mae_surf_p):
 - #3908: 59.00 (SwiGLU + mlp_ratio=3, −2.83% vs #3905; inner_dim 216→320)
 - #4002: 57.35 (SwiGLU + mlp_ratio=3 + epochs=14, −2.80% vs #3908)
 - #3969: 56.44 (SwiGLU + mlp_ratio=2 + epochs=14, −1.60% vs #4002; inner_dim=216)
-- **#3981: 53.82 (bf16 mixed-precision + epochs=18 cut at ep16; ALL 4 test splits improve; 1.47× speedup) ← CURRENT**
+- #3981: 53.82 (bf16 mixed-precision + epochs=18 cut at ep16; ALL 4 test splits improve; 1.47× speedup)
+- **#4082: 50.90 (n_hidden=176 + bf16 + epochs=18; +18% params over #3981; ALL 4 splits improve; curve still descending) ← CURRENT**
 
 ## Winning stack (all additive, all merged)
 
@@ -45,9 +46,10 @@ Baseline progression (val_avg/mae_surf_p):
 | **SwiGLU + mlp_ratio=3** | **#3908** | **−2.83%** | Wider gated FFN inner_dim 216→320 (+0.25M params); best_epoch=12/12; still descending |
 | **SwiGLU + mlp_ratio=3 + epochs=14** | **#4002** | **−2.80%** | Even longer training on wider model; best_epoch=14/14; still descending |
 | **SwiGLU + mlp_ratio=2 + epochs=14** | **#3969** | **−1.60%** | Narrower model (inner_dim=216) with longer training beats wider (inner_dim=320) |
-| **bf16 + epochs=18 (cut at ep16)** | **#3981** | **−4.64%** | bf16 autocast unlocks 1.47× speedup; same wall clock budget → 50% more epochs; ALL 4 test splits improve; CURRENT BEST |
+| **bf16 + epochs=18 (cut at ep16)** | **#3981** | **−4.64%** | bf16 autocast unlocks 1.47× speedup; same wall clock budget → 50% more epochs; ALL 4 test splits improve |
+| **n_hidden=176 + bf16 + epochs=18** | **#4082** | **−5.43%** | +18% params (1.035M→1.23M); ALL 4 splits improve; curve still descending at ep18; 44.6 GB peak VRAM (50 GB headroom); CURRENT BEST |
 
-**Total improvement from baseline:** 109.42 → 53.82 (−50.8%)
+**Total improvement from baseline:** 109.42 → 50.90 (−53.5%)
 
 ## Critical mlp_ratio finding
 
@@ -69,38 +71,48 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 4. **Fourier PE num_freq=4 is the default** — confirmed sweet spot.
 5. **coord_noise_std=0.01 is the default** (merged in #3632).
 6. **lr=5e-4 is the default** — lr=1e-3 + coord noise regressed in 3-seed test (#3690).
-7. **--epochs 14** is the recommended training budget. Val curve still descending at ep14 — more epochs likely helps.
+7. **--epochs 18 + --use_bf16 + --n_hidden 176** is the new default training recipe (post-#4082). Val curve still descending at ep18 — more epochs likely helps.
 8. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 9. **SwiGLU key detail:** `mlp2` (output head) is left as standard MLP; only `self.mlp` in TransolverBlock is replaced. inner_dim=216 for mlp_ratio=2; 320 for mlp_ratio=3.
 10. **mlp_ratio=2 beats mlp_ratio=3 at epochs=14** — narrower model wins; default is mlp_ratio=2.
 11. **DSDF distribution finding (nezuko #3836):** normalized DSDF max abs=2.88 → clip=3.0 is a no-op. Clip=2.0 or 2.5 would actually touch 0.33-1.37% of values.
 
-## Active in-flight PRs (status as of ~16:00 UTC)
+## Active in-flight PRs (status as of ~19:45 UTC)
 
-| # | Student | Hypothesis | State | val_avg/mae_surf_p |
-|---|---|---|---|---|
-| **#3969** | askeladd | **SwiGLU + mlp_ratio=2 + epochs=14** | **MERGED ~15:50** → new baseline | 56.4402 |
-| **#4002** | alphonse | SwiGLU + mlp_ratio=3 + epochs=14 | MERGED (superseded by #3969) | 57.3537 |
-| **#3908** | alphonse | SwiGLU + mlp_ratio=3 | MERGED (prev baseline) | 59.0038 |
-| **#3905** | askeladd | SwiGLU + epochs=12 | MERGED (prev baseline) | 60.7195 |
-| **#3916** | tanjiro | SwiGLU output head gate (mlp2) | CLOSED — val=62.50 (+2.93% regress) | — |
-| **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | CLOSED — mixed signal | — |
-| **#3951** | thorfinn | OneCycleLR + SwiGLU | CLOSED — val=61.38 regress | — |
-| **#3972** | edward | SwiGLU+mlp_ratio=3 + asinh (scale=2.0/3.0) | CLOSED — negative result | — |
-| **#3974** | nezuko | Curriculum learning | CLOSED — stale (baseline 2 gens old) | — |
-| **#3979** | frieren | SwiGLU + n_hidden=176 (mlp_ratio=3 base) | CLOSED — stale (mlp_ratio=2 now baseline) | — |
-| **#4000** | fern | attn_dropout=0.2 + epochs=14 | CLOSED ~16:00 — val=57.02 (+1.02% regress vs #3969); test=50.14 (+2.56% regress); attn_dropout exhausted on this stack | — |
-| **#4001** | tanjiro | slice_num=32 on SwiGLU+mlp_ratio=3 | CLOSED ~16:30 — val=61.32 (+8.6% regress); all 4 splits regress; slice direction exhausted | — |
-| **#3981** | thorfinn | bf16 mixed-precision (ep16 best) | **MERGED ~16:42** → new baseline | 53.8221 |
-| **#4054** | thorfinn | **Round-7:** mlp_ratio=3 + bf16 + epochs=18 (let wider model converge) | WIP — assigned ~16:55 | awaiting |
-| **#4047** | tanjiro | **Round-7:** Extended training probe (epochs=16/18 fp32) | WIP — assigned ~16:40 | awaiting |
-| **#4034** | alphonse | **Round-7:** n_layers=6 depth scaling | WIP — assigned ~16:00 | awaiting |
-| **#4036** | askeladd | **Round-7:** Camber flip augmentation (z-flip + AoA negate) | WIP — assigned ~16:00 | awaiting |
-| **#4039** | edward | **Round-7:** Multi-scale Fourier PE (num_freq=8, freq-range sweep) | WIP — assigned ~16:00 | awaiting |
-| **#4040** | fern | **Round-7:** DropPath stochastic depth (0.1, 0.15) | CLOSED ~18:35 — val=59.32/61.43 (+5.1%/+8.8% vs #3969); all 4 splits regress | — |
-| **#4082** | fern | **Round-7 reassign:** n_hidden=176 + bf16 + epochs=18 (width retest on new stack) | WIP — assigned ~18:35 | awaiting |
-| **#4042** | frieren | **Round-7:** Curvature-weighted surface loss (DSDF-norm proxy) | WIP — assigned ~16:00 | awaiting |
-| **#4043** | nezuko | **Round-7:** AdamW weight_decay sweep (1e-3, 3e-4) + eta_min | WIP — assigned ~16:00 | awaiting |
+### Round-8 active (assigned 19:35–19:45 UTC, all on bf16 stack)
+| # | Student | Hypothesis | State |
+|---|---|---|---|
+| **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 | WIP |
+| **#4108** | alphonse | n_layers=6 retest with bf16 + ep18 (full cosine schedule) | WIP |
+| **#4110** | frieren | Curvature loss retest with sharpened proxy on new baseline | WIP |
+| **#4111** | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending at ep18) | WIP |
+| **#4112** | thorfinn | DSDF-norm as input feature (orthogonal to loss-weighting) | WIP |
+
+### Round-7 still in-flight (assigned earlier, results pending)
+| # | Student | Hypothesis | State |
+|---|---|---|---|
+| **#4036** | askeladd | Camber flip augmentation | WIP (long-running, GPU stuck at 95961 MiB) |
+| **#4039** | edward | Multi-scale Fourier PE num_freq=8 | WIP |
+| **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (resumed activity 19:30) |
+
+### Round-7 results (resolved 19:30 UTC)
+| # | Student | Hypothesis | Outcome |
+|---|---|---|---|
+| **#4082** | fern | n_hidden=176 + bf16 + ep18 | **MERGED ~19:32** → new baseline val=50.90 / test=43.90 |
+| **#4054** | thorfinn | mlp_ratio=3 + bf16 + ep18 | CLOSED — disconfirmed; mlp_ratio=2 wins on bf16 too (val=56.49) |
+| **#4047** | tanjiro | ep16/18 fp32 probe | CLOSED — under-trained; moot under bf16 (val=76.04) |
+| **#4042** | frieren | Curvature-weighted surface loss | CLOSED — real within-arm signal but absolute regress; retest assigned (#4110) |
+| **#4034** | alphonse | n_layers=6 (fp32, ep14) | CLOSED — under-trained (both arms cut at ep9); retest with bf16 assigned (#4108) |
+| **#4040** | fern | DropPath stochastic depth | CLOSED ~18:35 (val regress +5.1%/+8.8%) |
+
+### Prior baseline progression
+| # | Student | Hypothesis | Outcome |
+|---|---|---|---|
+| **#3981** | thorfinn | bf16 + epochs=18 (cut at ep16) | MERGED ~16:42 (prev baseline 53.82) |
+| **#3969** | askeladd | SwiGLU + mlp_ratio=2 + epochs=14 | MERGED ~15:50 (prev baseline 56.44) |
+| **#4002** | alphonse | SwiGLU + mlp_ratio=3 + epochs=14 | MERGED (superseded) |
+| **#3908** | alphonse | SwiGLU + mlp_ratio=3 | MERGED |
+| **#3905** | askeladd | SwiGLU + epochs=12 | MERGED |
 
 ## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
 
@@ -117,36 +129,32 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 **Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing. Clip=3σ is a no-op. Tighter clip values (2.5, 2.0) would touch the surface-side tail near sharp leading/trailing edges.
 
-## Round-7 assignments (assigned ~16:00–16:55 UTC, --epochs 14 + mlp_ratio=2 base unless noted)
+## Round-8 assignments (assigned 19:35–19:45 UTC, all build on the new n_hidden=176 + bf16 + ep18 baseline)
 
 | PR | Student | Hypothesis | Key CLI / change |
 |---|---|---|---|
-| #4034 | alphonse | n_layers=6 depth scaling | `--n_layers 6` (also arm B at epochs=12) |
-| #4036 | askeladd | Camber flip augmentation (z-flip + AoA negate) | `--camber_flip_aug` |
-| #4039 | edward | Multi-scale Fourier PE num_freq=8 + wider freq range | `--num_freq 8` (+ wider exp range arm B) |
-| #4040 | fern | DropPath stochastic depth | CLOSED 18:35 — both arms regress >5% on every split; under-training, not overfit |
-| #4082 | fern | Width retest with bf16 budget — n_hidden=176 + bf16 + ep18 | `--n_hidden 176 --use_bf16 --epochs 18` (ASSIGNED 18:35) |
-| #4042 | frieren | Curvature-weighted surface loss (DSDF-norm proxy) | `--use_curvature_weight` |
-| #4043 | nezuko | AdamW weight_decay sweep + eta_min floor | `--weight_decay 1e-3` (+ eta_min variants) |
-| #4047 | tanjiro | Extended training probe (epochs=16/18, fp32 only) | `--epochs 18` |
-| #4054 | thorfinn | mlp_ratio=3 + bf16 + epochs=18 (let wider model converge) | `--mlp_ratio 3 --use_bf16 --epochs 18` |
+| #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 | `--n_hidden 192 --use_bf16 --epochs 18`, T=50 |
+| #4108 | alphonse | n_layers=6 retest with bf16 + ep18 (depth-isolated, n_hidden=160) | `--n_layers 6 --use_bf16 --epochs 18`, T=45 |
+| #4110 | frieren | Curvature loss retest with sharpened proxy (squared DSDF-norm) on new baseline | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) |
+| #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending) | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 |
+| #4112 | thorfinn | DSDF-norm as input feature (orthogonal to frieren's loss-weighting) | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 |
 
-Deferred to round-8 (backlog):
+Deferred to round-9 (backlog):
 - SAM optimizer (rho=0.05) — costly; screen at epochs=10 first
-- DSDF-norm curvature **feature** (separate from #4042 which uses it for loss-weighting)
-- AoA jitter augmentation (+/- 0.5-1.0 degrees)
-- n_hidden=176 re-test on mlp_ratio=2 stack (was only tested on mlp_ratio=3)
-- mlp_ratio=3 + epochs=16/18 (let wider model fully converge)
 - Per-block / per-head learning rate ratios for SwiGLU FFN
+- AdamW betas tuning (beta2=0.95 vs default 0.999)
+- Stacking interactions: depth + width, curvature loss + DSDF feature, etc.
+- Mixup-style geometry blending across samples
+- Stronger curvature proxy variants (gradient of DSDF, learned curvature head)
 
-## Potential next research directions (post-round-7)
+## Potential next research directions (post-round-8)
 
 ### Tier change candidates (high upside, higher risk)
 1. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity field, or pressure-Bernoulli surface constraint. High complexity but high upside.
 2. **Learnable slice positions** — make slice_num=64 positions trainable rather than fixed attention aggregation
-3. **Surface-aware loss weighting** — weight per-point loss by local surface curvature (high-curvature regions = leading edges = where pressure peaks live)
-4. **Equivariance via cross-attention** — replace coord features with positional encoding only, use SE(2)-equivariant cross-attention for pressure-field decoding
-5. **mlp_ratio=3 + epochs=18** — the wider model may need more compute to converge; let it run longer
+3. **Equivariance via cross-attention** — replace coord features with positional encoding only, use SE(2)-equivariant cross-attention for pressure-field decoding
+4. **Stack the round-8 winners** — if both width=192 (fern) and curvature (frieren) and DSDF feature (thorfinn) win independently, compound them into a single architecture in round-9
+5. **Compute-axis pushes** — if ep22 wins (tanjiro), try ep26 or ep30 on the now-confirmed bf16 stack
 
 ### Confirmed exhausted (do not retry on this stack)
 - n_hidden=176/192 (pre-SwiGLU only — deferred for mlp_ratio=2 stack)

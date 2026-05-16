@@ -1015,3 +1015,55 @@ All 6 idle students assigned. Round-7 focuses on improving OOD generalization an
 - Hypothesis: Earlier n_hidden=176 regress was tested on **mlp_ratio=3 + fp32 + epochs=12**. The current stack is fundamentally different (mlp_ratio=2 + bf16 + epochs=18). bf16's 1.47× speedup makes the ~21% per-epoch cost of n_hidden=176 affordable for the first time. Tests whether the prior regress was capacity-limited *and* budget-limited simultaneously.
 - Key CLI: `SENPAI_TIMEOUT_MINUTES=45 python train.py --n_hidden 176 --epochs 18 --use_bf16`
 - Single arm; n_hidden=192 won't fit in budget. If this wins, the next student can push wider.
+
+---
+
+## 2026-05-16 19:30 — Round-7 Review Wave + Round-8 Launch
+
+### PR #4082 — MERGED: Width retest with bf16 budget (fern) → NEW BASELINE
+- Branch: willowpai2i48h4-fern/fern-nhidden176-bf16-ep18
+- Hypothesis: Earlier n_hidden=176 regress (on mlp_ratio=3+fp32+ep12) was a joint budget+capacity artifact. On the bf16+ep18+mlp_ratio=2 stack, width should now win.
+- W&B run: `mgu3m5v2`
+- val_avg/mae_surf_p: **50.9008** vs #3981 baseline 53.8221 → **−5.43%**
+- test_avg/mae_surf_p: **43.8989** vs #3981 baseline 47.2742 → **−7.14%**
+- Per-split test: single_in_dist=48.97 (−10.5%), geom_camber_rc=55.45 (−7.1%), geom_camber_cruise=28.27 (−3.0%), re_rand=42.91 (−5.8%) — **ALL four splits improve**
+- Val trajectory: ep15=56.91, ep16=53.28, ep17=52.28, ep18=**50.90** — curve **still descending** at ep18
+- Wall time: 39.0 min (well under 45 min cap); peak VRAM 44.6 GB (50 GB headroom on H100); ~130s/epoch
+- **Decision: MERGED ~19:32 UTC** as new baseline. Compound win on bf16+width axis.
+
+### PR #4054 — CLOSED: mlp_ratio=3 + bf16 + epochs=18 (thorfinn)
+- Hypothesis tested: did mlp_ratio=3 lose to mlp_ratio=2 only because of insufficient compute?
+- W&B runs: `m1xcci1k` (Arm A: mlp3+bf16+ep18, cut@15), `5f0cbmkw` (Arm B: mlp3+bf16+ep14, full)
+- Arm A val=**56.49** (+10.99% vs new baseline 50.90) / test=48.27 (+9.94%)
+- Arm B val=**56.66** (+11.32%) / test=49.15 (+11.96%)
+- Arm A vs Arm B delta = −0.30% val (one extra epoch buys almost nothing). **Compute is not the bottleneck for mlp_ratio=3.**
+- **Decision: CLOSED.** mlp_ratio=2 is architecturally superior, confirmed under matched bf16 conditions.
+
+### PR #4047 — CLOSED: ep16/18 fp32 probe (tanjiro)
+- Hypothesis tested: does longer training continue to help, fp32?
+- W&B run: `bc6vu538` (cut at ep11/16 by SENPAI_TIMEOUT_MINUTES=30; cosine T_max=16 lr_factor≈0.39 at cut)
+- val=**76.04** (+49.4% vs baseline 50.90) — dominated by under-training, not by the hypothesis
+- **Decision: CLOSED.** Question now moot under bf16 (PR #3981 and #4082 both answered it positively for bf16+ep18).
+
+### PR #4042 — CLOSED: Curvature-weighted surface loss (frieren)
+- Hypothesis tested: weight surface loss by DSDF-norm proxy to up-weight LE/TE regions
+- W&B runs: `tsjicevo` (Arm A: curv on), `u9t8uqc9` (Arm B: control re-baseline)
+- Arm A val=**56.67** (+11.32% vs new baseline 50.90) / test=48.55 (+10.59%)
+- Arm A − Arm B (within-experiment): −2.65% val / −3.66% test in favor of curvature; geom_camber_rc gained **−5.78%**
+- **Decision: CLOSED with retest.** Within-arm signal is real but doesn't beat the new baseline absolutely. The DSDF proxy was weak (max/mean=1.45 vs PR's intended [2,20] range). Reassigned to frieren with **sharpened proxy (squared DSDF-norm) on new baseline stack**.
+
+### PR #4034 — CLOSED: n_layers=6 depth scaling (alphonse)
+- W&B runs: `1gcva1uq` (Arm A: n6+ep14), `eza2cpbe` (Arm B: n6+ep12)
+- Both arms timeout-cut at ep9 (cosine LR still 1-2e-4 vs 0 at full anneal). Arm A val=**84.67** (+66.4%); Arm B val=**81.94**.
+- **Hypothesis was unanswered, not refuted** (student's own preemptive analysis 18:26 was on point).
+- **Decision: CLOSED with retest.** bf16 makes ep18 fit in 45-min cap at n_layers=6 (~141 s/epoch × 18 = 42.3 min). Reassigned with `--use_bf16 --epochs 18`.
+
+### Round-8 Launch (5 fresh assignments)
+
+| PR | Student | Hypothesis | Key CLI |
+|---|---|---|---|
+| #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 | `--n_hidden 192 --use_bf16 --epochs 18`, T=50 |
+| #4108 | alphonse | n_layers=6 retest with bf16+ep18 (depth-isolated; n_hidden=160) | `--n_layers 6 --use_bf16 --epochs 18`, T=45 |
+| #4110 | frieren | Curvature loss retest with sharpened proxy on new baseline | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) |
+| #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending at ep18) | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 |
+| #4112 | thorfinn | DSDF-norm as input feature (orthogonal to frieren's loss-weighting) | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 |
