@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~20:55 UTC) — **#4063 tanjiro MERGED** (T_max=20: val 57.66 / test 49.45, new best); **#4044 alphonse CLOSED** (multi-FiLM falsified); **#4015 nezuko sent back** (T_max=20 composition test); **#4145 alphonse assigned** (grad_clip + T_max=20 composition); 8/8 staffed.
+- **Date:** 2026-05-16 (~21:05 UTC) — **#4063 tanjiro MERGED** (T_max=20: val 57.66 / test 49.45, new best); **#4044 alphonse CLOSED** (multi-FiLM falsified); **#4015 nezuko sent back** (T_max=20 composition test); **#4145 alphonse** (grad_clip+T_max=20 composition) + **#4148 tanjiro** (LR@T_max=20) assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -50,9 +50,9 @@ Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.
 | #4120 | thorfinn | R10 H52: LR re-optimisation at clip=1.0 {1.5e-4, 2e-4, 2.5e-4} | WIP |
 | #4122 | edward | R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} | WIP |
 | #4096 | frieren | R10 H50: SGDR cosine warm restarts {T_0=7, T_0=4 T_mult=2} | WIP |
-| #4063 | tanjiro | R10 H47: T_max sweep — MERGED; next assignment pending | **Idle (just merged)** |
+| **#4148** | **tanjiro** | **R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4}** | **Just assigned** |
 
-⚠️ **NOTE:** tanjiro is effectively idle — their PR just merged. If tanjiro's pod becomes unassigned, they need a new experiment. Candidate: T_max sweep extension {24, 28} OR grad_clip + T_max=20 seed confirmation.
+**All 8 students now staffed.**
 
 ## Recent closures (informative nulls — recent sessions)
 
@@ -73,6 +73,7 @@ Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.
 | Axis | Hypothesis | PR / student | Expected outcome |
 |------|-----------|-------------|-----------------|
 | Schedule+optimizer composition | grad_clip=1.0 + T_max=20 + T_max=24 extension | #4145 alphonse | −1 to −3 val; tests orthogonal improvements composing |
+| LR recalibration at T_max=20 | lr {1.3e-4, 1.5e-4 ctrl, 1.7e-4} at T_max=20 | #4148 tanjiro | −0 to −2 val; LR optimum may shift with T_max |
 | Architecture stability composition | layer_scale=1e-4 + T_max=20 | #4015 nezuko | −0 to −2 val; tests if both wins stack |
 | Loss balance | surf_weight {5, 10 ctrl, 20} at clip=1.0 substrate | #4128 fern | −0 to −2 val; substrate-dependent finding |
 | Gradient signal | Batch size {8, 16} at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val |
@@ -108,7 +109,7 @@ Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.
 
 1. **alphonse #4145 composition**: grad_clip=1.0 + T_max=20 (Arm B) is highest-priority combination. If both improvements compose, potential new best ~55–56 val.
 2. **nezuko #4015 composition**: layer_scale=1e-4 + T_max=20 (Arms F+G) — tests if architecture stability improvement stacks with schedule win.
-3. **Assign tanjiro a new experiment**: pod may become idle as T_max=20 PR merged. Options: T_max sweep {24, 28} OR surf_weight on T_max=20 substrate.
+3. **All 8 students now staffed.** Tanjiro assigned #4148 LR recalibration at T_max=20.
 4. **In-flight recalibration PRs**: thorfinn #4120 LR@clip, edward #4122 wd@clip — note these used OLD T_max=14 substrate; results will need re-testing on T_max=20.
 5. **SGDR frieren #4096**: LR schedule reformulation — may be less relevant now that T_max=20 is the baseline, but still informative.
 6. **Paper completeness**: Need clean ablation of T_max (done), grad_clip (done), composition (in-flight). Consider EMA decay at T_max=20 substrate as a confirmatory sweep.

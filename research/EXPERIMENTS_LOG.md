@@ -57,6 +57,10 @@ Arms D+E (layer_scale=1e-4 + T_max=14, 2 seeds) had val 59.66/59.67 — beats OL
 
 3 arms: B (T_max=20 + clip=1.0), C (T_max=24 no clip), D (T_max=24 + clip=1.0). Tests composition of two orthogonal previous wins + schedule extension beyond T_max=20.
 
+### #4148 tanjiro — R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4} (just assigned)
+
+Tests whether lr=1.5e-4 optimum (finding #14, T_max=14 substrate) shifts at T_max=20 where effective LR is ~20% higher within budget. Pure CLI.
+
 ---
 
 ## 2026-05-16 20:35 — #4084 fern CLOSED informative (dropout monotone hurts, camber_rc gain noted); #4128 fern surf_weight assigned
