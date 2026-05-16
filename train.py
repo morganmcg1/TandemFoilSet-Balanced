@@ -370,6 +370,7 @@ class Config:
     surf_weight: float = 25.0
     epochs: int = 50
     smooth_l1_beta: float = 1.0  # transition point between quadratic/linear regions of SmoothL1
+    adam_beta2: float = 0.999  # Adam second-moment decay (default 0.999, transformer recipes often use 0.99 for small batch)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -426,7 +427,12 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 print(f"EMA shadow model created with decay={ema_decay}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.adam_beta2),
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -494,6 +500,18 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    v_means = []
+    v_maxes = []
+    for group in optimizer.param_groups:
+        for p in group['params']:
+            state = optimizer.state.get(p)
+            if state and 'exp_avg_sq' in state:
+                v = state['exp_avg_sq']
+                v_means.append(v.abs().mean().item())
+                v_maxes.append(v.abs().max().item())
+    v_mean = sum(v_means) / len(v_means) if v_means else 0.0
+    v_max = max(v_maxes) if v_maxes else 0.0
+
     # --- Validate (using EMA model) ---
     model.eval()
     ema_model.eval()
@@ -524,6 +542,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/v_mean": v_mean,
+        "train/v_max": v_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
