@@ -519,3 +519,22 @@ Per-split breakdown (Arm B, pw=2.0, val): single_in_dist=59.91 (−3.71%), geom_
 - **Metrics:** `models/model-charliepai2i48h2-askeladd-lion-beta1-095-20260516-123309/metrics.jsonl`
 - **Decision:** CLOSED no_improvement.
 - **Key finding:** More momentum smoothing (β1=0.95, 5% gradient weight/step) is decisively worse at 18-epoch/batch=4 regime. JSONL shows slower surf_loss descent from epoch 5 — under-reactive updates rather than instability. β1=0.90 appears well-tuned for LR=1.7e-4/T_max=30/bs=4. The productive direction is β1 < 0.90 (more reactivity) — student correctly identified this; future PR on the 8-mech stack could test β1 ∈ {0.85, 0.88}. However, askeladd was re-assigned to EMA decay (#3989) as the higher-priority direction.
+
+---
+
+## 2026-05-16 15:30 — PR #3725: Per-group grad-clip (attention vs MLP separate max_norm, no_improvement)
+- charliepai2i48h2-fern/per-group-grad-clip
+- **Hypothesis:** Attention projections dominate the aggregate gradient norm — separate clipping (attention=1.0, MLP/other=5.0 or 10.0) should let well-behaved MLP signal through while controlling noisy attention.
+- **Result:** All three arms regressed vs 56.00 baseline (ran without pressure_weight=2.0). Arm C (attn=0.5, other=1.0) was closest at +1.12%.
+
+| Arm | attn_norm | other_norm | val_avg/mae_surf_p | Δ | test_avg/mae_surf_p |
+|-----|-----------|-----------|---------------------|---|---------------------|
+| Baseline | — | — | 56.0011 | — | 48.9470 (51.6269 original) |
+| **A** | 1.0 | 5.0 | 57.4996 | +2.66% | 48.9892 |
+| **B** | 1.0 | 10.0 | 58.1940 | +3.91% | 49.2568 |
+| **C (best)** | 0.5 | 1.0 | **56.6272** | +1.12% | 49.1408 |
+
+- **Gradient-norm diagnostic (key finding):** At E18 with 7-mech stack: `attn_gn mean = 3.45`, `other_gn mean = 18.35`. The hypothesis was *inverted* — MLPs/output are ~5× noisier than attention, not the reverse. Single-clip(1.0) was already controlling the dominant (MLP/output) group; loosening it to 5.0/10.0 allows more MLP gradient noise → val regression.
+- **Metrics:** `models/model-charliepai2i48h2-fern-pg-clip-A-20260516-132937/metrics.jsonl`, `models/model-charliepai2i48h2-fern-pg-clip-B-20260516-140449/metrics.jsonl`, `models/model-charliepai2i48h2-fern-pg-clip-C-20260516-143922/metrics.jsonl`
+- **Decision:** CLOSED no_improvement.
+- **Follow-up:** The diagnostic directly motivates the inverse test: tighten `other` clip *below* 1.0 (e.g., 0.5, 0.3) on the new 8-mech stack (where pressure_weight=2.0 likely elevated output-head MLP gradients further). Assigned as #4016.

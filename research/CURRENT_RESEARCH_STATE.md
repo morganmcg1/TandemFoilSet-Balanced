@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-16 14:00Z — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-16 15:45Z — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=53.7235** (PR #3674 pressure_weight=2.0 merged, −4.07% from 56.00)
 
@@ -42,7 +42,7 @@ cd target && python train.py --agent <student> \
 | #3970 | alphonse | torch.compile throughput: default and reduce-overhead modes | WIP | #3884+#3750 confirmed throughput-bound; compile buys per-epoch time → more steps |
 | #3953 | frieren | LR × T_max coupling: lr=2.1e-4 and 2.5e-4 under T_max=30 | WIP | Effective avg-LR shifted 60%; optimal lr_init may have moved; notified of 53.72 target |
 | #3887 | edward | Cosine T_max refinement: bracket T_max=30 with T_max=25 and 40 | WIP — STALE | Pod recovering from rate-limit; notified of 53.72 target |
-| #3725 | fern | Per-group grad-clip: attention (max_norm=1.0) vs MLP (5.0/10.0) | WIP — STALE | Pod recovering; notified of 53.72 target |
+| #4016 | fern | Tighter MLP/output grad-clip (other=0.5, 0.3) on 8-mech stack | WIP — NEW | #3725 diagnostic: MLP~5× noisier than attn; tighten dominant group; pw=2.0 elevates output-head grad further |
 | #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2) | WIP — STALE | Still rate-limit blocked; notified of 53.72 target |
 | #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP — STALE | Pod recovering from rate-limit; notified of 53.72 target |
 
@@ -53,7 +53,7 @@ cd target && python train.py --agent <student> \
 3. **Does torch.compile buy meaningful per-epoch speedup?** (#3970 alphonse) — #3884+#3750 confirmed throughput-bound; compile is direct attack
 4. **Does lr_init shift under T_max=30?** (#3953 frieren) — lr=2.1/2.5e-4 under T_max=30+pw=2.0; prior lr=2.5e-4 failure was on T_max=80 stack
 5. **Is T_max=30 optimal or is there headroom?** (#3887 edward) — T_max=25 and 40 bracket the winner
-6. **Is MLP gradient over-clipped?** (#3725 fern) — 100% clip rate at norms 25-180
+6. **Is `other` (MLP/output) gradient over-clipped by the existing single-clip(1.0)?** (#4016 fern) — #3725 revealed MLP gradients ~5× larger than attention (other_gn mean ~18); tightening to 0.5/0.3 tests if stronger clipping of the dominant group helps on the 8-mech stack
 7. **Does signed log1p beat asinh?** (#3731 tanjiro) — more aggressive tail compression
 8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn) — input-dependent gating
 
@@ -84,6 +84,7 @@ Eight mechanisms targeting DIFFERENT points:
 | #3586 (nezuko higher LR 2.5e-4) | +2.74% regression; lr=1.7e-4 near-optimal |
 | #3656 (frieren surf-weight-fine sw=22/27) | +4.09% regression; curve flat in [20,25] |
 | #3528 (fern grad-clip rebased sw×max_norm grid) | +0.57% regression; max_norm=1.0 optimal |
+| #3725 (fern per-group grad-clip attn vs MLP) | no_improvement: val +1.1–3.9% vs 56.00; diagnostic revealed MLP/output ~5× noisier than attention; direction inverted from hypothesis; #4016 tests tighter MLP clip below 1.0 on 8-mech stack |
 | #3442 (tanjiro signed-log1p) | Closed stale; reassigned as #3731 |
 | #3383 (edward warmup-cosine) | Closed stale; reassigned as #3733 |
 | #3275 (thorfinn SwiGLU) | Closed stale; reassigned as #3734 |
