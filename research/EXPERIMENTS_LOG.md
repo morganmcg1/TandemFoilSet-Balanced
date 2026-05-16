@@ -1149,3 +1149,60 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 - **CLOSED — budget-constrained negative.** Two evidence points for under-training rather than depth incapacity: (1) single_in_dist +16.6 outsize hit suggests the high-magnitude split needs more steps; (2) val curve descending sharply at E13. But the budget IS the operating constraint: even with curve descending, +7.28% is too large to close in 1 more epoch.
 - **Analysis:** 3rd "budget-constrained capacity regression" this round (alongside LayerScale, hidden_inner=256). The 14-epoch / 30-min cap consistently kills experiments that need more time to mature. SwiGLU+n_head=2 at depth=5 is well-tuned to the budget; depth=6 isn't.
 - **Decision:** Close depth axis at this stack. Pivoting fern to budget-neutral optimization axis: AdamW β2 0.999→0.95 (faster second-moment EMA tracking, more responsive to mature-stack gradient statistics).
+
+## 2026-05-16 10:25 — PR #3773: n_head 2→1, head_dim 48→96 [CLOSED — WIDER-HEAD KNEE AT 2]
+
+- charliepai2i24h2-askeladd/n-head-1-head-dim-96
+- **Hypothesis:** Extend wider-head trend (#3643 n_head 4→2 won -6.2%). Does n_head=1 continue paying off or hit the knee?
+- **Artifacts:** `models/model-n-head-1-head-dim-96-20260516-082229/metrics.{jsonl,yaml}` (+ second run at 07:29:57)
+
+| Metric | Baseline (PR #3643) | n_head=1 | Δ |
+|--------|--------------------|----------|---|
+| val_avg/mae_surf_p | 70.925 | 74.474 | **+5.0%** |
+| test_avg/mae_surf_p | 61.914 | 64.773 | **+4.6%** |
+| n_params | 509,389 | 636,104 | +24.9% (Q/K/V scale with dim_head) |
+| Wall-clock | 27.97 min | 23.5 min | **−16.0%** (single-head attention is cheaper) |
+| Peak VRAM | 39.13 GB | 35.39 GB | −9.6% |
+
+- Per-split: all 4 val + all 4 test regressed. Inter-run variance was high (~6pt val spread across 2 seeds; baseline shows ~1-2pt), confirming single-head attention is more init-sensitive than multi-head (no parallel paths to average over).
+- **CLOSED — clear negative.** The wider-head trend now has a knee: n_head=4→2 won -6.2%, n_head=2→1 loses +5.0%. The optimal subspace partitioning for this dataset is 2-head × 48-dim, not 1-head × 96-dim. Likely mechanism: the multiplicative interaction in 2-head attention (where each head's attention pattern can specialize differently) gives more expressive power per param than a single ultra-wide head.
+- **Decision:** Close head-width axis. Pivoting askeladd to **Mish in SwiGLU gate** — gate-activation-curvature axis, single-line, budget-neutral.
+
+## 2026-05-16 10:25 — PR #3655: RFF σ=3 + learnable-σ on SwiGLU+n_head=2 [CLOSED — RFF AXIS DEAD ON NEW STACK]
+
+- charliepai2i24h2-nezuko/rff-sigma3-on-swiglu (2-arm)
+- **Hypothesis:** RFF σ=3 won -1.91% on the GELU+wd baseline (#3606). Does it still help on post-SwiGLU+n_head=2 stack? Arm A fixed σ=3; Arm B learnable σ init=3.
+- **Artifacts:** `models/model-rff-sigma3-swiglu-mlp2-nhead2-20260516-073436/metrics.jsonl` (A), `models/model-rff-learnable-sigma-swiglu-mlpratio2-nhead2-20260516-083929/metrics.jsonl` (B)
+
+| Arm | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test |
+|-----|--------------------|-------|---------------------|--------|
+| Baseline (PR #3643) | 70.925 | — | 61.914 | — |
+| Arm A — RFF σ=3 fixed | 77.576 | **+9.38%** | 68.497 | +10.63% |
+| Arm B — RFF learnable σ | 76.859 | **+8.37%** | 68.072 | +9.95% |
+
+- Per-split: every single val + test split worse on both arms; geom_camber_cruise particularly bad (+15-18%). Learnable σ converged to 2.87 (barely moved from init 3.0) — optimization landscape genuinely doesn't believe a different frequency would help.
+- **CLOSED — RFF axis dead on new stack.** Mechanism shift after PR #3608 SwiGLU + #3643 n_head=2: the multiplicative gating + wider attention heads now provide expressive feature interactions that RFF was previously substituting for. The "+12,288 params from wider preprocess MLP input" overhead now buys nothing.
+- **Analysis:** This is a clean example of how earlier wins close out earlier axes. RFF was useful when the model couldn't otherwise encode spatial-frequency information; now SwiGLU's gating + 2-head wide attention covers that need natively. Adding RFF on top just adds capacity at the wrong layer (preprocess) and hurts.
+- **Decision:** Close positional-encoding axis at RFF. Pivoting nezuko to **AdamW β1=0.9→0.95** (slower momentum, complementary to fern's β2 test).
+
+## 2026-05-16 10:25 — PR #3607: FFN dropout p=0.1 [CLOSED — 5TH UNIFORM-REGULARIZER FAILURE]
+
+- charliepai2i24h2-thorfinn/dropout-ffn-p01
+- **Hypothesis:** Regularization helps now that capacity is exhausted (originally formulated against weaker baseline).
+- **Artifacts:** `models/model-dropout-ffn-p01-20260516-083107/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | FFN dropout p=0.1 | Δ |
+|--------|--------------------|--------------------|---|
+| val_avg/mae_surf_p | 70.925 | 75.323 | **+6.20%** |
+| test_avg/mae_surf_p | 61.914 | 65.565 | **+5.90%** |
+
+- Per-split val: single 85.575 / geom_rc 88.322 / geom_cruise 56.284 / re_rand 71.112 — all worse than baseline.
+- Full 14/14 epochs completed (no truncation). Train surf_loss bumped at E14 (0.0388 → 0.0447) — model converged to its dropout-imposed asymptote within budget. NOT a budget issue; an "amount-of-regularization-needed" issue.
+- **CLOSED — clear negative.** This is the **5th consecutive textbook-magnitude uniform regularizer failure** on the post-SwiGLU+n_head=2 stack:
+  - DropPath p=0.1 (#3646): +24.6%
+  - EMA α=0.999 (#3639): +13.5%
+  - attn-dropout p=0.1 (#3774): +7.8%
+  - FFN dropout p=0.1 (#3607, now): +6.2%
+  - wd=5e-4 (#3569): +1.3%
+- **Program finding firmly confirmed:** uniform regularizers at textbook magnitudes are past their optimum on this stack. The post-SwiGLU+n_head=2 model has substantially lower intrinsic overfitting risk than the GELU+n_head=4 baseline where these were originally evaluated.
+- **Decision:** Close FFN dropout axis. Pivoting thorfinn to **Huber β=1.0→0.5** — loss-shape axis (never tested on new stack), single-line, budget-neutral.
