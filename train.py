@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import random
@@ -452,14 +453,17 @@ class Config:
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
     lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override
+    ema_decay: float = 0.0     # 0.0 disables; typical 0.999 / 0.9999
+    ema_warmup_steps: int = 100  # direct-copy steps before EMA averaging starts
+    seed: int = 42             # deterministic seed for reproducibility
 
 
 cfg = sp.parse(Config)
 
-torch.manual_seed(42)
-torch.cuda.manual_seed_all(42)
-np.random.seed(42)
-random.seed(42)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+np.random.seed(cfg.seed)
+random.seed(cfg.seed)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -502,6 +506,24 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# EMA-of-weights: keep a fp32 shadow copy of the parameters.
+# fp32 storage is required because under bf16 autocast the (1 - decay) term
+# is below bf16 resolution for decay≥0.999 — the EMA would otherwise never
+# update. Direct-copy for ``ema_warmup_steps`` steps avoids contaminating
+# the running average with random-init weights.
+ema_enabled = cfg.ema_decay > 0
+if ema_enabled:
+    ema_model = copy.deepcopy(model).float()
+    ema_model.eval()
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    print(
+        f"EMA: enabled decay={cfg.ema_decay} warmup_steps={cfg.ema_warmup_steps} "
+        f"(fp32 buffers, half-life ≈ {math.log(2) / max(-math.log(cfg.ema_decay), 1e-12):.0f} steps)"
+    )
+else:
+    ema_model = None
+
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 t_max = cfg.lr_T_max if cfg.lr_T_max > 0 else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -536,8 +558,10 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("val_avg_ema/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
+    wandb.define_metric(f"ema/{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -548,6 +572,9 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+best_ema_avg_surf_p = float("inf")
+best_ema_metrics: dict = {}
+ema_model_path = model_dir / "checkpoint_ema.pt"
 global_step = 0
 train_start = time.time()
 
@@ -594,6 +621,20 @@ for epoch in range(MAX_EPOCHS):
         else:
             grad_norm = torch.zeros((), device=device)
         optimizer.step()
+
+        # EMA update — after optimizer.step(), before global_step increment.
+        # During the warmup window, copy params directly to keep early random
+        # init from contaminating the running average. fp32 cast on the model
+        # side preserves precision under bf16 autocast.
+        if ema_model is not None:
+            with torch.no_grad():
+                if global_step < cfg.ema_warmup_steps:
+                    for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                        ema_p.data.copy_(p.data.float())
+                else:
+                    for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                        ema_p.data.mul_(cfg.ema_decay).add_(p.data.float(), alpha=1 - cfg.ema_decay)
+
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -618,6 +659,18 @@ for epoch in range(MAX_EPOCHS):
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+    ema_split_metrics: dict = {}
+    ema_val_avg: dict = {}
+    ema_avg_surf_p: float | None = None
+    if ema_model is not None:
+        ema_split_metrics = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, amp_dtype=cfg.amp_dtype)
+            for name, loader in val_loaders.items()
+        }
+        ema_val_avg = aggregate_splits(ema_split_metrics)
+        ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -633,6 +686,14 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if ema_model is not None:
+        for split_name, m in ema_split_metrics.items():
+            for k, v in m.items():
+                log_metrics[f"ema/{split_name}/{k}"] = v
+        for k, v in ema_val_avg.items():
+            # k looks like "avg/mae_surf_p" → log as "val_avg_ema/mae_surf_p"
+            suffix = k.split("/", 1)[1] if "/" in k else k
+            log_metrics[f"val_avg_ema/{suffix}"] = v
     wandb.log(log_metrics)
 
     tag = ""
@@ -643,29 +704,62 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # When EMA is the deployed model, the base-best stays on a side path
+        # so the main artifact (model_path) remains the EMA checkpoint.
+        base_save_path = (model_dir / "checkpoint_base.pt") if ema_model is not None else model_path
+        torch.save(model.state_dict(), base_save_path)
         tag = " *"
 
+    ema_tag = ""
+    if ema_model is not None and ema_avg_surf_p is not None and ema_avg_surf_p < best_ema_avg_surf_p:
+        best_ema_avg_surf_p = ema_avg_surf_p
+        best_ema_metrics = {
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": ema_avg_surf_p,
+            "per_split": ema_split_metrics,
+        }
+        # The EMA checkpoint is the deployed model — save to the main artifact
+        # path so wandb upload and eval_nansafe.py pick it up by default.
+        torch.save(ema_model.state_dict(), model_path)
+        torch.save(ema_model.state_dict(), ema_model_path)
+        ema_tag = " *ema"
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    extra = f"  ema_surf_p={ema_avg_surf_p:.4f}{ema_tag}" if ema_avg_surf_p is not None else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{extra}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+    if ema_model is not None:
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(f"ema/{name}", ema_split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
-if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
-    wandb.summary.update({
-        "best_epoch": best_metrics["epoch"],
-        "best_val_avg/mae_surf_p": best_avg_surf_p,
+# When EMA is on, the "deployed model" is the EMA shadow at its best epoch —
+# model_path stores that, and reporting/test eval flows through it.
+deployed_metrics = best_ema_metrics if (ema_model is not None and best_ema_metrics) else best_metrics
+deployed_surf_p = best_ema_avg_surf_p if (ema_model is not None and best_ema_metrics) else best_avg_surf_p
+
+if deployed_metrics:
+    label = "EMA" if (ema_model is not None and best_ema_metrics) else "model"
+    print(f"\nBest {label} val: epoch {deployed_metrics['epoch']}, val_avg/mae_surf_p = {deployed_surf_p:.4f}")
+    summary_update = {
+        "best_epoch": deployed_metrics["epoch"],
+        "best_val_avg/mae_surf_p": deployed_surf_p,
         "total_train_minutes": total_time,
-    })
+    }
+    if ema_model is not None:
+        summary_update["best_ema_epoch"] = best_ema_metrics["epoch"] if best_ema_metrics else None
+        summary_update["best_val_avg_ema/mae_surf_p"] = best_ema_avg_surf_p if best_ema_metrics else None
+        summary_update["best_base_epoch"] = best_metrics["epoch"] if best_metrics else None
+        summary_update["best_base_val_avg/mae_surf_p"] = best_avg_surf_p if best_metrics else None
+    wandb.summary.update(summary_update)
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
@@ -715,8 +809,8 @@ if best_metrics:
         model_path=model_path,
         model_dir=model_dir,
         cfg=cfg,
-        best_metrics=best_metrics,
-        best_avg_surf_p=best_avg_surf_p,
+        best_metrics=deployed_metrics,
+        best_avg_surf_p=deployed_surf_p,
         test_metrics=test_metrics,
         test_avg=test_avg,
         n_params=n_params,
