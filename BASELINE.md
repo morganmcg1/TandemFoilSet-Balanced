@@ -602,3 +602,79 @@ python train.py \
 # Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-16 21:07 — PR #3980: Lion optimizer (sign projection) — NEW BEST
+
+**val_avg/mae_surf_p: 63.336** (Δ −3.48% vs SF-AdamW baseline 65.618)
+
+Lion + clip=0.25 is now the canonical optimizer, replacing SF-AdamW. Post-rebase reproduction confirmed. Paired Δ −24.43% val / −23.72% test vs AdamW+clip=0.25 (within-session control), ~12× seed-variance noise floor.
+
+### Val surface pressure MAE (lower is better)
+
+| Split | val/mae_surf_p |
+|---|---:|
+| `val_single_in_dist`      | 65.069 |
+| `val_geom_camber_rc`      | 77.134 |
+| `val_geom_camber_cruise`  | 47.166 |
+| `val_re_rand`             | 63.975 |
+| **val_avg**               | **63.336** |
+
+### Test surface pressure MAE (3 finite splits; cruise NaN pre-existing)
+
+| Split | test/mae_surf_p |
+|---|---:|
+| `test_single_in_dist`   | 56.001 |
+| `test_geom_camber_rc`   | 69.853 |
+| `test_re_rand`          | 55.794 |
+| `test_avg (3 finite)` | **60.549** |
+
+### Paired sweep summary (post-rebase R2)
+
+| Arm | optimizer | scheduler | clip | val_avg | Δ vs A |
+|---|---|---|---:|---:|---:|
+| A | AdamW | cosine T_max=15 | 0.25 | 83.812 | — (control) |
+| **B** | **Lion** | **cosine T_max=15** | **0.25** | **63.336** | **−24.43% (winner)** |
+
+Best epoch: 17 (both arms). Peak memory: 38.92 GB. Sec/epoch: 112.5. Both arms still descending at budget cap — further headroom exists.
+
+### Mechanism
+
+With clip_rate ≈ 100% at clip=0.25, AdamW sees L2-clipped Adam (two normalizers in series: per-coordinate `m̂/(√v̂+ε)` + global L2 rescale). Lion sees sign projection (single consistent normalizer: all coordinates ±lr). Sign projection re-weights toward under-represented gradient components and removes the fight between Adam's adaptive scaling and the global clip. Win is uniform across all 4 val splits and 3 finite test splits.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-frieren-lion-r2-armb-lion-clip25-rebased-20260516-183306/metrics.jsonl` ← **winner (R2 rebased)**
+- `models/model-charliepai2i48h4-frieren-lion-r2-armb-lion-clip25-rebased-20260516-183306/metrics.yaml`
+- `models/model-charliepai2i48h4-frieren-lion-r2-arma-adamw-clip25-rebased-20260516-172945/metrics.jsonl` (R2 control)
+- `models/model-charliepai2i48h4-frieren-lion-r1-armb-lion-clip25-20260516-152650/metrics.jsonl` (R1 original)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 --cosine_t_max 15 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 0.25 \
+  --optimizer lion --lion_lr 1.5e-4 --lion_weight_decay 3e-4 \
+  --lion_betas 0.9,0.99 \
+  --seed 1
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: cosine (--cosine_t_max 15)
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# FiLM: --film_cond --two_shot_film  (shared conditioner, two injection sites per block)
+# Optimizer: Lion lr=1.5e-4, weight_decay=3e-4, betas=(0.9, 0.99)
+# Gradient clip: --grad_clip_norm 0.25
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+```
+
