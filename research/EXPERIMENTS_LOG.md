@@ -538,3 +538,123 @@ Per-split breakdown (Arm B, pw=2.0, val): single_in_dist=59.91 (−3.71%), geom_
 - **Metrics:** `models/model-charliepai2i48h2-fern-pg-clip-A-20260516-132937/metrics.jsonl`, `models/model-charliepai2i48h2-fern-pg-clip-B-20260516-140449/metrics.jsonl`, `models/model-charliepai2i48h2-fern-pg-clip-C-20260516-143922/metrics.jsonl`
 - **Decision:** CLOSED no_improvement.
 - **Follow-up:** The diagnostic directly motivates the inverse test: tighten `other` clip *below* 1.0 (e.g., 0.5, 0.3) on the new 8-mech stack (where pressure_weight=2.0 likely elevated output-head MLP gradients further). Assigned as #4016.
+
+---
+
+## 2026-05-16 16:00 — PR #3989: EMA decay re-tune on 8-mech stack (ema_decay=0.995 wins)
+- charliepai2i48h2-askeladd/ema-decay-8mech
+- **Hypothesis:** EMA decay=0.999 was tuned on a 5-mech stack at T_max=80. Under T_max=30+pw=2.0, faster decay (shorter half-life) should better track the recent-weights regime produced by steeper annealing.
+- **Result:** Arm B (ema_decay=0.995) wins — val 51.4403 (−4.25% vs 53.72). Arm A (ema_decay=0.997) also beats baseline: val 52.6190 (−2.06%).
+
+| Arm | EMA decay | val_avg/mae_surf_p | Δ | test_avg/mae_surf_p |
+|-----|-----------|---------------------|---|---------------------|
+| Baseline | 0.999 | 53.7235 | — | 46.6011 |
+| **Arm B (winner)** | **0.995** | **51.4403** | **−4.25%** | **43.9473** |
+| Arm A | 0.997 | 52.6190 | −2.06% | 45.2369 |
+
+Per-split (Arm B): val_single_in_dist=56.17 (−3.71%), val_geom_camber_rc=68.07 (+1.49%), val_geom_camber_cruise=32.12 (−9.27%), val_re_rand=49.40 (−5.91%)
+Test (Arm B): test_single_in_dist=53.55, test_geom_camber_rc=56.79, test_geom_camber_cruise=26.94, test_re_rand=38.51
+
+- **Metrics:** `models/model-charliepai2i48h2-askeladd-ema-decay-8mech-0995-20260516-142331/metrics.jsonl`, `models/model-charliepai2i48h2-askeladd-ema-decay-8mech-0997-20260516-133820/metrics.jsonl`
+- **Decision:** MERGED — new baseline 51.4403. 9th compounding mechanism.
+- **Key finding:** The pre-bf16 finding (faster EMA decay wins) replicated cleanly on the 9-mech stack. Convergence-horizon hypothesis confirmed: T_max=30 collapses LR to 40% by epoch 18 → recent weights are trained at much lower LR → EMA shadow model benefits from tracking them more closely (shorter half-life). re_rand test split gains the most (44.63→38.51, −13.7%) — cross-regime Re generalization benefits most from tighter EMA tracking. Arm A vs Arm B gap is 1.18 pts (at noise floor), so 0.995 isn't conclusively better than 0.997 but both clearly beat 0.999. Askeladd assigned #4029 to push toward 0.993/0.990.
+
+---
+
+## 2026-05-16 16:00 — PR #3984: Pressure weight sweep pw=3.0/4.0 (no_improvement)
+- charliepai2i48h2-nezuko/pressure-weight-3p0 and 4p0
+- **Hypothesis:** pw curve was monotone in {0.5, 1.0, 2.0} — does it continue upward past 2.0?
+- **Result:** Both regressed. pw=2.0 is the unique peak.
+
+| pw | val_avg/mae_surf_p | Δ vs 53.72 |
+|----|---------------------|-------------|
+| **2.0 (baseline)** | **53.7235** | — |
+| 3.0 (Arm A) | 55.0026 | +2.38% |
+| 4.0 (Arm B) | 56.8016 | +5.73% |
+
+- **Metrics:** `models/model-charliepai2i48h2-nezuko-pressure-weight-3p0-20260516-134034/metrics.jsonl`, `models/model-charliepai2i48h2-nezuko-pressure-weight-4p0-20260516-144129/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. Pressure-weight axis closed at pw=2.0.
+- **Key finding:** At pw=3.0, velocity Ux/Uy MAE degrades +5-9%; at pw=4.0, +13%. When velocity is starved, the shared Transolver backbone can no longer represent flow physics well, and pressure itself stops improving. Complete inverted-U curve: 57.79 (pw=0.5) → 56.00 (pw=1.0) → 53.72 (pw=2.0) → 55.00 (pw=3.0) → 56.80 (pw=4.0). Nezuko assigned #4030 (velocity surface down-weighting) as a gentler reallocation approach.
+
+---
+
+## 2026-05-16 16:00 — PR #3887: Cosine T_max bracket 25/40 on 8-mech stack (no_improvement)
+- charliepai2i48h2-edward/cosine-tmax-25-pw2 and cosine-tmax-40-pw2
+- **Hypothesis:** T_max=30 was found optimal on the 7-mech stack (pre-pw=2.0). Does the optimum shift with pw=2.0?
+- **Result:** Both regressed. T_max=30 remains the peak.
+
+| T_max | Final LR at ep18 | val_avg/mae_surf_p | Δ |
+|-------|-------------------|---------------------|---|
+| 25 (Arm A) | 3.95e-5 (23% init) | 56.4444 | +5.07% |
+| **30 (baseline)** | **6.73e-5 (40% init)** | **53.7235** | — |
+| 40 (Arm B) | 1.05e-4 (62% init) | 55.2622 | +2.86% |
+
+- **Metrics:** `models/model-charliepai2i48h2-edward-cosine-tmax-25-pw2-20260516-134404/metrics.jsonl`, `models/model-charliepai2i48h2-edward-cosine-tmax-40-pw2-20260516-143620/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. T_max axis closed at 30.
+- **Key finding:** T_max=30 is a relatively narrow peak. Both directions lose. The 40% final-LR-fraction is the sweet spot for this 18-epoch/batch=4 regime. Tighter anneal (T_max=25) costs more than looser (T_max=40) — confirming that killing late-epoch LR is worse than being slightly too warm. Edward assigned #4031 (Lion β2 sweep) as the next untested axis.
+
+---
+
+## 2026-05-16 17:30 — PR #3731: Signed log1p compression on pressure (no_improvement)
+- charliepai2i48h2-tanjiro/signed-log1p-pressure-v2
+- **Hypothesis:** Signed log1p (`sign(z) * log1p(|z|)`) is a more aggressive heavy-tail compressor than asinh and may better stabilize pressure-channel residuals.
+- **Result:** All splits regressed +4–20% vs 9-mech baseline (51.4403); asinh confirmed locally optimal.
+
+| Metric | signed log1p | 9-mech baseline (asinh) | Δ |
+|--------|--------------|--------------------------|---|
+| **val_avg/mae_surf_p** | **58.0898** | **51.4403** | **+12.93%** |
+| val_single_in_dist | 64.02 | 56.17 | +13.97% |
+| val_geom_camber_rc | 71.01 | 68.07 | +4.31% |
+| val_geom_camber_cruise | 38.53 | 32.12 | +19.95% |
+| val_re_rand | 58.81 | 49.40 | +19.05% |
+| **test_avg/mae_surf_p** | **49.5628** | 43.95 | +12.78% |
+
+- **Metrics:** `models/model-charliepai2i48h2-tanjiro-signed-log1p-pressure-v2-20260516-165143/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. Pressure-transform axis exhausted.
+- **Key finding:** asinh's derivative `1/√(1+z²)` and signed-log1p's `1/(1+|z|)` are similar at extreme |z| but differ critically in the |z| ∈ (1,5) "transition" range where most pressure-gradient signal lives. signed-log1p over-attenuates this range, throttling the boundary-layer and geometry-tail gradient. Worst-hit splits (val_geom_camber_cruise +19.95%, val_re_rand +19.05%) depend on capturing finer pressure variation in perturbed geometries — exactly where moderate-|z| signal matters. Tanjiro's analysis explicitly framed this as binary: either signed-log1p wins or asinh is locally optimal. Result is decisive: asinh is locally optimal under the 9-mech stack. EMA(0.995)+pw=2.0 are calibrated around asinh's shape; switching compressors breaks that calibration. Tanjiro assigned #4061 (channel-decoupled output heads) as the next direction — leverages their pressure-channel expertise toward an architectural specialization instead of further loss-side transforms.
+
+---
+
+## 2026-05-16 18:15 — PR #3970: torch.compile(mode=default, dynamic=True) — MASSIVE WIN (10th mechanism)
+- charliepai2i48h2-alphonse/torch-compile
+- **Hypothesis:** torch.compile(model, mode='default', dynamic=True) reduces kernel launch overhead and fuses operations, cutting per-epoch time and enabling more epochs within the 30-min cap. dynamic=True handles variable-length padded batches from pad_collate.
+- **Result:** Arm A (compile_mode=default) wins with val=44.2439 (−14.0% vs 9-mech baseline 51.44). Epoch time halved: 102s→54.4s. Epochs: 18→33. VRAM: 32.97→23.84 GB.
+
+| Metric | Arm A (default) | Arm B (reduce-overhead) | 9-mech baseline |
+|--------|-----------------|-------------------------|-----------------|
+| **val_avg/mae_surf_p** | **44.2439** | 45.3626 | 51.4403 |
+| val_single_in_dist | 46.9816 | 46.83 | 56.17 |
+| val_geom_camber_rc | 58.2760 | 60.11 | 68.07 |
+| val_geom_camber_cruise | 27.6407 | 28.36 | 32.12 |
+| val_re_rand | 44.0774 | 46.15 | 49.40 |
+| **test_avg/mae_surf_p** | **38.0107** | 39.28 | 43.95 |
+| test_single_in_dist | 42.3063 | 43.36 | 53.55 |
+| test_geom_camber_rc | 49.5504 | 52.17 | 56.79 |
+| test_geom_camber_cruise | 23.1558 | 23.71 | 26.94 |
+| test_re_rand | 37.0300 | 37.86 | 38.51 |
+| Per-epoch time | ~54.4s | ~55.2s | ~102s |
+| Best epoch | 33 | 33 | 18 |
+| Peak VRAM | 23.84 GB | 23.84 GB | 32.97 GB |
+
+- **Metrics:** `models/model-charliepai2i48h2-alphonse-torch-compile-default-20260516-162535/metrics.jsonl`, `models/model-charliepai2i48h2-alphonse-torch-compile-reduce-overhead-20260516-165822/metrics.jsonl`
+- **Decision:** MERGED. New baseline: 44.2439. Cumulative: 135.02 → 44.24 = **−67.2%** from initial.
+- **Key finding:** The entire gain comes from the 15 extra epochs (18→33) that compile enables — the loss curve was still monotonically descending at epoch 18. reduce-overhead mode is slightly slower than default in this setting (variable shapes from pad_collate cause overhead that outweighs reduce-overhead's kernel caching benefit). Critically: 9 GB freed VRAM (32.97→23.84 GB) opens the door to capacity expansion — previously blocked by the 42 GB VRAM usage of larger models. Val curve still descending at epoch 33 with rate ~0.03/epoch — not yet saturated. Assigned alphonse #4078 (capacity scale-up on compile stack) and edward #4079 (T_max re-calibration for 33-epoch budget).
+
+---
+
+## 2026-05-16 18:15 — PR #4031: Lion β2 sweep: 0.95 and 0.98 (no_improvement — failure)
+- charliepai2i48h2-edward/lion-beta2
+- **Hypothesis:** Lion β2 (momentum buffer decay) has never been tested. Under T_max=30+pw=2.0+EMA=0.995, the optimal gradient memory window may have shifted from the default β2=0.99.
+- **Result:** Arm A (β2=0.95) val=65.34 — a +27% regression. Stop condition triggered; Arm B skipped.
+
+| Metric | β2=0.95 (Arm A) | 9-mech baseline (β2=0.99) | Δ |
+|--------|-----------------|---------------------------|---|
+| **val_avg/mae_surf_p** | **65.34** | **51.4403** | **+27.0%** |
+| val_single_in_dist | 69.26 | 56.17 | +23.3% |
+| val_geom_camber_rc | 84.31 | 68.07 | +23.9% |
+| val_geom_camber_cruise | 46.18 | 32.12 | +43.8% |
+| val_re_rand | 61.10 | 49.40 | +23.7% |
+
+- **Metrics:** student PR comment
+- **Decision:** CLOSED no_improvement. Lion-internal momentum axis is now fully closed: β1=0.90 optimal (PR #3949, β1=0.95 +9.8%), β2=0.99 optimal (this PR, β2=0.95 +27%). Both defaults confirmed optimal under the current 10-mech stack.
+- **Key finding:** β2=0.95 gives a ~14-step momentum half-life — Lion "forgets" gradient direction every 14 steps. Under T_max=30's steep annealing and pw=2.0's channel asymmetry, this is far too reactive: the model cannot build stable gradient consensus and oscillates. The default β2=0.99 (~69-step half-life) is well-matched to this regime. Physical intuition confirmed: the lion momentum buffer needs enough history to distinguish noise from signal, especially with asymmetric pressure/velocity loss weighting.

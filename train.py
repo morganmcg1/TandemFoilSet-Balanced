@@ -457,6 +457,7 @@ class Config:
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
+    compile_mode: str = ""  # empty = no compile (baseline behavior)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -505,6 +506,10 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+if cfg.compile_mode:
+    _mode = cfg.compile_mode if cfg.compile_mode != "default" else None
+    model = torch.compile(model, mode=_mode, dynamic=True)
+    print(f"Model compiled with mode={cfg.compile_mode!r}")
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
