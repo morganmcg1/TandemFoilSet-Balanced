@@ -32,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -323,11 +324,14 @@ def save_model_artifact(
         "model_config": model_config,
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_checkpoint_source": best_metrics.get("checkpoint_source", "ema"),
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "swa_start": cfg.swa_start,
+        "swa_eval": cfg.swa_eval,
     }
 
     description = (
@@ -389,6 +393,8 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
+    swa_start: int = -1  # epoch (0-indexed) at which uniform SWA snapshot averaging begins; -1 disables
+    swa_eval: bool = True  # if SWA active, evaluate the SWA shadow each epoch and consider it for checkpoint selection
 
 
 cfg = sp.parse(Config)
@@ -438,6 +444,17 @@ ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
     p.requires_grad_(False)
 ema_decay = 0.999
+
+# Uniform-snapshot SWA shadow (Polyak averaging). Disabled unless cfg.swa_start >= 0.
+# AveragedModel performs incremental uniform averaging: snapshot i contributes 1/n
+# after n updates. update_parameters(model) must be called explicitly after each
+# optimizer.step() once epoch >= cfg.swa_start. Transolver uses only LayerNorm
+# (no running stats), so torch.optim.swa_utils.update_bn is NOT required.
+swa_model: AveragedModel | None = None
+if cfg.swa_start >= 0:
+    swa_model = AveragedModel(model)
+    for p in swa_model.parameters():
+        p.requires_grad_(False)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -518,6 +535,8 @@ for epoch in range(MAX_EPOCHS):
         with torch.no_grad():
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
+        if swa_model is not None and epoch >= cfg.swa_start:
+            swa_model.update_parameters(model)
         global_step += 1
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
@@ -535,12 +554,44 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     ema_model.eval()
-    split_metrics = {
+
+    ema_split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+
+    swa_active = (
+        swa_model is not None
+        and cfg.swa_eval
+        and epoch >= cfg.swa_start
+        and int(swa_model.n_averaged.item()) > 0
+    )
+    if swa_active:
+        swa_model.eval()
+        swa_split_metrics = {
+            name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_split_metrics)
+        swa_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+    else:
+        swa_split_metrics = None
+        swa_val_avg = None
+        swa_avg_surf_p = float("inf")
+
+    # Pick the better averager for checkpoint selection — uses min(EMA, SWA).
+    if swa_avg_surf_p < ema_avg_surf_p:
+        split_metrics = swa_split_metrics
+        val_avg = swa_val_avg
+        avg_surf_p = swa_avg_surf_p
+        checkpoint_source = "swa"
+    else:
+        split_metrics = ema_split_metrics
+        val_avg = ema_val_avg
+        avg_surf_p = ema_avg_surf_p
+        checkpoint_source = "ema"
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
@@ -551,12 +602,19 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "val_avg/mae_surf_p_ema": ema_avg_surf_p,
+        "checkpoint/source": checkpoint_source,
+        "checkpoint/source_is_swa": int(checkpoint_source == "swa"),
+        "swa/active": int(swa_active),
+        "swa/n_averaged": int(swa_model.n_averaged.item()) if swa_model is not None else 0,
     }
+    if swa_active:
+        log_metrics["val_avg/mae_surf_p_swa"] = swa_avg_surf_p
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
-        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc. (chosen winner)
     wandb.log(log_metrics)
 
     tag = ""
@@ -566,9 +624,15 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "checkpoint_source": checkpoint_source,
         }
-        torch.save(ema_model.state_dict(), model_path)
-        tag = " *"
+        if checkpoint_source == "swa":
+            # AveragedModel wraps the inner module under .module — save the plain
+            # Transolver-compatible state_dict so the test-eval reload is averager-agnostic.
+            torch.save(swa_model.module.state_dict(), model_path)
+        else:
+            torch.save(ema_model.state_dict(), model_path)
+        tag = f" *[{checkpoint_source}]"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
@@ -588,6 +652,7 @@ if best_metrics:
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_checkpoint_source": best_metrics.get("checkpoint_source", "ema"),
         "total_train_minutes": total_time,
     })
 
