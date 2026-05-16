@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 06:35 UTC
+- **Updated:** 2026-05-16 07:30 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
 - **Metrics:** local JSONL only (no remote tracking on this branch)
-- **Current round-5 baseline (PR #3582 MERGED):** `val_avg/mae_surf_p = 61.2023`, `test_avg/mae_surf_p = 54.0076`
-  - Note: torch.compile() `default` mode validated on full merged stack at `cf6ac4a`. Arm A beat prior best (75.40) by **−18.83%** with all 8 val/test cells improving. Per-epoch speedup 1.88× (108s → 57s), unlocking **32 effective epochs vs 17 at baseline**. Run still descending at −0.7/epoch at cutoff — schedule and other axes have additional headroom.
-- **Cumulative round-5 improvement:** −50.59% val_avg (123.88 → 61.20) and −52.78% test_avg (114.37 → 54.01) vs pre-round-5 floor. **Nine compounding wins in sequence.**
+- **Current round-5 baseline (PR #3666 MERGED):** `val_avg/mae_surf_p = 54.0564`, `test_avg/mae_surf_p = 48.1422`
+  - Note: lr=1e-3 (up from 5e-4) on full compile stack. Epoch-1 instability (seen at lr=1e-3 without compile in PR #3581) **entirely absent** with compile + TF32. Arm B (lr=1e-3) sits strictly below Arm A (lr=7e-4) from epoch 1 to 32. Cautious mask invariant at ~0.61. All 8 val/test cells improve uniformly. Still descending at −0.5/epoch at epoch-32 cutoff.
+- **Cumulative round-5 improvement:** −56.37% val_avg (123.88 → 54.06) and −57.90% test_avg (114.37 → 48.14) vs pre-round-5 floor. **Ten compounding wins in sequence.**
 
 ## Most recent research direction from human researcher team
 (none — no open Issues directed at this launch)
@@ -44,17 +44,23 @@ Key observations from merged results:
 
 Strongest remaining axes (in priority order):
 
-1. **More compute / better schedule alignment for compile budget** (fern new this loop): T_max=32 vs T_max=35 with compile — schedule alignment for the new 32-epoch budget (the analogue of #3465's fix for the new horizon). Expected −1% to −5%. **The natural compounding follow-up.**
-2. **LR sweep with compile** (thorfinn new this loop): re-run lr=7e-4 / lr=1e-3 with `--torch_compile`. The 32-epoch budget nearly 2× the recovery window thorfinn's first sweep had; late-epoch descent rate at lr=1e-3 was −4.13/epoch which could now compound.
-3. **Bernoulli verify + enable** (#3694 frieren WIP, new loop 14): fix `--bernoulli_residual` argparse and run one verification arm on compile baseline. If confirmed active, expected −1–4% free win.
-4. **Batch size sweep** (#3702 tanjiro WIP, new loop 14): VRAM headroom 24/96 GB. batch=8 vs 16 on compile baseline. Tests whether smoother gradients from larger batches beat the step-count reduction.
-5. **Cp normalization** (#3547 askeladd WIP, rebase needed): divide by p_B — natural physics extension. Needs rebase to 61.20 tip + `--torch_compile`.
-6. **Spatial Fourier positional encoding** (#3631 nezuko WIP): NeRF-style sin/cos on (x,y) ±dsdf. Targets OOD geometry weakness.
-7. **slice_num sweep** (#3739 alphonse WIP, new loop 16): slice_num=96 vs 128 on compile baseline — physics-region granularity in Physics_Attention; untested on merged stack. OOD-geometry motivation (camber_rc/cruise remain worst splits).
-8. **Capacity revisit** (#3463 edward WIP, sent back for rebase): n_hidden=192/256 sweep, tractable with bf16 VRAM savings (and now further headroom from compile).
-9. **max-autotune compile mode** (fern #3 suggestion): single arm, deferred.
+1. **LR continuation** (#3771 thorfinn WIP, new loop 17): lr=1.5e-3 vs 2e-3 — continuing the monotonic sweep (5e-4→7e-4→1e-3 all improved). Key question: at what LR does TF32+compile fail to neutralize the epoch-1 spike?
+2. **T_max=35 + lr=1e-3 compound** (#3665 fern WIP, sent back loop 17): schedule realignment compounds with LR win. fern's analysis predicted optimal T_max shifts under LR scaling. Expected −1–3% additional.
+3. **n_hidden=192 + lr=1e-3** (#3463 edward WIP, sent back loop 17): capacity compound at new LR. Prior win was −4.09% at lr=5e-4; at lr=1e-3 the higher gradient signal should accelerate convergence on the 24-epoch budget.
+4. **Bernoulli verify + enable at lr=1e-3** (#3694 frieren WIP, baseline update posted loop 17): bernoulli_residual=True on full lr=1e-3 compile stack. Independent verification via alphonse #3647 confirmed bare flag works.
+5. **Batch size sweep at lr=1e-3** (#3702 tanjiro WIP, baseline update posted loop 17): batch=8 vs 16 at lr=1e-3 baseline.
+6. **slice_num sweep** (#3739 alphonse WIP, new loop 16): slice_num=96 vs 128 on compile baseline — physics-region granularity in Physics_Attention; untested on merged stack. OOD-geometry motivation.
+7. **Cp normalization** (#3547 askeladd WIP, rebase needed): physics-motivated output normalization.
+8. **Spatial Fourier positional encoding** (#3631 nezuko WIP): OOD geometry encoding.
+9. **max-autotune compile mode** (fern suggestion, deferred): single arm, low complexity.
 
-**Closed/merged in this loop (Loop 16)**:
+**Closed/merged in this loop (Loop 17)**:
+- **#3666 (thorfinn LR sweep with compile)** — MERGED (commit `92658ac`). New best val_avg=54.0564 / test_avg=48.1422. lr=1e-3 + compile. All 8 cells improve (−9.9% to −13.9% val). Epoch-1 val_avg=367 (no instability). Cautious mask 0.61 (invariant). Arm A (lr=7e-4) also a winner at 58.38 but Arm B wins decisively. Both arms still descending at epoch 32 cutoff. Ten compounding wins.
+- **#3665 (fern T_max=35) — SENT BACK**: result 58.55 doesn't beat new 54.06. Re-run with lr=1e-3 + T_max=35 requested.
+- **#3463 (edward n_hidden=192) — SENT BACK**: result 58.70 doesn't beat new 54.06. Re-run with lr=1e-3 + n_hidden=192 requested.
+- **#3771 (thorfinn lr continuation) — ASSIGNED** (Loop 17). Testing lr=1.5e-3 vs 2e-3 continuation of monotonic LR sweep.
+
+**Closed/merged in Loop 16**:
 - **#3647 (alphonse surf_weight sweep)** — CLOSED. surf_weight=5 → +12.05% regression (val_avg 84.49), surf_weight=20 → +19.92% regression (val_avg 90.42), both vs OLD 75.40 baseline (=+38-48% vs current 61.20). All 8 val + 8 test cells regress for both arms. Clean representational-overfitting signal: train/surf_loss decreases for both arms while val MAE worsens. surf_weight=10 confirmed as a real local optimum on the full merged stack. Arm B also catastrophically degrades volume (+28.9% mae_vol_p), showing the shared backbone collapses globally when surface is over-weighted. Key finding: loss-weight ratio dynamic range that preserves shared backbone is narrow (~2–7× weighted-surf/vol); sw=10 lands at ~5.8×, which is the sweet spot. Also confirmed independently that bare `--bernoulli_residual` flag parses correctly via simple_parsing — alphonse's runs had bernoulli_residual=True and ran cleanly.
 - **#3739 (alphonse slice_num sweep)** — ASSIGNED (Loop 16). Testing slice_num=96 vs 128 (default=64) on full compile stack. Mechanistic story: finer physics-region decomposition → more capacity for OOD geometry generalization on camber splits.
 
@@ -93,19 +99,20 @@ Strongest remaining axes (in priority order):
 | #3581 | thorfinn | CLOSED (loop 13) | Peak LR sweep on T_max=25 — both arms +9-15% regression |
 | #3425 | tanjiro | CLOSED (loop 14) | SF-AdamW head-to-head — 3 rounds, consistently +40%+ regression |
 | #3548 | frieren | CLOSED (loop 14) | AoA-jitter TTA — FiLM already smooth, Jensen bias kills Arm B |
-| #3463 | edward | WIP (rebase pending re-run) | Capacity revisit: n_hidden=192 |
+| #3463 | edward | WIP (sent back loop 17 — rebase + lr=1e-3 + n_hidden=192) | Capacity revisit: n_hidden=192 + lr=1e-3 compound |
 | #3631 | nezuko | WIP | Fourier positional encoding on spatial coords (x,y,dsdf) |
 | #3647 | alphonse | CLOSED (loop 16) | surf_weight sweep: 5 vs 20 — both arms +12-20% regression, sw=10 confirmed local optimum |
 | #3739 | alphonse | WIP (new loop 16) | slice_num sweep: 96 vs 128 — physics-region granularity |
 | #3547 | askeladd | WIP (baseline update posted, rebase needed) | Cp normalization — 2 arms (cp, halfcp) |
-| #3665 | fern | WIP | T_max alignment for compile: T_max=32 vs T_max=35 |
-| #3666 | thorfinn | WIP | LR sweep with compile: lr=7e-4 vs 1e-3 on 32-epoch budget |
+| #3665 | fern | WIP (sent back loop 17 — rebase + lr=1e-3 + T_max=35) | T_max alignment for compile: T_max=35 + lr=1e-3 compound |
+| #3666 | thorfinn | MERGED (loop 17) | LR sweep with compile: lr=1e-3 wins — new best val_avg 54.06 |
+| #3771 | thorfinn | WIP (new loop 17) | LR continuation: lr=1.5e-3 vs 2e-3 |
 | #3694 | frieren | WIP (new loop 14) | Bernoulli verify + enable on compile baseline |
 | #3702 | tanjiro | WIP (new loop 14) | Batch size sweep: batch=8 vs 16 with compile |
 
 ## Plateau watch
 
-Round 5 now has 9 compounding wins totaling −50.59% val_avg. **No plateau signal — descent rate is still active at the current best**. Half the wall-clock cap is still spent in a regime where −0.7/epoch is achievable. Throughput and schedule axes remain the highest-leverage axes; capacity and physics-prior axes (Cp norm, Bernoulli fix, capacity revisit) are next-tier as the throughput line saturates.
+Round 5 now has **10 compounding wins totaling −56.37% val_avg**. **No plateau signal — the LR axis has been productive for 3 consecutive loops** (T_max → compile → LR). Still descending at −0.5/epoch at epoch-32 cutoff. The LR continuation sweep (lr=1.5e-3 vs 2e-3) is the next test of the momentum curve. The key risk: the epoch-1 instability at high LR may return — TF32+compile appears to neutralize it but the threshold is unknown.
 
 ## Potential next research directions (post-current batch)
 

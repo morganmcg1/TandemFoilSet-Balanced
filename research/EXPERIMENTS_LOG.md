@@ -2,6 +2,61 @@
 
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r5`. Primary ranking metric: `val_avg/mae_surf_p` (lower better). Test-time decision metric: `test_avg/mae_surf_p`.
 
+## 2026-05-16 07:20 — PR #3666: LR sweep with compile — lr=7e-4 vs lr=1e-3 [MERGED — new best 54.06]
+
+- Branch: `charliepai2i24h5-thorfinn/lr-sweep-compile`
+- Student: charliepai2i24h5-thorfinn
+- Hypothesis: PR #3581 showed lr=1e-3 caused catastrophic epoch-1 spike (~800 val_avg) on the 17-epoch no-compile budget. With torch.compile() enabling 32 epochs and TF32 mode active, the spike might not materialize — and even if it does, the longer budget gives more recovery time. A re-run at lr=7e-4 and lr=1e-3 on the compile baseline tests whether higher LR finds a better optimum.
+
+### Results
+
+| Arm | LR | val_avg/mae_surf_p | Δ vs 61.20 | test_avg/mae_surf_p | best_epoch |
+|---|---:|---:|---:|---:|---:|
+| Baseline (#3582 compile) | 5e-4 | 61.2023 | — | 54.0076 | 32 |
+| **A: lr=7e-4 + compile** | 7e-4 | 58.3825 | −4.61% | 51.5693 | 31 |
+| **B: lr=1e-3 + compile ⭐** | **1e-3** | **54.0564** | **−11.68%** | **48.1422** | **32** |
+
+Per-split val/test (Arm B winner):
+
+| Split | val | test | Δ val | Δ test |
+|---|---:|---:|---:|---:|
+| single_in_dist | 56.328 | 53.236 | −13.92% | −10.05% |
+| geom_camber_rc | 68.829 | 63.621 | −10.35% | −9.85% |
+| geom_camber_cruise | 36.021 | 29.889 | −13.18% | −12.45% |
+| re_rand | 55.047 | 45.823 | −9.92% | −12.10% |
+
+Epoch-1 val_avg: Arm A=355, Arm B=367 (identical to baseline ~365 — NO SPIKE). Cautious mask: ~0.61 invariant. Peak VRAM: 24.38 GB (both arms). Descent rate at cutoff: ~−0.5/epoch (still undercooked).
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-thorfinn-lr1e3_compile-20260516-052709/metrics.jsonl` (winner)
+- `models/model-charliepai2i24h5-thorfinn-lr7e4_compile-20260516-042552/metrics.jsonl`
+
+### Analysis
+
+**The epoch-1 instability at lr=1e-3 seen in PR #3581 (spike to ~800, unrecoverable at 17 epochs) completely disappears with compile + TF32.** Epoch 1 lands at 367 for Arm B — indistinguishable from the 5e-4 compile baseline. This is the decisive finding: the high-LR instability was an artifact of no-compile + fp32 matmul precision. With TF32 + kernel fusion, the Hessian in the first optimizer step is numerically different enough to suppress the spike.
+
+The LR-vs-val_avg trend is monotonic: 5e-4→7e-4→1e-3 each improves by −4.6% and −11.7% cumulatively. No sign of instability onset at 1e-3. This suggests the LR sweet spot may be higher — motivating the follow-up sweep to 1.5e-3 and 2e-3.
+
+Cautious AdamW mask is invariant at ~0.61 across all LR levels — masking does NOT gate high-LR updates (confirmed from PR #3581 close finding, further corroborated here). The gating is operating at ~38% of steps regardless of LR magnitude.
+
+**Cumulative round-5 improvement:** −56.37% val_avg (123.88 → 54.06), −57.90% test_avg (114.37 → 48.14). Ten compounding wins.
+
+## 2026-05-16 07:20 — PR #3665: T_max sweep (32 vs 35) on compile [SENT BACK — sub-par vs new 54.06 baseline]
+
+- Branch: `charliepai2i24h5-fern/tmax-compile-alignment`
+- Student: charliepai2i24h5-fern
+- Note: Both arms beat OLD 61.20 baseline (Arm A: 59.78, −2.32%; Arm B: 58.55, −4.34%). But PR #3666 merged during this loop, setting the new baseline to 54.06. Both results (58.55, 59.78) miss the new target. Sent back to re-run Arm B (T_max=35) with lr=1e-3 to test the compound.
+
+Key finding: T_max=35 at lr=5e-4 wins over T_max=32 because the cosine has 3 epochs of headroom past the cutoff (LR=6.43e-5 at epoch 32 vs Arm A's 5.11e-5). Late-epoch descent rate Arm B: −0.94/epoch vs Arm A: −0.76/epoch. The mechanism is the same as PR #3465 chose T_max=25 over T_max=19: slight LR overshoot past the wall-clock cutoff keeps gradient signal alive.
+
+## 2026-05-16 07:20 — PR #3463: Capacity revisit — n_hidden=192 + compile [SENT BACK — sub-par vs new 54.06 baseline]
+
+- Branch: `charliepai2i24h5-edward/capacity-revisit-with-bf16`
+- Student: charliepai2i24h5-edward
+- Note: n_hidden=192 + compile = val_avg 58.6989 (−4.09% vs 61.20). Also sent back because PR #3666 merged during this loop and 58.70 doesn't beat 54.06. Sent back to re-run with lr=1e-3 + n_hidden=192.
+
+Key findings: All 8 val/test cells improve. OOD-geometry splits show largest gains (geom_camber_rc: −6.86% val, geom_camber_cruise: −4.96% val). single_in_dist improved only −0.6% — compile already pushed in-dist convergence, remaining headroom is on OOD geometry. Cautious mask at 0.6128 (matches baseline — width-invariant). Per-epoch cost: 75.2 s/epoch at n=192 vs 57.3 at n=128 → 24 epochs in 30 min vs baseline's 32. Model still descending at −1.05/epoch at cutoff.
+
 ## 2026-05-16 06:30 — PR #3647: surf_weight sweep (5 vs 20) [CLOSED — local optimum confirmed]
 
 - Branch: `charliepai2i24h5-alphonse/surf-weight-sweep`
