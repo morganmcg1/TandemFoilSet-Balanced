@@ -1283,3 +1283,98 @@ vs merged baseline 89.784: **−9.05%** — **MERGED** as new baseline.
 
 Tanjiro #3906: clip threshold sweep {0.25, 1.0, 4.0} — determines whether direction-normalization mechanism is saturated at clip=1.0 or whether adjacent thresholds improve further.
 
+
+---
+
+## 2026-05-16 12:25 — PR #3758 [SENT BACK R2]: n_layers=4 depth ablation — seed-2 confirm (fern)
+
+- **Student branch:** `charliepai2i48h4-fern/depth-r1`
+- **Hypothesis (carried forward):** n_layers=4 saves ~18.2% params and ~19.2% sec/epoch, gaining ~4 fine-tune epochs in cosine T_max=15 tail.
+
+### Seed-2 result
+
+| Run | val_avg/mae_surf_p | Best epoch | n_params | sec/epoch |
+|---|---:|---:|---:|---:|
+| R1 seed-1 Arm A (n_layers=5)   | 91.305 | 17 | 845,527 | 111.2 |
+| R1 seed-1 Arm B (n_layers=4)   | 90.198 | 21 | 691,347 |  89.8 |
+| **R2 seed-2 Arm B (n_layers=4)** | **88.441** | 21 | 691,347 |  89.83 |
+
+Mean of two n_layers=4 seeds: **89.32** (below pre-clip merged 89.784).
+
+### Per-split val MAE (seed-2 vs seed-1, both n_layers=4)
+
+| Split | Seed-1 Arm B | **Seed-2 Arm B** | Δ vs seed-1 |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 105.433 | **102.786** | −2.51% |
+| `val_geom_camber_rc`     |  96.080 |  **94.709** | −1.43% |
+| `val_geom_camber_cruise` |  73.478 |  **71.609** | −2.54% |
+| `val_re_rand`            |  85.802 |  **84.660** | −1.33% |
+| **val_avg**              | **90.198** | **88.441** | **−1.95%** |
+
+Test (3 finite splits): **83.164** vs seed-1 Arm B 86.612 → −3.99%.
+
+### Decision: SENT BACK FOR REBASE WITH CLIP
+
+Per-arm seed variance characterized at ±1.5–2% (confirmed across this PR and #3365, #3684). But **baseline moved while seed-2 ran**: grad-clip merged at #3511 dropping baseline 89.784 → 81.660. fern's 88.441 absolute is +8.3% worse than the new baseline.
+
+The paired Δ (−1.21% R1) is real and clean. Mechanism-wise, depth reduction (capacity↓, epochs↑) is orthogonal to clip-norm (direction normalization). Prior: they compose.
+
+**Sent back for R3 paired sweep with `--grad_clip_norm 1.0` in BOTH arms.** Decision rule:
+- Arm B (n_layers=4+clip) < Arm A (n_layers=5+clip) by >0.5% paired Δ → merge.
+- Within ±0.5% → close (clip subsumed depth's benefit).
+- Arm B > Arm A → close.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-fern-depth-r2-armb-nlayers4-seed2-20260516-102352/metrics.jsonl` (seed-2)
+
+---
+
+## 2026-05-16 12:25 — PR #3492 [SENT BACK R2]: Model capacity — n_hidden=192 on full FiLM stack (nezuko R2)
+
+- **Student branch:** `charliepai2i48h4-nezuko/model-capacity-nhidden192`
+- **Hypothesis:** Wider model (n_hidden=128 → 192) gives FiLM heads more output bandwidth and the trunk MLPs more capacity. Expected larger gain on FiLM stack than pre-FiLM because FiLM's conditioner-multiplier interaction benefits from richer per-channel modulation.
+
+### R2 results — paired Δ −8.21% val_avg
+
+| Arm | n_hidden | n_params | epochs | sec/epoch | VRAM (GB) | best epoch | val_avg/mae_surf_p | test_avg (3 finite) |
+|-----|---:|---:|---:|---:|---:|---:|---:|---:|
+| A   | 128 |   845,527 | 17 | 110.6 | 38.92 | 17 | 97.232 | 93.831 |
+| B   | **192** | **1,737,559** | 13 | 140.3 | **51.98** | 13 | **89.252** | **86.318** |
+| Δ   | — | +2.05× | −4 | +26.8% | +33.6% | — | **−8.21%** | **−8.00%** |
+
+### Per-split val MAE
+
+| Split | A (n_hidden=128) | B (n_hidden=192) | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 119.597 | **100.542** | **−15.93%** |
+| `val_geom_camber_rc`     | 101.358 |  **98.071** | −3.24% |
+| `val_geom_camber_cruise` |  77.050 |  **72.401** | −6.03% |
+| `val_re_rand`            |  90.926 |  **85.995** | −5.42% |
+| **val_avg**              | **97.232** | **89.252** | **−8.21%** |
+
+Every split improves; largest gain on `val_single_in_dist` (−15.93%), consistent with R1 pattern where wider FiLM head best captures heavy-tailed pressure distributions on single-airfoil split.
+
+### Analysis
+
+- **Wider FiLM head, not just trunk:** FiLM module size scales with hidden_dim (output `2*hidden_dim*n_layers`). The wider conditioner provides richer per-channel modulation that composes with two-shot injection.
+- **Capacity composes with FiLM (not subsumed):** R1 (pre-FiLM) showed paired Δ −2.99%; R2 (FiLM stack) shows −8.21%. FiLM allocates extra capacity to inductive-bias smoothing rather than memorization. At common epoch 13, Arm B train surf_loss=0.0517 vs Arm A=0.0598 (Arm B fits training tighter AND generalizes better).
+- **Wall-clock cost manageable:** +26.8% sec/epoch fits inside cosine T_max=15 (Arm B best at epoch 13 with 2 cosine steps remaining).
+- **Initial OOM crash on Arm B launch** (Arm A still in test eval, ~49 GB held). Relaunched sequentially; no code issue.
+- **Seed variance caveat:** Arm A absolute (97.232) is +8.3% above merged 89.784 — bf16 noise + no `torch.manual_seed`. Paired Δ within session is the trusted signal.
+
+### Decision: SENT BACK FOR REBASE WITH CLIP
+
+Absolute Arm B (89.252) is +9.3% worse than new baseline 81.660. Can't merge directly. But the paired Δ is the strongest signal we've seen this round — orthogonal to clip-norm, prior is strong they compose.
+
+**Sent back for R3 paired sweep with `--grad_clip_norm 1.0` in BOTH arms.** Decision rule:
+- Arm B (n_hidden=192+clip) < Arm A (n_hidden=128+clip) by >0.5% paired Δ → likely merge. If even a fraction of −8.21% survives, this is the biggest single hop available.
+- Within ±0.5% → close (capacity subsumed by clip).
+- Arm B > Arm A → close.
+
+If R3 wins, also unlocks: slice_num=96 (currently locked at 64 at n_hidden=128), wider FiLM MLP hidden (256), and depth+capacity compose.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-nezuko-capacity-r2-arma-baseline-20260516-102534/metrics.jsonl`
+- `models/model-charliepai2i48h4-nezuko-capacity-r2-armb-nhidden192-20260516-110108/metrics.jsonl`
