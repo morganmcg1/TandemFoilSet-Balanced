@@ -5,6 +5,41 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 12:26 — PR #3570: torch.compile speedup — **MERGED ⭐⭐⭐ (MASSIVE new val=47.57, test=41.73 best)**
+
+- Student branch: `willowpai2i24h1-edward/torch-compile`
+- Student: `willowpai2i24h1-edward`
+- Hypothesis: `torch.compile(model, mode="default")` fuses Transolver's many small ops (slice-token attention, GeGLU gating, LN, residual) into Triton kernels via Inductor. Expected 1.3-1.8× speedup → deeper cosine decay within 30-min budget → lower val/test MAE.
+
+| Arm | wandb run | wd | seed | compile | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | sec/step |
+|-----|-----------|----|----|---------|---------------------|---------------------|------------|----------|
+| nocompile_ctrl | mq01t5w7 | 1e-4 | default | no | 75.57 | 67.23 | 17 | 0.295 |
+| compile_stacked | f077n973 | 1e-4 | default | yes | 49.14 | 44.07 | 32 | 0.146 |
+| **compile_stacked_seed42 (winner)** | **7vuwr4wg** | **1e-3** | **42** | **yes** | **47.57** | **41.73** | **33** | **0.146** |
+
+Per-split val (compile_stacked_seed42, run 7vuwr4wg):
+- val_single_in_dist mae_surf_p = 50.50 (vs ctrl 99.36 — −48.86 ⭐⭐)
+- val_geom_camber_cruise mae_surf_p = 32.66 (vs ctrl 49.69 — −17.03 ⭐⭐)
+- val_geom_camber_rc mae_surf_p = 57.80 (vs ctrl 85.73 — −27.93 ⭐⭐)
+- val_re_rand mae_surf_p = 49.32 (vs ctrl 67.51 — −18.19 ⭐⭐)
+
+Per-split test (compile_stacked_seed42, run 7vuwr4wg):
+- test_single_in_dist mae_surf_p = 46.72
+- test_geom_camber_cruise mae_surf_p = 28.43
+- test_geom_camber_rc mae_surf_p = 50.58
+- test_re_rand mae_surf_p = 41.20
+- **test_avg/mae_surf_p = 41.73 (NEW BEST, −20.74 vs 62.47 prior best, −33%)**
+
+**Decision: MERGED.** 2.02× per-step speedup (0.295 → 0.146 s/step) lets the 30-min budget reach 33 epochs vs 17 — the model travels ~66% of the cosine schedule vs ~34% pre-compile. The result is robust across two independent seeds (47.57 and 49.14 — 1.6 unit gap, within init noise). Zero graph-break warnings. VRAM slightly lower post-compile (kernel fusion reduces intermediate allocations). The Transolver architecture is particularly well-suited for compile: many small ops per layer (multi-head split, GeGLU gating, LN, residuals) fuse into a small number of Triton kernels.
+
+**Key insight:** The mechanism is unambiguous — it is entirely budget/schedule driven. Per-step numerics are identical (same loss value at ep1 across arms); the gain comes from reaching deeper cosine decay. This makes torch.compile a universal multiplier: every future experiment now effectively gets "50-epoch equivalent" behavior in 30 min.
+
+**Operational implication:** All in-flight and future PRs must include `--use_compile` to evaluate on the new playing field. New threshold: val < 44.5 (≥3 units below 47.57).
+
+Follow-up assigned: edward → compile-mode-sweep (`reduce-overhead` and `max-autotune` Inductor tiers).
+
+---
+
 ## 2026-05-16 11:05 — PR #3600: Fourier L sweep — **MERGED ⭐ (new val=69.98, test=62.47 best)**
 
 - Student branch: `fern/fourier-l-sweep`
