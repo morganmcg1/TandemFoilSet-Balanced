@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 09:45
+- **Updated:** 2026-05-16 10:45
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -35,18 +35,18 @@ Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_si
 | #3320 nezuko | CosineAnnealingWarmRestarts T_0=5 T_mult=2 | 98.88 | −15.6% ✓ **MERGED** |
 | #3157 tanjiro | grad clip max_norm=1.0 | 117.16 | baseline |
 
-## Round 4 + 4.1 active portfolio (8 students, all GPUs assigned)
+## Round 4 + 4.1 + 5 active portfolio (8 students, all GPUs assigned)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3860 | nezuko | **Lion betas (β1, β2)** 4-arm sweep | **New** (after #3720 merge) — fine-tunes Lion's momentum hyperparameters |
-| #3812 | fern | **batch_size=1** (extends bs trend) | New — tests diminishing returns; reports actual steps completed |
-| #3617 | edward | log-space L1 surf loss | **Sent back** — retest on new bs=2 baseline; add surf_weight=30 arms |
-| #3614 | thorfinn | OneCycleLR max_lr=1.5e-3 | Running — original 2e-3 results posted, retest at 1.5e-3 ongoing |
-| #3787 | alphonse | Lion LR sweep at {1e-3, 5e-4, 2e-3} | Running — independent Lion LR replication |
-| #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | Running — throughput + quality |
-| #3797 | askeladd | FiLM conditioning on (Re, AoA, NACA) | Running — architectural axis |
-| #3827 | tanjiro | **Re/AoA input jitter** (3-arm σ sweep) | New (after #3699 close) — data-augmentation axis; targets OOD splits |
+| #3860 | nezuko | **Lion betas (β1, β2)** 4-arm sweep | Running (round 5) — fine-tunes Lion's momentum hyperparameters |
+| #3812 | fern | **batch_size=1** (extends bs trend) | Running — tests diminishing returns; reports actual steps completed |
+| #3617 | edward | log-space L1 + Lion stack (5-arm) | **Sent back 2026-05-16 10:40** — stack log-space L1 + Lion + bs=2 with surf_weight∈{10, 30} arms |
+| #3614 | thorfinn | bs=2 + AdamW max_lr=1.5e-3 | Off-baseline (AdamW) — let current arms finish for LR sensitivity data; close & reassign after |
+| #3787 | alphonse | Lion LR sweep at {1e-3 repl, 5e-4, 2e-3} | **Nudged 10:40** — no comments yet; awaiting status |
+| #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | **Nudged 10:40** — no comments yet; orthogonal to optimizer |
+| #3797 | askeladd | FiLM conditioning on (Re, AoA, NACA) | **Nudged 10:40** — no comments yet; orthogonal to optimizer |
+| #3827 | tanjiro | **Re/AoA input jitter** (3-arm σ sweep) | Running (round 4.1) — data-augmentation axis; targets OOD splits |
 
 ## Round 4 closed/sent-back so far
 
