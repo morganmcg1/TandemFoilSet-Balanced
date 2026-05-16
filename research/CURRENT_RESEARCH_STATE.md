@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~05:25 UTC, Round 5 + 6 active — 8 of 8 students staffed after closing edward/askeladd holdovers)
+- **Date:** 2026-05-16 (~06:35 UTC, Round 5 + 6 active — 8/8 students staffed; nezuko #3671 closed, reassigned to spectral norm; alphonse σ=3 arm marginally beats baseline pending other arms)
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -37,19 +37,20 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #3671 | nezuko | FiLM at intermediate Transolver blocks (layer-wise conditioning) | WIP (R5 H16) |
-| #3672 | alphonse | Fourier ablation under FiLM+Lion+EMA (n_fourier=0 vs σ=3 vs σ=10) | WIP (R5 H17) |
-| #3673 | tanjiro | EMA decay sweep under FiLM+Lion (0.995 vs 0.997 vs 0.999) | WIP (R5 H18) |
+| #3672 | alphonse | Fourier ablation under FiLM+Lion+EMA (n_fourier=0 vs σ=3 vs σ=10) | **WIP** — σ=3 arm `drp81h4l` FINISHED val 71.28 (marginal beat); Arm A running; Arm C not started |
+| #3673 | tanjiro | EMA decay sweep under FiLM+Lion (0.995 vs 0.997 vs 0.999) | **WIP** — 0.997 FINISHED val 73.46 (within noise); Arms A & C running |
 | #3695 | fern | Sobolev loss on surface ∂p/∂s (physics-motivated) | WIP (R5 H19) |
 | #3697 | frieren | Multi-σ Gaussian Fourier features under FiLM+Lion+EMA (proper wiring) | WIP (R5 H20) |
 | #3698 | thorfinn | TTA via z-reflection symmetry (free inference gain) | WIP (R5 H21) |
-| **#3711** | **edward** | **Layer-wise LR decay (LLRD) under FiLM+Lion+EMA** | WIP (R6 H22, just assigned) |
-| **#3712** | **askeladd** | **Lion β1 sweep (β1 ∈ {0.8, 0.9, 0.95})** | WIP (R6 H23, just assigned) |
+| #3711 | edward | Layer-wise LR decay (LLRD) under FiLM+Lion+EMA | WIP (R6 H22) |
+| #3712 | askeladd | Lion β1 sweep (β1 ∈ {0.8, 0.9, 0.95}) | WIP (R6 H23) |
+| **#3748** | **nezuko** | **Spectral normalization on output head (Lipschitz constraint)** | WIP (R6 H24, just assigned) |
 
 ## Closed this turn (informative negative / superseded)
 
 - **#3483 edward** — Lion+EMA ablation (3 arms FINISHED). Best arm A (no-Fourier, EMA): val 73.10 / test 63.65 — regresses vs new baseline (71.65). Best paper finding: **EMA contributes 4.4 val / 3.8 test points on top of Lion** (Arm A vs Arm C pure-Lion). Closed as informative ablation.
 - **#3609 askeladd** — Lion + LR warmup (3 arms FINISHED). Best arm C (warmup=1000): val 78.46 / test 68.69 — regresses vs new baseline by ~7 val points. **LR warmup adds nothing to Lion at 14-effective-epoch budget.** Non-monotonic in warmup_steps (1000 > 0 > 500). Paper-section material for LR-schedule ablation.
+- **#3671 nezuko** — Layer-wise FiLM (Arm A FINISHED, then student declared verdict). Block-FiLM on intermediate Transolver blocks regresses uniformly +5 val on every split vs output-only FiLM baseline. Paper-relevant — confirms **output-FiLM at final layer is the correct FiLM topology**.
 
 ## Earlier closes this launch
 
@@ -70,7 +71,6 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 
 | Axis | Hypothesis | PR / student |
 |------|-----------|--------------|
-| FiLM topology | FiLM at intermediate layers (layer-wise conditioning) | #3671 nezuko |
 | Fourier under FiLM | n_fourier=0 vs σ=3 vs σ=10 (single-scale) | #3672 alphonse |
 | Fourier under FiLM | Multi-σ {3,10,30} (multi-scale) | #3697 frieren |
 | EMA decay | 0.995 vs 0.997 vs 0.999 | #3673 tanjiro |
@@ -78,6 +78,7 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 | Inference-time | TTA via z-reflection | #3698 thorfinn |
 | Optimizer per-block | Layer-wise LR decay (LLRD) γ ∈ {1.0, 0.85, 0.65} | #3711 edward |
 | Optimizer hyperparameter | Lion β1 ∈ {0.8, 0.9, 0.95} | #3712 askeladd |
+| Lipschitz constraint | Spectral norm on output head (+ FiLM layers) | #3748 nezuko |
 
 ## Round 7+ reserved hypotheses
 
@@ -103,6 +104,7 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 | #3380 | frieren multi-σ (config bug) | ❌ Closed 04:33Z (val 76.95, student agreed) |
 | #3483 | edward Lion+EMA ablation | ❌ Closed 05:24Z (best Arm A val 73.10, regresses vs FiLM; EMA contributes 4.4 val) |
 | #3609 | askeladd Lion warmup | ❌ Closed 05:24Z (best Arm C val 78.46, warmup adds nothing to Lion) |
+| #3671 | nezuko block-FiLM | ❌ Closed 06:33Z (Arm A val 76.81, +5 regression on every split; output-FiLM is correct topology) |
 | #3379 | alphonse EMA compound | Closed (superseded by nezuko) |
 | #3484 | tanjiro EMA decay sweep | Closed (superseded) |
 | #3412/#3407/#3410/#3409 | Various R2 dead ends | ❌ Closed |

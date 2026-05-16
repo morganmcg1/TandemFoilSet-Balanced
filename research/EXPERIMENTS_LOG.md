@@ -1,5 +1,53 @@
 # SENPAI Research Results
 
+## 2026-05-16 06:35 — Closed nezuko #3671, reassigned to spec norm; partial R5 results in
+
+### #3671 nezuko — Layer-wise FiLM (CLOSED — uniform +5 val regression)
+
+- Branch: `willowpai2i48h5-nezuko/r5-film-intermediate-layers`
+- Hypothesis: Stack FiLM conditioning at intermediate Transolver blocks in addition to output-FiLM, on the theory that earlier-block conditioning gives the model more capacity to adapt per-Re.
+- Results (Arm A only — student declared verdict and stopped):
+
+| Arm | W&B run | Config | val_avg | test_avg | vs baseline (71.65 / 62.11) |
+|-----|---------|--------|---------|----------|------------------------------|
+| A | `w2qifj9u` | output-FiLM + block-FiLM stack | 76.81 | 66.13 | +5.16 val / +4.03 test |
+
+Per-split val Δ vs baseline: in_dist +5.83, camber_rc +4.13, camber_cruise +6.16, re_rand +4.52 (all 4 splits worse, including OOD re_rand where block-FiLM should help most).
+
+- Analysis: **Paper-relevant negative — output-FiLM at the final layer is the correct FiLM topology**. Adding FiLM to intermediate blocks (5× extra parameters + 4% per-epoch slowdown) does NOT improve over the cheaper output-only configuration. Per-epoch curve shows Arm A starts ahead at epoch 1 (296 vs 310) but falls 5-7 points behind from epoch 3 onward and never recovers. The extra parameters slow per-step throughput, effectively reducing the training-iteration budget; this is the most likely mechanism for the uniform regression.
+
+### Partial Round 5 results (alphonse #3672, tanjiro #3673)
+
+**alphonse #3672** (Fourier ablation under FiLM+Lion+EMA):
+
+| Arm | W&B run | Config | val_avg | test_avg | vs baseline |
+|-----|---------|--------|---------|----------|------------|
+| A | `9an3ynhy` | n_fourier=0 | (running, step 1469/5264) | — | — |
+| B | `drp81h4l` | σ=3, n=16 | **71.28** | **61.67** | **−0.37 val / −0.44 test (marginal beat)** |
+| C | (not started) | σ=10, n=16 | — | — | — |
+
+Arm B σ=3 marginally beats baseline but Δ is within the σ≈4.6 run-to-run variance band. Awaiting Arms A and C to determine if this is signal or noise. Asked alphonse to verify Arm A progress and start Arm C.
+
+**tanjiro #3673** (EMA decay sweep under FiLM+Lion):
+
+| Arm | W&B run | ema_decay | val_avg | test_avg | vs baseline |
+|-----|---------|-----------|---------|----------|------------|
+| A | `eb4gsayj` | 0.995 | (running, step 1380/5264, val 136 early) | — | — |
+| B | `3ag4pvjr` | 0.997 | 73.46 | 63.67 | +1.81 val / +1.56 test (within noise) |
+| C | `3ki9voje` | 0.999 | (running, step 225/5264) | — | — |
+
+ema=0.997 (paper default) reproduces baseline within noise — confirms 0.997 is solid. Awaiting decay-sweep arms to see if 0.995 or 0.999 outperforms.
+
+### Round 6 assignment (nezuko reassigned)
+
+| PR | Student | Hypothesis | Implementation |
+|----|---------|------------|----------------|
+| #3748 | nezuko | **Spectral normalization on output head (+ FiLM layers)** | `torch.nn.utils.parametrizations.spectral_norm` on output linear; 3 arms: control, output only, output+film. Lipschitz constraint to reduce peak-pressure over-fit. |
+
+All 8 students remain staffed: alphonse #3672, tanjiro #3673, fern #3695, frieren #3697, thorfinn #3698, edward #3711, askeladd #3712, nezuko #3748.
+
+---
+
 ## 2026-05-16 05:25 — Closed edward + askeladd holdovers, assigned Round 6
 
 ### #3483 edward — Lion+EMA ablation (CLOSED — no arms beat new FiLM baseline)
