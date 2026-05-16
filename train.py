@@ -137,6 +137,37 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class FiLM(nn.Module):
+    """Feature-wise Linear Modulation conditioned on a scalar.
+
+    h <- (1 + delta_gamma) * h + beta, with the final MLP layer zero-initialized
+    so the transform starts at identity. adaLN-Zero style — see Peebles & Xie
+    (2022) and Zhu et al. (ICLR 2025).
+    """
+
+    def __init__(self, n_hidden: int, hidden_mlp: int = 64):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(1, hidden_mlp),
+            nn.SiLU(),
+            nn.Linear(hidden_mlp, 2 * n_hidden),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, c):
+        """c: ``[B]`` or ``[B, 1]`` standardized scalar.
+
+        Returns (gamma, beta), each ``[B, 1, n_hidden]`` so they broadcast
+        across the node dimension.
+        """
+        if c.dim() == 1:
+            c = c.unsqueeze(-1)
+        delta_gamma, beta = self.mlp(c).chunk(2, dim=-1)
+        gamma = 1.0 + delta_gamma
+        return gamma.unsqueeze(1), beta.unsqueeze(1)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -157,11 +188,23 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, film=None, film_ffn=False):
         fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+
+        ffn_out = self.mlp(self.ln_2(fx))
+        if film is not None and film_ffn:
+            gamma, beta = film
+            ffn_out = gamma * ffn_out + beta
+        fx = ffn_out + fx
+
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            h = self.mlp2[0](h)
+            h = self.mlp2[1](h)
+            if film is not None:
+                gamma, beta = film
+                h = gamma * h + beta
+            return self.mlp2[2](h)
         return fx
 
 
@@ -170,12 +213,18 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_film: bool = False, film_mode: str = "output_only",
+                 log_re_mean: float = 14.58, log_re_std: float = 0.76):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_film = use_film
+        self.film_mode = film_mode
+        self.log_re_mean = log_re_mean
+        self.log_re_std = log_re_std
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -197,6 +246,9 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
+        if self.use_film:
+            self.film = FiLM(n_hidden)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -209,8 +261,22 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+
+        film_params = None
+        if self.use_film and "log_re_raw" in data:
+            log_re = data["log_re_raw"]
+            log_re_n = (log_re - self.log_re_mean) / self.log_re_std
+            film_params = self.film(log_re_n)
+
+        n_blocks = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            is_last = (i == n_blocks - 1)
+            if film_params is not None and self.film_mode == "all_blocks":
+                fx = block(fx, film=film_params, film_ffn=True)
+            elif film_params is not None and self.film_mode == "output_only" and is_last:
+                fx = block(fx, film=film_params, film_ffn=False)
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -223,9 +289,12 @@ def _apply_fourier(x_norm, model):
 
     The projection matrix ``B`` is stored as a buffer on the model so the
     same encoding is applied at train and eval time (it travels with
-    ``state_dict``).
+    ``state_dict``). Handles ``AveragedModel`` by falling through to
+    ``model.module`` when the buffer is not on the wrapper.
     """
     B = getattr(model, "fourier_B", None)
+    if B is None and hasattr(model, "module"):
+        B = getattr(model.module, "fourier_B", None)
     if B is None:
         return x_norm
     coord = x_norm[..., :2]                       # [..., 2]
@@ -275,7 +344,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = _apply_fourier(x_norm, model)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
+            pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
 
             # Diagnostic: model produced non-finite values in normalized space?
             nf_pred = (~torch.isfinite(pred)) & mask.unsqueeze(-1)
@@ -543,6 +613,10 @@ class Config:
     optimizer_name: str = "adamw"  # "adamw" or "lion"
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    use_film: bool = False   # enable FiLM conditioning on log(Re)
+    film_mode: str = "output_only"  # "output_only" or "all_blocks"
+    ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
+    grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -592,6 +666,10 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_film=cfg.use_film,
+    film_mode=cfg.film_mode,
+    log_re_mean=float(stats["x_mean"][13].item()),
+    log_re_std=float(stats["x_std"][13].item()),
 )
 
 model = Transolver(**model_config).to(device)
@@ -604,6 +682,14 @@ if cfg.n_fourier > 0:
     print(f"Fourier features: n_fourier={cfg.n_fourier}, sigma={cfg.fourier_sigma}")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema_model = None
+if cfg.ema_decay > 0:
+    from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
+    ema_model = AveragedModel(
+        model, multi_avg_fn=get_ema_multi_avg_fn(cfg.ema_decay)
+    ).to(device)
+    print(f"EMA enabled (decay={cfg.ema_decay})")
 
 if cfg.optimizer_name == "lion":
     optimizer = Lion(model.parameters(), lr=cfg.lr,
@@ -672,7 +758,8 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
+        pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
         # Two-pronged guard (advisor update on PR #3296):
         #   1. Replace inf/nan predictions with 0 (prevents inf gradients).
         #   2. Drop samples whose GT y is non-finite (one known bad sample
@@ -692,9 +779,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # grad clip (and norm reporting): inf max_norm computes norm without clipping
+        clip_at = cfg.grad_clip if cfg.grad_clip > 0 else float("inf")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_at).item()
         optimizer.step()
+        if ema_model is not None:
+            ema_model.update_parameters(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm,
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -705,9 +801,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # With EMA enabled, evaluate the EMA shadow (the actual predictor we'll
+    # checkpoint). The raw model is just an intermediate state.
+    eval_model = ema_model if ema_model is not None else model
+    eval_model.eval()
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, split_name=name)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, split_name=name)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -728,6 +828,19 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # FiLM γ/β diagnostics across the val_re_rand split's Re range
+    if cfg.use_film:
+        diag_model = ema_model.module if ema_model is not None else model
+        with torch.no_grad():
+            re_lo, re_hi = 11.5, 15.4
+            log_re_probe = torch.linspace(re_lo, re_hi, 32, device=device)
+            log_re_n = (log_re_probe - diag_model.log_re_mean) / diag_model.log_re_std
+            gamma, beta = diag_model.film(log_re_n)  # [32, 1, n_hidden]
+            log_metrics["film/gamma_max_abs_delta"] = (gamma - 1.0).abs().max().item()
+            log_metrics["film/gamma_std"] = gamma.std().item()
+            log_metrics["film/beta_abs_max"] = beta.abs().max().item()
+            log_metrics["film/beta_std"] = beta.std().item()
     wandb.log(log_metrics)
 
     tag = ""
@@ -738,7 +851,9 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA weights when EMA is on — that's the actual predictor.
+        sd_to_save = (ema_model.module if ema_model is not None else model).state_dict()
+        torch.save(sd_to_save, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
