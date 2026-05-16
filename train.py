@@ -402,6 +402,7 @@ class Config:
     huber_delta_p: float = 0.25   # Huber delta for pressure channel p (per-channel)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
+    slice_num: int = 64   # Transolver physics-slice tokens; default 64
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -442,7 +443,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     output_fields=["Ux", "Uy", "p"],
