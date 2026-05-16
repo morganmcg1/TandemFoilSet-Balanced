@@ -8,7 +8,7 @@ target base `icml-appendix-charlie`).
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=1`, `unified_pos=False` |
+| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=1`, `unified_pos=False`, **FiLM-on-Re head** |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
@@ -18,43 +18,43 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3982, mlp_ratio=1, single-seed, best epoch 19)
+## Current best metrics (PR #4004, FiLM-on-Re, single-seed, best epoch 18)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **79.05** |
-| `test_avg/mae_surf_p` | **69.76** |
-| `test/test_single_in_dist/mae_surf_p` | 81.55 |
-| `test/test_geom_camber_rc/mae_surf_p` | 79.44 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 49.32 |
-| `test/test_re_rand/mae_surf_p` | 68.73 |
+| `val_avg/mae_surf_p` **(primary)** | **71.46** |
+| `test_avg/mae_surf_p` | **62.53** |
+| `test/test_single_in_dist/mae_surf_p` | 72.86 |
+| `test/test_geom_camber_rc/mae_surf_p` | 74.86 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 41.88 |
+| `test/test_re_rand/mae_surf_p` | 60.52 |
 
 Per-split val surface-p MAE at best checkpoint (single seed):
 
 | Split | mae_surf_p | Δ vs prev |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  92.38 | -1.53% |
-| `val_geom_camber_rc`     |  90.41 | -2.85% |
-| `val_geom_camber_cruise` |  58.997 | -2.43% |
-| `val_re_rand`            |  74.42 | -0.84% |
-| **avg** | **79.05** | **-1.92%** |
+| `val_single_in_dist`     |  83.22 | -9.9% |
+| `val_geom_camber_rc`     |  81.69 | -9.6% |
+| `val_geom_camber_cruise` |  50.61 | -14.2% |
+| `val_re_rand`            |  70.32 | -5.5% |
+| **avg** | **71.46** | **-9.6%** |
 
-Artifact: `models/model-mlp-ratio-1-20260516-133706/metrics.jsonl`
+Artifact: `models/model-film-re-20260516-145147/metrics.jsonl`
 
-Note: clean win — both primary metrics -1.92% (val) and -1.93% (test), ALL 4 val and 4 test splits improved. Best epoch 19 (vs 18 baseline) = +1 epoch in 30-min cap from compute saving. Single-line change: mlp_ratio 2→1. -12% trainable params, peak GPU mem 29.69 GB. Monotone val improvement at cap — still compute-bound.
+Note: landmark win — largest single-PR improvement since the loss-function rounds. val -9.6%, test -10.4%, ALL 4 val and 4 test splits improved. val_single_in_dist (structural gap split): 92.38 → 83.22 (-9.9%). Training still monotonically descending at epoch 18 — 30-min cap is the hard constraint, not overfitting. Peak GPU mem 32.17 GB, +165K params from film_head.
 
-Why it works: Halving FFN intermediate (256→128) saved 7% sec/epoch (95.9s vs 103.1s), unlocking +1 epoch. Capacity loss was free — the implicit regularization from a leaner FFN + extra training epoch compounded cleanly. Importantly, the 7% wall-clock saving was MUCH less than predicted 25% — confirming FFN matmuls are NOT the dominant per-step cost. Per-iteration overhead (dataloader / EMA update / Python) is the real ceiling.
+Why it works: FiLM (Feature-wise Linear Modulation, Perez 2017) conditions every Transolver block on log(Re) via learned `(γ, β) = MLP(log_Re)`, applied as `(1+γ)·fx + β` before each block. Re is THE fundamental dimensionless parameter in fluid mechanics (sets viscous vs. inertial regime, boundary layer behavior, separation). Treating it as one of 24 input channels buries this signal; FiLM gives it first-class status in every layer. Identity init (γ=0, β=0 at epoch 0) means the model starts equivalent to baseline and freely learns to use conditioning. The global improvement across all 4 splits (not just val_single_in_dist as originally hypothesized) confirms that Re conditioning benefits every flow regime.
 
-**Compute-budget model refined:** O(K²) attention savings (slice_num) and FFN matmul savings (mlp_ratio) both yield modest wall-clock improvements (~5-7%). The next big compute win must come from attacking dataloader/optimizer/Python overhead — bf16 (askeladd #3743), torch.compile, or larger effective batch.
+**+6.3% sec/epoch overhead** (102s vs 96s) due to per-block affine ops, costing -1 epoch (18 vs 19). Still a massive net win because the per-epoch improvement rate dominates.
 
 Reproduce:
 
 ```bash
 cd target/
-python train.py --experiment_name slice-num-16-repro --agent <name>
-# (slice_num=16 + SmoothL1 beta=0.25 + EMA-0.999 + dropout=0.1 all in train.py on icml-appendix-charlie-pai2i-48h-r1)
+python train.py --experiment_name film-re-repro --agent <name>
+# FiLM-on-Re: film_head = MLP(1 → 128 → 1280) conditioning each of 5 Transolver blocks
 ```
 
 ### Note on val variance
@@ -103,4 +103,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #3601 | EMA decay 0.999→0.998 (tighter window, confirmed on slice_num=16 base) | 81.16 | -3.88% |
 | 2026-05-16 | #3783 | EMA decay 0.998→0.997 (probe looser; diminishing returns) | 80.88 | -0.34% |
 | 2026-05-16 | #3950 | slice_num 16→12 (triangulate; tie within noise) | 80.60 | -0.34% |
-| 2026-05-16 | #3982 | mlp_ratio 2→1 (halve FFN width, +1 epoch from compute saving) | **79.05** | **-1.92%** |
+| 2026-05-16 | #3982 | mlp_ratio 2→1 (halve FFN width, +1 epoch from compute saving) | 79.05 | -1.92% |
+| 2026-05-16 | #4004 | FiLM-on-Re: condition each Transolver block on log(Re) scalar | **71.46** | **-9.6%** |
