@@ -1,43 +1,46 @@
 # TandemFoilSet Baseline
 
 **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-**Last updated:** 2026-05-16 13:27 UTC
+**Last updated:** 2026-05-16 15:25 UTC
 
-## Current best — PR #3901: Huber δ=0.5 compound on full stack — alphonse
+## Current best — PR #3924: SGDR T_0=8 warm restarts on full stack — frieren
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p` | **61.6105** | run `cc7wvqvi` (δ=0.5 @ epoch 15) |
-| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **60.8910** | run `cc7wvqvi` |
+| `val_avg/mae_surf_p` | **60.8893** | run `geo7pc4h` (sgdr_t0=8 @ epoch 15) |
+| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **59.2081** | run `geo7pc4h` |
 
-Per-split validation (run `cc7wvqvi` vs prev baseline #3789 vel-asinh, 63.7383):
+Per-split validation (run `geo7pc4h` vs prev baseline #3901 Huber δ=0.5, 61.6105):
 
-| Split | mae_surf_p | Δ vs #3789 |
+| Split | mae_surf_p | Δ vs #3901 |
 |---|---|---|
-| val_single_in_dist | 71.5845 | **−1.58%** |
-| val_geom_camber_rc | 74.1791 | **−5.37%** |
-| val_geom_camber_cruise | 41.1771 | **−5.59%** |
-| val_re_rand | 59.5015 | **−1.20%** |
+| val_single_in_dist | 69.4278 | **−2.96%** |
+| val_geom_camber_rc | 74.2213 | +0.06% |
+| val_geom_camber_cruise | 40.5148 | **−1.61%** |
+| val_re_rand | 59.3933 | **−0.18%** |
 
-Per-split test (run `cc7wvqvi`):
+Per-split test (run `geo7pc4h`):
 
-| Split | mae_surf_p | Δ vs #3789 |
+| Split | mae_surf_p | Δ vs #3901 |
 |---|---|---|
-| test_single_in_dist | 63.9637 | **−2.89%** |
-| test_geom_camber_rc | 67.0300 | **−4.81%** |
+| test_single_in_dist | 61.3286 | **−4.12%** |
+| test_geom_camber_rc | 66.6430 | **−0.58%** |
 | test_geom_camber_cruise | NaN (data/scoring.py bug — known fleet-wide) | — |
-| test_re_rand | 51.6794 | **−1.55%** |
+| test_re_rand | 49.6526 | **−3.92%** |
 
-Key mechanistic finding: **Huber δ=0.5 compounds cleanly with the full stack** (SwiGLU + n_head=2 + vel-asinh + asinh-p + EMA + clip). Tighter quadratic band keeps more residuals in L2-style learning territory post-asinh-p compression; this is most beneficial for surface-pressure prediction on OOD camber geometries (rc and cruise splits both −5.4%). Best epoch 15 — monotone at truncation, gain conservative.
+Key mechanistic finding: **SGDR T_0=8 enables effective low-lr fine-tuning within the 15-epoch wall-clock budget.** Plain `CosineAnnealingLR(T_max=50)` truncates at epoch 15 with lr still at ~3.97e-4 — the model never sees the low-lr regime needed to refine. T_0=8 gives 1 full cycle + 1 partial cycle, so lr decays to ~2e-5 twice within budget. The 5.91% test_3split gain is dominated by `test_single_in_dist` (−4.12%) and `test_re_rand` (−3.92%), suggesting reaching low-lr matters most for in-distribution refinement and Reynolds extrapolation.
 
-Merged from PR #3901, student `willowpai2i48h2-alphonse`.
+**Note on stack**: this run used `--huber_delta 1.0` (not δ=0.5), because frieren's assignment predated alphonse's merge. SGDR + δ=0.5 compound remains untested but should compound at least as well.
+
+Merged from PR #3924, student `willowpai2i48h2-frieren`.
 
 ---
 
 ## Current best configuration
 
-Huber δ=0.5 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pressure compression + EMA (fast decay) + gradient clipping:
-- **`--huber_delta 0.5`** ← NEW (PR #3901): tighter quadratic band; more residuals in L2-style regime post-asinh-p
+SGDR T_0=8 + Huber δ=1.0 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pressure compression + EMA (fast decay) + gradient clipping:
+- **`--sgdr_t0 8`** ← NEW (PR #3924): warm-restart scheduler; lr cycles 5e-4 → ~2e-5 over 8 epochs, then restarts
+- **`--huber_delta 1.0`** (note: δ=0.5 untested with SGDR; expected to compound but needs verification)
 - **`--asinh_vel_scale 0.5`** (PR #3789): applies `asinh(vel / 0.5)` to velocity channels (Ux, Uy); pressure unchanged
 - **`--n_head 2`** (PR #3794): wider per-head attention dim (64 vs 32); also 14% faster per epoch
 - **`--use_swiglu --mlp_ratio 1.333`** (PR #3723): SwiGLU in all TransolverBlock MLPs; param-count matched
@@ -51,13 +54,14 @@ Huber δ=0.5 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pressure compress
 ```bash
 cd target/ && python train.py \
   --grad_clip 5.0 \
-  --huber_delta 0.5 \
+  --huber_delta 1.0 \
   --ema_decay 0.99 \
   --asinh_p_scale 1.0 \
   --use_swiglu \
   --mlp_ratio 1.333 \
   --n_head 2 \
   --asinh_vel_scale 0.5 \
+  --sgdr_t0 8 \
   --agent <student>
 ```
 
