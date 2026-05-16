@@ -2,6 +2,22 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 12:24 — PR #3867: H41 Domain-type indicator embedding (thorfinn) — **CLOSED**
+
+- Branch: `charliepai2i24h4-thorfinn/domain-type-indicator`
+- Result: val_avg=78.13 (+15.5%), val_single=96.39 (+20.0% on target split — opposite direction from hypothesis). best_epoch=11/15 (one fewer than baseline's 12).
+- Key diagnostic: embedding norms grew monotonically from 0 → ~0.10 (5× init scale) — mechanism active. Both is_tandem and dim-22-only discriminators agreed 1.000.
+- **Critical refutation**: dims 18-23 are EXACTLY zero for single-foil (not noisy, not fuzzy). The Transolver's preprocess MLP can learn this AND-of-zero with a single hidden unit. The PR's premise that "Transformer learns AND patterns slowly" applies to FUZZY ANDs; here the AND is tight and the model already handles it.
+- **Implementation finding**: forward() receives normalized x_norm where dims 18-23 map to constants (-mean/std). The student correctly computed is_tandem from raw x at the loop level, confirmed via Step 0 diagnostic.
+- **Updates val_single bottleneck story**: NOT a routing problem. Must be rarity, variance, output calibration, or shape distribution. The "highest researcher priority" hypothesis from 2026-05-16_09:30 is refuted.
+- **Next**: thorfinn reassigned to H47 Focal regression loss (PR #3948) — attacks the rarity hypothesis via per-sample hard-example weighting.
+
+## 2026-05-16 12:24 — PR #3948: H47 Focal regression loss (thorfinn) — **assigned**
+
+- Branch: `charliepai2i24h4-thorfinn/focal-regression-loss`
+- Hypothesis: per-sample focal weighting on the existing MSE-in-log1p loss. weights = (loss_i.detach() / mean).clamp(0.1, 5.0) ** gamma, normalized to preserve total magnitude. Attacks the rarity hypothesis from H41 closure: if single-foil samples are getting under-trained because they're a small fraction of balanced batches, focal weighting will up-weight them via their high relative error. Two arms gamma ∈ {1.0, 2.0}. Predicted -1 to -4 from 67.64.
+- Replaces: #3867 (H41 domain-indicator closed +15.5%)
+
 ## 2026-05-16 11:40 — Round closures and reassignments (4 PRs)
 
 ### PR #3742: H33 OneCycleLR pct_start sweep (tanjiro) — **CLOSED**
