@@ -54,6 +54,16 @@ from data import (
 POS_COLS = slice(0, 2)  # (x, z) spatial coords — dims 0-1 per program.md
 
 
+def asinh_transform(y: torch.Tensor, scale: float) -> torch.Tensor:
+    """asinh(y / scale) — heavy-tail compression. Linear near 0, log for |y|>>scale."""
+    return torch.asinh(y / scale)
+
+
+def asinh_inverse(y_t: torch.Tensor, scale: float) -> torch.Tensor:
+    """sinh(y_t) * scale — exact inverse of asinh_transform."""
+    return torch.sinh(y_t) * scale
+
+
 def fourier_pos_encode(coords: torch.Tensor, num_freq: int) -> torch.Tensor:
     """NeRF-style log-spaced sinusoidal features for 2D coordinates.
 
@@ -258,12 +268,18 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1") -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1",
+                   asinh_scale: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``asinh_scale > 0`` the model predicts in ``asinh(y_norm/scale)`` space:
+    the loss is computed against the forward-transformed target (consistent with
+    training); MAE is computed after applying ``sinh(pred)*scale`` and the
+    standard denormalization back to physical units.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -280,13 +296,17 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            if asinh_scale > 0:
+                y_target = asinh_transform(y_norm, asinh_scale)
+            else:
+                y_target = y_norm
             pred = model({"x": x_enc})["preds"]
 
             # NaN guard: some samples (e.g. test_geom_camber_cruise idx 20) have
             # non-finite ground-truth. IEEE 754 propagates NaN through NaN * 0,
             # so masking alone leaks NaN into the per-split loss/MAE sums.
-            finite_y = torch.isfinite(y_norm)
-            err = _pointwise_loss(pred, torch.where(finite_y, y_norm, torch.zeros_like(y_norm)), loss_type)
+            finite_y = torch.isfinite(y_target)
+            err = _pointwise_loss(pred, torch.where(finite_y, y_target, torch.zeros_like(y_target)), loss_type)
             err = torch.where(finite_y, err, torch.zeros_like(err))
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -300,6 +320,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             ).item()
             n_batches += 1
 
+            if asinh_scale > 0:
+                pred = asinh_inverse(pred, asinh_scale)
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
             # Subset to fully-finite samples so the scoring accumulator's
             # per-sample skip works (it would otherwise still hit NaN*0=NaN
@@ -445,6 +467,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    asinh_scale: float = 0.0  # 0 = disabled; >0 enables asinh(y_norm/scale) target transform
 
 
 cfg = sp.parse(Config)
@@ -564,6 +587,8 @@ for epoch in range(MAX_EPOCHS):
             x_norm[..., :2] = x_norm[..., :2] + noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.asinh_scale > 0:
+            y_norm = asinh_transform(y_norm, cfg.asinh_scale)
         pred = model({"x": x_enc})["preds"]
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
@@ -595,7 +620,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type,
+                             asinh_scale=cfg.asinh_scale)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -663,7 +689,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type,
+                                 asinh_scale=cfg.asinh_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
