@@ -548,7 +548,19 @@ optimizer = torch.optim.AdamW(
     list(model.parameters()) + list(fourier_encoder.parameters()),
     lr=cfg.lr, weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# OneCycleLR: linear warm-up (pct_start) to max_lr=cfg.lr, then cosine
+# anneal to max_lr / (div_factor * final_div_factor). Stepped per-batch.
+steps_per_epoch = len(train_loader)
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=cfg.lr,
+    epochs=MAX_EPOCHS,
+    steps_per_epoch=steps_per_epoch,
+    pct_start=0.2,
+    div_factor=10.0,
+    final_div_factor=1e4,
+    anneal_strategy="cos",
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -640,14 +652,18 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/lr": scheduler.get_last_lr()[0],
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
