@@ -1954,3 +1954,52 @@ R1-R3 paired Δs remain valid as mechanistic findings; they just don't translate
 - Arm A: `models/model-charliepai2i48h4-nezuko-capacity-r4-arma-nh128-sf-20260516-164211/metrics.jsonl`
 - Arm B: `models/model-charliepai2i48h4-nezuko-capacity-r4-armb-nh192-sf-20260516-173359/metrics.jsonl`
 
+
+## 2026-05-16 18:40 — PR #3985 (R2): AGC adaptive gradient clipping — CLOSED (mechanism-flip under SF-AdamW)
+
+**Branch:** `charliepai2i48h4-edward/agc-adaptive-clip`
+
+**Hypothesis (R2):** Per-tensor AGC (λ=0.01, NFNet recipe) vs global L2 clip=1.0 under SF-AdamW. R1 found AGC wins by −2.02% paired on AdamW+cosine+clip=0.25 stack — does the win survive the optimizer change?
+
+### Results (paired R2, single seed each)
+
+| Arm | val_avg/mae_surf_p | test 3-split (no cruise) | best epoch | sec/epoch |
+|-----|------:|------:|---:|---:|
+| A (SF + clip=1.0, control) | **66.761** | **63.510** | 17 | 112.4 |
+| B (SF + AGC λ=0.01)        | 72.405      | 69.482     | 16 | 113.6 |
+| **Δ %**                    | **+8.45%**  | **+9.40%** | — | +1.1% |
+
+All 4 val splits and all 3 finite-test splits regress for B (smallest single-split regression: +5.32% on val_re_rand).
+
+**Arm A absolute 66.761 vs baseline 65.618 = +1.74%** → control reproduced within ±1.5-2% seed band.
+
+### Mechanism (the key insight)
+
+**R1 (AdamW+cosine):** AGC won −2.02% on clip=0.25 stack. **R2 (SF-AdamW):** AGC loses +8.45% on clip=1.0 stack. Same AGC, same λ, same operating regime (any_clip rate=1.0 every step, group_clip~77%). What changed: **LR schedule**.
+
+- **Under AdamW+cosine:** LR decays from 5e-4 → ~5e-8 over 17 epochs. AGC's per-tensor adaptive clip preserves layer-specific direction *late* in training when LR is small. That's where the R1 win came from.
+- **Under SF-AdamW:** LR is constant at 5e-4 throughout. Every step is "big". Per-tensor rescaling at λ=0.01 forces 40 attention tensors each to rescale independently in their own per-tensor frame. The independence is exactly what hurts under constant LR — no late-stage low-LR regime where the per-tensor geometry would matter.
+- **Diagnostic confirmation:** per-group `ratio_mean` values are 2-3× smaller under SF than under AdamW+cosine at matched final epoch — the gradient distribution *is* genuinely different.
+
+### Decision: CLOSED (per R2 rule: AGC + SF regresses → "SF and AGC are interfering")
+
+R1 result remains valid on its stack. R2 is a clean mechanism-flip: AGC's value is in late-LR direction preservation, which SF eliminates. Direction normalization at L2 (clip=1.0) wins under SF; per-tensor AGC loses.
+
+### Direction normalization mechanism map (updated)
+
+The "direction normalization mechanism family" now has clearer geometry:
+
+| Mechanism | Geometry | Best stack | Status |
+|---|---|---|---|
+| clip=0.25 (L2 global) | L2 ball, 100% saturation | AdamW + cosine | Was canonical (#3906) |
+| clip=1.0 (L2 global) | L2 ball, 100% saturation | SF-AdamW | Current canonical (#3594) |
+| AGC λ=0.01 (per-tensor) | Per-tensor L2 ball | AdamW + cosine | Wins R1, loses R2 (R1 stale-stack) |
+| Lion sign-projection (L∞) | Sign on each coord | AdamW + cosine | STRONG WIN R1, awaiting SF compose (#3980) |
+
+**Conclusion:** Direction normalization geometry matters, but the optimizer/scheduler also matters. AGC is **not** a universal upgrade; it's late-LR-specific.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-edward-agc-r2-arma-sf-clip1-20260516-163042/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-edward-agc-r2-armb-sf-agc-20260516-173702/metrics.jsonl`
+

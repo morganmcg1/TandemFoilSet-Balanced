@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 18:31 UTC (Round 4 mid-flight on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 18:42 UTC (Round 4 mid-flight on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 - **PR #3594 (alphonse SF-AdamW R2) MERGED 15:34 UTC**: baseline 80.893 → **65.618** (−18.88% absolute, −16.80% paired). Largest single-experiment gain of the round.
@@ -8,7 +8,7 @@
 - **PR #3492 (nezuko n_hidden=192 R4) CLOSED 18:31 UTC**: paired Δ +1.46% val / −0.06% test → "capacity subsumed under SF" branch of the R4 decision rule. Mechanism is BUDGET subsumption: B wins at every common epoch by 7-10%, but the 27% throughput penalty costs 4 epochs that Arm A turns into −11.2% drop under SF's constant LR (no cosine floor). Capacity wins R1-R3 remain valid. New follow-up axis: `film_mlp_hidden` scaling.
 - **PR #3390 (thorfinn T_max=20 R2) CLOSED 16:08 UTC**: superseded by SF-AdamW. Cosine axis formally closed.
 - **PR #3777 (askeladd SDF) CLOSED 15:55 UTC**: +2.52% paired regression. Geometric-input axis closed.
-- **PR #3985 (edward AGC R1) SENT BACK 15:50 UTC**: real paired Δ −2.02% but on stale baseline. R2 retest under SF-AdamW assigned.
+- **PR #3985 (edward AGC R2) CLOSED 18:40 UTC**: paired Δ +8.45% val / +9.40% test → mechanism-flip under SF-AdamW. AGC wins under decaying LR (R1) but loses under SF's constant LR. Direction-normalization geometry matters, optimizer/scheduler matters too. New assignment: sf_warmup_steps sweep (orthogonal to all in-flight SF sweeps).
 - **PR #4019 (alphonse SF 2×2 factorial)** assigned 15:38 UTC: clip × EMA composition sweep.
 - **PR #4038 (askeladd SF-LR sweep)** assigned 16:00 UTC: lr ∈ {5e-4 control, 1e-3, 2e-3, 5e-3}.
 - **PR #4051 (thorfinn SF-wd sweep)** assigned 16:12 UTC: wd ∈ {1e-4 control, 3e-4, 1e-3, 1e-2}.
@@ -40,11 +40,15 @@
 
 ### Highest-priority open questions
 
-1. **Clip threshold under SF-AdamW** — is clip=0.25 (AdamW optimum) still optimal? `alphonse #4019 arm A vs B`.
-2. **EMA redundancy under SF** — does external EMA add anything on top of SF's Polyak averaging? `alphonse #4019 arm A vs C, B vs D`.
-3. **LR under SF-AdamW** — SF paper recommends 1×-10× larger LR than scheduled approach; Arm B in #3594 was still descending at cap. `askeladd #4038 4-arm sweep`.
-4. **AGC under SF-AdamW** — Edward's R1 showed −2.02% paired on stale baseline; does per-tensor direction normalization compound with SF's Polyak averaging? `edward #3985 R2 retest`.
-5. **Capacity (n_hidden=192) + SF** — R2 showed −8.21% under AdamW; could compound massively under SF. Awaiting nezuko #3492 R3 result.
+1. **Clip threshold under SF-AdamW** — is clip=0.25 (AdamW optimum) still optimal? `alphonse #4019 arm A vs B` (in flight).
+2. **EMA redundancy under SF** — does external EMA add anything on top of SF's Polyak averaging? `alphonse #4019 arm A vs C, B vs D` (in flight).
+3. **LR under SF-AdamW** — SF paper recommends 1×-10× larger LR than scheduled approach. `askeladd #4038 4-arm sweep` (in flight).
+4. **WD under SF-AdamW** — never re-tuned for the new stack. `thorfinn #4051 4-arm sweep` (in flight).
+5. **sf_warmup_steps optimum** — paper default 500 inherited blindly. `edward #4087 4-arm sweep` (just assigned).
+6. **Lion reproduction** — STRONGEST candidate (R1: −24% paired, 63.336 absolute). `frieren #3980 rebase` (in flight).
+7. **FiLM head width** — does inductive-bias-amplification scale via FiLM MLP? `nezuko #4081 3-arm sweep` (just assigned).
+
+**Mechanism axis CLOSED:** Capacity (budget-subsumed under SF), AGC (mechanism-flipped under SF), Depth, Cosine, SDF.
 
 ### Key in-flight experiments (18:31 UTC)
 
@@ -55,7 +59,7 @@
 | **askeladd** | **#4038** | **SF-AdamW LR sweep** {5e-4, 1e-3, 2e-3, 5e-3} | Training (100% GPU, ~2h in) | Directly refines 65.618 baseline |
 | **thorfinn** | **#4051** | **SF-AdamW weight-decay sweep** {1e-4, 3e-4, 1e-3, 1e-2} | Training (100% GPU, ~1.6h in) | Directly refines 65.618 baseline |
 | **nezuko** | **#4081** | **FiLM head width: film_mlp_hidden ∈ {128, 192, 256}** | Just assigned 18:31 UTC | Tests inductive-bias-amplification; no throughput cost |
-| **edward** | **#3985** | **AGC R2: SF + AGC vs SF + clip=1.0** | Rebased+training (since ~17:25) | If wins, replaces `--grad_clip_norm 1.0` |
+| **edward** | **#4087** | **SF warmup steps sweep** {100, 500, 1000, 2000} | Just assigned 18:42 UTC | Only SF-specific param not yet swept |
 | tanjiro | #4003 | Clip thresh R2 under AdamW: {0.05, 0.1, 0.15, 0.25} | Training | AdamW context; informs clip axis |
 | fern | #4012 | Sobolev / edge-gradient L1 loss | Training (old stack, Sobolev code) | Orthogonal loss axis; still relevant |
 
@@ -93,6 +97,8 @@
 | #3830 | Lookahead wrapper | Paired Δ +0.42% val | Redundant with EMA |
 | #3777 | SDF input features | +2.52% val / +3.99% test | Redundant with `dsdf`+FiLM; per-sample p95 norm breaks comparability |
 | #3390 | T_max=20 R2 (Arm A only, B aborted) | superseded mid-run | Cosine axis closed by SF-AdamW; another "two mechanisms same role" |
+| #3492 | n_hidden=192 R4 SF | paired Δ +1.46% val (B per-epoch wins by 7-10% but 4 epochs lost to throughput) | Budget subsumption — capacity dormant under SF, not falsified |
+| #3985 | AGC R2 SF | paired Δ +8.45% val / +9.40% test | Mechanism-flip: AGC needs late-low-LR regime; SF eliminates it |
 
 ## Axes status
 
@@ -114,9 +120,17 @@ AdamW optimum: clip=0.25 (monotone, 100% clip rate). SF-AdamW optimum: unknown �
 
 R1 result: **paired Δ −24.43% val / −23.72% test on AdamW+cosine+clip=0.25 stack**. Arm B absolute val 63.336 BEATS the current SF-AdamW baseline (65.618, −3.48%); test 60.549 vs 62.853 (−3.67%). **Largest paired Δ on the track, lowest single-run absolute number on any single experiment.** Mechanism reading: sign projection is the L∞ extreme of "direction normalization" — internally consistent vs AdamW + L2 clip which combines two normalizers in series (Adam's per-coordinate `v̂` then global rescaling). PR has merge conflicts post-#3594 — sent back for rebase and re-run confirmation. **If reproduction holds, Lion becomes the new canonical optimizer** displacing AdamW; next experiment Lion + SF-AdamW (mechanisms likely orthogonal: Lion = update direction, SF = schedule removal + iterate averaging).
 
-### AGC (edward #3985 — R2 retest under SF-AdamW, in flight)
+### AGC (CLOSED under SF — mechanism-flip from optimizer/scheduler change)
 
-R1 showed −2.02% paired val / −3.97% paired test on the AdamW + clip=0.25 stack (absolute 81.552 > current 65.618 baseline). R2 retest now in flight: SF-AdamW + AGC vs SF-AdamW + clip=1.0. Key diagnostic from R1: `any_clip` rate = 100% every step, meaning AGC at λ=0.01 behaves as a permanent per-tensor direction normalizer rather than the safety-clamp regime the paper assumes. The mechanism that won is structurally similar to the clip=0.25 win in #3906 (direction normalization at full saturation).
+**R1 (AdamW+cosine):** AGC λ=0.01 won by −2.02% paired val / −3.97% test (#3985 R1, stale stack). **R2 (SF-AdamW):** AGC loses by +8.45% val / +9.40% test (#3985 R2).
+
+Mechanism: AGC's value is in late-LR per-tensor direction preservation when global L2 would over-constrain individual layers. SF-AdamW's constant LR eliminates the late-low-LR regime where this matters. AGC is **not** a universal upgrade — it's optimizer/scheduler-dependent.
+
+Adds to the "two-mechanisms-for-same-role" pattern: AGC was proxying late-LR direction preservation; SF's constant LR + Polyak averaging owns that role differently.
+
+### SF-AdamW warmup axis (edward #4087 — ACTIVE, NEW)
+
+Sf_warmup_steps was at paper-default 500 throughout, never re-tuned for our 30-min budget. Warmup directly controls when Polyak averaging starts collecting samples. 4-arm sweep ∈ {100, 500, 1000, 2000}. Only SF-specific hyperparameter not yet swept — orthogonal to alphonse #4019 (clip×EMA), askeladd #4038 (LR), thorfinn #4051 (wd).
 
 ### Capacity axis (CLOSED under SF-AdamW — budget subsumption, not mechanism)
 
