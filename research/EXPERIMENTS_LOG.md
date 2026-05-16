@@ -1,5 +1,53 @@
 # SENPAI Research Results
 
+## 2026-05-16 01:43 — PR #3537: Lion optimizer (sign-based update) vs AdamW [Round 3 H13]
+
+- Branch: `willowpai2i48h5-askeladd/round3-lion-optimizer`
+- Hypothesis: Replace AdamW with Lion (Chen et al. 2023, arXiv 2302.06675) — sign-based update, momentum-decay schedule, decoupled weight decay. Lion's sign update yields uniform per-coordinate steps, potentially benefiting irregular-mesh CFD where AdamW's adaptive scaling may misjudge importance across heterogeneous node features.
+
+| Arm | W&B run | optimizer | lr | wd | val_avg | test_avg | Notes |
+|-----|---------|-----------|----|----|---------|----------|-------|
+| A — Lion lr=5e-5 wd=1e-3 | `yvkf9glr` | lion | 5e-5 | 1e-3 | **77.5788** | **68.8764** | **WINNER** — merged |
+| B — Lion lr=1e-4 wd=5e-4 | (not yet run) | lion | 1e-4 | 5e-4 | — | — | Follow-up sweep |
+| C — Lion lr=3e-4 wd=1e-4 | (not yet run) | lion | 3e-4 | 1e-4 | — | — | Follow-up sweep |
+
+**Per-split val mae_surf_p (Arm A):**
+
+| Split | val | test |
+|-------|-----|------|
+| single_in_dist | 90.85 | 81.69 |
+| geom_camber_rc | 87.72 | 77.94 |
+| geom_camber_cruise | **58.81** | **48.83** |
+| re_rand | 72.93 | 67.04 |
+
+**Decision: MERGED** as new baseline. val_avg 93.20 → 77.58 (−16.8%). test_avg 83.54 → 68.88 (−17.5%). Every test split improves substantially. This is the **largest single-mechanism gain** of the launch (Δ = 15.62 val, 3.4σ above noise floor σ ≈ 4.6).
+
+**Analysis:**
+- Lion paper recommends batch ≥ 64 but it works strongly at our batch_size=4. The irregular-mesh CFD loss landscape appears to be well-suited to sign updates.
+- LR=5e-5 was the conservative 10× scale-down from AdamW's 5e-4 — Lion's larger effective per-coordinate step requires lower LR.
+- All other components held constant: Huber β=0.05, Fourier σ=10 n=16, T_max=14.
+- Arms B and C (LR sweep around the winner) are paper-required ablations but Arm A is already merged.
+
+**Implications:**
+- All EMA-cluster wins (tanjiro EMA(0.997) val 86.42, fern σ=3+EMA val 87.83) need re-validation on top of Lion. They were achieved with `cosine_t_max=None` and AdamW.
+- Natural Round 4: EMA(0.997) + Lion compound (4-way stack with Huber + σ=10 + T_max=14).
+
+---
+
+## 2026-05-15 23:11 — PR #3444: Cosine T_max=14 (recalibrate schedule to wall-clock budget) [Round 2 thorfinn]
+
+- Branch: `willowpai2i48h5-thorfinn/round2-cosine-tmax`
+- Hypothesis: 30-min wall-clock binds at epoch ~14 of 50. The cosine LR schedule was set for T_max=50 → at the early stopping point LR is still ~82% of peak. Setting T_max=14 lets the schedule complete inside the budget, giving the final 2-4 epochs proper fine-tuning at low LR.
+
+| Run | cosine_t_max | val_avg | test_avg | Δ vs prior baseline |
+|-----|--------------|---------|----------|---------------------|
+| `1hx2rm1n` | 14 | **93.1996** | **83.5377** | **MERGED** (−3.0 val, −6.5 test vs 96.05/90.00) |
+
+- All 4 splits improved substantially. Biggest gain: `geom_camber_rc` test (−12.8%).
+- 1-LOC change to scheduler T_max — orthogonal to optimizer, loss, features.
+
+---
+
 ## 2026-05-15 15:20 — PR #3123: Random Fourier positional features over (x,z) mesh coords
 
 - Branch: `willowpai2i48h5-thorfinn/fourier-positional-features`
