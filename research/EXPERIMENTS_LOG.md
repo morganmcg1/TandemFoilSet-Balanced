@@ -965,6 +965,38 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 22:00 — PR #4069 — torch.compile(dynamic=True) on bf16+GEGLU (SENT BACK — beats new baseline but missing SF)
+
+- **Branch:** `charliepai2i48h1-nezuko/torch-compile-on-film` (rebased)
+- **Hypothesis:** Wrap model in `torch.compile(model, dynamic=True, mode='default')` to fuse Python dispatch and elementwise kernels. Predicted: 10-25% wall-clock reduction → more epochs in 30-min cap.
+- **Results vs OLD bf16+GEGLU baseline (val=50.57, test=43.94):**
+
+| Metric | OLD baseline (bf16+GEGLU) | + torch.compile | Δ |
+|--------|--------------------------:|----------------:|--:|
+| `val_avg/mae_surf_p` | 50.57 | **41.20** | **-18.5% ✓** |
+| `test_avg/mae_surf_p` | 43.94 | **36.37** | **-17.2% ✓** |
+| `val_single_in_dist` | 56.18 | 42.25 | -24.8% |
+| `val_geom_camber_rc` | 63.01 | 54.69 | -13.2% |
+| `val_geom_camber_cruise` | 32.57 | 24.95 | -23.4% |
+| `val_re_rand` | 50.52 | 42.92 | -15.0% |
+| `test_single_in_dist` | 49.91 | 38.40 | -23.1% |
+| `test_geom_camber_rc` | 56.89 | 52.10 | -8.4% |
+| `test_geom_camber_cruise` | 26.45 | 20.15 | -23.8% |
+| `test_re_rand` | 42.53 | 34.84 | -18.1% |
+| sec/epoch | 78.9s | **47.5s** | **-39.7%** (vastly exceeded predicted 10-25%) |
+| epochs in 30-min cap | 23 | **38** | +15 (!) |
+| Peak VRAM | 25.7 GB | 19.19 GB | -25% (compile is also memory-friendly) |
+
+- **Metrics path:** `models/model-charliepai2i48h1-nezuko-torch-compile-on-bf16-geglu-20260516-204717/metrics.jsonl`
+- **Decision:** SENT BACK (not merged) for two reasons:
+  1. **Merge conflict** with SF merge (#4071) — both touched optimizer construction zone
+  2. **Baseline correctness:** result measured against bf16+GEGLU (pre-SF); needs full-stack (bf16+GEGLU+SF) rebase to confirm compile + SF compose cleanly. 41.20 already beats new SF baseline (45.07) by -8.6%, so retest is very likely to win.
+- **Why compile won so big:** GEGLU FFN doubles the small element-wise ops per block (gate + GELU + multiply + projection-back); bf16 shrinks the kernel work; together, Python dispatch overhead becomes the dominant fraction of per-step wall-clock — exactly where compile fuses fastest. Net: -39.7% sec/epoch unlocking 15 extra epochs of training.
+- **Implementation:** `model = torch.compile(model, dynamic=True, mode='default')` after EMA wrap. `dynamic=True` mandatory because pad_collate pads per-batch to its own max_n. EMA wrapper is built before compile so validation runs in eager mode (only training and final test eval benefit from compile speedup).
+- **Predicted full-stack result (compile + SF + GEGLU + bf16):** ~38-40 epochs at full LR via SF → target val ≤ 38.
+
+---
+
 ## 2026-05-16 21:45 — PR #4071 — Schedule-Free AdamW on bf16+GEGLU (MERGED → **NEW BEST, -10.9%**)
 
 - **Branch:** `charliepai2i48h1-fern/schedule-free-adamw-on-film` (rebased for bf16+GEGLU retest)

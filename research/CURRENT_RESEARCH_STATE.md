@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 21:50 UTC
+- **Updated:** 2026-05-16 22:05 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -128,6 +128,7 @@ Three orthogonal levers still in play:
 - **#4041 CLOSED** (alphonse FiLM-broadcast-scalar axis): v2 on bf16+GEGLU regressed +1.57%; GEGLU's block-level gating absorbs the disentanglement benefit. FiLM-broadcast-scalar axis closed. Alphonse reassigned to #4168 (GEGLU readout head).
 - **#4137 CLOSED** (frieren GEGLU+mlp_ratio=2): regression +1.58%; wall-clock saturation. mlp_ratio axis CLOSED for GEGLU too.
 - **#4107 SENT BACK** (tanjiro slice_num=8): won old bf16 baseline (-2.13%) but needs full stack (bf16+GEGLU+SF) rebase. Predicted target val ≤ 40.
+- **#4069 SENT BACK** (nezuko torch.compile): MASSIVE result — val=41.20 (-18.5% vs old, -8.6% vs new SF baseline), sec/epoch -39.7% (78.9→47.5), 38 epochs in cap (vs 23). Merge conflict with SF merge + needs full-stack retest. Predicted retest result: val ≤ 38.
 - **frieren reassigned** (#4155 SwiGLU).
 - **alphonse reassigned** (#4168 GEGLU readout head).
-- **fern now idle** — needs next assignment this cycle.
+- **fern reassigned** (#4177 EMA decay sweep on SF stack).
