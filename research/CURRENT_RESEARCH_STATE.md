@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 16:35
+- **Date**: 2026-05-16 16:50
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 active — Lion optimizer compounding phase (H58 rebase pending; H67-H72 in-flight)
+- **Round**: 5 active — Lion optimizer compounding phase (H58 rebase pending; H67-H73 in-flight; H65 closed)
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -54,15 +54,15 @@ Test 3-split avg (excl. cruise NaN bug): **54.5026**
 | **#3990** | askeladd | H62: GEGLU + mlp_ratio (3, 4) | MEDIUM | ~56-57 |
 | **#3991** | frieren | H63: DropPath (0.05, 0.10) | MEDIUM | ~56-57 |
 | **#3992** | nezuko | H64: Huber δ_p retune (0.1, 0.5) | MEDIUM | ~56.5-57 |
-| **#3997** | tanjiro | H65: EMA weight averaging (0.999, 0.9999) | MEDIUM | ~56.5-57 |
 | **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm compound** | **CRITICAL** | ~45-48 |
 | **#4022** | askeladd | **H68: Lion β₂ sweep (0.95, 0.999)** | **HIGH** | ~46-48 |
 | **#4023** | fern | **H69: Lion + linear LR warmup** | **HIGH** | ~45-47 |
 | **#4024** | frieren | **H70: n_head sweep under Lion** | **HIGH** | ~46-48 |
 | **#4025** | nezuko | **H71: Lion wd sweep (1e-4, 5e-4)** | **HIGH** | ~46-48 |
 | **#4048** | thorfinn | **H72: slice_num=96 + RMSNorm compound** | **HIGH** | ~56.0-56.5 |
+| **#4055** | tanjiro | **H73: Lion + slice_num=96 compound** | **CRITICAL** | ~45-47 |
 
-All 8 students WIP (some with 2 active assignments from dual-batch Lion seeding). Zero idle.
+All 8 students WIP. Zero idle. **H65 closed** (EMA negative, both arms regressed — Polyak averaging needs longer budget than wall allows).
 
 **Rate-limit note:** All 8 pods were blocked 15:30-16:22Z on shared GitHub API rate limit. Pods are recovering — edward's confirmed back at 16:23Z. H67-H71 students may still be picking up their assignments.
 
@@ -85,8 +85,9 @@ All 8 students WIP (some with 2 active assignments from dual-batch Lion seeding)
 | Huber δ_p | 🔬 H64 testing | 0.25 (H25) | May need retune at tighter baseline |
 | Normalization | 🏆 RMSNorm wins (fused) | H59: 56.9056 | Per-epoch speedup gives extra step |
 | slice_num+RMSNorm | 🔬 H72 testing | TBD | Compound of H66+H59; predicted near-additive |
+| Lion+slice_num=96 | 🔬 H73 testing | TBD | Compound of H58+H66; predicted ~46.6 if additive |
 | DropPath | 🔬 H63 testing | 0.0 | Novel for this arch/size |
-| EMA averaging | 🔬 H65 testing | None | Polyak/SWA — flatter minima for OOD |
+| EMA averaging | ❌ Closed (H65) | N/A | Both arms regressed (65.82, 327.27). Polyak needs more epochs than budget. |
 | β₂ (Lion) | 🔬 H68 testing | 0.99 (H58) | Lion-specific |
 | wd (Lion) | 🔬 H71 testing | 1e-3 (H58) | — |
 
@@ -96,7 +97,7 @@ All 8 students WIP (some with 2 active assignments from dual-batch Lion seeding)
 2. **Does slice_num=96 + RMSNorm compound additively?** H72 thorfinn (#4048). Predicted: ~56.0-56.5 if additive (H66 −0.16 + H59 −0.67 = −0.83 from H60).
 3. **Does Lion+RMSNorm compound?** H67 alphonse (#4020). H58 used LayerNorm; adding RMSNorm should give +0.67 pts from the fused-kernel speedup.
 4. **Are β₂, wd, n_head, warmup levers under Lion well-characterized?** H68/H69/H70/H71 mapping this space.
-5. **Do slice_num=96 and Lion compound?** Not yet explicitly tested — would need H67+ Lion baseline merged before testing.
+5. **Do slice_num=96 and Lion compound?** H73 tanjiro (#4055). Predicted ~46.6 val_avg if perfectly additive (56.75 − 10.11 from Lion, or 46.80 − 0.16 from slice_num).
 
 ## Baseline Progression
 

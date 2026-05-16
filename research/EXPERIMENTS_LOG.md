@@ -1642,3 +1642,41 @@ Arm B (slice=128) regresses across the board. Two factors: (1) wall-cut at epoch
 | **#4048** | thorfinn | **H72: slice_num=96 + RMSNorm compound at GEGLU n_layers=4 base** | ~56.0-56.5 (Arm A) |
 
 **H72 (slice_num=96 + RMSNorm compound):** Directly compounds the two latest baseline-moving wins. H59 (RMSNorm, fused F.rms_norm) and H66 (slice_num=96) are mechanistically orthogonal — one is a kernel-efficiency / extra-epoch lever, the other widens the attention bottleneck. H66 was measured at LayerNorm; enabling both flags simultaneously (no code changes needed — both are in the merged codebase) should yield near-additive gains. Arm A = slice_num=96 + RMSNorm (direct compound). Arm B = slice_num=112 + RMSNorm (exploratory: probes the 96→128 interpolation zone, with RMSNorm's per-epoch speedup recovering the wall budget Arm B of H66 lost at 128).
+
+---
+
+## 2026-05-16 16:35 — PR #3997: H65 EMA weight averaging (tanjiro) — **CLOSED, negative result**
+
+- Branch: `charliepai2i48h3-tanjiro/h65-ema-weights`
+- Hypothesis: EMA/Polyak weight averaging finds flatter loss-landscape minima → better OOD generalization.
+
+| Arm | val_avg raw | val_avg EMA | test 3-split raw | test 3-split EMA | best_epoch |
+|-----|------------:|------------:|-----------------:|-----------------:|-----------:|
+| **A (decay=0.999)** | 65.82 | 73.25 | 63.59 | 70.72 | 12 |
+| B (decay=0.9999) | 62.60 | **327.49** | 59.87 | **346.72** | 13 |
+| H48 baseline | 58.63 | — | 56.70 | — | 13 |
+| H66 current baseline | 56.75 | — | 54.50 | — | 15 |
+
+**Δ vs current baseline:** Arm A raw +9.07 val_avg, +9.09 test 3-split (REGRESSION). Arm B EMA essentially un-converged.
+
+**Decisive mechanism (from student analysis):**
+1. **EMA only helps in the *oscillation* regime around a minimum.** Under our 30-min / 13-epoch budget with cosine T_max=15, LR is still meaningfully nonzero at endpoint — raw weights are still *translating*, not oscillating. Averaging across translation produces a worse estimate, exactly as observed in L2-distance trajectory (Arm A: shrinking but never closes; Arm B: widens then plateaus at 26.58).
+2. **Dual per-epoch validation** (raw + EMA) added ~10% wall overhead, costing 1 full epoch under the hard 30-min cap. Arm A ran 12 epochs vs baseline's 13.
+
+**Per-split decay-0.999 Arm A EMA shows uniform +3 to +8 pt regression on every split** vs raw → the EMA average is strictly worse than the raw weights at the same epoch. No "flat minimum" effect visible.
+
+**Status: CLOSED — EMA lever is exhausted at the current 13-epoch / cosine T_max=15 budget.**
+
+**Why closed not sent back:** The mechanism is well-understood and the proposed remediations (lower decay 0.99/0.995, warm-start EMA from mid-training checkpoint, Adam-style bias correction, sparser EMA eval cadence) are all sound but represent diminishing relative payoff vs. the Lion track (which is delivering ~10× the gain at the same compute). EMA can be revisited *after* the Lion+slice_num+RMSNorm baseline is established and we're hunting smaller margins.
+
+**Operational note:** Student's pod ran successfully despite the rate-limit window that affected most other pods (15:30-16:22Z) — tanjiro happened to land outside the bucket-exhaustion window.
+
+---
+
+## 2026-05-16 16:36 — R5 cycle 14 new assignment (1 idle student, tanjiro)
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#4055** | tanjiro | **H73: Lion + GEGLU + slice_num=96 — compound two strongest levers** | ~45-47 (Arm A) |
+
+**H73 (Lion + slice_num=96 compound):** Compounds the two strongest confirmed levers — H58 Lion (Δ −10.11 val_avg, loose UB) and H66 slice_num=96 (Δ −0.16 val / −1.74 test). Mechanistically orthogonal: Lion changes *how* weights update (sign-based gradient), slice_num=96 changes *what* attention computes (wider spatial bottleneck). Predicted additivity: H73 ≈ 46.64 val_avg if perfect (= 56.75 − 10.11 = 46.80 − 0.16 from either compound direction). Arm A = Lion lr=1e-4 (H58 winner) + slice_num=96. Arm B = Lion lr=3e-4 + slice_num=96 (Lion's native LR range). This fills the missing piece of the Lion compound matrix — H67-H71 test Lion + (RMSNorm, β₂, warmup, n_head, wd) but not Lion + slice_num.
