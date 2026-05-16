@@ -1099,3 +1099,74 @@ Per-split (delpqmrq best epoch 16):
 **Root cause (edward's own diagnostic)**: `scheduler.step()` is called per-epoch (line 633). `LinearLR(total_iters=1)` steps once per epoch → lr stays at `start_factor × base_lr = 1e-6 × 5e-4 = 5e-10` for all of epoch 1, then jumps to `5e-4` at epoch 2. The "warmup" is actually a 1-epoch starvation. Not a warmup at all.
 
 **Action**: closed and re-assigned as PR #3967 (willowpai2i48h2-edward/lr-warmup-perstep): per-STEP warmup with `LinearLR(total_iters=500)` stepped inside the batch loop, then `CosineAnnealingLR` stepped per-epoch after warmup completes. The hypothesis (smoother early-training dynamics → better EMA shadow → fewer epoch-1-3 missteps) remains well-motivated; the plumbing just needs to match the intended schedule shape.
+
+## 2026-05-16 15:24 — PR #3924: SGDR T_0=8 warm restarts on full stack — frieren (WINNER — MERGED, new baseline)
+
+- Branch: `willowpai2i48h2-frieren/sgdr-warm-restarts-full-stack`
+- W&B runs: `geo7pc4h` (T_0=8 winner), `f5wbvgnk` (T_0=5 run 1), `9zba054x` (T_0=5 run 2)
+- **Hypothesis**: SGDR warm restarts let the model escape local minima and reach a low-lr fine-tuning regime within the 15-epoch wall-clock budget. With `CosineAnnealingLR(T_max=50)` baseline, the run truncates at epoch 15 with lr still at ~3.97e-4 — the optimizer never sees the low-lr regime.
+
+| Arm | T_0 | val_avg | test_3split | Δ val vs #3901 (61.6105) |
+|-----|-----|---------|-------------|--------------------------|
+| **B (winner)** | **8** | **60.8893** | **59.2081** | **−1.17%** |
+| A run 1 | 5 | 63.3853 | 63.2106 | +2.83% regression |
+| A run 2 | 5 | 64.2457 | 62.6249 | +4.28% regression |
+
+Per-split val (geo7pc4h, T_0=8):
+
+| Split | val | Δ vs #3901 |
+|---|---|---|
+| val_single_in_dist | 69.4278 | −2.96% |
+| val_geom_camber_rc | 74.2213 | +0.06% |
+| val_geom_camber_cruise | 40.5148 | −1.61% |
+| val_re_rand | 59.3933 | −0.18% |
+
+Per-split test (geo7pc4h):
+
+| Split | test | Δ vs #3901 |
+|---|---|---|
+| test_single_in_dist | 61.3286 | **−4.12%** |
+| test_geom_camber_rc | 66.6430 | −0.58% |
+| test_geom_camber_cruise | NaN (fleet bug) | — |
+| test_re_rand | 49.6526 | **−3.92%** |
+
+**Mechanism**: T_0=8 fits the 15-epoch wall-clock budget as "1 full cycle + 1 partial cycle". The first cycle (epochs 1–8) descends to val~78 by epoch 8 with lr down to ~2e-5; restart at epoch 9 kicks the model out with EMA damping the bump within 1-2 epochs, then the second partial cycle (epochs 9-15) fine-tunes from a near-optimal init with lr decaying to ~2e-5 again. **Key insight: plain cosine with T_max=50 never sees lr below 3.97e-4 in a 15-epoch budget**; SGDR's win is partly "lr actually reaches a useful minimum within budget".
+
+T_0=5 alternates between val ≈ 63.4 and val ≈ 64.2 (mean ~63.8 ≈ baseline): cycles too short for adequate descent before next restart. The conditional gate that promoted Arm B was correctly triggered.
+
+**Stack note**: frieren's run used `--huber_delta 1.0` (not 0.5, which alphonse merged AFTER this assignment was given). The SGDR + δ=0.5 super-compound is now untested. Frieren reassigned PR #4013 to confirm.
+
+**MERGED 15:24 UTC** — new baseline: val=60.8893, test_3split=59.2081.
+
+## 2026-05-16 14:53 — PR #3902 (rebase): wd=1e-3 + Huber δ=0.5 compound — nezuko (WIN at submission, superseded; sent back for super-compound)
+
+- Branch: `willowpai2i48h2-nezuko/wd-1e-3-compound-full-stack`
+- W&B run: `ukhfs5r4`
+- **Hypothesis**: wd=1e-3 (which won independently on the #3789 baseline) compounds with the δ=0.5 baseline.
+
+| Metric | Baseline #3901 (cc7wvqvi) | nezuko (ukhfs5r4) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 61.6105 | **61.1469** | **−0.75%** |
+| `test_3split/mae_surf_p` | 60.8910 | **59.9845** | **−1.49%** |
+
+Per-split val (ukhfs5r4):
+
+| Split | val | Δ vs #3901 |
+|---|---|---|
+| val_single_in_dist | 74.5447 | +4.13% |
+| val_geom_camber_rc | 73.1288 | −1.42% |
+| val_geom_camber_cruise | 39.2101 | **−4.78%** |
+| val_re_rand | 57.7040 | **−3.02%** |
+
+Per-split test (ukhfs5r4):
+
+| Split | test | Δ vs #3901 |
+|---|---|---|
+| test_single_in_dist | 64.8281 | +1.35% |
+| test_geom_camber_rc | 65.3937 | −2.44% |
+| test_geom_camber_cruise | NaN | — |
+| test_re_rand | 49.7318 | **−3.77%** |
+
+**Analysis**: wd=1e-3 redistributes error: big OOD wins (camber_cruise −4.78%, val_re_rand −3.02%, test_re_rand −3.77%), but +4.13% regression on val_single_in_dist (where the unregularized δ=0.5 model already fit best). Net positive on val_avg and test_3split.
+
+**Outcome**: WIN at submission time (61.1469 vs 61.6105), but frieren #3924 merged first with val=60.8893, making nezuko's 61.1469 no longer beat the new baseline. **SENT BACK for super-compound**: wd=1e-3 + SGDR T_0=8 + δ=0.5. Both mechanisms are orthogonal (wd is parameter regularization, SGDR is schedule) and have strongest gains on different splits (wd on OOD splits, SGDR on test_single_in_dist + test_re_rand). Compound expected to break val < 60.
