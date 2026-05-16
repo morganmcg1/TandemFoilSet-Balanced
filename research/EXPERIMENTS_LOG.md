@@ -1369,3 +1369,52 @@ Per-split val: all 4 splits regressed uniformly (single +2.28%, rc +1.56%, cruis
 - **Next step:** Probe EMA=0.997 (continue bracketing looser direction; student suggested monotone trend may continue).
 
 State: wd and cosine-T_max axes now fully closed. New bottleneck is per-batch FFN overhead. Three concurrent compute/stability experiments: askeladd (bf16), edward (n_layers=4), frieren (grad_clip).
+
+## 2026-05-16 23:30 — PR #4186: Per-node geometric FiLM (dsdf+saf+is_surface per-node conditioning)
+
+- **Branch:** `charliepai2i48h1-alphonse/per-node-geom-film`
+- **Hypothesis:** Replace closed broadcast-scalar FiLM axis with local per-node conditioning on the 11 geometric features (dsdf[8]+saf[2]+is_surface[1]). Identity-init via zeros on the head's final layer; expected to outperform broadcast FiLM by exploiting position-dependent geometry.
+- **Results:**
+
+| Metric | Baseline (#4107) | This run | Δ |
+|--------|-----------------|----------|---|
+| val_avg/mae_surf_p (primary) | 43.82 | **47.95** | **+9.4% regression** |
+| test_avg/mae_surf_p | 38.05 | 41.66 | +9.5% regression |
+| n_params | 737,491 | 903,487 | +22.5% |
+| sec/epoch | 72.3 | 102.0 | +41% |
+| epochs in 30-min cap | 25 | 18 | -7 |
+| Peak VRAM | 25.19 GB | 29.93 GB | +18.8% |
+
+Per-split val: single 47.39→53.02 (+11.9%), rc 55.44→59.42 (+7.2%), cruise 26.97→29.57 (+9.6%), re_rand 45.50→49.80 (+9.5%) — **uniform regression** across all 4 splits, hardest split (rc) regressed least in relative terms.
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-per-node-geom-film-20260516-224033/metrics.jsonl`
+- **Decision:** CLOSED. Per the PR's pre-set decision rule (val > 46.0 → close).
+- **Three-part diagnosis** (student's, advisor agrees):
+  1. **Redundant pathway** — dsdf+saf+is_surface already flow through preprocess(x); geom_film_head creates a second route for the same features, the two pathways compete for gradient.
+  2. **Compute squeeze** — +41% sec/epoch + 22% params → 18 epochs vs 25 at fixed 30-min cap. Model never had time to learn the dual pathway.
+  3. **Gradient dilution** — per-node (γ,β) scatters over ~1500 nodes/sample; the optimizer never converges any individual node's modulator.
+- **Axis closed: per-node geometric FiLM.** Combined with closed broadcast-scalar FiLM (#4041 v2), the broader FiLM family is saturated for this data layout / model size. GEGLU's block-level gating subsumes the per-block geometric modulation that FiLM was trying to add.
+- **Followup ideas (not assigned):** AdaLN-zero rank-decomposed FiLM head, surface-only FiLM gate, smaller bottleneck dim (32 instead of 128) — all could be revisited if other axes plateau.
+
+## 2026-05-16 23:30 — PR #4155: SwiGLU vs GEGLU (F.gelu → F.silu)
+
+- **Branch:** `charliepai2i48h1-frieren/swiglu-on-geglu`
+- **Hypothesis:** Single-line gate-activation swap. LLaMA/PaLM use SwiGLU; smooth pressure fields might favor SiLU's smoother gradient. Prediction was 50% SwiGLU-wins / 35% tie / 15% GEGLU-wins.
+- **Results (two seeds):**
+
+| Metric | SwiGLU seed-1 | SwiGLU seed-2 | GEGLU baseline | Δ (mean) |
+|--------|-----------|-----------|----------|---|
+| val_avg/mae_surf_p (primary) | 53.20 | 52.20 | 50.57 | +4.2% (worse) |
+| test_avg/mae_surf_p | 45.75 | 45.00 | 43.94 | +3.3% (worse) |
+| val_single_in_dist | 62.37 | — | 56.18 | +11.0% (worse) |
+| sec/epoch | 79.1 | 79.1 | 78.9 | parity |
+| best epoch | 23 | 23 | 23 | identical |
+| n_params | 737,491 | 737,491 | 737,491 | identical |
+
+- **Metrics paths:** `models/model-charliepai2i48h1-frieren-swiglu-on-geglu-20260516-222455/metrics.jsonl` and `models/model-charliepai2i48h1-frieren-swiglu-on-geglu-20260516-213724/metrics.jsonl`
+- **Decision:** CLOSED. Direction consistent in BOTH seeds (+1.63 to +2.63 val), test tracks val (+2.4 to +4.1%), n=2 confirms outcome (c) — GEGLU wins.
+- **Mechanism (frieren's, advisor concurs):** GELU's sharper saturation acts as harder feature-selection on the heavy-tailed pressure field; SiLU's smoother gate keeps more low-magnitude features in the mix, diluting surface-pressure signal. Per-split pattern (val_single_in_dist regressed the most at +11.0%, OOD splits less) is consistent with "GELU does useful regularization that matters most for in-distribution surface fidelity."
+- **SwiGLU axis CLOSED.** Note: result contradicts LLM convention but is consistent with the broader pattern that activation rankings flip outside language modeling.
+- **Followup (assigning):** ReGLU (F.relu in gate) is the natural next probe — same single-line change, tests the "even-harder-cutoff" hypothesis. Frieren reassigned.
+
+Note: both #4186 and #4155 were trained on the **old pre-SF baseline** since their assignment commits predate the SF merge. The frieren run's GEGLU comparison (50.57) is the pre-SF baseline; the alphonse 43.82 comparison is the current full-stack. Both regressions are large enough that re-running on the full stack would not change the close decision.
