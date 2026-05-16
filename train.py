@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -390,6 +391,8 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    test_metrics_raw: dict | None = None,
+    test_avg_raw: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -406,17 +409,29 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_decay": cfg.ema_decay,
     }
+    if "val_avg/mae_surf_p_raw" in best_metrics:
+        summary["best_val_avg/mae_surf_p_raw"] = best_metrics["val_avg/mae_surf_p_raw"]
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
             summary[f"best_val/{split_name}/{k}"] = v
+    for split_name, m in best_metrics.get("per_split_raw", {}).items():
+        for k, v in m.items():
+            summary[f"best_val_raw/{split_name}/{k}"] = v
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
         summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+    if test_avg_raw is not None and "avg/mae_surf_p" in test_avg_raw:
+        summary["test_avg_raw/mae_surf_p"] = test_avg_raw["avg/mae_surf_p"]
+        if test_metrics_raw is not None:
+            for split_name, m in test_metrics_raw.items():
+                for k, v in m.items():
+                    summary[f"test_raw/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -455,6 +470,7 @@ class Config:
     ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    ema_decay: float = 0.0  # EMA decay for weight averaging; 0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -506,6 +522,30 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema_model = None
+if cfg.ema_decay > 0:
+    ema_model = copy.deepcopy(model)
+    ema_model.eval()
+    for p in ema_model.parameters():
+        p.requires_grad = False
+    print(f"EMA enabled: decay={cfg.ema_decay}")
+
+
+def _ema_update(ema_m, m, decay):
+    with torch.no_grad():
+        for ep, p in zip(ema_m.parameters(), m.parameters()):
+            ep.data.mul_(decay).add_(p.data, alpha=1.0 - decay)
+        for eb, b in zip(ema_m.buffers(), m.buffers()):
+            eb.data.copy_(b.data)
+
+
+def _ema_l2_distance(ema_m, m) -> float:
+    sq_sum = 0.0
+    with torch.no_grad():
+        for ep, p in zip(ema_m.parameters(), m.parameters()):
+            sq_sum += (ep.data - p.data).pow(2).sum().item()
+    return sq_sum ** 0.5
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -578,6 +618,9 @@ for epoch in range(MAX_EPOCHS):
             epoch_grad_norm_pre += float(pre_clip_norm)
         optimizer.step()
 
+        if ema_model is not None:
+            _ema_update(ema_model, model, cfg.ema_decay)
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -589,12 +632,29 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
-    split_metrics = {
+    split_metrics_raw = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    val_avg_raw = aggregate_splits(split_metrics_raw)
+    avg_surf_p_raw = val_avg_raw["avg/mae_surf_p"]
+
+    if ema_model is not None:
+        split_metrics_ema = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_ema = aggregate_splits(split_metrics_ema)
+        avg_surf_p_ema = val_avg_ema["avg/mae_surf_p"]
+        # Use EMA metrics as primary for checkpoint selection.
+        split_metrics = split_metrics_ema
+        avg_surf_p = avg_surf_p_ema
+    else:
+        split_metrics_ema = None
+        avg_surf_p_ema = None
+        split_metrics = split_metrics_raw
+        avg_surf_p = avg_surf_p_raw
+
     dt = time.time() - t0
 
     tag = ""
@@ -604,12 +664,26 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "val_avg/mae_surf_p_raw": avg_surf_p_raw,
+            "per_split_raw": split_metrics_raw,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save the model used for evaluation (EMA if enabled, else raw).
+        save_model = ema_model if ema_model is not None else model
+        torch.save(save_model.state_dict(), model_path)
+        # When EMA is enabled, also snapshot the raw model at the same epoch
+        # so we can run apples-to-apples test eval (raw vs EMA at best epoch).
+        if ema_model is not None:
+            raw_model_path = model_dir / "checkpoint_raw.pt"
+            torch.save(model.state_dict(), raw_model_path)
         tag = " *"
 
+    # Log EMA L2 distance to raw weights at epochs 1, 7, 13 (per PR request)
+    ema_l2 = None
+    if ema_model is not None and (epoch + 1) in (1, 7, 13):
+        ema_l2 = _ema_l2_distance(ema_model, model)
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    log_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -618,14 +692,29 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        "ema_decay": cfg.ema_decay,
         "val_avg/mae_surf_p": avg_surf_p,
+        "val_avg/mae_surf_p_raw": avg_surf_p_raw,
         "val_splits": split_metrics,
+        "val_splits_raw": split_metrics_raw,
         "is_best": tag == " *",
-    })
+    }
+    if avg_surf_p_ema is not None:
+        log_record["val_avg/mae_surf_p_ema"] = avg_surf_p_ema
+        log_record["val_splits_ema"] = split_metrics_ema
+    if ema_l2 is not None:
+        log_record["ema_l2_distance_to_raw"] = ema_l2
+    append_metrics_jsonl(metrics_jsonl_path, log_record)
+
+    ema_extra = ""
+    if avg_surf_p_ema is not None:
+        ema_extra = f"  ema_surf_p={avg_surf_p_ema:.4f}"
+        if ema_l2 is not None:
+            ema_extra += f"  ema_l2={ema_l2:.3f}"
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p_raw:.4f}{ema_extra}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -642,6 +731,8 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_metrics_raw = None
+    test_avg_raw = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -657,11 +748,33 @@ if best_metrics:
         print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+
+        # When EMA is enabled, also evaluate the raw checkpoint (saved at the
+        # same best epoch) so we can report raw-vs-EMA test metrics.
+        if cfg.ema_decay > 0:
+            raw_model_path = model_dir / "checkpoint_raw.pt"
+            if raw_model_path.exists():
+                print("\nEvaluating raw (non-EMA) model on test splits for comparison...")
+                model.load_state_dict(
+                    torch.load(raw_model_path, map_location=device, weights_only=True)
+                )
+                model.eval()
+                test_metrics_raw = {
+                    name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                    for name, loader in test_loaders.items()
+                }
+                test_avg_raw = aggregate_splits(test_metrics_raw)
+                print(f"\n  TEST (raw)  avg_surf_p={test_avg_raw['avg/mae_surf_p']:.4f}")
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(name, test_metrics_raw[name])
+
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "test_avg_raw": test_avg_raw,
+            "test_splits_raw": test_metrics_raw,
         })
 
     write_experiment_summary(
@@ -674,6 +787,8 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        test_metrics_raw=test_metrics_raw,
+        test_avg_raw=test_avg_raw,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
