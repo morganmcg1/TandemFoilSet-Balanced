@@ -327,6 +327,71 @@ class EMA:
 _AMP_DTYPES = {"fp32": None, "bf16": torch.bfloat16}
 
 
+# Per-tensor (Frobenius) AGC group buckets — name prefix → bucket.
+def _agc_group_for(name: str) -> str:
+    if name.startswith("film."):
+        return "film"
+    if name.startswith("preprocess."):
+        return "preprocess"
+    if ".mlp2." in name:
+        return "head"
+    if ".attn." in name:
+        return "attn"
+    if ".mlp." in name:
+        return "mlp"
+    return "other"
+
+
+def adaptive_gradient_clip(
+    named_params,
+    clip_factor: float = 0.01,
+    eps: float = 1e-3,
+    exclude_1d: bool = True,
+) -> dict:
+    """Per-tensor AGC (NFNet-style, Frobenius variant) — clips each tensor's
+    gradient to ``clip_factor * ||p||_F`` with a min unit-norm floor of ``eps``.
+
+    ``exclude_1d=True`` skips 1D parameters (LayerNorm γ/β, biases, scalar
+    temperatures, placeholders) — matches the safer timm-style choice noted in
+    the PR. Returns a per-call diagnostic dict for JSONL aggregation.
+    """
+    n_clipped_groups = 0
+    n_total_groups = 0
+    any_clipped = 0
+    ratios: list[float] = []
+    per_group: dict[str, dict] = {}
+    for name, p in named_params:
+        if p.grad is None:
+            continue
+        if exclude_1d and p.ndim < 2:
+            continue
+        param_norm = p.detach().norm(2).clamp(min=eps)
+        grad_norm = p.grad.detach().norm(2)
+        max_norm = clip_factor * param_norm
+        # ratio = ||g|| / max_norm: >1 means clipping is active for this group.
+        ratio = (grad_norm / max_norm).item()
+        was_clipped = ratio > 1.0
+        if was_clipped:
+            p.grad.detach().mul_(max_norm / grad_norm)
+            n_clipped_groups += 1
+        n_total_groups += 1
+        ratios.append(ratio)
+        group = _agc_group_for(name)
+        g = per_group.setdefault(group, {"n_params": 0, "n_clipped": 0, "ratio_sum": 0.0})
+        g["n_params"] += 1
+        g["n_clipped"] += int(was_clipped)
+        g["ratio_sum"] += ratio
+    if n_clipped_groups > 0:
+        any_clipped = 1
+    return {
+        "n_clipped_groups": n_clipped_groups,
+        "n_total_groups": n_total_groups,
+        "any_clipped": any_clipped,
+        "ratios": ratios,
+        "per_group": per_group,
+    }
+
+
 def make_amp_ctx(amp_dtype: str):
     """Build the autocast context for ``amp_dtype`` (``"fp32"`` or ``"bf16"``)."""
     dt = _AMP_DTYPES[amp_dtype]
@@ -436,6 +501,9 @@ def write_experiment_summary(
         "grad_clip_norm": cfg.grad_clip_norm,
         "use_schedule_free": cfg.use_schedule_free,
         "sf_warmup_steps": cfg.sf_warmup_steps if cfg.use_schedule_free else None,
+        "use_agc": cfg.use_agc,
+        "agc_lambda": cfg.agc_lambda if cfg.use_agc else None,
+        "agc_eps": cfg.agc_eps if cfg.use_agc else None,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -492,6 +560,9 @@ class Config:
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
     use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
     sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
+    use_agc: bool = False  # per-tensor adaptive gradient clipping (NFNet-style); replaces global L2 clip
+    agc_lambda: float = 0.01  # AGC clip factor: clip ||g_i|| to lambda * ||theta_i||_F
+    agc_eps: float = 1e-3  # min unit-norm floor for param norm (protects zero-init heads)
 
 
 cfg = sp.parse(Config)
@@ -609,8 +680,16 @@ for epoch in range(MAX_EPOCHS):
     n_batches = 0
     grad_norms_epoch: list[float] = []
     clip_active_epoch = 0
+    # AGC bookkeeping (only populated when cfg.use_agc).
+    agc_step_any_clipped = 0
+    agc_step_n = 0
+    agc_total_clipped = 0
+    agc_total_opportunities = 0
+    agc_ratio_all: list[float] = []
+    agc_per_group_accum: dict[str, dict] = {}
 
     clip_threshold = cfg.grad_clip_norm if cfg.grad_clip_norm is not None else float("inf")
+    named_params_list = list(model.named_parameters())
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -632,11 +711,40 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm_before = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold)
-        grad_norm_val = grad_norm_before.item()
-        grad_norms_epoch.append(grad_norm_val)
-        if cfg.grad_clip_norm is not None and grad_norm_val > cfg.grad_clip_norm:
-            clip_active_epoch += 1
+        if cfg.use_agc:
+            # AGC replaces the global L2 clip. Capture the natural global grad
+            # norm first (clip_grad_norm_ with inf max returns the norm without
+            # clipping) so we can still log "what would the global norm be" as
+            # a diagnostic for comparison with PR #3511's clip-rate analysis.
+            grad_norm_before = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
+            grad_norm_val = grad_norm_before.item()
+            grad_norms_epoch.append(grad_norm_val)
+            agc_diag = adaptive_gradient_clip(
+                named_params_list,
+                clip_factor=cfg.agc_lambda,
+                eps=cfg.agc_eps,
+                exclude_1d=True,
+            )
+            agc_step_n += 1
+            agc_step_any_clipped += agc_diag["any_clipped"]
+            agc_total_clipped += agc_diag["n_clipped_groups"]
+            agc_total_opportunities += agc_diag["n_total_groups"]
+            agc_ratio_all.extend(agc_diag["ratios"])
+            for gname, gstats in agc_diag["per_group"].items():
+                acc = agc_per_group_accum.setdefault(
+                    gname, {"n_params_per_step": 0, "n_clipped_total": 0, "ratio_sum": 0.0, "n_steps_clipped": 0}
+                )
+                acc["n_params_per_step"] = gstats["n_params"]  # constant across steps
+                acc["n_clipped_total"] += gstats["n_clipped"]
+                acc["ratio_sum"] += gstats["ratio_sum"]
+                if gstats["n_clipped"] > 0:
+                    acc["n_steps_clipped"] += 1
+        else:
+            grad_norm_before = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold)
+            grad_norm_val = grad_norm_before.item()
+            grad_norms_epoch.append(grad_norm_val)
+            if cfg.grad_clip_norm is not None and grad_norm_val > cfg.grad_clip_norm:
+                clip_active_epoch += 1
         optimizer.step()
         if ema is not None:
             ema.update(model)
@@ -712,6 +820,36 @@ for epoch in range(MAX_EPOCHS):
         if cfg.grad_clip_norm is not None:
             epoch_record["grad_clip_norm"] = cfg.grad_clip_norm
             epoch_record["grad_norm/clip_rate"] = clip_active_epoch / max(gn.numel(), 1)
+    if cfg.use_agc and agc_step_n > 0:
+        # Aggregate AGC statistics for this epoch.
+        epoch_record["agc/lambda"] = cfg.agc_lambda
+        epoch_record["agc/eps"] = cfg.agc_eps
+        epoch_record["agc/step_any_clip_rate"] = agc_step_any_clipped / agc_step_n
+        epoch_record["agc/group_clip_rate"] = (
+            agc_total_clipped / max(agc_total_opportunities, 1)
+        )
+        epoch_record["agc/n_steps"] = agc_step_n
+        epoch_record["agc/n_clipped_groups_total"] = agc_total_clipped
+        epoch_record["agc/n_group_opportunities"] = agc_total_opportunities
+        if agc_ratio_all:
+            rt = torch.tensor(agc_ratio_all, dtype=torch.float64)
+            rt_finite = rt[torch.isfinite(rt)]
+            if rt_finite.numel() > 0:
+                epoch_record["agc/ratio_p50"] = torch.quantile(rt_finite, 0.5).item()
+                epoch_record["agc/ratio_p90"] = torch.quantile(rt_finite, 0.9).item()
+                epoch_record["agc/ratio_p99"] = torch.quantile(rt_finite, 0.99).item()
+                epoch_record["agc/ratio_max"] = rt_finite.max().item()
+        per_group_out: dict[str, dict] = {}
+        for gname, acc in agc_per_group_accum.items():
+            n_params = acc["n_params_per_step"]
+            total_opp = agc_step_n * max(n_params, 1)
+            per_group_out[gname] = {
+                "n_params": n_params,
+                "clip_rate_steps": acc["n_steps_clipped"] / agc_step_n,
+                "clip_rate_param_steps": acc["n_clipped_total"] / max(total_opp, 1),
+                "ratio_mean": acc["ratio_sum"] / max(total_opp, 1),
+            }
+        epoch_record["agc/per_group"] = per_group_out
     append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
