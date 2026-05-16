@@ -2,10 +2,48 @@
 
 ## Current Best
 
-**PR #3445 — H20: Gradient clip=1.0 on H19 triple compound (nezuko)**
-Merged 2026-05-16. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
+**PR #3452 — H27b: LR=1e-3 + clip=1.0 on H20 base (frieren)**
+Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **71.7713** | PR #3452 Arm B |
+| val_single_in_dist/mae_surf_p | 83.7818 | PR #3452 Arm B |
+| val_geom_camber_rc/mae_surf_p | 85.0398 | PR #3452 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 49.5211 | PR #3452 Arm B |
+| val_re_rand/mae_surf_p | 68.7425 | PR #3452 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3452 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **70.6226** | PR #3452 Arm B |
+| test_single_in_dist/mae_surf_p | 72.9392 | PR #3452 Arm B |
+| test_geom_camber_rc/mae_surf_p | 78.0408 | PR #3452 Arm B |
+| test_re_rand/mae_surf_p | 60.8879 | PR #3452 Arm B |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + **lr=1e-3**.
+
+**Why higher LR works:** With clip=1.0 bounding per-step gradient norms, a higher peak LR is stable. Under T_max=15 cosine with 13-epoch wall budget, a higher peak LR covers more loss-landscape area in the high-LR phase. Pre-clip grad norms decayed from 8.6→2.3 — clip was active every step, confirming stability. Training monotone on both arms. **Every split improved** vs H20 baseline.
+
+**Note on Arm A (lr=7e-4):** val_avg=75.9937 — essentially tied with H20 (75.4955). The monotone trend 5e-4→7e-4→1e-3 is: 75.50 (tie) → 75.99 (tie) → **71.77 (clear win)**. The jump happens in the 1e-3 range, not 7e-4.
+
+**Note on `--huber_delta 0.5`:** This flag is a no-op in the current train.py (loss always uses per-channel `huber_delta_vel`/`huber_delta_p`). The realized loss config is δ_vel=0.5, δ_p=0.25 from merged defaults.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT; `test_avg/mae_surf_p = NaN` for all PRs. File is read-only.
+
+**Artifacts:** `models/model-h27b-lr1e3-clip1-20260516-012724/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h27b-lr1e3-clip1 --agent <student> \
+  --clip_grad_norm 1.0 --lr 1e-3
+# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, CosineAnnealingLR T_max=15 are merged defaults
+```
+
+## Previous Best (overridden by #3452)
+
+**PR #3445 — H20: Gradient clip=1.0 on H19 triple compound (nezuko)**
+Merged 2026-05-16. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
 
 | Metric | Value | Source |
 |--------|-------|--------|
