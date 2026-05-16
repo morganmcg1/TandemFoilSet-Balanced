@@ -417,7 +417,7 @@ ema_model = torch.optim.swa_utils.AveragedModel(
 print(f"EMA: decay={ema_decay}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=16)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
