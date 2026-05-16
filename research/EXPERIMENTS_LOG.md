@@ -1,5 +1,35 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:00 — 3 carryover closures (#4141, #4102, #4101) + 3 new assignments (#4170, #4171, #4172)
+
+After the alphonse #4067 merge, the 3 carryover PRs that had been submitted against the old slice=8 baseline came in. None beat the new baseline (val=56.4260). All 3 closed; corresponding students reassigned to fresh orthogonal axes on the new slice=16+β2=0.95 stack.
+
+### Closed: PR #4141 (frieren) — Asymmetric Huber (δ_pos=0.25, δ_neg=1.0)
+
+Run reported val_avg=61.95 (+8.7% vs slice=8 baseline; +9.8% vs new baseline). **The residual-sign instrumentation that frieren added was the load-bearing finding**: train/surf_p_resid_mean ≈ 0.003 and train/surf_p_resid_frac_pos ≈ 0.495 at convergence. The under-prediction premise that motivated asymmetric Huber was **falsified by frieren's own diagnostic** — residuals are essentially balanced. Asymmetric loss then just adds an arbitrary direction-bias that hurts fitting. This is a clean mechanistic falsification, not a noise close.
+
+**Follow-up assigned**: log-cosh loss (PR #4170). Same regime as Huber (quadratic-near-zero, linear-far-from-zero) but **symmetric, C² smooth, parameter-free** — mechanistically matches frieren's balanced-residual finding. If log-cosh wins, the result motivates Welsch biweight next on the symmetric robust-loss family.
+
+### Closed: PR #4102 (tanjiro) — temperature_init=0.7 (diffuse softmax)
+
+Run reported val_avg=58.7349 (+3.2% vs slice=8 baseline). Combined with PR #3877 (T=0.1, slice=16, val=58.21 regress) and the default T=0.5 baseline (val=56.43), **the temperature axis is fully bracketed**: T=0.5 is the optimum, both directions (sharper T=0.1 and more diffuse T=0.7) regress. Mechanism: T=0.5 sits at the sweet spot where the slice-attribution softmax neither dead-slices (T=0.1 too sharp) nor over-blurs (T=0.7 too diffuse). The dead-slice hypothesis that motivated T=0.7 was not supported.
+
+**Follow-up assigned**: AdamW β1=0.85 on the new baseline (PR #4171). Direct extension of alphonse's β2=0.95 win on the optimization axis — both EMAs at similar short timescales should co-evolve coherently across the training horizon. Hypothesis lives or dies on whether β1=0.85 + β2=0.95 beats β1=0.9 + β2=0.95.
+
+### Closed: PR #4101 (edward) — asinh_vel_scale=1.0 (denser inlet velocity)
+
+Run reported val_avg=56.7989 (+0.18% — essentially flat vs slice=8 baseline; +0.66% vs new baseline). **The most diagnostically interesting close of the day**: per-split decoupling — val_geom_camber_rc improved −3.87% but val_geom_camber_cruise regressed +6.77%. Two camber-OOD splits moving in opposite directions; net cancellation killed the headline. This says the inlet-velocity-scale axis IS doing something mechanically, but the cruise-vs-rc asymmetry is not what we want.
+
+**Follow-up assigned**: vol_weight=0.5 (PR #4172). Edward's own suggested follow-up #3 (OOD-camber-specific objectives). Down-weighting the auxiliary volume loss focuses optimization on the paper-facing surface pressure metric. Different axis (loss reweighting) from all in-flight; orthogonal to vel-scale extension which Edward owned.
+
+### Round-15 new assignments (all against the new slice=16+β2=0.95 baseline; val=56.4260)
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4170** | **frieren** | log-cosh loss (parameter-free C² robust) | Same regime as Huber, smoother transition, no δ tune. Matches the balanced-residual finding from #4141. |
+| **#4171** | **tanjiro** | AdamW β1=0.85 + β2=0.95 | Faster momentum EMA (half-life 4 steps vs default 7); same axis as alphonse's β2 win. |
+| **#4172** | **edward** | vol_weight=0.5 (down-weight aux vol_loss) | Focus gradient on paper-facing surf metric; addresses edward's per-split decoupling observation directly. |
+
 ## 2026-05-16 21:30 — alphonse #4067 WINNER (plateau broken) + 2 closures + 3 new assignments
 
 ### MERGED: PR #4067 (alphonse) — AdamW β2=0.95 on slice=16 stack
