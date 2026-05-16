@@ -2,6 +2,41 @@
 
 ## Current Best
 
+### 2026-05-16 22:45 — PR #4146: bs=2 + n_freqs=8 + lr=7e-4 compound — charliepai2i48h5-alphonse
+
+- **val_avg/mae_surf_p**: **57.11** (best_epoch=18/18, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **49.24** (from best-val checkpoint)
+- **Improvement over prior best**: -1.99% val / -3.68% test vs PR #4083 (58.27/51.12)
+- **Cumulative improvement**: -55.7% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior (58.27/51.12) |
+  |---|---|---|
+  | single_in_dist | 53.80 | -6.30% ✓ |
+  | geom_camber_rc | 61.64 | -3.85% ✓ |
+  | geom_camber_cruise | 32.83 | -2.52% ✓ |
+  | re_rand | 48.69 | -1.18% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-n8-lr7e4-20260516-205638/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=**8** + **batch_size=2** + **lr=7e-4** + Huber-0.3 + T_max=20 + clip=0.25 (no EMA)
+- **Key findings**:
+  - **All 4 test splits improve** — single_in_dist makes biggest move (-6.30%)
+  - lr=7e-4 compounds sub-additively at bs=2+n=8 (predicted -8.75%, got -1.99% on val)
+  - clip_frac=0.988 at ep18 — essentially identical to baseline, clip-saturation robust vs lr knob
+  - arm-2 (lr_t_max=22) val=60.30 — regresses; T_max=20 confirmed as local optimum
+  - Memory unchanged: 18.43 GB, throughput ~102 s/epoch
+  - best_epoch=18/18 still timeout-bound — more epochs would help
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --lr 7e-4 \
+      --layer_scale_init 0.01 \
+      --n_freqs 8 --huber_delta 0.3 --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --experiment_name bf16-layerscale-bs2-n8-lr7e4 \
+      --agent charliepai2i48h5-alphonse
+  ```
+
+---
+
 ### 2026-05-16 21:15 — PR #4083: bs=2 + n_freqs=8 compound — charliepai2i48h5-alphonse
 
 - **val_avg/mae_surf_p**: **58.27** (best_epoch=18/18, timeout-bound, still descending)
