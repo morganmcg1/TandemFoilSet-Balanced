@@ -32,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, update_bn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -493,6 +494,11 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     smooth_l1_beta: float = 0.05  # quadratic-to-linear transition in normalized y space
+    # SWA: start averaging at this 0-indexed epoch.
+    # Default 7 corresponds to ~50% of typical wall-clock-limited training
+    # (~14 epochs in the 30-min cap); cfg.epochs=50 would never trigger SWA
+    # if we keyed off 50%, so we use the actual-training-aware default.
+    swa_start_epoch: int = 7
 
 
 cfg = sp.parse(Config)
@@ -538,6 +544,15 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# SWA: wrap a deep copy of the model so per-batch weight averages start
+# accumulating once cfg.swa_start_epoch is reached. Default simple averaging.
+swa_model = AveragedModel(model)
+swa_n_updates = 0
+print(
+    f"SWA: averaging starts at 1-indexed epoch {cfg.swa_start_epoch + 1} "
+    f"(0-indexed epoch >= {cfg.swa_start_epoch})"
+)
 
 fourier_encoder = FourierEncoder(cfg.fourier_bands).to(device)
 n_fourier_params = sum(p.numel() for p in fourier_encoder.parameters())
@@ -640,6 +655,9 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if epoch >= cfg.swa_start_epoch:
+            swa_model.update_parameters(model)
+            swa_n_updates += 1
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -707,6 +725,45 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+# --- SWA finalization + validation ---
+swa_active = swa_n_updates > 0
+swa_val_avg = None
+if swa_active:
+    n_avg = int(swa_model.n_averaged.item())
+    print(
+        f"\nSWA: accumulated {swa_n_updates} updates "
+        f"(AveragedModel.n_averaged={n_avg}) starting at 1-indexed "
+        f"epoch {cfg.swa_start_epoch + 1}"
+    )
+    # No-op for LayerNorm-only models (no BatchNorm to update), but kept
+    # per the SWA recipe — early-returns inside torch when no BN exists.
+    update_bn(train_loader, swa_model, device=device)
+    swa_model.eval()
+
+    print("Evaluating SWA model on validation splits...")
+    swa_val_metrics = {
+        name: evaluate_split(swa_model, fourier_encoder, loader, stats,
+                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_val_metrics)
+    print(f"  VAL (SWA) avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(f"{name} (SWA)", swa_val_metrics[name])
+
+    swa_val_log: dict[str, float] = {"swa_n_updates": swa_n_updates}
+    for split_name, m in swa_val_metrics.items():
+        for k, v in m.items():
+            swa_val_log[f"val/{split_name}/{k}_swa"] = v
+    for k, v in swa_val_avg.items():
+        swa_val_log[f"val_{k}_swa"] = v
+    wandb.log(swa_val_log)
+    wandb.summary.update(swa_val_log)
+
+    swa_model_path = model_dir / "swa_checkpoint.pt"
+    torch.save(swa_model.module.state_dict(), swa_model_path)
+    print(f"Saved SWA checkpoint to {swa_model_path}")
+
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
@@ -756,6 +813,27 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        if swa_active:
+            print("\nEvaluating SWA model on held-out test splits...")
+            swa_test_metrics = {
+                name: evaluate_split(swa_model, fourier_encoder, loader, stats,
+                                     cfg.surf_weight, cfg.smooth_l1_beta, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  TEST (SWA) avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(f"{name} (SWA)", swa_test_metrics[name])
+
+            swa_test_log: dict[str, float] = {}
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    swa_test_log[f"test/{split_name}/{k}_swa"] = v
+            for k, v in swa_test_avg.items():
+                swa_test_log[f"test_{k}_swa"] = v
+            wandb.log(swa_test_log)
+            wandb.summary.update(swa_test_log)
 
     save_model_artifact(
         run=run,
