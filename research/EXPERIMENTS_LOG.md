@@ -860,6 +860,111 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 20:30 — PR #4105 — GEGLU FFN on bf16 baseline (MERGED → **NEW BEST, -14.4%**)
+
+- **Branch:** `charliepai2i48h1-frieren/geglu-ffn-on-bf16`
+- **Hypothesis:** Replace vanilla `Linear → GELU → Linear` FFN inside Transolver block's `mlp` with GEGLU gating: `FFN(x) = W2(GELU(W1a(x)) * W1b(x))` (Shazeer 2020 arXiv:2002.05202). Per-position, per-channel gating provides implicit "feature experts" within each block.
+- **Results vs baseline (val=59.08, test=51.29):**
+
+| Metric | Baseline (bf16 + GELU FFN) | GEGLU (this PR) | Δ |
+|--------|---------------------------:|----------------:|--:|
+| `val_avg/mae_surf_p` | **59.08** | **50.57** | **-14.4%** |
+| `test_avg/mae_surf_p` | **51.29** | **43.94** | **-14.3%** |
+| `val_single_in_dist` | 69.49 | 56.18 | **-19.2%** |
+| `val_geom_camber_rc` | 68.90 | 63.01 | -8.5% |
+| `val_geom_camber_cruise` | 40.32 | 32.57 | **-19.2%** |
+| `val_re_rand` | 57.60 | 50.52 | -12.3% |
+| `test_single_in_dist` | 60.89 | 49.90 | -18.0% |
+| `test_geom_camber_rc` | 63.00 | 56.89 | -9.7% |
+| `test_geom_camber_cruise` | 32.91 | 26.45 | -19.6% |
+| `test_re_rand` | 48.38 | 42.52 | -12.1% |
+| n_params | 491,939 | 737,491 | **+245k (+50%, all in FFN)** |
+| sec/epoch | 74.4s | 78.9s | +6% |
+| epochs in 30-min cap | 25 | 23 (still descending at 1.7 pts/epoch) | -2 |
+| Peak VRAM | 23.5 GB | 25.73 GB | +9% |
+| best epoch | 25 (final) | 23 (final, still descending) | — |
+
+- **Metrics path:** `models/model-charliepai2i48h1-frieren-geglu-ffn-on-bf16-20260516-194450/metrics.jsonl`
+- **Decision:** MERGED. Landmark win — second decisive jump in the same day after bf16. **New best: val=50.57, test=43.94.** Total improvement from calibration baseline: 143.52 → 50.57 = **-64.8%**.
+- **Mechanistic insight:** Surface-pressure distributions vary dramatically by regime (high-Re vs low-Re samples differ by ~order of magnitude in y-std; surface vs interior nodes have wildly different statistics). The gate `GELU(W1a(x))` produces a per-position, per-channel mask that lets the FFN select rather than uniformly transform features — implicit "feature experts" within each block. Largest gains on `val_single_in_dist` (-19.2%) and `val_geom_camber_cruise` (-19.2%), the regimes where pressure magnitude variation is highest.
+- **Orthogonality confirmed:** GEGLU (FFN nonlinearity/gating) is orthogonal to bf16 (precision), FiLM (broadcast-scalar conditioning), EMA (parameter averaging), and slice_num (attention sparsity). Compound win with bf16 holds cleanly.
+- **Compute economics:** +50% params for +14.4% quality gain at +6% sec/epoch — best efficiency ratio in this launch by a wide margin.
+- **New baseline: val=50.57, test=43.94.**
+- **Student suggested follow-ups (all queued):** (a) SwiGLU (SiLU gate) variant. (b) GEGLU + mlp_ratio=2 doubling FFN width. (c) GEGLU in `mlp2` readout head. (d) Longer training off-policy run to test the still-descending tail.
+
+---
+
+## 2026-05-16 20:30 — PR #4104 — batch_size 4→8 on bf16 (no LR scaling) (CLOSED — regression)
+
+- **Branch:** `charliepai2i48h1-askeladd/batch8-on-bf16`
+- **Hypothesis:** Use the 8.7 GB freed VRAM from bf16 (32.2 → 23.5 GB) for batch=8. Predicted: lower gradient variance + better GPU utilization → equal or better val with same wall-clock budget.
+- **Results vs baseline (val=59.08, test=51.29):**
+
+| Metric | Baseline (batch=4) | batch=8 (LR held at 5e-4) | Δ |
+|--------|-------------------:|--------------------------:|--:|
+| `val_avg/mae_surf_p` | 59.08 | **68.69** | **+16.3% (regression)** |
+| `test_avg/mae_surf_p` | 51.29 | 58.64 | +14.3% (regression) |
+| All 4 val + 4 test splits | — | uniformly worse 8-25% | regression |
+| sec/epoch | 74.4 | 75.5 | +1.5% (no speedup) |
+| epochs in 30-min cap | 25 | 24 | -1 |
+| Peak VRAM | 23.5 GB | 46.9 GB | ~2× |
+
+- **Metrics path:** `models/model-charliepai2i48h1-askeladd-batch8-on-bf16-20260516-194233/metrics.jsonl`
+- **Decision:** CLOSED. >5% regression on both val and test. Closes the "scale batch alone, hold LR" hypothesis.
+- **Diagnostic insight (excellent student analysis):** Both predicted benefits failed: (1) **no GPU speedup** because the per-epoch wall-clock floor is not compute (attention/MLP) but variable-mesh padding overhead in `pad_collate` + dataloader/Python — doubling batch doubles VRAM linearly (23.5 → 46.9 GB) but doesn't reduce wall-clock; (2) **worse per-epoch convergence** because steps-per-epoch halved (376 → 188) with LR held at 5e-4 → effectively half the optimization updates in same wall-clock.
+- **Not a dead axis — closed only this variant.** The LR-scaling variant (batch=8, lr=1e-3 linear-scaling) is the genuine next probe. Will revisit at the new GEGLU+bf16 baseline.
+- **Mechanistic confirmation:** Per-epoch wall-clock floor is ~75s on bf16 even with batch doubling — strong evidence the bottleneck is `pad_collate(max_n per batch)` + Python/dataloader, not GPU compute. This is a known torch.compile blocker (handled via dynamic=True in #4069).
+
+---
+
+## 2026-05-16 20:30 — PR #4109 — lr 5e-4→7.5e-4 on bf16 (CLOSED — tied within noise)
+
+- **Branch:** `charliepai2i48h1-thorfinn/lr-7e4-on-bf16`
+- **Hypothesis:** With bf16's longer training budget (25 epochs vs 18), peak LR may be undertuned — try lr=7.5e-4. Predicted faster early descent.
+- **Results vs baseline (val=59.08, test=51.29):**
+
+| Metric | Baseline (lr=5e-4) | lr=7.5e-4 | Δ |
+|--------|-------------------:|----------:|--:|
+| `val_avg/mae_surf_p` | 59.08 | 59.43 | +0.35 (tie, within ±5-10 noise) |
+| `test_avg/mae_surf_p` | 51.29 | 51.11 | -0.18 (tie) |
+| `val_single_in_dist` | 69.49 | 65.74 | -3.75 |
+| `val_geom_camber_rc` | 68.90 | 73.76 | +4.86 |
+| `val_geom_camber_cruise` | 40.32 | 38.64 | -1.68 |
+| `val_re_rand` | 57.60 | 59.58 | +1.98 |
+| sec/epoch | 74.4 | 74.4 | tied |
+| epochs in 30-min cap | 25 | 25 | tied |
+
+- **Metrics path:** `models/model-lr-7e4-on-bf16-20260516-194414/metrics.jsonl`
+- **Decision:** CLOSED. Tied within single-seed noise. Per-epoch trajectory and final val differ by <2 pts at almost every epoch — peak-LR axis saturated for lr ∈ [5e-4, 7.5e-4].
+- **Per-split shuffle pattern (single +2 splits, rc +2 splits move opposite ways):** Consistent with stochastic redistribution across splits, not a systematic LR effect.
+- **Key insight:** lr=5e-4 is already near-optimal for this configuration. Pure peak-LR knob is saturated.
+- **Next probe (student suggestion + advisor decision):** **Shorten cosine T_max** to match actual epochs reached. Currently T_max=50 → at epoch 25 effective LR is still 2.5e-4 (50% peak, not fully annealed). T_max=25 (or T_max=epochs_reached) would let the LR fully decay to eta_min, potentially finding a sharper minimum on this 25-epoch budget. The cosine-tail story matters more now with GEGLU still descending at epoch 23. **Queued for thorfinn's next assignment.**
+
+---
+
+## 2026-05-16 20:30 — PR #4068 — n_layers 5→4 on OLD baseline (SENT BACK — wins old, not new)
+
+- **Branch:** `charliepai2i48h1-edward/n-layers-4-on-film`
+- **Hypothesis:** Drop one Transolver block (n_layers 5→4) to free ~17 sec/epoch for more training epochs. Compute-efficiency play on old fp32 baseline.
+- **Results vs OLD baseline (val=68.80, test=59.49):**
+
+| Metric | Old baseline (n_layers=5, fp32) | n_layers=4, fp32 (2-seed mean) | Δ vs old baseline |
+|--------|-------------------------------:|-------------------------------:|------------------:|
+| `val_avg/mae_surf_p` | 68.80 | **65.82** | **-4.34% ✓** |
+| `test_avg/mae_surf_p` | 59.49 | **57.74** | **-2.94% ✓** |
+| All 4 test splits in BOTH seeds | — | uniformly improved 1.5-5.5% | strong correlated signal |
+| best epoch | 18 (final) | 21-22 (still descending) | +3-4 epochs |
+| sec/epoch | ~102 | ~85.6 | -16% (slightly under predicted ~20%) |
+| n_params | 657K | 535K | -18.6% |
+
+- **Metrics paths:** Run1: `models/model-charliepai2i48h1-edward-n-layers-4-on-film-20260516-182629/metrics.jsonl`, Run2: `.../20260516-193448/metrics.jsonl`
+- **Decision:** SENT BACK (not closed) — same baseline-shift problem as #4069, #4071, #4041 v2. Both runs ran on the OLD fp32 baseline (edward's pod had `M train.py` and GH rate-limit issues blocking iterations 24-26). New baseline is now 50.57 (bf16 + GEGLU); n_layers=4 fp32 result of 65.82 is +30% worse than current.
+- **Hypothesis IS confirmed against old baseline:** FiLM-Re+AoA at n_layers=5 was compute-bound, not capacity-bound. Dropping a block gains more from extra epochs than it loses in capacity. Test splits improved 1.5-5.5% in BOTH seeds — no split-flip, strong correlated signal.
+- **Why orthogonal to merged wins:** n_layers (capacity vs compute trade) ⊥ bf16 (precision) ⊥ GEGLU (FFN gating). Stacked prediction: ~62-68s/epoch on n_layers=4+bf16+GEGLU → 26-30 epochs in 30-min cap, target val ≤ 48.
+- **Next action:** edward rebases onto current advisor branch (now has bf16 + GEGLU), re-runs same n_layers=4 change. Target: beat val=50.57.
+
+---
+
 ## 2026-05-16 16:30 — PR #4018 — FiLM-Re+AoA (MERGED → new baseline, -3.7%)
 
 - **Branch:** `charliepai2i48h1-alphonse/film-re-aoa`
