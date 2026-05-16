@@ -486,6 +486,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_pre = 0.0
     n_batches = 0
+    pre_clip_norms: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -520,7 +521,9 @@ for epoch in range(MAX_EPOCHS):
             pre_clip_norm = torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=cfg.clip_grad_norm
             )
-            epoch_grad_norm_pre += float(pre_clip_norm)
+            v = float(pre_clip_norm)
+            epoch_grad_norm_pre += v
+            pre_clip_norms.append(v)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -531,6 +534,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_pre /= max(n_batches, 1)
+
+    # Pre-clip grad-norm distribution + clip-binding fraction
+    grad_stats = {}
+    if pre_clip_norms:
+        import numpy as _np
+        arr = _np.asarray(pre_clip_norms, dtype=_np.float64)
+        grad_stats = {
+            "train/grad_norm_pre_min": float(arr.min()),
+            "train/grad_norm_pre_max": float(arr.max()),
+            "train/grad_norm_pre_std": float(arr.std()),
+            "train/grad_norm_pre_p50": float(_np.percentile(arr, 50)),
+            "train/grad_norm_pre_p90": float(_np.percentile(arr, 90)),
+            "train/grad_norm_pre_p95": float(_np.percentile(arr, 95)),
+            "train/clip_bind_frac": float((arr > cfg.clip_grad_norm).mean()) if cfg.clip_grad_norm > 0 else 0.0,
+        }
 
     # --- Validate ---
     model.eval()
@@ -563,14 +581,22 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        **grad_stats,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
+    bind_msg = ""
+    if grad_stats:
+        bind_msg = (
+            f"  grad[pre_avg={epoch_grad_norm_pre:.3f} "
+            f"max={grad_stats['train/grad_norm_pre_max']:.3f} "
+            f"bind={grad_stats['train/clip_bind_frac']*100:.1f}%]"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{bind_msg}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
