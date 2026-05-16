@@ -1,5 +1,29 @@
 # SENPAI Research Results
 
+## 2026-05-16 12:00 — Round 5 closures + new assignments (3 PRs closed, 3 new assigned)
+
+### #3812 fern bs=1 — CLOSED (result on old baseline, reassigned as #3945)
+- Branch: `willowpai2i24h5-fern/bs1-continue`
+- W&B: `zhlggiha`, `kxny51vd`, `k49jk177` — 3-arm mean val_avg **71.32** (best arm 70.67)
+- vs bs=2 baseline (77.06): **−5.74 pp / −7.45%** — batch-size trend **accelerated** (not diminished)
+- vs FiLM baseline (63.79): +7.53 pp **regression** — closed, reassigned to FiLM+Lion+bs=1 (#3945)
+- Key finding: GPU stays at ~99% utilization even at bs=1 on H100; no underutilization. All splits improved. Best epoch=13 (step-bound, not converged). Compounding prediction: bs=1 + FiLM + Lion should reach high-50s.
+
+### #3791 frieren bf16 — CLOSED (throughput dead, schedule finding actionable)
+- Branch: `willowpai2i24h5-frieren/bf16-mixed-precision`
+- W&B: `6hbbxdwx`(arm1), `bex5d673`(arm2, best), `ipt118t1`(arm3) — AdamW+bs=4 recipe
+- Throughput: only **~5% speedup** (compute-pipe <6% of wall time; model is 0.66M params, overhead-bound, not matmul-bound). bf16 confirmed loss-neutral (-0.10 pp at same budget), useless for speed.
+- **Incidental finding:** sched_epochs=21 arm (72.31) beat sched_epochs=14 arm (80.21) by **−9.85%** at identical 18 epochs — schedule length independent of precision. Carry-forward assigned as #3944.
+
+### #3787 alphonse Lion LR completion — CLOSED (max_lr=5e-4 peak at bs=4 found, retest assigned)
+- Branch: `willowpai2i24h5-alphonse/lion-lr-sweep`
+- W&B: `mr8x5z8s`(1e-3, 68.30), `mcvu48z1`(5e-4, **64.16**), `5mj488qv`(2e-3, diverged)
+- **max_lr=5e-4 beats 3e-4** at bs=4 (64.16 vs nezuko's 66.69 at bs=2+max_lr=3e-4). max_lr=2e-3 diverges at epoch 5 — Lion divergence boundary established. 
+- vs FiLM baseline (63.79): +0.37 pp regression — closed, fine-sweep on FiLM+bs=2 assigned as #3942.
+- Key finding: Lion's sign-update does NOT absorb higher LR than AdamW; per-element sign is unit-direction, not unit-step. LR ceiling <2e-3.
+
+---
+
 ## 2026-05-16 10:55 — PR #3797 askeladd FiLM MERGED — architectural paradigm shift (−4.35%)
 
 ### #3797 askeladd FiLM conditioning on (Re, AoA, NACA) — MERGED ✓ (new baseline 63.79 / test 61.50)

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 11:05
+- **Updated:** 2026-05-16 12:00
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -42,23 +42,23 @@ Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_si
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3910 | askeladd | **FiLM + Lion + bs=2 stacked confirmation** (3-arm) | **New (round 5, 11:00)** — establishes true compounded baseline |
-| #3911 | thorfinn | **surf_weight sweep on FiLM+Lion+bs=2** {5, 10, 20} | **New (round 5, 11:00)** — loss-balance sensitivity after FiLM merge |
-| #3860 | nezuko | Lion betas (β1, β2) 4-arm sweep | Running — fine-tunes Lion's momentum hyperparameters |
-| #3812 | fern | batch_size=1 (extends bs trend) | Running (stale — nudged 10:40) |
-| #3617 | edward | log-space L1 + Lion + bs=2 (5-arm, sw∈{10, 30}) | Sent back 2026-05-16 10:40 — stacks log-space L1 with FiLM+Lion+bs=2 |
-| #3787 | alphonse | Lion LR sweep at {1e-3 repl, 5e-4, 2e-3} | Nudged 10:40 — awaiting status |
-| #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | Nudged 10:40 — awaiting status |
+| #3910 | askeladd | FiLM + Lion + bs=2 stacked confirmation (3-arm) | Running — establishes true compounded baseline |
+| #3911 | thorfinn | surf_weight sweep on FiLM+Lion+bs=2 {5, 10, 20} | Running — loss-balance sensitivity after FiLM merge |
+| #3942 | alphonse | **Lion max_lr fine-sweep {4e-4, 5e-4, 6e-4} on FiLM+Lion+bs=2** | **New (round 5, 12:00)** — max_lr=5e-4 was bs=4 peak (#3787); retest at bs=2 + FiLM |
+| #3944 | frieren | **OneCycleLR sched_epochs {14, 18, 22} on FiLM+Lion+bs=2** | **New (round 5, 12:00)** — sched=21 incidentally gave −9.85% (#3791); retest at FiLM stack |
+| #3945 | fern | **FiLM + Lion + bs=1 full-stack compound** (3-arm) | **New (round 5, 12:00)** — bs=1 gave −7.45% (#3812); ambitious full-stack test |
+| #3860 | nezuko | Lion betas (β1, β2) 4-arm sweep | Running — nudged (12:00); no comments yet |
+| #3617 | edward | log-space L1 + Lion + bs=2 (5-arm, sw∈{10, 30}) | Running — stacks log-space L1 on FiLM+Lion+bs=2 |
 | #3827 | tanjiro | Re/AoA input jitter (3-arm σ sweep) | Running — data-augmentation axis; targets OOD splits |
 
 ## Recently closed/sent-back
 
 | PR | Student | Change | Decision |
 |---|---|---|---|
-| #3614 | thorfinn | bs=2 + AdamW max_lr=1.5e-3 | **closed** — LR axis exhausted (all bumps above 1e-3 regress at bs=4 and bs=2); AdamW superseded by Lion |
-| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | closed — SWA mean 85.09 (+4.2%); weight-averaging failure |
-| #3622 | frieren | final_div_factor ∈ {1e3, 1e5} | closed — locks 1e4 |
-| #3699 | tanjiro | Lookahead(AdamW) | closed — +8.93% regression; third trajectory-averaging failure |
+| #3812 | fern | bs=1 (AdamW baseline) | **closed** — 71.32 beats bs=2 by −7.45% but inferior to FiLM (63.79); reassigned to FiLM+Lion+bs=1 #3945 |
+| #3791 | frieren | bf16 mixed precision | **closed** — only 5% speedup (compute-pipe <6%, overhead-bound); viability confirmed neutral; schedule finding (sched=21 → −9.85%) reassigned as #3944 |
+| #3787 | alphonse | Lion LR sweep | **closed** — max_lr=5e-4 found peak at bs=4 (64.16) but inferior to FiLM (63.79); max_lr=2e-3 diverged; reassigned fine-sweep at FiLM stack #3942 |
+| #3614 | thorfinn | bs=2 + AdamW max_lr=1.5e-3 | closed — LR axis exhausted; AdamW superseded by Lion |
 
 ## Round 3 closed
 
@@ -82,10 +82,12 @@ Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_si
 5. **Grad clip is gradient normalization** — max_norm=1.0 fires 100% of steps; median pre-clip norm ~45. Tighter (0.5) gave +1.94% regression.
 6. **Model capacity is NOT the bottleneck (historically)** — width, depth, slice changes all failed. FiLM's win is conditioning-based, not capacity-based. Post-FiLM, this finding may need revisiting.
 7. **Volume loss structure matters** — vol MSE + surf L1 locked in. Full L1 vol+surf regresses.
-8. **surf_weight=10 is optimal on non-FiLM baseline** — under investigation whether FiLM changes this (#3911 thorfinn). Prior: sw=5 regresses 10.8%, sw=25 worse.
-9. **Trajectory-averaging methods are incompatible — 3-for-3 failures** — EMA (#3431), SWA (#3615), Lookahead (#3699 +8.93%). Family-wide rejection: don't retry.
-10. **AdamW LR axis is exhausted** — max_lr=1e-3 is the ceiling for AdamW+this setup. All bumps at {1.5, 2.0}e-3 regress at both bs=4 and bs=2. Lion's optimal is 3e-4.
-11. **batch_size=2 compounded with all subsequent wins** — −5.63% (#3616). bs=1 under test (#3812 fern).
+8. **batch_size trend accelerates: bs=1 > bs=2 > bs=4** — bs=4→2 gave −5.63%; bs=2→1 gave **−7.45%** (#3812 closed; now retesting at FiLM+Lion stack #3945). GPU stays at ~99% utilization even at bs=1 on H100.
+9. **Lion LR sensitivity: max_lr=5e-4 beats 3e-4 at bs=4** — alphonse #3787 found 64.16 at max_lr=5e-4 (vs 66.69 at nezuko's max_lr=3e-4 at bs=2). LR optimum may depend on batch size; fine-sweep under test at FiLM+bs=2 (#3942). max_lr=2e-3 diverges catastrophically — Lion divergence boundary established at <2e-3.
+10. **sched_epochs=21 incidentally discovered** — frieren #3791 showed sched=21 at AdamW+bs=4 gives −9.85% vs sched=14 at same epoch count (72.31 vs 80.21). The "right-sized" schedule (sched=14) over-anneals when wall-clock allows >14 epochs. Now testing sched_epochs {14, 18, 22} on FiLM+Lion+bs=2 (#3944).
+11. **surf_weight=10 is optimal on non-FiLM baseline** — under investigation whether FiLM changes this (#3911 thorfinn). Prior: sw=5 regresses 10.8%, sw=25 worse.
+12. **Trajectory-averaging methods are incompatible — 3-for-3 failures** — EMA (#3431), SWA (#3615), Lookahead (#3699). Family-wide rejection.
+13. **AdamW LR axis is exhausted** — max_lr=1e-3 is the ceiling for AdamW+this setup. Lion's optimal LR is in the 3-5e-4 range (sharper gradient magnitude control via sign update).
 
 ## Potential next research directions (round 5+ backlog)
 
