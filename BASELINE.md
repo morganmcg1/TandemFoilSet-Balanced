@@ -13,41 +13,49 @@ target base `icml-appendix-charlie`).
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
 | Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
+| Precision | **bf16 autocast** (`torch.autocast(device_type='cuda', dtype=torch.bfloat16)`) — PR #4064 |
 | Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #4018, FiLM-Re+AoA, single-seed, best epoch 18)
+## Current best metrics (PR #4064, bf16 autocast on FiLM-Re+AoA, single-seed, best epoch 25)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **68.80** |
-| `test_avg/mae_surf_p` | **59.49** |
-| `test/test_single_in_dist/mae_surf_p` | 68.75 |
-| `test/test_geom_camber_rc/mae_surf_p` | 72.54 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 39.27 |
-| `test/test_re_rand/mae_surf_p` | 57.42 |
+| `val_avg/mae_surf_p` **(primary)** | **59.08** |
+| `test_avg/mae_surf_p` | **51.29** |
+| `test/test_single_in_dist/mae_surf_p` | 60.89 |
+| `test/test_geom_camber_rc/mae_surf_p` | 63.00 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 32.91 |
+| `test/test_re_rand/mae_surf_p` | 48.38 |
 
-Per-split val surface-p MAE at best checkpoint (single seed):
+Per-split val surface-p MAE at best checkpoint (single seed, epoch 25):
 
-| Split | mae_surf_p | Δ vs prev |
+| Split | mae_surf_p | Δ vs prev (68.80) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  80.63 | -3.1% |
-| `val_geom_camber_rc`     |  80.24 | -1.8% |
-| `val_geom_camber_cruise` |  47.81 | -5.5% |
-| `val_re_rand`            |  66.50 | -5.4% |
-| **avg** | **68.80** | **-3.7%** |
+| `val_single_in_dist`     |  69.49 | -13.8% |
+| `val_geom_camber_rc`     |  68.90 | -14.1% |
+| `val_geom_camber_cruise` |  40.32 | -15.7% |
+| `val_re_rand`            |  57.60 | -13.4% |
+| **avg** | **59.08** | **-14.1%** |
 
-Artifact: `models/model-charliepai2i48h1-alphonse-film-re-aoa-20260516-153907/metrics.jsonl`
+Artifact: `models/model-bf16-on-film-20260516-182629/metrics.jsonl`
 
-Note: all 8 splits improved. Zero compute overhead (same 102s/epoch, same 18 epochs vs FiLM-Re baseline). Consistency across splits is the key signal — uniform 2-4 pt improvement across all regimes confirms AoA adds real orthogonal information beyond Re. val_geom_camber_rc improved least (-1.8%) — that OOD split varies NACA shape, which is NOT yet in the FiLM conditioning vector.
+Note: bf16 autocast delivers -27% sec/epoch (102s → 74s), enabling 25 epochs in the 30-min cap vs 18. The model was **still monotonically descending at epoch 25 (final)** — another compute savings compounding would push further. All 4 val and 4 test splits improved 13-16%. Zero NaN/Inf issues throughout; autocast keeps reduction ops in fp32 for stability.
 
-Why it works: AoA (angle of attack) is the second fundamental physical conditioning parameter after Re, setting lift polarity and magnitude per foil. Adding AoA0_rad and AoA1_rad to the FiLM conditioning vector `[log_Re, AoA0, AoA1]` (channels 13, 14, 18 in input x) gives the model per-foil flow context. The largest gain is on val_re_rand (-5.4%) where the cross-regime tandem configuration most benefits from per-foil AoA information. The modest gain on val_geom_camber_rc (-1.8%) points at NACA shape conditioning as the next frontier.
+Why it works: bf16 halves activation storage in attention/MLP intermediates, cutting both compute and memory bandwidth. The 7 extra epochs each produced ~1.4 pts/epoch improvement. The FiLM affines and LayerNorms remain numerically stable because PyTorch autocast keeps `sum` and `smooth_l1_loss` reductions in fp32.
 
-**FiLM conditioning progression:** Re-only (PR #4004, -9.6%) → Re+AoA (PR #4018, -3.7%). The diminishing returns signal that Re carries most regime information; AoA adds orthogonal signal at zero cost.
+**bf16 compute impact:** sec/epoch 102 → 74 (-27%), VRAM 32.2 → 23.5 GB (-27%). Headroom freed for larger batch or deeper model in subsequent experiments.
+
+Reproduce:
+```bash
+cd target/
+python train.py --experiment_name bf16-repro --agent <name>
+# bf16: torch.autocast(device_type='cuda', dtype=torch.bfloat16) wraps forward+loss
+```
 
 Reproduce:
 
@@ -105,4 +113,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #3950 | slice_num 16→12 (triangulate; tie within noise) | 80.60 | -0.34% |
 | 2026-05-16 | #3982 | mlp_ratio 2→1 (halve FFN width, +1 epoch from compute saving) | 79.05 | -1.92% |
 | 2026-05-16 | #4004 | FiLM-on-Re: condition each Transolver block on log(Re) scalar | 71.46 | -9.6% |
-| 2026-05-16 | #4018 | FiLM-Re+AoA: expand conditioning to [log_Re, AoA0, AoA1] | **68.80** | **-3.7%** |
+| 2026-05-16 | #4018 | FiLM-Re+AoA: expand conditioning to [log_Re, AoA0, AoA1] | 68.80 | -3.7% |
+| 2026-05-16 | #4064 | bf16 autocast: -27% sec/epoch, 18→25 epochs in 30-min cap | **59.08** | **-14.1%** |
