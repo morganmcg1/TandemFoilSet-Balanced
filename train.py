@@ -466,6 +466,8 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
+    use_welsch: bool = False  # Welsch (Leclerc) biweight loss with redescending influence; overrides huber_delta
+    welsch_c: float = 1.0  # Welsch scale parameter; residuals beyond |r|=c get downweighted
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
     asinh_vel_scale: float = 0.0  # 0 disables; >0 enables asinh on Ux/Uy channels
@@ -611,7 +613,13 @@ for epoch in range(MAX_EPOCHS):
                     f"pred_inv[p] range=[{pp_inv.min().item():.3f},{pp_inv.max().item():.3f}] "
                     f"pred_phys[p] range=[{pp_phys.min().item():.3f},{pp_phys.max().item():.3f}]"
                 )
-        if cfg.huber_delta > 0:
+        if cfg.use_welsch:
+            # Welsch (Leclerc) biweight loss: c²/2 · (1 - exp(-r²/(2c²)))
+            # Gradient: r · exp(-r²/(2c²)) — redescending (decreases for |r| > c)
+            r = pred - y_target
+            c = cfg.welsch_c
+            elem_loss = 0.5 * c * c * (1.0 - torch.exp(-0.5 * (r * r) / (c * c)))
+        elif cfg.huber_delta > 0:
             elem_loss = F.huber_loss(pred, y_target, delta=cfg.huber_delta, reduction="none")
         else:
             elem_loss = (pred - y_target) ** 2
@@ -621,6 +629,29 @@ for epoch in range(MAX_EPOCHS):
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Surface-p residual diagnostics (no graph contribution; only logging stats).
+        with torch.no_grad():
+            if surf_mask.any():
+                surf_p_resid = (pred[..., 2] - y_target[..., 2])[surf_mask]
+                if surf_p_resid.numel() > 0:
+                    resid_abs = surf_p_resid.abs()
+                    surf_p_resid_mean = surf_p_resid.mean().item()
+                    surf_p_resid_frac_pos = (surf_p_resid > 0).float().mean().item()
+                    surf_p_resid_abs_max = resid_abs.max().item()
+                    surf_p_resid_p99 = torch.quantile(
+                        resid_abs.float(), 0.99
+                    ).item()
+                else:
+                    surf_p_resid_mean = float("nan")
+                    surf_p_resid_frac_pos = float("nan")
+                    surf_p_resid_abs_max = float("nan")
+                    surf_p_resid_p99 = float("nan")
+            else:
+                surf_p_resid_mean = float("nan")
+                surf_p_resid_frac_pos = float("nan")
+                surf_p_resid_abs_max = float("nan")
+                surf_p_resid_p99 = float("nan")
 
         optimizer.zero_grad()
         loss.backward()
@@ -634,7 +665,14 @@ for epoch in range(MAX_EPOCHS):
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        step_log = {
+            "train/loss": loss.item(),
+            "train/surf_p_resid_mean": surf_p_resid_mean,
+            "train/surf_p_resid_frac_pos": surf_p_resid_frac_pos,
+            "train/surf_p_resid_abs_max": surf_p_resid_abs_max,
+            "train/surf_p_resid_p99": surf_p_resid_p99,
+            "global_step": global_step,
+        }
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
         wandb.log(step_log)
