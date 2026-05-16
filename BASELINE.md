@@ -8,7 +8,7 @@ target base `icml-appendix-charlie`).
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=16`, `mlp_ratio=2`, `unified_pos=False` |
+| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
@@ -18,36 +18,36 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3783, EMA decay=0.997, single-seed, best epoch 18)
+## Current best metrics (PR #3950, slice_num=12, single-seed, best epoch 18)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **80.88** |
-| `test_avg/mae_surf_p` | **71.18** |
-| `test/test_single_in_dist/mae_surf_p` | 83.37 |
-| `test/test_geom_camber_rc/mae_surf_p` | 82.79 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 51.08 |
-| `test/test_re_rand/mae_surf_p` | 69.85 |
+| `val_avg/mae_surf_p` **(primary)** | **80.60** |
+| `test_avg/mae_surf_p` | **71.14** |
+| `test/test_single_in_dist/mae_surf_p` | 82.31 |
+| `test/test_geom_camber_rc/mae_surf_p` | 83.66 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 50.12 |
+| `test/test_re_rand/mae_surf_p` | 68.48 |
 
 Per-split val surface-p MAE at best checkpoint (single seed):
 
 | Split | mae_surf_p | Δ vs prev |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  94.59 | +0.57% |
-| `val_geom_camber_rc`     |  90.88 | -2.00% |
-| `val_geom_camber_cruise` |  61.04 | +0.98% |
-| `val_re_rand`            |  77.02 | -0.52% |
-| **avg** | **80.88** | **-0.34%** |
+| `val_single_in_dist`     |  93.82 | -0.81% |
+| `val_geom_camber_rc`     |  93.06 | +2.40% |
+| `val_geom_camber_cruise` |  60.47 | -0.93% |
+| `val_re_rand`            |  75.05 | -2.55% |
+| **avg** | **80.60** | **-0.34%** |
 
-Artifact: `models/model-ema-0997-probe-20260516-082433/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-alphonse-slice-num-12-20260516-123207/metrics.jsonl`
 
-Note: small win within stated single-seed noise floor (±5-10 pts). Val AND test moved together (val -0.34%, test -0.82%) — correlated signal supports merge despite small magnitude. Best epoch 18 (compute-bound, identical to baseline). Per-split: rc improved most (-2.00%); single and cruise slightly regressed. EMA window has effectively converged near the optimum.
+Note: small win at noise floor (val -0.34%, test -0.05%). 6 of 8 split metrics improved (3/4 val + 3/4 test); only rc regressed. Single-line change: slice_num 16→12. Per-epoch trajectory indistinguishable from sn=16 baseline — convergence rate identical, 0.28pt final-epoch gap is plausibly stochastic. Sec/epoch dropped 2% (105.2→103.1) but epoch count unchanged.
 
-Why it works: EMA decay=0.997 → window ≈ 330 steps (~10% of training budget) vs 0.998 → 500 steps (14-17%). Marginal tightening. Diminishing returns clear — the EMA axis has reached its useful floor in [0.997, 0.998].
+Why it works: slice_num=12 gives 144 slice-pair attention entries vs 256 at sn=16, a modest O(K²) saving. Wall-clock barely moves because FFN/projection cost dominates so completely. Expressiveness floor lies somewhere in (8, 12]: sn=8 regressed (+1.52%), sn=12 ties sn=16 within noise.
 
-EMA progression: 0.9995→catastrophic, 0.999→84.44, 0.998→81.16 (-3.88%), 0.997→80.88 (-0.34%). **Axis effectively closed.** Next moves should be on orthogonal levers.
+Slice_num progression: 64→32(-5.81%)→16(-6.78%)→12(-0.34%)→[8 regressed +1.52%]. **Discrete optimum is in [12, 16] — both effectively tied. Axis closed.**
 
 Reproduce:
 
@@ -101,4 +101,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #3533 | slice_num=64→32 (halve slice-attention cost, +2 epochs, implicit reg) | 90.58 | -5.81% |
 | 2026-05-16 | #3602 | slice_num=32→16 (continue halving, +2 epochs to 18, still compute-bound) | 84.44 | -6.78% |
 | 2026-05-16 | #3601 | EMA decay 0.999→0.998 (tighter window, confirmed on slice_num=16 base) | 81.16 | -3.88% |
-| 2026-05-16 | #3783 | EMA decay 0.998→0.997 (probe looser; diminishing returns) | **80.88** | **-0.34%** |
+| 2026-05-16 | #3783 | EMA decay 0.998→0.997 (probe looser; diminishing returns) | 80.88 | -0.34% |
+| 2026-05-16 | #3950 | slice_num 16→12 (triangulate; tie within noise) | **80.60** | **-0.34%** |
