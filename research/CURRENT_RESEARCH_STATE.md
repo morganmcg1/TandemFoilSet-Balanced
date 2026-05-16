@@ -5,7 +5,7 @@
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
 - **Metrics:** local JSONL only (no remote tracking on this branch)
-- **Current round-5 baseline (PR #3582 PENDING MERGE — rate limited):** `val_avg/mae_surf_p = 61.2023`, `test_avg/mae_surf_p = 54.0076`
+- **Current round-5 baseline (PR #3582 MERGED):** `val_avg/mae_surf_p = 61.2023`, `test_avg/mae_surf_p = 54.0076`
   - Note: torch.compile() `default` mode validated on full merged stack at `cf6ac4a`. Arm A beat prior best (75.40) by **−18.83%** with all 8 val/test cells improving. Per-epoch speedup 1.88× (108s → 57s), unlocking **32 effective epochs vs 17 at baseline**. Run still descending at −0.7/epoch at cutoff — schedule and other axes have additional headroom.
 - **Cumulative round-5 improvement:** −50.59% val_avg (123.88 → 61.20) and −52.78% test_avg (114.37 → 54.01) vs pre-round-5 floor. **Nine compounding wins in sequence.**
 
@@ -56,9 +56,9 @@ Strongest remaining axes (in priority order):
 10. **SF-AdamW head-to-head** (#3425 tanjiro WIP, needs rebase to current tip): SF-AdamW must beat 61.20 (new baseline) — significant moving target.
 11. **max-autotune compile mode** (fern #3 suggestion): single arm, deferred.
 
-**Closed in this loop**:
-- **#3582 (fern torch.compile)** — **PENDING MERGE** (advisor rate-limited until ~04:20 UTC). Decision: MERGE. New best 61.20.
-- **#3581 (thorfinn LR sweep)** — CLOSED. +9.4–14.8% regression on 17-epoch budget. Reassigned to compile-enabled re-run.
+**Closed/merged in this loop**:
+- **#3582 (fern torch.compile)** — MERGED (commit 34f7c61). New best val_avg 61.20. Ninth compounding win.
+- **#3581 (thorfinn LR sweep)** — CLOSED. +9.4–14.8% regression on 17-epoch budget. Reassigned to compile-enabled re-run (#3666).
 
 **Closed in prior loops**:
 - #3432 (fern SEMA) — +22.8% to +33.4% regression; SEMA mechanism inverted under EMA decay=0.999 / short wall-clock horizon.
@@ -75,7 +75,7 @@ Strongest remaining axes (in priority order):
 | #3315 | askeladd | MERGED | Cautious AdamW |
 | #3466 | askeladd | MERGED (Bernoulli claim now suspect — see note above) | Bernoulli pressure residual |
 | #3465 | thorfinn | MERGED | T_max=25 schedule alignment — val_avg 75.40 |
-| #3582 | fern | PENDING MERGE (this loop, rate limited until ~04:20Z) | torch.compile() — new best val_avg 61.20 |
+| #3582 | fern | MERGED (this loop) | torch.compile() — new best val_avg 61.20 |
 | #3347 | alphonse | CLOSED | Manifold mixup — mesh-correspondence problem |
 | #3346 | thorfinn | CLOSED | Cosine T_max=15 + warmup + LR=7e-4 — clear regression |
 | #3374 | nezuko | CLOSED | Stochastic depth — 3-seed robust negative |
@@ -91,8 +91,8 @@ Strongest remaining axes (in priority order):
 | #3647 | alphonse | WIP | surf_weight sweep: 5 vs 20 |
 | #3547 | askeladd | WIP | Cp normalization — 2 arms (cp, halfcp) |
 | #3548 | frieren | WIP | AoA-jitter TTA — 2 arms |
-| (pending assign) | fern | NEW (this loop, post-merge) | T_max alignment for compile (T_max=32 vs 35) |
-| (pending assign) | thorfinn | NEW (this loop, post-merge) | LR sweep with compile (lr=7e-4 vs 1e-3) |
+| #3665 | fern | WIP (new this loop) | T_max alignment for compile: T_max=32 vs T_max=35 |
+| #3666 | thorfinn | WIP (new this loop) | LR sweep with compile: lr=7e-4 vs 1e-3 on 32-epoch budget |
 
 ## Plateau watch
 

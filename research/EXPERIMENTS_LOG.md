@@ -986,3 +986,33 @@ Closed. Picked re-run of LR sweep with compile (new 32-epoch budget) as the natu
 ## 2026-05-16 03:50 — New assignment: thorfinn LR sweep re-run with compile
 
 - **PR (forthcoming, thorfinn): LR sweep with `--torch_compile`**. Re-run lr=7e-4 and lr=1e-3 on the new 32-epoch compile baseline. Thorfinn's #3581 closed because the 17-epoch budget couldn't overcome the epoch-1 spike, but at lr=1e-3 the late-epoch descent rate was −4.13/epoch (vs −2.74 baseline). If that rate sustains through 15 more epochs (compile-unlocked), the math has a chance of working. T_max=25 unchanged to factorize cleanly from fern's parallel T_max experiment.
+
+## 2026-05-16 04:25 — Loop 13 continuation: merge completed, assignments created
+
+**Merge of #3582 (fern torch.compile) confirmed** — commit `34f7c61`. BASELINE.md updated to val_avg=61.20, test_avg=54.01. Nine compounding wins in round 5, −50.59% val_avg from anchor.
+
+**New assignment #3665 (fern): T_max alignment for compile 32-epoch budget**
+- Two arms: T_max=32 (exact match to 32-epoch wall-clock) vs T_max=35 (3-epoch safety margin)
+- Pure schedule change: `--torch_compile --t_max 32/35 --eta_min_factor 0.10`
+- Reproduces the fix that #3465 performed (T_max=50→25 for 17-epoch budget) for the new 32-epoch compile budget
+- At epoch 32 (compile cutoff), descent was −0.7/epoch; cosine floor at eta_min already reached at epoch 25 → 7 wasted late-epoch steps
+- Expected: −1% to −5% val_avg
+
+**New assignment #3666 (thorfinn): LR sweep with torch.compile**
+- Two arms: lr=7e-4 and lr=1e-3 (same as closed #3581), now with `--torch_compile`
+- Hypothesis: 32-epoch budget gives 2× more recovery time vs #3581's 17-epoch budget. At lr=1e-3, thorfinn observed late-epoch descent rate −4.13/epoch vs −2.74 baseline — if this sustains through 15 more epochs, the math has a chance.
+- T_max=25 unchanged to factorize cleanly from fern's T_max experiment (#3665)
+- Expected: uncertain (high-variance); honest prior is still negative given epoch-1 spike mechanism, but worth testing
+
+**Tanjiro #3425 baseline update posted** — Updated compile-enabled rebase instructions. New target: val_avg < 61.20 (was 75.40). SF-AdamW + full stack + compile (Arm A) + compile + warmup_steps=840 (Arm B). Tanjiro pod confirmed alive (iteration 127) with #3425 assigned.
+
+**Pod state at loop 13 close:**
+- All 8 charlie-r5 pods alive. All 8 students have assigned PRs. Zero idle GPUs.
+  - alphonse: #3647 (surf_weight sweep)
+  - askeladd: #3547 (Cp normalization)
+  - edward: #3463 (capacity revisit, rebase pending)
+  - fern: #3665 (T_max alignment for compile — just assigned)
+  - frieren: #3548 (AoA-TTA)
+  - nezuko: #3631 (Fourier spatial pos encoding)
+  - tanjiro: #3425 (SF-AdamW head-to-head, rebase pending)
+  - thorfinn: #3666 (LR sweep with compile — just assigned)
