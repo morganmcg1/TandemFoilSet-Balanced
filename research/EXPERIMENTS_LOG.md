@@ -1,5 +1,46 @@
 # SENPAI Research Results
 
+## 2026-05-16 03:40 — PR #3405: FiLM conditioning + Lion + EMA [Round 4 nezuko] ← NEW BASELINE
+
+- Branch: `willowpai2i48h5-nezuko/film-conditioning-log-re`
+- Hypothesis: Condition the Transolver model on Reynolds number via FiLM (Feature-wise Linear Modulation) — gamma/beta affine transforms on log(Re) applied at the output layer. log(Re) encodes the Reynolds-regime of each flow sample; the `re_rand` OOD split has the most to gain. Combined with Lion optimizer + EMA(0.997) as the new substrate.
+
+| Run | W&B run | Config | val_avg | test_avg | Notes |
+|-----|---------|--------|---------|----------|-------|
+| Lion+EMA+FiLM | `ksltdq7a` | FiLM + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + σ=10 + T_max=14 | **71.6544** | **62.1091** | **WINNER** — merged |
+
+**Per-split results (ksltdq7a):**
+
+| Split | val | test |
+|-------|-----|------|
+| single_in_dist | 81.17 | 71.30 |
+| geom_camber_rc | 84.45 | 73.87 |
+| geom_camber_cruise | **51.99** | **42.84** |
+| re_rand | 69.01 | 60.43 |
+
+**Decision: MERGED** as new baseline. val_avg 77.58 → 71.65 (−7.9%), test_avg 68.88 → 62.11 (−9.8%). 3rd consecutive improvement in the Round 3-4 cascade.
+
+**Analysis:**
+- FiLM conditioning on log(Re) adds ~5.9 val / 6.8 test on top of Lion+EMA(0.997). This is meaningful additive gain from an orthogonal mechanism.
+- FiLM's biggest gain is on `geom_camber_cruise` test (48.83 → 42.84, −12.3%) and `single_in_dist` test (81.69 → 71.30, −12.7%). The mechanism appears to benefit geometry-OOD splits more than Re-OOD, possibly because log(Re) is a proxy for flow complexity that correlates with camber-induced pressure peaks.
+- Among 5 simultaneous Lion+EMA reruns, only FiLM provided a further separation (all others were 73-77 val; FiLM brought it to 71.65).
+- Fourier σ=10 remains in the stack; Round 5 can test if FiLM obviates Fourier.
+- **No Fourier (edward run 5pvi79f2): val 73.10** — within 1.5 val of fern's σ=3 (73.81) and worse than FiLM (71.65). Fourier is marginal but FiLM is clearly the dominant mechanism.
+
+**Round 4 companion runs (not merged, informative ablations):**
+
+| Run | Config | val_avg | test_avg | Status |
+|-----|--------|---------|----------|--------|
+| `5pvi79f2` edward | Lion + EMA(0.997), n_fourier=0 | 73.10 | 63.65 | Ablation: confirms no-Fourier under Lion+EMA |
+| `dl4apv3e` fern | Lion + EMA(0.997) + σ=3 | 73.81 | 63.89 | Ablation: σ=3 ≈ no-Fourier, not better |
+| `fg3u9jsj` alphonse | Lion + EMA(0.997) + σ=10 | 76.15 | 66.55 | Variance sample A |
+| `5uaxtezx` tanjiro | Lion + EMA(0.997) + σ=10 | 79.17 | 68.97 | Variance sample B |
+| `54hmldzq` frieren | Lion + EMA(0.997), n_fourier=0 (config bug) | 76.95 | 67.07 | Config bug — intended multi-σ |
+| `drt9naou` thorfinn | Lookahead (k=5 α=0.5) + Lion | 89.39 | 78.24 | Dead end: Lookahead regresses |
+| `379hrdie` askeladd | Lion warmup=0 (control) | 79.13 | 68.98 | Control: baseline reproduction |
+
+---
+
 ## 2026-05-16 01:43 — PR #3537: Lion optimizer (sign-based update) vs AdamW [Round 3 H13]
 
 - Branch: `willowpai2i48h5-askeladd/round3-lion-optimizer`
