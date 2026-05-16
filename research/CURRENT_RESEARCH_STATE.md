@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 04:50
+- **Updated:** 2026-05-16 05:00
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -39,7 +39,7 @@ Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_star
 |---|---|---|---|
 | #3613 | askeladd | OneCycleLR `pct_start=0.05` (faster warmup, longer anneal) | Running — 2 arm1 attempts both regress (84.59, 85.94); arm running |
 | #3614 | thorfinn | OneCycleLR **max_lr=1.5e-3** (midpoint retest after 2e-3 regressed) | Sent back; 3 new arms incoming |
-| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | Running — first attempt crashed 2 arms; retry arm1=82.73, arm2 running |
+| #3720 | nezuko | **Lion optimizer (sign-based momentum)** — 3-arm max_lr sweep | New (replaces #3615 SWA close) |
 | #3616 | fern | `batch_size=2` (2× gradient updates/epoch) | Running — arm1 attempt 1 hit **77.98** (potential round winner); follow-on arms running |
 | #3617 | edward | log-space L1 surface pressure loss | Running — arm1 attempt 1 hit **78.13** (potential round winner); high variance attempt 2 = 82.78 |
 | #3619 | alphonse | weight_decay=0 retest on OneCycle baseline | Running |
@@ -50,6 +50,7 @@ Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_star
 
 | PR | Student | Change | Decision |
 |---|---|---|---|
+| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | closed — SWA mean 85.09 (+4.2%); second weight-averaging failure |
 | #3622 | frieren | final_div_factor ∈ {1e3, 1e5} | closed — locks 1e4 (both sides regress ~0.2 pp) |
 | #3614 | thorfinn | max_lr=2e-3 | **sent back** for max_lr=1.5e-3 retest (val regresses but test improves) |
 | #3360 | tanjiro | grad_clip=0.5 retest on OneCycle | closed — schedule subsumes clip-strength (+1.94% regression mean) |
@@ -76,7 +77,7 @@ Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_star
 4. **Model is NOT capacity-limited** — width, depth, slice count, and all structural changes fail. slice_num=64 is the floor.
 5. **Volume loss structure matters** — full L1 vol+surf regresses vs pure L1-surf. MSE vol loss provides stronger far-field consistency gradient. Locked in: vol MSE + surf L1.
 6. **Loss weighting: surf_weight=10 is optimal** — surf_weight=5 regresses by 10.8%; surf_weight=25 regresses even more.
-7. **EMA is incompatible with warm-restarts / oscillatory schedules** — the averaging window spans restart cycles. OneCycle may be more EMA/SWA-friendly (monotonic anneal — being tested in #3615).
+7. **Weight averaging is incompatible with our setup, regardless of schedule** — EMA failed on warm-restarts (#3431), SWA failed on OneCycle (#3615). OneCycle's monotonic anneal settles into a single sharp basin; averaging blurs the cruise-OOD specialization in the final epochs rather than widening it. Don't retry averaging-based methods on this baseline.
 
 ## Potential next research directions (round 5+ backlog)
 

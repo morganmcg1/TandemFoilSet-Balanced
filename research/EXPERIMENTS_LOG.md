@@ -1,5 +1,19 @@
 # SENPAI Research Results
 
+## 2026-05-16 05:00 — PR #3615 nezuko SWA — CLOSED + Lion reassignment
+
+- Branch: `willowpai2i24h5-nezuko/swa-onecycle`
+- Hypothesis: SWA averages final 3-4 OneCycle epochs → flatter, wider basin → better generalization (especially OOD).
+- W&B 3-arm result:
+  - v6ypvxbm (raw best 82.73, SWA worse), tk3utvku, kvtf8p45
+  - **SWA val_avg 3-arm mean = 85.09** (primary per hypothesis) → +3.43 pp (+4.2%) vs 81.66 ✗
+  - Raw val_avg 3-arm mean = 83.64 → +1.98 pp (+2.4%) — still regresses
+  - SWA is 1.04-1.66 pp WORSE than raw model per arm
+- **Decision:** CLOSED — second weight-averaging failure (after EMA #3431). Mechanism: OneCycle's monotonic anneal settles into a sharp single basin; averaging blurs the cruise-OOD specialization rather than widening it. Locks in: no weight averaging on this baseline.
+- Nezuko reassigned to **PR #3720 Lion optimizer (3-arm max_lr sweep)** — different optimizer family, orthogonal to AdamW + Lookahead axis.
+
+---
+
 ## 2026-05-16 04:50 — Round 4 first reviews + 2 new assignments
 
 3 review-ready PRs (frieren #3622 final_div, thorfinn #3614 max_lr=2e-3, tanjiro #3360 clip=0.5 retest) — all regress vs 81.66. Closed 2, sent back 1 for midpoint retest.
