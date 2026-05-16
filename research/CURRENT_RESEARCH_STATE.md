@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 17:30 UTC
+- **Updated:** 2026-05-16 20:00 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -13,51 +13,15 @@ down vs the baseline Transolver config in `target/train.py`.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 68.80**, **test_avg/mae_surf_p = 59.49** (PR #4018,
-FiLM-Re+AoA, cond=[log_Re, AoA0, AoA1], best epoch 18).
+**val_avg/mae_surf_p = 59.08**, **test_avg/mae_surf_p = 51.29** (PR #4064,
+bf16 autocast on FiLM-Re+AoA, best epoch 25, still descending at termination).
 
-Per-split val: single=80.63, rc=80.24, cruise=47.81, re_rand=66.50.
-Per-split test: single=68.75, rc=72.54, cruise=39.27, re_rand=57.42.
+Per-split val: single=69.49, rc=68.90, cruise=40.32, re_rand=57.60.
+Per-split test: single=60.89, rc=63.00, cruise=32.91, re_rand=48.38.
 
-## FiLM conditioning progression (active research front)
+**Total improvement from calibration baseline:** 143.52 → 59.08 = **-58.8%**
 
-Three consecutive FiLM wins, each a one-line input-layer change:
-
-| PR | Conditioning | val_avg | Δ | Key observation |
-|----|-------------|--------:|--:|-----------------|
-| #4004 | log_Re (1 scalar) | 71.46 | -9.6% | Global improvement all splits; Re dominates |
-| #4018 | + AoA0, AoA1 (3 scalars) | 68.80 | -3.7% | val_geom_camber_rc gained least — NACA not yet conditioned |
-| #4041 | + NACA0, NACA1, gap, stagger (11 scalars) | **WIP** | ? | Tests whether geometry conditioning helps OOD NACA splits |
-
-**Next probe:** PR #4041 (alphonse in-flight) extends to all 11 broadcast-constant scalars. If NACA conditioning helps val_geom_camber_rc specifically, it validates the geometric conditioning axis. If not, FiLM conditioning is saturated and the axis is closed.
-
-## R14 portfolio strategy (just dispatched, 7 fresh assignments)
-
-The 7 stale pre-FiLM PRs were closed because their baselines were 8-15 pts behind the FiLM regime. Replaced with **7 orthogonal hypotheses all anchored on the FiLM-Re+AoA baseline (68.80)** — chosen to attack different bottlenecks simultaneously.
-
-| Theme | Student | PR | Hypothesis | Expected mechanism |
-|-------|---------|----|------------|---------------------|
-| Compute | askeladd | #4064 | bf16 autocast | +4-6 epochs in 30-min budget |
-| Compute | edward | #4068 | n_layers 5→4 | -20% step time → +4-5 epochs |
-| Compute | nezuko | #4069 | torch.compile(dynamic=True) | -10-25% step time, kernel fusion |
-| Optim | fern | #4071 | Schedule-Free AdamW | Removes T_max fragility, internal averaging |
-| FiLM capacity | tanjiro | #4072 | Wider FiLM head 128→256 | Probe conditioning bottleneck |
-| EMA | thorfinn | #4073 | decay 0.997→0.995 | Looser window matches FiLM dynamics |
-| Normalization | frieren | #4077 | RMSNorm replaces LayerNorm | -1 op per norm, drop-in for LayerNorm |
-| Architecture | alphonse | #4041 | FiLM-full (11 scalars) | Probe NACA conditioning gap |
-
-Three compute experiments simultaneously (bf16, n_layers=4, torch.compile) — these may stack later if any wins. The optim/EMA/norm levers test orthogonal axes. FiLM-full and Wider-FiLM-head test the FiLM saturation hypothesis from two angles (more dims vs. more head capacity).
-
-## Critical lessons (R1–R13)
-
-1. **30-min budget is the binding constraint.** Every capacity-adding experiment failed. Both FiLM runs are still monotonically descending at epoch 18 — compute-bound throughout. **Most current dispatches attack this directly.**
-2. **FiLM conditioning is the dominant architectural discovery.** Three consecutive wins. -13.9% total from mlp_ratio=1 baseline via FiLM alone.
-3. **FiLM conditioning axis still OPEN.** Re (9.6%) > Re+AoA (3.7%). Each extension cheaper than the last. Saturation signal: diminishing returns. Current probes: full 11-scalar conditioning (#4041) and wider FiLM head (#4072).
-4. **val_geom_camber_rc diagnostic pointer:** This split (OOD on front-foil NACA shape) improved least with AoA conditioning (-1.8%), directly pointing at NACA shape as the conditioning gap.
-5. **slice_num, dropout, surf_weight, n_head, mlp_ratio axes all CLOSED.**
-6. **Identity FiLM init is critical pattern:** `nn.init.zeros_(film_head[-1].weight/bias)` ensures epoch-0 = baseline, allowing safe zero-risk experiments.
-
-## Round wins merged (R1–R13)
+## Round wins merged (R1–R14)
 
 | PR | Hypothesis | val_avg | Δ vs prior | Decision |
 |----|------------|--------:|-----:|----------|
@@ -71,36 +35,64 @@ Three compute experiments simultaneously (bf16, n_layers=4, torch.compile) — t
 | #3950 | slice_num 16→12 | 80.60 | -0.34% | MERGED |
 | #3982 | mlp_ratio 2→1 | 79.05 | -1.92% | MERGED |
 | #4004 | FiLM-on-Re | 71.46 | -9.6% | MERGED |
-| #4018 | FiLM-Re+AoA | **68.80** | **-3.7%** | **MERGED — current baseline** |
+| #4018 | FiLM-Re+AoA | 68.80 | -3.7% | MERGED |
+| **#4064** | **bf16 autocast** | **59.08** | **-14.1%** | **MERGED — current baseline** |
 
-**Total improvement from calibration baseline:** 143.52 → 68.80 = **-52.1%**
+## Key architecture (current baseline configuration)
 
-## Currently in flight (8 WIP — all students active on FiLM baseline)
+| Group | Value |
+|-------|-------|
+| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, **slice_num=12**, mlp_ratio=1 |
+| Conditioning | **FiLM head [log_Re, AoA0, AoA1]** (3-scalar → per-block γ,β) |
+| Precision | **bf16 autocast** (forward + loss; reductions in fp32) |
+| Optim | AdamW, lr=5e-4, weight_decay=1e-4, batch=4, cosine T_max=50 |
+| Loss | SmoothL1 (Huber, beta=0.25), surf_weight=10.0 |
+| EMA | decay=0.997, applied as val/test checkpoint |
+| Compute | ~74s/epoch, **25 epochs** in 30-min cap |
+
+## Dominant discovery: compute is the binding constraint
+
+bf16 autocast's -14.1% win came entirely from 7 extra epochs (25 vs 18). The model is STILL descending at the terminal epoch — every extra epoch worth ~1.4 pts. The research program priority is: **give the model more effective training time**.
+
+Three orthogonal ways to get more training:
+1. **Fewer seconds per epoch** (bf16 done; torch.compile → nezuko; slice_num=8 → tanjiro)
+2. **More informative gradient per step** (batch=8 → askeladd; lr=7.5e-4 → thorfinn)
+3. **More expressive per-step update** (GEGLU FFN → frieren; FiLM-two-stage → alphonse)
+
+## Currently in flight (8 WIP — all students active)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #4041 | alphonse  | FiLM-full: all 11 broadcast scalars | architecture | WIP |
-| #4064 | askeladd  | bf16 autocast on FiLM | compute | WIP |
-| #4068 | edward    | n_layers 5→4 on FiLM | compute | WIP |
-| #4069 | nezuko    | torch.compile(dynamic=True) | compute | WIP |
-| #4071 | fern      | Schedule-Free AdamW | optim | WIP |
-| #4072 | tanjiro   | Wider FiLM head 128→256 | FiLM capacity | WIP |
-| #4073 | thorfinn  | EMA decay 0.997→0.995 | EMA | WIP |
-| #4077 | frieren   | RMSNorm replaces LayerNorm | normalization | WIP |
+| #4041 v2 | alphonse  | FiLM two-stage (base+geom, is_tandem gate) | FiLM architecture | WIP |
+| #4069 rebased | nezuko | torch.compile on bf16 baseline | compute | WIP (sent back to rebase+retest) |
+| #4104 | askeladd  | batch 4→8 on bf16 | data parallelism | WIP |
+| #4068 | edward    | n_layers 5→4 on bf16 | compute | WIP (old baseline — compare carefully) |
+| #4071 | fern      | Schedule-Free AdamW on bf16 | optim | WIP (old baseline — compare carefully) |
+| #4105 | frieren   | GEGLU FFN replaces GELU | FFN nonlinearity | WIP |
+| #4107 | tanjiro   | slice_num 12→8 on bf16 | compute | WIP |
+| #4109 | thorfinn  | lr 5e-4→7.5e-4 on bf16 | optim | WIP |
 
-**Closed (stale, pre-FiLM baselines):** #3558, #3560, #3572, #3573, #3743, #3769, #3772 — all replaced with FiLM-aligned hypotheses above.
+**Note on edward (#4068) and fern (#4071):** These were assigned against old baseline (68.80). If their results beat 68.80 but not 59.08, they get sent back to re-run on the bf16 merged baseline — the compute wins are orthogonal.
 
-## Potential next research directions (R15+)
+## Closed axes (final state)
 
-1. **Compound the winners.** If multiple of {bf16, n_layers=4, torch.compile} land, they should be merged sequentially and the next round runs on the compound baseline. Compute savings compound linearly with epochs.
-2. **FiLM × NACA shape conditioning.** If PR #4041 wins, the next probe is per-NACA expert routing (mixture of FiLM heads conditioned on NACA shape clusters).
-3. **FiLM inside PhysicsAttention slice projection.** Apply Re/geometry conditioning to the slice projections within PhysicsAttention, not just the block-level representations. More targeted attention modulation.
-4. **Cross-block FiLM with shared parameters.** Currently each block gets its own (γ,β). Try sharing the FiLM head across blocks (cheaper, may regularize).
-5. **Second seed of current best (68.80).** Variance confirmation before ICML deadline.
-6. **GEGLU/SwiGLU FFN.** mlp_ratio=1 is closed at FFN width axis, but FFN nonlinearity is unexplored.
+| Axis | Verdict |
+|------|---------|
+| EMA decay (0.997→0.995) | SATURATED — 0.997 is the optimum |
+| RMSNorm | REGRESSION — mean-centering matters for CFD pressure |
+| Wider FiLM head (128→256) | TIE — FiLM head capacity not the bottleneck for 3 scalars |
+| slice_num (16→12) | MERGED as tiny win — probe 12→8 next |
+| mlp_ratio | CLOSED at 1 (width not the lever) |
+| dropout (0.1) | CLOSED |
+| n_head (4) | CLOSED |
+| surf_weight (10.0) | CLOSED |
+| FiLM-full naive (11 scalars) | SENT BACK — structural zeros for single-foil; v2 (two-stage) in flight |
 
-## Plateau plan
+## Potential next research directions (post-R14)
 
-Progress: 11 consecutive wins (R1-R13), -52.1% total from calibration. First time crossing 50% improvement.
-FiLM conditioning has been the dominant theme of R11-R13. R14 attacks 8 orthogonal axes simultaneously to find what stacks on top of FiLM.
-Next trigger: fires if two consecutive rounds land 0 winners vs the 68.80 baseline.
+1. **Compound compute wins**: if nezuko (torch.compile on bf16) wins, we'll have 28+ epochs. Stack with askeladd batch=8 if both win — potential for ~30-33 epochs.
+2. **FiLM two-stage confirmation**: if alphonse v2 wins (is_tandem gating fixes single-foil regression), FiLM conditioning axis reopens with 8-12 new scalars.
+3. **n_layers 5→4**: edward's result (if it wins against old baseline) should be re-run on bf16 baseline — n_layers=4 + bf16 may compound.
+4. **Schedule-Free AdamW**: fern's result may have interesting optimizer dynamics in longer training regime (25 epochs vs 18).
+5. **LR sweep**: thorfinn's lr=7.5e-4 result will calibrate the optimal LR for the 25-epoch bf16 regime. Follow-up: cosine T_max aligned to actual epochs reached.
+6. **Multi-seed confirmation**: val_avg variance ±5-10 pts at single seed. Before ICML deadline, run 3 seeds of the best config.

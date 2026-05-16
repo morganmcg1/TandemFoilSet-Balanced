@@ -709,6 +709,75 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 19:27 — PR #4064 — bf16 autocast on FiLM baseline (MERGED → **NEW BEST, -14.1%**)
+
+- **Branch:** `charliepai2i48h1-askeladd/bf16-on-film`
+- **Hypothesis:** `torch.autocast(device_type='cuda', dtype=torch.bfloat16)` wraps the training forward+loss pass. Expected -25% sec/epoch → +4-6 epochs in 30-min cap.
+- **Results vs baseline (val=68.80, test=59.49):**
+
+| Metric | Baseline (FiLM-Re+AoA, fp32) | bf16 autocast | Δ |
+|--------|-----------------------------:|-------------:|--:|
+| `val_avg/mae_surf_p` | **68.80** | **59.08** | **-14.1%** |
+| `test_avg/mae_surf_p` | **59.49** | **51.29** | **-13.8%** |
+| `val_single_in_dist` | 80.63 | 69.49 | -13.8% |
+| `val_geom_camber_rc` | 80.24 | 68.90 | -14.1% |
+| `val_geom_camber_cruise` | 47.81 | 40.32 | -15.7% |
+| `val_re_rand` | 66.50 | 57.60 | -13.4% |
+| test_single | 68.75 | 60.89 | -11.4% |
+| test_rc | 72.54 | 63.00 | -13.2% |
+| test_cruise | 39.27 | 32.91 | -16.2% |
+| test_re_rand | 57.42 | 48.38 | -15.7% |
+| sec/epoch | ~102s | **74.4s** | **-27.1%** |
+| epochs in 30-min cap | 18 | **25** | **+7** |
+| Peak VRAM | 32.2 GB | **23.5 GB** | **-27%** |
+| best epoch | 18 (final) | 25 (final, still descending) | — |
+
+- **Metrics path:** `models/model-bf16-on-film-20260516-182629/metrics.jsonl`
+- **Decision:** MERGED. Landmark win. All 4 val + 4 test splits improved 13-16%. Single line of code change, zero numerical issues throughout. **New best: val=59.08, test=51.29.**
+- **Key mechanistic insight:** bf16 halves activation dtype → -27% memory bandwidth in attention/MLP kernels → -27% wall-clock. Frees 8.7 GB VRAM (23.5 vs 32.2). The extra 7 epochs each contributed ~1.4 pts improvement. Model still descending at epoch 25 → we are still compute-bound even at the new faster regime.
+- **Compute headroom unlocked:** 8.7 GB freed VRAM → batch=8 viable; -27% per-step → further compute wins (torch.compile) will compound further.
+- **New baseline: val=59.08, test=51.29.**
+
+---
+
+## 2026-05-16 19:27 — PR #4069 — torch.compile(dynamic=True) (SENT BACK — beat old baseline, not new bf16 baseline)
+
+- **Branch:** `charliepai2i48h1-nezuko/torch-compile-on-film`
+- **Hypothesis:** torch.compile fuses kernel dispatch → -25% step time → +4 epochs.
+- **Results vs old baseline (val=68.80):** val=64.34 (-6.5%), test=55.96 (-5.9%). A clean win vs fp32 baseline.
+- **Why not merged:** PR #4064 (bf16) merged first, setting new baseline val=59.08. torch.compile's 64.34 > 59.08 → no longer a winner against current baseline.
+- **Decision:** NOT closed. **Sent back to nezuko for retest on bf16 baseline.** bf16 and torch.compile are orthogonal (bf16 = memory/bandwidth; compile = Python dispatch + kernel fusion). Both in the merged baseline → compound win expected. Retest target: val < 59.08.
+- **Next action:** nezuko rebases onto advisor branch (which now has bf16 merged), re-runs same compile code.
+
+---
+
+## 2026-05-16 19:28 — PR #4072 — Wider FiLM head 128→256 (CLOSED — tied)
+
+- **Branch:** `charliepai2i48h1-tanjiro/wider-film-head`
+- **Hypothesis:** Wider FiLM hidden dim probes conditioning bottleneck.
+- **Results vs baseline (val=68.80):** val=68.84 (+0.04), test=60.02 (+0.53). **Exact tie within noise.** Best epoch 18, same as baseline. n_params +164k (+25%).
+- **Decision:** CLOSED. Null result confirms: FiLM head capacity is NOT the bottleneck for 3-scalar conditioning. 128 hidden is already overparameterized for the (log_Re, AoA0, AoA1) → 1280-dim mapping. Axis CLOSED.
+
+---
+
+## 2026-05-16 19:26 — PR #4073 — EMA decay 0.997→0.995 (CLOSED — regression, axis saturated)
+
+- **Branch:** `charliepai2i48h1-thorfinn/ema-decay-0995-on-film`
+- **Hypothesis:** Looser EMA window (effective ~133 steps vs ~200) captures faster-descending FiLM iterates.
+- **Results vs baseline (val=68.80):** val=69.67 (+1.27%), test=60.33 (+1.42%). All test splits worse.
+- **Decision:** CLOSED. EMA axis saturated. Decay history: 0.999→0.998 (-3.88%), 0.998→0.997 (-0.34%), **0.997→0.995 (+1.27% = loss)**. Optimum at decay=0.997 confirmed. Do not probe EMA axis further.
+
+---
+
+## 2026-05-16 19:29 — PR #4077 — RMSNorm replaces LayerNorm (CLOSED — consistent small regression)
+
+- **Branch:** `charliepai2i48h1-frieren/rmsnorm-on-film`
+- **Hypothesis:** RMSNorm removes mean-centering → -4% step time → cleaner FiLM-modulated activations.
+- **Results vs baseline (val=68.80):** val=70.08 (+1.86%), test=61.20 (+2.87%). All 4 val and test splits regressed 2-4%. Speed saved ~4% sec/epoch (102→98s) — insufficient for an extra epoch.
+- **Decision:** CLOSED. Mean-centering matters for CFD pressure prediction. LayerNorm is the correct normalization. Axis CLOSED.
+
+---
+
 ## 2026-05-16 18:25 — PR #4041 — FiLM-full: all 11 broadcast scalars (NO MERGE, sent back for v2)
 
 - **Branch:** `charliepai2i48h1-alphonse/film-full-cond`
