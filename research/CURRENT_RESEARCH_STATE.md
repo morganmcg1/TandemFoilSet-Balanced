@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 12:32
+- **Date:** 2026-05-16 13:27
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; programme best val=65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -42,8 +42,8 @@ Dominant learning: (1) input/output ends of network, (2) value path within each 
 - head_and_embed 1.75× boost moved absolute grad_norm 33% but ratio head/block_0 essentially unchanged (3.1×→3.3×). Lever direction correct, magnitude undersized.
 - Gradient-equilibrium argument implies ~3.1× as the equilibrium target.
 - → head_and_embed 2.5× (#3932) — geometric midpoint between "undersized 1.75×" and "equilibrium 3.1×"
-- → fc_main 1.5× (#3888) — corrected within-block target
-- ✗ fc_gate boost (#3840) — wrong within-block target
+- ✗ fc_gate 1.5× boost (#3840) — regression (val=67.00); wrong within-block target
+- ✗ fc_main 1.5× boost (#3888) — regression (val=67.40); right target direction but ratio FLIPPED to gate-dominant, val still penalized → **per-projection LR asymmetry is non-actionable on SwiGLU, in either direction**
 
 ## Per-channel weighting × architecture: a mechanistic map
 
@@ -61,19 +61,20 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| **#3959** | **tanjiro** | **lr=1e-3 (2× base) on SwiGLU h=128** | **NEW — assigned 12:31** |
+| **#3973** | **frieren** | **RMSNorm replacement of LayerNorm on SwiGLU** | **NEW — assigned 13:26** |
+| #3959 | tanjiro | lr=1e-3 (2× base) on SwiGLU h=128 | Running |
 | #3934 | thorfinn | T_max=12 cosine on SwiGLU h=128 | Running |
 | #3933 | edward | ReGLU activation (close GLU family) | Running |
 | #3932 | askeladd | head_and_embed 2.5× LR boost on SwiGLU | Running |
 | #3904 | fern | GeGLU seed confirm (seeds 1+2) | Running |
-| #3888 | frieren | fc_main LR boost 1.5× within SwiGLU | Running |
-| #3886 | alphonse | DropPath (Stochastic Depth) on SwiGLU | Running |
+| #3886 | alphonse | DropPath (Stochastic Depth) on SwiGLU | W&B shows 2 seeds done (val=73.3, 73.9; +8 regression); nudged for SENPAI-RESULT marker |
 | #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (re-running on SwiGLU regime; conflict cleared 12:23) |
 
 ## Recently closed PRs (this session)
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
+| **#3888** | **fc_main 1.5× boost (frieren)** | **67.40** | **Null. MAJOR finding: per-projection LR asymmetry (fc_main vs fc_gate) hurts in BOTH directions (with #3840). Gradient-mass framework invalidated for SwiGLU.** |
 | **#3855** | **Bilinear gate (tanjiro)** | **66.88** | **Closes GLU ablation family. MAJOR finding: gating mechanism = 94% of GLU gain; activation choice = ~6%. SwiGLU ≈ GeGLU > Bilinear ≫ GELU.** |
 | **#3837** | **β_p=20 + SwiGLU (edward)** | **67.58** | **Modest anti-additive regression. MAJOR finding: per-channel weighting is width-coupled.** |
 | **#3832** | **head_and_embed 1.75× (askeladd)** | **67.16** | **Slight regression; lever direction correct, magnitude undersized (head/block_0 ratio essentially unchanged at 3.3×).** |
@@ -128,12 +129,14 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 11. **h=192+SwiGLU stacking under current budget** — #3764. Compute-starved at 12 epochs; needs faster-converging h=192 setup before retesting.
 12. **head_and_embed 1.75× LR boost** — #3832. Right direction, undersized lever; superseded by 2.5× #3932.
 13. **Bilinear gate (no activation)** — #3855. Closes GLU ablation family: works mechanistically (94% of GLU gain) but does not improve on GeGLU/SwiGLU; reduced complexity does not translate to better minima.
+14. **Per-projection LR asymmetry on SwiGLU** — #3840 (fc_gate boost) + #3888 (fc_main boost). Both directions regress; ratio actually flipped under fc_main boost (Adam did not normalize away the asymmetry), but val penalized either dynamics shift. Gate/main grad-mass asymmetry is a non-actionable invariant of healthy SwiGLU optimization.
 
 ## Plateau status
 
 **Not in plateau.** Active investigation on 5 parallel fronts:
-1. **GLU ablation family** (ReGLU #3933) — formally closing with the last activation choice (ReLU); Bilinear #3855 just landed as 94%-of-gain check.
-2. **Gradient-informed LR scaling** (head_and_embed 2.5× #3932, fc_main 1.5× #3888) — frieren's inversion finding points at bottlenecks; #3832 confirms lever direction.
+1. **GLU ablation family** (ReGLU #3933) — formally closing with the last activation choice (ReLU); Bilinear #3855 confirmed 94% of gain from gating mechanism alone.
+2. **Gradient-informed LR scaling — between-block** (head_and_embed 2.5× #3932) — within-block per-projection axis exhausted (#3840 + #3888 both null in both directions).
 3. **Schedule tuning** (T_max=12 #3934, SWA tail #3644 on SwiGLU regime) — aligning cosine to actual budget on h=128/gated-FFN.
-4. **Regularization layered with gating** (DropPath #3886) — block-granularity, complementary to SwiGLU's per-token gates.
+4. **Regularization layered with gating** (DropPath #3886) — early signal shows +8 val regression at drop_prob=0.1; nudged for SENPAI-RESULT marker. May close soon.
 5. **Base LR scaling** (lr=1e-3 #3959) — using SwiGLU's measured σ̂=0.90 stability headroom that 5e-4 inherits from GELU era.
+6. **Normalization geometry** (RMSNorm #3973) — LLaMA-style architectural test of "does mean-centering matter for this model?"

@@ -1,5 +1,52 @@
 # SENPAI Research Results
 
+## 2026-05-16 13:25 — PR #3888: H: fc_main LR boost 1.5× on SwiGLU ✗ CLOSED (val=67.40 null; per-projection LR asymmetry invalidated)
+
+- Branch: `willowpai2i48h1-frieren/fc_main_lr_swiglu`
+- Student: willowpai2i48h1-frieren
+
+### Results (W&B `oessvlpg`, seed=0, h=128/T_max=15/bf16/SwiGLU + fc_main LR=7.5e-4, fc_gate LR=5e-4)
+
+| Metric | SwiGLU #3680 | fc_main boost 1.5× | Δ |
+|--------|:------------:|:------------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **67.40** | **+1.96** |
+| **test_avg/mae_surf_p** | **62.04** | **63.01** | **+0.97** |
+
+### MAJOR mechanistic finding: per-projection LR asymmetry is non-actionable
+
+frieren's #3768→#3840→#3888 trilogy now closes the gradient-mass framework definitively:
+
+| PR | Direction tested | val | Verdict |
+|----|------------------|-----|---------|
+| #3768 | Inverse-LLRD (full between-block scaling) | 74.01 | regression — between-block grad-norm inversion |
+| #3840 | fc_gate 1.5× (within-block, gate boost) | 67.00 | regression — gate is not the bottleneck |
+| **#3888 (this)** | **fc_main 1.5× (within-block, main boost)** | **67.40** | **regression — main boost also hurts** |
+
+**Robust conclusion: per-projection LR asymmetry hurts in either direction on SwiGLU. The gate/main grad-mass asymmetry (~0.7) is a non-actionable invariant of healthy SwiGLU optimization, not a bottleneck to correct.**
+
+### Dynamics shift confirmed (Adam did NOT normalize away the LR boost)
+
+Per-block fc_gate/fc_main grad-norm ratio:
+
+| State | Block 0 | Block 1 | Block 2 | Block 3 | Block 4 | Comment |
+|-------|---:|---:|---:|---:|---:|---|
+| Baseline (#3840) | 0.6–0.75 | ditto | ditto | ditto | ditto | uniform LR; main dominant |
+| fc_main 1.5× (this) | 1.53 | 1.23 | 1.47 | 1.43 | 1.56 | ratio FLIPPED to gate-dominant |
+
+The 1.5× boost on fc_main caused fc_main to converge faster (smaller residual grad), driving the ratio flip. The dynamics did change — but val landscape penalized the shift. So Adam **didn't** flatten the boost; the boost just made the model converge to a worse basin.
+
+### Closure rationale
+
+Val=67.40 ∈ [65.37, 68] null band per decision tree. Adding to dead-end lever classes: per-projection LR asymmetry on SwiGLU (both directions, exhausted).
+
+### Follow-up: PR #3973 frieren RMSNorm
+
+Reassigning frieren to RMSNorm replacement of LayerNorm — orthogonal axis (normalization geometry). LLaMA-style; param-matched within 0.1%. Tests "does removing mean-centering hurt or help this small transformer?"
+
+frieren's own suggestion (fc_main rank-up via width rather than LR) is queued for a later round; we're saturated on the LR-scaling axis right now (head_and_embed 2.5× via askeladd #3932 still in flight).
+
+---
+
 ## 2026-05-16 12:31 — PR #3855: H: Bilinear gate (no activation) ✗ CLOSED (val=66.88; closes GLU ablation — gating mechanism = 94% of gain)
 
 - Branch: `willowpai2i48h1-tanjiro/bilinear-gate-no-activation`
