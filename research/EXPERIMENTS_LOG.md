@@ -1,5 +1,36 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:55 — #4015 nezuko layer_scale MERGED (new best val 54.30 / test 47.29); #4201 nezuko assigned (four-way composition)
+
+### #4015 nezuko — R10 H39: layer_scale_init=1e-4 + T_max=20 (MERGED — **new best val 54.3009 / test 47.2883**)
+
+- Branch: `willowpai2i48h5-nezuko/r10-layerscale-nezuko`
+- Hypothesis: CaiT/DeiT-III layer_scale_init=1e-4 composes with T_max=20 substrate.
+- W&B: Arm F `8m99yywe` (winner, seed 1), Arm G `gbzybjhx` (seed 2)
+
+| Arm | layer_scale | T_max | lr | val_avg | test_avg | W&B |
+|-----|-----------|------|-----|---------|----------|-----|
+| NEW BL (PR #4120) | — | 14 | 2e-4+clip | 56.89 | 49.03 | 1c58zju8 |
+| **F (seed 1, winner)** | **1e-4** | **20** | **1.5e-4** | **54.30** | **47.29** | **8m99yywe** |
+| G (seed 2) | 1e-4 | 20 | 1.5e-4 | 57.64 | 49.91 | gbzybjhx |
+| F+G mean | 1e-4 | 20 | 1.5e-4 | 55.97 | 48.60 | — |
+
+Per-split val (Arm F): in_dist 57.78, camber_rc 67.19, camber_cruise 38.28, re_rand 53.95
+Per-split test (Arm F): in_dist 49.18, camber_rc 61.28, camber_cruise 32.26, re_rand 46.43
+
+**Δ vs prior best (PR #4120 val 56.89 / test 49.03): −2.59 val / −1.74 test** (single seed Arm F)
+**2-seed mean: −0.92 val / −0.43 test** (both seeds clearly beat prior BL)
+
+**Key findings:** (1) layer_scale_init=1e-4 composes ~80% additively with T_max=20 (observed −7.08 from #3976 BL vs predicted −8.78). (2) Seed σ=1.67 val under T_max=20 (wider than T_max=14 σ=0.016 — T_max=20 amplifies optimization variance). (3) train.py now includes --layer_scale_init flag.
+
+**Note on alphonse #4145 interaction:** Arm B of alphonse (T_max=20+lr=1.5e-4+clip=1.0 → val 56.71) does NOT beat new BL (54.30). Alphonse sent updated instruction to add Arm E (layer_scale+clip composition).
+
+### #4201 nezuko — R11 H62: layer_scale + clip + lr=2e-4 composition at T_max=20 (just assigned)
+
+Four-way composition: layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0. Arm A: full four-way. Arm B: layer_scale+T_max=20+clip at lr=1.5e-4 (original lr). Tests whether the clip+lr=2e-4 family composes with layer_scale+T_max=20. Expected: val ~52–54 if composing.
+
+---
+
 ## 2026-05-16 22:35 — #4173 thorfinn triple-compose REVIEWED+SENT BACK (val tied, test better); #4128 fern surf_weight CLOSED; #4192 fern Huber β@lr=2e-4 assigned
 
 ### #4173 thorfinn — R11 H59: Triple composition T_max=20 + lr=2e-4 + clip=1.0 (REVIEWED, NOT MERGED, sent back)

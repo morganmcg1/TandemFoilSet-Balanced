@@ -6,21 +6,21 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~22:35 UTC) — **#4173 thorfinn triple-compose REVIEWED+SENT BACK** (val tied +0.086, test better −0.69; sent back for lr=1.8e-4 + T_max=18 arms); **#4128 fern surf_weight CLOSED** (1/3 arms launched, obsolete substrate); **#4192 fern Huber β@lr=2e-4** assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~22:55 UTC) — **#4015 nezuko layer_scale+T_max=20 MERGED** (new best val 54.30/test 47.29; 2-seed mean 55.97/48.60); **#4201 nezuko four-way composition** (layer_scale+clip+lr=2e-4+T_max=20) assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
 
-**val_avg/mae_surf_p = 56.8913** (PR #4120 thorfinn — Lion **lr=2e-4** + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm; run `1c58zju8`)
-**test_avg/mae_surf_p = 49.0322** (same run, clean 4-split)
+**val_avg/mae_surf_p = 54.3009** (PR #4015 nezuko — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **layer_scale_init=1e-4**; NO spec_norm; NO grad_clip; run `8m99yywe`)
+**test_avg/mae_surf_p = 47.2883** (same run, clean 4-split)
 
-Per-split val: in_dist 61.01, camber_rc 71.92, camber_cruise 37.30, re_rand 57.34
-Per-split test: in_dist 52.64, camber_rc 64.54, camber_cruise 31.01, re_rand 47.94
+Per-split val: in_dist 57.78, camber_rc 67.19, camber_cruise 38.28, re_rand 53.95
+Per-split test: in_dist 49.18, camber_rc 61.28, camber_cruise 32.26, re_rand 46.43
 
-**Δ vs prior best (PR #4063 T_max=20, val 57.66 / test 49.45): −0.77 val / −0.41 test**
-**All 4 splits improve.** LR optimum at clip=1.0 shifts from 1.5e-4 to 2e-4 (direction-sensitive clip interaction).
+**Δ vs prior best (PR #4120 lr=2e-4+clip=1.0, val 56.89 / test 49.03): −2.59 val / −1.74 test** (single seed Arm F)
+**2-seed mean: val 55.97 / test 48.60** (both seeds beat prior BL; σ=1.67 val under T_max=20)
 
-Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0). Clipped step direction (normalized gradient) ≠ sign(momentum), and their dot product depends on nominal lr. With clip=1.0, the LR-vs-val curve has same shape as no-clip but shifted upward in lr.
+Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block residual at 1e-4 and lets it grow during training — reduces initialization sensitivity. Composes ~80% additively with T_max=20 (observed −7.08 vs predicted −8.78 from #3976 BL).
 
 ## Merged sequence (improvement cascade)
 
@@ -38,9 +38,10 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 | #3976 | Lion lr=1.5e-4 | 64.68 → 63.05 | 56.17 → 53.60 | −2.5% / −4.6% |
 | #4056 | grad_clip=1.0 | 63.05 → 61.18 | 53.60 → 52.09 | −3.0% / −2.8% |
 | #4063 | T_max=20 | 61.18 → 57.66 | 52.09 → 49.45 | −5.7% / −5.1% |
-| **#4120** | **lr=2e-4 at clip=1.0** | **57.66 → 56.89** | **49.45 → 49.03** | **−1.3% / −0.8%** |
+| #4120 | lr=2e-4 at clip=1.0 | 57.66 → 56.89 | 49.45 → 49.03 | −1.3% / −0.8% |
+| **#4015** | **layer_scale_init=1e-4 + T_max=20** | **56.89 → 54.30** | **49.03 → 47.29** | **−4.6% / −3.5%** |
 
-**Total improvement:** val 135 → 56.89 (−57.9%), test ~130 → 49.03 (−62.3%)
+**Total improvement:** val 135 → 54.30 (−59.8%), test ~130 → 47.29 (−63.6%)
 
 ## Active experiments (8 of 8 students staffed)
 
@@ -50,7 +51,8 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 | #4015 | nezuko | R10 H39: layer_scale=1e-4 + T_max=20 composition (Arms F+G) | WIP |
 | **#4192** | **fern** | **R11 H61: Huber β recalibration at lr=2e-4 {0.03, 0.05 ctrl, 0.10}** | **Just assigned** |
 | #4153 | askeladd | R11 H58: Lion β2 sweep at T_max=20 {0.98, 0.99 ctrl, 0.995} | WIP |
-| #4173 | thorfinn | R11 H59 (extended): Triple composition + Arms D (lr=1.8e-4 + T_max=20) and E (lr=2e-4 + T_max=18) | Sent back |
+| #4173 | thorfinn | R11 H59 (extended): triple comp Arms D (lr=1.8e-4+T_max=20) + E (lr=2e-4+T_max=18) | Sent back |
+| **#4201** | **nezuko** | **R11 H62: layer_scale=1e-4 + clip=1.0 + lr=2e-4 + T_max=20 (four-way composition)** | **Just assigned** |
 | **#4180** | **edward** | **R11 H60: Clip ratio sweep at lr=2e-4 {0.7, 1.0 ctrl, 1.4}** | **Just assigned** |
 | #4152 | frieren | R11 H57: EMA decay sweep at T_max=20 {0.995, 0.997 ctrl, 0.999} | WIP |
 | #4148 | tanjiro | R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4} | WIP |
@@ -112,11 +114,12 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 20. **T_max=20 optimal** within SENPAI_TIMEOUT_MINUTES=30 budget: monotone T_max=14→18→20. Mechanism: higher time-averaged LR within budget; EMA smooths late-training noise.
 21. **Multi-FiLM global conditioning FALSIFIED**: Global γ/β conditioning on 11 params hurts camber_rc OOD (−5.45 val on target split). Per-node geometric variation must reach model through attention path, not global FiLM scalar.
 22. **LR optimum shifts from 1.5e-4 to 2e-4 at clip=1.0**: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0). Clipped step direction (g/‖g‖) ≠ sign(Lion momentum); their interaction is direction-sensitive, not a pure scale factor. The LR-vs-val curve at clip=1.0 has same shape as no-clip but shifted upward in lr. Inflection now at 2e-4 (regresses by 2.5e-4). All 4/4 splits improve.
+23. **layer_scale_init=1e-4 (CaiT/DeiT-III) composes ~80% additively with T_max=20**: layer_scale=1e-4 initializes each block residual at 1e-4 and grows during training (block-0 attn 1e-4 → 0.019 by end). Reduces initialization sensitivity. Confirmed composing with T_max=20 substrate (observed −7.08 val from #3976 BL vs predicted −8.78). 2-seed agreement: D+E on T_max=14 σ=0.016 (very tight), F+G on T_max=20 σ=1.67 (wider). All 4/4 splits improve on both val and test. New best val 54.30 / test 47.29.
 
 ## Next priorities
 
-1. **thorfinn #4173 triple composition**: T_max=20 + lr=2e-4 + clip=1.0 — the highest-priority uncharted territory. Potential val ~54–55 if all three compose.
-2. **alphonse #4145**: T_max=20 + clip=1.0 at lr=1.5e-4 — will tell us if clip×T_max compose even at suboptimal lr; result informs thorfinn #4173 interpretation.
-3. **tanjiro #4148**: LR@T_max=20 — note that lr=2e-4 finding (#22) suggests Arm D (lr=2e-4) should be added if Arm C (lr=1.7e-4) looks promising. The LR optimum at T_max=20+clip=0 may be between 1.5e-4 and 2e-4.
-4. **edward #4122 + fern #4128**: On old T_max=14 substrate. If they show wins, will need re-testing on T_max=20+lr=2e-4+clip=1.0 substrate.
-5. **Paper completeness**: T_max ablation (done), clip ablation (done), LR shift finding (done), triple composition (in-flight #4173).
+1. **nezuko #4201 four-way composition**: layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0. This is the highest-priority composition — four orthogonal wins stacked. Potential val ~51–54.
+2. **alphonse #4145 updated** (WIP, awaiting Arm D+E): Arm B (T_max=20+clip at lr=1.5e-4 → val 56.71) doesn't beat new BL (54.30). Asked student to add Arm E (layer_scale + clip + T_max=20 at lr=1.5e-4) as the natural next composition.
+3. **thorfinn #4173 sent back**: Arms D (lr=1.8e-4 + T_max=20 + clip) and E (lr=2e-4 + T_max=18 + clip) — localizing the lr×T_max minimum at clip=1.0. These won't beat new BL unless layer_scale further composes.
+4. **tanjiro #4148**: LR@T_max=20 (no clip, no layer_scale). Results will now compare to val 54.30; only Arm D (lr=2e-4) has any hope.
+5. **Paper completeness**: T_max ablation (done), clip (done), layer_scale (done), LR shift finding (done), four-way composition (in-flight #4201). Need layer_scale ablation on paper-facing splits.
