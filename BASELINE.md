@@ -1,6 +1,48 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 14:55) — PR #3868: Huber beta=0.1
+## Current best (as of 2026-05-16 17:30) — PR #3947: Lookahead k=5 on SOAP (precondition_frequency=5)
+
+Ten winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + **Lookahead k=5** (PR #3947, alphonse, **−4.14% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **48.4191** (run `yi5ektgs`, alphonse variant-lookahead-k5-freq5-huber01, best epoch 14)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **47.8034** (−4.10% vs previous 49.8493)
+  - `test_single_in_dist/mae_surf_p` = 54.0308
+  - `test_geom_camber_rc/mae_surf_p` = 50.6174
+  - `test_re_rand/mae_surf_p` = 38.7619
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.1, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- **Lookahead (k=5, alpha=0.5)** wrapping SOAP — k=5 aligns with precondition_frequency=5
+- Wall-clock: ~32.3 min / arm (hit 30-min cap; best epoch 14)
+- Peak VRAM: 42.1 GB
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 1e-3 --warmup_epochs 3 \
+  --huber_beta 0.1 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --wandb_group lookahead-soap-huber01 \
+  --wandb_run_name variant-lookahead-k5-freq5-huber01
+```
+
+**Note on hardware variance:** alphonse's baseline-no-lookahead arm (identical config to PR #3868) reproduced at val=48.823 vs BASELINE.md 50.5133 — a ~1.7 val drift between GPU machines (likely SOAP eigendecomposition non-determinism). The within-PR Lookahead delta (−0.83% val / −1.01% test) is hardware-controlled and robust. All future students should compare against this BASELINE.md number but note that absolute values may drift ±1-2 val between pods.
+
+---
+
+## Previous best (as of 2026-05-16 14:55) — PR #3868: Huber beta=0.1
 
 Nine winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + **Huber beta=0.1** (PR #3868, fern, **−3.77% vs previous canonical**).
 
