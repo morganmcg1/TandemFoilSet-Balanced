@@ -25,7 +25,7 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #4089 | nezuko | SWA over final 4 cosine epochs of T_max=17 SwiGLU (no LR kick-out) | Training, ~19:26 UTC start |
+| #4132 | nezuko | Lookahead optimizer (k=5, α=0.5) wrapping AdamW(β2=0.95) on triple-stack | Assigned (post #4089 close) |
 | #4116 | thorfinn | Triple-stack seed=1 (3-seed canonical) | Assigned |
 | #4117 | alphonse | Triple-stack seed=2 (3-seed canonical) | Assigned |
 | #4118 | askeladd | β1=0.95 on triple-stack (compound momentum) | Assigned |

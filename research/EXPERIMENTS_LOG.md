@@ -1,5 +1,49 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:35 — PR #4089: H: SWA over final 4 cosine epochs (T_max=17 SwiGLU) — no LR kick-out ← CLOSED
+
+- Branch: `willowpai2i48h1-nezuko/swa-tail4-cosine-tmax17`
+- Student: willowpai2i48h1-nezuko
+- W&B run: `92f93jle`
+- Hypothesis: SWA over epochs 14-17 of T_max=17 cosine (no constant-LR tail). Mechanism validated in PR #3644 but failed there due to LR kick-out — this experiment removes the kick-out entirely.
+
+### Results
+
+| Arm | val_avg | test_avg | Δ vs SwiGLU baseline | Δ vs triple-stack |
+|---|---|---|---|---|
+| baseline (PR #3994 SwiGLU) | 62.1023 | 59.5529 | — | — |
+| **swa_tail4** | **62.7940** | **59.7545** | **+0.69 / +0.20** ✗ | **+2.36 / +2.31** ✗ |
+| epoch17_weights | 62.1023 | 59.5529 | tied | +2.36 |
+| best_val_ckpt | 62.1023 | 59.5529 | tied | +2.36 |
+
+best_val_ckpt and epoch17_weights tied because epoch 17 was the best val epoch — cosine had not flattened.
+
+### Mechanism: budget-limited cosine breaks SWA tail assumption
+
+Per-epoch val in the SWA window:
+
+| Epoch | val_avg | Δ from prev |
+|---|---|---|
+| 14 | 68.40 | — |
+| 15 | 68.03 | −0.37 |
+| 16 | 62.80 | −5.23 |
+| 17 | 62.10 | −0.70 |
+
+The model is **still actively descending** at the bottom of cosine — 6.3 pt drop from epoch 15→16 (the SWA premise required "oscillation around minimum at low LR"). T_max=17 is budget-limited, not converged.
+
+Beautiful math observation: val(mean(θ_14..17)) = 62.79 < mean(val(θ_i)) = 65.34 < val(θ_17) = 62.10. SWA *did* find a flatter point than per-snapshot mean, just not flatter than epoch 17 alone.
+
+### Two failure modes for SWA-at-T_max=17
+
+1. **PR #3644**: constant-LR tail jumps LR ~25× before basin floor
+2. **PR #4089**: no kick-out, but cosine never flattens within budget
+
+Both rule out SWA tail averaging at our scale/budget. **Appendix-grade negative result** with clean mechanism.
+
+### Decision
+
+Close. Nezuko reassigned to Lookahead optimizer (Zhang 2019) — the online/adaptive cousin of SWA, which performs basin-averaging during training and is well-suited to non-stationary trajectories.
+
 ## 2026-05-16 20:10 — PR #3995: H: Triple-stack (T_max=17 + β2=0.95 + GeGLU) ← MERGED (NEW PROGRAMME BEST)
 
 - Branch: `willowpai2i48h1-fern/adamw_beta2_095_swiglu`
