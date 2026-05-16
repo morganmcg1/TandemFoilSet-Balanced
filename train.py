@@ -585,6 +585,9 @@ class Config:
     # the variable padded mesh size (74K-242K nodes) without recompilation.
     torch_compile: bool = False
     torch_compile_mode: str = "default"  # default | reduce-overhead | max-autotune
+    # Global gradient clipping max norm (applied after backward, before step).
+    # None disables clipping (current default behaviour).
+    grad_clip_norm: float | None = None
 
 
 cfg = sp.parse(Config)
@@ -764,6 +767,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf_p_l1 = 0.0
     epoch_scale_mean = epoch_scale_std = 0.0
     epoch_mask_mean = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_sumsq = 0.0
+    epoch_grad_norm_min = float("inf")
+    epoch_grad_norm_max = float("-inf")
+    epoch_grad_clipped_count = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -820,6 +828,20 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip_norm is not None:
+            # clip_grad_norm_ returns the pre-clip total grad norm (a tensor).
+            pre_clip_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip_norm,
+            )
+            pre_clip_val = float(pre_clip_norm.item())
+            epoch_grad_norm_sum += pre_clip_val
+            epoch_grad_norm_sumsq += pre_clip_val * pre_clip_val
+            if pre_clip_val < epoch_grad_norm_min:
+                epoch_grad_norm_min = pre_clip_val
+            if pre_clip_val > epoch_grad_norm_max:
+                epoch_grad_norm_max = pre_clip_val
+            if pre_clip_val > cfg.grad_clip_norm:
+                epoch_grad_clipped_count += 1
         optimizer.step()
         update_ema(ema_model, model, EMA_DECAY)
 
@@ -842,6 +864,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_scale_mean /= max(n_batches, 1)
     epoch_scale_std /= max(n_batches, 1)
     epoch_mask_mean /= max(n_batches, 1)
+    if cfg.grad_clip_norm is not None and n_batches > 0:
+        epoch_grad_norm_mean = epoch_grad_norm_sum / n_batches
+        epoch_grad_norm_var = max(
+            epoch_grad_norm_sumsq / n_batches - epoch_grad_norm_mean ** 2, 0.0,
+        )
+        epoch_grad_norm_std = epoch_grad_norm_var ** 0.5
+        epoch_grad_clipped_frac = epoch_grad_clipped_count / n_batches
+        epoch_grad_norm_min_log = epoch_grad_norm_min
+        epoch_grad_norm_max_log = epoch_grad_norm_max
+    else:
+        epoch_grad_norm_mean = float("nan")
+        epoch_grad_norm_std = float("nan")
+        epoch_grad_clipped_frac = float("nan")
+        epoch_grad_norm_min_log = float("nan")
+        epoch_grad_norm_max_log = float("nan")
 
     # --- Validate (EMA weights) ---
     ema_model.eval()
@@ -883,17 +920,29 @@ for epoch in range(MAX_EPOCHS):
         "train/cautious_mask_mean": epoch_mask_mean,
         "train/torch_compile_active": torch_compile_active,
         "train/torch_compile_mode": cfg.torch_compile_mode if torch_compile_active else None,
+        "train/grad_clip_norm": cfg.grad_clip_norm,
+        "train/grad_norm_mean": epoch_grad_norm_mean,
+        "train/grad_norm_std": epoch_grad_norm_std,
+        "train/grad_norm_min": epoch_grad_norm_min_log,
+        "train/grad_norm_max": epoch_grad_norm_max_log,
+        "train/grad_clipped_frac": epoch_grad_clipped_frac,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
+    grad_part = ""
+    if cfg.grad_clip_norm is not None:
+        grad_part = (
+            f" gnorm={epoch_grad_norm_mean:.3f}±{epoch_grad_norm_std:.3f}"
+            f" gclip%={epoch_grad_clipped_frac*100:.0f}"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"lr={epoch_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
         f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f} "
-        f"mask={epoch_mask_mean:.3f}]  "
+        f"mask={epoch_mask_mean:.3f}{grad_part}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
