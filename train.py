@@ -527,6 +527,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_l1_ref = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -539,13 +540,25 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
-        abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        # Log-space L1 for surface loss (PR #3617) — sign-preserving log1p
+        # compresses extreme residuals so per-decade weight replaces per-magnitude.
+        pred_log = torch.sign(pred) * torch.log1p(pred.abs())
+        y_log = torch.sign(y_norm) * torch.log1p(y_norm.abs())
+        log_abs_err = (pred_log - y_log).abs()
+        surf_loss = (log_abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        with torch.no_grad():
+            abs_err = (pred - y_norm).abs()
+            surf_loss_l1_ref = (
+                (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            )
 
         optimizer.zero_grad()
         loss.backward()
@@ -556,16 +569,20 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/surf_loss_log": surf_loss.item(),
+            "train/surf_loss_l1_ref": surf_loss_l1_ref.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_l1_ref += surf_loss_l1_ref.item()
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_l1_ref /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -581,6 +598,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_l1_ref_epoch": epoch_surf_l1_ref,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
