@@ -553,3 +553,54 @@ change from the `target/train.py` defaults so effects are attributable.
 | #3603 | frieren  | CosineAnnealingLR T_max=50→16 | Match LR schedule to actual 16-epoch budget; model never sees low-LR phase with T_max=50 |
 
 All three PRs target `icml-appendix-charlie-pai2i-48h-r1` on top of slice_num=32 + dropout=0.1 + beta=0.25 + EMA-0.999 (new baseline val=90.58).
+
+---
+
+## 2026-05-16 05:30 — PR #3602 — slice_num=32→16 (MERGED → NEW BASELINE)
+
+- **Branch:** `charliepai2i48h1-askeladd/slice-num-16`
+- **Hypothesis:** Halving slice_num from 32→16 continues the O(K²) cost reduction (256 → 64 op-pairs), fitting ~18 epochs vs 16, with further implicit regularization (each slice covers ~1250 nodes, 2× more than at 32).
+- **Results:**
+
+| Metric | Value | Δ vs baseline |
+|--------|-------|---------------|
+| `val_avg/mae_surf_p` | **84.44** | **-6.78%** vs 90.58 |
+| `test_avg/mae_surf_p` | **74.75** | **-8.00%** vs 81.25 |
+| `val_single_in_dist` | 100.09 | -7.43% |
+| `val_geom_camber_rc` | 94.49 | -9.38% |
+| `val_geom_camber_cruise` | 63.60 | -4.75% |
+| `val_re_rand` | 79.60 | -4.27% |
+| Best epoch | 18 (final) | — |
+| Per-epoch time | 105.5s | -8.4% vs slice_num=32 |
+| Peak GPU mem | 35.27 GB | -6.6% vs slice_num=32 |
+
+- **Metrics path:** `models/model-charliepai2i48h1-askeladd-slice-num-16-20260516-032444/metrics.jsonl`
+- **Decision:** MERGED. All 4 val splits improved. Val trajectory monotonically improving at training cap (epoch 18 was final) — confirmed compute-bound, not capacity-bound. Same pattern as slice_num=32 → the expressiveness ceiling is below 16.
+- **Key insight:** Slice_num progression: 64(96.17) → 32(90.58, -5.81%) → 16(84.44, -6.78%). The improvement is monotone and growing slightly. Next probe: slice_num=8.
+
+---
+
+## 2026-05-16 05:35 — PR #3601 — EMA decay 0.999→0.998 (SENT BACK for re-test)
+
+- **Branch:** `charliepai2i48h1-alphonse/ema-decay-0998`
+- **Hypothesis:** Looser EMA window (decay=0.998, ~500 steps) better focuses on the most-converged recent epochs vs decay=0.999 (~1000 steps).
+- **Results on slice_num=32 base:**
+
+| Metric | seed1 | seed0 | 2-seed mean | Δ vs slice_num=32 baseline |
+|--------|-------|-------|-------------|---------------------------|
+| `val_avg/mae_surf_p` | 86.82 | 86.96 | **86.89** | **-4.07%** vs 90.58 |
+| `test_avg/mae_surf_p` | 76.84 | 77.54 | 77.19 | -5.00% vs 81.25 |
+| Best epoch | 16 | 16 | — | — |
+| Seed spread | — | — | 0.14 pts (0.2%) | very tight |
+
+- **Decision:** SENT BACK. The 2-seed signal is clean and strong, but PR #3602 (slice_num=16) merged during review, setting the new baseline to 84.44. Since EMA decay and slice_num are mechanically orthogonal (EMA only affects val/test weight averaging, not training), the improvement should stack. Alphonse is asked to re-run a single seed on the slice_num=16 base to confirm the compound win before merging.
+
+---
+
+## 2026-05-16 05:40 — Round 8 assigned (1 PR)
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3677 | askeladd | slice_num=16→8 | Continue monotone winning axis; probe expressiveness ceiling |
+
+alphonse retesting EMA-0.998 on slice_num=16 base (PR #3601 rebase).
