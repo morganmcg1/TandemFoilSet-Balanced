@@ -2,6 +2,50 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 04:45 — PR #3687: H30 gradient clipping max_norm=1.0 (nezuko) — **assigned**
+
+- Branch: `charliepai2i24h4-nezuko/grad-clip`
+- Hypothesis: 2-line change adds `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` before optimizer.step(). Targets OneCycleLR high-LR phase stability (epochs 5-6, lr ≈ 5e-4). Standard transformer practice (DeiT max_norm=1.0). Conservative, no params, no overhead.
+
+## 2026-05-16 04:45 — PR #3686: H31 SAM ρ=0.05 (askeladd) — **assigned**
+
+- Branch: `charliepai2i24h4-askeladd/sam-optimizer`
+- Hypothesis: Inline SAM optimizer wrapper (Foret 2020). Two forward+backward passes per step, weight perturbation toward sharp direction. Replaces EMA direction (which closed). Predicted -3% to -8% from 67.64 — works on gradient side, orthogonal to all merged mechanisms. Step time ~1.8× baseline.
+
+## 2026-05-16 04:30 — PR #3197: H8v3 EMA v4 on OneCycleLR (askeladd) — **CLOSED**
+
+- Branch: `charliepai2i24h4-askeladd/ema`
+- Result: val_avg=87.22, test_avg=78.20 vs baseline 67.64 → **+29% regression**. Live val 77.28 also above baseline.
+- Mechanism: EMA β=0.999 needs ~1000 steps of stable low-LR to catch up to live. OneCycleLR's late phase drops LR fast (epoch 11 lr=1.58e-4 vs cosine equivalent ~2.5e-4). Combined with 11-epoch budget (one fewer than baseline due to dual val pass), EMA shadow can't converge.
+- Student diagnosis correct: EMA only beats live at epoch 10 (one epoch) before crossing back. Confirms EMA + OneCycleLR + 30-min cap is fundamentally incompatible.
+- **Closed**: useful negative (EMA + cosine v3 was -7.5% on its baseline; EMA + OneCycleLR fails).
+
+## 2026-05-16 04:30 — PR #3628: H29 per-block geom_proj (nezuko) — **CLOSED**
+
+- Branch: `charliepai2i24h4-nezuko/per-block-geom-proj`
+- Result: val_avg=81.10 vs baseline 67.64 → **+20% regression**. All splits worse, including cam_rc target (+15.77).
+- Mechanism: 5× duplication of geom_proj MLPs (+144K params) caused gradient interference. geom_gates ended with alternating signs [+0.048, -0.033, +0.034, -0.039, +0.062] — optimizer never settled. Per-block specialization didn't emerge in 15 epochs.
+- Per-block projection norms 5.05-6.49 — all similar magnitude, no specialization.
+- **Closed**: useful negative (depth-specialized geom conditioning needs longer training or pre-training shared projection first).
+
+## 2026-05-16 04:30 — PR #3559: H25 n_layers=6 (edward) — **SENT BACK FOR ONECYCLE RETEST**
+
+- Branch: `charliepai2i24h4-edward/n-layers-6`
+- Result on H18 baseline (79.52): val_avg=77.39 (-2.7%), test_avg=68.81 (~tied), best_epoch=10.
+- **Key finding**: Cam_rc recovered from 93.29 → 85.81 (-8.0%), undoing H18's regression on that split.
+- Diagnostics: New block 5 ls2_norm=0.465 (highest of all blocks, despite gamma init=1e-6). geom_gates monotone growth with depth [0.044→0.056].
+- Status: rebased onto OneCycleLR baseline 67.64; sent back for single-arm retest with `--n_layers 6 --use_onecycle`. Predicted val_avg 62-68 if compose works.
+
+## 2026-05-16 04:30 — PR #3583: H26 weight_decay sweep {0.001, 0.01, 0.05} (fern) — **SENT BACK FOR ONECYCLE RETEST**
+
+- Branch: `charliepai2i24h4-fern/weight-decay-sweep`
+- Result on H18 baseline (79.52):
+  - **wd=0.001: val=73.92 (-7.04%), test=64.98 (-5.76%) — winner**
+  - wd=0.01: val=76.91 (-3.28%)
+  - wd=0.05: val=77.30 (-2.79%)
+- Inverted U-shape: smaller wd is better. Canonical DeiT-III (0.05) underperforms vs modest 10× bump from current 1e-4 to 0.001.
+- Status: sent back for single-arm wd=0.001 retest on OneCycleLR baseline. Predicted val_avg 62-67.
+
 ## 2026-05-16 03:30 — PR #3539: H23 slice_num sweep {32, 64, 128} (alphonse) — **MASSIVE WIN, SENT BACK FOR REBASE+RETEST**
 
 - Branch: `charliepai2i24h4-alphonse/slice-num-sweep`
