@@ -1,5 +1,45 @@
 # SENPAI Research Results
 
+## 2026-05-16 07:35 — R5 results finalized; edward #3711 closed; R7 edward assigned
+
+### #3711 edward — Layer-wise LR decay / LLRD (CLOSED — dead end, monotonic regression with γ<1)
+
+- Branch: `willowpai2i48h5-edward/r6-llrd`
+- Hypothesis: Lower LR for earlier Transolver blocks (γ<1 multiplier from output to input) mirrors fine-tuning LR decay used in pretrained LLMs and may improve generalization.
+- Results (all 3 arms FINISHED, terminal SENPAI-RESULT posted):
+
+| Arm | γ | W&B run | val_avg | test_avg | Δval vs base (71.65) |
+|-----|---|---------|---------|----------|----------------------|
+| A (control) | 1.00 | `kuvqzt5y` | 71.8970 | 62.4985 | +0.24 (within noise) |
+| B | 0.85 | `3om0smnq` | 76.7062 | 66.3279 | +5.05 |
+| C | 0.65 | `nnsunb0c` | 93.1413 | 82.3440 | +21.49 |
+
+- Analysis: **LLRD with γ<1 hurts monotonically under FiLM+Lion+EMA.** LLRD is designed for fine-tuning pretrained models, where lower layers encode general features already at a good basin. Training from scratch means lower blocks are far from convergence at epoch 0 — throttling their LR (γ=0.85 cuts group_0 to 37.7% of base) prevents them from finding a good basin in 14 effective epochs. The output head is then forced to compensate with under-trained features → worse generalization across all 4 splits. Effect is monotonic and catastrophic at γ=0.65 (+21.5 val). The γ=1.0 control reproduces baseline within +0.24 val (noise), confirming clean implementation and real negative result.
+
+**Paper-relevant findings**: LLRD does not transfer from the fine-tuning setting to training-from-scratch setting. Our regime (14 effective epochs from random init) is not analogous to NLP LLRD literature.
+
+### Round 5+6 results fully in — action taken
+
+All 5 remaining R5 students had W&B results completed. Advisor comments posted to push for terminal SENPAI-RESULT on:
+
+- **#3672 alphonse** (winner declared — n_fourier=0 `297qot5r` val 70.3432 / test 61.6253, beats baseline)
+- **#3673 tanjiro** (close as informative — best EMA=0.995 `s3ufqnz2` val 71.51, wash)
+- **#3695 fern** (close as informative — best sobolev=0.1 `b655hio8` val 71.84, flat val but test improves −0.18)
+- **#3698 thorfinn** (close as informative — TTA=True `5555kka9` val 72.56, no gain; design gap noted — no control arm)
+
+Still awaiting:
+- **#3697 frieren** Arm C (σ='3,10,30') — still running
+- **#3712 askeladd** — β1=0.8/0.95 just starting (rate-limit delayed, GPU now at 100%)
+- **#3748 nezuko** — all 3 arms not started (rate-limit delayed, pod just picked up PR)
+
+### R7 edward assigned — #3786
+
+| PR | Student | Hypothesis | Implementation |
+|----|---------|------------|----------------|
+| #3786 | edward | **Huber β sweep (0.05→0.1→0.2)** | 3 arms: `--loss_beta 0.05/0.10/0.20`. Hypothesis: current β=0.05 is too tolerant of peak-pressure errors that drive camber_rc (worst split at test 73.87). Widening transition region increases gradient for moderate residuals → better peak-pressure fitting. |
+
+---
+
 ## 2026-05-16 06:35 — Closed nezuko #3671, reassigned to spec norm; partial R5 results in
 
 ### #3671 nezuko — Layer-wise FiLM (CLOSED — uniform +5 val regression)
