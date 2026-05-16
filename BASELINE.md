@@ -290,3 +290,71 @@ cd target/ && python train.py --agent willowpai2i48h1-askeladd \
   --wandb_name "willowpai2i48h1-askeladd/wider_h192_bf16_tmax18" \
   --wandb_group capacity_scaling_bf16
 ```
+
+---
+
+## 2026-05-16 07:30 — PR #3680: H: SwiGLU activation in Transolver MLP blocks ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-thorfinn
+- **Branch:** `willowpai2i48h1-thorfinn/swiglu_activation`
+- **W&B run:** `8on2llcv`
+- **Epochs:** 17/18 best (T_max=15 cosine, 30-min budget)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **65.4439** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 75.9041 |
+| val_geom_camber_rc | 78.6650 |
+| val_geom_camber_cruise | 45.7442 |
+| val_re_rand | 61.4623 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 66.0903 |
+| test_geom_camber_rc | 71.5465 |
+| test_geom_camber_cruise | 55.5494 |
+| test_re_rand | 54.9568 |
+| **test_avg (all 4 splits)** | **62.0357** ← NEW ALL-TIME BEST |
+
+### Vs prior baselines
+
+| Metric | Prior best (h=192+GELU) | Prior best (h=128+GELU μ̂) | SwiGLU h=128 | Δ vs h=192 | Δ vs μ̂ |
+|--------|------------------------|--------------------------|--------------|-----------|--------|
+| val_avg | 86.81 | 90.77 | **65.44** | −21.37 | −25.33 |
+| test_avg | 81.35 | 85.85 | **62.04** | −19.31 | −23.81 |
+
+### Model config (experimental — h=128, T_max=15, SwiGLU)
+
+- Transolver: 5 layers, **hidden=128**, heads=4, slice_num=64, mlp_ratio=2
+- **SwiGLU FFN:** `SwiGLUMlp(in=128, hidden=round(256*2/3)=171, out=128)` replacing standard GELU MLP
+- n_params: 663,429 (vs 663,040 GELU baseline — param-matched within <0.1%)
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, weight_decay=1e-4, batch=4, **cosine T_max=15** ← h=128 epoch budget
+- bf16 autocast; evaluation in pure fp32
+- `--use_swiglu` CLI flag required; default Config.use_swiglu=False
+
+### Key insight
+
+SwiGLU (Shazeer 2020, "GLU Variants Improve Transformers") replaces GELU with a gated linear path: `output = fc_out(fc_main(x) * SiLU(fc_gate(x)))`. The multiplicative gate allows the FFN to selectively suppress irrelevant features per-token. With h=128 (mlp_ratio=2, nominal hidden=256), the SwiGLU hidden is 171 (2/3 factor), keeping param count near-identical to the GELU baseline.
+
+**Why the gain is so large:** the pressure field in 2D CFD has high spatial frequency. The gating mechanism allows the FFN to selectively propagate high-frequency features through the most active gates, suppressing noise that GELU passes uniformly. This aligns with SwiGLU's known superiority on tasks requiring fine-grained feature selection.
+
+**Important caveats:**
+1. Single seed (seed=0). Seed confirmation run assigned to fern (PR TBD).
+2. Tested on h=128 config; stacking with h=192 (current advisor default) untested — assigned to thorfinn.
+3. After merge, `use_swiglu=False` by default. The new h=192/T_max=18 advisor default still uses GELU.
+
+### Reproduce (exact experimental setup)
+
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
+  --wandb_name "willowpai2i48h1-thorfinn/swiglu_mlp_activation" \
+  --wandb_group swiglu_activation \
+  --seed 0 \
+  --use_swiglu
+# NOTE: Also override model to h=128/T_max=15 (train.py defaults are now h=192/T_max=18)
+```
