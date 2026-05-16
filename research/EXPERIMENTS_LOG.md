@@ -331,6 +331,30 @@ Per-split val: single=118.30, rc=108.41, cruise=73.74, re_rand=89.34. All within
 
 ---
 
+## 2026-05-16 00:12 — Stale PRs closed, R6.5 assigned
+
+**#3325 edward weight_decay=5e-4 (CLOSED, stale):**
+- Had terminal results (val=101.17, 2-seed mean) on OLD 104.52 baseline, which is +5.2% vs new 96.17.
+- Core finding from run: wd=5e-4 gave -3.2% val, -9.1% test; val_single most helped (-4 to -9%).
+- Three rebase-and-rerun prompts went unactioned in 9 hours. Fresh PR #3554 assigned.
+
+**#3286 tanjiro surf_weight=25 (CLOSED, stale, never executed):**
+- 9 hours with 3 rebase prompts, no student response. Pivoted to higher-leverage direction.
+- fern #3482 already covers surf_weight=15; fresh PR #3558 gives tanjiro single-foil upweight hypothesis.
+
+**#3135 thorfinn channel-weights (1,1,3) (CLOSED, stale, never executed):**
+- 11 hours with 3 rebase prompts, no student response. Fresh PR #3560 with correct baseline.
+
+**R6.5 assignments:**
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3554 | edward | weight_decay=5e-4 v2 (2-seed, on dropout=0.1 base) | wd showed -9% test signal in #3325; retest on new base |
+| #3558 | tanjiro | racecar_single 2x upweight in sampler | Attack val_single_in_dist=116.53 via data sampling |
+| #3560 | thorfinn | per-channel surf (Ux,Uy,p)=(1,1,3) | Triple pressure gradient budget for ranked metric |
+
+---
+
 ## 2026-05-15 23:35 — PR #3471 — Stochastic depth p=0.1 (CLOSED, regression)
 
 - **Branch:** `alphonse/stoch-depth-p01`
