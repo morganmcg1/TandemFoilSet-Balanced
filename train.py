@@ -474,6 +474,7 @@ class Config:
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
+    swa_last_k: int = 0  # if >0, average EMA snapshots across last K epochs before final eval; 0 disables
 
 
 cfg = sp.parse(Config)
@@ -568,6 +569,7 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+epoch_ema_snapshots: list[dict] = []
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -704,8 +706,64 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    if cfg.swa_last_k > 0:
+        snapshot = {k: v.detach().cpu().clone() for k, v in ema_model.state_dict().items()}
+        epoch_ema_snapshots.append(snapshot)
+        if len(epoch_ema_snapshots) > cfg.swa_last_k:
+            epoch_ema_snapshots.pop(0)
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- SWA: average last-K EMA snapshots and re-evaluate validation ---
+swa_used = False
+swa_val_avg: dict | None = None
+swa_split_metrics: dict | None = None
+if cfg.swa_last_k > 0 and len(epoch_ema_snapshots) >= 2:
+    k_used = len(epoch_ema_snapshots)
+    print(f"\nSWA: averaging EMA shadows across last {k_used} epoch(s) (requested K={cfg.swa_last_k})")
+    avg_state: dict[str, torch.Tensor] = {}
+    for key in epoch_ema_snapshots[0].keys():
+        ref = epoch_ema_snapshots[0][key]
+        if ref.is_floating_point():
+            stacked = torch.stack([s[key].float() for s in epoch_ema_snapshots])
+            avg_state[key] = stacked.mean(dim=0).to(ref.dtype)
+        else:
+            avg_state[key] = ref.clone()
+    ema_model.load_state_dict(avg_state)
+    ema_model.eval()
+
+    swa_split_metrics = {
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                             asinh_p_scale=cfg.asinh_p_scale,
+                             asinh_vel_scale=cfg.asinh_vel_scale)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_split_metrics)
+    print(f"  SWA val_avg/mae_surf_p = {swa_val_avg['avg/mae_surf_p']:.4f}  "
+          f"(non-SWA final-epoch = {avg_surf_p:.4f})")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(f"{name}_swa", swa_split_metrics[name])
+
+    swa_log: dict[str, float | int] = {}
+    for split_name, m in swa_split_metrics.items():
+        for k, v in m.items():
+            swa_log[f"{split_name}/{k}_swa"] = v
+    for k, v in swa_val_avg.items():
+        swa_log[f"val_{k}_swa"] = v
+    swa_log["swa_k_used"] = k_used
+    swa_log["swa_k_requested"] = cfg.swa_last_k
+    swa_log["final_val_avg/mae_surf_p"] = avg_surf_p
+    wandb.log(swa_log)
+    wandb.summary.update(swa_log)
+
+    # Replace saved checkpoint with SWA-averaged EMA so existing test eval uses it.
+    torch.save(ema_model.state_dict(), model_path)
+    swa_used = True
+    best_metrics["swa_k_used"] = k_used
+    best_metrics["swa_val_avg/mae_surf_p"] = swa_val_avg["avg/mae_surf_p"]
+elif cfg.swa_last_k > 0:
+    print(f"\nSWA requested (K={cfg.swa_last_k}) but only {len(epoch_ema_snapshots)} snapshot(s) available; skipping averaging.")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
@@ -714,6 +772,7 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "swa_used": swa_used,
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
