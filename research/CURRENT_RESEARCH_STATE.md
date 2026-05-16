@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~20:50 UTC
+- **Last updated:** 2026-05-16 ~21:05 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -92,7 +92,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 ### Round-7 still in-flight (assigned earlier, results pending)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
-| **#4039** | edward | Multi-scale Fourier PE num_freq=8 | WIP |
+| **#4039** | edward | Multi-scale Fourier PE num_freq=8 (stacked retest on n_hidden=176) | WIP — **sent back 21:00** after Arm B win on prior baseline; retesting stacked |
 | **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (redirected 20:08 to new baseline stack) |
 
 ### Round-7/8 results (resolved 19:30–20:35 UTC)
@@ -107,6 +107,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4036** | askeladd | Camber flip augmentation | CLOSED ~20:05 (val +20.1% regress; root: NACA-M asymmetry unflippable; beta2 sweep #4129) |
 | **#4112** | thorfinn | DSDF-norm as input feature | CLOSED ~20:30 (val +2.57%, test +3.45%; OOD splits worst; encoder already has full DSDF) |
 | **#4108** | alphonse | n_layers=6 bf16 retest | CLOSED ~20:30 (val=62.05 cut ep13/18 @ 30-min env; depth=6 exhausted on 30-min budget; #4140 assigned) |
+| **#4039(v1)** | edward | Multi-scale Fourier PE (3 arms on prior baseline) | Arm B WIN on #3981 (val=51.47, −4.34%/-5.22%); doesn't beat #4082 (val=50.90); **sent back for stacked retest on n_hidden=176** |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -162,8 +163,9 @@ Deferred to round-9 (backlog):
 1. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity field, or pressure-Bernoulli surface constraint. High complexity but high upside.
 2. **Learnable slice positions** — make slice_num=64 positions trainable rather than fixed attention aggregation
 3. **Equivariance via cross-attention** — replace coord features with positional encoding only, use SE(2)-equivariant cross-attention for pressure-field decoding
-4. **Stack the round-8 winners** — if both width=192 (fern) and curvature (frieren) and DSDF feature (thorfinn) win independently, compound them into a single architecture in round-9
-5. **Compute-axis pushes** — if ep22 wins (tanjiro), try ep26 or ep30 on the now-confirmed bf16 stack
+4. **Stack the round-8 winners** — if both width=192 (fern) and edward's multi-scale Fourier PE (#4039 retest) win independently, compound them into a single architecture in round-9
+5. **Compute-axis pushes** — if ep22 wins (deferred), try ep26 or ep30 on the now-confirmed bf16 stack (requires 45+ min budget student)
+6. **Push Fourier PE low end** (per edward's #4039 suggestions): freq_min_exp=-3 (sub-pixel detail), num_freq=10 (denser wide grid) — pending stack-with-width confirmation
 
 ### Confirmed exhausted (do not retry on this stack)
 - n_hidden=176/192 (pre-SwiGLU only — deferred for mlp_ratio=2 stack)

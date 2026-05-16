@@ -1,5 +1,61 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 21:00 — PR #4039 sent back: multi-scale Fourier PE win on prior baseline
+
+### #4039 edward multi-scale Fourier PE — **SENT BACK** (Arm B beat #3981 by -4.34% val; retest on #4082 stack)
+
+- **Student:** willowpai2i48h4-edward (branch: `willowpai2i48h4-edward/edward-multi-scale-fourier-pe`)
+- **Hypothesis:** Multi-scale Fourier positional encoding. 3 arms via `--wandb_group willow-r7-fourier-pe`. Student correctly rebased to current baseline (#3981 at run time) and added `freq_min_exp`/`freq_max_exp` Config knobs preserving baseline default behavior (None → arange).
+
+### Results (3 arms, all on n_hidden=160+bf16+ep18 stack)
+
+| Arm | num_freq | freq range (×π) | val | Δ vs #3981 | test | Δ vs #3981 | W&B |
+|---|---|---|---:|---:|---:|---:|---|
+| Baseline #3981 | 4 | 2^[0..3] = 1..8 | 53.8221 | — | 47.2742 | — | `b9h4bvnm` |
+| **B — nf=8 wide** | **8** | **2^[-2..5] = 0.25..32** | **51.4683** | **−4.34%** | **44.8054** | **−5.22%** | `t1seach2` |
+| A — nf=8 default | 8 | 2^[0..7] = 1..128 | 56.0588 | +4.16% | 47.3131 | +0.08% | `t9mewkgq` |
+| C — nf=6 default | 6 | 2^[0..5] = 1..32 | 55.8039 | +3.68% | 48.8032 | +3.23% | `5k9mu16u` |
+
+### Per-split test (Arm B vs #3981)
+
+| Split | #3981 | Arm B | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 54.72 | 51.88 | −5.2% |
+| geom_camber_rc | 59.71 | 57.36 | −3.9% |
+| geom_camber_cruise | **29.13** | **26.90** | **−7.6%** |
+| re_rand | 45.53 | 43.09 | −5.4% |
+
+**All 4 test splits improve. Predicted gain on geom_camber_cruise was confirmed** — this is the split most sensitive to fine geometric encoding, and it benefits most from sub-mesh-unit frequency content (freq_min_exp=-2).
+
+### Mechanistic story (student's, well-argued)
+
+- **Range matters more than count.** Arm A (nf=8, same min=1) regressed val; Arm C (nf=6, same min=1) also regressed. Only Arm B (nf=8 with wider range that adds *sub-mesh-unit* low-frequency components) wins.
+- **High end hurts.** Arm A's two highest frequencies (64, 128 × π) oscillate within a single mesh element → aliasing-like noise.
+- **Low end helps.** Arm B's sub-mesh-unit components (0.25, 0.5, 0.71 × π) encode detail the baseline literally cannot represent.
+- **SwiGLU expressivity unlocks the new spectrum** — the original num_freq=4 sweet spot was on a less expressive FFN. The wider, finer spectrum is now usable.
+
+### Why sent back (not merged)
+
+Edward ran on n_hidden=160 (the active default at his PR time) but PR #4082 (n_hidden=176+bf16+ep18) merged as new baseline (val=50.90/test=43.90) during his run. His absolute val=51.47 is **+1.12% above** #4082, even though his delta-vs-prior-baseline is excellent.
+
+**Hypothesis: multi-scale PE + n_hidden=176 should compound** — operate on orthogonal model dimensions (input embedding vs hidden dim). Expected stacked result: val~48-49 if changes are fully orthogonal.
+
+### Sent back with: single-arm retest on current baseline stack
+
+```bash
+cd "target/" && python train.py \
+  --n_hidden 176 --use_bf16 --epochs 18 \
+  --num_freq 8 --freq_min_exp -2 --freq_max_exp 5 \
+  --wandb_group willow-r8-fourier-stack \
+  --wandb_name edward-nf8-wide-stack-nh176-bf16
+```
+
+- **Decision criteria:** Merge if val<50.90 AND test<43.90 (stacking confirmed); send back if val<51.47 (better than prior but not stacked); close if val≥51.47.
+- Edward's code changes (`freq_min_exp`/`freq_max_exp` Config, linspace-vs-arange logic in `fourier_pos_encode`) preserved.
+- Note: edward's prior wall = ~32 min/arm at n_hidden=160. At n_hidden=176 expect ~39 min — may cut at ep15 if pod env is in the 30-min cap group.
+
+---
+
 ## 2026-05-16 20:50 — PR #4111 closed; #4150 assigned — tanjiro budget pivot
 
 ### #4111 tanjiro epochs=22 — **CLOSED** (budget constraint, not hypothesis fail)
