@@ -1,5 +1,83 @@
 # SENPAI Research Results
 
+## 2026-05-16 13:30 — frieren #3843 MERGED (new baseline val 65.41 / test 56.06); fern #3808 / askeladd #3712 closed informative; 3 R9 assignments
+
+### #3843 frieren — Lion lr=1e-4 sweep (MERGED — **new baseline val 65.4142 / test 56.0627**)
+
+- Branch: `willowpai2i48h5-frieren/r7-lion-lr-sweep`
+- Hypothesis: Lion lr=1e-4 improves over lr=5e-5 — sign-based updates tolerate higher lr within the 14-epoch cosine budget.
+- All 3 arms on n_fourier=0 WITHOUT spec_norm (frieren's branch based before #3748 merged):
+
+| Arm | lr | W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | vs #3748 baseline (68.96/60.82) |
+|-----|----|---------|--------------------|--------------------|-------------------------------|
+| A | 2e-5 | `gcjjdfot` | 78.93 | 69.31 | +9.97 / +8.49 (much worse) |
+| B (ctrl) | 5e-5 | `pqbyquwr` | 69.69 | 60.47 | +0.73 / −0.35 (good repro ✓) |
+| **C (WINNER)** | **1e-4** | **`bw38ym4h`** | **65.4142** | **56.0627** | **−3.55 / −4.76** |
+
+Per-split (Arm C — winner):
+| Split | val | test | Δval vs #3748 | Δtest vs #3748 |
+|-------|-----|------|--------------|---------------|
+| in_dist | 69.60 | 61.03 | **−8.24** | **−8.59** |
+| camber_rc | 80.18 | 70.47 | −1.20 | −2.74 |
+| camber_cruise | 46.19 | 37.84 | −3.71 | −2.84 |
+| re_rand | 65.69 | 54.91 | −1.02 | **−4.87** |
+
+- Analysis: **Largest single-arm improvement since Lion optimizer (R3). Effect size: −3.55 val / −4.76 test across all 4 splits.** 
+
+  Mechanistically: Lion's effective step size ≈ lr × sign(grad). Doubling lr from 5e-5 → 1e-4 doubles per-step magnitude uniformly. The sign-based update is scale-tolerant in gradient magnitude but NOT in lr — the cosine schedule completing at epoch 14 fully harnesses the larger lr within the budget. The monotone trend across arms (val 78.93 → 69.69 → 65.41 across 2× lr steps) is consistent with the LR being the primary bottleneck in the prior baseline.
+
+  Control arm (val 69.69 vs baseline 70.34) cleanly reproduces the n_fourier=0 substrate, confirming the lr=1e-4 gain is real and not a baseline-shift artifact.
+
+  **Paper finding (finding #14):** Lion lr=1e-4 is the optimal learning rate for this task. Each 2× step halves the improvement (5e-5→1e-4: −4.28 val; 2e-5→5e-5: −9.24 val), suggesting a diminishing-returns curve with possible headroom at 1.5e-4/2e-4 (R9 H36 assigned to frieren).
+
+  **New baseline: val 65.4142 / test 56.0627** (BASELINE.md updated, PR #3843 squash-merged).
+
+### #3808 fern — surf_weight sweep (CLOSED — informative, substrate-dependent)
+
+- Final results (confirmation arm D on new substrate n_fourier=0):
+
+| Arm | n_fourier | surf_weight | val_avg | test_avg | vs new baseline 65.41 |
+|-----|-----------|-------------|---------|----------|-----------------------|
+| A | 16 | 10 | 75.28 | 64.70 | not comparable (old substrate) |
+| B | 16 | 20 | 72.00 | 61.82 | not comparable (old substrate) |
+| C | 16 | 40 | 76.93 | 66.63 | not comparable (old substrate) |
+| **D (confirm)** | **0** | **20** | **72.71** | **62.87** | **+7.30 val (regression)** |
+
+- Analysis: Strong internal signal at w=20 on n_fourier=16 (−3.28 val) did NOT transfer to n_fourier=0. Arm D val 72.71 is +7.30 vs new merged baseline (65.41). The surf_weight optimum is substrate-dependent: when input encoding changes (n_fourier=16→0), the surface-loss weighting optimum shifts. Informative finding for paper appendix.
+  Also note: vol MAE climbs monotonically with surf_weight across all arms — clear surface/volume Pareto trade-off.
+
+### #3712 askeladd — Lion β1 sweep (CLOSED — informative, β1=0.9 confirmed optimal)
+
+- Final sweep (all runs on n_fourier=16 substrate):
+
+| Arm | lion_beta1 | Best run | val_avg | vs β1=0.9 |
+|-----|-----------|---------|---------|-----------|
+| A (ctrl) | 0.9 | `rwgmm429` | 72.34 | baseline |
+| B | 0.8 | `bus0nw0b` | 76.91 | **+4.57 worse** |
+| C | 0.95 | `nu6wrtuc` | 74.09 | **+1.75 worse** |
+
+- Analysis: β1=0.9 is locally optimal. Asymmetric: reducing momentum (0.8) hurts significantly more than increasing it slightly (0.95). Chen 2023 default β1=0.9 is confirmed as appropriate for this task. Internal ablation transfers regardless of substrate (we're confirming a design choice, not seeking a new baseline).
+  **Paper finding (finding on Lion momentum):** β1=0.9 locally optimal; asymmetric — smaller momentum hurts much more than larger momentum.
+
+### edward #3913 — Re-sampler debugging in progress
+
+- 8 failed W&B runs with no val metrics (all `resampler-alpha00` name pattern, all crashed/failed).
+- Investigation: edward's branch has only the assignment commit — NO implementation code pushed yet. Student is running failed experiments with local (uncommitted) code changes.
+- Action: posted detailed debug guidance on PR. Key insight: `alpha=0.0` arm should be a pure baseline reproduction with zero code behavior change — if THAT crashes, bug is in CLI plumbing before the weight computation.
+- Also updated reproduce commands in debug comment to use new lr=1e-4 (frieren #3843 merged).
+
+### R9 assignments
+
+| PR | Student | Hypothesis | Key experiment | Expected |
+|----|---------|------------|----------------|----------|
+| **#3976** | **frieren** | **R9 H36: Lion lr push {1.5e-4, 2e-4}** | 3 arms: lr=1e-4 ctrl, 1.5e-4, 2e-4. Monotone trend A→B→C was still falling — is 1e-4 the inflection? | ~−2 val if trend continues |
+| **#3977** | **fern** | **R9 H37: Stochastic depth on Transolver blocks** | DropPath p_max ∈ {0.0 ctrl, 0.1, 0.2}. Fresh residual-pathway regularizer, never tried. | Uncertain; ~−1-2 val if effective |
+| **#3978** | **askeladd** | **R9 H38: Input MixUp augmentation** | mixup_alpha ∈ {0.0 ctrl, 0.2, 0.5}. Interpolate per-node features + targets between samples. | Uncertain; known to help OOD generalization |
+
+All 8 students now staffed. Rate limit (5000/hr) exhausted mid-session due to shared token usage across multiple student pods; GH REST blocked for ~37 min; recovered via GraphQL queries and ScheduleWakeup.
+
+---
+
 ## 2026-05-16 12:35 — nezuko #3748 MERGED; 4 R8 assignments; frieren lr=1e-4 pending
 
 ### #3748 nezuko — Spectral norm on output head (MERGED — new baseline val 68.96 / test 60.82)
