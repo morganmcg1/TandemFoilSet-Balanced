@@ -115,6 +115,30 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class FiLMLayer(nn.Module):
+    """Feature-wise Linear Modulation conditioned on a scalar signal.
+
+    Initialised so gamma≈0 and beta≈0 — at the start of training each FiLM
+    layer is identity and the model matches the unconditioned baseline.
+    """
+
+    def __init__(self, hidden_dim: int, cond_dim: int = 1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, 32),
+            nn.GELU(),
+            nn.Linear(32, hidden_dim * 2),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        # x: [B, N, hidden_dim]; cond: [B, cond_dim]
+        gb = self.net(cond)
+        gamma, beta = gb.chunk(2, dim=-1)
+        return x * (1.0 + gamma.unsqueeze(1)) + beta.unsqueeze(1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -172,7 +196,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_film=False, cond_dim=1):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -183,6 +208,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.use_film = use_film
+        if use_film:
+            self.film1 = FiLMLayer(hidden_dim, cond_dim=cond_dim)
+            self.film2 = FiLMLayer(hidden_dim, cond_dim=cond_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -190,9 +219,15 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+    def forward(self, fx, re_cond=None):
+        h = self.attn(self.ln_1(fx))
+        if self.use_film and re_cond is not None:
+            h = self.film1(h, re_cond)
+        fx = h + fx
+        h = self.mlp(self.ln_2(fx))
+        if self.use_film and re_cond is not None:
+            h = self.film2(h, re_cond)
+        fx = h + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -201,12 +236,15 @@ class TransolverBlock(nn.Module):
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
-                 slice_num=32, ref=8, unified_pos=False,
+                 slice_num=32, ref=8, unified_pos=False, use_film=False,
+                 re_feature_idx=13,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.use_film = use_film
+        self.re_feature_idx = re_feature_idx
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -224,11 +262,22 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_film=use_film,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+
+        # self.apply re-initialises every Linear (incl. FiLM's last linear)
+        # with trunc_normal_, which would erase the zero init from
+        # FiLMLayer.__init__. Re-zero those weights here so each FiLM starts
+        # as near-identity (gamma≈0, beta≈0) per the spec.
+        if use_film:
+            for block in self.blocks:
+                for film in (block.film1, block.film2):
+                    nn.init.zeros_(film.net[-1].weight)
+                    nn.init.zeros_(film.net[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -241,9 +290,18 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        re_cond = None
+        if self.use_film:
+            # log(Re) is feature index 13, same value for every real node in a
+            # sample. pad_collate pads with zeros at the end, so row 0 is
+            # always a real node and reading it directly avoids the padding
+            # contamination that mean(dim=1) would suffer (padding rows have
+            # normalised value -mean/std ≈ -19 for log(Re), which would
+            # dominate the mean for samples with lots of padding).
+            re_cond = x[:, 0, self.re_feature_idx:self.re_feature_idx + 1]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, re_cond=re_cond)
         return {"preds": fx}
 
 
@@ -472,6 +530,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    use_film=True,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -535,7 +594,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch_idx, (x, y, is_surface, mask) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -545,6 +604,30 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         ff = fourier_encoder(x_norm[..., :2])
         x_aug = torch.cat([x_norm, ff], dim=-1)
+
+        if epoch == 0 and batch_idx == 0 and model_config.get("use_film", False):
+            with torch.no_grad():
+                # First-row read (what the model now uses) — clean per-sample
+                # log(Re) signal, immune to padding contamination.
+                re_cond_dbg = x_aug[:, 0, 13]
+                # Old buggy mean-over-nodes value, logged for the record so
+                # the deviation from the original spec is visible.
+                re_mean_dbg = x_aug[:, :, 13].mean(dim=1)
+                print(
+                    f"  [FiLM debug] epoch={epoch+1} re_cond (first-row) = "
+                    f"{re_cond_dbg.cpu().tolist()}  re_mean_(buggy) = "
+                    f"{re_mean_dbg.cpu().tolist()}"
+                )
+                wandb.log({
+                    "debug/re_cond_min": re_cond_dbg.min().item(),
+                    "debug/re_cond_max": re_cond_dbg.max().item(),
+                    "debug/re_cond_std": re_cond_dbg.std().item() if re_cond_dbg.numel() > 1 else 0.0,
+                    "debug/re_cond_mean": re_cond_dbg.mean().item(),
+                    "debug/re_mean_buggy_min": re_mean_dbg.min().item(),
+                    "debug/re_mean_buggy_max": re_mean_dbg.max().item(),
+                    "global_step": global_step,
+                })
+
         pred = model({"x": x_aug})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.smooth_l1_beta, reduction="none")
 
