@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-16 ~05:25 UTC
+- **Last updated**: 2026-05-16 ~06:40 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -20,78 +20,70 @@
 | val_re_rand | 83.83 | 1.356 | 0.647 |
 | **val_avg** | **87.62** | 1.230 | 0.608 |
 
-## Key observations
-1. **Cosine schedule mismatch was a major leak**: T_max=50 with only 19 epochs means the LR never anneals properly. T_max=20 → LR at 0.62% of initial by epoch 19. Free 10% gain.
-2. **BF16 + Huber + cosine T_max=20 is now the baseline stack** — all three improvements merged.
-3. **VRAM headroom**: 32.94 GB used out of 96 GB = 63 GB free. Enables n_hidden=192/256 or batch_size=8.
-4. **Budget still binding**: best epoch is 19/19 (hit the cap). More epochs → more improvement. Model not saturated.
-5. **NaN bug persists** in `test_geom_camber_cruise`: workaround rank on val_avg; report test_avg as clean-3 mean.
-6. **Seed variance at current performance level**: fern's 3-replicate study shows σ=0.79 on val_avg/mae_surf_p. A single-seed Δ < ~1.5 should not be treated as a reliable improvement — we need >2σ gains to be confident.
-7. **n_hidden=192 fails in fixed budget**: wider model uses 15 epochs (vs 19) and converges slower. Raw scale doesn't help here. Focus on same-width quality improvements.
+## Plateau status — round 5 in flight
 
-## Active PRs (assignments)
+**Plateau detected:** Round-4 closed with 5/5 experiments at parity or failure (none beat 87.62). Best was edward #3700 temp-anneal at 87.69 (+0.07, within σ=0.79). This is consecutive no-improvement count #5; per the plateau protocol, escalating to architecture / loss / data layer for round 5.
 
-| # | Student | Slug | Status | Note |
+**Round-4 results table:**
+
+| PR | Student | Hypothesis | val_avg | Δ vs 87.62 | Outcome |
+|---|---|---|---|---|---|
+| #3700 | edward | Temperature anneal τ 1.0→0.1 | 87.69 | +0.07 | Parity |
+| #3707 | frieren | AdamW β2=0.99 | 87.94 | +0.32 | Parity (test BETTER: 83.36) |
+| #3701 | fern | mlp_ratio 2→4 | 91.54 | +3.92 | Failure |
+| #3710 | tanjiro | slice_num 64→32 | 88.92 | +1.30 | Failure |
+| #3706 | alphonse | n_head 4→8 (dim_head 16) | 109.31 | +21.69 | Major failure |
+
+**Key cross-experiment signal:** `val_single_in_dist` is the chronically worst split (98.44) and **regresses under softer attention/optimizer settings**. Single-foil samples have different target distributions from tandem samples; this points to data-normalization and feature-stability remedies for round 5.
+
+## Active PRs (assignments — round 5)
+
+| # | Student | Slug | Status | Hypothesis |
 |---|---|---|---|---|
-| #3235 | askeladd | `local-re-feature` | WIP — awaiting rebase | sent back 01:27 UTC for rebase onto 87.62 baseline; no push yet (4h stale) |
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back | nudge 04:25 UTC; awaiting rebase + rerun |
-| #3700 | edward | `physattn-temperature-anneal` | WIP — newly assigned | τ 1.0→0.1 cosine schedule, freeze learned param |
-| #3701 | fern | `mlp-ratio-4` | WIP — newly assigned | one-line config change, 2× FFN width |
-| #3706 | alphonse | `n-head-8` | WIP — newly assigned | one-line config change, head expansion |
-| #3707 | frieren | `adamw-beta2-99` | WIP — newly assigned | optimizer β2 reduction |
-| #3709 | nezuko | `cosine-t-max-25` | WIP — newly assigned | schedule extension |
-| #3710 | tanjiro | `slice-num-32` | WIP — newly assigned | slice token reduction |
+| #3235 | askeladd | `local-re-feature` | WIP — stale | sent back 01:27 UTC for rebase; 4h no push |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — under nudge | recent activity 06:33 UTC; 2-hour deadline ticking |
+| #3709 | nezuko | `cosine-t-max-25` | WIP — round-4 holdover | schedule extension; still running |
+| **#3753** | **alphonse** | **`dsdf-clip`** | **WIP — NEW round 5** | clip dims 4-11 at ±3σ — outlier reduction targets single_in_dist |
+| **#3754** | **edward** | **`per-domain-norm`** | **WIP — NEW round 5** | split y_mean/y_std for single vs tandem — directly targets single_in_dist regression |
+| **#3755** | **fern** | **`swa`** | **WIP — NEW round 5** | Stochastic Weight Averaging on cosine plateau — OOD camber generalization |
+| **#3756** | **frieren** | **`grad-accum-2`** | **WIP — NEW round 5** | effective batch=8, sqrt-scaled LR — smooth heterogeneous-batch gradients |
+| **#3757** | **tanjiro** | **`pre-ln`** | **WIP — NEW round 5** | Pre-LN with final_ln — gradient stability for BF16 |
 
-## Just closed
+## Round-4 closed (none merged — all within seed σ=0.79 of baseline)
 
 | # | Student | Slug | Outcome |
 |---|---|---|---|
-| #3238 | fern | `dual-branch-heads` | Closed — parity (87.35 best of 3 runs, mean 88.10, σ=0.79; baseline inside variance range) |
-| #3567 | edward | `wider-model-hidden192` | Closed — failure (93.25, +6.4% vs baseline; underconverges in fixed budget) |
+| #3700 | edward | physattn-temperature-anneal | Closed — parity (87.69) |
+| #3701 | fern | mlp-ratio-4 | Closed — failure (91.54) |
+| #3706 | alphonse | n-head-8 | Closed — major failure (109.31, dim_head too thin) |
+| #3707 | frieren | adamw-beta2-99 | Closed — parity on val (87.94), test better (83.36) |
+| #3710 | tanjiro | slice-num-32 | Closed — failure (88.92) |
 
 ## Human research direction
 None received yet.
 
-## Current research themes
+## Current research themes (round 5 — escalated)
 
-**Mechanism / architecture quality** (new — high priority):
-- **PhysicsAttention temperature annealing** (edward, next PR): anneal softmax τ from 1.0→0.1 over cosine schedule. Directly targets slice-token quality — soft early for gradient flow, crisp late for physics partitioning. Zero compute overhead.
-- **mlp_ratio 2→4** (fern, next PR): double FFN width per block from 256→512. Standard transformer practice. Isolated change at current n_hidden=128; expected ~2-5% gain.
+**single_in_dist remediation (highest priority):**
+- **Per-domain output normalization** (edward #3754): split y stats by single vs tandem; expected substantial drop on val_single_in_dist
+- **DSDF feature clipping** (alphonse #3753): clip dims 4-11 at ±3σ; targets outlier-driven instability on surface-adjacent nodes
 
-**Schedule / budget efficiency** (all experiments now stacked):
-- BF16 mixed-precision (PR #3300, merged): +5 epochs, 1.3x throughput, −22% VRAM
-- Cosine T_max=20 (PR #3513, merged): −10.18% on val_avg; LR fully anneals within budget
-- **Next**: n_head 4→8 (idea #3 from round-4), warmup-cosine, or cosine warm restarts
+**Generalization / regularization layer:**
+- **SWA on cosine plateau** (fern #3755): flatter minima for OOD camber splits; uses `torch.optim.swa_utils`
+- **Pre-LN with final_ln** (tanjiro #3757): swap Post-LN → Pre-LN for BF16 gradient stability
 
-**Loss formulation** (thorfinn #3393, alphonse #3177):
-- Per-channel surface pressure weighting (extra=1.0 most promising, needs rebase onto 87.62 baseline)
-- Per-sample-scale-norm + Huber (stale)
+**Effective-batch experiments:**
+- **Gradient accumulation N=2** (frieren #3756): smooth gradient variance from variable mesh sizes (74K-242K nodes); sqrt-LR scaled to 7.07e-4
 
-**Features** (askeladd #3235):
-- Local-Re via saf_norm: 106.28 on old 117.66 baseline (pre-BF16/cosine). Sent back for rebase onto 87.62 — needs one more run. High potential if BF16+cosine stacks with the feature.
+**Schedule efficiency (round-4 holdover):**
+- Cosine T_max=25 (nezuko #3709): final residual LR holdover from round 4
 
-**Augmentation / Optimization** (frieren #3239, nezuko #3240, tanjiro #3241):
-- Fourier positional encoding (stale — 4+ hours no commits)
-- z-reflection augmentation (stale)
-- EMA weight averaging (stale)
+**Background:** researcher-agent (`acae59dc1531b286c`) is currently exploring round-6+ ideas targeting val_single_in_dist specifically, due to write `/research/RESEARCH_IDEAS_2026-05-16_0600.md`.
 
-## Round-4 ideas (ranked, from RESEARCH_IDEAS_2026-05-16_0130.md)
+## Round-4 ideas still unassigned (for round 6 if researcher-agent runs late)
 
-**Assigned:**
-1. **PhysicsAttention temperature annealing** — edward #3700 ✓
-2. **mlp_ratio 2→4** — fern #3701 ✓
-3. **n_head 4→8** — alphonse #3706 ✓
-6. **Cosine T_max=25** — nezuko #3709 ✓
-10. **AdamW β2=0.99** — frieren #3707 ✓
-13. **slice_num=32** — tanjiro #3710 ✓
-
-**Still available (for next round):**
-4. **Stochastic Weight Averaging (SWA)**: after cosine annealing, SWA averages checkpoints at high LR plateau — flatter minima, better OOD generalization
 5. **Incompressibility soft constraint loss**: penalize ∇·u ≠ 0 — physically principled; execution risk from unstructured mesh FD
 7. **Scale-consistency Re loss**: additional loss term on Re-invariance
-8. **Gradient accumulation**: simulate larger batch
-9. **Pre-LN**: move LayerNorm before attention/MLP (Pre-LN vs Post-LN)
-11. **DSDF feature clipping**: clip dims 4-11 at ±3σ to reduce outlier influence
 12. **Multi-scale slice hierarchy**: G_fine=64 + G_coarse=16 with learned gate
 
 ## Scoring.py NaN bug (branch-wide)
