@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 04:36
+- **Date:** 2026-05-16 05:26
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -34,7 +34,7 @@
 | askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (training) |
 | thorfinn | #3682 | Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 | NEW (wave-7) |
 | edward | #3192 | EMA decay=0.999 + T_max=20 on full stack | Needs rebase |
-| fern | #3439 | Gaussian RFF σ∈{3,7} on full stack + T_max=20 | Sent back (rebase+σ refinement) |
+| fern | #3708 | AdamW β2 sweep {0.99, 0.95} on n_freqs=14+clip=1.0 | NEW (wave-7) |
 
 ## Closed this round
 
@@ -49,6 +49,7 @@
 | #3419 (tanjiro) | n_hidden=160: 4.6× per-epoch slowdown, only 10-11ep |
 | #3509 (alphonse) | DropPath: underfit regime, 5-block net, convergence-speed penalty |
 | #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests, advisor branch moved 4+ merges ahead |
+| #3439 (fern) | RFF σ∈{1,3,5,7} all worse than log-spaced; σ=3 best at val=85.25 vs baseline 81.08 (-5%) |
 
 ## Current research themes
 
@@ -60,7 +61,7 @@
 
 4. **EMA checkpoint averaging (edward #3192)**: Confirmed large effect (-14.3% val contribution from EMA alone). Retesting with T_max=20. If EMA composes with n_freqs=14+clip=1.0, could land below val=75.
 
-5. **RFF Gaussian σ refinement (fern #3439)**: σ=5 competitive, σ=1→5 monotonically improved. Testing σ∈{3,7} on full stack with T_max=20.
+5. **AdamW β2 sweep (fern #3708)**: β2=0.999 has effective half-life ~700 steps; with heavy-tailed gradients the second-moment estimate is contaminated for too long. Testing β2∈{0.99, 0.95} (half-life ~70 / ~14 steps). Last untouched optimizer hyperparameter.
 
 6. **LayerScale (alphonse #3593)**: Zero convergence penalty. Per-channel attenuation of residuals. Expected OOD improvement.
 

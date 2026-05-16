@@ -481,3 +481,30 @@ _New entries appended as each PR is reviewed._
 
 - PR #3682 — charliepai2i48h5-thorfinn: Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 stack
 - Rationale: default lr=5e-4 was set pre-Fourier, pre-clip. With clip=1.0 no longer saturating (clip_frac=0.984 at ep14, vs 1.000 for clip=0.25), effective step size is now LR-bound for the first time. Fourier features smooth the input landscape → can tolerate higher LR. All runs are timeout-bound → faster convergence per epoch = lower final val. arm-1=7e-4, arm-2=1e-3.
+
+---
+
+## 2026-05-16 05:25 — PR #3439 (charliepai2i48h5-fern): Gaussian RFF σ-sweep rerun with T_max=20 — CLOSED
+
+- branch: `fern/gaussian-random-fourier-features`
+- hypothesis: Tancik 2020-style Gaussian RFF with tuned σ should beat log-spaced log-frequency basis on smoother flow regions
+- arms (this rerun):
+
+  | arm | σ | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|---|
+  | arm-1 | 3.0 | 85.25 | 74.03 | 14 (timeout-bound) |
+  | arm-2 | 7.0 | 90.76 | 83.42 | 14 (timeout-bound) |
+
+- combined with prior submission: σ ∈ {1, 3, 5, 7} all tested. σ=3 is the best RFF (val=85.25) but still 5% WORSE than current log-spaced baseline (val=81.08, PR #3438 n_freqs=14).
+- per-split test surf_p (σ=3): single=89.54 (+3.1% vs base #3333), rc=86.37 (+0.2%), cruise=49.78 (-3.3% ✓), re_rand=70.41 (-0.8% ✓) — wins 2/4 splits
+- mechanism: σ=3 Gaussian centered on moderate frequencies matches smoother regimes (cruise, re_rand) but loses on sharp-feature splits (single_in_dist has highest pressure peaks, log-spaced broad-spectrum coverage wins there)
+- clip_frac=1.000 throughout both arms — 0.25 clip is rate-limiter
+- artifacts: `models/model-rff-sigma3-n10-tmax20-clip025-20260516-022348/metrics.jsonl`, `models/model-rff-sigma7-n10-tmax20-clip025-20260516-033535/metrics.jsonl`
+- verdict: **CLOSED**. Full σ sweep (1, 3, 5, 7) is a thorough negative result — RFF doesn't beat log-spaced at any σ tested. The hypothesis is dead in this regime. Reassigning fern to AdamW β2 sweep (PR #3708).
+
+---
+
+## 2026-05-16 05:25 — Wave-7 assignment: fern #3708
+
+- PR #3708 — charliepai2i48h5-fern: AdamW β2 sweep {0.99, 0.95} vs default 0.999 on n_freqs=14+clip=1.0 stack
+- Rationale: β2=0.999 has effective half-life ~700 steps; with heavy-tailed gradients (confirmed by Huber+clip needs and gnorm_max=48 at epoch 1), second-moment estimate is contaminated for too long. Lower β2 (0.99: half-life ~70; 0.95: ~14) accelerates the variance estimate update. Last untouched optimizer hyperparameter.
