@@ -1062,3 +1062,26 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 **Analysis:** Within-PR signal is real and consistent (logp=0.1 wins both val and test_excl_cruise by−0.62/−2.12). However, absolute results are 6+ val above new canonical (48.4191) due to: (1) freq=10 instead of freq=5 bias (~1.78% = ~0.85 val); (2) Cauchy stack instead of Huber β=0.1 (~3.77% = ~1.8 val); (3) missing Lookahead (−4.14% = ~2.0 val). Mechanism check partial: val_re_rand improved as predicted (−1.35) but val_geom_camber_rc REGRESSED (+0.82) — contradicts hypothesis. Within-PR test_single delta was large (−6.6) despite small val_single delta — suggests log-p shapes pressure-tail fit in ways that generalize.
 
 **Decision: SENT BACK** for 2-arm rerun on full new canonical (Huber β=0.1 + freq=5 + Lookahead k=5) with logp_weight=0.0 (baseline arm) vs logp_weight=0.1 (best within-PR arm). If −0.62 within-PR val signal holds on new stack, that would put result at ~47.8 — comfortably beating new canonical 48.4191.
+
+## 2026-05-16 17:45 — PR #3415 (frieren): Log-Re sinusoidal (freqs=4) on Huber β=0.1 — SENT BACK
+
+- Branch: `willowpai2i48h3-frieren/log-re-sinusoidal`
+- W&B runs: `g6ya26q3` (baseline-no-embed), `mah26c4z` (variant-freqs4)
+- Ran on Huber β=0.1 + SOAP freq=5 + EMA 0.99 (WITHOUT Lookahead — submitted 5 min before Lookahead merge)
+
+| Arm | log_re_freqs | val_avg/mae_surf_p | test_3split_avg | Δ within-PR val |
+|---|---|---|---|---|
+| Arm 1 (baseline no embed) | 0 | 48.8230 | 48.2890 | — |
+| **Arm 2 (freqs=4)** | 4 | **48.2352** | **48.0227** | **−1.20%** |
+
+**vs new canonical (Lookahead, 48.4191/47.8034):** val barely beats (−0.38%) but test loses (+0.46%). Frieren ran on the pre-Lookahead stack — submitted 5 min before notification.
+
+**Analysis:** Within-PR signal solid (−1.20% val, −0.55% test_3split, −1.87% val_re_rand). Per-split: val_geom_camber_rc improves −2.07%, val_re_rand −1.87% ✓ (OOD bias confirmed). Regression only on test_geom_camber_rc (+3.94% vs paired baseline) — consistent with prior rounds, possibly representational budget reallocation. Student flagged this.
+
+**Decision: SENT BACK** for 2-arm rerun on full Lookahead canonical. Log-Re is input-side, orthogonal to Lookahead (optimizer-side). Expected after compounding: variant val ≈ 47.83, test ≈ 47.54 — clean win on both metrics. Branch has CONFLICTING status from Lookahead merge. Explicit rebase + Lookahead addition instructions sent.
+
+## 2026-05-16 17:45 — PR #4070 alphonse assigned: Lookahead alpha sweep (α ∈ {0.3, 0.5, 0.7})
+
+- willowpai2i48h3-alphonse/lookahead-alpha-sweep
+- Hypothesis: PR #3947 used α=0.5 (Lookahead paper default). On SOAP freq=5 stack, preconditioner creates correlated 5-step noise. α=0.3 (more aggressive pull-back) may capture more averaging benefit; α=0.7 (less aggressive) may preserve more within-k curvature. Optimal α is unknown and worth a 3-arm sweep.
+- 3 arms: α=0.3, α=0.5 (canonical reproduction check), α=0.7. k=5 fixed.

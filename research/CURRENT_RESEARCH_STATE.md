@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 17:32 — #3947 alphonse MERGED (Lookahead k=5, new canonical val=48.4191); #3952 edward sent back (log-pressure rerun on new canonical); all 8 students active)
+- **Date:** 2026-05-16 (updated 17:45 — #3415 frieren sent back (log-Re rerun on Lookahead canonical); #4070 alphonse assigned (Lookahead alpha sweep); tanjiro #3497 rebase nudge sent)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 48.4191`, `test_avg/mae_surf_p (excl cruise) = 47.8034`
@@ -66,13 +66,14 @@ Old launch baseline: 135.30. Total gain: **−64.2%** over 10 compounding improv
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
-| **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) — rebase onto Lookahead canonical** | **Inputs** | **WIP — canonical update notified** |
-| **#4037** | **fern** | **Huber beta lower bound: {0.05, 0.025, 0.01} vs β=0.1** | **Loss tuning** | **WIP — canonical update notified, add Lookahead to all arms** |
-| **#4021** | **nezuko** | **SWA: uniform late-epoch averaging on top of EMA** | **Training** | **WIP — canonical update notified, add Lookahead to all arms** |
-| **#3736** | **thorfinn** | **surf_weight {10,5} rerun on new canonical** | **Loss weighting** | **WIP — canonical update notified, add Lookahead to all arms** |
-| **#3497** | **tanjiro** | **Grad-clip {none, clip=1} rerun on new canonical** | **Optimization** | **WIP — canonical update notified, add Lookahead to all arms** |
-| **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1) rerun on new canonical** | **Loss tuning** | **WIP — sent back (freq=10 bug + new canonical with Lookahead)** |
-| **#3975** | **askeladd** | **bfloat16 autocast: more epochs in 30-min cap** | **Throughput** | **WIP — canonical update notified (throughput test, orthogonal to Lookahead)** |
+| **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) — rerun on Lookahead canonical** | **Inputs** | **WIP — sent back. −1.20% within-PR on Huber β=0.1 (no Lookahead). CONFLICTING — needs rebase + Lookahead add.** |
+| **#4070** | **alphonse** | **Lookahead alpha sweep: α ∈ {0.3, 0.5, 0.7}, k=5 fixed** | **Optimization** | **WIP — just assigned. Tuning α of #3947 canonical.** |
+| **#4037** | **fern** | **Huber beta lower bound: {0.05, 0.025, 0.01} vs β=0.1** | **Loss tuning** | **WIP — running on Lookahead canonical** |
+| **#4021** | **nezuko** | **SWA: uniform late-epoch averaging on top of EMA** | **Training** | **WIP — running on Lookahead canonical** |
+| **#3736** | **thorfinn** | **surf_weight {10,5} rerun on Lookahead canonical** | **Loss weighting** | **WIP — running, Lookahead added** |
+| **#3497** | **tanjiro** | **Grad-clip {none, clip=1} rerun on Lookahead canonical** | **Optimization** | **WIP — CONFLICTING (needs rebase). Rebase + rerun instructions sent.** |
+| **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1) rerun on Lookahead canonical** | **Loss tuning** | **WIP — sent back. CONFLICTING — needs rebase + freq=5 + Lookahead.** |
+| **#3975** | **askeladd** | **bfloat16 autocast: more epochs in 30-min cap** | **Throughput** | **WIP — throughput diagnostic, orthogonal to Lookahead** |
 
 Zero idle students. All 8 pods active.
 
@@ -102,7 +103,7 @@ Zero idle students. All 8 pods active.
 - **Askeladd bf16 (#3975).** Throughput diagnostic — if ≥1.2x speedup, unlocks more epochs for everyone.
 
 ### Post-sweep stack (after pending WIPs land)
-1. **Lookahead alpha sweep (α ∈ {0.3, 0.5, 0.7})** with k=5 fixed — alphonse's own suggestion, α=0.5 is literature default but not tuned for freq=5/huber=0.1 stack.
+1. **Lookahead k sweep (k ∈ {3, 7, 10})** — verify U-shape, confirm k=5 is optimal. After alpha sweep resolves.
 2. **Pure MAE (L1 loss):** if Huber β=0.01 still improves, switch to `nn.L1Loss` directly.
 3. **Adaptive Barron loss:** learn α and c per-output-channel. Removes loss hyperparameter.
 4. **SAM on SOAP:** sharpness-aware minimization. Doubles forward cost — only viable after bf16.
