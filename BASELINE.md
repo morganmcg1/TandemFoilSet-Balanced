@@ -4,9 +4,44 @@
 
 ---
 
-## 2026-05-16 16:42 — PR #3981: bf16 mixed-precision + epochs=18 (cut at ep16) (thorfinn) — ← CURRENT BEST
+## 2026-05-16 19:32 — PR #4082: Width retest with bf16 budget — n_hidden=176 + bf16 + epochs=18 (fern) — ← CURRENT BEST
 
-- **val_avg/mae_surf_p: 53.8221** (best epoch 16/18, W&B run `b9h4bvnm`) — **−4.64% vs previous best 56.4402**
+- **val_avg/mae_surf_p: 50.9008** (best epoch 18/18, W&B run `mgu3m5v2`) — **−5.43% vs previous best 53.8221**
+- **test_avg/mae_surf_p: 43.8989** — **−7.14% vs previous best 47.2742**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not per-split logged) | 48.9679 |
+| geom_camber_rc | (not per-split logged) | 55.4540 |
+| geom_camber_cruise | (not per-split logged) | 28.2655 |
+| re_rand | (not per-split logged) | 42.9082 |
+| **avg** | **50.9008** | **43.8989** |
+
+- **Model config:** SwiGLU FFN, **n_hidden=176** (wider), n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, inner_dim=232, ~1.23M params (+18% vs #3981)
+- **Change from previous baseline:** add `--n_hidden 176` on top of bf16+ep18. Earlier n_hidden=176 regress (on mlp_ratio=3+fp32+ep12) was a joint budget+capacity artifact, not a width ceiling.
+- **Throughput:** ~130 s/epoch (bf16, n_hidden=176) vs ~117.8 s/epoch (bf16, n_hidden=160) → +10% per-epoch cost
+- **Wall time:** ~39.0 min for all 18 epochs completed (well under 45 min cap)
+- **Cosine T_max:** 18 (fully annealed); curve **still descending** at ep18 (−1.38 from ep17→ep18)
+- **Peak GPU memory:** 44.6 GB (vs 41.9 GB at n_hidden=160) — ~50 GB of headroom remains on 96 GB H100
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=18); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+- **Key findings:**
+  1. Width scaling on the bf16+ep18 stack is unsaturated; n_hidden=176 wins +5.4% val / +7.1% test over n_hidden=160
+  2. ALL test splits improve: single_in_dist −10.5%, geom_camber_rc −7.1%, geom_camber_cruise −3.0%, re_rand −5.8%
+  3. Curve still descending at ep18 — more epochs OR even wider model likely to keep gaining
+  4. Combined with #3981, bf16 + width scaling delivers a compound win: 53.82→50.90 with single change
+
+**Reproduce command:**
+```bash
+cd "target/" && SENPAI_TIMEOUT_MINUTES=45 python train.py --n_hidden 176 --epochs 18 --use_bf16
+```
+
+---
+
+## 2026-05-16 16:42 — PR #3981: bf16 mixed-precision + epochs=18 (cut at ep16) (thorfinn) — prev baseline
+
+- **val_avg/mae_surf_p: 53.8221** (best epoch 16/18, W&B run `b9h4bvnm`) — −4.64% vs prior
 - **test_avg/mae_surf_p: 47.2742** — **−3.31% vs previous best 48.8947**
 
 | Split | val mae_surf_p | test mae_surf_p |
