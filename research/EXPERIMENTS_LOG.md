@@ -708,3 +708,61 @@ Lower δ doesn't help: as δ → 0, Huber → L1, so we just recover the merged 
 - **PR #3547 (askeladd): Cp normalization on top of Bernoulli residual** — extend her own merged win by additionally dividing by `p_B` (Arm A: full Cp = (p − p_B) / p_B; Arm B: half-Cp dividing by V_∞ instead of V_∞²). Her own pre-pass identified this as the natural physics-informed follow-up to address the V_∞²-correlated per-sample std variance.
 - **PR #3548 (frieren): AoA-jitter test-time augmentation** — first eval-only experiment in round 5. K-ensemble of inference with small AoA perturbations. Arm A: K=4, σ=0.1°. Arm B: K=8, σ=0.05° + jitter on other continuous cond dims. Targets OOD splits without any training cost. Compounds with every merged mechanism.
 
+
+## 2026-05-16 02:30 — PR #3465: CosineAnnealingLR T_max alignment [MERGED — new best]
+
+- Branch: `charliepai2i24h5-thorfinn/schedule-tmax-alignment`
+- Student: charliepai2i24h5-thorfinn
+- Hypothesis: align `CosineAnnealingLR(T_max=25, eta_min_factor=0.10)` to the actual bf16 training budget (~17–19 epochs), fixing the pre-bf16 default `T_max=50` that caused LR to hover near peak throughout the wall-clock window with near-zero floor.
+- Status: MERGED as new best. val_avg=75.40, test_avg=65.86. **−12.42% vs PR #3466 Bernoulli residual baseline (86.09)**.
+
+### Results (Arm B — T_max=25, eta_min_factor=0.10 — winner)
+
+| Split | val_mae_surf_p | test_mae_surf_p | Δ val vs #3466 |
+|---|---:|---:|---:|
+| single_in_dist | 84.8767 | 73.8438 | −16.8% |
+| geom_camber_rc | 85.9009 | 77.2500 | −14.2% |
+| geom_camber_cruise | 57.6499 | 46.6446 | −8.5% |
+| re_rand | 73.1886 | 65.6982 | −7.6% |
+| **avg** | **75.4040** | **65.8592** | **−12.42%** |
+
+Arm A (T_max=19, eta_min_factor=0.05): val_avg=80.12 — also beats prior baseline but loses to Arm B.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-thorfinn-tmax25_em10-20260515-232319/metrics.jsonl`
+- `models/model-charliepai2i24h5-thorfinn-tmax19_em05-20260515-222432/metrics.jsonl`
+
+### Analysis
+
+Massive, clean win on a pure schedule fix. The cosine curve with T_max=50 was spending most of its decay budget *after* the wall-clock cutoff — so the optimizer ran at near-peak LR for all 17 training epochs. T_max=25 pushes the cosine descent into the actual training window; LR at epoch 17 was 1.79e-4 (well above the floor) and still productive. `eta_min_factor=0.10` ensured the floor (5e-5) is non-zero, preserving late-epoch gradient signal. Arm B's longer T_max=25 > T_max=19 won because T_max=19 reached eta_min exactly at the wall-clock cutoff, leaving the last few epochs at near-zero LR.
+
+Cautious mask mean flat at 0.617 across all epochs — schedule realignment did not perturb the cautious gating equilibrium. All 8 cells (val+test across 4 splits) improved, biggest gain on single_in_dist (−16.8% val), geom_camber_rc (−14.2% val). Best epoch still 17/50 — training still undercooked (descent active at −2.74/epoch at cutoff). This motivates the two new assignments: higher peak LR (#3581) and torch.compile() (#3582).
+
+Cumulative round-5 improvement now **−39.15% val_avg** (123.88 → 75.40) and **−42.45% test_avg** (114.37 → 65.86) over the pre-round-5 floor. **Eight compounding wins**.
+
+## 2026-05-16 02:30 — PR #3432: SEMA — copy EMA weights back each epoch [CLOSED — both arms regressed]
+
+- Branch: `charliepai2i24h5-fern/sema-ema-copy-back`
+- Student: charliepai2i24h5-fern
+- Hypothesis: SEMA (Stochastic EMA) from Kaddour et al. — periodically copy EMA weights back into the live model at frequency=1 or frequency=2 epochs, after a warmup period. Expected to keep the live model near "flat minimum" regions discovered by EMA averaging.
+- Status: CLOSED. Both arms regressed +22-33% vs FiLM baseline (#3265, val=103.02). Arm A +33.4%, Arm B +22.8%.
+
+### Results vs tested baseline (PR #3265 FiLM, val_avg=103.02)
+
+| Arm | val_avg | Δ | test_avg | Best epoch |
+|---|---:|---:|---:|---:|
+| Arm A: sema_freq=1, warmup=5 | 137.38 | **+33.4%** | 124.17 | 14 |
+| Arm B: sema_freq=2, warmup=5 | 126.54 | **+22.8%** | 115.07 | 13 |
+
+### Analysis
+
+Clear negative, well-analyzed by student. The mechanism inversion: EMA decay=0.999 at batch_size=4 gives a ~2.7-epoch effective averaging window. At epoch 6 (first SEMA copy), EMA reflects the model state from epochs 3–5 — so the copy is a 2–3 epoch **reset**, not a flat-region refinement. Each SEMA copy bleeds away recent gradient progress. Student ran 3 independent arm A replications (132.08, 137.38, 141.25 — mean 136.9); all far above baseline. Robust negative result.
+
+Arm B (freq=2) being less bad than Arm A (freq=1) confirms the mechanistic explanation: less frequent resets waste less gradient progress. Neither is remotely competitive.
+
+Implication: SEMA may become viable if (a) EMA decay is lowered to ≈0.99 so EMA is closer to the live model at copy time, or (b) training is much longer. PR #3545 (EMA decay annealing) addresses the same cold-start from a different angle and is still WIP.
+
+## 2026-05-16 02:30 — New assignments after T_max win and SEMA close
+
+- **PR #3581 (thorfinn): Peak LR sweep on T_max=25 aligned schedule** — test lr=7e-4 (Arm A) and lr=1e-3 (Arm B) with the fixed T_max=25/eta_min_factor=0.10 schedule. Descent still active at −2.74/epoch at epoch 17; higher LR may unlock faster per-epoch improvement. Cautious AdamW masking (0.62) stabilizes high-LR runs by zeroing ~38% of update components.
+- **PR #3582 (fern): torch.compile() for more effective epochs** — JIT-compile the model graph (Arm A: default mode; Arm B: reduce-overhead) to reduce per-epoch wall-clock time by 10–25%. Expected to unlock 2–4 additional effective epochs within the 30-min cap. At −2.74/epoch descent rate, this translates to 5.5–11 point improvement. First pure speed experiment in round 5.
