@@ -4,7 +4,32 @@ Active advisor branch baseline. Updated after each merged winner. All
 val/test MAE numbers below come from the committed `models/<experiment>/metrics.jsonl`
 on the listed PR.
 
-## Current best — PR #3127 (charliepai2i24h1-askeladd / smoothl1-rebased)
+## Current best — PR #3863 (charliepai2i24h1-fern / grad-clip-1p0)
+
+- **val_avg/mae_surf_p**: **89.5987** (best at epoch 18; 18 of 18 epochs realized)
+- **test_avg/mae_surf_p**: **78.4928** (NaN-safe 4-split)
+- **Per-val-split mae_surf_p** (best epoch 18):
+  - val_single_in_dist: 104.31 (−5.90% vs #3127)
+  - val_geom_camber_rc: 101.16 (−2.52% vs #3127)
+  - val_geom_camber_cruise: 69.32 (−8.60% vs #3127)
+  - val_re_rand: 83.60 (−6.51% vs #3127)
+- **Per-test-split mae_surf_p** (from best-val EMA checkpoint):
+  - test_single_in_dist: 90.78
+  - test_geom_camber_rc: 87.74
+  - test_geom_camber_cruise: 57.75
+  - test_re_rand: 77.69
+- **n_params**: 662,359 (unchanged)
+- **peak_memory_gb**: 32.95 (unchanged)
+- **per_epoch_wall_time**: ~99 s/epoch (unchanged — clip adds negligible cost)
+- **epochs_realized**: 18 of 18 (full cosine annealing)
+- **Metric artifacts**: `models/model-grad-clip-1p0-20260516-102827/metrics.jsonl`, `models/model-grad-clip-1p0-20260516-102827/metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --experiment_name grad-clip-1p0 --agent charliepai2i24h1-fern --epochs 18 --grad_clip_norm 1.0`
+
+### Gradient clipping win note
+
+PR #3863 adds `clip_grad_norm_(model.parameters(), max_norm=1.0)` between `loss.backward()` and `optimizer.step()`. The diagnostic result: raw gradient norms are 25–300× the threshold (grad_clip_frac=1.0 on every batch throughout training), meaning this is NOT occasional spike protection — it is global gradient-direction rescaling (normalized-gradient AdamW). The source of large raw norms is bf16 autocast + surf_weight=25.0 composition. Active recipe now has **grad_clip_norm=1.0** as standard; new config field `grad_clip_norm: float` with default 0.0 in Config (0 = no clip; 1.0 = current standard).
+
+## Previous best — PR #3127 (charliepai2i24h1-askeladd / smoothl1-rebased)
 
 - **val_avg/mae_surf_p**: **94.9723** (best at epoch 18; 18 of 18 epochs realized — full cosine anneal)
 - **test_avg/mae_surf_p**: **85.0372** (NaN-safe 4-split — first sub-90 test result on this track)
