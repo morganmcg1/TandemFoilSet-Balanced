@@ -5,6 +5,24 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 16:20 — PR #4005 (charliepai2i48h5-tanjiro): BF16+LS+n10+EMA 0.998 missing cell — CLOSED
+
+- branch: `charliepai2i48h5-tanjiro/bf16-layerscale-ema-n10`
+- hypothesis: fill the missing cell — does EMA 0.998 help or hurt on the n10 stack at the 17-epoch BF16 horizon?
+- results (JSONL-verified, 15 epochs timeout-bound):
+
+  | Metric | This run (EMA 0.998) | Baseline #3527 (no EMA) | Δ |
+  |---|---|---|---|
+  | val_avg/mae_surf_p | **68.64** | 67.19 | **+2.16% (worse)** |
+  | test_avg/mae_surf_p | **59.88** | 58.05 | **+3.15% (worse)** |
+  | best_epoch | 15 / 50 | 17 / 50 | -2 epochs from EMA overhead |
+
+- per-split test surf_p: single=67.81 (+0.58%), rc=70.50 (+1.02%), cruise=42.43 (**+9.74%**), re_rand=58.78 (+4.31%) — every split regresses
+- artifacts: `models/model-bf16-layerscale-n10-ema0998-20260516-144223/metrics.jsonl`
+- commentary: CLOSED — definitive negative result. EMA half-life (~350 steps) vs total training (~850 steps) gives EMA only 41% of training inside its smoothing window — too little to amortize at this horizon. EMA-raw gap collapsed from -12% at epoch 5 to -2.2% at epoch 15. Cost: ~9% per-epoch overhead drops effective budget 17→15 epochs. **All three EMA experiments on BF16+LS now confirm same pattern** (n14+EMA: 68.50, n10+EMA: 68.64, quad-compound also worse than n10 alone). **Drop EMA entirely on the BF16 stack.** Cruise regresses most because it had largest baseline margin (38.66) — most sensitive to losing 2 epochs of fine-tuning. Student's per-epoch EMA-raw delta table was the smoking gun.
+
+---
+
 ## 2026-05-16 16:00 — PR #3983 (charliepai2i48h5-askeladd): Huber δ sweep {0.15, 0.5} on FP32 triple compound — CLOSED
 
 - branch: `charliepai2i48h5-askeladd/huber-delta-sweep`

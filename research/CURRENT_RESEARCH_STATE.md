@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 16:05
+- **Date:** 2026-05-16 16:25
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -31,14 +31,14 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} on FP32 triple | wave-10 WIP (training, GPU 97%) |
-| tanjiro | #4005 | BF16+LS+n10+EMA 0.998 — missing cell | **status:review** (16:05 — needs review when rate limit clears) |
+| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} on FP32 triple | wave-10 WIP (training finished, awaiting results push) |
+| tanjiro | #4033 | Huber δ sweep {0.15, 0.5} on BF16+LS+n10 — last unswept primary axis | wave-11 NEW |
 | fern | #4006 | n_freqs sweep {8, 12} on BF16+LS stack | wave-11 WIP |
 | thorfinn | #4008 | surf_weight sweep {5.0, 20.0} on BF16+LS+n10 | wave-11 WIP |
 | nezuko | #4009 | Gradient clip sweep {0.5, 1.0} on BF16+LS+n10 | wave-11 WIP |
 | frieren | #4014 | Width scaling narrower: n_hidden=120 on BF16+LS+n10 | wave-11 WIP |
-| alphonse | #4026 | Batch size sweep {2, 8} on BF16+LS+n10 — first ever bs sweep | wave-11 NEW |
-| askeladd | #4027 | LR sweep {7e-4, 1e-3} on BF16+LS+n10 | wave-11 NEW |
+| alphonse | #4026 | Batch size sweep {2, 8} on BF16+LS+n10 — first ever bs sweep | wave-11 WIP |
+| askeladd | #4027 | LR sweep {7e-4, 1e-3} on BF16+LS+n10 | wave-11 WIP |
 
 ## Closed this round
 
@@ -58,6 +58,7 @@
 | #4007 (frieren) | Width n=144: timeout-bound at 15 epochs vs 17+ needed |
 | #3983 (askeladd) | Huber δ {0.15, 0.5}: both regress vs δ=0.3 on FP32 stack |
 | #3964 (alphonse) | LayerScale γ-init {0.005, 0.020}: both regress vs γ=0.01 |
+| #4005 (tanjiro) | BF16+LS+n10+EMA 0.998 missing cell: EMA hurts at 17-epoch BF16 horizon (val 68.64 vs 67.19); EMA window covers only 41% of training. **Drop EMA entirely on BF16 stack.** |
 
 ## Current research themes
 
@@ -65,7 +66,7 @@
 
 Key insight: **BF16 extended convergence horizon changes optimal hyperparameters**. At 12 epochs (FP32), n14>n10 and EMA helps. At 17 epochs (BF16), n10>n14 and EMA costs more than it gains. All sweepable hyperparameters need re-evaluation on the new BF16+LS+n10 stack.
 
-1. **Missing cell — tanjiro #4005** (status:review): BF16+LS+n10+EMA 0.998. Does EMA help or hurt n10 at 17 epochs? **AWAITING REVIEW** (rate-limited).
+1. **Missing cell — CLOSED #4005**: BF16+LS+n10+EMA 0.998 underperforms (val=68.64 vs 67.19). Drop EMA on BF16 stack.
 
 2. **n_freqs on BF16+LS — fern #4006** (WIP): n=8 and n=12. Aliasing regime reversed: n10>n14 at 17 epochs. Does n=8 win? n=12 interpolates.
 
@@ -75,9 +76,11 @@ Key insight: **BF16 extended convergence horizon changes optimal hyperparameters
 
 5. **Clip sweep — nezuko #4009** (WIP): clip={0.5, 1.0} vs 0.25. clip_frac=1.0 throughout all runs. LayerScale provides implicit gating; maybe clip=0.25 is double-regularizing. Prior clip=1.0 test (PR #3529) was pre-LayerScale.
 
-6. **Batch size sweep — alphonse #4026** (NEW): batch_size={2, 8} vs default 4. Never tested in this programme. BF16's freed memory makes bs=8 viable; bs=2 tests if smaller-batch noise helps generalization.
+6. **Batch size sweep — alphonse #4026** (WIP): batch_size={2, 8} vs default 4. Never tested in this programme. BF16's freed memory makes bs=8 viable; bs=2 tests if smaller-batch noise helps generalization.
 
-7. **LR sweep on BF16 — askeladd #4027** (NEW): lr={7e-4, 1e-3} vs default 5e-4. Prior FP32 LR sweep (#3784) was clip-saturated; on BF16+LS+n10 with 17 epochs and unsaturated gradient dynamics, higher LR may now manifest.
+7. **LR sweep on BF16 — askeladd #4027** (WIP): lr={7e-4, 1e-3} vs default 5e-4. Prior FP32 LR sweep (#3784) was clip-saturated; on BF16+LS+n10 with 17 epochs and unsaturated gradient dynamics, higher LR may now manifest.
+
+8. **Huber δ on BF16 — tanjiro #4033** (NEW): δ={0.15, 0.5} on BF16+LS+n10. Last unswept primary axis. FP32 confirmed δ=0.3 (#3424, #3983 both bracket); BF16's smaller late-epoch residuals may shift optimum.
 
 ### Old FP32 triple stack (wave-10, completing)
 
@@ -94,7 +97,7 @@ Edward #3971 still running EMA warm-up ramp on FP32 triple. Result will inform w
 - **LayerScale γ=0.01 fully confirmed** (#3593 win, #3740 asymmetric closed, #3964 bracket both regress).
 - **Learnable Fourier dead**: Frequencies don't migrate; overhead too costly.
 - **LayerScale γ=0.01 biggest single win**: −10.2% val from per-channel residual gating.
-- **EMA at 12 epochs helps; at 17 epochs (BF16), its cost (~2 epochs) exceeds benefit on n10 stack** (provisional — #4005 will decide).
+- **EMA on BF16 stack is now DEFINITIVELY dead.** All three EMA tests on BF16+LS regress: n14+EMA (68.50), n10+EMA (68.64), quad-compound. EMA's smoothing window covers only 41% of training; cost (~2 epochs) exceeds benefit. #4005 closed the question.
 
 ## Potential next research directions
 
