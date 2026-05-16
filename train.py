@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -340,6 +341,9 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    swa_val_metrics: dict | None = None,
+    swa_val_agg: dict | None = None,
+    swa_updates: int = 0,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -361,6 +365,15 @@ def write_experiment_summary(
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
             summary[f"best_val/{split_name}/{k}"] = v
+    if swa_val_agg is not None and "avg/mae_surf_p" in swa_val_agg:
+        summary["swa_val_avg/mae_surf_p"] = swa_val_agg["avg/mae_surf_p"]
+        summary["swa_updates"] = swa_updates
+        summary["swa_start_epoch"] = cfg.swa_start_epoch
+        summary["live_best_val_avg/mae_surf_p"] = best_avg_surf_p
+        if swa_val_metrics is not None:
+            for split_name, m in swa_val_metrics.items():
+                for k, v in m.items():
+                    summary[f"swa_val/{split_name}/{k}"] = v
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
         summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
@@ -399,6 +412,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0   # Huber loss transition threshold (normalized space)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
+    swa_start_epoch: int = 0   # 0 disables SWA; 0-based epoch index (matches loop var) from which to begin averaging
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -449,6 +463,13 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# SWA: equal-weight average of late-training snapshots (Izmailov et al. 2018).
+# Transolver uses LayerNorm only — no BatchNorm pass needed.
+swa_model = AveragedModel(model) if cfg.swa_start_epoch > 0 else None
+swa_updates = 0
+if swa_model is not None:
+    print(f"SWA enabled: will average snapshots from epoch index {cfg.swa_start_epoch} onward")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
@@ -537,6 +558,12 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # SWA snapshot averaging: once the model has descended into a low-loss basin,
+    # equal-weight average each subsequent epoch's weights into swa_model.
+    if swa_model is not None and epoch >= cfg.swa_start_epoch:
+        swa_model.update_parameters(model)
+        swa_updates += 1
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -548,6 +575,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "swa_updates": swa_updates,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -562,10 +590,42 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest live val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    swa_val_metrics = None
+    swa_val_agg = None
+    swa_val_avg_surf_p = None
+    if swa_model is not None and swa_updates > 0:
+        print(
+            f"SWA enabled: averaged {swa_updates} epoch snapshots "
+            f"(started at epoch index {cfg.swa_start_epoch})"
+        )
+        swa_model.eval()
+        torch.save(swa_model.state_dict(), model_dir / "swa_checkpoint.pt")
+        eval_model = swa_model
+
+        print("\nFinal validation with SWA-averaged model...")
+        swa_val_metrics = {
+            name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_agg = aggregate_splits(swa_val_metrics)
+        swa_val_avg_surf_p = swa_val_agg["avg/mae_surf_p"]
+        print(f"\n  SWA VAL  avg_surf_p={swa_val_avg_surf_p:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_metrics[name])
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "swa_val",
+            "swa_updates": swa_updates,
+            "swa_start_epoch": cfg.swa_start_epoch,
+            "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
+            "live_best_val_avg/mae_surf_p": best_avg_surf_p,
+            "swa_val_splits": swa_val_metrics,
+        })
+    else:
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.eval()
+        eval_model = model
 
     test_metrics = None
     test_avg = None
@@ -577,7 +637,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -589,6 +649,8 @@ if best_metrics:
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "eval_model": "swa" if (swa_model is not None and swa_updates > 0) else "live_best",
+            "swa_updates": swa_updates,
         })
 
     write_experiment_summary(
@@ -601,6 +663,9 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        swa_val_metrics=swa_val_metrics,
+        swa_val_agg=swa_val_agg,
+        swa_updates=swa_updates,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
