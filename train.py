@@ -403,6 +403,10 @@ class Config:
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    schedule: str = "cosine"       # 'cosine' (default) or 'wsd' (warmup-stable-decay)
+    wsd_warmup_epochs: int = 2     # WSD warmup phase length (linear ramp 0 -> peak)
+    wsd_stable_epochs: int = 8     # WSD stable phase length (hold at peak)
+    wsd_decay_epochs: int = 4      # WSD decay phase length (linear peak -> 0)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -455,7 +459,26 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+if cfg.schedule == "wsd":
+    W = cfg.wsd_warmup_epochs
+    S = cfg.wsd_stable_epochs
+    D = cfg.wsd_decay_epochs
+
+    def wsd_lambda(epoch: int) -> float:
+        if epoch < W:
+            return (epoch + 1) / max(W, 1)
+        elif epoch < W + S:
+            return 1.0
+        elif epoch < W + S + D:
+            return max(0.0, 1.0 - (epoch - W - S) / max(D, 1))
+        else:
+            return 0.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_lambda)
+elif cfg.schedule == "cosine":
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+else:
+    raise ValueError(f"Unknown schedule '{cfg.schedule}' (expected 'cosine' or 'wsd')")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -482,6 +505,7 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    epoch_lr = optimizer.param_groups[0]["lr"]  # LR used by this epoch's optimizer steps
     model.train()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_pre = 0.0
@@ -563,12 +587,14 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        "lr": epoch_lr,
+        "schedule": cfg.schedule,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={epoch_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
