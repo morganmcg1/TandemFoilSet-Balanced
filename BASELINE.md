@@ -15,7 +15,7 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 - Loss: Charbonnier `sqrt(diff² + ε²)`, ε=1e-3 (**merged from PR #3143**, default
   flipped in **PR #3440**)
   `loss = vol_loss + surf_weight * surf_loss`, `surf_weight=10.0`
-- Optimizer: AdamW, `lr=5e-4`, `weight_decay=1e-4`
+- Optimizer: AdamW, `lr=5e-4`, `weight_decay=1e-3` (**updated from PR #3630** — wd=1e-3 wins clean 3-arm monotonic sweep on truly-stacked base)
 - Schedule: `SequentialLR(LinearLR warmup → CosineAnnealingLR)`,
   `warmup_epochs=3`, `eta_min=1e-6` (**merged from PR #3150**)
 - **Gradient clipping**: `clip_grad_norm_(max_norm=0.5)` — **default is now 0.5**
@@ -63,8 +63,36 @@ A confirmation arm with all three levers stacked (`--mlp_type geglu --pos_enc_mo
 Compared to the published 81.48/72.68 (which lacked bf16+Fourier), the truly-stacked baseline is **−3.9 val / −4.6 test**. Stacking does compose. The new effective baseline for advisor decisions is **val=77.57 / test=68.77** (from d66p6r3s) — any PR must beat this number.
 
 **To beat baseline going forward**:
-- val_avg/mae_surf_p < **77.57**
-- test_avg/mae_surf_p < **68.77**
+- val_avg/mae_surf_p < **72.59** (PR #3630 wd_1e-3_stacked, run zmahpm3e)
+- test_avg/mae_surf_p < **66.45** (same run)
+
+---
+
+## 2026-05-16 — PR #3630: AdamW weight decay sweep — **MERGED ⭐ (new val AND test best)**
+
+- **val_avg/mae_surf_p: 72.59** (NEW BEST, −5.0 vs 77.57 prior truly-stacked baseline, −4.5 vs published 8ile1q1j)
+- **test_avg/mae_surf_p: 66.45** (NEW BEST, −2.3 vs 68.77 prior truly-stacked best, −6.2 vs published 8ile1q1j)
+- **W&B run:** zmahpm3e (wd_1e-3_stacked)
+- **Sweep:** wd=1e-5 → 1e-4 → 1e-3, monotonic improvement on both val and test
+- **Surface MAE (test, wd_1e-3_stacked, run zmahpm3e):**
+  - test_single_in_dist mae_surf_p = 85.0510
+  - test_geom_camber_rc mae_surf_p = 74.8364
+  - test_geom_camber_cruise mae_surf_p = 45.1028
+  - test_re_rand mae_surf_p = 60.8268
+- **best_epoch:** 16 / 31.2 min
+- **Reproduce:**
+  ```
+  cd target/
+  python train.py --weight_decay 1e-3 \
+    --mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 \
+    --wandb_group wd-stacked --wandb_name wd_1e-3_stacked --epochs 50
+  ```
+
+Notes: clean 3-arm monotonic sweep (wd_1e-5=77.34, wd_1e-4=74.72, wd_1e-3=72.59). Within-sweep Δ (−2.1 val from 1e-4→1e-3) is below run-to-run noise (~3-4 units). The merge is conservative — the result is the best of 3 arms with clean ordering, but multi-seed confirmation is recommended. Nezuko analysis: stacking (bf16+geglu+fourier) reduces the marginal regularization load on wd, so the best wd shifts higher. Per-split: wd_1e-3 helps geom_camber_rc and re_rand; hurts geom_camber_cruise slightly (−3.6 on that split vs wd_1e-4).
+
+**To beat this baseline**, any PR must achieve val_avg/mae_surf_p < **72.59** by ≥5 units for clear attribution.
+
+---
 
 ## 2026-05-16 — PR #3370: Gated MLPs (GeGLU) in TransolverBlocks — **MERGED ⭐⭐ (new val AND test best)**
 
