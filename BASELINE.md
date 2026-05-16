@@ -9,7 +9,7 @@ target base `icml-appendix-charlie`).
 | Group | Value |
 |-------|-------|
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=1`, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]**, **GEGLU FFN (PR #4105)** |
-| Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
+| Optim | **Schedule-Free AdamW** `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` — PR #4071; NO LR scheduler |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
 | Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
@@ -20,48 +20,52 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #4105, GEGLU FFN on bf16 FiLM-Re+AoA, single-seed, best epoch 23)
+## Current best metrics (PR #4071, Schedule-Free AdamW on bf16+GEGLU, single-seed, best epoch 23)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **50.57** |
-| `test_avg/mae_surf_p` | **43.94** |
-| `test/test_single_in_dist/mae_surf_p` | 49.90 |
-| `test/test_geom_camber_rc/mae_surf_p` | 56.89 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 26.45 |
-| `test/test_re_rand/mae_surf_p` | 42.52 |
+| `val_avg/mae_surf_p` **(primary)** | **45.07** |
+| `test_avg/mae_surf_p` | **38.58** |
+| `test/test_single_in_dist/mae_surf_p` | 43.26 |
+| `test/test_geom_camber_rc/mae_surf_p` | 51.59 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 22.20 |
+| `test/test_re_rand/mae_surf_p` | 37.26 |
 
 Per-split val surface-p MAE at best checkpoint (single seed, epoch 23):
 
-| Split | mae_surf_p | Δ vs prev (59.08) |
+| Split | mae_surf_p | Δ vs prev (50.57) |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  56.18 | -19.2% |
-| `val_geom_camber_rc`     |  63.01 |  -8.5% |
-| `val_geom_camber_cruise` |  32.57 | -19.2% |
-| `val_re_rand`            |  50.52 | -12.3% |
-| **avg** | **50.57** | **-14.4%** |
+| `val_single_in_dist`     |  48.79 | -13.1% |
+| `val_geom_camber_rc`     |  58.57 |  -7.1% |
+| `val_geom_camber_cruise` |  26.72 | -18.0% |
+| `val_re_rand`            |  46.21 |  -8.5% |
+| **avg** | **45.07** | **-10.9%** |
 
-Artifact: `models/model-charliepai2i48h1-frieren-geglu-ffn-on-bf16-20260516-194450/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-fern-sf-adamw-on-bf16-geglu-20260516-204614/metrics.jsonl`
 
-Note: GEGLU replaces the standard `Linear → GELU → Linear` FFN with gated `W2(GELU(W1a(x)) * W1b(x))` (Shazeer 2020 arXiv:2002.05202). The gate enables per-position, per-channel feature selection — the model learns "this channel matters at this kind of mesh point" rather than activating uniformly. n_params 492K → 737K (+50%, all in FFN stack). Per-epoch cost +6% (74.4s → 78.9s). Trained 23 epochs in 30-min cap vs baseline's 25 — losing 2 epochs but gaining ~1.7 pts per remaining epoch and still descending hard at terminal epoch. Largest gains on `val_single_in_dist` and `val_geom_camber_cruise` (-19.2% each), exactly the regimes where pressure magnitudes vary most. Zero NaN/Inf throughout.
+Note: Schedule-Free AdamW (Defazio et al. 2024, arXiv:2405.15682) replaces cosine annealing with an optimizer that maintains its own iterate average — no `T_max` required. The key insight: with `T_max=50` and only 23 effective epochs, cosine LR at epoch 23 is at ~59% of peak (i.e. `0.5*(1+cos(23/50*π))*lr ≈ 0.59*lr`), so the last ~10 epochs of the GEGLU baseline were making under-powered gradient steps. Schedule-Free keeps the effective LR at full strength right up to the timeout, giving late epochs ~1.5-2× larger updates. Zero compute overhead: 79.2 s/epoch vs 78.9 s baseline (+0.4%); peak VRAM 25.96 GB (+0.3% vs GEGLU baseline's 25.7 GB). All 8 val+test splits improved. EMA (decay=0.997) and SF coexist cleanly — SF operates on the optimizer iterate, EMA on shadow model parameters, no competition. Run was still descending at epoch 23 (-0.79 pts/epoch at terminal), so there remains headroom.
 
-Why it works: surface-pressure distributions vary dramatically by regime (high-Re vs low-Re samples differ by an order of magnitude in y-std; surface vs interior nodes have wildly different statistics). The gating projection lets the FFN gate features rather than uniformly transforming them, providing implicit "experts" within each block. The mechanism is orthogonal to bf16 (precision/bandwidth), FiLM (broadcast-scalar conditioning), and EMA (averaging), so it compounds cleanly with prior wins.
+Why it works: the cosine T_max fragility grows with each compute-saving win (bf16, n_layers, compile each silently shrink effective epochs vs the T_max budget). Schedule-Free eliminates this hidden coupling by construction — the optimizer is portable across compute budgets. The LR schedule was the hidden bottleneck limiting late-epoch gradient quality.
 
-**GEGLU compute impact:** sec/epoch 74.4 → 78.9 (+6%), VRAM ~23.5 → 25.7 GB (+9%). Still well under the 96 GB cap; headroom remains for further experiments.
+**SF key implementation detail:** call `optimizer.train()` before each training step and `optimizer.eval()` before val/test evaluation; omitting these switches silently evaluates at the wrong iterate and negates the win.
 
 Reproduce:
 ```bash
 cd target/
-python train.py --experiment_name geglu-repro --agent <name>
-# GEGLU: PhysicsAttention.mlp = MLP_GEGLU(n_hidden, n_hidden*mlp_ratio, n_hidden)
+pip install schedulefree
+python train.py --experiment_name sf-repro --agent <name>
+# SF: optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=5e-4, weight_decay=1e-4, warmup_steps=200)
+# Remove cosine scheduler entirely. Add optimizer.train()/optimizer.eval() around train/val steps.
 ```
 
 ### Note on val variance
 
 Single-seed variance is ±5-10 pts on `val_avg/mae_surf_p`. Improvements
 smaller than ~5% may be within noise — confirm with a re-run if uncertain.
+
+**Total improvement from calibration baseline:** 143.52 → 45.07 = **-68.6%**
 
 ### Calibration-only baseline (PR #3107, default config MSE)
 
@@ -108,4 +112,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #4004 | FiLM-on-Re: condition each Transolver block on log(Re) scalar | 71.46 | -9.6% |
 | 2026-05-16 | #4018 | FiLM-Re+AoA: expand conditioning to [log_Re, AoA0, AoA1] | 68.80 | -3.7% |
 | 2026-05-16 | #4064 | bf16 autocast: -27% sec/epoch, 18→25 epochs in 30-min cap | 59.08 | -14.1% |
-| 2026-05-16 | #4105 | GEGLU FFN: gating projection replaces vanilla MLP, all 4+4 splits improved 9-19% | **50.57** | **-14.4%** |
+| 2026-05-16 | #4105 | GEGLU FFN: gating projection replaces vanilla MLP, all 4+4 splits improved 9-19% | 50.57 | -14.4% |
+| 2026-05-16 | #4071 | Schedule-Free AdamW: eliminates cosine T_max fragility, all 8 splits improved 7-18% | **45.07** | **-10.9%** |
