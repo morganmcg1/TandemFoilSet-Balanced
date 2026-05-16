@@ -469,3 +469,69 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-16 14:32 — PR #3906: Clip threshold sweep — clip=0.25 beats clip=1.0 by −3.42% paired
+
+**New best `val_avg/mae_surf_p`: 80.893** (was: 81.660 — **−0.94%**)
+
+### Val surface pressure MAE per split
+
+| Split | val_avg/mae_surf_p |
+|---|---:|
+| `val_single_in_dist`     | 93.062 |
+| `val_geom_camber_rc`     | 90.132 |
+| `val_geom_camber_cruise` | 61.764 |
+| `val_re_rand`            | 78.616 |
+| **val_avg**              | **80.893** |
+
+### Test surface pressure MAE (3 finite splits; cruise NaN pre-existing)
+
+| Split | test/mae_surf_p |
+|---|---:|
+| `test_single_in_dist`   | 79.300 |
+| `test_geom_camber_rc`   | 80.780 |
+| `test_re_rand`          | 70.587 |
+| `test_avg (3 finite)` | **76.889** |
+
+### Three-arm sweep summary (this PR)
+
+| Arm | clip_norm | val_avg | Δ vs A |
+|---|---:|---:|---:|
+| A | 1.0 | 83.756 | — (control) |
+| B | 4.0 | 86.647 | +3.45% (regression) |
+| **C** | **0.25** | **80.893** | **−3.42% (winner)** |
+
+Monotone: tighter clip = better. Arm C clip rate = **100% every epoch throughout**. Direction normalization (not outlier suppression) is the load-bearing mechanism.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-armc-clip0_25-20260516-133449/metrics.jsonl` ← **winner**
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-armc-clip0_25-20260516-133449/metrics.yaml`
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-arma-clip1_0-20260516-113014/metrics.jsonl` (paired control)
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-armb-clip4_0-20260516-122208/metrics.jsonl` (paired regression arm)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film --grad_clip_norm 0.25
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16
+# Scheduler: --cosine_t_max 15
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# FiLM: --film_cond --two_shot_film  (shared conditioner, two injection sites per block)
+# Gradient clip: --grad_clip_norm 0.25  (clips to 0.25 norm; 100% clip rate all-run)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
+# surf_weight=10
+```
