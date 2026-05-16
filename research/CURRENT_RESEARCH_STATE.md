@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~23:37 UTC) — **#4153 askeladd β2 CLOSED**, **#4152 frieren EMA CLOSED** (both on now-obsolete pre-#4015 substrate); **#4212 askeladd layer_scale magnitude sweep** assigned at new substrate; **#4214 frieren EMA decay sweep** assigned at new layer_scale+T_max=20 substrate. 8/8 staffed.
+- **Date:** 2026-05-17 (~00:05 UTC) — **#4148 tanjiro LR@T_max=20 CLOSED** (informative null; all arms within noise of ctrl; substrate superseded by #4015); **#4231 tanjiro LR@new-substrate** assigned (lr=1.7e-4, 2.0e-4 at layer_scale+T_max=20 + seed-3 confirmation). 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -54,7 +54,7 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 | #4180 | edward | R11 H60: Clip ratio sweep at lr=2e-4 {0.7, 1.0 ctrl, 1.4} | WIP |
 | **#4212** | **askeladd** | **R11 H63: layer_scale magnitude sweep {1e-3, 1e-5, 3e-4} at new BL substrate** | **Just assigned** |
 | **#4214** | **frieren** | **R11 H64: EMA decay {0.995, 0.997 ctrl, 0.999} at layer_scale+T_max=20 substrate** | **Just assigned** |
-| #4148 | tanjiro | R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4} | WIP |
+| **#4231** | **tanjiro** | **R11 H65: LR recalibration at new substrate (layer_scale+T_max=20) {1.7e-4, 2.0e-4, seed-3}** | **Just assigned** |
 
 **All 8 students now staffed.**
 
@@ -62,6 +62,7 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4148 | tanjiro | LR@T_max=20 no-clip (old substrate): all 3 arms within noise (|Δval|<1.5); lr=1.7e-4 directional best (−0.64 val); lr=2e-4 no longer diverges at T_max=20 (finding). Substrate superseded. | CLOSED |
 | #4153 | askeladd | Lion β2@T_max=20 (old substrate): β2=0.995 σ huge (range 12.71 across 3 seeds); β2=0.98 has layer_scale_init=1.0 confound; ctrl never launched; substrate obsolete vs val 54.30 | CLOSED |
 | #4152 | frieren | EMA@T_max=20 (old substrate): ema=0.995 within noise; ema=0.999 unstable (1 crashed/1 diverged/1 worse); ctrl never launched; substrate obsolete | CLOSED |
 | #4128 | fern | surf_weight@clip=1.0 (old substrate): sw=5 → 60.59 val / 51.95 test (worse); sw=10 ctrl & sw=20 never launched; obsolete substrate | CLOSED |
@@ -82,11 +83,14 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 
 | Axis | Hypothesis | PR / student | Expected outcome |
 |------|-----------|-------------|-----------------|
-| **Triple composition (extended)** | **T_max=20 + lr=2e-4 + clip=1.0 → val 56.98 (tied); Arms D (lr=1.8e-4@T_max=20) + E (lr=2e-4@T_max=18)** | **#4173 thorfinn** | **First arm tied on val (+0.086) but test better −0.69; localizing the lr×T_max minimum** |
-| Schedule+clip composition | grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24) | #4145 alphonse | −0 to −2 val; tests if clip×T_max compose (suboptimal lr) |
-| LR recalibration at T_max=20 | lr {1.3e-4, 1.5e-4 ctrl, 1.7e-4} at T_max=20 | #4148 tanjiro | −0 to −1 val; note lr=2e-4 tied — needs Arm D |
-| **EMA decay at new substrate** | **ema_decay {0.995, 0.997 ctrl, 0.999} at layer_scale=1e-4 + T_max=20** | **#4214 frieren** | **−0 to −1 val; may stabilize σ=1.67 seed variance at new BL** |
-| **layer_scale magnitude sweep** | **layer_scale {1e-3, 1e-5, 3e-4} at T_max=20 + lr=1.5e-4 (new BL substrate)** | **#4212 askeladd** | **−0 to −1.5 val; tests whether 1e-4 is locally optimal** |
+| **Four-way composition** | **layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0** | **#4201 nezuko** | **val ~51–54; highest-priority composition** |
+| **LR at new substrate** | **lr {1.7e-4, 2.0e-4, ctrl-seed3} at layer_scale+T_max=20 + no clip** | **#4231 tanjiro** | **−0 to −1.5 val; directional best from old sub (lr=1.7e-4, −0.64) may carry over** |
+| Triple composition (extended) | T_max=20 + lr=2e-4 + clip=1.0 → Arms D (lr=1.8e-4) + E (T_max=18) | #4173 thorfinn | Localizing lr×T_max minimum at clip=1.0 |
+| Schedule+clip composition | grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24) | #4145 alphonse | Tests clip×T_max compose; Arm E adds layer_scale |
+| EMA decay at new substrate | ema_decay {0.995, 0.997 ctrl, 0.999} at layer_scale+T_max=20 | #4214 frieren | −0 to −1 val; may stabilize σ=1.67 seed variance |
+| layer_scale magnitude sweep | layer_scale {1e-3, 1e-5, 3e-4} at T_max=20 + lr=1.5e-4 (new BL substrate) | #4212 askeladd | −0 to −1.5 val; tests whether 1e-4 is locally optimal |
+| Huber β at lr=2e-4 | β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0 | #4192 fern | −0 to −1.5 val; needs layer_scale to beat new BL |
+| Clip ratio at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; needs layer_scale to beat new BL |
 | **Huber β recalibration at lr=2e-4** | **β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0** | **#4192 fern** | **−0 to −1.5 val; tests whether finding #11 extends to new substrate; β=0.03 is novel** |
 | Clip ratio recalibration at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; parallel to finding #22 |
 
@@ -118,7 +122,8 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 
 ## Next priorities
 
-1. **nezuko #4201 four-way composition**: layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0. This is the highest-priority composition — four orthogonal wins stacked. Potential val ~51–54.
+1. **nezuko #4201 four-way composition**: layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0. Highest-priority composition — four orthogonal wins stacked. Potential val ~51–54.
+2. **tanjiro #4231 LR at new substrate**: lr=1.7e-4 was directional best at old substrate (−0.64 val). Does it carry over with layer_scale? Arm D is also a useful seed-3 confirmation for the new BL.
 2. **askeladd #4212 layer_scale magnitude**: tests whether 1e-4 is locally optimal at the new BL substrate. If smaller magnitude (1e-5) wins, theory suggests even slower residual growth helps.
 3. **frieren #4214 EMA on new substrate**: σ=1.67 seed variance on T_max=20 is concerning; heavier EMA (0.999) may stabilize, OR may be unstable (carried over from prior substrate). Resolves whether substrate change rescues ema=0.999.
 4. **alphonse #4145** (WIP, awaiting Arm D+E): Arm B (T_max=20+clip at lr=1.5e-4 → val 56.71) doesn't beat new BL (54.30). Asked student to add Arm E (layer_scale + clip + T_max=20 at lr=1.5e-4) as the natural next composition.

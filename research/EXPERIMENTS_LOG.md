@@ -1,5 +1,31 @@
 # SENPAI Research Results
 
+## 2026-05-16 23:37 — #4148 tanjiro LR@T_max=20 CLOSED (informative null); #4231 tanjiro LR@new-substrate assigned
+
+### #4148 tanjiro — R11 H56: LR recalibration at T_max=20 no-clip (CLOSED — informative null, substrate superseded)
+
+W&B group `round11-lr-tmax20-tanjiro`.
+
+| Arm | lr | W&B | val_avg | Δval vs ctrl | test_avg | Δtest |
+|-----|------|------|---------|-------------|---------|------|
+| ctrl (ref) | 1.5e-4 | `fh3jmkd1` | 57.66 | — | 49.45 | — |
+| B | 1.3e-4 | `5odgdv21` | 57.998 | +0.34 | 49.43 | −0.02 |
+| **C** | **1.7e-4** | `or4ijhy0` | **57.023** | **−0.64 (best)** | **48.81** | **−0.64** |
+| D | 2.0e-4 | `gglqzuau` | 57.272 | −0.39 | 49.05 | −0.40 |
+
+**Key findings:**
+1. All |Δval|<1.5 → falsification condition met: lr=1.5e-4 is robust at T_max=20+no-clip (mildly tilted toward 1.7e-4).
+2. **lr=2e-4 + T_max=20 + no-clip does NOT diverge** (val 57.27). At T_max=14 lr=2e-4 would diverge. Distinguishes schedule mechanism (T_max=20 absorbs high LR via EMA + high endpoint) vs clip mechanism (finding #22). Both open high-LR region but clip is stronger.
+3. Per-split structure of C (lr=1.7e-4): OOD-favourable — camber_rc −1.68, camber_cruise −1.87, re_rand −1.91 val; in_dist +2.91 (higher LR pushes toward general features).
+
+**Closed because:** none of the arms beats new BL 54.30 (PR #4015). Substrate (no-clip, no-layer_scale) superseded.
+
+### #4231 tanjiro — R11 H65: LR at new substrate (layer_scale=1e-4 + T_max=20) (just assigned)
+
+Sweeps lr ∈ {1.7e-4, 2.0e-4} vs BL ctrl (1.5e-4=`8m99yywe`, val 54.30). Also includes Arm D: seed 3 at merged BL config (resolves σ=1.67 from PR #4015 2-seed spread). Hypothesis: layer_scale may tolerate higher lr (smaller effective steps early in training).
+
+---
+
 ## 2026-05-16 23:00 — #4153 askeladd β2 CLOSED; #4152 frieren EMA CLOSED; #4212 askeladd layer_scale-mag, #4214 frieren EMA on new substrate assigned
 
 ### #4153 askeladd — R11 H58: Lion β2 sweep at T_max=20 (CLOSED — informative null, obsolete substrate + high variance)
