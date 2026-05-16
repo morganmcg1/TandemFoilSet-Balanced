@@ -281,6 +281,38 @@ def invert_asinh_vel(pred, scale):
 
 
 # ---------------------------------------------------------------------------
+# Data augmentation helpers
+# ---------------------------------------------------------------------------
+
+def rotate_mesh(positions: torch.Tensor, vel_x: torch.Tensor, vel_y: torch.Tensor,
+                theta_deg: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Rotate mesh node positions and velocity targets by theta_deg degrees.
+
+    Args:
+        positions: [B, N, 2] — raw (x, z) node coordinates (dims 0-1 of x).
+        vel_x:     [B, N]   — Ux targets (channel 0 of y).
+        vel_y:     [B, N]   — Uy targets (channel 1 of y).
+        theta_deg: rotation angle in degrees (positive = counter-clockwise).
+
+    Returns:
+        (positions_rot, vel_x_rot, vel_y_rot) — same shapes as inputs.
+
+    Note: pressure (y channel 2) is scalar and unchanged. Shape descriptors
+    (saf, dsdf) and flow condition features (AoA, Re, NACA) are also unchanged.
+    """
+    theta = torch.tensor(theta_deg * 3.14159265358979 / 180.0, device=positions.device,
+                         dtype=positions.dtype)
+    cos_t = torch.cos(theta)
+    sin_t = torch.sin(theta)
+    x_rot = positions[..., 0] * cos_t - positions[..., 1] * sin_t
+    y_rot = positions[..., 0] * sin_t + positions[..., 1] * cos_t
+    positions_rot = torch.stack([x_rot, y_rot], dim=-1)
+    vel_x_rot = vel_x * cos_t - vel_y * sin_t
+    vel_y_rot = vel_x * sin_t + vel_y * cos_t
+    return positions_rot, vel_x_rot, vel_y_rot
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -475,6 +507,7 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    mesh_aug_rot_deg: float = 0.0  # >0 enables uniform random rotation in ±deg of positions+velocity targets, plus 50% horizontal flip; training-only
 
 
 cfg = sp.parse(Config)
@@ -590,6 +623,24 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Mesh augmentation: rotation ± mesh_aug_rot_deg degrees + 50% horizontal flip.
+        # Applied in raw coordinate space (before normalization), training only.
+        # Velocity targets are rotated by the SAME angle to maintain physics consistency.
+        # Pressure (y[:,2]) is scalar — unchanged. Shape descriptors and flow conditions — unchanged.
+        if cfg.mesh_aug_rot_deg > 0:
+            theta = (torch.rand(1).item() * 2 - 1) * cfg.mesh_aug_rot_deg
+            positions_aug, vel_x_aug, vel_y_aug = rotate_mesh(
+                x[..., 0:2], y[..., 0], y[..., 1], theta
+            )
+            x = x.clone()
+            x[..., 0:2] = positions_aug
+            y = y.clone()
+            y[..., 0] = vel_x_aug
+            y[..., 1] = vel_y_aug
+            if torch.rand(1).item() < 0.5:
+                x[..., 1] = -x[..., 1]   # flip z-coordinate
+                y[..., 1] = -y[..., 1]   # mirror Uy
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
