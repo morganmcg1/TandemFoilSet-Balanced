@@ -39,13 +39,15 @@ If these compound, every split improves simultaneously — the most complete gen
 | #3207 | nezuko | FiLM-Re + geom-slice (2 seeds) | Sent back 03:45; rebasing |
 | #3652 | fern | OneCycleLR + FiLM-Re (lr=5e-4, 8e-4) | Just assigned |
 | #3653 | frieren | Fourier bands 12/16 + FiLM-Re | Just assigned |
-| #3597 | edward | batch_size=8 + lr=1e-3 (old baseline context) | WIP, arm running |
-| #3194 | askeladd | 5-ep warmup + SmoothL1 (old baseline context) | WIP, 2nd arm running |
+| #3669 | edward | SWA on FiLM-Re (stochastic weight averaging) | Just assigned |
+| #3670 | askeladd | surf_weight sweep {5,15,20} on FiLM-Re | Just assigned |
 
 ## Closed this cycle
 
-- **PR #3568 (fern mlp_ratio=4):** CLOSED. val=95.47 (+5.4% worse). Depth/width scaling fails at 30-min budget (same finding as #3413).
-- **PR #3520 (frieren pure L1):** CLOSED. val~93.98 (worse than old baseline). L1→0 territory covered by tanjiro's sweep; FiLM-Re is far more impactful.
+- **PR #3597 (edward bs=8 + lr=1e-3):** CLOSED. val=94.08 (+3.8% vs old baseline). Batch/LR scaling fails at 30-min budget.
+- **PR #3194 (askeladd warmup+cosine):** CLOSED. Best arm val=91.90 (fails old baseline by 1.4%). Warmup eats wall-clock budget without benefit.
+- **PR #3568 (fern mlp_ratio=4):** CLOSED. val=95.47 (+5.4% worse). Depth/width scaling fails at 30-min budget.
+- **PR #3520 (frieren pure L1):** CLOSED. val~93.98 (worse than old baseline). L1→0 territory covered by tanjiro's sweep.
 
 ## Compound research questions (priority order)
 

@@ -16,6 +16,42 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 04:25 — PR #3597: Larger batch_size=8 + lr=1e-3 (edward) — CLOSED
+- student: willowpai2i24h2-edward
+- branch: `willowpai2i24h2-edward/larger-batch-bs8-smoothl1`
+- hypothesis: linear LR scaling for larger batch (bs=4→8, lr=5e-4→1e-3) improves throughput and regularization
+- W&B run: `bdfz13em`
+
+| Metric | This run | Baseline (#3215, old) | New baseline (#3350 FiLM-Re) |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 94.08 | 90.60 | **79.90** |
+| `test_avg/mae_surf_p` | 83.90 | 83.00 | **69.33** |
+
+**Analysis:** val=94.08 fails the old baseline by 3.8% — linear LR scaling for batch doubling did not work within the 30-min wall-clock budget. Gap to new FiLM-Re baseline is 17.7%. Batch/LR scaling consistently fails at this wall-clock limit.
+
+**Decision:** CLOSED. Assigning SWA on FiLM-Re.
+
+---
+
+## 2026-05-16 04:25 — PR #3194: 5-ep LR warmup + cosine annealing (askeladd) — CLOSED
+- student: willowpai2i24h2-askeladd
+- branch: `willowpai2i24h2-askeladd/lr-warmup-cosine`
+- hypothesis: 5-epoch linear LR warmup before cosine annealing stabilizes early training on heterogeneous mesh sizes
+- W&B runs: `vqqdb62c` (arm 1), `ls2r0kta` (arm 2)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| `vqqdb62c` (arm 1) | 103.47 | 87.64 |
+| `ls2r0kta` (arm 2) | **91.90** | **78.78** |
+| Baseline (#3215 old) | 90.6039 | 83.0029 |
+| **FiLM-Re baseline (#3350)** | **79.9018** | **69.3296** |
+
+**Analysis:** Even best arm (91.90) fails old baseline by 1.4% and is 15% above new FiLM-Re baseline. High seed variance (103.47 vs 91.90). Warmup eats wall-clock budget that baseline spends on convergence. Not a productive direction.
+
+**Decision:** CLOSED. Assigning surf_weight sweep on FiLM-Re.
+
+---
+
 ## 2026-05-16 03:30 — PR #3350: FiLM-Re conditioning on Transolver (alphonse) — MERGED (NEW BASELINE)
 - student: willowpai2i24h2-alphonse
 - branch: `willowpai2i24h2-alphonse/film-re-conditioning`
