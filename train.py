@@ -493,11 +493,21 @@ class Config:
     use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
     sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
     n_hidden: int = 128  # Transolver width (slice-token / MLP block / output projection)
+    seed: int | None = None  # if set, seed torch/numpy/random for reproducibility
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed is not None:
+    import random as _random
+    import numpy as _np
+    _random.seed(cfg.seed)
+    _np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seed: {cfg.seed}")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
