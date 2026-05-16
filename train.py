@@ -47,23 +47,33 @@ from data import (
 )
 
 
-def augment_x_with_local_re(x: torch.Tensor) -> torch.Tensor:
+def augment_x_with_local_re(x: torch.Tensor, surface_coord: str = "x_chord") -> torch.Tensor:
     """x: [B, N, 24] in PHYSICAL (unnormalized) space. Returns [B, N, 25].
 
-    Adds Re_x = log1p(Re * |x_chord|) gated to surface nodes only — a
-    boundary-layer-motivated local-Reynolds feature that varies along the
-    foil surface, in contrast to the existing global log(Re) at dim 13.
+    Adds Re_s = log1p(Re * s) gated to surface nodes only, where s is a
+    streamwise surface coordinate selected by ``surface_coord``:
+      - "x_chord":  s = |x_chord| (dim 0). Simple but conflates "which foil" with
+        "where on foil" for tandem layouts where foil 2 is offset by gap+stagger.
+      - "saf_norm": s = ||saf||_2 (dims 2-3). Local to each foil's surface,
+        bounded ~[0, 0.36] across all domains, more faithful to boundary-layer
+        physics (arc-length from the local foil's leading edge).
     """
     log_re = x[..., 13:14]
     re = torch.exp(log_re)
-    x_pos = x[..., 0:1].abs()           # |x_chord|
+    if surface_coord == "x_chord":
+        s = x[..., 0:1].abs()
+    elif surface_coord == "saf_norm":
+        s = x[..., 2:4].norm(dim=-1, keepdim=True)
+    else:
+        raise ValueError(f"unknown surface_coord: {surface_coord!r}")
     is_surf = x[..., 12:13]             # 0/1
-    re_x = torch.log1p(re * x_pos) * is_surf
+    re_x = torch.log1p(re * s) * is_surf
     return torch.cat([x, re_x], dim=-1)
 
 
 def compute_re_x_stats(
     train_ds, batch_size: int = 4, num_workers: int = 4, n_samples: int = 100,
+    surface_coord: str = "x_chord",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Single-pass scan over the train set to compute mean/std of the new feature.
 
@@ -80,7 +90,7 @@ def compute_re_x_stats(
     total_sum_sq = 0.0
     total_n = 0
     for x, _y, _is_surf, mask in loader:
-        x_aug = augment_x_with_local_re(x)
+        x_aug = augment_x_with_local_re(x, surface_coord=surface_coord)
         re_x = x_aug[..., 24]
         re_x_valid = re_x[mask].double()
         total_sum += re_x_valid.sum().item()
@@ -266,7 +276,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, surface_coord: str = "x_chord") -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -285,7 +295,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_aug = augment_x_with_local_re(x)
+            x_aug = augment_x_with_local_re(x, surface_coord=surface_coord)
             x_norm = (x_aug - stats["x_mean_aug"]) / stats["x_std_aug"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
@@ -405,6 +415,7 @@ class Config:
     surf_weight: float = 10.0
     huber_delta: float = 1.0
     cosine_t_max: int = 20
+    surface_coord: str = "saf_norm"  # "x_chord" or "saf_norm" for local-Re feature
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -425,8 +436,10 @@ train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cf
 # Compute normalization stats for the local-Re feature on the training set.
 re_x_mean_cpu, re_x_std_cpu = compute_re_x_stats(
     train_ds, batch_size=4, num_workers=4, n_samples=100,
+    surface_coord=cfg.surface_coord,
 )
-print(f"local-Re feature stats: mean={re_x_mean_cpu.item():.4f}, std={re_x_std_cpu.item():.4f}")
+print(f"local-Re feature ({cfg.surface_coord}) stats: "
+      f"mean={re_x_mean_cpu.item():.4f}, std={re_x_std_cpu.item():.4f}")
 stats["re_x_mean"] = re_x_mean_cpu
 stats["re_x_std"] = re_x_std_cpu
 # Precompute the concatenated mean/std for the augmented 25-dim input.
@@ -505,7 +518,7 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_aug = augment_x_with_local_re(x)
+        x_aug = augment_x_with_local_re(x, surface_coord=cfg.surface_coord)
         x_norm = (x_aug - stats["x_mean_aug"]) / stats["x_std_aug"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
@@ -532,7 +545,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, surface_coord=cfg.surface_coord)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -590,7 +603,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, surface_coord=cfg.surface_coord)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
