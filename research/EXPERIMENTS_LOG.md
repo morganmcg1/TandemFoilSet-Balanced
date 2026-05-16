@@ -738,3 +738,25 @@ Improvement is consistent across ALL splits (every val and test split improves) 
 c=1.0 wins on test (best paper metric). c=0.5 wins on val by 0.014 (within noise). c=1.0 wins test_single_in_dist and test_geom_camber_rc; c=0.5 wins test_re_rand.
 
 **Decision: REQUEST CHANGES.** Cauchy c=1.0 beats old canonical (61.43) but does NOT beat new canonical (58.005/56.713) since both ran on the same old stack. Sent back to rebase onto EMA(0.99)+SOAP(freq=5) and re-run c=1.0 vs Huber baseline.
+
+---
+
+## 2026-05-16 06:27 — PR #3501 (thorfinn): surf_weight sweep — **CLOSED (accidental), NEW PR OPENED**
+
+- Branch: `willowpai2i48h3-thorfinn/soap-surf-weight-sweep`
+- Terminal SENPAI-RESULT had been posted (val=77.28 sw=5, within-PR winner)
+- PR closed accidentally at 05:33:43Z by morganmcg1 during merge cascade; could not be reopened via API
+
+**Action:** Assigned fresh PR #3736 `surf-weight-finer-ema-sweep` on new canonical (val=58.005).
+
+---
+
+## 2026-05-16 06:30 — PR #3736 (thorfinn): surf_weight finer sweep {10,5,3} on EMA+SOAP canonical — **ASSIGNED**
+
+- Branch: `willowpai2i48h3-thorfinn/surf-weight-finer-ema-sweep`
+- W&B group: `surf-weight-finer-ema-sweep`
+- 3 arms (sw=10 baseline, sw=5, sw=3) on full EMA(0.99)+SOAP(freq=5) stack, seed=42
+
+**Hypothesis:** Previous within-PR (SOAP-only) showed sw=5 < sw=10 < sw=20 monotonically (−1.5% val). The EMA smoothing may amplify this by reducing the gradient noise that surf_weight=10 was partially compensating for. We also explore sw=3 to check if the optimal continues decreasing.
+
+**Target:** val_avg/mae_surf_p < 58.005.

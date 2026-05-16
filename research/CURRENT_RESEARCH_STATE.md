@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 06:02 — **PR #3591 MERGED**: new canonical val=58.005 test=56.713; EMA decay=0.99 now default)
+- **Date:** 2026-05-16 (updated 06:30 — thorfinn reassigned #3736 surf-weight-finer-ema-sweep; frieren/fern actively rebasing)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 58.005`, `test_avg/mae_surf_p (excl cruise) = 56.713`
@@ -43,15 +43,14 @@ Old launch baseline: 135.30. Total gain: −57.1% over 6 compounding improvement
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
 | ~~#3591~~ | ~~nezuko~~ | ~~EMA decay=0.99~~ | **MERGED 05:57** | — |
-| **#3728** | **nezuko** | **EMA decay lower sweep {0.97, 0.95} vs 0.99** | **Training** | **WIP (new)** |
-| **#3493** | **alphonse** | **SOAP LR (lr=2e-3 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −3.2% val on SOAP-only)** |
-| ~~#3495~~ | ~~askeladd~~ | ~~SOAP precond_freq=5~~ | **MERGED 05:05** | — |
-| **#3703** | **askeladd** | **SOAP precond_freq finer {3, 2} vs freq=5 canonical** | **Optimization** | **WIP (new)** |
-| **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} on EMA+SOAP (clip5 winner)** | **Optimization** | **WIP — rebase + 3-arm compounding test (sent back 03:55, within-PR: −12.1% val on SOAP-only — BIGGEST round-3 signal)** |
-| **#3501** | **thorfinn** | **surf_weight (sw=5 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 04:50, within-PR: −1.5% val on SOAP-only)** |
-| **#3415** | **frieren** | **Log-Re sinusoidal (SOAP stack, seed=42)** | **Inputs** | **WIP — arm1 done (77.88), variants in progress** |
-| **#3316** | **fern** | **Huber beta sweep (0.5/1.0/2.0) on SOAP stack** | **Loss tuning** | **WIP — rebased, arms running** |
-| **#3612** | **edward** | **Cauchy c=1.0 vs Huber on new canonical (EMA 0.99)** | **Loss tuning** | **WIP — rebase + 2-arm confirmation (sent back 06:00)** |
+| **#3728** | **nezuko** | **EMA decay lower sweep {0.97, 0.95} vs 0.99** | **Training** | **WIP** |
+| **#3493** | **alphonse** | **SOAP LR (lr=2e-3 winner) on EMA+SOAP** | **Optimization** | **WIP — within-PR: −3.2% val on SOAP-only, rebasing** |
+| **#3703** | **askeladd** | **SOAP precond_freq finer {3, 2} vs freq=5 canonical** | **Optimization** | **WIP** |
+| **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} on EMA+SOAP (clip5 winner)** | **Optimization** | **WIP — within-PR: −12.1% val on SOAP-only (BIGGEST signal), rebasing** |
+| **#3736** | **thorfinn** | **surf_weight finer sweep {10,5,3} on EMA+SOAP canonical** | **Optimization** | **WIP (new — #3501 was accidentally closed)** |
+| **#3415** | **frieren** | **Log-Re sinusoidal on EMA+SOAP (rebasing)** | **Inputs** | **WIP — rebase in progress** |
+| **#3316** | **fern** | **Huber beta sweep (0.5/1.0/2.0) on EMA+SOAP (rebasing)** | **Loss tuning** | **WIP — rebase in progress** |
+| **#3612** | **edward** | **Cauchy c=1.0 vs Huber on new canonical (EMA 0.99)** | **Loss tuning** | **WIP — rebase + 2-arm confirmation** |
 
 Note: PRs #3493, #3495, #3497, #3501 are running against the SOAP-without-EMA baseline. Advisor has notified all 4 students about the new EMA canonical. Within-PR comparison is still valid for identifying the best hyperparameter setting; winners will be asked to rebase onto EMA+SOAP stack.
 
