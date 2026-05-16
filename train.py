@@ -81,6 +81,47 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class GEGLU(nn.Module):
+    """Gated Linear Unit (Shazeer 2020): out = value * gate_act(gate).
+
+    Single Linear(dim_in -> 2*dim_out) chunked into (value, gate).
+    gate_act in {"gelu" -> GEGLU, "silu" -> SwiGLU}.
+    """
+
+    def __init__(self, dim_in, dim_out, gate_act="gelu"):
+        super().__init__()
+        self.proj = nn.Linear(dim_in, 2 * dim_out)
+        self.gate_act = nn.GELU() if gate_act == "gelu" else nn.SiLU()
+
+    def forward(self, x):
+        x, gate = self.proj(x).chunk(2, dim=-1)
+        return x * self.gate_act(gate)
+
+
+class GatedMLP(nn.Module):
+    """FFN with gated activation: GEGLU(n_input -> n_hidden) -> Linear(n_hidden -> n_output).
+
+    Drop-in replacement for MLP with n_layers=0. The GEGLU gate IS the
+    nonlinearity, so no additional gated block is stacked.
+    """
+
+    def __init__(self, n_input, n_hidden, n_output, n_layers=0, gate_act="gelu", res=True):
+        super().__init__()
+        self.n_layers = n_layers
+        self.res = res
+        self.linear_pre = GEGLU(n_input, n_hidden, gate_act=gate_act)
+        self.linear_post = nn.Linear(n_hidden, n_output)
+        self.linears = nn.ModuleList(
+            [GEGLU(n_hidden, n_hidden, gate_act=gate_act) for _ in range(n_layers)]
+        )
+
+    def forward(self, x):
+        x = self.linear_pre(x)
+        for i in range(self.n_layers):
+            x = self.linears[i](x) + x if self.res else self.linears[i](x)
+        return self.linear_post(x)
+
+
 class ConditionMLP(nn.Module):
     """Produces (gamma, beta) FiLM parameters for a hidden_dim layer.
 
@@ -163,7 +204,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0,
+                 ffn_act="gelu"):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -172,8 +214,15 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        if ffn_act == "geglu":
+            self.mlp = GatedMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                                n_layers=0, gate_act="gelu", res=False)
+        elif ffn_act == "swiglu":
+            self.mlp = GatedMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                                n_layers=0, gate_act="silu", res=False)
+        else:
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                           n_layers=0, res=False, act=act)
         self.cond_dim = cond_dim
         if cond_dim > 0:
             self.film = ConditionMLP(cond_dim, hidden_dim)
@@ -199,6 +248,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
+                 ffn_act="gelu",
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -222,7 +272,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                cond_dim=cond_dim,
+                cond_dim=cond_dim, ffn_act=ffn_act,
             )
             for i in range(n_layers)
         ])
@@ -402,6 +452,7 @@ class Config:
     huber_delta_p: float = 0.25   # Huber delta for pressure channel p (per-channel)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
+    ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -446,6 +497,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=2,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
+    ffn_act=cfg.ffn_act,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
