@@ -118,6 +118,27 @@ class SwiGLUMlp(nn.Module):
         return self.fc_out(self.fc_main(x) * self.act(self.fc_gate(x)))
 
 
+class GeGLUMlp(nn.Module):
+    """GeGLU FFN: gated linear unit with GELU activation in the gate.
+
+    Shazeer 2020, "GLU Variants Improve Transformers". Identical structure to
+    SwiGLUMlp; only the gate nonlinearity differs (GELU vs SiLU). Same 2/3
+    hidden-dim factor keeps param count at parity with SwiGLU. Ablation lever
+    for isolating gating mechanism from SiLU-specific behavior.
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        geglu_h = int(round(n_hidden * 2 / 3))
+        self.fc_main = nn.Linear(n_input, geglu_h)
+        self.fc_gate = nn.Linear(n_input, geglu_h)
+        self.fc_out = nn.Linear(geglu_h, n_output)
+        self.act = nn.GELU()
+
+    def forward(self, x):
+        return self.fc_out(self.fc_main(x) * self.act(self.fc_gate(x)))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -176,8 +197,10 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False):
+                 use_swiglu=False, use_geglu=False):
         super().__init__()
+        if use_swiglu and use_geglu:
+            raise ValueError("use_swiglu and use_geglu are mutually exclusive")
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
@@ -187,6 +210,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         if use_swiglu:
             self.mlp = SwiGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        elif use_geglu:
+            self.mlp = GeGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         else:
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                            n_layers=0, res=False, act=act)
@@ -211,7 +236,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu=False):
+                 use_swiglu=False, use_geglu=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -232,7 +257,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_swiglu=use_swiglu,
+                use_swiglu=use_swiglu, use_geglu=use_geglu,
             )
             for i in range(n_layers)
         ])
@@ -439,6 +464,7 @@ class Config:
     seed: int = 42
     deterministic: bool = False
     use_swiglu: bool = False
+    use_geglu: bool = False
 
 
 cfg = sp.parse(Config)
@@ -477,14 +503,15 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=192,
+    n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=96,
+    slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
+    use_geglu=cfg.use_geglu,
 )
 
 model = Transolver(**model_config).to(device)
@@ -496,7 +523,7 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
