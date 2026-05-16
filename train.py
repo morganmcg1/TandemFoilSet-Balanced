@@ -81,6 +81,36 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class FiLMGenerator(nn.Module):
+    """Maps per-sample physical priors to (gamma, beta) per Transolver block.
+
+    Identity init: the last linear is zero-init so gamma=1+0=1 and beta=0 at
+    step 0 — FiLM is initially the identity, and only activates as the MLP
+    learns useful conditioning.
+    """
+
+    def __init__(self, cond_dim: int, n_blocks: int, n_hidden: int, hidden_dim: int = 64):
+        super().__init__()
+        self.cond_dim = cond_dim
+        self.n_blocks = n_blocks
+        self.n_hidden = n_hidden
+        self.mlp = nn.Sequential(
+            nn.Linear(cond_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 2 * n_blocks * n_hidden),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, cond):
+        # cond: (B, cond_dim)
+        out = self.mlp(cond)  # (B, 2 * n_blocks * n_hidden)
+        out = out.view(-1, self.n_blocks, 2, self.n_hidden)
+        gamma = 1.0 + out[:, :, 0, :]  # (B, n_blocks, n_hidden)
+        beta = out[:, :, 1, :]          # (B, n_blocks, n_hidden)
+        return gamma, beta
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -156,9 +186,12 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, film=None):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
+        if film is not None:
+            gamma, beta = film  # each: (B, n_hidden)
+            fx = gamma.unsqueeze(1) * fx + beta.unsqueeze(1)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -169,12 +202,17 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_film: bool = False,
+                 film_cond_slice: tuple[int, int] | None = None,
+                 film_hidden_dim: int = 64):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_film = use_film
+        self.film_cond_slice = film_cond_slice
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -185,6 +223,7 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.n_layers = n_layers
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -195,6 +234,19 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+
+        # FiLM generator is created after apply(_init_weights) so its zero-init
+        # last layer is not clobbered by the trunc_normal_ Linear init above.
+        if self.use_film:
+            if film_cond_slice is None:
+                raise ValueError("use_film=True requires film_cond_slice=(start, end).")
+            cond_dim = film_cond_slice[1] - film_cond_slice[0]
+            self.film_gen = FiLMGenerator(
+                cond_dim=cond_dim,
+                n_blocks=n_layers,
+                n_hidden=n_hidden,
+                hidden_dim=film_hidden_dim,
+            )
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,9 +259,18 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.use_film:
+            s, e = self.film_cond_slice
+            # Per-sample physical priors are constant across nodes; node 0 is
+            # always a real (non-padded) node for any sample.
+            cond = x[:, 0, s:e]  # (B, cond_dim)
+            gamma, beta = self.film_gen(cond)  # (B, n_layers, n_hidden) each
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            if self.use_film:
+                fx = block(fx, film=(gamma[:, i, :], beta[:, i, :]))
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -425,11 +486,17 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_film=True,
+    # Per-sample physical priors: log(Re), AoA1, NACA1 (3), AoA2, NACA2 (3),
+    # gap, stagger — input x dims 13..23 (inclusive of 13, exclusive of 24).
+    film_cond_slice=(13, 24),
+    film_hidden_dim=64,
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+n_film = sum(p.numel() for p in model.film_gen.parameters()) if model.use_film else 0
+print(f"Model: Transolver ({n_params/1e6:.2f}M params; FiLM {n_film/1e3:.1f}K)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -451,6 +518,7 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "n_film_params": n_film,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
