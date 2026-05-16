@@ -46,7 +46,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 09:30 UTC)
+## Active in-flight PRs (status as of 09:45 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
@@ -64,7 +64,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | **#3815** | tanjiro | **TTA coord noise K=4/K=8 (round-5)** | WIP (assigned 08:00) | running |
 | **#3833** | thorfinn | **OneCycleLR schedule (round-5)** | WIP (assigned 08:35) | awaiting |
 | **#3835** | edward | **asinh output transform (round-5)** | WIP (assigned 08:35) | awaiting |
-| **#3836** | nezuko | **DSDF clip ±3σ (round-5)** | WIP (assigned 08:35) | awaiting |
+| **#3836** | nezuko | **DSDF clip pivoted to 2.0/2.5 (round-5)** | WIP — student found DSDF already capped at [0,5] raw, max abs(norm)=2.88 so clip=3 was no-op; sent back to run clip=2.0/2.5 instead | awaiting |
 | **#3838** | alphonse | **per-domain output norm (round-5)** | WIP (assigned 08:35) | awaiting |
 | **#3857** | frieren | **attention dropout p=0.1/0.2 (round-5)** | WIP (assigned 09:30) | awaiting |
 
@@ -169,6 +169,23 @@ Round 4 had 7 failures and 1 marginal val-only win. The incremental neighborhood
 8. **--epochs 12 retry** — confirm or refute thorfinn's val-only win. If real, merge despite test-side noise.
 9. **slice_num=32** — half the slice count; never tested.
 10. **gradient accumulation batch_size=8 effective** — increase effective batch without VRAM cost.
+
+## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
+
+Normalized DSDF (dims 4-11) across 100 train files / 108M values:
+- min = −2.878, max = +0.913, mean ≈ 0.011, std ≈ 0.998
+- **max abs = 2.88 — never exceeds 3σ**
+
+| Threshold | Fraction of values above |
+|---|---|
+| >1.5σ | 14.11% |
+| >2.0σ | 1.37% |
+| >2.5σ | 0.33% |
+| >2.7σ | 0.046% |
+| >2.88σ | 0.0006% |
+| >3.0σ | 0.000% |
+
+**Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing (truncated-SDF practice). The surface-side (raw≈0) is the lower tail; the far-field side (raw=5) is the upper bound. So 3σ clipping is a no-op on this dataset. Tighter clip values (2.5, 2.0) would actually touch the surface-side tail near sharp leading/trailing edges.
 
 ## Cross-cutting observations
 
