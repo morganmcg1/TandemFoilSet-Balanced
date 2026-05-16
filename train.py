@@ -170,7 +170,8 @@ class FiLM(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layer_scale_init: float = 1.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -181,6 +182,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        # CaiT/DeiT-III layer scale: per-channel learnable gain on each
+        # residual sub-block. init=1.0 reproduces baseline at step 0.
+        self.ls_attn = nn.Parameter(layer_scale_init * torch.ones(hidden_dim))
+        self.ls_mlp = nn.Parameter(layer_scale_init * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -189,13 +194,13 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, film=None, film_ffn=False):
-        fx = self.attn(self.ln_1(fx)) + fx
+        fx = self.ls_attn * self.attn(self.ln_1(fx)) + fx
 
         ffn_out = self.mlp(self.ln_2(fx))
         if film is not None and film_ffn:
             gamma, beta = film
             ffn_out = gamma * ffn_out + beta
-        fx = ffn_out + fx
+        fx = self.ls_mlp * ffn_out + fx
 
         if self.last_layer:
             h = self.ln_3(fx)
@@ -215,7 +220,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  use_film: bool = False, film_mode: str = "output_only",
-                 log_re_mean: float = 14.58, log_re_std: float = 0.76):
+                 log_re_mean: float = 14.58, log_re_std: float = 0.76,
+                 layer_scale_init: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -240,6 +246,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                layer_scale_init=layer_scale_init,
             )
             for i in range(n_layers)
         ])
@@ -619,6 +626,7 @@ class Config:
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
+    layer_scale_init: float = 1.0  # CaiT/DeiT-III layer scale on attn/mlp sub-blocks (1.0 = identity at init)
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -746,6 +754,7 @@ model_config = dict(
     film_mode=cfg.film_mode,
     log_re_mean=float(stats["x_mean"][13].item()),
     log_re_std=float(stats["x_std"][13].item()),
+    layer_scale_init=cfg.layer_scale_init,
 )
 
 model = Transolver(**model_config).to(device)
@@ -931,6 +940,16 @@ for epoch in range(MAX_EPOCHS):
             log_metrics["film/gamma_std"] = gamma.std().item()
             log_metrics["film/beta_abs_max"] = beta.abs().max().item()
             log_metrics["film/beta_std"] = beta.std().item()
+
+    # Layer-scale diagnostics: per-layer mean/abs-mean of ls_attn / ls_mlp.
+    # Tracked from EMA weights when EMA is on (the actual predictor).
+    diag_model_ls = ema_model.module if ema_model is not None else model
+    with torch.no_grad():
+        for i, block in enumerate(diag_model_ls.blocks):
+            log_metrics[f"ls/block{i}/attn_abs_mean"] = block.ls_attn.abs().mean().item()
+            log_metrics[f"ls/block{i}/mlp_abs_mean"] = block.ls_mlp.abs().mean().item()
+            log_metrics[f"ls/block{i}/attn_mean"] = block.ls_attn.mean().item()
+            log_metrics[f"ls/block{i}/mlp_mean"] = block.ls_mlp.mean().item()
     wandb.log(log_metrics)
 
     tag = ""
