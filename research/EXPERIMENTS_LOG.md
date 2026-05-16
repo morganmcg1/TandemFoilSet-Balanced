@@ -331,6 +331,54 @@ Per-split val: single=118.30, rc=108.41, cruise=73.74, re_rand=89.34. All within
 
 ---
 
+## 2026-05-16 00:35 — PR #3510 — dropout=0.2 (CLOSED, underfit regression)
+
+- **Branch:** `charliepai2i48h1-nezuko/dropout-02`
+- **Hypothesis:** dropout=0.1 showed no train-loss slowdown → model has redundancy → 0.2 might regularize more without underfitting
+- **Results:**
+
+| Metric | dropout=0.2 | Baseline (96.17) | Δ |
+|--------|------------|-----------------|---|
+| `val_avg/mae_surf_p` | **98.72** | 96.17 | +2.65% (worse) |
+| `test_avg/mae_surf_p` | **89.01** | 86.88 | +2.45% (worse) |
+| `val_single_in_dist` | 121.52 | 116.53 | +4.28% worse |
+| `val_geom_camber_rc` | 109.96 | 106.64 | +3.11% worse |
+| `val_geom_camber_cruise` | 73.57 | 72.45 | +1.55% worse |
+| `val_re_rand` | 89.85 | 89.06 | +0.89% worse |
+| Train surf_loss (ep 14) | 0.1536 | 0.1041 | **+47.6%** |
+
+- **Artifacts:** `models/model-dropout-02-20260515-233313/metrics.jsonl`
+- **Commentary:** Underfit failure mode confirmed. Train loss +47% higher than baseline at epoch 14 — model is paying real representational tax. The hypothesis relied on "train loss unchanged at 0.1 → redundancy → 0.2 also safe" which proved non-linear: doubling the drop rate from 10% → 20% with only 14 effective epochs and 663K params exceeds the model's ability to recover signal. All 4 splits regressed proportionally (globally weaker model, not targeted OOD). Per student's own decision rule: **Dropout axis closed at 0.1.**
+
+---
+
+## 2026-05-16 00:35 — PR #3482 — surf_weight=15 (CLOSED, within-noise result)
+
+- **Branch:** `charliepai2i48h1-fern/surf-weight-15`
+- **Hypothesis:** surf_weight=10 was never tuned; bumping to 15 shifts gradient budget from ~25% → ~37% on surface-pressure
+- **Results (2-seed mean, on OLD 97.15 baseline):**
+
+| Metric | surf_weight=15 | Baseline (97.15) | Δ |
+|--------|---------------|-----------------|---|
+| `val_avg/mae_surf_p` | **97.27** | 97.15 | +0.12 (within noise) |
+| `test_avg/mae_surf_p` | 87.63 | 87.36 | +0.27 |
+
+Per-split deltas randomly distributed in sign; all within ±1 pt of baseline. Best epoch identical (14). Training loss numerically higher (expected) but val metric unaffected.
+
+- **Artifacts:** `models/model-charliepai2i48h1-fern-surf-weight-15-20260515-223315/metrics.jsonl` (seed 1), `...-20260515-232421/metrics.jsonl` (seed 2)
+- **Commentary:** 2-seed methodology makes this a confident null result. Advisor risk note confirmed: "model is not bottlenecked by gradient budget allocation — bottleneck is generalization." **surf_weight axis closed at 10.** Note: experiment ran on old 97.15 baseline (pre-dropout=0.1), but null signal on looser base means even weaker prior on tighter base.
+
+---
+
+## 2026-05-16 00:40 — R6 new assignments (nezuko + fern)
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3572 | nezuko | CosineWarmRestarts T_0=4 T_mult=2 | LR scheduling effectively flat (lr 5e-4→4.1e-4 over 14 epochs on T_max=50); multi-cycle gives 2 full warm/cool passes |
+| #3573 | fern | lr 5e-4→7e-4 (2-seed) | lr never tuned since launch; +40% probe with 2-seed methodology |
+
+---
+
 ## 2026-05-16 00:12 — Stale PRs closed, R6.5 assigned
 
 **#3325 edward weight_decay=5e-4 (CLOSED, stale):**
