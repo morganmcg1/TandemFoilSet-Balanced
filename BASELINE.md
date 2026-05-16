@@ -4,7 +4,41 @@
 
 ---
 
-## 2026-05-16 15:50 — PR #3969: SwiGLU mlp_ratio=2 + epochs=14 (askeladd) — ← CURRENT BEST
+## 2026-05-16 16:42 — PR #3981: bf16 mixed-precision + epochs=18 (cut at ep16) (thorfinn) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 53.8221** (best epoch 16/18, W&B run `b9h4bvnm`) — **−4.64% vs previous best 56.4402**
+- **test_avg/mae_surf_p: 47.2742** — **−3.31% vs previous best 48.8947**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not per-split logged) | 54.72 |
+| geom_camber_rc | (not per-split logged) | 59.71 |
+| geom_camber_cruise | (not per-split logged) | 29.13 |
+| re_rand | (not per-split logged) | 45.53 |
+| **avg** | **53.8221** | **47.2742** |
+
+- **Model config:** SwiGLU FFN, n_hidden=160, n_layers=5, n_head=4, slice_num=64, **mlp_ratio=2** (default), inner_dim=216, ~1.035M params — same architecture as #3969
+- **Change from previous baseline:** add `--use_bf16` autocast + `--epochs 18`. Run was cut at ep16/18 by `SENPAI_TIMEOUT_MINUTES=30` (student correctly did not override). Best ckpt = epoch 16, evaluated on test.
+- **Throughput:** ~117.8 s/epoch (bf16) vs ~173.3 s/epoch (fp32 baseline) → **1.47× speedup**; 41.9 GB peak VRAM
+- **Wall time:** ~31.5 min for 16/18 completed epochs
+- **Cosine T_max:** 18 (lr at the cut ≈ 2e-5, schedule still descending)
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=18); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+- **Key findings:**
+  1. bf16 autocast at the same wall clock budget = 50% more epochs trained → all 4 test splits improve
+  2. ALL test split improvements: single_in_dist −1.07%, geom_camber_rc −2.37%, geom_camber_cruise **−9.02%**, re_rand −3.33%
+  3. Val curve still descending at the timeout — there is more headroom with a longer budget
+  4. bf16 autocast: parameters/optimizer stay fp32; only matmul/forward intermediates use bf16. No NaN/inf instabilities observed.
+
+**Reproduce command:**
+```bash
+cd "target/" && SENPAI_TIMEOUT_MINUTES=35 python train.py --epochs 18 --use_bf16
+```
+
+---
+
+## 2026-05-16 15:50 — PR #3969: SwiGLU mlp_ratio=2 + epochs=14 (askeladd) — prev baseline
 
 - **val_avg/mae_surf_p: 56.4402** (best epoch 14/14, W&B run `dwyzcs0e`) — **−1.60% vs previous best 57.3537**
 - **test_avg/mae_surf_p: 48.8947** — **−1.84% vs previous best 49.8024**
