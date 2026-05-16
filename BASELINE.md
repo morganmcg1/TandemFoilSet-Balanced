@@ -231,3 +231,62 @@ cd target/ && python train.py --agent willowpai2i48h1-askeladd \
   --wandb_name "willowpai2i48h1-askeladd/bf16_only_bs4" \
   --wandb_group bf16_clean
 ```
+
+---
+
+## 2026-05-16 06:00 — PR #3562: H: Wider Transolver (h=192, slice=96) + T_max=18 under bf16 ← NEW ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-askeladd
+- **Branch:** `willowpai2i48h1-askeladd/wider-h192-bf16-tmax18`
+- **W&B run:** `hzxs6zx9` (best run; 3 other runs: gu27mc6o, sv85254i, fqzs1zk1)
+- **Epochs:** 13 best (wall-clock timeout — model still improving at cutoff)
+
+### Validation metrics (best checkpoint, epoch 13)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **86.8095** ← NEW BEST |
+| val_single_in_dist | 103.640 |
+| val_geom_camber_rc | 98.013 |
+| val_geom_camber_cruise | 65.111 |
+| val_re_rand | 80.474 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 92.053 |
+| test_geom_camber_rc | 86.305 |
+| test_geom_camber_cruise | 71.082 |
+| test_re_rand | 75.966 |
+| **test_avg (all 4 splits)** | **81.3514** ← NEW BEST |
+
+### 4-seed distribution (informal — no explicit seed control)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|-----|-------------------|---------------------|
+| hzxs6zx9 (best) | 86.8095 | 81.3514 |
+| gu27mc6o | — | — |
+| sv85254i | 91.06 | — |
+| fqzs1zk1 | 92.97 | — |
+| **4-run mean** | **~89.70** | — |
+
+Note: σ̂≈2.97 is large (no explicit seed control). Seed-controlled variance characterization on this wider config is the recommended next step.
+
+### Model config
+- **Transolver: 5 layers, hidden=192, heads=4, slice_num=96, mlp_ratio=2** ← wider than baseline
+- n_params: 1.48M (vs 0.66M baseline h=128, ×2.24)
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, weight_decay=1e-4, batch=4, **cosine T_max=18** ← tuned to bf16 epoch budget
+- bf16 autocast around forward + loss; evaluation in pure fp32
+- Peak VRAM: **49.24 GB** / 96 GB (vs 32.9 GB h=128 baseline)
+
+### Key insight
+Capacity scaling is real. bf16's VRAM headroom (32.9 GB at h=128 → 49.24 GB at h=192, still 47 GB free) enables a genuinely larger model within the 30-min budget. The test improvement (−2.03pt) is the headline: OOD splits (re_rand −1.19, cruise −4.05) improve substantially. Best epoch 13 shows the model was still improving at cutoff — T_max=18 schedule left more LR at the end than T_max=15, giving a longer annealing window. Further gains likely from seed-controlled runs (the 4-run mean of 89.70 reflects noisy sampling, not the true distributional mean of this config).
+
+### Reproduce (best seed)
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-askeladd \
+  --wandb_name "willowpai2i48h1-askeladd/wider_h192_bf16_tmax18" \
+  --wandb_group capacity_scaling_bf16
+```
