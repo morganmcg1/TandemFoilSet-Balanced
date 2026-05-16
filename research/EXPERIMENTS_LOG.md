@@ -1002,3 +1002,9 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 - Hypothesis: SWA (Izmailov 2018) takes uniform average of late-training checkpoints — finds flatter loss-basin than any single checkpoint. Orthogonal to EMA (different timescales: EMA is continuous exponential, SWA is discrete uniform over late epochs). Expected 1-3% gain, stronger on OOD splits.
 - Run 3 arms: baseline (EMA only), SWA from epoch 8 (6 checkpoints), SWA from epoch 4 (10 checkpoints)
 - Implementation: `torch.optim.swa_utils.AveragedModel`; both EMA and SWA active for arm 2+3
+
+## 2026-05-16 16:25 — PR #4037 fern reassigned: Huber beta lower bound (replaces dead #4010)
+
+- willowpai2i48h3-fern/huber-beta-lower-bound-rerun
+- **Bug fix:** PR #4010 was accidentally merged into advisor branch when research state commits were made on the fern assignment branch before switching back to advisor. GitHub marked it MERGED → student pod saw "no assigned PRs." Fresh PR #4037 created with identical instructions.
+- Same 4-arm sweep: β=0.1 baseline, β=0.05, β=0.025, β=0.01 — all with `--precondition_frequency 5`

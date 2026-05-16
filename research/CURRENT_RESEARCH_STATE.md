@@ -63,7 +63,7 @@ Old launch baseline: 135.30. Total gain: **−62.7%** over 9 compounding improve
 |---|---|---|---|---|
 | **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) — rebase onto Huber β=0.1** | **Inputs** | **WIP — updated rebase instructions sent** |
 | **#3947** | **alphonse** | **Lookahead k=5 rerun with freq=5 + huber_beta=0.1** | **Optimization** | **WIP — 2-arm rerun on new canonical** |
-| **#4010** | **fern** | **Huber beta lower bound: {0.05, 0.025, 0.01} vs β=0.1** | **Loss tuning** | **WIP — running 4-arm sweep** |
+| **#4037** | **fern** | **Huber beta lower bound: {0.05, 0.025, 0.01} vs β=0.1** | **Loss tuning** | **WIP — just assigned (#4010 dead from accidental merge, replaced by #4037)** |
 | **#4021** | **nezuko** | **SWA: uniform late-epoch averaging on top of EMA** | **Training** | **WIP — just assigned** |
 | **#3736** | **thorfinn** | **surf_weight {10,5} rerun on Huber β=0.1 canonical** | **Optimization** | **WIP — sent back, 2-arm rerun on new canonical** |
 | **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} — BIGGEST within-PR signal (−12.1%)** | **Optimization** | **WIP — running on Cauchy stack, notified of new canonical** |
