@@ -772,3 +772,48 @@ c=1.0 wins on test (best paper metric). c=0.5 wins on val by 0.014 (within noise
 **Action taken:** Posted explicit recovery nudges on all 6 stalled PRs (#3493, #3703, #3612, #3316, #3415, #3497) with situational context, specific commands referencing the new canonical (EMA decay=0.99 + precond_freq=5 = train.py defaults), and `-ema` W&B group naming convention to distinguish from pre-rebase runs.
 
 **Affected students:** alphonse, askeladd, edward, fern, frieren, tanjiro — each nudged with their specific arm requirements.
+
+---
+
+## 2026-05-16 10:05 — PR #3316 (fern): Huber beta=0.5 — **MERGED**
+
+- Branch: `willowpai2i48h3-fern/huber-delta-sweep`
+- W&B group: `huber-delta-sweep-ema-soap`, seed=42, EMA(0.99)+SOAP(freq=5) canonical
+
+**Result (3 arms):**
+
+| Arm | huber_beta | val_avg | test_avg (excl cruise) | Δ vs arm base | Δ vs canon (58.005) | W&B |
+|---|---|---|---|---|---|---|
+| baseline-delta1.0 | 1.0 | 56.117 | 54.659 | 0.00% | −3.25% | v1nnpr0x |
+| **variant-delta0.5** | **0.5** | **54.494** | **52.837** | **−2.89%** | **−6.05%** | 9acc7fff |
+| variant-delta2.0 | 2.0 | 58.994 | 57.784 | +5.13% | +1.71% | huwndxhp |
+
+**Analysis:** Monotone decreasing: 2.0→1.0→0.5. Smaller beta = more aggressive L1-like outlier suppression on surface-pressure tails. Pattern suggests optimum below 0.5 → assigned fern #3868.
+
+**Decision: MERGE. New canonical: val=54.494, test=52.837.**
+
+---
+
+## 2026-05-16 10:07 — PR #3415 (frieren): Log-Re sinusoidal freqs=4 — **REQUEST CHANGES**
+
+- Branch: `willowpai2i48h3-frieren/log-re-sinusoidal`
+- W&B group: `log-re-sinusoidal-ema-soap`, seed=42
+
+**Result (3 arms on OLD canonical huber_beta=1.0):**
+
+| Arm | freqs | val_avg | test_3split | Δ vs arm base | W&B |
+|---|---|---|---|---|---|
+| baseline-no-embed | 0 | 56.117 | 54.659 | 0.00% | oaplcga4 |
+| variant-freqs2 | 2 | 54.957 | 56.134 | −2.07% | bgk8hkoy |
+| **variant-freqs4** | **4** | **54.895** | **54.380** | **−2.18%** | sacxerlv |
+
+vs **NEW canonical (54.494)**: freqs=4 at 54.895 is +0.73% WORSE. Cannot merge. Expected compound on huber_beta=0.5: ~53.3 val.
+
+**Decision: REQUEST CHANGES.** Rebase onto huber_beta=0.5 canonical, 2-arm re-test.
+
+---
+
+## 2026-05-16 10:12 — PR #3868 (fern): Huber beta finer sweep {0.5,0.25,0.1} — **ASSIGNED**
+
+- 3 arms on new canonical (huber_beta=0.5 default), `--wandb_group huber-beta-finer-sweep`, seed=42
+- **Target: val < 54.494. Expected optimum at beta≤0.25 given monotone pattern.**
