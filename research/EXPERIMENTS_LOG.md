@@ -1,5 +1,64 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:50 — #4063 tanjiro MERGED (new best val 57.66 / test 49.45); #4044 alphonse CLOSED; #4015 nezuko sent back for T_max=20 composition; #4145 alphonse assigned
+
+### #4063 tanjiro — T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 (MERGED — **new best val 57.6606 / test 49.4491**)
+
+- Branch: `willowpai2i48h5-tanjiro/r10-tmax-lr15e4`
+- Hypothesis: Longer cosine schedule within wall-clock budget maintains higher time-averaged LR.
+- W&B: ctrl `kx37feeh`/`f6tg9w5l`, T_max=18 `o7trffbr`, **T_max=20 `fh3jmkd1`** (winner)
+
+| Arm | T_max | val_avg | test_avg | vs prior BL 61.18/52.09 |
+|-----|-------|---------|----------|------------------------|
+| A1 ctrl | 14 | 65.46 | 56.54 | +4.28 / +4.45 (seed spread) |
+| A2 ctrl retry | 14 | 63.37 | 54.42 | +2.19 / +2.33 |
+| B | 18 | 59.22 | 50.79 | −1.96 / −1.30 |
+| **C WINNER** | **20** | **57.66** | **49.45** | **−3.52 / −2.64** |
+
+Per-split (Arm C winner, vs prior BL):
+| Split | val | test | Δ val | Δ test |
+|-------|-----|------|-------|--------|
+| in_dist | 57.88 | 51.04 | −7.49 | −5.77 |
+| camber_rc | 71.61 | 64.76 | −5.29 | −2.08 |
+| camber_cruise | 40.47 | 32.44 | −1.27 | −1.78 |
+| re_rand | 60.69 | 49.55 | −0.01 | −0.92 |
+
+All 8 splits (val × 4, test × 4) improve monotonically T_max=14→18→20. Global training-dynamics win — no split-specific story.
+
+**Mechanism:** SENPAI_TIMEOUT_MINUTES=30 caps training at ~14 epochs. T_max=20 → LR endpoint ≈ 1.20e-4 (80% of peak) vs T_max=14 → LR→0. Higher time-averaged LR within budget. EMA(0.997) smooths late-training noise from higher-LR endpoint. The "longer schedule × higher LR" interaction is synergistic, not competitive.
+
+**5× amplification vs old substrate:** On old substrate (lr=5e-5, spec_norm), T_max=20 beat T_max=14 by ~1.3 val. On new substrate (lr=1.5e-4, no clip), by 6.76 val.
+
+**New baseline: val 57.6606 / test 49.4491** (BASELINE.md updated, PR #4063 squash-merged).
+
+### #4044 alphonse — Multi-param FiLM (CLOSED — informative null, hypothesis FALSIFIED)
+
+- Branch: `willowpai2i48h5-alphonse/r10-multi-film`
+- Hypothesis: Conditioning FiLM on all 11 global params (vs log(Re) only) improves camber_rc OOD.
+- W&B: ctrl `7fc1ujfh`, Arm B (11-param) `yi8cdd1g`, Arm C (4-param) `nve9vzv0`
+
+| Arm | film_cond_dim | val_avg | test_avg | vs OLD BL 64.68 | vs NEW BL 57.66 |
+|-----|---------------|---------|----------|-----------------|-----------------|
+| A ctrl | 1 | 65.29 | 56.78 | +0.61 | +7.63 above |
+| B treatment | 11 | 69.37 | 60.62 | +4.68 | +11.71 above |
+| C treatment | 4 | 65.23 | 57.04 | +0.55 | +7.57 above |
+
+Primary prediction (camber_rc improves under multi-FiLM): **FALSIFIED**. Both treatment arms regress camber_rc vs ctrl:
+- Arm B: camber_rc +5.45 val (wrong direction)
+- Arm C: camber_rc +2.90 val (wrong direction)
+
+**Key finding:** Global gamma/beta conditioning cannot substitute for per-node geometric information. AoA/NACA camber already reach the model effectively through flat node features + attention path. Forcing them through a global FiLM MLP averages out node-level shape variation that local attention handles better. Arm C's cruise improvement (−3.52 val) is interesting but comes at camber_rc cost — classic conditioning-path overfit. Multi-FiLM as global conditioning path closed.
+
+### #4015 nezuko — Layer scale (SENT BACK — needs T_max=20 composition test)
+
+Arms D+E (layer_scale=1e-4 + T_max=14, 2 seeds) had val 59.66/59.67 — beats OLD new-BL (61.18) decisively with 2-seed agreement (σ=0.016). But tanjiro's T_max=20 (val 57.66) just superseded this. Nezuko asked to add Arms F+G (layer_scale=1e-4 + T_max=20, 2 seeds) to confirm composition.
+
+### #4145 alphonse — R11 H55: grad_clip=1.0 + T_max=20 composition + T_max=24 extension (just assigned)
+
+3 arms: B (T_max=20 + clip=1.0), C (T_max=24 no clip), D (T_max=24 + clip=1.0). Tests composition of two orthogonal previous wins + schedule extension beyond T_max=20.
+
+---
+
 ## 2026-05-16 20:35 — #4084 fern CLOSED informative (dropout monotone hurts, camber_rc gain noted); #4128 fern surf_weight assigned
 
 ### #4084 fern — Dropout sweep {0.05, 0.10} at lr=1.5e-4 (CLOSED — informative null)

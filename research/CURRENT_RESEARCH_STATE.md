@@ -6,20 +6,19 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~20:35 UTC) — **#4084 fern CLOSED** (dropout informative null; camber_rc −4.23 val notable but net-negative); **#4128 fern surf_weight assigned**; 8/8 staffed.
+- **Date:** 2026-05-16 (~20:55 UTC) — **#4063 tanjiro MERGED** (T_max=20: val 57.66 / test 49.45, new best); **#4044 alphonse CLOSED** (multi-FiLM falsified); **#4015 nezuko sent back** (T_max=20 composition test); **#4145 alphonse assigned** (grad_clip + T_max=20 composition); 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
 
-**val_avg/mae_surf_p = 61.1778** (PR #4056 thorfinn — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm; run `y5tua53k`)
-**test_avg/mae_surf_p = 52.0853** (same run, clean 4-split)
+**val_avg/mae_surf_p = 57.6606** (PR #4063 tanjiro — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20**; NO spec_norm; NO grad_clip; run `fh3jmkd1`)
+**test_avg/mae_surf_p = 49.4491** (same run, clean 4-split)
 
-Per-split val: in_dist 65.37, camber_rc 76.90, camber_cruise 41.74, re_rand 60.70
-Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.47
+Per-split val: in_dist 57.88, camber_rc 71.61, camber_cruise 40.47, re_rand 60.69
+Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.55
 
-**Δ vs prior best (PR #3976 lr=1.5e-4 no-clip, val 63.05 / test 53.60): −1.87 val / −1.51 test**
-
-⚠️ **PENDING**: tanjiro #4063 T_max=18 (val 59.22 / test 50.79) may set a new best once terminal is posted.
+**Δ vs prior best (PR #4056 grad_clip=1.0, val 61.18 / test 52.09): −3.52 val / −2.64 test**
+**All 8 splits improve.** Monotone trend T_max=14→18→20 on all splits.
 
 ## Merged sequence (improvement cascade)
 
@@ -34,58 +33,54 @@ Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.
 | #3748 | spec_norm(output) | 70.34 → 68.96 | 61.63 → 60.82 | −2.0% / −1.3% |
 | #3843 | Lion lr=1e-4 | 68.96 → 65.41 | 60.82 → 56.06 | −5.2% / −7.8% |
 | #3954 | spec_norm + lr=1e-4 | 65.41 → 64.68 | 56.06 → 56.17 | −1.1% / +0.2% |
-| **#3976** | **Lion lr=1.5e-4** | **64.68 → 63.05** | **56.17 → 53.60** | **−2.5% / −4.6%** |
-| **#4056** | **grad_clip=1.0** | **63.05 → 61.18** | **53.60 → 52.09** | **−3.0% / −2.8%** |
+| #3976 | Lion lr=1.5e-4 | 64.68 → 63.05 | 56.17 → 53.60 | −2.5% / −4.6% |
+| #4056 | grad_clip=1.0 | 63.05 → 61.18 | 53.60 → 52.09 | −3.0% / −2.8% |
+| **#4063** | **T_max=20** | **61.18 → 57.66** | **52.09 → 49.45** | **−5.7% / −5.1%** |
 
-**Total improvement:** val 135 → 63.05 (−53%), test ~130 → 53.60 (−59%)
-
-**LR monotone trend:** val(2e-5)=78.93 → val(5e-5)=69.69 → val(1e-4)=65.41 → val(1.5e-4)=63.05 → val(2e-4)=63.84 ← inflects back up. Optimum confirmed in [1.2e-4, 1.7e-4].
+**Total improvement:** val 135 → 57.66 (−57%), test ~130 → 49.45 (−62%)
 
 ## Active experiments (8 of 8 students staffed)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| **#4128** | **fern** | **R10 H54: surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20}** | **Just assigned** |
-| **#4085** | **askeladd** | **R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4** | **WIP** |
-| **#4120** | **thorfinn** | **R10 H52: LR sweep at clip=1.0 {1.5e-4 ctrl, 2e-4, 2.5e-4}** | **Just assigned** |
-| **#4122** | **edward** | **R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3}** | **Just assigned** |
+| **#4145** | **alphonse** | **R11 H55: grad_clip=1.0 + T_max=20 composition + T_max=24 extension** | **Just assigned** |
+| **#4015** | **nezuko** | **R10 H39: layer_scale=1e-4 + T_max=20 composition (Arms F+G)** | **Sent back for Arms F+G** |
+| #4128 | fern | R10 H54: surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} | WIP |
+| #4085 | askeladd | R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4 | WIP |
+| #4120 | thorfinn | R10 H52: LR re-optimisation at clip=1.0 {1.5e-4, 2e-4, 2.5e-4} | WIP |
+| #4122 | edward | R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} | WIP |
 | #4096 | frieren | R10 H50: SGDR cosine warm restarts {T_0=7, T_0=4 T_mult=2} | WIP |
-| #4063 | tanjiro | R10 H47: T_max=18 WINNING (val 59.22) — T_max=20 still running | WIP, **near terminal** |
-| #4015 | nezuko | R10 H39: Layer scale — sent back, Arm D+E (new substrate) | Sent back |
-| #4044 | alphonse | R10 H40: Multi-param FiLM — ctrl-only, treatment not launched | Nudged |
+| #4063 | tanjiro | R10 H47: T_max sweep — MERGED; next assignment pending | **Idle (just merged)** |
+
+⚠️ **NOTE:** tanjiro is effectively idle — their PR just merged. If tanjiro's pod becomes unassigned, they need a new experiment. Candidate: T_max sweep extension {24, 28} OR grad_clip + T_max=20 seed confirmation.
 
 ## Recent closures (informative nulls — recent sessions)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
-| #4084 | fern | Dropout {0.05, 0.10}: monotone hurt (+0.67/+1.24 val vs ctrl); camber_rc −4.23 val (notable but net-negative) | CLOSED |
-| #4057 | edward | Surfrouting: vec arm val 62.76 (+1.58 vs new BL 61.18); falsification triggered (bias→0) | CLOSED |
-| #4049 | frieren | spec_norm at lr=1.5e-4: Arm B −0.27 val vs ctrl (within noise) | CLOSED |
+| #4044 | alphonse | Multi-FiLM {cond_dim=11, cond_dim=4}: both hurt camber_rc (target). Global γ/β can't substitute per-node geometry. | CLOSED |
+| #4084 | fern | Dropout {0.05, 0.10}: monotone hurt; camber_rc −4.23 val (net-negative breadth) | CLOSED |
+| #4057 | edward | Surfrouting: vec arm val 62.76 (+1.58 vs BL 61.18); scalar bias no-op | CLOSED |
+| #4049 | frieren | spec_norm at lr=1.5e-4: −0.27 val (noise; finding #18 extends) | CLOSED |
 | #4046 | askeladd | p_weight upweighting monotone hurts (1→2→3 worsens) | CLOSED |
 | #4045 | fern | Capacity bottleneck = wall clock (n=128 ctrl best within budget) | CLOSED |
-| #3957 | tanjiro | T_max=20 best within-substrate (val 67.48 lr=5e-5) — above new BL | CLOSED |
-| #3958 | thorfinn | wd=5e-4 best (val 64.79) — above new BL 63.05 | CLOSED |
-| #3913 | edward | Re-sampler monotonically hurts; alpha=0 ctrl=64.53 | CLOSED |
 | #3977 | fern | Stochastic depth hurts at 5-block depth | CLOSED |
 | #3978 | askeladd | MixUp catastrophic (+23-27 val) — non-physical targets | CLOSED |
 | #3955 | alphonse | n_power_iter=1 optimal; higher = over-regularizes | CLOSED |
 
-## R10/R11 hypothesis map (current round)
+## R11 hypothesis map (active round)
 
 | Axis | Hypothesis | PR / student | Expected outcome |
 |------|-----------|-------------|-----------------|
-| Conditioning signal | Multi-FiLM 11 global params | #4044 alphonse | −2 to −4 val; camber_rc target |
-| Architecture capacity | n_hidden 192/256 vs 128 | #4045 fern | −1 to −4 val |
-| Metric alignment | p_weight {2x, 3x} Huber loss | #4046 askeladd | −1 to −3 val |
-| Architecture stability | Layer scale init {1e-4, 1e-5} | #4015 nezuko | −1 to −3 val |
-| Optimizer stability | Grad clip {0.5, 1.0, 2.0} at lr=1.5e-4 | #4056 thorfinn | −0 to −2 val mean; variance reduction |
-| Architecture routing | Surface-biased PhysicsAttention routing | #4057 edward | −1 to −3 val; camber_rc target |
-| Schedule depth | T_max sweep {14, 18, 20} at lr=1.5e-4 | #4063 tanjiro | ≤−1 to +1 val; tests within-substrate T_max=20 transfer |
-| Loss balance | surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} | #4128 fern | −0 to −2 val; tests loss balance on new substrate |
-| Gradient signal cleanliness | Batch size {8, 16} with Lion at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val; risk: wall-clock budget |
-| LR schedule reformulation | SGDR cosine warm restarts {T_0=7×2, T_0=4 T_mult=2} | #4096 frieren | −0 to −2 val; tests Lion+EMA × restarts compositional |
+| Schedule+optimizer composition | grad_clip=1.0 + T_max=20 + T_max=24 extension | #4145 alphonse | −1 to −3 val; tests orthogonal improvements composing |
+| Architecture stability composition | layer_scale=1e-4 + T_max=20 | #4015 nezuko | −0 to −2 val; tests if both wins stack |
+| Loss balance | surf_weight {5, 10 ctrl, 20} at clip=1.0 substrate | #4128 fern | −0 to −2 val; substrate-dependent finding |
+| Gradient signal | Batch size {8, 16} at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val |
+| LR recalibration | LR {1.5e-4, 2e-4, 2.5e-4} at clip=1.0 | #4120 thorfinn | −0 to −2 val; tests effective-LR shift from clip |
+| WD recalibration | wd {3e-4, 5e-4, 1e-3 ctrl, 2e-3} at clip=1.0 | #4122 edward | −0 to −2 val |
+| Schedule reformulation | SGDR cosine warm restarts | #4096 frieren | −0 to −2 val |
 
-## Key findings (cumulative, 19)
+## Key findings (cumulative, 21)
 
 1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0 (paper-critical ablation confirmed).
 2. **EMA(0.997)** contributes +4.4 val on top of Lion.
@@ -99,19 +94,21 @@ Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.
 10. **TTA z-reflection fails** — AoA asymmetry.
 11. **Huber β=0.05 locally optimal** in [0.05, 0.20].
 12. **Seed noise floor ≈ 2.77 val** (two identical runs).
-13. **Output-only spectral norm**: Lipschitz constraint on head MLP reduces peak-pressure over-fitting at lr=5e-5 (−1.39 val / −0.81 test). Contribution diminishes with higher lr.
-14. **Lion lr=1.5e-4 optimal**: monotone trend 2e-5→5e-5→1e-4→1.5e-4 (inflection at 2e-4). Largest single gain since Lion optimizer itself.
+13. **Output-only spectral norm**: −1.39 val at lr=5e-5; contribution diminishes with lr.
+14. **Lion lr=1.5e-4 optimal**: monotone trend, inflection at 2e-4.
 15. **Train-time z-aug fails** — AoA asymmetry.
 16. **surf_weight optimum substrate-dependent**.
 17. **Lion β1=0.9 optimal** in {0.8, 0.9, 0.95}.
-18. **spec_norm Lipschitz contribution diminishes as lr grows**: −1.39 val at lr=5e-5 → ~0 at lr=1e-4 → −0.27 val (noise) at lr=1.5e-4. Output-head Lipschitz closed; Lion's sign-update already bounds per-step gradient magnitude.
-19. **Input MixUp catastrophic** on CFD pressure fields: non-physical blended targets (+23-28 val). FiLM's log(Re) conditioning also gets mixed — further invalidating the augmentation.
+18. **spec_norm Lipschitz contribution diminishes as lr grows**: closed at lr=1.5e-4.
+19. **Input MixUp catastrophic** on CFD pressure fields (+23-28 val).
+20. **T_max=20 optimal** within SENPAI_TIMEOUT_MINUTES=30 budget: monotone T_max=14→18→20, 5× larger effect than old substrate (6.76 vs 1.3 val). Mechanism: higher time-averaged LR within budget; EMA smooths late-training noise.
+21. **Multi-FiLM global conditioning FALSIFIED**: Global γ/β conditioning on 11 params hurts camber_rc OOD (−5.45 val on target split). Per-node geometric variation must reach model through attention path, not global FiLM scalar.
 
 ## Next priorities
 
-1. **Tanjiro #4063 T_max=18 terminal** — T_max=18 val 59.22 / test 50.79 beats new BL 61.18/52.09. T_max=20 still running. Merge when terminal posted → likely new best.
-2. **Multi-FiLM treatment arm (alphonse #4044)** — highest-priority R10 hypothesis (camber_rc target). Currently ctrl-only; nudged for treatment launch.
-3. **Layer scale at new substrate (nezuko Arms D+E)** — if layer_scale=1e-4 on clip=1.0+lr=1.5e-4 beats val 61.18.
-4. **R10 in flight**: surf_weight (#4128 fern), batchsize (#4085 askeladd), SGDR (#4096 frieren), LR@clip1 (#4120 thorfinn), wd@clip1 (#4122 edward).
-5. **Combine T_max=18 + clip=1.0** — the biggest follow-up after tanjiro's PR merges; both axes are independent.
-6. **Unassigned hypotheses** (if more idle): H41 SWA, finer T_max sweep, EMA decay at new substrate.
+1. **alphonse #4145 composition**: grad_clip=1.0 + T_max=20 (Arm B) is highest-priority combination. If both improvements compose, potential new best ~55–56 val.
+2. **nezuko #4015 composition**: layer_scale=1e-4 + T_max=20 (Arms F+G) — tests if architecture stability improvement stacks with schedule win.
+3. **Assign tanjiro a new experiment**: pod may become idle as T_max=20 PR merged. Options: T_max sweep {24, 28} OR surf_weight on T_max=20 substrate.
+4. **In-flight recalibration PRs**: thorfinn #4120 LR@clip, edward #4122 wd@clip — note these used OLD T_max=14 substrate; results will need re-testing on T_max=20.
+5. **SGDR frieren #4096**: LR schedule reformulation — may be less relevant now that T_max=20 is the baseline, but still informative.
+6. **Paper completeness**: Need clean ablation of T_max (done), grad_clip (done), composition (in-flight). Consider EMA decay at T_max=20 substrate as a confirmatory sweep.
