@@ -455,6 +455,53 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Parameter EMA (Polyak averaging for evaluation)
+# ---------------------------------------------------------------------------
+
+
+class ParameterEMA:
+    """Shadow-parameter EMA, swap-in for evaluation.
+
+    With ``warmup=True`` the effective decay ramps up as
+    ``min(target_decay, (1+t)/(10+t))`` (Karras et al.), so the shadow is not
+    biased toward the initialization during early training. This matters most
+    for large target decays (e.g. 0.9999) over moderate-length runs.
+    """
+
+    def __init__(self, model, decay: float, warmup: bool = True):
+        self.decay = decay
+        self.warmup = warmup
+        self.step_count = 0
+        self.shadow = {n: p.detach().clone() for n, p in model.named_parameters()}
+        self.backup: dict = {}
+
+    def effective_decay(self) -> float:
+        if not self.warmup:
+            return self.decay
+        t = self.step_count
+        return min(self.decay, (1.0 + t) / (10.0 + t))
+
+    @torch.no_grad()
+    def update(self, model):
+        self.step_count += 1
+        d = self.effective_decay()
+        for n, p in model.named_parameters():
+            self.shadow[n].mul_(d).add_(p.detach(), alpha=1.0 - d)
+
+    @torch.no_grad()
+    def apply_to(self, model):
+        self.backup = {n: p.detach().clone() for n, p in model.named_parameters()}
+        for n, p in model.named_parameters():
+            p.copy_(self.shadow[n])
+
+    @torch.no_grad()
+    def restore(self, model):
+        for n, p in model.named_parameters():
+            p.copy_(self.backup[n])
+        self.backup = {}
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -483,6 +530,8 @@ class Config:
     amp_dtype: str = "fp32"   # "fp32" | "bf16"
     mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
     use_compile: bool = False  # wrap model with torch.compile if True
+    ema_decay: float = 0.0  # 0 disables; >0 enables shadow-parameter EMA for eval
+    ema_warmup: bool = True  # Karras-style decay warmup: min(decay, (1+t)/(10+t))
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -559,6 +608,10 @@ if cfg.use_compile:
     model = torch.compile(model, mode="default")
     print("Wrapped model with torch.compile(mode='default')")
 
+ema = ParameterEMA(model, cfg.ema_decay, warmup=cfg.ema_warmup) if cfg.ema_decay > 0 else None
+if ema is not None:
+    print(f"EMA: enabled (target decay={cfg.ema_decay}, warmup={cfg.ema_warmup})")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.warmup_epochs > 0:
     warmup = torch.optim.lr_scheduler.LinearLR(
@@ -595,6 +648,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("ema/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -665,6 +719,8 @@ for epoch in range(MAX_EPOCHS):
             )
             grad_norm_key = "train/grad_norm_unclipped"
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -681,6 +737,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # Swap in EMA shadow weights for evaluation and checkpoint saving.
+    if ema is not None:
+        ema.apply_to(model)
+
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_fn, cfg.charbonnier_eps)
@@ -699,6 +759,9 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if ema is not None:
+        log_metrics["ema/effective_decay"] = ema.effective_decay()
+        log_metrics["ema/step_count"] = ema.step_count
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -714,8 +777,13 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        # Save with EMA still applied — checkpoint holds EMA weights.
         torch.save(model.state_dict(), model_path)
         tag = " *"
+
+    # Restore live (non-EMA) weights to continue training.
+    if ema is not None:
+        ema.restore(model)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
