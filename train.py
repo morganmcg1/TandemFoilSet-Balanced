@@ -97,6 +97,27 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUMlp(nn.Module):
+    """SwiGLU FFN: gated linear unit with SiLU/Swish activation.
+
+    Shazeer 2020, "GLU Variants Improve Transformers". Standard FFN in modern
+    large transformers (LLaMA, PaLM, Mistral). Uses ``2/3 * n_hidden`` for the
+    two parallel projections to keep param count near parity with a vanilla
+    ``Linear -> GELU -> Linear`` FFN of the same nominal hidden width.
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        swiglu_h = int(round(n_hidden * 2 / 3))
+        self.fc_main = nn.Linear(n_input, swiglu_h)
+        self.fc_gate = nn.Linear(n_input, swiglu_h)
+        self.fc_out = nn.Linear(swiglu_h, n_output)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        return self.fc_out(self.fc_main(x) * self.act(self.fc_gate(x)))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -154,7 +175,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_swiglu=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -163,8 +185,11 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        if use_swiglu:
+            self.mlp = SwiGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        else:
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                           n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -185,7 +210,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_swiglu=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -206,6 +232,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_swiglu=use_swiglu,
             )
             for i in range(n_layers)
         ])
@@ -411,6 +438,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 42
     deterministic: bool = False
+    use_swiglu: bool = False
 
 
 cfg = sp.parse(Config)
@@ -456,11 +484,16 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_swiglu=cfg.use_swiglu,
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+n_ffn_params = sum(
+    p.numel() for n, p in model.named_parameters()
+    if "blocks." in n and ".mlp." in n and ".mlp2." not in n
+)
+print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
@@ -475,11 +508,14 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "n_ffn_params": n_ffn_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
+run.summary["model/param_count"] = n_params
+run.summary["model/ffn_param_count"] = n_ffn_params
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
@@ -532,9 +568,16 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_norm=float("inf")
+        )
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
