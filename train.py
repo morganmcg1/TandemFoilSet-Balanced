@@ -435,6 +435,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     smooth_l1_beta: float = 0.05  # quadratic-to-linear transition in normalized y space
+    mlp_ratio: int = 2
 
 
 cfg = sp.parse(Config)
@@ -471,7 +472,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
