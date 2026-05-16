@@ -106,6 +106,50 @@ def _make_norm(dim: int, norm_type: str) -> nn.Module:
     return RMSNorm(dim) if norm_type == "rmsnorm" else nn.LayerNorm(dim)
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, https://arxiv.org/abs/2302.06675).
+
+    Update: u_t = sign(beta1 * m_{t-1} + (1 - beta1) * g_t); p -= lr * u_t.
+    Momentum: m_t = beta2 * m_{t-1} + (1 - beta2) * g_t.
+    Weight decay is decoupled and applied multiplicatively: p *= 1 - lr * wd.
+
+    Defaults follow the lucidrains/lion-pytorch reference (beta1=0.9, beta2=0.99).
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                if wd != 0.0:
+                    p.mul_(1.0 - lr * wd)
+                update = exp_avg.clone().mul_(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
 class GEGLU(nn.Module):
     """Gated Linear Unit (Shazeer 2020): out = value * gate_act(gate).
 
@@ -518,6 +562,7 @@ class Config:
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
+    optimizer: str = "adamw"   # Optimizer choice: 'adamw' or 'lion'
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -577,7 +622,13 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer}")
+print(f"Optimizer: {cfg.optimizer} (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=15, eta_min=cfg.eta_min
 )
