@@ -1,5 +1,24 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 03:35 — PR #3658: Transolver depth n_layers=6 test — ASSIGNED to tanjiro
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/depth`
+- **Hypothesis:** Add one Transolver block (5 → 6) to test depth-limited capacity on the FiLM+RFF-conditioned input. First architecture-side experiment in this track (4 prior wins were all loss/input/schedule).
+- **Predicted impact:** Conservative 1–3% (test ~67–68), hopeful 5% (test ~65–66). +114K params (+17%), +17% per-step compute → student should drop cosine_tmax to ~11-12 to match achievable epochs under 30-min cap.
+- **Status:** WIP, smoke test mandatory before full run
+
+---
+
+## 2026-05-16 03:30 — PR #3406: surf_weight sweep — CLOSED (re-run regressed on new base)
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/surf-weight-sweep`
+- **Hypothesis:** sw5 sweep arm winner from R1 (frieren-only base, val=98.30/test=88.80) re-run on full FiLM+RFF stack.
+- **W&B run:** `2kulmdv6` (sw5-on-film-base, surf_weight=5, all other configs at merged defaults)
+- **Result:** val_avg=81.22, test_avg=72.17 — **+4.17% above 69.27 baseline**, all 4 splits regressed (+0.4% / +1.1% / +11.1% / +7.1%). Largest hits on `test_geom_camber_cruise` (+11.1%) and `test_re_rand` (+7.1%) — the two splits FiLM+RFF were already strongest on.
+- **Decision:** CLOSED — student's analysis correctly identified the mechanism: loss rebalancing was unlocking headroom on the simpler base that FiLM+RFF now provide structurally. Reducing surf_weight on the new base muffles the dominant gradient signal without freeing useful budget elsewhere. **Loss reweighting lever is exhausted on this stack.**
+
+---
+
 ## 2026-05-16 02:00 — PR #3618: Surface-only decoder head (parallel zero-init residual) — ASSIGNED to nezuko
 
 - **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/surf_head`
