@@ -137,11 +137,12 @@ class SwiGLUFFN(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, attn_dropout=0.0, slice_num=64):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.attn_dropout = attn_dropout
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -180,7 +181,7 @@ class PhysicsAttention(nn.Module):
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
+            dropout_p=self.attn_dropout if self.training else 0.0,
             is_causal=False,
         )
 
@@ -191,13 +192,14 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 attn_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, attn_dropout=attn_dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
@@ -220,6 +222,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 attn_dropout=0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -241,7 +244,8 @@ class Transolver(nn.Module):
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_num, attn_dropout=attn_dropout,
+                last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
@@ -466,6 +470,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    attn_dropout: float = 0.0  # dropout_p for F.scaled_dot_product_attention (slice-token attention)
 
 
 cfg = sp.parse(Config)
@@ -504,6 +509,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    attn_dropout=cfg.attn_dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
