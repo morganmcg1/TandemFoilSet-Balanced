@@ -321,6 +321,65 @@ class EMA:
 
 
 # ---------------------------------------------------------------------------
+# Lion optimizer — sign-based update with EMA momentum (Chen et al. 2023)
+# ---------------------------------------------------------------------------
+
+
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (arXiv:2302.06675), Algorithm 2.
+
+        update = sign(β1 · m + (1 − β1) · g)
+        θ     ← (1 − lr·λ) · θ − lr · update        # additive form expands to this
+        m     ← β2 · m + (1 − β2) · g               # uses the pre-step grad
+
+    Half the optimizer state of AdamW (no second moment) and produces unit-L∞-norm
+    updates, so lr should typically be 3–10× smaller and weight_decay 3–10× larger
+    than the AdamW recipe for the same task.
+    """
+
+    def __init__(self, params, lr: float = 1e-4, betas: tuple[float, float] = (0.9, 0.99),
+                 weight_decay: float = 0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+
+                # Interpolated momentum, sign-projected. Clone so exp_avg is intact
+                # for its own EMA update below.
+                update = exp_avg.clone().mul_(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.data.add_(update, alpha=-lr)
+
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -436,6 +495,11 @@ def write_experiment_summary(
         "grad_clip_norm": cfg.grad_clip_norm,
         "use_schedule_free": cfg.use_schedule_free,
         "sf_warmup_steps": cfg.sf_warmup_steps if cfg.use_schedule_free else None,
+        "optimizer": cfg.optimizer,
+        "lion_lr": cfg.lion_lr if cfg.optimizer == "lion" else None,
+        "lion_weight_decay": cfg.lion_weight_decay if cfg.optimizer == "lion" else None,
+        "lion_betas": cfg.lion_betas if cfg.optimizer == "lion" else None,
+        "seed": cfg.seed,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -492,14 +556,22 @@ class Config:
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
     use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
     sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
+    optimizer: str = "adamw"  # one of: "adamw", "lion"
+    lion_lr: float = 1.5e-4  # Lion lr (typically 3-10x smaller than AdamW; 3x of cfg.lr=5e-4)
+    lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
+    lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
+    seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f"  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -546,7 +618,27 @@ ema = EMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
 if ema is not None:
     print(f"EMA: enabled (decay={cfg.ema_decay}, warmup ramp (1+step)/(10+step))")
 
-if cfg.use_schedule_free:
+if cfg.optimizer == "lion":
+    lion_betas = tuple(float(b.strip()) for b in cfg.lion_betas.split(","))
+    if len(lion_betas) != 2:
+        raise ValueError(f"--lion_betas must be two comma-separated floats, got {cfg.lion_betas!r}")
+    optimizer = Lion(model.parameters(), lr=cfg.lion_lr,
+                     betas=lion_betas, weight_decay=cfg.lion_weight_decay)
+    print(f"Optimizer: Lion (lr={cfg.lion_lr}, weight_decay={cfg.lion_weight_decay}, betas={lion_betas})")
+    t_max_eff = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
+    if cfg.cosine_t_max is not None:
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[
+                torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max_eff),
+                torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1e-4, total_iters=1_000_000),
+            ],
+            milestones=[t_max_eff],
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"Scheduler: cosine T_max={t_max_eff}, max_epochs={MAX_EPOCHS}")
+elif cfg.use_schedule_free:
     from schedulefree import AdamWScheduleFree
     optimizer = AdamWScheduleFree(
         model.parameters(),
@@ -560,8 +652,9 @@ if cfg.use_schedule_free:
         f"Optimizer: AdamWScheduleFree(lr={cfg.lr}, weight_decay={cfg.weight_decay}, "
         f"warmup_steps={cfg.sf_warmup_steps}); no scheduler"
     )
-else:
+elif cfg.optimizer == "adamw":
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Optimizer: AdamW (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
     t_max_eff = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
     if cfg.cosine_t_max is not None:
         # Decay fully across t_max_eff epochs, then hold near zero for any overshoot.
@@ -576,6 +669,8 @@ else:
     else:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
     print(f"Scheduler: cosine T_max={t_max_eff}, max_epochs={MAX_EPOCHS}")
+else:
+    raise ValueError(f"Unknown --optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
