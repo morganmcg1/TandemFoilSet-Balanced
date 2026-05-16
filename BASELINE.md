@@ -1,6 +1,42 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 10:05) — PR #3316: Huber beta=0.5
+## Current best (as of 2026-05-16 12:00) — PR #3612: Cauchy loss c=1.0
+
+Eight winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + **Cauchy loss c=1.0** (PR #3612, edward, **−3.67% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **52.494** (run `mep5yevo`, edward variant-cauchy-c1-ema99-freq5, best epoch 14)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **51.220** (−3.06% vs previous 52.837)
+  - `test_single_in_dist/mae_surf_p` = 58.170
+  - `test_geom_camber_rc/mae_surf_p` = 53.490
+  - `test_re_rand/mae_surf_p` = 42.010
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Cauchy loss (cauchy_c=1.0)** replaces Huber; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- Wall-clock: ~32.6 min / arm (hit 30-min cap; best epoch 14)
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --lr 1e-3 --warmup_epochs 3 \
+  --cauchy_c 1.0 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --wandb_group cauchy-ema-decay99 \
+  --wandb_run_name variant-cauchy-c1-ema99-freq5
+```
+
+---
+
+## Previous best (as of 2026-05-16 10:05) — PR #3316: Huber beta=0.5
 
 Seven winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + **Huber beta=0.5** (PR #3316, fern, **−6.05% vs previous canonical**).
 
