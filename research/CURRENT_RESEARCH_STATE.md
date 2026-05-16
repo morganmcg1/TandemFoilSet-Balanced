@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 10:50
+- **Date:** 2026-05-16 11:05
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; programme best val=65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -21,6 +21,16 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 **Effective win threshold:** val < 65.37 (or test < 61.68).
 
+## Canonical noise floor: SwiGLU+h=128 (PR #3765 — 3-seed σ̂ characterization)
+
+**μ̂(SwiGLU+h=128) = 66.48 ± 0.90** (seeds 0/1/2: 65.44 / 67.07 / 66.93)
+
+- PR #3680 seed=0 (65.44) was a ~1.16σ-low lucky draw
+- σ̂=0.90 < σ̂(GELU)=1.54 — SwiGLU is *more* consistent, not less
+- GeGLU programme best (65.37, single-seed) lies −1.23σ from SwiGLU μ̂ → **within noise; population-level equivalence unresolved**
+- **Recommended strong win bar: 2-seed mean val < 64.7** (= 2σ below SwiGLU μ̂)
+- GeGLU multi-seed confirmation → fern PR #3904 (just assigned)
+
 ## Consolidated SwiGLU gradient landscape (from #3768 + #3840 diagnostics)
 
 **Between blocks:** head_and_embed (3.48) > block_4 (1.41) > block_0 (1.12) > middle blocks (~0.17)
@@ -37,8 +47,8 @@ Dominant learning: (1) input/output ends of network, (2) value path within each 
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3764 | thorfinn | h=192+SwiGLU stacking | Running (stale poll — rate-limit delay) |
-| #3765 | fern | SwiGLU h=128 seed confirm (seeds 1+2) | Running (stale poll — rate-limit delay) |
+| #3764 | thorfinn | h=192+SwiGLU stacking | Running (rate-limit poll delay, picked up 11:22 UTC) |
+| **#3904** | **fern** | **GeGLU seed confirm (seeds 1+2)** | **NEW — assigned 11:00** |
 | #3832 | askeladd | head_and_embed LR boost 1.75× on SwiGLU | Running |
 | **#3886** | **alphonse** | **DropPath (Stochastic Depth) on SwiGLU** | **NEW — assigned 10:40** |
 | **#3888** | **frieren** | **fc_main LR boost 1.5× within SwiGLU** | **NEW — assigned 10:45** |
@@ -50,6 +60,7 @@ Dominant learning: (1) input/output ends of network, (2) value path within each 
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
+| **#3765** | **SwiGLU seed confirm (fern)** | **μ̂=66.48** | **3-seed variance char. MAJOR: seed=0 was lucky low. Canonical μ̂=66.48±0.90. GeGLU population tie unresolved.** |
 | **#3811** | **Dropout 0.1 + SwiGLU (alphonse)** | **μ̂=66.82** | **2-seed null. SwiGLU gating already regularizes sufficiently. OOD-asymmetric help hypothesis rejected.** |
 | **#3840** | **fc_gate LR boost 1.5× (frieren)** | **67.00** | **Modest regression. MAJOR finding: fc_main > fc_gate grad-norm ratio 0.6-0.75. Gate is not the within-block bottleneck.** |
 | #3768 | Inverse-LLRD+SwiGLU (frieren) | 74.01 | Anti-additive. MAJOR finding: grad-norm inverts between-block. |

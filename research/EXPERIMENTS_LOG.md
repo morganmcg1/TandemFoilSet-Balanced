@@ -1,5 +1,44 @@
 # SENPAI Research Results
 
+## 2026-05-16 11:00 — PR #3765: H: SwiGLU h=128 seed confirm ✗ CLOSED (val=66.48 mean, doesn't beat 65.37 best — but CRITICAL variance characterization)
+
+- Branch: `willowpai2i48h1-fern/h128-swiglu-seed-confirm`
+- Student: willowpai2i48h1-fern
+
+### 3-seed results (W&B `n6mnok0f`/`130yh1y9`, seeds 1+2 + thorfinn's seed=0)
+
+| Seed | val_avg/mae_surf_p | test_avg | W&B |
+|------|--------------------|----------|-----|
+| 0 (PR #3680) | 65.44 | 62.04 | 8on2llcv |
+| 1 (this PR) | 67.07 | 63.75 | n6mnok0f |
+| 2 (this PR) | 66.93 | 62.81 | 130yh1y9 |
+| **μ̂ (3-seed)** | **66.48** | **62.87** | — |
+| **σ̂ (sample)** | **0.90** | **0.86** | — |
+
+### The critical calibration finding
+
+**PR #3680's seed=0 (val=65.44) was a ~1.16σ-low lucky draw.** The canonical SwiGLU val is ~66.5, not 65.4. σ̂=0.90 is LOWER than GELU σ̂=1.54 (PR #3546) — SwiGLU is more consistent across seeds, not less. The +24pt improvement vs GELU is 15.8σ from GELU's noise floor (completely confirmed).
+
+**Implication for GeGLU:** The current programme best (GeGLU 65.37, single-seed PR #3810) lies −1.23σ from the SwiGLU μ̂. GeGLU and SwiGLU may be statistically equivalent at the population level. Multi-seed GeGLU confirmation is the critical next step.
+
+### Updated win threshold framework
+
+| Bound | val threshold |
+|-------|--------------|
+| Single-seed headline | < 65.37 (GeGLU seed=0) |
+| 1σ below SwiGLU μ̂ | < 65.6 |
+| **2σ below SwiGLU μ̂ (recommended strong bar)** | **< 64.7** |
+
+### Closure rationale
+
+Val=66.48 (3-seed mean) does not beat the current programme best (65.37 GeGLU). Closed per merge rule (no improvement). The variance data is recorded in BASELINE.md for calibration.
+
+### Follow-up: PR #3904 fern GeGLU seed confirmation
+
+Fern assigned to run GeGLU seeds 1+2 using identical methodology. This will tell us if GeGLU μ̂ < SwiGLU μ̂ (65.6 threshold), confirming whether GeGLU is genuinely better at the population level.
+
+---
+
 ## 2026-05-16 10:45 — PR #3811: H: Dropout 0.1 + SwiGLU ✗ CLOSED (null, 2-seed mean val=66.82)
 
 - Branch: `willowpai2i48h1-alphonse/dropout_swiglu`

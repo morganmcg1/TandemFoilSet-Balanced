@@ -418,3 +418,40 @@ cd target/ && python train.py --agent willowpai2i48h1-tanjiro \
   --seed 0
 # NOTE: Override model to h=128/slice_num=64/T_max=15 (train.py defaults are h=192/T_max=18)
 ```
+
+---
+
+## 2026-05-16 10:55 — Variance characterization: SwiGLU+h=128 3-seed σ̂ (PR #3765 — not merged, info only)
+
+PR #3765 (fern) ran SwiGLU+h=128 at seeds 1 and 2 to validate the seed=0 result from PR #3680.
+
+### 3-seed canonical for SwiGLU+h=128
+
+| Seed | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|------|--------------------|---------------------|---------|
+| 0 (PR #3680) | 65.44 | 62.04 | `8on2llcv` |
+| 1 (PR #3765) | 67.07 | 63.75 | `n6mnok0f` |
+| 2 (PR #3765) | 66.93 | 62.81 | `130yh1y9` |
+| **μ̂ (3-seed)** | **66.48** | **62.87** | – |
+| **σ̂ (sample)** | **0.90** | **0.86** | – |
+
+### Implications for win threshold
+
+- PR #3680's seed=0 (val=65.44) was a ~1.16σ-low lucky draw, not a representative SwiGLU baseline.
+- PR #3810's GeGLU seed=0 (val=65.37) lies ~−1.23σ from the SwiGLU μ̂ — within seed noise. GeGLU and SwiGLU are likely **statistically equivalent at the population level** (multi-seed GeGLU confirmation pending).
+- σ̂(SwiGLU)=0.90 < σ̂(GELU)=1.54 (PR #3546) — SwiGLU is *more* consistent across seeds, not less. The +24pt gap vs GELU is 15.8σ relative to GELU σ̂.
+
+### Updated win threshold framework (SwiGLU/GeGLU regime)
+
+| Bound | val_avg threshold | Note |
+|-------|------------------|------|
+| Headline single-seed best | **65.37** | GeGLU seed=0 (PR #3810) |
+| SwiGLU 3-seed μ̂ | 66.48 | new canonical reference |
+| 1σ below SwiGLU μ̂ | **< 65.6** | weak/marginal win |
+| 2σ below SwiGLU μ̂ | **< 64.7** | strong win (recommended bar for canonical claims) |
+
+Future SwiGLU/GeGLU-regime experiments should aim for 2-seed mean < 64.7 to declare a robust improvement; single-seed val < 65.4 should be confirmed at seed=1 before being merged.
+
+### Note
+
+PR #3765 was closed (not merged) because val=66.48 does not beat the current baseline (65.37). The variance data is recorded here for calibration purposes.
