@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:40
+- **Date:** 2026-05-16 12:32
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -31,7 +31,7 @@
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
 | edward | #3878 | EMA decay sweep {0.995, 0.999} on triple compound | wave-9 |
-| alphonse | #3882 | SAM optimizer (ρ=0.05) on triple compound | wave-9 |
+| alphonse | #3964 | LayerScale γ-init sweep {0.005, 0.02} on triple compound | NEW (wave-10) |
 | fern | #3883 | T_max schedule sweep {12, 25} on triple compound | wave-9 |
 | frieren | #3909 | Learnable Fourier frequencies on triple compound | NEW (wave-9) |
 | tanjiro | #3527 | BF16 + LS + n14 + EMA quad compound | SENT BACK (BF16+LS+n10 already at val=67.19/test=58.05; needs EMA arm + rebase) |
@@ -62,14 +62,15 @@
 | #3782 (fern) | AdamW eps sweep falsified: both 1e-6/1e-7 worse; default 1e-8 optimal |
 | #3740 (frieren) | Asymmetric LayerScale γ-init: both arms regress; γ converges to natural asymmetry regardless of init |
 | #3823 (nezuko) | Lookahead optimizer: both k=5/k=10 ~15-21% worse; slow-anchor averaging disrupts LayerScale γ trajectory |
+| #3882 (alphonse) | SAM optimizer ρ=0.05: structural failure under 30-min budget; 2× overhead halves epochs, no flat-min benefit overcomes |
 
 ## Current research themes
 
 1. **BF16 quad compound (tanjiro #3527) — HIGHEST PRIORITY**: arm-1 of original BF16 run (BF16+LS+n10, no EMA) at 17 epochs already hits val=67.19/test=58.05 — beats current best (71.20/62.71) by -7.4% test. Sent back to rebase + run BF16+LS+n14+EMA quad compound. Even arm-2 (BF16+LS+n14, no EMA, 16 epochs) hit val=67.00/test=59.31. BF16's extra epochs are extremely valuable; the quad compound should land sub-60 val if it composes.
 
-2. **EMA decay sweep (edward #3878) — wave-9**: EMA 0.998 won by enabling n14+LayerScale. Is 0.998 the optimal decay for ~12 epochs (~600 steps)? Testing {0.995, 0.999} to bracket.
+2. **LayerScale γ-init sweep (alphonse #3964) — wave-10 NEW**: γ=0.01 won on n=10 stack; with n_freqs=14 (richer input) + EMA (averages γ-trajectory) the optimal may have shifted. Testing γ ∈ {0.005, 0.02} narrow bracket on triple compound.
 
-3. **SAM optimizer (alphonse #3882) — wave-9 BOLD BET**: Sharpness-Aware Minimization finds flat minima → better OOD generalization. 2× compute overhead → ~6-7 epochs in budget. Theoretically well-motivated for distribution-shift robustness.
+3. **EMA decay sweep (edward #3878) — wave-9, STALLED**: EMA 0.998 won by enabling n14+LayerScale. Testing {0.995, 0.999} bracket. ~3h no progress since assignment; pod healthy but pinged.
 
 4. **T_max schedule sweep (fern #3883) — wave-9**: Current T_max=20 with ~12 effective epochs means cosine only completes 60-70% of its cycle. T_max=12 (aligned to budget) vs T_max=25 (slower decay).
 

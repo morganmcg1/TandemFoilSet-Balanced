@@ -5,6 +5,25 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 12:30 — PR #3882 (charliepai2i48h5-alphonse): SAM optimizer (ρ=0.05) — CLOSED
+
+- branch: `charliepai2i48h5-alphonse/sam-optimizer`
+- hypothesis: Sharpness-Aware Minimization → flat minima → better OOD generalization
+- results (JSONL-verified):
+
+  | metric | value | vs baseline (71.20/62.71) |
+  |---|---|---|
+  | val_avg/mae_surf_p | 126.72 | +78% worse |
+  | test_avg/mae_surf_p | 116.15 | +85% worse |
+  | best_epoch | 7 | (vs baseline's 12) |
+
+- per-split test surf_p: single=155.70, rc=115.17, cruise=81.93, re_rand=111.79 — all massively above baseline
+- epoch budget: ~283 s/epoch (2.0× overhead); only 7 epochs in 30 min vs baseline's 14
+- artifacts: `models/model-layerscale-n14-ema0998-sam005-20260516-112730/metrics.jsonl`
+- commentary: CLOSED — structural failure under 30-min budget. SAM trajectory is monotonically descending (algorithm works correctly), but halving available epochs is fatal vs the cosine-T_max=20 schedule. Student's analysis identified the gating criterion violation (val at epoch 6 = 135.63 vs <71.20 target) and noted amortized variants (LookSAM k=5 ~1.2× overhead, periodic-SAM every 4th batch ~1.25× overhead, ESAM) as the path forward. Those need fresh hypothesis PRs.
+
+---
+
 ## 2026-05-16 11:35 — PR #3823 (charliepai2i48h5-nezuko): Lookahead optimizer wrapper {k=5, k=10} — CLOSED
 
 - branch: `charliepai2i48h5-nezuko/lookahead-optimizer`
