@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~17:55 UTC) — #3957 tanjiro CLOSED (informative); #4063 tanjiro R10 T_max sweep at lr=1.5e-4 assigned; nezuko #4015 confirmed active (3+ arms done in W&B; PR was false-positive stale); 8/8 staffed.
+- **Date:** 2026-05-16 (~18:40 UTC) — #4046 askeladd / #4045 fern CLOSED informative; #4015 nezuko sent back for new-substrate confirmation arms (layer scale=1e-4 winner on OLD substrate); #4084 fern dropout / #4085 askeladd batchsize assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -42,19 +42,21 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| **#4056** | **thorfinn** | **R10 H42: Gradient clip sweep {0.5, 1.0, 2.0} at lr=1.5e-4** | **Just assigned** |
-| **#4057** | **edward** | **R10 H45: Surface-biased slice routing in PhysicsAttention** | **Just assigned** |
+| **#4084** | **fern** | **R10 H48: Dropout sweep {0.05, 0.10} on Transolver blocks at lr=1.5e-4** | **Just assigned** |
+| **#4085** | **askeladd** | **R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4** | **Just assigned** |
+| #4015 | nezuko | R10 H39: Layer scale init {1e-4, 1e-5} — sent back for Arm D+E on new substrate | Sent back |
+| #4063 | tanjiro | R10 H47: T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 substrate | WIP |
+| #4057 | edward | R10 H45: Surface-biased slice routing in PhysicsAttention | WIP |
+| #4056 | thorfinn | R10 H42: Gradient clip sweep {0.5, 1.0, 2.0} at lr=1.5e-4 | WIP |
 | #4049 | frieren | R11 H46: spec_norm at lr=1.5e-4 (2-arm) | WIP |
-| #4044 | alphonse | R10 H40: Multi-param FiLM (all 11 global params) | WIP |
-| #4045 | fern | R10 H44: Model capacity n_hidden {192, 256} | WIP |
-| #4046 | askeladd | R10 H43: Pressure channel upweighting {2×, 3×} | WIP |
-| #4015 | nezuko | R10 H39: Layer scale init {1e-4, 1e-5} | WIP |
-| **#4063** | **tanjiro** | **R10 H47: T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 substrate** | **Just assigned** |
+| #4044 | alphonse | R10 H40: Multi-param FiLM — ctrl-only so far, treatment not launched | Nudged |
 
 ## Recent closures (informative nulls — recent sessions)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4046 | askeladd | p_weight upweighting monotone hurts (1→2→3 worsens) | CLOSED |
+| #4045 | fern | Capacity bottleneck = wall clock (n=128 ctrl best within budget) | CLOSED |
 | #3957 | tanjiro | T_max=20 best within-substrate (val 67.48 lr=5e-5) — above new BL | CLOSED |
 | #3958 | thorfinn | wd=5e-4 best (val 64.79) — above new BL 63.05 | CLOSED |
 | #3913 | edward | Re-sampler monotonically hurts; alpha=0 ctrl=64.53 | CLOSED |
@@ -74,6 +76,8 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 | Optimizer stability | Grad clip {0.5, 1.0, 2.0} at lr=1.5e-4 | #4056 thorfinn | −0 to −2 val mean; variance reduction |
 | Architecture routing | Surface-biased PhysicsAttention routing | #4057 edward | −1 to −3 val; camber_rc target |
 | Schedule depth | T_max sweep {14, 18, 20} at lr=1.5e-4 | #4063 tanjiro | ≤−1 to +1 val; tests within-substrate T_max=20 transfer |
+| Block regularization | Dropout sweep {0.05, 0.10} in PhysicsAttention + FFN | #4084 fern | −0 to −2 val; targets camber_rc generalization |
+| Gradient signal cleanliness | Batch size {8, 16} with Lion at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val; risk: wall-clock budget |
 
 ## Key findings (cumulative, 19)
 
@@ -99,7 +103,8 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 
 ## Next priorities
 
-1. **Monitor R10/R11 hypotheses** — multi-FiLM (H40) and capacity (H44) have highest expected upside; camber_rc split (val 80.74) remains the weakest target
-2. **Watch tanjiro #3957 T_max=20** — close as informative when terminal (T_max=20 unlikely to beat BL based on mid-run trajectory)
-3. **Unassigned R10 hypotheses** (if more students become idle): H41 SWA (Priority 6 — may overlap with EMA)
-4. **If current R10/R11 round produces winners**: investigate whether multi-FiLM + capacity compound (both target different bottlenecks), and whether wd recalibration (wd=5e-4 at lr=1.5e-4) is worth testing after specnorm result is known
+1. **Layer scale at new substrate (nezuko Arms D+E)** — highest-confidence pending experiment. If layer_scale=1e-4 + lr=1.5e-4 ≤ 62.3 val, it's a real win → merge.
+2. **Multi-FiLM treatment arm (alphonse #4044)** — highest-priority R10 hypothesis (camber_rc target). Currently ctrl-only; nudged for treatment launch.
+3. **R10/R11 in flight**: dropout (#4084), batchsize (#4085), T_max (#4063), gradclip (#4056), surfrouting (#4057), spec_norm@lr=1.5e-4 (#4049).
+4. **Unassigned R10 hypotheses** (if more students idle): H41 SWA, gradient accumulation, slice_num sweep, alternative loss formulations.
+5. **Confidence on baseline**: future PR — 2-seed reproduction of #3976 (jurrwig2) to measure variance directly; would let us better calibrate the ~2.77 noise floor at this substrate.

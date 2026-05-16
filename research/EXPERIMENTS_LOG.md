@@ -1,5 +1,55 @@
 # SENPAI Research Results
 
+## 2026-05-16 18:40 — #4046 askeladd / #4045 fern CLOSED informative; #4015 nezuko sent back for new-substrate confirmation; #4084 fern dropout / #4085 askeladd batchsize assigned
+
+### #4015 nezuko — Layer scale (SENT BACK — needs new-substrate confirmation)
+
+3 arms ran on OLD lr=1e-4 + spec_norm substrate:
+
+| Arm | layer_scale_init | run_id | val_avg | test_avg | vs OLD BL 64.68 | vs NEW BL 63.05/53.60 |
+|-----|------------------|--------|---------|----------|-----------------|----------------------|
+| A ctrl | 1.0 | sawf13tr | 64.5367 | 55.9533 | −0.14 (parity) | +1.49 / +2.35 |
+| **B winner** | **1e-4** | **lwx03cg0** | **63.3233** | **55.0365** | **−1.36 / −1.14** | **+0.27 / +1.44** |
+| C | 1e-5 | kbqu64n6 | 63.5006 | 55.2014 | −1.18 / −0.97 | +0.45 / +1.60 |
+
+- Per-split test (Arm B): camber_rc 69.24→66.75 (−2.49), camber_cruise 38.56→37.52, re_rand 55.83→54.08, single_in_dist 61.06→61.80 (+0.74)
+- Analysis: Layer scale init=1e-4 wins on OLD substrate by −1.36 val / −1.14 test. Direction consistent (test improves on 3 of 4 splits). But on NEW lr=1.5e-4 + no spec_norm substrate, can't compare directly. Asked for Arm D (layer_scale=1e-4 on lr=1.5e-4 substrate) + Arm E (2nd seed) confirmation. If Arm D ≤ 62.3 val → likely merge.
+
+### #4046 askeladd — Pressure channel upweighting (CLOSED — informative null)
+
+| Arm | p_weight | val_avg | test_avg | vs OLD BL 64.68 |
+|-----|----------|---------|----------|-----------------|
+| ctrl | 1 | 66.08 | 58.01 | +1.40 |
+| p2 | 2 | 68.11 | 59.80 | +3.43 worse |
+| p3 | 3 | 68.01 | 59.28 | +3.33 worse |
+
+- Analysis: Monotone hurt; explicit channel reweighting in Huber loss is harmful. Implicit surf_weight=10 balance is sufficient.
+- **Paper finding (added):** Surface pressure channel does not benefit from explicit upweighting in Huber loss.
+
+### #4045 fern — Capacity bump n_hidden {192, 256} (CLOSED — wall-clock-bound informative null)
+
+| Arm | n_hidden | Epochs | val_avg | test_avg | s/epoch |
+|-----|----------|--------|---------|----------|---------|
+| A ctrl | 128 | 14 | 64.58 | 56.48 | 135 |
+| B | 192 | 10 | 69.05 | 60.56 | 190 |
+| C | 256 | 8 | 73.79 | 65.63 | 228 |
+
+- Analysis: Larger n_hidden converges faster per-epoch but slower per-step. Within SENPAI_TIMEOUT_MINUTES=30, n=128 ctrl wins. At epoch 8, n=256 leads n=128 by 6.5 val — capacity bottleneck is wall clock, not architecture. Per launch isolation, timeout is hard bound.
+- **Paper finding (added):** Under fixed wall-clock budget, n_hidden=128 is the optimal capacity for this task.
+
+### #4044 alphonse — Multi-FiLM (NUDGED — ctrl-only so far)
+
+W&B group shows 3 runs all `film_cond_dim=1` (ctrl) — the 11-param treatment has NOT launched. Posted status check asking alphonse to launch treatment arm or report implementation blocker.
+
+### New assignments
+
+| PR | Student | Hypothesis | Status |
+|----|---------|------------|--------|
+| #4084 | fern | R10 H48: Dropout sweep {0.05, 0.10} on Transolver blocks at lr=1.5e-4 | Just assigned |
+| #4085 | askeladd | R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4 | Just assigned |
+
+---
+
 ## 2026-05-16 17:55 — #3957 tanjiro CLOSED (informative); #4063 tanjiro R10 T_max sweep at lr=1.5e-4 assigned
 
 ### #3957 tanjiro — cosine T_max sweep (CLOSED — informative null)
