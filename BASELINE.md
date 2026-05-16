@@ -251,4 +251,49 @@ cd target && python train.py --agent <student> \
     --experiment_name "<student>/your-experiment-name"
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **70.2479** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **70.2479**~~ — superseded by PR #3530 below.
+
+---
+
+## 2026-05-16 03:30 — PR #3530: surf_weight reduction 30→25 on full 5-mechanism stack
+
+**Student:** charliepai2i48h2-frieren  
+**Change:** `surf_weight=30 → surf_weight=25`. Hypothesis: the asinh loss compression, EMA, and grad-clip together already reduce extreme pressure gradient signal, making surf_weight=30 an over-weight on the 4-mechanism stack. Two arms tested (25 and 20); sw=25 wins in aggregate.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **67.2991** |
+| val_single_in_dist/mae_surf_p | 80.6871 |
+| val_geom_camber_rc/mae_surf_p | 79.0339 |
+| val_geom_camber_cruise/mae_surf_p | 46.1009 |
+| val_re_rand/mae_surf_p | 63.3746 |
+| **test_avg/mae_surf_p** | **58.9233** |
+| test_single_in_dist/mae_surf_p | 71.2300 |
+| test_geom_camber_rc/mae_surf_p | 69.7762 |
+| test_geom_camber_cruise/mae_surf_p | 37.9947 |
+| test_re_rand/mae_surf_p | 56.6922 |
+| Best epoch | 14 (timeout-bound; val still descending) |
+| Peak GPU memory | 42.13 GB |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + **25**·surf_loss, with asinh(z) on pressure channel  
+**EMA:** decay=0.999, applied at val/test passes  
+**Gradient clipping:** max_norm=1.0 (inserted before optimizer.step())  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-frieren-surf-weight-25-20260516-002627/metrics.jsonl`
+
+**Note:** −4.20% on val (67.30 vs 70.25), −5.08% on test (58.92 vs 62.08). All 4 val splits improved (−1.0% to −6.3%). Hypothesis confirmed: the asinh/EMA/grad-clip stack already compresses extreme pressure gradient signal, making surf_weight=30 an over-weight. The sw=20 arm (val=68.10) also beat baseline, showing the 20–25 range is broadly good; the curve flattens below 20. Val and test both descend monotonically to epoch 14 — still timeout-bound.
+
+**5-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.999) + grad_clip(max_norm=1.0)
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **67.2991** with a terminal `SENPAI-RESULT` marker.

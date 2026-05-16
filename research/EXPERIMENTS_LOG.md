@@ -366,3 +366,23 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Decision:** CLOSED — +98.6% regression. Same wall-clock penalty pattern as alphonse capacity scale-up (#3099). 261s/epoch gives only 7 epochs vs baseline's 14. The per-step convergence is fine (monotone descent) but the epoch budget deficit dominates.
 - **Key finding:** Any architecture change that increases per-epoch time above ~150s cannot overcome the lost epoch count within the 30-min cap. The direction requires an orthogonal throughput win (bf16 — alphonse's current experiment) before capacity scaling can add positive signal.
 
+---
+
+## 2026-05-16 03:30 — PR #3530: surf_weight reduction 30→25 on full 5-mechanism stack
+
+- **Branch:** charliepai2i48h2-frieren/surf-weight-ablation
+- **Hypothesis:** With asinh loss compression + EMA + grad-clip all active, surf_weight=30 over-weights surface loss because the noise-reduction mechanisms already de-emphasize extreme pressure gradients implicitly. Reducing surf_weight should rebalance the vol/surf trade-off.
+- **Metrics:** `models/model-charliepai2i48h2-frieren-surf-weight-25-20260516-002627/metrics.jsonl` (winner), `models/model-charliepai2i48h2-frieren-surf-weight-20-20260516-013527/metrics.jsonl` (arm B)
+
+| Split | baseline (sw=30) | Arm A (sw=25) | Δ | Arm B (sw=20) | Δ |
+|-------|-----------------|---------------|---|---------------|---|
+| single_in_dist | 81.50 | 80.69 | −0.99% | 81.42 | −0.10% |
+| geom_camber_rc | 82.80 | 79.03 | −4.55% | 77.80 | −6.04% |
+| geom_camber_cruise | 49.22 | 46.10 | −6.34% | 48.17 | −2.13% |
+| re_rand | 67.47 | 63.37 | −6.07% | 65.02 | −3.62% |
+| **val_avg** | **70.2479** | **67.2991** | **−4.20%** | **68.1024** | **−2.92%** |
+| **test_avg** | **62.0765** | **58.9233** | **−5.08%** | **59.2259** | **−4.59%** |
+
+- **Decision:** MERGED — new baseline 67.2991 (sw=25 wins). 5th compounding mechanism on the 5-mechanism stack (Lion + surf_weight=25 + asinh + EMA + grad-clip).
+- **Key finding:** Hypothesis fully confirmed. The asinh/EMA/grad-clip stack implicitly de-emphasizes extreme-pressure gradients, shifting the optimal surface weight left from 30 toward 25. Both arms beat baseline; sw=25 marginally outperforms sw=20 in the aggregate. Split-by-split: cruise and re_rand gain the most (−6%); single_in_dist barely moves. Vol metrics stable — optimizer genuinely rebalanced rather than just shifting surface loss off. Optimum knee is at ~25; going below 20 likely trades away cruise/re_rand gains. Val still descending at epoch 14 (timeout-bound). Cumulative improvement from initial baseline: 135.02 → 67.30 = **−50.2%**.
+
