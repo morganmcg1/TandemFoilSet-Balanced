@@ -464,6 +464,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    max_lr: float | None = None  # OneCycleLR peak LR override; default uses cfg.lr
 
 
 cfg = sp.parse(Config)
@@ -534,9 +535,10 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.use_onecycle:
     total_steps = len(train_loader) * MAX_EPOCHS
+    onecycle_max_lr = cfg.max_lr if cfg.max_lr is not None else cfg.lr
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=optimizer.param_groups[0]["lr"],
+        max_lr=onecycle_max_lr,
         total_steps=total_steps,
         pct_start=cfg.onecycle_pct_start,
         div_factor=25.0,
@@ -547,7 +549,7 @@ if cfg.use_onecycle:
     onecycle_mode = True
     rising_epochs = int(total_steps * cfg.onecycle_pct_start / max(len(train_loader), 1))
     print(
-        f"Scheduler: OneCycleLR  max_lr={optimizer.param_groups[0]['lr']:.2e}  "
+        f"Scheduler: OneCycleLR  max_lr={onecycle_max_lr:.2e}  "
         f"div_factor=25  final_div_factor=1e4  pct_start={cfg.onecycle_pct_start}  "
         f"total_steps={total_steps}  steps_per_epoch={len(train_loader)}\n"
         f"  Rising phase: epochs 1-{rising_epochs}; falling: epochs {rising_epochs+1}-end  "
