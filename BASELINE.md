@@ -1,6 +1,39 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4120 (LR re-optimisation at clip=1.0 — lr=2e-4 + grad_clip=1.0 + T_max=14)
+## Current best — PR #4015 (layer_scale_init=1e-4 + T_max=20 — CaiT/DeiT-III block gating + longer schedule)
+
+**val_avg/mae_surf_p = 54.3009** (W&B run: `8m99yywe`, PR #4015 nezuko — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20** + **layer_scale_init=1e-4**; NO spec_norm; NO grad_clip)
+**test_avg/mae_surf_p = 47.2883** (same run `8m99yywe`, clean 4-split)
+
+Note: 2-seed (F+G) mean is val 55.9689 / test 48.6014 (σ_val=1.67). Both seeds clearly beat the prior best. Report uses best single seed (Arm F) as the target-to-beat threshold.
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 57.78 | 49.18 |
+| **geom_camber_rc** | **67.19** | **61.28** |
+| **geom_camber_cruise** | **38.28** | **32.26** |
+| **re_rand** | **53.95** | **46.43** |
+
+**Δ vs prior best (PR #4120 lr=2e-4+clip=1.0, val 56.89 / test 49.03): −2.59 val / −1.74 test**
+
+All 4 val splits and all 4 test splits improve. Mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III style) initialises each block's residual contribution at 1e-4 instead of 1.0, then lets the block "grow into" the residual path during training. Composes ~80% additively with T_max=20 (observed −7.08 val vs predicted −8.78 from #3976 jurrwig2 baseline). Layer_scale reduces init sensitivity; T_max=20 sustains higher-LR exploration.
+
+**Reproduce (PR #4015 Arm F — winner, seed 1):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-nezuko --epochs 50 \
+  --wandb_group round10-layerscale-nezuko \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 --cosine_t_max 20 \
+  --optimizer_name lion --lr 1.5e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 --use_film \
+  --layer_scale_init 1e-4 \
+  --wandb_name nezuko-r10-layerscale-1e4-tmax20-s1
+```
+
+---
+
+## Prior best — PR #4120 (LR re-optimisation at clip=1.0 — lr=2e-4 + grad_clip=1.0 + T_max=14)
 
 **val_avg/mae_surf_p = 56.8913** (W&B run: `1c58zju8`, PR #4120 Lion lr=2e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm)
 **test_avg/mae_surf_p = 49.0322** (same run `1c58zju8`, clean 4-split)
