@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 19:22
+- **Date**: 2026-05-16 19:35
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); 6 new experiments launched to refine the Lion stack
+- **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); 8 experiments active, H76+H77 closed negative (warmup/n_head don't transfer to slice=96)
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -62,14 +62,16 @@ The H67-H73 Lion compound batch revealed:
 |----|---------|------------|----------|---------|
 | **#4088** | askeladd | **H74: Extended cosine schedule (T_max=20/SGDR)** | HIGH | ~38-41 |
 | **#4094** | tanjiro | **H75: Lion LR sweep (lr=2e-4, lr=5e-4)** | HIGH | ~41-44 |
-| **#4090** | fern | **H76: Warmup=2 at H73 baseline** | HIGH (warmup=2 was +5.3 pts at slice=64) | ~40-42 |
-| **#4091** | frieren | **H77: n_head=4 at slice=96** | HIGH | ~41-43 |
+| **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
+| **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
 | **#4092** | nezuko | **H79: wd retune (wd=1e-4, wd=5e-5)** | HIGH | ~41-44 |
 | **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | HIGH (bold swing) | ~35-40 optimistic |
 | **#4097** | edward | **H78: Lion β₂ sweep (β₂=0.999, β₂=0.995)** | HIGH | ~41-43 |
 | **#4098** | alphonse | **H81: RMSNorm under Lion+slice=96** | HIGH (closes normalization question) | ~41-44 |
 
-**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73).
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (closed cycle 22b — superseded by H73), **H76 (warmup negative at slice=96)**, **H77 (n_head negative at slice=96)**.
+
+**H76/H77 negative-result implication for H80:** H80 (thorfinn full stack) combines warmup=2 + wd=1e-4 + β₂=0.999 + n_head=4. Two of these four levers (warmup, n_head) are now confirmed NEGATIVE at slice=96. H80's predicted range should be revised downward — still possible to win if wd+β₂ wins compensate, but less likely.
 
 ## Lever Status (post-H73)
 
@@ -77,8 +79,8 @@ The H67-H73 Lion compound batch revealed:
 |-------|--------|-------------|-------|
 | Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win |
 | LR (Lion) | 🔬 More to find | 3e-4 (H73) | Sweet spot may be 2-4e-4 at slice=96 |
-| Schedule (Lion) | 🔬 warmup helps | T_max=15 (H73) | warmup=2 won at slice=64 (H69); test on H73 |
-| n_head (Lion) | 🔬 4 wins at slice=64 | 2 (H73) | H70 found n_head=4; retest at slice=96 |
+| Schedule (Lion) | ❌ warmup REGRESSES at slice=96 (H76) | T_max=15 (H73) | H69 win doesn't transfer; warmup=2 cost > benefit at 15-ep horizon |
+| n_head (Lion) | ❌ n_head=4 REGRESSES at slice=96 (H77) | 2 (H73) | H70 win doesn't transfer; per-head dim shrinkage hurts |
 | β₂ (Lion) | 🔬 0.999 wins at slice=64 | 0.99 (H73) | H68 found β₂=0.999 helps; retest |
 | wd (Lion) | 🔬 Interaction unclear | 1e-3 (H73) | wd=1e-4 won at slice=64 (H71); wd=1e-3 won at slice=96 |
 | slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |

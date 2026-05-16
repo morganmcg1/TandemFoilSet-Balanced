@@ -1856,3 +1856,50 @@ Neither arm beats the current baseline (H73 val=42.97). Alphonse correctly ident
 | #4098 | alphonse | H81: RMSNorm under Lion+slice=96 | RMSNorm+lr=3e-4 (Arm A), RMSNorm+lr=2e-4 (Arm B) |
 
 All 8 students now active. H78 tests the β₂ individual isolation (thorfinn has the compound H80 including β₂=0.999, edward has the individual sweep). H81 retests the normalization question under Lion — H72 showed anti-compound under AdamW, but Lion's sign-update changes the normalization interaction.
+
+---
+
+## 2026-05-16 19:30 — PR #4090: H76 Warmup on H73 (fern) — **CLOSED, negative**
+
+- Branch: `fern/h76-warmup-at-lr3e4`
+- Hypothesis: warmup_epochs=2 ports from H69 slice=64 win to H73 slice=96.
+
+| Arm | val_avg | Δ vs H73 | test 3-split | best_epoch |
+|-----|--------:|---------:|-------------:|-----------:|
+| A (warmup=2, lr=3e-4) | 46.7102 | **+3.73** worse | 44.6028 | 15/15 |
+| B (warmup=2, lr=5e-4) | 49.6935 | **+6.72** worse | 48.0475 | 15/15 |
+
+**Insight captured:** Warmup does NOT transfer from slice=64+lr=1e-4 (where H69 won by 5.3 pts) to slice=96+lr=3e-4. Mechanism: at the 15-epoch wall-cut horizon, the 2 warmup epochs are 13% of training time. Lion+slice=96+GEGLU already trains stably from epoch 1 — no overshoot to suppress. Warmup is a portable lever ONLY when the optimizer/config has epoch-1 overshoot pathology.
+
+**Status: CLOSED — negative result. Warmup ruled out at H73 horizon. H80 (which includes warmup=2) is now less likely to win.**
+
+---
+
+## 2026-05-16 19:30 — PR #4091: H77 n_head on H73 (frieren) — **CLOSED, negative**
+
+- Branch: `frieren/h77-nhead-at-slice96`
+- Hypothesis: n_head=4 ports from H70 slice=64 win to H73 slice=96.
+
+| Arm | val_avg | Δ vs H73 | test 3-split | epochs |
+|-----|--------:|---------:|-------------:|-------:|
+| A (n_head=4) | 45.6576 | **+2.68** worse | 44.1039 | 13/50 wall-cut |
+| B (n_head=3) | 44.6507 | **+1.67** worse | 43.0911 | 14/50 wall-cut |
+
+**Insight captured:** Monotonic worsening with n_head at slice=96 — opposite of H70's slice=64 finding. At slice=96, the spatial bottleneck is already 50% wider; adding heads shrinks per-head dim (64→43→32 at fixed n_hidden=128), which hurts more than diversity helps. **n_head=2 is locked at slice=96**. Note: more heads also cost ~16% more time per epoch (145s vs 122s), partially confounded by wall-clock budget. But even ignoring confound, the trend is wrong direction.
+
+**Status: CLOSED — negative result. n_head locked at 2. H80 (which includes n_head=4) is now less likely to win.**
+
+---
+
+## 2026-05-16 19:35 — Round 5 Cycle 23: Re-assign fern and frieren after H76/H77 closures
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4126 | fern | H82: slice_num sweep under Lion | slice=128 (Arm A), slice=80 (Arm B) |
+| #4127 | frieren | H83: n_layers sweep under Lion | n_layers=5 (Arm A), n_layers=3 (Arm B) |
+
+**Strategic value:**
+- H82 retests AdamW's slice=128 regression point (H66) under Lion's fundamentally different optimization dynamics. If Lion can train slice=128 stably, this could unlock further super-additive gain.
+- H83 retunes depth under Lion at the new slice=96 baseline (H60's n_layers=4 win was AdamW+slice=64-specific).
+
+These two hypotheses target the two architectural levers that have NOT yet been tested under Lion+slice=96.
