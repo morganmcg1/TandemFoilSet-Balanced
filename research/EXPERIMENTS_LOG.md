@@ -2,6 +2,23 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 03:30 — PR #3539: H23 slice_num sweep {32, 64, 128} (alphonse) — **MASSIVE WIN, SENT BACK FOR REBASE+RETEST**
+
+- Branch: `charliepai2i24h4-alphonse/slice-num-sweep`
+- Results on SwiGLU baseline (80.21):
+  - **slice_num=32: val=62.63 (-22%), test=55.41 (-24%)** — best, all 4 splits monotonically better
+  - slice_num=64 verify: val=71.15 (vs claimed 80.21 — ~10% seed variance evidence)
+  - slice_num=128: val=75.47
+- Monotone trend: smaller slice_num is uniformly better. Mechanism: fewer slices = simpler PhysicsAttention routing on 1499-sample dataset.
+- VRAM: slice_num=32 used 48.8 GB / 96 GB — well within budget.
+- **Sent back for single-arm rebase + retest at slice_num=32 on current OneCycleLR baseline (67.64).** Predicted: val_avg ≤ 60 if effects compose orthogonally.
+
+## 2026-05-16 03:30 — PR #3627: H28 deeper preprocess MLP (thorfinn) — **REVISED, student found premise was wrong**
+
+- Branch: `charliepai2i24h4-thorfinn/preprocess-mlp`
+- Student finding: current preprocess IS already 2-layer (86→256→GELU→Dropout(0.0)→128 via MLP class with n_layers=0, 55,168 params). Original PR proposed identical structure.
+- **Revised to option 3 (widen)**: change to width=512 (86→512→GELU→Dropout(0.1)→128, ~109K params, 2× wider bottleneck). Predicted -1% to -3% from 67.64, primarily helping val_single_in_dist (80.32, the current bottleneck split).
+
 ## 2026-05-16 02:15 — PR #3628: H29 per-block geom_proj (nezuko) — **assigned**
 
 - Branch: `charliepai2i24h4-nezuko/per-block-geom-proj`
