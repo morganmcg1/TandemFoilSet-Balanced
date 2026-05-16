@@ -1,10 +1,11 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 02:05 UTC
+- **As of:** 2026-05-16 03:25 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
 - **Most recent human researcher direction:** None recorded. Launch isolation rules are in force.
+- **Ops note:** GitHub API rate limit (5000-req/hr cap) blocked all 8 student pods from seeing assignments between ~01:40 and 03:20 UTC. As of 03:23 UTC, 7/8 pods (alphonse, askeladd, fern, tanjiro, nezuko, edward, frieren) have picked up their PRs; thorfinn pod's last attempt at 03:19:36 was rate-limited (next retry ~03:24:36, current rate-limit shows 3070/5000 remaining). First training runs starting now; results expected ~03:55-04:00 UTC.
 
 ## Research programme summary
 
@@ -25,16 +26,16 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 
 | # | Student | PR | Hypothesis | Status |
 |---|---------|----|-----------|--------|
-| 1 | nezuko   | #3618 | **Surface-only decoder head (parallel zero-init residual on surface nodes)** | WIP (assigned 02:00) |
-| 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (rebasing; VRAM: start film_mid=64) |
-| 3 | thorfinn | #3468 | Per-block FiLM heads — v2 on cosine base; notified of new 69.27 target | WIP (rebase+rerun in flight) |
-| 4 | tanjiro  | #3406 | surf_weight sweep — sw5 rerun on cosine base; notified of new 69.27 target | WIP (rebase+rerun, branch updated 01:23) |
-| 5 | alphonse | #3565 | AdamW betas=(0.9,0.95) + weight_decay=0.05 sweep (3 arms) | WIP (assigned 00:40) |
-| 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — SENT BACK for full-stack rebase | WIP (rebasing; branch CONFLICTING) |
-| 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} — R3 refinement on own win | WIP (assigned 01:37) |
-| 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — SENT BACK for full-stack rebase | WIP (rebasing) |
+| 1 | nezuko   | #3618 | **Surface-only decoder head (parallel zero-init residual on surface nodes)** | WIP (assigned 02:00; pod picked up 03:20) |
+| 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (pod picked up 03:21) |
+| 3 | thorfinn | #3468 | Per-block FiLM heads — v2; CONFLICTING needs rebase resolution | WIP (pod still rate-limited at 03:19; next iter ~03:24) |
+| 4 | tanjiro  | #3406 | surf_weight sweep — sw5 rerun on cosine+RFF base | WIP (pod picked up 03:21) |
+| 5 | alphonse | #3565 | AdamW betas=(0.9,0.95) + weight_decay=0.05 sweep (3 arms) | WIP (pod picked up 03:20) |
+| 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — CONFLICTING needs rebase resolution | WIP (pod picked up 03:21) |
+| 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} — R3 refinement on own win | WIP (pod picked up 03:20) |
+| 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — MERGEABLE | WIP (pod picked up 03:21) |
 
-**All 8 students active.** Nezuko assigned #3618 (Surface-only decoder head) at 02:00 UTC after #3550 (Volume MAE) was closed (+4.7% test regression on old base, +21% above 69.27).
+**All 8 students active.** First training runs starting now; ETAs vary by complexity (single arm ~30 min; alphonse 3-arm sweep ~90 min if sequential).
 
 ## R1/R2 closed/merged history
 
