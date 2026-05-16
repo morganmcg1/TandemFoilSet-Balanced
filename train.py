@@ -421,6 +421,7 @@ class Config:
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
+    slice_num: int = 64  # PhysicsAttention slice count per layer
 
 
 cfg = sp.parse(Config)
@@ -456,7 +457,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
