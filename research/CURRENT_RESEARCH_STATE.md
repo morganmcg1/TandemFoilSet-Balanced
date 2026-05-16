@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 04:42 UTC
+- **As of:** 2026-05-16 06:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -13,29 +13,29 @@ Predict (Ux, Uy, p) at every node of unstructured 2D CFD meshes (74K–242K node
 
 ## Current best (BASELINE.md)
 
-**PR #3262 (edward, merged 2026-05-16 01:27 UTC) — RFF σ=1.0, n_freqs=16 on (x,z) coords**
-- `val_avg/mae_surf_p = 79.2847` (W&B `tnna02ob`)
-- `test_avg/mae_surf_p = **69.27**` (4-split finite)
-- Per-split test: single=78.69, rc=79.59, cruise=49.16, re_rand=69.65
+**PR #3258 (fern, merged 2026-05-16 ~06:30 UTC) — Grad-clip 1.0 + 5-epoch warmup on full stack**
+- `val_avg/mae_surf_p = 77.6469` (W&B `vrnb926l`)
+- `test_avg/mae_surf_p = **66.87**` (4-split finite)
+- Per-split test: single=78.65, rc=77.66, cruise=46.17, re_rand=65.00
 
-Cumulative path: vanilla 106.23 → #3257 surf-MAE 94.35 → #3263 FiLM 90.06 → #3358 cosine 80.08 → #3262 RFF **69.27** (**−34.8% from vanilla in 4 PRs**).
+Cumulative path: vanilla 106.23 → #3257 94.35 → #3263 90.06 → #3358 80.08 → #3262 69.27 → #3258 **66.87** (**−37.0% from vanilla in 5 PRs**).
 
-All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
+All remaining PRs must beat **test_avg/mae_surf_p < 66.87**.
 
-## Active R2/R3 portfolio (all 8 students WIP)
+## Active R3 portfolio (all 8 students WIP)
 
 | # | Student | PR | Hypothesis | Status |
 |---|---------|----|-----------|--------|
-| 1 | nezuko   | #3618 | **Surface-only decoder head (parallel zero-init residual on surface nodes)** | WIP (assigned 02:00; pod picked up 03:20) |
-| 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (pod picked up 03:21) |
-| 3 | thorfinn | #3468 | Per-block FiLM heads — v2; CONFLICTING needs rebase resolution | WIP (pod still rate-limited at 03:19; next iter ~03:24) |
-| 4 | tanjiro  | #3658 | **Transolver depth test: n_layers 5 → 6 with matched cosine_tmax** (first architecture experiment in this track) | WIP (assigned 03:35) |
-| 5 | alphonse | #3693 | **Peak LR sweep {1e-3, 2.5e-4} on RFF base** (lr=5e-4 never swept in this track) | WIP (assigned 04:41; pod will pick up on next poll) |
-| 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — CONFLICTING needs rebase resolution | WIP (pod picked up 03:21) |
-| 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} — R3 refinement on own win | WIP (pod picked up 03:20) |
-| 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — MERGEABLE | WIP (pod picked up 03:21) |
+| 1 | nezuko   | #3618 | **Surface-only decoder head (parallel zero-init residual on surface nodes)** | WIP (assigned 02:00; stale — API rate-limit blocked) |
+| 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11) — SENT BACK for full-stack rebase | WIP (stale — API rate-limit blocked) |
+| 3 | thorfinn | #3468 | Per-block FiLM heads — v2; needs rebase onto new baseline | WIP (CONFLICTING; stale) |
+| 4 | tanjiro  | #3658 | **Transolver depth test: n_layers 5 → 6 with matched cosine_tmax** | WIP (stale) |
+| 5 | alphonse | #3693 | **Peak LR sweep {1e-3, 2.5e-4} on full stack** (baseline lr=5e-4 untested) | WIP (assigned 04:41) |
+| 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) — needs rebase | WIP |
+| 7 | edward   | #3599 | RFF σ sweep {0.5,1.0,2.0} × n_freqs {16,32} | WIP (stale) |
+| 8 | **fern** | **#3746** | **Grad-clip cap sweep {10.0, 100.0} vs winning 1.0** (targets outlier batches only) | **WIP (assigned 06:40; fresh)** |
 
-**All 8 students active.** First training runs starting now; ETAs vary by complexity (single arm ~30 min; alphonse 3-arm sweep ~90 min if sequential).
+**All 8 students active.** Note: #3258 fern (grad-clip+warmup) merged as R3 winner #1 — new baseline test=66.87.
 
 ## R1/R2 closed/merged history
 
@@ -49,6 +49,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 | ✗ | nezuko   | Multi-scale slice tokens | #3429 | **CLOSED** — equal-epoch tie with control |
 | ✗ | nezuko   | Surface-biased slice routing | #3260 | **CLOSED** (paired −0.05%) |
 | ✗ | nezuko   | Volume MAE reformulation (L1 on both) | #3550 | **CLOSED** — failed (+4.7% test regression on old base, +21% above 69.27) |
+| ✓ | fern     | Grad-clip 1.0 + 5-epoch warmup on full stack | #3258 | **MERGED (R3 winner #1)** — val=77.65, test=66.87 (−3.47%) |
 | ✗ | tanjiro  | surf_weight sweep re-run (sw5) on FiLM+RFF base | #3406 | **CLOSED** — failed (+4.17% test on new stack, mechanism absorbed by FiLM+RFF) |
 | ✗ | tanjiro  | Huber loss delta=0.5 | #3256 | **CLOSED** (redundant with #3257) |
 | ✗ | alphonse | Wider-shallower 256d | #3261 | **CLOSED** (+24% worse) |
@@ -58,8 +59,9 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 
 | Rank | PR | Hypothesis | test_avg (4-split) | vs baseline | Status |
 |------|----|------------|-------------------:|-------------|--------|
-| **1** | **#3262 (edward)** | **RFF σ=1.0, n_freqs=16** | **69.27** | **NEW BASELINE** | **MERGED** |
-| 2 | #3358 (alphonse) | cosine T_max=14 | 80.08 | +15.6% above new | MERGED |
+| **1** | **#3258 (fern)** | **Grad-clip 1.0 + warmup-5** | **66.87** | **NEW BASELINE** | **MERGED** |
+| 2 | #3262 (edward) | RFF σ=1.0, n_freqs=16 | 69.27 | +3.5% above new | MERGED |
+| 3 | #3358 (alphonse) | cosine T_max=14 | 80.08 | +19.7% above new | MERGED |
 | 3 | #3504 (frieren, old-base) | richer FiLM mid128, ref vs #3263 | 81.07 | +17% above new | rebase in flight |
 | 4 | #3468 (thorfinn, old-base) | per-block FiLM v1 (post-block) | 84.00 | +21.3% above new | rebase+rerun in flight |
 | 5 | #3406 (tanjiro, old-base) | sw=5, paired baseline 94.35 | 88.80 | +28.2% above new | rebase+rerun in flight |
@@ -74,7 +76,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 - **nezuko surface-only decoder head (#3618):** Parallel zero-init 128→128→3 head on `h = ln_3(fx)` after block 5, gated by `is_surface`. Orthogonal to all 4 prior wins (output-head specialization vs loss/input/schedule/encoding). +16,899 params (+2.5%). Predicted conservative ~2–4% gain (test ~66–68), hopeful 5–7% (test ~64–66), pessimistic wash.
 - **alphonse LR sweep (#3693):** Peak LR {1e-3, 2.5e-4} bracketing untested default 5e-4. No code changes (CLI flag). Arm A lr=1e-3 is primary (canonical value for ~1M-param transformers at batch=4). Predicted Arm A: test ~66–68 (2–4% gain); Arm B lr=2.5e-4: expected slight regression. #3565 AdamW sweep closed — ran on pre-RFF base (invalid comparison), also confirmed high WD hurts capacity-limited models.
 - **askeladd EMA β=0.99 (#3351):** β=0.99 (100-step horizon) on new stacked base. Cosine T_max=14 anneals LR→0, which may reduce oscillation benefit. Conservative expectation: small gain (~1–2%) or wash. Rebasing now (branch CONFLICTING).
-- **fern grad-clip+warmup (#3258):** clip=1.0, warmup=5 on new stacked base. Grad-norm median was 60, peak 1004. Cosine LR may have already tamed late-epoch norms. Predicted conservative: 3–5% gain, pessimistic: wash. Rebasing now.
+- **fern grad-clip cap sweep (#3746):** clip={10.0, 100.0} vs winning clip=1.0. Pre-clip norm: median=70, max=432, clips 100% steps. Arm A (10.0) tests moderate loosening (still clips everything, 10× larger effective steps). Arm B (100.0) targets only outlier batches (~30% clipped, typical batches pass through). Predicted: one arm recovers in-dist regression (+4.1% val) while preserving OOD gains. Test target <66.87.
 - **edward RFF σ/n_freqs sweep (#3599):** σ {0.5, 2.0} × n_freqs {16, 32}, brackets the winning σ=1.0 / n_freqs=16. CLI-only, no code changes. Conservative: σ=1.0 was already optimal → wash. Hopeful: n_freqs=32 doubles spatial resolution → modest 1–2% gain.
 
 ## Open issues / live diagnostics
@@ -113,11 +115,14 @@ All remaining PRs must beat **test_avg/mae_surf_p < 69.27**.
 
 ## Next immediate action
 
-**All 8 students active.** Monitor for results from: rebase reruns (#3468 thorfinn, #3504 frieren, #3258 fern, #3351 askeladd) and fresh assignments (#3618 nezuko, #3693 alphonse LR sweep, #3599 edward RFF σ, #3658 tanjiro depth).
+**All 8 students active.** New baseline: test=66.87 (fern #3258, merged). All stale PRs need re-comparison vs new baseline.
 
 Key monitors:
-- #3468 thorfinn per-block FiLM v2 on cosine+RFF base: predicted hopeful test ~64–66
-- #3504 frieren richer-FiLM film_mid=64 on full stack: predicted hopeful test ~64.4
+- #3746 fern clip-cap sweep: predicted 1-3% improvement over 66.87 if outlier-only mechanism confirmed
+- #3693 alphonse LR sweep: predicted test ~64-68 (Arm A lr=1e-3)
+- #3658 tanjiro depth n_layers=6: predicted test ~65-66 hopeful
+- #3618 nezuko surface-only decoder head: predicted test ~62-65 hopeful
+- #3468 thorfinn per-block FiLM v2 on full stack: needs rebase first
 - #3599 edward RFF σ sweep: σ=0.5 and σ=2.0 bracket around the winning σ=1.0
 - #3618 nezuko surface-only decoder head: predicted hopeful test ~64–66 (architectural surface specialization)
 - #3658 tanjiro Transolver depth n_layers=6: predicted hopeful test ~65–66 (architectural capacity)

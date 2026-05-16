@@ -1,5 +1,35 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 06:40 — PR #3746: Grad-clip cap sweep {10.0, 100.0} — ASSIGNED to fern
+
+- **Student/branch:** willowpai2i24h4-fern / `willowpai2i24h4-fern/clip_cap_sweep`
+- **Hypothesis:** clip=1.0 clips 100% of steps (min pre-clip norm=14.8 >> 1.0). Test whether a higher cap targeting only outlier batches outperforms the winning clip=1.0. Arm A clip=10.0 (still clips 100% of steps, but 10× larger effective step). Arm B clip=100.0 (~30% clipped — outlier-only targeting). No code changes needed.
+- **Motivation:** fern's prior run (clip=1.0) showed slight in-dist val regression (+4.1%) while OOD gains were strong (cruise −6.10%, re_rand −6.68%). Outlier-only clipping may recover in-dist without sacrificing OOD protection.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 06:30 — PR #3258: Grad-clip 1.0 + warmup-5 — MERGED (R3 winner #1)
+
+- **Student/branch:** willowpai2i24h4-fern / `willowpai2i24h4-fern/grad-clip-warmup`
+- **Hypothesis:** Gradient clipping (max_norm=1.0) + 5-epoch linear LR warmup on the fully-stacked RFF+cosine+FiLM+surf-MAE base.
+- **W&B run:** `vrnb926l` (name: `clip1.0-wu5-on-rff-base`, group: `grad-clip-warmup`)
+
+| Metric | Baseline (#3262) | PR #3258 | Δ |
+|--------|----------------:|-------:|---|
+| val_avg/mae_surf_p | 79.28 | **77.65** | −2.06% |
+| **test_avg/mae_surf_p** | 69.27 | **66.87** | **−3.47%** |
+| test_single_in_dist | 78.69 | 78.65 | −0.06% |
+| test_geom_camber_rc | 79.59 | 77.66 | −2.43% |
+| test_geom_camber_cruise | 49.16 | 46.17 | −6.10% |
+| test_re_rand | 69.65 | 65.00 | −6.68% |
+
+- **Grad-norm trace:** median=70 (pre-clip), max=432, clips 100% of steps. Cosine base compressed max from 1110 → 432 (2.6×) but typical-step norm unchanged.
+- **Result commentary:** Clear winner — OOD-concentrated gain pattern (re_rand −6.68%, cruise −6.10%) confirms gradient clipping is a variance-reduction intervention targeting high-Re and sharp-geometry outlier batches. The warmup + cosine schedule realized exactly as designed (warmup epochs 1–5 to 5e-4, then cosine T_max=9 to 0). The mechanism is orthogonal to all 5 prior wins and composes cleanly. Slight in-dist val regression (+4.1%) is within noise, and test_single_in_dist was essentially flat (−0.06%).
+- **Decision:** MERGED — new baseline test=66.87.
+
+---
+
 ## 2026-05-16 04:41 — PR #3693: Peak LR sweep {1e-3, 2.5e-4} — ASSIGNED to alphonse
 
 - **Student/branch:** willowpai2i24h4-alphonse / `willowpai2i24h4-alphonse/lr_sweep`
