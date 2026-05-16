@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 03:20 UTC
+- **Updated:** 2026-05-16 03:50 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -34,12 +34,14 @@ Strongest remaining axes (in priority order):
 3. **Optimizer alternative head-to-head** (#3425 tanjiro): SF-AdamW must beat 75.40 after rebasing onto latest tip. Rebase comment posted. Decision: SF-AdamW (no cosine scheduler) may have a natural schedule alignment advantage.
 4. **Cp normalization** (#3547 askeladd WIP): divide by p_B in addition to subtract — the natural physics extension of the Bernoulli win. Standard CFD non-dimensionalization. Baseline updated to 75.40.
 5. **Spatial representation** (#3631 nezuko new): NeRF-style Fourier positional encoding on (x, y) and optionally dsdf before input MLP. Addresses OOD geometry weakness (#3519 showed cond-path Fourier hurts camber extrapolation; spatial-path is the correct target).
-6. **EMA refinement** (#3545 alphonse WIP): EMA decay annealing — low decay early, high decay late, addresses cold-start.
+6. **Loss weight rebalancing** (#3647 alphonse new): surf_weight sweep (5 vs 20) — the default surf_weight=10 predates bf16/Bernoulli/T_max; test whether the new landscape prefers a different weight.
 7. **Test-time augmentation** (#3548 frieren WIP): AoA-jitter TTA — K-ensemble of inference with small AoA perturbations.
 8. **Capacity revisit** (#3463 edward WIP, actively training): n_hidden=192/256 sweep, tractable with bf16 VRAM savings.
 
-**Closed in this loop**: 
-- #3432 (fern SEMA) — +22.8% to +33.4% regression; SEMA mechanism inverted under EMA decay=0.999 / short wall-clock horizon (copy = 2–3 epoch reset, not flat-region refinement).
+**Closed in this loop and prior loops**:
+- #3432 (fern SEMA) — +22.8% to +33.4% regression; SEMA mechanism inverted under EMA decay=0.999 / short wall-clock horizon.
+- #3519 (nezuko Fourier FiLM) — +4.75% regression vs actual baseline; OOD geometry degraded by cond-path Fourier enrichment.
+- #3545 (alphonse EMA annealing) — essentially neutral (+0.02% vs Bernoulli baseline), +14.2% vs current 75.40; wall-clock too short for time-varying EMA to matter.
 
 | PR | Student | Status | Hypothesis |
 |----|---------|--------|-----------|
@@ -61,7 +63,8 @@ Strongest remaining axes (in priority order):
 | #3463 | edward | WIP (sent back this loop — strong n=192 win on old baseline, rebase + re-run on 75.40) | Capacity revisit: n_hidden=192 |
 | #3519 | nezuko | CLOSED (this loop) | Fourier FiLM — +4.75% regression vs actual baseline; OOD geometry degraded |
 | #3631 | nezuko | WIP (new this loop) | Fourier positional encoding on spatial coords (x,y,dsdf) — NeRF-style, targets OOD geometry |
-| #3545 | alphonse | WIP | EMA decay annealing — 2 arms (linear5, cosine19) |
+| #3545 | alphonse | CLOSED (this loop) | EMA decay annealing — null result; cold-start regime; wall-clock too short |
+| #3647 | alphonse | WIP (new this loop) | surf_weight sweep: 5 vs 20 on full merged stack |
 | #3547 | askeladd | WIP | Cp normalization — 2 arms (cp, halfcp) |
 | #3548 | frieren | WIP | AoA-jitter TTA — 2 arms |
 | #3581 | thorfinn | WIP (new this loop) | Peak LR sweep on T_max=25: lr=7e-4 / lr=1e-3 |

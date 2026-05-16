@@ -835,3 +835,35 @@ The student correctly identified the issue in follow-up note #5: their 90.34 ref
 ## 2026-05-16 03:15 — New assignment: nezuko Fourier positional encoding
 
 - **PR #3631 (nezuko): NeRF-style Fourier features on spatial coordinates** — encode (x, y) and optionally dsdf with multi-frequency sin/cos basis before the input MLP. Directly targets OOD geometry splits (geom_camber_rc, geom_camber_cruise) where spatial representation must extrapolate. Arm A: n_freqs=6, sigma=0.5 on (x, y). Arm B: n_freqs=6, sigma=0.5 on (x, y, dsdf). Conservative sigma avoids #3519's aliasing failure mode. Builds on nezuko's Fourier implementation expertise.
+
+## 2026-05-16 03:45 — PR #3545: EMA decay annealing (low to high) [CLOSED — neutral/negative]
+
+- Branch: `charliepai2i24h5-alphonse/ema-decay-annealing`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: anneal EMA decay from 0.99 (short 100-step window) early to 0.999 (1000-step window) late, addressing the cold-start regime where fixed 0.999 window averages over too-early weights.
+- Status: CLOSED. Arm A +0.02% vs Bernoulli baseline (86.09) — statistically tied, but +14.2% vs current T_max baseline (75.40). Arm B +3.88% (clear regression).
+
+### Results vs tested baseline (PR #3466 Bernoulli, val_avg=86.09)
+
+| Arm | Schedule | val_avg | delta vs 86.09 | delta vs 75.40 | Best epoch |
+|---|---|---:|---:|---:|---:|
+| A: linear, 5-ep ramp | 0.99 -> 0.999 over 5 ep | 86.11 | +0.02% | +14.2% | 17 |
+| B: cosine, 19-ep ramp | 0.99 -> 0.999 over 19 ep | 89.44 | +3.88% | +18.6% | 17 |
+
+Arm A per-split: single_in_dist -2.34%, geom_camber_rc -2.23% (both improved), geom_camber_cruise +3.53%, re_rand +3.10% (both worsened) — net zero on primary metric.
+
+### Analysis
+
+The mechanism executes correctly (EMA decay schedule verified via logged train/ema_decay). The null result is diagnostic:
+
+1. The 30-min wall-clock cap is the binding constraint. With only 17 epochs available and the val_avg still in steep descent (234→86 over 17 epochs), there is no "convergent phase" against which a short-window EMA could trade. The fixed 0.999 was already appropriate for this regime because EMA window length matters only when training has stabilized.
+
+2. Arm B never reaches 0.999 within 17 epochs (cosine barely hits 0.998 at ep 17) — confirming the hypothesis only works if training runs long enough for the slow phase to matter.
+
+3. Arm A's per-split split reveals two convergence regimes within the same run: single_in_dist + geom_camber_rc (slow, gains from shorter EMA early) vs geom_camber_cruise + re_rand (faster, hurt by shorter EMA). These cancel in the average.
+
+Key insight from student: "Don't pursue further EMA-window tuning on this task at this budget." Absorbed.
+
+## 2026-05-16 03:45 — New assignment: alphonse surf_weight sweep
+
+- **PR #3647 (alphonse): surf_weight sweep (5 vs 20)** — surf_weight=10 was set heuristically before bf16, Bernoulli residual, and T_max alignment changed the loss landscape. Arm A: surf_weight=5.0; Arm B: surf_weight=20.0. Both with full merged stack (T_max=25, Bernoulli, CautiousAdamW, bf16, FiLM, surf-L1, EMA, scale-inv). No code changes needed — pure flag sweep targeting whether the primary metric (surface MAE) benefits from direct gradient reweighting on the new merged baseline.
