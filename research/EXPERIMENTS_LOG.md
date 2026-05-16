@@ -993,3 +993,76 @@ Per-split Arm A: single_in_dist 77.23, rc 81.58, cruise 44.08, re_rand 64.80. Al
 - Artifacts: `models/model-h41-tmax20-lr1e3-clip1-20260516-052215/`, `models/model-h41-tmax18-lr1e3-clip1-20260516-062247/`
 
 **Status: SENT BACK — fern running Arm C stack (PR #3688 → draft).**
+
+---
+
+## 2026-05-16 09:30 — PR #3737: H44: AdamW β₁ sweep (0.8, 0.95) on H38 base (frieren) — SENT BACK
+
+- Branch: `charliepai2i48h3-frieren/h44-adamw-beta1-sweep`
+- Hypothesis: β₁ controls AdamW first-moment decay. Lower β₁ (faster moment decay) gives crisper updates; higher β₁ (slower decay, more persistent momentum) can overshoot. H36 confirmed β₂=0.999; this tests β₁ ∈ {0.8, 0.95} on the H38 base (lr=1e-3 + wd=5e-5).
+
+| Arm | β₁ | val_avg | test_avg (3-split) | Δ vs H38 (68.19) |
+|-----|-----|---------|---------------------|------------------|
+| H38 baseline | 0.9 | 68.1932 | 65.4393 | — |
+| **Arm A** | **0.8** | **66.6492** | **65.0585** | **−1.54 (WIN over H38)** |
+| Arm B | 0.95 | 72.1674 | 69.4378 | +3.97 (regression) |
+
+Per-split Arm A: re_rand dominates gain (-4.1 pts), cruise -1.7, rc -0.5, single_in_dist unchanged. β₁=0.8 leads at all epochs from 7 onward, opening a 5+ pt gap in late epochs (11-13). β₁=0.95 even regresses at epoch 11 (val rises 85→86 → confirms "momentum too persistent → overshoots").
+
+**Decision:** Arm A (66.65) beats H38 (68.19) by 1.54 pts but does NOT beat H37b (66.11) by 0.54. The margin over H38 is below 2.3-pt seed variance — not independently mergeable. However β₁=0.8 is mechanistically distinct (first-moment decay) from n_head/wd/T_max, so stacking is worth testing.
+
+Sent back for **Arm C: β₁=0.8 + n_head=2 + lr=1e-3 + wd=5e-5 + clip=1.0** — predicted val_avg ≈ **64.5–65.5**.
+
+- Artifacts: `models/model-h44-beta1-08-lr1e3-wd5e5-20260516-063229/`, `models/model-h44-beta1-095-lr1e3-wd5e5-20260516-072246/`
+
+**Status: SENT BACK — frieren running Arm C stack (PR #3737 → draft).**
+
+---
+
+## 2026-05-16 09:30 — PR #3729: H43: Linear warmup (1, 2 ep) + lr=1e-3 + clip=1.0 (askeladd) — CLOSED
+
+- Branch: `charliepai2i48h3-askeladd/h43-warmup-lr1e3`
+- Hypothesis: Linear warmup (start_factor=0.1, N epochs then cosine) softens early gradient instability at lr=1e-3.
+
+| Arm | warmup | val_avg | test_avg (3-split) | Δ vs H32 (69.44) |
+|-----|--------|---------|---------------------|------------------|
+| Arm A | 1 ep | 70.8424 | 67.4468 | +1.40 (regression) |
+| Arm B | 2 ep | 68.9705 | 68.3538 | −0.47 (within noise) |
+
+Arm A regresses; Arm B marginal improvement below 2.3-pt seed variance threshold. Both far above new baseline H37b (66.11). Key mechanism: **warmup eats into cosine duration at the 30-min wall cap.** Arm B got 13 epochs total with LR at 1.26e-4 at termination — schedule not complete. The budget cost of warmup outweighs any gradient-stability benefit.
+
+Test-side improvement (Arm A -1.73, Arm B -0.83 over H32 test_avg) is logged but below val_avg merge bar.
+
+**Key insight confirmed:** T_max stretch (H41) is the right lever for improving late-epoch LR, NOT warmup. At our 30-min fixed cap, adding any schedule prefix steals cosine epochs.
+
+- Artifacts: `models/model-h43-warmup1-lr1e3-clip1-20260516-062336/`, `models/model-h43-warmup2-lr1e3-clip1-20260516-072417/`
+
+**Status: CLOSED — warmup is budget-stealing at fixed wall budget. Askeladd reassigned to H48 (GEGLU, PR #3834).**
+
+---
+
+## 2026-05-16 09:30 — PR #3689: H42: n_layers sweep (7, 3) on lr=1e-3 + clip=1.0 (alphonse) — SENT BACK
+
+- Branch: `charliepai2i48h3-alphonse/n-layers-sweep-lr1e3`
+- Hypothesis: Does depth help where width fails? n_layers=7 (+2 blocks) vs n_layers=3 (−2 blocks) on lr=1e-3 base.
+
+| Arm | n_layers | n_params | val_avg | test_avg (3-split) | best_ep | epochs/30min |
+|-----|----------|----------|---------|---------------------|---------|--------------|
+| Arm A | 7 | 1,146,591 | 84.1562 | 82.6683 | 10 | **10** (timeout) |
+| **Arm B** | **3** | **523,727** | **67.9740** | **65.0983** | **18** | **21** |
+| H32 baseline | 5 | ~835K | 69.4381 | 69.1774 | — | ~14 |
+
+**Key finding (HIGH SIGNIFICANCE):** n_layers=3 wins via a compound mechanism:
+1. **~2.2× faster per-epoch** (87s vs ~138s baseline) → 21 epochs in 30 min vs 14
+2. **Clean convergence** — best at ep18, trajectory peaked at ep18 not budget-limited
+3. **Smaller model is better**: 524K params beats 835K (H32), in-line with width failure (H33) — the model was over-parameterized for this dataset/budget
+
+n_layers=7 regresses due to budget truncation (only 10 epochs at ~192s/epoch) — fundamentally walltime-confounded, not conclusively bad architecturally.
+
+**Decision:** Arm B (67.97) beats H38 (68.19) BUT does NOT beat H37b (66.11) by 1.86 pts. However, n_layers=3 is mechanistically orthogonal to n_head=2 (depth vs head structure), both win via "structural efficiency without adding params." Stacking very likely to compound.
+
+Sent back for **Arm C: n_layers=3 + n_head=2 + lr=1e-3 + wd=5e-5 + clip=1.0** — predicted val_avg ≈ **63–65** (21 epochs + n_head=2 + wd=5e-5 stack = very high upside).
+
+- Artifacts: `models/model-h42-nlayers3-lr1e3-clip1-20260516-072335/`, `models/model-h42-nlayers7-lr1e3-clip1-20260516-062551/`
+
+**Status: SENT BACK — alphonse running Arm C stack (PR #3689 → draft).**
