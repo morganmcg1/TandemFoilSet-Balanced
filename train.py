@@ -394,6 +394,36 @@ def make_amp_ctx(amp_dtype: str):
     return torch.autocast(device_type="cuda", dtype=dt)
 
 
+def compute_sobolev_loss(pred: torch.Tensor, y_norm: torch.Tensor,
+                         x: torch.Tensor, surf_mask: torch.Tensor) -> torch.Tensor:
+    """L1 penalty on surface-pressure edge gradients along nearest-surface-neighbor edges.
+
+    For each surface node (per sample), finds its single nearest surface neighbor by
+    Euclidean distance over input dims 0-1 (raw spatial coords), then penalizes
+    ``|(p_pred[i] - p_pred[nn]) - (p_true[i] - p_true[nn])|`` in normalized space.
+    Computed in fp32 for bf16 stability; argmin is wrapped in ``no_grad``.
+    """
+    B = pred.shape[0]
+    losses: list[torch.Tensor] = []
+    for b in range(B):
+        surf_b = surf_mask[b]
+        if int(surf_b.sum().item()) < 2:
+            continue
+        coords = x[b, surf_b, :2].float()
+        with torch.no_grad():
+            d = torch.cdist(coords, coords)
+            d.fill_diagonal_(float("inf"))
+            nn = d.argmin(dim=1)
+        p_pred = pred[b, surf_b, 2].float()
+        p_true = y_norm[b, surf_b, 2].float()
+        dp_pred = p_pred - p_pred[nn]
+        dp_true = p_true - p_true[nn]
+        losses.append((dp_pred - dp_true).abs().mean())
+    if not losses:
+        return torch.zeros((), device=pred.device, dtype=torch.float32)
+    return torch.stack(losses).mean()
+
+
 def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype: str = "fp32") -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -499,6 +529,7 @@ def write_experiment_summary(
         "lion_lr": cfg.lion_lr if cfg.optimizer == "lion" else None,
         "lion_weight_decay": cfg.lion_weight_decay if cfg.optimizer == "lion" else None,
         "lion_betas": cfg.lion_betas if cfg.optimizer == "lion" else None,
+        "sobolev_weight": cfg.sobolev_weight,
         "seed": cfg.seed,
     }
 
@@ -560,6 +591,7 @@ class Config:
     lion_lr: float = 1.5e-4  # Lion lr (typically 3-10x smaller than AdamW; 3x of cfg.lr=5e-4)
     lion_weight_decay: float = 3e-4  # Lion wd (typically 3-10x larger than AdamW; 3x of cfg.weight_decay=1e-4)
     lion_betas: str = "0.9,0.99"  # Lion (beta1, beta2) as comma-separated floats
+    sobolev_weight: float = 0.0  # L1 edge-gradient supervision on surface pressure (0 disables)
     seed: int = 0  # RNG seed for model init + data sampler; enables paired-arm reproducibility
 
 
@@ -700,7 +732,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     if cfg.use_schedule_free:
         optimizer.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_sobolev = 0.0
     n_batches = 0
     grad_norms_epoch: list[float] = []
     clip_active_epoch = 0
@@ -725,6 +757,13 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
+        if cfg.sobolev_weight > 0:
+            sobolev_loss = compute_sobolev_loss(pred, y_norm, x, surf_mask)
+            loss = loss + cfg.sobolev_weight * sobolev_loss
+            sobolev_val = sobolev_loss.detach().item()
+        else:
+            sobolev_val = 0.0
+
         optimizer.zero_grad()
         loss.backward()
         grad_norm_before = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold)
@@ -738,6 +777,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_sobolev += sobolev_val
         n_batches += 1
 
     epoch_lr = optimizer.param_groups[0]["lr"]
@@ -745,6 +785,7 @@ for epoch in range(MAX_EPOCHS):
         scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_sobolev /= max(n_batches, 1)
 
     # --- Validate (with EMA-applied weights if enabled; save best while applied) ---
     model.eval()
@@ -783,6 +824,8 @@ for epoch in range(MAX_EPOCHS):
         "cosine_t_max": t_max_eff,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/sobolev_loss": epoch_sobolev,
+        "sobolev_weight": cfg.sobolev_weight,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
