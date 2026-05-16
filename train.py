@@ -31,6 +31,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.amp import autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -485,6 +486,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    train_loop_t0 = time.time()
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -493,16 +495,17 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+        with autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_mask_3d = vol_mask.unsqueeze(-1)
-        surf_mask_3d = surf_mask.unsqueeze(-1)
-        vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-        surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_mask_3d = vol_mask.unsqueeze(-1)
+            surf_mask_3d = surf_mask.unsqueeze(-1)
+            vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+            surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -513,6 +516,9 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    train_loop_dt = time.time() - train_loop_t0
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
@@ -529,12 +535,14 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "step_time_ms": step_time_ms,
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
@@ -557,7 +565,7 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
