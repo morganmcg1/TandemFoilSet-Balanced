@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -32,6 +34,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -449,14 +452,21 @@ class Config:
     amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
+    warmup_epochs: int = 0   # LinearLR warmup epochs before cosine; 0 disables
+    seed: int = 42           # deterministic seed for torch/numpy/random
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+np.random.seed(cfg.seed)
+random.seed(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f"  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -495,9 +505,18 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min
-)
+if cfg.warmup_epochs > 0:
+    warmup_sched = LinearLR(
+        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs
+    )
+    cosine_sched = CosineAnnealingLR(
+        optimizer, T_max=MAX_EPOCHS - cfg.warmup_epochs, eta_min=cfg.eta_min
+    )
+    scheduler = SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[cfg.warmup_epochs]
+    )
+else:
+    scheduler = CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min)
 
 amp_torch_dtype = _amp_torch_dtype(cfg.amp_dtype)
 amp_enabled = cfg.amp_dtype != "fp32"
@@ -505,7 +524,7 @@ grad_clip_enabled = cfg.grad_clip_norm is not None and cfg.grad_clip_norm > 0
 print(
     f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}  "
     f"grad_clip: norm={cfg.grad_clip_norm if grad_clip_enabled else 'off'}  "
-    f"cosine eta_min={cfg.eta_min}"
+    f"cosine eta_min={cfg.eta_min}  warmup_epochs={cfg.warmup_epochs}"
 )
 
 run = wandb.init(
@@ -582,13 +601,16 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         if grad_clip_enabled:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_norm)
+            clipped = float(grad_norm.item() > cfg.grad_clip_norm)
         else:
             grad_norm = torch.zeros((), device=device)
+            clipped = 0.0
         optimizer.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/clipped": clipped,
             "global_step": global_step,
         })
 
