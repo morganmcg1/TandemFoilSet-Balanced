@@ -482,6 +482,11 @@ class Config:
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
     amp_dtype: str = "fp32"   # "fp32" | "bf16"
     mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
+    lr_schedule: str = "cosine"      # "cosine" (warmup+cosine) | "onecycle" (OneCycleLR)
+    onecycle_max_lr: float = 0.0     # OneCycle: peak LR; if 0, falls back to cfg.lr
+    onecycle_pct_start: float = 0.1  # OneCycle: fraction of total_steps in warmup phase
+    onecycle_div_factor: float = 25.0    # OneCycle: starting_lr = max_lr / div_factor
+    onecycle_final_div_factor: float = 1e4  # OneCycle: ending_lr = starting_lr / final_div_factor
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -555,18 +560,45 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-if cfg.warmup_epochs > 0:
-    warmup = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs,
+if cfg.lr_schedule not in ("cosine", "onecycle"):
+    raise ValueError(f"--lr_schedule must be one of ['cosine','onecycle']; got {cfg.lr_schedule!r}")
+
+# OneCycle steps per batch; cosine steps per epoch. We resolve the cadence once
+# and gate scheduler.step() in the train loop below.
+SCHEDULER_PER_BATCH = cfg.lr_schedule == "onecycle"
+
+if cfg.lr_schedule == "cosine":
+    if cfg.warmup_epochs > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs,
+        )
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs), eta_min=1e-6,
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs],
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+else:  # onecycle
+    total_steps = max(1, len(train_loader) * MAX_EPOCHS)
+    onecycle_peak_lr = cfg.onecycle_max_lr if cfg.onecycle_max_lr > 0 else cfg.lr
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=onecycle_peak_lr,
+        total_steps=total_steps,
+        pct_start=cfg.onecycle_pct_start,
+        anneal_strategy="cos",
+        div_factor=cfg.onecycle_div_factor,
+        final_div_factor=cfg.onecycle_final_div_factor,
     )
-    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs), eta_min=1e-6,
+    print(
+        f"OneCycleLR: total_steps={total_steps} "
+        f"(batches/epoch={len(train_loader)} × epochs={MAX_EPOCHS}), "
+        f"max_lr={onecycle_peak_lr}, pct_start={cfg.onecycle_pct_start}, "
+        f"div_factor={cfg.onecycle_div_factor}, "
+        f"final_div_factor={cfg.onecycle_final_div_factor}"
     )
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs],
-    )
-else:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -660,10 +692,15 @@ for epoch in range(MAX_EPOCHS):
             )
             grad_norm_key = "train/grad_norm_unclipped"
         optimizer.step()
+        if SCHEDULER_PER_BATCH:
+            # OneCycleLR is defined to step once per batch. Stepping per-epoch
+            # would only consume a tiny fraction of its schedule.
+            scheduler.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             grad_norm_key: total_norm.item(),
+            "train/lr": optimizer.param_groups[0]["lr"],
             "global_step": global_step,
         })
 
@@ -671,7 +708,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not SCHEDULER_PER_BATCH:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
