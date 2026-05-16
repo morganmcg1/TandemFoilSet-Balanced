@@ -709,6 +709,37 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 14:30 — PR #3982 — mlp_ratio=2→1 (MERGED → new baseline, **clean -1.92% win**)
+
+- **Branch:** `charliepai2i48h1-alphonse/mlp-ratio-1`
+- **Hypothesis:** Halving FFN intermediate dim (256→128, mlp_ratio=2→1) cuts ~25% per-step matmul cost, potentially yielding +4-6 epochs in the 30-min wall-clock budget. At compute-bound regime, more epochs > more capacity.
+- **Results vs baseline (val=80.60, test=71.14):**
+
+| Metric | Baseline (mlp_ratio=2, sn=12) | mlp_ratio=1 | Δ |
+|--------|------------------------------:|------------:|--:|
+| `val_avg/mae_surf_p` | 80.60 | **79.05** | **-1.92%** |
+| `test_avg/mae_surf_p` | 71.14 | **69.76** | **-1.93%** |
+| `val_single_in_dist` | 93.82 | 92.38 | -1.53% |
+| `val_geom_camber_rc` | 93.06 | 90.41 | -2.85% |
+| `val_geom_camber_cruise` | 60.47 | 58.997 | -2.43% |
+| `val_re_rand` | 75.05 | 74.42 | -0.84% |
+| `test_single_in_dist` | — | 81.55 | — |
+| `test_geom_camber_rc` | — | 79.44 | — |
+| `test_geom_camber_cruise` | — | 49.32 | — |
+| `test_re_rand` | — | 68.73 | — |
+| sec/epoch | 103.1 | **95.9** | -7.0% |
+| best epoch | 18 | **19** | +1 |
+| peak GPU mem (GB) | ~29.69 | **29.69** | — |
+| trainable params | ~3.25M | **~2.86M** | -12% |
+
+- **Metrics path:** `models/model-mlp-ratio-1-20260516-133706/metrics.jsonl`
+- **Decision:** MERGED. Clean win — both primary metrics improved by -1.92% (val) and -1.93% (test). ALL 4 val and 4 test splits improved. Best epoch 19 vs 18 baseline (+1 epoch from compute saving). Single-line change.
+- **Key analysis (student's insight):** "The 7% wall-clock saving was MUCH less than predicted 25% — confirming FFN matmuls are NOT the dominant per-step cost." Per-iteration overhead (dataloader/optimizer/Python) is the real ceiling, NOT the matmuls inside the block. Per-step efficiency gains (slice_num, mlp_ratio) both yielded ~5-7% wall-clock savings, far below the FLOP reduction. Dataloader is already well-tuned: num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=2.
+- **New baseline: val=79.05, test=69.76. Best epoch 19. Model: n_hidden=128, n_layers=5, n_head=4, slice_num=12, mlp_ratio=1.**
+- **Next probes:** (1) FiLM-on-Re conditioning (PR #4004, alphonse) — architectural attack on val_single_in_dist structural gap. (2) bf16 autocast (askeladd #3743) and n_layers=4 (edward #3769) in flight, both attacking per-iter overhead from different angles.
+
+---
+
 ## 2026-05-16 13:30 — PR #3950 — slice_num=16→12 triangulation (MERGED → new baseline)
 
 - **Branch:** `charliepai2i48h1-alphonse/slice-num-12`
