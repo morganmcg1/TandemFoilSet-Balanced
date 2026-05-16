@@ -5,6 +5,74 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 23:35 — PR #4131 (charliepai2i48h5-thorfinn): slice_num sweep {128, 192} at bs=2 — CLOSED (both arms regress massively; step-count loss + routing softmax flattening)
+
+- branch: `charliepai2i48h5-thorfinn/slicenum-bs2`
+- hypothesis: larger slice_num increases Transolver routing granularity → better spatial representation
+- results (both arms on bs=2/n=10, vs new baseline 56.92/49.32 from PR #4103):
+
+  | arm | slice_num | val_avg | test_avg | Δ val vs 60.67 (PR body) | epochs | s/epoch | peak mem |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 128 | 76.89 | 67.14 | +26.7% ✗✗ | 12 | ~140 | 25.1 GB |
+  | arm-2 | 192 | 85.96 | 77.91 | +41.7% ✗✗ | 9 | ~175 | 32.8 GB |
+
+- all per-split test surf_p regressed in both arms (single worst: +30% / +71%)
+- artifacts: `models/model-bf16-layerscale-bs2-slice128-20260516-203628/metrics.jsonl`, `models/model-bf16-layerscale-bs2-slice192-20260516-212703/metrics.jsonl`
+- commentary: CLOSED. Two compounding failure modes: (1) step-count loss (1.36× slower at s=128, 50% fewer epochs in budget); (2) routing softmax flattening (~31 points/slot at s=192 vs ~94 at s=64 — insufficient per-slot density). single_in_dist regressed worst (+30%/+71%), the easiest split — confirms routing module is harmed, not just OOD generalization. LayerScale γ dynamics healthy. Student's own analysis was excellent. **Direction reversal**: next test is slice_num={32, 48} to explore whether coarser routing helps. Assigned thorfinn #4221.
+
+---
+
+## 2026-05-16 23:35 — PR #4125 (charliepai2i48h5-frieren): bs=1 sweep — CLOSED (neutral vs baseline; bs=1 lever ceiling found)
+
+- branch: `charliepai2i48h5-frieren/bs1-sweep`
+- hypothesis: bs=1 (27,000 updates in 30-min budget) continues the bs lever trend below bs=2
+- results (2 clean arm-1 replicates + 1 partial arm-2 due to GPU contention, vs new baseline 56.92/49.32):
+
+  | arm | n_freqs | val_avg | test_avg | Δ vs 57.11 (#4146 baseline when assigned) | best_ep | steps | peak mem | s/ep |
+  |---|---|---|---|---|---|---|---|---|
+  | arm-1 confirm | 10 | 57.54 | 49.42 | +0.43 / +0.18 | 20/20 | ~29,980 | 9.25 GB | 91.0 |
+  | arm-1 original | 10 | 57.67 | **48.87** | +0.56 / **-0.37** | 20/20 | ~29,980 | 9.25 GB | 91.3 |
+  | arm-1 contended | 10 | 66.12 | 58.52 | +9.0% ✗ | 13/14 | ~20,990 | 9.25 GB | 130.7 |
+  | arm-2 partial | 8 | 59.45 | 53.13 | +4.1% ✗ (vs #4083) | 16/16 | ~23,990 | 9.23 GB | 123.8 |
+
+- artifacts: `models/model-bf16-layerscale-bs1-n10-confirm-20260516-222724/metrics.jsonl`, `models/model-bf16-layerscale-bs1-n10-20260516-203252/metrics.jsonl`, `models/model-bf16-layerscale-bs1-n8-20260516-212654/metrics.jsonl`
+- commentary: CLOSED. **bs=1 lever ceiling found**: val=57.54 (clean replicate) vs baseline 57.11 — neutral within seed noise (both runs bracket 57.11, spread 0.37pt). **Key findings**: (1) clip_frac drops to 0.88 at ep20 — FIRST full LayerScale stack run where clip=0.25 doesn't saturate throughout; bs=1 per-sample gradients have smaller mean norm. (2) Memory **9.25 GB** peak — 80+ GB headroom unlocked, massive capacity opportunity. (3) T_max=20 cosine completed at wall-clock cutoff; no decay tail sampled. arm-2 (bs=1+n=8) partial due to GPU contention — steeper per-epoch descent than arm-1 at ep16, suggests clean run could match/beat. **Next levers**: capacity expansion (n_hidden=192 fits on bs=1), or the headroom can be exploited in any other direction.
+
+---
+
+## 2026-05-16 23:35 — PR #4103 (charliepai2i48h5-tanjiro): bs=2 + Huber δ={0.15, 0.10} — **MERGED (NEW BEST)**
+
+- branch: `charliepai2i48h5-tanjiro/bs2-huber-compound`
+- hypothesis: δ=0.15 / δ=0.10 compounds with bs=2 (both on n=10 stack, without lr=7e-4)
+- results (arm-1 δ=0.15, arm-2 δ=0.10, vs new baseline 57.11/49.24 at time of merge):
+
+  | arm | δ | val_avg | test_avg | Δ val vs 57.11 | best_epoch | cruise test | per-split test single/rc/cruise/re_rand |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 0.15 | 59.49 | 51.44 | +4.17% ✗ | 18/18 | 34.41 | 57.07/64.06/34.41/50.22 |
+  | **arm-2 (WINNER)** | **0.10** | **56.92** | **49.32** | **-0.33% ✓** | **18/18** | **32.89** | **54.68/61.34/32.89/48.35** |
+
+- artifacts: `models/model-bf16-layerscale-bs2-huber010-rerun-20260516-222510/metrics.jsonl`, `models/model-bf16-layerscale-bs2-huber015-20260516-214446/metrics.jsonl`
+- commentary: **MERGED** — arm-2 (δ=0.10) val=56.92 beats baseline 57.11 by -0.19. **Monotonic Huber tightening continues**: δ=0.3 → 0.15 → 0.10 each step improving at bs=2. arm-1 (δ=0.15) sub-additive compound at bs=2 (-1.18 vs #4026 baseline, less than -3.19 observed at bs=8). arm-2 continues the trend (-2.57 additional val from δ=0.15→0.10). cruise split gained most (-5.3% val) — consistent with residual-shape mechanism. No destabilization at δ=0.10 (best_epoch=18/18, smooth val curves). **Different lineage from #4146**: uses n=10 (not n=8) without lr=7e-4 — two best stacks now coexist at val~57. **Assigned tanjiro #4220**: 4-way compound (n=8+lr=7e-4+δ=0.10) + δ=0.05.
+
+---
+
+## 2026-05-16 23:35 — PR #4095 (charliepai2i48h5-nezuko): bs=2 + clip=1.0 compound — CLOSED (arm-1 val regresses on primary metric; critical substitution finding)
+
+- branch: `charliepai2i48h5-nezuko/bs2-clip-compound`
+- hypothesis: clip=1.0 compounds with bs=2; arm-2 tests triple (bs=2+n=8+clip=1.0)
+- results (arm-1 n=10, arm-2 n=8, vs new baseline 57.11/49.24):
+
+  | arm | n_freqs | clip | val_avg | test_avg | Δ val vs 57.11 | best_epoch | clip_frac @ep18 |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 10 | 1.0 | 57.45 | **48.97** | +0.60% ✗ val / **-0.55% ✓ test** | 18/18 | 0.80 |
+  | arm-2 | 8 | 1.0 | 60.17 | 51.85 | +8.47% ✗✗ | 18/18 | 0.82 |
+
+- per-split test surf_p (arm-1 n=10+clip=1.0): single=53.78, rc=60.37, cruise=33.68, re_rand=48.04
+- artifacts: `models/model-bf16-layerscale-bs2-clip10-20260516-212408/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-clip10-20260516-222812/metrics.jsonl`
+- commentary: CLOSED. arm-1 val regresses by +0.34 (primary metric), test improves by -0.27. **Critical substitution finding**: arm-2 (n=8+clip=1.0) val=60.17 — n=8 and clip=1.0 SUBSTITUTE, both targeting gradient noise/magnitude DOF. The triple stack (bs=2+n=8+clip=1.0) is worse than any pair. **Practical implication**: clip=1.0 and n=8 are NOT independent — future compound tests must pick one or the other. The n=10+clip=1.0 arm is competitive with n=8 baseline (57.45 vs 57.11, within noise). cruise floor at 33.68 — matches n=8 baseline's cruise floor exactly. **Assigned nezuko #4223**: clip=1.0 and surf_weight=5.0 on new best stack (n=10+δ=0.10).
+
+---
+
 ## 2026-05-16 23:00 — PR #4053 (charliepai2i48h5-edward): n_freqs sweep {8, 12} at clip=1.0+bs=8 — CLOSED (stale baseline; aliasing thesis confirmed at clip=1.0)
 
 - branch: `charliepai2i48h5-edward/bf16-nfreqs-clip10`
