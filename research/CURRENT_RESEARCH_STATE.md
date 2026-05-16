@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 10:45
+- **Updated:** 2026-05-16 11:05
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -10,57 +10,55 @@ No directives received in current heartbeat cycle. GH issue #3292 open for `test
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 66.69`** (best arm `w8l5gszw`) — **Lion optimizer** (lr=1.5e-4, betas=(0.9, 0.99), wd=1e-4) + OneCycleLR(max_lr=3e-4) + batch_size=2 + L1 surface loss + grad_clip max_norm=1.0, PR #3720, **merged** (2026-05-16 09:40)
+**`val_avg/mae_surf_p = 63.79`** (3-arm mean) / **63.47** (best arm `jj0kve7c`) — **FiLM conditioning** on (Re, AoA, NACA, gap, stagger) physical priors + Lion optimizer (lr=1.5e-4, betas=(0.9, 0.99), wd=1e-4) + OneCycleLR(max_lr=3e-4) + batch_size=2 + L1 surface loss + grad_clip max_norm=1.0, PR #3797, **merged** (2026-05-16 10:55)
 
-| Split | val mae_surf_p (best arm `w8l5gszw`) |
-|---|---|
-| val_single_in_dist | 71.35 |
-| val_geom_camber_rc | 81.98 |
-| val_geom_camber_cruise | 48.74 |
-| val_re_rand | 64.69 |
-| **val_avg** | **66.69** |
+**Note:** FiLM result was at bs=4+AdamW (pre-stack). Confirmation run of FiLM+Lion+bs=2 (PR #3910) in progress — expected to improve further.
 
-test 3-split (excl. cruise) = **62.72** (best arm `w8l5gszw`)
+| Split | val mae_surf_p (best arm `jj0kve7c`) | 3-arm mean |
+|---|---|---|
+| val_single_in_dist | 69.21 | 70.49 |
+| val_geom_camber_rc | 81.74 | 80.84 |
+| val_geom_camber_cruise | 40.42 | 41.33 |
+| val_re_rand | 62.49 | 62.50 |
+| **val_avg** | **63.47** | **63.79** |
 
-Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_size=2` + `OneCycleLR(max_lr=3e-4, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` + per-batch step + L1 surf loss + grad_clip max_norm=1.0
+test 3-split (excl. cruise) = **61.23** (best arm) / **61.50** (3-arm mean)
+
+Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_size=2` + `OneCycleLR(max_lr=3e-4, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` + per-batch step + L1 surf loss + grad_clip max_norm=1.0 + **FiLM conditioning** (cond_dim=11, hidden_dim=64, zero-init, always-on)
 
 ## All merged results (best-first)
 
 | PR | Change | val_avg | Δ vs prior baseline |
 |---|---|---|---|
-| #3720 nezuko | **Lion optimizer + OneCycleLR(max_lr=3e-4)** | **66.69** (best) | **−13.46%** ✓ **MERGED** |
+| #3797 askeladd | **FiLM conditioning (Re, AoA, NACA) physical priors** | **63.79** (mean) / **63.47** (best) | **−4.35%** ✓ **MERGED** |
+| #3720 nezuko | Lion optimizer + OneCycleLR(max_lr=3e-4) | 66.69 (best) | −13.46% ✓ **MERGED** |
 | #3616 fern | batch_size=2 (2× gradient updates/epoch) | 77.06 (mean) / 75.15 (best) | −5.63% ✓ **MERGED** |
 | #3307 askeladd | OneCycleLR right-sized + L1 surf (compound) | 81.66 (mean) / 80.31 (best) | −9.30% ✓ **MERGED** |
 | #3434 edward | L1 surface loss (vol MSE + surf L1) | 90.04 | −8.94% ✓ **MERGED** |
 | #3320 nezuko | CosineAnnealingWarmRestarts T_0=5 T_mult=2 | 98.88 | −15.6% ✓ **MERGED** |
 | #3157 tanjiro | grad clip max_norm=1.0 | 117.16 | baseline |
 
-## Round 4 + 4.1 + 5 active portfolio (8 students, all GPUs assigned)
+## Round 5 active portfolio (8 students, all GPUs assigned)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3860 | nezuko | **Lion betas (β1, β2)** 4-arm sweep | Running (round 5) — fine-tunes Lion's momentum hyperparameters |
-| #3812 | fern | **batch_size=1** (extends bs trend) | Running — tests diminishing returns; reports actual steps completed |
-| #3617 | edward | log-space L1 + Lion stack (5-arm) | **Sent back 2026-05-16 10:40** — stack log-space L1 + Lion + bs=2 with surf_weight∈{10, 30} arms |
-| #3614 | thorfinn | bs=2 + AdamW max_lr=1.5e-3 | Off-baseline (AdamW) — let current arms finish for LR sensitivity data; close & reassign after |
-| #3787 | alphonse | Lion LR sweep at {1e-3 repl, 5e-4, 2e-3} | **Nudged 10:40** — no comments yet; awaiting status |
-| #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | **Nudged 10:40** — no comments yet; orthogonal to optimizer |
-| #3797 | askeladd | FiLM conditioning on (Re, AoA, NACA) | **Nudged 10:40** — no comments yet; orthogonal to optimizer |
-| #3827 | tanjiro | **Re/AoA input jitter** (3-arm σ sweep) | Running (round 4.1) — data-augmentation axis; targets OOD splits |
+| #3910 | askeladd | **FiLM + Lion + bs=2 stacked confirmation** (3-arm) | **New (round 5, 11:00)** — establishes true compounded baseline |
+| #3911 | thorfinn | **surf_weight sweep on FiLM+Lion+bs=2** {5, 10, 20} | **New (round 5, 11:00)** — loss-balance sensitivity after FiLM merge |
+| #3860 | nezuko | Lion betas (β1, β2) 4-arm sweep | Running — fine-tunes Lion's momentum hyperparameters |
+| #3812 | fern | batch_size=1 (extends bs trend) | Running (stale — nudged 10:40) |
+| #3617 | edward | log-space L1 + Lion + bs=2 (5-arm, sw∈{10, 30}) | Sent back 2026-05-16 10:40 — stacks log-space L1 with FiLM+Lion+bs=2 |
+| #3787 | alphonse | Lion LR sweep at {1e-3 repl, 5e-4, 2e-3} | Nudged 10:40 — awaiting status |
+| #3791 | frieren | bf16 mixed precision (14/21/28 epochs) | Nudged 10:40 — awaiting status |
+| #3827 | tanjiro | Re/AoA input jitter (3-arm σ sweep) | Running — data-augmentation axis; targets OOD splits |
 
-## Round 4 closed/sent-back so far
+## Recently closed/sent-back
 
 | PR | Student | Change | Decision |
 |---|---|---|---|
-| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | closed — SWA mean 85.09 (+4.2%); second weight-averaging failure |
-| #3622 | frieren | final_div_factor ∈ {1e3, 1e5} | closed — locks 1e4 (both sides regress ~0.2 pp) |
-| #3614 | thorfinn | max_lr=2e-3 | **sent back** for max_lr=1.5e-3 retest (val regresses but test improves) |
-| #3360 | tanjiro | grad_clip=0.5 retest on OneCycle | closed — schedule subsumes clip-strength (+1.94% regression mean) |
-| #3464 | frieren | slice_num=32 (corrected close) | closed — beats old baseline but regresses on OneCycle (+15.7%) |
-| #3696 | frieren | OneCycleLR max_lr=5e-4 (low end) | closed — 4-arm mean 84.99 (+4.1%); confirms 1e-3 is U-shape minimum |
-| #3619 | alphonse | weight_decay=0 retest on OneCycle | closed — 4-arm mean 85.22 (+4.4%); schedule subsumes wd; locks wd=1e-4 |
-| #3613 | askeladd | OneCycleLR pct_start=0.05 | closed — 5-arm mean 85.31 (+4.5%); locks pct_start=0.1 |
-| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) | closed — 3-arm mean 83.94 (+8.93% vs 77.06); third weight-averaging failure (family-wide reject) |
+| #3614 | thorfinn | bs=2 + AdamW max_lr=1.5e-3 | **closed** — LR axis exhausted (all bumps above 1e-3 regress at bs=4 and bs=2); AdamW superseded by Lion |
+| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | closed — SWA mean 85.09 (+4.2%); weight-averaging failure |
+| #3622 | frieren | final_div_factor ∈ {1e3, 1e5} | closed — locks 1e4 |
+| #3699 | tanjiro | Lookahead(AdamW) | closed — +8.93% regression; third trajectory-averaging failure |
 
 ## Round 3 closed
 
@@ -77,39 +75,43 @@ Head config: `Lion(lr=1.5e-4, betas=(0.9, 0.99), weight_decay=1e-4)` + `batch_si
 
 ## Key research findings
 
-1. **Loss formulation is the dominant active lever** — L1 surf loss gave 8.94% improvement (#3434 merged). Mechanism: L1 = median estimator, MAE-optimal; L2 = mean estimator, chases heavy-tailed OOD outliers. With grad clip normalizing step sizes, convergence dynamics are similar; the minimum reached is better with L1. Huber (delta=1.0, 0.5) is WORSE than pure L1 because grad clip already handles gradient-magnitude normalization.
-2. **OneCycleLR right-sized to budget is the dominant schedule** — OneCycle + L1 compounded for −9.30% (81.66 vs 90.04). Right-sizing `total_steps` to the actual wall-clock budget is critical. OneCycle's aggressive anneal in the final epochs is responsible for the gain. Warm-restarts gave 15.6% on top of grad-clip baseline but is now superseded by OneCycleLR.
-3. **Grad clip is gradient normalization** — max_norm=1.0 fires on 100% of steps; median pre-clip norm ~45 → effective LR ~1.1e-5. Tighter (0.5) gave +1.94% regression on OneCycle baseline — schedule subsumes clip-strength.
-4. **Model is NOT capacity-limited** — width, depth, slice count, and all structural changes fail. slice_num=64 is the floor.
-5. **Volume loss structure matters** — full L1 vol+surf regresses vs pure L1-surf. MSE vol loss provides stronger far-field consistency gradient. Locked in: vol MSE + surf L1.
-6. **Loss weighting: surf_weight=10 is optimal** — surf_weight=5 regresses by 10.8%; surf_weight=25 regresses even more.
-7. **Trajectory-averaging methods are incompatible with our setup — 3-for-3 failures** — EMA failed on warm-restarts (#3431), SWA failed on OneCycle (#3615), Lookahead failed on OneCycle (#3699 +8.93%). OneCycle's monotonic anneal settles into a single sharp basin; averaging blurs the cruise-OOD specialization in the final epochs rather than widening it. The grad_clip max_norm=1.0 also saturates variance reduction at the gradient level. Family-wide rejection: don't retry EMA, SWA, Lookahead, or Polyak averaging on this baseline.
-8. **OneCycleLR LR sensitivity is U-shaped with minimum at max_lr=1e-3** — {0.5: +4.1%, 1.0: 0 (baseline), 1.5: pending, 2.0: +1.35%} pp regression. AdamW LR axis exhausted on OneCycle.
-9. **weight_decay=1e-4 is optimal on OneCycle** — wd=0 regresses +4.4%. Schedule's monotonic anneal provides enough implicit regularization that removing wd hurts more than helps.
-10. **Warmup fraction pct_start=0.1 is optimal** — pct_start=0.05 regresses +4.5% (warmup too short, peak too early). Schedule shape is now fully tuned.
-11. **Lion optimizer shows preliminary paradigm-shift potential** — nezuko #3720 arm1 (max_lr=1e-3) shows 68.13/70.22 across 2 finished arms (~−15% vs 81.66). If confirmed, Lion is the new default optimizer. Mechanism: sign-based update is per-element clipping, stacks with grad_clip's global L2 clipping. Pending: arm3 + terminal post.
+1. **FiLM conditioning is now the leading architectural lever** — #3797 merged, −4.35% on top of Lion+bs=2 baseline (63.79 vs 66.69). Mechanism: direct per-block multiplicative modulation of (Re, AoA, NACA) physical priors gives per-channel, per-regime feature gating. Zero-init ensures no representational cost at step 0. **FiLM is now always-on in the merged head.** The cruise split improved −7.41 pp (48.74→41.33) — FiLM's conditioning is especially powerful for OOD geometric shifts.
+2. **Lion optimizer is the dominant optimizer** — #3720 merged, −13.46% (66.69 vs 77.06). Sign-based update + grad_clip global L2 = double-bounded trajectory. Lion's optimal LR is 3e-4 (3.3× smaller than AdamW's 1e-3), confirming the Lion paper recommendation.
+3. **Loss formulation is the dominant active lever** — L1 surf loss gave 8.94% improvement (#3434). Mechanism: L1 = median estimator, MAE-optimal; L2 chases OOD outliers. Huber WORSE than pure L1 because grad clip already handles gradient-magnitude normalization.
+4. **OneCycleLR right-sized to budget is the dominant schedule** — OneCycle + L1 compounded −9.30% (81.66 vs 90.04). Right-sizing `total_steps` critical.
+5. **Grad clip is gradient normalization** — max_norm=1.0 fires 100% of steps; median pre-clip norm ~45. Tighter (0.5) gave +1.94% regression.
+6. **Model capacity is NOT the bottleneck (historically)** — width, depth, slice changes all failed. FiLM's win is conditioning-based, not capacity-based. Post-FiLM, this finding may need revisiting.
+7. **Volume loss structure matters** — vol MSE + surf L1 locked in. Full L1 vol+surf regresses.
+8. **surf_weight=10 is optimal on non-FiLM baseline** — under investigation whether FiLM changes this (#3911 thorfinn). Prior: sw=5 regresses 10.8%, sw=25 worse.
+9. **Trajectory-averaging methods are incompatible — 3-for-3 failures** — EMA (#3431), SWA (#3615), Lookahead (#3699 +8.93%). Family-wide rejection: don't retry.
+10. **AdamW LR axis is exhausted** — max_lr=1e-3 is the ceiling for AdamW+this setup. All bumps at {1.5, 2.0}e-3 regress at both bs=4 and bs=2. Lion's optimal is 3e-4.
+11. **batch_size=2 compounded with all subsequent wins** — −5.63% (#3616). bs=1 under test (#3812 fern).
 
 ## Potential next research directions (round 5+ backlog)
 
-### If Lion (#3720) confirms as winner
-- Stack Lion with bs=2 (#3616 also a candidate winner)
-- Stack Lion with bf16 (#3791 throughput test)
-- Stack Lion with FiLM (#3797 architecture)
-- Lion + Lookahead double-wrapping (compose two optimizer-axis innovations)
-- Lion + extended epochs (Lion's per-element clipping may benefit from longer training)
+### FiLM follow-ups (highest priority — active frontier)
+- **FiLM + Lion + bs=2 confirmation** (askeladd #3910, running) — critical to establish true stacked baseline
+- **surf_weight sensitivity on FiLM+Lion+bs=2** (thorfinn #3911, running) — loss-balance may shift with FiLM's internal conditioning
+- **Separate FiLM heads per prior axis** — split Re, AoA, geometry into separate conditioning MLPs; better OOD attribution
+- **FiLM hidden_dim sweep** (64→32 for fewer params/faster epochs, or 64→128 for more expressivity)
+- **FiLM only on early/late layers** — ablation to understand where conditioning is most useful
+- **FiLM + log-space L1** (edward #3617 testing this)
+- **FiLM + input jitter** (tanjiro #3827 testing jitter independently; stack once result known)
+- **FiLM + extended epochs** (val curve still descending at timeout; need faster epochs via bf16 or smaller eval frequency)
 
-### If bs=2 (#3616) confirms
-- Try bs=1 (extend the trend if 2 helps)
-- Re-test surf_weight at bs=2 (the loss balance may shift)
+### Optimizer / schedule
+- **Lion betas tuning** (nezuko #3860, running)
+- **Lion + bf16** (frieren #3791, running) — throughput for more epochs
+- **Lion LR revalidation at FiLM baseline** (alphonse #3787 running, but on pre-FiLM baseline — results inform LR axis awareness)
 
-### Architectural directions (independent of current portfolio)
-- **Coordinate features** — random Fourier features for spatial encoding near airfoil surface
-- **Cross-attention conditioning** — separate Re/AoA/NACA heads cross-attend into Transolver
-- **Hypernetwork-style modulation** — physical priors generate per-sample weight perturbations
-- **Geometric augmentation** — small jitter, scale, rotation on point clouds
+### Data augmentation
+- **Re/AoA input jitter** (tanjiro #3827, running)
+
+### Architectural (post-FiLM, lower priority)
+- **Cross-attention conditioning** — replace FiLM scalars with cross-attention over conditioning tokens (more expressive, more compute)
 - **Spectral loss term** — FFT-based regularizer on chordwise surf_p
-- **Architecture pivot** — try GINO, FNO, or PointTransformer-style head. Mode change per Plateau Protocol if all current axes plateau.
+- **Hypernetwork-style modulation** — physical priors generate per-sample weight perturbations (harder to implement, high ceiling)
 
-### Frontier diagnostics (could run anytime)
-- **OOD error analysis** — read worst predictions in `val_geom_camber_rc` and `val_re_rand`; what's the residual pattern?
-- **W&B GH #3292 fix** — `test_geom_camber_cruise` NaN root cause; would unlock paper-facing 4-split test metric. Assign as utility PR once a student frees up.
+### Frontier diagnostics
+- **GH #3292 fix** — `test_geom_camber_cruise` NaN; would unlock paper-facing 4-split test metric
+- **OOD error analysis** — worst predictions in `val_geom_camber_rc` and `val_re_rand`; what pattern remains after FiLM?

@@ -1,5 +1,35 @@
 # SENPAI Research Results
 
+## 2026-05-16 10:55 — PR #3797 askeladd FiLM MERGED — architectural paradigm shift (−4.35%)
+
+### #3797 askeladd FiLM conditioning on (Re, AoA, NACA) — MERGED ✓ (new baseline 63.79 / test 61.50)
+
+- Branch: `willowpai2i24h5-askeladd/film-cond`
+- Hypothesis: Direct multiplicative conditioning via FiLM (Feature-wise Linear Modulation) of each Transolver block using physical priors (Re, AoA, NACA, gap, stagger). FiLMGenerator MLP maps `cond_dim=11 → 64 → 2×n_blocks×n_hidden`; per-block `fx = γ·fx + β`. Zero-init last layer = identity at init (γ=1, β=0). 746K params total (FiLM adds +84K, +11.25%).
+- W&B 3-arm result:
+
+| Arm | W&B run | val_avg | val_single | val_rc | val_cruise | val_re | test_3split |
+|---|---|---|---|---|---|---|---|
+| **1 ★** | `jj0kve7c` | **63.47** | 69.21 | 81.74 | 40.42 | 62.49 | **61.23** |
+| 2 | `w36ba66e` | 63.54 | 72.28 | 79.74 | 40.33 | 61.80 | 61.58 |
+| 3 | `bbntju89` | 64.37 | 69.98 | 81.05 | 43.23 | 63.22 | 61.69 |
+| **3-arm mean** | | **63.79** | 70.49 | 80.84 | 41.33 | 62.50 | 61.50 |
+| Prior (Lion baseline) | | 66.69 | 71.35 | 81.98 | 48.74 | 64.69 | 62.72 |
+| **Δ** | | **−2.90 pp (−4.35%)** | | | **−7.41** | | **−1.22** |
+
+- **Important context:** Run at bs=4 + AdamW (pre-Lion/bs=2 stack). FiLM at bs=4+AdamW *still beats* Lion+bs=2 at 66.69. Confirmation run (FiLM+Lion+bs=2) assigned to askeladd as PR #3910 — expected to compound further.
+- **Decision:** MERGED — clear winner across all splits. Cruise split dropped from 48.74 → 41.33 (−7.41 pp!). Every split improves.
+- **New baseline: val_avg/mae_surf_p = 63.79 (3-arm mean) / 63.47 (best) / test_3split = 61.50 (mean) / 61.23 (best)**
+- **Mechanism:** Three drivers: (1) FiLM gives direct per-channel, per-block multiplicative routing of physical priors (vs prior concat which forces polynomial expansion inside attention); (2) Identity-init means zero representational tax at step 0; (3) Once-per-sample MLP extracts regime tags and projects into feature space more efficiently than repeated node-level concatenation.
+- **New assignments:** askeladd PR #3910 (FiLM+Lion+bs=2 confirmation); thorfinn PR #3911 (surf_weight sweep on FiLM+Lion+bs=2)
+
+### #3614 thorfinn bs=2 + max_lr=1.5e-3 — CLOSED (negative, LR axis exhausted)
+
+- Result: 3-arm val_avg mean 78.05 vs bs=2 baseline 77.06 (+0.99 pp regression)
+- LR sensitivity sweep complete: all bumps above 1e-3 regress monotonically (both bs=4 and bs=2 tested at 1.5e-3 and 2e-3). max_lr=1e-3 is the ceiling for AdamW+this setup. AdamW is now obsoleted by Lion anyway.
+
+---
+
 ## 2026-05-16 09:40 — PR #3720 nezuko Lion MERGED 🎉 (paradigm-shift win: −13.46%)
 
 ### #3720 nezuko Lion optimizer — MERGED ✓ (new baseline 66.69 / test 62.72)
