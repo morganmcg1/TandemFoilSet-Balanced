@@ -46,6 +46,61 @@ from data import (
     pad_collate,
 )
 
+
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, arXiv:2302.06675).
+
+    Sign-of-momentum update with decoupled weight decay:
+        u_t   = sign(beta1 * m_{t-1} + (1 - beta1) * g_t)
+        m_t   = beta2 * m_{t-1} + (1 - beta2) * g_t
+        theta = theta * (1 - lr * wd) - lr * u_t
+
+    Reference implementation follows the canonical pseudo-code from the paper
+    and matches `google/automl/lion`. Decoupled weight decay is applied as a
+    multiplicative pre-step before the sign update — never folded into the
+    sign() argument, which would entangle the binary update with a real-valued
+    decay term.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                exp_avg = state["exp_avg"]
+
+                # Decoupled weight decay (multiplicative pre-step)
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+                # Interpolated update direction (not stored)
+                update = exp_avg.mul(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                # Update momentum buffer
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -516,6 +571,12 @@ class Config:
     ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
     norm_type: str = "layernorm"  # Block-level normalization: 'layernorm' or 'rmsnorm'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
+    t_max: int = 15   # CosineAnnealingLR period in epochs (T_max)
+    warmup_epochs: int = 0   # LinearLR warmup length in epochs; 0 disables warmup
+    warmup_start_factor: float = 1e-6  # LinearLR start_factor for warmup
+    optimizer: str = "adamw"  # 'adamw' or 'lion'
+    lion_beta1: float = 0.9   # Lion momentum-interpolation coefficient
+    lion_beta2: float = 0.99  # Lion EMA decay coefficient
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -577,10 +638,40 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
+if cfg.optimizer == "lion":
+    optimizer = Lion(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(cfg.lion_beta1, cfg.lion_beta2),
+        weight_decay=cfg.weight_decay,
+    )
+    print(f"Optimizer: Lion(lr={cfg.lr}, betas=({cfg.lion_beta1}, {cfg.lion_beta2}), wd={cfg.weight_decay})")
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Optimizer: AdamW(lr={cfg.lr}, wd={cfg.weight_decay})")
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer}")
+
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=cfg.t_max - cfg.warmup_epochs, eta_min=cfg.eta_min
 )
+if cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=cfg.warmup_start_factor,
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs]
+    )
+    print(
+        f"Scheduler: LinearLR(start={cfg.warmup_start_factor}, end=1.0, iters={cfg.warmup_epochs}) "
+        f"-> CosineAnnealingLR(T_max={cfg.t_max - cfg.warmup_epochs}, eta_min={cfg.eta_min})"
+    )
+else:
+    scheduler = cosine
+    print(f"Scheduler: CosineAnnealingLR(T_max={cfg.t_max}, eta_min={cfg.eta_min})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -612,6 +703,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_pre = 0.0
     n_batches = 0
 
+    epoch_lr = optimizer.param_groups[0]["lr"]
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -691,6 +783,11 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
+        "lr_epoch_start": epoch_lr,
+        "lr_epoch_end": optimizer.param_groups[0]["lr"],
+        "optimizer": cfg.optimizer,
+        "warmup_epochs": cfg.warmup_epochs,
+        "t_max": cfg.t_max,
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
@@ -700,7 +797,7 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
     })
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB] lr={epoch_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
