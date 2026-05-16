@@ -473,6 +473,7 @@ class Config:
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
+    p_weight: float = 1.0  # per-channel pressure upweight in loss; 1.0 = disabled
 
 
 cfg = sp.parse(Config)
@@ -608,6 +609,10 @@ for epoch in range(MAX_EPOCHS):
             elem_loss = F.huber_loss(pred, y_target, delta=cfg.huber_delta, reduction="none")
         else:
             elem_loss = (pred - y_target) ** 2
+        if cfg.p_weight != 1.0:
+            pw = elem_loss.new_ones(3)
+            pw[2] = cfg.p_weight  # channel 2 is pressure (after Ux, Uy)
+            elem_loss = elem_loss * pw
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
