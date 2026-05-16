@@ -427,7 +427,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=96,
     n_layers=5,
-    n_head=4,
+    n_head=2,
     slice_num=96,
     mlp_ratio=2,
     ffn_type="swiglu",
@@ -436,6 +436,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
+print(f"n_head={model_config['n_head']} head_dim={model_config['n_hidden'] // model_config['n_head']}")
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
