@@ -4,7 +4,37 @@
 
 ---
 
-## 2026-05-16 15:30 — PR #4002: SwiGLU mlp_ratio=3 + epochs=14 (alphonse) — ← CURRENT BEST
+## 2026-05-16 15:50 — PR #3969: SwiGLU mlp_ratio=2 + epochs=14 (askeladd) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 56.4402** (best epoch 14/14, W&B run `dwyzcs0e`) — **−1.60% vs previous best 57.3537**
+- **test_avg/mae_surf_p: 48.8947** — **−1.84% vs previous best 49.8024**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not per-split logged) | 55.3088 |
+| geom_camber_rc | (not per-split logged) | 61.1577 |
+| geom_camber_cruise | (not per-split logged) | 32.0157 |
+| re_rand | (not per-split logged) | 47.0968 |
+| **avg** | **56.4402** | **48.8947** |
+
+- **Model config:** SwiGLU FFN, n_hidden=160, n_layers=5, n_head=4, slice_num=64, **mlp_ratio=2**, inner_dim=216, ~1.035M params
+- **Change from previous baseline:** `--epochs 14` on mlp_ratio=2 stack (vs mlp_ratio=3 at epochs=14 in PR #4002)
+- **Val curve (last 4 epochs):** ep11=65.49, ep12=61.10, ep13=58.40, ep14=**56.44** — still descending at budget end; ep13→ep14 delta = −1.96
+- **Wall time:** ~41.05 min (2463 s); ~176 s/epoch
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=14); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+- **Key finding:** mlp_ratio=2 + epochs=14 (this PR) BEATS mlp_ratio=3 + epochs=14 (PR #4002) by 0.91 val / 0.91 test. The wider model does not cleanly compound with extended training at this budget. The under-converged model at ep12 (mlp_ratio=3) overtook mlp_ratio=2 at shorter budgets, but the advantage reverses with extended training.
+
+**Reproduce command:**
+```bash
+cd "target/" && SENPAI_TIMEOUT_MINUTES=50 python train.py --epochs 14
+```
+*(mlp_ratio=2 is default; no extra flag needed)*
+
+---
+
+## 2026-05-16 15:30 — PR #4002: SwiGLU mlp_ratio=3 + epochs=14 (alphonse)
 
 - **val_avg/mae_surf_p: 57.3537** (best epoch 14/14, W&B run `vuod53pk`) — **−2.80% vs previous best 59.0038**
 - **test_avg/mae_surf_p: 49.8024** — **−1.84% vs previous best 50.7368**
