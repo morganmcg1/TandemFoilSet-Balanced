@@ -817,3 +817,36 @@ vs **NEW canonical (54.494)**: freqs=4 at 54.895 is +0.73% WORSE. Cannot merge. 
 
 - 3 arms on new canonical (huber_beta=0.5 default), `--wandb_group huber-beta-finer-sweep`, seed=42
 - **Target: val < 54.494. Expected optimum at beta≤0.25 given monotone pattern.**
+
+## 2026-05-16 11:30 — PR #3703: SOAP precond_freq finer sweep {3, 2} vs new canonical (5) — CLOSED (FALSIFIED)
+- willowpai2i48h3-askeladd/soap-precond-freq-finer-sweep
+- Hypothesis: previous round-3 sweep {5, 10, 20} showed monotone improvement toward freq=5; finer sweep below would yield additional gains
+- W&B group: `precond-freq-finer-sweep`
+
+| Arm | precond_freq | W&B id | val_avg/mae_surf_p | test_avg/mae_surf_p_excl_cruise | s/epoch | Δval vs baseline |
+|---|---|---|---|---|---|---|
+| baseline-freq5 | 5 | `wsmr9a80` | **60.3318** | **59.273** | 138.29 | — (matches PR baseline) |
+| variant-freq3 | 3 | `b0srzi0m` | 63.6274 | 62.966 | 140.15 | **+5.46% (worse)** |
+| variant-freq2 | 2 | `ssxfa99z` | 64.3156 | 63.264 | 142.53 | **+6.60% (worse)** |
+
+- **Outcome: clean falsification.** U-shape with optimum at freq=5. Going more frequent than every-5 steps HURTS both val and test by 5-7% while being 1-3% slower.
+- Mechanism: too-frequent eigenbasis recomputation injects rotational noise from high-variance SOAP EMA estimates; misaligns Adam moments with the rotating frame.
+- Baseline-freq5 reproduces PR baseline (60.33) to 3 sig figs — confirms SOAP+EMA stack is highly reproducible.
+- Decision: CLOSED. precond_freq=5 stays canonical. New assignment to askeladd incoming.
+
+## 2026-05-16 11:30 — PR #3612: Cauchy robust loss sweep — SENT BACK (winner, needs rebase)
+- willowpai2i48h3-edward/cauchy-robust-loss
+- Hypothesis: Cauchy ρ(r) = c²/2 × log(1 + (r/c)²) has heavier tails than Huber, more aggressively discounting extreme prediction errors on OOD
+- W&B group: `cauchy-ema-decay99` (2-arm rebase confirmation)
+
+| Arm | Loss | W&B id | val_avg/mae_surf_p | test_avg/mae_surf_p_excl_cruise | Δval vs arm1 |
+|---|---|---|---|---|---|
+| baseline-huber-ema99 | Huber β=1.0 | `lw3fus4p` | **56.117** | **54.659** | — |
+| **variant-cauchy-c1-ema99-freq5** | **Cauchy c=1.0** | `mep5yevo` | **52.494** | **51.220** | **−6.46%** |
+
+- vs new canonical (PR #3316, val=54.494, test=52.837): variant-cauchy-c1 wins by **−3.67% val, −3.06% test**
+- Per-split val MAE: Cauchy wins on every split (single_in_dist 64.47 vs 68.27, geom_camber_rc 65.75 vs 69.37, geom_camber_cruise 30.90 vs 34.40, re_rand 48.85 vs 52.44)
+- Per-split test MAE: Cauchy wins on every test split (single_in_dist 58.17 vs 62.26, geom_camber_rc 53.49 vs 57.45, re_rand 42.01 vs 44.26)
+- **Critical insight:** cauchy_c>0 bypasses the Huber path entirely, so mep5yevo result is independent of the huber_beta default (0.5 vs 1.0). The result stands head-to-head against current canonical.
+- Branch was CONFLICTING (likely train.py loss-section conflict with PR #3316). Sent back for rebase-only — no new experiment needed.
+- Expected post-merge canonical: val ≈ 52.494, test ≈ 51.220 → cumulative gain ≈ −61.2% from old launch baseline (135.30)
