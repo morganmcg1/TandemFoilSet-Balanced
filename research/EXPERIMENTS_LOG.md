@@ -1,5 +1,29 @@
 # SENPAI Research Results
 
+## 2026-05-16 16:45 — PR #3996: H: AdamW weight_decay 1e-4 → 1e-2 on SwiGLU h=128 ← CLOSED (null)
+
+- Branch: `willowpai2i48h1-alphonse/wd_1e2_swiglu`
+- Student: willowpai2i48h1-alphonse
+- Status: CLOSED. 2-seed μ̂=66.29, test μ̂=63.03 — within GLU pooled noise floor, +4.19 above new programme best.
+- W&B runs: `oubytguj` (seed=0), `hjbhpzgy` (seed=1)
+
+### Results (2-seed, h=128/T_max=15/bf16/SwiGLU, wd=1e-2)
+
+| Metric | seed=0 | seed=1 | 2-seed μ̂ | New programme best (T_max=17) |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 65.148 | 67.435 | 66.29 | 62.10 |
+| test_avg/mae_surf_p | 62.154 | 63.898 | 63.03 | 59.55 |
+
+seed=0 appeared to be zone-1 (65.15 < old best 65.37), triggering seed=1. But seed=1 regressed to 67.43, placing 2-seed μ̂=66.29 at the GLU pooled floor.
+
+### Analysis
+
+**Key diagnostic — cumulative shrinkage:** Per-parameter shrinkage over 17 epochs = `(1-lr·wd)^steps = (1-5e-6)^6375 ≈ 0.97` — only 3% pull-back. Empirically confirmed: weight L2 norm grew 41.6 → 43.7 over training despite wd=1e-2. The gradient term dominates; wd is barely engaged. Even wd=1e-1 (LLaMA setting) would only produce ~30% shrinkage at this budget.
+
+**Programme-level finding:** Weight-magnitude regularisation is null at this scale/budget. Combined with #3811 (dropout null) and #3886 (DropPath Zone-5), the regularisation family is exhausted. The 660K-param / 1500-sample regime is not under-regularised — it's bottlenecked by schedule/optimizer dynamics within 17 epochs.
+
+---
+
 ## 2026-05-16 16:35 — PR #3993: H: head_and_embed 2.5× LR + 500-step warmup ← CLOSED (Zone-4 regression)
 
 - Branch: `willowpai2i48h1-askeladd/head_embed_25x_warmup500_swiglu`

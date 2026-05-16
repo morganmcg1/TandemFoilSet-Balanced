@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 16:35
+- **Date:** 2026-05-16 16:45
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; NEW programme best val=62.10)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -63,7 +63,8 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
 | **#4028** | **thorfinn** | **T_max=17 SwiGLU seed=1 — confirm programme-record win** | WIP (assigned 16:05) |
-| **#4032** | **askeladd** | **T_max=17 + GeGLU stack — compound two validated wins** | NEW — assigned 16:35 |
+| **#4050** | **alphonse** | **T_max=17 SwiGLU seed=2 — 3-seed canonical for new programme best** | NEW — assigned 16:45 |
+| **#4032** | **askeladd** | **T_max=17 + GeGLU stack — compound two validated wins** | WIP — assigned 16:35 |
 | **#3999** | **tanjiro** | **gradient clipping clip_norm=1.0 on SwiGLU h=128** | Running (T_max=15; rate-limit recovery, training starting ~16:22) |
 | **#3998** | **edward** | **slice_num=128 (2×) on SwiGLU — attention granularity** | Running (T_max=15; rate-limit recovery, training starting ~16:22) |
 | **#3996** | **alphonse** | **AdamW weight_decay 1e-4 → 1e-2 on SwiGLU** | Running (T_max=15; rate-limit recovery, training starting ~16:20) |
@@ -78,6 +79,7 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
 | **#3994** | **T_max=17 SwiGLU (thorfinn)** | **62.10 ← MERGED** | **NEW PROGRAMME BEST. T_max=17 enables "snap to minimum" descent in eps 16-17 (LR~4e-6→0) that T_max=15 missed (LR=0 hard at ep 15). Single-knob +3.27pt win.** |
+| **#3996** | **wd=1e-2 SwiGLU (alphonse, 2-seed)** | **μ̂=66.29** | **Null. Cumulative shrinkage only 3% over 17 epochs — wd barely engages. Regularisation family closed (#3811+#3886+#3996).** |
 | **#3993** | **head_embed 2.5× + warmup500 (askeladd)** | **69.61** | **Zone-4. MAJOR: warmup WORSENED early dynamics (val@ep1=222 vs 185 no-warmup). 3.09× equilibrium NOT a unique attractor — warmup permanently shifted basin to 2.35×. Head_embed LR boost lever class exhausted.** |
 | **#3959** | **lr=1e-3 (tanjiro)** | **68.87 (+5.34σ)** | **Zone-4 regression. MAJOR: lower σ̂ ≠ larger LR headroom. MAJOR: cosine T_max=15 cannot absorb early inefficiency.** |
 | **#3933** | **ReGLU (edward)** | **67.92** | **+1.6σ regression. Dead-gate pathology. GLU family DEFINITIVELY closed.** |
@@ -139,7 +141,8 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 17. **`CosineAnnealingLR(T_max=N)` with N < total_epochs** — #3934. PyTorch footgun: LR rebounds past T_max.
 18. **ReGLU (ReLU gate)** — #3933. Dead-gate pathology.
 19. **lr=1e-3 under T_max=15** — #3959. Two findings: (a) lower σ̂ ≠ LR headroom; (b) T_max=15 cannot absorb early inefficiency.
-20. **head_and_embed LR boost — all variants** — #3832 (1.75×), #3932 (2.5× no-warmup), #3993 (2.5× + warmup500). Warmup WORSENED early dynamics (val@ep1=222 vs 185); 3.09× gradient equilibrium is NOT a unique attractor (shifted to 2.35× under warmup). The structural cost of 2.5× boost (~4-5pt val) is not recoverable within 17 epochs regardless of warmup. Lever class closed.
+20. **Weight-magnitude regularisation (wd scan)** — #3996. wd=1e-2 null on 2-seed (μ̂=66.29). Cumulative shrinkage `(1-lr·wd)^steps ≈ 0.97` over 17 epochs at lr=5e-4 — 3% pull-back is negligible. Regularisation is not the bottleneck; combined with #3811+#3886, the entire reg. family is closed.
+21. **head_and_embed LR boost — all variants** — #3832 (1.75×), #3932 (2.5× no-warmup), #3993 (2.5× + warmup500). Warmup WORSENED early dynamics (val@ep1=222 vs 185); 3.09× gradient equilibrium is NOT a unique attractor (shifted to 2.35× under warmup). The structural cost of 2.5× boost (~4-5pt val) is not recoverable within 17 epochs regardless of warmup. Lever class closed.
 
 ## PyTorch scheduler gotchas (programme-wide)
 
