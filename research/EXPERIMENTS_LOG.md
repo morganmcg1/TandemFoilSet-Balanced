@@ -1,5 +1,44 @@
 # SENPAI Research Results
 
+## 2026-05-16 04:33 — PR #3238: Dual surface/volume output heads (fern) — CLOSED (parity)
+
+- **Branch**: `charliepai2i24h3-fern/dual-branch-heads`
+- **Hypothesis**: Separate output projection heads for surface and volume nodes would let the model specialize per domain, improving surface pressure MAE.
+- **Outcome**: **CLOSED — statistical parity with baseline**
+
+| Run | val_avg/mae_surf_p | Δ vs baseline (87.62) |
+|---|---|---|
+| Run 1 (20260516-012302) | 88.93 | +1.31 (+1.50%) |
+| Run 2 (20260516-022240) | 88.02 | +0.40 (+0.46%) |
+| **Run 3 (20260516-032251) — best** | **87.35** | **−0.27 (−0.31%)** |
+| **Mean ± σ** | **88.10 ± 0.79** | **+0.55% (mean worse)** |
+
+- Best run per-split: cruise=68.78 (−3.5% ✓), re_rand=83.71 (−0.1% ✓), rc=97.87 (+0.9%), single=99.05 (+0.6%)
+- Params: 679K (+17K vs 662K baseline); Peak VRAM: 33.73 GB; ~100s/epoch, 19 epochs
+- Artifacts: `models/model-charliepai2i24h3-fern-dual_branch_cosine_t20-20260516-03225{1,2240,12302}/metrics.jsonl`
+
+**Analysis**: Fern's 3-replicate variance analysis (σ=0.79) reveals that the baseline value of 87.62 sits inside the dual-branch distribution (range 87.35–88.93). The mean (88.10) is slightly worse. The per-split picture shows the dual-branch mechanism genuinely helps the OOD cruise split (−3.5%), but loses it back on rc and single. This is a "cruise-specialist" effect, not a general improvement. Decision: close to avoid locking in 17K params + 0.5% overhead for a noise-level overall change. The variance study is highly valuable — it shows that single-seed comparisons at this metric level (Δ ~1%) are unreliable.
+
+## 2026-05-16 04:34 — PR #3567: Wider model n_hidden 128→192 (edward) — CLOSED (failure)
+
+- **Branch**: `charliepai2i24h3-edward/wider-model-hidden192`
+- **Hypothesis**: 63 GB VRAM free; n_hidden=192 adds capacity (1.47M params) at ~25% compute overhead.
+- **Outcome**: **CLOSED — clear failure (+6.4% vs baseline)**
+
+| Split | Baseline (87.62) | n_hidden=192 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 98.44 | 106.33 | +7.89 worse |
+| val_geom_camber_rc | 96.95 | 100.18 | +3.23 worse |
+| val_geom_camber_cruise | 71.27 | 75.23 | +3.96 worse |
+| val_re_rand | 83.83 | 91.26 | +7.43 worse |
+| **val_avg** | **87.62** | **93.25** | **+5.63 (+6.4%) worse** |
+
+- Params: 1.47M (2.2× baseline 662K); Peak VRAM: 43.02 GB; ~122s/epoch, 15 epochs (vs 19 baseline)
+- Multiple replicates (3 runs) all in range [93.25, 94.21] — consistent result
+- Artifact: `models/model-wider_hidden192-20260516-032514/metrics.jsonl`
+
+**Analysis**: Two compounding effects killed the wider model: (1) the 30-min cap allowed only 15 epochs (vs 19 baseline) — 21% fewer gradient updates; (2) the wider model converges slower per epoch. The cosine T_max=20 schedule anneals LR to ~25% of peak by epoch 14-15, capping further improvement. This is a budget interaction, not a fundamental failure of width — given 2× wall clock the wider model might converge. Key lesson: raw parameter scaling is not free in fixed-budget regime. Prefer same-width, higher-quality changes (attention mechanism, MLP ratio, regularization).
+
 ## 2026-05-16 00:40 — PR #3513: Cosine schedule match (T_max=20 to fit realistic epoch horizon)
 
 - **Branch**: `charliepai2i24h3-edward/cosine-schedule-match`
