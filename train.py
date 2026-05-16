@@ -169,16 +169,19 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 pos_bound=8.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.pos_bound = pos_bound
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            # 2D ref x ref anchor grid → distance encoding replaces the raw coords.
+            self.preprocess = MLP(fun_dim + ref**2, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
             self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
@@ -206,8 +209,28 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+    def get_grid(self, my_pos):
+        """Euclidean distance from each node to each of ref^2 anchor points.
+
+        my_pos: [B, N, space_dim=2] — normalized (x, z) coords.
+        Returns: [B, N, ref**2] — raw L2 distance to a ref x ref lattice spanning
+        [-pos_bound, +pos_bound] in both axes (chosen to cover the normalized
+        coord range observed in the dataset, ~[-7, +8]).
+        """
+        grid = torch.linspace(-self.pos_bound, self.pos_bound, self.ref,
+                              device=my_pos.device, dtype=my_pos.dtype)
+        gx, gy = torch.meshgrid(grid, grid, indexing="ij")
+        grid_ref = torch.stack([gx.flatten(), gy.flatten()], dim=-1)  # [ref**2, 2]
+        diff = my_pos[:, :, None, :] - grid_ref[None, None, :, :]
+        return torch.sqrt((diff ** 2).sum(dim=-1))  # [B, N, ref**2]
+
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.unified_pos:
+            coords = x[..., :self.space_dim]
+            fun_features = x[..., self.space_dim:]
+            new_pos = self.get_grid(coords)
+            x = torch.cat([fun_features, new_pos], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -431,6 +454,9 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unified_pos=True,
+    ref=8,
+    pos_bound=8.0,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -578,10 +604,12 @@ print(f"\nTraining done in {total_time:.1f} min")
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    peak_gb_final = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "gpu_mem_gb_peak": peak_gb_final,
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
