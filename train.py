@@ -82,6 +82,23 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUMLP(nn.Module):
+    """Gated linear unit MLP block (Shazeer 2020).
+
+    forward: linear_out(SiLU(linear_gate(x)) * linear_value(x))
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        self.linear_gate = nn.Linear(n_input, n_hidden)
+        self.linear_value = nn.Linear(n_input, n_hidden)
+        self.linear_out = nn.Linear(n_hidden, n_output)
+        self.silu = nn.SiLU()
+
+    def forward(self, x):
+        return self.linear_out(self.silu(self.linear_gate(x)) * self.linear_value(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -139,7 +156,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_swiglu=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -148,8 +166,12 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        mlp_hidden = int(hidden_dim * mlp_ratio)
+        if use_swiglu:
+            self.mlp = SwiGLUMLP(hidden_dim, mlp_hidden, hidden_dim)
+        else:
+            self.mlp = MLP(hidden_dim, mlp_hidden, hidden_dim,
+                           n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -170,7 +192,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_swiglu: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -191,6 +214,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_swiglu=use_swiglu,
             )
             for i in range(n_layers)
         ])
@@ -421,6 +445,8 @@ class Config:
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
+    use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
+    mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
 
 
 cfg = sp.parse(Config)
@@ -457,14 +483,16 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
+    use_swiglu=cfg.use_swiglu,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
+      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}]")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
