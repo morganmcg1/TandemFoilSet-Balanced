@@ -3,53 +3,63 @@
 **Branch:** `icml-appendix-willow-pai2i-48h-r2`
 **Last updated:** 2026-05-16
 
-## Current best — PR #3474: EMA decay=0.99 + grad_clip=5 + Huber δ=1.0 (alphonse)
+## Current best — PR #3475: Asinh pressure compression on EMA decay=0.99 stack (askeladd)
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| `val_avg/mae_surf_p` | **81.9754** | run `j5214ii4` (best replicate @ epoch 14) |
+| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **81.3654** | run `j5214ii4` |
+
+Per-split validation (best replicate `j5214ii4` vs prev baseline #3474):
+
+| Split | mae_surf_p | Δ vs #3474 (90.6131) |
+|---|---|---|
+| val_single_in_dist | 101.013 | **−4.8%** |
+| val_geom_camber_rc | 90.717 | **−8.8%** |
+| val_geom_camber_cruise | 59.909 | **−14.8%** |
+| val_re_rand | 76.263 | **−11.8%** |
+
+Per-split test (best replicate `j5214ii4`):
+
+| Split | mae_surf_p | Δ vs #3474 |
+|---|---|---|
+| test_single_in_dist | 91.416 | **−4.5%** |
+| test_geom_camber_rc | 83.080 | **−7.4%** |
+| test_geom_camber_cruise | NaN (data/scoring.py bug — known fleet-wide) | — |
+| test_re_rand | 69.600 | **−14.1%** |
+
+Verify arms (both on new EMA decay=0.99 baseline):
+
+| Arm | run | val_avg | Δ vs #3474 | test 3-split |
+|---|---|---|---|---|
+| verify | `2028x8co` | 85.815 | −5.3% | 83.338 |
+| **replicate (best)** | **`j5214ii4`** | **81.975** | **−9.5%** | **81.365** |
+
+Seed variance: ~3.8 MAE units between two identical-config replicates. Both clear the old baseline by >5%. Best arm merged.
+Merged from PR #3475, student `willowpai2i48h2-askeladd`.
+
+---
+
+## Previous best — PR #3474: EMA decay=0.99 + grad_clip=5 + Huber δ=1.0 (alphonse)
 
 | Metric | Value | Source |
 |--------|-------|--------|
 | `val_avg/mae_surf_p` | **90.6131** | run `fzrq04xr` (best @ epoch 14) |
 | `test_avg/mae_surf_p` (3 valid splits; cruise=NaN) | **88.8252** | run `fzrq04xr` |
 
-Per-split validation (best @ epoch 14):
-
-| Split | mae_surf_p | Δ vs prev baseline (#3366, 94.4199) |
-|---|---|---|
-| val_single_in_dist | 106.135 | **−5.1%** |
-| val_geom_camber_rc | 99.466 | **−9.7%** |
-| val_geom_camber_cruise | 70.358 | +1.9% |
-| val_re_rand | 86.494 | −0.2% |
-
-Per-split test (best ckpt):
-
-| Split | mae_surf_p | Δ vs prev baseline |
-|---|---|---|
-| test_single_in_dist | 95.735 | −4.1% |
-| test_geom_camber_rc | 89.726 | −6.8% |
-| test_geom_camber_cruise | NaN (data/scoring.py bug — `inf * 0 = NaN`) | — |
-| test_re_rand | 81.015 | −0.0% |
-
-Sweep summary (all arms beat prior baseline 94.4199):
-
-| Arm | ema_decay | W&B run | val_avg | Δ vs #3366 | test 3-split |
-|---|---|---|---|---|---|
-| A | 0.997 | `ml7l5jck` | 91.990 | −2.6% | 88.322 |
-| B | 0.995 | `y5xumcvw` | 91.205 | −3.4% | 88.177 |
-| **C (best)** | **0.99** | **`fzrq04xr`** | **90.613** | **−4.0%** | **88.825** |
-
-All arms hit wall-clock cap at epoch 14 (monotone improvement — headroom remains).
-Merged from PR #3474, student `willowpai2i48h2-alphonse`.
+Sweep: ema_decay 0.997→0.995→0.99; all arms beat prior baseline. Merged 2026-05-16 00:25 UTC.
 
 ## Current best configuration
 
-EMA (fast decay) + gradient clipping + Huber loss:
-- **`ema_decay = 0.99`** ← updated from 0.999 (PR #3474)
+Asinh pressure compression + EMA (fast decay) + gradient clipping + Huber loss:
+- **`asinh_p_scale = 1.0`** ← NEW (PR #3475): target pressure channel is asinh-transformed before loss; inverted before reporting physical-unit predictions
+- **`ema_decay = 0.99`** (PR #3474)
 - **`grad_clip = 5.0`**: `torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)` before `optimizer.step()`
-- **`huber_delta = 1.0`**: `F.huber_loss(pred, y_norm, delta=1.0, reduction="none")` replaces MSE element-wise loss
+- **`huber_delta = 1.0`**: `F.huber_loss(pred, y_norm, delta=1.0, reduction="none")`
 - Validation, checkpoint selection, and test eval all use EMA shadow weights
 - Checkpoint (`model_path`) saves EMA `state_dict`
-- All other settings unchanged from prior config
 
-**Key mechanistic finding:** At the 14-epoch wall-clock budget, decay=0.99 (half-life ~69 steps) outperforms decay=0.999 (half-life ~693 steps) because the shorter-lag shadow tracks recent parameter improvements in the late-training phase rather than lagging behind them. The shadow still smooths the last ~70 optimizer steps, which is enough to suppress per-step noise while reflecting the current basin. Improvement is monotone: 0.997 > 0.995 > 0.99 > 0.999 within this budget.
+**Key mechanistic finding (asinh):** By applying `asinh(p / scale)` to the pressure target before loss computation, the heavy-tailed pressure distribution (|z| can reach ~5+ on high-Re samples) is compressed toward a near-z-score range. This stops Huber+EMA from over-weighting the highest-magnitude tail. The compound effect with fast-EMA (decay=0.99) is larger than asinh alone: asinh on the old decay=0.999 base gave −2.1%; on the new decay=0.99 base it gives −9.5%. Mechanism: fast-EMA tracks the late-training basin cleanly, and the compressed loss signal provides cleaner gradients exactly when EMA can act on them.
 
 ## Baseline configuration
 
@@ -70,8 +80,9 @@ cd target/ && python train.py \
   --grad_clip 5.0 \
   --huber_delta 1.0 \
   --ema_decay 0.99 \
-  --wandb_group ema-decay0.99-clip5-huber \
-  --wandb_name ema-decay0.99-clip5-huber \
+  --asinh_p_scale 1.0 \
+  --wandb_group asinh-pressure-on-new-base \
+  --wandb_name asinh-p-s1.0-decay0.99 \
   --agent <student>
 ```
 
@@ -82,6 +93,7 @@ cd target/ && python train.py \
 | 2026-05-15 (seed) | ref run `07efagec` | 136.8873 | — | askeladd baseline-w1 reference arm |
 | 2026-05-15 17:30 | #3186 fern EMA | 121.6850 | −11.10% | All 4 val splits improve; 3 reproducible runs |
 | 2026-05-15 20:40 | #3366 fern EMA+clip+Huber | 94.4199 | −22.4% | All 4 val splits ≥−20%; 2 reproducible runs; val still monotone at epoch 14 |
-| **2026-05-16 00:25** | **#3474 alphonse EMA decay=0.99** | **90.6131** | **−4.0%** | **All 3 arms beat baseline; monotone in decay direction; 3 runs; val monotone at ep14** |
+| 2026-05-16 00:25 | #3474 alphonse EMA decay=0.99 | 90.6131 | −4.0% | All 3 arms beat baseline; monotone in decay direction; 3 runs; val monotone at ep14 |
+| **2026-05-16 03:30** | **#3475 askeladd asinh-pressure** | **81.9754** | **−9.53%** | **Every val split improves; val_re_rand −11.8%; 2 verify replicates both beat baseline; test_3split=81.37 (−8.4%)** |
 
 Update this file every time a PR improves on `val_avg/mae_surf_p` and is merged. Record the PR number and the new metric value with the W&B run id.
