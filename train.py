@@ -31,6 +31,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -478,6 +479,16 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# SWA (Izmailov et al. 2018): build the averaged-weight wrapper now, but
+# only start collecting snapshots in the last 30% of training. The
+# OneCycleLR linear anneal keeps LR very small in this tail, so successive
+# epoch checkpoints explore a flat neighborhood around a local minimum;
+# averaging them recovers the geometric center of that neighborhood.
+# Model uses LayerNorm not BatchNorm, so no update_bn() pass is required.
+swa_model = AveragedModel(model)
+swa_start_step_frac = 0.7
+swa_updates = 0
+
 optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=cfg.lr,
@@ -645,6 +656,23 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # SWA: in the last 30% of scheduled training, add this epoch's weights
+    # to the running average. We measure progress against the OneCycleLR
+    # calibration target (not MAX_EPOCHS) because that's the schedule the
+    # LR anneal is aligned to — by 70% elapsed the linear anneal has
+    # dropped the LR enough for successive checkpoints to be in a flat
+    # basin.
+    elapsed_frac = (epoch + 1) / cfg.onecycle_target_epochs
+    if elapsed_frac >= swa_start_step_frac:
+        swa_model.update_parameters(model)
+        swa_updates += 1
+        print(f"    SWA: update #{swa_updates} (elapsed_frac={elapsed_frac:.3f})")
+        wandb.log({
+            "swa/updates": swa_updates,
+            "swa/elapsed_frac": elapsed_frac,
+            "global_step": global_step,
+        })
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -701,5 +729,57 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+
+# --- SWA evaluation -------------------------------------------------------
+# swa_model.module is independent of `model` (deepcopy at construction +
+# updates via update_parameters), so the load_state_dict above did not
+# touch the averaged weights.
+swa_log: dict[str, float] = {"swa/updates_final": swa_updates}
+if swa_updates > 0:
+    print(f"\nSWA: averaging across {swa_updates} epoch checkpoints; running final SWA eval...")
+    swa_model.eval()
+    swa_val_metrics = {
+        name: evaluate_split(swa_model.module, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_val_metrics)
+    print(f"\n  SWA VAL  avg_surf_p={swa_val_avg['avg/mae_surf_p']:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, swa_val_metrics[name])
+    for split_name, m in swa_val_metrics.items():
+        for k, v in m.items():
+            swa_log[f"swa_val/{split_name}/{k}"] = v
+    for k, v in swa_val_avg.items():
+        swa_log[f"swa_val_{k}"] = v
+
+    swa_test_metrics = None
+    swa_test_avg = None
+    if not cfg.skip_test:
+        # Reuse test_loaders from the best-checkpoint test eval above; only
+        # build them here if that block was skipped (no best_metrics).
+        if "test_loaders" not in globals():
+            test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+            test_loaders = {
+                name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+                for name, ds in test_datasets.items()
+            }
+        swa_test_metrics = {
+            name: evaluate_split(swa_model.module, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        swa_test_avg = aggregate_splits(swa_test_metrics)
+        print(f"\n  SWA TEST avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, swa_test_metrics[name])
+        for split_name, m in swa_test_metrics.items():
+            for k, v in m.items():
+                swa_log[f"swa_test/{split_name}/{k}"] = v
+        for k, v in swa_test_avg.items():
+            swa_log[f"swa_test_{k}"] = v
+else:
+    print("\nSWA: no updates collected (training ended before swa_start_step_frac threshold); no SWA eval.")
+
+wandb.log(swa_log)
+wandb.summary.update(swa_log)
 
 wandb.finish()
