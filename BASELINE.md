@@ -2,6 +2,41 @@
 
 ## Current Best
 
+### 2026-05-16 17:15 — PR #4006: n_freqs=8 on BF16+LS — charliepai2i48h5-fern
+
+- **val_avg/mae_surf_p**: **64.08** (best_epoch=17/50, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **55.05** (from best-val checkpoint)
+- **Improvement over prior best**: -2.47% val / -4.76% test vs PR #4009 (65.70/57.80)
+- **Cumulative improvement**: -50.2% val vs round-5 start (~128.69) — **breaks the -50% threshold**
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior (65.70/57.80) |
+  |---|---|---|
+  | single_in_dist | 62.10 | -4.81% ✓ |
+  | geom_camber_rc | 68.13 | -4.62% ✓ |
+  | geom_camber_cruise | 36.63 | -4.39% ✓ |
+  | re_rand | 53.35 | -5.09% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-n8-20260516-144643/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + **n_freqs=8** + Huber-0.3 + T_max=20 + clip=0.25 (no EMA)
+- **Key findings**:
+  - **All four test splits improve** — uniform generalization effect, not split-specific
+  - n_freqs=8 has space_dim=34 (vs n=10 space_dim=42, n=12 space_dim=50, n=14 space_dim=58)
+  - n_freqs ordering on this stack: val n=8 (64.08) < n=12 (65.18) < n=14 (66.99) < n=10 (67.19)
+  - test ordering: n=8 (55.05) < n=12 (56.71) < n=10 (58.05) < n=14 (59.31)
+  - **Lower aliasing wins decisively** at 1499 train samples — fewer Fourier components reduce noise
+  - clip_frac=1.0 throughout (still ran at clip=0.25); ~111 s/epoch; peak memory 36.83 GB
+  - **Not yet compounded with clip=1.0** — that combination is the obvious next test
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 \
+      --layer_scale_init 0.01 \
+      --n_freqs 8 --huber_delta 0.3 --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --experiment_name bf16-layerscale-n8 \
+      --agent charliepai2i48h5-fern
+  ```
+
+---
+
 ### 2026-05-16 16:55 — PR #4009: Gradient clip relaxation clip=1.0 on BF16+LS+n10 — charliepai2i48h5-nezuko
 
 - **val_avg/mae_surf_p**: **65.70** (best_epoch=17/50, timeout-bound, still descending)
