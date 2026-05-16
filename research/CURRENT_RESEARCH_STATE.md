@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~21:40 UTC) — **#4120 thorfinn lr=2e-4+clip=1.0 MERGED** (new best val 56.89/test 49.03); **#4173 thorfinn triple-compose** (T_max=20+lr=2e-4+clip=1.0) assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~21:55 UTC) — **#4122 edward wd-sweep CLOSED** (2/4 arms incomplete, both finished worse; obsolete substrate); **#4180 edward clip-ratio @ lr=2e-4** assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -51,7 +51,7 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 | #4128 | fern | R10 H54: surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} | WIP |
 | #4153 | askeladd | R11 H58: Lion β2 sweep at T_max=20 {0.98, 0.99 ctrl, 0.995} | WIP |
 | **#4173** | **thorfinn** | **R11 H59: Triple composition T_max=20 + lr=2e-4 + clip=1.0 (+ T_max=24 arm)** | **Just assigned** |
-| #4122 | edward | R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} | WIP |
+| **#4180** | **edward** | **R11 H60: Clip ratio sweep at lr=2e-4 {0.7, 1.0 ctrl, 1.4}** | **Just assigned** |
 | #4152 | frieren | R11 H57: EMA decay sweep at T_max=20 {0.995, 0.997 ctrl, 0.999} | WIP |
 | #4148 | tanjiro | R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4} | WIP |
 
@@ -61,6 +61,7 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4122 | edward | wd@clip=1.0 (old substrate): wd=3e-4 → 62.99 (+1.8 vs ctrl 61.18), wd=5e-4 → 61.45 (within noise); wd=1e-3 ctrl & wd=2e-3 never launched; substrate obsolete | CLOSED |
 | #4096 | frieren | SGDR cosine restarts: T_0=7 → val 64.14 (+6.48), T_0=4 T_mult=2 → 69.51 (+11.85). Restarts oppose T_max=20 mechanism. | CLOSED |
 | #4085 | askeladd | Batch size: bs=8 catastrophic (3 reps best 76.93 = +19.27 above BL); bs=16 not launched. Lion+bs=4 correctly tuned. | CLOSED |
 | #4044 | alphonse | Multi-FiLM {cond_dim=11, cond_dim=4}: both hurt camber_rc (target). Global γ/β can't substitute per-node geometry. | CLOSED |
@@ -84,7 +85,7 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 | Lion β2 at T_max=20 | lion_beta2 {0.98, 0.99 ctrl, 0.995} at T_max=20 | #4153 askeladd | −0 to −1.5 val; untested optimizer-state axis |
 | Architecture stability composition | layer_scale=1e-4 + T_max=20 | #4015 nezuko | −0 to −2 val; tests if both wins stack |
 | Loss balance | surf_weight {5, 10 ctrl, 20} at clip=1.0 substrate | #4128 fern | −0 to −2 val; substrate-dependent (note: on old LR, will need T_max=20+lr=2e-4 re-test) |
-| WD recalibration | wd {3e-4, 5e-4, 1e-3 ctrl, 2e-3} at clip=1.0+T_max=14 | #4122 edward | −0 to −2 val; on old substrate, re-test on new if wins |
+| **Clip ratio recalibration at lr=2e-4** | **clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4** | **#4180 edward** | **−0 to −1.5 val; parallel to finding #22, tests whether clip optimum also shifts** |
 
 ## Key findings (cumulative, 22)
 

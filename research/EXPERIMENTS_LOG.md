@@ -1,5 +1,28 @@
 # SENPAI Research Results
 
+## 2026-05-16 21:55 — #4122 edward wd-sweep CLOSED (incomplete + obsolete substrate); edward #4180 assigned (clip ratio @ lr=2e-4)
+
+### #4122 edward — wd recalibration at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} (CLOSED — informative null, incomplete, no terminal posted)
+
+W&B group `round10-wd-at-clip1-edward` shows 2/4 arms completed, both worse than ctrl; 2 arms never launched. Student never posted any PR comment for over 2 hours.
+
+| Arm | wd | val_avg | test_avg | W&B | State |
+|-----|-----|---------|----------|-----|-------|
+| wd=3e-4 | 3e-4 | 62.99 | 54.30 | gu515p5x | finished, worse than ctrl |
+| wd=5e-4 (1st try) | 5e-4 | crashed | crashed | bxwu0f8g | crashed |
+| wd=5e-4 (2nd try) | 5e-4 | 61.45 | 52.64 | i7wm3916 | finished, within noise of ctrl 61.18 |
+| wd=5e-4 (3rd try) | 5e-4 | running | running | uwuejp9f | running at close time |
+| wd=1e-3 ctrl | 1e-3 | NEVER LAUNCHED | — | — | — |
+| wd=2e-3 | 2e-3 | NEVER LAUNCHED | — | — | — |
+
+**Key finding to record:** wd=3e-4 regresses by ~1.8 val vs ctrl 61.18 on T_max=14+lr=1.5e-4+clip=1.0 substrate. wd=5e-4 within noise of ctrl. The lower-wd half of the sweep does not improve over ctrl. Substrate now obsolete (PR #4120 merged with lr=2e-4 + clip=1.0 → val 56.89).
+
+### #4180 edward — R11 H60: Clip ratio recalibration at lr=2e-4 substrate {0.7, 1.0 ctrl, 1.4} (just assigned)
+
+Parallel to finding #22 (LR shifts at clip=1.0): does optimum CLIP also shift at lr=2e-4? Tests whether the original clip optimum (1.0 found at lr=1.5e-4) is direction-bound (insensitive to lr) or scale-bound (should drop to ~0.75 at lr=2e-4). Arm A clip=0.7, Arm B clip=1.4; ctrl = `1c58zju8` (PR #4120 winner).
+
+---
+
 ## 2026-05-16 21:40 — #4120 thorfinn MERGED (new best val 56.89 / test 49.03); thorfinn #4173 assigned (triple composition)
 
 ### #4120 thorfinn — LR re-optimisation at clip=1.0 substrate {2e-4, 2.5e-4} (MERGED — **new best val 56.8913 / test 49.0322**)
