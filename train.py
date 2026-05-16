@@ -452,6 +452,8 @@ class Config:
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
     lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override
+    plateau_start_epoch: int | None = None  # epoch (1-indexed lr-log convention) at which to switch from cosine to constant plateau LR
+    plateau_lr: float = 2e-5  # constant LR held during plateau phase
 
 
 cfg = sp.parse(Config)
@@ -504,17 +506,38 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 t_max = cfg.lr_T_max if cfg.lr_T_max > 0 else MAX_EPOCHS
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=t_max, eta_min=cfg.eta_min
-)
+if cfg.plateau_start_epoch is not None:
+    from torch.optim.lr_scheduler import CosineAnnealingLR, ConstantLR, SequentialLR
+    cos_epochs = cfg.plateau_start_epoch
+    plateau_epochs = max(1, MAX_EPOCHS - cos_epochs)
+    cos_sched = CosineAnnealingLR(optimizer, T_max=cos_epochs, eta_min=cfg.plateau_lr)
+    const_sched = ConstantLR(optimizer, factor=1.0, total_iters=plateau_epochs)
+    scheduler = SequentialLR(
+        optimizer, schedulers=[cos_sched, const_sched], milestones=[cos_epochs]
+    )
+    # ConstantLR._get_closed_form_lr() uses base_lrs (= initial_lr = 2e-4),
+    # so SequentialLR's milestone transition would jump LR back to 2e-4
+    # with factor=1.0. Override base_lrs so the plateau holds at plateau_lr.
+    const_sched.base_lrs = [cfg.plateau_lr] * len(const_sched.base_lrs)
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=t_max, eta_min=cfg.eta_min
+    )
 
 amp_torch_dtype = _amp_torch_dtype(cfg.amp_dtype)
 amp_enabled = cfg.amp_dtype != "fp32"
 grad_clip_enabled = cfg.grad_clip_norm is not None and cfg.grad_clip_norm > 0
+if cfg.plateau_start_epoch is not None:
+    sched_str = (
+        f"cosine T_max={cfg.plateau_start_epoch} eta_min={cfg.plateau_lr} "
+        f"→ plateau lr={cfg.plateau_lr} from ep{cfg.plateau_start_epoch}"
+    )
+else:
+    sched_str = f"cosine T_max={t_max} eta_min={cfg.eta_min}"
 print(
     f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}  "
     f"grad_clip: norm={cfg.grad_clip_norm if grad_clip_enabled else 'off'}  "
-    f"cosine T_max={t_max} eta_min={cfg.eta_min}"
+    f"{sched_str}"
 )
 
 run = wandb.init(
