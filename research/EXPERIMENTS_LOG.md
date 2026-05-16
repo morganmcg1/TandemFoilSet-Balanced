@@ -1142,3 +1142,86 @@ Per-split test (H=160, nansafe):
 - PR #3640 converted to draft (sent back for retesting)
 - Edward directed to run `--lr 2e-4 --lr_T_max 21 --ema_decay 0.999` (and optionally swap d=0.9999 for d=0.997 in Arm 2)
 - EMA code implementation already in branch — no code changes needed, only CLI flag
+
+---
+
+## 2026-05-16 12:15 — PR #3821 tanjiro CLOSED: cosine-plateau-tail — overfits val_in_dist at OOD's expense
+
+- Branch: `tanjiro/cosine-plateau-tail`
+- Hypothesis: Hold LR constant at sweet-spot value (1.4e-5 or 2e-5) for ep17-19 instead of cosine-passing-through — extends low-LR refinement window.
+
+### Terminal results
+
+| Arm | plateau_lr | val_avg | test_avg_nansafe | Best ep | W&B |
+|---|---|---|---|---|---|
+| Baseline #3675 | — | **65.30** | **60.54** | 19 (still descending) | `3rvfeq4g` |
+| Arm 1 | 1.4e-5 | 65.13 (−0.17) | 61.93 (+1.39) | 18 | `cca2lnrr` |
+| Arm 2 | 2.0e-5 | 66.79 (+1.50) | 62.19 (+1.65) | 19 | `x40z09nk` |
+
+### Per-split breakdown — the diagnostic
+
+| Val split | Baseline | Arm 1 (1.4e-5) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 75.89 | **69.99** | **−5.9** ✓ |
+| val_geom_camber_rc | 78.30 | 78.60 | ≈0 |
+| val_geom_camber_cruise | **44.92** | 46.62 | +1.7 ✗ |
+| val_re_rand | **62.08** | 65.30 | +3.2 ✗ |
+| **val_avg** | 65.30 | **65.13** | −0.17 |
+
+| Test split | Baseline | Arm 1 (1.4e-5) | Δ |
+|---|---|---|---|
+| test_single_in_dist | 64.05 | **62.26** | **−1.8** ✓ |
+| test_geom_camber_rc | **67.58** | 70.89 | +3.3 ✗ |
+| test_geom_camber_cruise | **56.13** | 57.53 | +1.4 ✗ |
+| test_re_rand | **54.40** | 57.01 | +2.6 ✗ |
+| **test_avg_nansafe** | **60.54** | 61.93 | +1.39 |
+
+**Arm 1's marginal val win is ENTIRELY from val_single_in_dist (−5.9) — every OOD split regresses. Same val-overfits-to-in-dist pattern as fern's vol_p_weight=1.5.**
+
+### Analysis
+
+**Mechanism (student's excellent analysis):** Lion's update is `LR·sign(momentum)` — fixed-magnitude steps. With cosine decay the step size keeps shrinking, *cooling* the model into the basin (implicit regularization). Holding LR constant at 1.4e-5 for 2 epochs lets sign-updates oscillate at fixed amplitude with NO further annealing. The model finds a slightly better minimum on the IID-like in_dist split but **drifts toward locally-flat directions that don't generalize OOD**.
+
+**Smoking-gun trajectory detail:** Arm 1's val_avg over ep18→19 at constant LR=1.4e-5 goes 65.13 → 67.50. If the plateau LR were a "productive zone", we'd see monotone descent — instead, a one-shot dip immediately undone. That's optimizer oscillation, not refinement.
+
+**Implementation detail noted:** `ConstantLR._get_closed_form_lr()` requires `const_sched.base_lrs = [plateau_lr] * N` override or it spikes back to initial LR at the SequentialLR milestone. Student's fix is clean.
+
+### Decision: CLOSED
+
+- Both arms regress on test_avg_nansafe (paper metric)
+- Student's own recommendation: close this thread
+- The "still descending" signal from #3675 is NOT untapped budget — it is the final settle into a basin requiring continued LR decay (not a holding plateau)
+- Tanjiro reassigned to `swa-post-training` — applies the SAME tail-iterates the plateau was overfitting on, but as a *post-hoc equal-weight average* (basin geometry, not trajectory reshape)
+
+---
+
+## 2026-05-16 12:15 — PR #3801 frieren CLOSED: lion-lr-refine — lr=2e-4/T_max=21 is a tight local optimum
+
+- Branch: `frieren/lion-lr-refine`
+- Hypothesis: (a) lr=2.5e-4 midpoint between winner (2e-4) and overshoot (3e-4); (b) lr=2e-4, T_max=25 to extend cosine and use the "still descending at ep19" headroom.
+
+### Terminal results
+
+| Arm | Config | val_avg | test_avg_nansafe | Best ep | W&B |
+|---|---|---|---|---|---|
+| Baseline #3675 | lr=2e-4, T_max=21 | **65.30** | **60.54** | 19 (still descending) | `3rvfeq4g` |
+| Arm 1 | lr=2.5e-4, T_max=21 | 65.40 (+0.11) | 61.20 (+0.66) | 18 (overshoots ep19) | `t0cn1n08` |
+| Arm 2 | lr=2e-4, T_max=25 | 66.28 (+0.98) | 61.35 (+0.81) | 19 (still descending) | `hxayu4n5` |
+
+### Analysis
+
+**Both directions decisively refuted.**
+
+- **Arm 1 (lr midpoint)** lands in a *different* basin, not a better one. test_single_in_dist *improves* by 3 points (−2.99) but test_re_rand *degrades* by 3 points (+3.03). Trades in-dist for OOD-poor — wrong direction for headline metric.
+- **Arm 2 (schedule extension)** keeps LR too high through the final epochs. At ep19, Arm 2 lr=3.57e-5 vs baseline lr=1.41e-5. Cannot perform the fine-grained convergence that drops val from 66 → 65.30 — the load-bearing late refinement.
+
+**Mechanism (student's reframing):** The "still descending at ep19" signal in #3675 is NOT "needs more LR budget" — it's "needs more steps at *low* LR". The model finishes a tight settle into a basin that requires LR < 2e-5 to refine. Extending the high-LR portion misses the productive zone entirely.
+
+**Clip engagement ~98% across all three runs.** The clip-saturated regime means lr·sign step size has direct, near-linear control over per-step displacement. Lever responses are clean and proportional.
+
+### Decision: CLOSED
+
+- Both arms regress on val and test_avg_nansafe (paper metric)
+- lr=2e-4, T_max=21 confirmed as a tight local optimum at this stack
+- Student suggested (e) higher clip threshold as a future direction — filed for a later round (clip is engaging on 98%+ of steps, so loosening it would let Lion take larger steps when wanted)
+- Frieren reassigned to `lookahead-lion` — orthogonal optimizer-geometry intervention, well-motivated specifically for Lion's sign-update structure
