@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:30 — PR #4124: H: mlp_ratio=3 on triple-stack ← CLOSED (rate-limit recovery)
+
+- Branch: `willowpai2i48h1-fern/mlp-ratio-3-triple-stack`
+- Student: willowpai2i48h1-fern
+- W&B runs: `2ara1wvg`, `nw3ab2po` (both finished, bit-identical) — student blocked from posting SENPAI-RESULT by GitHub rate-limit storm
+- Hypothesis: mlp_ratio=3 (FFN hidden 256 → 384, GeGLU inner 171 → 256, +12.5% params) on triple-stack.
+
+### Results (W&B-verified, closed via [[rate-limit-close-on-wandb]] protocol)
+
+| Metric | Triple-stack 3-seed μ̂ | mlp_ratio=3 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 61.66 ± 1.32 | **61.83** | +0.17 (null) |
+| test_avg/mae_surf_p | 58.36 ± 0.83 | **57.87** | −0.49 (null) |
+| best_epoch | — | 16 | — |
+
+Within 1σ of the 3-seed canonical mean. **No orthogonal gain** at h=128 in 30-min/17-epoch budget — either capacity-saturated for the trajectory we can reach, or extra params need more epochs to pay off.
+
+### Decision
+
+Closed. mlp_ratio lever has no headroom on its own; stacking onto Lookahead is a lower-priority direction than other Lookahead-era follow-ups. Reassigned fern to **Lookahead + higher LR sweep ({7e-4, 1e-3})**.
+
+## 2026-05-16 22:30 — PR #4119: H: β2 fine scan ({0.93, 0.97}) on triple-stack ← CLOSED (rate-limit recovery)
+
+- Branch: `willowpai2i48h1-frieren/beta2-fine-scan-tripleStack`
+- Student: willowpai2i48h1-frieren
+- W&B runs: `25gslduq` (β2=0.97, finished), `nh5hiw51` + `qq9yzsoo` (β2=0.93, crashed twice)
+- Hypothesis: Fine scan around β2=0.95 (triple-stack default) — test 0.93 and 0.97.
+
+### Results (W&B-verified)
+
+| Config | val_avg | test_avg | Δ vs triple-stack 3-seed μ̂ |
+|---|---|---|---|
+| Triple-stack 3-seed μ̂ | 61.66 ± 1.32 | 58.36 ± 0.83 | — |
+| β2=0.97 (`25gslduq`) | 61.41 | 58.28 | −0.25/−0.08 (null) |
+| β2=0.93 | — | — | crashed twice |
+
+β2=0.97 is within 1σ of canonical mean — **β2=0.95 appears near-optimal under plain AdamW.** The β2=0.93 arm crashed twice; without a successful run we can't characterize whether 0.93 is worse or training instability is config-specific.
+
+### Decision
+
+Closed. β2 lever appears saturated under plain AdamW. Reassigned frieren to **Lookahead + β2 fine scan ({0.93, 0.97})** — Lookahead's basin-averaging may shift the β2 optimum and may also stabilize the β2=0.93 arm that crashed under plain AdamW.
+
 ## 2026-05-16 22:15 — PR #4123: H: Lion optimizer on triple-stack ← SENT BACK FOR REBASE + 2-ARM VERIFICATION
 
 - Branch: `willowpai2i48h1-edward/lion-optimizer-triple-stack`

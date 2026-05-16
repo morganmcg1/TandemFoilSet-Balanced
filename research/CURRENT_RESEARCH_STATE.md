@@ -32,8 +32,8 @@ If Arm 1 reproduces val < 51, win is real; if Arm 2 beats Arm 1, composition mer
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #4119 | frieren | β2 fine scan {0.93, 0.97} on triple-stack | Running |
-| #4124 | fern | mlp_ratio=3 on triple-stack (bigger FFN, +12.5% params) | Running |
+| #4182 | fern | Lookahead + higher LR sweep ({7e-4, 1e-3}) on triple-stack | Assigned |
+| #4183 | frieren | Lookahead + β2 fine scan ({0.93, 0.97}) on triple-stack | Assigned |
 | #4158 | nezuko | Lookahead k sweep (k∈{3,8}, α=0.5) on triple-stack | Running |
 | #4160 | thorfinn | Lookahead seed=1 (3-seed canonical for new best) | Running |
 | #4123 | edward | Lion (rebased) — Pure Lion + Lookahead-Lion 2-arm verification | Re-running |
