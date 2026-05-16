@@ -97,6 +97,16 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+# RMSNorm (Zhang & Sennrich 2019; LLaMA): drops mean-centering, only RMS-
+# normalizes and applies a learnable scale. Subclasses the fused `nn.RMSNorm`
+# (PyTorch 2.4+) so the autocast/fp32 upcast is handled by a single CUDA
+# kernel. eps=1e-5 default matches nn.LayerNorm's default (nn.RMSNorm itself
+# defaults to torch.finfo(dtype).eps, ≈7.8e-3 in bf16).
+class RMSNorm(nn.RMSNorm):
+    def __init__(self, dim, eps=1e-5):
+        super().__init__(dim, eps=eps)
+
+
 class SwiGLUMlp(nn.Module):
     """SwiGLU FFN: gated linear unit with SiLU/Swish activation.
 
@@ -197,17 +207,18 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, use_rmsnorm=False):
         super().__init__()
         if use_swiglu and use_geglu:
             raise ValueError("use_swiglu and use_geglu are mutually exclusive")
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        norm = RMSNorm if use_rmsnorm else nn.LayerNorm
+        self.ln_1 = norm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = norm(hidden_dim)
         if use_swiglu:
             self.mlp = SwiGLUMlp(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         elif use_geglu:
@@ -216,7 +227,7 @@ class TransolverBlock(nn.Module):
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                            n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = norm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -236,7 +247,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, use_rmsnorm=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -258,6 +269,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu, use_geglu=use_geglu,
+                use_rmsnorm=use_rmsnorm,
             )
             for i in range(n_layers)
         ])
@@ -465,6 +477,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    use_rmsnorm: bool = False
 
 
 cfg = sp.parse(Config)
@@ -512,6 +525,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
     use_geglu=cfg.use_geglu,
+    use_rmsnorm=cfg.use_rmsnorm,
 )
 
 model = Transolver(**model_config).to(device)
@@ -666,6 +680,52 @@ for epoch in range(MAX_EPOCHS):
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    if epoch == 0:
+        norm_stats: dict[str, dict[str, float]] = {}
+
+        def _make_hook(name_: str):
+            def _hook(_mod, inputs, _out):
+                if name_ in norm_stats:
+                    return
+                xin = inputs[0].detach().float()
+                norm_stats[name_] = {
+                    "mean": xin.mean().item(),
+                    "std": xin.std().item(),
+                    "rms": xin.pow(2).mean().sqrt().item(),
+                    "abs_max": xin.abs().max().item(),
+                }
+            return _hook
+
+        norm_modules = [
+            (n, m) for n, m in model.named_modules()
+            if isinstance(m, (nn.LayerNorm, RMSNorm))
+        ]
+        handles = [m.register_forward_hook(_make_hook(n)) for n, m in norm_modules]
+        try:
+            sample_loader = next(iter(val_loaders.values()))
+            with torch.no_grad():
+                for x_s, y_s, isf_s, mask_s in sample_loader:
+                    x_s = x_s.to(device, non_blocking=True)
+                    x_norm_s = (x_s - stats["x_mean"]) / stats["x_std"]
+                    with autocast(device_type="cuda", dtype=torch.bfloat16):
+                        model({"x": x_norm_s})
+                    break
+        finally:
+            for h in handles:
+                h.remove()
+
+        print("\n  Norm-site input activation stats (epoch 1, eval mode):")
+        log_norm: dict[str, float] = {}
+        for n_, s_ in norm_stats.items():
+            print(
+                f"    {n_:<24s} mean={s_['mean']:+.4f} std={s_['std']:.4f}  "
+                f"rms={s_['rms']:.4f} abs_max={s_['abs_max']:.2f}"
+            )
+            for k_, v_ in s_.items():
+                log_norm[f"norm_input/{n_}/{k_}"] = v_
+        wandb.log({**log_norm, "global_step": global_step})
+        wandb.summary.update(log_norm)
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
