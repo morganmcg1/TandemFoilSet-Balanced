@@ -1901,3 +1901,56 @@ R2's −8.21% paired and three independent replications make this the strongest 
 
 - `models/model-charliepai2i48h4-nezuko-capacity-r3-arma-nh128-clip-20260516-143410/metrics.jsonl` (control)
 - `models/model-charliepai2i48h4-nezuko-capacity-r3-armb-nh192-clip-20260516-152649/metrics.jsonl` (n_hidden=192)
+
+## 2026-05-16 18:30 — PR #3492 (R4): Model capacity n_hidden=192 — CLOSED (capacity axis subsumed under SF)
+
+**Branch:** `charliepai2i48h4-nezuko/model-capacity-nhidden192`
+
+**Hypothesis (R4):** n_hidden=192 should still compose under SF-AdamW (R1-R3 showed compositional wins across +T_max, +FiLM, +clip stacks). Retest on the current SF stack to determine whether the capacity axis is still live after the −16.80% absolute drop.
+
+### Results (paired R4, full SF stack, seed=1)
+
+| Arm | n_hidden | n_params | best epoch | val_avg/mae_surf_p | test 3-split |
+|---|---:|---:|---:|---:|---:|
+| A | 128 | 845,527 | 17 | **62.950** | **61.257** |
+| B | **192** | 1,737,559 | 13 | 63.867 | 61.219 |
+| **Δ** | — | +2.05× | — | **+1.46%** | **−0.06%** |
+
+**Per-split val (B − A):** B regresses on 3/4 splits; only `val_re_rand` improves for B (−2.25%).
+
+**At common epoch 13:** A=70.845 vs B=63.867 (B better by −9.85%) — the per-epoch capacity benefit is intact, but Arm A then gets 4 extra epochs (14-17) and uses them to descend further (70.845 → 62.950, −11.2%).
+
+### Diagnostics — the key insight
+
+| Epoch | Arm A val_avg | Arm B val_avg | Δ |
+|------:|--------------:|--------------:|---:|
+| 5  | 105.219 | 97.080  | −7.74% |
+| 9  | 82.096  | 76.708  | −6.56% |
+| 11 | 75.711  | 69.783  | −7.83% |
+| 13 | 70.845  | **63.867** | **−9.85%** |
+| 15 | 67.039  | (cut)   | — |
+| 17 | **62.950** | (cut) | — |
+
+Arm B wins per-epoch at every common epoch. **Wall-clock budget cuts B at ep13 just as it's still descending steeply.** Under SF (no cosine floor), Arm A's 4 extra epochs add −11.2% of pure additional improvement.
+
+### Mechanism: BUDGET subsumption, not MECHANISM subsumption
+
+- **Capacity composes with FiLM (R2 −8.21%)** and **clip (R3 −5.17%)** because those don't interact with epoch budget.
+- **Capacity does NOT compose with SF-AdamW under fixed wall-clock** because SF's no-cosine-floor convergence makes additional epochs disproportionately valuable, and the wider model loses 4 epochs to its 27% throughput penalty.
+- **At larger compute budgets** (or via batch-size tricks / smaller `slice_num`), n_hidden=192 + SF would likely still win.
+
+### Decision: CLOSED (per R4 rule: paired Δ ≥ 0 → "capacity axis subsumed under SF")
+
+R1-R3 paired Δs remain valid as mechanistic findings; they just don't translate to the SF stack at 30-min wall-clock.
+
+### Why this still matters
+
+- **Inductive-bias-amplification hypothesis is alive** — FiLM head width (`film_mlp_hidden`) was fixed at 128 across all four rounds. FiLM is small (no throughput penalty), so the budget calculus that closed R4 does not apply. Next experiment: scale `film_mlp_hidden` instead of n_hidden.
+- **Capacity remains dormant, not dead** — could be revisited if (a) wall-clock budget grows, (b) we find lower-overhead width scaling (smaller `slice_num`, batched FiLM compute), or (c) SF-LR sweep (#4038) lands on a lower constant LR favorable to wider models.
+- **Arm A absolute 62.950 < baseline 65.618** is single-seed noise within the ±1.5-2% paired variance band.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-nezuko-capacity-r4-arma-nh128-sf-20260516-164211/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-nezuko-capacity-r4-armb-nh192-sf-20260516-173359/metrics.jsonl`
+

@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 16:12 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 18:31 UTC (Round 4 mid-flight on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 - **PR #3594 (alphonse SF-AdamW R2) MERGED 15:34 UTC**: baseline 80.893 → **65.618** (−18.88% absolute, −16.80% paired). Largest single-experiment gain of the round.
 - ⭐ **PR #3980 (frieren Lion) STRONG WIN, SENT BACK FOR REBASE 16:05 UTC**: paired Δ −24.43% val / −23.72% test. Arm B absolute val=63.336 < current baseline 65.618 (−3.48%), test=60.549 < 62.853 (−3.67%). **Largest paired Δ on the track, lowest single-run absolute.** Mergeable once branch rebased and reproduction confirmed.
-- **PR #3492 (nezuko n_hidden=192 R3) SENT BACK 16:10 UTC**: third paired replication of capacity win (−5.17% val / −5.22% test paired) but on stale stack (absolute 79.409 > 65.618). R4 retest under SF-AdamW assigned.
+- **PR #3492 (nezuko n_hidden=192 R4) CLOSED 18:31 UTC**: paired Δ +1.46% val / −0.06% test → "capacity subsumed under SF" branch of the R4 decision rule. Mechanism is BUDGET subsumption: B wins at every common epoch by 7-10%, but the 27% throughput penalty costs 4 epochs that Arm A turns into −11.2% drop under SF's constant LR (no cosine floor). Capacity wins R1-R3 remain valid. New follow-up axis: `film_mlp_hidden` scaling.
 - **PR #3390 (thorfinn T_max=20 R2) CLOSED 16:08 UTC**: superseded by SF-AdamW. Cosine axis formally closed.
 - **PR #3777 (askeladd SDF) CLOSED 15:55 UTC**: +2.52% paired regression. Geometric-input axis closed.
 - **PR #3985 (edward AGC R1) SENT BACK 15:50 UTC**: real paired Δ −2.02% but on stale baseline. R2 retest under SF-AdamW assigned.
@@ -46,18 +46,18 @@
 4. **AGC under SF-AdamW** — Edward's R1 showed −2.02% paired on stale baseline; does per-tensor direction normalization compound with SF's Polyak averaging? `edward #3985 R2 retest`.
 5. **Capacity (n_hidden=192) + SF** — R2 showed −8.21% under AdamW; could compound massively under SF. Awaiting nezuko #3492 R3 result.
 
-### Key in-flight experiments (16:12 UTC)
+### Key in-flight experiments (18:31 UTC)
 
 | Student | PR | Hypothesis | Status | vs SF baseline 65.618 |
 |---------|----|----|----|----|
-| ⭐ **frieren** | **#3980** | **Lion vs AdamW (post-rebase reproduction)** | Sent back 16:05 for rebase | **Strongest candidate — −24% paired, 63.336 absolute** |
-| **alphonse** | **#4019** | **SF-AdamW clip×EMA 2×2 factorial** | In progress (since 15:38) | Directly refines 65.618 baseline |
-| **askeladd** | **#4038** | **SF-AdamW LR sweep** {5e-4, 1e-3, 2e-3, 5e-3} | In progress (since 16:00) | Directly refines 65.618 baseline |
-| **thorfinn** | **#4051** | **SF-AdamW weight-decay sweep** {1e-4, 3e-4, 1e-3, 1e-2} | Just assigned 16:12 UTC | Directly refines 65.618 baseline |
-| **nezuko** | **#3492** | **n_hidden=192 + SF R4** (paired retest) | Sent back 16:10 for SF retest | Highest-EV: 3rd paired Δ replication of capacity win |
-| **edward** | **#3985** | **AGC R2: SF + AGC vs SF + clip=1.0** | Sent back 15:50 for SF retest | If wins, replaces `--grad_clip_norm 1.0` |
-| tanjiro | #4003 | Clip thresh R2 under AdamW: {0.05, 0.1, 0.15, 0.25} | In progress | AdamW context; informs clip axis |
-| fern | #4012 | Sobolev / edge-gradient L1 loss | In progress | Orthogonal loss axis; still relevant |
+| ⭐ **frieren** | **#3980** | **Lion vs AdamW (post-rebase reproduction)** | Sent back 16:33 for rebase; training | **Strongest candidate — −24% paired, 63.336 absolute** |
+| **alphonse** | **#4019** | **SF-AdamW clip×EMA 2×2 factorial** | Training since 15:38 (~3h in) | Directly refines 65.618 baseline |
+| **askeladd** | **#4038** | **SF-AdamW LR sweep** {5e-4, 1e-3, 2e-3, 5e-3} | Training (100% GPU, ~2h in) | Directly refines 65.618 baseline |
+| **thorfinn** | **#4051** | **SF-AdamW weight-decay sweep** {1e-4, 3e-4, 1e-3, 1e-2} | Training (100% GPU, ~1.6h in) | Directly refines 65.618 baseline |
+| **nezuko** | **#4081** | **FiLM head width: film_mlp_hidden ∈ {128, 192, 256}** | Just assigned 18:31 UTC | Tests inductive-bias-amplification; no throughput cost |
+| **edward** | **#3985** | **AGC R2: SF + AGC vs SF + clip=1.0** | Rebased+training (since ~17:25) | If wins, replaces `--grad_clip_norm 1.0` |
+| tanjiro | #4003 | Clip thresh R2 under AdamW: {0.05, 0.1, 0.15, 0.25} | Training | AdamW context; informs clip axis |
+| fern | #4012 | Sobolev / edge-gradient L1 loss | Training (old stack, Sobolev code) | Orthogonal loss axis; still relevant |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
@@ -118,9 +118,15 @@ R1 result: **paired Δ −24.43% val / −23.72% test on AdamW+cosine+clip=0.25 
 
 R1 showed −2.02% paired val / −3.97% paired test on the AdamW + clip=0.25 stack (absolute 81.552 > current 65.618 baseline). R2 retest now in flight: SF-AdamW + AGC vs SF-AdamW + clip=1.0. Key diagnostic from R1: `any_clip` rate = 100% every step, meaning AGC at λ=0.01 behaves as a permanent per-tensor direction normalizer rather than the safety-clamp regime the paper assumes. The mechanism that won is structurally similar to the clip=0.25 win in #3906 (direction normalization at full saturation).
 
-### Capacity axis (nezuko #3492 R4 SF retest — in flight, HIGHEST-EV non-Lion)
+### Capacity axis (CLOSED under SF-AdamW — budget subsumption, not mechanism)
 
-R3 result: **third consecutive paired replication of n_hidden=192 win** (R1 −2.99%, R2 −8.21%, R3 −5.17% on FiLM+clip stack). Mechanism is robust: wider features compose super-additively with global inductive priors. But R3 absolute 79.409 > 65.618 — cannot merge on stale stack. R4 retest now in flight: paired n_hidden=128 vs 192 on the full SF-AdamW stack. If wins, capacity + SF compound could be the largest absolute win on the track. **Seed=1 pinning now available** (student added `--seed` flag mid-R3).
+R4 result: paired Δ +1.46% val. At common epoch 13, B beats A by −9.85%; but A gets 4 extra epochs (SF no-cosine-floor = constant descent) and uses them to drop −11.2% more. n_hidden=192 is per-epoch-better but wall-clock-worse.
+
+Key insight: **capacity composes with FiLM and clip (R1-R3 confirmed), but is budget-subsumed under SF-AdamW.** Not a mechanism falsification — a budget arithmetic result.
+
+### FiLM head width axis (nezuko #4081 — ACTIVE, successor to R4)
+
+Natural follow-up: scale `film_mlp_hidden` (128→192→256) instead of n_hidden. FiLM head is tiny (<50k params), adds ~0% throughput cost. Tests the inductive-bias-amplification hypothesis without the budget penalty that closed R4. Already in Config dataclass — no code change required.
 
 ### Depth axis (CLOSED) — n_layers=5 is optimal
 
@@ -148,16 +154,15 @@ All future SF-AdamW experiments: `--use_schedule_free` (no `--cosine_t_max`).
 2. **SF LR sweep (ASSIGNED #4038, askeladd)** — in flight
 3. **SF weight-decay sweep (ASSIGNED #4051, thorfinn)** — in flight
 4. **AGC under SF (ASSIGNED #3985 R2, edward)** — in flight
-5. **n_hidden=192 + SF (ASSIGNED #3492 R4, nezuko)** — highest-EV in-flight
+5. **FiLM head width (ASSIGNED #4081, nezuko)** — `film_mlp_hidden` ∈ {128, 192, 256}; tests inductive-bias-amplification without throughput cost
 6. **Lion reproduction post-rebase (ASSIGNED #3980 rebase, frieren)** — STRONGEST candidate
 7. **Lion + SF-AdamW** — if Lion lands, immediate next experiment to test mechanism orthogonality
-8. **Lion + n_hidden=192** — if both win independently, compound test
-9. **Lion + AGC** — Lion is L∞ direction normalization, AGC is per-tensor; could compose
-10. **Longer budget for SF-AdamW** — constant LR means more epochs = better; Arm B was at ~1.8 val/epoch slope at cap
-11. **Best-of-(LR × clip × EMA × wd)** — after #4019 #4038 #4051 land, combine winners
-12. **Sobolev loss + winning stack** — if fern #4012 wins, combine
-13. **Mixup / CutMix** — may help geom_camber_rc split
-14. **FiLM MLP hidden widening** — `film_mlp_hidden=256`; conditional on #3492 R4 outcome
+8. **Lion + AGC** — Lion is L∞ direction normalization, AGC is per-tensor; could compose
+9. **Best-of-(LR × clip × EMA × wd)** — after #4019 #4038 #4051 land, combine winners
+10. **Sobolev loss + winning stack** — if fern #4012 wins, combine
+11. **Mixup / CutMix** — may help geom_camber_rc split
+12. **n_hidden=192 + smaller batch_size** — routes around SF budget constraint (nezuko's follow-up #1); halving batch reduces throughput penalty
+13. **Longer budget / higher wall-clock** — if SENPAI_TIMEOUT_MINUTES raised, revisit n_hidden=192 (slope still steep at cap)
 
 ## Operational notes
 
