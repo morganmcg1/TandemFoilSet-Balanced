@@ -218,7 +218,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, beta=1.0) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -237,20 +237,33 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose ground truth contains non-finite values; the
+            # scoring helper's mask-after-subtract path otherwise propagates NaN
+            # through accumulators (NaN * 0 = NaN). One such sample exists in
+            # test_geom_camber_cruise (index 20, pressure channel).
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.any():
+                continue
+            if not y_finite.all():
+                x = x[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model({"x": x_norm})["preds"]
 
-                sq_err = (pred - y_norm) ** 2
+                elem_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=beta)
                 vol_mask = mask & ~is_surface
                 surf_mask = mask & is_surface
                 vol_loss_sum += (
-                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    (elem_err * vol_mask.unsqueeze(-1)).sum()
                     / vol_mask.sum().clamp(min=1)
                 ).item()
                 surf_loss_sum += (
-                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    (elem_err * surf_mask.unsqueeze(-1)).sum()
                     / surf_mask.sum().clamp(min=1)
                 ).item()
             n_batches += 1
@@ -313,6 +326,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "smooth_l1_beta": cfg.smooth_l1_beta,
         "epochs_configured": cfg.epochs,
     }
 
@@ -355,6 +369,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 25.0
     epochs: int = 50
+    smooth_l1_beta: float = 1.0  # transition point between quadratic/linear regions of SmoothL1
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -453,12 +468,12 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            sq_err = (pred - y_norm) ** 2
+            elem_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=cfg.smooth_l1_beta)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (elem_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -483,7 +498,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta=cfg.smooth_l1_beta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -541,7 +556,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta=cfg.smooth_l1_beta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
