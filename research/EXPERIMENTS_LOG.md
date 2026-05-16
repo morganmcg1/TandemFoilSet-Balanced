@@ -1014,3 +1014,88 @@ Student GH credentials hit HTTP 403 rate limit ~11:50 UTC fleet-wide. All studen
 - **tanjiro temp_init=0.2**: confirmed architecture-internal hypothesis from researcher-agent. Arm B (0.1) running.
 - **askeladd per-channel**: within seed variance; unlikely to merge.
 - **edward LR warmup**: clear regression with replicate divergence; likely SequentialLR plumbing instability.
+
+## 2026-05-16 12:42 — PR #3901: Huber δ=0.5 compound test on full stack — alphonse (TERMINAL RECEIVED)
+
+- Branch: `willowpai2i48h2-alphonse/huber-delta-0.5-compound-full-stack`
+- W&B run: `cc7wvqvi`
+- **Hypothesis**: Huber δ=0.5 (tighter quadratic band) compounds on full stack (n_head=2 + SwiGLU + vel-asinh + EMA + clip + asinh-p)
+
+| Metric | cc7wvqvi (δ=0.5) | Baseline #3789 (δ=1.0) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **61.6105** | 63.7383 | **−3.34%** |
+| `test_3split/mae_surf_p` (cruise NaN) | **60.8910** | 62.9264 | **−3.23%** |
+| best_epoch | 15 | 13 | — |
+
+Per-split validation:
+
+| Split | cc7wvqvi | Baseline #3789 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 71.5845 | 72.7317 | −1.58% |
+| val_geom_camber_rc | 74.1791 | 78.3846 | **−5.37%** |
+| val_geom_camber_cruise | 41.1771 | 43.6151 | **−5.59%** |
+| val_re_rand | 59.5015 | 60.2217 | −1.20% |
+
+Per-split test:
+
+| Split | cc7wvqvi | Baseline #3789 | Δ |
+|---|---|---|---|
+| test_single_in_dist | 63.9637 | 65.8686 | −2.89% |
+| test_geom_camber_rc | 67.0300 | 70.4182 | −4.81% |
+| test_geom_camber_cruise | NaN | NaN | — |
+| test_re_rand | 51.6794 | 52.4924 | −1.55% |
+
+**Analysis**: Hypothesis confirmed — Huber δ=0.5 transfers cleanly across three progressive stacks (#3793 SwiGLU-only −1.62% → now full-stack −3.34%). Tighter δ keeps more residuals in the quadratic regime where gradient scales with error; this is most valuable for the pressure channel after asinh-p softens the tail, and for the surface-geometry OOD splits (camber-rc and cruise) where the optimizer needs finer-grained signal on unseen geometries. Best epoch 15 (monotone at truncation) — gain is conservative. **PENDING MERGE** (REST rate limit recovering; merge when REST resets ~13:20 UTC).
+
+## 2026-05-16 12:42 — PR #3854: slice_num=32 fine sweep with n_head=2 — fern (TERMINAL RECEIVED)
+
+- Branch: `willowpai2i48h2-fern/slice-num-sweep-nhead2`
+- W&B runs: `delpqmrq` (slice=32, WIN), `u5ntfjnk` (slice=128, regression)
+- **Hypothesis**: slice_num=32 (coarser, larger slices) suits dim_head=64 better than default 64
+
+| Arm | slice_num | val_avg | test_3split | Δ val vs #3789 |
+|---|---|---|---|---|
+| Arm A | 32 (`delpqmrq`) | **62.3992** | **60.8933** | **−2.10%** |
+| Arm B | 128 (`u5ntfjnk`) | 65.4244 | 63.6491 | +2.64% regression |
+| Baseline | 64 (#3789) | 63.7383 | 62.9264 | — |
+
+Per-split (delpqmrq best epoch 16):
+
+| Split | val | test |
+|---|---|---|
+| single_in_dist | 72.9510 | 62.0752 |
+| geom_camber_rc | 75.1377 | 68.3967 |
+| geom_camber_cruise | 42.2019 | NaN |
+| re_rand | 59.3064 | 52.2081 |
+
+**Crash analysis**: 3 earlier slice=32 runs (azpcvmc4, bjdjokbe, nvtvkg98) appeared to diverge (val=108-144) but forensics confirm these are NOT training instability. `azpcvmc4`: OOM from GPU co-tenant (62.3 GiB held by another process). `bjdjokbe` and `nvtvkg98`: epoch wall-clock 238 s (vs clean 113 s) = GPU contention, externally killed mid-epoch. The val=108-144 values are mid-training values from runs still descending from initial ~190 — not divergence. `delpqmrq` ran on a clean GPU (37.5 GiB, 113 s/epoch). Hypothesis validated as stable.
+
+**Analysis**: Confirmed hypothesis direction. Coarser slicing (32 vs 64) with dim_head=64 improves by −2.10% val, −3.02% test_3split. Mechanism: at dim_head=64, each slice already has enough feature width that finer partitioning creates redundancy rather than specialization; 32 larger slices concentrate gradient mass more efficiently. slice_num=128 regression confirms the direction is monotone toward coarser. slice_num=16 is a natural follow-up. **PENDING EVALUATION vs POST-MERGE BASELINE** (alphonse must merge first; if fern's test_3split 60.8933 doesn't beat new baseline, send for rebase).
+
+## 2026-05-16 12:50 — PR #3903: vel-asinh per-channel (ux=0.5 uy=0.3) — askeladd (CLOSED — test regression)
+
+- Branch: `willowpai2i48h2-askeladd/vel-asinh-per-channel`
+- W&B run: `61kpv6z6`
+- **Hypothesis**: per-channel vel-asinh scales (Ux≠Uy) better than symmetric scale=0.5
+
+| Metric | 61kpv6z6 | Baseline #3789 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 63.5458 | 63.7383 | −0.30% (marginal) |
+| `test_3split/mae_surf_p` | 63.9217 | 62.9264 | **+1.58% REGRESSION** |
+
+**Analysis**: Marginal val improvement (+0.30%) is within seed variance (~1-2 MAE typical). More importantly, test_3split regresses by 1.58% despite the val improvement — the asymmetric scaling (ux=0.5, uy=0.3) is likely fitting training-set velocity distribution idiosyncrasies rather than learning a transferable compression. Symmetric scale=0.5 (already merged in PR #3789) remains optimal. The per-channel idea fails: at Re-stratified OOD (val_re_rand and test_re_rand), different Re regimes change both Ux and Uy proportionally, so independent scaling adds noise rather than signal. **CLOSED** (close action pending REST reset ~13:20 UTC; decision is final).
+
+## 2026-05-16 12:50 — PR #3874: LR warmup (1 ep) on SwiGLU + n_head=2 — edward (CLOSED, new PR assigned)
+
+- Branch: `willowpai2i48h2-edward/lr-warmup-on-swiglu-nhead2`
+- W&B runs: `d93t4jmu` (full run, 30 ep), `9jeicc1b`, `xdn6czel` (wall-clock capped at ~4 ep)
+- **Hypothesis**: 1-epoch linear LR warmup reduces early destabilization
+
+| Run | val_avg | test_3split | Notes |
+|---|---|---|---|
+| d93t4jmu | 65.2114 | 64.1739 | +2.31% regression |
+| baseline #3789 | 63.7383 | 62.9264 | — |
+
+**Root cause (edward's own diagnostic)**: `scheduler.step()` is called per-epoch (line 633). `LinearLR(total_iters=1)` steps once per epoch → lr stays at `start_factor × base_lr = 1e-6 × 5e-4 = 5e-10` for all of epoch 1, then jumps to `5e-4` at epoch 2. The "warmup" is actually a 1-epoch starvation. Not a warmup at all.
+
+**Action**: closed and re-assigned as PR #3967 (willowpai2i48h2-edward/lr-warmup-perstep): per-STEP warmup with `LinearLR(total_iters=500)` stepped inside the batch loop, then `CosineAnnealingLR` stepped per-epoch after warmup completes. The hypothesis (smoother early-training dynamics → better EMA shadow → fewer epoch-1-3 missteps) remains well-motivated; the plumbing just needs to match the intended schedule shape.
