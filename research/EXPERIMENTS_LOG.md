@@ -1,5 +1,60 @@
 # SENPAI Research Results
 
+## 2026-05-16 21:40 — PR #4132: H: Lookahead optimizer (k=5, α=0.5) on triple-stack ← MERGED (NEW PROGRAMME BEST)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-optimizer-triple-stack`
+- Student: willowpai2i48h1-nezuko
+- W&B run: `d9ujr4oe`
+- Group: `triple_stack_lookahead`
+- Hypothesis: Wrap AdamW(β2=0.95) with Lookahead (k=5, α=0.5) — online basin-averaging that works on non-stationary trajectories unlike post-hoc SWA.
+
+### Results (W&B verified to 4dp)
+
+| Metric | Triple-stack (PR #3995) | Lookahead (this PR) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | 60.4338 | **57.2203** | **−3.21** |
+| **test_avg/mae_surf_p** | 57.4381 | **54.0468** | **−3.39** |
+| val_single_in_dist | 69.659 | 69.610 | −0.05 |
+| val_geom_camber_rc | 72.671 | 69.943 | −2.73 |
+| val_geom_camber_cruise | 41.722 | 35.606 | **−6.12** |
+| val_re_rand | 57.683 | 53.723 | −3.96 |
+| test_single_in_dist | 60.566 | 60.988 | +0.42 |
+| test_geom_camber_rc | 66.851 | 61.902 | −4.95 |
+| test_geom_camber_cruise | 51.976 | 47.569 | −4.41 |
+| test_re_rand | 50.360 | 45.728 | −4.63 |
+
+### Mechanism analysis
+
+Online averaging (Lookahead) beats post-hoc tail averaging (SWA, PRs #3644 and #4089) because our T_max=17 cosine is budget-limited (still descending at the tail). Lookahead accumulates flat-minima benefits throughout training; SWA needs a stationary window. The dominant gains on OOD splits (val_geom_camber_cruise −6.12, test_re_rand −4.63) confirm the flat-minima → better generalization story. In-distribution split (test_single_in_dist) barely moves — there's little headroom left.
+
+1275 sync events confirmed (6375 steps / k=5), verifying the wrapper was genuinely active.
+
+### Decision
+
+**MERGED — new programme best.** val_avg=57.22, test_avg=54.05. Single seed=0. Follow-ups: k sweep (nezuko #assigned), seed=1 canonical (thorfinn #assigned).
+
+## 2026-05-16 21:30 — PR #4116: Triple-stack seed=1 — 3-seed canonical ← CLOSED (completes 2-seed data)
+
+- Branch: `willowpai2i48h1-thorfinn/triple-stack-seed1-canonical`
+- Student: willowpai2i48h1-thorfinn
+- W&B run: `zf09r368`
+- Hypothesis: seed=1 of triple-stack (T_max=17 + β2=0.95 + GeGLU) to establish σ̂ around programme best.
+
+### Results
+
+| Metric | seed=0 (PR #3995) | seed=1 (this PR) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | 60.4338 | 61.5427 | **+1.11** |
+| **test_avg/mae_surf_p** | 57.4381 | 58.5320 | **+1.09** |
+
+Per-split: all 8 metrics regressed; worst on val_re_rand (+1.84) and test_single_in_dist (+2.14); smallest on val_geom_camber_rc (+0.25).
+
+2-seed mean: val=60.99 / test=57.99 — seed=0 was ~0.56 below mean (slightly lucky).
+
+### Decision
+
+Closed — provides 3-seed canonical context for triple-stack baseline, but **new programme best (PR #4132 Lookahead val=57.22) makes this the old baseline**. Thorfinn reassigned to Lookahead seed=1 canonical.
+
 ## 2026-05-16 20:35 — PR #4089: H: SWA over final 4 cosine epochs (T_max=17 SwiGLU) — no LR kick-out ← CLOSED
 
 - Branch: `willowpai2i48h1-nezuko/swa-tail4-cosine-tmax17`
