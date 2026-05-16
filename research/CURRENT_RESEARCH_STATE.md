@@ -33,6 +33,7 @@ If these compound, every split improves simultaneously — the most complete gen
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
+| #3657 | alphonse | Multi-signal FiLM: cond_dim 1→5/9 (Re + geometry scalars) | Just assigned |
 | #3516 | tanjiro | FiLM-Re + β=0.02 / β=0.01 | Sent back 03:30; rebasing |
 | #3356 | thorfinn | FiLM-Re + div_weight=0.01/0.005 | Sent back 03:30; rebasing |
 | #3207 | nezuko | FiLM-Re + geom-slice (2 seeds) | Sent back 03:45; rebasing |
