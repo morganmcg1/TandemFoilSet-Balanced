@@ -609,4 +609,62 @@ cd target && python train.py --agent <student> \
 ```
 (In-tree defaults: lr=1.7e-4, T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999, compile_mode=none — must pass all six explicitly.)
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **40.6869** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **40.6869**~~ — superseded by PR #4079 below.
+
+---
+
+## 2026-05-16 21:50 — PR #4079: T_max recalibration for 33-epoch compile horizon (pure T_max sweep) — 12th compounding mechanism
+
+**Student:** charliepai2i48h2-edward  
+**Change:** `cosine_t_max_epochs` 30 → 40 (with lr=1.7e-4 held fixed). Isolates T_max's contribution from frieren's joint T_max+lr change in #3953. Confirms: **T_max alone accounts for the full gain** — and the lr increase in frieren's PR was slightly counterproductive.
+
+| Metric | Arm A (T_max=33) | **Arm B (T_max=40) — WINNER** |
+|--------|-----------------|-------------------------------|
+| **val_avg/mae_surf_p** | 42.7860 (−3.30%) | **39.8345 (−9.97%)** |
+| val_single_in_dist/mae_surf_p | 46.2051 | 43.6797 |
+| val_geom_camber_rc/mae_surf_p | 57.8122 | 53.1517 |
+| val_geom_camber_cruise/mae_surf_p | 24.6440 | 22.7101 |
+| val_re_rand/mae_surf_p | 42.4825 | 39.7965 |
+| **test_avg/mae_surf_p** | 36.6624 (−3.55%) | **33.8873 (−10.85%)** |
+| test_single_in_dist/mae_surf_p | 41.9767 | 38.5031 |
+| test_geom_camber_rc/mae_surf_p | 49.7533 | 45.9308 |
+| test_geom_camber_cruise/mae_surf_p | 20.5000 | 18.9889 |
+| test_re_rand/mae_surf_p | 34.4198 | 32.1266 |
+| Best epoch | 33 (timeout-bound) | 34 (timeout-bound; val still descending) |
+| Per-epoch time | ~54.3s | ~54.2s |
+| Peak VRAM | 23.84 GB | 23.84 GB |
+
+**LR trajectory (key diagnostic):** T_max=30 had LR=~4.7e-7 at epoch 30 (effectively zero) and cycling past minimum for epochs 31-33. T_max=40 has LR=1.25e-5 (~7% of init) at epoch 34 — still receiving meaningful training signal at the timeout. Val curve monotonically descending at final epoch.
+
+**Model config:** unchanged — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** unchanged — Lion **lr=1.7e-4**, wd=3e-4, betas=(0.9, 0.99) (**lr unchanged — key scientific finding**)  
+**Scheduler:** **CosineAnnealingLR(T_max=40)** (was T_max=30)  
+**Loss:** unchanged — vol_loss + 25·surf_loss with asinh(z) on pressure + pressure_weight=2.0  
+**Precision:** unchanged — bf16 autocast on forward+loss  
+**EMA:** unchanged — decay=0.995  
+**Gradient clipping:** unchanged — max_norm=1.0  
+**Compile:** unchanged — torch.compile(mode='default', dynamic=True)  
+**Batch:** 4  
+**Metric artifacts:**  
+- `models/model-charliepai2i48h2-edward-tmax-compile-33-20260516-202201/metrics.jsonl` (Arm A)  
+- `models/model-charliepai2i48h2-edward-tmax-compile-40-20260516-193437/metrics.jsonl` (Arm B)
+
+**Note:** −9.97% on val (39.83 vs 44.24), −10.85% on test (33.89 vs 38.01). Isolates that **T_max alone drives the gain**, with lr=1.7e-4 outperforming frieren's lr=2.5e-4 at T_max=40 (39.83 vs 40.69). The frieren merge was directionally correct (T_max=40) but the accompanying lr increase was counterproductive. Edward's result reverts lr to 1.7e-4 as the optimal. Val still descending at epoch 34 → T_max=50 follow-up assigned (frieren #4159 updated to lr=1.7e-4).
+
+**12-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + **cosine T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) [lr reverted back to 1.7e-4]
+
+**Cumulative improvement from initial baseline:** 135.02 → 39.83 = **−70.5%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 40 \
+    --pressure_weight 2.0 \
+    --ema_decay 0.995 \
+    --compile_mode default
+```
+(In-tree default lr=1.7e-4 is now correct — do NOT pass `--lr 2.5e-4`; in-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999, compile_mode=none — must pass these four explicitly.)
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **39.8345** with a terminal `SENPAI-RESULT` marker.
