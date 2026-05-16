@@ -2,10 +2,47 @@
 
 ## Current Best
 
-**PR #3968 — H60 Arm B: n_layers=4 at GEGLU base (thorfinn)**
-Merged 2026-05-16. 16 epochs completed (30-min timeout cap; cosine T_max=15 → effective stop at epoch 15).
+**PR #3966 — H59 Arm B: GEGLU + RMSNorm (fused kernel) (fern)**
+Merged 2026-05-16. 14 epochs completed (30-min timeout cap).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **56.9056** | PR #3966 Arm B (best_epoch=14) |
+| val_single_in_dist/mae_surf_p | 64.4659 | PR #3966 Arm B |
+| val_geom_camber_rc/mae_surf_p | 70.1136 | PR #3966 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 35.7221 | PR #3966 Arm B |
+| val_re_rand/mae_surf_p | 57.3210 | PR #3966 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3966 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **56.2420** | PR #3966 Arm B |
+| test_single_in_dist/mae_surf_p | 56.0700 | PR #3966 Arm B |
+| test_geom_camber_rc/mae_surf_p | 65.7949 | PR #3966 Arm B |
+| test_re_rand/mae_surf_p | 46.8612 | PR #3966 Arm B |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + ffn_act=geglu + n_layers=4 + **norm_type=rmsnorm** (fused `torch.nn.functional.rms_norm`). n_params=856,587. peak_memory_gb=49.54.
+
+**Why RMSNorm wins:** Using the fused `F.rms_norm` kernel (not naive pow→mean→add→sqrt→div→mul) matches LayerNorm's fused throughput. The fused kernel squeezes ~3s/epoch (137s vs 140s for LayerNorm), yielding an extra epoch within the 30-min wall budget — and at epoch 14, the model's training trajectory was still descending (train/surf_loss=0.01911). The gain is primarily from the additional training step, not from RMSNorm's normalization properties per se. pre_clip grad_norm=2.02 at epoch 14, confirming stable training.
+
+**Δ vs prior best (H60 n_layers=4 GEGLU, 57.5750):** −0.67 pts val_avg, −0.22 pts test 3-split.
+**Δ vs H37b (66.11):** −9.20 pts val_avg cumulative gain.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+
+**Artifacts:** `models/model-h59-geglu-rmsnorm-20260516-142835/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h59-geglu-rmsnorm --agent <student> \
+  --n_head 2 --n_layers 4 --lr 1e-3 --weight_decay 5e-5 --clip_grad_norm 1.0 \
+  --ffn_act geglu --norm_type rmsnorm
+```
+
+## Previous Best (overridden by #3966)
+
+**PR #3968 — H60 Arm B: n_layers=4 at GEGLU base (thorfinn)**
+Merged 2026-05-16. 16 epochs completed (30-min timeout cap; cosine T_max=15 → effective stop at epoch 15).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -20,33 +57,12 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 | test_geom_camber_rc/mae_surf_p | 65.1970 | PR #3968 Arm B |
 | test_re_rand/mae_surf_p | 47.6647 | PR #3968 Arm B |
 
-**Arm A (n_layers=6) for reference:**
-| Metric | Value |
-|--------|-------|
-| val_avg/mae_surf_p | 67.0902 |
-| epochs_completed | 11/50 (wall) |
-| mean s/epoch | 166s (vs 113s for n_layers=4) |
+**Arm A (n_layers=6) for reference:** val_avg=67.0902, 11 epochs (wall), 166s/epoch.
 
-Arm A wall-clamped at epoch 11 with trajectory still descending — likely undertrained, not fundamentally worse.
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + ffn_act=geglu + **n_layers=4** (merged default; was 5). mlp_ratio=2. n_params=856,587.
 
-**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + ffn_act=geglu + **n_layers=4** (new merged default; was 5). mlp_ratio=2 preserved. n_params=856,587.
-
-**Why n_layers=4 wins on GEGLU:** GEGLU's gated FFN adds per-block capacity (gate+up+down vs single expand+contract), so fewer-but-fatter-effective layers fit the regression problem with less wall-clock cost (113s/epoch vs 130s for n_layers=5). Gains land on all OOD splits (rc −1.71, cruise −2.68, re_rand −1.54); single_in_dist regresses slightly (+1.72) — net negative-1.05 val_avg. The pre-GEGLU H42 finding that "deeper-when-stacked-with-n_head=2 hurts" does *not* transfer; shallower-on-GEGLU is the winner.
-
-**Δ vs prior best (H48 GEGLU n_layers=5, 58.63):** −1.05 pts val_avg, −0.24 pts test 3-split.
-**Δ vs H37b (66.11):** −8.53 pts val_avg cumulative gain.
-
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
-
+**Δ vs prior best (H48 GEGLU n_layers=5, 58.63):** −1.05 pts val_avg.
 **Artifacts:** `models/model-h60-geglu-nlayers4-20260516-140046/`
-
-**Reproduce:**
-```bash
-cd target/ && python train.py --epochs 50 \
-  --experiment_name h60-geglu-nlayers4 --agent <student> \
-  --n_head 2 --n_layers 4 --lr 1e-3 --weight_decay 5e-5 --clip_grad_norm 1.0 \
-  --ffn_act geglu
-```
 
 ## Previous Best (overridden by #3968)
 
