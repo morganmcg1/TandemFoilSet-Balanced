@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 10:36
+- **Date:** 2026-05-16 11:22
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
@@ -42,7 +42,7 @@
 | **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP (training in progress)** |
 | **#3867** | **thorfinn** | **H41 domain-type indicator embedding (is_tandem 2-class) — fix val_single bottleneck** | **WIP (new, replaces H34)** |
 | **#3850** | **askeladd** | **H39 BF16 AMP mixed precision — unlock 18+ epochs in 30-min budget** | **WIP (new)** |
-| **#3889** | **nezuko** | **H42 aux Re/AoA prediction head (aux_weight={0.1, 0.05}) — val_re targeting** | **WIP (new, replaces H30)** |
+| **#3900** | **nezuko** | **H42 aux Re/AoA prediction head (aux_weight={0.1, 0.05}) — val_re targeting** | **WIP (new, replaces H30; #3889 was advisor-side mismerge, recreated)** |
 
 ## Closed/Failed this round
 

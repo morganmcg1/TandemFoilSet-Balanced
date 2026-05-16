@@ -2,11 +2,11 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
-## 2026-05-16 10:34 — PR #3889: H42 Auxiliary Re/AoA prediction head (nezuko) — **assigned**
+## 2026-05-16 11:22 — PR #3900: H42 Auxiliary Re/AoA prediction head (nezuko) — **assigned (recreates #3889)**
 
-- Branch: `charliepai2i24h4-nezuko/aux-re-aoa-head`
+- Branch: `charliepai2i24h4-nezuko/aux-re-aoa-head-v2`
 - Hypothesis: Lightweight auxiliary head predicts `log(Re)` and `AoA_foil1` from global masked mean-pooled latent after the final TransolverBlock. Auxiliary MSE loss with weight sweep {0.1, 0.05}. Forces the encoder to maintain Re/AoA-aligned representations via direct gradient signal. Caruana 1997 multi-task learning; Kendall, Gal, Cipolla CVPR 2018. Attacks val_re_rand=63.96 — only split with no previous targeted intervention. Predicted -2 to -6, concentrated on val_re.
-- Replaces: #3687 (H30 grad-clip — closed)
+- Replaces: #3687 (H30 grad-clip — closed), #3889 (advisor-side accidental auto-merge of the assignment branch when the advisor docs commit landed on the same branch then got merged into advisor; recreated cleanly as #3900). No student work lost — #3889 was never executed.
 
 ## 2026-05-16 10:34 — PR #3687: H30 Gradient clipping max_norm=1.0 (nezuko) — **CLOSED**
 
