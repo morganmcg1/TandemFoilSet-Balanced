@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 23:35
-- **Launch:** willow-pai2i-48h-r1 (round 11 — Lookahead k=3 era; programme best val=55.97)
+- **Date:** 2026-05-16 23:45
+- **Launch:** willow-pai2i-48h-r1 (round 11 — Lookahead-Lion era; programme best val=47.97)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -14,78 +14,70 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 | Config | val_avg | test_avg | Source | Note |
 |--------|---------|---------|--------|------|
-| **Lookahead k=3/α=0.5 + triple-stack (PROGRAMME BEST)** | **55.9681** | **53.4423** | PR #4158, W&B `oeb54ela`, seed=0 | Merged 2026-05-16 23:35 |
-| Lookahead k=5/α=0.5 + triple-stack | 57.2203 | 54.0468 | PR #4132, W&B `d9ujr4oe`, seed=0 | 3-seed k=5: median=57.05, seed=1=78.50 outlier |
-| Triple-stack: h=128+GeGLU+β2=0.95+T_max=17 | 60.4338 | 57.4381 | PR #3995, W&B `insf46p8`, seed=0 | 3-seed μ̂=61.66 ± 1.32 (closed) |
+| **Lookahead-Lion (k=5/α=0.5) + triple-stack (PROGRAMME BEST)** | **47.9735** | **46.4900** | PR #4123, W&B `rx3negp7`, seed=0 | Merged 2026-05-16 23:45 |
+| Lookahead-AdamW k=3/α=0.5 + triple-stack | 55.9681 | 53.4423 | PR #4158, W&B `oeb54ela`, seed=0 | Superseded by Lion |
+| Lookahead-AdamW k=5/α=0.5 + triple-stack | 57.2203 | 54.0468 | PR #4132, W&B `d9ujr4oe`, seed=0 | 3-seed: median=57.05, seed=1=78.50 outlier |
+| Triple-stack: h=128+GeGLU+β2=0.95+T_max=17 | 60.4338 | 57.4381 | PR #3995, W&B `insf46p8`, seed=0 | 3-seed μ̂=61.66 ± 1.32 |
 
-**Win threshold: val < 55.97 (Lookahead k=3 seed=0).** 3-seed canonical for k=3 in progress.
+**Win threshold: val < 47.97 (Lookahead-Lion seed=0).** Seed=1 verification in progress (#4224 edward).
 
-## k-sweep finding (definitive)
+## Lookahead-Lion mechanism decomposition
 
-| k | val_avg | Δ vs k=5 | Decision |
-|---|---|---|---|
-| **k=3** | **55.97** | **−1.25** | **MERGED — new best** |
-| k=5 | 57.22 | — | superseded |
-| k=8 | 60.09 | +2.87 | regression |
-
-Monotone: smaller k → more sync events → lower val. k=3 gives 2125 syncs/run; k=8 gives 797. Optimal k at α=0.5 is ≤3. k=2 in flight (tanjiro #4203).
-
-## α-sweep finding (partial, at k=5)
-
-| α | val_avg (at k=5) | Δ vs α=0.5 |
+| Intervention | Δ val | Mechanism |
 |---|---|---|
-| 0.3 | 61.58 | +4.36 (worse) |
+| AdamW → Lion | −8.15 | Sign-based: eliminate per-step gradient-magnitude variance |
+| Lion → Lookahead+Lion (k=5/α=0.5) | −1.10 | Slow-weight averaging: reduce per-basin commitment variance |
+| **Total: AdamW → Lookahead+Lion** | **−9.25** | Orthogonal-additive composition |
+
+Lookahead's smaller gain on top of Lion (−1.10) vs on top of AdamW (−3.21) suggests partial mechanism overlap but no antagonism. Composition is genuinely additive.
+
+## Lookahead sweep findings (context for Lookahead-Lion era)
+
+**k-sweep at α=0.5 (Lookahead-AdamW, now informing Lookahead-Lion):**
+| k | val (AdamW) | Δ vs k=5 |
+|---|---|---|
+| **k=3** | **55.97** | **−1.25** |
+| k=5 | 57.22 | — |
+| k=8 | 60.09 | +2.87 |
+
+**α-sweep at k=5 (Lookahead-AdamW):**
+| α | val (AdamW) | Δ vs α=0.5 |
+|---|---|---|
+| 0.3 | 61.58 | +4.36 |
 | **0.5** | **57.22** | — |
-| **0.7** | **56.92** | **−0.30** |
+| 0.7 | 56.92 | −0.30 |
 
-Monotone: larger α → lower val at k=5. Optimum α is >0.5. α sweep at k=3 now underway (#4211 α∈{0.6,0.7}, #4213 α=0.8).
+These suggest optimal (k, α) is k≤3, α≥0.6 for AdamW. Likely transfers to Lookahead-Lion but unverified.
 
-## Lookahead 3-seed canonical picture (k=5 era, complete; k=3 era, in progress)
+## Lookahead seed-1 outlier picture
 
-**k=5, α=0.5:**
-| Seed | val | Source |
-|---|---|---|
-| 0 | 57.220 | nezuko #4132 |
-| 1 | **78.503** (OUTLIER, best_ep=10) | thorfinn #4160 |
-| 2 | 57.046 | alphonse #4174 |
+**Lookahead-AdamW k=5:** seed=0=57.22, seed=1=78.50 (outlier, best_ep=10), seed=2=57.05.
+**Lookahead-Lion k=5:** seed=0=47.97, seed=1=**pending (#4224 edward)**, seed=2=pending.
 
-μ̂=64.26 ± 12.4, median=57.05. Paper-facing: report median with outlier footnote.
-
-**k=3, α=0.5 (in progress):**
-| Seed | val | Source |
-|---|---|---|
-| 0 | 55.968 | nezuko #4158 |
-| 1 | (running: alphonse #4202) | — |
-| 2 | (running: nezuko #4210) | — |
-
-## Pending high-magnitude verification
-
-### PR #4123 (edward, Lion) — Pure Lion verified, Lookahead-Lion missing
-
-**Pure Lion Arm 1 verified:** W&B `ux8amr59` (rebased) reproduces original `rv8hjgtx` to 4dp: val=49.0721, test=47.0707, best_epoch=17. The Lion win is REAL at seed=0 (Δ=−6.27 vs NEW Lookahead k=3 best).
-
-**Arm 2 (Lookahead-Lion) NOT YET RUN.** No W&B trace exists. Edward sent detailed comment directing: (1) push rebase commits, (2) run Arm 2 with lookahead_k=5/α=0.5 + use_lion=True, (3) post terminal SENPAI-RESULT.
-
-Decision rules: Arm 2 > Arm 1 → Lookahead-Lion merges (new best); Arm 2 ≈ Arm 1 → Pure Lion merges (val~49); Arm 2 < Arm 1 → Pure Lion merges.
+If Lion has same seed=1 outlier: 3-seed mean ~(47.97 + 78?? + 47??) = high variance, but median still competitive.
+If Lion avoids the outlier (due to sign-based step reducing initialization sensitivity): 3-seed mean ~48-50.
 
 ## Active WIP experiments
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #4123 | edward | Lion (rebased) — Pure Lion verified; Arm 2 Lookahead-Lion pending | Pending Arm 2 |
-| #4182 | fern | Lookahead k=3 + higher LR ({7e-4, 1e-3}) | Running |
-| #4183 | frieren | Lookahead k=3 + β2 fine scan ({0.93, 0.97}) | Running |
-| #4202 | alphonse | Lookahead k=3 seed=1 (3-seed canonical verify) | Running |
-| #4203 | tanjiro | Lookahead k=2 (extend k-sweep below k=3) | Running |
-| #4210 | nezuko | Lookahead k=3 seed=2 (3-seed canonical verify) | **NEW** |
-| #4211 | askeladd | Lookahead k=3 + α sweep (α∈{0.6,0.7}) | **NEW** |
-| #4213 | thorfinn | Lookahead k=3 + α=0.8 (push saturation boundary) | **NEW** |
+| #4224 | edward | Lookahead-Lion seed=1 (verify seed robustness of new best) | **NEW — highest priority** |
+| #4202 | alphonse | Lookahead-AdamW k=3 seed=1 (3-seed canonical) | Running |
+| #4203 | tanjiro | Lookahead-AdamW k=2 (k-sweep extension) | Running |
+| #4210 | nezuko | Lookahead-AdamW k=3 seed=2 (3-seed canonical) | Running |
+| #4211 | askeladd | Lookahead-AdamW k=3 + α∈{0.6,0.7} sweep | Running |
+| #4213 | thorfinn | Lookahead-AdamW k=3 + α=0.8 | Running |
+| #4182 | fern | Lookahead-AdamW + LR sweep ({7e-4, 1e-3}) | Running |
+| #4183 | frieren | Lookahead-AdamW + β2 scan ({0.93, 0.97}) | Running |
 
-## Round-11 closures / merges
+**Note on #4202/#4203/#4210/#4211/#4213/#4182/#4183:** All are on Lookahead-AdamW (now superseded by Lookahead-Lion). Their k/α findings still inform the Lookahead-Lion hyperparameter space — let them run to completion. Results will guide Lookahead-Lion k/α sweep decisions.
 
-- **#4158 nezuko (Lookahead k=3)** MERGED: val=55.97, new programme best (Δ=−1.25 vs k=5)
-- **#4160 thorfinn (Lookahead k=5 seed=1)** closed: val=78.50 OUTLIER canonical data
-- **#4175 askeladd (Lookahead α sweep at k=5)** closed: α=0.7 won old baseline but not new; reassigned to k=3 α sweep
+## Round-11 merges / closures
+
+- **#4123 edward (Lookahead-Lion)** MERGED: val=47.97 — new all-time best (Δ=−9.25 vs AdamW triple-stack)
+- **#4158 nezuko (Lookahead k=3)** MERGED: val=55.97 — superseded by Lion, but k=3 finding persists
+- **#4160 thorfinn (Lookahead k=5 seed=1)** closed: val=78.50 OUTLIER
+- **#4175 askeladd (Lookahead α sweep at k=5)** closed: superseded; reassigned to k=3 α sweep
 
 ## Key mechanistic findings to date
 

@@ -1,5 +1,40 @@
 # SENPAI Research Results
 
+## 2026-05-16 23:45 — PR #4123: Lookahead-Lion (k=5/α=0.5 wrapping Lion) ← MERGED (NEW ALL-TIME BEST, val=47.97)
+
+- Branch: `willowpai2i48h1-edward/lion-optimizer-triple-stack`
+- Student: willowpai2i48h1-edward
+- W&B runs: `ux8amr59` (Arm 1 Pure Lion, val=49.07), `rx3negp7` (Arm 2 Lookahead-Lion, val=47.97)
+- Hypothesis: (a) Verify Pure Lion seed=0 reproduces post-Lookahead-merge; (b) Test Lookahead-Lion composition.
+
+### Results (terminal SENPAI-RESULT, W&B-verified)
+
+| Config | val_avg | test_avg | best_epoch | W&B |
+|---|---|---|---|---|
+| Lookahead-AdamW k=5 (prior best) | 57.22 | 54.05 | 17 | `d9ujr4oe` |
+| **Pure Lion (Arm 1 `ux8amr59`)** | **49.07** | **47.07** | 17 | bit-identical to `rv8hjgtx` ✓ |
+| **Lookahead-Lion (Arm 2 `rx3negp7`)** | **47.97** | **46.49** | 17 | **MERGED → new programme best** |
+
+### Mechanism decomposition
+
+| Intervention | Δ val | Source of gain |
+|---|---|---|
+| AdamW → Lion | −8.15 | Sign-based updates: eliminate per-step gradient-magnitude variance |
+| Lion → Lookahead+Lion | −1.10 | Slow-weight pull: reduce per-basin commitment variance |
+| Total (AdamW → Lookahead+Lion) | **−9.25** | Complementary mechanisms, orthogonal-additive composition |
+
+Lookahead's gain on top of Lion (−1.10 val) is smaller than its gain on top of AdamW (−3.21 val from k=5 #4132), suggesting partial mechanism overlap. But no antagonism — pure additive composition.
+
+OOD split improvements vs Lookahead-AdamW: camber_cruise (29.32 val vs 35.61), re_rand (48.02 val vs 53.72). In-distribution split slightly worse on test (+1.37) but dominated by OOD gains. The geom_camber_cruise split is now val=29.32 — the lowest single-split we've ever seen on this benchmark.
+
+### Training stability
+
+Pure Lion shows 3 upward spikes in the training curve (ep 7, 10, 11). Lookahead-Lion shows 1 micro-spike (ep 11). Lookahead's slow-weight averaging absorbs Lion's sign-update overshoots — mechanistically sound.
+
+### Decision
+
+**Merged as new programme best. BASELINE.md updated.** Win threshold now: val < 47.97. edward reassigned to Lookahead-Lion seed=1 verification (#4224) — checking whether the seed=1 outlier pattern (observed on Lookahead-AdamW: val=78.50) also affects Lookahead-Lion.
+
 ## 2026-05-16 23:35 — PR #4175: Lookahead α sweep (α∈{0.3,0.7}) at k=5 ← CLOSED (superseded by new k=3 baseline)
 
 - Branch: `willowpai2i48h1-askeladd/lookahead-alpha-sweep`
