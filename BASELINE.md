@@ -2,6 +2,42 @@
 
 ## Current Best
 
+### 2026-05-16 19:10 — PR #4026: batch_size=2 on BF16+LS+n10 — charliepai2i48h5-alphonse
+
+- **val_avg/mae_surf_p**: **60.67** (best_epoch=18/18, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **53.11** (from best-val checkpoint)
+- **Improvement over prior best**: -5.32% val / -3.52% test vs PR #4006 (64.08/55.05)
+- **Cumulative improvement**: -52.8% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior (64.08/55.05) |
+  |---|---|---|
+  | single_in_dist | 57.99 | -6.62% ✓ |
+  | geom_camber_rc | 66.40 | -2.54% ✓ |
+  | geom_camber_cruise | 35.50 | -3.09% ✓ |
+  | re_rand | 52.54 | -1.52% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-bs2-20260516-162303/metrics.jsonl`
+- **Stack**: BF16 + LayerScale γ-init=0.01 + n_freqs=10 + **batch_size=2** + Huber-0.3 + T_max=20 + clip=0.25 (no EMA)
+- **Key findings**:
+  - **All 4 test splits improve** — uniform generalization effect
+  - bs=2 gets 4.5× more updates (13,500) than bs=8 (3,008) in same 30-min budget
+  - clip_frac=1.0 throughout — per-step magnitude fixed at `0.25 × dir(grad)`, so total steps dominates
+  - Mechanism: clip-saturation makes batch_size purely a "steps in budget" lever, not a "gradient quality" lever
+  - bs=2 runs at 102.6 s/epoch (vs 111s baseline) — 8% faster
+  - Peak memory **18.5 GB** (vs 33 GB baseline) — 44% reduction
+  - arm-2 bs=8: val=77.24 / test=67.03 — regresses badly (only 3,008 updates, 73.8 GB memory)
+  - **n_freqs=10 (not n=8) used in this experiment** — was assigned before PR #4006 merged. Compounding with n=8 not yet tested.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 --batch_size 2 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.3 --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --experiment_name bf16-layerscale-bs2 \
+      --agent charliepai2i48h5-alphonse
+  ```
+
+---
+
 ### 2026-05-16 17:15 — PR #4006: n_freqs=8 on BF16+LS — charliepai2i48h5-fern
 
 - **val_avg/mae_surf_p**: **64.08** (best_epoch=17/50, timeout-bound, still descending)
