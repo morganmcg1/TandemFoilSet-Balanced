@@ -478,6 +478,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    warmup_epochs: int = 2  # Linear LR warmup duration; cosine T_max = epochs - warmup_epochs
 
 
 cfg = sp.parse(Config)
@@ -533,7 +534,7 @@ def train_amp_ctx():
         return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     return torch.autocast(device_type="cuda", enabled=False)
 
-warmup_epochs = 2
+warmup_epochs = cfg.warmup_epochs
 def lr_lambda(epoch):
     if epoch < warmup_epochs:
         return 0.1 + 0.9 * (epoch + 1) / warmup_epochs  # 0.1 -> 1.0 over warmup
