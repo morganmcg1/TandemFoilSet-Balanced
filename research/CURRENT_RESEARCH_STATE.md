@@ -6,7 +6,7 @@
 - **Most recent human research directive:** _none — issue queue empty_
 - **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 - **Current baseline:** `val_avg/mae_surf_p = 67.64, test_avg=62.12` (PR #3540 tanjiro H24 OneCycleLR, epoch 12/15 truncated)
-- **Key pending wins:** alphonse H23 slice_num=32 (62.63 on H15 SwiGLU baseline — predicted ≤60 on OneCycleLR), edward H25 n_layers=6 (cam_rc recovery -8%), fern H26 wd=0.001 (-7%), frieren H19 DropPath=0.20
+- **Key pending wins:** alphonse H23 slice_num=32 (62.63 on H15 SwiGLU baseline — predicted ≤60 on OneCycleLR), frieren H36 channel-weighted surf_loss (+direct metric alignment), tanjiro H33 pct_start sweep
 
 ## Merged improvements so far (baseline stack)
 
@@ -36,12 +36,11 @@
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | **#3539** | **alphonse** | **H23 slice_num=32 (rebased) — was val=62.63 on H15 SwiGLU; sent back for OneCycleLR retest** | **WIP (retest)** |
-| **#3705** | **frieren** | **H32 robust loss L1 vs smooth_l1 (β=0.1) — MSE↔MAE mismatch fix** | **WIP (new)** |
-| **#3583** | **fern** | **H26 weight_decay=0.001 — winner on H18 (-7%); sent back for OneCycleLR retest** | **WIP (retest)** |
-| **#3559** | **edward** | **H25 n_layers=6 — winner on H18 with cam_rc -8% recovery; sent back for OneCycleLR retest** | **WIP (retest)** |
+| **#3788** | **frieren** | **H36 channel-weighted surf_loss surf_p_weight sweep {2,3,5} — direct metric/loss alignment** | **WIP (new)** |
+| **#3760** | **fern** | **H35 AdamW no-decay param groups (biases/LN/LayerScale exempt from WD)** | **WIP (new)** |
+| **#3792** | **edward** | **H37 OneCycleLR epochs=12 — fit schedule to realized budget** | **WIP (new)** |
 | **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP** |
 | **#3762** | **thorfinn** | **H34 RFF n_freq sweep {16,64} — richer/sparser spatial Fourier basis** | **WIP (new)** |
-| **#3760** | **fern** | **H35 AdamW no-decay param groups (biases/LN/LayerScale exempt from WD)** | **WIP (new)** |
 | **#3686** | **askeladd** | **H31 SAM (Sharpness-Aware Minimization) ρ=0.05 — replaces failed EMA direction** | **WIP (new)** |
 | **#3687** | **nezuko** | **H30 gradient clipping max_norm=1.0 — 2-line stability fix** | **WIP (new)** |
 
@@ -67,13 +66,17 @@
 | #3625 | tanjiro | H27 OneCycleLR max_lr sweep {1e-3, 2e-3} | Closed — all arms regress; 30-min cap truncates schedule before fine-tune tail |
 | #3627 | thorfinn | H28 widen preprocess w512 + dropout=0.1 | Closed — +21%; two changes stacked; val_single worst hit; preprocess width not bottleneck |
 | #3583 | fern | H26 wd=0.001 retest on OneCycleLR | Closed — +12%; WD and OneCycleLR are not orthogonal; long low-LR tail amplifies integrated shrinkage |
+| #3705 | frieren | H32 robust loss L1/smooth_l1 β=0.1 | Closed — L1 +7.7%, smooth_l1 +11.9%. signed_log1p already neutralizes heavy tail; MSE confirmed optimal for this dataset |
+| #3559 | edward | H25 n_layers=6 OneCycleLR retest | Closed — +26.5% (2 seeds, spread 4.1). Depth + OneCycleLR non-orthogonal: 199s/epoch model gets only 10 epochs, never reaches fine-tune tail (LR=2.3e-4 at termination vs 9.4e-5 for baseline) |
 
 ## OneCycleLR budget constraint (critical insight)
 
-The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11 epochs. This has major implications:
+The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11-13 epochs depending on per-epoch cost. This has major implications:
 - max_lr > 5e-4 **hurts** (H27 closed): extra exploration burns budget before fine-tune
-- H24's pct_start=0.30 leaves LR at ~3e-4 at ep11 — still not fully converged
+- H24's pct_start=0.30 gives best_epoch=12 at LR=9.4e-5 — schedule end (LR=0) never reached
 - **H33** tests if compressing pct_start to {0.10, 0.15, 0.20} extends the low-LR fine-tune phase within the same wall-clock budget
+- **H37** tests if compressing total epochs (epochs=12) so schedule actually completes helps
+- **n_layers=6 is structurally incompatible** with 30-min budget: 199s/epoch → only 10 epochs, never reaches fine-tune tail
 
 ## Research insights so far
 
@@ -83,33 +86,33 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11 epochs. This h
 4. **Multiplicative/scale mechanisms hurt cam_rc**: FiLM, LayerScale — both regressed cam_rc. Additive mechanisms (GALE) helped. n_layers=6 recovers cam_rc (-8%) → adding capacity compensates for LayerScale's narrow-channel restriction.
 5. **EMA + OneCycleLR is incompatible**: H8v3 v4 +29% regression. EMA β=0.999 needs ~1000 stable low-LR steps; OneCycleLR's truncated schedule never gives them. SAM (H31) is the gradient-side replacement.
 6. **Per-block parameter duplication hurts without supervision**: H29 +20% — 5× geom_proj MLPs caused gradient interference with no specialization in 15 epochs.
-7. **Inverted-U for weight decay**: H26 found wd=0.001 (10× current 1e-4) is optimal; canonical DeiT-III 0.05 underperforms in this regime.
+7. **Inverted-U for weight decay**: H26 found wd=0.001 (10× current 1e-4) is optimal on cosine; but WD and OneCycleLR are non-orthogonal. WD=1e-4 is confirmed default on OneCycleLR.
 8. **DropPath + LayerScale compete on the FFN-depth axis**: H19 DropPath +31.7% on full stack. LayerScale's monotone-growth depth pattern and DropPath's depth-scaled dropout fight over the same dimension. Non-compositional.
 9. **OneCycleLR max_lr is saturated at 5e-4 for 30-min budget**: H27 max_lr sweep both arms regress. Higher peak LR burns schedule budget before fine-tune tail. 5e-4 is near-optimal for this wall-clock window.
 10. **WD and OneCycleLR are not orthogonal**: H26 retest +12%. The integrated lr×wd shrinkage under OneCycleLR's long low-LR tail is much larger than under cosine annealing. WD=1e-4 is the confirmed default.
 11. **Preprocess MLP width is not a bottleneck**: H28 +21% with width 256→512. The current 256-wide preprocess (already 2-layer: 86→256→GELU→128) is not limiting. Capacity gains must go elsewhere.
 12. **No-decay param groups are unexplored**: canonical practice (DeiT-III, ConvNeXt) excludes biases/LN/LayerScale from WD. Currently all params decay uniformly at 1e-4, potentially shrinking H18's LayerScale gains. H35 tests this.
+13. **MSE in signed_log1p space is optimal for this dataset**: H32 closed. signed_log1p already neutralizes the heavy Re tail (residuals are O(0.1-1), not blowing up). L1's robustness buys nothing. Smooth_L1 β=0.1 was 5× MSE curvature in the wrong regime.
+14. **Depth (n_layers=6) + OneCycleLR is structurally non-orthogonal under 30-min cap**: H25 retest closed +26.5% (2 seeds). 199s/epoch model never reaches fine-tune tail. The architecture is sound (H18 baseline showed -2.7%); the budget interaction is the barrier.
+15. **Primary metric is p-channel only but loss is channel-uniform**: val_avg/mae_surf_p is pure pressure. `surf_loss` averages Ux, Uy, p equally → p gets 1/3 of gradient signal. H36 tests upweighting p directly.
+16. **Schedule truncation is a first-class bug**: H24 baseline reaches LR=9.4e-5 at best_epoch=12 but schedule ends at LR=0 (epoch 15, never reached). H33 (pct_start) and H37 (epochs=12) both attack this truncation from different angles.
 
 ## Open questions
 
 - **Highest priority**: Does slice_num=32 compose with OneCycleLR? (alphonse H23 retest — prediction: ≤60 val_avg, new best of round)
-- **Highest priority**: Does slice_num=32 compose with OneCycleLR? (alphonse H23 retest — prediction: ≤60 val_avg, new best of round)
+- Does channel-weighted surf_loss (surf_p_weight={2,3,5}) align gradient with metric? (frieren H36 — prediction: -1% to -4%)
+- Does fitting the schedule to budget (epochs=12) complete the fine-tune tail? (edward H37 — prediction: -1% to -3%)
 - Does compressing pct_start give more fine-tune budget? (tanjiro H33 {0.10,0.15,0.20})
-- Does robust loss (L1/smooth_l1) improve OOD splits? (frieren H32)
 - Does no-decay param grouping protect LayerScale and improve WD? (fern H35)
 - Does n_freq=64 RFF improve spatial resolution? (thorfinn H34)
-- Does n_layers=6 compose with OneCycleLR? (edward H25 retest)
 - Does grad-clip stabilize OneCycleLR high-LR phase? (nezuko H30)
 - Does SAM replace EMA's flat-minimum role? (askeladd H31)
-- Does widening preprocess MLP to 512 help? (thorfinn H28)
-- Does gradient clipping stabilize OneCycleLR high-LR phase? (nezuko H30)
-- Does SAM replace EMA's role as flat-minimum regularizer? (askeladd H31)
 
 ## Next directions (after current wave resolves)
 
-- **slice_num + n_layers product sweep**: if both H23 and H25 work, test {slice_num=32, n_layers=6} combo
-- **OneCycleLR pct_start sweep**: {0.1, 0.2, 0.4} once max_lr converged
+- **slice_num=32 + n_layers=6 product sweep**: if H23 wins, revisit depth with cheaper attention (H25 showed depth is good architecturally, just budget-limited; slice_num=32 cuts ~50% per-epoch cost)
+- **epochs=12 + pct_start=0.20 combo**: if H37 and/or H33 win, combine them
+- **per-channel loss with per-split weighting**: if H36 wins, consider also weighting re_rand vs single vs rc differently
 - **Auxiliary physics loss**: lift/drag prediction head as auxiliary task
 - **Geometry features**: curvature/normals as additional input channels
-- **Batch size + linear scaling rule** with OneCycleLR (256 → 512 if VRAM permits)
-- **MixUp / CutMix** for the geometry input — strong-data-aug regime fits SAM well
+- **MixUp / CutMix for geometry input**: strong-data-aug regime fits SAM well (if H31 wins)

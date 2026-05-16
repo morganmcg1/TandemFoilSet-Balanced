@@ -2,6 +2,30 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 07:50 — PR #3792: H37 OneCycleLR epochs=12 schedule-fit (edward) — **assigned**
+
+- Branch: `charliepai2i24h4-edward/onecycle-epochs12`
+- Hypothesis: H24 baseline uses epochs=15 but wall-clock cap gives ~13.8 realized epochs (130s/epoch). Best epoch=12 at LR=9.4e-5; schedule end (epoch 15, LR=0) never reached. H25 diagnostic revealed this truncation mechanism. Single arm: `--epochs 12` fits the schedule to realized budget. `pct_start=0.30` preserved; peak at epoch 3.6, LR=~0 by epoch 12. Complementary to tanjiro H33 (pct_start side) and edward H25 (depth side). Predicted -1% to -3%.
+
+## 2026-05-16 07:50 — PR #3788: H36 channel-weighted surf_loss, surf_p_weight sweep {2,3,5} (frieren) — **assigned**
+
+- Branch: `charliepai2i24h4-frieren/channel-weighted-surf-loss`
+- Hypothesis: Primary metric is `mae_surf_p` (pressure only), but `surf_loss` is averaged uniformly across all 3 channels (Ux, Uy, p). p gets 1/3 of gradient signal. Upweighting p in surf_loss redirects gradient where eval cares. Three arms: `surf_p_weight ∈ {2.0, 3.0, 5.0}`. Division by `ch_weights.mean()` preserves surf_loss scale so `surf_weight=10.0` requires no re-tuning. Frieren's own suggestion from H32 analysis. Predicted -1% to -4%.
+
+## 2026-05-16 07:45 — PR #3705: H32 robust loss L1/smooth_l1 (frieren) — **CLOSED**
+
+- Branch: `charliepai2i24h4-frieren/robust-loss`
+- Result: L1 arm val_avg=72.88 (+5.24, +7.7%), smooth_l1 β=0.1 arm val_avg=75.72 (+8.08, +11.9%) vs baseline 67.64. Both arms truncated at epoch 11.
+- Key insight: MSE in signed_log1p space is already well-matched. signed_log1p compresses the heavy Re tail so log-domain residuals are O(0.1-1); MSE's quadratic penalty doesn't chase outliers. L1's constant-magnitude gradient is noisier near zero, not steadier. Smooth-L1 β=0.1 is 5× MSE curvature inside |err|<0.1, biasing toward easy samples. MAE-eval ↔ MSE-train mismatch is NOT the dominant factor when log1p does the same job.
+- **Closed**: negative result, mechanism validated. MSE confirmed optimal for this dataset.
+
+## 2026-05-16 07:45 — PR #3559: H25 n_layers=6 OneCycleLR retest (edward) — **CLOSED**
+
+- Branch: `charliepai2i24h4-edward/n-layers-6`
+- Result: Seed1 val_avg=89.67 (+32.6%), Seed2 val_avg=85.57 (+26.5%) vs baseline 67.64. Spread 4.10 (not seed-luck). Test_avg 76.17 (+22.6%).
+- Key insight: Deeper model (199s/epoch) gets only 10 epochs in 30-min budget vs baseline's 12 epochs. At epoch 10, LR=2.3e-4 (still in mid-descent). The baseline's gain came from epochs 11-12 at LR=9.4e-5 — a fine-tune tail the deeper model never reaches. Architecture is not broken (H18 n_layers=6 worked at -2.7% on cosine baseline); the OneCycleLR wall-clock interaction is structural. Depth + OneCycleLR is non-orthogonal under 30-min cap.
+- **Closed**: structural incompatibility with 30-min budget. H37 (epochs=12) assigned to fix the schedule-budget fit directly.
+
 ## 2026-05-16 07:45 — PR #3762: H34 RFF n_freq sweep {16,64} (thorfinn) — **assigned**
 
 - Branch: `charliepai2i24h4-thorfinn/rff-nfreq-sweep`
