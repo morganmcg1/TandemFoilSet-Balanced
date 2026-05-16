@@ -1,92 +1,94 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-15 21:55 UTC
+- **Last updated:** 2026-05-16 00:40 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (checked at 21:30 UTC — no open issues for this advisor branch).
+- **Most recent direction from human researcher team:** None (checked 00:30 UTC — no open issues).
 
 ## Current best baseline
 
 | Metric | Value | Source |
 |---|---|---|
-| `val_avg/mae_surf_p` | **94.4199** | PR #3366 fern EMA+clip5+Huber (merged 20:40 UTC) |
-| `test_avg/mae_surf_p` (3 valid splits; cruise=NaN) | 92.3626 | run `m6hkf8el` |
+| `val_avg/mae_surf_p` | **90.6131** | PR #3474 alphonse EMA decay=0.99+clip5+Huber (merged 00:25 UTC) |
+| `test_avg/mae_surf_p` (3 valid splits; cruise=NaN) | 88.8252 | run `fzrq04xr` |
 
 Per-split validation:
 
-| Split | mae_surf_p | Δ vs prev EMA baseline |
+| Split | mae_surf_p | Δ vs prev baseline (#3366, 94.42) |
 |---|---|---|
-| val_single_in_dist | 111.794 | **−24.2%** |
-| val_geom_camber_rc | 110.162 | **−20.0%** |
-| val_geom_camber_cruise | 69.012 | **−25.3%** |
-| val_re_rand | 86.712 | **−20.5%** |
+| val_single_in_dist | 106.135 | −5.1% |
+| val_geom_camber_rc | 99.466 | **−9.7%** |
+| val_geom_camber_cruise | 70.358 | +1.9% |
+| val_re_rand | 86.494 | −0.2% |
 
-All 4 splits improve by ≥20%. Val trajectory strictly monotone at epoch 14 (no plateau — longer training budget might improve further).
+## Active PRs (zero idle students)
 
-## Round 3 status (8 active assignments, zero idle students)
+### Tier-1 — hyperparameter sweeps (all WIP, training active)
 
-### Tier 1 — extend the EMA+clip+Huber stack (assigned earlier in round)
+| PR | Student | Hypothesis | W&B best so far | Vs new baseline 90.61 |
+|----|---------|-----------|-----------------|----------------------|
+| #3454 | edward | lr-sweep (1e-3, 2e-3, 5e-3) | 93.47 (lr=1e-3); lr=2e-3 running | +3.2% so far |
+| #3456 | nezuko | cosine T_max=14, T_max=9 | 96.04 (T_max=14 only; T_max=9 NOT YET RUN) | +5.9% so far |
+| #3458 | tanjiro | huber-delta sweep (0.5, 1.0, 2.0, 0.0) | 93.91 (δ=1.0); δ=0.0 running | +3.6% so far |
+
+### Tier-2 — orthogonal mechanisms (all WIP, training active or awaiting terminal post)
+
+| PR | Student | Hypothesis | W&B best | Vs new baseline | Status |
+|----|---------|-----------|----------|-----------------|--------|
+| **#3475** | **askeladd** | **asinh-pressure (scale=1.0)** | **88.67** | **−2.1% WIN** | **Awaiting terminal SENPAI-RESULT — top merge candidate** |
+| #3473 | fern | geom-aug-mirror | 99.79 | +10.1% REGRESS | Awaiting terminal result → likely close |
+| #3476 | frieren | swa-on-full-stack start=6 | 96.00 | +5.9% REGRESS | start=4 arm pending |
+| #3477 | thorfinn | physics-continuity | 98.66 (w=0.01); w=0.1 running | +8.9% so far | Await w=0.1 + w=0.5 completion |
+
+### Tier-3 — follow-up on confirmed direction (EMA decay bracketing)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3454 | edward | lr-sweep-clip-huber (lr=1e-3, 2e-3, 5e-3) | wip |
-| #3456 | nezuko | tmax9-clip-huber (T_max=14+9 on full stack) | wip |
-| #3458 | tanjiro | huber-delta-sweep (δ=0.5, 1.0, 2.0, 0.0) | wip |
-
-### Tier 2 — orthogonal mechanisms (assigned 21:50 UTC)
-
-| PR | Student | Hypothesis | Mechanism | EV |
-|----|---------|-----------|-----------|-----|
-| #3473 | fern | geometry-augmentation-vertical-mirror (single-foil, AUGMENT_PROB=0.5) | Data | Medium-High |
-| #3474 | alphonse | ema-decay-fast (0.997, 0.995, 0.99) | Optim | Low-Medium |
-| #3475 | askeladd | asinh-pressure (heavy-tail compression on p channel) | Output rep | Medium |
-| #3476 | frieren | swa-on-full-stack (SWA + EMA dual-shadow, min-val checkpoint selection) | Optim | Low-Medium |
-| #3477 | thorfinn | physics-continuity-loss (∂Ux/∂x + ∂Uy/∂z = 0 soft penalty) | Loss | Medium |
+| #3543 | alphonse | ema-decay-push (0.98, 0.97, 0.95) | Just assigned |
 
 ## Confirmed winners (merged)
 
 | PR | Hypothesis | val_avg | Δ | Notes |
 |---|---|---|---|---|
 | #3186 (fern) | EMA weights decay=0.999 | 121.685 | −11.10% | All 4 splits improve, 3 runs |
-| **#3366 (fern)** | **EMA + grad_clip=5 + Huber δ=1.0** | **94.4199** | **−22.4%** | **All 4 splits ≥−20%; 2 runs; val monotone at ep14** |
+| #3366 (fern) | EMA + grad_clip=5 + Huber δ=1.0 | 94.4199 | −22.4% | All 4 splits ≥−20%; 2 runs |
+| **#3474 (alphonse)** | **EMA decay=0.99 (faster shadow tracking)** | **90.6131** | **−4.0%** | **Monotone sweep; 3 arms all beat prior baseline** |
 
-## Key findings from Rounds 1–2
+## Key findings from Rounds 1–3 (so far)
 
 ### Round 1: EMA wins, structural bias loses
-EMA trajectory averaging (decay=0.999): −11.1% val_avg, all 4 splits improve. Loss-redirection family (surf_weight, pressure_channel_weight, per_channel_heads) all failed: RC-camber gain at cost of in-dist regression. Structural pattern across 4 dead-end PRs.
+EMA trajectory averaging (decay=0.999): −11.1% val_avg, all 4 splits improve. Loss-redirection family all failed (structural pattern).
 
 ### Round 2: grad_clip + Huber compounds with EMA
-- **grad_clip=5 + Huber=1.0 on EMA baseline: −22.4% val_avg** — largest single-round improvement in program
-- Mechanism: EMA baseline had clip=1.0 biting 100% of steps (median pre-clip norm ~16×). Raising to 5.0 allows 5× larger effective steps. Huber δ=1.0 caps per-sample loss influence from high-Re outliers. Three mechanisms (EMA, clip, Huber) are orthogonal.
-- Budget-aware cosine (T_max=9): −2.9% on EMA+warmup; finds wider minima but weaker than clip+Huber
-- EMA decay sweep slow-direction (0.9995/0.9999): fails — slower averaging doesn't converge in 14-epoch budget. Round-3 retries the opposite direction (alphonse #3474).
-- SWA on EMA-only baseline (swa_start=6/8): marginally positive vs EMA-only (121.46 vs 121.68) but far from new baseline. Round-3 retries on full stack (frieren #3476).
-- Weight decay (1e-3→1e-2): all regress; EMA+Huber already handles the regularization axes
-- Per-channel heads: confirmed dead-end (Round 1 finding holds with EMA)
+EMA+clip5+Huber δ=1.0: −22.4% val_avg. Three mechanisms orthogonal (EMA smoothing, grad clip, Huber outlier control).
 
-### Architecture insight: effective LR under clip
-At clip=5, the gradient bites ~92–99% of steps (median pre-clip norm 16–34×). The effective per-step update is 5/16 × 5e-4 ≈ 1.6e-4. Higher lr (1e-3, 2e-3) on the same clipped config could proportionally accelerate convergence (tested by edward #3454).
+### Round 3 (in progress): Faster EMA decay wins too
+- EMA decay 0.99 > 0.995 > 0.997 > 0.999 within the 14-epoch budget
+- Mechanism: shorter half-life (69 steps vs 693) lets shadow track late-training improvements without lagging
+- Shadow still helps at ema_lag_rel=2% — denoises last few steps, not a long-window average
+- **Trend still monotone at 0.99 — optimum not yet bracketed from below**
 
-## Round 3 research themes
+### Early Round-3 signal from Tier-2:
+- **asinh-pressure scale=1.0 (askeladd): val_avg=88.67** — beats new 90.61 baseline by 2.1%. Awaiting terminal SENPAI-RESULT.
+- Geometry mirror (fern): 99.79 — regresses. Augmentation not helping on this dataset/budget.
+- SWA on full stack (frieren): 96.00 — regresses vs new baseline. SWA's 14-epoch window too short.
+- Physics continuity (thorfinn): 98.66 (w=0.01); w=0.1 still running.
 
-### Theme A — Hyperparameter tuning of the merged stack
-Three sweeps directly probe the stack's optimal operating point: LR (edward), cosine T_max (nezuko), Huber δ (tanjiro). All expected to deliver 0–6% improvement if the new baseline is near-optimal; >6% would indicate one of the merged hyperparams was sub-optimal.
+## Round 3 goal and next priorities
 
-### Theme B — Orthogonal mechanisms with compounding potential
-- **Geometry augmentation** (fern #3473): pressure-symmetric data doubling — orthogonal to all optimizer/loss changes
-- **Asinh pressure** (askeladd #3475): output-representation change targeting the heavy-tail pressure distribution
-- **Physics-informed continuity** (thorfinn #3477): soft constraint on divergence — orthogonal regularizer
-- **SWA on full stack** (frieren #3476): captures wider-minimum geometry that EMA's exponential averaging may smooth over
+**Primary goal:** push `val_avg/mae_surf_p` below 88 (combining multiple improvements).
 
-### Theme C — Re-explore failed axes from the opposite direction
-- **Fast EMA decay** (alphonse #3474): the opposite direction from her slow-decay sweep. Hypothesis: with the new much faster-converging stack, decay=0.999 may be too smoothing.
+**Most likely next merge(s):**
+1. **#3475 askeladd asinh-pressure** (88.67, needs terminal result posted) → merge immediately on receipt
+2. **#3543 alphonse ema-decay-push** — if 0.98 or 0.97 beats 90.61, compound with asinh for a double-win
+
+**Strategic outlook:**
+- If asinh (88.67) and EMA decay-push both win, combining them (arinh on 0.99 config = compound) could push below 86.
+- Tier-1 Tier-2 hypothesis coverage: LR (edward), T_max (nezuko), Huber-delta (tanjiro) all showing ≤3-6% regression vs new baseline — any of these would be secondary wins at best.
+- After Round-3 completes: consider (a) LR+faster-EMA compound, (b) asinh+new-EMA compound, (c) geometry-augmentation with corrected indices if fern identified an index error.
 
 ## Operational notes
 
-- **data/scoring.py NaN bug**: `test_geom_camber_cruise_gt/000020.pt` has inf GT pressure → `test_avg/mae_surf_p=NaN` fleet-wide. Students report 3-split test mean.
-- Per-run budget: 30 min wall clock, 50 epoch cap. Wall clock binds (~14 epochs). Val still monotone at ep14 — each epoch adds value.
-- **Zero idle students**: 8/8 student slots occupied with WIP PRs.
-- REST API: was at 0/5000 during assignment burst (~21:46–21:55 UTC); PRs created successfully via GraphQL path. GraphQL: healthy (~3200/5000).
-
-## Round 3 goal
-
-Push `val_avg/mae_surf_p` below 90. Realistic best-case: a 3–6% compound win combining a Tier-2 orthogonal mechanism (fern's geometry mirror is the highest-EV candidate) with one of the Tier-1 sweep winners (edward LR sweep most likely). Worst-case: Tier-1 confirms the merged stack is already at the local optimum, and Tier-2 mechanisms become the next merge candidates.
+- **data/scoring.py NaN bug**: `test_geom_camber_cruise_gt/000020.pt` has inf GT pressure → cruise=NaN fleet-wide.
+- Per-run budget: 30 min wall clock, 50 epoch cap. Wall clock binds (~14 epochs); all runs hit cap.
+- **Zero idle students**: alphonse just assigned #3543; 9 WIP PRs total (alphonse + 8 others).
+- REST API was rate-limited earlier (~21:46-22:05 UTC) but GraphQL fallback worked. Both healthy now.

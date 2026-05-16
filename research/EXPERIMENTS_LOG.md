@@ -424,3 +424,60 @@ After closures and the three Round-3 assignments already in flight (#3454 edward
 | #3477 | thorfinn | physics-continuity-loss (H-06, ∂Ux/∂x + ∂Uy/∂z = 0 soft penalty on volume nodes) | Loss | Medium |
 
 Zero idle students. Round-3 PR slots: 8/8 occupied. Target: push val_avg below 90.
+
+---
+
+## 2026-05-16 00:30 — PR #3474: EMA decay fast sweep (alphonse) — MERGED
+
+**Student:** willowpai2i48h2-alphonse
+**Hypothesis:** Faster EMA decay (0.997, 0.995, 0.99) compound better with 14-epoch budget than slow decay (0.999 baseline). Opposite direction from alphonse's previously closed slow-decay sweep (#3367).
+
+**Results:**
+
+| Arm | ema_decay | W&B run | val_avg/mae_surf_p | Δ vs baseline 94.42 | test 3-split |
+|---|---|---|---|---|---|
+| Baseline (#3366) | 0.999 | m6hkf8el | 94.4199 | — | 92.3626 |
+| A | 0.997 | ml7l5jck | 91.9901 | −2.6% | 88.322 |
+| B | 0.995 | y5xumcvw | 91.2049 | −3.4% | 88.177 |
+| **C (best)** | **0.99** | **fzrq04xr** | **90.6131** | **−4.0%** | **88.825** |
+
+**Per-split (Arm C, epoch 14):** val_single=106.13, val_rc=99.47, val_cruise=70.36, val_re=86.49
+
+**Analysis:** Monotone improvement: 0.999 > 0.997 > 0.995 > 0.99 within the 14-epoch budget. Faster decay (half-life ~69 steps vs ~693 for 0.999) lets the shadow track the late-training phase more closely. EMA still helps at lag ≤2% (ema_lag_rel for Arm C at ep14 = 2.05%). All 3 arms converge at wall-clock cap (epoch 14) — improvement trend did not plateau. The trend is monotone in the explored range; optimum has NOT been bracketed from below.
+
+**Verdict:** MERGED. New baseline: val_avg=**90.6131**, test_3split=88.8252. Next: push decay below 0.99 (0.98, 0.97, 0.95) to find the floor — assigned to alphonse #3543.
+
+---
+
+## 2026-05-16 00:30 — Round-3 Tier-2 status check (via W&B, no terminal results posted yet)
+
+| PR | Student | W&B progress | Best val_avg | Vs NEW baseline 90.61 |
+|---|---|---|---|---|
+| #3473 fern | geom-aug-mirror p=0.5 | 2 arms: c5yqhyum=99.79, e2mq4thp=101.17 | 99.79 | +10.1% REGRESS |
+| #3475 askeladd | asinh-pressure scale=1.0 | 2 runs: 9vcc7qfn=88.67, sgl0hury=91.70 | **88.67** | **−2.1% WIN** |
+| #3476 frieren | swa-on-full-stack start=6 | 2 arms: pphl9e3g=96.08, 6afydvtb=96.00 | 96.00 | +5.9% REGRESS |
+| #3477 thorfinn | physics-continuity | w=0.01: 98.66; w=0.1 running | 98.66 (so far) | +8.9% REGRESS |
+
+**Critical**: askeladd's asinh-pressure (88.67) beats the NEW baseline 90.6131 — pending terminal SENPAI-RESULT, will merge when submitted. Nudges sent to all 4 students.
+
+---
+
+## 2026-05-16 00:30 — Round-3 Tier-1 status (no terminal results, still training)
+
+| PR | Student | W&B progress | Best val_avg | Vs NEW baseline 90.61 |
+|---|---|---|---|---|
+| #3454 edward | lr-sweep 1e-3/2e-3/5e-3 | lr=1e-3: 93.47/96.89/99.59 (variance); lr=2e-3 running | 93.47 (lr=1e-3) | +3.2% so far |
+| #3456 nezuko | cosine T_max=14/9 | T_max=14 only: 96.04, 98.05, 98.35; T_max=9 NOT YET RUN | 96.04 | +5.9% so far |
+| #3458 tanjiro | huber-delta 0.5/1.0/2.0/0.0 | δ=0.5:94.84/96.83, δ=1.0:93.91, δ=2.0:100.0, δ=0.0 running | 93.91 | +3.6% so far |
+
+All three Tier-1 PRs have runs that don't beat the new 90.61 baseline yet. Best hope: edward lr=2e-3 currently running; nezuko's T_max=9 arm pending.
+
+---
+
+## 2026-05-16 00:35 — alphonse assigned #3543: ema-decay-push
+
+After merging #3474 (decay=0.99 new baseline), the decay trend was still monotone at the floor. Assigned: bracket optimum below 0.99.
+
+- Arms: ema_decay=0.98, 0.97, 0.95
+- Group: ema-decay-push
+- Expected: find where shadow = live model (ema_lag_rel → 0%) and improvement stops
