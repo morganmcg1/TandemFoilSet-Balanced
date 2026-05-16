@@ -1253,3 +1253,52 @@ Commit merge: `f7c3b8e`. Baseline updated: val_avg 54.06 → **53.19**, test_avg
   - nezuko: #3631 (Fourier spatial pos encoding, sent back for rebase)
   - tanjiro: #3785 (weight decay sweep, assigned loop 18)
   - thorfinn: #3771 (LR continuation lr=1.5e-3 vs 2e-3, assigned loop 17)
+
+## 2026-05-16 09:50 UTC — Loop 21 — Two merges, one close, two assignments
+
+**PR #3771 (thorfinn LR continuation) — MERGED — New best val_avg=50.7001**
+
+| Arm | lr | Epochs | s/ep | Peak VRAM | val_avg | Δ vs 54.06 | Δ vs 53.19 | test_avg |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **Arm A (MERGED)** | **1.5e-3** | **32** | **57.7** | **24.38 GB** | **50.7001** | **−6.21%** | **−4.68%** | **44.3493** |
+| Arm B | 2e-3 | 32 | 57.6 | 24.38 GB | 53.4114 | −1.19% | +0.42% | 48.0565 |
+
+Per-split Arm A vs current 53.19 baseline:
+| Split | val_mae (Δ) | test_mae (Δ) |
+|---|---:|---:|
+| single_in_dist | 51.954 (−6.17%) | 46.889 (−9.37%) |
+| geom_camber_rc | 65.066 (−7.33%) | 59.097 (−9.23%) |
+| geom_camber_cruise | 32.981 (−2.35%) | 27.259 (+0.09%) |
+| re_rand | 52.799 (−1.15%) | 44.153 (−4.43%) |
+
+Key findings:
+- **Epoch-1 stable at ~370 for BOTH arms** (within 1% of lr=1e-3 baseline). TF32+compile neutralises instability up to at least lr=2e-3. The threshold is above this range.
+- **Arm B regression is eta_min-floor effect:** at lr=2e-3, eta_min=2e-4; model already rebounding at epoch 32 (val 53.49 vs 53.41 at epoch 31). Not an instability — a settling failure. This precisely identifies where the floor becomes problematic.
+- **Cautious mask invariant**: Arm A 0.609, Arm B 0.603 — both within ±0.01 of all prior measurements.
+- **geom_camber_rc improving strongly** (−7.33% val at Arm A) — this split REGRESSED at n=192+lr=1e-3. High LR, not capacity, is the lever for camber_rc.
+- Commit merge: `296f003`. Baseline updated: 53.19 → **50.70**, test 47.57 → **44.35**. Twelve compounding wins.
+
+**PR #3739 (alphonse slice_num sweep) — CLOSED**
+
+Best arm: slice_num=96, val_avg=62.90 — **regresses vs targeted 61.20 baseline (+1.70)** and massively vs new 50.70 baseline.
+- slice_num=128: val_avg=63.45 (worse than 96)
+- Per-epoch slowdown: +14% (slice=96), +26% (slice=128) — dominates any representation benefit
+- The `O(N·slice_num)` scatter/gather term (not the O(slice_num²) attention) drives the slowdown — 26% at slice=128 costs 7 of 32 effective epochs
+- Hypothesis refuted: OOD-camber hypothesis failed (cruise split WORSENED +2.7%). The predicted per-slice-token benefit doesn't materialize with the merged stack's existing conditioning (FiLM, scale-inv loss). **slice_num=64 confirmed as local optimum.**
+
+**Advisor actions in Loop 21:**
+- **#3785 tanjiro weight decay**: Baseline-update comment posted (new target: 50.70 on lr=1.5e-3 stack; should rebase and re-run with --lr 1.5e-3). Label fixed stale-wip → wip.
+- **#3631 nezuko Fourier** and **#3547 askeladd Cp normalization**: Baseline-update comments posted (new target: 50.70, lr=1.5e-3 stack). Already in draft from Loop 20 send-back.
+- **#3870 alphonse capacity×LR compound** — ASSIGNED: n_hidden=192 + lr=1.5e-3 + compile. Tests orthogonality of capacity and LR axes at the new optimal LR. Critical: camber_rc behavior determines if n=192 is a true independent gain or was confounded with lr at lr=1e-3.
+- **#3871 thorfinn LR refinement** — ASSIGNED: lr=1.3e-3 vs lr=1.7e-3 around the 1.5e-3 peak. Also tests the eta_min-floor instability threshold at lr=1.7e-3 (floor 1.7e-4 vs the problematic 2e-4).
+
+**Pod state at loop 21 close:**
+- All 8 charlie-r5 pods active. All 8 students assigned. Zero idle GPUs.
+  - alphonse: #3870 (capacity×LR compound, just assigned)
+  - askeladd: #3547 (Cp normalization, sent back for rebase)
+  - edward: #3839 (Bernoulli verify on n=192+lr=1e-3)
+  - fern: #3665 (T_max=35, sent back — needs rebase onto lr=1.5e-3 stack)
+  - frieren: #3809 (grad clipping sweep)
+  - nezuko: #3631 (Fourier spatial pos encoding, sent back for rebase)
+  - tanjiro: #3785 (weight decay sweep, updated to lr=1.5e-3)
+  - thorfinn: #3871 (LR refinement 1.3e-3 vs 1.7e-3, just assigned)
