@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- 2026-05-16 12:45Z — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-16 14:00Z — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
-- **New baseline: val=56.0011** (PR #3822 cosine T_max=30 merged, −4.88% from 58.87)
+- **New baseline: val=53.7235** (PR #3674 pressure_weight=2.0 merged, −4.07% from 56.00)
 
 ## Baseline progression
 
@@ -16,48 +16,50 @@
 | #3384 (fern, grad-clip+EMA+asinh) | 70.2479 | −15.6% | grad_clip(max_norm=1.0) before optimizer.step() |
 | #3530 (frieren, surf_weight=25) | 67.2991 | −4.20% | surf_weight: 30→25 (5-mech stack now complete) |
 | #3485 (alphonse, bf16 autocast) | 58.8717 | −12.5% | bf16 autocast on forward+loss; 18 epochs vs 14 |
-| **#3822 (edward, cosine T_max=30)** | **56.0011** | **−4.88%** | **CosineAnnealingLR T_max: 80→30; moderate late-epoch anneal** |
+| #3822 (edward, cosine T_max=30) | 56.0011 | −4.88% | CosineAnnealingLR T_max: 80→30; moderate late-epoch anneal |
+| **#3674 (nezuko, pressure_weight=2.0)** | **53.7235** | **−4.07%** | **pressure_weight: 1.0→2.0; up-weights pressure channel in training loss** |
 
-**Current HEAD (7 mechanisms):** Lion + surf_weight=25 + asinh pressure-loss + EMA(0.999) + grad_clip(max_norm=1.0) + bf16 autocast + cosine T_max=30. val=56.00 at epoch 18 (timeout-bound, val still descending).
+**Current HEAD (8 mechanisms):** Lion + surf_weight=25 + asinh pressure-loss + EMA(0.999) + grad_clip(max_norm=1.0) + bf16 autocast + cosine T_max=30 + pressure_weight=2.0. val=53.72 at epoch 18 (timeout-bound, val still descending).
 
 **Reproduce baseline:**
 ```bash
 cd target && python train.py --agent <student> \
     --experiment_name "<student>/your-experiment-name" \
     --surf_weight 25 \
-    --cosine_t_max_epochs 30
+    --cosine_t_max_epochs 30 \
+    --pressure_weight 2.0
 ```
-(In-tree default is still T_max=80 — must pass `--cosine_t_max_epochs 30` explicitly.)
+(In-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0 — must pass all three explicitly.)
 
-**Cumulative improvement from initial baseline:** 135.02 → 56.00 = **−58.5%**
+**Cumulative improvement from initial baseline:** 135.02 → 53.72 = **−60.2%**
 
 ## Active experiments
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3970 | alphonse | torch.compile throughput: default and reduce-overhead modes | WIP — NEW | #3884+#3750 confirmed throughput-bound; compile buys per-epoch time → more steps |
-| #3887 | edward | Cosine T_max refinement: bracket T_max=30 with T_max=25 and 40 | WIP | #3822 winner maps to the knee; "above 30" is student's own prediction |
-| #3949 | askeladd | Lion β1 momentum sweep: 0.95 and 0.85 vs current 0.90 | WIP — NEW | Fresh axis; β1 untested on 7-mech stack; Lion paper cites as most sensitive HP |
-| #3953 | frieren | LR × T_max coupling: lr=2.1e-4 and 2.5e-4 under T_max=30 | WIP — NEW | T_max=30 changed effective LR by 60%; optimal lr_init may have shifted upward |
-| #3725 | fern | Per-group grad-clip: attention (max_norm=1.0) vs MLP (5.0/10.0) | WIP — STALE | Notified of 56.00 target; T_max=30 flag required |
-| #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — STALE | Notified of 56.00 target; T_max=30 flag required |
-| #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2) | WIP — STALE | Notified of 56.00 target; T_max=30 flag required |
-| #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP — STALE | Notified of 56.00 target; T_max=30 flag required |
+| #3989 | askeladd | EMA decay on 8-mech stack: 0.997 and 0.995 vs 0.999 | WIP — NEW | Overdue test; T_max=30+pw=2.0 changed convergence horizon; #3470/#3776 closed rate-limited |
+| #3984 | nezuko | Pressure weight sweep: pw=3.0 and 4.0 above the pw=2.0 winner | WIP — NEW | pw monotone in {0.5, 1.0, 2.0}; optimum may not be at 2.0; mapping the curve upward |
+| #3970 | alphonse | torch.compile throughput: default and reduce-overhead modes | WIP | #3884+#3750 confirmed throughput-bound; compile buys per-epoch time → more steps |
+| #3953 | frieren | LR × T_max coupling: lr=2.1e-4 and 2.5e-4 under T_max=30 | WIP | Effective avg-LR shifted 60%; optimal lr_init may have moved; notified of 53.72 target |
+| #3887 | edward | Cosine T_max refinement: bracket T_max=30 with T_max=25 and 40 | WIP — STALE | Pod recovering from rate-limit; notified of 53.72 target |
+| #3725 | fern | Per-group grad-clip: attention (max_norm=1.0) vs MLP (5.0/10.0) | WIP — STALE | Pod recovering; notified of 53.72 target |
+| #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2) | WIP — STALE | Still rate-limit blocked; notified of 53.72 target |
+| #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP — STALE | Pod recovering from rate-limit; notified of 53.72 target |
 
 ## Key open questions (round 12 — new baseline 56.00)
 
-1. **Does torch.compile buy meaningful per-epoch speedup?** (#3970 alphonse) — #3884+#3750 confirmed throughput-bound; compile is the direct attack on the binding constraint
-2. **Is T_max=30 the optimal or is there headroom above/below?** (#3887 edward) — T_max=25 and 40 bracket the winner; student predicts "above 30"
-3. **Does Lion β1=0.95 or 0.85 beat 0.90?** (#3949 askeladd) — fresh optimizer-level axis; β1 sets gradient reactivity; never tested on 7-mech stack
-4. **Does lr_init shift under T_max=30?** (#3953 frieren) — T_max=30 cut effective avg-LR 60%; lr=2.1e-4/2.5e-4 tests if optimal lr_init moved up; lr=2.5e-4 directly re-tests nezuko's prior failure
-5. **Is MLP gradient over-clipped?** (#3725 fern) — 100% clip rate at norms 25-180; per-group clip
-6. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 vs w_p=2.0
+1. **Is pw=2.0 the pressure weight optimum or does the curve continue?** (#3984 nezuko) — pw monotone in {0.5, 1.0, 2.0}; sweeping 3.0 and 4.0 to find the peak
+2. **Does EMA decay < 0.999 win on the 8-mech stack?** (#3989 askeladd) — 0.997/0.995 won pre-bf16; T_max=30+pw=2.0 changed convergence horizon; overdue test
+3. **Does torch.compile buy meaningful per-epoch speedup?** (#3970 alphonse) — #3884+#3750 confirmed throughput-bound; compile is direct attack
+4. **Does lr_init shift under T_max=30?** (#3953 frieren) — lr=2.1/2.5e-4 under T_max=30+pw=2.0; prior lr=2.5e-4 failure was on T_max=80 stack
+5. **Is T_max=30 optimal or is there headroom?** (#3887 edward) — T_max=25 and 40 bracket the winner
+6. **Is MLP gradient over-clipped?** (#3725 fern) — 100% clip rate at norms 25-180
 7. **Does signed log1p beat asinh?** (#3731 tanjiro) — more aggressive tail compression
 8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn) — input-dependent gating
 
 ## 7-mechanism stack: gradient pipeline analysis
 
-Seven mechanisms targeting DIFFERENT points:
+Eight mechanisms targeting DIFFERENT points:
 1. **Lion (sign-based update)**: optimizer level — single momentum buffer, fixed-magnitude steps
 2. **surf_weight=25**: loss level — balance surface vs volume loss
 3. **asinh**: loss-level — per-coordinate pressure z-score compression
@@ -65,6 +67,7 @@ Seven mechanisms targeting DIFFERENT points:
 5. **grad-clip**: gradient vector level — L2 norm cap at 1.0
 6. **bf16 autocast**: compute level — forward+loss precision reduction; 23% faster/epoch
 7. **cosine T_max=30**: schedule level — moderate late-epoch annealing (40% of initial LR at epoch 18)
+8. **pressure_weight=2.0**: loss level — up-weights pressure channel MAE 2× in training loss; constructively stacks with asinh
 
 ## Closed / falsified experiments this round
 
@@ -88,6 +91,7 @@ Seven mechanisms targeting DIFFERENT points:
 | #3733 (edward warmup-cosine v2) | +4.2% regression (val=61.33 vs 58.87); warmup shifted curve right without compensating gain |
 | #3750 (alphonse capacity-bf16) | no_improvement: Arm A (n144) val=59.85 (+1.66%), Arm B (n_layers=6) val=64.57 (+9.7%); per-epoch time +14-20% drops epoch count 18→15-16; throughput-bound |
 | #3884 (alphonse batch-size-bf16) | no_improvement: Arm A (batch=6) val=69.68 (+24.4%); steps/epoch −33% (250 vs 374); per-epoch time flat (+3s); throughput fully saturated at batch=4 — step-count is binding |
+| #3949 (askeladd lion-beta1) | no_improvement: Arm A (β1=0.95) val=61.49 (+9.8%); stop condition triggered; β1=0.90 appears optimal at LR=1.7e-4/T_max=30/bs=4; β1<0.90 remains untested |
 | #3776 (askeladd EMA-decay-bf16-v2) | Closed at 11:35Z without terminal results; force-push reset; likely rate-limit cascade failure preventing pod commits |
 | #3726 (frieren Lion-wd-sweep) | Closed at 11:33Z without terminal results; force-push reset; same rate-limit cascade issue |
 
@@ -99,10 +103,13 @@ Seven mechanisms targeting DIFFERENT points:
 - ~~Cosine T_max alignment~~ — MERGED (#3822)
 - ~~EMA decay re-tune on bf16/T_max=30 stack~~ — CLOSED #3776 (no results due to rate-limit; direction was convergence-horizon hypothesis; may revisit)
 - ~~Lion weight decay sweep~~ — CLOSED #3726 (no results due to rate-limit; may revisit on 7-mech stack)
-- ~~Batch size scaling~~ — CLOSED #3884 (batch=6 +24.4% regression; step-count binding; bf16 compute-saturated at batch=4)
+- ~~Batch size scaling~~ — CLOSED #3884 (batch=6 +24.4%; step-count binding; bf16 compute-saturated at batch=4)
 - **torch.compile throughput** — IN PROGRESS as #3970 (alphonse); direct attack on throughput-bound constraint
+- **Per-channel pressure weight** — MERGED #3674 (pw=2.0, −4.07%); now fine-sweeping upward as #3984
+- **Pressure weight fine sweep** — IN PROGRESS as #3984 (nezuko); pw=3.0/4.0; monotone in {0.5,1.0,2.0}
+- **EMA decay on 8-mech stack** — IN PROGRESS as #3989 (askeladd); overdue test with T_max=30+pw=2.0
 - **T_max refinement** — IN PROGRESS as #3887 (edward)
-- **Lion β1 momentum sweep** — IN PROGRESS as #3949 (askeladd); 0.95/0.85 vs 0.90
+- ~~Lion β1 momentum sweep~~ — CLOSED #3949 (β1=0.95 +9.8%; default 0.90 optimal; β1<0.90 direction untested)
 - **LR × T_max coupling** — IN PROGRESS as #3953 (frieren); lr=2.1/2.5e-4 under T_max=30
 - **WeightedRandomSampler dynamic reweighting**: inverse-error resampling after epoch 1 — note: static domain-balanced sampler already present; dynamic per-sample reweighting is the next step
 - **Channel-decoupled output heads**: separate MLP for Ux/Uy vs p (pressure has very different statistics)

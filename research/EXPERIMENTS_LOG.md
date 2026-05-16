@@ -486,3 +486,36 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Metrics:** `models/model-charliepai2i48h2-alphonse-batch-bs-6-20260516-112156/metrics.jsonl`
 - **Decision:** CLOSED no_improvement.
 - **Key finding:** Per-epoch time essentially unchanged at batch=6 (+3s) — bf16 is already compute-saturated at batch=4; bigger batch does NOT buy throughput. But steps/epoch dropped 33%: 4,500 vs 6,732 total optimization updates. With val still descending 5%/epoch at epoch 18, the lost steps dominate. Definitively confirms: **throughput is binding, not memory or signal quality.** Combined with #3750, the 7-mech stack at batch=4 is the right anchor. Next direction: `torch.compile` to buy per-epoch time savings that translate to more steps (assigned as #3970).
+
+## 2026-05-16 13:50 — PR #3674: Per-channel pressure weight (pw=2.0 wins)
+- charliepai2i48h2-nezuko/pressure-channel-weight
+- **Hypothesis:** Per-channel loss weighting for pressure: pw=0.5 (de-emphasise) vs pw=2.0 (up-weight) vs baseline pw=1.0.
+- **Result:** Arm B (pw=2.0) wins — val 53.7235 (−4.07% vs 56.00 baseline). Arm A (pw=0.5) regressed +3.20%.
+
+| Arm | pressure_weight | val_avg/mae_surf_p | Δ | test_avg/mae_surf_p |
+|-----|-----------------|---------------------|---|---------------------|
+| Baseline | 1.0 | 56.0011 | — | 48.9470 |
+| **Arm B** | **2.0** | **53.7235** | **−4.07%** | **46.6011** |
+| Arm A | 0.5 | 57.7945 | +3.20% | 50.4263 |
+
+Per-split breakdown (Arm B, pw=2.0, val): single_in_dist=59.91 (−3.71%), geom_camber_rc=67.08 (−2.08%), geom_camber_cruise=35.41 (−6.08%), re_rand=52.50 (−5.55%)
+
+- **Metrics:** `models/model-charliepai2i48h2-nezuko-pressure-weight-2p0-20260516-112553/metrics.jsonl`
+- **Decision:** MERGED — new baseline 53.7235. 8th compounding mechanism.
+- **Key finding:** asinh compression hadn't fully neutralised channel imbalance — pw=2.0 constructively stacks with asinh by re-emphasising pressure without losing asinh stability. Velocity channels mildly regress (+11-21%) but pressure improvement dominates. val monotone in {pw=0.5, 1.0, 2.0} — curve may continue upward; nezuko assigned pw=3.0/4.0 sweep (#3984). Cumulative improvement: 135.02 → 53.72 = −60.2%.
+
+---
+
+## 2026-05-16 13:50 — PR #3949: Lion β1 momentum sweep (no_improvement)
+- charliepai2i48h2-askeladd/lion-beta1
+- **Hypothesis:** Lion β1=0.95 (more smoothing) and β1=0.85 (more reactivity) vs default β1=0.90.
+- **Result:** Arm A (β1=0.95) regressed +9.8% (val 61.49 vs 56.00). Stop condition triggered; Arm B not run.
+
+| Arm | β1 | val_avg/mae_surf_p | Δ |
+|-----|-----|---------------------|---|
+| Baseline | 0.90 | 56.0011 | — |
+| Arm A | 0.95 | 61.4851 | +9.77% ❌ |
+
+- **Metrics:** `models/model-charliepai2i48h2-askeladd-lion-beta1-095-20260516-123309/metrics.jsonl`
+- **Decision:** CLOSED no_improvement.
+- **Key finding:** More momentum smoothing (β1=0.95, 5% gradient weight/step) is decisively worse at 18-epoch/batch=4 regime. JSONL shows slower surf_loss descent from epoch 5 — under-reactive updates rather than instability. β1=0.90 appears well-tuned for LR=1.7e-4/T_max=30/bs=4. The productive direction is β1 < 0.90 (more reactivity) — student correctly identified this; future PR on the 8-mech stack could test β1 ∈ {0.85, 0.88}. However, askeladd was re-assigned to EMA decay (#3989) as the higher-priority direction.
