@@ -193,8 +193,18 @@ class Transolver(nn.Module):
             )
             for i in range(n_layers)
         ])
+        self.n_layers = n_layers
+        self.film_head = nn.Sequential(
+            nn.Linear(1, n_hidden),
+            nn.GELU(),
+            nn.Linear(n_hidden, 2 * n_layers * n_hidden),
+        )
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Identity init AFTER apply (so trunc_normal_ doesn't overwrite zeros):
+        # γ=0, β=0 → (1+γ)*fx + β = fx, model starts equivalent to baseline.
+        nn.init.zeros_(self.film_head[-1].weight)
+        nn.init.zeros_(self.film_head[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,8 +217,16 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # x[:, :, 13] = log(Re), broadcast across N mesh points per sample
+        # (see data/prepare_splits.py:92). Sample at node 0 since it's always real.
+        log_re = x[:, 0:1, 13]  # [B, 1]
+        B = x.shape[0]
+        film = self.film_head(log_re).view(B, self.n_layers, 2, self.n_hidden)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            gamma = film[:, i, 0, :].unsqueeze(1)  # [B, 1, n_hidden]
+            beta = film[:, i, 1, :].unsqueeze(1)   # [B, 1, n_hidden]
+            fx = (1.0 + gamma) * fx + beta          # identity at init
             fx = block(fx)
         return {"preds": fx}
 
