@@ -707,4 +707,32 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 | #3769 | edward | n_layers=5→4 (drop a Transolver block) | Attack per-batch FFN overhead; ~20% speedup → 22-23 epochs. Compute-efficiency play. |
 | #3772 | frieren | gradient clipping max_norm=1.0 | Stability lever, untested in this launch. Bounds gradient spikes, may improve late-training convergence and EMA quality. |
 
+---
+
+## 2026-05-16 09:00 — PR #3601 — EMA decay 0.999→0.998 re-test on slice_num=16 (MERGED → new baseline)
+
+- **Branch:** `charliepai2i48h1-alphonse/ema-0998-sn16-run1`
+- **Hypothesis:** Confirm EMA-0.998 win (originally seen on slice_num=32 base, -4.07%) on the new slice_num=16 base. Single-line change: `ema_decay=0.999→0.998`.
+- **Results vs baseline (val=84.44, test=74.75):**
+
+| Metric | Baseline (slice_num=16) | EMA-0.998 | Δ |
+|--------|------------------------|-----------|---|
+| `val_avg/mae_surf_p` | 84.44 | **81.16** | **-3.88%** |
+| `test_avg/mae_surf_p` | 74.75 | **71.77** | **-3.98%** |
+| `val_single_in_dist` | 100.09 | 94.05 | -6.04% |
+| `val_geom_camber_rc` | 94.49 | 92.73 | -1.86% |
+| `val_geom_camber_cruise` | 63.60 | 60.45 | -4.95% |
+| `val_re_rand` | 79.60 | 77.42 | -2.74% |
+| `test_single_in_dist` | 88.51 | 83.37 | -5.81% |
+| `test_geom_camber_rc` | 83.91 | 82.79 | -1.33% |
+| `test_geom_camber_cruise` | 53.62 | 51.08 | -4.73% |
+| `test_re_rand` | 72.94 | 69.85 | -4.24% |
+| Best epoch | 18 (final) | 18 (final) | — |
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-ema-0998-sn16-run1-20260516-052324/metrics.jsonl`
+- **Decision:** MERGED. Clean win — all 4 val splits improved, all 4 test splits improved. Improvement confirmed on slice_num=16 base (was -4.07% on slice_num=32, now -3.88% — compound holds). val_single_in_dist best mover (-6.04%), consistent with EMA window tightening helping the hardest ID split.
+- **Mechanism:** EMA-0.998 window ≈ 500 steps (14-17% of training budget) vs EMA-0.999 window ≈ 1000 steps (33%). Tighter window focuses the averaged model on the more-converged tail, producing a sharper and better-calibrated final checkpoint. Matches compute-bound regime where val improves monotonically to budget.
+- **New baseline: val_avg/mae_surf_p = 81.16, test_avg/mae_surf_p = 71.77.**
+- **Next step:** Probe EMA=0.997 (continue bracketing looser direction; student suggested monotone trend may continue).
+
 State: wd and cosine-T_max axes now fully closed. New bottleneck is per-batch FFN overhead. Three concurrent compute/stability experiments: askeladd (bf16), edward (n_layers=4), frieren (grad_clip).
