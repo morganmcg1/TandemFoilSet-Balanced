@@ -27,6 +27,35 @@ Per-run limits enforced by the harness:
 
 ## Baseline metrics
 
+### 2026-05-16 08:30 — PR #3616: batch_size=2 (2× gradient updates per epoch)
+
+**New best: `val_avg/mae_surf_p = 77.06`** — 4-arm mean, **−4.60 pp (−5.63%)** vs prior baseline 81.66. All 4 arms beat baseline; spread 2.83 pp.
+
+| Split | val mae_surf_p (best run `1xg2jnmd`) | 4-arm mean | Δ mean vs baseline |
+|---|---|---|---|
+| val_single_in_dist | 80.27 | 83.49 | −9.84 |
+| val_geom_camber_rc | 86.61 | 86.63 | −6.04 |
+| val_geom_camber_cruise | 58.56 | 61.23 | −0.64 |
+| val_re_rand | 75.16 | 76.89 | −1.90 |
+| **val_avg** | **75.15** | **77.06** | **−4.60** |
+| test avg (3-split excl. cruise) | 72.44 | 73.34 | −5.94 |
+
+- **W&B runs:** `eesuqkiy` (77.98), `1xg2jnmd` (75.15 ★ best), `stuakeo3` (77.74), `cbr2vdd2` (77.37) — group `willow-pai2i-24h-r5-round4`
+- **Epochs:** 14 / 50 (30-min wall-clock cap; `len(train_loader)=750` at bs=2, `total_steps=10500`, double the steps vs bs=4)
+- **Peak VRAM:** ~79 GB (down from ~94 GB at bs=4 — 15 GB headroom freed)
+- **Change vs prior baseline:** `batch_size` from `4` → `2` (Config default); `OneCycleLR total_steps=len(train_loader)*14` auto-scales with the doubled loader length (10500 steps). All other hyperparameters unchanged.
+- **Why it works:** 2× gradient updates per 30-min budget (10500 vs 5250 steps). In-distribution gains (−9.84 pp on val_single_in_dist) largest; the longer fine-tuning phase of the anneal benefits all splits. Smaller batch also reduces peak VRAM, freeing headroom for future architectural scale-up.
+- **Reproduce (best arm):**
+  ```bash
+  cd target/ && python train.py \
+    --lr 5e-4 --weight_decay 1e-4 --batch_size 2 --surf_weight 10.0 --epochs 50 \
+    --agent willowpai2i24h5-fern \
+    --wandb_group willow-pai2i-24h-r5-round4 \
+    --wandb_name fern-bs2-arm1
+  ```
+
+---
+
 ### 2026-05-16 01:35 — PR #3307: OneCycleLR right-sized to actual budget + L1 surf (compound win)
 
 **New best: `val_avg/mae_surf_p = 81.66`** — 3-arm mean, **−8.38 pp (−9.30%)** vs prior baseline 90.04. All 3 arms beat baseline; spread 3.80 pp.
