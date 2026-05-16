@@ -474,6 +474,7 @@ class Config:
     cosine_tmax: int = 14  # match observed wall-clock ceiling (~13-14 epochs)
     grad_clip: float = 1.0
     warmup_epochs: int = 5
+    re_weight_alpha: float = 0.0  # Re-conditioned per-sample loss weight strength (focal on Re tails)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -596,15 +597,30 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
 
-        # Volume loss: MSE (unchanged) — rich-mesh gradient signal
-        sq_err = (pred - y_norm) ** 2
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        # Volume loss: MSE — per-sample aggregation (denom = node count, preserves 3x channel scaling)
+        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
+        vol_err = (sq_err * vol_mask.unsqueeze(-1)).sum(dim=(1, 2))  # [B] — sum over nodes & channels
+        vol_count = vol_mask.sum(dim=1).clamp(min=1).float()  # [B] — # volume nodes per sample
+        vol_loss_per_sample = vol_err / vol_count  # [B]
 
-        # Surface loss: MAE with per-channel p weight (aligns with ranking metric)
-        surf_err = (pred - y_norm).abs()
+        # Surface loss: MAE with per-channel p weight (aligns with ranking metric) — per-sample
+        surf_err = (pred - y_norm).abs()  # [B, N, 3]
         ch_w = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=pred.device)
         surf_err = surf_err * ch_w[None, None, :]
-        surf_loss = (surf_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_err_total = (surf_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2))  # [B] — sum nodes & ch
+        surf_count = surf_mask.sum(dim=1).clamp(min=1).float()  # [B] — # surface nodes per sample
+        surf_loss_per_sample = surf_err_total / surf_count  # [B]
+
+        # Re-conditioned per-sample weights (focal-loss-style on Re tails)
+        # x_norm is already z-scored using training stats (mean/std at index 13 = log_Re)
+        # log_Re is constant per-sample → take from first node (always a real node, padding is at end)
+        log_re_z = x_norm[:, 0, 13]  # [B] — z-scored log_Re
+        re_weight = 1.0 + cfg.re_weight_alpha * (log_re_z ** 2)  # [B]
+        re_weight = re_weight / re_weight.mean().clamp(min=1e-6)  # normalize: batch-mean weight = 1.0
+
+        # Weighted batch average — when re_weight_alpha=0, re_weight=1.0 everywhere → no-op
+        vol_loss = (vol_loss_per_sample * re_weight).mean()
+        surf_loss = (surf_loss_per_sample * re_weight).mean()
 
         loss = vol_loss + cfg.surf_weight * surf_loss
 
@@ -616,6 +632,11 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/re_weight_mean": re_weight.mean().item(),
+            "train/re_weight_std": re_weight.std().item() if re_weight.numel() > 1 else 0.0,
+            "train/re_weight_max": re_weight.max().item(),
+            "train/re_weight_min": re_weight.min().item(),
+            "train/log_re_z_abs_mean": log_re_z.abs().mean().item(),
             "global_step": global_step,
         })
 
