@@ -11,43 +11,43 @@ target base `icml-appendix-charlie`).
 | Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=16`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
-| EMA   | **Polyak averaging, decay=0.999**, evaluated at val/test time (PR #3285) |
+| EMA   | **Polyak averaging, decay=0.998**, evaluated at val/test time (PR #3601) |
 | Dropout | **dropout=0.1** in PhysicsAttention (attn + to_out) — PR #3402 |
 | Scoring | NaN-safe accumulators (PR #3279) — `torch.where` instead of `mask * err` |
 | Sampler | `WeightedRandomSampler` over 3 domain groups |
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3602, slice_num=16, single-seed, best epoch 18)
+## Current best metrics (PR #3601, EMA decay=0.998, single-seed, best epoch 18)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **84.44** |
-| `test_avg/mae_surf_p` | **74.75** |
-| `test/test_single_in_dist/mae_surf_p` | 88.51 |
-| `test/test_geom_camber_rc/mae_surf_p` | 83.91 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 53.62 |
-| `test/test_re_rand/mae_surf_p` | 72.94 |
+| `val_avg/mae_surf_p` **(primary)** | **81.16** |
+| `test_avg/mae_surf_p` | **71.77** |
+| `test/test_single_in_dist/mae_surf_p` | 83.37 |
+| `test/test_geom_camber_rc/mae_surf_p` | 82.79 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 51.08 |
+| `test/test_re_rand/mae_surf_p` | 69.85 |
 
 Per-split val surface-p MAE at best checkpoint (single seed):
 
 | Split | mae_surf_p | Δ vs prev |
 |-------|------------|-----------|
-| `val_single_in_dist`     | 100.09 | -7.43% |
-| `val_geom_camber_rc`     |  94.49 | -9.38% |
-| `val_geom_camber_cruise` |  63.60 | -4.75% |
-| `val_re_rand`            |  79.60 | -4.27% |
-| **avg** | **84.44** | **-6.78%** |
+| `val_single_in_dist`     |  94.05 | -6.04% |
+| `val_geom_camber_rc`     |  92.73 | -1.86% |
+| `val_geom_camber_cruise` |  60.45 | -4.95% |
+| `val_re_rand`            |  77.42 | -2.74% |
+| **avg** | **81.16** | **-3.88%** |
 
-Artifact: `models/model-charliepai2i48h1-askeladd-slice-num-16-20260516-032444/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-alphonse-ema-0998-sn16-run1-20260516-052324/metrics.jsonl`
 
-Note: single-seed merge; all 4 val splits improved. Best epoch 18 = final epoch (compute-bound, not capacity-bound). Per-epoch time 105.5s (-8.4% vs slice_num=32), peak GPU mem 35.27 GB. Val trajectory was monotonically improving at cap — consistent with slice_num=32's behavior.
+Note: single-seed merge; all 4 val splits improved. Best epoch 18 = final epoch (compute-bound). Single-line change: EMA decay 0.999→0.998. val_single_in_dist improved most (-6.04%) — the tighter EMA window focuses on more-converged tail of training, benefiting the hardest in-distribution split most.
 
-Why it works: O(K²) attention cost drops 64→32→16: from 4096 → 1024 → 256 op-pairs. Each slice now covers ~1250 mesh nodes. Model is not capacity-limited at this resolution; the implicit regularization + extra training epochs (18 vs 16 vs 14) continues to compound. Expressiveness ceiling is below slice_num=16 for this mesh density.
+Why it works: EMA decay=0.998 gives an effective window of ~500 steps (≈14-17% of training budget), vs ~1000 steps at 0.999 (≈33%). Focusing the average on the converged tail rather than early-training weights improves generalization, especially on in-distribution splits. Compounds cleanly with slice_num=16 implicit regularization.
 
-Slice_num progression: 64→96.17, 32→90.58 (-5.81%), 16→84.44 (-6.78%). Next probe: slice_num=8.
+EMA progression: 0.9995→catastrophic (+34.5%), 0.999→84.44 (baseline), 0.998→81.16 (-3.88%). Next probe: 0.997 (continue bracketing looser direction).
 
 Reproduce:
 
@@ -99,4 +99,5 @@ After every merged winner, the advisor:
 | 2026-05-15 | #3400 | SmoothL1 beta=0.25 (2-seed mean; beta lever saturated) | 97.15 | -1.32% |
 | 2026-05-15 | #3402 | dropout=0.1 in PhysicsAttention (8/8 split consistency) | 96.17 | -1.01% |
 | 2026-05-16 | #3533 | slice_num=64→32 (halve slice-attention cost, +2 epochs, implicit reg) | 90.58 | -5.81% |
-| 2026-05-16 | #3602 | slice_num=32→16 (continue halving, +2 epochs to 18, still compute-bound) | **84.44** | **-6.78%** |
+| 2026-05-16 | #3602 | slice_num=32→16 (continue halving, +2 epochs to 18, still compute-bound) | 84.44 | -6.78% |
+| 2026-05-16 | #3601 | EMA decay 0.999→0.998 (tighter window, confirmed on slice_num=16 base) | **81.16** | **-3.88%** |
