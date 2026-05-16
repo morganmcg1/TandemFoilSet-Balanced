@@ -30,7 +30,7 @@
 | #3726 | frieren | Lion weight decay sweep: wd=1e-3 and 3e-3 (Lion paper rec.) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
 | #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — STALE | Rebase advised; beat 58.87 with bf16 or 67.30 without |
 | #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
-| #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP — IN PROGRESS | Picked up; running 3 arms sequentially; target now 58.87 |
+| #3776 | askeladd | EMA decay ablation on bf16 stack: 0.997/0.995 (v2) | WIP — NEW | #3470 closed prematurely; reassigned on bf16 stack; pre-bf16 0.997→62.21, 0.995→62.67 |
 | #3733 | edward | Warmup-cosine: 2-epoch linear warmup + cosine (v2) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
 | #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
 
@@ -41,7 +41,7 @@
 3. **Is Lion weight decay too low?** (#3726 frieren) — Lion paper recommends 3-10× higher wd; current 3e-4 is AdamW-style; wd=1e-3 and 3e-3 untested
 4. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 vs w_p=2.0; pressure channel rebalancing
 5. **Does signed log1p beat asinh?** (#3731 tanjiro) — more aggressive tail compression; direct competitor to the winning mechanism
-6. **Does EMA decay=0.995 converge faster within 18 epochs?** (#3470 askeladd) — decay optimization on new bf16 budget
+6. **Does EMA decay=0.997 or 0.995 still beat 0.999 on bf16?** (#3776 askeladd v2) — convergence-horizon hypothesis: 4 extra epochs may neutralize the pre-bf16 advantage of faster decays
 7. **Does 2-epoch warmup improve early convergence?** (#3733 edward) — Lion cold-start stability on bf16 stack
 8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn) — input-dependent gating for surface vs volume node specialization
 
@@ -74,6 +74,7 @@ They compose cleanly because they're orthogonal. The surf_weight reduction from 
 | #3442 (tanjiro signed-log1p) | Closed stale — branch stuck on pre-asinh base (Round-7) despite 4 rebase-guidance comments; reassigned as #3731 on fresh HEAD |
 | #3383 (edward warmup-cosine) | Closed stale — branch stuck on pre-asinh base (Round-4) despite 5 rebase-guidance comments; reassigned as #3733 on fresh HEAD |
 | #3275 (thorfinn SwiGLU) | Closed stale — branch stuck at initial baseline (Round-0) despite 6 rebase-guidance comments; reassigned as #3734 on fresh HEAD |
+| #3470 (askeladd EMA-decay) | Closed prematurely — pre-bf16 arms ran but didn't beat new 58.87 bf16 baseline (0.997→62.21, 0.995→62.67, 0.990→64.32); student rebased and started bf16 re-runs but PR was already closed; reassigned as #3776 on bf16 stack |
 
 ## Potential next research directions
 
