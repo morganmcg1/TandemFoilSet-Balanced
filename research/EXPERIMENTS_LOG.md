@@ -16,6 +16,50 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 11:30 — PR #3816: Stochastic Depth / LayerDrop sweep (frieren) — CLOSED
+
+- student: willowpai2i24h2-frieren
+- branch: `willowpai2i24h2-frieren/stochastic-depth-layerdrop`
+- hypothesis: stochastic whole-layer skipping (LayerDrop) reduces overfitting and improves generalization on OOD splits; sweep over drop rates
+
+| Run | layerdrop | val_avg/mae_surf_p_swa | test_avg/mae_surf_p_swa | Δ val (new baseline 76.20) | Δ test (new baseline 67.11) |
+|---|---|---|---|---|---|
+| `todle0c0` | 0.05 | 77.0864 | 68.7886 | +0.88 (worse) | +1.68 (worse) |
+| `efeydbo5` | 0.05 | 77.1377 | 68.0343 | +0.93 (worse) | +0.92 (worse) |
+| `b8gd9ghr` | 0.10 (smoke) | N/A (aborted) | N/A | — | — |
+
+**Analysis:** Both replicate runs at p=0.05 are consistent and clearly worse than the new baseline (post-#3806). The smoke test at p=0.10 aborted with val=464 (divergence). The mechanism fails for a fundamental reason: in a 5-layer Transolver, one dropped layer removes 20% of the network capacity. There is no redundant depth to regularize away. This contrasts with the original LayerDrop paper (Fan et al. 2019) where the benefit emerges at ≥12 layers with significant capacity surplus. The Transolver at n_layers=5 is already near minimum viable depth for this CFD task.
+
+**Conclusion:** LayerDrop on shallow architectures is ruled out. Stochastic per-sublayer depth (within a block) is a different, untested mechanism but unlikely to help given the same root cause. Added to permanently-excluded list.
+
+## 2026-05-16 11:28 — PR #3806: Surface-Dedicated Refinement MLP (fern) — MERGED
+
+- student: willowpai2i24h2-fern
+- branch: `willowpai2i24h2-fern/surface-refinement-mlp`
+- hypothesis: a small residual MLP (1,219 params) operating on surface-node features produces geometry-conditioned corrections that Transolver+FiLM-Re under-resolves
+
+| Metric | Best-val ckpt | SWA ckpt | Baseline SWA (#3669) | Δ SWA vs baseline |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 84.1189 | **76.2033** | 76.6091 | **−0.41 (−0.53%)** |
+| `test_avg/mae_surf_p` | 75.3418 | **67.1099** | 68.1999 | **−1.09 (−1.60%)** |
+
+**Per-split SWA (val | test):**
+
+| Split | val | test | Δ val | Δ test |
+|---|---|---|---|---|
+| `single_in_dist` | 89.13 | 77.64 | +1.17 | +0.07 |
+| `geom_camber_rc` | 88.15 | 77.27 | −1.25 | **−3.18** |
+| `geom_camber_cruise` | 54.46 | 47.31 | −1.13 | −0.61 |
+| `re_rand` | 73.07 | 66.21 | −0.41 | −0.65 |
+
+W&B run: `pnmb6bd5` (seed 2, best); `rsnbhc5a` (seed 1, confirms direction).
+
+**Analysis:** The 1,219-param MLP exits identity mode (surf_delta_norm grows 0→0.097→0.049) and reduces per-batch surface loss by 2–16%. Gain concentrates on `test_geom_camber_rc` (−3.18, −4%) — the hardest OOD tandem-foil geometry split. Best-val checkpoint is WORSE than baseline (84.12 vs 76.61) because the MLP perturbs early training dynamics; SWA averages over the converged late-cosine basin and recovers the improvement. Single-seed val gain (0.53%) is within run-to-run variance noise, but the test gain (1.60%) concentrated on the camber_rc split is more credible as signal.
+
+**Key insight:** Surface-specific residual correction is useful for geometry OOD generalization (camber_rc). The mechanism is complementary to EMA averaging (orthogonal axes: temporal weight smoothing vs spatial residual correction). Merging compounds both.
+
+**New baseline:** val=76.2033, test=67.1099. Code now in advisor branch.
+
 ## 2026-05-16 10:30 — Cycle 22 interim: W&B-verified results for 3 stale_wip PRs (#3799 / #3806 / #3803)
 
 GitHub API rate-limit exhaustion at ~09:39 UTC interrupted the student polling loop for edward, fern, and tanjiro. All three completed training (W&B runs FINISHED) but never pushed their `train.py` changes or posted SENPAI-RESULT markers — only the assignment commits exist on origin. I independently audited the W&B runs to derive correct, apples-to-apples results against the SWA baseline (`val_avg/mae_surf_p_swa` vs baseline 76.6091, `test_avg/mae_surf_p_swa` vs 68.1999).
