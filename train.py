@@ -601,6 +601,152 @@ class Config:
     # analogue at the output injection point: tiny Linear(1,8)→GELU→Linear(8,3)
     # MLP with zero-init final layer. ~35 new params.
     re_conditional_output_bias: bool = False
+    # rc-NN multi-axis oversampling: bias the WeightedRandomSampler toward
+    # train samples whose per-sample feature signature (channels 13-23:
+    # log_Re, AoA1/2, NACA1/2, gap, stagger) is k-NN-close to the
+    # val_geom_camber_rc samples. Per-train weight = 1 + (max_boost-1)*exp(-d/σ_med)
+    # where d is the mean z-scored Euclidean distance to k nearest rc samples
+    # and σ_med is the median d across train. Multiplied with the existing
+    # domain-balanced base weights (preserves iid bulk; only re-weights within).
+    rc_nn_oversample: bool = False
+    rc_nn_k: int = 5
+    rc_nn_max_boost: float = 3.0
+    # Per-signature-channel multiplicative weights for the k-NN distance metric.
+    # When None, every channel contributes equally (z-scored Euclidean). For
+    # geometry-weighted distance, set log_Re to 0 to exclude Re mass and
+    # double-weight NACA geometry channels (AoA, M, P, T pair). gap/stagger
+    # remain at their default unit weight. Applied as element-wise multiplier
+    # on the z-scored deltas before squaring. Provided as a CLI flag.
+    rc_nn_channel_weights: str | None = None
+
+
+# Per-sample feature signature: input channels 13-23 are constant across mesh
+# nodes within a sample (the dataset broadcasts the global geometry/flow
+# conditions to every node). We pick them up from node 0 and use them as the
+# 11-D OOD-axis signature for k-NN-based oversampling and the split diagnostic.
+SIG_CHANNEL_NAMES = [
+    "log_Re", "AoA_1",
+    "M_1", "P_1", "T_1",
+    "AoA_2",
+    "M_2", "P_2", "T_2",
+    "gap", "stagger",
+]
+SIG_START = 13  # channel index where per-sample features begin (see program.md)
+
+# Channel-weight presets for the rc-NN distance metric. Each vector is length
+# len(SIG_CHANNEL_NAMES) and is applied element-wise to z-scored deltas before
+# squaring. "geom" follows the advisor's geometry-weighted variant: exclude
+# log_Re from the distance, double-weight NACA channels, keep gap/stagger at 1.
+RC_NN_CHANNEL_WEIGHT_PRESETS: dict[str, list[float]] = {
+    "uniform": [1.0] * len(SIG_CHANNEL_NAMES),
+    # log_Re, AoA_1, M_1, P_1, T_1, AoA_2, M_2, P_2, T_2, gap, stagger
+    "geom":    [0.0,    2.0,   2.0, 2.0, 2.0, 2.0,   2.0, 2.0, 2.0, 1.0, 1.0],
+}
+
+
+def parse_rc_nn_channel_weights(spec: str | None) -> torch.Tensor | None:
+    """Resolve ``--rc_nn_channel_weights`` to an 11-D per-channel weight tensor.
+
+    ``None`` / ``""`` → uniform (legacy behaviour). Preset names from
+    ``RC_NN_CHANNEL_WEIGHT_PRESETS`` are honoured. Otherwise expects a
+    comma-separated list of len(SIG_CHANNEL_NAMES) floats.
+    """
+    if spec is None or spec == "" or spec == "uniform":
+        return None
+    if spec in RC_NN_CHANNEL_WEIGHT_PRESETS:
+        return torch.tensor(RC_NN_CHANNEL_WEIGHT_PRESETS[spec], dtype=torch.float32)
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if len(parts) != len(SIG_CHANNEL_NAMES):
+        raise ValueError(
+            f"--rc_nn_channel_weights expects {len(SIG_CHANNEL_NAMES)} comma-separated floats "
+            f"or a preset name in {list(RC_NN_CHANNEL_WEIGHT_PRESETS)}; got: {spec!r}"
+        )
+    return torch.tensor([float(p) for p in parts], dtype=torch.float32)
+
+
+def _extract_signatures_from_files(files: list[Path], key: str = "x") -> torch.Tensor:
+    """Load each .pt file and return its per-sample signature row.
+
+    Reads ``{key}`` from each .pt file (``x`` for train/val/test). Avoids
+    materialising the entire mesh tensor — we just need ``x[0, 13:]``.
+    Returns a CPU tensor [n_samples, 11].
+    """
+    rows = []
+    for f in files:
+        s = torch.load(f, weights_only=True)
+        x = s[key] if key in s else s["x"]
+        rows.append(x[0, SIG_START:].clone().to(torch.float32))
+    return torch.stack(rows, dim=0)
+
+
+def build_split_signatures(splits_dir: Path, train_ds, val_splits) -> dict[str, torch.Tensor]:
+    """Per-sample signatures for train, val, and test splits."""
+    sigs: dict[str, torch.Tensor] = {}
+    sigs["train"] = _extract_signatures_from_files(train_ds.files)
+    for name, ds in val_splits.items():
+        sigs[name] = _extract_signatures_from_files(ds.files)
+    splits_dir = Path(splits_dir)
+    for name in TEST_SPLIT_NAMES:
+        x_files = sorted((splits_dir / name).glob("*.pt"))
+        if x_files:
+            sigs[name] = _extract_signatures_from_files(x_files)
+    return sigs
+
+
+def signature_table(sigs: dict[str, torch.Tensor]) -> dict:
+    """Per-split, per-channel stats for the JSON diagnostic dump."""
+    table: dict[str, dict] = {}
+    for split, sig in sigs.items():
+        per_channel: dict[str, dict] = {}
+        for i, ch_name in enumerate(SIG_CHANNEL_NAMES):
+            col = sig[:, i]
+            unique_sorted = sorted({round(float(v), 4) for v in col.tolist()})
+            std = float(col.std().item()) if col.shape[0] > 1 else 0.0
+            per_channel[ch_name] = {
+                "mean": float(col.mean().item()),
+                "std": std,
+                "min": float(col.min().item()),
+                "max": float(col.max().item()),
+                "n_unique": len(unique_sorted),
+                "unique": unique_sorted,
+            }
+        table[split] = {"count": int(sig.shape[0]), "per_channel": per_channel}
+    return table
+
+
+def compute_rc_nn_weights(
+    train_sigs: torch.Tensor,
+    rc_sigs: torch.Tensor,
+    k: int,
+    max_boost: float,
+    channel_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """k-NN-distance-based per-train-sample weights ∝ similarity to RC.
+
+    Z-score by train stats so every channel contributes equally, then for each
+    train sample compute mean Euclidean distance to its ``k`` nearest rc
+    samples. ``channel_weights`` (if provided) is a per-channel multiplier on
+    z-scored deltas — set channels to 0 to exclude them from the distance.
+    Map distance to a weight in [1, max_boost] via
+    ``1 + (max_boost-1)*exp(-d/σ_med)``. Returns ``(weights, per_train_dist, σ_med)``.
+    """
+    mu = train_sigs.mean(dim=0)
+    sigma = train_sigs.std(dim=0).clamp_min(1e-6)
+    train_z = (train_sigs - mu) / sigma
+    rc_z = (rc_sigs - mu) / sigma
+
+    if channel_weights is not None:
+        cw = channel_weights.to(train_z.device, train_z.dtype)
+        train_z = train_z * cw
+        rc_z = rc_z * cw
+
+    d = torch.cdist(train_z, rc_z)
+    nn_d, _ = d.topk(k, dim=1, largest=False)
+    per_train_dist = nn_d.mean(dim=1)
+    sigma_med = per_train_dist.median().clamp_min(1e-6)
+    boost_span = float(max_boost) - 1.0
+    weights = 1.0 + boost_span * torch.exp(-per_train_dist / sigma_med)
+    return weights, per_train_dist, float(sigma_med.item())
 
 
 cfg = sp.parse(Config)
@@ -612,6 +758,84 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# --- Create model_dir early so we can dump split_signatures.json + setup
+# events before training begins. The metrics.jsonl file is opened lazily on
+# first append. ---
+experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
+experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
+model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
+model_dir.mkdir(parents=True, exist_ok=True)
+model_path = model_dir / "checkpoint.pt"
+metrics_jsonl_path = model_dir / "metrics.jsonl"
+
+# --- Build per-sample signature table (always, regardless of oversampling
+# flag — high-value diagnostic). Test splits are loaded directly from .pt
+# x-files (no GT join needed for signatures). ---
+print("Building per-sample feature signatures (channels 13-23)...")
+split_sigs = build_split_signatures(Path(cfg.splits_dir), train_ds, val_splits)
+sig_table = signature_table(split_sigs)
+with open(model_dir / "split_signatures.json", "w") as f:
+    json.dump(sig_table, f, indent=2, default=str)
+print(
+    "Per-sample signatures: "
+    + ", ".join(f"{k}={v.shape[0]}" for k, v in split_sigs.items())
+    + f"  →  saved to {model_dir / 'split_signatures.json'}"
+)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "split_signatures_dumped",
+    "channel_names": SIG_CHANNEL_NAMES,
+    "split_counts": {k: int(v.shape[0]) for k, v in split_sigs.items()},
+    "path": str(model_dir / "split_signatures.json"),
+})
+
+# --- Optional: rc-NN multi-axis oversampling. Multiplies the existing
+# domain-balanced base weights by per-sample exp-decayed similarity to the
+# val_geom_camber_rc signatures, capped at max_boost. ---
+rc_nn_setup_event: dict | None = None
+if cfg.rc_nn_oversample and not cfg.debug:
+    train_sigs = split_sigs["train"]
+    rc_sigs = split_sigs["val_geom_camber_rc"]
+    rc_nn_channel_weights = parse_rc_nn_channel_weights(cfg.rc_nn_channel_weights)
+    rc_weights, rc_dist, sigma_med = compute_rc_nn_weights(
+        train_sigs, rc_sigs, k=cfg.rc_nn_k, max_boost=cfg.rc_nn_max_boost,
+        channel_weights=rc_nn_channel_weights,
+    )
+    rc_weights_64 = rc_weights.to(torch.float64)
+    combined_weights = sample_weights * rc_weights_64
+    sample_weights = combined_weights  # for downstream use / readability
+
+    # Diagnostic: weight histogram, top-20% threshold, mean signature of
+    # the most-rc-similar 20% of train samples.
+    hist = torch.histogram(rc_weights, bins=10)
+    top_k20 = max(1, int(0.2 * rc_weights.shape[0]))
+    top_idx = rc_weights.topk(top_k20).indices
+    rc_nn_setup_event = {
+        "event": "rc_nn_oversample_setup",
+        "k": cfg.rc_nn_k,
+        "max_boost": cfg.rc_nn_max_boost,
+        "channel_weights_spec": cfg.rc_nn_channel_weights or "uniform",
+        "channel_weights": rc_nn_channel_weights.tolist() if rc_nn_channel_weights is not None
+                           else [1.0] * len(SIG_CHANNEL_NAMES),
+        "rc_nn_median_dist": sigma_med,
+        "weight_min": float(rc_weights.min().item()),
+        "weight_max": float(rc_weights.max().item()),
+        "weight_mean": float(rc_weights.mean().item()),
+        "weight_histogram": hist.hist.tolist(),
+        "weight_bin_edges": hist.bin_edges.tolist(),
+        "top_20pct_weight_threshold": float(rc_weights.quantile(0.80).item()),
+        "top_20pct_mean_signature": train_sigs[top_idx].mean(dim=0).tolist(),
+        "top_20pct_signature_channels": SIG_CHANNEL_NAMES,
+        "per_train_dist_min": float(rc_dist.min().item()),
+        "per_train_dist_max": float(rc_dist.max().item()),
+    }
+    append_metrics_jsonl(metrics_jsonl_path, rc_nn_setup_event)
+    print(
+        f"rc-NN oversampling ON: k={cfg.rc_nn_k}, max_boost={cfg.rc_nn_max_boost}, "
+        f"channel_weights={cfg.rc_nn_channel_weights or 'uniform'}, "
+        f"σ_med={sigma_med:.4f}, weights∈[{rc_weights.min().item():.3f}, "
+        f"{rc_weights.max().item():.3f}], top-20% threshold={rc_nn_setup_event['top_20pct_weight_threshold']:.3f}"
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -741,12 +965,6 @@ SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
 
-experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
-experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
-model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
-model_dir.mkdir(parents=True, exist_ok=True)
-model_path = model_dir / "checkpoint.pt"
-metrics_jsonl_path = model_dir / "metrics.jsonl"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
