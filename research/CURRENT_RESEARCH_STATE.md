@@ -1,10 +1,13 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 15:40 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 16:00 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 - **PR #3594 (alphonse SF-AdamW R2) MERGED 15:34 UTC**: baseline 80.893 → **65.618** (−18.88% absolute, −16.80% paired). **Largest single-experiment gain of the round.**
+- **PR #3777 (askeladd SDF) CLOSED 15:55 UTC**: +2.52% paired regression on stale stack. Mechanism failure (redundant with `dsdf` + FiLM, per-sample p95 norm breaks comparability). Geometric-input axis closed.
+- **PR #3985 (edward AGC R1) SENT BACK 15:50 UTC**: real paired Δ −2.02% but on stale baseline (absolute 81.552 > current 65.618). R2 retest under SF-AdamW assigned.
 - **PR #4019 (alphonse SF 2×2 factorial)** assigned 15:38 UTC: clip × EMA composition sweep.
+- **PR #4038 (askeladd SF-LR sweep)** assigned 16:00 UTC: 4-arm constant-LR sweep {5e-4 control, 1e-3, 2e-3, 5e-3} under SF-AdamW.
 - **Previous merges this session:** #3906 clip=0.25 (→80.893), #3594 SF-AdamW clip=1.0 (→65.618).
 
 ## Current research focus
@@ -35,20 +38,22 @@
 
 1. **Clip threshold under SF-AdamW** — is clip=0.25 (AdamW optimum) still optimal? `alphonse #4019 arm A vs B`.
 2. **EMA redundancy under SF** — does external EMA add anything on top of SF's Polyak averaging? `alphonse #4019 arm A vs C, B vs D`.
-3. **Capacity (n_hidden=192) + SF** — R2 showed −8.21% under AdamW; could compound massively under SF. Awaiting nezuko #3492 R3 result.
+3. **LR under SF-AdamW** — SF paper recommends 1×-10× larger LR than scheduled approach; Arm B in #3594 was still descending at cap. `askeladd #4038 4-arm sweep`.
+4. **AGC under SF-AdamW** — Edward's R1 showed −2.02% paired on stale baseline; does per-tensor direction normalization compound with SF's Polyak averaging? `edward #3985 R2 retest`.
+5. **Capacity (n_hidden=192) + SF** — R2 showed −8.21% under AdamW; could compound massively under SF. Awaiting nezuko #3492 R3 result.
 
-### Key in-flight experiments (15:40 UTC)
+### Key in-flight experiments (16:00 UTC)
 
 | Student | PR | Hypothesis | Status | vs new SF baseline |
 |---------|----|----|----|----|
-| **alphonse** | **#4019** | **SF-AdamW clip×EMA 2×2 factorial** | **Just assigned 15:38 UTC** | **Directly refines 65.618 baseline** |
+| **alphonse** | **#4019** | **SF-AdamW clip×EMA 2×2 factorial** | In progress (since 15:38) | **Directly refines 65.618 baseline** |
+| **askeladd** | **#4038** | **SF-AdamW LR sweep {5e-4, 1e-3, 2e-3, 5e-3}** | **Just assigned 16:00 UTC** | **Directly refines 65.618 baseline** |
+| **edward** | **#3985** | **AGC R2: SF-AdamW + AGC vs SF-AdamW + clip=1.0** | Sent back 15:50 for SF retest | If wins, replaces `--grad_clip_norm 1.0` in stack |
 | tanjiro | #4003 | Clip thresh R2 under AdamW: {0.05, 0.1, 0.15, 0.25} | In progress | AdamW context; informs clip axis |
-| edward | #3985 | AGC vs global clip=0.25 (AdamW) | In progress | AdamW stack; if wins, re-test under SF |
 | frieren | #3980 | Lion + clip=0.25 vs AdamW + clip=0.25 | In progress (rebasing) | AdamW stack; if wins, re-test under SF |
 | thorfinn | #3390 | T_max=20 on clip=1.0 stack (R2) | In progress | ⚠️ Moot vs SF; keep as negative reference |
 | fern | #4012 | Sobolev / edge-gradient L1 loss | In progress | Orthogonal loss axis; still relevant |
 | nezuko | #3492 | n_hidden=192 + clip=1.0 R3 | In progress (rebasing) | Highest-EV in-flight (R2 was −8.21%) |
-| askeladd | #3777 | SDF input features | Recovering (poll-gap fixed 15:24) | Geometric-input axis; still relevant |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
@@ -103,9 +108,9 @@ AdamW optimum: clip=0.25 (monotone, 100% clip rate). SF-AdamW optimum: unknown �
 
 If wins, re-test under SF-AdamW. Lion + SF could be additive if they address orthogonal mechanisms.
 
-### AGC (edward #3985 — in flight, AdamW context)
+### AGC (edward #3985 — R2 retest under SF-AdamW, in flight)
 
-Same re-test protocol applies if AGC wins.
+R1 showed −2.02% paired val / −3.97% paired test on the AdamW + clip=0.25 stack (absolute 81.552 > current 65.618 baseline). R2 retest now in flight: SF-AdamW + AGC vs SF-AdamW + clip=1.0. Key diagnostic from R1: `any_clip` rate = 100% every step, meaning AGC at λ=0.01 behaves as a permanent per-tensor direction normalizer rather than the safety-clamp regime the paper assumes. The mechanism that won is structurally similar to the clip=0.25 win in #3906 (direction normalization at full saturation).
 
 ### Capacity axis (nezuko #3492 R3 — in flight, HIGHEST-EV)
 
@@ -121,23 +126,28 @@ n_hidden=192 on clip stack. R2 Δ −8.21% — could compound massively under SF
 
 First experiment targeting loss formulation. Still relevant under any optimizer stack.
 
-### SDF input features (askeladd #3777 — ACTIVE, recovering)
+### SDF input features (CLOSED — #3777 askeladd)
 
-Geometric-input axis. Poll-gap self-healed 15:24 UTC.
+Geometric-input axis closed. SDF regressed +2.52% paired val / +3.99% test 3-split. Three independent mechanism causes: redundant with `dsdf` (8-D shape descriptor already in input), competes with FiLM for geometric conditioning role, per-sample p95 normalization breaks cross-sample comparability (2.2× spread). Lesson: when a new feature targets a role another mechanism already owns, it has to replace not stack.
+
+### Learning-rate axis under SF-AdamW (askeladd #4038 — ACTIVE, NEW)
+
+NEW HIGHEST-PRIORITY axis. Under cosine, lr=5e-4 averaged to ~1.5e-4 effective over the run; under SF it stays at 5e-4 throughout — so SF-effective LR is 3× higher than AdamW-effective LR. SF README recommends 1×-10× larger LR than the scheduled approach (so 5e-4 → 5e-3). #4038 sweeps the full recommended range with paired control.
 
 ## Potential next hypotheses (not yet assigned)
 
 All future SF-AdamW experiments: `--use_schedule_free` (no `--cosine_t_max`).
 
 1. **SF clip×EMA factorial (ASSIGNED #4019, alphonse)** — in flight
-2. **n_hidden=192 + SF-AdamW** — if nezuko #3492 R3 wins, follow up immediately
-3. **Longer budget for SF-AdamW** — constant LR means more epochs = better; Arm B was at ~1.8 val/epoch slope at cap
-4. **LR sweep under SF** — SF README notes 1×-10× larger LR often works; test lr ∈ {5e-4, 1e-3, 2e-3}
-5. **Lion + SF-AdamW** — if Lion wins on AdamW (#3980), test the composition
-6. **AGC + SF-AdamW** — if AGC wins on AdamW (#3985), test the composition
-7. **Sobolev loss + SF-AdamW** — if fern #4012 wins, combine with new stack
-8. **Mixup / CutMix** — may help geom_camber_rc split
-9. **FiLM MLP hidden widening** — `film_mlp_hidden=256`; conditional on #3492 outcome
+2. **SF LR sweep (ASSIGNED #4038, askeladd)** — in flight
+3. **AGC under SF (ASSIGNED #3985 R2, edward)** — in flight
+4. **n_hidden=192 + SF-AdamW** — if nezuko #3492 R3 wins, follow up immediately
+5. **Longer budget for SF-AdamW** — constant LR means more epochs = better; Arm B was at ~1.8 val/epoch slope at cap (orthogonal to #4038 LR sweep)
+6. **Best-of-(LR × clip × EMA)** — after #4019 and #4038 land, combine winners (e.g. clip=0.25 × lr=2e-3 × no EMA)
+7. **Lion + SF-AdamW** — if Lion wins on AdamW (#3980), test the composition
+8. **Sobolev loss + SF-AdamW** — if fern #4012 wins, combine with new stack
+9. **Mixup / CutMix** — may help geom_camber_rc split
+10. **FiLM MLP hidden widening** — `film_mlp_hidden=256`; conditional on #3492 outcome
 
 ## Operational notes
 
@@ -147,6 +157,6 @@ All future SF-AdamW experiments: `--use_schedule_free` (no `--cosine_t_max`).
 - **Two-mechanisms-for-same-role insight:** Depth=4 was proxying clip stability; T_max=20 was proxying better late-LR use; both subsumed. When a new axis changes the optimization dynamic, re-test hypotheses whose evidence was a proxy for the same role.
 - **GH API rate limits:** Recurring; last incident 14:53 UTC.
 - **test_geom_camber_cruise NaN:** pre-existing; use 3-split mean for test comparisons.
-- **Askeladd #3777 recovered:** Poll-gap self-healed at 15:24 UTC. Training in progress.
+- **Askeladd next assignment #4038:** LR sweep under SF-AdamW (highest-leverage hyperparameter on the new baseline).
 - **Seed variance ~±1.5-2%:** Paired Δ within session is reliable; absolute deltas need confirmation.
 - **SF-AdamW budget insight:** At constant LR, no natural "done" signal except budget cap. More epochs = better results (slope still ~1.8/epoch at epoch 17 cap).

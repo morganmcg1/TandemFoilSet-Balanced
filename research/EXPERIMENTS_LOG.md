@@ -1641,3 +1641,111 @@ Arm A's LR reaches 5e-8 by epoch 16 — frozen. Arm B's LR stays at 5e-4 through
 ### Next assignment: PR #4019 SF-AdamW 2×2 composition factorial (alphonse)
 
 2×2 factorial: clip ∈ {1.0, 0.25} × EMA ∈ {on, off}. Answers: (1) optimal clip under SF, (2) EMA redundancy under SF. Best arm merges as the canonical new SF-AdamW stack.
+
+---
+
+## 2026-05-16 15:55 — PR #3777 [CLOSED]: SDF input features — distance-to-surface as geometric input (askeladd)
+
+**Branch:** `charliepai2i48h4-askeladd/sdf-features`
+
+**Hypothesis:** Adding a per-node Signed Distance to Surface (SDF) input feature (precomputed via `torch.cdist`, per-sample p95-normalized) provides an explicit geometric prior orthogonal to FiLM (which encodes per-sample physics-regime) and orthogonal to the existing `dsdf` 8-D shape descriptor. Expected to help the geometric splits (`val_geom_camber_rc`, `val_geom_camber_cruise`).
+
+### Results (paired, two-shot-FiLM + cosine T_max=15 stack — NOT current SF stack)
+
+| Arm | Config | val_avg/mae_surf_p | best epoch | n_params |
+|---|---|---:|---:|---:|
+| A | full stack, no SDF | 88.8275 | 17 | 845,527 |
+| B | full stack + SDF (per-sample p95-norm) | 91.0628 | 16 | 845,783 (+256) |
+| **Paired Δ B−A** | — | **+2.235 (+2.52%)** | — | +0.03% |
+
+Note: Arm A=88.83 reproduces the pre-clip baseline (89.78) within seed band — implementation is sound, run was clean, but on a stack now superseded by SF-AdamW (65.618 baseline).
+
+### Per-split val MAE
+
+| Split | A (no SDF) | B (SDF) | Δ % | Hypothesis-predicted? |
+|---|---:|---:|---:|---|
+| `val_single_in_dist`     | 100.354 | 105.578 | **+5.21%** | no (sanity split) |
+| `val_geom_camber_rc`     |  97.200 |  98.980 | +1.83% | **YES — predicted to help** |
+| `val_geom_camber_cruise` |  70.585 |  71.954 | +1.94% | **YES — predicted to help** |
+| `val_re_rand`            |  87.171 |  87.739 | +0.65% | no |
+| **val_avg**              | **88.828** | **91.063** | **+2.52%** | — |
+
+Per-split test 3-split mean: +3.99% (every finite split regresses, slightly larger than val). Direction-consistent — not val-only noise.
+
+### Mechanism diagnostic: per-sample p95 normalization breaks cross-sample comparability
+
+Student measured raw_p95 chord distances across all splits:
+
+| Split | n | raw_p95 median | spread |
+|---|---:|---:|---|
+| `train`                  | 1499 | 3.60 | **2.22–4.74 (2.2× spread)** |
+| `val_geom_camber_rc`     |  100 | 2.85 | 2.34–3.35 |
+| `val_geom_camber_cruise` |  100 | 4.43 | 4.24–4.73 |
+
+The per-sample p95 varies 2.2× across train: a node with `sdf_norm=0.5` means physical distance of 1.1 chord in raceCar but 2.4 chord in cruise. **The network cannot learn a single "near-wall" threshold** — the normalization removes mesh-extent invariance only at the cost of physical comparability.
+
+### Why it failed — three mechanism findings
+
+1. **Not orthogonal to existing inputs.** The dataset already provides `dsdf` (8-D distance-based shape descriptor, x[4:12]) and `is_surface` (binary, x[12]). Adding a per-sample-normalized single scalar is a low-resolution, lower-quality version of what `dsdf` already encodes at 8-D.
+2. **Not orthogonal to FiLM.** FiLM owns per-sample geometric conditioning via film_cond features. Adding a redundant per-node geometric feature *competes* with FiLM's role rather than supplementing it — a third mechanism aimed at the same task that the model already handles.
+3. **Per-sample normalization actively hurts.** The normalization scheme assumed the answer was "mesh-extent-invariant SDF" but the resulting feature loses the physical-distance meaning the SDF was meant to encode. A *global* normalization (one constant over the entire dataset) would preserve comparability but lose the mesh-extent-invariance.
+
+### Decision: CLOSE
+
+Paired Δ +2.52% val / +3.99% test cleanly above seed band (±1.5-2%). Mechanism failure has three independent contributing causes — re-running on the SF-AdamW stack would not change the analysis (geometric-input axis is closed by `dsdf` already, not by stack noise).
+
+### Lesson carried forward
+
+**When a new feature targets a role another mechanism already owns, it has to *replace* that mechanism, not stack with it.** FiLM owns per-sample geometric conditioning. `dsdf` owns per-node distance-based geometric encoding. SDF was a third mechanism aimed at the same role and predictably lost. This same lesson now applies to the broader stack: experiments that change *what is being optimized* (Sobolev loss, AGC, Lion) have a chance — experiments that add a redundant feature do not.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-askeladd-sdf-r1-arma-baseline-20260516-133807/metrics.jsonl` (control)
+- `models/model-charliepai2i48h4-askeladd-sdf-r1-armb-sdf-20260516-142734/metrics.jsonl` (SDF)
+
+### Next assignment: PR #4038 SF-AdamW LR sweep (askeladd)
+
+4-arm constant-LR sweep under SF-AdamW: lr ∈ {5e-4 control, 1e-3, 2e-3, 5e-3} — covers SF README's full recommended 1×-10× range. Highest-leverage hyperparameter on the new SF stack: cosine is gone, so constant LR is now the dominant per-step setting. Arm B in #3594 was still descending at the budget cap (val slope ~1.8/epoch at epoch 17), suggesting the optimizer was still in fast-descent regime — a larger LR may reach equivalent or better val_avg in fewer epochs.
+
+---
+
+## 2026-05-16 15:50 — PR #3985 [SENT BACK]: AGC R1 — strong paired win on stale baseline (edward)
+
+**Branch:** `charliepai2i48h4-edward/agc-vs-global-clip`
+
+**Hypothesis:** NFNet's Adaptive Gradient Clipping (AGC) replaces global `clip_grad_norm_(model, 0.25)` with per-tensor clipping at `λ × ||param|| / ||grad||`. The mechanism: scale-aware clipping that adapts per-parameter (large weight matrices get larger clip budget; small biases get smaller), in principle more "physical" than a single global L2 threshold. Tested on the AdamW + cosine + clip=0.25 stack.
+
+### Results (R1 paired, AdamW + cosine T_max=15 + two-shot FiLM stack — NOT current SF stack)
+
+| Arm | Config | val_avg/mae_surf_p | Δ vs A | Δ vs baseline 80.893 |
+|---|---|---:|---:|---:|
+| A | clip=0.25 control (matches old baseline) | 83.233 | — | +2.89% |
+| **B** | **AGC λ=0.01 (no global clip)** | **81.552** | **−2.02%** | +0.81% |
+
+Test 3-split mean: paired Δ −3.97%. Direction-consistent (val and test both improve, test larger).
+
+### Diagnostic from student (per-group AGC clip rate)
+
+Student measured AGC clip rates per parameter-group, every step. Key finding: **`any_clip` rate = 100% every step** — every step at least one tensor was clipped. This is the *opposite* of the regime the AGC paper assumes ("mostly inactive, kicks in only at gradient spikes"). So:
+- At λ=0.01, AGC is behaving more like a permanent per-tensor normalizer than a safety clamp.
+- The mechanism that won here is "per-tensor direction normalization" rather than "scale-aware safety clipping."
+- This is structurally similar to the win that tighter global clip=0.25 got (#3906) — direction normalization at full saturation.
+
+### Decision: SEND BACK for SF-AdamW retest
+
+The win is real (−2.02% paired) and on a mechanism that genuinely differs from global L2 clip (per-tensor vs single threshold). But the absolute val_avg 81.552 is **worse than the current 65.618 baseline** — Edward's experiment was on a stale stack.
+
+Sent back with explicit instructions for the R2 retest:
+- Arm A: SF-AdamW + clip=1.0 + EMA + two-shot FiLM (reproduces #3594 winner)
+- Arm B: SF-AdamW + AGC λ=0.01 (no `--grad_clip_norm`) + EMA + two-shot FiLM
+
+Under SF-AdamW, the question is whether AGC's per-tensor direction normalization compounds with SF's Polyak averaging (which smooths iterates, not gradients). If AGC wins again on the new stack, it becomes a candidate to replace `--grad_clip_norm 1.0` in the canonical stack.
+
+### Lesson
+
+**Rebase-if-positive-Δ protocol fired correctly.** A paired Δ on a stale baseline is the right signal to retest, not to merge. R2 confirmation on the SF stack will determine canonical adoption.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-edward-agc-r1-arma-clip025-20260516-150051/metrics.jsonl` (control, val_avg=83.233)
+- `models/model-charliepai2i48h4-edward-agc-r1-armb-agc-lambda01-20260516-142616/metrics.jsonl` (AGC, val_avg=81.552)
