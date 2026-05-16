@@ -186,14 +186,20 @@ class FourierPosFeatures(nn.Module):
     Output dims for input pos of shape [B, N, 2] are 2 + 4 * n_freqs:
     the raw position plus sin/cos at K frequencies in each of 2 spatial axes.
     Frequencies are geometric: [base^0, base^1, ..., base^(K-1)] scaled by pi.
+    With learnable=True, the freqs vector becomes an nn.Parameter and can
+    be reshaped by gradient descent.
     """
 
-    def __init__(self, n_freqs: int = 6, base: float = 2.0):
+    def __init__(self, n_freqs: int = 6, base: float = 2.0, learnable: bool = False):
         super().__init__()
         freqs = base ** torch.arange(n_freqs).float()
-        self.register_buffer("freqs", freqs.view(1, 1, 1, -1))
+        if learnable:
+            self.freqs = nn.Parameter(freqs.view(1, 1, 1, -1))
+        else:
+            self.register_buffer("freqs", freqs.view(1, 1, 1, -1))
         self.n_freqs = n_freqs
         self.base = base
+        self.learnable = learnable
 
     def forward(self, pos):  # pos: [B, N, 2]  (normalized x, z)
         xz = pos.unsqueeze(-1) * self.freqs * math.pi  # [B, N, 2, K]
@@ -207,6 +213,7 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  n_freqs: int = 0, fourier_base: float = 2.0,
+                 learnable_freqs: bool = False,
                  layer_scale_init: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
@@ -216,7 +223,10 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.n_freqs = n_freqs
-        self.fourier = FourierPosFeatures(n_freqs=n_freqs, base=fourier_base) if n_freqs > 0 else None
+        self.fourier = (
+            FourierPosFeatures(n_freqs=n_freqs, base=fourier_base, learnable=learnable_freqs)
+            if n_freqs > 0 else None
+        )
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -351,6 +361,13 @@ def append_metrics_jsonl(metrics_path: Path, record: dict) -> None:
         f.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def fourier_freq_values(model: nn.Module) -> list[float] | None:
+    """Return current Fourier frequency values as a python list (None if no Fourier)."""
+    if getattr(model, "fourier", None) is None:
+        return None
+    return model.fourier.freqs.detach().flatten().cpu().tolist()
+
+
 def gamma_stats(model: nn.Module) -> dict[str, float]:
     """Return per-block mean and max |gamma| for LayerScale parameters.
 
@@ -398,6 +415,8 @@ def write_experiment_summary(
         "huber_delta": cfg.huber_delta,
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
+        "learnable_freqs": cfg.learnable_freqs,
+        "freq_lr_mult": cfg.freq_lr_mult,
         "lr_t_max": cfg.lr_t_max,
         "layer_scale_init": cfg.layer_scale_init,
         "ema_decay": cfg.ema_decay,
@@ -447,6 +466,8 @@ class Config:
     huber_delta: float = 1.0  # threshold (in normalized units) where Huber switches from quadratic to linear; matches MSE in the limit delta -> inf
     n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
     fourier_base: float = 2.0
+    learnable_freqs: bool = False  # promote Fourier freqs to nn.Parameter so gradient descent can reshape the basis
+    freq_lr_mult: float = 1.0  # LR multiplier for the freq param group (no effect if learnable_freqs=False)
     lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS if None
     layer_scale_init: float = 0.0  # CaiT-style per-channel residual gain; 0.0 disables (baseline behavior)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -495,6 +516,7 @@ model_config = dict(
     mlp_ratio=2,
     n_freqs=cfg.n_freqs,
     fourier_base=cfg.fourier_base,
+    learnable_freqs=cfg.learnable_freqs,
     layer_scale_init=cfg.layer_scale_init,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -504,29 +526,35 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-if cfg.layer_scale_init > 0:
-    # Exclude LayerScale gamma params from weight decay (standard ViT recipe).
-    # Otherwise AdamW would slowly pull tiny gamma values back toward zero, defeating
-    # the point of LayerScale at small init.
-    decay_params, no_decay_params = [], []
-    for name, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if name.endswith("gamma_attn") or name.endswith("gamma_mlp"):
-            no_decay_params.append(p)
-        else:
-            decay_params.append(p)
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay_params, "weight_decay": cfg.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ],
-        lr=cfg.lr,
-    )
-    print(f"Optimizer: AdamW with {len(no_decay_params)} no-decay gamma params, "
-          f"{len(decay_params)} decay params")
-else:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+decay_params, no_decay_params, freq_params = [], [], []
+for name, p in model.named_parameters():
+    if not p.requires_grad:
+        continue
+    if "fourier.freqs" in name:
+        # Learnable Fourier frequencies: optionally take a different LR; never weight-decayed.
+        freq_params.append(p)
+    elif cfg.layer_scale_init > 0 and (name.endswith("gamma_attn") or name.endswith("gamma_mlp")):
+        # Exclude LayerScale gamma params from weight decay (standard ViT recipe).
+        # Otherwise AdamW would slowly pull tiny gamma values back toward zero, defeating
+        # the point of LayerScale at small init.
+        no_decay_params.append(p)
+    else:
+        decay_params.append(p)
+
+param_groups = [{"params": decay_params, "weight_decay": cfg.weight_decay}]
+if no_decay_params:
+    param_groups.append({"params": no_decay_params, "weight_decay": 0.0})
+if freq_params:
+    param_groups.append({
+        "params": freq_params,
+        "lr": cfg.lr * cfg.freq_lr_mult,
+        "weight_decay": 0.0,
+    })
+optimizer = torch.optim.AdamW(param_groups, lr=cfg.lr)
+print(
+    f"Optimizer: AdamW  decay={len(decay_params)}  no_decay={len(no_decay_params)}  "
+    f"freq={len(freq_params)} (freq_lr_mult={cfg.freq_lr_mult})"
+)
 
 ema_model: AveragedModel | None = None
 if cfg.ema_decay is not None:
@@ -554,6 +582,18 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+
+# Capture initial Fourier frequency values BEFORE any training step so we can
+# diagnose how learnable freqs migrate from the geometric init.
+init_freqs = fourier_freq_values(model)
+if init_freqs is not None:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "init",
+        "fourier_freqs": init_freqs,
+        "learnable_freqs": cfg.learnable_freqs,
+        "freq_lr_mult": cfg.freq_lr_mult,
+    })
+    print(f"Initial Fourier freqs ({len(init_freqs)}): {[round(f, 3) for f in init_freqs]}")
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -673,6 +713,11 @@ for epoch in range(MAX_EPOCHS):
     gstats = gamma_stats(model)
     if gstats:
         epoch_record.update(gstats)
+    cur_freqs = fourier_freq_values(model)
+    if cur_freqs is not None:
+        epoch_record["fourier_freqs"] = cur_freqs
+        if ema_model is not None:
+            epoch_record["fourier_freqs_ema"] = fourier_freq_values(ema_model.module)
     if ema_model is not None:
         epoch_record["raw_val_avg/mae_surf_p"] = raw_avg_surf_p
         epoch_record["raw_val_splits"] = raw_split_metrics
@@ -724,6 +769,11 @@ if best_metrics:
         best_ckpt_gstats = gamma_stats(model)
         if best_ckpt_gstats:
             test_record["best_ckpt_gamma_stats"] = best_ckpt_gstats
+        best_ckpt_freqs = fourier_freq_values(model)
+        if best_ckpt_freqs is not None:
+            test_record["best_ckpt_fourier_freqs"] = best_ckpt_freqs
+            if init_freqs is not None:
+                test_record["initial_fourier_freqs"] = init_freqs
         append_metrics_jsonl(metrics_jsonl_path, test_record)
 
     write_experiment_summary(
