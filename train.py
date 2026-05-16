@@ -474,6 +474,7 @@ class Config:
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
+    adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
 
 
 cfg = sp.parse(Config)
@@ -526,7 +527,12 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 ema_decay = cfg.ema_decay
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.adamw_beta2),
+)
 if cfg.sgdr_t0 > 0:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg.sgdr_t0, T_mult=1, eta_min=1e-6
