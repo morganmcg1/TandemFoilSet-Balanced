@@ -221,6 +221,30 @@ def compute_bernoulli_p(x: torch.Tensor, chord_correction: bool = False) -> torc
     return p_b_freestream.unsqueeze(-1) * bump
 
 
+CP_MODES = ("none", "cp", "halfcp")
+
+
+def compute_cp_divisor(x: torch.Tensor, cp_mode: str) -> torch.Tensor:
+    """Per-sample Cp-normalization divisor broadcast across nodes.
+
+    ``cp``     → divisor = p_B = 0.5·V_∞² (standard pressure coefficient).
+    ``halfcp`` → divisor = V_∞           (one power of V_∞ instead of two).
+
+    Clamped at 1.0 for numerical safety; on this dataset the actual minimum
+    divisor is p_B≈1.125 / V_∞≈1.50, so the clamp never fires on real data.
+    """
+    log_re = x[:, 0, LOG_RE_DIM]  # [B]
+    v_inf = torch.exp(log_re) * NU_AIR / CHORD_LENGTH  # [B]
+    if cp_mode == "cp":
+        divisor = 0.5 * v_inf ** 2  # [B]
+    elif cp_mode == "halfcp":
+        divisor = v_inf  # [B]
+    else:
+        raise ValueError(f"Unknown cp_mode: {cp_mode!r}")
+    divisor = divisor.clamp(min=1.0)
+    return divisor.unsqueeze(-1).expand(-1, x.shape[1])  # [B, N]
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -380,6 +404,7 @@ def update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
 def evaluate_split(
     model, loader, stats, surf_weight, device,
     bernoulli_residual: bool = False, bernoulli_chord_correction: bool = False,
+    cp_residual: str = "none",
 ) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -391,6 +416,10 @@ def evaluate_split(
     residual ``p - p_B`` before normalization, and the model's denormalized
     prediction has p_B added back before MAE accumulation so the reported MAE
     remains on raw p.
+
+    If ``cp_residual`` is "cp" or "halfcp", the p channel of y is replaced by
+    ``(p - p_B) / divisor`` before normalization, and the inverse transform is
+    applied to the denormalized prediction so the reported MAE remains on raw p.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -416,7 +445,12 @@ def evaluate_split(
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
 
-            if bernoulli_residual:
+            if cp_residual != "none":
+                p_b = compute_bernoulli_p(x)
+                divisor = compute_cp_divisor(x, cp_residual)
+                y_for_norm = y_clean.clone()
+                y_for_norm[..., 2] = (y_clean[..., 2] - p_b) / divisor
+            elif bernoulli_residual:
                 p_b = compute_bernoulli_p(x, chord_correction=bernoulli_chord_correction)
                 y_for_norm = y_clean.clone()
                 y_for_norm[..., 2] = y_clean[..., 2] - p_b
@@ -444,7 +478,10 @@ def evaluate_split(
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            if bernoulli_residual:
+            if cp_residual != "none":
+                pred_orig = pred_orig.clone()
+                pred_orig[..., 2] = pred_orig[..., 2] * divisor + p_b
+            elif bernoulli_residual:
                 pred_orig = pred_orig.clone()
                 pred_orig[..., 2] = pred_orig[..., 2] + p_b
             ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
@@ -580,6 +617,11 @@ class Config:
     # Arm B: add a per-node chord-position correction 0.5·(1-cos(2π·x)) to p_B.
     # Only takes effect when bernoulli_residual is also True.
     bernoulli_chord_correction: bool = False
+    # Cp-style pressure normalization: predict (p − p_B) / divisor where divisor
+    # depends on cp_residual: "cp" → divisor=p_B (standard pressure coefficient),
+    # "halfcp" → divisor=V_∞ (one power of V_∞). Inverted at eval. Mutually
+    # exclusive with --bernoulli_residual.
+    cp_residual: str = "none"
     # torch.compile() wrapping for faster per-epoch training. EMA shadow stays
     # uncompiled (deepcopy of model happens before compile). dynamic=True handles
     # the variable padded mesh size (74K-242K nodes) without recompilation.
@@ -593,6 +635,14 @@ class Config:
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+assert cfg.cp_residual in CP_MODES, (
+    f"--cp_residual must be one of {CP_MODES}, got {cfg.cp_residual!r}"
+)
+if cfg.cp_residual != "none":
+    assert not cfg.bernoulli_residual, (
+        "--cp_residual is mutually exclusive with --bernoulli_residual"
+    )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -664,6 +714,55 @@ if cfg.bernoulli_residual:
     print(f"  Std ratio (resid/raw)   : {y_p_std_resid/y_p_std_raw:.3f}")
     stats["y_mean"][2] = torch.tensor(y_p_mean_resid, dtype=stats["y_mean"].dtype, device=stats["y_mean"].device)
     stats["y_std"][2] = torch.tensor(y_p_std_resid, dtype=stats["y_std"].dtype, device=stats["y_std"].device)
+
+# --- Cp normalization stats pre-pass ----------------------------------------
+# When predicting (p − p_B) / divisor instead of raw p, the global y_mean/y_std
+# for the p channel saved in stats.json no longer apply. Stream once over the
+# training data to recompute the p-channel mean/std on the transformed target
+# and overwrite stats["y_mean"][2], stats["y_std"][2] in place.
+y_p_mean_cp = y_p_mean_raw
+y_p_std_cp = y_p_std_raw
+cp_v_inf_min = cp_v_inf_max = cp_v_inf_mean = float("nan")
+cp_divisor_min = cp_divisor_max = float("nan")
+if cfg.cp_residual != "none":
+    print(f"Pre-pass: recomputing Cp-normalized stats for p channel (mode={cfg.cp_residual})...")
+    prepass_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False,
+                                collate_fn=pad_collate, num_workers=4, pin_memory=True)
+    sum_r = sum_r2 = n_total = 0.0
+    v_infs: list[float] = []
+    divisors: list[float] = []
+    for x_b, y_b, _is_s, mask_b in prepass_loader:
+        x_b = x_b.to(device, non_blocking=True)
+        y_b = y_b.to(device, non_blocking=True)
+        mask_b = mask_b.to(device, non_blocking=True)
+        finite = torch.isfinite(y_b[..., 2])
+        valid = (mask_b & finite).float()
+        p_b = compute_bernoulli_p(x_b)
+        divisor = compute_cp_divisor(x_b, cfg.cp_residual)
+        cp_target = (y_b[..., 2] - p_b) / divisor
+        r = cp_target * valid
+        sum_r += float(r.sum().item())
+        sum_r2 += float((r * r * valid).sum().item())
+        n_total += float(valid.sum().item())
+        log_re_b = x_b[:, 0, LOG_RE_DIM]
+        v_inf_b = (torch.exp(log_re_b) * NU_AIR / CHORD_LENGTH).cpu().tolist()
+        v_infs.extend(v_inf_b)
+        divisors.extend(divisor[:, 0].cpu().tolist())
+    y_p_mean_cp = sum_r / max(n_total, 1.0)
+    y_p_var_cp = sum_r2 / max(n_total, 1.0) - y_p_mean_cp ** 2
+    y_p_std_cp = max(y_p_var_cp, 1e-8) ** 0.5
+    cp_v_inf_min = min(v_infs)
+    cp_v_inf_max = max(v_infs)
+    cp_v_inf_mean = sum(v_infs) / len(v_infs)
+    cp_divisor_min = min(divisors)
+    cp_divisor_max = max(divisors)
+    print(f"  V_inf distribution: min={cp_v_inf_min:.2f}  max={cp_v_inf_max:.2f}  mean={cp_v_inf_mean:.2f} m/s")
+    print(f"  Divisor ({cfg.cp_residual}): min={cp_divisor_min:.3f}  max={cp_divisor_max:.3f}")
+    print(f"  Cp p-channel stats : mean={y_p_mean_cp:.4f}  std={y_p_std_cp:.4f}")
+    print(f"  Raw p-channel stats: mean={y_p_mean_raw:.3f}  std={y_p_std_raw:.3f}")
+    print(f"  Std ratio (cp/raw) : {y_p_std_cp/y_p_std_raw:.5f}")
+    stats["y_mean"][2] = torch.tensor(y_p_mean_cp, dtype=stats["y_mean"].dtype, device=stats["y_mean"].device)
+    stats["y_std"][2] = torch.tensor(y_p_std_cp, dtype=stats["y_std"].dtype, device=stats["y_std"].device)
 
 model_config = dict(
     space_dim=2,
@@ -743,6 +842,24 @@ if cfg.bernoulli_residual:
         "y_p_std_ratio": y_p_std_resid / y_p_std_raw,
     })
 
+if cfg.cp_residual != "none":
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "cp_setup",
+        "cp_residual": cfg.cp_residual,
+        "nu_air": NU_AIR,
+        "chord_length": CHORD_LENGTH,
+        "v_inf_min": cp_v_inf_min,
+        "v_inf_max": cp_v_inf_max,
+        "v_inf_mean": cp_v_inf_mean,
+        "divisor_min": cp_divisor_min,
+        "divisor_max": cp_divisor_max,
+        "y_p_mean_raw": y_p_mean_raw,
+        "y_p_std_raw": y_p_std_raw,
+        "y_p_mean_cp": y_p_mean_cp,
+        "y_p_std_cp": y_p_std_cp,
+        "y_p_std_ratio": y_p_std_cp / y_p_std_raw,
+    })
+
 append_metrics_jsonl(metrics_jsonl_path, {
     "event": "compile_setup",
     "torch_compile": cfg.torch_compile,
@@ -781,7 +898,12 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        if cfg.bernoulli_residual:
+        if cfg.cp_residual != "none":
+            p_b = compute_bernoulli_p(x)
+            divisor = compute_cp_divisor(x, cfg.cp_residual)
+            y_for_norm = y.clone()
+            y_for_norm[..., 2] = (y[..., 2] - p_b) / divisor
+        elif cfg.bernoulli_residual:
             p_b = compute_bernoulli_p(x, chord_correction=cfg.bernoulli_chord_correction)
             y_for_norm = y.clone()
             y_for_norm[..., 2] = y[..., 2] - p_b
@@ -887,6 +1009,7 @@ for epoch in range(MAX_EPOCHS):
             ema_model, loader, stats, cfg.surf_weight, device,
             bernoulli_residual=cfg.bernoulli_residual,
             bernoulli_chord_correction=cfg.bernoulli_chord_correction,
+            cp_residual=cfg.cp_residual,
         )
         for name, loader in val_loaders.items()
     }
@@ -972,6 +1095,7 @@ if best_metrics:
                 ema_model, loader, stats, cfg.surf_weight, device,
                 bernoulli_residual=cfg.bernoulli_residual,
                 bernoulli_chord_correction=cfg.bernoulli_chord_correction,
+                cp_residual=cfg.cp_residual,
             )
             for name, loader in test_loaders.items()
         }
