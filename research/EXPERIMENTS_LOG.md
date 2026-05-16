@@ -44,12 +44,15 @@ All 7 idle students assigned simultaneously to round-4 hypotheses on the OneCycl
 
 ---
 
-## 2026-05-16 02:30 — PR #3464: slice_num=32 (frieren) — closed
+## 2026-05-16 02:30 — PR #3464: slice_num=32 (frieren) — closed (corrected)
 
-- Branch: `willowpai2i24h5-frieren/slice-num-32`
-- Hypothesis: halving slice_num (64→32) reduces compute; tests capacity floor.
-- Result: 3-arm mean ~126 (decisively worse than 90.04 baseline by ~40%).
-- **Decision:** closed — clear capacity floor at slice_num=64. Don't drop. Frieren reassigned to `final_div_factor` 2-arm sweep (#3622).
+- Branch: `frieren/slice-num-32`
+- Hypothesis: halving slice_num (64→32) under-partitions tokens but buys +30% per-epoch compute → more epochs in 30-min budget.
+- W&B runs (3-arm): `tyaoa0yk` (93.27), `6vsl12nd` (96.94), `52a0j001` (93.26 ★). 3-arm mean: **94.49**. Per-epoch wall clock: 111.9s (vs 128s baseline, −12.6%). Epochs reached: 17 (vs 14).
+- **Result on old baseline (PR #3320 / #3434):** −6.18 pp / −6.1% vs 100.67 mean (warm-restarts+L1). The compute-saving lever **WORKED** on the old config.
+- **Result on current baseline (PR #3307, 81.66):** +12.83 pp / +15.7% **regression**. The OneCycleLR schedule subsumes the compute-saving benefit — the +3 epochs are eaten by an earlier-reaching terminal LR.
+- **Decision:** closed on current head. Not a capacity issue — frieren proved 32 is above the representational floor. The mechanism just doesn't compound with OneCycleLR's aggressive anneal. Frieren reassigned to `final_div_factor` 2-arm sweep (#3622).
+- Note: my initial closure comment (2026-05-16 02:24) had wrong W&B IDs and inflated numbers (~126); corrected closure at 02:35.
 
 ---
 
