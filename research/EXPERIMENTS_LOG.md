@@ -1,5 +1,40 @@
 # SENPAI Research Results
 
+## 2026-05-16 23:35 — Welsch closure (#4193) + per-sample reweight assignment (#4204); loss-shape axis FULLY CLOSED
+
+### Closed: PR #4193 (frieren) — Welsch biweight c=1.0 on new baseline
+
+Run `j6txdfb6`: val_avg=60.2183 (+6.72% vs new baseline), test_3split=59.4685 (+7.46%). Failure-mode #1 triggered.
+
+**Frieren's mechanism reading is the cleanest closure analysis to date**. The Welsch failure is NOT late-stage-fine-tuning suppression as my brief hypothesized; it is **early-stage gradient-signal collapse**. At init, normalized residuals have p99≈2.1, abs_max≈2.5. With c=1.0 and gradient `r·exp(-r²/2)`:
+- exp(-r²/2) ≈ 0.135 for r=2
+- exp(-r²/2) ≈ 0.011 for r=3
+
+For the first ~10% of training, the dominant hard samples received an effectively-zero gradient multiplier. By the time residuals entered the quadratic regime (epoch 5-7, p99 < 1.0), cosine LR had burned >35% of budget. best_epoch=17=MAX confirmed budget-bound, not overfit-bound.
+
+**Split decomposition (load-bearing finding)**: val_single_in_dist (EASY split) regressed MOST (+13.19%), val_geom_camber_rc +7.25%, val_geom_camber_cruise +3.24%, val_re_rand +0.86%. Easy splits regress most when high-|p| samples LOSE gradient signal — the inverse direction (giving them MORE signal) should help hard splits most. This directly motivates the next assignment.
+
+**This is textbook initialization-sensitivity failure of redescending M-estimators** (graduated non-convexity literature; classical robust statistics). From-scratch transformer training is fundamentally incompatible without a Huber warmup pretrain. Closure protocol applied.
+
+### Loss-shape axis FULLY CLOSED this round
+
+Four distinct mechanisms tested; four distinct failure modes; clean coverage:
+
+| PR | Loss | Result | Mechanism failure |
+|----|------|--------|-------------------|
+| #4086 | Huber δ=0.25 (3-seed) | mean 61.55 | δ-axis saturated past 0.5 — tighter quadratic over-shrinks |
+| #4141 | Asymmetric Huber (δ_pos=0.25, δ_neg=1.0) | 61.95 | Residuals are balanced (instrumentation falsified premise) |
+| #4170 | log-cosh (parameter-free C² robust) | 57.66 | Wider quadratic transition (|r|≈1) — Huber's tighter (|r|=0.5) is load-bearing |
+| #4193 | Welsch biweight c=1.0 | 60.22 | Init-sensitivity: redescending gradient kills early-stage signal on hard samples |
+
+Frieren's residual-distribution instrumentation (frac_pos, abs_max, p99) was load-bearing in all three of their own closures. This is paper-quality diagnostic work and worth packaging when we write up.
+
+### Round-17 new assignment
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4204** | **frieren** | Per-sample surface-loss reweighting by peak |p| (α=1.0) | Same gradient form (Huber δ=0.5); per-sample WEIGHT scaling. Tests the inverse direction Welsch's split-decomposition pointed to — give high-|p| samples MORE signal |
+
 ## 2026-05-16 22:50 — 2 more closures (#4170, #4164) + 2 new assignments (#4193, #4194)
 
 ### Closed: PR #4170 (frieren) — log-cosh loss on new baseline

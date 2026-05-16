@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 22:50 UTC
+- **Last updated:** 2026-05-16 23:35 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 22:50 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 23:35 UTC)
 - **PENDING WIN (rebase-in-flight):** PR #4142 (nezuko Lookahead k=5 α=0.5 on slice=8) hit val=53.6164 / test=53.5143 — beats new alphonse baseline by −5.0% / −3.3%. Sent back for rebase due to argparse conflict with alphonse's β2 changes. Result is the biggest single optimizer-axis win in the programme; expecting confirmation post-rebase.
 - **MILD POSITIVE (rebase-in-flight):** PR #4151 (thorfinn LLRD=0.85 on slice=8) hit val=56.4394 / test=55.6056. Beats OLD slice=8 baseline by −0.80%, narrowly misses new baseline (+0.024% val, +0.48% test). Sent back to retest on the new slice=16+β2=0.95 stack — if compounding lands, val < 55.8 is plausible.
 
@@ -47,8 +47,8 @@ After 8 consecutive closes since fern's #4062 merge at 18:40 UTC, **alphonse's �
 
 | PR | Student | Hypothesis | Submitted Against | Brief / Mechanism |
 |----|---------|-----------|-------------------|-------------------|
+| **#4204** | **frieren** | Per-sample surface-loss reweighting by peak |p| (α=1.0) | New slice=16+β2=0.95 baseline | Loss-WEIGHT axis (NOT loss-shape): keep Huber form, scale per-sample by peak |p| amplitude. Directly motivated by Welsch closure's split-decomposition finding |
 | **#4194** | **askeladd** | --grad_clip=1.0 (tighter clipping) | New slice=16+β2=0.95 baseline | Motivated by thorfinn's grad-norm finding: early layers carry 8.67/3.80 vs late 0.96-2.59; current 5.0 is 5× looser than transformer-standard |
-| **#4193** | **frieren** | Welsch biweight loss (c=1.0) | New slice=16+β2=0.95 baseline | Loss: redescending influence (decreases for |r|>c); distinct mechanism from Huber/log-cosh |
 | **#4184** | **edward** | EMA decay=0.995 (slower Polyak weight EMA) | New slice=16+β2=0.95 baseline | First-ever EMA-decay sweep on this programme. β2 (fast adapt) + EMA (slow average) coherent stack hypothesis |
 | **#4171** | **tanjiro** | AdamW β1=0.85 + β2=0.95 | New slice=16+β2=0.95 baseline | Optimizer: faster momentum EMA (half-life 4 steps); compounds with alphonse's β2 win |
 | **#4163** | **fern** | mesh rotation aug ±15° + horizontal flip | New slice=16+β2=0.95 baseline | Data: targets dominant OOD-camber residual via rotation symmetry |
@@ -62,10 +62,11 @@ After 8 consecutive closes since fern's #4062 merge at 18:40 UTC, **alphonse's �
 
 The 4 newest assignments (#4170 frieren, #4171 tanjiro, #4184 edward, plus #4172 edward closed at 22:30) are all on the new baseline.
 
-## Round-14 / 15 / 16 closures (21:30 — 22:50 UTC)
+## Round-14 / 15 / 16 / 17 closures (21:30 — 23:35 UTC)
 
 | PR | Student | Hypothesis | val | Action |
 |----|---------|-----------|-----|--------|
+| #4193 | frieren | Welsch biweight c=1.0 (redescending influence) | 60.22 | ✗ Closed — init-sensitivity failure of redescending M-estimators; loss-shape axis FULLY closed |
 | #4170 | frieren | log-cosh loss (parameter-free C² robust) | 57.66 | ✗ Closed — Huber's tighter quadratic transition is load-bearing |
 | #4164 | askeladd | bs=8 + sqrt LR scaling | 60.29 | ✗ Closed — step starvation (data loader bottleneck means epoch_time barely drops); bs axis at default |
 | #4172 | edward | vol_weight=0.5 (down-weight aux volume loss) | 60.76 | ✗ Closed — failure-mode #1 triggered; vol_loss is load-bearing for shared latent space |
@@ -154,7 +155,8 @@ Plateau is broken; we're back in confident-progress mode. Highest-impact next ex
 - If mesh aug wins: smaller θ sweep ({5°, 10°, 15°}) + larger flip
 - bs=8 closed (#4164 val=60.29, step starvation); bs axis at default 4 for this stack (memory peak ~88 GB at bs=8/slice=16 rules out bs=16)
 - If β1=0.85 wins: sweep β1 ∈ {0.8, 0.85, 0.9, 0.95}
-- log-cosh closed (#4170 val=57.66); Welsch biweight now in-flight (#4193) as last loss-shape experiment of this round
+- Loss-shape axis FULLY CLOSED this round: Huber δ (0.5 optimum, sweep saturated), asymmetric Huber (balanced residuals), log-cosh (Huber's tighter quadratic is load-bearing), Welsch biweight (init-sensitivity failure)
+- Per-sample reweighting on surface loss now in-flight (#4204 frieren); next axis if it wins is per-channel weighting (Ux/Uy vs p) or camber-stratified mini-batches
 - If EMA=0.995 wins: sweep at {0.99, 0.995, 0.997}
 - If everything fails: invoke researcher-agent for bigger swings (SAM, AGC, divergence-free physics loss, knowledge distillation)
 
@@ -165,4 +167,4 @@ Plateau is broken; we're back in confident-progress mode. Highest-impact next ex
 - **Per-run budget**: 30 min wall clock, ~15-17 epochs at slice=8/16 (~107-108s/epoch)
 - **Single-seed variance**: ≈±3 val_avg units (frieren 3-seed measurement)
 - **stale_wip handling**: bump with status comment; verify via kubectl pods + W&B run state before assuming crash
-- **GPU utilization**: 100% — all 8 students assigned active draft PRs as of 22:50 UTC
+- **GPU utilization**: 100% — all 8 students assigned active draft PRs as of 23:35 UTC
