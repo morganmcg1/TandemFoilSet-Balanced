@@ -367,6 +367,50 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     )
 
 
+def continuity_penalty(pred, x_orig, vol_mask, n_pairs: int = 512):
+    """Random-pair finite-difference divergence proxy on volume nodes.
+
+    For each batch element, sample two independent permutations of volume node
+    indices (perm_a, perm_b) and compute the directional-derivative divergence
+    proxy `(dUx*dx + dUy*dz) / |dr|^2`. Returns mean(div^2).
+
+    pred:     [B, N, 3] model output in normalized space (we operate in normalized
+              space; Ux and Uy share the same physical unit so relative weighting
+              is preserved up to a global scale absorbed by `continuity_weight`).
+    x_orig:   [B, N, 24] input feature tensor; positions at x_orig[..., 0:2].
+    vol_mask: [B, N] True for valid volume / non-surface nodes (and not padding).
+    """
+    B = pred.shape[0]
+    losses = []
+    r2_samples = []
+    for b in range(B):
+        vol_idx = vol_mask[b].nonzero(as_tuple=True)[0]
+        n_vol = vol_idx.numel()
+        if n_vol < 4:
+            continue
+        k = min(n_pairs, n_vol)
+        perm_a = vol_idx[torch.randperm(n_vol, device=pred.device)[:k]]
+        perm_b = vol_idx[torch.randperm(n_vol, device=pred.device)[:k]]
+        dx = x_orig[b, perm_b, 0] - x_orig[b, perm_a, 0]
+        dz = x_orig[b, perm_b, 1] - x_orig[b, perm_a, 1]
+        dUx = pred[b, perm_b, 0] - pred[b, perm_a, 0]
+        dUz = pred[b, perm_b, 1] - pred[b, perm_a, 1]
+        r2 = dx * dx + dz * dz + 1e-6
+        div = (dUx * dx + dUz * dz) / r2
+        losses.append((div * div).mean())
+        r2_samples.append(r2.detach())
+    if not losses:
+        zero = torch.tensor(0.0, device=pred.device)
+        return zero, {"median_r2": 0.0, "n_pairs": 0}
+    div_loss = torch.stack(losses).mean()
+    r2_all = torch.cat(r2_samples)
+    info = {
+        "median_r2": float(r2_all.median().item()),
+        "n_pairs": int(r2_all.numel()),
+    }
+    return div_loss, info
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -389,6 +433,8 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
+    continuity_weight: float = 0.0  # PINN soft divergence penalty weight; 0 disables
+    continuity_n_pairs: int = 512  # random node pairs per sample for FD divergence proxy
 
 
 cfg = sp.parse(Config)
@@ -505,7 +551,18 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        data_loss = vol_loss + cfg.surf_weight * surf_loss
+        loss = data_loss
+
+        div_loss_val: float | None = None
+        div_r2_median: float | None = None
+        if cfg.continuity_weight > 0:
+            div_loss, div_info = continuity_penalty(
+                pred, x, vol_mask, n_pairs=cfg.continuity_n_pairs
+            )
+            loss = loss + cfg.continuity_weight * div_loss
+            div_loss_val = float(div_loss.item())
+            div_r2_median = div_info["median_r2"]
 
         optimizer.zero_grad()
         loss.backward()
@@ -519,9 +576,19 @@ for epoch in range(MAX_EPOCHS):
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        step_log = {
+            "train/loss": loss.item(),
+            "train/data_loss": data_loss.item(),
+            "global_step": global_step,
+        }
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if div_loss_val is not None:
+            step_log["train/div_loss"] = div_loss_val
+            step_log["train/div_r2_median"] = div_r2_median
+            step_log["train/div_to_data_ratio"] = (
+                cfg.continuity_weight * div_loss_val / max(data_loss.item(), 1e-12)
+            )
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
