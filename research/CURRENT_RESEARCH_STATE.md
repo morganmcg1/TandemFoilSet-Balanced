@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 07:45 (PR #3643 n_head=2 merged — new baseline 70.925; #3639 EMA + #3646 DropPath closed; #3727 GEGLU sent back; askeladd/alphonse/fern assigned new experiments #3773/#3774/#3775)
+- **Last updated:** 2026-05-16 08:35 (attn-dropout #3774 closed — 4th uniform-regularizer failure; alphonse assigned LayerScale #3819; all 8 GPUs occupied)
 - **Most recent research direction from human researcher team:** none (no open issues — verified 06:30Z).
 - **Current best (merged):** `val_avg/mae_surf_p` = **70.925** (PR #3643 n_head=2 head_dim=48)
 - **GH rate-limit status:** ~3500/5000 remaining.
@@ -15,7 +15,8 @@
 | #3727 | frieren | GEGLU at hidden_inner=192 | WIP (sent back for retest on n_head=2 stack) | Was −3.10% standalone win |
 | #3744 | tanjiro | hidden_inner=192→256 | WIP | Capacity ceiling probe |
 | #3773 | askeladd | n_head=1 head_dim=96 (extend wider-head trend) | WIP (newly assigned) | Follow-up to #3643 win |
-| #3774 | alphonse | attention dropout p=0.1 | WIP (newly assigned) | New regularization axis on attention path |
+| #3774 | alphonse | attention dropout p=0.1 | CLOSED — NEGATIVE (+7.79%) | 4th consecutive uniform-regularizer failure |
+| #3819 | alphonse | LayerScale γ=1e-4 (residual scaling) | WIP (newly assigned) | Architectural init, not regularization |
 | #3775 | fern | n_layers=6 on SwiGLU + n_head=2 | WIP (newly assigned) | Depth retest on new stack |
 
 ## Branch context
@@ -67,7 +68,7 @@ Frieren's #3727 showed GELU-gated FFN beats SiLU-gated by −3.1% val. **This co
 4. **hidden_inner=256** — tanjiro (#3744). Capacity ceiling probe.
 
 ### Tier 2 (asymmetric regularization, never tested)
-5. **Attention dropout p=0.1** — alphonse (new). Clean new axis: dropout in attention path, not FFN. Different mechanism than the failed uniform regularizers.
+5. **LayerScale γ=1e-4** — alphonse (#3819). Residual scaling with learnable per-channel scalars. Init at 1e-4; converges to ~1 if not needed. Zero regularization effect; purely architectural init stabilizer. CaiT (Touvron 2021) showed benefits at depth 5+.
 
 ### Tier 3 (other open axes)
 6. **surf_weight=5** — edward (#3645). Loss rebalance.
@@ -78,13 +79,15 @@ Frieren's #3727 showed GELU-gated FFN beats SiLU-gated by −3.1% val. **This co
 - Does n_head=1 push the head-width trend further or hit the knee? (askeladd)
 - Does GEGLU compound with n_head=2 to give an additional −2-3%? (frieren #3727)
 - Does n_layers=6 finally work on SwiGLU+n_head=2? (fern)
-- Does attention dropout reach a different sweet spot than FFN dropout? (alphonse)
+- ~~Does attention dropout reach a different sweet spot than FFN dropout?~~ **ANSWERED: NO — +7.79% val at p=0.1. 4th consecutive uniform-regularizer failure.**
+- Does LayerScale γ=1e-4 stabilize residual updates and improve convergence? (alphonse #3819)
 - Does hidden_inner=256 saturate or continue paying off? (tanjiro #3744)
 - ~~Does eta_min=1e-5 compound on SwiGLU?~~ **DEAD axis**
 - ~~Does DropPath p=0.1 regularize productively?~~ **DEAD axis**
 - ~~Does EMA α=0.999 smooth the cosine tail?~~ **DEAD axis**
 
 ## Closed/regressed (cumulative)
+- **NEW: #3774 alphonse attn-dropout p=0.1: +7.79% val (4th consecutive uniform-regularizer failure)**
 - **NEW: #3639 alphonse EMA α=0.999: +13.5% live val (axis dead at this α)**
 - **NEW: #3646 fern DropPath p=0.1: +24.6% val (axis dead at this p)**
 - #3536 tanjiro eta_min=1e-5 on SwiGLU: +6.6%

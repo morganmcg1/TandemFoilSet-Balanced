@@ -1086,3 +1086,18 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 - **SENT BACK** — was a winner on old stack but doesn't beat n_head=2 baseline. Direction strongly promising; should compound. Frieren rebasing onto n_head=2 stack for retest.
 - **Analysis:** GEGLU outperformed SwiGLU at hidden_inner=192 by −3.10% val, −4.34% test on the n_head=4 stack. **This is surprising** — in LLMs SwiGLU usually slightly outperforms GEGLU. On this physics surrogate, GELU's smoother negative region may give better gradient signal to the gate. Both axes (n_head=2, GEGLU) are orthogonal — should compound on the new stack.
 
+
+## 2026-05-16 08:28 — PR #3774: Attention dropout p=0.1 [CLOSED — NEGATIVE]
+
+- charliepai2i24h2-alphonse/attn-dropout-p01
+- **Hypothesis:** Attention dropout (post-softmax probability dropout) is mechanically distinct from FFN dropout — targets which tokens attend to which, not feature values. Standard transformer default p=0.1 (Vaswani 2017).
+- **Artifacts:** `models/model-attn-dropout-p01-20260516-073355/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | Attn Dropout p=0.1 | Δ |
+|--------|--------------------|--------------------|---|
+| val_avg/mae_surf_p | 70.925 | 76.449 | **+7.79%** |
+| test_avg/mae_surf_p | 61.914 | 66.531 | **+7.46%** |
+
+- **CLOSED — clear negative.** All 4 val/test splits regressed. Curve still descending at E14 — convergence drag, same pattern as DropPath p=0.1 (#3646).
+- **Analysis:** This is the **4th consecutive textbook-magnitude uniform regularizer failure** on the post-SwiGLU+n_head=2 stack (DropPath, EMA, attn-dropout, FFN dropout). Program finding confirmed: standard-magnitude uniform regularizers are past their optimum on this stack. The post-SwiGLU model has lower intrinsic overfitting risk; any regularization at standard magnitudes just adds convergence drag within the 14-epoch budget.
+- **Decision:** Close attention-dropout axis at p=0.1. Moving alphonse to LayerScale (#3819) — fundamentally different architectural axis.
