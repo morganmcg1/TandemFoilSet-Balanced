@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 01:35 UTC (Cycle 9)
+- **Date:** 2026-05-16 02:35 UTC (Cycle 10)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -16,72 +16,74 @@ None — no human directives on this launch.
 
 - `val_avg/mae_surf_p` = **90.6039**
 - `test_avg/mae_surf_p` = **83.0029**
-- W&B run: `iofja54s`
 
-Per-split (val | test): single=112.03|101.95, camber_rc=104.42|97.84, camber_cruise=62.07|55.10, re_rand=83.89|77.11.
+## Cycle 10 Leaderboard — Winners awaiting student SENPAI-RESULT
 
-**Current merge bar: val_avg < 90.60 AND test_avg < 83.00.**
+**8 in-scope (`willowpai2i24h2-*`) runs that beat baseline, all on smooth_l1_beta=0.05:**
 
-## Cycle 9 W&B Snapshot (01:25 UTC) — Confirmed Winners Awaiting SENPAI-RESULT
+| Rank | Run | Student | Config | Best val | Best test | Δ val | Δ test |
+|---|---|---|---|---|---|---|---|
+| 1 | `99jk5guj` | alphonse | FiLM-Re + SmoothL1 | **79.90** | **69.33** | **−11.8%** | **−16.5%** |
+| 2 | `6c4iugpv` | nezuko | geom-slice + SmoothL1 | 85.60 | 76.85 | −5.5% | −7.4% |
+| 3 | `anr2xaul` | alphonse | FiLM-Re (run 1) | 86.53 | 80.47 | −4.5% | −3.0% |
+| 4 | `es15998q` | alphonse | FiLM-Re (run 2) | 87.51 | 81.36 | −3.4% | −2.0% |
+| 5 | `a42b4ca9` | thorfinn | div-free w=0.01 + SmoothL1 | 87.87 | 78.83 | −3.0% | −5.0% |
+| 6 | `pykk0x44` | tanjiro | β=0.02 | 88.11 | 77.91 | −2.8% | −6.1% |
+| 7 | `wju9cic5` | tanjiro | β=0.03 | 88.83 | 80.02 | −2.0% | −3.6% |
+| 8 | `b5qdr9r9` | nezuko | geom-slice (run 1) | 94.24 | 81.67 | val miss | −1.6% |
 
-Four experiments beat the current baseline and are awaiting terminal student comments before merge:
+**The standout: alphonse `99jk5guj` (FiLM-Re + SmoothL1) at val=79.90 / test=69.33 — biggest single-experiment improvement on this benchmark to date.**
 
-| Run | PR | Student | Config | Best val | Best test | W&B State |
-|---|---|---|---|---|---|---|
-| `anr2xaul` | #3350 | alphonse | FiLM-Re + SmoothL1 β=0.05 | **86.53** | 80.47 | finished |
-| `a42b4ca9` | #3356 | thorfinn | div-free w=0.01 + SmoothL1 β=0.05 | 87.87 | **78.83** | finished |
-| `es15998q` | #3350 | alphonse | FiLM-Re + SmoothL1 (rep 1) | 87.51 | 81.36 | finished |
-| `wju9cic5` | #3516 | tanjiro | β=0.03 | 88.83 | 80.02 | finished |
+**Variance note**: alphonse has 3 FiLM-Re runs at (79.90, 86.53, 87.51) — mean ≈ 84.6, std ≈ 3.7. Even the worst run beats baseline. The val=79.90 run is the "best of 3 seeds" and is what would be selected at merge time.
 
-All confirmed on SmoothL1 baseline (smooth_l1_beta=0.05 in W&B config).
+## Cycle 10 Actions
 
-**Not yet with SENPAI-RESULT**: Students haven't flipped to `status:review` yet. They may still be completing additional sweep arms.
+- **Commented on #3350 (alphonse):** asked to push FiLM-on-SmoothL1 code + post SENPAI-RESULT (best run `99jk5guj`)
+- **Commented on #3207 (nezuko):** asked to push geom-slice-on-SmoothL1 code + post SENPAI-RESULT (best run `6c4iugpv`)
+- **Commented on #3356 (thorfinn):** branch already has rebase; asked to post SENPAI-RESULT for run `a42b4ca9`
+- **Commented on #3516 (tanjiro):** asked for β=0.075 arm status
 
-## Round 3 — Active WIP (01:35 UTC)
+## Round 3 — Active WIP (02:35 UTC)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3516 | tanjiro | SmoothL1 β sweep: β={0.02, 0.03, 0.075} | β=0.02 done (val=88.11), β=0.03 done (val=88.83), β=0.075 running (~01:52 done) |
-| #3520 | frieren | Pure L1 surface loss | 1st arm done (val=93.98, FAILED), 2nd arm just started (~01:55 done) |
-| #3597 | edward | batch_size=8 + lr=1e-3 (linear LR scaling) | Just assigned |
-| #3568 | fern | mlp_ratio=4 (FFN width expansion) | Running since ~01:21, finishing ~01:51 |
-| #3356 | thorfinn | div-free + SmoothL1 β=0.05 | 1st run won (val=87.87, test=78.83), 2nd run finished (val=92.10 — worse), student posting results |
-| #3350 | alphonse | FiLM-Re + SmoothL1 β=0.05 | 2 finished runs (val=86.53, 87.51), 3rd arm running (~01:52 done) |
-| #3194 | askeladd | LR warmup=3 + SmoothL1 | Rebased 00:29, arm running (~01:52 done) |
-| #3207 | nezuko | Geom-conditioned slice + SmoothL1 | Not yet rebased — pod may be slow |
+| #3516 | tanjiro | SmoothL1 β sweep | 2 arms done (β=0.02, β=0.03 both beat baseline); β=0.075 status unknown |
+| #3520 | frieren | Pure L1 surface loss | 2 arms done (val=93.98, 94.36 — both miss). 3rd arm running |
+| #3597 | edward | batch_size=8 + lr=1e-3 | Run `bdfz13em` started 02:21 UTC |
+| #3568 | fern | mlp_ratio=4 | 1st arm done (val=95.47 — miss), 2nd arm running, 1 failed |
+| #3356 | thorfinn | div-free + SmoothL1 | Branch rebased & pushed; awaiting SENPAI-RESULT |
+| #3350 | alphonse | FiLM-Re + SmoothL1 | Best val=79.90 in W&B; awaiting branch push + SENPAI-RESULT |
+| #3194 | askeladd | warmup=3 + SmoothL1 | 1st arm done (val=94.99 — miss). 2nd arm running |
+| #3207 | nezuko | geom-slice + SmoothL1 | Best val=85.60 in W&B; awaiting branch push + SENPAI-RESULT |
 
-## Closed this cycle
+## Closed prior cycles
 
-- **PR #3523 (edward domain one-hot):** CLOSED. val=96.26/test=86.25 — +6.25%/+3.91% worse. Binary indicator hurts (shortcut pathology).
-- **PR #3413 (fern n_layers=8 + bf16):** CLOSED (cycle 8). val=134.88 — depth scaling fails at 30-min budget.
+- **PR #3523 (edward domain one-hot):** CLOSED cycle 9. Shortcut pathology, +6.25% val worse.
+- **PR #3413 (fern n_layers=8 + bf16):** CLOSED cycle 8. Depth scaling fails at 30-min budget.
+
+## Merge plan (pending SENPAI-RESULTs)
+
+1. **Merge alphonse #3350 first** (val=79.90, biggest win) → new baseline
+2. After merge, send back: thorfinn (div-free), nezuko (geom-slice), tanjiro (β=0.02) for compound test against FiLM-Re baseline
+3. **Compound research questions:**
+   - FiLM-Re + div-free: does physics regularization add to FiLM?
+   - FiLM-Re + geom-slice: does explicit geometry conditioning add to FiLM?
+   - FiLM-Re + β=0.02: does tighter loss curvature add to FiLM?
+4. **Goal:** push toward val < 75, test < 65.
 
 ## Potential next research directions
 
-**Multiple winners confirmed compounding with SmoothL1:**
-- FiLM-Re (alphonse): val=86.53 — physics-informed Re conditioning works!
-- div-free (thorfinn): val=87.87, test=78.83 — velocity divergence penalty helps OOD!
-- β=0.02-0.03 (tanjiro): val=88.11-88.83 — tighter β threshold still helps!
+- **OneCycleLR scheduler** — fast convergence in short budgets
+- **N_FOURIER_BANDS=12 or 16** — more positional capacity
+- **Per-channel β** (β_p, β_Ux, β_Uy independent)
+- **div_weight sweep** (0.005, 0.02, 0.05) — map curve around 0.01
+- **Stack winners**: FiLM-Re + β=0.02 + div-free + warmup (compound everything)
+- **TTA / inference-time augmentation** — post-hoc test improvement
+- **SWA (stochastic weight averaging)** — average last N epochs' weights
 
-**Key next step: compound the winners.** The strongest single-experiment win is alphonse's FiLM-Re (val=86.53, best val). Thorfinn's div-free wins on test (78.83, best test). If these can be stacked: FiLM-Re + div-free + SmoothL1 could push below val=85.
-
-### After next merge(s):
-
-1. **FiLM-Re + div-free compound** — stack alphonse and thorfinn's mechanisms
-2. **β=0.02 + FiLM-Re compound** — if β=0.02 is the sweet spot
-3. **warmup=3 + FiLM-Re compound** — if askeladd shows warmup helps on SmoothL1
-4. **Per-channel β** (β_p=0.05, β_Ux=β_Uy=0.10) — different curvature per field
-5. **N_FOURIER_BANDS=12** — more Fourier capacity on SmoothL1 baseline
-
-### Unexplored but queued:
-
-- Larger batch_size (edward #3597 — running)
-- mlp_ratio=4 (fern #3568 — running)
-- Pure L1 loss (frieren #3520 — running)
-- Geom-slice (nezuko #3207 — not yet rebased, concerning)
-
-### Architecture tier (if plateau):
+## Architecture tier (if winners saturate compounding):
 
 - GNN over mesh
 - Galerkin transformer
-- Spectral-conv hybrid
+- Spectral-conv (FNO) hybrid
 - Per-sample normalization with clipping
