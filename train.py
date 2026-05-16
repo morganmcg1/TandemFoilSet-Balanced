@@ -82,6 +82,31 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class DropPath(nn.Module):
+    """Stochastic depth (Huang et al. 2016, arXiv 1603.09382): drop per-sample
+    residual paths during training with probability ``drop_prob``.
+
+    Inverted-dropout convention: surviving paths are rescaled by ``1/keep_prob``
+    so the expected residual contribution equals the deterministic value, and
+    inference (model.eval()) needs no rescaling. The mask is sampled per sample
+    (broadcast over the node dimension) so different airfoils in a batch see
+    different drop patterns.
+    """
+
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if not self.training or self.drop_prob == 0.0:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor = torch.floor(random_tensor + keep_prob)
+        return x * random_tensor / keep_prob
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -170,7 +195,8 @@ class FiLM(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -181,6 +207,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path_rate)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -189,13 +216,13 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, film=None, film_ffn=False):
-        fx = self.attn(self.ln_1(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
 
         ffn_out = self.mlp(self.ln_2(fx))
         if film is not None and film_ffn:
             gamma, beta = film
             ffn_out = gamma * ffn_out + beta
-        fx = ffn_out + fx
+        fx = self.drop_path(ffn_out) + fx
 
         if self.last_layer:
             h = self.ln_3(fx)
@@ -215,7 +242,8 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  use_film: bool = False, film_mode: str = "output_only",
-                 log_re_mean: float = 14.58, log_re_std: float = 0.76):
+                 log_re_mean: float = 14.58, log_re_std: float = 0.76,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -225,6 +253,7 @@ class Transolver(nn.Module):
         self.film_mode = film_mode
         self.log_re_mean = log_re_mean
         self.log_re_std = log_re_std
+        self.drop_path_rate = drop_path_rate
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -235,11 +264,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear schedule: deeper blocks get dropped more (Huang et al. 2016).
+        # For n_layers=1 we fall back to a single drop_path_rate.
+        if n_layers > 1:
+            dpr = torch.linspace(0.0, drop_path_rate, n_layers).tolist()
+        else:
+            dpr = [drop_path_rate]
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=dpr[i],
             )
             for i in range(n_layers)
         ])
@@ -619,6 +655,7 @@ class Config:
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
+    drop_path_rate: float = 0.0  # stochastic depth max rate; 0.0 disables (baseline behavior)
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -746,6 +783,7 @@ model_config = dict(
     film_mode=cfg.film_mode,
     log_re_mean=float(stats["x_mean"][13].item()),
     log_re_std=float(stats["x_std"][13].item()),
+    drop_path_rate=cfg.drop_path_rate,
 )
 
 model = Transolver(**model_config).to(device)
@@ -767,6 +805,9 @@ if cfg.spec_norm_target != "none":
 
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+if cfg.drop_path_rate > 0.0:
+    per_block_dp = [round(b.drop_path.drop_prob, 4) for b in model.blocks]
+    print(f"[stochastic_depth] drop_path_rate={cfg.drop_path_rate} per-block={per_block_dp}")
 
 ema_model = None
 if cfg.ema_decay > 0:
