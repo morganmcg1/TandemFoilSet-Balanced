@@ -2,19 +2,29 @@
 
 ## Current best
 
-### 2026-05-16 05:29 — PR #3654: SwiGLU full mlp_ratio=2 (hidden_inner 128→192, +50% FFN params)
+### 2026-05-16 06:27 — PR #3643: n_head 4→2 (head_dim 24→48) — wider per-head subspace
 
-- **val_avg/mae_surf_p:** 75.5776 (best @ epoch 13 / 14; **−3.61% vs previous best**)
-- **test_avg/mae_surf_p:** 66.7399 (**−2.39% vs previous best**)
+- **val_avg/mae_surf_p:** 70.9252 (best @ epoch 14 / 14; **−6.16% vs previous best**)
+- **test_avg/mae_surf_p:** 61.9143 (**−7.23% vs previous best**)
+- **Per-split val mae_surf_p:** All four splits improved (curve still descending at E14)
+- **Per-split test mae_surf_p:** All four splits improved
+- **Changes:** n_head 4→2 (head_dim 24→48). Wider per-head subspace at constant n_hidden=96.
+- **n_params:** 509,389 (+7.93% vs PR #3654's 471,959 — Q/K/V projections scale with dim_head)
+- **Wall-clock:** 27.97 min total (~119.9 s/epoch; all 14 epochs completed, **faster** than baseline)
+- **Peak VRAM:** 39.13 GB (vs baseline 46.92 GB — head reduction saves attention memory)
+- **Metric artifacts:** `models/model-n-head-2-head-dim-48-20260516-053417/metrics.{jsonl,yaml}`
+- **Reproduce:** `cd target && python train.py --experiment_name n-head-2-head-dim-48 --agent charliepai2i24h2-askeladd --epochs 14`
+- **Delta vs previous best (#3654):** −4.65 val_avg/mae_surf_p (75.578 → 70.925); −4.83 test (66.740 → 61.914). Every val and test split improved. Last epoch drop −6.7% suggests further headroom with longer training.
+
+### 2026-05-16 05:29 — PR #3654: SwiGLU full mlp_ratio=2 (hidden_inner 128→192, superseded)
+
+- **val_avg/mae_surf_p:** 75.5776 (best @ epoch 13 / 14; −3.61% vs previous best)
+- **test_avg/mae_surf_p:** 66.7399 (−2.39% vs previous best)
 - **Per-split val mae_surf_p:** single 86.290 | geom_rc 89.762 | geom_cruise 55.041 | re_rand 71.218
 - **Per-split test mae_surf_p:** single 77.887 | geom_rc 77.254 | geom_cruise 47.216 | re_rand 64.602
-- **Changes:** SwiGLU hidden_inner 128→192 (+50% FFN params per block; unconstrained capacity vs param-matched PR #3608).
-- **n_params:** 471,959 (~0.47M; +24% vs PR #3608's 380K)
-- **Wall-clock:** 32.2 min total (~149 s/epoch; hit 30-min cap, epoch 14 not run — curve still descending)
-- **Peak VRAM:** 46.92 GB
+- **Changes:** SwiGLU hidden_inner 128→192 (+50% FFN params per block).
+- **n_params:** 471,959
 - **Metric artifacts:** `models/model-swiglu-full-mlpratio2-20260516-042703/metrics.{jsonl,yaml}`
-- **Reproduce:** `cd target && python train.py --experiment_name swiglu-full-mlpratio2 --agent charliepai2i24h2-frieren --epochs 14`
-- **Delta vs previous best (#3608):** −2.829 val_avg/mae_surf_p (78.407 → 75.578); −1.635 test (68.375 → 66.740). Strongest gain on single_in_dist (−8.5% val, −6.3% test). geom_camber_cruise test slightly regressed (+2.7%).
 
 ### 2026-05-16 03:30 — PR #3608: SwiGLU FFN (param-matched replacement for GELU, superseded)
 

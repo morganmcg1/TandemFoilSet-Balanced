@@ -1025,3 +1025,64 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 - **MERGED** — New baseline: val 75.578, test 66.740.
 - **Analysis:** Gating does most of the work (−18.2% from PR #3608), with additional capacity adding a further −3.6%. The key insight: GELU+mlp_ratio=4 (#3503) failed because extra params with single-path expansion just memorize; SwiGLU's gate selectively uses the extra hidden units, so overfitting scales sub-linearly. single_in_dist benefits most (−8.5% val) — larger FFN extracts finer in-distribution detail. geom_camber_cruise test regressed slightly (+2.7%) — the only yellow flag. The run hit the 30-min cap at E13 (curve still descending); E14 would likely have given ~1-2 more points.
 - **Next:** GEGLU at hidden_inner=192 (gate-vs-SiLU ablation). hidden_inner=256 is in the queue but wall-clock budget limits comparability.
+
+## 2026-05-16 07:25 — PR #3643: n_head 4→2 (head_dim 24→48) — wider per-head subspace [MERGED — MASSIVE WIN]
+
+- charliepai2i24h2-askeladd/n-head-2-head-dim-48
+- **Hypothesis:** Reverse the head-direction sweep from #3535 (n_head=8) which regressed badly. Try going *narrower* — n_head=2, head_dim=48 — to give each attention head a wider subspace to operate over. May interact favorably with SwiGLU's adaptive feature selection.
+- **Artifacts:** `models/model-n-head-2-head-dim-48-20260516-053417/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3654) | This run (n_head=2) | Δ |
+|--------|--------------------|--------------------|---|
+| val_avg/mae_surf_p | 75.578 | **70.925** | **−6.16%** |
+| test_avg/mae_surf_p | 66.740 | **61.914** | **−7.23%** |
+| n_params | 471,959 | 509,389 | +7.93% (Q/K/V projections scale with dim_head) |
+| Wall-clock | 32.2 min (13 ep) | 27.97 min (14 ep) | −13% (faster despite more params) |
+| Peak VRAM | 46.92 GB | 39.13 GB | −16.6% |
+
+- **MERGED** — New baseline: val 70.925, test 61.914.
+- **Analysis:** Every val and test split improved. Best @ E14/14 with curve still descending sharply (−6.7% drop on last epoch). The reverse-direction probe was correct: fewer-wider heads beat more-narrower heads on this dataset. The mechanism appears to be that wider head_dim provides per-head subspaces with sufficient expressive capacity to combine multi-feature attention patterns, where head_dim=24 (the previous 4-head config) was too narrow to capture the relevant interactions. Combined with SwiGLU's gating, the model has both adaptive feature selection AND wider attention subspaces.
+- **Next:** Probe whether the trend continues at n_head=1 (head_dim=96) — assigned to askeladd. Also retest GEGLU on this new stack (frieren #3727 sent back).
+
+## 2026-05-16 07:30 — PR #3639: EMA / Polyak α=0.999 [CLOSED — NEGATIVE]
+
+- charliepai2i24h2-alphonse/ema-polyak-alpha999
+- **Hypothesis:** EMA weight averaging with α=0.999 smooths the late-cosine noise and provides a slightly-lagged but more-stable evaluation checkpoint.
+- **Artifacts:** `models/model-ema-polyak-alpha999-20260516-052825/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (was #3654) | EMA val | Live val | Δ vs new baseline 70.925 |
+|--------|----------------------|---------|----------|---------------------------|
+| val_avg/mae_surf_p | 75.578 | 87.527 | 80.490 | +23.4% (EMA), +13.5% (live) |
+| test_avg/mae_surf_p | 66.740 | 78.089 | — | +14.2% (EMA) |
+
+- **CLOSED — clear negative**
+- **Analysis:** α=0.999 → ~1000-step horizon. 14 epochs × ~85 steps/ep ≈ 1200 steps total, so EMA barely catches up to live weights. The EMA val lagged live val at every epoch (gap shrank from +126.77 at E2 to +7.04 at E12 but never crossed). Lesson: EMA decay constants designed for LLM pretraining horizons (1M+ steps) need rescaling for short surrogate training. EMA axis declared dead at α=0.999.
+
+## 2026-05-16 07:35 — PR #3646: Stochastic depth DropPath p=0.1 [CLOSED — NEGATIVE]
+
+- charliepai2i24h2-fern/droppath-p01
+- **Hypothesis:** Block-level stochastic depth (DropPath p=0.1) provides regularization orthogonal to weight decay and FFN-dropout; should help most on single_in_dist where overfit risk is highest.
+- **Artifacts:** `models/model-droppath-p01-20260516-064140/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (was #3654) | DropPath p=0.1 | Δ vs new baseline 70.925 |
+|--------|----------------------|----------------|---------------------------|
+| val_avg/mae_surf_p | 75.578 | 88.39 (E12) | +24.6% |
+| test_avg/mae_surf_p | 66.740 | 76.89 | +15.2% |
+
+- **CLOSED — clear negative**
+- **Analysis:** Convergence is the bottleneck, not generalization. Train losses descend at baseline rate but val never crosses baseline. p=0.1 with n_layers=5 gives expected effective depth ~4.5 — the model sees less computation per sample within a 14-epoch budget. **Key insight: the post-SwiGLU stack has a much tighter train-val gap, so the regularizer-need has dropped substantially.** Uniform regularizers (wd-too-high, FFN-dropout, DropPath) are now consistently past their optimum on the gated FFN. Closing uniform-DropPath axis as dead.
+
+## 2026-05-16 07:35 — PR #3727: GEGLU SiLU→GELU at hidden_inner=192 [SENT BACK — WAS WINNER VS OLD BASELINE]
+
+- charliepai2i24h2-frieren/geglu-hidden192
+- **Hypothesis:** Is the SwiGLU win from gating per se, or SiLU specifically? Direct ablation: replace SiLU with GELU on the gate path.
+- **Artifacts:** `models/model-geglu-hidden192-20260516-053716/metrics.{jsonl,yaml}`
+
+| Metric | Old baseline (PR #3654, 75.578) | New baseline (PR #3643, 70.925) | This run (GEGLU) | Δ vs old | Δ vs new |
+|--------|----------------------------------|--------------------------------|------------------|----------|----------|
+| val_avg/mae_surf_p | 75.578 | 70.925 | **73.233** | **−3.10%** | +3.25% |
+| test_avg/mae_surf_p | 66.740 | 61.914 | **63.840** | **−4.34%** | +3.11% |
+
+- **SENT BACK** — was a winner on old stack but doesn't beat n_head=2 baseline. Direction strongly promising; should compound. Frieren rebasing onto n_head=2 stack for retest.
+- **Analysis:** GEGLU outperformed SwiGLU at hidden_inner=192 by −3.10% val, −4.34% test on the n_head=4 stack. **This is surprising** — in LLMs SwiGLU usually slightly outperforms GEGLU. On this physics surrogate, GELU's smoother negative region may give better gradient signal to the gate. Both axes (n_head=2, GEGLU) are orthogonal — should compound on the new stack.
+
