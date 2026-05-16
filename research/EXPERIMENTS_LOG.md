@@ -963,4 +963,42 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 - Hypothesis: Monotone trend β={0.5, 0.25, 0.1} has not plateaued. β={0.05, 0.025, 0.01} will find the true minimum, potentially approaching pure L1. If still monotone at β=0.01, pure MAE (L1 loss) is the logical next step.
 - Run 4 arms: β=0.1 baseline (verify freq=5 canonical), β=0.05, β=0.025, β=0.01
 - All arms with `--precondition_frequency 5` (explicit, not default=10)
-- Note: SOAP.step() stays in float32 (outside autocast). Only forward+loss wrapped.
+
+## 2026-05-16 15:26 — PR #3736 (thorfinn): surf_weight {10,5,3} sweep — SENT BACK
+
+- Branch: `willowpai2i48h3-thorfinn/surf-weight-finer-ema-sweep`
+- W&B runs: `nuqdqt33` (sw=10), `j9kyfpmw` (sw=5), `vaklrdv6` (sw=3)
+- Ran on Cauchy+Huber β=0.5 stack (outdated — canonical moved twice during execution)
+
+| Arm | surf_weight | val_avg/mae_surf_p | test_excl_cruise | Δ within-PR |
+|---|---|---|---|---|
+| Arm 1 baseline (sw=10) | 10.0 | 54.6343 | 54.413 | — |
+| **Arm 2 winner (sw=5)** | 5.0 | **53.9197** | **53.769** | **−1.31% val** |
+| Arm 3 (sw=3) | 3.0 | 53.9251 | 54.114 | −1.30% val (tied sw=5 on val, loses test) |
+
+**Analysis:** Clean within-PR signal — sw=5 wins by −1.31% val / −1.18% test. Mechanism: SOAP's Kronecker-factored preconditioner already balances per-block scale, so surf_weight=10 over-weights surface loss. sw=5 lets SOAP balance more naturally. sw=3 ties on val but loses on test (geom_camber_rc degrades — too little surface emphasis for OOD geometry). Result doesn't beat new canonical (val 53.92 vs new canonical 50.51).
+
+**Decision: SENT BACK** — rerun 2 arms (sw=10 vs sw=5) on Huber β=0.1 canonical with explicit `--precondition_frequency 5`. If mechanism is loss-independent (expected), sw=5 should compound with new canonical.
+
+## 2026-05-16 15:31 — PR #3728 (nezuko): EMA decay lower sweep — **CLOSED (clean negative)**
+
+- Branch: `willowpai2i48h3-nezuko/ema-decay-lower-sweep`
+- W&B runs: `2kry2rci` (decay=0.99), `6w0t181v` (decay=0.97), `suzc3q81` (decay=0.95)
+- Ran on Cauchy c=1.0 + SOAP freq=5 stack (option-2 config per advisor)
+
+| Arm | ema_decay | EMA horizon (steps) | val_avg/mae_surf_p | Δ vs arm1 |
+|---|---|---|---|---|
+| Arm 1 (canonical reproduction) | 0.99 | ~100 steps | **52.4938** | — |
+| Arm 2 | 0.97 | ~33 steps | 54.8543 | **+4.50%** ❌ |
+| Arm 3 | 0.95 | ~20 steps | 56.7779 | **+8.16%** ❌ |
+
+**Analysis:** Arm 1 perfectly reproduces canonical mep5yevo (val=52.494, test=51.220) — excellent determinism check. Lower decay → shorter EMA horizon → loss of signal averaging, degradation is monotone and smooth (no instability). The U-shape minimum sits at 0.99, not lower. The PR #3591 trend (0.999 → 0.99 wins) doesn't continue downward: once horizon ≈ 1 epoch, further shortening loses benefit faster than it gains adaptation speed. Confirmed direction as closed.
+
+**Decision: CLOSED.** ema_decay=0.99 remains canonical. Excellent pre-launch stack check by student (option-2 config) produced clean, comparable results.
+
+## 2026-05-16 15:40 — PR #4021 nezuko assigned: SWA (Stochastic Weight Averaging)
+
+- willowpai2i48h3-nezuko/swa-stochastic-weight-averaging
+- Hypothesis: SWA (Izmailov 2018) takes uniform average of late-training checkpoints — finds flatter loss-basin than any single checkpoint. Orthogonal to EMA (different timescales: EMA is continuous exponential, SWA is discrete uniform over late epochs). Expected 1-3% gain, stronger on OOD splits.
+- Run 3 arms: baseline (EMA only), SWA from epoch 8 (6 checkpoints), SWA from epoch 4 (10 checkpoints)
+- Implementation: `torch.optim.swa_utils.AveragedModel`; both EMA and SWA active for arm 2+3
