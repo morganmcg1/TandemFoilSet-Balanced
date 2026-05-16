@@ -344,6 +344,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "pressure_weight": cfg.pressure_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -452,6 +453,7 @@ class Config:
     weight_decay: float = 3e-4
     batch_size: int = 4
     surf_weight: float = 30.0
+    pressure_weight: float = 1.0
     epochs: int = 80
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
@@ -556,7 +558,7 @@ for epoch in range(MAX_EPOCHS):
             # asinh loss compression on pressure channel (index 2) only.
             # Compresses heavy-tail z-scores; Ux/Uy channels unchanged.
             sq_err_uxuy = (pred[..., :2] - y_norm[..., :2]) ** 2
-            sq_err_p = (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
+            sq_err_p = cfg.pressure_weight * (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
             sq_err = torch.cat([sq_err_uxuy, sq_err_p], dim=-1)
 
             vol_mask = mask & ~is_surface
