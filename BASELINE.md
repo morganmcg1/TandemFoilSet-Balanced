@@ -535,3 +535,70 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-16 15:34 — PR #3594: Schedule-Free AdamW — eliminate cosine schedule
+
+**New best `val_avg/mae_surf_p`: 65.618** (was: 80.893 — **−18.88%**)
+
+### Val surface pressure MAE per split
+
+| Split | val_avg/mae_surf_p |
+|---|---:|
+| `val_single_in_dist`     | 74.715 |
+| `val_geom_camber_rc`     | 79.128 |
+| `val_geom_camber_cruise` | 45.160 |
+| `val_re_rand`            | 63.467 |
+| **val_avg**              | **65.618** |
+
+### Test surface pressure MAE (3 finite splits; cruise NaN pre-existing)
+
+| Split | test/mae_surf_p |
+|---|---:|
+| `test_single_in_dist`   | 63.718 |
+| `test_geom_camber_rc`   | 70.042 |
+| `test_re_rand`          | 54.799 |
+| `test_avg (3 finite)` | **62.853** |
+
+### Paired sweep summary (this PR)
+
+| Arm | optimizer | scheduler | clip | val_avg | Δ vs A |
+|---|---|---|---:|---:|---:|
+| A | AdamW | cosine T_max=15 | 1.0 | 78.871 | — (control) |
+| **B** | **SF-AdamW** | **none** | **1.0** | **65.618** | **−16.80% (winner)** |
+
+Both arms still descending at epoch 17/17 (budget cap). Cosine T_max=15 freezes Arm A at LR=5e-8 from epoch 16 onward; SF-AdamW keeps stepping at LR=5e-4 throughout. Arm B was dropping ~1.8 val/epoch at the cap — further budget headroom exists.
+
+**Note on clip threshold:** this win was measured with clip=1.0, not the current merged clip=0.25 (#3906). New baseline represents: `bf16 + EMA(0.999) + FiLM + two-shot FiLM + SF-AdamW + clip=1.0`. The optimal clip threshold under SF-AdamW is unknown and is the next experiment.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-alphonse-sf-r2-armb-sf-adamw-clip-20260516-142921/metrics.jsonl` ← **winner**
+- `models/model-charliepai2i48h4-alphonse-sf-r2-armb-sf-adamw-clip-20260516-142921/metrics.yaml`
+- `models/model-charliepai2i48h4-alphonse-sf-r2-arma-baseline-20260516-135423/metrics.jsonl` (paired control)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py \
+  --amp_dtype bf16 --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film --grad_clip_norm 1.0 \
+  --use_schedule_free
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+# AMP: --amp_dtype bf16
+# Scheduler: NONE (--use_schedule_free replaces cosine)
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# FiLM: --film_cond --two_shot_film  (shared conditioner, two injection sites per block)
+# Optimizer: SF-AdamW lr=5e-4, weight_decay=1e-4, warmup_steps=500, betas=(0.9,0.999)
+#   → use optimizer.train() before train epoch, optimizer.eval() before val
+# Gradient clip: --grad_clip_norm 1.0  (NOTE: clip=0.25 optimal under AdamW; SF-AdamW clip not yet tuned)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# surf_weight=10
+```
