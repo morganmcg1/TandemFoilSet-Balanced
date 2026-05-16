@@ -394,6 +394,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    swa_k: int = 5  # number of last-epoch snapshots to uniformly average
+    swa_k_secondary: int = 3  # optional second arm (averaged from same buffer)
 
 
 cfg = sp.parse(Config)
@@ -475,6 +477,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+
+# SWA: rolling buffer of the last cfg.swa_k epoch-end state_dicts.
+# Robust to early stopping / timeout — always holds the most recent K snapshots.
+swa_snapshots: list[dict] = []
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -572,10 +578,107 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # SWA: append a deep-cloned snapshot of the post-step model state and trim to last K.
+    swa_snapshots.append({k: v.detach().clone() for k, v in model.state_dict().items()})
+    if len(swa_snapshots) > cfg.swa_k:
+        swa_snapshots.pop(0)
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
-# --- Test evaluation + artifact upload ---
+# Hoist test loaders — shared by SWA eval and best-checkpoint eval below.
+test_loaders = None
+if not cfg.skip_test:
+    test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+    test_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in test_datasets.items()
+    }
+
+
+def _average_state_dicts(state_dicts: list[dict]) -> dict:
+    """Uniform mean of N state_dicts (in float for precision, cast back to original dtype)."""
+    n = len(state_dicts)
+    avg = {}
+    for key in state_dicts[0].keys():
+        stacked = torch.stack([sd[key].float() for sd in state_dicts], dim=0)
+        avg[key] = stacked.mean(dim=0).to(state_dicts[0][key].dtype)
+    return avg
+
+
+def _eval_full(state: dict, label: str) -> tuple[dict, dict, dict | None, dict | None]:
+    """Load `state` into `model`, eval on val + test; print one-line summary."""
+    model.load_state_dict(state)
+    model.eval()
+    v_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    v_avg = aggregate_splits(v_metrics)
+    t_metrics = t_avg = None
+    if test_loaders is not None:
+        t_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        t_avg = aggregate_splits(t_metrics)
+    t_str = f"  test_avg={t_avg['avg/mae_surf_p']:.4f}" if t_avg is not None else ""
+    print(f"  [{label}] val_avg={v_avg['avg/mae_surf_p']:.4f}{t_str}")
+    return v_metrics, v_avg, t_metrics, t_avg
+
+
+# --- SWA evaluation: raw final-epoch vs uniform average of last K snapshots ---
+swa_results: dict = {}
+if len(swa_snapshots) >= 2:
+    K_main = min(cfg.swa_k, len(swa_snapshots))
+    K_sec = min(cfg.swa_k_secondary, len(swa_snapshots))
+    print(
+        f"\nSWA: {len(swa_snapshots)} snapshots collected; "
+        f"primary K={K_main}, secondary K={K_sec if K_sec != K_main else 'skip (=primary)'}"
+    )
+
+    # Raw final-epoch state == last snapshot (model is already in this state, but clone for safety).
+    raw_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    raw_v_metrics, raw_v_avg, raw_t_metrics, raw_t_avg = _eval_full(raw_state, "raw final-epoch")
+
+    swa_main_state = _average_state_dicts(swa_snapshots[-K_main:])
+    swa_v_metrics, swa_v_avg, swa_t_metrics, swa_t_avg = _eval_full(swa_main_state, f"SWA-K={K_main}")
+
+    swa_sec_v_metrics = swa_sec_v_avg = swa_sec_t_metrics = swa_sec_t_avg = None
+    if K_sec != K_main and K_sec >= 2:
+        swa_sec_state = _average_state_dicts(swa_snapshots[-K_sec:])
+        (swa_sec_v_metrics, swa_sec_v_avg,
+         swa_sec_t_metrics, swa_sec_t_avg) = _eval_full(swa_sec_state, f"SWA-K={K_sec}")
+
+    # Log everything under `swa/...` for easy grouping in W&B.
+    swa_results["swa/n_snapshots"] = len(swa_snapshots)
+    swa_results["swa/K_main"] = K_main
+    if K_sec != K_main and K_sec >= 2:
+        swa_results["swa/K_secondary"] = K_sec
+    swa_results["swa/raw/val_avg/mae_surf_p"] = raw_v_avg["avg/mae_surf_p"]
+    swa_results[f"swa/k{K_main}/val_avg/mae_surf_p"] = swa_v_avg["avg/mae_surf_p"]
+    for split in VAL_SPLIT_NAMES:
+        swa_results[f"swa/raw/{split}/mae_surf_p"] = raw_v_metrics[split]["mae_surf_p"]
+        swa_results[f"swa/k{K_main}/{split}/mae_surf_p"] = swa_v_metrics[split]["mae_surf_p"]
+        if swa_sec_v_metrics is not None:
+            swa_results[f"swa/k{K_sec}/{split}/mae_surf_p"] = swa_sec_v_metrics[split]["mae_surf_p"]
+    if raw_t_avg is not None:
+        swa_results["swa/raw/test_avg/mae_surf_p"] = raw_t_avg["avg/mae_surf_p"]
+        swa_results[f"swa/k{K_main}/test_avg/mae_surf_p"] = swa_t_avg["avg/mae_surf_p"]
+        for split in TEST_SPLIT_NAMES:
+            swa_results[f"swa/raw/{split}/mae_surf_p"] = raw_t_metrics[split]["mae_surf_p"]
+            swa_results[f"swa/k{K_main}/{split}/mae_surf_p"] = swa_t_metrics[split]["mae_surf_p"]
+            if swa_sec_t_metrics is not None:
+                swa_results[f"swa/k{K_sec}/{split}/mae_surf_p"] = swa_sec_t_metrics[split]["mae_surf_p"]
+    if swa_sec_v_avg is not None:
+        swa_results[f"swa/k{K_sec}/val_avg/mae_surf_p"] = swa_sec_v_avg["avg/mae_surf_p"]
+    if swa_sec_t_avg is not None:
+        swa_results[f"swa/k{K_sec}/test_avg/mae_surf_p"] = swa_sec_t_avg["avg/mae_surf_p"]
+
+    wandb.log(swa_results)
+    wandb.summary.update(swa_results)
+
+# --- Test evaluation + artifact upload (best-by-val checkpoint, baseline-comparable) ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
@@ -589,13 +692,8 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
-    if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
+    if test_loaders is not None:
+        print("\nEvaluating on held-out test splits (best-by-val checkpoint)...")
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
