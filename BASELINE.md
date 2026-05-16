@@ -4,11 +4,11 @@ This is the fresh-track baseline for the Charlie local-metrics arm (research tag
 `charlie-pai2i-48h-r1`, advisor branch `icml-appendix-charlie-pai2i-48h-r1`,
 target base `icml-appendix-charlie`).
 
-## Current best configuration (merged as of 2026-05-15)
+## Current best configuration (merged as of 2026-05-16)
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=64`, `mlp_ratio=2`, `unified_pos=False` |
+| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=32`, `mlp_ratio=2`, `unified_pos=False` |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.999**, evaluated at val/test time (PR #3285) |
@@ -18,39 +18,41 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #3402, dropout=0.1, single-seed, best epoch 14)
+## Current best metrics (PR #3533, slice_num=32, single-seed, best epoch 16)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **96.17** |
-| `test_avg/mae_surf_p` | **86.88** |
-| `test/test_geom_camber_rc/mae_surf_p` | 94.69 |
-| `test/test_re_rand/mae_surf_p` | 85.06 |
-| `test/test_single_in_dist/mae_surf_p` | 105.49 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 62.30 |
+| `val_avg/mae_surf_p` **(primary)** | **90.58** |
+| `test_avg/mae_surf_p` | **81.25** |
+| `test/test_geom_camber_rc/mae_surf_p` | — |
+| `test/test_re_rand/mae_surf_p` | — |
+| `test/test_single_in_dist/mae_surf_p` | — |
+| `test/test_geom_camber_cruise/mae_surf_p` | — |
 
 Per-split val surface-p MAE at best checkpoint (single seed):
 
-| Split | mae_surf_p |
-|-------|------------|
-| `val_single_in_dist`     | 116.53 |
-| `val_geom_camber_rc`     | 106.64 |
-| `val_geom_camber_cruise` |  72.45 |
-| `val_re_rand`            |  89.06 |
-| **avg** | **96.17** |
+| Split | mae_surf_p | Δ vs prev |
+|-------|------------|-----------|
+| `val_single_in_dist`     | 108.12 | -7.21% |
+| `val_geom_camber_rc`     | 104.27 | -2.22% |
+| `val_geom_camber_cruise` |  66.77 | -7.84% |
+| `val_re_rand`            |  83.15 | -6.63% |
+| **avg** | **90.58** | **-5.81%** |
 
-Artifact: `models/model-charliepai2i48h1-nezuko-dropout-01-20260515-202343/metrics.jsonl`
+Artifact: `models/model-slice-num-32-20260516-002650/metrics.jsonl`
 
-Note: single-seed merge; 8/8 split directional consistency was the deciding signal.
+Note: single-seed merge; all 4 val splits improved. Best epoch 16 (still improving at cap — potential for more headroom with longer budget). Per-epoch time 115.2s, peak GPU mem 37.76 GB (vs ~42.7 GB at slice_num=64).
+
+Why it works: halving slice_num (64→32) reduces slice-attention O(K²) cost from 4096→1024 op-pairs (~4× cheaper), fitting 16 epochs in the 30-min budget vs 14. The reduced slice count also acts as implicit regularization (each slice covers 2× more mesh nodes). Both effects compound.
 
 Reproduce:
 
 ```bash
 cd target/
-python train.py --experiment_name smooth-l1-beta025-repro --agent <name>
-# (SmoothL1 beta=0.25 + EMA-0.999 + NaN-safe scoring all in train.py on icml-appendix-charlie-pai2i-48h-r1)
+python train.py --experiment_name slice-num-32-repro --agent <name>
+# (slice_num=32 + SmoothL1 beta=0.25 + EMA-0.999 + dropout=0.1 all in train.py on icml-appendix-charlie-pai2i-48h-r1)
 ```
 
 ### Note on val variance
@@ -93,4 +95,5 @@ After every merged winner, the advisor:
 | 2026-05-15 | #3285 | EMA model weights, decay=0.999 | 104.52 | -3.6% |
 | 2026-05-15 | #3280 | SmoothL1 beta=0.5 (tuned from 1.0) | 98.45 | -5.81% |
 | 2026-05-15 | #3400 | SmoothL1 beta=0.25 (2-seed mean; beta lever saturated) | 97.15 | -1.32% |
-| 2026-05-15 | #3402 | dropout=0.1 in PhysicsAttention (8/8 split consistency) | **96.17** | **-1.01%** |
+| 2026-05-15 | #3402 | dropout=0.1 in PhysicsAttention (8/8 split consistency) | 96.17 | -1.01% |
+| 2026-05-16 | #3533 | slice_num=64→32 (halve slice-attention cost, +2 epochs, implicit reg) | **90.58** | **-5.81%** |
