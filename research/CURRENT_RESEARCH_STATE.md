@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 03:50 UTC (Cycle 11)
+- **Date:** 2026-05-16 05:25 UTC (Cycle 15 — PLATEAU)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -21,13 +21,43 @@ None — no human directives on this launch.
 
 **Key finding:** FiLM-style per-channel gamma/beta conditioning on log-Re. Zero-init after `self.apply`, first-row `re_cond = x[:, 0, 13:14]` to avoid padding confounding. −11.8% val / −16.5% test vs prior baseline. Strongest single-experiment gain to date.
 
-## Research focus: compounding on FiLM-Re baseline
+## PLATEAU STATUS — 10 compound experiments, ZERO beat baseline
 
-FiLM-Re established that explicit Reynolds conditioning is a major lever. The current research programme tests which other mechanisms **compound** with FiLM-Re. Key insight from nezuko's geom-slice analysis: geom-slice and FiLM-Re attack **orthogonal OOD axes**:
-- FiLM-Re helps: `re_rand` (−10.8%), `geom_camber_cruise` (−11.5%)
-- Geom-slice helps: `single_in_dist` (−10.4%), `geom_camber_rc` (−7.8%)
+The FiLM-Re baseline (val=79.90, test=69.33) has proven to be a strong attractor. None of the 10 finished compound experiments has beaten it. The closest miss is thorfinn FiLM-Re+div-free at val=80.86 (1.2% off), but it does not pass the threshold.
 
-If these compound, every split improves simultaneously — the most complete generalization we've seen.
+**Cycle 11-12 compound experiment results (all on FiLM-Re baseline):**
+
+| Run | Student | Config | val_avg | test_avg | Δ val |
+|---|---|---|---|---|---|
+| `hukaxiix` | thorfinn | div_w=0.01 (1 of 2 arms) | **80.86** | 71.58 | +1.2% |
+| `snjlp7xq` | alphonse | multi-signal cond_dim=5 | 82.46 | 72.73 | +3.2% |
+| `m3u0225j` | tanjiro | β=0.02 | 83.99 | 78.71 | +5.1% |
+| `hw2aksew` | nezuko | geom-slice seed 1 | 84.41 | 77.99 | +5.6% |
+| `4bw2hrdu` | tanjiro | β=0.01 | 86.16 | 74.56 | +7.8% |
+| `t60xj83c` | askeladd | surf_weight=5 | 86.78 | 77.00 | +8.6% |
+| `4p8o19be` | fern | OneCycleLR lr=5e-4 | 88.76 | 82.61 | +11.1% |
+| `pftv6no3` | thorfinn | div-free arm 2 | 95.46 | 76.40 | +19.5% |
+| `e55dm25a` | frieren | Fourier bands=16 | 96.09 | 78.46 | +20.3% |
+| `hpw0veo8` | edward | SWA (50% start) | 102.24 | 79.75 | +27.9% |
+
+**Mechanistic conclusions:**
+- **β decrease alone DOES NOT compound with FiLM-Re**: standalone β=0.02 gave val=88.11; β=0.02 on FiLM-Re gave val=83.99 — improvement is smaller and FiLM-Re's role dominates.
+- **div-free physics loss is FRAGILE on FiLM-Re**: one seed val=80.86 (close), other val=95.46. High variance suggests interaction with FiLM-Re training dynamics.
+- **geom-slice DOES NOT compound additively with FiLM-Re**: standalone val=85.60, with FiLM-Re val=84.41. Marginal improvement, much less than the orthogonal OOD analysis suggested.
+- **Multi-signal FiLM is promising as REPLACEMENT, not addition**: cond_dim=5 at val=82.46 — second-best, may indicate the FiLM mechanism itself can be improved further.
+- **SWA, OneCycleLR, more Fourier bands ALL HURT** at the 30-min wall-clock budget. These techniques need longer training to pay off.
+
+## Plateau Protocol — Researcher Agent Dispatched (2026-05-16 05:25)
+
+Per CLAUDE.md plateau protocol (10 failed experiments triggers escalation), the researcher-agent has been dispatched to explore:
+1. Architecture-tier replacements (GNN, FNO, Galerkin, U-Net)
+2. Loss formulation paradigms (percentile-weighted, focal, residual learning)
+3. Data representation (per-domain normalization, log-space targets)
+4. Self-supervised pretrain (masked reconstruction)
+5. Inference-time techniques (TTA, ensemble)
+6. Hyperparameter regimes not yet explored
+
+Output expected at `/workspace/senpai/target/research/RESEARCH_IDEAS_2026-05-16_05:25.md`.
 
 ## Active WIP — Compounding Experiments
 
