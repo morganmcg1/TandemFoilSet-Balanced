@@ -356,6 +356,8 @@ class Config:
     surf_weight: float = 10.0
     huber_delta: float = 1.0
     cosine_t_max: int = 20
+    warmup_epochs: int = 5
+    warmup_start_factor: float = 0.01
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -408,7 +410,30 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max)
+cosine_t_max_effective = max(1, cfg.cosine_t_max - cfg.warmup_epochs)
+if cfg.warmup_epochs > 0:
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=cfg.warmup_start_factor,
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cosine_t_max_effective, eta_min=0.0
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_sched, cosine_sched],
+        milestones=[cfg.warmup_epochs],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg.cosine_t_max
+    )
+print(
+    f"LR schedule: linear warmup {cfg.warmup_epochs} epochs (start_factor={cfg.warmup_start_factor}) "
+    f"→ cosine T_max={cosine_t_max_effective} (cfg.cosine_t_max={cfg.cosine_t_max})"
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -487,6 +512,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
+    epoch_lr = optimizer.param_groups[0]["lr"]
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -518,6 +544,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -526,6 +553,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"lr={epoch_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
