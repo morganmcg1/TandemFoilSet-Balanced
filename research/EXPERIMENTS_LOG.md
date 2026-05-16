@@ -2464,3 +2464,48 @@ Only Arm B (target=0.99) is target-limited because it hits its target at step 10
 
 **tanjiro → #4207**: surf_weight sweep at SF-AdamW lr=2e-3 — directly modulate the primary metric's loss term weight, untested at correct LR.
 
+---
+
+## 2026-05-16 23:55 — PR #4149 [CLOSED / NULL]: Lion LR sweep — lion_lr ∈ {7.5e-5, 1.5e-4, 3e-4, 6e-4}
+
+- **Student branch:** `charliepai2i48h4-askeladd/lion-lr-r1`
+- **Hypothesis:** Can Lion match SF-AdamW (54.769) with higher LR? The SF \"4× LR\" insight (5e-4 → 2e-3) might transfer to Lion's sign-projection regime.
+- **Stack:** Lion + cosine T_max=15 + clip=0.25 + EMA 0.999 + FiLM two-shot + bf16 + Huber
+
+### Results
+
+| Arm | lion_lr | val_avg | paired Δ vs A | test 3-split | vs SF (54.769) |
+|---|---:|---:|---:|---:|---:|
+| **A (control)** | **1.5e-4** | **61.146** | — | **58.577** | +11.64% |
+| B | 7.5e-5 (0.5×) | 72.088 | +17.89% | 68.483 | +31.62% |
+| C | 3e-4 (2×) | 61.412 | +0.43% (tied) | 57.542 | +12.13% |
+| D | 6e-4 (4×) | 65.611 | +7.30% | 63.115 | +19.80% |
+
+### Crossing-pattern diagnostic
+
+Per-epoch trajectory shows:
+- D leads epochs 1–3 (higher LR steps further per iteration)
+- C catches up around epoch 5
+- **A pulls ahead by epoch 7 and never gives the lead back**
+
+This is the cosine-decay signature: high-LR arms burn early-epoch budget faster, then can't refine as LR decays. SF-AdamW avoids this because constant LR maintains step magnitude throughout — **explains why SF benefits from higher LR while Lion+cosine doesn't**.
+
+### Conclusions
+
+1. **The SF \"4× LR\" insight does NOT transfer to Lion.** Sign projection lacks the Polyak iterate-averaging buffer that SF uses to stabilize at higher LR.
+2. **lion_lr=1.5e-4 is the local optimum under cosine T_max=15.** A vs C tied within noise; B and D regress monotonically.
+3. **No Lion arm approaches SF-AdamW canonical (54.769).** Best Lion (A) is +11.64% behind. **Lion is officially behind SF as a standalone optimizer.**
+
+**Open question:** Lion + Schedule-Free composition (frieren #4144 Arm C) — if Lion+SF wins, the constant-LR regime might rescue Lion's higher-LR potential. If Lion+SF loses, Lion is fully closed.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-askeladd-lion-lr-r1-arma-lr1_5e-4-20260516-205206/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-askeladd-lion-lr-r1-armb-lr7_5e-5-20260516-212554/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-askeladd-lion-lr-r1-armc-lr3e-4-20260516-220123/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-askeladd-lion-lr-r1-armd-lr6e-4-20260516-223642/metrics.jsonl`
+
+### Follow-up
+
+**askeladd → #4225**: Model width sweep at SF-AdamW lr=2e-3 — `n_hidden` ∈ {96, 128, 160, 192} with --seed 1. The primary model capacity axis, untouched at correct LR.
+

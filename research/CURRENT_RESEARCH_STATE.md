@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 22:30 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-17 00:00 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -37,7 +37,7 @@ python train.py \
 | Student | PR | Hypothesis | Stack | Priority |
 |---------|----|----|----|----|
 | ⭐ **frieren** | **#4144** | **Lion vs SF-AdamW lr=2e-3 vs Lion+SF (3-way)** | Lion (A), SF lr=2e-3 (B), Lion+SF (C) | **HIGHEST — resolves whether Lion or SF wins head-to-head with correct LRs** |
-| ⭐ **askeladd** | **#4149** | **Lion LR sweep: {7.5e-5, 1.5e-4, 3e-4, 6e-4}** | Lion+cosine | **HIGH — can Lion match SF-54.769 with higher LR?** |
+| ⭐ **askeladd** | **#4225** | **Model width sweep: n_hidden ∈ {96, 128, 160, 192}** | SF-AdamW lr=2e-3 + --seed 1 (requires Config edit) | **HIGH — primary capacity axis, untested at correct LR** |
 | ⭐ **edward** | **#4157** | **SF-AdamW LR fine-tune: {1.5e-3, 2e-3, 2.5e-3, 3e-3}** | SF-AdamW lr=2e-3 base | **HIGH — localizes the peak from #4038's coarse sweep; +1-3% EV if peak is off-grid** |
 | ⭐ **tanjiro** | **#4207** | **surf_weight sweep at lr=2e-3: {5, 10, 15, 25}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — directly modulates primary metric loss; untested at correct LR** |
 | ⭐ **fern** | **#4208** | **Dropout sweep at lr=2e-3: {0.0, 0.05, 0.10, 0.15}** | SF-AdamW lr=2e-3 + --seed 1 (requires Config edit) | **HIGH — untouched regularization axis; OOD generalization angle** |
@@ -69,11 +69,12 @@ python train.py \
 ## Priority Next Experiments (Post Current Sweeps)
 
 1. **Review #4157 edward LR fine-tune** — if any arm in {1.5e-3, 2.5e-3, 3e-3} beats 2e-3, update canonical LR immediately
-2. **Lion LR sweep results (#4149 askeladd)** — if Lion+lr=3e-4 or 6e-4 matches/beats SF-54.769, Lion becomes competitive again
-3. **Lion+SF composition (#4144 frieren)** — 3-way comparison with correct LRs for both mechanisms
-4. **All in-flight stale-LR SF sweeps** — after current runs complete (nezuko/tanjiro/thorfinn/alphonse), apply paired Δ gate: >3% → re-run at lr=2e-3; <1% → close
-5. **FiLM width under SF lr=2e-3** — if nezuko #4081 shows effect at stale LR, confirm/amplify at correct LR
-6. **Sobolev under SF lr=2e-3** — fern #4012 testing on Lion; after results, test winning Sobolev weight on SF stack
+2. **Lion+SF composition (#4144 frieren)** — Arms A (Lion-cosine) and B (SF lr=2e-3) reproduce closed results; Arm C (Lion+SF) is the only remaining Lion-related question
+3. **Surf_weight sweep results (#4207 tanjiro)** — direct loss-balance lever; +1-3% EV
+4. **Dropout sweep results (#4208 fern)** — untouched regularization axis; OOD generalization angle
+5. **n_hidden sweep results (#4225 askeladd)** — primary model capacity axis; likely either a clean win or a clean null
+6. **alphonse #4019 R2 (clip×EMA at lr=2e-3)** — finalize EMA-redundancy question under correct LR
+7. **Stale-LR SF sweeps** (nezuko #4081, thorfinn #4114) — apply paired Δ gate when results land: >3% → re-test at lr=2e-3; <1% → close
 
 ## Falsified / Closed Hypotheses
 
@@ -86,3 +87,4 @@ python train.py \
 | **#4087** | **SF warmup steps {100, 500, 1000, 2000}** | **Paper default 500 wins; B/C/D regress +7.15%, +3.81%, +1.64%** | **Warmup axis exhausted; 500 is optimal at 30-min/17-epoch budget** |
 | **#4012** | **Sobolev edge-gradient L1 supervision (R1 AdamW, R2 Lion)** | **R1 within seed variance; R2 paired Δ +2.68% val / +2.28% test regression across all splits** | **Cross-stack null. Sobolev penalty fires but doesn't help surface MAE — mechanism doesn't fit loss landscape** |
 | **#4113** | **EMA decay sweep {0.99, 0.999, 0.9995, 0.9999}** | **B (0.99) Δ=−3.72% but cross-arm noise band ~3.46% (no --seed); A/C/D theoretically identical under Karras ramp** | **Karras ramp dominates target ema_decay at 17-epoch budget; paired methodology > absolute decay tuning** |
+| **#4149** | **Lion LR sweep {7.5e-5, 1.5e-4, 3e-4, 6e-4}** | **A (1.5e-4) optimal; B/D regress; best Lion 61.146 is +11.64% behind SF-canonical 54.769** | **SF \"4× LR\" insight does not transfer to Lion+cosine; Lion as standalone optimizer behind SF — only Lion+SF (frieren #4144 Arm C) still pending** |
