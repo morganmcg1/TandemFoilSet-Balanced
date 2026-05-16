@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import subprocess
 import time
@@ -32,7 +33,7 @@ import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.amp import autocast
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -46,6 +47,67 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Train-time horizontal-flip augmentation (PR #3563)
+# ---------------------------------------------------------------------------
+#
+# Z-reflection transform: (z, NACA0_M, NACA1_M, Uy) → -(...). Applied per
+# sample at __getitem__ time with probability p. The contract mirrors the
+# transform edward is using in eval-time TTA (PR #3542).
+#
+# Flip-rate is tracked via process-shared counters so DataLoader workers
+# (persistent_workers=True) can increment without per-process drift.
+
+_aug_flip_counter = mp.Value("i", 0, lock=True)
+_aug_sample_counter = mp.Value("i", 0, lock=True)
+
+
+def _consume_aug_counters() -> tuple[int, int]:
+    with _aug_flip_counter.get_lock():
+        flipped = _aug_flip_counter.value
+        _aug_flip_counter.value = 0
+    with _aug_sample_counter.get_lock():
+        total = _aug_sample_counter.value
+        _aug_sample_counter.value = 0
+    return flipped, total
+
+
+class HFlipAugmentedDataset(Dataset):
+    """Per-sample horizontal-flip wrapper for TandemFoilSet train data.
+
+    Indices into ``x`` follow the layout in ``data/prepare_splits.py``:
+    pos(2), saf(2), dsdf(8), is_surface(1), log_Re(1),
+    AoA0(1), NACA0(3), AoA1(1), NACA1(3), gap(1), stagger(1).
+    """
+
+    POS_Z_IDX = 1      # pos[:, 1] — z (vertical) coordinate
+    CAMBER0_IDX = 15   # NACA0 camber M
+    CAMBER1_IDX = 19   # NACA1 camber M
+    UY_IDX = 1         # y[:, 1] — Uy target
+
+    def __init__(self, base: Dataset, p: float = 0.5):
+        self.base = base
+        self.p = p
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        do_flip = torch.rand(1).item() < self.p
+        with _aug_sample_counter.get_lock():
+            _aug_sample_counter.value += 1
+        if do_flip:
+            x = x.clone()
+            y = y.clone()
+            x[:, self.POS_Z_IDX] = -x[:, self.POS_Z_IDX]
+            x[:, self.CAMBER0_IDX] = -x[:, self.CAMBER0_IDX]
+            x[:, self.CAMBER1_IDX] = -x[:, self.CAMBER1_IDX]
+            y[:, self.UY_IDX] = -y[:, self.UY_IDX]
+            with _aug_flip_counter.get_lock():
+                _aug_flip_counter.value += 1
+        return x, y, is_surface
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -394,6 +456,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    aug_hflip_p: float = 0.5  # PR #3563: probability of horizontal flip per sample
 
 
 cfg = sp.parse(Config)
@@ -409,12 +472,15 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+train_ds_aug = HFlipAugmentedDataset(train_ds, p=cfg.aug_hflip_p)
+print(f"Train aug: HFlipAugmentedDataset(p={cfg.aug_hflip_p}) — flips pos_z, NACA0_M, NACA1_M, Uy")
+
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    train_loader = DataLoader(train_ds_aug, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds_aug), replacement=True)
+    train_loader = DataLoader(train_ds_aug, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
 val_loaders = {
@@ -460,6 +526,7 @@ run = wandb.init(
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
+wandb.define_metric("train_aug/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
@@ -484,6 +551,10 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol_per_ch = torch.zeros(3, dtype=torch.float64, device=device)
+    epoch_surf_per_ch = torch.zeros(3, dtype=torch.float64, device=device)
+    epoch_n_vol_nodes = 0
+    epoch_n_surf_nodes = 0
     n_batches = 0
 
     train_loop_t0 = time.time()
@@ -515,6 +586,13 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        # Per-channel accumulation for diagnostic logging
+        with torch.no_grad():
+            err64 = err.detach().double()
+            epoch_vol_per_ch += (err64 * vol_mask_3d).sum(dim=(0, 1))
+            epoch_surf_per_ch += (err64 * surf_mask_3d).sum(dim=(0, 1))
+            epoch_n_vol_nodes += int(vol_mask.sum().item())
+            epoch_n_surf_nodes += int(surf_mask.sum().item())
         n_batches += 1
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -523,6 +601,8 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol_per_ch_mean = (epoch_vol_per_ch / max(epoch_n_vol_nodes, 1)).cpu().tolist()
+    epoch_surf_per_ch_mean = (epoch_surf_per_ch / max(epoch_n_surf_nodes, 1)).cpu().tolist()
 
     # --- Validate ---
     model.eval()
@@ -536,9 +616,20 @@ for epoch in range(MAX_EPOCHS):
     dt = time.time() - t0
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
+    aug_flipped, aug_total = _consume_aug_counters()
+    aug_flip_rate = aug_flipped / max(aug_total, 1)
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/vol_loss_Ux": epoch_vol_per_ch_mean[0],
+        "train/vol_loss_Uy": epoch_vol_per_ch_mean[1],
+        "train/vol_loss_p":  epoch_vol_per_ch_mean[2],
+        "train/surf_loss_Ux": epoch_surf_per_ch_mean[0],
+        "train/surf_loss_Uy": epoch_surf_per_ch_mean[1],
+        "train/surf_loss_p":  epoch_surf_per_ch_mean[2],
+        "train_aug/flip_rate": aug_flip_rate,
+        "train_aug/n_flipped": aug_flipped,
+        "train_aug/n_total": aug_total,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -567,6 +658,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"aug_flip={aug_flip_rate:.3f} ({aug_flipped}/{aug_total})  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
