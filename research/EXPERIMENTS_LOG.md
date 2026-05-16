@@ -564,3 +564,78 @@ This is a high-quality elimination of a plausible hypothesis. Pre-clip ‖g‖ w
 - Artifacts: `models/model-h29-perchan-vel10-p025-clip1-20260516-003604/`
 
 **Status: CLOSED — informative negative.** Follow-up H34 assigned to nezuko: element-wise clipping (`clip_grad_value_`) to bypass the global-rescale interaction and directly test the hypothesis.
+
+---
+
+## 2026-05-16 02:35 — PR #3561: H33: Wider Transolver (n_hidden=192/256) on H20 base (edward) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-edward/h33-wider-hidden-h20`
+- Hypothesis: Increase n_hidden from 128 → 192 or 256 to increase model capacity. H5 (R1) was inconclusive on untuned stack.
+
+| Arm | n_hidden | val_avg | vs baseline | Notes |
+|-----|----------|---------|-------------|-------|
+| Arm A | 192 | 86.91 | +15.1% | regression |
+| Arm B | 256 | 92.54 | +22.6% | regression |
+| **Baseline (H20)** | **128** | **75.4955** | **0** | current best |
+
+**Both arms significantly worse.** val_single_in_dist (the hardest split) is 85.7 at baseline — already the worst. Edward's analysis: capacity isn't the bottleneck. Within the 14-epoch budget, a wider model can't use its extra capacity (the LR schedule governs convergence speed, not capacity). Wider = more parameters to converge in the same wall-clock budget. Also: the model may be regularization-starved — wider nets may need higher wd or dropout.
+
+**Key insight:** Architecture capacity fails on this problem because we're budget-constrained, not capacity-constrained. The "val_single_in_dist is worst" pattern is a distribution difficulty problem, not a capacity problem.
+
+- Artifacts: `models/model-h33-nhidden192-h20-*/`, `models/model-h33-nhidden256-h20-*/`
+
+**Status: CLOSED — dead end on capacity. H35 assigned to edward: slice_num sweep (96, 128), targeting physical representation budget rather than feature dimension.**
+
+---
+
+## 2026-05-16 02:40 — PR #3551: H30: Grad clip sweep (2.0, 1.5) on H20 base (askeladd) — CLOSED, null result
+
+- Branch: `charliepai2i48h3-askeladd/h30-clip-sweep-h20`
+- Hypothesis: clip=1.0 is not the optimum; looser clipping (2.0, 1.5) allows bigger steps in high-LR phase.
+
+| Arm | clip | val_avg | test 3-split | epochs |
+|-----|------|---------|--------------|--------|
+| Arm A | 2.0 | 75.6754 | 74.5001 | 13 |
+| Arm B | 1.5 | 76.5508 | 72.4856 | 13 |
+| **Baseline** | **1.0** | **75.4955** | **73.1556** | **14** |
+
+**Budget asymmetry**: both H30 arms completed 13 epochs vs baseline's 14 (per-epoch wall time ~140s vs ~110s, node variance). Per-epoch traces show H30 arms equal-to-or-ahead of baseline at common epochs — the gap is purely the missing 14th cosine-anneal step.
+
+**Hypothesis test failure**: The prediction that clip=2.0 would only activate at ep1 was wrong — pre-clip grad norms decayed from 12.6 to 3.5 across 13 epochs, staying well above 2.0 throughout. This sweep tested "1×/2×/3× active clipping", not "active vs inactive".
+
+**Null result at primary metric level.** Arm B's test 3-split (72.49) is the best test score yet — but this is within run-to-run noise (~1 point variance shown here). clip=1.0 remains merged default.
+
+Key insight: to properly test the clip threshold, need fixed epoch count (--epochs 14 to ensure equal budgets) or longer wall-clock budget.
+
+- Artifacts: `models/model-charliepai2i48h3-askeladd-h30-clip2-h20-*/`, `models/model-h30-clip15-h20-*/`
+
+**Status: CLOSED — null result. H36 assigned to askeladd: AdamW beta2 sweep (0.95 vs 0.999) — orthogonal optimizer direction.**
+
+---
+
+## 2026-05-16 02:45 — PR #3448: H23b: surf_weight sweep (5, 2) + clip=1.0 rebase (tanjiro) — CLOSED, null result
+
+- Branch: `charliepai2i48h3-tanjiro/H23-surf-weight-sweep`
+- Hypothesis: H23's surf_weight=5 win (vs 10 on H19 base) transfers to H20 stack (clip=1.0).
+- Prior H23 result: sw=5 beat sw=10 by Δ=-1.9 on H19 (no clip). Monotone 20→10→5 trend suggested sw=5 or lower is optimal.
+
+| Arm | sw | val_avg | vs H20 |
+|-----|----|---------|--------|
+| Arm A | 5 | 75.9103 | +0.41 |
+| Arm B | 2 | 78.4422 | +2.95 |
+| **Baseline (H20)** | **10** | **75.4955** | **0** |
+
+**H23 win does not transfer.** With clip=1.0, sw=10 is optimal (75.50), sw=5 slightly worse (75.91), sw=2 much worse (78.44).
+
+**Key mechanism (tanjiro's analysis):** The H23 win was an implicit gradient-magnitude correction: high surf_weight creates large surface gradients; reducing sw softened the update magnitude, improving training stability. But clip_grad_norm=1.0 already caps per-step update magnitude globally. The two mechanisms are redundant — and reducing sw now only shifts the loss balance toward volume, hurting the surface metric.
+
+**Generalizable principle confirmed**: This is the 3rd example (after H29 and now H23b) of "gradient-magnitude-shaping interventions don't compound with clip." The list:
+- H29: per-channel δ_vel=1.0 + clip=1.0 → clip's global rescale defeats per-channel benefit
+- H30: clip=2.0/1.5 → gradient norms still above threshold; looser clip is still active clipping
+- H23b: surf_weight=5 + clip=1.0 → clip already controls step magnitude; sw reduction is redundant
+
+Future direction: prioritize **directional** changes (attention structure, slice budget, conditioning), not magnitude changes.
+
+- Artifacts: `models/model-h23b-sw5-clip1-*/`, `models/model-h23b-sw2-clip1-*/`
+
+**Status: CLOSED — null result. H37 assigned to tanjiro: n_head sweep (8, 2), a directional/architectural change that doesn't interact with clip magnitude.**
