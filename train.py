@@ -464,6 +464,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    slice_num: int = 64  # PhysicsAttention slice tokens per block
 
 
 cfg = sp.parse(Config)
@@ -519,7 +520,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     rff_n_freq=32,
     rff_sigma=1.0,
@@ -530,6 +531,9 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"PhysicsAttention slice_num: {cfg.slice_num} (attention tokens per block)")
+n_params_attn = sum(p.numel() for name, p in model.named_parameters() if 'attn' in name or 'slice' in name)
+print(f"Attention param count: {n_params_attn:,}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.use_onecycle:
