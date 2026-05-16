@@ -1,5 +1,121 @@
 # SENPAI Research Results — charlie-pai2i-24h-r2
 
+## 2026-05-16 02:30 — PR #3535: n_head=8 on new baseline [CLOSED — CATASTROPHIC NEGATIVE]
+- Branch: `charliepai2i24h2-askeladd/n-head-8`
+- Student: charliepai2i24h2-askeladd
+- Hypothesis: Doubling attention heads (4→8) with head_dim shrinking 24→12 gives finer-grained per-head attention. Predicted 0.5-2% improvement.
+
+### Results table
+
+| Metric | n_head=8 | Baseline 95.808 | Δ |
+|--------|----------|-----------------|---|
+| `val_avg/mae_surf_p` | **118.811** | 95.808 | **+22.9%** worse (CATASTROPHIC) |
+| `test_avg/mae_surf_p` | 107.034 | 85.578 | +25.3% worse |
+| val single_in_dist | ~135 | 110.886 | +21.7% |
+| val geom_camber_rc | ~131 | 105.776 | +24% |
+| val geom_cruise | ~91 | 76.060 | +19.5% |
+| val re_rand | ~118 | 90.510 | +30% |
+| Wall-clock/epoch | ~196s | ~137s | **+43%** |
+| Peak VRAM | ~61 GB | ~41 GB | +50% |
+| Epochs completed | 10 / 14 | 14 / 14 | 30-min cap fired |
+
+### Analysis
+- Root cause: **head_dim collapse**. n_hidden=96 / n_head=8 → head_dim=12, too narrow to express meaningful per-head subspaces in slice attention. Baseline head_dim=24 appears to be the lower viable bound for this slot-attention dimensionality.
+- Tensor-core dispatch on (slice_num=96, head_dim=12) is unfavorable — explains the wall-clock hit. Combined with VRAM +50%, this is a clean Pareto loss.
+- Head axis only has headroom in the **other** direction (fewer heads → wider head_dim). Student's own suggested follow-up is exactly n_head=2 (head_dim=48).
+
+### Decision
+- **Closed.** Head expansion axis dead. Follow-up assigned to askeladd: n_head=2 (head_dim=48).
+
+---
+
+## 2026-05-16 02:25 — PR #3564: n_layers=4 (depth bracket below baseline) [CLOSED — NEGATIVE]
+- Branch: `charliepai2i24h2-edward/n-layers-4-r6`
+- Student: charliepai2i24h2-edward
+- Hypothesis: Reducing depth 5→4 brackets the sweet spot from below; if depth=5 is the optimum, depth=4 should also regress (mirror of depth=6 closure). Predicted neutral or slight regression — to characterize the depth axis curvature.
+
+### Results table
+
+| Metric | n_layers=4 | Baseline 95.808 | Δ |
+|--------|-----------|-----------------|---|
+| `val_avg/mae_surf_p` | **98.409** | 95.808 | **+2.71%** worse |
+| `test_avg/mae_surf_p` | 87.748 | 85.578 | +2.54% worse |
+| val single_in_dist | ~119 | 110.886 | +7.4% |
+| val geom_camber_rc | ~109 | 105.776 | +3% |
+| val geom_cruise | ~77 | 76.060 | ~flat |
+| val re_rand | ~93 | 90.510 | +2.7% |
+| Wall-clock/epoch | ~110s | ~137s | −19.7% |
+| Peak VRAM | 33.9 GB | 40.96 GB | −17% |
+
+### Analysis
+- 3 of 4 splits regressed. Depth axis confirmed sweet spot at 5 from both sides:
+  - n_layers=4: +2.71% (this PR)
+  - n_layers=5: 95.808 (baseline)
+  - n_layers=6: +15.0% (#3506)
+  - n_layers=8: +1.53% on old stack (#3302)
+- Compute trade was as predicted (−19.7% wall-clock, −17% VRAM) but the metric loss is not compensable.
+- Combined with closed width and mlp_ratio ladders, **the full capacity axis (depth × width × FFN expansion) is exhausted**.
+
+### Decision
+- **Closed.** Depth axis decisively dead. Follow-up assigned to edward: surf_weight=5 (loss rebalance — single_in_dist memorization).
+
+---
+
+## 2026-05-16 02:20 — PR #3569: weight_decay=5e-4 (WD ladder) [CLOSED — NEGATIVE, EXCELLENT DIAGNOSTIC]
+- Branch: `charliepai2i24h2-fern/wd-5e-4-r6`
+- Student: charliepai2i24h2-fern
+- Hypothesis: Continue WD ladder 1e-4 → 3e-4 → 5e-4. If wd=3e-4 helped, more should help further (regularization rung up). Predicted 0.5-1% improvement.
+
+### Results table
+
+| Metric | wd=5e-4 | Baseline 95.808 | Δ |
+|--------|---------|-----------------|---|
+| `val_avg/mae_surf_p` | **97.052** | 95.808 | **+1.30%** worse |
+| `test_avg/mae_surf_p` | 86.228 | 85.578 | +0.76% worse |
+| val single_in_dist | ~120.3 | 110.886 | **+8.53%** (WORST regression) |
+| val geom_camber_rc | ~104 | 105.776 | **−1.5%** (better) |
+| val geom_cruise | 72.07 | 76.060 | **−5.25%** (better) |
+| val re_rand | ~87.6 | 90.510 | **−3.22%** (better) |
+
+### Analysis
+- **Sharpest mechanism signal in the round**: WD does NOT monotonically help the hardest split. WD helps OOD/robustness splits (cruise, re_rand) but past a point hurts in-distribution memorization (single_in_dist).
+- WD ladder bracketed at 3e-4 as the optimum:
+  - wd=1e-4 → 96.667 (PR #3377 stack)
+  - wd=3e-4 → 95.808 (**current best**)
+  - wd=5e-4 → 97.052 (this PR)
+- Uniform regularization is at its limit on the merged stack. Further gain on single_in_dist requires: (a) asymmetric regularization, (b) orthogonal stochastic regularization (dropout, drop-path), or (c) loss-side rebalance.
+
+### Decision
+- **Closed.** WD ladder dead. Follow-up assigned to fern: stochastic depth / drop-path p=0.1 — block-level regularizer complementary to thorfinn's FFN dropout (#3607 in flight).
+
+---
+
+## 2026-05-16 02:15 — PR #3579: lr 7e-4 → 1e-3 (peak LR raise) [CLOSED — NEGATIVE]
+- Branch: `charliepai2i24h2-alphonse/lr-1e-3-r6`
+- Student: charliepai2i24h2-alphonse
+- Hypothesis: Raise peak LR 7e-4 → 1e-3 with same SequentialLR warmup+cosine. On the new merged stack the model may handle a hotter peak. Predicted 0.5-1.5% improvement.
+
+### Results table
+
+| Metric | lr=1e-3 | Baseline 95.808 | Δ |
+|--------|---------|-----------------|---|
+| `val_avg/mae_surf_p` | **98.079** | 95.808 | **+2.47%** worse |
+| `test_avg/mae_surf_p` | 85.761 | 85.578 | +0.21% worse |
+| val single_in_dist | 118.41 | 110.886 | **+6.79%** (worst regression) |
+| val geom_camber_rc | ~107 | 105.776 | +1.5% |
+| val geom_cruise | ~77 | 76.060 | ~flat |
+| val re_rand | ~92 | 90.510 | +1.6% |
+
+### Analysis
+- E5-E6 instability fingerprint in loss trajectory (overshoot pattern). LinearLR 2-ep warmup is too short for a 1e-3 peak.
+- **lr=7e-4 is at the upper edge of the stable range** for this stack (slice_num=96, n_hidden=96, wd=3e-4, mlp_ratio=2, n_layers=5). The cosine tail is doing the heavy lifting.
+- Peak-LR axis dead on this stack. Schedule work should move to: (a) eta_min tail (tanjiro #3536 compound retest pending), (b) WSD/inverse-sqrt schedules, (c) optimizer-level tricks (EMA / Polyak, Lookahead).
+
+### Decision
+- **Closed.** Peak-LR axis dead. Follow-up assigned to alphonse: EMA / Polyak weight averaging (orthogonal to peak-LR; addresses the same instability).
+
+---
+
 ## 2026-05-16 01:25 — PR #3536: eta_min=1e-5 on cosine annealing [SENT BACK — REBASE FOR COMPOUND TEST]
 - Branch: `charliepai2i24h2-tanjiro/eta-min-1e-5-rebased-r5`
 - Student: charliepai2i24h2-tanjiro
