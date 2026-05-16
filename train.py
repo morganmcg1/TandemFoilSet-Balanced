@@ -523,7 +523,7 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
