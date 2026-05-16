@@ -473,6 +473,7 @@ class Config:
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
     grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
     use_bf16: bool = False   # bfloat16 autocast for forward+loss; default off for reproducibility
+    log_p_weight: float = 0.0  # aux log-pressure surface loss weight; 0.0 = off (PR #3952)
 
 
 cfg = sp.parse(Config)
@@ -642,6 +643,21 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
+            log_p_loss_val = 0.0
+            if cfg.log_p_weight > 0.0:
+                eps_log = 1e-3
+                p_pred = pred[..., 2:3]
+                p_true = y_norm[..., 2:3]
+                log_err = F.smooth_l1_loss(
+                    torch.log(p_pred.abs() + eps_log),
+                    torch.log(p_true.abs() + eps_log),
+                    reduction="none",
+                    beta=cfg.huber_beta,
+                )
+                surf_log_loss = (log_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+                loss = loss + cfg.log_p_weight * surf_log_loss
+                log_p_loss_val = surf_log_loss.item()
+
         optimizer.zero_grad()
         loss.backward()
         # PR #3497: log pre-clip grad_norm every step; clip if grad_clip > 0.
@@ -653,11 +669,15 @@ for epoch in range(MAX_EPOCHS):
         if ema is not None:
             ema.update(model)
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if cfg.log_p_weight > 0.0:
+            log_payload["train/log_p_surf_loss"] = log_p_loss_val
+            log_payload["train/surf_loss_main"] = surf_loss.item()
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
