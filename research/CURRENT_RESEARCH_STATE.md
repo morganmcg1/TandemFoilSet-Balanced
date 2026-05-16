@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 04:52 — #3501 thorfinn sw5 within-PR win sent back for EMA+SOAP; edward/frieren pods recovered from rate-limit loop)
+- **Date:** 2026-05-16 (updated 05:08 — **PR #3495 MERGED**: new canonical val=60.33 test=59.27; precond_freq=5 now default)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 61.43`, `test_avg/mae_surf_p (excl cruise) = 60.92`
-  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)** + **EMA of model weights decay=0.999 (PR #3430, −18.8%)**
-  - Full stack config: SOAP precondition_frequency=10, lr=1e-3, warmup_epochs=3, ema_decay=0.999
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 60.33`, `test_avg/mae_surf_p (excl cruise) = 59.27`
+  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)** + **EMA of model weights decay=0.999 (PR #3430, −18.8%)** + **SOAP precond_freq=5 (PR #3495, −1.78%)**
+  - Full stack config: SOAP **precondition_frequency=5**, lr=1e-3, warmup_epochs=3, ema_decay=0.999
 
 ## Tracked infrastructure issue: cruise-test NaN
 
@@ -18,9 +18,10 @@
 | #3147 | askeladd | LR warmup + peak 1e-3 | **−8.9%** | 123.20 |
 | #3155 | fern | Huber loss (beta=1.0) | **−18.1%** | 110.83 |
 | #3283 | alphonse | SOAP optimizer | **−31.7%** | 75.70 |
-| **#3430** | **nezuko** | **EMA of model weights (decay=0.999)** | **−18.8%** | **61.43** |
+| #3430 | nezuko | EMA of model weights (decay=0.999) | **−18.8%** | 61.43 |
+| **#3495** | **askeladd** | **SOAP precond_freq=5** | **−1.78%** | **60.33** |
 
-Old launch baseline: 135.30. Total gain: −54.6% over 4 compounding improvements.
+Old launch baseline: 135.30. Total gain: −55.4% over 5 compounding improvements.
 
 ## Closed hypotheses (complete)
 
@@ -42,7 +43,8 @@ Old launch baseline: 135.30. Total gain: −54.6% over 4 compounding improvement
 |---|---|---|---|---|
 | **#3591** | **nezuko** | **EMA decay sweep {0.99, 0.999, 0.9999}** | **Training** | **WIP — 2/3 arms done (W&B): variant-decay0.99=58.005 (−5.6%), awaiting arm 3 + SENPAI-RESULT** |
 | **#3493** | **alphonse** | **SOAP LR (lr=2e-3 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −3.2% val on SOAP-only)** |
-| **#3495** | **askeladd** | **SOAP precond_freq (freq=5 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −5.3% val on SOAP-only)** |
+| ~~#3495~~ | ~~askeladd~~ | ~~SOAP precond_freq=5~~ | **MERGED 05:05** | — |
+| **#3703** | **askeladd** | **SOAP precond_freq finer {3, 2} vs freq=5 canonical** | **Optimization** | **WIP (new)** |
 | **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} on EMA+SOAP (clip5 winner)** | **Optimization** | **WIP — rebase + 3-arm compounding test (sent back 03:55, within-PR: −12.1% val on SOAP-only — BIGGEST round-3 signal)** |
 | **#3501** | **thorfinn** | **surf_weight (sw=5 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 04:50, within-PR: −1.5% val on SOAP-only)** |
 | **#3415** | **frieren** | **Log-Re sinusoidal (SOAP stack, seed=42)** | **Inputs** | **WIP — arm1 done (77.88), variants in progress** |

@@ -667,3 +667,26 @@ The naive expectation (higher surf_weight → lower surf_loss) is **violated**: 
 **Decision: REQUEST CHANGES — rebase onto EMA+SOAP, run 2 arms (sw=10 baseline, sw=5 variant).**
 
 Within-PR signal is modest (−1.5%) but the mechanism is sound and the loss-component data is convincing. Sent back for compounding test on EMA+SOAP stack.
+
+---
+
+## 2026-05-16 05:05 — PR #3495 (askeladd): SOAP precond_freq=5 on EMA+SOAP — **MERGED**
+
+- Branch: `willowpai2i48h3-askeladd/soap-precond-freq-sweep`
+- W&B group: `precond-freq-ema-soap`
+- 2 arms, seed=42 (compounding test after EMA+SOAP rebase)
+
+**Result:**
+
+| Arm | precond_freq | val_avg/mae_surf_p | test_avg (excl cruise) | s/epoch | W&B |
+|---|---|---|---|---|---|
+| baseline-freq10-ema | 10 | 61.43 (exact canonical) | 60.92 | 136.8 | uu4nll7s |
+| **variant-freq5-ema** | **5** | **60.33 (−1.78%)** ✓ | **59.27 (−2.70%)** | 138.2 | 94f3r1yb |
+
+All 3 test splits improve: single_in_dist 71.13→69.39, geom_camber_rc 61.95→60.65, re_rand 49.67→47.78.
+
+**Decision: MERGED.** Baseline canonical: val=61.43 → **60.33** (−1.78%). Baseline arm reproduced canonical exactly (sanity check passed). Wall-clock penalty negligible (+1.0%).
+
+**Cumulative stack:** Huber(β=1.0) + LR warmup(1e-3) + SOAP(precond_freq=**5**) + EMA(0.999). Total: 135.30 → **60.33** (−55.4%).
+
+**Note:** `precondition_frequency=5` is now the default in `train.py` after this merge. All subsequent runs without explicit flag will use freq=5.
