@@ -413,3 +413,129 @@ The sharp final-decay improvement (96 → 89 in the last epoch) shows the model 
 
 **Status: MERGED.** Provides confirmation point on δ trend; per-channel Huber (H25) is the better path forward.
 
+
+
+---
+
+## 2026-05-15 21:23 — PR #3445: H20: Gradient clip=1.0 on H19 triple compound (nezuko) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-nezuko/H20-grad-clip-confirm`
+- Hypothesis: Grad clip max_norm=1.0 (from H18B signal ~74.23 on pre-H19 base) on the merged H19 triple-compound stack.
+- Two arms: clip=1.0 (Arm A) and clip=0.5 (Arm B).
+- **Effective base config:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (defaults on merged train.py) + T_max=15 + clip.
+
+| Arm | clip | val_avg/mae_surf_p | test 3-split avg | Δ vs H19 (83.81) |
+|-----|------|--------------------|-----------------|------------------|
+| **Arm A** | **1.0** | **75.4955 (NEW BEST)** | **73.1556** | **−8.32** |
+| Arm B | 0.5 | 77.0687 | 73.0051 | −6.74 |
+
+**Per-split breakdown (Arm A, NEW BEST):**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------|-----------------|
+| val_single_in_dist | 85.7272 | 77.4314 |
+| val_geom_camber_rc | 85.4700 | 77.5658 |
+| val_geom_camber_cruise | 55.7886 | NaN |
+| val_re_rand | 74.9964 | 64.4696 |
+| **val_avg** | **75.4955** | **73.1556** (3-split) |
+
+**Why it works:** Pre-clip grad norm was 5–17× throughout (clipping active at every step). With Huber already suppressing pressure tail loss terms, clip=1.0 adds a second layer: bounding the per-step update magnitude so that no single high-Re sample's gradient dominates a step. clip=0.5 is too aggressive (17–34× reduction), starving useful gradient signal.
+
+**Subtle finding:** H20 used `--huber_delta 0.5` which is NOT used in the loss code (train.py always uses `huber_delta_vel`/`huber_delta_p`). H20 actually ran with δ_vel=0.5, δ_p=0.25 (the merged defaults from H25). So H20's effective config differs from H25 only in: δ_vel=0.5 vs 1.0 AND clip=1.0 vs None.
+
+- Artifacts: `models/model-h20-clip1-h19-20260515-212335/`, `models/model-h20-clip05-h19-20260515-222355/`
+- Best epoch: 14 (30-min wall cap; T_max=15 fully annealed)
+
+**Status: MERGED — new best.** All R3+ experiments should now include clip_grad_norm=1.0 by default.
+
+
+---
+
+## 2026-05-15 21:35 — PR #3446: H21: WSD schedule on H19 triple compound (thorfinn) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-thorfinn/H21-wsd-schedule-h19`
+- Hypothesis: WSD (Warmup-Stable-Decay) schedule should outperform cosine on H19 stack.
+- Two arms: warmup=2/stable=9 (Arm A) and warmup=1/stable=10 (Arm B).
+
+| Arm | val_avg/mae_surf_p | vs H19 (83.81) |
+|-----|---------------------|----------------|
+| Arm A (warmup=2,stable=9) | 96.71 | +15.4% |
+| Arm B (warmup=1,stable=10) | 101.09 | +20.6% |
+
+**Why WSD failed:** The 30-min cap cuts at epoch 14. WSD's decay phase barely fires — LR is ~5e-4 through most of training and only begins decaying at epoch 12-13. CosineAnnealingLR(T_max=15) anneals smoothly from epoch 1, giving stable convergence across all 14 epochs. WSD requires ~25+ epochs for the decay phase to be meaningful. Second confirmed WSD failure (H9 Arm B at 89.04 was on a less-tuned base).
+
+**Status: CLOSED — dead end. Do not revisit WSD unless SENPAI_TIMEOUT_MINUTES is raised.**
+
+
+---
+
+## 2026-05-15 23:25 — PR #3448: H23: surf_weight sweep (5, 20) on H19 triple compound (tanjiro) — SENT BACK for rebase
+
+- Branch: `charliepai2i48h3-tanjiro/H23-surf-weight-sweep`
+- Hypothesis: Default surf_weight=10 is above optimum; reducing to 5 improves primary metric.
+- Two arms: surf_weight=5 (Arm A) and surf_weight=20 (Arm B).
+
+| Arm | surf_weight | val_avg/mae_surf_p | vs H19 (83.81) |
+|-----|-------------|---------------------|----------------|
+| **Arm A** | **5** | **81.91** | **−1.90 (wins vs H19)** |
+| Arm B | 20 | 84.77 | +0.96 |
+
+Arm A beats H19 (83.81) but not H20 current best (75.50). Also improved vol_p metrics simultaneously — no surface/volume tradeoff, suggests 10 was too high.
+
+**Status: SENT BACK.** Request rebase onto H20 base (clip=1.0) + test surf_weight=5 and surf_weight=2 with clip.
+
+
+---
+
+## 2026-05-15 23:26 — PR #3452: H27: LR sweep (3e-4, 7e-4) on H19 triple compound (frieren) — SENT BACK for rebase
+
+- Branch: `charliepai2i48h3-frieren/H27-lr-sweep-h19`
+- Hypothesis: lr=5e-4 is suboptimal on H19 stack; higher peak LR covers more loss landscape.
+- Two arms: lr=3e-4 (Arm A) and lr=7e-4 (Arm B).
+
+| Arm | lr | val_avg/mae_surf_p | vs H19 (83.81) |
+|-----|----|--------------------|----------------|
+| Arm A | 3e-4 | 86.78 | +2.97 |
+| **Arm B** | **7e-4** | **79.79** | **−4.02 (wins vs H19)** |
+
+Arm B beats H19 but not H20 (75.50). frieren's prediction of stability at lr=7e-4 confirmed — no spikes. Monotone LR direction confirmed: 3e-4 < 5e-4 < 7e-4.
+
+**Status: SENT BACK.** Rebase onto H20 base (clip=1.0) + test lr=7e-4 and lr=1e-3 with clip.
+
+
+---
+
+## 2026-05-15 23:30 — PR #3451: H26: FiLM cond_dim ablation (3 vs 1) on H19 (alphonse) — SENT BACK for rebase
+
+- Branch: `charliepai2i48h3-alphonse/H26-film-cond-dim-ablation`
+- Hypothesis: FiLM with cond_dim=11 includes noisy geometry dimensions that zero out for single-foil samples.
+- Two arms: cond_dim=3 (Re, AoA1, NACA1_camber) and cond_dim=1 (Re only).
+
+| Arm | cond_dim | val_avg/mae_surf_p | vs H19 (83.81) |
+|-----|----------|--------------------|----------------|
+| **Arm A** | **3** | **82.51** | **−1.30 (wins vs H19)** |
+| Arm B | 1 | 86.42 | +2.61 |
+
+cond_dim=3 beats cond_dim=11! Geometry tail dims (AoA2, NACA2, gap, stagger) zero out for single-foil samples (~half of training data), creating distribution mismatch that hurts FiLM. cond_dim=3 (Re, AoA1, NACA1_camber) is leaner and better. But doesn't beat H20 (75.50).
+
+**Status: SENT BACK.** Rebase onto H20 base (clip=1.0) + test cond_dim=3 and cond_dim=2 with clip.
+
+
+---
+
+## 2026-05-16 00:23 — PR #3491: H28: SWA on H19 triple compound (edward) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-edward/h28-swa-on-h19-stack`
+- Hypothesis: SWA (equal-weight avg of last 7 epochs from start_epoch=7) should find a flatter minimum than the terminal checkpoint.
+- Single arm: swa_start_epoch=7 on H19 base.
+
+| Source | val_avg/mae_surf_p | vs H19 (83.81) |
+|--------|---------------------|----------------|
+| SWA (start_epoch=7) | 89.68 | +5.86 regression |
+| Live checkpoint (diagnostic) | 85.21 | +1.40 regression |
+
+**Why SWA failed:** Model improves by ~44 pts between epoch 7 and 14 (129→85 val_avg). SWA averages weights from the steep-descent phase, yielding mid-trajectory weights far worse than the endpoint. CosineAnnealingLR(T_max=15) never plateaus within 14 epochs, so there's no converged basin to average. Same failure mode as H24 EMA.
+
+Principle confirmed: Both EMA and SWA fail at this budget. Averaging requires a post-convergence regime.
+
+**Status: CLOSED — dead end. Revisit SWA only if budget exceeds ~20 epochs (swa_start_epoch=12+).**
