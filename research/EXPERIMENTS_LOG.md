@@ -1,5 +1,58 @@
 # SENPAI Research Results
 
+## 2026-05-16 02:35 — Round 4 portfolio (7 assignments)
+
+All 7 idle students assigned simultaneously to round-4 hypotheses on the OneCycleLR + L1 baseline (81.66). Tanjiro #3360 retest in flight (from round-3 send-back).
+
+| PR | Student | Hypothesis | Mechanism |
+|---|---|---|---|
+| #3613 | askeladd | `pct_start=0.05` (was 0.10) | Faster warmup → more anneal steps. Peak at epoch 0.7 instead of 1.4. |
+| #3614 | thorfinn | `max_lr=2e-3` (was 1e-3) | Higher peak. Tests whether OneCycle headroom existed at 1e-3. |
+| #3615 | nezuko | SWA (start epoch 11) | Average final 3-4 OneCycle epochs via `torch.optim.swa_utils.AveragedModel` + `update_bn`. Different from EMA (uniform avg vs decay), and OneCycle's monotonic anneal is the right regime for SWA. |
+| #3616 | fern | `batch_size=2` (was 4) | 2× gradient updates per epoch; OneCycle `total_steps` auto-scales. Tests under-training hypothesis. |
+| #3617 | edward | log-space L1 surf | `log1p(\|x\|)·sign(x)` then L1. Distributes gradient per decade vs per magnitude. Pressure spans ~3 OoM. |
+| #3619 | alphonse | wd=0 retest | Prior wd=0 was +1.65 pp on warm-restarts+L1. Does wd=0 stack with OneCycle? |
+| #3622 | frieren | `final_div_factor` ∈ {1e3, 1e5} 2-arm sensitivity | Terminal LR sweep: 4e-8 vs 4e-10 (baseline 4e-9). Tests whether end-of-anneal LR matters. |
+
+---
+
+## 2026-05-16 02:30 — PR #3512: lr=1e-3 warm-restarts (nezuko) — closed
+
+- Branch: `willowpai2i24h5-nezuko/lr-1e-3-warm-restarts`
+- Hypothesis (original): higher base LR (1e-3 vs 5e-4) on warm-restarts baseline.
+- Result: 3-arm mean ~90.66 on old warm-restarts baseline (within noise of 90.04).
+- **Decision:** closed — even if it had won on the old baseline, the warm-restarts schedule was superseded by OneCycleLR (#3307 merged, 81.66). The config is obsolete. Nezuko reassigned to SWA on OneCycle baseline (#3615).
+
+---
+
+## 2026-05-16 02:30 — PR #3487: weight_decay=0 (alphonse) — closed
+
+- Branch: `willowpai2i24h5-alphonse/wd-0`
+- Hypothesis: wd=0 in underfit regime where weight_decay is pure penalty.
+- W&B runs (3-arm on old warm-restarts+L1 baseline): mean 88.56 (best 88.39).
+- **Result:** −1.65 pp vs old baseline 90.04 (PR #3434), but +6.9 pp vs new baseline 81.66 (PR #3307).
+- **Decision:** closed on this config. **Reassigned: wd=0 retest on OneCycle baseline (#3619)** — the wd=0 mechanism is real and we should retest it on the new head, where it may stack with OneCycle's anneal.
+
+---
+
+## 2026-05-16 02:30 — PR #3488: Full L1 vol+surf (edward) — closed
+
+- Branch: `willowpai2i24h5-edward/full-l1`
+- Hypothesis: extend L1 to volume loss too (vol L1 + surf L1).
+- W&B result: 3-arm mean ~91.77 on old baseline (90.04). Surf-only L1 wins.
+- **Decision:** closed — full L1 regresses ~1.7 pp vs surf-only L1. The MSE vol loss provides stronger far-field structure gradient; L1 vol distributes gradient too evenly across the unbounded far-field cells. **Locks in: vol MSE + surf L1 as the loss formulation.** Edward reassigned to log-space surface pressure loss (#3617).
+
+---
+
+## 2026-05-16 02:30 — PR #3464: slice_num=32 (frieren) — closed
+
+- Branch: `willowpai2i24h5-frieren/slice-num-32`
+- Hypothesis: halving slice_num (64→32) reduces compute; tests capacity floor.
+- Result: 3-arm mean ~126 (decisively worse than 90.04 baseline by ~40%).
+- **Decision:** closed — clear capacity floor at slice_num=64. Don't drop. Frieren reassigned to `final_div_factor` 2-arm sweep (#3622).
+
+---
+
 ## 2026-05-16 01:35 — PR #3307: OneCycleLR right-sized to actual budget + L1 surf — **MERGED (compound winner)**
 
 - Branch: `willowpai2i24h5-askeladd/onecyclelr-1e3`
