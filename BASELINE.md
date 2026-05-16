@@ -1,9 +1,50 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3537 (Lion optimizer)
+## Current best — PR #3405 (FiLM conditioning + Lion + EMA)
 
-**val_avg/mae_surf_p = 77.5788** (W&B run: `yvkf9glr`, PR #3537 Lion optimizer lr=5e-5 wd=1e-3 on Huber + Fourier σ=10 + T_max=14)
-**test_avg/mae_surf_p = 68.8764** (same run `yvkf9glr`, clean 4-split)
+**val_avg/mae_surf_p = 71.6544** (W&B run: `ksltdq7a`, PR #3405 FiLM-output on log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) on Huber + Fourier σ=10 + T_max=14)
+**test_avg/mae_surf_p = 62.1091** (same run `ksltdq7a`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 81.17 | 71.30 |
+| geom_camber_rc | 84.45 | 73.87 |
+| geom_camber_cruise | **51.99** | **42.84** ¹ |
+| re_rand | 69.01 | 60.43 |
+
+¹ 199/200 samples evaluated — `splits_v2/.test_geom_camber_cruise_gt/000020.pt` dropped via y-side mask. Previously null due to flat key naming; now correctly resolved to 42.84 by scan of nested W&B keys.
+
+**Comparison vs prior best (PR #3537 Lion, val 77.58 / test 68.88):**
+
+| Split | Prior test mae (yvkf9glr) | New test mae (ksltdq7a) | Δ |
+|-------|---------------------------:|--------------------------:|---:|
+| single_in_dist | 81.69 | 71.30 | **−12.7%** |
+| geom_camber_rc | 77.94 | 73.87 | **−5.2%** |
+| geom_camber_cruise | 48.83 | 42.84 | **−12.3%** |
+| re_rand | 67.04 | 60.43 | **−9.9%** |
+| **avg** | **68.88** | **62.11** | **−9.8%** |
+
+All 4 splits improve; largest gains on `single_in_dist` and `geom_camber_cruise`.
+
+**PR #3405 (FiLM conditioning):** FiLM (Feature-wise Linear Modulation) conditions the surface-pressure model on log(Re) via gamma/beta affine transforms at the network output. log(Re) encodes the Reynolds-number regime of each flow sample. On the OOD `re_rand` split, FiLM adds the most value (val 69.01 vs Lion-only 72.93), and the `geom_camber_cruise` split sees the largest absolute improvement on test (48.83 → 42.84). Combined with Lion optimizer + EMA(0.997) + Fourier σ=10 + Huber β=0.05 + cosine T_max=14.
+
+**Reproduce (PR #3405):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-nezuko --epochs 50 \
+  --wandb_group round4-film-ema-lion-nezuko \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 16 --fourier_sigma 10.0 \
+  --cosine_t_max 14 \
+  --optimizer_name lion --lr 5e-5 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --wandb_name nezuko-r4-film-ema997-lion
+```
+
+---
+
+## PR #3537 (prior best) — Lion optimizer
 
 | Split | val mae_surf_p | test mae_surf_p |
 |-------|----------------|------------------|
