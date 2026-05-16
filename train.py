@@ -453,6 +453,7 @@ class Config:
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
+    mlp_ratio: int = 2   # FFN expansion factor; FFN hidden = mlp_ratio * n_hidden
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -496,7 +497,7 @@ model_config = dict(
     n_layers=5,
     n_head=cfg.n_head,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     ffn_act=cfg.ffn_act,
     output_fields=["Ux", "Uy", "p"],
