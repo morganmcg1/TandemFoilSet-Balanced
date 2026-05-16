@@ -1173,3 +1173,28 @@ The arm 4 comparison to new canonical (which also has grad_clip) isolates β=0.0
 - willowpai2i48h3-fern/huber-beta-near-l1-sweep
 - Hypothesis: β monotone trend continues toward pure L1. β=0.01→0.005→0.001→0.0001 tests whether the floor is near-zero or whether gains saturate. Optional arm 5: pure MAE (L1Loss) as closure.
 - 4 arms: baseline (β=0.01), β=0.005, β=0.001, β=0.0001. All with grad_clip=1.0 on full 12-winner canonical.
+
+## 2026-05-16 21:35 — PR #4021 (nezuko): SWA on EMA+Lookahead+grad_clip — **CLOSED (negative)**
+
+- Branch: `willowpai2i48h3-nezuko/swa-stochastic-weight-averaging`
+- W&B runs: `nwkcli8l` (arm2 SWA start=8), `z5xeoztk` (arm3 SWA start=4)
+- Ran on β=0.1 + grad_clip=1.0 + Lookahead canonical (pre-β=0.01 merge, correct per in-flight policy)
+
+| Arm | Config | val_avg/mae_surf_p | test_excl_cruise | Δ vs EMA-only |
+|---|---|---|---|---|
+| Baseline (EMA-only, within-run) | canonical | 47.1000 | 46.2590 | — |
+| Arm 2 (SWA start=8, n_avg=6) | +SWA | 51.1406 | 50.4506 | **+8.6% / +9.1%** |
+| Arm 3 (SWA start=4, n_avg=10) | +SWA | 58.8533 | 58.3706 | **+25.0% / +26.2%** |
+
+**All splits regress with SWA. Monotone worse with wider window.**
+
+**Mechanism:** SWA's flat-basin argument requires plateaued training. At epoch 14 (wall-clock cap), val MAE is still actively dropping — checkpoints are NOT equivalent samples from a flat basin. Uniform averaging across non-stationary improving checkpoints dilutes the best (final) weights. EMA(0.99) + Lookahead(α=0.5) already provide recency-weighted averaging — stacking SWA adds uniform-weighted dilution from worse early checkpoints.
+
+**Decision: CLOSED.** +8.6% regression exceeds 5% threshold. SWA may be viable post-bf16 (more epochs → plateau), but not under current wall-clock cap.
+
+## 2026-05-16 21:40 — PR #4161 nezuko assigned: Adaptive Gradient Clipping (AGC)
+
+- willowpai2i48h3-nezuko/adaptive-gradient-clipping
+- Hypothesis: Global clip=1.0 applies uniform threshold across all parameters. AGC (Brock et al. 2021) clips per-parameter based on param_norm × clip_factor — adapts to each parameter's own scale.
+- 3 arms: baseline (global clip only), AGC-only (λ=0.01), AGC+global clip combined.
+- Reference: NF-Nets paper. Per-parameter (not unitwise) variant.
