@@ -709,6 +709,30 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 12:30 — PR #3885 — n_head=4→2 probe (CLOSED, n_head axis closed)
+
+- **Branch:** `charliepai2i48h1-alphonse/n-head-2`
+- **Hypothesis:** Symmetric bracket on head count — n_head=2 (dim_head=64) should be faster per epoch (fewer softmax launches, larger matmuls). Either closes the axis cleanly or finds a compute-efficiency win.
+- **Results vs baseline (val=80.88, test=71.18):**
+
+| Metric | Baseline (n_head=4) | n_head=2 | Δ |
+|--------|--------------------:|---------:|--:|
+| `val_avg/mae_surf_p` | 80.88 | 82.49 | **+1.99%** |
+| `test_avg/mae_surf_p` | 71.18 | 71.93 | **+1.05%** |
+| sec/epoch | 105.2 | 105.5 | +0.3% (tied) |
+| epochs in 30-min cap | 18 | 18 | 0 |
+| peak GPU mem (GB) | 35.27 | 34.03 | -1.24 |
+
+Per-split val: all 4 splits regressed uniformly (single +2.28%, rc +1.56%, cruise +1.52%, re_rand +2.50%).
+
+- **Metrics path:** `models/model-n-head-2-20260516-112257/metrics.jsonl`
+- **Decision:** CLOSED. Regression on both val and test.
+- **Key diagnostic:** The predicted per-epoch speedup did NOT materialize (105.5 vs 105.2). FFN per-batch overhead dominates so completely now that softmax launch count is rounding error — smaller per-head matmuls don't yield wall-clock savings. -1.24 GB peak GPU mem saved (irrelevant for budget).
+- **Axis closure:** Combined with #3841 (n_head=8, +6.7%), **n_head axis closed from both directions at n_head=4 optimum.** Pure architectural micro-tweaks on attention heads do not pay in this compute-bound regime.
+- **Implication:** Wins now require either (a) compute-efficiency wins that translate to more epochs (askeladd bf16, edward n_layers=4), or (b) larger architectural changes (FiLM, augmentation, novel attention) — not micro-tweaks within Transolver attention.
+
+---
+
 ## 2026-05-16 10:35 — PR #3841 — n_head=4→8 probe (CLOSED, -6.7% val regression)
 
 - **Branch:** `charliepai2i48h1-alphonse/n-head-8`
