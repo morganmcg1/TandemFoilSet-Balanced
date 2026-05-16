@@ -631,3 +631,48 @@ Current advisor baseline: val=**109.42**. Arm A is **19.8% worse** on val and **
 - Arm B and C are dead ends — per-channel p weighting compounds badly with surface weighting (Arm C 30×3=90× effective surface-p vs volume-Ux).
 - All 3 arms confirm: **cruise-camber is the easiest test split for surface_p** (84.76 vs 116-140 elsewhere). Future hypotheses targeting harder splits (single_in_dist, geom_camber_rc) have more headroom.
 - Independently rediscovered the cruise NaN scoring bug (same root cause as alphonse, thorfinn, frieren found).
+
+## 2026-05-16 08:30 — Round-4 Closeout + #3691 Merge
+
+### PR #3691 — MERGED: Longer training --epochs 12 (thorfinn)
+- Branch: willowpai2i48h4-thorfinn/thorfinn-longer-training-12ep
+- Hypothesis: extending training from 10→12 epochs (slower cosine to T_max=12) allows the model to reach its best_epoch=11, recovering gradient steps that the 10ep budget was truncating
+- 3-seed results (all identical config):
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val | Δ test |
+|---|---:|---:|---:|---:|
+| Baseline (`0q6t1hpc`, 10ep) | 83.4954 | 73.7918 | — | — |
+| `zqxkh9np` (seed 1) | **82.4997** | 74.1023 | −1.20% | +0.42% |
+| `oj72dm7b` (seed 2) | 83.7424 | 73.7927 | +0.30% | +0.00% |
+| `kkuvnrai` (seed 3) | 82.6374 | **72.3393** | −1.03% | −1.96% |
+| **Mean (3 seeds)** | **82.96** | **73.41** | **−0.63%** | **−0.51%** |
+
+- Per-split (zqxkh9np, best val): single_in_dist=90.99/83.13, geom_camber_rc=91.55/82.74, geom_camber_cruise=65.79/56.33, re_rand=81.67/74.22
+- **Decision: MERGED** — val improves on primary metric; mean across seeds beats baseline on both val and test. kkuvnrai shows a clean test-side win (72.34, −1.96%) but best_val seed `zqxkh9np` shows mild test regression (+0.42%). This is within run-to-run variance (spread 1.76 on test).
+- Key finding: run-to-run variance (val spread 82.50–83.74) is comparable to the gain (−1.2% best). **Epochs=12 is now the new default for all future experiments.**
+
+### PR #3690 — CLOSED: lr=1e-3 + coord noise (edward)
+- 3 seeds: `96tusrhs` val=86.32, `x0icixhu` val=87.54, `j2n5ir36` val=84.70 — best seed still +1.2% regression
+- Conclusion: lr=5e-4 is the correct default with coord_noise_std=0.01. The lower lr acts as implicit regularizer compatible with the coordinate noise scale. lr=1e-3 oversteps the augmented training signal.
+
+### PR #3714 — CLOSED: surf_weight=15 (alphonse)
+- Runs `84azuean` (val=88.27) and `ru8t1lhr` (val=89.30) — both clear regressions (+4.8–+5.8)
+- surf_weight=10 confirmed as the correct operating point for the L1+coord_noise+Fourier stack. Increasing surface weight over-penalizes volume fields OOD splits rely on.
+
+### PR #3718 — CLOSED: AoA jitter augmentation (nezuko)
+- Runs `4h64yzzl` (std=0.02, val=84.96) and `ksw9zvsw` (std=0.01, val=86.44) — both fail
+- Correctly identified AoA columns at dims 14 and 18 (per program.md schema)
+- AoA jitter adds ambiguity to the flow-condition signal without geometric redundancy. Confirms: scalar conditioning features are not suitable for noise augmentation.
+
+### PR #3715 — CLOSED: mlp_ratio=4 (askeladd)
+- Run `0ezsswb4` (--epochs 8 due to per-epoch time ~195s): val=93.17, test=83.39 — +9.68/+9.59 regression
+- mlp_ratio=4 forced --epochs 8 to stay within 30-min budget. Regression is consistent across all 4 splits (+6 to +17). mlp_ratio=2 confirmed as the sweet spot for this budget.
+
+### PR #3692 — CLOSED: feature condition noise cols 2-23 (tanjiro)
+- Arm 1 (`xu5e6cul`, std=0.005): val=85.98, test=75.30 — +2.48 regression
+- Arm 2 (`yg32qo3i`, std=0.01): val=89.19, test=79.58 — +5.69 regression (worse with more noise)
+- Feature noise monotonically worsens as std increases. Conditioning scalars carry per-sample physics without spatial redundancy.
+
+### Cross-cutting round-4 conclusion
+All 8 round-4 experiments (excluding the thorfinn win) failed. The model has exhausted the local neighborhood: augmentation on scalar flow features doesn't work, FFN/attention head scaling doesn't help within the 30-min budget, surf_weight and lr are already optimal. Moving to round-5 tier change: SwiGLU FFN, TTA, OneCycleLR, asinh target transform, DSDF clipping, per-domain normalization.
+

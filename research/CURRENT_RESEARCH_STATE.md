@@ -1,22 +1,23 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~08:00 UTC
+- **Last updated:** 2026-05-16 ~08:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 83.4954, test_avg/mae_surf_p = 73.7918** — from PR #3632 (tanjiro, coord noise augmentation std=0.01), merged 2026-05-16 ~04:30 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 82.4997, test_avg/mae_surf_p = 74.1023** — from PR #3691 (thorfinn, --epochs 12 longer training), merged 2026-05-16 ~08:30 UTC. See `BASELINE.md` for full details.
 
-Per-split test: single_in_dist=83.77, geom_camber_rc=80.55, geom_camber_cruise=55.20, re_rand=75.64.
+Per-split test (zqxkh9np): single_in_dist=83.13, geom_camber_rc=82.74, geom_camber_cruise=56.33, re_rand=74.22. Note: companion seed kkuvnrai achieved test=72.34 (−1.96% vs previous baseline) — run-to-run variance is real.
 
 Baseline progression (val_avg/mae_surf_p):
 - #3091: 109.42 (warmup + clip + lr=1e-3, MSE)
 - #3089: 100.53 (L1 loss + scoring fix)
 - #3507: 96.10 (n_hidden=160 width scaling)
 - #3372: 88.24 (Fourier PE 4-freq, lr=1e-3)
-- **#3632: 83.50 (coord noise augmentation std=0.01, lr=5e-4) ← CURRENT**
+- #3632: 83.50 (coord noise augmentation std=0.01, lr=5e-4)
+- **#3691: 82.50 (--epochs 12 longer training, 3-seed mean val=82.96) ← CURRENT**
 
 ## Winning stack (all additive, all merged)
 
@@ -26,8 +27,9 @@ Baseline progression (val_avg/mae_surf_p):
 | n_hidden=160 | #3507 | −4.4% | Width sweet spot for 30min budget |
 | Fourier PE num_freq=4 | #3372 | −8.2% | log-spaced sinusoidal on (x,z), lr=1e-3 |
 | Coord noise std=0.01 | #3632 | −5.4% | Spatial augmentation during training, lr=5e-4 |
+| --epochs 12 (longer training) | #3691 | −1.2% | Cosine T_max=12; best_epoch=11 in all 3 seeds |
 
-**Total improvement from baseline:** 109.42 → 83.50 (−23.7%)
+**Total improvement from baseline:** 109.42 → 82.50 (−24.6%)
 
 ## Most recent research direction from human researcher team
 
@@ -44,7 +46,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 08:00 UTC)
+## Active in-flight PRs (status as of 08:35 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
@@ -52,14 +54,18 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | **#3716** | fern | n_head=8 (attention diversity) | CLOSED (val=93.17) | — |
 | **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | **CLOSED 08:00** (val=93.17, +9.68) | — |
 | **#3692** | tanjiro | Feature condition noise aug cols 2:24 | **CLOSED 08:00** (val=85.98, +2.48) | — |
-| **#3690** | edward | lr=1e-3 + coord noise | stale_wip — W&B FAIL (`96tusrhs` 86.32 / `x0icixhu` 87.54); advisor commented | close on submission |
-| **#3691** | thorfinn | --epochs 12 longer training | stale_wip — W&B `zqxkh9np` val=**82.50**, test=**74.10**; val wins −1.2%, test +0.4% | merge candidate (val), test caveat |
-| **#3714** | alphonse | surf_weight=15 sweep | WIP — W&B FAIL (`j8rnxpc4` 88.23 / `84azuean` 88.27); advisor commented | close on submission |
-| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP — W&B FAIL (std=0.03 `mynslale` 86.29; std=0.005 arm not launched); advisor asked for std=0.005 | awaiting |
-| **#3718** | nezuko | AoA jitter augmentation | WIP — W&B FAIL (`4h64yzzl` std=0.02 84.96 — marginal); advisor commented | close on submission |
+| **#3691** | thorfinn | --epochs 12 longer training | **MERGED 08:30** → baseline val=82.50/test=74.10 | 82.4997 🏆 |
+| **#3690** | edward | lr=1e-3 + coord noise | **CLOSED 08:30** (val=84.70, 3-seed best, +1.2%) | — |
+| **#3714** | alphonse | surf_weight=15 sweep | **CLOSED 08:30** (val=89.30, +5.8%) | — |
+| **#3718** | nezuko | AoA jitter augmentation | **CLOSED 08:30** (val=84.96, +1.47%) | — |
+| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP — W&B FAIL (std=0.03 `mynslale` 86.29; std=0.005 arm awaited) | awaiting submission |
 | **#3741** | fern | eta_min=1e-5 cosine floor | WIP (no run started yet) | awaiting |
-| **#3814** | askeladd | **SwiGLU FFN (round-5)** | WIP (assigned 08:00) | awaiting |
-| **#3815** | tanjiro | **TTA coord noise K=4/K=8 (round-5)** | WIP (assigned 08:00) | awaiting |
+| **#3814** | askeladd | **SwiGLU FFN (round-5)** | WIP (assigned 08:00) | running |
+| **#3815** | tanjiro | **TTA coord noise K=4/K=8 (round-5)** | WIP (assigned 08:00) | running |
+| **#3833** | thorfinn | **OneCycleLR schedule (round-5)** | WIP (assigned 08:35) | awaiting |
+| **#3835** | edward | **asinh output transform (round-5)** | WIP (assigned 08:35) | awaiting |
+| **#3836** | nezuko | **DSDF clip ±3σ (round-5)** | WIP (assigned 08:35) | awaiting |
+| **#3838** | alphonse | **per-domain output norm (round-5)** | WIP (assigned 08:35) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
