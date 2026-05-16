@@ -465,6 +465,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    fc_main_boost: float = 1.0  # >1.0 boosts fc_main LR within SwiGLU blocks (PR #3888)
 
 
 cfg = sp.parse(Config)
@@ -522,8 +523,69 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Per-projection LR scaling for SwiGLU (PR #3888): boost fc_main LR within each block.
+# Inverted from PR #3840 (which boosted fc_gate). Diagnostic from #3840 showed
+# fc_gate/fc_main grad-norm ratio = 0.6-0.75 across all blocks/epochs — fc_main
+# carries 1.3-1.7x the gradient mass, so boost the dominant path instead.
+gate_main_params_per_block: list[dict] = []
+if cfg.use_swiglu and cfg.fc_main_boost != 1.0:
+    BASE_LR = cfg.lr
+    BOOST = cfg.fc_main_boost
+    param_groups: list[dict] = []
+    gate_ids: set[int] = set()
+    main_ids: set[int] = set()
+    for i, block in enumerate(model.blocks):
+        mlp = block.mlp
+        if not isinstance(mlp, SwiGLUMlp):
+            raise RuntimeError(
+                f"block_{i}.mlp is {type(mlp).__name__}, not SwiGLUMlp — --use_swiglu must be set"
+            )
+        gate_p = list(mlp.fc_gate.parameters())
+        main_p = list(mlp.fc_main.parameters())
+        # fc_gate at BASELINE LR (was boosted in #3840)
+        param_groups.append({"params": gate_p, "lr": BASE_LR,
+                             "name": f"block_{i}_fc_gate"})
+        # fc_main BOOSTED (was baseline in #3840)
+        param_groups.append({"params": main_p, "lr": BASE_LR * BOOST,
+                             "name": f"block_{i}_fc_main"})
+        gate_ids.update(id(p) for p in gate_p)
+        main_ids.update(id(p) for p in main_p)
+        gate_main_params_per_block.append({"gate": gate_p, "main": main_p})
+    specialized = gate_ids | main_ids
+    remaining = [p for p in model.parameters() if id(p) not in specialized]
+    param_groups.append({"params": remaining, "lr": BASE_LR, "name": "remaining"})
+    total_in_groups = sum(sum(p.numel() for p in g["params"]) for g in param_groups)
+    total_model = sum(p.numel() for p in model.parameters())
+    assert total_in_groups == total_model, (
+        f"Param group mismatch: {total_in_groups} vs {total_model} model params"
+    )
+    print(f"Per-projection optimizer: {len(param_groups)} groups, "
+          f"fc_main LR={BASE_LR * BOOST:.2e}, fc_gate/remaining LR={BASE_LR:.2e}, "
+          f"BOOST={BOOST}x")
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.weight_decay)
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+
+def _per_block_grad_norms(blocks_params, device) -> dict[str, float]:
+    """Per-block fc_gate / fc_main grad norms (L2). One CPU sync via stack-then-cpu."""
+    if not blocks_params:
+        return {}
+    sq_sums: list[torch.Tensor] = []
+    for gm in blocks_params:
+        for key in ("gate", "main"):
+            s = torch.zeros((), device=device)
+            for p in gm[key]:
+                if p.grad is not None:
+                    s = s + p.grad.detach().pow(2).sum()
+            sq_sums.append(s)
+    norms = torch.stack(sq_sums).sqrt().cpu().tolist()
+    out: dict[str, float] = {}
+    for i in range(len(blocks_params)):
+        out[f"train/block_{i}_fc_gate_grad_norm"] = norms[2 * i]
+        out[f"train/block_{i}_fc_main_grad_norm"] = norms[2 * i + 1]
+    return out
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -598,13 +660,21 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), max_norm=float("inf")
         )
+        per_block_gn = _per_block_grad_norms(gate_main_params_per_block, device)
         optimizer.step()
         global_step += 1
-        wandb.log({
+        step_log = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        step_log.update(per_block_gn)
+        # Per-group LR sanity at step 1 (PR #3888 diagnostic)
+        if global_step == 1:
+            for pg in optimizer.param_groups:
+                name = pg.get("name", "global")
+                step_log[f"optim/{name}/lr_step1"] = pg["lr"]
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -640,6 +710,9 @@ for epoch in range(MAX_EPOCHS):
         "gpu_mem_gb_peak": peak_gb,
         "global_step": global_step,
     }
+    for pg in optimizer.param_groups:
+        name = pg.get("name", "global")
+        log_metrics[f"optim/{name}/lr"] = pg["lr"]
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
