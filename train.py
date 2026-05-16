@@ -555,6 +555,18 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
+        if cfg.huber_delta > 0:
+            with torch.no_grad():
+                resid_abs = (pred - y_target).abs()
+                m_node = mask.unsqueeze(-1)
+                n_node = m_node.sum().clamp(min=1).float()
+                l1_all = ((resid_abs > cfg.huber_delta).float() * m_node).sum() / (n_node * resid_abs.shape[-1])
+                l1_Ux = ((resid_abs[..., 0] > cfg.huber_delta).float() * mask).sum() / n_node
+                l1_Uy = ((resid_abs[..., 1] > cfg.huber_delta).float() * mask).sum() / n_node
+                l1_p = ((resid_abs[..., 2] > cfg.huber_delta).float() * mask).sum() / n_node
+                surf_n = surf_mask.sum().clamp(min=1).float()
+                l1_p_surf = ((resid_abs[..., 2] > cfg.huber_delta).float() * surf_mask).sum() / surf_n
+
         optimizer.zero_grad()
         loss.backward()
         grad_norm_preclip: float | None = None
@@ -570,6 +582,12 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if cfg.huber_delta > 0:
+            step_log["train/loss_l1_frac"] = l1_all.item()
+            step_log["train/loss_l1_frac_Ux"] = l1_Ux.item()
+            step_log["train/loss_l1_frac_Uy"] = l1_Uy.item()
+            step_log["train/loss_l1_frac_p"] = l1_p.item()
+            step_log["train/loss_l1_frac_p_surf"] = l1_p_surf.item()
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
