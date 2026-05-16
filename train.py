@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -237,6 +238,34 @@ def invert_asinh_p(pred, scale):
 
 
 # ---------------------------------------------------------------------------
+# Mixup augmentation (training-only)
+# ---------------------------------------------------------------------------
+
+def mixup_data(x, y, is_surface, mask, alpha):
+    """Mixup for variable-length padded mesh batches.
+
+    Mixes continuous tensors (x, y) elementwise: ``mix = lam * a + (1-lam) * b``
+    where ``lam ~ Beta(alpha, alpha)`` and ``b`` is a random permutation of the
+    batch. ``is_surface`` is kept from sample A (a single hard label per node
+    avoids ambiguous surface/volume routing). ``mask`` uses intersection so the
+    loss is computed only at positions valid in BOTH samples — at unpaired
+    padded positions the mixed input/target would be a scaled version of one
+    sample and would not provide a clean Mixup regularization signal.
+
+    Returns ``(x_mix, y_mix, is_surface, mask_mix, lam)``. ``lam = 1.0`` is
+    returned when Mixup is disabled or the batch is too small to permute.
+    """
+    if alpha <= 0 or x.shape[0] < 2:
+        return x, y, is_surface, mask, 1.0
+    lam = float(np.random.beta(alpha, alpha))
+    perm = torch.randperm(x.shape[0], device=x.device)
+    x_mix = lam * x + (1.0 - lam) * x[perm]
+    y_mix = lam * y + (1.0 - lam) * y[perm]
+    mask_mix = mask & mask[perm]
+    return x_mix, y_mix, is_surface, mask_mix, lam
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -421,6 +450,7 @@ class Config:
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
+    mixup_alpha: float = 0.0  # 0 disables; >0 enables Beta(alpha,alpha) Mixup (training-only)
 
 
 cfg = sp.parse(Config)
@@ -525,6 +555,10 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        x, y, is_surface, mask, mixup_lam = mixup_data(
+            x, y, is_surface, mask, cfg.mixup_alpha
+        )
+
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = apply_asinh_p(y_norm, cfg.asinh_p_scale)
@@ -570,6 +604,9 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        if cfg.mixup_alpha > 0:
+            step_log["train/mixup_lam"] = mixup_lam
+            step_log["train/mask_keep_ratio"] = mask.float().mean().item()
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
