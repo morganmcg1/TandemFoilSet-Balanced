@@ -1,44 +1,55 @@
 # TandemFoilSet Baseline
 
 **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-**Last updated:** 2026-05-16 18:40 UTC
+**Last updated:** 2026-05-16 21:30 UTC
 
-## Current best — PR #4062: slice_num=8 — fern
+## Current best — PR #4067: AdamW β2=0.95 — alphonse
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p` | **56.8954** | run `vzpgr8us` (best epoch 18, timeout) |
-| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **55.9817** | run `vzpgr8us` |
+| `val_avg/mae_surf_p` | **56.4260** | run `3pc74k8f` (best epoch 17, slice=16 stack) |
+| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **55.3387** | run `3pc74k8f` |
 
-Per-split validation (run `vzpgr8us` vs prior #3854 slice=16 baseline, 57.6953):
+Per-split validation (run `3pc74k8f` vs prior #3854 slice=16+default β2 baseline, 57.6953):
 
 | Split | mae_surf_p | Δ vs #3854 |
 |---|---|---|
-| val_single_in_dist | 66.966 | +1.48% ⚠️ |
-| val_geom_camber_rc | 70.071 | **−2.43%** |
-| val_geom_camber_cruise | 35.324 | **−7.06%** |
-| val_re_rand | 55.221 | +0.46% |
-| **val_avg** | **56.895** | **−1.39%** |
+| val_single_in_dist | 65.188 | −1.21% |
+| val_geom_camber_rc | 67.131 | **−6.52%** ← dominant residual gain |
+| val_geom_camber_cruise | 37.922 | −0.22% |
+| val_re_rand | 55.464 | +0.90% |
+| **val_avg** | **56.426** | **−2.20%** |
 
-Per-split test (run `vzpgr8us`):
+Per-split test (run `3pc74k8f`):
 
 | Split | mae_surf_p |
 |---|---|
-| test_single_in_dist | 58.1525 |
-| test_geom_camber_rc | 63.5973 |
+| test_single_in_dist | 58.0236 |
+| test_geom_camber_rc | 60.6063 |
 | test_geom_camber_cruise | NaN (data/scoring.py bug — known fleet-wide) |
-| test_re_rand | 46.2952 |
+| test_re_rand | 47.3864 |
 
-Key mechanistic finding: **slice_num=8 extends the winning slice axis (64→32: −3.02%, 32→16: −5.16%, 16→8: −1.39%; clearly decelerating).** With ~100 nodes per slice (vs ~50 at slice=16), each slice token aggregates a broader spatial neighborhood. The per-split signature is informative: in-distribution regresses slightly (+1.48%) while OOD-camber splits improve substantially (rc −2.43%, cruise −7.06%). Coarser slicing forces the model to learn more abstract, geometry-invariant features at the slice-aggregation stage — trades fine-grained precision for OOD generalization. Test (−1.55%) tracks val improvement closely, validating the win as paper-facing. Direction is alive but decelerating; the next datapoint should bracket toward saturation (slice=4 or slice=12).
+Key mechanistic finding: **AdamW β2 = 0.95 (instead of default 0.999) halves the second-moment EMA half-life from ~693 steps to ~13 steps**. With only ~6000 total steps in our 30-min budget, β2=0.999 cannot adapt the per-parameter second-moment estimate fast enough — the optimizer effectively uses epoch-1 gradient statistics throughout training. β2=0.95 lets per-parameter step sizes track late-training gradient statistics within each epoch. The win concentrates on val_geom_camber_rc (−6.52%, the hardest OOD-camber split). best_epoch=17 confirms snappier adaptation didn't land in a worse local minimum.
 
-Merged from PR #4062, student `willowpai2i48h2-fern`.
+**Note on baseline**: this win was measured on **slice=16**, not slice=8 (the prior best stack at val=56.8954). Result still beats slice=8 baseline by −0.47 val and −0.64 test, so merging is correct. The slice=8 + β2=0.95 compounding is **untested** and is the next experiment (re-validation assigned to alphonse).
+
+Merged from PR #4067, student `willowpai2i48h2-alphonse`.
+
+---
+
+## Previous baseline — PR #4062: slice_num=8 — fern (superseded 21:30 UTC)
+
+- `val_avg/mae_surf_p`: 56.8954 (run `vzpgr8us`)
+- `test_3split/mae_surf_p`: 55.9817 (run `vzpgr8us`)
+- Stack: slice=8 + Huber δ=0.5 + default β2=0.999
 
 ---
 
 ## Current best configuration
 
-slice_num=8 + Huber δ=0.5 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pressure compression + EMA (fast decay) + gradient clipping:
-- **`--slice_num 8`** ← NEW (PR #4062): 8× coarser than original baseline 64; ~100 nodes per slice
+slice_num=16 + AdamW β2=0.95 + Huber δ=0.5 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pressure compression + EMA (fast decay) + gradient clipping:
+- **`--adamw_beta2 0.95`** ← NEW (PR #4067): fast second-moment EMA adaptation
+- **`--slice_num 16`** ← measured baseline (the merged code default may be slice=8; the winning RUN was on slice=16)
 - **`--huber_delta 0.5`** (PR #3854 stack): tighter quadratic transition for small residuals
 - **`--asinh_vel_scale 0.5`** (PR #3789): applies `asinh(vel / 0.5)` to velocity channels (Ux, Uy); pressure unchanged
 - **`--n_head 2`** (PR #3794): wider per-head attention dim (64 vs 32); also 14% faster per epoch
@@ -47,9 +58,9 @@ slice_num=8 + Huber δ=0.5 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pre
 - **`ema_decay = 0.99`** (PR #3474)
 - **`grad_clip = 5.0`**
 - Validation, checkpoint selection, and test eval all use EMA shadow weights
-- **NO SGDR** in this run; SGDR + slice=16 + δ=0.5 super-compound is untested
+- **NO SGDR**
 
-## Reproduce
+## Reproduce (winning run alphonse #4067)
 
 ```bash
 cd target/ && python train.py \
@@ -57,13 +68,15 @@ cd target/ && python train.py \
   --huber_delta 0.5 \
   --ema_decay 0.99 \
   --asinh_p_scale 1.0 \
-  --use_swiglu \
-  --mlp_ratio 1.333 \
+  --use_swiglu --mlp_ratio 1.333 \
   --n_head 2 \
   --asinh_vel_scale 0.5 \
-  --slice_num 8 \
+  --slice_num 16 \
+  --adamw_beta2 0.95 \
   --agent <student>
 ```
+
+**Compounding check (next experiment)**: replace `--slice_num 16` with `--slice_num 8` to test whether the β2=0.95 win compounds with the previously merged slice=8 stack.
 
 ## Baseline configuration
 
