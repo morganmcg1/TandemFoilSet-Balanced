@@ -1063,3 +1063,85 @@ Rerun:
 
 ### This may be the largest unmerged single-change improvement available right now.
 
+
+---
+
+## 2026-05-16 09:00 — PR #3684 [CLOSED]: slice_num=32/64/96 sweep on full FiLM stack
+
+- **Student branch:** `charliepai2i48h4-edward/slice-num-sweep`
+- **Hypothesis:** Test whether richer slice-token partitions (96) or faster coarser (32) improve over default 64 on the full FiLM stack.
+- **Stack:** bf16 + cosine T_max=15 + EMA(0.999) + FiLM + two-shot FiLM (full current best)
+
+### Results
+
+| Arm | slice_num | val_avg/mae_surf_p | best_epoch | n_epochs | sec/epoch | peak_VRAM |
+|-----|---:|---:|---:|---:|---:|---:|
+| **A** | **64** | **88.534** | 17 | 17 | 110.3 | 38.92 GB |
+| B | 96 | 91.927 | 14 | 14 | 130.9 | 45.14 GB |
+| C | 32 | 92.850 | 21 | 21 | 89.7 | 32.71 GB |
+
+### Per-split val MAE (Arm A wins every split)
+
+| Split | A (sn=64) | B (sn=96) | C (sn=32) |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | **101.435** | 108.136 | 105.877 |
+| `val_geom_camber_rc`     |  **95.531** |  98.207 |  99.125 |
+| `val_geom_camber_cruise` |  **72.072** |  73.582 |  75.014 |
+| `val_re_rand`            |  **85.098** |  87.783 |  91.384 |
+| **val_avg**              |  **88.534** |  91.927 |  92.850 |
+
+### Compute analysis
+
+- sn=96: 18.7% slower/epoch, 14 epochs (truncated, didn't reach T_max=15 LR floor)
+- sn=32: 18.7% faster/epoch, 21 epochs (6 bonus LR-floor epochs); accuracy loss outweighs compute gain
+- VRAM: 32.7 → 38.9 → 45.1 GB linear scaling
+
+### Mechanism analysis (from student)
+
+- sn=96: model not bottlenecked by mode resolution at n_hidden=128 capacity; overparameterized attention head + slower epochs
+- sn=32: coarser mode partition loses val_re_rand (+7.4%) worst — fewer physics modes = worse Re-OOD generalization
+- sn=64 is a genuine knee point
+
+### Decision: CLOSED (slice_num=64 locked in as optimum)
+
+Note: student suggested sn=96 might unlock with n_hidden=192 at wider capacity. Holding for post-nezuko evaluation.
+
+---
+
+## 2026-05-16 09:00 — PR #3681 [CLOSED]: Three-shot FiLM — preprocess injection
+
+- **Student branch:** `charliepai2i48h4-frieren/three-shot-film`
+- **Hypothesis:** Add third FiLM injection site at preprocess MLP output, before residual stream begins.
+- **Stack:** bf16 + cosine T_max=15 + EMA(0.999) + FiLM + two-shot FiLM (full current best)
+
+### Results
+
+| Arm | FiLM sites | n_params | val_avg/mae_surf_p | best_epoch | test_avg/mae_surf_p (3 finite) |
+|-----|---|---:|---:|---:|---:|
+| A (two-shot) | attn + MLP × 5 blocks | 845,527 | **89.285** | 17 | 86.442 |
+| B (three-shot) | preprocess + attn + MLP × 5 blocks | 878,551 | 92.922 | 17 | 89.284 |
+| **Δ B vs A** | — | +33,024 | **+4.08%** | — | **+3.29%** |
+
+### Per-split val MAE (B worse on every split)
+
+| Split | A (two-shot) | B (three-shot) | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 103.523 | 107.820 | +4.15% |
+| `val_geom_camber_rc`     |  96.087 |  97.746 | +1.73% |
+| `val_geom_camber_cruise` |  71.644 |  75.221 | +4.99% |
+| `val_re_rand`            |  85.884 |  90.900 | +5.84% |
+| **val_avg**              | **89.285** | **92.922** | **+4.08%** |
+
+### Per-epoch gap consistent (not a transient)
+
+Arm B trails by 3-4 points from epoch 8 onward — third FiLM is actively harmful, not just slow to converge.
+
+### Mechanism analysis (from student)
+
+1. **Shared conditioner head over-stretched.** Going 5→10→12 output slots forces same MLP body to multiplex across more streams without growing capacity.
+2. **Preprocess site is wrong injection point.** Two-shot works because both sites are *inside* residual stream (post-LN, pre-sublayer). Preprocess site is on un-LN'd features before residual stream — scale+shift on raw features distorts rather than modulates.
+
+### Decision: CLOSED (three-shot FiLM falsified; injection-count axis at saturation)
+
+Follow-up: per-block independent FiLM (#3829) tests shared-head-bottleneck hypothesis directly.
+
