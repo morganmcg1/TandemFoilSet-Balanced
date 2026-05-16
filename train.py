@@ -169,9 +169,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 per_channel_heads=False):
         super().__init__()
         self.last_layer = last_layer
+        self.per_channel_heads = per_channel_heads
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -182,16 +184,39 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            if per_channel_heads:
+                # Three independent decoder heads (Linear -> GELU -> Linear),
+                # one per output channel, so each channel has its own decoder
+                # body and final projection. Channel order matches
+                # data.scoring.CHANNELS = (Ux, Uy, p).
+                self.head_Ux = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, 1),
+                )
+                self.head_Uy = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, 1),
+                )
+                self.head_p = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, 1),
+                )
+            else:
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            if self.per_channel_heads:
+                return torch.cat(
+                    [self.head_Ux(h), self.head_Uy(h), self.head_p(h)], dim=-1
+                )
+            return self.mlp2(h)
         return fx
 
 
@@ -200,7 +225,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 per_channel_heads=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -221,6 +247,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                per_channel_heads=per_channel_heads,
             )
             for i in range(n_layers)
         ])
@@ -444,6 +471,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
+    per_channel_heads: bool = True  # split joint output projection into 3 per-channel heads
 
 
 cfg = sp.parse(Config)
@@ -484,6 +512,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    per_channel_heads=cfg.per_channel_heads,
 )
 
 model = Transolver(**model_config).to(device)
