@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 14:15
+- **Date:** 2026-05-16 15:30
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; programme best val=65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -66,7 +66,7 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 | **#3999** | **tanjiro** | **gradient clipping clip_norm=1.0 on SwiGLU (canonical transformer recipe)** | **NEW — assigned 14:15** |
 | **#3998** | **edward** | **slice_num=128 (2×) on SwiGLU — attention granularity scan** | **NEW — assigned 14:05** |
 | **#3996** | **alphonse** | **AdamW weight_decay 1e-4 → 1e-2 on SwiGLU** | **NEW — assigned 14:00** |
-| **#3995** | **fern** | **AdamW β2=0.95 (LLaMA-style) on SwiGLU** | **NEW — assigned 14:00** |
+| **#3995** | **fern** | **AdamW β2=0.95 + GeGLU stack (after β2-only TIE at val=65.40)** | **SENT BACK 15:30 for stack** |
 | **#3994** | **thorfinn** | **T_max=17 cosine on SwiGLU (matched to training length)** | **NEW — assigned 14:00** |
 | **#3993** | **askeladd** | **head_and_embed 2.5× LR + 500-step warmup on head_and_embed only** | **NEW — assigned 14:00** |
 | #3973 | frieren | RMSNorm replacement of LayerNorm on SwiGLU | Running |
@@ -77,6 +77,10 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
 | **#3959** | **lr=1e-3 (tanjiro)** | **68.87 (+5.34σ)** | **Zone-4 regression. MAJOR: lower σ̂ ≠ larger LR headroom (these were conflated as the hypothesis premise). MAJOR: cosine T_max=15 cannot absorb early inefficiency — generalises #3934 schedule-budget interaction.** |
+
+## Recent TIE result (not merged, stack queued)
+
+- **#3995 β2=0.95 SwiGLU (fern, 2-seed)** — val=65.40 ± 0.024 vs programme best 65.37 (Δ=+0.03 TIE); test=61.67 vs 61.68 (Δ=−0.01 TIE). MAJOR finding: β2=0.95 alone closes the SwiGLU→GeGLU gap, delivering the same magnitude of improvement as GeGLU does over SwiGLU+default-β2. Suggests β2 and GeGLU touch overlapping optimization headroom. Sent back to stack β2=0.95 + GeGLU on the same PR.
 | **#3933** | **ReGLU (edward)** | **67.92** | **+1.6σ regression. MAJOR: dead-gate pathology confirmed (64-67% pre-acts ≤0, monotone-with-depth, GROWING over training). GLU family DEFINITIVELY closed: gating=94%, smoothness=6%, SiLU/GELU/identity choice is noise.** |
 | **#3886** | **DropPath p=0.1 (alphonse)** | **μ̂=73.63 (+8.19)** | **Zone-5 regression. MAJOR: closes activation-noise regularisation family. With #3811+#3855, gating IS the regulariser; activation/block noise is redundant.** |
 | **#3904** | **GeGLU 3-seed confirm (fern)** | **μ̂=65.99** | **Population tie with SwiGLU (Z=−0.81). GLU family characterized: gating=94% of gain; activation in gate (SiLU/GELU/identity) is sub-σ noise.** |

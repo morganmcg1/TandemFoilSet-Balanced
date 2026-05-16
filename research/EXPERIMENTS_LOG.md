@@ -1,5 +1,50 @@
 # SENPAI Research Results
 
+## 2026-05-16 15:30 — PR #3995: H: AdamW β2=0.95 (LLaMA-style) on SwiGLU h=128 ⟲ SENT BACK for stack with GeGLU (val=65.40 TIE with programme best)
+
+- Branch: `willowpai2i48h1-fern/adamw_beta2_095_swiglu`
+- Student: willowpai2i48h1-fern
+- Status: NOT MERGED. Sent back to stack β2=0.95 + GeGLU on the same PR.
+
+### Results (2-seed, h=128/T_max=15/bf16/SwiGLU + betas=(0.9, 0.95))
+
+| Metric | seed 0 | seed 1 | mean | σ̂ (n=2) | vs programme best (#3810) |
+|--------|:------:|:------:|:----:|:-------:|:--------:|
+| **val_avg/mae_surf_p** | 65.4187 | 65.3846 | **65.4017** | **0.024** | +0.03 (TIE) |
+| **test_avg/mae_surf_p** | 61.8333 | 61.5002 | **61.6668** | 0.236 | −0.01 (TIE) |
+
+W&B runs: `zqkprofa` (seed=0), `1j1dhhbg` (seed=1). Both ran to best=ep17 (terminal=best).
+
+### MAJOR finding: β2=0.95 closes the SwiGLU→GeGLU gap on its own
+
+| Configuration | val μ̂ | σ̂ | n |
+|---------------|:----:|:----:|:--:|
+| SwiGLU + default β2 (#3765) | 66.48 | 0.90 | 3 |
+| GeGLU + default β2 (#3904) | 65.99 | 0.54 | 3 |
+| **SwiGLU + β2=0.95 (this)** | **65.40** | **0.024** | **2** |
+
+The single-axis β2 win delivers ~Δ=−1.08 (≈1.2σ) over the default-β2 SwiGLU floor — essentially the same magnitude of improvement as GeGLU achieves over SwiGLU. **β2 and GeGLU appear to be touching overlapping optimization headroom rather than orthogonal axes** — both move the floor by ~1σ.
+
+### Train dynamics — no instability concern at batch=4
+
+100-step rolling train-loss std decreases monotonically (0.22→0.07 across ep1→ep17 on both seeds). No instability from the faster second-moment tracking. Concern from PR background was not borne out at our batch=4.
+
+### Per-split improvements are uniform
+
+Val improvement vs SwiGLU baseline is distributed across all 4 splits — no single split is driving the gain. Same pattern on test. β2=0.95 is a global optimization improvement, not a split-specific effect.
+
+### σ̂=0.024 caveat
+
+Anomalously tight 2-seed std — both seeds happened to converge to nearly identical val. A 3rd seed would give a more honest noise estimate. Even with σ̂ inflated to 0.5 (typical for this regime), the result remains within 1σ of programme best.
+
+### Decision
+
+Per merge rule: val=65.40 vs baseline val=65.37 is on the regression side of noise (Δ=+0.03), so NOT a merge despite test being microscopically lower (−0.01). But the result is structurally important: β2=0.95 alone closes the SwiGLU→GeGLU gap.
+
+**Sent back with explicit follow-up: stack β2=0.95 + GeGLU** (fern's own suggested #1). The mechanism question is whether the two wins are independent (stack → val ~64.8, real beat) or overlapping (stack → val ~65.3-65.4, confirms headroom is shared). Either outcome is programmatically valuable.
+
+---
+
 ## 2026-05-16 14:15 — PR #3959: H: lr=1e-3 (2× base) on SwiGLU ✗ CLOSED (val=68.87 +5.34σ; lower-σ̂ ≠ larger-LR-headroom; cosine T_max=15 cannot absorb early inefficiency)
 
 - Branch: `willowpai2i48h1-tanjiro/lr1e3_swiglu_h128`
