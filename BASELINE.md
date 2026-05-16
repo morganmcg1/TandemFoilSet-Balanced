@@ -2,6 +2,36 @@
 
 ## Current Best
 
+### 2026-05-16 06:22 — PR #3593: LayerScale γ-init=0.01 on full stack — charliepai2i48h5-alphonse
+
+- **val_avg/mae_surf_p**: **72.77** (best_epoch=13, timeout-bound)
+- **test_avg/mae_surf_p**: **65.12** (NaN-safe eval)
+- **Improvement over prior best**: -10.2% val / -8.9% test vs n_freqs=14 baseline (81.08/71.52)
+- **Cumulative improvement**: -43.5% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior |
+  |---|---|---|
+  | single_in_dist | 78.83 | -3.0% ✓ |
+  | geom_camber_rc | 75.82 | -10.7% ✓ |
+  | geom_camber_cruise | 43.86 | -12.1% ✓ |
+  | re_rand | 61.97 | -11.4% ✓ |
+- **Metric artifacts**: `models/model-layerscale-0.01-fullstack-20260516-042447/metrics.jsonl`
+- **Stack**: Fourier n_freqs=10 + Huber-0.3 + T_max=20 + clip=0.25 + **LayerScale γ-init=0.01**
+- **Key finding**: Per-channel learnable residual gain (CaiT/LayerScale) gives massive -10.2% val improvement. Mechanism: with init=0.01, `gamma_attn` stays near zero (mean ~0.01, max ~0.085 per block — sparse channel selectivity) while `gamma_mlp` grows 3× (mean ~0.03-0.04, max ~0.12 — MLP residual stream unlocked). EVERY test split improves (single -3%, rc -10.7%, cruise -12.1%, re_rand -11.4%) — best OOD generalization seen this round. arm-1 (γ-init=0.1) also beat baseline (val=74.74) but with high run-to-run variance (~7-point spread across two seeds); γ=0.01 had cleaner dynamics. clip_frac=1.000 throughout — clip=0.25 still rate-limiting; LayerScale wins purely through model-side selective residuals, not gradient regularization. Stack still uses n_freqs=10 not 14 (alphonse rebased before #3438 merged); combining LayerScale + n_freqs=14 is the next high-priority compound test.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --n_freqs 10 \
+      --huber_delta 0.3 \
+      --lr_t_max 20 \
+      --grad_clip_max_norm 0.25 \
+      --layer_scale_init 0.01 \
+      --experiment_name layerscale-0.01-fullstack \
+      --agent charliepai2i48h5-alphonse
+  ```
+
+---
+
 ### 2026-05-16 03:25 — PR #3438: Fourier n_freqs=14 on full stack (deconfounded) — charliepai2i48h5-nezuko
 
 - **val_avg/mae_surf_p**: **81.08** (best_epoch=14/14, timeout-bound)
