@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import subprocess
@@ -543,6 +544,8 @@ class Config:
     optimizer_name: str = "adamw"  # "adamw" or "lion"
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    ema_decay: float = 0.0   # 0 disables; e.g. 0.999 = exponential moving average of model weights
+    grad_clip: float = 0.0   # 0 disables; otherwise max-norm of per-step gradients
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -552,6 +555,31 @@ def _residual_err(pred, target, loss_type, beta):
     if loss_type == "smooth_l1":
         return F.smooth_l1_loss(pred, target, reduction="none", beta=beta)
     raise ValueError(loss_type)
+
+
+class ModelEMA:
+    """Exponential moving average of model parameters (and buffers).
+
+    Maintained as a separate copy of the model that is updated after each
+    optimizer step with: ema_p = decay * ema_p + (1 - decay) * current_p.
+    Buffers are copied directly so non-parameter state (e.g. fourier_B)
+    stays consistent with the live model.
+    """
+
+    def __init__(self, model: nn.Module, decay: float):
+        self.decay = decay
+        self.module = copy.deepcopy(model)
+        self.module.eval()
+        for p in self.module.parameters():
+            p.requires_grad_(False)
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        d = self.decay
+        for ema_p, p in zip(self.module.parameters(), model.parameters()):
+            ema_p.mul_(d).add_(p.detach(), alpha=1.0 - d)
+        for ema_b, b in zip(self.module.buffers(), model.buffers()):
+            ema_b.copy_(b)
 
 
 cfg = sp.parse(Config)
@@ -604,6 +632,12 @@ if cfg.n_fourier > 0:
     print(f"Fourier features: n_fourier={cfg.n_fourier}, sigma={cfg.fourier_sigma}")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema = ModelEMA(model, cfg.ema_decay) if cfg.ema_decay > 0.0 else None
+if ema is not None:
+    print(f"EMA enabled: decay={cfg.ema_decay}")
+if cfg.grad_clip > 0.0:
+    print(f"Grad clip enabled: max_norm={cfg.grad_clip}")
 
 if cfg.optimizer_name == "lion":
     optimizer = Lion(model.parameters(), lr=cfg.lr,
@@ -692,9 +726,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip > 0.0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        else:
+            grad_norm = None
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        log_step = {"train/loss": loss.item(), "global_step": global_step}
+        if grad_norm is not None:
+            log_step["train/grad_norm"] = float(grad_norm)
+        wandb.log(log_step)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -706,8 +749,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    eval_model = ema.module if ema is not None else model
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, split_name=name)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, split_name=name)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -738,7 +782,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(eval_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
