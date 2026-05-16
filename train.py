@@ -472,6 +472,7 @@ class Config:
     p_channel_weight: float = 3.0
     epochs: int = 50
     cosine_tmax: int = 14  # match observed wall-clock ceiling (~13-14 epochs)
+    slice_num: int = 64  # physics partition granularity per Transolver block
     grad_clip: float = 1.0
     warmup_epochs: int = 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -520,7 +521,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
