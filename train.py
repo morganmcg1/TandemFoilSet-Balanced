@@ -48,6 +48,43 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Sinusoidal Re embedding
+# ---------------------------------------------------------------------------
+
+RE_IDX = 13  # log(Re) column in the 24-d feature tensor (see program.md)
+
+
+def sinusoidal_re_embed(log_re: torch.Tensor, d: int = 8, max_log: float = 16.0) -> torch.Tensor:
+    """Map a scalar log(Re) per node to a d-dimensional sin/cos embedding.
+
+    Transformer-style frequencies (10000^(-2k/d)). log_re is normalized by
+    max_log so re_norm is in [0, 1] for the observed range (~12.1 to ~15.4).
+    """
+    re_norm = log_re / max_log
+    freqs = torch.pow(
+        10000.0, -2.0 * torch.arange(d // 2, device=log_re.device, dtype=log_re.dtype) / d
+    )
+    args = re_norm.unsqueeze(-1) * freqs  # [..., d//2]
+    return torch.cat([args.sin(), args.cos()], dim=-1)  # [..., d]
+
+
+def apply_re_embedding(x_norm: torch.Tensor, x_raw: torch.Tensor, re_embed_dim: int,
+                       re_max_log: float) -> torch.Tensor:
+    """Replace the normalized log_Re column with a sinusoidal embedding.
+
+    Uses the *raw* (un-normalized) log_re for the embedding so re_norm sits in
+    [0, 1]; the rest of x_norm stays standardized.
+    """
+    if re_embed_dim <= 1:
+        return x_norm
+    log_re_raw = x_raw[..., RE_IDX]  # [B, N]
+    re_embed = sinusoidal_re_embed(log_re_raw, d=re_embed_dim, max_log=re_max_log)
+    return torch.cat(
+        [x_norm[..., :RE_IDX], x_norm[..., RE_IDX + 1:], re_embed], dim=-1
+    )
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -218,7 +255,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   re_embed_dim: int = 1, re_max_log: float = 16.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -238,6 +276,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = apply_re_embedding(x_norm, x, re_embed_dim, re_max_log)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -390,6 +429,8 @@ class Config:
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
+    re_embed_dim: int = 1  # 1 = scalar log_Re (baseline); >1 = sinusoidal embed dim
+    re_max_log: float = 16.0  # normalizer for sinusoidal Re embedding; > observed max ~15.4
 
 
 cfg = sp.parse(Config)
@@ -418,9 +459,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+input_dim = (X_DIM - 1 + cfg.re_embed_dim) if cfg.re_embed_dim > 1 else X_DIM
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=input_dim - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -495,6 +537,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_norm = apply_re_embedding(x_norm, x, cfg.re_embed_dim, cfg.re_max_log)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         if cfg.huber_delta > 0:
@@ -537,7 +580,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                             re_embed_dim=cfg.re_embed_dim, re_max_log=cfg.re_max_log)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -618,7 +662,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 re_embed_dim=cfg.re_embed_dim, re_max_log=cfg.re_max_log)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
