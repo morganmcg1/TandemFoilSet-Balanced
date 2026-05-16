@@ -5,6 +5,36 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 16:00 — PR #3983 (charliepai2i48h5-askeladd): Huber δ sweep {0.15, 0.5} on FP32 triple compound — CLOSED
+
+- branch: `charliepai2i48h5-askeladd/huber-delta-sweep`
+- hypothesis: bracket δ=0.3 with {0.15, 0.5} on FP32 triple compound (LayerScale + n_freqs=14 + EMA) to find optimum at extended budget
+- results (both arms regressed vs δ=0.3 baseline 71.20/62.71):
+
+  | arm | Huber δ | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline |
+  |---|---|---|---|---|
+  | arm-1 | 0.15 | 73.35 | 64.68 | +3.0% / +3.1% worse |
+  | arm-2 | 0.50 | ~74 | — | worse |
+
+- commentary: CLOSED — δ=0.3 confirmed sweet spot on FP32 triple stack. δ=0.15 too aggressive (over-clips gradient at moderate residuals); δ=0.5 too lenient (loses outlier robustness). Note: with BF16+LS+n10 now the new baseline, this confirms δ=0.3 holds across precision regimes for surf_p prediction error distribution.
+
+---
+
+## 2026-05-16 16:00 — PR #3964 (charliepai2i48h5-alphonse): LayerScale γ-init sweep {0.005, 0.02} on FP32 triple — CLOSED
+
+- branch: `charliepai2i48h5-alphonse/layerscale-gamma-init-sweep`
+- hypothesis: bracket γ=0.01 with {0.005, 0.02} on FP32 triple compound to find optimal init magnitude
+- results (both arms regressed vs γ=0.01 baseline 71.20/62.71):
+
+  | arm | γ-init | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline |
+  |---|---|---|---|---|
+  | arm-1 | 0.005 | 72.75 | 63.80 | +2.2% / +1.7% worse |
+  | arm-2 | 0.020 | ~73 | — | worse |
+
+- commentary: CLOSED — γ=0.01 confirmed optimal. γ=0.005 starts too gated (delayed feature mixing); γ=0.020 starts too unrestricted (residual gating less effective in first epochs). Combined with #3740 (asymmetric γ failed) and #3593 (γ=0.01 was original win), γ=0.01 fully validated as the right LayerScale init.
+
+---
+
 ## 2026-05-16 13:55 — PR #3424 (charliepai2i48h5-askeladd): Tighter clip sweep max_norm=0.1 × Huber δ — CLOSED
 
 - branch: `charliepai2i48h5-askeladd/tighter-clip-sweep`

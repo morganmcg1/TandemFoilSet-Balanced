@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 14:55
+- **Date:** 2026-05-16 16:05
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -27,18 +27,18 @@
 | #3192 (edward, merged) | LayerScale + n_freqs=14 + EMA 0.998 | 71.20 | 62.71 | -2.16% |
 | **#3527 (tanjiro, merged)** | **BF16 + LayerScale + n_freqs=10** | **67.19** | **58.05** | **-5.6%** |
 
-## Active WIP
+## Active WIP (8 students, full deck)
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} on FP32 triple | wave-10 WIP |
-| alphonse | #3964 | LayerScale γ-init sweep {0.005, 0.02} on FP32 triple compound | wave-10 WIP |
-| askeladd | #3983 | Huber δ sweep {0.15, 0.5} on FP32 triple compound | wave-10 WIP |
-| tanjiro | #4005 | BF16+LS+n10+EMA 0.998 — missing cell | wave-11 NEW |
-| fern | #4006 | n_freqs sweep {8, 12} on BF16+LS stack | wave-11 NEW |
-| frieren | #4007 | Width scaling: n_hidden=144 on BF16+LS+n10 | wave-11 NEW |
-| thorfinn | #4008 | surf_weight sweep {5.0, 20.0} on BF16+LS+n10 | wave-11 NEW |
-| nezuko | #4009 | Gradient clip sweep {0.5, 1.0} on BF16+LS+n10 | wave-11 NEW |
+| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} on FP32 triple | wave-10 WIP (training, GPU 97%) |
+| tanjiro | #4005 | BF16+LS+n10+EMA 0.998 — missing cell | **status:review** (16:05 — needs review when rate limit clears) |
+| fern | #4006 | n_freqs sweep {8, 12} on BF16+LS stack | wave-11 WIP |
+| thorfinn | #4008 | surf_weight sweep {5.0, 20.0} on BF16+LS+n10 | wave-11 WIP |
+| nezuko | #4009 | Gradient clip sweep {0.5, 1.0} on BF16+LS+n10 | wave-11 WIP |
+| frieren | #4014 | Width scaling narrower: n_hidden=120 on BF16+LS+n10 | wave-11 WIP |
+| alphonse | #4026 | Batch size sweep {2, 8} on BF16+LS+n10 — first ever bs sweep | wave-11 NEW |
+| askeladd | #4027 | LR sweep {7e-4, 1e-3} on BF16+LS+n10 | wave-11 NEW |
 
 ## Closed this round
 
@@ -55,6 +55,9 @@
 | #3883 (fern) | T_max sweep: T_max=12 worst, T_max=20 optimal |
 | #3909 (frieren) | Learnable Fourier: frequencies barely migrate; overhead costs ~2 epochs |
 | #3941 (nezuko) | WD sweep {3e-5, 3e-4} both worse; WD=1e-4 confirmed optimal |
+| #4007 (frieren) | Width n=144: timeout-bound at 15 epochs vs 17+ needed |
+| #3983 (askeladd) | Huber δ {0.15, 0.5}: both regress vs δ=0.3 on FP32 stack |
+| #3964 (alphonse) | LayerScale γ-init {0.005, 0.020}: both regress vs γ=0.01 |
 
 ## Current research themes
 
@@ -62,19 +65,23 @@
 
 Key insight: **BF16 extended convergence horizon changes optimal hyperparameters**. At 12 epochs (FP32), n14>n10 and EMA helps. At 17 epochs (BF16), n10>n14 and EMA costs more than it gains. All sweepable hyperparameters need re-evaluation on the new BF16+LS+n10 stack.
 
-1. **Missing cell — tanjiro #4005**: BF16+LS+n10+EMA 0.998. Does EMA help or hurt n10 at 17 epochs? EMA's half-life is 41% of training — potentially meaningful. One arm, cheap, decisive.
+1. **Missing cell — tanjiro #4005** (status:review): BF16+LS+n10+EMA 0.998. Does EMA help or hurt n10 at 17 epochs? **AWAITING REVIEW** (rate-limited).
 
-2. **n_freqs on BF16+LS — fern #4006**: n=8 and n=12. Aliasing regime reversed: n10>n14 at 17 epochs. Does n=8 win? n=12 interpolates.
+2. **n_freqs on BF16+LS — fern #4006** (WIP): n=8 and n=12. Aliasing regime reversed: n10>n14 at 17 epochs. Does n=8 win? n=12 interpolates.
 
-3. **Width scaling — frieren #4007**: n_hidden=144 with BF16+LS+n10. BF16's −21% memory opens wider models. LayerScale's γ gating lets model stay sparse if extra width isn't needed. Expected ~14 epochs.
+3. **Width scaling (narrow bracket) — frieren #4014** (WIP): n_hidden=120 with BF16+LS+n10. n=144 closed (timeout-bound); n=120 brackets the n=128 baseline.
 
-4. **surf_weight sweep — thorfinn #4008**: surf_weight={5.0, 20.0} vs default 10.0. **Never tested in this programme.** Direct control over surface vs volume loss weighting.
+4. **surf_weight sweep — thorfinn #4008** (WIP): surf_weight={5.0, 20.0} vs default 10.0. **Never tested in this programme.** Direct control over surface vs volume loss weighting.
 
-5. **Clip sweep — nezuko #4009**: clip={0.5, 1.0} vs 0.25. clip_frac=1.0 throughout all runs. LayerScale provides implicit gating; maybe clip=0.25 is double-regularizing. Prior clip=1.0 test (PR #3529) was pre-LayerScale.
+5. **Clip sweep — nezuko #4009** (WIP): clip={0.5, 1.0} vs 0.25. clip_frac=1.0 throughout all runs. LayerScale provides implicit gating; maybe clip=0.25 is double-regularizing. Prior clip=1.0 test (PR #3529) was pre-LayerScale.
+
+6. **Batch size sweep — alphonse #4026** (NEW): batch_size={2, 8} vs default 4. Never tested in this programme. BF16's freed memory makes bs=8 viable; bs=2 tests if smaller-batch noise helps generalization.
+
+7. **LR sweep on BF16 — askeladd #4027** (NEW): lr={7e-4, 1e-3} vs default 5e-4. Prior FP32 LR sweep (#3784) was clip-saturated; on BF16+LS+n10 with 17 epochs and unsaturated gradient dynamics, higher LR may now manifest.
 
 ### Old FP32 triple stack (wave-10, completing)
 
-Edward, alphonse, askeladd still running on FP32 triple. Results informative — EMA warm-up and Huber δ findings will inform wave-12+ planning.
+Edward #3971 still running EMA warm-up ramp on FP32 triple. Result will inform whether EMA delivers when "born ramping". Askeladd #3983 and alphonse #3964 closed (δ and γ-init bracketed; both confirmed at original values).
 
 ## Key insights accumulated
 
@@ -83,18 +90,20 @@ Edward, alphonse, askeladd still running on FP32 triple. Results informative —
 - **T_max=20 confirmed optimal** for 12-17 epoch runs. T_max=12 traps in suboptimal basin. No re-sweep needed.
 - **surf_weight=10.0 never swept**: Only major hyperparameter unexplored. High priority.
 - **AdamW fully confirmed**: β2=0.999, eps=1e-8, WD=1e-4 all optimal. Inner-optimizer exhausted.
+- **Huber δ=0.3 fully confirmed** on FP32 stack (#3424 and #3983 both bracket). Validate on BF16+LS+n10 next.
+- **LayerScale γ=0.01 fully confirmed** (#3593 win, #3740 asymmetric closed, #3964 bracket both regress).
 - **Learnable Fourier dead**: Frequencies don't migrate; overhead too costly.
 - **LayerScale γ=0.01 biggest single win**: −10.2% val from per-channel residual gating.
-- **EMA at 12 epochs helps; at 17 epochs (BF16), its cost (~2 epochs) exceeds benefit on n10 stack.**
+- **EMA at 12 epochs helps; at 17 epochs (BF16), its cost (~2 epochs) exceeds benefit on n10 stack** (provisional — #4005 will decide).
 
 ## Potential next research directions
 
 - **n_layers depth scaling** — no current flag; requires train.py modification; BF16 memory headroom makes viable
-- **Batch size 8** — BF16 memory freed; better gradient estimates
 - **n_freqs=6** — if n=8 wins on fern's sweep, continue the aliasing trend lower
-- **n_hidden=160** — if frieren's n=144 shows width helps, scale further
-- **Huber δ on new BF16 stack** — askeladd's FP32 result will inform whether to re-test
-- **Sub-60 target**: val=67.19 now; missing cell + width scaling could push to 63-65
+- **n_hidden=160 / 96** — depends on frieren #4014 narrow bracket outcome
+- **Huber δ on new BF16 stack** — re-test {0.15, 0.5} at extended 17-epoch horizon
+- **LR + clip co-tuning** — clip and LR interact strongly; once individual sweeps settle, run 2D grid
+- **Sub-60 val target**: val=67.19 now; missing cell (#4005) + width narrowing + LR sweep could push to 63-65
 
 ## Ideas dossier
 - Full hypothesis catalogue: `research/RESEARCH_IDEAS_2026-05-15.md` (13 ranked entries)
