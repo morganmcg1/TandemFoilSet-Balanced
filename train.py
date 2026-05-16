@@ -492,6 +492,7 @@ class Config:
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
     use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
     sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
+    n_hidden: int = 128  # Transolver width (slice-token / MLP block / output projection)
 
 
 cfg = sp.parse(Config)
@@ -524,7 +525,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
