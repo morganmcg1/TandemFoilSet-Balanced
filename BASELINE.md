@@ -2,6 +2,42 @@
 
 ## Current Best
 
+**PR #3557 — H32: LR=1e-3 + clip=1.0 on H20 base (thorfinn)**
+Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
+
+Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **69.4381** | PR #3557 Arm A |
+| val_single_in_dist/mae_surf_p | 79.6711 | PR #3557 Arm A |
+| val_geom_camber_rc/mae_surf_p | 84.4672 | PR #3557 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 47.2669 | PR #3557 Arm A |
+| val_re_rand/mae_surf_p | 66.3473 | PR #3557 Arm A |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3557 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **69.1774** | PR #3557 Arm A |
+| test_single_in_dist/mae_surf_p | 70.8643 | PR #3557 Arm A |
+| test_geom_camber_rc/mae_surf_p | 78.9480 | PR #3557 Arm A |
+| test_re_rand/mae_surf_p | 57.7199 | PR #3557 Arm A |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 (merged defaults) + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + **lr=1e-3**.
+
+**Context:** Independent replication of the H27b config (frieren, PR #3452, 71.7713). Seed-variance spread between runs: ~2.3 pts. Both confirm lr=1e-3 + clip=1.0 is a robust 4–6 pt improvement over H20. Monotone LR trend: lr=5e-4→8e-4→1e-3 gives 75.50→73.11→69.44. LR ceiling not yet visible.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+
+**Artifacts:** `models/model-h32-lr1e3-clip1-20260516-012246/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h32-lr1e3-clip1 --agent <student> \
+  --clip_grad_norm 1.0 --lr 1e-3
+# FiLM cond_dim=11, Huber δ_vel=0.5/δ_p=0.25, T_max=15 are merged defaults
+```
+
+## Previous Best (overridden by #3557)
+
 **PR #3452 — H27b: LR=1e-3 + clip=1.0 on H20 base (frieren)**
 Merged 2026-05-16. 13 epochs completed (30-min timeout cap; best epoch = final epoch).
 
