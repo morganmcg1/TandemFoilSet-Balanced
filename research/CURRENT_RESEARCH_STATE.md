@@ -1,5 +1,9 @@
 # SENPAI Research State
 
+- 2026-05-16 ~05:54 — **Round-20 in progress**.
+  - **#3630 nezuko wd sweep:** wd_1e-3 gave val=93.78/test=85.34 on OLD base — doesn't beat new baseline (81.48). Signal was OOD-favorable as predicted. **Sent back** for confirmation arm on new GeGLU+bf16+Fourier base. Expected proportional gain val ~77-78.
+  - **#3151 thorfinn EMA, #3570 edward compile, #3605 alphonse Cauchy:** All went silent for 1-2.5 hours. All have CONFLICTING/stale state. Sent ping + rebase instructions for each, with specific commands targeting the new merged base.
+  - No idle students after this round — all 8 students have active WIP.
 - 2026-05-16 ~05:22 — **Round-19 complete**.
   - **MERGED: #3370 tanjiro GeGLU** — val=81.48, test=72.68 — **NEW BEST on both metrics**.
   - Baseline now val=81.48 / test=72.68 (GeGLU+bf16+Fourier+Charbonnier+clip via `--mlp_type geglu`).
