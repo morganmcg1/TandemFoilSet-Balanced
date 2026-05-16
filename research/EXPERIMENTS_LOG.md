@@ -1378,3 +1378,48 @@ If R3 wins, also unlocks: slice_num=96 (currently locked at 64 at n_hidden=128),
 
 - `models/model-charliepai2i48h4-nezuko-capacity-r2-arma-baseline-20260516-102534/metrics.jsonl`
 - `models/model-charliepai2i48h4-nezuko-capacity-r2-armb-nhidden192-20260516-110108/metrics.jsonl`
+
+---
+
+## 2026-05-16 13:28 — PR #3829 [CLOSED]: Per-block independent FiLM heads (frieren R1-R2)
+
+- **Student branch:** `charliepai2i48h4-frieren/perblock-film`
+- **Hypothesis:** Replace shared FiLM output head with per-block heads (shared body, per-block output projections). With `--two_shot_film`, each per-block head outputs two independent (γ, β) pairs — one for attn, one for MLP — instead of the shared two-shot's single (γ, β) reused at both sites.
+
+### Results (R1 + R2 paired)
+
+| Run | Arm A (shared) val_avg | Arm B (per-block) val_avg | Paired Δ | Notes |
+|---|---:|---:|---:|---|
+| R1 (09:35 / 10:39) | 90.962 | 91.224 | **+0.29%** | regression |
+| R2 (11:28 / 12:03) | 91.752 | 90.518 | **−1.34%** | improvement |
+| **Mean** | 91.357 | 90.871 | **−0.53% val_avg / −0.64% test 3-split** | within noise band |
+
+- **Params:** 845,527 → 1,010,647 (+165,120, **+19.5%**) vs predicted +1.5% (13× higher than expected — per-block × per-site arithmetic dominates)
+- **Sec/epoch:** ~+6-8%
+- **Seed variance band:** ±1.5-2% → averaged Δ −0.53% sits well inside noise
+
+### Decision: CLOSE
+
+**Rationale:**
+1. **Signal at noise floor.** R1 +0.29% and R2 −1.34% straddle zero; averaged Δ inside seed variance band.
+2. **Disproportionate cost.** +19.5% params for noise-level signal.
+3. **Confounded design** (student-flagged): Arm B couples (i) per-block independent heads AND (ii) attn-vs-MLP independent (γ, β) per block. Cannot attribute (noisy) Δ to either change.
+4. **Won't beat 81.660** even with clip-rebase: Arm B 91.488 absolute + clip's ~−9% lands low 80s = parity with baseline.
+5. **FiLM injection-count axis saturated** at n_hidden=128: single-shot merged, two-shot merged, three-shot closed (+4.08%), per-block-capacity at noise. May unlock at higher capacity if nezuko #3492 R3 (n_hidden=192+clip) merges.
+
+### Lessons for future FiLM work
+
+- **Two paired runs were essential.** Without R2, R1's +0.29% regression would have been the only data point — easy to misread as falsified. R2's −1.34% revealed the noise-floor nature of the signal. Replicates near the noise floor are the right protocol.
+- **Per-block × per-site combinatorics:** the param multiplication caught the student off-guard. For future per-block conditioner ideas, isolate per-block from per-site changes (test single-shot per-block first to control the confound).
+- **FiLM capacity may need wider trunk to manifest.** If nezuko #3492 R3 merges (n_hidden=192 + clip), revisit per-block FiLM at the larger capacity — the bottleneck may shift.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-frieren-perblock-r1-arma-baseline-20260516-093521/metrics.jsonl`
+- `models/model-charliepai2i48h4-frieren-perblock-r1-armb-perblock-20260516-103912/metrics.jsonl`
+- `models/model-charliepai2i48h4-frieren-perblock-r1-arma-baseline-20260516-112856/metrics.jsonl`
+- `models/model-charliepai2i48h4-frieren-perblock-r2-armb-perblock-20260516-120346/metrics.jsonl`
+
+### Next assignment: PR #3980 Lion optimizer
+
+Frieren reassigned to Lion optimizer (sign projection on full clip stack vs AdamW+clip). Tests the mechanistic question of whether clip's load-bearing mechanism is direction normalization, in which case Lion's sign-projection (L∞ direction normalization, more extreme than L2 clip) should compose or supersede.
