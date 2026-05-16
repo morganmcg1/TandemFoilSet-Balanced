@@ -462,6 +462,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
+    onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
 
 
 cfg = sp.parse(Config)
@@ -530,7 +532,31 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+if cfg.use_onecycle:
+    total_steps = len(train_loader) * MAX_EPOCHS
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=optimizer.param_groups[0]["lr"],
+        total_steps=total_steps,
+        pct_start=cfg.onecycle_pct_start,
+        div_factor=25.0,
+        final_div_factor=1e4,
+        anneal_strategy="cos",
+        cycle_momentum=False,
+    )
+    onecycle_mode = True
+    rising_epochs = int(total_steps * cfg.onecycle_pct_start / max(len(train_loader), 1))
+    print(
+        f"Scheduler: OneCycleLR  max_lr={optimizer.param_groups[0]['lr']:.2e}  "
+        f"div_factor=25  final_div_factor=1e4  pct_start={cfg.onecycle_pct_start}  "
+        f"total_steps={total_steps}  steps_per_epoch={len(train_loader)}\n"
+        f"  Rising phase: epochs 1-{rising_epochs}; falling: epochs {rising_epochs+1}-end  "
+        f"(cycle_momentum=False)"
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+    onecycle_mode = False
+    print("Scheduler: CosineAnnealingLR(T_max=15)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -615,12 +641,18 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if onecycle_mode:
+            scheduler.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not onecycle_mode:
+        scheduler.step()
+    epoch_lr = scheduler.get_last_lr()[0]
+    if epoch == 0:
+        print(f"  scheduler lr after epoch 1: {epoch_lr:.6e}")
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -651,6 +683,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
