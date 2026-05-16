@@ -139,9 +139,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 two_shot_film=False):
         super().__init__()
         self.last_layer = last_layer
+        self.two_shot_film = two_shot_film
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -162,7 +164,10 @@ class TransolverBlock(nn.Module):
         if scale is not None:
             h = h * scale.unsqueeze(1) + shift.unsqueeze(1)
         fx = self.attn(h) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        h2 = self.ln_2(fx)
+        if self.two_shot_film and scale is not None:
+            h2 = h2 * scale.unsqueeze(1) + shift.unsqueeze(1)
+        fx = self.mlp(h2) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -202,7 +207,8 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  film_cond: bool = False, film_cond_dim: int = 11,
                  film_cond_slice: tuple[int, int] = (13, 24),
-                 film_mlp_hidden: int = 128):
+                 film_mlp_hidden: int = 128,
+                 two_shot_film: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -219,11 +225,13 @@ class Transolver(nn.Module):
         self.n_hidden = n_hidden
         self.space_dim = space_dim
         self.n_layers = n_layers
+        self.two_shot_film = two_shot_film
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                two_shot_film=two_shot_film,
             )
             for i in range(n_layers)
         ])
@@ -477,6 +485,7 @@ class Config:
     ema_decay: float = 0.999  # max decay; warmup ramp protects early training
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
+    two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
 
 
 cfg = sp.parse(Config)
@@ -520,6 +529,7 @@ model_config = dict(
     film_cond_dim=11,
     film_cond_slice=(13, 24),
     film_mlp_hidden=cfg.film_mlp_hidden,
+    two_shot_film=cfg.two_shot_film,
 )
 
 model = Transolver(**model_config).to(device)
