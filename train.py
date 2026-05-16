@@ -619,6 +619,7 @@ class Config:
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
+    re_sampler_alpha: float = 0.0
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -713,6 +714,53 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# Reynolds-extremity oversampling. Multiplies the balanced-domain weights by
+# |log(Re)_i - mean(log Re)|^alpha so samples at OOD Re ends (low + high) are
+# drawn more often. Cache log(Re)_i to a local .pt file to avoid re-iterating
+# the dataset at every training start. Skipped in debug (no sampler) and when
+# alpha == 0 (exact baseline reproduction).
+re_sampler_stats: dict[str, float] = {}
+if (not cfg.debug) and cfg.re_sampler_alpha > 0:
+    cache_path = Path("log_re_per_sample.pt")
+    log_re_per_sample = None
+    if cache_path.exists():
+        cached = torch.load(cache_path, weights_only=True)
+        if cached.numel() == len(train_ds):
+            log_re_per_sample = cached
+            print(f"[re_sampler] loaded cached log_re from {cache_path}")
+        else:
+            print(f"[re_sampler] cache len mismatch ({cached.numel()} vs {len(train_ds)}); recomputing")
+    if log_re_per_sample is None:
+        t0_re = time.time()
+        log_re_per_sample = torch.tensor(
+            [train_ds[i][0][0, 13].item() for i in range(len(train_ds))],
+            dtype=torch.float64,
+        )
+        torch.save(log_re_per_sample, cache_path)
+        print(f"[re_sampler] extracted log(Re) for {len(train_ds)} samples in {time.time()-t0_re:.1f}s; cached to {cache_path}")
+    log_re_mean = log_re_per_sample.mean()
+    re_extremity = (log_re_per_sample - log_re_mean).abs() ** cfg.re_sampler_alpha
+    sample_weights = sample_weights * re_extremity
+    sample_weights = sample_weights / sample_weights.sum()
+    p = sample_weights.to(torch.float64)
+    ess = 1.0 / (p * p).sum().item()
+    n_zero = int((sample_weights == 0).sum().item())
+    re_sampler_stats = {
+        "re_sampler/alpha": cfg.re_sampler_alpha,
+        "re_sampler/log_re_mean": float(log_re_mean.item()),
+        "re_sampler/log_re_std": float(log_re_per_sample.std().item()),
+        "re_sampler/re_extremity_min": float(re_extremity.min().item()),
+        "re_sampler/re_extremity_max": float(re_extremity.max().item()),
+        "re_sampler/re_extremity_mean": float(re_extremity.mean().item()),
+        "re_sampler/effective_sample_size": ess,
+        "re_sampler/n_zero_weight_samples": n_zero,
+    }
+    print(
+        f"[re_sampler] alpha={cfg.re_sampler_alpha} ESS={ess:.1f}/{len(train_ds)} "
+        f"n_zero_weight={n_zero} extremity[min={re_extremity.min().item():.3e} "
+        f"max={re_extremity.max().item():.3f} mean={re_extremity.mean().item():.3f}]"
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -812,6 +860,9 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+
+if re_sampler_stats:
+    wandb.summary.update(re_sampler_stats)
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
