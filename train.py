@@ -354,6 +354,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     huber_delta: float = 1.0
+    cosine_t_max: int = 20
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -406,7 +407,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
