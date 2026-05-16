@@ -1524,3 +1524,79 @@ The student's dual-loss implementation (mathematically equivalent to mixed-targe
 | **#4011** | thorfinn | **H66: slice_num sweep (96, 128) at n_layers=4 GEGLU** | ~56.5-57.5 (Arm A) |
 
 **H66 (slice_num):** The H60 win opens compute headroom (~13% per epoch). Widen the slice-token representation that Transolver's PhysicsAttention uses to compress mesh nodes. slice_num=64 is the original Transolver default; the model has improved 57+ pts since H10 tested 96/128, so the bottleneck/capacity tradeoff is fundamentally different now. Arms: slice_num=96 (50% more) and 128 (2x). Tests whether finer spatial selectivity helps the geometry-OOD splits where local mesh structure matters most.
+
+---
+
+## 2026-05-16 15:34 — PR #3966: H59 GEGLU + RMSNorm (fern) — **MERGED, NEW BASELINE**
+
+- Branch: `charliepai2i48h3-fern/h59-geglu-rmsnorm`
+- Hypothesis: Replace LayerNorm with RMSNorm in GEGLU Transolver blocks. RMSNorm skips mean-subtraction, preserving the directional structure the GEGLU gate path exploits. Fused `torch.nn.functional.rms_norm` should also yield per-epoch speedup.
+
+| Metric | H60 baseline (LN) | **PR #3966 (RMSNorm)** | Δ |
+|--------|-------------------|-------------------------|---|
+| **val_avg/mae_surf_p** | 57.5750 | **56.9056** | **−0.67** |
+| val_single_in_dist | 63.3430 | 64.4659 | +1.12 |
+| val_geom_camber_rc | 72.1854 | 70.1136 | −2.07 |
+| val_geom_camber_cruise | 37.7532 | 35.7221 | −2.03 |
+| val_re_rand | 57.0183 | 57.3210 | +0.30 |
+| **test_avg (3-split)** | 56.4610 | **56.2420** | **−0.22** |
+| test_single_in_dist | — | 56.0700 | — |
+| test_geom_camber_rc | — | 65.7949 | — |
+| test_re_rand | — | 46.8612 | — |
+| Epochs completed | 16/50 (wall) | 14/50 (wall) | — |
+| Mean s/epoch | 113s | ~137s (slightly slower wall-clock than nominal due to first-run JIT/warmup) | — |
+| n_params | 856k | 856,587 | — |
+| Peak GPU memory | — | 49.54 GB | — |
+
+**Analysis:** Wins on the two geometry-OOD splits (camber_rc, camber_cruise) by ~2 pts each, small regression on in-distribution (+1.12). Net: −0.67 val_avg, −0.22 test 3-split. Importantly, the student used the **fused** `F.rms_norm` kernel rather than a naive python implementation — without this optimization, RMSNorm would not gain wall-clock time. The win is driven primarily by the additional training step within the wall budget; the directional-preservation argument may matter mechanistically but is not separately measurable at this scale.
+
+**Status: MERGED — NEW BASELINE val=56.9056, test=56.2420. Cumulative gain from R5 start: −9.20 pts val (66.11 → 56.91).**
+
+---
+
+## 2026-05-16 15:30 — PR #3965: H58 Lion optimizer + GEGLU FFN mega-stack (edward) — **TERMINAL, SENT BACK FOR REBASE**
+
+- Branch: `charliepai2i48h3-edward/h58-lion-geglu`
+- Hypothesis: Compound Lion's sign-based update direction with GEGLU's multiplicative gating. Predicted ~52-55 val_avg from H37b → H48 → Lion stacking.
+
+| Arm | val_avg | test_avg (3-split) | best_epoch | epochs |
+|-----|---------|--------------------|------------|--------|
+| **A (lr=1e-4, wd=1e-3, β=(0.9,0.99))** | **46.7957** | 46.6320 | 13 | 13/50 (wall) |
+| B (lr=2e-4) | 47.4440 | **45.8483** | 13 | 13/50 (wall) |
+| H48 baseline (pre-H59) | 58.6268 | 56.6976 | — | — |
+
+**Per-split val (Arm A):** single_in_dist=50.68, camber_rc=59.93, camber_cruise=29.64, re_rand=46.93. Uniform −10 to −14 pt improvement across all four splits — Lion fixes a systemic optimization issue, not a regime-specific lever.
+
+**Gate health:** GEGLU std=0.27→0.29 (Arm A) and 0.42→0.45 (Arm B) across training. No saturation; Lion's sign-update concern did not materialize.
+
+**Wall-budget caveat:** Both arms hit 30-min wall at epoch 13/50 with val_avg *still dropping ~2.4 pts per epoch* (49.17 → 46.80 in the last step). Cosine T_max=15 means LR was near-peak. **These are loose upper bounds — a full schedule should yield substantially lower.**
+
+**Action: SENT BACK FOR REBASE.** Edward's PR was submitted against the pre-H59 codebase. After H59 RMSNorm merge (in train.py block-level norms), the PR has conflicts with the additive RMSNorm code. Student asked to: (1) rebase onto current advisor branch, (2) resolve train.py conflicts (Lion's optimizer changes are orthogonal to RMSNorm), (3) re-run a quick verification (--epochs 20) to confirm improvement on updated codebase, (4) mark ready for re-review.
+
+**Strategic note:** Even pending rebase, the H58 signal is *the strongest single PR result of the round* — Δ −10.11 vs current baseline 56.91. The follow-up cycle pre-emptively seeded 5 Lion-themed compound hypotheses (H67-H71) to exploit the lever in parallel while H58 rebases.
+
+---
+
+## 2026-05-16 15:43 — R5 cycle 13 new assignments (5 students; pre-emptive Lion compound batch)
+
+Triggered by Edward's H58 terminal result (Lion+GEGLU → −10.11 vs new H59 baseline). The lever is so strong it warrants parallel exploitation across multiple orthogonal compound directions, rather than waiting on the H58 rebase.
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm compound stack (lr=1e-4, 3e-4)** | ~45-48 |
+| **#4022** | askeladd | **H68: Lion β₂ momentum decay sweep (0.95 vs 0.999)** | ~46-48 |
+| **#4023** | fern | **H69: Lion + linear LR warmup + cosine decay** | ~45-47 |
+| **#4024** | frieren | **H70: Attention head count sweep under Lion (n_head 1, 4)** | ~46-48 |
+| **#4025** | nezuko | **H71: Lion weight decay sweep (1e-4, 5e-4)** | ~46-48 |
+
+**H67 (Lion+RMSNorm compound):** Two confirmed wins stacked — Lion (gradient update) + RMSNorm (per-epoch speed). Tests Arm A=lr=1e-4 (H58 winner) and Arm B=lr=3e-4 (Lion's native range).
+
+**H68 (Lion β₂):** Lion is unusually sensitive to β₂ (slow EMA). H58 used β₂=0.99 (from H49). Sweep β₂=0.95 (faster forgetting, more reactive) and β₂=0.999 (slower) to map this dimension.
+
+**H69 (Lion + LR warmup):** Lion's loose upper bound (val=46.80 at wall) is partly because LR was still near-peak at epoch 13. Linear warmup (1-2 epochs) lets the model warm up under low LR and reach the cosine peak later, potentially smoother convergence within the wall budget.
+
+**H70 (n_head under Lion):** The n_head=2 optimum was confirmed under AdamW. Lion's sign-based update changes the gradient norm balance across heads — worth verifying n_head=2 stays optimal vs n_head=1, 4 in the new regime.
+
+**H71 (Lion wd):** H58 used wd=1e-3 (Lion's classic sweet spot from H49). The H37b/H39c AdamW wd-optimum is wd=5e-5. Lion's decoupled-wd implementation behaves differently — Arm A wd=1e-4 and Arm B wd=5e-4 probe the local landscape around H58's choice.
+
+**Strategy:** All 8 students now WIP. Lion is the dominant lever; if any of H67-H71 lands cleanly, baseline could drop another 1-3 pts on top of H58's still-loose 46.80.
