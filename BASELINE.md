@@ -142,7 +142,50 @@ cd target/ && python train.py --agent willowpai2i48h1-askeladd \
 
 ---
 
-## 2026-05-16 00:25 — PR #3480: H: bf16 autocast alone (bs=4 preserved) ← CURRENT BEST
+## 2026-05-16 04:05 — PR #3546: Seed control infrastructure + 4-seed variance characterization ← CANONICAL σ̂
+
+- **Student:** willowpai2i48h1-alphonse
+- **Branch:** `willowpai2i48h1-alphonse/seed-control-baseline-variance`
+- **W&B runs:** `ek21s9hy` (seed0), `8vcv4ojk` (seed1), `1y3my9x2` (seed2), `0ekl0alh` (seed3)
+- **Type:** Infrastructure + variance characterization — no single-run improvement
+
+### 4-seed variance characterization (bf16 + T_max=15 canonical config)
+
+| Seed | val_avg/mae_surf_p (best-ep) | test_avg/mae_surf_p | Best epoch |
+|------|------------------------------|---------------------|------------|
+| 0 (`ek21s9hy`) | 89.71 | 85.64 | 15 |
+| 1 (`8vcv4ojk`) | 90.16 | 85.54 | 18 |
+| 2 (`1y3my9x2`) | 93.05 | 86.83 | 17 |
+| 3 (`0ekl0alh`) | 90.14 | 85.37 | 17 |
+| **μ̂ (4-seed)** | **90.77** | **85.85** | — |
+| **σ̂ (ddof=1)** | **1.54** | **0.67** | — |
+
+### Critical meta-finding
+
+**The single-run best of 87.9105 (PR #3480) sits 1.86σ below the 4-seed mean of 90.77.** It is a downward lucky-draw outlier from the canonical-config distribution, not a representative lower bound. The correct canonical performance is μ̂=90.77 ± σ̂=1.54 on val, μ̂=85.85 ± σ̂=0.67 on test.
+
+**Practical threshold for "beating baseline":**
+- Strong win (2σ below mean): val_avg/mae_surf_p < **87.7** (90.77 - 2×1.54)
+- Modest win (1σ below mean): val_avg/mae_surf_p < **89.2**
+- Single-seed results in 89.2-92.3 are statistically indistinguishable from the canonical config
+
+The 87.9105 remains the all-time best single-run result on this program and is the headline for paper purposes. But **future PR reviews should compare against μ̂=90.77 and declare a win when a result is >1σ below that mean (< 89.2), not just below the lucky-draw 87.91**.
+
+### Seed-control changes merged
+
+`set_all_seeds(seed)` + `seed_worker` + `--seed` CLI arg now in canonical train.py. All future experiments should pass `--seed <N>` for reproducibility.
+
+### Reproduce (single seed)
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-alphonse \
+  --wandb_name "willowpai2i48h1-alphonse/baseline_seed0" \
+  --wandb_group baseline_variance_canonical \
+  --seed 0
+```
+
+---
+
+## 2026-05-16 00:25 — PR #3480: H: bf16 autocast alone (bs=4 preserved) ← ALL-TIME BEST (single-run)
 
 - **Student:** willowpai2i48h1-askeladd
 - **Branch:** `willowpai2i48h1-askeladd/bf16-bs4-only`
