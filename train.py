@@ -237,11 +237,61 @@ def invert_asinh_p(pred, scale):
 
 
 # ---------------------------------------------------------------------------
+# Re embedding (sinusoidal, corrected normalization)
+# ---------------------------------------------------------------------------
+# Empirical log(Re) range on TandemFoilSet (channel 13 of raw x):
+# min=11.5129, max=15.4249 across the 1499 training samples (full corpus span
+# also covers all val splits within this window). Using these as the
+# normalization bounds ensures `re_norm` covers ~[0, 1] so all sinusoidal
+# frequency components vary meaningfully.
+LOG_RE_MIN_DATA = 11.5
+LOG_RE_MAX_DATA = 15.5
+LOG_RE_CHANNEL = 13
+
+
+def build_re_sinusoidal_embed(log_re, d: int, log_re_min: float, log_re_max: float):
+    """Sinusoidal embedding of log(Re) normalized to the actual data range.
+
+    log_re shape [...] -> output [..., d]. ``d`` must be even.
+    """
+    re_norm = (log_re - log_re_min) / (log_re_max - log_re_min)
+    half = d // 2
+    freqs = torch.pow(
+        10000.0,
+        -2.0 * torch.arange(half, device=log_re.device, dtype=log_re.dtype) / d,
+    )
+    args = re_norm.unsqueeze(-1) * freqs
+    return torch.cat([args.sin(), args.cos()], dim=-1)
+
+
+def make_model_input(x, stats, re_embed_dim: int):
+    """Build the model input tensor.
+
+    Normalizes x with stored stats. When ``re_embed_dim>0``, replaces the
+    normalized log(Re) channel with a ``re_embed_dim``-dim sinusoidal embedding
+    computed from the *raw* log(Re) so the frequencies span the actual data
+    range, not the normalized one.
+    """
+    x_norm = (x - stats["x_mean"]) / stats["x_std"]
+    if re_embed_dim <= 0:
+        return x_norm
+    log_re_raw = x[..., LOG_RE_CHANNEL]
+    embed = build_re_sinusoidal_embed(
+        log_re_raw, re_embed_dim, LOG_RE_MIN_DATA, LOG_RE_MAX_DATA
+    )
+    return torch.cat(
+        [x_norm[..., :LOG_RE_CHANNEL], embed, x_norm[..., LOG_RE_CHANNEL + 1 :]],
+        dim=-1,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   asinh_p_scale: float = 0.0) -> dict[str, float]:
+                   asinh_p_scale: float = 0.0,
+                   re_embed_dim: int = 0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -265,10 +315,10 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_model = make_model_input(x, stats, re_embed_dim)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             y_target = apply_asinh_p(y_norm, asinh_p_scale)
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_model})["preds"]
 
             sq_err = (pred - y_target) ** 2
             vol_mask = mask & ~is_surface
@@ -421,6 +471,7 @@ class Config:
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
+    re_embed_dim: int = 0  # 0 disables; >0 replaces log(Re) channel with d-dim sinusoidal embedding
 
 
 cfg = sp.parse(Config)
@@ -449,9 +500,12 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+re_extra = cfg.re_embed_dim - 1 if cfg.re_embed_dim > 0 else 0
+if cfg.re_embed_dim > 0 and cfg.re_embed_dim % 2 != 0:
+    raise ValueError(f"re_embed_dim must be even, got {cfg.re_embed_dim}")
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + re_extra,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -525,10 +579,22 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_model = make_model_input(x, stats, cfg.re_embed_dim)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = apply_asinh_p(y_norm, cfg.asinh_p_scale)
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_model})["preds"]
+        if cfg.debug and global_step == 0 and cfg.re_embed_dim > 0:
+            with torch.no_grad():
+                log_re_raw = x[..., LOG_RE_CHANNEL][mask]
+                re_norm = (log_re_raw - LOG_RE_MIN_DATA) / (LOG_RE_MAX_DATA - LOG_RE_MIN_DATA)
+                embed_slice = x_model[..., LOG_RE_CHANNEL : LOG_RE_CHANNEL + cfg.re_embed_dim][mask]
+                print(
+                    f"[RE-EMBED-DEBUG d={cfg.re_embed_dim} range=[{LOG_RE_MIN_DATA},{LOG_RE_MAX_DATA}]] "
+                    f"log_re raw range=[{log_re_raw.min().item():.4f},{log_re_raw.max().item():.4f}] "
+                    f"re_norm range=[{re_norm.min().item():.4f},{re_norm.max().item():.4f}] "
+                    f"embed range=[{embed_slice.min().item():.4f},{embed_slice.max().item():.4f}] "
+                    f"x_model.shape={tuple(x_model.shape)}"
+                )
         if cfg.debug and global_step == 0 and cfg.asinh_p_scale > 0:
             with torch.no_grad():
                 yp = y_norm[..., 2][mask]
@@ -585,7 +651,8 @@ for epoch in range(MAX_EPOCHS):
     ema_model.eval()
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
-                             asinh_p_scale=cfg.asinh_p_scale)
+                             asinh_p_scale=cfg.asinh_p_scale,
+                             re_embed_dim=cfg.re_embed_dim)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -667,7 +734,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 asinh_p_scale=cfg.asinh_p_scale)
+                                 asinh_p_scale=cfg.asinh_p_scale,
+                                 re_embed_dim=cfg.re_embed_dim)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
