@@ -709,6 +709,28 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 19:42 — PR #4071 — Schedule-Free AdamW (SENT BACK — beat old baseline, not new bf16 baseline)
+
+- **Branch:** `charliepai2i48h1-fern/schedule-free-adamw-on-film`
+- **Hypothesis:** `schedulefree.AdamWScheduleFree(lr=5e-4, weight_decay=1e-4, warmup_steps=200)` replaces AdamW + cosine T_max=50. Removes cosine fragility.
+- **Results vs old baseline (val=68.80, test=59.49):**
+
+| Metric | Old baseline (FiLM-Re+AoA, AdamW+cosine) | Schedule-Free | Δ |
+|--------|----------------------------------------:|--------------:|--:|
+| `val_avg/mae_surf_p` | 68.80 | **65.57** | **-4.7%** |
+| `test_avg/mae_surf_p` | 59.49 | **57.18** | **-3.9%** |
+| All 8 val+test splits | — | improved 3-7% | uniform — regime-portable |
+| sec/epoch | ~102s | ~102s | 0% (no compute overhead) |
+| best epoch | 18 | 18 (still descending at -1.51 pts/epoch) | — |
+
+- **Metrics path:** `models/model-charliepai2i48h1-fern-sf-adamw-on-film-20260516-183322/metrics.jsonl`
+- **Why not merged:** New baseline (PR #4064 bf16) is val=59.08. Schedule-Free's 65.57 > 59.08 → no longer a winner against current baseline.
+- **Decision:** NOT closed. **Sent back to fern for retest on bf16 baseline.** Schedule-Free attacks optimizer dynamics; bf16 attacks compute precision → fully orthogonal mechanisms. Cosine premature-decay problem is *more* relevant on bf16 (25 epochs vs 18 with T_max=50). Compound win expected.
+- **Key student insight:** "Cosine LR at epoch 18 is ≈0.79·lr_init — already at ~80% of initial. SF keeps effective LR at full strength until convergence." On bf16 (25 epochs), the under-annealing is worse: cosine at epoch 25 with T_max=50 is at 0.5·lr_init. SF should help more.
+- **Next action:** fern rebases onto advisor branch (bf16 merged), re-runs Schedule-Free.
+
+---
+
 ## 2026-05-16 19:27 — PR #4064 — bf16 autocast on FiLM baseline (MERGED → **NEW BEST, -14.1%**)
 
 - **Branch:** `charliepai2i48h1-askeladd/bf16-on-film`
