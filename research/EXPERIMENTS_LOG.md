@@ -1,5 +1,40 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 05:20 — Round-3 retry closures (#3633, #3634, #3636, #3638, #3479)
+
+After PR #3632 (coord noise) merged as new baseline (val=83.50/test=73.79), all 5 remaining round-3 retries finished and regressed vs the new baseline:
+
+| PR | Student | Hypothesis | Final run | val | test | Δ val vs 83.50 |
+|---|---|---|---|---:|---:|---:|
+| #3633 | askeladd | Learnable Fourier freqs | `z2kg48ty` | 87.97 | 77.25 | +5.4% |
+| #3634 | fern | slice_num=96 | `fagaonns` | 89.10 | 78.29 | +6.7% |
+| #3636 | nezuko | num_freq=2 | `2fnr2k1z` | 88.51 | 77.51 | +6.0% |
+| #3636 | nezuko | num_freq=6 | `xvtmrakm` | FAILED | — | crashed at startup (20s) |
+| #3638 | alphonse | p_weight=3 | `fort2r4i` | 85.35 | 75.70 | +2.2% (best of round) |
+| #3479 | frieren | per-channel + lr=1e-3 | `5lcpht9s` | 88.55 | 79.33 | +6.1% |
+
+### Analysis
+
+**The coord noise merge raised the bar significantly.** All techniques that were promising vs the OLD baseline (88.24) failed to beat the NEW baseline (83.50). Several lessons:
+
+1. **Learnable Fourier freqs (askeladd)** — Same as fixed (+5.4% worse). The fixed log-spaced freqs were near-optimal; the few extra trainable params didn't get enough gradient signal in 10 epochs.
+
+2. **slice_num=96 (fern)** — +6.7% worse. Combined with slice_num=128 (#3092, val=106.82), confirms slice_num=64 is the sweet spot. More slice tokens fragment attention compute too thin without enough epochs.
+
+3. **num_freq=2 (nezuko)** — +6.0% worse. Fewer frequencies = less representational granularity. num_freq=4 confirmed as the optimum. num_freq=6 crashed at startup (likely dim mismatch in preprocess MLP; not worth debugging since num_freq=2 already eliminates the lower bracket).
+
+4. **p_weight=3 (alphonse)** — +2.2% worse. BEST of the round; closest to baseline. The pressure channel emphasis competes with the L1 + Fourier PE inductive biases. surf_weight (global, not per-channel) is the cleaner mechanism — assigned to alphonse next.
+
+5. **Per-channel heads + lr=1e-3 (frieren)** — +6.1% worse. The technique that helped on pre-Fourier-PE stacks (~val 95 → 95.6) didn't transfer. Both per-channel heads and coord noise target output-side optimization; they don't compose cleanly.
+
+### Cross-cutting takeaway
+
+**Coord noise augmentation absorbed much of the upside that round-3 architecture/loss experiments would have provided.** The post-coord-noise baseline (83.50) is a harder target than the post-Fourier-PE baseline (88.24). Round-4 must target genuinely orthogonal axes — augmentation variants, FFN capacity, attention head diversity, surface weighting. Architecture width/depth scaling is exhausted at this budget.
+
+All 5 PRs closed. 5 students reassigned to round-4 hypotheses.
+
+---
+
 ## 2026-05-16 04:30 — PR #3637: Width n_hidden=176 (thorfinn) — CLOSED
 
 - **Student:** willowpai2i48h4-thorfinn
