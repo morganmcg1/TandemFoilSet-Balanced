@@ -1,5 +1,67 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 01:38 — PR #3469: Deeper model n_layers 5→6 (tanjiro) — CLOSED
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `tanjiro/depth-6layers`)
+- **Hypothesis:** One additional Transolver block (n_layers 5→6) provides higher-order cross-slice interactions on the airfoil geometry; predicted improvement on val_avg/mae_surf_p, especially on cross-regime splits.
+
+### Results (W&B run `5y4w4b45`)
+
+| Metric | Stale ref (#3091, 109.42) | This run (n_layers=6) | Δ stale | Δ new baseline (96.10) |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 109.4166 | **108.4452** | −0.97 ✓ | **+12.34 ✗** |
+| test_avg/mae_surf_p (3-split workaround) | 107.4694 | 105.2823 | −2.19 | — |
+| test_avg/mae_surf_p (full) | NaN | NaN | — | — |
+
+Per-split val (n_layers=6 vs old baseline 109.42):
+- val_re_rand: −10.51 (big win); val_geom_camber_*: −3.51/−4.17 (modest gain); val_single_in_dist: +14.29 (regression).
+
+### Analysis
+
+The run was completed against the STALE pre-#3089 codebase (MSE loss, n_hidden=128). The reported −0.97 win against the #3091 baseline (109.42) is real but the experiment was never validated on the post-#3507 advisor (val=96.10, with L1 + n_hidden=160). The depth-6 result (108.45) is +12.34 above the current baseline, so even a generous re-run would need to gain >12 to land on the merge curve — vs an observed +1 gain in the stale ablation, this is implausible.
+
+Useful signals captured for future depth work on the new baseline:
+- depth-6 reliably helps `val_re_rand` and `val_geom_camber_*` on tandem-cruise OOD tracks
+- depth-6 hurts `val_single_in_dist` by +14 — capacity overfits single-foil distribution
+- ~158s/epoch at n_hidden=128 + n_layers=6 (vs ~168s for n_hidden=160 + n_layers=5) — depth is cheaper than width per epoch
+- Loss curves still descending at epoch 10 → under-trained
+
+**Closed** at 01:38 UTC as the stale-baseline regression is too large to bridge. tanjiro reassigned to a fresh experiment on the current advisor tip.
+
+---
+
+## 2026-05-16 00:30 — PR #3507: Width scaling n_hidden 128→160 (alphonse) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/alphonse-width-160`)
+- **Hypothesis:** Increasing Transolver hidden width from 128 to 160 (+25% capacity, +56% params) on top of the L1 + warmup + clip stack will improve val_avg/mae_surf_p further; cosine schedule still fully anneals at the slightly slower ~168s/epoch.
+
+### Results (W&B run `7vxhbv8o`)
+
+| Metric | Old baseline (#3089, 100.53) | This run (n_hidden=160) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 100.5275 | **96.0997** | **−4.40 (−4.4%) 🏆** |
+| **test_avg/mae_surf_p** | 90.1489 | **85.5256** | **−4.62 (−5.1%) 🏆** |
+
+Per-split test surface pressure MAE:
+
+| Split | test/mae_surf_p |
+|---|---:|
+| single_in_dist | 103.7483 |
+| geom_camber_rc | 92.4243 |
+| geom_camber_cruise | 61.3787 |
+| re_rand | 84.5510 |
+| **avg** | **85.5256** |
+
+Config: L1 loss (carry-over from #3089), warmup 2 ep, cosine to 0 (T_max=10), grad-clip 1.0, lr=1e-3, batch=4, surf_weight=10. Width 128→160; params 662k → 1.03M. Per-epoch ~168s (↑ from ~134s); peak VRAM 50.1 GB (53% of 96 GB envelope).
+
+### Analysis
+
+Width-160 composes cleanly with the merged optimization stack and delivers the expected gain on both val and test. Improvement is broadly distributed across all 4 test splits (no per-split regression). Val curves still descending at epoch 10 → continued width scaling is likely net-positive, but with diminishing returns expected past ~192 given the budget-constrained 10-epoch annealing.
+
+**Merged** at 00:30 UTC as new advisor baseline. All in-flight students need to rebase to inherit `Config.n_hidden = 160`.
+
+---
+
 ## 2026-05-15 22:35 — PR #3095: Higher surf_weight + per-channel p weighting (nezuko) — CLOSED
 
 - **Student:** willowpai2i48h4-nezuko (branch: `willowpai2i48h4-nezuko/surface-weight`)
