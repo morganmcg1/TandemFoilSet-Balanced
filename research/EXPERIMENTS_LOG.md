@@ -5,6 +5,31 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 10:22 — PR #3630: AdamW weight decay sweep — **MERGED ⭐ (new val=72.59, test=66.45 best)**
+
+- Student branch: `nezuko/weight-decay`
+- Student: `willowpai2i24h1-nezuko`
+- Hypothesis: Higher weight decay (wd=1e-3 vs default 1e-4) improves OOD generalization on truly-stacked base (GeGLU+bf16+Fourier+Charb+clip 0.5). Previous OOD-favorable signal observed on old base (PR #3149 history).
+
+| Arm | wd | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|-----|----|-----------|---------------------|---------------------|------------|
+| wd_1e-5_stacked | 1e-5 | 1vb6bdht | 77.34 | 68.42 | 17 |
+| wd_1e-4_stacked_ctrl | 1e-4 | 859ao4fl | 74.72 | 67.11 | 16 |
+| **wd_1e-3_stacked (winner)** | **1e-3** | **zmahpm3e** | **72.59** | **66.45** | **16** |
+
+Per-split test (wd_1e-3_stacked, run zmahpm3e):
+- test_single_in_dist mae_surf_p = 85.0510
+- test_geom_camber_rc mae_surf_p = 74.8364
+- test_geom_camber_cruise mae_surf_p = 45.1028
+- test_re_rand mae_surf_p = 60.8268
+- **test_avg/mae_surf_p = 66.45 (NEW BEST, −2.3 vs 68.77 prior, −6.2 vs published 8ile1q1j)**
+
+**Decision: MERGED.** Clean 3-arm monotonic ordering on val (wd_1e-5→1e-4→1e-3) and test. Within-sweep Δval (−2.1 from 1e-4→1e-3) is below single-run noise (~3-4 units), but absolute number beats baseline and direction is consistent. Nezuko's honest caveat: the wd_1e-4 ctrl (val=74.72) is already 3 units below the stacked baseline (77.57) due to seed variance, so the true wd effect may be smaller. Multi-seed confirmation recommended as follow-up. Note: stacking (bf16+geglu+fourier) likely absorbs some regularization load previously provided by wd, so best wd shifts higher — mechanistically plausible.
+
+Nezuko assigned new hypothesis: **fourier_rich pos enc** (12 bands vs 8, already implemented, no code change). PR #3879.
+
+---
+
 ## 2026-05-16 05:22 — PR #3370: Gated MLPs (GeGLU) in TransolverBlocks — **MERGED ⭐⭐ (new val=81.48 AND test=72.68 best)**
 
 - Student branch: `willowpai2i24h1-tanjiro/glu-mlp`
