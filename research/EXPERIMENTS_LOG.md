@@ -1,5 +1,75 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 04:30 — PR #3637: Width n_hidden=176 (thorfinn) — CLOSED
+
+- **Student:** willowpai2i48h4-thorfinn
+- **Hypothesis:** n_hidden=176 is the sweet spot between the working 160 and the failing 192, giving +10% width with +20% params.
+
+### Results (W&B run `7zjst4wu`)
+
+| Metric | Baseline (#3632, 83.50) | n_hidden=176 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 83.4954 | 88.4539 | **+5.0 (vs old baseline 88.24: +0.21)** |
+| test_avg/mae_surf_p | 73.7918 | 79.2911 | **+5.50** |
+
+Ran against the OLD baseline at val=88.24 (submitted before #3632 coord noise was merged). Against THAT baseline: val=88.45 (+0.21, essentially noise-level regression). Against current 83.50: +5.0 (clearly worse).
+
+### Analysis
+
+Width scaling is confirmed plateaued at n_hidden=160 for this 30-min budget. n_hidden=176 (+10% width) gives both val and test regressions. Both sub-192 widths (176, 192) have been tested and both regress. The model is not capacity-limited in width — it's under-trained in time. Depth also fails at budget. The winning lever going forward is **data/augmentation** (coord noise proved this) and **loss/pe engineering** (Fourier PE proved this).
+
+**Closed** — width scaling exhausted at n_hidden=160 for current budget.
+
+---
+
+## 2026-05-16 04:30 — PR #3635: Depth n_layers=6 on current stack (edward) — CLOSED
+
+- **Student:** willowpai2i48h4-edward
+- **Hypothesis:** n_layers=6 on the full current stack (Fourier PE + L1 + n_hidden=160) might give gains that were masked in the stale #3469 experiment.
+
+### Results (W&B run `4vmya3cn`)
+
+| Metric | Baseline (#3372, 88.24) | n_layers=6 (8ep) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 88.2442 | 94.5011 | **+6.26 ✗** |
+| test_avg/mae_surf_p | 77.0880 | 83.5150 | **+6.43 ✗** |
+
+Per-split: single_in_dist+14.95 (worst), geom_camber_cruise +1.31 (best), re_rand +2.97. Every split regressed.
+
+### Analysis
+
+Depth=6 at --epochs 8 (budget constraint) is under-converged: the extra block needs more gradient steps to learn meaningful higher-order cross-slice interactions. geom_camber_cruise nearly held neutral (+1.31) — the extra depth might help if training epochs could increase. Not viable at 30-min budget. Depth scaling would require 20+ epochs or a curriculum/pretraining approach.
+
+**Closed** — confirms depth scaling is budget-constrained at 30min window. Consistent with #3469.
+
+---
+
+## 2026-05-16 04:30 — PR #3632: Coordinate noise augmentation std=0.01 (tanjiro) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-tanjiro
+- **Hypothesis:** Gaussian jitter (std=0.01) on normalized (x,z) coords during training only gives richer geometry variation each epoch, improving OOD generalization.
+
+### Results (W&B run `0q6t1hpc`)
+
+| Metric | Old baseline (#3372, 88.24) | Coord noise (0q6t1hpc) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 88.2442 | **83.4954** | **−4.75 (−5.38%) 🏆** |
+| **test_avg/mae_surf_p** | 77.0880 | **73.7918** | **−3.30 (−4.28%) 🏆** |
+
+Per-split test: single_in_dist 83.77 (−4.68%), geom_camber_rc 80.55 (−2.60%), geom_camber_cruise 55.20 (−7.08%), re_rand 75.64 (−3.47%). Improvement on every split.
+
+Config: n_hidden=160, n_layers=5, Fourier PE num_freq=4, L1 loss, coord_noise_std=0.01 (train only), lr=5e-4 (Config default — note: NOT the lr=1e-3 used in #3372; testing lr=1e-3 with coord noise is an open opportunity).
+
+### Analysis
+
+Second-largest single-experiment gain in the track (+5.38% val, after Fourier PE +8.2%). Coord noise acts as implicit mesh-topology augmentation: the model sees slightly different geometry each epoch, forcing it to learn the physics rather than memorize mesh coordinates. The cruise split gained most (−7.08% test) — consistent with cruise shapes having highest geometry variability.
+
+Key insight: lr=5e-4 (default) was used, NOT lr=1e-3 (the prev baseline lr). Testing lr=1e-3 + coord noise is an open compounding experiment.
+
+**Merged** at 04:30 UTC. New baseline: val=83.50/test=73.79. coord_noise_std=0.01 is now default.
+
+---
+
 ## 2026-05-16 02:25 — PR #3372: Fourier PE 4-freq on (x,z) coords (askeladd) — **MERGED** → new baseline
 
 - **Student:** willowpai2i48h4-askeladd (branch: `askeladd/fourier-pos-encoding`)
