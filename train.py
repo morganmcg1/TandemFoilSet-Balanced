@@ -417,6 +417,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     optimizer: str = "adamw"  # "adamw" or "soap" — single-variable A/B for PR #3283
     ema_decay: float = 0.0   # EMA decay (0 = disabled, 0.999 = recommended)
+    precondition_frequency: int = 10  # SOAP: steps between eigenbasis refreshes (PR #3495)
     seed: int = 0            # RNG seed (used for torch + cuda + numpy)
 
 
@@ -484,7 +485,7 @@ elif cfg.optimizer == "soap":
         lr=cfg.lr,
         betas=(0.95, 0.95),
         weight_decay=cfg.weight_decay,
-        precondition_frequency=10,
+        precondition_frequency=cfg.precondition_frequency,
         shampoo_beta=0.95,
         eps=1e-8,
         normalize_grads=False,
