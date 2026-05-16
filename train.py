@@ -578,6 +578,11 @@ class Config:
     # Arm B: add a per-node chord-position correction 0.5·(1-cos(2π·x)) to p_B.
     # Only takes effect when bernoulli_residual is also True.
     bernoulli_chord_correction: bool = False
+    # torch.compile() wrapping for faster per-epoch training. EMA shadow stays
+    # uncompiled (deepcopy of model happens before compile). dynamic=True handles
+    # the variable padded mesh size (74K-242K nodes) without recompilation.
+    torch_compile: bool = False
+    torch_compile_mode: str = "default"  # default | reduce-overhead | max-autotune
 
 
 cfg = sp.parse(Config)
@@ -677,6 +682,23 @@ ema_model.requires_grad_(False)
 ema_model.eval()
 print(f"EMA model initialized (decay={EMA_DECAY})")
 
+# torch.compile wrapping — must happen AFTER ema_model deepcopy, since deepcopy
+# of an OptimizedModule is unsafe (it retains references to the compiled graph
+# rather than producing fresh weights). Compile only the training model; EMA
+# eval path stays in eager which keeps the test eval simple and isolates any
+# compile bugs to the training forward pass.
+torch_compile_active = False
+if cfg.torch_compile:
+    torch.set_float32_matmul_precision("high")
+    if cfg.torch_compile_mode == "reduce-overhead":
+        # CUDA Graph Trees record a graph per input shape. With our 74K-242K
+        # variable padded mesh size that would blow up memory. Skip CUDA graph
+        # recording for dynamic-shape graphs (issue #128424).
+        torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
+    model = torch.compile(model, mode=cfg.torch_compile_mode, dynamic=True)
+    torch_compile_active = True
+    print(f"torch.compile(mode={cfg.torch_compile_mode}, dynamic=True) applied to training model")
+
 optimizer = CautiousAdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 t_max = cfg.t_max if cfg.t_max is not None else MAX_EPOCHS
 eta_min = cfg.lr * cfg.eta_min_factor
@@ -715,6 +737,15 @@ if cfg.bernoulli_residual:
         "y_p_std_resid": y_p_std_resid,
         "y_p_std_ratio": y_p_std_resid / y_p_std_raw,
     })
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "compile_setup",
+    "torch_compile": cfg.torch_compile,
+    "torch_compile_mode": cfg.torch_compile_mode if cfg.torch_compile else None,
+    "torch_compile_active": torch_compile_active,
+    "torch_version": torch.__version__,
+    "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -848,6 +879,8 @@ for epoch in range(MAX_EPOCHS):
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
         "train/cautious_mask_mean": epoch_mask_mean,
+        "train/torch_compile_active": torch_compile_active,
+        "train/torch_compile_mode": cfg.torch_compile_mode if torch_compile_active else None,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
