@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 19:30 UTC
+- **Last updated:** 2026-05-16 20:35 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 18:45 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 20:35 UTC)
 
 ## Current best baseline (after fern #4062 merge — second consecutive fern WIN)
 
@@ -11,14 +11,14 @@
 | `val_avg/mae_surf_p` | **56.8954** | PR #4062 fern (slice=8 + δ=0.5, run `vzpgr8us`) |
 | `test_3split/mae_surf_p` | **55.9817** | PR #4062 fern |
 
-Per-split val (PR #4062 vs PR #3854 slice=16):
+Per-split val (PR #4062):
 
-| Split | mae_surf_p | Δ vs slice=16 |
-|---|---|---|
-| val_single_in_dist | 66.966 | +1.48% ⚠️ |
-| val_geom_camber_rc | 70.071 | −2.43% |
-| val_geom_camber_cruise | 35.324 | −7.06% |
-| val_re_rand | 55.221 | +0.46% |
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 66.966 |
+| val_geom_camber_rc | 70.071 ← **dominant residual** |
+| val_geom_camber_cruise | 35.324 |
+| val_re_rand | 55.221 |
 
 Reproduce:
 ```bash
@@ -31,50 +31,44 @@ cd target/ && python train.py \
 
 **NO SGDR** in current baseline. Frieren #4013 confirmed SGDR+δ=0.5 super-compound conflicts.
 
-**IMPORTANT**: The 7 in-flight PRs below were all submitted against the previous (slice=16, val=57.6953) baseline. Their results must now be compared against the **new slice=8 baseline (val=56.8954, test=55.9817)** for merge eligibility. The decision tree on review:
-- If a PR result beats val=56.8954 AND test=55.9817 → merge (compounds with slice=8).
-- If a PR result beats val=57.6953 only (slice=16 baseline) but NOT val=56.8954 → mechanism real, send back for re-test on slice=8 baseline.
-- If a PR result fails to beat val=57.6953 → close (mechanism doesn't even work on old baseline).
+## Plateau status
+
+**7 consecutive closes since the fern #4062 merge at 18:40 UTC** (no improvement for ~2h):
+1. #4065 frieren SGDR T_0=15 — math equivalent to baseline cosine
+2. #4080 fern slice=4 — capacity cliff at 4 slice tokens
+3. #4075 edward RMSNorm — mixed (helps OOD test, hurts in-dist val)
+4. #3877 tanjiro temp_init=0.1 (slice=16 retest) — slice/temp coupled on softmax-sharpness axis
+5. #4100 fern n_head=4 — dim_head=32 lost OOD-camber generalization
+6. #4086 frieren δ=0.25 (3-seed) — δ axis saturated past 0.5
+7. #4076 nezuko SWA K=5 — SWA needs converged trajectory we don't have
+
+Plateau is **real but not yet panic-worthy**: 5 in-flight experiments could still produce winners. Strategy: 1 more round of orthogonal axis exploration before invoking researcher-agent for fresh hypotheses.
 
 ## Active PRs (8 WIP, 0 idle — zero idle GPUs)
 
 | PR | Student | Hypothesis | Submitted Against | Brief / Mechanism |
 |----|---------|-----------|-------------------|-------------------|
-| #4100 | fern | **n_head=4** (dim_head=32) | NEW slice=8 baseline | Architecture: head-count gap between n_head=2 and n_head=8 |
-| #4101 | edward | **asinh_vel_scale=1.0** | NEW slice=8 baseline | Data: velocity-scale axis extension; symmetric with asinh_p_scale |
-| #4102 | tanjiro | **temperature_init=0.7** (diffuse) | NEW slice=8 baseline | Architecture: dead-slice hypothesis; sign-flip from closed #3877 |
-| #4086 | frieren | **huber_delta=0.25** | NEW slice=8 baseline | Loss: extends winning δ axis (1.0→0.5 paid); compounds with slice=8 |
-| #4066 | thorfinn | slice_num=12 | slice=16 baseline | Conservative slice axis bracket point |
-| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline | Optimizer: faster 2nd-moment EMA adaptation |
+| **#4138** | **fern** | **attn_dropout=mlp_dropout=0.1** | NEW slice=8 baseline | Regularization: orthogonal to EMA/wd; targets dropout axis (untested ever) |
+| **#4141** | **frieren** | **asymmetric Huber (δ_pos=0.25, δ_neg=1.0)** | NEW slice=8 baseline | Loss: pushes under-prediction harder than over-prediction (their suggestion) |
+| **#4142** | **nezuko** | **Lookahead optimizer (k=5, α=0.5)** | NEW slice=8 baseline | Optimizer: in-training averaging (k-step inner loop); fixes SWA's convergence requirement |
+| #4101 | edward | asinh_vel_scale=1.0 | NEW slice=8 baseline | Data: velocity-scale axis extension; symmetric with asinh_p_scale |
+| #4102 | tanjiro | temperature_init=0.7 (diffuse) | NEW slice=8 baseline | Architecture: dead-slice hypothesis; sign-flip from closed #3877 |
+| #4066 | thorfinn | slice_num=12 | slice=16 baseline (stale_wip) | Conservative slice axis bracket point — bumped 20:35 UTC |
+| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline (stale_wip) | Optimizer: faster 2nd-moment EMA adaptation — bumped 20:35 UTC |
 | #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | Capacity: more channels per slice token |
-| #4076 | nezuko | SWA tail averaging (last 5 EMA) | slice=16 baseline | Ensemble: flatter-minimum via cross-epoch checkpoint averaging |
 
-## Round-12 results (18:30 UTC)
+## Round-12 results (18:30-20:30 UTC, 8 PRs)
 
 | PR | Student | Hypothesis | val | test_3split | Action |
 |----|---------|-----------|-----|-------------|--------|
 | **#4062** | **fern** | **slice_num=8** | **56.8954** | **55.9817** | ✓ **MERGED — NEW BASELINE** |
-
-Per-split signature for slice=8 win (vs slice=16):
-- val_single_in_dist: +1.48% (slight regression)
-- val_geom_camber_rc: −2.43% ✓
-- val_geom_camber_cruise: −7.06% ✓ (big OOD gain)
-- val_re_rand: +0.46% (~unchanged)
-
-Slice axis decelerating but alive: 64→32 (−3.02%), 32→16 (−5.16%), 16→8 (−1.39%). Coarser slicing trades in-dist precision for OOD-geometric generalization — textbook regularizing signature. Next datapoint (slice=4, PR #4080) tests the saturation point.
-
-## Round-11 results (17:35 UTC, in summary)
-
-| PR | Student | Hypothesis | val | test_3split | Action |
-|----|---------|-----------|-----|-------------|--------|
-| **#3854** | **fern** | **slice=16+δ=0.5** | **57.6953** | **56.8613** | ✓ **MERGED — NEW BASELINE** |
-| #3877 | tanjiro | temp_init=0.1+δ=0.5+SGDR | 59.9942 | 59.4763 | → Send back: rebase to slice=16 baseline |
-| #4017 | edward | p_weight=3.0+SGDR (2 seeds) | 60.29 / 62.50 | 60.34 / 61.00 | ✗ Closed — student verdict |
-| #3986 | alphonse | surf_weight=20+δ=0.5 | 61.93 | 60.48 | ✗ Closed — regression |
-| #4013 | frieren | SGDR+δ=0.5 super-compound | 62.61 | 61.10 | ✗ Closed — needs more low-lr time than budget |
-| #3907 | thorfinn | surf_weight=15+δ=0.5 | 62.96 / 69.70 | 69.86 | ✗ Closed — mechanism non-compounding with δ=0.5 |
-| #4035 | nezuko | asinh_p_scale=2.0 | 73.02 | — | ✗ Closed — over-compression (hit close threshold) |
-| #3987 | askeladd | lr=1e-3+δ=0.5 | 74.14 | — | ✗ Closed — destabilizes loss landscape |
+| #4065 | frieren | SGDR T_0=15 single cycle | 59.32 | — | ✗ Closed — equiv to baseline cosine |
+| #4080 | fern | slice_num=4 | 61.5+ | — | ✗ Closed — capacity cliff at 4 slice tokens |
+| #4075 | edward | RMSNorm replacing LayerNorm | 58.0+ | mixed | ✗ Closed — partial mechanism (OOD-test only) |
+| #3877 | tanjiro | temp_init=0.1 (slice=16 retest) | 58.21 | — | ✗ Closed — slice/temp coupling confirmed |
+| #4100 | fern | n_head=4 (dim_head=32) | 58.23 | 57.16 | ✗ Closed — head-dim too narrow at slice=8 |
+| #4086 | frieren | huber_delta=0.25 (3-seed) | 60.02 | — | ✗ Closed — δ axis fully saturated past 0.5 |
+| #4076 | nezuko | SWA K=5 tail averaging | 60.49 (swa) / 59.28 (final) | — | ✗ Closed — SWA needs converged trajectory |
 
 ## Key findings (cumulative)
 
@@ -87,61 +81,65 @@ Slice axis decelerating but alive: 64→32 (−3.02%), 32→16 (−5.16%), 16→
 - SwiGLU gated MLP in TransolverBlocks only
 - n_head=2 wider per-head dim (dim_head=64)
 - vel-asinh scale=0.5 on Ux+Uy
-- Huber δ=0.5 (tighter quadratic transition; merged via PR #3901 alphonse)
+- Huber δ=0.5 (tighter quadratic transition; PR #3901 alphonse)
 - slice_num=16 (PR #3854): biggest single win since SwiGLU
 - **slice_num=8 (PR #4062): val=56.90, test=55.98 (NEW)** — ~100 nodes per slice; trades in-dist for OOD gains
 
-### Confirmed mechanisms with broad-split improvement (pending re-test on new baseline)
-- **temperature_init=0.1** (tanjiro #3877): −2.62% val vs alphonse baseline; rebased to slice=16 (in-flight)
-
 ### What does NOT work
-- SGDR (any T_0 ≤ 15) in our 15-epoch budget — mathematically equivalent to baseline cosine (frieren #4065)
-- SGDR T_0=8 with δ=0.5 (frieren #4013 — restart bump destructive in 15-epoch budget)
-- slice_num=4 on slice=8 stack (fern #4080 — capacity cliff at 4 slice tokens)
-- RMSNorm replacing LayerNorm (edward #4075 — partial mechanism; in-dist val regresses)
-- temperature_init=0.1 at low slice_num (tanjiro #3877 — coupled with slice_num on softmax-sharpness axis; helpful only at slice_num ≥ 32)
-- p_weight=3.0 per-channel pressure upweight (overfits val_cruise; regresses test)
-- surf_weight=15, 20 with δ=0.5 (axis non-compounding)
-- lr=1e-3 with δ=0.5 (destabilizes)
-- wd=1e-3 super-compound (over-regularizes)
-- asinh_p_scale=2.0 (over-compresses)
-- n_layers=6, mlp_ratio>2, slice_num=128, n_head=8, DropPath, Mixup, LR warmup, vel-asinh scale<0.5
+- SGDR (any T_0 ≤ 15) in our 15-epoch budget — mathematically equivalent to baseline cosine
+- SGDR T_0=8 with δ=0.5 — restart bump destructive in 15-epoch budget
+- slice_num=4 on slice=8 stack — capacity cliff at 4 slice tokens
+- slice_num=12 (in-flight) likely small/no effect — slice axis bracketed by 8 and 16
+- RMSNorm replacing LayerNorm — partial mechanism; in-dist val regresses
+- temperature_init=0.1 at low slice_num — coupled with slice_num on softmax-sharpness axis; helpful only at slice_num ≥ 32
+- p_weight=3.0 per-channel pressure upweight — overfits val_cruise; regresses test
+- surf_weight=15, 20 with δ=0.5 — axis non-compounding
+- huber_delta=0.25 (3-seed confirmation) — δ axis saturated past 0.5
+- lr=1e-3 with δ=0.5 — destabilizes
+- n_head=4 (dim_head=32) at slice=8 — lost OOD-camber generalization
+- SWA K=5 tail averaging — needs converged trajectory; val swing −7 MAE in last 5 epochs
+- wd=1e-3 super-compound — over-regularizes
+- asinh_p_scale=2.0 — over-compresses
+- n_layers=6, mlp_ratio>2, slice_num=128, n_head=8, DropPath, Mixup, LR warmup, vel-asinh scale<0.5 (old baseline closures)
 
 ## Strategic outlook
 
 **Target**: val < 56. Current: 56.90. Need −1.6% more. (Test target: <55.0; current 55.98, need −1.8%.)
 
-### Round-12 axes being explored in parallel (current PR slate)
+### Round-13 axes being explored in parallel (current PR slate)
 
-**Architecture axes** (3):
-- slice_num=8 (fern, axis extension)
-- slice_num=12 (thorfinn, conservative bracket)
-- n_hidden=192 (askeladd, capacity-per-slice)
+**Regularization axis** (1, NEW):
+- attn_dropout=mlp_dropout=0.1 (fern #4138) — untested ever
 
-**Optimization axes** (3):
-- AdamW β2=0.95 (alphonse, faster 2nd-moment adaptation)
-- SGDR T_0=15 single-cycle (frieren, removed restart-bump)
-- SWA tail averaging (nezuko, ensemble of EMA shadows)
+**Loss axis** (1, NEW):
+- Asymmetric Huber δ_pos=0.25 / δ_neg=1.0 (frieren #4141) — pushes under-prediction harder
 
-**Normalization axis** (1):
-- RMSNorm vs LayerNorm (edward, scale-preservation)
+**Optimizer axes** (2):
+- AdamW β2=0.95 (alphonse #4067, slice=16 stale)
+- Lookahead k=5 α=0.5 wrapping AdamW (nezuko #4142, NEW) — in-training averaging
 
-**Attention axis** (1):
-- temperature_init=0.1 (tanjiro, rebased to new baseline)
+**Architecture axes** (2):
+- slice_num=12 (thorfinn #4066, slice=16 stale, conservative bracket)
+- n_hidden=192 (askeladd #4074, capacity-per-slice)
+- temperature_init=0.7 (tanjiro #4102, diffuse-softmax hypothesis at slice=8)
 
-### Pending follow-ups (queue for round-13)
-- If slice=8 wins big: try slice=4 to find true optimum on the slice axis
-- If RMSNorm wins: try Pre-LN+RMSNorm and AlphaInit
-- If SWA wins: try K=3 and K=10 to find optimum tail window
-- Mixed-δ schedule (δ=1.0 early, δ=0.5 late) — frieren's suggestion
-- Data augmentation (mesh rotation, Re jitter)
-- Lookahead optimizer
+**Data axis** (1):
+- asinh_vel_scale=1.0 (edward #4101, axis extension upward)
+
+### Pending follow-ups (queue for round-14)
+- If dropout wins: sweep at {0.05, 0.1, 0.2} to find optimum
+- If asymmetric Huber wins: try sign-flip ({1.0, 0.25}) to confirm direction
+- If Lookahead wins: try k=10 and α=0.3 to find optimum cadence
+- If multiple round-13 fail: **invoke researcher-agent for bold new directions** (per plateau protocol — bigger swings: SAM, layer-wise LR decay, AGC, divergence-free physics loss, knowledge distillation)
+- Mixed-δ schedule (δ=1.0 early, δ=0.5 late) — frieren's prior suggestion
+- Data augmentation (mesh rotation, Re jitter, target perturbation)
 - Surface-only p_weight (edward's follow-up; decoupled from volume)
 
 ## Operational notes
 
-- **GitHub REST rate limit**: still constrained (shared user ID 20516801 — students periodically hit 403); use GraphQL when possible
+- **GitHub REST rate limit**: still constrained (shared user ID 20516801); use GraphQL when possible
 - **data/scoring.py NaN bug**: cruise=NaN fleet-wide; use test_3split everywhere
-- **Per-run budget**: 30 min wall clock, ~15-17 epochs at slice=16 (~107s/epoch — slightly faster than slice=64)
-- **slice=16 dynamics**: epoch_time ~107s vs slice=64's ~124s → 14% faster per epoch (more capacity for SGDR or longer scheduling)
-- **GPU utilization**: 100% — all 8 students assigned active draft PRs as of 18:30 UTC
+- **Per-run budget**: 30 min wall clock, ~15-17 epochs at slice=8 (~107s/epoch)
+- **Single-seed variance**: ≈±3 val_avg units (frieren 3-seed measurement)
+- **stale_wip handling**: bump with status comment; do not assume crash — verify via kubectl pods + W&B run state
+- **GPU utilization**: 100% — all 8 students assigned active draft PRs as of 20:35 UTC

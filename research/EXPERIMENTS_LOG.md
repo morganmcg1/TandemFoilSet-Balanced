@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:35 — Round-12 final closures (3 more) + Round-13 new assignments (3 students)
+
+### Closed: PR #4100 (fern) — n_head=4 (dim_head=32) on slice=8
+
+Run reported val=58.2268 (+2.34% vs slice=8 baseline 56.8954), test_3split=57.1613 (+2.11% vs 55.9817). Hit failure-mode #1 from the brief (val > 58.0). **Mechanism**: dim_head=32 (half of n_head=2's dim_head=64) lost the per-head representational richness that slice=8's coarse pooling demanded. Per-split signature: val_geom_camber_cruise regressed materially while in-dist held — exactly inverted from slice=8's winning OOD signature. **Head axis closed at slice=8**: n_head=2 (dim_head=64) is the optimum and the n_head=8 (dim_head=16) failure was not just about head count but about representational width per head.
+
+### Closed: PR #4086 (frieren) — huber_delta=0.25 (3-seed methodology)
+
+3 seeds: val_avg = 60.02, 61.29, 63.33 (mean ≈ 61.55, all 3 regress materially). **Excellent methodological work** — establishes single-seed variance at ≈±3 val_avg on this stack (the spread). Closure is fully justified: even the best seed (60.02) is +3.1% over baseline. **Delta axis fully saturated past 0.5**: monotonically worsens for δ ∈ {0.25 below, 0.5 optimum, 1.0 above}. Do NOT try δ=0.1 — same direction, larger penalty for inlier residuals further over-shrinks fits. Frieren's suggestion: try **asymmetric Huber** (different δ for over- vs under-predictions) — assigned as PR #4141.
+
+### Closed: PR #4076 (nezuko) — SWA K=5 tail averaging
+
+`val_avg_swa = 60.4877` (+3.59%) vs final-epoch `val_avg = 59.281`. **SWA actively HURT vs no averaging**. Nezuko's root-cause is excellent: SWA averages the last K=5 EMA checkpoints, but our 30-min budget keeps the model still **descending hard** at epoch 17 (val swing −7.06 MAE between epoch 13 and epoch 17). SWA presumes a converged trajectory — we don't have one. **Closing this brings the post-merge close streak to 7 consecutive — plateau confirmed**. The right intervention for averaging-in-training is **Lookahead** (in-training k-step inner loop, no convergence required) — assigned as PR #4142.
+
+### Plateau analysis
+
+7 consecutive closes since the #4062 merge at 18:40 UTC (~2h), 0 winners. Closed axes:
+- Schedules: SGDR (any T_0 ≤ 15) ≈ baseline cosine
+- Slice: {4 cliff, 8 optimum, 16/32/64 worse}; 12 in-flight
+- Normalization: RMSNorm partial mechanism, mixed signal
+- Temperature: coupled to slice; sharp temps regress at slice ≤ 16
+- Head count: n_head=4 dim_head=32 too narrow at slice=8
+- Loss δ: symmetric Huber axis saturated; only asymmetric remains
+- Checkpoint averaging: SWA needs convergence we don't have
+
+**Strategy**: 1 more round of orthogonal-axis exploration (dropout, asymmetric Huber, Lookahead) before invoking researcher-agent for bigger swings.
+
+### Round-13 new assignments
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4138** | **fern** | attn_dropout=mlp_dropout=0.1 on slice=8 | **Regularization** (untested axis): forces redundant slice usage; targets dominant residual val_geom_camber_rc=70.07 |
+| **#4141** | **frieren** | Asymmetric Huber δ_pos=0.25, δ_neg=1.0 on slice=8 | **Loss asymmetry**: pushes under-prediction (suction-peak underestimate) harder than over-prediction (frieren's own follow-up) |
+| **#4142** | **nezuko** | Lookahead k=5 α=0.5 wrapping AdamW on slice=8 | **In-training averaging**: k-step inner loop with slow→fast pull; fixes SWA's convergence requirement (nezuko's domain) |
+
+All 3 stay on the current MERGED slice=8 + δ=0.5 stack; all 3 require minor `train.py` modifications (~20 lines each, well-established techniques). Expected outcomes:
+- Dropout < 56.5 → axis open, sweep {0.05, 0.1, 0.2}
+- Asymmetric Huber < 56.0 → real axis, try sign-flip ({1.0, 0.25})
+- Lookahead < 56.0 → tighter k+α sweep
+
+If all 3 close, plateau is confirmed deeper → **invoke researcher-agent** for bigger swings (SAM, AGC, layer-wise LR decay, divergence-free physics loss, knowledge distillation).
+
 ## 2026-05-16 19:30 — Round-12 closures: 3 axes closed, 3 new axes assigned
 
 ### Closed: PR #4080 (fern) — slice_num=4 saturation test
