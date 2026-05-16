@@ -350,7 +350,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 25.0
@@ -432,6 +432,8 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+nan_events: list[dict] = []
+halt_for_nan = False
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -442,6 +444,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    nan_count_epoch = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -461,6 +464,23 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
+        loss_finite = torch.isfinite(loss).item()
+        if not loss_finite:
+            nan_count_epoch += 1
+            evt = {
+                "event": "nan_loss",
+                "epoch": epoch + 1,
+                "step": n_batches,
+                "vol_loss": float(vol_loss.detach().item()) if torch.isfinite(vol_loss).item() else None,
+                "surf_loss": float(surf_loss.detach().item()) if torch.isfinite(surf_loss).item() else None,
+            }
+            nan_events.append(evt)
+            append_metrics_jsonl(metrics_jsonl_path, evt)
+            print(f"[NaN/Inf] epoch={epoch+1} step={n_batches} vol={evt['vol_loss']} surf={evt['surf_loss']}")
+            optimizer.zero_grad()
+            n_batches += 1
+            continue
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -474,6 +494,12 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+    if epoch < 3 and nan_count_epoch > 0:
+        print(f"[NaN/Inf] epoch {epoch+1} fired {nan_count_epoch} non-finite loss events (of {n_batches} batches).")
+    if nan_count_epoch >= max(5, n_batches // 5):
+        print(f"[HALT] epoch {epoch+1} had {nan_count_epoch}/{n_batches} non-finite loss events — stopping training (lr likely above bf16 stability ceiling).")
+        halt_for_nan = True
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
@@ -512,17 +538,30 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "nan_count_epoch": nan_count_epoch,
+        "lr_current": scheduler.get_last_lr()[0],
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  nan_events={nan_count_epoch}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    if halt_for_nan:
+        break
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+if nan_events:
+    print(f"Total NaN/Inf loss events: {len(nan_events)}")
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "training_done",
+    "total_time_min": total_time,
+    "total_nan_events": len(nan_events),
+    "halted_for_nan": halt_for_nan,
+})
 
 # --- Test evaluation + local summary ---
 if best_metrics:
