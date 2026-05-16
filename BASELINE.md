@@ -1,38 +1,45 @@
 # BASELINE — TandemFoilSet (willow-pai2i-24h-r4)
 
-## Current best — PR #3263 (thorfinn, merged 2026-05-15 21:55 UTC)
+## Current best — PR #3358 (alphonse, merged 2026-05-16 00:24 UTC)
 
-**FiLM(log_Re) conditioning on Transolver hidden state, on top of #3257 frieren surf-MAE+p_weight=3 base.**
+**Cosine LR schedule T_max=14 (matched to wall-clock epoch cap), on top of #3263 FiLM(log_Re) + #3257 surf-MAE+p_weight=3 base.**
 
 | Metric | Value | W&B run | Δ vs prior baseline |
 |--------|------:|---------|---------------------|
-| `val_avg/mae_surf_p` | **100.24** | `69jp9tvt` (thorfinn) | **−6.03%** (from 106.67) |
-| `test_avg/mae_surf_p` | **90.06** | `69jp9tvt` (thorfinn) | **−4.55%** (from 94.35) |
-| `test_single_in_dist/mae_surf_p` | 119.11 | `69jp9tvt` | −2.6% |
-| `test_geom_camber_rc/mae_surf_p` | 100.27 | `69jp9tvt` | −5.7% |
-| `test_geom_camber_cruise/mae_surf_p` | 58.62 | `69jp9tvt` | −6.2% |
-| `test_re_rand/mae_surf_p` | 82.27 | `69jp9tvt` | −4.6% |
+| `val_avg/mae_surf_p` | **90.4369** | `b9qv36aq` (alphonse) | **−9.78%** (from 100.24) |
+| `test_avg/mae_surf_p` | **80.0794** | `b9qv36aq` (alphonse) | **−11.08%** (from 90.06) |
+| `test_single_in_dist/mae_surf_p` | 96.49 | `b9qv36aq` | **−19.0%** |
+| `test_geom_camber_rc/mae_surf_p` | 90.24 | `b9qv36aq` | −10.0% |
+| `test_geom_camber_cruise/mae_surf_p` | 55.95 | `b9qv36aq` | −4.6% |
+| `test_re_rand/mae_surf_p` | 77.65 | `b9qv36aq` | −5.6% |
 
 ### What changed
-- **FiLM module added:** Zero-init `FiLM(cond_dim=1, hidden_dim=128, mid_dim=64)` injected between the preprocess MLP and the Transolver block stack. Conditioning is `x[..., 13:14]` (log_Re), a per-sample-global scalar.
-- **Subclassed model:** `TransolverFiLM` adds the FiLM head as a low-rank affine route from log_Re into every channel of the trunk's hidden state. +17K params (0.66M → 0.68M).
-- **All `_skipped_y_samples` confirmed:** cruise = 1 (canonical inherited from #3257), other splits = 0.
+- **Cosine `T_max` aligned to the wall-clock epoch cap.** Default `cosine_tmax: int = 14` added to Config; scheduler line uses `CosineAnnealingLR(optimizer, T_max=cfg.cosine_tmax)`.
+- **LR trace now decays cleanly to 0** at epoch 14 (epoch 1: 4.94e-04 → epoch 7: 2.50e-04 → epoch 10: 9.41e-05 → epoch 13: 6.27e-06 → epoch 14: 0.00).
+- **`train/lr` epoch logging** added for the LR trace.
+- **All other config unchanged** from #3263 (FiLM head + frieren's loss preserved through rebase).
+- **All `_skipped_y_samples` correct:** cruise = 1 (canonical), other splits = 0.
 
 ### Mechanism summary
-FiLM's gate gives the model an explicit, low-rank Re-conditioned affine modulation of the entire trunk's hidden state. While the merged loss already up-weights pressure 3× (capturing some Re-dependent physics through gradient flow), the FiLM gate adds a *structural* route for Re information that the loss alone cannot provide. Result: ~4.5% additional gain composes cleanly on top of frieren's loss reformulation.
+The previous baseline (`69jp9tvt`) was still training at LR ≈ 4.09e-04 (82% of peak) when the wall-clock cap hit at epoch 14 — the cosine schedule was set for `T_max=50` but only ~14 epochs ran. With `T_max=14`, the optimizer gets the full annealing tail and can settle into a noticeably tighter minimum on top of the better-conditioned loss + FiLM base. The mechanism is purely orthogonal to the loss reformulation and architecture work — three independent improvements stacking additively.
 
-### Model config (unchanged from #3257 except FiLM head)
+The largest per-split gain is on `test_single_in_dist` (−19.0%), the hardest split. On the old MSE base this was the only split where T_max=14 *lost* vs T_max=50 — on the new FiLM+MAE base it's the biggest winner, suggesting the schedule fix interacts constructively with the better loss/architecture.
+
+### Model config (unchanged from #3263 except cosine T_max)
 - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
 - `lr=5e-4, weight_decay=1e-4, batch_size=4, surf_weight=10, p_channel_weight=3, surface-MAE loss, epochs=50`
 - **FiLM:** `cond_dim=1 (log_Re), mid_dim=64, hidden=128, zero-init`
-- `dropout=0.0, grad_clip=none, warmup=none`, cosine LR `T_max=50` (still mismatched)
-- Peak VRAM: 43.6 GB / 96 GB, wall-clock: 31.8 min, 14 epochs of 50
+- **Cosine LR:** `T_max=14` (matched to wall-clock 14 epochs)
+- `dropout=0.0, grad_clip=none, warmup=none`
+- Peak VRAM: ~42 GB / 96 GB, wall-clock: 31.8 min, 14 epochs of 50
 
 ### Reproduce command
 
 ```bash
-cd target && python train.py --wandb_group film-re-cond --wandb_name film-re-v3-on-frieren-base
+cd target && python train.py --wandb_group cosine-tmax --wandb_name cosine-tmax14-on-film-base
 ```
+
+(No CLI override needed — `cosine_tmax=14` is now the default.)
 
 ---
 
@@ -40,7 +47,8 @@ cd target && python train.py --wandb_group film-re-cond --wandb_name film-re-v3-
 
 | Date | PR | Hypothesis | val_avg | test_avg | Merge |
 |------|----|------------|--------:|--------:|:-----:|
-| 2026-05-15 | #3263 (thorfinn) | FiLM(log_Re) conditioning on hidden state | **100.24** | **90.06** | ✓ R1#2 |
+| 2026-05-16 | #3358 (alphonse) | Cosine LR T_max=14 (matched to wall-clock cap) | **90.44** | **80.08** | ✓ R2#1 |
+| 2026-05-15 | #3263 (thorfinn) | FiLM(log_Re) conditioning on hidden state | 100.24 | 90.06 | ✓ R1#2 |
 | 2026-05-15 | #3257 (frieren) | Surface MAE + p-weight 3× + NaN guard | 106.67 | 94.35 | ✓ R1#1 |
 | — | vanilla (`xfayvdk2`, alphonse) | NaN-guarded baseline | 117.89 | 106.23 | pre-R1 anchor |
 | — | vanilla (`17fia1vd`, edward) | unguarded baseline | 128.34 | NaN | ref only |
