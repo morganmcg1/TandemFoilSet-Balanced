@@ -377,7 +377,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 2  # was 4
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
