@@ -525,7 +525,7 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(
-    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
+    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.95, 0.95)
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17)
 
@@ -547,6 +547,7 @@ run = wandb.init(
 )
 run.summary["model/param_count"] = n_params
 run.summary["model/ffn_param_count"] = n_ffn_params
+run.summary["optim/betas"] = [0.95, 0.95]
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
