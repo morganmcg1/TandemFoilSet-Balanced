@@ -44,6 +44,20 @@ L=8 is the optimal number of frequency bands on the new composed base.
 
 ---
 
+## 2026-05-16 — PR #3494: Default grad_clip flip 0.0 → 0.5 — **MERGED ✅ (operational)**
+
+- Student: `willowpai2i24h1-nezuko`
+- Hypothesis: Close the silent foot-gun where bare `python train.py` trains no-clip (~106) instead of the documented clip_0p5 best (~97).
+- One-line Config change: `grad_clip_max_norm: float = 0.0` → `grad_clip_max_norm: float = 0.5`
+
+| Run | wandb | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
+|-----|-------|--------------------|---------------------|-------|
+| default_clip_sanity | w8th8428 | 101.19 | 90.50 | confirms clip=0.5 auto-applied |
+
+**Decision: MERGED.** Operational hygiene — no metric improvement expected or required. All 4 test splits finite, grad_clip_max_norm=0.5 confirmed in W&B config tab. Post-merge, all students can drop the explicit flag.
+
+---
+
 ## 2026-05-16 01:00 — PR #3398: Charbonnier ε sweep (3e-4 / 1e-3 / 3e-3) — **CLOSED (null, ε=1e-3 default confirmed optimal)**
 
 - Student branch: `willowpai2i24h1-edward/charbonnier-eps-sweep`
