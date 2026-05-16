@@ -1,5 +1,62 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 08:50 — PR #3826: surf_weight sweep {7, 5} — ASSIGNED to frieren
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/surf_weight_sweep`
+- **Hypothesis:** Test whether the 10× surf_weight (giving 30× implicit surface-p bias with p_channel_weight=3) is still optimal now that FiLM(cond_dim=11, mid=128) provides explicit AoA/NACA/gap/stagger conditioning. Prior surf_weight=5 attempt (#3406) failed on old cond_dim=1 base; the new geometry-aware FiLM changes the hypothesis. Primary arm sw=7 (21× effective bias), optional sw=5 gated on sw=7 winning by >1 MAE unit.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 08:50 — PR #3825: Per-block FiLM (cond_dim=11, 5 heads) — ASSIGNED to nezuko
+
+- **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/per_block_film`
+- **Hypothesis:** Replace single block-0 FiLM gate with 5 per-block FiLM heads (one before each Transolver block), each conditioned on the same 11 dims (log_Re, AoA_1, NACA_1×3, AoA_2, NACA_2×3, gap, stagger). Deeper blocks lose geometry/regime signal through attention transforms — per-block re-injection should compound cruise+re_rand gains. +71K params (+10.1%), no attention FLOPs added. Zero-init preserved on each head.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 08:30 — PR #3504: Richer FiLM conditioning (cond_dim=11, film_mid=128) — MERGED (R3 winner #2)
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/richer_film`
+- **Hypothesis:** Extend FiLM conditioning from log_Re only (cond_dim=1) to all 11 per-sample-global scalars (log_Re, AoA_1, NACA_1×3, AoA_2, NACA_2×3, gap, stagger). Also widen film_mid from 64→128.
+- **W&B run (winner):** `v38snhoe` (film_mid=128); also ran `6lpw8m00` (film_mid=64)
+
+| Metric | Baseline (#3258) | mid64 arm | mid128 arm | Δ (mid128 vs baseline) |
+|--------|------:|-------:|-------:|---|
+| val_avg/mae_surf_p | 77.65 | 70.32 | **67.30** | **−13.31%** |
+| **test_avg/mae_surf_p** | **66.87** | **61.03** | **59.29** | **−11.34%** |
+| test_single_in_dist | 78.65 | 72.57 | 69.69 | −11.39% |
+| test_geom_camber_rc | 77.66 | 72.42 | 74.16 | −4.51% |
+| test_geom_camber_cruise | 46.17 | 39.66 | **36.63** | **−20.66%** |
+| test_re_rand | 65.00 | 59.47 | **56.69** | **−12.79%** |
+
+- **Results commentary:** Decisive mechanism win. AoA/NACA/gap/stagger conditioning orthogonal to RFF and grad-clip/warmup. Cruise (tandem-only) gains most (−20.66%) via gap/stagger features. re_rand gains −12.79%. The single_in_dist regression seen in R1 on old base is gone — RFF's spatial structure gives the model enough redundancy that FiLM's degenerate cond manifold on single-foil samples (6 zero features) doesn't hurt. mid128 > mid64 by ~3% test. Peak VRAM only 44.5 GiB. Rebased cleanly onto #3258.
+- **New baseline:** test_avg/mae_surf_p = **59.29** (cumulative −44.2% from vanilla in 6 PRs).
+- **Decision:** MERGED — decisive test win (−11.34%), +17,792 params (+2.5%), minimal VRAM.
+
+---
+
+## 2026-05-16 08:30 — PR #3618: Surface-only decoder head (parallel zero-init residual) — CLOSED (wash + regression)
+
+- **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/surf_head`
+- **Hypothesis:** Add parallel 128→128→3 residual head on surface nodes only, zero-init so model starts identical to baseline. Rationale: trunk compromised between surface (30× loss weight) and volume physics.
+- **W&B run:** `x8jwcej7`
+
+| Metric | Baseline (#3258) | PR #3618 | Δ |
+|--------|------:|-------:|---|
+| val_avg/mae_surf_p | 77.65 | 79.94 | +2.95% |
+| **test_avg/mae_surf_p** | **66.87** | **69.62** | **+4.11%** (regression) |
+| test_single_in_dist | 78.65 | 77.30 | −1.77% ✓ |
+| test_geom_camber_rc | 77.66 | 79.27 | +2.07% |
+| test_geom_camber_cruise | 46.17 | 50.53 | +9.43% ✗ |
+| test_re_rand | 65.00 | 71.38 | +9.81% ✗ |
+
+- **Results commentary:** Classic added-capacity-without-regularization on OOD splits (two ID splits improved, two OOD splits regressed). Net wash on old base (+0.50% vs prior #3262), clear regression (+4.11%) on new #3258 baseline. Zero-init epoch-1 parity confirmed (0.26%). The assumption was wrong: with surf_weight=10 × p_channel_weight=3 = 30× per-sample weighting, the shared trunk is already surface-biased by the loss. A dedicated head adds no new capacity — it trains on the same skewed gradient signal. Output-head specialization is not a missing degree of freedom on this baseline.
+- **Decision:** CLOSED — regression on current baseline.
+
+---
+
 ## 2026-05-16 07:22 — PR #3781: Re-conditioned loss reweighting α=1.0 — ASSIGNED to tanjiro
 
 - **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/re_loss_weighting`
