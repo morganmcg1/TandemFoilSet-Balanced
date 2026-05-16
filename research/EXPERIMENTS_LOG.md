@@ -1184,3 +1184,32 @@ Tanjiro now idle → assigned PR #3702 (batch-size-sweep).
   - nezuko: #3631 (Fourier spatial pos encoding)
   - tanjiro: #3425 (SF-AdamW head-to-head, rebase pending)
   - thorfinn: #3666 (LR sweep with compile — just assigned)
+
+## 2026-05-16 07:50 UTC — Loop 19 (frieren self-close + grad-clip assignment)
+
+**PR #3694 (frieren Bernoulli verify + enable) — CLOSED (self-closed by student)**
+- Same pattern as #3702 tanjiro in Loop 18: force-pushed and closed simultaneously at 07:37 UTC after Loop 17's baseline-update comment landed
+- No results submitted
+- Two students (tanjiro + frieren) self-closing after baseline shifts is now a recurring pattern — they appear to prefer fresh-axis assignments over re-running on a moved target
+- Reassigning frieren to a structurally different axis to avoid the moving-baseline issue
+
+**PR #3809 (frieren) — Gradient clipping sweep ASSIGNED**
+- Two arms: `--grad_clip_norm 1.0` (standard) vs `--grad_clip_norm 0.5` (tighter)
+- Confirmed via grep that train.py has **no gradient clipping** today — single-knob untested axis structurally orthogonal to all other in-flight work (LR/schedule/capacity/Bernoulli/slice_num/wd/Cp/Fourier)
+- Defensive measure that compounds with thorfinn's #3771 high-LR continuation (clipping is the standard remedy if high-LR instability appears at lr=1.5e-3 or 2e-3)
+- Cautious AdamW interaction analyzed: clipping preserves gradient direction (only rescales magnitude), so the sign-agreement test is unchanged. Cautious mask mean ~0.61 should be invariant. Hypothesis explicitly asks frieren to report mask mean per arm to verify.
+- Diagnostic logging: pre-clip gradient norm + fraction of steps where clipping fires (per arm) — tells us whether the experiment is doing real work or a near-no-op
+- Decision rule: merge the better arm if val_avg < 54.06. If both regress, close — no clipping is the local optimum at lr=1e-3.
+
+**Fresh baseline-update comments sent to #3547 (askeladd) and #3631 (nezuko)** — their previous baseline-update comments from Loops 15/17 still pointed at the old 61.20 baseline. Now updated to the post-#3666 target (val_avg=54.06, test_avg=48.14) and the lr=1e-3 + compile + T_max=25 + eta_min_factor=0.10 stack.
+
+**Pod state at loop 19 close:**
+- All 8 charlie-r5 pods should be alive. All 8 students have assigned PRs. Zero idle GPUs.
+  - alphonse: #3739 (slice_num sweep)
+  - askeladd: #3547 (Cp normalization, baseline-update sent, rebase pending)
+  - edward: #3463 (capacity revisit lr=1e-3 + n_hidden=192, sent back Loop 17)
+  - fern: #3665 (T_max=35 + lr=1e-3, sent back Loop 17)
+  - frieren: #3809 (grad clipping sweep — just assigned Loop 19)
+  - nezuko: #3631 (Fourier spatial pos encoding, baseline-update sent)
+  - tanjiro: #3785 (weight decay sweep, assigned Loop 18)
+  - thorfinn: #3771 (LR continuation lr=1.5e-3 vs 2e-3, assigned Loop 17)

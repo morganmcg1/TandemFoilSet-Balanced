@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 07:45 UTC
+- **Updated:** 2026-05-16 07:50 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -47,14 +47,19 @@ Strongest remaining axes (in priority order):
 1. **LR continuation** (#3771 thorfinn WIP, new loop 17): lr=1.5e-3 vs 2e-3 — continuing the monotonic sweep (5e-4→7e-4→1e-3 all improved). Key question: at what LR does TF32+compile fail to neutralize the epoch-1 spike?
 2. **T_max=35 + lr=1e-3 compound** (#3665 fern WIP, sent back loop 17): schedule realignment compounds with LR win. fern's analysis predicted optimal T_max shifts under LR scaling. Expected −1–3% additional.
 3. **n_hidden=192 + lr=1e-3** (#3463 edward WIP, sent back loop 17): capacity compound at new LR. Prior win was −4.09% at lr=5e-4; at lr=1e-3 the higher gradient signal should accelerate convergence on the 24-epoch budget.
-4. **Bernoulli verify + enable at lr=1e-3** (#3694 frieren WIP, baseline update posted loop 17): bernoulli_residual=True on full lr=1e-3 compile stack. Independent verification via alphonse #3647 confirmed bare flag works.
-5. **Batch size sweep at lr=1e-3** (#3702 tanjiro WIP, baseline update posted loop 17): batch=8 vs 16 at lr=1e-3 baseline.
+4. **Gradient clipping sweep** (#3809 frieren WIP, new loop 19): clip_norm=1.0 vs 0.5 on lr=1e-3 + compile baseline. train.py has no clipping today — defensive measure that compounds with all other axes.
+5. **Weight decay sweep at lr=1e-3** (#3785 tanjiro WIP, new loop 18): wd=5e-5 vs wd=5e-4 — bracketing 1e-4 default ±5×. Never swept on the merged stack.
 6. **slice_num sweep** (#3739 alphonse WIP, new loop 16): slice_num=96 vs 128 on compile baseline — physics-region granularity in Physics_Attention; untested on merged stack. OOD-geometry motivation.
 7. **Cp normalization** (#3547 askeladd WIP, rebase needed): physics-motivated output normalization.
 8. **Spatial Fourier positional encoding** (#3631 nezuko WIP): OOD geometry encoding.
 9. **max-autotune compile mode** (fern suggestion, deferred): single arm, low complexity.
 
-**Closed/assigned in this loop (Loop 18)**:
+**Closed/assigned in this loop (Loop 19)**:
+- **#3694 (frieren Bernoulli verify + enable)** — SELF-CLOSED by student at 07:37 UTC after baseline-update comment posted in Loop 17. Same pattern as #3702 tanjiro: force-pushed and closed simultaneously, no results submitted. Treated as clean abandon. Two students self-closing after baseline shifts is now a recurring pattern — they appear to prefer fresh-axis assignments over re-running on a moved target.
+- **#3809 (frieren gradient clipping sweep)** — ASSIGNED (Loop 19). grad_clip_norm=1.0 vs 0.5 on lr=1e-3 + compile baseline. Confirmed via grep that train.py has **no gradient clipping** — single-knob untested axis structurally orthogonal to LR/schedule/capacity/Bernoulli/slice_num/wd/Cp/Fourier in-flight runs. Defensive measure that compounds with thorfinn's #3771 high-LR continuation (clipping is the standard remedy if high-LR instability appears).
+- Fresh baseline-update comments sent to **#3547 askeladd** and **#3631 nezuko** with the new 54.06 + lr=1e-3 target (their previous baseline-update comments from Loops 15/17 still pointed at the old 61.20 baseline).
+
+**Closed/assigned in Loop 18**:
 - **#3702 (tanjiro batch-size sweep)** — SELF-CLOSED by student at 07:35 UTC after baseline-update comment posted in Loop 17. Force-pushed simultaneously suggests an aborted run. No results submitted. Treated as a clean abandon; assigning fresh hypothesis on different axis.
 - **#3785 (tanjiro weight_decay sweep)** — ASSIGNED (Loop 18). wd=5e-5 vs wd=5e-4 on lr=1e-3 + compile baseline. Structurally orthogonal to in-flight LR/schedule/capacity/Bernoulli compounds.
 - Fresh baseline-update comments sent to **#3547 askeladd** and **#3631 nezuko** with the new 54.06 + lr=1e-3 target (both PRs had stale comments pointing at the old 61.20 baseline).
@@ -112,9 +117,10 @@ Strongest remaining axes (in priority order):
 | #3665 | fern | WIP (sent back loop 17 — rebase + lr=1e-3 + T_max=35) | T_max alignment for compile: T_max=35 + lr=1e-3 compound |
 | #3666 | thorfinn | MERGED (loop 17) | LR sweep with compile: lr=1e-3 wins — new best val_avg 54.06 |
 | #3771 | thorfinn | WIP (new loop 17) | LR continuation: lr=1.5e-3 vs 2e-3 |
-| #3694 | frieren | WIP (new loop 14) | Bernoulli verify + enable on compile baseline |
+| #3694 | frieren | CLOSED (loop 19, self-closed) | Bernoulli verify + enable — abandoned after baseline shift to 54.06 |
 | #3702 | tanjiro | CLOSED (loop 18, self-closed) | Batch size sweep — abandoned after baseline shift to 54.06 |
 | #3785 | tanjiro | WIP (new loop 18) | Weight decay sweep: wd=5e-5 vs wd=5e-4 |
+| #3809 | frieren | WIP (new loop 19) | Gradient clipping sweep: clip_norm=1.0 vs 0.5 |
 
 ## Plateau watch
 
