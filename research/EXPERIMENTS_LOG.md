@@ -431,3 +431,40 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Key finding:** Lion + EMA + grad-clip already absorb the early-epoch instability the hypothesis worried about. Warmup is essentially zero-sum on this stack in a fixed budget: 2 epochs of slower learning that never get recovered. The val curve was still descending at ~2.3/epoch at end and `is_best` hit on every epoch — the diagnostic is real but the solution is not warmup. Reassigned edward to cosine-tmax-align (#3822): T_max=20/30 vs current 80 (cosine essentially constant at LR 0.85× initial through 18 epochs) — late-schedule complement to this early-schedule failure.
 
 ---
+
+## 2026-05-16 10:30 — PR #3822: Cosine T_max alignment (T_max=30)
+- charliepai2i48h2-edward/cosine-tmax-align
+- **Hypothesis:** CosineAnnealingLR(T_max=80) is essentially constant over 18 epochs (LR at 0.852× initial at epoch 18). T_max alignment to match realistic training budget gives meaningful late-epoch annealing.
+- **Result:** Arm B (T_max=30) **wins** — val 56.0011 (−4.88% vs 58.87). Arm A (T_max=20) neutral — val 59.08 (+0.36%).
+
+| Split | Baseline (PR #3485) | Arm B T_max=30 | Δ |
+|-------|---------------------|-----------------|---|
+| single_in_dist | 70.2014 | 62.2099 | −11.4% |
+| geom_camber_rc | 68.7070 | 68.5030 | −0.3% |
+| geom_camber_cruise | 39.0294 | 37.7010 | −3.4% |
+| re_rand | 57.5489 | 55.5904 | −3.4% |
+| **val_avg** | **58.8717** | **56.0011** | **−4.88%** |
+| **test_avg** | **51.6269** | **48.9470** | **−5.20%** |
+
+- **Metrics:** `models/model-charliepai2i48h2-edward-cosine-tmax-30-20260516-093553/metrics.jsonl`
+- **Decision:** MERGED — new baseline 56.0011. 7th compounding mechanism.
+- **Key finding:** Arm A (T_max=20) was nearly neutral while Arm B (T_max=30) won. The optimal schedule has LR ending at ~40% of initial (6.73e-5), providing meaningful annealing without giving up update magnitude. Lion's sign-based update is not LR-magnitude-insensitive at end of training — modest annealing helps. Val still descending monotonically at epoch 18 in both arms (no plateau), confirming runs remain timeout-bound. Cumulative improvement: 135.02 → 56.00 = −58.5%.
+
+---
+
+## 2026-05-16 10:30 — PR #3750: Capacity expansion on bf16 stack
+- charliepai2i48h2-alphonse/capacity-bf16
+- **Hypothesis:** bf16 freed 9 GB VRAM; moderate capacity bump (n_hidden=144 or n_layers=6) could fit within budget.
+
+| Run | Config | val_avg | test_avg | Epochs | t/epoch |
+|-----|--------|---------|---------|--------|---------|
+| Baseline | n128/5L/bf16 | 58.8717 | 51.6269 | 18 | 101s |
+| Arm A (run 1) | n_hidden=144 | 59.8474 | **51.4517** | 16 | 114.7s |
+| Arm A (re-run) | n_hidden=144 | 61.0179 | 52.6836 | 16 | 114.3s |
+| Arm B | n_layers=6 | 64.5683 | 55.9771 | 15 | 121.0s |
+
+- **Metrics:** `models/model-charliepai2i48h2-alphonse-capacity-n144-20260516-072226/metrics.jsonl`, `*-082212/metrics.jsonl`, `*-capacity-l6-20260516-092228/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. Arm B regresses >5%. Arm A within noise floor (~1.17pt variance between same-config runs).
+- **Key finding:** Per-epoch time +14-20% dropped epoch count 18→15-16, offsetting expressivity gain. Capacity expansion needs more wall-clock, not just memory headroom. Test metric mildly better than baseline (51.45 vs 51.63) despite val regression — suggests bigger model learns something useful but val checkpoint selection masked it. Reassigned alphonse to batch-size-bf16 (#3884).
+
+---
