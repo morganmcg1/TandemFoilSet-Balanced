@@ -1,5 +1,45 @@
 # SENPAI Research Results
 
+## 2026-05-16 09:25 — PR #3759: Per-point adaptive slice temperature — pending rebase on new baseline
+
+- **Student**: charliepai2i24h3-askeladd / `per-point-temp`
+- **Hypothesis**: Replace global slice temperature scalar τ with a per-node learned τ via `sigmoid(temp_proj(x_mid)) * 1.9 + 0.1`, letting each node choose its own slice-assignment sharpness
+- **Result vs OLD baseline (87.62)**: val_avg/mae_surf_p = **85.479** (Δ = **−2.14, −2.45%**) — **new-best on old baseline**
+
+| Split | #3759 (per-point-τ) | Old baseline (87.62) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 98.94 | 98.44 | +0.50 |
+| val_geom_camber_rc | 94.69 | 96.95 | −2.26 |
+| val_geom_camber_cruise | 66.40 | 71.27 | **−4.87** |
+| val_re_rand | 81.89 | 83.83 | −1.94 |
+| **val_avg** | **85.479** | **87.62** | **−2.14 ✓** |
+| test_avg (clean 3) | 82.165 | 84.10 est | −1.94 |
+
+- **τ statistics**: τ.std grew 0.24→0.41 over 19 epochs; full [0.12, 1.97] range; mechanism is NOT degenerating to a global scalar. Highest spread in early layers (layer 0: τ.std=0.45) confirming per-point clustering specialization.
+- **Params**: 662,504 (+145 vs baseline); Peak VRAM: 33.03 GB; ~96s/epoch, 19 epochs
+- **Status**: Sent back for **rebase onto current baseline** (icml-appendix-charlie-pai2i-24h-r3 includes PR #3753 feature clip). Re-run command: `python train.py --experiment_name per_point_temp_rebased`. Expected stacking outcome if orthogonal: val_avg ≈ 84.6.
+- **Key insight**: The per-point τ helps smooth flow regimes (cruise −4.87, re_rand −1.94) but doesn't fix val_single_in_dist (+0.50). The single_in_dist bottleneck is upstream of slice assignment (likely feature representation or loss). Per-point τ is +145 params, +0.27% VRAM — nearly free.
+
+---
+
+## 2026-05-16 09:20 — Round-5/6 closures: 4 refuted hypotheses
+
+| PR | Student | Hypothesis | val_avg | Δ vs 86.77 | Outcome |
+|---|---|---|---|---|---|
+| #3779 | thorfinn | Re-stratified loss (log(Re) sample weights) | 89.03 | +2.26 | **Refuted** — Re range too narrow [1.1×, 1.3×], weights nearly uniform, backfires on tandem |
+| #3754 | edward | Per-domain output normalization (split y stats) | val_single regressed +5.94 | severe | **Refuted** — per-domain norm trades implicit regularization for direct optimization; losses in single_in_dist variance unmasked; rebalancing worsens overall |
+| #3755 | fern | Stochastic Weight Averaging (SWA on cosine plateau) | 89.79 | +3.02 | **Refuted** — SWA worsens OOD generalization here; likely flattening overshoots into a poorer basin on this heterogeneous-mesh dataset |
+| #3756 | frieren | Gradient accumulation N=2 (effective batch=8) | stale_wip | — | **Stale** — no training output after branch creation; reassigned |
+
+### Cross-experiment signals from round-5/6 closures
+
+1. **Re stratification does not help when the Re range per-batch is too narrow.** The per-split Re distribution only spans [1.1×, 1.3×] within a training batch; uniform weights dominate. This approach requires wider Re diversity (e.g., explicitly sampling across decade boundaries).
+2. **Per-domain output normalization backfires.** Splitting y_mean/y_std trades the regularizing effect of shared output statistics for per-domain variance; on low-sample splits this increases noise. Implicit normalization in a unified head turns out to be better than explicit per-domain splitting at this data scale.
+3. **SWA is unsuitable for heterogeneous-mesh training.** Averaging weights across cosine phases does not help when each epoch sees structurally different mesh sizes (74K–242K nodes). The SWA weight trajectory samples an incoherent basin.
+4. **Pattern confirmed**: Any mechanism that redistributes loss signal away from tandem/OOD toward single_in_dist hurts tandem. Any mechanism that softens optimization hurts single_in_dist. The loss landscape around the current optimum is very asymmetric.
+
+---
+
 ## 2026-05-16 08:30 — PR #3753: DSDF clip → MERGED (new baseline 86.77)
 
 - **Student**: charliepai2i24h3-alphonse / `dsdf-clip`
