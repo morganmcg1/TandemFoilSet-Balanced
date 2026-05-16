@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-16 08:15 UTC
+- **As of:** 2026-05-16 09:30 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 6 active)
 - **Most recent human research direction:** None received.
@@ -70,12 +70,12 @@ The full current SOTA stack (7 levers stacked across 6 rounds):
 |---|---|---|---|---|
 | MED | #3640 | edward | EMA d=0.999 on T_max=21 | Post-rebase re-run in progress |
 | HIGH | #3801 | frieren | lr-refine: lr=2.5e-4 + T_max=25 | Training |
-| MED | #3821 | tanjiro | cosine-plateau-tail: plateau 1.4/2e-5 ep17-19 | NEW |
+| MED | #3821 | tanjiro | cosine-plateau-tail: plateau 1.4/2e-5 ep17-19 | NEW (Training) |
 | MED | #3590 | alphonse | clip=off arm | Running |
-| MED | #3745 | nezuko | H=160 + T_max=16 | Training |
-| MED | #3747 | fern | vol_loss p-weight | Training |
-| LOW | #3749 | askeladd | Lion β₁ sweep | Training |
-| LOW | #3751 | thorfinn | wd sweep | Training |
+| MED | #3745 | nezuko | H=160+T_max=16 / H=144+T_max=17 | Arm 1 finished val=65.78 (worse); Arm 2 running |
+| LOW | #3747 | fern | vol_loss p-weight 1.5/2.0 | Both arms finished: vol_p=1.5 val=65.17/test=61.02 (val-better, test-worse); re-run vol_p=2.0 in flight |
+| LOW | #3749 | askeladd | Lion β₁ sweep | Both arms finished: β=0.8 val=70.66, β=0.95 val=70.87 (both worse); awaiting terminal |
+| LOW | #3751 | thorfinn | wd sweep | wd=1e-3 ran 3× (val=65.92, test=61.90, all worse); **wd=5e-2 arm missing — nudged student** |
 
 ## Critical insight: EMA + T_max=21 mechanism overlap
 
