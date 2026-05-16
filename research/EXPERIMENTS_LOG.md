@@ -1,5 +1,60 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 10:35 — PR #3891: LayerNorm on FiLM conditioning input — ASSIGNED to thorfinn
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/layernorm_film_cond`
+- **Hypothesis:** Add LayerNorm on the 11-dim FiLM cond vector before the first Linear. Raw features have badly mixed scales (log_Re ~13 vs AoA ~0.1 vs gap ~0.5 vs NACA ~0.05). FiLM head has to learn implicit scale invariance with only ~5K steps. LayerNorm gives well-conditioned signal, frees FiLM capacity for actual feature interactions. +22 params, zero FLOP increase — free-lunch optimization in budget-constrained regime.
+- **Status:** WIP, smoke test mandatory first
+
+---
+
+## 2026-05-16 10:35 — PR #3890: p_channel_weight sweep {4, 5} — ASSIGNED to frieren
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/p_channel_weight_sweep`
+- **Hypothesis:** Following frieren's own #3826 finding (surf_weight reduction = uniform regression, FiLM and surf_weight are complementary not redundant), test the opposite direction: increase p_channel_weight from 3 to {4, 5}. Increasing p emphasis redistributes within-surface gradient toward the primary metric (mae_surf_p) without reducing total surface signal. Zero compute overhead — pure CLI flag. Primary arm pcw=4, gated arm pcw=5 if pcw=4 beats baseline by ≥0.5 MAE.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 10:30 — PR #3826: surf_weight sweep {7, 5} — CLOSED (regression, mechanistically informative)
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/surf_weight_sweep`
+- **Hypothesis:** Test whether 30× implicit surface bias (10×3) is over-tuned now that FiLM(cond_dim=11) provides explicit geometry conditioning.
+- **W&B run:** `45jsh9p1` (sw=7, sw=5 gated and skipped per protocol)
+
+| Metric | Baseline #3504 (sw=10) | sw=7 | Δ |
+|--------|------:|-------:|---|
+| val_avg/mae_surf_p | 67.30 | 68.75 | +2.16% |
+| **test_avg/mae_surf_p** | **59.29** | **60.89** | **+2.69% (regression)** |
+| test_single_in_dist | 69.69 | 71.00 | +1.31 |
+| test_geom_camber_rc | 74.16 | 77.07 | +2.91 |
+| test_geom_camber_cruise | 36.63 | 38.49 | +1.86 |
+| test_re_rand | 56.69 | 57.00 | +0.32 |
+
+- **Results commentary:** Mechanistic falsification — FiLM conditioning and surf_weight are **complementary, not redundant**. FiLM injects geometry priors into the forward pass (affine modulation); surf_weight controls which targets the optimizer prioritizes during backprop. Importantly, the camber-OOD splits (rc +2.91, cruise +1.86) regressed MOST — these are exactly the splits we'd expect to benefit if FiLM substituted for surf_weight. Instead, they're the most sensitive to weakening the surface gradient. Clean falsification.
+- **Decision:** CLOSED — regression. Student correctly stopped at one arm per gating criterion. Reassigned to p_channel_weight sweep (PR #3890) following their own suggested follow-up #2.
+
+---
+
+## 2026-05-16 10:30 — PR #3761: slice_num sweep {96, 128} — CLOSED (budget-limited regression, capacity vs compute lost)
+
+- **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/slice_num_cap`
+- **Hypothesis:** slice_num=64 is partition-limited on single_in_dist (78.65, largest absolute error on #3258 baseline). Test {96, 128} to expand attention partition diversity.
+- **W&B runs:** `zktfti2r` (smoke), `um7pnde4` (s=96, 12 epochs), `m4imamc2` (s=128, 11 epochs)
+
+| Metric | Baseline #3258 (s=64, t=14) | Arm A: s=96, t=12 | Arm B: s=128, t=10 |
+|--------|------:|-------:|-------:|
+| n_params | ~687K | 692,599 (+5.3K) | 697,879 (+10.6K) |
+| Epochs achieved | 14 | 12 | 11 |
+| val_avg/mae_surf_p | 77.65 | 86.56 | 91.80 |
+| **test_avg/mae_surf_p** | **66.87** | **75.26 (+12.6%)** | **83.27 (+24.5%)** |
+
+- **Results commentary:** Capacity-vs-compute trade-off **lost by budget**. Both arms hit LR=0 (cosine schedule terminus) while val is still descending steeply. s=96 dropped 88.99→86.56 in the FINAL epoch (still on steep curve); s=128 dropped 96.73→91.80 in epoch 10 (LR=0 reached early). Param delta was 5× smaller than predicted (5.3K/10.6K vs 33K/65K) — slice projection is much cheaper than back-of-envelope, but per-step time grew 15-25%, forcing 2-3 epoch loss. single_in_dist hit hardest (consistent with capacity-hungry but confounded with global undertraining). PR ran against then-current #3258 baseline (test=66.87); both arms also worse vs current #3504 baseline (test=59.29).
+- **Key insight:** Capacity hypothesis NEITHER confirmed NOR refuted at this compute envelope. The right falsification path is slice-softmax entropy logging (student's suggested follow-up #4), not raw slice_num bumps.
+- **Decision:** CLOSED — clear regression. Reassigned to LayerNorm-on-FiLM-cond (PR #3891) — free-lunch optimization in same budget-constrained regime.
+
+---
+
 ## 2026-05-16 08:50 — PR #3826: surf_weight sweep {7, 5} — ASSIGNED to frieren
 
 - **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/surf_weight_sweep`
