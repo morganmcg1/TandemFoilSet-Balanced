@@ -390,6 +390,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
+    p_surf_weight: float = 1.0  # multiplier on pressure channel inside surf_loss; 1.0 = no change
 
 
 cfg = sp.parse(Config)
@@ -439,6 +440,12 @@ ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
     p.requires_grad_(False)
 ema_decay = cfg.ema_decay
+
+# Per-channel multiplier inside surf_loss: [Ux=1, Uy=1, p=cfg.p_surf_weight].
+# 1.0 reproduces the prior uniform reduction; >1.0 upweights pressure gradients.
+surf_channel_weights = torch.tensor(
+    [1.0, 1.0, cfg.p_surf_weight], device=device, dtype=torch.float32
+)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -505,7 +512,14 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_mask_f = surf_mask.unsqueeze(-1)
+        surf_denom = surf_mask.sum().clamp(min=1)
+        surf_loss = (elem_loss * surf_channel_weights * surf_mask_f).sum() / surf_denom
+        # Unweighted pressure-channel component of surf_loss, for diagnosing
+        # whether p_surf_weight actually shifted the per-channel loss balance.
+        surf_loss_p_component = (
+            elem_loss[..., 2] * surf_mask
+        ).sum() / surf_denom
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -520,7 +534,11 @@ for epoch in range(MAX_EPOCHS):
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        step_log = {
+            "train/loss": loss.item(),
+            "train/surf_loss_p_component": surf_loss_p_component.item(),
+            "global_step": global_step,
+        }
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
         wandb.log(step_log)
