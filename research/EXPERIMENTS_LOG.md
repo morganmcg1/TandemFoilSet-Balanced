@@ -922,4 +922,45 @@ vs **NEW canonical (54.494)**: freqs=4 at 54.895 is +0.73% WORSE. Cannot merge. 
 - Hypothesis: bf16 forward pass gives 1.5-2x throughput → ~20 effective epochs vs 14 under 30-min cap. Diagnostic for compute-bound vs memory-bandwidth-bound. No GradScaler needed (bfloat16 has float32 dynamic range).
 - Run 2 arms: baseline-fp32 vs variant-bf16, `bf16-autocast-sweep`
 - Key metric: steps/sec (throughput diagnosis), val_avg/mae_surf_p, epochs completed
+
+## 2026-05-16 14:28 — PR #3947 (alphonse): Lookahead wrapper on SOAP k=5 — SENT BACK
+
+- Branch: `willowpai2i48h3-alphonse/lookahead-soap`
+- W&B runs: `rbic276j` (baseline), `gv06bo6w` (k=5), `sj5osp3c` (k=10)
+
+| Arm | Lookahead | val_avg/mae_surf_p | Δ within-PR | test_excl_cruise |
+|---|---|---|---|---|
+| Arm 1 baseline (no-Lookahead, freq=10) | — | 54.6343 | — | 54.413 |
+| **Arm 2 k=5** | k=5, α=0.5 | **52.0057** | **−4.81%** | 52.650 |
+| Arm 3 k=10 | k=10, α=0.5 | 52.4512 | −4.00% | 52.308 |
+
+**Analysis:** Clean within-PR signal — Lookahead k=5 wins. Mechanism: slow-weight sync every k=5 steps averages out stale SOAP preconditioner noise. k=5 matches preconditioner refresh cycle (precond_freq=5 in canonical). However:
+- Student used **precondition_frequency=10 (default)** — NOT canonical freq=5. Baseline arm (54.63) is +4.07% above canonical (52.494), larger than expected freq gap of 1.78%.
+- After fern #3868 merge, new canonical is val=50.5133 — Lookahead k=5 result (52.0057) no longer beats canonical.
+- Test regression vs old canonical: 52.650 vs 51.220 (+2.79% worse).
+
+**Decision: SENT BACK** — re-run 2 arms (baseline vs Lookahead k=5) with `--precondition_frequency 5 --huber_beta 0.1` to test on actual current canonical. Mechanism is theoretically sound and within-PR signal is real.
+
+## 2026-05-16 14:26 — PR #3868 (fern): Huber beta=0.1 — **MERGED (new canonical)**
+
+- Branch: `willowpai2i48h3-fern/huber-beta-finer-sweep`
+- W&B runs: `xyenxqp9` (β=0.5), `9vvgvg86` (β=0.25), `3yejzgk1` (β=0.1)
+
+| Arm | huber_beta | val_avg/mae_surf_p | Δ vs baseline-arm | test_excl_cruise |
+|---|---|---|---|---|
+| Arm 1 baseline (β=0.5) | 0.5 | 53.6946 | — | 52.9043 |
+| Arm 2 variant (β=0.25) | 0.25 | 51.6800 | −3.75% | 51.0630 |
+| **Arm 3 winner (β=0.1)** | 0.1 | **50.5133** | **−5.92%** | **49.8493** |
+
+**Analysis:** Monotone trend confirmed through full range {0.5, 0.25, 0.1}. Every test split improves with smaller β. β=0.1 is essentially pure L1 for |r|>0.1 — SOAP+EMA handles the noisier gradient direction robustly. **Beats Cauchy canonical (52.494/51.220) by −3.77% val / −2.68% test.** Huber with very small β outperforms Cauchy's logarithmic redescending function on this benchmark — possibly because SOAP's adaptive preconditioning already handles curvature, making the outlier-robustness mechanism of Cauchy redundant.
+
+**Merge decision:** MERGED as new canonical. val=50.5133, test=49.8493.
+Also identified and fixed BASELINE.md reproduce command bug — missing `--precondition_frequency 5` flag in all reproduce commands.
+
+## 2026-05-16 14:55 — PR #4010 fern assigned: Huber beta lower bound sweep
+
+- willowpai2i48h3-fern/huber-beta-lower-bound
+- Hypothesis: Monotone trend β={0.5, 0.25, 0.1} has not plateaued. β={0.05, 0.025, 0.01} will find the true minimum, potentially approaching pure L1. If still monotone at β=0.01, pure MAE (L1 loss) is the logical next step.
+- Run 4 arms: β=0.1 baseline (verify freq=5 canonical), β=0.05, β=0.025, β=0.01
+- All arms with `--precondition_frequency 5` (explicit, not default=10)
 - Note: SOAP.step() stays in float32 (outside autocast). Only forward+loss wrapped.
