@@ -356,6 +356,7 @@ class Config:
     huber_delta: float = 1.0
     cosine_t_max: int = 20
     epochs: int = 50
+    re_weight_global_max: float = 15.424665  # log(5e6); global normalizer for per-sample log(Re) surface-loss weighting
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -427,6 +428,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+re_weight_logged = False  # diagnostic log on first batch only
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -436,6 +438,10 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_re_weight_min = float("inf")
+    epoch_re_weight_max = -float("inf")
+    epoch_re_weight_sum = 0.0
+    epoch_re_weight_n = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -446,14 +452,46 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Per-sample log(Re) surface-loss weight (PR #3779).
+        # Re is constant across all real nodes within a sample; pad_collate puts
+        # real nodes at position 0, so the first node's log(Re) is exact.
+        log_re_per_sample = x_norm[:, 0, 13] * stats["x_std"][13] + stats["x_mean"][13]  # [B]
+        re_weight = (log_re_per_sample / cfg.re_weight_global_max).clamp(max=1.0)  # [B], in ~[0.75, 1.0]
+
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
             pred = model({"x": x_norm})["preds"]
             sq_err = F.huber_loss(pred, y_norm, reduction='none', delta=cfg.huber_delta)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Surface loss: keep baseline's node-weighted denominator so re_weight=1
+            # exactly recovers the baseline; high-Re samples (closer to 1.0) keep
+            # full gradient signal, low-Re samples (~0.75) are damped.
+            re_weight_bcast = re_weight.to(sq_err.dtype).view(-1, 1, 1)  # [B, 1, 1]
+            surf_loss = (
+                (sq_err * surf_mask.unsqueeze(-1) * re_weight_bcast).sum()
+                / surf_mask.sum().clamp(min=1)
+            )
             loss = vol_loss + cfg.surf_weight * surf_loss
+
+        if not re_weight_logged:
+            print(
+                f"  [re_weight diag] log_re per sample: min={log_re_per_sample.min().item():.3f} "
+                f"max={log_re_per_sample.max().item():.3f} mean={log_re_per_sample.mean().item():.3f}"
+            )
+            print(
+                f"  [re_weight diag] re_weight per sample: min={re_weight.min().item():.4f} "
+                f"max={re_weight.max().item():.4f} mean={re_weight.mean().item():.4f}"
+            )
+            re_weight_logged = True
+
+        rw_min = re_weight.min().item()
+        rw_max = re_weight.max().item()
+        epoch_re_weight_min = min(epoch_re_weight_min, rw_min)
+        epoch_re_weight_max = max(epoch_re_weight_max, rw_max)
+        epoch_re_weight_sum += re_weight.sum().item()
+        epoch_re_weight_n += re_weight.numel()
 
         optimizer.zero_grad()
         loss.backward()
@@ -489,6 +527,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    epoch_re_weight_mean = epoch_re_weight_sum / max(epoch_re_weight_n, 1)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -496,6 +535,9 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/re_weight_min": epoch_re_weight_min,
+        "train/re_weight_max": epoch_re_weight_max,
+        "train/re_weight_mean": epoch_re_weight_mean,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
