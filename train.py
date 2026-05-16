@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -386,11 +387,19 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # Input jitter augmentation (training only). Both default to 0 = disabled.
+    # sigma_re_rel applies N(0, sigma) directly to log(Re) (dim 13) — equivalent
+    # to ~sigma relative Gaussian noise on Re for small sigma. sigma_aoa_deg is
+    # in degrees and converted to radians internally before being applied to
+    # AoA foil 1 (dim 14) and AoA foil 2 (dim 18, tandem samples only).
+    sigma_re_rel: float = 0.0
+    sigma_aoa_deg: float = 0.0
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+SIGMA_AOA_RAD = cfg.sigma_aoa_deg * math.pi / 180.0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -490,6 +499,22 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if cfg.sigma_re_rel > 0.0 or SIGMA_AOA_RAD > 0.0:
+            # Per-sample physical-prior jitter, broadcast across all real nodes.
+            B = x.shape[0]
+            real = mask.to(x.dtype)
+            if cfg.sigma_re_rel > 0.0:
+                re_jit = torch.randn(B, 1, device=x.device, dtype=x.dtype) * cfg.sigma_re_rel
+                x[..., 13] = x[..., 13] + re_jit * real
+            if SIGMA_AOA_RAD > 0.0:
+                aoa1_jit = torch.randn(B, 1, device=x.device, dtype=x.dtype) * SIGMA_AOA_RAD
+                x[..., 14] = x[..., 14] + aoa1_jit * real
+                # AoA foil 2 (dim 18) only meaningful for tandem samples — detect
+                # via NACA thickness foil 2 (dim 21) which is >0 for tandem, 0 for single.
+                tandem = (x[..., 21].abs().amax(dim=1, keepdim=True) > 0).to(x.dtype)
+                aoa2_jit = torch.randn(B, 1, device=x.device, dtype=x.dtype) * SIGMA_AOA_RAD
+                x[..., 18] = x[..., 18] + aoa2_jit * tandem * real
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
