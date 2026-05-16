@@ -449,14 +449,24 @@ class Config:
     amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
+    p_weight: float = 1.0    # per-channel weight on pressure inside surf_loss
+    seed: int = 42           # fixed seed for reproducibility
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+import random
+import numpy as np
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+np.random.seed(cfg.seed)
+random.seed(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Seed: {cfg.seed}  p_weight (surf): {cfg.p_weight}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -575,7 +585,13 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Per-channel weights inside surf_loss. Channel order is (Ux, Uy, p);
+        # p_weight upweights only the pressure channel since `mae_surf_p` is
+        # the ranking metric.
+        surf_ch_w = torch.tensor(
+            [1.0, 1.0, cfg.p_weight], device=sq_err.device, dtype=sq_err.dtype
+        )
+        surf_loss = ((sq_err * surf_ch_w) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
