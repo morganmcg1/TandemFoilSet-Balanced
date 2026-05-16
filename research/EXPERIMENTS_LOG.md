@@ -1,5 +1,26 @@
 # SENPAI Research Results
 
+## 2026-05-16 08:30 — PR #3753: DSDF clip → MERGED (new baseline 86.77)
+
+- **Student**: charliepai2i24h3-alphonse / `dsdf-clip`
+- **Hypothesis**: Clip input features at ±3σ post-normalization (global, all 24 dims)
+- **Result**: val_avg/mae_surf_p = **86.767** (prior baseline 87.62, Δ = **−0.85**)
+
+| Split | #3753 (clip) | Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 102.00 | 98.44 | +3.56 (**regressed**) |
+| val_geom_camber_rc | 93.75 | 96.95 | −3.20 |
+| val_geom_camber_cruise | 69.15 | 71.27 | −2.12 |
+| val_re_rand | 82.17 | 83.83 | −1.66 |
+| **val_avg** | **86.77** | **87.62** | **−0.85 ✓** |
+| test clean-3 | 83.45 | 84.10 | −0.64 |
+
+- **Metric artifacts**: `models/model-dsdf_clip-20260516-073513/metrics.jsonl`
+- **Key insight**: DSDF dims 4-11 had 0% clipping — the gain came entirely from position (dims 0-1) and saf (dims 2-3) tail clipping. val_single_in_dist regressed because clipping removes informative far-field boundary nodes from single-foil meshes (wider spatial extent, no second foil). **MERGED as winner; new baseline = 86.77.**
+- **Follow-up assigned**: #3818 surgical clip (dims 0-3 only) vs tanh soft-clip
+
+---
+
 ## 2026-05-16 07:35 — Round-5 partial close: 3 PRs closed, 5 still running
 
 | PR | Student | Hypothesis | val_avg / outcome | Notes |

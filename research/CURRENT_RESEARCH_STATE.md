@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-16 ~07:40 UTC
+- **Last updated**: 2026-05-16 ~08:35 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -8,17 +8,19 @@
 
 ## Current best baseline
 
-- `val_avg/mae_surf_p` = **87.62** (PR #3513, edward, `cosine-schedule-match`, epoch 19)
-- **MERGED 2026-05-16 00:40 UTC**
-- Change from BF16 baseline (97.55): set `cosine_t_max=20` so LR fully anneals within 19-epoch budget. Zero overhead — same epochs, same VRAM, same throughput. Pure scheduling gain.
+- `val_avg/mae_surf_p` = **86.77** (PR #3753, alphonse, `dsdf-clip`, epoch 19)
+- **MERGED 2026-05-16 08:30 UTC**
+- Change: `x_norm = x_norm.clamp(-3.0, 3.0)` after feature normalization (global, all 24 dims). Actual gain from clipping position/saf tails (dims 0-3, ~2-3% clipped). DSDF dims (4-11) had 0% clipping. val_single_in_dist regressed +3.56 — follow-up #3818 tests surgical and soft clip.
 
-| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
-|---|---|---|---|
-| val_single_in_dist | 98.44 | 1.174 | 0.616 |
-| val_geom_camber_rc | 96.95 | 1.923 | 0.837 |
-| val_geom_camber_cruise | 71.27 | 0.782 | 0.493 |
-| val_re_rand | 83.83 | 1.356 | 0.647 |
-| **val_avg** | **87.62** | 1.230 | 0.608 |
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 102.00 |
+| val_geom_camber_rc | 93.75 |
+| val_geom_camber_cruise | 69.15 |
+| val_re_rand | 82.17 |
+| **val_avg** | **86.77** |
+
+_Prior best (for tracking): PR #3513, val_avg=87.62. Cumulative stack: BF16 + Huber δ=1.0 + cosine T_max=20 + global ±3σ clip._
 
 ## Plateau status — round 5 in flight
 
@@ -41,6 +43,7 @@
 | # | Student | Slug | Status | Hypothesis |
 |---|---|---|---|---|
 | **#3759** | **askeladd** | **`per-point-temp`** | **WIP — round 6 (rank 1)** | Per-point adaptive slice temperature (Transolver++) — targets val_single_in_dist |
+| **#3818** | **alphonse** | **`surgical-clip`** | **WIP — NEW clip follow-up** | Surgical dims-0-3 clip vs tanh soft-clip — recover single_in_dist from +3.56 regression |
 | **#3778** | **tanjiro** | **`rmsnorm`** | **WIP — NEW round 6** | RMSNorm replacement for LayerNorm — LLaMA-family normalization, BF16 stability |
 | **#3779** | **thorfinn** | **`re-stratified-loss`** | **WIP — NEW round 6 (rank 5)** | log(Re)-weighted surface loss per sample — physical hardness proxy targets single_in_dist |
 | **#3780** | **nezuko** | **`focal-loss`** | **WIP — NEW round 6 (rank 10)** | EMA per-sample focal weight γ=2 — adaptive Kaggle-style hard-sample focus |
