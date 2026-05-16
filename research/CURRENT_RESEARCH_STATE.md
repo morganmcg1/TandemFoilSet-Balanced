@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 08:15 UTC (Cycle 19 — plateau-break round launched; 0 idle students)
+- **Date:** 2026-05-16 08:40 UTC (Cycle 20 — close 2 PRs, full plateau-break round (8/8) now in flight)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -19,8 +19,6 @@ None — no human directives on this launch.
 - W&B run: `dqe95m2e`
 - Per-split (val | test): single=87.96|77.57, camber_rc=89.40|80.45, camber_cruise=55.59|47.92, re_rand=73.48|66.86
 
-**SWA mechanism:** `AveragedModel` with per-step updates starting at epoch 8/13 (swa_start_epoch=7, 0-indexed). Best-val ckpt alone (val=80.62, test=71.96) does NOT beat prior baseline — the SWA averaging is the key. Zero GPU memory overhead. Now default in `train.py`.
-
 ### Merge history
 | Date | PR | Title | val_avg | test_avg | Δ val_avg |
 |---|---|---|---|---|---|
@@ -30,51 +28,69 @@ None — no human directives on this launch.
 | 2026-05-16 03:30 | #3350 | FiLM-Re conditioning | 79.90 | 69.33 | −11.8% |
 | **2026-05-16 08:00** | **#3669** | **SWA on FiLM-Re** | **76.61** | **68.20** | **−4.1%** |
 
-## Cycle 19 actions (just executed)
+## Cycle 20 actions (just executed)
 
-**Closed** (no longer compounding against new SWA baseline):
-- PR #3356 (thorfinn) — divergence-free aux loss; student replied "Option A — closing" with mechanistic reasoning that FiLM-Re's per-block Re-conditioning already imposes a physics-aware prior the div-free penalty competes with.
-- PR #3653 (frieren) — Fourier bands=16; student's own SENPAI-RESULT recommended closure (3-seed mean misses both baselines by 6-11%; sample-complexity-limited at 13 epochs, not capacity-limited).
-- PR #3207 (nezuko) — FiLM-Re + geom-slice v2 compound; v2 primary (usqypjfh) val=81.90 / test=73.82 vs SWA 76.61/68.20. Per-split signature shows OOD splits regressing while in-dist improves — exactly the wrong direction for an inductive-bias improvement.
+**Closed** (2 PRs, both with student-recommended closure and thorough mechanistic analyses):
 
-**Assigned** (3 new plateau-break experiments now running):
+- **PR #3670 (askeladd, surf_weight sweep)** — best arm sw=15 val=82.56/test=76.05 vs SWA 76.61/68.20 (+7.8% val, +11.5% test). Curve mapped at {5,10,15,20} — sw=10 wins. Load-bearing insight from student: volume loss is a *structural prior* for surface generalisation, not just a regulariser (camber holdouts most volume-sensitive).
+- **PR #3657 (alphonse, multi-signal FiLM cond_dim=5)** — 3-seed clean negative (mean val=82.24, test=73.30; +7.4%/+7.5%). Regression driven entirely by single_in_dist (+15% val). Student diagnosis: FiLM bottleneck is narrow (`Linear(cond_dim, 32) → GELU → Linear(32, 2·hidden)`), wider input through fixed bottleneck doesn't help; geometry info redundant with per-node features.
+
+**Assigned** (2 new plateau-break experiments now running):
 
 | Student | PR | Idea | Why this student |
 |---|---|---|---|
-| thorfinn | #3813 | Per-Sample Re-Scaled Normalization (Idea 1, ranked #1 by researcher-agent) | Strong physics-loss/scaling instincts; this is the loss-side analog of FiLM-Re |
-| frieren | #3816 | Stochastic Depth / LayerDrop sweep {0.05, 0.10, 0.15} (Idea 6) | Has demonstrated clean multi-seed sweep methodology |
-| nezuko | #3820 | Residual learning over linear baseline (Idea 2, DeltaPhi-style) | Meticulous data-side work; found the scoring.py NaN bug |
+| alphonse | #3828 | Low-rank hypernetwork Re conditioning on PhysicsAttention to_v (Idea 4) | Alphonse built FiLM-Re; diagnosed bottleneck issue cleanly; hypernetwork is the natural "widen the bottleneck" follow-up they proposed |
+| askeladd | #3831 | Bernoulli consistency aux loss (Idea 8) | Askeladd's surf_weight closing insight (volume-as-structural-prior, channel coupling matters) motivates the Bernoulli p+0.5|U|² approach directly |
 
-## Active Research Directions — Cycle 19 in-flight (8 WIP)
+## Active Research Directions — Cycle 20 in-flight (8 WIP, 0 idle)
 
-| PR | Student | Hypothesis | Status |
+All 8 students now running plateau-break experiments spanning 6 orthogonal mechanisms:
+
+| PR | Student | Idea / Mechanism | Status |
 |---|---|---|---|
-| #3657 | alphonse | Multi-signal FiLM cond_dim=5/9 (geometry-augmented FiLM) | WIP, SENPAI-RESULT pending |
-| #3670 | askeladd | surf_weight sweep {5,15,20} on FiLM-Re | WIP, SENPAI-RESULT pending |
-| #3799 | edward | EMA vs uniform SWA (decay sweep) | WIP |
-| #3803 | tanjiro | SWA start epoch sweep {4,6,8,10} | WIP |
-| #3806 | fern | Surface-Dedicated Refinement MLP (Idea 3) | WIP |
-| **#3813** | **thorfinn** | **Per-Sample Re-Scaled Norm (Idea 1)** | **NEW — just assigned** |
-| **#3816** | **frieren** | **Stochastic Depth / LayerDrop sweep (Idea 6)** | **NEW — just assigned** |
-| **#3820** | **nezuko** | **Residual learning over linear baseline (Idea 2)** | **NEW — just assigned** |
+| **#3799** | edward | EMA vs uniform SWA (decay sweep) — SWA mechanism variant | WIP, started cycle 18 |
+| **#3803** | tanjiro | SWA start epoch sweep {4,6,8,10} — SWA mechanism variant | WIP, started cycle 18 |
+| **#3806** | fern | Surface-Dedicated Refinement MLP (Idea 3) | WIP, started cycle 18 |
+| **#3813** | thorfinn | Per-Sample Re-Scaled Normalization (Idea 1, rank #1) | WIP, started cycle 19 |
+| **#3816** | frieren | Stochastic Depth / LayerDrop sweep (Idea 6) | WIP, started cycle 19 |
+| **#3820** | nezuko | Residual learning over linear baseline (Idea 2) | WIP, started cycle 19 |
+| **#3828** | alphonse | Low-rank hypernetwork Re conditioning (Idea 4) | **NEW — just assigned** |
+| **#3831** | askeladd | Bernoulli consistency aux loss (Idea 8) | **NEW — just assigned** |
 
-## Plateau-break strategy (this cycle)
+## Plateau-break strategy (full coverage now)
 
-The researcher-agent's cycle-15 diagnosis identifies three orthogonal axes that haven't been pulled:
+Six orthogonal mechanisms covering the researcher-agent's cycle-15 plateau diagnosis:
 
-1. **Loss-side** — directly condition the OBJECTIVE on Re (per-sample normalization), not just the model weights. (#3813 thorfinn)
-2. **Regularization-side** — stochastic depth implicitly ensembles sub-networks and reduces per-step compute. Orthogonal to FiLM-Re and SWA. (#3816 frieren)
-3. **Target-side** — residualize the target with a linear baseline, reducing magnitude and freeing capacity for the nonlinear physics. (#3820 nezuko)
+1. **SWA tuning** (edward EMA, tanjiro start-epoch): refine the SWA win itself.
+2. **Surface specialisation** (fern): add capacity dedicated to the metric-relevant nodes.
+3. **Loss-side normalisation** (thorfinn): directly condition the OBJECTIVE on Re.
+4. **Regularisation** (frieren): stochastic depth as orthogonal ensemble.
+5. **Target-side** (nezuko): residualize target with linear baseline.
+6. **Conditioning expressivity** (alphonse): weight-generating hypernetwork generalises FiLM beyond diagonal modulation.
+7. **Physics coupling** (askeladd): Bernoulli aux loss explicitly couples (p, Ux, Uy).
 
-In parallel, edward (#3799), tanjiro (#3803), and fern (#3806) are exploring SWA mechanism variants and surface-specialized capacity. Total coverage: 8 active experiments spanning 5 orthogonal mechanisms.
+This is the broadest mechanism-coverage round so far. If 2-3 of these compound, val can plausibly reach the 72-74 range targeted.
 
 ## Goal
 
-Push val < 72, test < 65. SWA broke the 79.90 → 76.61 plateau. The next break needs to come from one of the 8 active mechanisms above — most likely loss-side or target-side (Idea 1 or 2 in the researcher-agent's ranking).
+Push val < 72, test < 65. SWA broke the 79.90 → 76.61 plateau. Cycle 20 has 8 orthogonal mechanisms running simultaneously — at least one is likely to show signal in the next 30-90 minutes as runs complete.
 
-## Architecture tier (if plateau-break round stalls)
+## Architecture tier (if cycle-20 round stalls)
 
-- Hypernetwork Re conditioning (Idea 4) — only after low-risk ideas have results
 - Multiscale mesh pooling / domain-aware coarsening (Idea 5) — staged probe first
-- Bernoulli consistency aux loss (Idea 8) — if ideas 1-4 fail
 - GNN over mesh / Galerkin transformer / FNO hybrid — architecture-tier reset
+- Boundary-first tokenization (SpiderSolver-style) — surface-specialised architecture
+- Re-trigger researcher-agent for fresh ideas if all 8 cycle-20 mechanisms underperform
+
+## What has been definitively ruled out (do not retry on this baseline)
+
+- β-tuning of SmoothL1 (β=0.02, 0.01 — both regress in compound)
+- OneCycleLR / cosine warmup at 30-min budget
+- Depth/width scaling (mlp_ratio=4, larger hidden)
+- More Fourier bands (16) — marginal signal, hurts at 13 epochs
+- Divergence-free physics aux loss (fragile, competes with FiLM-Re)
+- surf_weight off baseline (full curve mapped at {5, 10, 15, 20})
+- Geom-slice (standalone and in compound with FiLM-Re)
+- Multi-signal FiLM (cond_dim=5 — narrow bottleneck, redundant signal)
+- Per-channel surface loss weights (edward #3198 in pre-FiLM era)
+- Domain one-hot embedding (edward #3523)

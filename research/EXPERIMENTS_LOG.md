@@ -16,6 +16,68 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 08:35 — PR #3670: surf_weight sweep {5,15,20} (askeladd) — CLOSED
+- student: willowpai2i24h2-askeladd
+- branch: `willowpai2i24h2-askeladd/surf-weight-sweep-film-re`
+- hypothesis: `surf_weight=10` was MSE-tuned and may not be optimal for SmoothL1 + FiLM-Re; sweep {5, 15, 20} to map the loss-balance curve
+- W&B runs: `vwusk9ub` (sw=15 primary), `5jbmpaw2`/`t60xj83c` (sw=5), `3o13k0j9` (sw=20), `k5yj366k`/`3d9auvcw` (crashed sw=5)
+
+| Arm | val_avg | test_avg | Δ val vs SWA baseline | Δ test vs SWA baseline |
+|---|---|---|---|---|
+| **SWA baseline (sw=10)** | **76.61** | **68.20** | — | — |
+| sw=15 (primary) | 82.56 | 76.05 | +7.78% | +11.5% |
+| sw=20 | 84.04 | 74.80 | +9.71% | +9.67% |
+| sw=5 (best of 2) | 83.83 | 76.12 | +9.41% | +11.6% |
+
+**Analysis (from student's detailed write-up):** Three load-bearing observations:
+1. **Volume loss is a structural prior, not just a regulariser.** Down-weighting volume deprives the model of upstream-wake signal needed for front-foil surface-p generalisation on the unseen-camber holdouts (geom_camber_rc val at sw=20 = 100.51 vs baseline 96.06; the OOD geometry splits are the most volume-loss-sensitive).
+2. **SmoothL1(β=0.05) operates in the linear regime almost everywhere at the relevant epochs**, so the MSE→SmoothL1 change did not actually move the surface/volume gradient ratio. The "sw=10 was MSE-tuned" framing was the right question but the answer is "the regimes are close enough that sw=10 still wins."
+3. **Higher sw amplifies surface oscillation** with insufficient time to re-stabilise in the 13-epoch budget; sw=20 best_epoch=12 with final=86.35 vs best=84.04 — the surface term overfits mid-training, volume can't pull it back.
+
+The student also noted that the 2 sw=5 seeds differ by 2.95 absolute val units (83.83 vs 86.78) — a large seed variance that suggests the baseline variance floor at sw=10 may eat the +3.3% sw=15 regression. But the test miss (+11.5%) is too large for noise.
+
+**Decision:** CLOSED. surf_weight curve is mapped at {5, 10, 15, 20}; finer steps unlikely to beat 10 by paper-worthy margin. Volume-as-structural-prior insight is preserved as load-bearing knowledge for future hypotheses.
+
+**Reassignment:** askeladd → PR #3831 (Bernoulli consistency aux loss — Idea 8 from researcher-agent). The motivation chains naturally: instead of TUNING the loss weight, ADD a new term that couples (p, Ux, Uy) according to the physics relationship the weighted-sum loss does not capture.
+
+---
+
+## 2026-05-16 08:35 — PR #3657: Multi-signal FiLM cond_dim=5 (alphonse) — CLOSED
+- student: willowpai2i24h2-alphonse
+- branch: `willowpai2i24h2-alphonse/film-mlp-2layer`
+- hypothesis: extending FiLM conditioning from `log(Re)` (cond_dim=1) to `log(Re) + foil1 geometry` (cond_dim=5) should add geometry-aware modulation; cond_dim=9 (adding foil2 features) as further expansion
+- W&B runs: `dae3ipda` (primary, best of cond_dim=5), `dgb6fp7k`, `snjlp7xq`, `4txi1sjy` (4th seed outlier)
+
+| Arm | val_avg | test_avg | Δ val vs SWA baseline | Δ test vs SWA baseline |
+|---|---|---|---|---|
+| **SWA baseline (cond_dim=1)** | **76.61** | **68.20** | — | — |
+| cond_dim=5 (best seed dae3ipda) | 81.87 | 73.24 | +6.86% | +7.39% |
+| cond_dim=5 (mean of 3 normal seeds) | 82.24 | 73.30 | +7.35% | +7.48% |
+| cond_dim=9 | not run | — | — | — |
+
+Seed variance for the 3 normal seeds is tight (val σ≈0.27, test σ≈0.50) — clean negative result.
+
+**Per-split signature (cond_dim=5 vs baseline):**
+- `single_in_dist` val: 93.78 → 107.93 (**+15.1%** — single largest hit)
+- `geom_camber_rc` val: 96.06 → 89.82 (−6.5% — slight improvement)
+- `geom_camber_cruise` val: 54.93 → 54.02 (≈flat)
+- `re_rand` val: 74.83 → 75.70 (+1.2%)
+
+The entire val/test regression is driven by single_in_dist. The camber splits (where extra geometry conditioning should help most) are flat or slightly better — but not enough to compensate.
+
+**Analysis (from student's detailed write-up):** Three reinforcing explanations:
+(a) **Geometry information is redundant with per-node features.** Every node already carries foil shape implicitly through position and per-node geometric features. Adding AoA1/NACA1 to FiLM gives the optimizer a low-rank, batch-shared modulation channel that *competes with* the existing geometry channels in slice/attention features — capacity is allocated to a redundant path.
+(b) **The FiLM bottleneck is narrow.** `Linear(cond_dim, 32) → GELU → Linear(32, 2·hidden)` — going from 1 to 5 inputs through a fixed 32-d bottleneck adds optimization difficulty without proportional modulation capacity gain. The fix is widening the bottleneck, not widening the input.
+(c) **Single-foil split is hit hardest because FiLM-Re was most useful there** — widest Re range. Diluting the Re modulation with 3 NACA1 shape-param dims (high intra-class spread) competes with the Re signal through the same gamma/beta channels.
+
+cond_dim=9 was correctly not run — foil2 signals are degenerate on single-foil samples (the very split where cond_dim=5 already fails worst).
+
+**Decision:** CLOSED as not-compounding, per student's explicit recommendation.
+
+**Reassignment:** alphonse → PR #3828 (low-rank hypernetwork on PhysicsAttention to_v projection — Idea 4 from researcher-agent). This is *exactly* the "widen the bottleneck, not the input" follow-up alphonse proposed: FiLM is the special case of a hypernetwork that generates only diagonal scalar matrices; a hypernetwork generates full per-Re weight matrices.
+
+---
+
 ## 2026-05-16 08:10 — PR #3207: FiLM-Re + geom-slice v2 (nezuko) — CLOSED
 - student: willowpai2i24h2-nezuko
 - branch: `willowpai2i24h2-nezuko/geom-slice-injection`
