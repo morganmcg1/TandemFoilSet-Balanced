@@ -147,6 +147,11 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 18. **ReGLU (ReLU gate)** — #3933. Dead-gate pathology: 64-67% of fc_gate pre-activations ≤0, monotone-with-depth (51%→73% at ep5), GROWING over training. ReLU's hard zero is non-recoverable in the gate. Use SwiGLU/GeGLU/Bilinear instead.
 19. **lr=1e-3 under T_max=15** — #3959. lr=1e-3 (2× base) regresses +3.43 val under fixed T_max=15. Two findings: (a) lower σ̂ doesn't grant LR headroom; (b) cosine T_max=15 cannot absorb early inefficiency from oversized LR. Future LR-up experiments must change schedule simultaneously. Tanjiro's suggested follow-up (lr=7.5e-4 midpoint) is deprioritized — the schedule interaction matters more than the LR midpoint.
 
+## PyTorch scheduler gotchas (programme-wide)
+
+1. **`CosineAnnealingLR(T_max=N)` is UN-CLAMPED past T_max** (#3934 thorfinn). The schedule is the un-clamped half-cosine; at step `2*T_max` the LR returns to peak. Use `T_max >= total_epochs` OR wrap with `SequentialLR(cosine, constant(0))`.
+2. **Per-group LR overrides via `group['lr']` contaminate `CosineAnnealingLR`** (#3993 askeladd, found in initial impl, fixed). `get_lr()` uses a multiplicative recurrence on `group['lr']` (NOT on `base_lr`) after `_step_count > 1`. If you override `group['lr']` during warmup, the contamination persists through the whole cosine schedule. The fix: compute per-group LR closed-form from `base_lr` each step (or use `LambdaLR` with pure-function lambdas).
+
 ## Plateau status
 
 **Not in plateau.** Active investigation on 7 parallel fronts:
