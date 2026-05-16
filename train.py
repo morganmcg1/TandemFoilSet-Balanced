@@ -57,6 +57,64 @@ def signed_expm1(z: torch.Tensor) -> torch.Tensor:
     return torch.sign(z) * torch.expm1(torch.abs(z))
 
 
+class SAM(torch.optim.Optimizer):
+    """Sharpness-Aware Minimization wrapper (Foret et al. 2020, arXiv:2010.01412).
+
+    Wraps a base optimizer. Each training step is two forward+backward passes:
+        first_step:  perturb w by  rho * grad(w) / ||grad(w)||
+        second_step: restore w, then base_optimizer.step() with grad(w_perturbed)
+
+    Scheduler.step() must be called AFTER second_step (never between the two).
+    """
+
+    def __init__(self, params, base_optimizer, rho=0.05, **kwargs):
+        defaults = dict(rho=rho, **kwargs)
+        super().__init__(params, defaults)
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                e_w = p.grad * scale
+                p.add_(e_w)
+                self.state[p]["e_w"] = e_w
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None or "e_w" not in self.state[p]:
+                    continue
+                p.sub_(self.state[p]["e_w"])
+        self.base_optimizer.step()
+        # Keep _step_count in sync so LR schedulers (which hook optimizer.step)
+        # don't warn about being called before optimizer.step.
+        self._step_count = getattr(self, "_step_count", 0) + 1
+        if zero_grad:
+            self.zero_grad()
+
+    def _grad_norm(self):
+        shared_device = self.param_groups[0]["params"][0].device
+        norm = torch.norm(
+            torch.stack([
+                p.grad.norm(p=2).to(shared_device)
+                for group in self.param_groups for p in group["params"]
+                if p.grad is not None
+            ]),
+            p=2,
+        )
+        return norm
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -464,6 +522,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    use_sam: bool = False  # Sharpness-Aware Minimization (Foret 2020) wrapping AdamW
+    sam_rho: float = 0.05  # SAM neighborhood size
 
 
 cfg = sp.parse(Config)
@@ -531,7 +591,13 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.use_sam:
+    optimizer = SAM(model.parameters(), torch.optim.AdamW, rho=cfg.sam_rho,
+                    lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Optimizer: SAM-AdamW  rho={cfg.sam_rho}")
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print("Optimizer: AdamW")
 if cfg.use_onecycle:
     total_steps = len(train_loader) * MAX_EPOCHS
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -602,19 +668,20 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        y_log = signed_log1p(y_norm)
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
 
         # H11: signed-log1p target transform applied on the loss side only.
         # pred stays in linear (normalized) space for the metric/eval path;
         # both pred and y_norm are passed through slog1p before MSE so per-sample
         # gradients are magnitude-comparable across the Re range.
-        y_log = signed_log1p(y_norm)
+        pred = model({"x": x_norm})["preds"]
         pred_log = signed_log1p(pred)
         sq_err = (pred_log - y_log) ** 2
 
         if not slog1p_diag_printed:
             with torch.no_grad():
-                m = mask.unsqueeze(-1)
                 y_raw_p = y[..., 2][mask]
                 y_norm_p = y_norm[..., 2][mask]
                 y_log_p = y_log[..., 2][mask]
@@ -632,15 +699,27 @@ for epoch in range(MAX_EPOCHS):
                 )
             slog1p_diag_printed = True
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+
+        if cfg.use_sam:
+            # Perturb to "sharp" point, then recompute grad at perturbed weights.
+            optimizer.first_step(zero_grad=True)
+            pred2 = model({"x": x_norm})["preds"]
+            pred2_log = signed_log1p(pred2)
+            sq_err2 = (pred2_log - y_log) ** 2
+            vol_loss2 = (sq_err2 * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss2 = (sq_err2 * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss2 = vol_loss2 + cfg.surf_weight * surf_loss2
+            loss2.backward()
+            optimizer.second_step(zero_grad=False)
+        else:
+            optimizer.step()
+
         if onecycle_mode:
             scheduler.step()
 
