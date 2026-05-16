@@ -497,4 +497,59 @@ cd target && python train.py --agent <student> \
 ```
 (In-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999 — must pass all four explicitly.)
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **51.4403** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **51.4403**~~ — superseded by PR #3970 below.
+
+---
+
+## 2026-05-16 18:15 — PR #3970: torch.compile (mode=default, dynamic=True) — 10th compounding mechanism
+
+**Student:** charliepai2i48h2-alphonse  
+**Change:** `torch.compile(model, mode='default', dynamic=True)` wraps the Transolver model after instantiation. `dynamic=True` handles the variable-length padded batch shapes from `pad_collate`. This is a pure throughput intervention: per-epoch time 102s → 54.4s (−47%), peak VRAM 32.97 → 23.84 GB (−9 GB headroom), reaching **33 epochs** vs 18 within the 30-min cap. The 15 extra epochs on a still-descending loss curve give a massive primary metric gain.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **44.2439** |
+| val_single_in_dist/mae_surf_p | 46.9816 |
+| val_geom_camber_rc/mae_surf_p | 58.2760 |
+| val_geom_camber_cruise/mae_surf_p | 27.6407 |
+| val_re_rand/mae_surf_p | 44.0774 |
+| **test_avg/mae_surf_p** | **38.0107** |
+| test_single_in_dist/mae_surf_p | 42.3063 |
+| test_geom_camber_rc/mae_surf_p | 49.5504 |
+| test_geom_camber_cruise/mae_surf_p | 23.1558 |
+| test_re_rand/mae_surf_p | 37.0300 |
+| Best epoch | 33 (timeout-bound; val still descending ~0.03/epoch) |
+| Per-epoch time | ~54.4s (was ~102s) |
+| Peak GPU memory | 23.84 GB (was 32.97 GB) |
+| n_params | 662,359 |
+
+**Model config:** unchanged — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** unchanged — Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** unchanged — CosineAnnealingLR(T_max=30)  
+**Loss:** unchanged — vol_loss + 25·surf_loss with asinh(z) on pressure + pressure_weight=2.0  
+**Precision:** unchanged — bf16 autocast on forward+loss  
+**EMA:** unchanged — decay=0.995  
+**Gradient clipping:** unchanged — max_norm=1.0  
+**Compile:** **torch.compile(mode='default', dynamic=True)** (Arm B reduce-overhead: val=45.36)  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-alphonse-torch-compile-default-20260516-162535/metrics.jsonl`
+
+**Note:** −14.0% on val (44.24 vs 51.44), −13.5% on test (38.01 vs 43.95). All 8 splits improved. The 15-epoch gain from compile (18→33) explains the full improvement — the loss curve was still monotonically descending at epoch 18. With 9 GB of freed VRAM (32.97→23.84 GB), capacity expansion experiments are now viable. reduce-overhead mode (Arm B: val=45.36) is slower than default — compile overhead pays off for default mode in this variable-shape setting.
+
+**10-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + cosine T_max=30 + pressure_weight=2.0 + **torch.compile(mode=default, dynamic=True)**
+
+**Cumulative improvement from initial baseline:** 135.02 → 44.24 = **−67.2%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 30 \
+    --pressure_weight 2.0 \
+    --ema_decay 0.995 \
+    --compile_mode default
+```
+(In-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999, compile_mode=none — must pass all five explicitly.)
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **44.2439** with a terminal `SENPAI-RESULT` marker.
