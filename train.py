@@ -102,14 +102,15 @@ class SwiGLUMLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 temperature_init=0.5):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * temperature_init)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -157,13 +158,14 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False):
+                 use_swiglu=False, temperature_init=0.5):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            temperature_init=temperature_init,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         mlp_hidden = int(hidden_dim * mlp_ratio)
@@ -193,7 +195,8 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu: bool = False):
+                 use_swiglu: bool = False,
+                 temperature_init: float = 0.5):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -215,6 +218,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu,
+                temperature_init=temperature_init,
             )
             for i in range(n_layers)
         ])
@@ -474,6 +478,7 @@ class Config:
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
+    temperature_init: float = 0.5  # init for PhysicsAttention slice-softmax temperature
 
 
 cfg = sp.parse(Config)
@@ -512,6 +517,7 @@ model_config = dict(
     slice_num=cfg.slice_num,
     mlp_ratio=cfg.mlp_ratio,
     use_swiglu=cfg.use_swiglu,
+    temperature_init=cfg.temperature_init,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -519,7 +525,10 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
-      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}]")
+      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, "
+      f"slice_num={cfg.slice_num}, temperature_init={cfg.temperature_init}]")
+print(f"[TEMP-INIT-SANITY] block[0].attn.temperature = "
+      f"{model.blocks[0].attn.temperature.detach().flatten().tolist()}")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
@@ -706,6 +715,22 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- Log final learned temperatures per layer/head (diagnostic for temp-init sweep) ---
+temp_summary: dict[str, float] = {}
+print("\n[TEMP-FINAL] Learned temperatures (live model, after all training steps):")
+for li, block in enumerate(model.blocks):
+    t = block.attn.temperature.detach().flatten().tolist()
+    for hi, v in enumerate(t):
+        temp_summary[f"temperature_final/layer{li}_head{hi}"] = v
+    print(f"  layer{li}: {[f'{v:.4f}' for v in t]}")
+print("[TEMP-FINAL-EMA] Learned temperatures (EMA shadow, used for checkpoint):")
+for li, block in enumerate(ema_model.blocks):
+    t = block.attn.temperature.detach().flatten().tolist()
+    for hi, v in enumerate(t):
+        temp_summary[f"temperature_final_ema/layer{li}_head{hi}"] = v
+    print(f"  layer{li}: {[f'{v:.4f}' for v in t]}")
+wandb.summary.update(temp_summary)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
