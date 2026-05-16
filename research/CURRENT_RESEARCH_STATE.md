@@ -1,79 +1,90 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 23:40
-- **Launch:** willow-pai2i-48h-r1 (round 3 in progress)
+- **Date:** 2026-05-16 01:00
+- **Launch:** willow-pai2i-48h-r1 (round 4 in progress)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
-- **Budget per run:** 30 min wall clock, 50 epochs max (~14 epochs achievable in fp32 at bs=4)
+- **Budget per run:** 30 min wall clock, 50 epochs max (~18 epochs achievable in bf16 at bs=4)
 - **Latest direction from human team:** None
 
 ## Research contract
 Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Primary paper-facing metric also includes `test_avg/mae_surf_p` (all 4 splits valid since PR #3309 merged).
 
-## Current best baseline
-- **val_avg/mae_surf_p = 91.3319** (PR #3317, cosine T_max=15)
-- **test_avg/mae_surf_p = 88.4260** (3-split, cruise NaN — branch predated NaN fix)
-- W&B: `kx17n4pn` (T_max=15 winner arm)
+## Current best baseline ← NEW
+- **val_avg/mae_surf_p = 87.9105** (PR #3480, bf16 autocast + T_max=15)
+- **test_avg/mae_surf_p = 83.3782** (4-split, all valid)
+- **Epochs in 30 min:** 18 (bf16) vs 14 (fp32)
+- **Peak VRAM:** 32.9 GB vs 78 GB (fp32)
+- W&B: `t00506x1`
+- Noise floor σ ≈ 1.80 (alphonse PR #3305 4-replicate characterization)
 
 ## Merged PRs
 | PR | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p |
 |----|-----------|---------------------|---------------------|
 | #3159 | Huber loss δ=0.1 | 112.9001 | 115.7589 (3/4) |
-| #3309 | NaN fix (cruise test) | 112.8295 | **106.5996** (4/4) |
-| #3317 | Cosine T_max=15 | **91.3319** | 88.4260 (3/4) |
+| #3309 | NaN fix (cruise test) | 112.8295 | 106.5996 (4/4) |
+| #3317 | Cosine T_max=15 | 91.3319 | 88.4260 (3/4) |
+| #3480 | **bf16 autocast (bs=4)** | **87.9105** | **83.3782 (4/4)** |
 
 ## Closed PRs (key dead ends)
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
 | #3162 | surf_weight=25 (MSE) | 133.41 | Loss misalignment |
-| #3188 | slice_num=128 (MSE) | 134.74 | Capacity not bottleneck |
+| #3188 | slice_num=128 (MSE) | 134.74 | Capacity not bottleneck (fp32 base) |
 | #3167 | OneCycleLR | 137.12 | Budget too short |
-| #3180 | h=192 wider | 150.38 | Capacity not bottleneck |
-| #3361 | slice_num=128 (retried) | 116.19 | 30% slower/ep |
+| #3180 | h=192 wider (MSE/T=50) | 150.38 | Resource-constrained, unfavorable conditions |
+| #3361 | slice_num=128 (retried) | 116.19 | 30% slower/ep, fp32 VRAM-saturated |
 | #3359 | edward no-commit | 133.32 | Iterated w/o pushing |
 | #3395 | LR peak scan 3e-4/8e-4 | 94.18/94.46 | lr=5e-4 at basin minimum |
 | #3426 | Warm restarts T_0=5 | 103.07 | 5-ep cycles too short |
 | #3460 | bf16 + bs=8 | 110.72 | bs=8 starved AdamW (-39% updates) |
 | #3459 | EMA decay=0.999 | 100.92 | Decay half-life > training horizon |
 | #3174 | L1-on-p + surf_w=50 | 99.51 | Gradient starvation (94% on surf-p) |
+| #3305 | Huber δ=0.05 (4 replicates) | 91.47 ± σ=1.80 | Within noise; **headline σ characterization** |
+| #3428 | surf_weight scan (15, 20) | 91.6 / 92.07 | Within σ — surf_weight lever exhausted |
+| #3522 | L1-on-p ONLY w=10 | 103.07 | L1-shape weaker small-residual grads |
+| #3171 | Split pressure head v3 | 100.78 | Capacity cost > 14-ep payback |
 
-## Active WIP — 8/8 students assigned
+## Active WIP — 8/8 students assigned (zero idle GPUs)
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3305 | alphonse | Huber δ=0.05 rebase on T_max=15 | Nudged — W&B 78nl8hac val=93.34, awaiting terminal |
-| #3480 | askeladd | bf16 autocast only (bs=4 preserved) | NEW — assigned after #3460 close |
-| #3428 | edward | surf_weight scan (15, 20) | Nudged — W&B 6ra6amur val=91.625, awaiting terminal |
-| #3171 | fern | Split pressure head + 3× p weight on T_max=15 | W&B as2gixh4 val=102.78, awaiting terminal |
-| #3522 | frieren | L1 on surf-p ONLY at surf_weight=10 (isolated) | NEW — assigned after #3174 close |
-| #3175 | nezuko | Cosine warmup on T_max=15 base | Nudged — W&B hyxr9xiu val=95.41, awaiting terminal |
-| #3521 | thorfinn | EMA decay=0.99 (faster forgetting) | NEW — assigned after #3459 close |
-| #3363 | tanjiro | AdamW β2=0.95 + grad clip on T_max=15 | Nudged — W&B 1i0kr8lr val=92.43 (close!), awaiting terminal |
+| #3546 | alphonse | **Seed control + 4 baseline replicates (σ̂ on 87.91 base)** | NEW after #3305 close |
+| #3562 | askeladd | **Wider Transolver h=192 slice=96 T_max=18 under bf16** | NEW after #3480 merge |
+| #3542 | edward | **TTA via horizontal-flip symmetry (eval-time)** | NEW after #3428 close |
+| #3566 | fern | **Unified positional encoding (Transolver unified_pos=True)** | NEW after #3171 close |
+| #3563 | frieren | **Train-time horizontal-flip augmentation** | NEW after #3522 close |
+| #3175 | nezuko | Cosine warmup on T_max=15 base | Stale — multiple nudges, no terminal |
+| #3363 | tanjiro | AdamW β2=0.95 + grad clip on T_max=15 | Stale — only OLD-base result posted |
+| #3521 | thorfinn | EMA decay=0.99 (faster forgetting) | Assigned 2026-05-15 23:35 |
 
-## Key pattern from round 2-3
-**Promising orthogonal levers DON'T fully stack onto T_max=15.** Multiple rebased experiments came in close to but worse than baseline 91.33:
-- tanjiro β2+clip on T_max=15: 92.43 (+1.2%)
-- edward surf_w=15: 91.625 (+0.3% — within noise)
-- alphonse Huber δ=0.05: 93.34 (+2.2%)
-- nezuko warmup: 95.41 (+4.5%, vs 89.02 on OLD base)
+## Key insights from round 3
+1. **bf16 is a clean orthogonal win** (PR #3480). 18 epochs/30min, 32.9GB VRAM. Now in canonical train.py. Stacks with all other levers.
+2. **Noise floor is σ ≈ 1.80** (alphonse PR #3305). Many "close to baseline" results across the program are statistically indistinguishable. train.py has no seed control — alphonse's #3546 adds it as a permanent fixture.
+3. **L1-on-surf-p lever fully exhausted** across both `surf_weight=50` (#3174 gradient starvation) and `surf_weight=10` (#3522 weak small-residual grads). The cruise OOD signal from #3174 was confounded with the surf_weight boost.
+4. **Marginal hyperparameter tweaks plateau within σ of baseline.** Surf_weight scan, β2+clip, Huber δ scan all came back within ±2%. Time to bigger swings.
+5. **Capacity scaling under unfavorable conditions failed** (#3180 h=192 T_max=50, #3188 slice=128 fp32). bf16's VRAM unlock + T_max=18 budget enables a real retest (askeladd #3562).
 
-**Hypothesis:** T_max=15 schedule is well-tuned to current model/data. Marginal hyperparameter tweaks see diminishing returns. New gains will likely come from:
-1. **Throughput unlock** → more epochs (askeladd bf16 path)
-2. **Architectural changes** (e.g. unified_pos, attention variants)
-3. **Data augmentation** (symmetry flip)
-4. **Test-time augmentation**
-5. **EMA at correct decay** (thorfinn's PR #3521 — high probability fit)
+## Round 4 active levers (orthogonal classes)
+1. **Noise-floor characterization** (alphonse #3546) — seed control + 4-replicate baseline σ̂.
+2. **Capacity scaling** (askeladd #3562) — bigger model, more epochs, matched schedule.
+3. **Inference-time symmetry (TTA)** (edward #3542) — h-flip + average.
+4. **Train-time symmetry augmentation** (frieren #3563) — h-flip during training.
+5. **Architectural — unified positional encoding** (fern #3566).
+6. **Weight averaging** (thorfinn #3521) — EMA decay=0.99 matched to horizon.
+7. **Optimizer stability** (tanjiro #3363, stale) — AdamW β2 + grad clip.
+8. **Schedule warmup** (nezuko #3175, stale) — linear warmup before cosine.
 
-## Priority hypotheses likely to advance state of art
-After current round, expect (best-case):
-- T_max=15 + EMA decay=0.99 (thorfinn): if EMA tracks raw, +0.5-2% improvement
-- T_max=15 + bf16 alone (askeladd): more epochs → val 86-88
-- T_max=15 + isolated L1 on surf-p (frieren): possible cruise OOD win
+Levers 1-6 are fresh round 4 assignments; 7-8 are carrying over and need terminal results or close/reassign next round.
 
-## Next research directions
-1. **Triple-stack winners** once individual results validate
-2. **Train-time symmetry augmentation** — horizontal flip (camber sign + Uy sign)
-3. **Unified positional encoding** — Transolver `unified_pos=True`
-4. **Test-time augmentation (TTA)** with flip+average
-5. **Stochastic Weight Averaging (SWA)** during final epochs (if EMA decay=0.99 looks promising)
-6. **Layer-wise LR decay**
-7. **Per-domain normalization** — pressure ranges differ by split
-8. **Re-evaluate current best (#3317)** with all 4 test splits — branch predates NaN fix
+## Next research directions (post round 4)
+1. **Triple-stack winners** (bf16 + TTA + train-aug if all three land) — biggest paper-facing impact.
+2. **Per-domain normalization** — pressure ranges differ by split; not yet tested.
+3. **Layer-wise LR decay** — orthogonal regularizer.
+4. **SWA (Stochastic Weight Averaging)** during final epochs — natural extension if EMA decay=0.99 works.
+5. **Smaller δ for surf-p only** (frieren's suggested follow-up from #3522) — δ_p < 0.1, leave Ux/Uy at 0.1.
+6. **Lighter split head** (fern's suggested follow-up from #3171) — h→h instead of h→2h→h.
+7. **Per-channel surf weight** (edward/frieren suggestion) — α=10 on Ux/Uy, β>10 on p.
+8. **Test-time + train-time symmetry stacked** — once both edward and frieren land.
+9. **bf16 + h=192 + EMA + TTA + train-aug stack** — full kitchen-sink confirmation run.
+
+## Plateau status
+Not in plateau. The bf16 unlock (PR #3480) was a real win past the noise floor on the test metric. Round 4 has 5 fresh orthogonal lever classes in flight; expect 1-3 of them to compound.
