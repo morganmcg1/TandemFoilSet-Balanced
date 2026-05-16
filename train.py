@@ -191,6 +191,35 @@ class TransolverBlock(nn.Module):
 
 COND_DIMS = slice(13, 24)  # dims 13-23: log Re, AoAs, NACAs, gap, stagger (11 dims, constant per sample)
 
+# Bernoulli pressure residual constants. Kinematic Bernoulli is 0.5 * V_inf**2
+# (target p is kinematic, p_actual/ρ in m²/s²). V_inf is recovered from log(Re)
+# via the dataset convention Re = V_inf * L / ν with L = 1 chord, ν = ν_air.
+NU_AIR = 1.5e-5  # kinematic viscosity of air at 20°C, m²/s
+CHORD_LENGTH = 1.0  # reference chord length in dataset normalized frame, m
+LOG_RE_DIM = 13
+
+
+def compute_bernoulli_p(x: torch.Tensor, chord_correction: bool = False) -> torch.Tensor:
+    """Per-node free-stream Bernoulli pressure baseline in kinematic units.
+
+    log(Re) at x[..., 13] is constant per sample; pad_collate puts padding at the
+    end so node 0 is always real. Returns p_B with shape ``[B, N]`` (one entry
+    per node); if chord_correction is False the per-sample free-stream value is
+    just broadcast across nodes.
+    """
+    log_re = x[:, 0, LOG_RE_DIM]  # [B]
+    v_inf = torch.exp(log_re) * NU_AIR / CHORD_LENGTH  # [B]
+    p_b_freestream = 0.5 * v_inf ** 2  # [B]
+    if not chord_correction:
+        return p_b_freestream.unsqueeze(-1).expand(-1, x.shape[1])
+    # Simple chord-position-dependent correction from the PR spec. Uses the raw
+    # x coordinate at dim 0 as a chord-position proxy and multiplies the
+    # free-stream Bernoulli by 0.5*(1 - cos(2π·x)). For tandem foils with a
+    # global mesh frame this is approximate, but documented in the hypothesis.
+    x_chord = x[..., 0]  # [B, N] — raw x coordinate
+    bump = 0.5 * (1.0 - torch.cos(2.0 * torch.pi * x_chord))
+    return p_b_freestream.unsqueeze(-1) * bump
+
 
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
@@ -348,12 +377,20 @@ def update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
         b_ema.copy_(b_model)
 
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(
+    model, loader, stats, surf_weight, device,
+    bernoulli_residual: bool = False, bernoulli_chord_correction: bool = False,
+) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``bernoulli_residual`` is set, the p channel of y is replaced by the
+    residual ``p - p_B`` before normalization, and the model's denormalized
+    prediction has p_B added back before MAE accumulation so the reported MAE
+    remains on raw p.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -378,7 +415,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
+
+            if bernoulli_residual:
+                p_b = compute_bernoulli_p(x, chord_correction=bernoulli_chord_correction)
+                y_for_norm = y_clean.clone()
+                y_for_norm[..., 2] = y_clean[..., 2] - p_b
+            else:
+                y_for_norm = y_clean
+
+            y_norm = (y_for_norm - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model({"x": x_norm})["preds"]
             # Compute surface-pressure MAE and the normalized loss in fp32
@@ -399,6 +444,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            if bernoulli_residual:
+                pred_orig = pred_orig.clone()
+                pred_orig[..., 2] = pred_orig[..., 2] + p_b
             ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -512,6 +560,14 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # Bernoulli pressure residual (predict p − p_B(Re, AoA) instead of raw p).
+    # Per-sample free-stream Bernoulli p_B = 0.5·V_inf² is subtracted from the p
+    # channel of y before normalization and added back to the denormalized
+    # prediction so MAE is reported on raw p.
+    bernoulli_residual: bool = False
+    # Arm B: add a per-node chord-position correction 0.5·(1-cos(2π·x)) to p_B.
+    # Only takes effect when bernoulli_residual is also True.
+    bernoulli_chord_correction: bool = False
 
 
 cfg = sp.parse(Config)
@@ -539,6 +595,55 @@ val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
     for name, ds in val_splits.items()
 }
+
+# --- Bernoulli residual stats pre-pass --------------------------------------
+# When predicting (p − p_B(Re)) instead of raw p, the global y_mean/y_std for the
+# p channel saved in stats.json no longer apply. Stream once over the training
+# data to recompute the p-channel mean/std on the residual target and overwrite
+# stats["y_mean"][2], stats["y_std"][2] in place. Ux/Uy channels are unchanged.
+v_inf_min = v_inf_max = v_inf_mean = float("nan")
+y_p_mean_raw = float(stats["y_mean"][2].item())
+y_p_std_raw = float(stats["y_std"][2].item())
+y_p_mean_resid = y_p_mean_raw
+y_p_std_resid = y_p_std_raw
+if cfg.bernoulli_residual:
+    print("Pre-pass: recomputing residual stats for p channel...")
+    prepass_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False,
+                                collate_fn=pad_collate, num_workers=4, pin_memory=True)
+    sum_r = sum_r2 = n_total = 0.0
+    v_infs: list[float] = []
+    p_bs: list[float] = []
+    for x_b, y_b, _is_s, mask_b in prepass_loader:
+        x_b = x_b.to(device, non_blocking=True)
+        y_b = y_b.to(device, non_blocking=True)
+        mask_b = mask_b.to(device, non_blocking=True)
+        finite = torch.isfinite(y_b[..., 2])
+        valid = (mask_b & finite).float()
+        p_b = compute_bernoulli_p(x_b, chord_correction=cfg.bernoulli_chord_correction)
+        r = (y_b[..., 2] - p_b) * valid
+        sum_r += float(r.sum().item())
+        sum_r2 += float((r * r * valid).sum().item())
+        n_total += float(valid.sum().item())
+        log_re_b = x_b[:, 0, LOG_RE_DIM]
+        v_inf_b = (torch.exp(log_re_b) * NU_AIR / CHORD_LENGTH).cpu().tolist()
+        v_infs.extend(v_inf_b)
+        if not cfg.bernoulli_chord_correction:
+            # per-sample p_B is constant
+            p_bs.extend((0.5 * (torch.exp(log_re_b) * NU_AIR / CHORD_LENGTH) ** 2).cpu().tolist())
+    y_p_mean_resid = sum_r / max(n_total, 1.0)
+    y_p_var_resid = sum_r2 / max(n_total, 1.0) - y_p_mean_resid ** 2
+    y_p_std_resid = max(y_p_var_resid, 1e-8) ** 0.5
+    v_inf_min = min(v_infs)
+    v_inf_max = max(v_infs)
+    v_inf_mean = sum(v_infs) / len(v_infs)
+    print(f"  V_inf distribution: min={v_inf_min:.2f}  max={v_inf_max:.2f}  mean={v_inf_mean:.2f} m/s")
+    if p_bs:
+        print(f"  p_B (free-stream, per-sample): min={min(p_bs):.2f}  max={max(p_bs):.2f}  mean={sum(p_bs)/len(p_bs):.2f}")
+    print(f"  Residual p-channel stats: mean={y_p_mean_resid:.3f}  std={y_p_std_resid:.3f}")
+    print(f"  Raw p-channel stats     : mean={y_p_mean_raw:.3f}  std={y_p_std_raw:.3f}")
+    print(f"  Std ratio (resid/raw)   : {y_p_std_resid/y_p_std_raw:.3f}")
+    stats["y_mean"][2] = torch.tensor(y_p_mean_resid, dtype=stats["y_mean"].dtype, device=stats["y_mean"].device)
+    stats["y_std"][2] = torch.tensor(y_p_std_resid, dtype=stats["y_std"].dtype, device=stats["y_std"].device)
 
 model_config = dict(
     space_dim=2,
@@ -581,6 +686,23 @@ with open(model_dir / "config.yaml", "w") as f:
         "ema_decay": EMA_DECAY,
     }, f, sort_keys=True)
 
+if cfg.bernoulli_residual:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "bernoulli_setup",
+        "bernoulli_residual": True,
+        "bernoulli_chord_correction": cfg.bernoulli_chord_correction,
+        "nu_air": NU_AIR,
+        "chord_length": CHORD_LENGTH,
+        "v_inf_min": v_inf_min,
+        "v_inf_max": v_inf_max,
+        "v_inf_mean": v_inf_mean,
+        "y_p_mean_raw": y_p_mean_raw,
+        "y_p_std_raw": y_p_std_raw,
+        "y_p_mean_resid": y_p_mean_resid,
+        "y_p_std_resid": y_p_std_resid,
+        "y_p_std_ratio": y_p_std_resid / y_p_std_raw,
+    })
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -605,7 +727,13 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.bernoulli_residual:
+            p_b = compute_bernoulli_p(x, chord_correction=cfg.bernoulli_chord_correction)
+            y_for_norm = y.clone()
+            y_for_norm[..., 2] = y[..., 2] - p_b
+        else:
+            y_for_norm = y
+        y_norm = (y_for_norm - stats["y_mean"]) / stats["y_std"]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
             sq_err = (pred - y_norm) ** 2  # [B, N, 3] — bf16
@@ -670,7 +798,11 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate (EMA weights) ---
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(
+            ema_model, loader, stats, cfg.surf_weight, device,
+            bernoulli_residual=cfg.bernoulli_residual,
+            bernoulli_chord_correction=cfg.bernoulli_chord_correction,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -735,7 +867,11 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(
+                ema_model, loader, stats, cfg.surf_weight, device,
+                bernoulli_residual=cfg.bernoulli_residual,
+                bernoulli_chord_correction=cfg.bernoulli_chord_correction,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
