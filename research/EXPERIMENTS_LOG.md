@@ -6,6 +6,114 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-16 01:30 — PR #3427 alphonse MERGED: Lion+bf16+clip+floor → val=69.86 NEW SOTA
+
+- Branch: `willowpai2i24h3-alphonse/bf16-stable` (rebased onto Lion baseline)
+- Hypothesis: Stack bf16 mixed precision + grad-clip(max_norm=1.0) + eta_min=1e-5 on the merged Lion+Huber baseline to extend epochs and eliminate late-cosine divergence.
+
+### Terminal results (rebased rerun: `f6lnbssy`)
+
+| Metric | Old Huber base | Lion base | AdamW+bf16+clip+floor (`to8x5txt`) | **Lion+bf16+clip+floor (`f6lnbssy`)** |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 107.46 | 94.08 | 92.62 | **69.86** |
+| **test_avg_nansafe/mae_surf_p** | 101.98 | 88.94 | 87.70 | **65.88** |
+| Best epoch | 14 | 14 | 19 (final) | 19 (final) |
+| Total epochs | 14 | 14 | 19 | 19 |
+| Per-epoch sec | — | — | 98.7 | 98.2 |
+| Peak VRAM | — | — | 33.0 GB | 33.0 GB |
+
+**vs new Lion baseline: −24.22 (−25.75%)**. All 4 val splits dramatically improved:
+val_single_in_dist=78.48, val_geom_camber_rc=86.87, val_geom_camber_cruise=45.33, val_re_rand=68.74.
+
+Per-split test: test_single_in_dist=71.67, test_geom_camber_rc=73.75, test_geom_camber_cruise=57.25, test_re_rand=60.85.
+
+### Analysis
+
+**Key mechanism: clip=1.0 as Lion momentum normalizer.** Alphonse's grad_norm telemetry revealed 99.7% of steps had pre-clip grad_norm > 1.0 (median=16.6, max=337.8). This means clip=1.0 is not a spike ceiling but a per-step normalizer on every update — reshaping what gets fed into Lion's momentum EMA on essentially every step. Without clip, Lion+bf16 alone gives val=89.53 (fern's #3481); with clip, val=69.86. The clip lever accounts for ~20 additional points.
+
+**bf16 contribution**: 19 epochs in 31 min vs 14 fp32 — 36% more optimizer steps. Smooth descent, no late-cosine divergence (prior bf16-default run `tup20e60` diverged from 111.6→171.4; clip eliminates this).
+
+**eta_min=1e-5**: standby — LR at ep19 was 7.16e-5, not yet at floor (T_max=50 cut by timeout). Acts as insurance for longer schedules.
+
+**VRAM**: 33.0 GB / 96 GB = 63 GB headroom → high-confidence new experiments can test bigger models.
+
+### Decision: MERGED — new SOTA
+
+- val 69.86 beats Lion 94.08 by −24.22 (−25.75%) ✓
+- test_nansafe 65.88 beats 88.94 by −23.06 (−25.92%) ✓
+- All 4 val splits and all 4 test splits improved ✓
+- Terminal SENPAI-RESULT with `terminal=true, pending_arms=false` ✓
+
+### Follow-up assignments triggered by this merge
+
+| Student | PR | Hypothesis |
+|---|---|---|
+| alphonse | #3590 | lion-clip-sweep: test clip {0.25, 0.5, 2.0} — is 1.0 optimal? |
+| nezuko | #3592 | deeper-model: n_layers=7 or n_hidden=160 (63 GB headroom) |
+| tanjiro | #3596 | lion-tmax-newbase: T_max=19 to engage eta_min floor |
+| fern | #3598 | p-weight-surf-loss: 2× and 4× p weight in surf_loss |
+| frieren | #3604 | lion-warmup-newbase: warmup on new stack (is clip redundant?) |
+
+---
+
+## 2026-05-16 01:00 — PR #3392 tanjiro CLOSED: Huber δ sweep (best val 108.37)
+
+- Branch: `willowpai2i24h3-tanjiro/huber-delta-tuning`
+- Hypothesis: Huber δ ∈ {0.5, 1.0, 3.0} sweep — is δ=2.0 the optimum?
+
+| Arm | δ | Best val | test_nansafe | Δ vs old Huber baseline |
+|---|---:|---:|---:|---:|
+| `1ocd5hgb` | 0.5 | 112.87 | 110.33 | +5.41 |
+| `uaaoj2i0` (best) | 1.0 | 108.37 | 106.36 | +0.91 |
+| δ=2.0 baseline | 2.0 | 107.46 | 101.98 | — |
+| `p2w2sfxe` | 3.0 | 127.51 | 132.73 | +20.05 |
+
+**Critical finding**: δ=1.0 run variance: 108→141 spread across 4 identical-config arms (no fixed seed). This 32-point spread exceeds any δ effect size — the optimizer dominates over δ tuning entirely. Fixed seeds mandated for all future assignments.
+
+**Decision**: Closed. δ=2.0 is at or near the local optimum. Optimizer (Lion) is the dominant lever. Tanjiro reassigned to lion-tmax-newbase (#3596).
+
+---
+
+## 2026-05-16 01:00 — PR #3389 nezuko CLOSED: surf_weight sweep (best val 111.08)
+
+- Branch: `willowpai2i24h3-nezuko/surf-weight-sweep`
+- Hypothesis: surf_weight ∈ {5, 20} vs default 10 — can surface emphasis be tuned?
+
+| Config | val_avg | test_nansafe | Δ vs baseline |
+|---|---:|---:|---:|
+| sw=10 (baseline) | 107.46 | 101.98 | — |
+| sw=5 (`as1ikqwm`) | 111.08 | 103.97 | +3.62 |
+| sw=20 (`pu95c8u1`) | 122.06 | 114.46 | +14.60 |
+
+**Conclusion**: sw=10 is near-optimal. Both directions regress. Only geom_camber_rc improved at sw=5 (115.40 vs 118.49). Nezuko's key suggestion: per-channel p weighting inside surf_loss is the more targeted lever (p, Ux, Uy currently equally weighted). → fern #3598. Nezuko reassigned to deeper-model (#3592).
+
+---
+
+## 2026-05-16 01:00 — PR #3515 frieren CLOSED: Lion+warmup (best val 100.80 regression)
+
+- Branch: `willowpai2i24h3-frieren/lion-warmup`
+- Hypothesis: 2-epoch linear LR warmup to smooth Lion's early instability (e1=195.75 spike).
+
+| Arm | warmup_epochs | val_avg | test_nansafe | Δ vs Lion 94.08 |
+|---|---:|---:|---:|---:|
+| `6ey6nh75` (best) | 1 | 100.80 | — | +6.72 |
+| `d1y7x4vv` | 2 | 104.91 | — | +10.83 |
+
+**Conclusion**: Warmup doesn't help bare Lion — neither arm beats Lion alone (94.08). Likely cause: warmup controls LR magnitude but Lion's sign-rule takes full-magnitude steps even at low LR — the mechanism driving early instability is the sign update itself, not the LR scale. Warmup may still help on the new stacked baseline where clip is engaged. Frieren reassigned to lion-warmup-newbase (#3604) to test.
+
+---
+
+## 2026-05-16 01:00 — PR #3481 fern CLOSED: Lion+bf16 alone (val 89.53)
+
+- Branch: `willowpai2i24h3-fern/lion-bf16-stacked`
+- Hypothesis: bf16 autocast on Lion baseline to extend ~14→~19 epochs.
+
+Best run `s134a98n`: val=89.53 (epoch 18). Other runs: 97.21, 104.88 (shorter training).
+
+**Conclusion**: Lion+bf16 without clip gives val=89.53 — better than Lion alone (94.08, −4.8%) but far from Lion+bf16+clip+floor (69.86). Closed because alphonse's #3427 (which adds clip+floor) merged and supersedes this PR's configuration. The bf16 pattern (pred.float() before loss) is correct and was adopted into the merged baseline. Fern reassigned to p-weight-surf-loss (#3598).
+
+---
+
 ## 2026-05-16 00:25 — PR #3391 thorfinn CLOSED: NACA Fourier stacked (val 115.45 regression)
 
 - Branch: `willowpai2i24h3-thorfinn/naca-fourier-stacked`
