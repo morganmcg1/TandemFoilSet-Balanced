@@ -327,3 +327,66 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-16 04:50 — PR #3584: Two-shot FiLM — condition attention + MLP paths per TransolverBlock
+
+**New best `val_avg/mae_surf_p`: 89.784** (was: 92.606 single-shot FiLM — **−3.05%**; intra-PR Arm B vs Arm A: **−3.67%**)
+
+- **Two-shot FiLM:** Same `FiLMConditioner` module reused at both (1) attention sub-layer input (after `ln_1`) and (2) MLP sub-layer input (after `ln_2`) per `TransolverBlock`. Shared module = **+0 parameters** vs single-shot FiLM. Two application sites give the model two independent opportunities to specialize per physics regime.
+- **Stack:** Huber + bf16 AMP + cosine T_max=15 + EMA decay=0.999 + FiLM (single-shot) as the merged baseline
+- **Params:** 845,527 (identical — shared conditioner)
+- **Best epoch:** 17 / 17 run (30-min budget, +6.2% epoch time vs Arm A's 18 epochs)
+- **Peak VRAM:** 38.9 GB (+6.8% vs Arm A 36.4 GB)
+- **Both arms still descending at budget cutoff** — additional epochs would likely improve further
+
+### Val surface pressure MAE (lower is better)
+
+| Split | Arm A (full stack, 1-shot FiLM) | **Arm B (two-shot FiLM)** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 106.191 | **103.854** | −2.20% |
+| `val_geom_camber_rc`     | 103.036 |  **95.887** | **−6.94%** |
+| `val_geom_camber_cruise` |  73.888 |  **73.143** | −1.01% |
+| `val_re_rand`            |  89.704 |  **86.251** | −3.85% |
+| **val_avg**              | **93.205** | **89.784** | **−3.67%** |
+
+Arm B vs merged baseline 92.606: **−3.05%** ✅
+
+### Test surface pressure MAE (3 finite splits; `test_geom_camber_cruise` NaN — pre-existing scoring bug)
+
+| Split | Arm A | **Arm B (two-shot FiLM)** | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist`    |  91.619 |  **89.460** | −2.36% |
+| `test_geom_camber_rc`    |  91.888 |  **87.408** | −4.87% |
+| `test_re_rand`           |  84.201 |  **80.336** | −4.59% |
+| **avg (3 finite splits)** | **89.236** | **85.735** | **−3.92%** |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-frieren-two-shot-film-armb-twoshot-20260516-030245/metrics.jsonl` ← **winner**
+- `models/model-charliepai2i48h4-frieren-two-shot-film-armb-twoshot-20260516-030245/metrics.yaml`
+- `models/model-charliepai2i48h4-frieren-two-shot-film-arma-baseline-20260516-022727/metrics.jsonl` (paired baseline)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py --experiment_name two-shot-film \
+  --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16
+# Scheduler: --cosine_t_max 15
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# FiLM: --film_cond --two_shot_film  (two injection sites per block — attn + MLP — shared conditioner, +0 params)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
+# surf_weight=10
+```
