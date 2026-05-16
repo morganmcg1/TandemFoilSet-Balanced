@@ -268,6 +268,7 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.n_layers = n_layers
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -278,8 +279,14 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
 
-        self.geom_proj = MLP(geom_ctx_dim, n_hidden * 2, n_hidden,
-                             n_layers=0, res=False, act=act)
+        # H29: per-block independent geom projections (vs single shared geom_proj
+        # in the GALE baseline). Each block learns its own linear combination of
+        # the 11 geometry features so early/late blocks can specialize.
+        self.geom_projs = nn.ModuleList([
+            MLP(geom_ctx_dim, n_hidden * 2, n_hidden,
+                n_layers=0, res=False, act=act)
+            for _ in range(n_layers)
+        ])
         # Gates init at 0 so the injection starts as a no-op and recovers baseline.
         self.geom_gates = nn.Parameter(torch.zeros(n_layers))
 
@@ -302,9 +309,9 @@ class Transolver(nn.Module):
         x_rff = torch.cat([pos_rff, rest], dim=-1)
         fx = self.preprocess(x_rff) + self.placeholder[None, None, :]
         geom_ctx = x[:, 0, self.geom_ctx_start:self.geom_ctx_start + self.geom_ctx_dim]
-        g = self.geom_proj(geom_ctx).unsqueeze(1)
         for i, block in enumerate(self.blocks):
-            fx = fx + self.geom_gates[i] * g
+            g_i = self.geom_projs[i](geom_ctx).unsqueeze(1)
+            fx = fx + self.geom_gates[i] * g_i
             fx = block(fx)
         return {"preds": fx}
 
@@ -530,6 +537,8 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+n_geom_params = sum(p.numel() for p in model.geom_projs.parameters())
+print(f"Per-block geom_projs: {len(model.geom_projs)} MLPs, {n_geom_params:,} params total")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.use_onecycle:
