@@ -464,6 +464,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    input_noise_std: float = 0.0   # Gaussian noise std added to x_norm during training
 
 
 cfg = sp.parse(Config)
@@ -558,6 +559,8 @@ else:
     onecycle_mode = False
     print("Scheduler: CosineAnnealingLR(T_max=15)")
 
+print(f"Input noise std={cfg.input_noise_std} (Bishop 1995 Tikhonov-equivalent input regularization)")
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -602,6 +605,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.input_noise_std > 0:
+            # Bishop 1995: equivalent to Tikhonov regularization on the input Jacobian
+            x_norm = x_norm + torch.randn_like(x_norm) * cfg.input_noise_std
         pred = model({"x": x_norm})["preds"]
 
         # H11: signed-log1p target transform applied on the loss side only.
