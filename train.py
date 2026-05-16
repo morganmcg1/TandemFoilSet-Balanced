@@ -445,6 +445,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    feature_noise_std: float = 0.0  # Gaussian noise std on condition features (cols 2:24) during training
 
 
 cfg = sp.parse(Config)
@@ -562,6 +563,11 @@ for epoch in range(MAX_EPOCHS):
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
+        if cfg.feature_noise_std > 0:
+            pad_mask_f = mask.unsqueeze(-1).to(x_norm.dtype)
+            feat_noise = torch.randn_like(x_norm[..., 2:24]) * cfg.feature_noise_std * pad_mask_f
+            x_norm = x_norm.clone()
+            x_norm[..., 2:24] = x_norm[..., 2:24] + feat_noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_enc})["preds"]
