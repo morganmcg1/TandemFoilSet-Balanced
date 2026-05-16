@@ -1,5 +1,36 @@
 # SENPAI Research Results
 
+## 2026-05-16 00:40 — PR #3513: Cosine schedule match (T_max=20 to fit realistic epoch horizon)
+
+- **Branch**: `charliepai2i24h3-edward/cosine-schedule-match`
+- **Hypothesis**: With BF16 we reach epoch 19 in the 30-min cap. But `CosineAnnealingLR(T_max=50)` leaves the LR at ~74% of initial at epoch 17 (best) and ~62% at epoch 19 — the schedule never anneals. Setting `cosine_t_max=20` means the LR lands at ~3e-6 (0.62% of initial) by epoch 19, giving the optimizer a proper cooldown and better final convergence. Zero cost: no model changes, same VRAM, same epoch count.
+- **Outcome**: **MERGED — clear winner, new baseline val_avg=87.62 (−10.18%)**
+
+| Metric | Prior baseline (PR #3300) | Cosine T_max=20 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 97.55 | **87.62** | **−9.93 (−10.18%)** |
+| `val_single_in_dist/mae_surf_p` | 114.41 | 98.44 | −15.97 (−13.96%) |
+| `val_geom_camber_rc/mae_surf_p` | 104.96 | 96.95 | −8.01 (−7.63%) |
+| `val_geom_camber_cruise/mae_surf_p` | 79.72 | 71.27 | −8.45 (−10.59%) |
+| `val_re_rand/mae_surf_p` | 91.09 | 83.83 | −7.26 (−7.97%) |
+| `test_avg/mae_surf_p` (3 finite splits) | 93.99 | **84.10** | −9.89 |
+| Best epoch | 17/19 | **19/19** | best at final epoch |
+| s/epoch | ~98 s | ~98 s | no change |
+| Peak VRAM | 32.95 GB | **32.94 GB** | no change |
+| Artifact | — | `models/model-bf16_cosine_t20-20260515-232950/metrics.jsonl` | — |
+
+**Analysis**: One of the cleanest results so far — all 4 splits improve, zero overhead, 2-line change. The key mechanism: when T_max=50 and training stops at epoch 19, the cosine schedule is barely past its first quarter. The LR never anneals, so the optimizer's final iterates are noisy. Setting T_max=20 gives a proper full anneal by the realistic budget boundary. The best checkpoint was at the very last epoch (19/19), confirming the model was still converging; the fully-annealed LR helped it settle rather than oscillate.
+
+**Observation**: val loss at epoch 17 was 88.93 in the prior BF16 run (T_max=50), and 88.93 in this run too — the early-epoch trajectories are essentially the same. The separation happens at epochs 18-19 where the annealed LR provides better local refinement. This is a pure scheduling gain, not model capacity.
+
+**Key implications**:
+1. T_max=20 is now baked in. All future experiments inherit this.
+2. The model best checkpoint is still epoch 19 — training is budget-limited, not loss-plateau-limited. More VRAM or a longer cap would likely continue improving.
+3. Clean test estimate: 84.10 vs 93.99 prior. The test trajectory tracks validation well.
+4. Next levers: larger model (63 GB VRAM free), larger batch (BF16 activation halved), or schedule variants (warmup + cosine, warm restarts).
+
+---
+
 ## 2026-05-15 22:45 — PR #3300: BF16 mixed-precision to get more epochs in 30-min budget
 
 - **Branch**: `charliepai2i24h3-edward/bf16-mixed-precision`

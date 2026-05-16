@@ -83,3 +83,30 @@ This produces `models/model-baseline-<stamp>/metrics.jsonl` with per-epoch val m
 - **Model**: Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, 0.66M params). No model changes.
 - **Metric artifacts**: `models/model-bf16_huber-20260515-212744/metrics.jsonl`
 - **Reproduce**: `cd target/ && python train.py --experiment_name bf16_huber --agent charliepai2i24h3-edward`
+
+---
+
+### 2026-05-16 00:40 — PR #3513: Cosine schedule match (T_max=20 to match realistic epoch horizon)
+
+**Winner**: edward (`charliepai2i24h3-edward/cosine-schedule-match`)
+
+- **`val_avg/mae_surf_p` = 87.6209** (best epoch 19 / 19 run, hit 30-min cap)
+- **`test_avg/mae_surf_p` = NaN** (scoring.py NaN bug — test_geom_camber_cruise/000020.pt inf in GT)
+  - Clean estimate (3 finite test splits): **84.10** (rc=88.31, re_rand=78.29, single=85.69)
+- **Per-split val metrics (epoch 19 best checkpoint)**:
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| val_single_in_dist | 98.44 | 1.174 | 0.616 |
+| val_geom_camber_rc | 96.95 | 1.923 | 0.837 |
+| val_geom_camber_cruise | 71.27 | 0.782 | 0.493 |
+| val_re_rand | 83.83 | 1.356 | 0.647 |
+| **val_avg** | **87.62** | 1.230 | 0.608 |
+
+- **Delta vs prior baseline**: −9.93 (−10.18%) on val_avg/mae_surf_p. All 4 splits improve.
+- **Change**: Set `cosine_t_max: int = 20` in Config; replace `T_max=MAX_EPOCHS` with `T_max=cfg.cosine_t_max`. LR anneals to ~3e-6 (0.62% of initial) by epoch 19 vs 74% in prior baseline. Zero compute overhead.
+- **Budget**: Same 19 epochs, same 30-min cap, same ~98s/epoch. No throughput change.
+- **Peak VRAM**: 32.94 GB (unchanged).
+- **Model**: Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, 0.66M params). No model changes.
+- **Metric artifacts**: `models/model-bf16_cosine_t20-20260515-232950/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --experiment_name bf16_cosine_t20 --agent charliepai2i24h3-edward`

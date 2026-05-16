@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-15 ~22:50 UTC
+- **Last updated**: 2026-05-16 ~00:45 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -8,74 +8,72 @@
 
 ## Current best baseline
 
-- `val_avg/mae_surf_p` = **97.55** (PR #3300, edward, `bf16-mixed-precision`, epoch 17)
-- **MERGED 2026-05-15 22:45 UTC**
-- Change from Huber baseline: BF16 autocast on forward pass → 1.3x throughput, 5 more epochs in 30-min cap (14→19), VRAM 42.1→32.95 GB. No model changes.
+- `val_avg/mae_surf_p` = **87.62** (PR #3513, edward, `cosine-schedule-match`, epoch 19)
+- **MERGED 2026-05-16 00:40 UTC**
+- Change from BF16 baseline (97.55): set `cosine_t_max=20` so LR fully anneals within 19-epoch budget. Zero overhead — same epochs, same VRAM, same throughput. Pure scheduling gain.
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |---|---|---|---|
-| val_single_in_dist | 114.41 | 1.387 | 0.674 |
-| val_geom_camber_rc | 104.96 | 2.060 | 0.851 |
-| val_geom_camber_cruise | 79.72 | 1.135 | 0.531 |
-| val_re_rand | 91.09 | 1.532 | 0.678 |
-| **val_avg** | **97.55** | 1.529 | 0.684 |
+| val_single_in_dist | 98.44 | 1.174 | 0.616 |
+| val_geom_camber_rc | 96.95 | 1.923 | 0.837 |
+| val_geom_camber_cruise | 71.27 | 0.782 | 0.493 |
+| val_re_rand | 83.83 | 1.356 | 0.647 |
+| **val_avg** | **87.62** | 1.230 | 0.608 |
 
 ## Key observations
-1. **BF16 is THE throughput unlock**: 14→19 epochs in 30-min cap, -17.1% on val_avg. This is now baked into the baseline — all future experiments start here.
-2. **Budget mismatch still persists**: T_max=50 but we only reach ~19 epochs. At best-val epoch (17), LR is still 74% of initial (not annealed). This is the next lever.
-3. **VRAM headroom opened**: 32.95 GB used out of 96 GB = 63 GB free. Enables n_hidden=192 or batch_size=8 without memory concerns.
-4. **NaN bug persists** in `test_geom_camber_cruise`: `inf` in GT of sample 20. Workaround: rank on val_avg/mae_surf_p; report test_avg as clean-3 mean.
-5. **Stale_wip is still pandemic** for 6 of 7 remaining PRs (alphonse, askeladd, frieren, nezuko, tanjiro, thorfinn). Push-flow has worked for fern (rebase pushed) and thorfinn (result pushed). Pattern: training completes but commits not pushed before harness heartbeat reset.
+1. **Cosine schedule mismatch was a major leak**: T_max=50 with only 19 epochs means the LR never anneals properly. T_max=20 → LR at 0.62% of initial by epoch 19. Free 10% gain.
+2. **BF16 + Huber + cosine T_max=20 is now the baseline stack** — all three improvements merged.
+3. **VRAM headroom**: 32.94 GB used out of 96 GB = 63 GB free. Enables n_hidden=192/256 or batch_size=8.
+4. **Budget still binding**: best epoch is 19/19 (hit the cap). More epochs → more improvement. Model not saturated.
+5. **NaN bug persists** in `test_geom_camber_cruise`: workaround rank on val_avg; report test_avg as clean-3 mean.
 
 ## Active PRs
 
 | # | Student | Slug | Status | Note |
 |---|---|---|---|---|
-| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign; Huber heads-up posted |
-| #3235 | askeladd | `local-re-feature` | WIP (stale) | sendback posted; no rerun pushed |
-| #3238 | fern | `dual-branch-heads` | WIP — rebased on Huber | branch healthy (70cf8a6), awaiting fresh training run |
-| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign; Huber heads-up posted |
-| #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign; Huber heads-up posted |
-| #3241 | tanjiro | `ema-weights` | WIP (stale) | confirmed rebase direction, pod restarted; needs redo |
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back | extra=4 neutral; trying extra=2 next |
-| TBD | edward | `cosine-schedule-match` | **NEW — assigning** | T_max=20 to match realistic epoch horizon |
+| #3177 | alphonse | `per-sample-scale-norm` | WIP (stale) | no commits since assign |
+| #3235 | askeladd | `local-re-feature` | WIP (stale) | sendback posted; no rerun |
+| #3238 | fern | `dual-branch-heads` | WIP — sent back | sent back for rebase onto new baseline (87.62); had been 95.56 on 97.55 baseline |
+| #3239 | frieren | `fourier-pos-enc` | WIP (stale) | no commits since assign |
+| #3240 | nezuko | `hflip-augment` | WIP (stale) | no commits since assign |
+| #3241 | tanjiro | `ema-weights` | WIP (stale) | needs redo after pod restart |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — sent back | needs rebase onto BF16+cosine then rerun extra=1.0 |
+| TBD | edward | NEW | **ASSIGNING** | idle after cosine merge |
 
 ## Human research direction
 None received yet.
 
 ## Current research themes
 
-**Budget efficiency** (edward new):
-- Cosine schedule match: T_max=20 instead of 50, so LR fully anneals within the ~19-epoch budget
-- (BF16 merged — baseline now includes it)
+**Schedule / budget efficiency** (all experiments now stacked):
+- BF16 mixed-precision (PR #3300, merged): +5 epochs, 1.3x throughput, −22% VRAM
+- Cosine T_max=20 (PR #3513, merged): −10.18% on val_avg; LR fully anneals within budget
+- **Next**: Warmup-cosine (3-epoch warmup → cosine to zero by epoch 20), or restart schedules
+
+**Architecture** (fern #3238):
+- Dual surface/volume heads — sent back to rebase onto new 87.62 baseline; mechanism orthogonal, expected stacked val_avg ~85-86
 
 **Loss formulation** (thorfinn #3393, alphonse #3177):
-- per-channel surface pressure weighting (surf_p_weight_extra=2, calibrated from extra=4 result)
-- per-sample-scale-norm + Huber: balance Re-regime gradient magnitudes
-
-**Architecture** (fern #3238, frieren #3239):
-- Dual surface/volume heads (re-running with Huber+BF16 after rebase)
-- Fourier positional encoding (multi-scale spatial features)
+- Per-channel surface pressure weighting (extra=1.0 most promising, needs rebase onto full stack)
+- Per-sample-scale-norm + Huber (stale)
 
 **Features** (askeladd #3235):
-- Local-Re feature + Huber (needs Huber rebase)
+- Local-Re feature + Huber (stale, needs rebase)
 
-**Augmentation / Optimization** (nezuko #3240, tanjiro #3241):
-- z-reflection symmetry
-- EMA weight averaging (rebased onto Huber)
+**Augmentation / Optimization** (nezuko #3240, tanjiro #3241, frieren #3239):
+- Fourier positional encoding (stale)
+- z-reflection augmentation (stale)
+- EMA weight averaging (stale)
 
-## Potential next directions (round 3, after current PRs land)
-1. **Larger model under BF16**: n_hidden=192 or n_layers=6 (63 GB VRAM free — lots of room)
-2. **Larger batch (batch_size=8)**: with BF16, activation memory halved — batch=8 fits comfortably (~55 GB estimated vs 96 GB available)
-3. **Cosine schedule match (edward)**: T_max=20 — the most immediate leverage after BF16
-4. **Huber delta sweep**: δ ∈ {0.5, 2.0} to test sensitivity around δ=1.0
-5. **Per-channel pressure-only auxiliary loss**: extra loss term on dim 2 (p) only (related to thorfinn's work)
-6. **Warmup-cosine schedule**: 3-epoch warmup → cosine to zero by epoch 20
-7. **Mesh-aware sampler**: weight training samples by inverse squared mesh size
-8. **Per-domain stats**: separate (y_mean, y_std) for raceCar/cruise/single domains
+## Potential next directions (round 4)
+1. **Larger model**: n_hidden=192 or n_hidden=256 (63 GB VRAM free — lots of room). With cosine T_max=20 the model may benefit more from capacity.
+2. **Batch_size=8**: BF16 halved activation memory, batch=8 likely fits (~50-55 GB estimated). Larger batch can stabilize training and allow slightly higher LR.
+3. **Warmup-cosine**: 2-3 epoch linear warmup → cosine to near-zero by epoch 20. Prevents early noisy gradients from locking in bad solutions.
+4. **Cosine warm restarts (SGDR)**: T_0=10, T_mult=1, T_max=20 — two full cosine cycles in the budget. May find a sharper minimum.
+5. **More aggressive Huber delta sweep**: δ ∈ {0.3, 0.5, 2.0} now that we have a cleaner baseline.
+6. **Per-domain normalization**: separate (y_mean, y_std) for raceCar/cruise/single domains — the single_in_dist split (98.44) is hardest, likely has different pressure statistics than camber splits.
+7. **Deeper network**: n_layers=6 or n_layers=7 — same 63 GB headroom, adds depth without width cost.
+8. **Attention head expansion**: n_head=8 (from 4) to improve slice-token mixing at same n_hidden=128.
 
 ## Scoring.py NaN bug (branch-wide)
-`test_geom_camber_cruise/000020.pt` has 761 `inf` values in GT. `data/scoring.py::accumulate_batch` correctly masks these but does `err = abs(pred - y)` *before* applying the per-sample mask, and `inf - finite = inf`, `inf × 0 = NaN`. The accumulator becomes NaN globally.
-
-Affects: All `test_avg/mae_surf_p` numbers on this branch are NaN.
-Fix requires modifying `data/scoring.py` (marked read-only). Workaround: rank on val_avg/mae_surf_p; report test_avg as mean over 3 finite splits in the paper.
+`test_geom_camber_cruise/000020.pt` has 761 `inf` values in GT. Workaround: rank on val_avg/mae_surf_p; report test_avg as mean over 3 finite splits. Fix requires modifying `data/scoring.py` (marked read-only).
