@@ -1,0 +1,9 @@
+[2026-05-16T20:47:20Z] Waiting for Arm A pid=132513 to exit...
+[2026-05-16T20:59:50Z] Arm A exited.
+[2026-05-16T20:59:50Z] Launching arm armb ema_decay=0.99 -> logs/sf-ema-r1-armb.log
+[2026-05-16T21:34:39Z] Arm armb exit code=0
+[2026-05-16T21:34:39Z] Launching arm armc ema_decay=0.9995 -> logs/sf-ema-r1-armc.log
+[2026-05-16T22:09:24Z] Arm armc exit code=0
+[2026-05-16T22:09:24Z] Launching arm armd ema_decay=0.9999 -> logs/sf-ema-r1-armd.log
+[2026-05-16T22:44:14Z] Arm armd exit code=0
+[2026-05-16T22:44:14Z] Sweep complete.

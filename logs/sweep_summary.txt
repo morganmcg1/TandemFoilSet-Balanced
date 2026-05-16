@@ -1,0 +1,66 @@
+====================================================================================================
+EMA-decay sweep summary (best ckpt = lowest val_avg/mae_surf_p)
+====================================================================================================
+Note: every arm trained 17 epochs (timeout-limited at SENPAI_TIMEOUT_MINUTES=30).
+Effective EMA half-life is reported in optimiser steps (375 steps / epoch).
+
+arm    decay  half_life_steps best_epoch   val_avg/mae_surf_p   delta_vs_A  delta_pct
+  A    0.999           692.80         17              65.3493       0.0000      0.000
+  B     0.99            68.97         17              62.9211      -2.4281     -3.716
+  C   0.9995          1385.95         17              63.0924      -2.2569     -3.454
+  D   0.9999          6931.13         17              64.2004      -1.1489     -1.758
+
+Test 3-split surf_p mean (single_in_dist + geom_camber_rc + re_rand) / 3:
+  Arm A decay=0.999: 63.7079   delta=+0.0000
+  Arm B decay=0.99: 59.9838   delta=-3.7242
+  Arm C decay=0.9995: 60.7689   delta=-2.9391
+  Arm D decay=0.9999: 61.2888   delta=-2.4191
+
+Per-split val (best epoch):
+arm    decay            val_single_in_dist             val_geom_camber_rc         val_geom_camber_cruise                    val_re_rand
+  A    0.999                        72.8779                        81.2551                        43.4948                        63.7692
+  B     0.99                        69.0219                        78.4305                        41.8754                        62.3565
+  C   0.9995                        70.6490                        78.1288                        41.6931                        61.8986
+  D   0.9999                        70.8936                        79.7376                        43.1157                        63.0548
+
+Per-split test (best epoch):
+arm    decay           test_single_in_dist            test_geom_camber_rc        test_geom_camber_cruise                   test_re_rand
+  A    0.999                        65.2047                        71.2578                            nan                        54.6614
+  B     0.99                        60.1806                        67.4485                            nan                        52.3223
+  C   0.9995                        60.8737                        68.2480                            nan                        53.1850
+  D   0.9999                        61.4702                        68.8879                            nan                        53.5083
+
+EMA <-> raw diagnostics (best epoch):
+arm    decay    ema_effective_decay       ema_raw_l2_ratio     ema_raw_diff_rel
+  A    0.999              0.998590              0.998916              0.003992
+  B     0.99              0.990000                   N/A                   N/A
+  C   0.9995              0.998590                   N/A                   N/A
+  D   0.9999              0.998590                   N/A                   N/A
+
+Per-epoch val trajectory:
+epoch           A           B           C           D
+    1    203.4739    204.5350    212.9828    204.5350
+    2    155.4047    149.5936    156.0670    149.5936
+    3    131.8577    129.8160    129.2168    130.1377
+    4    116.4447    112.7861    114.4991    114.4633
+    5    106.6973    105.3174    102.6459    105.8502
+    6     98.8386     98.2366     95.4109     99.3588
+    7     92.0876     92.1954     91.5202     92.9870
+    8     86.9902     85.4410     86.6109     87.3863
+    9     82.8696     82.5543     82.2010     83.5826
+   10     79.5006     79.9758     79.0817     80.5624
+   11     76.3484     76.0294     76.0129     77.5075
+   12     74.1959     74.0248     72.9332     74.8857
+   13     72.0832     70.7417     70.6287     72.3206
+   14     70.0737     68.3456     68.3093     69.9342
+   15     68.0152     66.3259     66.3032     67.6825
+   16     66.5506     65.0716     64.9153     65.7964
+   17     65.3493     62.9211     63.0924     64.2004
+
+Peak memory GB:
+  Arm A: 38.92 GB
+  Arm B: 38.92 GB
+  Arm C: 38.92 GB
+  Arm D: 38.92 GB
+
+Wrote /workspace/senpai/target/logs/sweep_summary.json
