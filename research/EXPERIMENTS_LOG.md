@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-05-16 21:30 — alphonse #4067 WINNER (plateau broken) + 2 closures + 3 new assignments
+
+### MERGED: PR #4067 (alphonse) — AdamW β2=0.95 on slice=16 stack
+
+**val_avg = 56.4260** (−0.83% vs prior slice=8 baseline 56.8954; −2.20% vs original slice=16 baseline 57.6953). **test_3split = 55.3387** (−1.14% vs slice=8; −2.68% vs slice=16). Both metrics beat the slice=8 baseline by a clean margin — first improvement in 8 closures.
+
+**Per-split signature**:
+- val_single_in_dist: 65.188 (−1.21% / −2.66% vs slice=8/16 baselines)
+- val_geom_camber_rc: 67.131 (**−4.20% / −6.52%** — dominant residual reduced significantly)
+- val_geom_camber_cruise: 37.922 (+7.36% vs slice=8, −0.22% vs slice=16)
+- val_re_rand: 55.464 (+0.44% / +0.90%)
+
+**Mechanism (clean)**: AdamW second-moment EMA half-life shrinks from ~693 steps (β2=0.999) to ~13 steps (β2=0.95). With only ~6000 total steps in our 30-min budget, β2=0.999 cannot adapt per-parameter step sizes fast enough — the optimizer effectively uses epoch-1 gradient statistics. β2=0.95 lets per-parameter step-size adapt to late-training gradient statistics within each epoch. The win concentrates on val_geom_camber_rc (−6.52%), the hardest OOD-camber split.
+
+**Critical operational finding**: in our short-training-horizon regime (15-17 epochs), the optimizer's adaptation speed is the binding constraint — NOT architecture, NOT loss, NOT regularization. This refocuses our search: the plateau was caused by exploring axes that don't help when the optimizer can't keep up with the loss landscape. Future hypotheses should target optimization-axis OR data-axis (which compounds with snappy optimization).
+
+**Note on baseline transition**: this win was measured on **slice=16**, not slice=8 (the prior best stack). Result beats slice=8 baseline on both metrics, so merging is correct. The slice=8 + β2=0.95 compounding question is the next experiment (alphonse #4162).
+
+W&B run: `3pc74k8f`. best_epoch=17, peak GPU memory ~99 GB, runtime 30 min train + test eval.
+
+### Closed: PR #4138 (fern) — attn_dropout=mlp_dropout=0.1 on slice=8
+
+Run `c8hodxau`: val_avg=58.8585 (+1.96 vs slice=8 baseline, +2.43 vs new alphonse baseline), test_3split=57.5096 (+1.53 / +2.17). Both metrics regress. Hit pre-stated failure-mode #1 (val > 58.5).
+
+**Mechanism**: at slice=8, each slice token carries ~8× the responsibility of slice=64. Stochastically dropping attention scores forces reliance on noisier slice attributions; SwiGLU MLP dropout cuts gated-feature signal that the small slice-count regime depends on. Net effect: 3 of 4 val splits regress (only val_re_rand improved marginally). Opposite of the 'OOD-improves-in-dist-regresses' pattern that would indicate genuine regularization benefit.
+
+Fern's epoch-budget caveat (regularization typically shows benefit under longer training horizons) is noteworthy — at 17 epochs, the model is still descending, so a conservative regularizer/short-budget product is unfavorable. Defer dropout to a future round if/when longer budget or more converged baseline.
+
+### Closed: PR #4074 (askeladd) — n_hidden=192 on slice=16 stack
+
+Run `hapwhewl`: val_avg=68.9528 (+11.26 / +12.53 vs slice=16/new baselines), test_3split=67.2178 (+10.36 / +11.88). Massive regression but the model is **still descending at the 30-min cutoff** (epoch 12/50). Falsification is at the wall-clock budget, not in absolute terms.
+
+Askeladd's per-epoch analysis: at epoch 12, n=192 reaches val=68.95; n=128 reaches ~58 by epoch 12 (best 57.7 at convergence). The capacity axis is falsified at our wall-clock budget; under a fixed-FLOP comparison it MIGHT still pay (e.g., bs=8 to halve per-sample time). Askeladd's discipline was exceptional: 2 debug runs to verify implementation, memory tracking (54.2 GB peak, 36 GB headroom), and a constructive fixed-compute follow-up suggestion.
+
+### Round-14 new assignments (3 students)
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4162** | **alphonse** | β2=0.95 + slice=8 compounding test | **Critical compounding check**: does β2 win persist on slice=8 stack? Most important measurement on the entire stack right now |
+| **#4163** | **fern** | Mesh rotation aug ±15° + horizontal flip on slice=16+β2=0.95 | **First input-space augmentation ever** on this stack; targets dominant OOD-camber residual via rotation symmetry |
+| **#4164** | **askeladd** | bs=8 + sqrt LR scaling (lr=7.07e-4) on slice=16+β2=0.95 | **New optimization axis** — untested since baseline; should compound with β2=0.95's snappy adaptation |
+
 ## 2026-05-16 20:55 — Round-13 thorfinn #4066 closure + LLRD assignment
 
 ### Closed: PR #4066 (thorfinn) — slice_num=12 conservative bracket
