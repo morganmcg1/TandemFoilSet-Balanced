@@ -327,6 +327,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "smooth_l1_beta": cfg.smooth_l1_beta,
+        "surf_p_weight": cfg.surf_p_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -370,6 +371,7 @@ class Config:
     surf_weight: float = 25.0
     epochs: int = 50
     smooth_l1_beta: float = 1.0  # transition point between quadratic/linear regions of SmoothL1
+    surf_p_weight: float = 4.0  # per-channel weight on pressure inside surface loss
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -444,6 +446,17 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+# Per-channel surface weight for training loss: [Ux, Uy, p] -> [1, 1, surf_p_weight].
+# Output channels are [Ux, Uy, p] per model_config["output_fields"]. The (sum/3.0) divisor
+# keeps surf_loss magnitudes comparable to baseline (=1.0 when surf_p_weight=1.0), so
+# surf_weight does not need re-tuning. Evaluation loss in evaluate_split is unchanged.
+surf_chan_w = torch.tensor([1.0, 1.0, cfg.surf_p_weight], device=device)
+surf_chan_w_norm = surf_chan_w.sum().item() / 3.0
+print(
+    f"Surface per-channel weight (train only): {surf_chan_w.tolist()}  "
+    f"normalizer={surf_chan_w_norm:.4f}  surf_p_weight={cfg.surf_p_weight}"
+)
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -473,7 +486,12 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (elem_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Per-channel surface weight: emphasize pressure (channel 2) to align with primary metric.
+            # Divisor (surf_chan_w.sum() / 3.0) keeps magnitudes comparable to baseline (=1.0 when surf_p_weight=1).
+            surf_elem = elem_err * surf_chan_w
+            surf_loss = (surf_elem * surf_mask.unsqueeze(-1)).sum() / (
+                surf_mask.sum().clamp(min=1) * (surf_chan_w_norm)
+            )
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
