@@ -592,3 +592,23 @@ Test (Arm B): test_single_in_dist=53.55, test_geom_camber_rc=56.79, test_geom_ca
 - **Metrics:** `models/model-charliepai2i48h2-edward-cosine-tmax-25-pw2-20260516-134404/metrics.jsonl`, `models/model-charliepai2i48h2-edward-cosine-tmax-40-pw2-20260516-143620/metrics.jsonl`
 - **Decision:** CLOSED no_improvement. T_max axis closed at 30.
 - **Key finding:** T_max=30 is a relatively narrow peak. Both directions lose. The 40% final-LR-fraction is the sweet spot for this 18-epoch/batch=4 regime. Tighter anneal (T_max=25) costs more than looser (T_max=40) — confirming that killing late-epoch LR is worse than being slightly too warm. Edward assigned #4031 (Lion β2 sweep) as the next untested axis.
+
+---
+
+## 2026-05-16 17:30 — PR #3731: Signed log1p compression on pressure (no_improvement)
+- charliepai2i48h2-tanjiro/signed-log1p-pressure-v2
+- **Hypothesis:** Signed log1p (`sign(z) * log1p(|z|)`) is a more aggressive heavy-tail compressor than asinh and may better stabilize pressure-channel residuals.
+- **Result:** All splits regressed +4–20% vs 9-mech baseline (51.4403); asinh confirmed locally optimal.
+
+| Metric | signed log1p | 9-mech baseline (asinh) | Δ |
+|--------|--------------|--------------------------|---|
+| **val_avg/mae_surf_p** | **58.0898** | **51.4403** | **+12.93%** |
+| val_single_in_dist | 64.02 | 56.17 | +13.97% |
+| val_geom_camber_rc | 71.01 | 68.07 | +4.31% |
+| val_geom_camber_cruise | 38.53 | 32.12 | +19.95% |
+| val_re_rand | 58.81 | 49.40 | +19.05% |
+| **test_avg/mae_surf_p** | **49.5628** | 43.95 | +12.78% |
+
+- **Metrics:** `models/model-charliepai2i48h2-tanjiro-signed-log1p-pressure-v2-20260516-165143/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. Pressure-transform axis exhausted.
+- **Key finding:** asinh's derivative `1/√(1+z²)` and signed-log1p's `1/(1+|z|)` are similar at extreme |z| but differ critically in the |z| ∈ (1,5) "transition" range where most pressure-gradient signal lives. signed-log1p over-attenuates this range, throttling the boundary-layer and geometry-tail gradient. Worst-hit splits (val_geom_camber_cruise +19.95%, val_re_rand +19.05%) depend on capturing finer pressure variation in perturbed geometries — exactly where moderate-|z| signal matters. Tanjiro's analysis explicitly framed this as binary: either signed-log1p wins or asinh is locally optimal. Result is decisive: asinh is locally optimal under the 9-mech stack. EMA(0.995)+pw=2.0 are calibrated around asinh's shape; switching compressors breaks that calibration. Tanjiro assigned #4061 (channel-decoupled output heads) as the next direction — leverages their pressure-channel expertise toward an architectural specialization instead of further loss-side transforms.

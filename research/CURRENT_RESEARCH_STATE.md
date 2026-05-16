@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-16 16:15Z — round 13 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-16 17:30Z — round 13 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 - **New baseline: val=51.4403** (PR #3989 EMA decay=0.995 merged, −4.25% from 53.72)
 
@@ -45,7 +45,7 @@ cd target && python train.py --agent <student> \
 | #3970 | alphonse | torch.compile throughput: default and reduce-overhead modes | WIP — STALE | #3884+#3750 confirmed throughput-bound; compile buys per-epoch time → more steps; notified of 51.44 target |
 | #3953 | frieren | LR × T_max coupling: lr=2.1e-4 and 2.5e-4 under T_max=30 | WIP | Effective avg-LR shifted 60%; optimal lr_init may have moved; notified of 53.72 target |
 | #4016 | fern | Tighter MLP/output grad-clip (other=0.5, 0.3) on 8-mech stack | WIP — NEW | #3725 diagnostic: MLP~5× noisier than attn; tighten dominant group; pw=2.0 elevates output-head grad further |
-| #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2) | WIP — STALE | Long overdue; notified of 51.44 target |
+| #4061 | tanjiro | Channel-decoupled output heads: split velocity (Ux,Uy) from pressure (p) | WIP — NEW | Pressure has different statistics; dedicated head can specialize; orthogonal to all current mechanisms |
 | #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP — STALE | Long overdue; notified of 51.44 target |
 
 ## Key open questions (round 13 — new baseline 51.44)
@@ -56,7 +56,7 @@ cd target && python train.py --agent <student> \
 4. **Does torch.compile buy meaningful per-epoch speedup?** (#3970 alphonse) — throughput-bound; 15-25% faster epochs → 22-24 epochs in same wall-clock
 5. **Does lr_init shift under T_max=30+pw=2.0+ema=0.995?** (#3953 frieren) — lr=2.1/2.5e-4; prior lr=2.5e-4 failure was on T_max=80 stack
 6. **Is `other` (MLP/output) gradient over-clipped by the existing single-clip(1.0)?** (#4016 fern) — other_gn mean ~18 >> attn_gn mean ~3.5; tightening other below 1.0 tests if dominant MLP signal benefits from stronger clipping
-7. **Does signed log1p beat asinh?** (#3731 tanjiro) — more aggressive tail compression
+7. **Do channel-decoupled output heads improve specialization?** (#4061 tanjiro) — pressure has heavy-tailed/2× weighted statistics distinct from velocity; dedicated head can specialize, freeing the shared backbone from a 3-channel multi-task constraint
 8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn) — input-dependent gating
 
 ## 9-mechanism stack: gradient pipeline analysis
@@ -98,6 +98,7 @@ Nine mechanisms targeting DIFFERENT points:
 | #3750 (alphonse capacity-bf16) | no_improvement: n144 val=59.85 (+1.66%), n_layers=6 val=64.57 (+9.7%); throughput-bound |
 | #3884 (alphonse batch-size-bf16) | no_improvement: batch=6 val=69.68 (+24.4%); steps/epoch −33%; throughput-bound at batch=4 |
 | #3949 (askeladd lion-beta1) | no_improvement: β1=0.95 val=61.49 (+9.8%); β1=0.90 optimal |
+| #3731 (tanjiro signed-log1p v2) | no_improvement: val=58.09 (+12.93% vs 51.44); signed-log1p over-compresses moderate |z| range where pressure gradient signal lives; asinh confirmed locally optimal; pressure-transform axis exhausted |
 | #3776 (askeladd EMA-decay-bf16-v2) | Closed without results; rate-limit cascade failure |
 | #3726 (frieren Lion-wd-sweep) | Closed without results; rate-limit cascade failure |
 
@@ -112,9 +113,9 @@ Nine mechanisms targeting DIFFERENT points:
 - **torch.compile throughput** — IN PROGRESS as #3970 (alphonse); stale
 - **LR × T_max coupling** — IN PROGRESS as #3953 (frieren); lr=2.1/2.5e-4
 - **Tighter MLP clip** — IN PROGRESS as #4016 (fern); other=0.5/0.3
-- **Signed log1p** — IN PROGRESS as #3731 (tanjiro); stale
+- ~~Signed log1p~~ — CLOSED #3731 (val +12.93%; signed-log1p over-compresses moderate |z|; asinh locally optimal; pressure-transform axis exhausted)
 - **SwiGLU gating** — IN PROGRESS as #3734 (thorfinn); stale
+- **Channel-decoupled output heads** — IN PROGRESS as #4061 (tanjiro); split velocity (Ux,Uy) and pressure (p) into separate output MLPs
 - **WeightedRandomSampler dynamic reweighting**: inverse-error resampling after epoch 1 — static domain-balanced sampler already present; dynamic per-sample reweighting is the next step
-- **Channel-decoupled output heads**: separate MLP for Ux/Uy vs p (pressure has very different statistics)
 - **Lion β1 < 0.90**: β1=0.85/0.88 — more reactive momentum; untested below 0.90 (was only tested above)
 - **Weight decay sweep**: wd ∈ {1e-4, 2e-4, 5e-4} — fixed at 3e-4 since PR #3293; untested under new 9-mech stack
