@@ -39,6 +39,7 @@
 | alphonse | #4083 | bs=2 + n_freqs=8 compound (+ lr_t_max=18 arm) | wave-14 NEW | 60.67 |
 | nezuko | #4095 | bs=2 + clip=1.0 compound; arm-2: triple bs=2+n=8+clip=1.0 | wave-14 NEW | 60.67 |
 | tanjiro | #4103 | bs=2 + Huber δ={0.15, 0.10} compound | wave-14 NEW | 60.67 |
+| askeladd | #4115 | bs=2 + lr={7e-4, 8e-4} compound | wave-14 NEW | 60.67 |
 | fern | #4058 | n_freqs lower {4, 6} on BF16+LS+n8 | wave-13 WIP | 64.08 |
 | thorfinn | #4059 | sw {2.5, 5.0} compound test on BF16+LS+n8 | wave-13 WIP | 64.08 |
 | frieren | #4060 | fourier_base {1.5, 2.5} on BF16+LS+n8 | wave-13 WIP | 64.08 |
@@ -72,6 +73,7 @@
 | #4014 (frieren) | Width n=120: throughput hypothesis fails (no speedup), test ties |
 | #4052 (nezuko) | clip ceiling {2.0, 4.0}: both arms regress on val (68.21 / 66.46 vs 65.70). Ceiling confirmed at clip=1.0. Non-monotone: clip=2.0 worst (+3.81%), clip=4.0 mixed (+1.16% val / -1.04% test) |
 | #4033 (tanjiro) | Huber δ {0.15, 0.5}: δ=0.15 beats δ=0.3 on n=10 stack (val=64.00, -3.19%), stale baseline (post-#4026 merge best is 60.67). BF16 favors tighter δ thesis confirmed. Compound (δ=0.15 + bs=2) assigned #4103 |
+| #4027 (askeladd) | LR {7e-4, 1e-3}: lr=7e-4 wins by -8.75% val (61.31 vs 67.19 baseline). Largest single-knob win any wave. Stale baseline (current best 60.67). clip_frac=1.000 throughout — effective step = lr × 0.25 × dir(g). Compound (lr=7e-4 + bs=2) assigned #4115 |
 
 ## Current research themes
 

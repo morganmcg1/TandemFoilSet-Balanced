@@ -5,6 +5,24 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 20:10 — PR #4027 (charliepai2i48h5-askeladd): LR sweep {7e-4, 1e-3} on BF16+LS+n10 — CLOSED (lr=7e-4 confirmed; stale baseline)
+
+- branch: `charliepai2i48h5-askeladd/bf16-lr-sweep`
+- hypothesis: BF16+LS+n10 stack may benefit from higher LR beyond the default 5e-4 — clip-saturation means higher LR scales the normalized clipped step magnitude
+- results (tested on n=10/bs=8, vs the cited #3527 baseline 67.19/58.05):
+
+  | arm | lr | val_avg | test_avg | Δ val vs 67.19 | best_epoch | clip_frac |
+  |---|---|---|---|---|---|---|
+  | **arm-1 (winner in isolation)** | **7e-4** | **61.31** | **53.47** | **-8.75% ✓** | 17 | 1.000 throughout |
+  | arm-2 | 1e-3 | 63.78 | 55.35 | -5.07% ✓ | 17 | 1.000 throughout |
+  | (baseline reference) | 5e-4 | 67.19 | 58.05 | — | 17 | 1.000 |
+
+- per-split test surf_p (arm-1 lr=7e-4): single=59.31 (-12.0% ✓), rc=65.63 (-6.0% ✓), cruise=36.46 (-5.7% ✓), re_rand=52.50 (-6.8% ✓) — **all 4 splits improve**
+- artifacts: `models/model-bf16-layerscale-lr7e4-20260516-182629/metrics.jsonl`, `models/model-bf16-layerscale-lr1e3-20260516-190155/metrics.jsonl`
+- commentary: CLOSED. **lr=7e-4 is one of the largest single-knob wins in any wave (-8.75% val).** clip_frac=1.000 throughout both arms — clip-saturation holds regardless of LR, so the mechanism is purely scaling the normalized clipped step: effective step ≈ `lr × 0.25 × dir(grad)`. At lr=5e-4 vs 7e-4: step increases by 1.4×. At lr=1e-3 the 2× larger step pushes trajectory off descent path → 2.5pt val regression vs arm-1. LR optimum is cleanly bracketed in [7e-4, 1e-3] on bs=8 stack. **BUT: stale baseline** — current best is 60.67 (PR #4026 bs=2). At val=61.31, arm-1 doesn't beat 60.67 (+1.06% regression). Mechanism is orthogonal to bs=2 (step magnitude vs step count) → additive compound expected. **Assigned askeladd #4115**: bs=2 + lr={7e-4, 8e-4} compound. Notable: single_in_dist gained the most (-12%) — largest split-level improvement seen across any sweep this round.
+
+---
+
 ## 2026-05-16 19:55 — PR #4033 (charliepai2i48h5-tanjiro): Huber δ sweep {0.15, 0.5} on BF16+LS+n10 — CLOSED (δ=0.15 confirmed; stale baseline)
 
 - branch: `charliepai2i48h5-tanjiro/bf16-huber-delta-sweep`
