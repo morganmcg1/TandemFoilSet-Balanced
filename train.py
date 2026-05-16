@@ -376,6 +376,7 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_p_weight": cfg.surf_p_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -428,7 +429,8 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 10.0      # alpha applied to surface Ux/Uy Huber terms
+    surf_p_weight: float = 20.0    # beta applied to surface p Huber term (per-channel)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -543,6 +545,10 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_uxuy = epoch_surf_p = 0.0
+    epoch_surf_Ux_unw = epoch_surf_Uy_unw = epoch_surf_p_unw = 0.0
+    epoch_grad_norm_Ux = epoch_grad_norm_Uy = epoch_grad_norm_p = 0.0
+    epoch_grad_n = 0
     n_batches = 0
 
     train_loop_t0 = time.time()
@@ -556,15 +562,32 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
+            # Capture grad on the prediction tensor so we can split per-channel
+            # gradient L2 norms (Ux / Uy / p) on surface nodes after backward.
+            pred.retain_grad()
             err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_mask_3d = vol_mask.unsqueeze(-1)
             surf_mask_3d = surf_mask.unsqueeze(-1)
+            n_surf = surf_mask_3d.sum().clamp(min=1)
             vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-            surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Per-channel surface losses: Ux/Uy share alpha=surf_weight; p uses beta=surf_p_weight.
+            err_surf_uxuy = err[..., :2]   # [B, N, 2] -> Ux, Uy
+            err_surf_p = err[..., 2:3]     # [B, N, 1] -> p
+            surf_uxuy_loss = (err_surf_uxuy * surf_mask_3d).sum() / n_surf
+            surf_p_loss = (err_surf_p * surf_mask_3d).sum() / n_surf
+            loss = vol_loss + cfg.surf_weight * surf_uxuy_loss + cfg.surf_p_weight * surf_p_loss
+
+            # Per-channel unweighted surface diagnostics (matches mae_surf_* semantics).
+            n_surf_2d = surf_mask.sum().clamp(min=1)
+            surf_Ux_unw = (err[..., 0] * surf_mask).sum() / n_surf_2d
+            surf_Uy_unw = (err[..., 1] * surf_mask).sum() / n_surf_2d
+            surf_p_unw  = (err[..., 2] * surf_mask).sum() / n_surf_2d
+            # Legacy combined (matches the pre-change train/surf_loss definition).
+            surf_loss_total = surf_uxuy_loss + surf_p_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -572,6 +595,22 @@ for epoch in range(MAX_EPOCHS):
             model.parameters(), max_norm=float("inf")
         )
         optimizer.step()
+
+        # Per-channel L2 norm of dL/dpred on surface nodes — smoking-gun that
+        # beta=surf_p_weight actually amplifies p relative to Ux/Uy.
+        if pred.grad is not None:
+            with torch.no_grad():
+                g = pred.grad.detach().float()                  # [B, N, 3]
+                sm = surf_mask.float().unsqueeze(-1)             # [B, N, 1]
+                g_surf = g * sm
+                g_ux = g_surf[..., 0].pow(2).sum().sqrt().item()
+                g_uy = g_surf[..., 1].pow(2).sum().sqrt().item()
+                g_p  = g_surf[..., 2].pow(2).sum().sqrt().item()
+                epoch_grad_norm_Ux += g_ux
+                epoch_grad_norm_Uy += g_uy
+                epoch_grad_norm_p  += g_p
+                epoch_grad_n += 1
+
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -580,7 +619,12 @@ for epoch in range(MAX_EPOCHS):
         })
 
         epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
+        epoch_surf += surf_loss_total.item()
+        epoch_surf_uxuy += surf_uxuy_loss.item()
+        epoch_surf_p += surf_p_loss.item()
+        epoch_surf_Ux_unw += surf_Ux_unw.item()
+        epoch_surf_Uy_unw += surf_Uy_unw.item()
+        epoch_surf_p_unw  += surf_p_unw.item()
         n_batches += 1
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -589,6 +633,16 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_uxuy /= max(n_batches, 1)
+    epoch_surf_p /= max(n_batches, 1)
+    epoch_surf_Ux_unw /= max(n_batches, 1)
+    epoch_surf_Uy_unw /= max(n_batches, 1)
+    epoch_surf_p_unw  /= max(n_batches, 1)
+    grad_n = max(epoch_grad_n, 1)
+    mean_grad_Ux = epoch_grad_norm_Ux / grad_n
+    mean_grad_Uy = epoch_grad_norm_Uy / grad_n
+    mean_grad_p  = epoch_grad_norm_p  / grad_n
+    grad_ratio_p_uxuy = mean_grad_p / max((mean_grad_Ux + mean_grad_Uy) / 2.0, 1e-12)
 
     # --- Validate ---
     model.eval()
@@ -606,6 +660,15 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_uxuy_loss": epoch_surf_uxuy,
+        "train/surf_p_loss": epoch_surf_p,
+        "train/surf_Ux_unweighted": epoch_surf_Ux_unw,
+        "train/surf_Uy_unweighted": epoch_surf_Uy_unw,
+        "train/surf_p_unweighted": epoch_surf_p_unw,
+        "train/grad_norm_surf_Ux": mean_grad_Ux,
+        "train/grad_norm_surf_Uy": mean_grad_Uy,
+        "train/grad_norm_surf_p": mean_grad_p,
+        "train/grad_norm_ratio_p_over_uxuy": grad_ratio_p_uxuy,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -634,7 +697,9 @@ for epoch in range(MAX_EPOCHS):
 
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"surf_Ux={epoch_surf_Ux_unw:.4f} surf_Uy={epoch_surf_Uy_unw:.4f} surf_p={epoch_surf_p_unw:.4f}]  "
+        f"grad[Ux={mean_grad_Ux:.2e} Uy={mean_grad_Uy:.2e} p={mean_grad_p:.2e} p/uxuy={grad_ratio_p_uxuy:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
