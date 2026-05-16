@@ -709,6 +709,32 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 18:25 — PR #4041 — FiLM-full: all 11 broadcast scalars (NO MERGE, sent back for v2)
+
+- **Branch:** `charliepai2i48h1-alphonse/film-full-cond`
+- **Hypothesis:** Extend FiLM conditioning from 3 scalars [log_Re, AoA0, AoA1] to all 11 broadcast-constant scalars (add NACA0×3, NACA1×3, gap, stagger). Targeting val_geom_camber_rc which holds out front-foil NACA shape.
+- **Results vs baseline (val=68.80, test=59.49):**
+
+| Metric | Baseline (FiLM-Re+AoA) | FiLM-full (11) | Δ |
+|--------|----------------------:|---------------:|--:|
+| `val_avg/mae_surf_p` | **68.80** | 69.5554 | +0.76 (within ±5-10 noise, but a slight regression) |
+| `test_avg/mae_surf_p` | **59.49** | 60.2500 | +0.76 (same direction) |
+| `val_single_in_dist` | 80.63 | **84.67** | **+4.04 (regression — dominant)** |
+| `val_geom_camber_rc` | 80.24 | 79.43 | -0.81 (slightly better, target hit) |
+| `val_geom_camber_cruise` | 47.81 | 48.09 | +0.28 (≈same) |
+| `val_re_rand` | 66.50 | 66.03 | -0.47 (slightly better) |
+| sec/epoch | ~102s | ~102s | 0% (compute cost negligible) |
+| n_params | 654,931 | 655,955 | +1,024 (Linear(3→11, 128) extra weights) |
+
+- **Metrics path:** `models/model-film-full-cond-20260516-163220/metrics.jsonl`
+- **Decision:** NO MERGE (slight aggregate regression). NOT closed — direction is partially validated and there's a clear mechanistic explanation + fix. Sent back for v2.
+- **Key diagnostic — structural zeros:** Single-foil samples (val_single_in_dist) carry exact zeros at NACA1×3 + gap + stagger (5 dims) because foil 2 doesn't exist (see `data/prepare_splits.py:81-99`). The Linear(11, 128) FiLM head therefore sees a categorically different conditioning distribution for single-foil (sparse zeros on 5/11 dims) vs tandem (dense). The FiLM modulation `(1+γ)·fx + β` is driven by a noisier, higher-dimensional input on a subset of training, which hurts single-foil more than the extra NACA/geom info helps it (+4.04 regression on val_single_in_dist).
+- **OOD hypothesis partially validated:** val_geom_camber_rc moved in the right direction (-0.81) and val_re_rand also (-0.47). Both gains are below seed variance, but the qualitative signal matches the hypothesis. Hidden by the val_single_in_dist regression in the average.
+- **Student's analysis** (excellent): Two cleanest fixes — (a) mask-aware FiLM with explicit is_tandem indicator, (b) two-stage FiLM with separate heads for [Re, AoA0, AoA1, NACA0] (always-meaningful, 6 dims) and [AoA1, NACA1, gap, stagger] (tandem-only, 5 dims) gated by is_tandem. Both directly fix the single-foil regression mechanism.
+- **Next action:** Send back to alphonse for v2 — two-stage FiLM with is_tandem gate. The original PR branch is reused (alphonse remains active on the same logical hypothesis).
+
+---
+
 ## 2026-05-16 16:30 — PR #4018 — FiLM-Re+AoA (MERGED → new baseline, -3.7%)
 
 - **Branch:** `charliepai2i48h1-alphonse/film-re-aoa`
