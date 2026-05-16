@@ -2,7 +2,66 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-15 21:29 — PR #3315: Cautious AdamW (Liang et al. ICLR 2026) (current best)
+## 2026-05-16 00:00 — PR #3466: Bernoulli pressure residual (current best)
+
+Stacks on top of PR #3315 Cautious AdamW + PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Reformulates the prediction target: instead of predicting raw `p`, predict the **viscous residual** `p − p_B` where `p_B = 0.5 · V_∞²` is the free-stream Bernoulli reference (per-sample scalar, `V_∞ = exp(log_Re) · 1.5e-5` m/s using the kinematic viscosity of air and L=1m chord). At inference, the model output is added back to the per-sample `p_B` to recover physical pressure. The student's empirical pre-pass confirmed the target std *increases* 1.71× under this transformation (raw p_std=679 → residual_std=1160), counter to the original "removes dynamic range" intuition; the win comes from a different mechanism — removing the analytic `V_∞²/2` component lets the network spend all its capacity on the spatial structure (viscous BL, separation, vortex shedding) rather than on first re-learning the freestream constant.
+
+> **Note on tested code state:** Validated against the current merged tip on `origin/icml-appendix-charlie-pai2i-24h-r5` at `3a3104a` (post-Cautious-AdamW, post-bf16, post-FiLM+surf-L1+EMA+scale-inv). 17 epochs / 50 inside the 30-min wall-clock cap, same epoch budget as the merged Cautious AdamW + bf16 baseline. This is the first head-to-head measured compound result confirming the full-merged-stack baseline lands close to the pre-bf16 Cautious AdamW number (90.34) — bf16's epoch-budget unlock did not change the picture as much as predicted, but the Bernoulli residual reformulation gave a clean −4.7% on top.
+
+**Primary** (Bernoulli residual validated on the full merged stack — Cautious AdamW + bf16 + FiLM + surf-L1 + EMA + scale-inv)
+- `val_avg/mae_surf_p` = **86.0948** (best epoch 17 / 50, run cut by 30-min wall clock; **−4.70% vs PR #3315**, **−30.49% vs round-5 anchor PR #3266**)
+- `test_avg/mae_surf_p` = **77.5066** (**−3.32% vs PR #3315**, **−32.22% vs round-5 anchor**)
+
+**Per-split surface pressure MAE (Bernoulli residual + full stack)**
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 102.0390 | 93.0730 |
+| geom_camber_rc | 100.1206 | 90.1840 |
+| geom_camber_cruise | 62.9941 | 52.3967 |
+| re_rand | 79.2254 | 74.3726 |
+| **avg** | **86.0948** | **77.5066** |
+
+**Largest per-split gain:** `val_single_in_dist` −7.16% (the previous worst split — was 109.91 under merged Cautious AdamW baseline). All four val splits and all four test splits improved; gains scale with V_∞-range mixedness (largest gain on the most regime-mixed splits: single_in_dist and re_rand).
+
+**Mechanism summary**
+- Subtracting per-sample `p_B = 0.5·V_∞²` removes the analytic component that depends only on Reynolds number
+- Bernoulli per-sample shift is computed once at startup from `log_Re` features (no per-batch overhead)
+- Target std *increases* 1.71× (raw 679 → residual 1160), but normalized-space MSE/L1 loss landscape is unchanged
+- Network capacity reallocates from "compute V_∞²" to "fit viscous residual" — implicit prior shrink
+- Compounds with all six previously-merged mechanisms
+
+**Arm B (chord-position correction):** failed (val_avg=122.18, +35%). The chord-position formula was applied to global mesh x-coordinate (range [-9.55, 11.34], ~20 chord lengths) rather than normalized chord position, producing high-frequency oscillations that injected noise. Clean negative on the implementation as specified — properly-computed chord position would require per-foil chord-boundary detection, deferred as a future follow-up.
+
+**Model config (architecture unchanged from #3315; new prediction target via train-time/eval-time `--bernoulli_residual` flag)**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- 829,015 raw params (same as #3265); EMA shadow copy at decay=0.999
+- Optimizer: CautiousAdamW lr=5e-4, wd=1e-4 (replaces standard AdamW)
+- bf16 mixed precision via `torch.autocast` (peak VRAM ~33 GB)
+- batch_size=4, surf_weight=10.0, surf_p_l1_weight=1.0, CosineAnnealingLR(T_max=50)
+- Loss: per-sample scale-invariant MSE + surf_p_l1_weight=1.0 * surf_p_l1 (on residual target)
+- New: `--bernoulli_residual freestream` to subtract `p_B = 0.5·V_∞²` from training targets and add back at eval
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-askeladd-bernoulli_freestream-20260515-215606/metrics.jsonl`
+- `models/model-charliepai2i24h5-askeladd-bernoulli_freestream-20260515-215606/metrics.yaml`
+- `models/model-charliepai2i24h5-askeladd-bernoulli_freestream-20260515-215606/config.yaml`
+
+**Reproduce**
+```bash
+cd target/
+python train.py --agent charliepai2i24h5-askeladd \
+    --experiment_name "charliepai2i24h5-askeladd/bernoulli_freestream" \
+    --bernoulli_residual freestream \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+
+**Cumulative round-5 improvement:** **−30.49% val_avg** (123.88 → 86.09) and **−32.22% test_avg** (114.37 → 77.51) over the pre-round-5 baseline. **Six compounding wins**: scale-inv → EMA → surf-L1 → FiLM → bf16 → Cautious AdamW → Bernoulli residual (seven mechanisms, six confirmed compoundings).
+
+---
+
+## 2026-05-15 21:29 — PR #3315: Cautious AdamW (Liang et al. ICLR 2026) (previous best)
 
 Stacks on top of PR #3373 bf16 + PR #3265 FiLM + PR #3337 surf-L1 + PR #3281 EMA + PR #3266 scale-invariant loss + NaN fix. Subclass `CautiousAdamW(torch.optim.AdamW)`: snapshots params before `super().step()`, then post-step constructs the agreement mask `(m * g > 0)` from the EMA-momentum `exp_avg` and the original gradient, mean-rescales the mask with `clamp(min=1e-3)`, and replaces the parent's delta with `delta * mask`. Result: ~38% of update components are gated to zero each step (mean mask agreement ≈ 0.62, flat across all training epochs and across all merged-mechanism variants — direct evidence that cautious masking operates on disjoint state from EMA/FiLM/surf-L1). Mechanism gates noisy update directions per step; EMA averages the iterate trajectory; FiLM conditions architecture on regime; surf-L1 aligns gradient with the eval metric. Four orthogonal axes.
 
