@@ -458,6 +458,8 @@ class Config:
     cosine_t_max_epochs: int = 80  # default unchanged from current behavior
     ema_decay: float = 0.999
     compile_mode: str = ""  # empty = no compile (baseline behavior)
+    attn_grad_norm: float = 1.0
+    other_grad_norm: float = 1.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -506,6 +508,19 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+
+# Per-group grad-clip partitions: attn (PhysicsAttention + temperature) vs everything
+# else (MLP/output/LN/preprocess). Captured pre-compile so names lack the
+# torch.compile `_orig_mod.` prefix; the parameter tensors are identical post-compile.
+attn_params = [p for n, p in model.named_parameters()
+               if ".attn." in n or n.endswith(".temperature")]
+other_params = [p for n, p in model.named_parameters()
+                if not (".attn." in n or n.endswith(".temperature"))]
+n_attn = sum(p.numel() for p in attn_params)
+n_other = sum(p.numel() for p in other_params)
+print(f"Grad-clip groups: attn={n_attn/1e6:.2f}M params, other={n_other/1e6:.2f}M params")
+assert n_attn + n_other == n_params, "Param partition incomplete or overlapping"
+
 if cfg.compile_mode:
     _mode = cfg.compile_mode if cfg.compile_mode != "default" else None
     model = torch.compile(model, mode=_mode, dynamic=True)
@@ -546,6 +561,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_gn_sum = 0.0
     epoch_gn_max = 0.0
     epoch_gn_clipped = 0
+    epoch_attn_gn_sum = 0.0
+    epoch_other_gn_sum = 0.0
+    epoch_attn_gn_max = 0.0
+    epoch_other_gn_max = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -574,15 +593,26 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # Per-group grad-clip: attention/temperature vs MLP/output/preprocess.
+        # Each group has its own pre-clip total norm and max_norm cap; the
+        # combined `grad_norm` below is for logging only.
+        attn_norm = torch.nn.utils.clip_grad_norm_(attn_params, max_norm=cfg.attn_grad_norm)
+        other_norm = torch.nn.utils.clip_grad_norm_(other_params, max_norm=cfg.other_grad_norm)
+        grad_norm = (attn_norm.pow(2) + other_norm.pow(2)).sqrt()
         optimizer.step()
         ema.update(model)
 
         gn = grad_norm.item()
+        attn_gn = attn_norm.item()
+        other_gn = other_norm.item()
         epoch_gn_sum += gn
         epoch_gn_max = max(epoch_gn_max, gn)
         if gn > 1.0:
             epoch_gn_clipped += 1
+        epoch_attn_gn_sum += attn_gn
+        epoch_other_gn_sum += other_gn
+        epoch_attn_gn_max = max(epoch_attn_gn_max, attn_gn)
+        epoch_other_gn_max = max(epoch_other_gn_max, other_gn)
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -594,6 +624,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     gn_mean = epoch_gn_sum / max(n_batches, 1)
     gn_clip_frac = epoch_gn_clipped / max(n_batches, 1)
+    attn_gn_mean = epoch_attn_gn_sum / max(n_batches, 1)
+    other_gn_mean = epoch_other_gn_sum / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -632,6 +664,10 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_preclip_mean": gn_mean,
         "train/grad_norm_preclip_max": epoch_gn_max,
         "train/grad_norm_clip_frac": gn_clip_frac,
+        "train/attn_grad_norm_preclip_mean": attn_gn_mean,
+        "train/attn_grad_norm_preclip_max": epoch_attn_gn_max,
+        "train/other_grad_norm_preclip_mean": other_gn_mean,
+        "train/other_grad_norm_preclip_max": epoch_other_gn_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -642,6 +678,11 @@ for epoch in range(MAX_EPOCHS):
         f"gn[mean={gn_mean:.3f} max={epoch_gn_max:.2f} clip={gn_clip_frac*100:.1f}%]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    if (epoch + 1) in {1, 5, 10, 15, 33} or tag == " *":
+        print(
+            f"    [GRAD-CLIP DIAG] attn_norm_pre[mean={attn_gn_mean:.4f} max={epoch_attn_gn_max:.4f}]  "
+            f"other_norm_pre[mean={other_gn_mean:.4f} max={epoch_other_gn_max:.4f}]"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
