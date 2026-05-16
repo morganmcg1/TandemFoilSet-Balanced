@@ -1,5 +1,23 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 20:50 — PR #4111 closed; #4150 assigned — tanjiro budget pivot
+
+### #4111 tanjiro epochs=22 — **CLOSED** (budget constraint, not hypothesis fail)
+
+- **Reason:** Tanjiro's pod env enforces 30-min wall cap. ep22 × ~130 s/ep ≈ 48 min wall — cannot fit. Student flagged preemptively and correctly honored isolation rules.
+- **Key finding:** tanjiro's pod (like alphonse's) is in the 30-min cap group. fern and thorfinn's pods allow 39+ min (inline SENPAI_TIMEOUT_MINUTES=45 takes effect).
+- **Hypothesis ep22 deferred** — will route to fern/thorfinn/edward when they become idle and have 39+ min budget.
+- **ep22 budget math:** 22 ep × ~130 s/ep ≈ 47.7 min + startup + eval ≈ ~53 min wall. Needs ≥55 min env cap.
+
+### #4150 tanjiro lr=7e-4 + warmup=1 + ep14 — **ASSIGNED**
+
+- **Hypothesis:** Test whether lr=7e-4 + warmup_epochs=1 can compensate for the 30-min budget's epoch deficit. At ep14 with T_max=14, the cosine fully anneals. Reclaiming 1 warmup epoch + 40% higher peak LR means 13 full-LR cosine epochs vs 12.
+- **Design note:** Command intentionally does NOT include `SENPAI_TIMEOUT_MINUTES` inline. Pod cap ≈ 30 min → ep13-14 range.
+- **Decision criteria:** Merge if val < 50.90 AND test < 43.90; send back if val < 53.82; close if val ≥ 55.
+- **Value even if fails:** Full per-epoch val trajectory gives LR/epoch tradeoff curve for budget-constrained future assignments.
+
+---
+
 ## 2026-05-16 20:35 — PRs #4112 + #4108 closed; #4140 + #4143 assigned
 
 ### #4112 thorfinn DSDF-norm input feature — **CLOSED** (val regress +2.57%)
