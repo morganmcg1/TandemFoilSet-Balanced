@@ -32,6 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -399,7 +400,10 @@ def write_experiment_summary(
         "fourier_base": cfg.fourier_base,
         "lr_t_max": cfg.lr_t_max,
         "layer_scale_init": cfg.layer_scale_init,
+        "ema_decay": cfg.ema_decay,
     }
+    if "raw_val_avg/mae_surf_p" in best_metrics:
+        summary["best_raw_val_avg/mae_surf_p"] = best_metrics["raw_val_avg/mae_surf_p"]
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
@@ -451,6 +455,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
+    ema_decay: float | None = None  # None disables EMA; typical values 0.999 / 0.9995
 
 
 cfg = sp.parse(Config)
@@ -522,6 +527,12 @@ if cfg.layer_scale_init > 0:
           f"{len(decay_params)} decay params")
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+ema_model: AveragedModel | None = None
+if cfg.ema_decay is not None:
+    ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(cfg.ema_decay))
+    ema_model.to(device)
+    print(f"EMA enabled (decay={cfg.ema_decay})")
 cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
@@ -583,6 +594,8 @@ for epoch in range(MAX_EPOCHS):
         else:
             gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
         optimizer.step()
+        if ema_model is not None:
+            ema_model.update_parameters(model)
 
         gnorm_val = gnorm.item()
         grad_norm_sum += gnorm_val
@@ -599,12 +612,27 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    eval_model = model
+    if ema_model is not None:
+        ema_model.eval()
+        eval_model = ema_model.module
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+
+    # Also evaluate the raw (non-EMA) model so we can report the EMA contribution.
+    raw_split_metrics = None
+    raw_avg_surf_p = None
+    if ema_model is not None:
+        raw_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+            for name, loader in val_loaders.items()
+        }
+        raw_avg_surf_p = aggregate_splits(raw_split_metrics)["avg/mae_surf_p"]
+
     dt = time.time() - t0
 
     tag = ""
@@ -615,7 +643,11 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        if ema_model is not None:
+            best_metrics["raw_val_avg/mae_surf_p"] = raw_avg_surf_p
+            torch.save(ema_model.module.state_dict(), model_path)
+        else:
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -633,6 +665,7 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_max": grad_norm_max,
         "train/clip_frac": clip_frac,
         "grad_clip_max_norm": cfg.grad_clip_max_norm,
+        "ema_decay": cfg.ema_decay,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -640,11 +673,17 @@ for epoch in range(MAX_EPOCHS):
     gstats = gamma_stats(model)
     if gstats:
         epoch_record.update(gstats)
+    if ema_model is not None:
+        epoch_record["raw_val_avg/mae_surf_p"] = raw_avg_surf_p
+        epoch_record["raw_val_splits"] = raw_split_metrics
     append_metrics_jsonl(metrics_jsonl_path, epoch_record)
+    ema_str = ""
+    if ema_model is not None:
+        ema_str = f"  raw_val={raw_avg_surf_p:.4f}"
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{ema_str}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
