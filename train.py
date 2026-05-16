@@ -305,11 +305,67 @@ def _apply_fourier(x_norm, model):
 
 
 # ---------------------------------------------------------------------------
+# Z-reflection TTA helpers
+# ---------------------------------------------------------------------------
+
+# Raw-input feature indices whose sign flips under z → -z.
+# - dim 1: z-coordinate.
+# - dims 2-3: signed arc-length (upper/lower surface swap).
+# - dims 14, 18: AoA foil 1 and foil 2 (rotation reflected).
+# - dim 22: gap (z-direction offset between tandem foils).
+# dsdf magnitudes (4-11), is_surface (12), log Re (13), NACA M/P/T (15-17, 19-21),
+# stagger (23) are invariant.
+_Z_REFLECT_INPUT_IDX = (1, 2, 3, 14, 18, 22)
+
+
+def _model_forward(model, x_raw, stats, log_re_raw):
+    """Normalize, apply Fourier, and forward through model.
+
+    Returns the prediction in normalized output space.
+    """
+    x_norm = (x_raw - stats["x_mean"]) / stats["x_std"]
+    x_norm = _apply_fourier(x_norm, model)
+    return model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
+
+
+def _predict_with_tta(model, x_raw, stats, log_re_raw, use_tta):
+    """Predict, optionally averaging over z-reflection TTA.
+
+    Returns prediction in NORMALIZED output space (matches the
+    non-TTA forward contract, so downstream code is unchanged).
+
+    Under reflection z → -z of the geometry, the CFD solution transforms:
+      - Ux (output channel 0) invariant
+      - Uy (output channel 1, the z-component of velocity) flips sign
+      - p  (output channel 2) invariant
+
+    The averaging is performed in PHYSICAL space (denormalized) so the
+    nonzero y_mean (especially for p) is handled correctly when flipping Uy.
+    """
+    pred_orig = _model_forward(model, x_raw, stats, log_re_raw)
+    if not use_tta:
+        return pred_orig
+
+    x_refl = x_raw.clone()
+    for idx in _Z_REFLECT_INPUT_IDX:
+        x_refl[..., idx] = -x_refl[..., idx]
+    pred_refl = _model_forward(model, x_refl, stats, log_re_raw)
+
+    y_mean = stats["y_mean"]
+    y_std = stats["y_std"]
+    pred_orig_phys = pred_orig * y_std + y_mean
+    pred_refl_phys = pred_refl * y_std + y_mean
+    pred_refl_phys[..., 1] = -pred_refl_phys[..., 1]
+    pred_avg_phys = 0.5 * (pred_orig_phys + pred_refl_phys)
+    return (pred_avg_phys - y_mean) / y_std
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   split_name: str = "") -> dict[str, float]:
+                   split_name: str = "", use_tta: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -341,11 +397,9 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = _apply_fourier(x_norm, model)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
-            pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
+            pred = _predict_with_tta(model, x, stats, log_re_raw, use_tta=use_tta)
 
             # Diagnostic: model produced non-finite values in normalized space?
             nf_pred = (~torch.isfinite(pred)) & mask.unsqueeze(-1)
@@ -617,6 +671,7 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
+    use_tta_reflection: bool = False  # also evaluate the best checkpoint with z-reflection TTA
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -906,6 +961,49 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    if cfg.use_tta_reflection:
+        # Re-evaluate the best checkpoint with z-reflection TTA. Averages
+        # original and z-reflected forward passes (with Uy sign-flip in the
+        # reflected branch). The non-TTA val/test numbers above are the
+        # reproducible baseline; the *_tta numbers below quantify the TTA gain.
+        print("\nRe-evaluating best checkpoint with z-reflection TTA...")
+        val_metrics_tta = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 split_name=name, use_tta=True)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_tta = aggregate_splits(val_metrics_tta)
+        print(f"  VAL  (TTA)  avg_surf_p={val_avg_tta['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, val_metrics_tta[name])
+
+        tta_log: dict[str, float] = {}
+        for split_name, m in val_metrics_tta.items():
+            for k, v in m.items():
+                tta_log[f"val_tta/{split_name}/{k}"] = v
+        for k, v in val_avg_tta.items():
+            tta_log[f"val_tta_{k}"] = v
+
+        if not cfg.skip_test:
+            test_metrics_tta = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                     split_name=name, use_tta=True)
+                for name, loader in test_loaders.items()
+            }
+            test_avg_tta = aggregate_splits(test_metrics_tta)
+            print(f"\n  TEST (TTA)  avg_surf_p={test_avg_tta['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_metrics_tta[name])
+
+            for split_name, m in test_metrics_tta.items():
+                for k, v in m.items():
+                    tta_log[f"test_tta/{split_name}/{k}"] = v
+            for k, v in test_avg_tta.items():
+                tta_log[f"test_tta_{k}"] = v
+
+        wandb.log(tta_log)
+        wandb.summary.update(tta_log)
 
     save_model_artifact(
         run=run,
