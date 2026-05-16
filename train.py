@@ -62,6 +62,41 @@ ACTIVATION = {
 }
 
 
+class ModelEMA:
+    """Polyak / EMA of model weights: shadow_t = decay * shadow_{t-1} + (1-decay) * theta_t.
+
+    apply_to(model) overwrites live params with EMA values and returns a backup
+    so restore() can put the live params back. We snapshot buffers too so any
+    non-parameter state (e.g. attention temperature buffers, normalization
+    running stats) is preserved across the swap even though we don't average it.
+    """
+
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+
+    @torch.no_grad()
+    def update(self, model):
+        for n, p in model.named_parameters():
+            if p.requires_grad and n in self.shadow:
+                self.shadow[n].mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
+
+    @torch.no_grad()
+    def apply_to(self, model):
+        backup = {}
+        for n, p in model.named_parameters():
+            if n in self.shadow:
+                backup[n] = p.detach().clone()
+                p.data.copy_(self.shadow[n])
+        return backup
+
+    @torch.no_grad()
+    def restore(self, model, backup):
+        for n, p in model.named_parameters():
+            if n in backup:
+                p.data.copy_(backup[n])
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -440,6 +475,10 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+EMA_DECAY = 0.999
+ema = ModelEMA(model, decay=EMA_DECAY)
+print(f"EMA / Polyak weight averaging enabled (decay={EMA_DECAY})")
+
 decay_params, no_decay_params = [], []
 for name, p in model.named_parameters():
     if not p.requires_grad:
@@ -519,6 +558,7 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -528,14 +568,27 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (live + EMA) ---
     model.eval()
-    split_metrics = {
+    live_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_avg_surf_p = live_val_avg["avg/mae_surf_p"]
+
+    ema_backup = ema.apply_to(model)
+    ema_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+    ema.restore(model, ema_backup)
+
+    # Primary metric is EMA val.
+    avg_surf_p = ema_avg_surf_p
+    split_metrics = ema_split_metrics
     dt = time.time() - t0
 
     tag = ""
@@ -546,7 +599,10 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        # Save EMA-applied weights as the checkpoint so test eval uses EMA.
+        ema_backup_save = ema.apply_to(model)
         torch.save(model.state_dict(), model_path)
+        ema.restore(model, ema_backup_save)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -558,13 +614,19 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
+        "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+        "live_val_avg/mae_surf_p": live_avg_surf_p,
         "val_splits": split_metrics,
+        "ema_val_splits": ema_split_metrics,
+        "live_val_splits": live_split_metrics,
+        "ema_decay": EMA_DECAY,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p(EMA)={ema_avg_surf_p:.4f}{tag}  "
+        f"val_avg_surf_p(live)={live_avg_surf_p:.4f}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
