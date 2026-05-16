@@ -929,3 +929,37 @@ Per-split val:
 |---|---|---|---|
 | #3874 | edward | LR warmup (1-2 ep linear) on SwiGLU+n_head=2 | Does cold-start fix unlock warmup benefit at this scale? |
 | #3877 | tanjiro | PhysicsAttention temperature_init=0.2 on SwiGLU+n_head=2 | Does sharper slice assignment from step 1 help? |
+
+## 2026-05-16 10:55 — PR #3789: vel-asinh scale=0.5 on SwiGLU+n_head=2 — thorfinn (MERGED)
+
+- Branch: `willowpai2i48h2-thorfinn/vel-asinh-on-swiglu`
+- W&B runs: `hy29un5q` (63.74), `7cw3m817` (65.91), `0rnfylq0` (in-progress)
+- **Hypothesis**: vel-asinh scale=0.5 compounds with SwiGLU baseline. Mechanism confirmed on old GELU stack (−7.1%), re-testing on new stack.
+
+| Run | val_avg/mae_surf_p | test_3split/mae_surf_p | Δ vs #3794 (64.34) |
+|---|---|---|---|
+| `hy29un5q` | **63.7383** | **62.9264** | **−0.93%** |
+| `7cw3m817` | 65.9056 | — | +2.44% (beats #3723 66.61) |
+| Mean (2 finished) | 64.82 | — | −1.1% avg |
+
+Per-split val (hy29un5q): single_in_dist 72.73 (−5.62%) | geom_camber_rc 78.38 (+0.26%) | geom_camber_cruise 43.62 (−0.29%) | re_rand 60.22 (−0.57%)
+
+**Analysis**: vel-asinh mechanism is activation-function-independent. Scale=0.5 remains the optimum: scale=0.25 (askeladd #3796) over-compresses and regresses +4%. The win concentrates on single_in_dist (−5.62%) where large-velocity outliers are most penalized by MSE. geom_camber_rc essentially flat — it's the geometry-shift split with the most distinct velocity patterns. **MERGED — new baseline val=63.7383.**
+
+## 2026-05-16 11:00 — Closures: PRs #3793, #3790, #3796 (moved-baseline situations)
+
+All three tested real mechanisms that won on the SwiGLU-only baseline (66.61), but the n_head=2 merge (#3794→64.34) and vel-asinh merge (#3789→63.74) moved the bar before their terminals arrived.
+
+| PR | val vs #3723 (66.61) | val vs new (63.74) | Verdict |
+|---|---|---|---|
+| #3793 alphonse Huber δ=0.5 | −1.62% WIN | +2.8% worse | CLOSED — mechanism real, now testing compound (#3901) |
+| #3790 nezuko wd=1e-3 | −1.46% WIN | +3.0% worse | CLOSED — mechanism real, now testing compound (#3902) |
+| #3796 askeladd vel-scale=0.25 | +0.60% regression | +5.2% worse | CLOSED — over-compression confirmed; per-channel H-07 next (#3903) |
+
+## 2026-05-16 11:05 — Round-8 assignments (3 PRs on new full baseline val=63.74)
+
+| PR | Student | Hypothesis | Key test |
+|---|---|---|---|
+| #3901 | alphonse | Huber δ=0.5 compound on full stack | Does δ=0.5 compound with vel-asinh+n_head=2? |
+| #3902 | nezuko | wd=1e-3 compound on full stack | Does wd=1e-3 compound with vel-asinh+n_head=2? |
+| #3903 | askeladd | vel-asinh per-channel Ux≠Uy (uy=0.3 vs 0.7) | Does independent per-channel scale beat shared 0.5? |
