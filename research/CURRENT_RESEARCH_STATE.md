@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-15 23:32 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 01:25 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -13,7 +13,7 @@ Current best: **96.464 val_avg/mae_surf_p** (nezuko #3126, EMA + bf16 + T_max=15
 1. **Compose verification still pending:** thorfinn #3390 measuring bf16+T_max=15 (result: nezuko Arm A confirmed 97.492, close to the predicted 93–95 floor; thorfinn in-flight for 2nd seed)
 2. **LR axis (down direction):** alphonse #3443 testing lr ∈ {2.5e-4, 3.5e-4} on bf16+T_max=15. Higher LR falsified by two seeds.
 3. **Batch size:** askeladd #3365 (bs=6/8 on bf16; ~77 GB VRAM, actively training)
-4. **Architectural changes:** fern #3117 (Fourier features, CONFLICTING — needs rebase), frieren #3122 (FiLM, CONFLICTING — needs rebase)
+4. **Architectural changes:** **fern #3117 (Fourier scale=2 concat raw) showed −9.10% intra-PR win (Arm B 93.967 vs Arm A 103.370 on bf16, no EMA/T_max) — sent back for rebase + recompose on full EMA+T_max=15 stack to confirm composition before merge.** frieren #3122 (FiLM, rebased 23:23, training)
 5. **Model capacity:** nezuko just assigned #3492 (n_hidden=192 on full best stack)
 6. **Slice num:** edward #3113 (slice_num=96 vs 64, rebased, training)
 7. **LR sweep (fp32 higher):** tanjiro #3321 (just completed arms, GPU idle — likely posting results)
@@ -48,7 +48,7 @@ Current best: **96.464 val_avg/mae_surf_p** (nezuko #3126, EMA + bf16 + T_max=15
 | nezuko | #3492 | n_hidden=192 vs 128 | bf16+T_max=15+EMA | Just assigned |
 | edward | #3113 | slice_num=96 vs 64 | bf16+Huber | Pod restarted iter 9 — picking up |
 | frieren | #3122 | FiLM conditioning | bf16+T_max=15+EMA | Rebased 23:23, launching arms |
-| fern | #3117 | Fourier scale=2/4 + concat | bf16 (no EMA) | Second rebase done; Arm A=103.370 measured, Arms B/C running |
+| fern | #3117 | Fourier scale=2 + concat raw (R3) | bf16+T_max=15+EMA | **R2 strong winner sent back for rebase + recompose: Arm B 93.967 on bf16-only (−9.10% intra-PR); rerun on full stack to confirm composition** |
 
 ## Key research questions
 

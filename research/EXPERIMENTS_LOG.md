@@ -508,3 +508,48 @@ Assigned tanjiro PR #3511 with 3 arms on full best stack:
 - Arm A: no clip
 - Arm B: clip_grad_norm=1.0
 - Arm C: clip_grad_norm=0.5
+
+## 2026-05-16 01:25 — PR #3117 [SENT BACK FOR REBASE+RECOMPOSE]: Fourier features Round 2 — concat raw + scale ∈ {2, 4}
+
+- **Student branch:** `charliepai2i48h4-fern/fourier-pos-features`
+- **Hypothesis:** NeRF-style Fourier features (sin/cos at random Gaussian frequencies) on (x,z) positions unlock high-frequency content for sharper pressure gradients. Round 1 (scale=10, replace raw) gave net-zero average but +9% on multi-foil (`*_rc`) splits. Round 2 (scale=2/4, concat raw+Fourier) is the advisor-prescribed fix — preserve raw position as low-frequency fallback, lower scale to match foil coordinate span (±1.5σ).
+
+### Results (3 arms, single GPU, 30-min × 50-epoch caps, all bf16 AMP, no EMA, no T_max=15)
+
+| Arm | Config | `val_avg/mae_surf_p` | Δ vs Arm A | `test_avg/mae_surf_p` | Δ vs Arm A |
+|-----|--------|----------------------|------------|-----------------------|------------|
+| A | bf16, no Fourier (baseline) | 103.370 | — | 96.014 | — |
+| B | bf16, Fourier scale=2, num_bands=10, concat raw | **93.967** | **−9.10%** ✅ | **83.878** | **−12.64%** ✅ |
+| C | bf16, Fourier scale=4, num_bands=10, concat raw | 96.946 | −6.21% ✅ | 88.886 | −7.42% ✅ |
+
+### Per-split val (best checkpoint, mae_surf_p)
+
+| Split | Arm A (raw) | Arm B (scale=2) | Δ_B | Arm C (scale=4) | Δ_C |
+|---|---|---|---|---|---|
+| `val_single_in_dist`     | 121.82 | **116.23** | **−4.59%** ✅ | 118.50 | −2.73% ✅ |
+| `val_geom_camber_cruise` |  88.56 |  **67.07** | **−24.26%** ✅ |  72.88 | −17.70% ✅ |
+| `val_re_rand`            |  97.74 |  **86.32** | **−11.68%** ✅ |  90.16 | −7.76% ✅ |
+| `val_geom_camber_rc`     | 105.36 | 106.25 | +0.84% (≈0) | 106.25 | +0.85% (≈0) |
+
+### Analysis
+
+- **Round 1 OOD failure fully repaired.** Round 1 with `scale=10, replace_positions` regressed `*_rc` by +9%; Round 2 with `scale=2, concat` regresses it by +0.84% (within noise). Mechanism: keeping raw `(x, z)` preserves smooth low-frequency basis so slot attention can still see "this region is far-field empty," while Fourier provides high-frequency lift on in-distribution and near-cruise splits.
+- **scale=2 strictly dominates scale=4** on 7/8 splits. The lone tie is `val_geom_camber_rc`. Confirms Tancik's scale-vs-input-σ analysis: foil positions have σ≈1.0–1.5, so scale=2 sits in the sweet spot while scale=4 starts aliasing.
+- **`val_re_rand` sign-flipped** vs Round 1 (+7.6% → −11.7%) — frequency mismatch, not the Fourier basis itself, was the OOD liability.
+- **`val_geom_camber_cruise` is the standout** (−24%/−28% val/test). Cruise-condition camber perturbations are geometrically near training, so high-frequency basis locks onto small perturbations efficiently.
+- **Other channels neutral.** `mae_surf_Ux/Uy` flat to slightly down; `mae_vol_p` actually improved (−4.2%). Net win is real, not surface-`p`-only.
+- **Memory cost negligible:** 33.19 GB vs 32.94 GB (+0.25 GB for 20 extra input features).
+
+### Decision: Sent back for rebase + recompose
+
+The intra-PR signal is huge (−9.10%) and the raw Arm B metric (93.967) already beats the current baseline (96.464) by −2.59%. **BUT** the result was generated on a pre-EMA, pre-T_max=15 stack (`git_commit: 85d57d6`), so the comparison vs 96.464 isn't apples-to-apples and the PR is `CONFLICTING` against advisor HEAD.
+
+Send-back instructions: rebase onto current advisor (`5c53212`), drop scale=4, rerun 2 arms on `bf16 + T_max=15 + EMA` stack:
+- Arm A: full current best stack baseline (predicted ~96.5)
+- Arm B: full stack + Fourier scale=2 (predicted ~87-90 if composition holds)
+
+Composition is highly likely (Fourier is feature-side, EMA+T_max=15 are gradient/schedule-side — orthogonal). Expected wall-clock ~60 min. After clean rerun, merge.
+
+### Bug-fix flag
+
+PR also contains `evaluate_split` upstream NaN-sample filter in `train.py` (writable) — confirmed safe in prior round; no `data/scoring.py` touched. Fix is no-op on splits with finite targets; only rescues `test_geom_camber_cruise` from `NaN·0=NaN` poisoning. This stays in the PR as a quality fix.
