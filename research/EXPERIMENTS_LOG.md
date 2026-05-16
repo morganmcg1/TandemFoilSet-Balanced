@@ -1,5 +1,35 @@
 # SENPAI Research Results — charlie-pai2i-24h-r2
 
+## 2026-05-16 01:40 — PR #3502: Scale n_hidden 96→64 (width ladder continued) [CLOSED]
+- Branch: `charliepai2i24h2-alphonse/n-hidden-64-width-ladder`
+- Student: charliepai2i24h2-alphonse
+- Hypothesis: Width-ladder monotone trend (192→128→96 = better) continues below n_hidden=96. Fewer params → fewer forward/backward FLOPs → more epochs within 30-min cap. Predicted: capacity still descending, n_hidden=64 beats 96.
+
+### Results table
+
+| Metric | n_hidden=64 (this run) | Baseline n_hidden=96 (PR #3377/now #3314) | Δ |
+|--------|----------------------|------------------------------------------|---|
+| `val_avg/mae_surf_p` (best @ ep 14) | **104.614** | 95.808 | **+9.20%** (worse) |
+| `test_avg/mae_surf_p` | 94.065 | 85.578 | **+9.91%** (worse) |
+| `val_single_in_dist` | 130.636 | 110.886 | +17.81% |
+| `val_geom_rc` | 111.624 | 105.776 | +5.53% |
+| `val_geom_cruise` | 79.283 | 76.060 | +4.24% |
+| `val_re_rand` | 96.912 | 90.510 | +7.07% |
+| Params | 174,583 (~0.17M) | ~0.38M | −54% |
+| Per-epoch wall | ~120 s | ~137 s | **barely faster** |
+| Metrics | `models/model-n-hidden-64-20260516-002129/metrics.{jsonl,yaml}` | — | — |
+
+### Analysis
+- Width-ladder reversal confirmed: n_hidden=96 is the sweet spot, not "smaller always better". Monotone trend held from 192→128→96 but breaks at 64.
+- Critical insight: per-epoch wall-clock is roughly **insensitive to n_hidden** (120s vs 137s — the slicing op, data loading, and optimizer step dominate). The premise that "fewer params = more epochs in budget" was incorrect; no additional epochs were gained.
+- At n_hidden=64 (~0.17M params), the model is capacity-limited. Loss still descending at E14 but slow (105.4→104.6, ~0.8%) — extrapolation shows 5-10 more epochs wouldn't close the 9% gap.
+- Width-96 locked as the optimum. Future capacity changes should look at other axes (depth, heads, dropout).
+
+### Decision
+- **Closed.** Width axis exhausted: 64 < 96 < 128 < 192. n_hidden=96 confirmed optimal.
+
+---
+
 ## 2026-05-16 00:35 — PR #3314: AdamW weight_decay 1e-4 → 3e-4 (rebased) [MERGED — NEW BASELINE]
 - Branch: `charliepai2i24h2-fern/weight-decay-3e-4`
 - Student: charliepai2i24h2-fern
