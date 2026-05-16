@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 21:25 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 22:30 UTC (Round 4 active on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -39,11 +39,11 @@ python train.py \
 | ⭐ **frieren** | **#4144** | **Lion vs SF-AdamW lr=2e-3 vs Lion+SF (3-way)** | Lion (A), SF lr=2e-3 (B), Lion+SF (C) | **HIGHEST — resolves whether Lion or SF wins head-to-head with correct LRs** |
 | ⭐ **askeladd** | **#4149** | **Lion LR sweep: {7.5e-5, 1.5e-4, 3e-4, 6e-4}** | Lion+cosine | **HIGH — can Lion match SF-54.769 with higher LR?** |
 | ⭐ **edward** | **#4157** | **SF-AdamW LR fine-tune: {1.5e-3, 2e-3, 2.5e-3, 3e-3}** | SF-AdamW lr=2e-3 base | **HIGH — localizes the peak from #4038's coarse sweep; +1-3% EV if peak is off-grid** |
-| **fern** | **#4012** | **Sobolev edge-gradient loss R2** (on Lion stack) | Lion+cosine | Loss axis; orthogonal to optimizer; result will transfer to SF stack |
+| ⭐ **tanjiro** | **#4207** | **surf_weight sweep at lr=2e-3: {5, 10, 15, 25}** | SF-AdamW lr=2e-3 + --seed 1 | **HIGH — directly modulates primary metric loss; untested at correct LR** |
+| ⭐ **fern** | **#4208** | **Dropout sweep at lr=2e-3: {0.0, 0.05, 0.10, 0.15}** | SF-AdamW lr=2e-3 + --seed 1 (requires Config edit) | **HIGH — untouched regularization axis; OOD generalization angle** |
+| **alphonse** | **#4019** | SF clip×EMA factorial R2 (2×2 at lr=2e-3) | SF-AdamW lr=2e-3 | R1 sent back — EMA-off won by 0.610% (below 0.97% noise floor); re-test at correct LR |
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results still diagnostic; paired Δ may be larger at correct LR |
-| **tanjiro** | **#4113** | EMA decay sweep: {0.99, 0.999, 0.9995, 0.9999} | SF-AdamW lr=5e-4 (stale) | EMA decay still relevant; paired Δ should transfer |
 | **thorfinn** | **#4114** | Batch size sweep: {4, 6, 8, 12} | SF-AdamW lr=5e-4 (stale) | Batch size axis universal |
-| **alphonse** | **#4019** | SF clip×EMA factorial R2 (2×2 at lr=2e-3) | SF-AdamW lr=2e-3 | **R1 sent back** — EMA-off won by 0.610% (below 0.97% noise floor); re-test at correct LR pending |
 
 **Note on stale-LR SF sweeps:** #4019/#4081/#4087/#4113/#4114 are all running at lr=5e-4. Their paired Δ results are still mechanistically informative. When they complete:
 - Large paired Δ results (>3%) → result likely holds and may be even stronger at lr=2e-3
@@ -84,3 +84,5 @@ python train.py \
 | #4003 | AdamW clip-R2 {0.05-0.25} | −0.07% noise floor | Direction-norm saturated at 0.25 |
 | SF-AdamW at lr=5e-4 | ALL experiments prior to #4038 | Viable but undertrained | LR was wrong; 2e-3 is the right setting |
 | **#4087** | **SF warmup steps {100, 500, 1000, 2000}** | **Paper default 500 wins; B/C/D regress +7.15%, +3.81%, +1.64%** | **Warmup axis exhausted; 500 is optimal at 30-min/17-epoch budget** |
+| **#4012** | **Sobolev edge-gradient L1 supervision (R1 AdamW, R2 Lion)** | **R1 within seed variance; R2 paired Δ +2.68% val / +2.28% test regression across all splits** | **Cross-stack null. Sobolev penalty fires but doesn't help surface MAE — mechanism doesn't fit loss landscape** |
+| **#4113** | **EMA decay sweep {0.99, 0.999, 0.9995, 0.9999}** | **B (0.99) Δ=−3.72% but cross-arm noise band ~3.46% (no --seed); A/C/D theoretically identical under Karras ramp** | **Karras ramp dominates target ema_decay at 17-epoch budget; paired methodology > absolute decay tuning** |

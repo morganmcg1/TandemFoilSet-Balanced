@@ -2376,3 +2376,91 @@ Alphonse introduced `--seed` flag for deterministic paired-arm reproducibility. 
 - Arm C: `models/model-charliepai2i48h4-alphonse-sf-r3-armc-clip1-noema-20260516-182613/metrics.jsonl`
 - Arm D: `models/model-charliepai2i48h4-alphonse-sf-r3-armd-clip0_25-noema-20260516-192255/metrics.jsonl`
 
+---
+
+## 2026-05-16 22:30 — PR #4012 [CLOSED / NULL]: Sobolev edge-gradient L1 supervision on surface pressure
+
+- **Student branch:** `charliepai2i48h4-fern/sobolev-gradient-loss`
+- **Hypothesis:** Add an edge-gradient L1 supervision term (∇_x p) to the surface loss. Tests whether forcing the model to learn spatial-derivative regularity improves the surface MAE.
+- **R1 stack:** AdamW + cosine + clip=0.25 + EMA + FiLM + bf16 + Huber (stale, lr=5e-4)
+- **R2 stack:** Lion + cosine + clip=0.25 + EMA + FiLM + bf16 + Huber (lion_lr=1.5e-4)
+
+### Results
+
+**R1 (AdamW+cosine, 4 arms over Sobolev weight {0, 0.1, 0.3, 0.5}):**
+- Non-monotonic ranking: B regresses, C wins narrowly, D flat
+- Val→test transfer ratio ~5× (signal didn't transfer cleanly)
+- Student's own honest read: "within seed variance"
+
+**R2 (Lion+cosine, 2-arm paired w=0 vs w=0.3 with --seed 1):**
+
+| Arm | sobolev_weight | val_avg | Δ val | test_3split | Δ test |
+|---|---:|---:|---:|---:|---:|
+| A (control) | 0.0 | 63.399 | — | 60.525 | — |
+| B | 0.3 | 65.096 | **+2.68% regress** | 61.904 | **+2.28% regress** |
+
+- Arm A reproduces Lion baseline within float drift (Δ +0.06 / +0.10%)
+- Every single val and test split regresses (sid, cam_rc, cam_cr, re_rand)
+- Val→test transfer ratio 0.81× (clean — regression travels consistently)
+
+### Conclusions
+
+**Sobolev hypothesis exhausted across two optimizer stacks.** The marginal R1 effect was seed luck; the R2 paired test (seed=1) shows clean regression on Lion. Mechanism doesn't fit the loss landscape — edge-gradient supervision adds a slightly conflicting objective.
+
+**No re-test on SF lr=2e-3:** Two stacks with null/regression is sufficient evidence. The Sobolev penalty fires the same way regardless of optimizer; the additional ~0.9% of total loss contribution doesn't help surface MAE.
+
+### Metric artifacts (R2)
+
+- `models/model-charliepai2i48h4-fern-sobolev-r2-arma-lion-w0-20260516-213309/metrics.jsonl`
+- `models/model-charliepai2i48h4-fern-sobolev-r2-armb-lion-w0_3-20260516-220713/metrics.jsonl`
+
+### Follow-up
+
+**fern → #4208**: Dropout regularization sweep at SF-AdamW lr=2e-3 — explore the untouched regularization axis with paired Δ.
+
+---
+
+## 2026-05-16 22:30 — PR #4113 [CLOSED / NULL]: EMA decay value sweep — {0.99, 0.999, 0.9995, 0.9999}
+
+- **Student branch:** `charliepai2i48h4-tanjiro/sf-ema-r1`
+- **Hypothesis:** Under SF-AdamW's Polyak averaging, the external EMA decay target may interact differently with the Karras warmup ramp. Test faster (0.99), default (0.999), slower (0.9995), much slower (0.9999) decays.
+- **Stack (stale):** SF-AdamW lr=5e-4 + clip=1.0 + EMA + FiLM two-shot + bf16, no --seed
+
+### Results
+
+| Arm | ema_decay | val_avg | Δ vs A | test_3split | clip rate |
+|---|---:|---:|---:|---:|---:|
+| A (control) | 0.999 | 65.349 | — | 63.708 | 0.9947 |
+| **B (winner nominal)** | **0.99** | **62.921** | **−3.72%** | **59.984** | 0.9947 |
+| C | 0.9995 | 63.092 | −3.45% | 60.769 | 0.9947 |
+| D | 0.9999 | 64.200 | −1.76% | 61.289 | 0.9947 |
+
+### Critical caveat (student's own analysis)
+
+**Karras warmup ramp `effective_decay = min(target, (1+step)/(10+step))` reaches 0.99859 at step 6375 (epoch 17 cap).** This means Arms A/C/D should be **theoretically identical** (same ramp-limited decay throughout). The 3.46% A-C-D spread IS the cross-arm seed-variance in this setup (no --seed flag on tanjiro's branch yet — it was added in #3980 Lion merge).
+
+Only Arm B (target=0.99) is target-limited because it hits its target at step 100, well before the ramp catches up.
+
+### Honest read of the signal
+
+- **Arm B's 3.72% val win over Arm A is *at* the cross-arm noise band (3.46%)** — at noise floor
+- **B vs C tie on val (62.92 vs 63.09)** is the cleanest evidence against a strong faster-EMA effect
+- All 4 arms regress 15-18% vs current canonical SF-AdamW lr=2e-3 (54.769) — stale-LR stack issue
+
+### Conclusions
+
+**Closed without re-test on SF lr=2e-3.** Alphonse #4019 R2 directly tests EMA on/off at lr=2e-3 with --seed — that experiment subsumes "fastest possible decay" and will give the clean answer.
+
+**Key learning preserved:** Karras ramp dominates target ema_decay at small step budgets — important constraint for future EMA work. Paired methodology with --seed matters MORE than absolute decay tuning at this scale.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-tanjiro-sf-ema-r1-arma-d0_999-20260516-202503/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-tanjiro-sf-ema-r1-armb-d0_99-20260516-205953/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-tanjiro-sf-ema-r1-armc-d0_9995-20260516-213442/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-tanjiro-sf-ema-r1-armd-d0_9999-20260516-220927/metrics.jsonl`
+
+### Follow-up
+
+**tanjiro → #4207**: surf_weight sweep at SF-AdamW lr=2e-3 — directly modulate the primary metric's loss term weight, untested at correct LR.
+
