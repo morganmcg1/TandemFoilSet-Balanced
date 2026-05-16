@@ -449,6 +449,7 @@ class Config:
     amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
+    warmup_epochs: int = 0   # 0 disables warmup; >0 enables linear warmup then cosine
 
 
 cfg = sp.parse(Config)
@@ -495,9 +496,27 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min
-)
+if cfg.warmup_epochs > 0:
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1.0 / cfg.warmup_epochs,
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(MAX_EPOCHS - cfg.warmup_epochs, 1),
+        eta_min=cfg.eta_min,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_sched, cosine_sched],
+        milestones=[cfg.warmup_epochs],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min
+    )
 
 amp_torch_dtype = _amp_torch_dtype(cfg.amp_dtype)
 amp_enabled = cfg.amp_dtype != "fp32"
@@ -505,7 +524,7 @@ grad_clip_enabled = cfg.grad_clip_norm is not None and cfg.grad_clip_norm > 0
 print(
     f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}  "
     f"grad_clip: norm={cfg.grad_clip_norm if grad_clip_enabled else 'off'}  "
-    f"cosine eta_min={cfg.eta_min}"
+    f"cosine eta_min={cfg.eta_min}  warmup_epochs={cfg.warmup_epochs}"
 )
 
 run = wandb.init(
