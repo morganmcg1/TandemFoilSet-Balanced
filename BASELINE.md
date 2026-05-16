@@ -4,7 +4,43 @@
 
 ---
 
-## 2026-05-16 19:32 — PR #4082: Width retest with bf16 budget — n_hidden=176 + bf16 + epochs=18 (fern) — ← CURRENT BEST
+## 2026-05-17 00:05 — PR #4106: Push wider — n_hidden=192 + bf16 + epochs=20 (fern) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 48.8400** (best epoch 20/20, W&B run `or5uq1id`) — **−4.05% vs previous best 50.9008**
+- **test_avg/mae_surf_p: 42.5895** — **−2.98% vs previous best 43.8989**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not per-split logged) | 46.4089 |
+| geom_camber_rc | (not per-split logged) | 55.5071 |
+| geom_camber_cruise | (not per-split logged) | 27.1443 |
+| re_rand | (not per-split logged) | 41.2976 |
+| **avg** | **48.8400** | **42.5895** |
+
+- **Model config:** SwiGLU FFN, **n_hidden=192** (wider), n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, inner_dim=256, ~1.47M params (+18% vs #4082)
+- **Change from previous baseline:** add `--n_hidden 192 --epochs 20` on top of bf16. First retest at ep18 (val=50.92) was borderline; ep20 retest confirmed the wider model was compute-starved at ep18.
+- **Throughput:** ~131 s/epoch (bf16, n_hidden=192) vs ~130 s/epoch (bf16, n_hidden=176) → +0.8% per-epoch cost
+- **Wall time:** ~43.6 min for all 20 epochs completed (within 50 min cap)
+- **Cosine T_max:** 20 (fully annealed); curve **still descending but decelerating** at ep20 (−0.97% ep19→ep20, vs −2.67% ep18→ep19)
+- **Peak GPU memory:** 47.6 GB (vs 44.6 GB at n_hidden=176) — ~50 GB of headroom remains on 96 GB H100
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=20); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+- **Key findings:**
+  1. Compound width+epochs win on every primary metric: −4.05% val / −2.98% test on top of the n_hidden=176+ep18 baseline.
+  2. **All 4 test splits improve or hold flat:** single_in_dist −5.24%, geom_camber_rc +0.10% (flat — structural hard split), geom_camber_cruise −3.99%, re_rand −3.76%.
+  3. **Mild-overfitting hypothesis from ep18 retest is refuted** — OOD splits that regressed at ep18 (rc/cruise/re_rand) now improve or hold flat at ep20. The wider model was compute-starved, not overfitting.
+  4. Curve still descending but decelerating — wider model is ~converged within 20-ep budget. Marginal returns past ep20 likely small.
+  5. **geom_camber_rc is the structural hard split** (~55 across all variants tested) — moving it requires something other than width/budget.
+
+**Reproduce command:**
+```bash
+cd "target/" && SENPAI_TIMEOUT_MINUTES=50 python train.py --n_hidden 192 --epochs 20 --use_bf16
+```
+
+---
+
+## 2026-05-16 19:32 — PR #4082: Width retest with bf16 budget — n_hidden=176 + bf16 + epochs=18 (fern) — SUPERSEDED BY #4106
 
 - **val_avg/mae_surf_p: 50.9008** (best epoch 18/18, W&B run `mgu3m5v2`) — **−5.43% vs previous best 53.8221**
 - **test_avg/mae_surf_p: 43.8989** — **−7.14% vs previous best 47.2742**
