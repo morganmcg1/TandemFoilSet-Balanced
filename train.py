@@ -564,6 +564,8 @@ class Config:
     ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
     norm_type: str = "layernorm"  # Block-level normalization: 'layernorm' or 'rmsnorm'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
+    t_max: int = 15   # CosineAnnealingLR T_max in epochs (also T_0 if cosine_restart)
+    cosine_restart: bool = False   # Use CosineAnnealingWarmRestarts (SGDR) with T_0=t_max, T_mult=1
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     slice_num: int = 64   # Transolver attention slice token count
@@ -640,9 +642,16 @@ elif cfg.optimizer == "adamw":
     print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=15, eta_min=cfg.eta_min
-)
+if cfg.cosine_restart:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=cfg.t_max, T_mult=1, eta_min=cfg.eta_min
+    )
+    print(f"Scheduler: CosineAnnealingWarmRestarts (T_0={cfg.t_max}, T_mult=1, eta_min={cfg.eta_min})")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg.t_max, eta_min=cfg.eta_min
+    )
+    print(f"Scheduler: CosineAnnealingLR (T_max={cfg.t_max}, eta_min={cfg.eta_min})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -745,11 +754,15 @@ for epoch in range(MAX_EPOCHS):
         gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
+        "t_max": cfg.t_max,
+        "cosine_restart": cfg.cosine_restart,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
