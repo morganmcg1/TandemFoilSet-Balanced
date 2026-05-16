@@ -268,6 +268,55 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     return out
 
 
+class EMAModel:
+    """Exponential moving average of model parameters (eval-time only)."""
+
+    def __init__(self, model, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {
+            name: param.detach().clone()
+            for name, param in model.named_parameters()
+            if param.requires_grad
+        }
+
+    @torch.no_grad()
+    def update(self, model):
+        for name, param in model.named_parameters():
+            if name in self.shadow:
+                self.shadow[name].mul_(self.decay).add_(param.detach(), alpha=1 - self.decay)
+
+    def apply_to(self, model):
+        return _EMASwap(self, model)
+
+    @torch.no_grad()
+    def l2_distance(self, model) -> float:
+        sq = 0.0
+        for name, p in model.named_parameters():
+            if name in self.shadow:
+                sq += (p.detach() - self.shadow[name]).pow(2).sum().item()
+        return sq ** 0.5
+
+
+class _EMASwap:
+    def __init__(self, ema: EMAModel, model):
+        self.ema = ema
+        self.model = model
+        self.backup: dict = {}
+
+    def __enter__(self):
+        for name, param in self.model.named_parameters():
+            if name in self.ema.shadow:
+                self.backup[name] = param.data.clone()
+                param.data.copy_(self.ema.shadow[name])
+        return self.model
+
+    def __exit__(self, *args):
+        for name, param in self.model.named_parameters():
+            if name in self.backup:
+                param.data.copy_(self.backup[name])
+        self.backup.clear()
+
+
 def _sanitize_path_token(s: str) -> str:
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
     return out.strip("-_.") or "experiment"
@@ -356,6 +405,7 @@ class Config:
     surf_weight: float = 10.0
     huber_delta: float = 1.0
     cosine_t_max: int = 20
+    ema_decay: float = 0.999
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -409,6 +459,8 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max)
+ema = EMAModel(model, decay=cfg.ema_decay)
+print(f"EMA: decay={cfg.ema_decay} (shadowing {len(ema.shadow)} parameter tensors)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -482,6 +534,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -491,12 +544,15 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    ema_l2 = ema.l2_distance(model)
+
+    # --- Validate (using EMA weights) ---
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
+    with ema.apply_to(model):
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
@@ -509,7 +565,9 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA weights (not raw weights) as the best checkpoint.
+        with ema.apply_to(model):
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -522,12 +580,14 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
+        "ema_raw_l2": ema_l2,
+        "ema_decay": cfg.ema_decay,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  ema_l2={ema_l2:.4f}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
