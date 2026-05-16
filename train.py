@@ -591,13 +591,16 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         if grad_clip_enabled:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_norm)
+            clipped = float(grad_norm.item() > cfg.grad_clip_norm)
         else:
             grad_norm = torch.zeros((), device=device)
+            clipped = 0.0
         optimizer.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/grad_clipped": clipped,
             "global_step": global_step,
         })
 
