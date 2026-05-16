@@ -2062,3 +2062,78 @@ These two hypotheses target the two architectural levers that have NOT yet been 
 **H88 strategic rationale:** H78 found β₂=0.995 wins over both 0.99 and 0.999 (non-monotonic). With 3 sparse samples and only 0.67 pt val win, the peak is undercharacterized. Tighter grid {0.992, 0.997} either confirms 0.995 is local-optimum or reveals a slightly better setting. Same single-flag protocol as H78.
 
 **H89 strategic rationale:** mlp_ratio is one of the few architectural levers untested under Lion+slice=96+LayerNorm. H62 (AdamW era, slice=64) closed mlp_ratio negative — but under Lion's scale-invariance + the wider slice=96 gradient surface, expanded FFN capacity may unlock representational headroom. mlp_ratio=4 doubles FFN width; mlp_ratio=3 is a moderate increase. Complementary to H86 (tanjiro, n_hidden=192/256) — H86 widens attention+FFN+everything; H89 widens FFN only.
+
+---
+
+## 2026-05-16 22:30-23:15 — Cycle 28 batch closures (H82-H86, all CLOSED negative)
+
+All 5 R5 sweeps from cycles 22-25 returned negative (closed by parallel session). Topline best-arm val_avg vs H78 baseline (42.30):
+
+| PR | Hypothesis | Student | Best arm val_avg | Δ vs H78 | Status |
+|----|-----------|---------|------------------:|---------:|--------|
+| #4126 | H82: slice_num sweep (128, 80) | fern | 44.5013 | +2.20 | CLOSED negative |
+| #4127 | H83: n_layers sweep (5, 3) | frieren | 44.0180 | +1.72 | CLOSED negative |
+| #4133 | H84: T_max compression (12, 10) | askeladd | 49.3500 | +7.05 | CLOSED negative |
+| #4135 | H85: FFN activation (swiglu, vanilla) | nezuko | 44.5595 | +2.26 | CLOSED negative |
+| #4147 | H86: n_hidden expansion (192, 256) | tanjiro | 60.6775 | +18.38 | CLOSED negative |
+
+**Key takeaways:**
+- **H84 negative confirms schedule lever fully exhausted.** T_max=15 + eta_min=0 + no warmup is optimal. T_max=10/12 dropped LR too fast; H87 (eta_min > 0) over-shoots. The current schedule is Pareto-optimal.
+- **H86 n_hidden=192/256 massively regressed (val=60.68)** — same wall-cut-bound mechanism as H89 (thorfinn's mlp_ratio): wider models train slower, eat epochs from the 30-min budget, never finish cosine decay. **Capacity scaling needs efficiency unlocks first.**
+- **slice=96 confirmed Pareto-optimal** (H82). Both directions {128 too slow, 80 too narrow} regress.
+- **GEGLU locked at slice=96 under Lion** (H85 reaffirms H48). vanilla and swiglu both lose.
+- **n_layers=4 locked under Lion+slice=96** (H83 confirms H60). 3 and 5 both lose.
+
+---
+
+## 2026-05-16 23:30 — PR #4156: H87 eta_min > 0 (alphonse) — **CLOSED, schedule-tail engineering negative**
+
+- Branch: `charliepai2i48h3-alphonse/h87-eta-min-floor`
+- Hypothesis: hold cosine LR floor above zero to keep meaningful gradient through wall-cut.
+
+| Arm | eta_min | val_avg | Δ vs H78 | Δ vs H73 | best epoch |
+|-----|---------|--------:|---------:|---------:|-----------:|
+| H78 baseline | 0 | 42.3048 | — | — | — |
+| A | 3e-5 (lr/10) | 46.0890 | +3.79 | +3.11 (regress) | 14 (ep 15 bounces UP) |
+| B | 1e-5 (lr/30) | 44.5038 | +2.20 (within noise) | +1.53 | 15 |
+
+**Mechanism (student's analysis):** H73 baseline epoch 15 LR is ~3e-6 (not 0), already an implicit micro-fine-tune. Replacing this with eta_min=3e-5 (10x larger) causes overshoot — direct evidence from Arm A's ep14→15 bounce (46.09→46.60). Arm B's mid-cosine tail runs at higher LR than baseline (e.g. 8.25e-5 vs 6.03e-5 at ep 11), so model arrives at ep 15 at a worse local minimum.
+
+**Schedule lever now fully closed.** H74 (T_max extension): negative. H84 (T_max compression): negative. H87 (eta_min > 0): negative. The H73 cosine T_max=15 + eta_min=0 schedule is locally optimal in all three directions.
+
+**Status: CLOSED — negative. Schedule lever lock confirmed.**
+
+---
+
+## 2026-05-16 23:30 — PR #4169: H89 mlp_ratio sweep (thorfinn) — **CLOSED, wall-cut-bound**
+
+- Branch: `charliepai2i48h3-thorfinn/h89-mlp-ratio-under-lion`
+- Hypothesis: FFN-only widening may unlock representational headroom under Lion+slice=96.
+
+| Arm | mlp_ratio | val_avg | Δ vs H78 | test 3-split | Δ test | best epoch | s/epoch | n_params |
+|-----|-----------|--------:|---------:|-------------:|-------:|-----------:|--------:|---------:|
+| H78 baseline | 2 | 42.3048 | — | 40.5564 | — | 15 | ~120 | 864,907 |
+| A | 4 | 47.3721 | +5.07 | 44.9365 | +4.38 | 12 (wall-cut) | 152 | 1,260,171 |
+| B | 3 | 42.1923 | −0.11 (noise) | 42.2758 | +1.72 (regress) | 13 (wall-cut) | 138 | 1,062,539 |
+
+**Critical insight from this PR (student's framing):** "Capacity is wall-cut-bound." Both wider arms wall-cut early — Arm A at ep 12, Arm B at ep 13. They were dropping ~3-5 pts/epoch at wall-cut, suggesting the cosine tail decay never completed. The s/epoch overhead (15-27%) ate epochs from the 30-min budget.
+
+**Same mechanism as H86 (n_hidden expansion, also closed negative).** Both capacity-scaling probes are blocked by training speed. **Strategic pivot: efficiency levers first, then revisit capacity.**
+
+**Status: CLOSED — wall-cut confound + Arm B mixed (val tied, test regresses). Major strategic insight: training efficiency is the prerequisite for capacity.**
+
+---
+
+## 2026-05-16 23:35 — Round 5 Cycle 30: Strategic pivot to training efficiency. Assign H95 (alphonse) + H96 (thorfinn).
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| TBD | alphonse | H95: bfloat16 mixed-precision training | --use_bf16 (model fwd/bwd in bf16, optimizer states fp32) |
+| TBD | thorfinn | H96: torch.compile baseline acceleration | --compile (default mode, no other changes) |
+
+**Strategic rationale:** H89 (mlp_ratio) and H86 (n_hidden) both closed negative due to wall-cut budget. The model is still descending steeply at ep 15 — wall-cut is the dominant constraint. Efficiency wins translate directly to more epochs in the 30-min budget:
+
+- bf16: typically 25-40% s/epoch reduction on H100. If bf16 cuts to ~80s/ep (from ~120), 30-min budget yields ~22 epochs vs current 15 — a 47% step increase.
+- torch.compile: typically 15-30% reduction via fused ops + graph optimization. Orthogonal to bf16; can stack later.
+
+If either lands, all capacity probes (H86, H89) become retestable with a meaningful wall-clock budget. **This is the highest-ROI cycle this round.**

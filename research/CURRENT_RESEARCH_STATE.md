@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 21:35
+- **Date**: 2026-05-16 23:35
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — **NEW BASELINE: H78 Arm B β₂=0.995, val=42.30 / test 3-split=40.56 (PR #4097 MERGED).** β₂ is the latest unlocked lever. Capacity scaling (H86 n_hidden) + schedule-tail (H84/H87) + FFN-width (H89) + β₂ refinement (H88) are active fronts.
+- **Round**: 5 late-phase — Baseline H78 (val=42.30) holds. **Major strategic pivot: training efficiency front.** Capacity probes H86 (n_hidden) and H89 (mlp_ratio) both wall-cut-bound — wider models eat epochs from the 30-min budget. Schedule lever fully closed (H74/H84/H87 all negative). Active fronts: efficiency (H95 bf16, H96 torch.compile), β₂ refinement (H88), β₁ sweep (H90), surf_weight (H91), seeds (H92), WSD (H93), batch_size (H94).
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -77,18 +77,31 @@ The H67-H73 Lion compound batch revealed:
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#4133** | askeladd | **H84: T_max compression (T_max=12, T_max=10)** | HIGH (askeladd's own follow-up) | ~41-44 |
-| **#4147** | tanjiro | **H86: n_hidden expansion (192, 256) — capacity scaling** | HIGH (new frontier) | ~36-44 |
-| **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
-| **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
-| **#4135** | nezuko | **H85: FFN activation (swiglu, vanilla) under Lion** | MED (test if GEGLU locked under Lion) | ~43-47 |
-| **#4156** | alphonse | **H87: CosineAnnealingLR eta_min > 0** | HIGH (schedule-tail counter to H84) | ~40-44 |
-| **TBD** | edward | **H88: β₂ refinement {0.992, 0.997} around H78's 0.995** | HIGH (confirm peak) | ~41-43 |
-| **TBD** | thorfinn | **H89: mlp_ratio sweep under Lion+slice=96 (3, 4)** | MED (FFN-width orthogonal to H86 n_hidden) | ~40-44 |
+| **#4166** | edward | **H88: β₂ refinement {0.992, 0.997} around H78's 0.995** | HIGH (confirm peak) | ~41-43 |
+| **#4189** | askeladd | **H90: Lion β₁ sweep (β₁=0.85, β₁=0.95)** | HIGH (first β₁ retune at slice=96) | ~41-44 |
+| **#4191** | fern | **H91: surf_weight sweep under Lion (sw=5, sw=20)** | MED (H54 locked surf_weight=10 under AdamW) | ~40-44 |
+| **#4195** | frieren | **H92: Baseline variance — 2 seeds at H78 config** | HIGH (calibrate noise floor) | ~42-44 |
+| **#4196** | nezuko | **H93: WSD schedule under Lion (vs cosine)** | MED (alternative schedule) | ~42-46 |
+| **#4197** | tanjiro | **H94: Batch size sweep BS=8 (no-scale and LR-scale)** | HIGH (orthogonal to capacity) | ~40-44 |
+| **TBD** | alphonse | **H95: bfloat16 mixed-precision training** | HIGH (efficiency unlock) | ~40-43 + 47% more epochs |
+| **TBD** | thorfinn | **H96: torch.compile baseline acceleration** | HIGH (efficiency unlock orthogonal to bf16) | ~40-43 + ~25% more epochs |
 
-**Closed this round:** H61 (LR-down), H62 (mlp_ratio under AdamW), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**, **H81 (RMSNorm anti-compound under Lion confirmed; normalization locked)**, H75 (LR U-shape), **H80 (full Lion stack: schedule confound + 3/4 levers individually negative)**.
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio AdamW), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound AdamW), H68/H69/H70/H71 (Lion variants at slice=64, superseded), H58/H67 (superseded), **H74 (T_max extend)**, **H75 (LR U-shape)**, **H76 (warmup)**, **H77 (n_head=4)**, **H79 (wd)**, **H80 (full Lion stack: confound)**, **H81 (RMSNorm anti-compound under Lion)**, **H82 (slice sweep)**, **H83 (n_layers sweep)**, **H84 (T_max compression)**, **H85 (FFN activation)**, **H86 (n_hidden expansion — wall-cut-bound)**, **H87 (eta_min > 0)**, **H89 (mlp_ratio — wall-cut-bound)**.
 
 **Merged this round:** H73 (Lion + slice=96 super-additive, val=42.98), **H78 (β₂=0.995 small win, val=42.30 NEW BEST)**.
+
+## Strategic State (post-cycle 30)
+
+**Wall-cut hypothesis confirmed.** H86 (n_hidden=192/256, val=60.68) and H89 (mlp_ratio=3/4) both fail because wider models slow s/epoch enough to eat epochs from the 30-min budget. The model is still descending steeply at ep 15 in baseline — the budget, not capacity, is the dominant constraint.
+
+**Schedule lever fully exhausted.** Three orthogonal probes all negative:
+- H74: extend T_max=20 → +6.62 regress
+- H84: compress T_max=10/12 → +7.05 regress
+- H87: hold eta_min > 0 → +1.5 to +3.8 regress
+
+H73's T_max=15 + eta_min=0 + no warmup is locally optimal in all directions.
+
+**Strategic pivot to efficiency.** If bf16 (H95) or torch.compile (H96) cut s/epoch by 25-40%, the wall-cut constraint loosens enough that capacity probes (H86, H89) become retestable. This is the highest-ROI lever class remaining.
 
 ## Lever Status (post-H73)
 
@@ -104,8 +117,11 @@ The H67-H73 Lion compound batch revealed:
 | n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
 | FFN activation | ✅ GEGLU locked (H48) | GEGLU | > SwiGLU > vanilla |
 | Normalization | ✅ LayerNorm locked (H72 AdamW, H81 Lion) | LN (H73) | RMSNorm anti-compounds at slice=96 under BOTH optimizers (+1.58 AdamW, +2.44 Lion) |
-| n_hidden | 🔬 H86 expansion test active | 128 (H73) | First Lion+slice=96 test of 192/256 |
-| Schedule eta_min | 🔬 H87 active | 0 (H73 default) | Val still descending at ep 15; eta_min>0 keeps LR meaningful through wall-cut |
+| n_hidden | ❌ Wall-cut-bound (H86 closed: 192=val 60.68) | 128 | Capacity scaling blocked by training speed; retest after efficiency wins (H95/H96) |
+| Schedule eta_min | ❌ H87 closed negative (+1.5 to +3.8) | 0 | H73's ~3e-6 ep-15 LR is the implicit fine-tune; replacing with ≥10× larger LR overshoots |
+| mlp_ratio (Lion) | ❌ Wall-cut-bound (H89 closed) | 2 | Same mechanism as H86: wider FFN slows s/epoch, eats epochs |
+| Mixed precision | 🔬 H95 active | fp32 (default) | Highest-ROI efficiency lever — 25-40% s/epoch reduction unlocks capacity probes |
+| torch.compile | 🔬 H96 active | off (default) | Orthogonal to bf16; 15-30% reduction typical |
 | clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | — |
 | surf_weight | ✅ Locked at 10 | H54 | — |
 | Huber δ_p | ✅ Locked at 0.25 | H25/H64 | — |
