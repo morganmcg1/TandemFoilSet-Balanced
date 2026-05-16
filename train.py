@@ -106,6 +106,54 @@ def _make_norm(dim: int, norm_type: str) -> nn.Module:
     return RMSNorm(dim) if norm_type == "rmsnorm" else nn.LayerNorm(dim)
 
 
+class Lion(torch.optim.Optimizer):
+    """EvoLved Sign Momentum (Chen et al. 2023, arxiv 2302.06675).
+
+    Algorithm 1:
+      1. p ← p · (1 − lr·wd)            # decoupled multiplicative weight decay
+      2. u ← β₁·m + (1−β₁)·g            # interpolate momentum and grad
+      3. p ← p − lr · sign(u)            # sign-based update
+      4. m ← β₂·m + (1−β₂)·g            # EMA momentum update AFTER param step
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta2: {betas[1]}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                p.data.mul_(1.0 - lr * wd)
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                update = m * beta1 + grad * (1.0 - beta1)
+                p.add_(update.sign_(), alpha=-lr)
+                m.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+
+        return loss
+
+
 class GEGLU(nn.Module):
     """Gated Linear Unit (Shazeer 2020): out = value * gate_act(gate).
 
@@ -518,6 +566,9 @@ class Config:
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
+    optimizer: str = "adamw"  # 'adamw' or 'lion'
+    lion_beta1: float = 0.9   # Lion update-momentum interpolation coefficient
+    lion_beta2: float = 0.99  # Lion EMA tracking coefficient
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -577,7 +628,19 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(cfg.lion_beta1, cfg.lion_beta2),
+        weight_decay=cfg.weight_decay,
+    )
+    print(f"Optimizer: Lion lr={cfg.lr} betas=({cfg.lion_beta1}, {cfg.lion_beta2}) wd={cfg.weight_decay}")
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Optimizer: AdamW lr={cfg.lr} wd={cfg.weight_decay}")
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=15, eta_min=cfg.eta_min
 )
@@ -694,6 +757,9 @@ for epoch in range(MAX_EPOCHS):
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
+        "optimizer": cfg.optimizer,
+        "lion_beta1": cfg.lion_beta1,
+        "lion_beta2": cfg.lion_beta2,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
