@@ -48,6 +48,62 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Per-domain loss weighting (PR #3585)
+# ---------------------------------------------------------------------------
+
+DOMAIN_NAMES = ("racecar_single", "racecar_tandem", "cruise")  # id 0, 1, 2
+DOMAIN_NAME_TO_ID = {name: i for i, name in enumerate(DOMAIN_NAMES)}
+
+
+def _build_idx_to_domain_id(splits_dir: Path, n_train: int) -> torch.Tensor:
+    """Map train sample index -> domain id, from meta.json's domain_groups."""
+    with open(splits_dir / "meta.json") as f:
+        meta = json.load(f)
+    out = torch.full((n_train,), -1, dtype=torch.long)
+    for name, idxs in meta["domain_groups"].items():
+        did = DOMAIN_NAME_TO_ID[name]
+        for i in idxs:
+            if i < n_train:
+                out[i] = did
+    assert (out >= 0).all(), "Some train indices have no domain assignment"
+    return out
+
+
+class _TrainDatasetWithDomain(torch.utils.data.Dataset):
+    """Wraps a train dataset and appends an int domain_id to each sample."""
+
+    def __init__(self, base: torch.utils.data.Dataset, idx_to_domain_id: torch.Tensor):
+        self.base = base
+        self.idx_to_domain_id = idx_to_domain_id
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        return x, y, is_surface, int(self.idx_to_domain_id[idx])
+
+
+def pad_collate_with_domain(batch):
+    """Like pad_collate, plus a [B] long domain_id tensor."""
+    xs, ys, surfs, doms = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    for i, (x, y, sf) in enumerate(zip(xs, ys, surfs)):
+        n = x.shape[0]
+        x_pad[i, :n] = x
+        y_pad[i, :n] = y
+        surf_pad[i, :n] = sf
+        mask[i, :n] = True
+    domain_ids = torch.tensor(doms, dtype=torch.long)
+    return x_pad, y_pad, surf_pad, mask, domain_ids
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -314,6 +370,9 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "domain_weight_racecar_single": cfg.domain_weight_racecar_single,
+        "domain_weight_racecar_tandem": cfg.domain_weight_racecar_tandem,
+        "domain_weight_cruise": cfg.domain_weight_cruise,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -360,6 +419,11 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # Per-training-domain surface-loss multipliers (PR #3585).
+    # Compose multiplicatively with surf_weight: total = vol + surf_weight * weighted_surf
+    domain_weight_racecar_single: float = 1.0
+    domain_weight_racecar_tandem: float = 2.0
+    domain_weight_cruise: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -372,21 +436,39 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+idx_to_domain_id = _build_idx_to_domain_id(Path(cfg.splits_dir), len(train_ds))
+train_ds_with_domain = _TrainDatasetWithDomain(train_ds, idx_to_domain_id)
+
+loader_kwargs = dict(num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_ds_with_domain, batch_size=cfg.batch_size,
+                              shuffle=True, collate_fn=pad_collate_with_domain,
+                              **loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(train_ds_with_domain, batch_size=cfg.batch_size,
+                              sampler=sampler, collate_fn=pad_collate_with_domain,
+                              **loader_kwargs)
 
 val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False,
+                     collate_fn=pad_collate, **loader_kwargs)
     for name, ds in val_splits.items()
 }
+
+domain_weight_table = torch.tensor([
+    cfg.domain_weight_racecar_single,
+    cfg.domain_weight_racecar_tandem,
+    cfg.domain_weight_cruise,
+], dtype=torch.float32, device=device)
+print(
+    f"Per-domain surface-loss weights: "
+    f"racecar_single={cfg.domain_weight_racecar_single}, "
+    f"racecar_tandem={cfg.domain_weight_racecar_tandem}, "
+    f"cruise={cfg.domain_weight_cruise}"
+)
 
 model_config = dict(
     space_dim=2,
@@ -433,6 +515,8 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+diagnostic_logged = False
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -443,11 +527,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for x, y, is_surface, mask, domain_id in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+        domain_id = domain_id.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -458,8 +543,27 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+            # Per-sample mean surface squared error (sum over surface nodes & 3 channels,
+            # divided by surface node count per sample — matches baseline normalization
+            # which also does not divide by 3).
+            per_sample_surf_num = (sq_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2))  # [B]
+            per_sample_surf_den = surf_mask.sum(dim=1).clamp(min=1).float()             # [B]
+            per_sample_surf = per_sample_surf_num / per_sample_surf_den                  # [B]
+
+            # Weighted-mean reduction (denominator = sum of weights, NOT batch_size).
+            # Preserves total loss magnitude regardless of batch domain composition,
+            # so the effective LR doesn't drift with the tandem-share per batch.
+            weights_per_sample = domain_weight_table[domain_id]  # [B]
+            surf_loss = (per_sample_surf * weights_per_sample).sum() / weights_per_sample.sum()
+
             loss = vol_loss + cfg.surf_weight * surf_loss
+
+        if not diagnostic_logged:
+            dom_names_in_batch = [DOMAIN_NAMES[i] for i in domain_id.tolist()]
+            print(f"DIAG[first batch] domain_id={domain_id.tolist()} ({dom_names_in_batch})")
+            print(f"DIAG[first batch] weights_per_sample={weights_per_sample.tolist()}")
+            diagnostic_logged = True
 
         optimizer.zero_grad()
         loss.backward()
@@ -512,6 +616,9 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "domain_weight_racecar_single": cfg.domain_weight_racecar_single,
+        "domain_weight_racecar_tandem": cfg.domain_weight_racecar_tandem,
+        "domain_weight_cruise": cfg.domain_weight_cruise,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -537,7 +644,8 @@ if best_metrics:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False,
+                             collate_fn=pad_collate, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
