@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~11:30 UTC
+- **Last updated:** 2026-05-16 ~12:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -50,22 +50,31 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 9. **SwiGLU key detail:** `mlp2` (output head) is left as standard MLP; only `self.mlp` in TransolverBlock is replaced. inner_dim=216 = round_to_mult(160*2*2/3, 8).
 10. **DSDF distribution finding (nezuko #3836):** normalized DSDF max abs=2.88 → clip=3.0 is a no-op. Clip=2.0 or 2.5 would actually touch 0.33-1.37% of values.
 
-## Active in-flight PRs (status as of 11:45 UTC)
+## Active in-flight PRs (status as of 12:30 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
 | **#3814** | askeladd | **SwiGLU FFN** | **MERGED 11:30** → new baseline | 64.2430 🏆 |
-| **#3838** | alphonse | per-domain output norm | **CLOSED 11:30** (val=89.28 FAIL vs both 82.50 and 64.24) | — |
-| **#3741** | fern | eta_min=1e-5 cosine floor | **CLOSED 11:30** (best val=86.21 FAIL × 3 seeds) | — |
-| **#3815** | tanjiro | TTA coord noise K=4/K=8 | **CLOSED 11:45** — K=1/4/8 flat (test 76.35/76.39/76.37); on obsolete pre-SwiGLU baseline | — |
-| **#3833** | thorfinn | OneCycleLR schedule | WIP (assigned 08:35) | awaiting |
-| **#3835** | edward | asinh output transform | WIP (assigned 08:35) | awaiting |
-| **#3836** | nezuko | DSDF clip pivoted to 2.0/2.5 | WIP — pivoted from clip=3 (no-op) to clip=2.0/2.5 per sanity check | awaiting |
-| **#3857** | frieren | attention dropout p=0.1/0.2 | WIP (assigned 09:30, pre-SwiGLU baseline) | awaiting |
+| **#3833** | thorfinn | OneCycleLR on MLP baseline | **CLOSED 12:15** — val=77.52/test=67.68 beats OLD baseline (−8.7% test) but SwiGLU baseline is 64.24. OneCycleLR is real; re-testing on SwiGLU stack | — |
+| **#3835** | edward | asinh output transform | WIP — 3 arms done on MLP baseline (val best=76.74 at asinh_scale=2.0); pod posting results; awaiting SENPAI-RESULT | 76.74 (pre-SwiGLU) |
+| **#3836** | nezuko | DSDF clip pivoted to 2.0/2.5 | WIP — Arm 1 (clip=2.5) no-op (val=82.52 ≈ baseline); Arm 2 (clip=2.0) running; decision: submit both vs MLP baseline | awaiting |
+| **#3857** | frieren | attn_dropout=0.1/0.2 | WIP — only p=0.1 ran (val=82.17, ~baseline); p=0.2 now running; pre-SwiGLU baseline | awaiting |
 | **#3905** | askeladd | SwiGLU + epochs=12 | **WIP** — assigned 11:45 | awaiting |
 | **#3908** | alphonse | SwiGLU mlp_ratio=3/4 sweep | **WIP** — assigned 11:45 | awaiting |
-| **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | **WIP** — assigned 11:45 | awaiting |
+| **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | **WIP** — assigned 11:45 (on SwiGLU baseline) | awaiting |
 | **#3916** | tanjiro | SwiGLU gate output head (mlp2) | **WIP** — assigned 11:45 | awaiting |
+| **#3951** | thorfinn | OneCycleLR + SwiGLU compound | **WIP** — assigned 12:25 | awaiting |
+
+## Pre-SwiGLU experiments finishing (informational only — vs old baseline 82.50/74.10)
+
+These were assigned before SwiGLU merged. Results are valid vs the old baseline but do NOT beat the new baseline (val=64.24):
+
+| # | Student | Hypothesis | Best result vs OLD baseline | Decision |
+|---|---|---|---|---|
+| #3833 | thorfinn | OneCycleLR max_lr=1e-3 | val=77.52/test=67.68 (−8.7% test) ✓ | Closed; re-testing on SwiGLU (#3951) |
+| #3835 | edward | asinh_scale=2.0 | val=76.74/test=67.10 (−9.4% test — clear monotonic trend) | Awaiting final comment; closing then re-test on SwiGLU |
+| #3836 | nezuko | DSDF clip=2.5/2.0 | val=82.52 (no-op) | Closing; clip hypothesis dead on this dataset |
+| #3857 | frieren | attn_dropout=0.1 | val=82.17 (no-op) | Awaiting p=0.2; likely close |
 
 ## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
 
