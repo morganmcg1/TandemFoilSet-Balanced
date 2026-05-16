@@ -152,8 +152,8 @@ class TransolverBlock(nn.Module):
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+                nn.Linear(hidden_dim, 2 * hidden_dim), nn.GELU(),
+                nn.Linear(2 * hidden_dim, out_dim),
             )
 
     def forward(self, fx):
@@ -405,7 +405,8 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+head_params = sum(p.numel() for p in model.blocks[-1].mlp2.parameters())
+print(f"Model: Transolver ({n_params/1e6:.2f}M params, head mlp2: {head_params:,})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.cosine_t_max)
