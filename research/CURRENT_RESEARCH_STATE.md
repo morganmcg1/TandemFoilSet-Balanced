@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 04:50
+- **Date:** 2026-05-16 05:30
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
@@ -36,7 +36,7 @@
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
 | **#3539** | **alphonse** | **H23 slice_num=32 (rebased) — was val=62.63 on H15 SwiGLU; sent back for OneCycleLR retest** | **WIP (retest)** |
-| **#3517** | **frieren** | **H19 DropPath=0.20 — val=73.55 on SwiGLU baseline; sent back for rebase onto OneCycleLR+LayerScale** | **WIP (rebase)** |
+| **#3705** | **frieren** | **H32 robust loss L1 vs smooth_l1 (β=0.1) — MSE↔MAE mismatch fix** | **WIP (new)** |
 | **#3583** | **fern** | **H26 weight_decay=0.001 — winner on H18 (-7%); sent back for OneCycleLR retest** | **WIP (retest)** |
 | **#3559** | **edward** | **H25 n_layers=6 — winner on H18 with cam_rc -8% recovery; sent back for OneCycleLR retest** | **WIP (retest)** |
 | #3625 | tanjiro | H27 OneCycleLR max_lr sweep {1e-3, 2e-3} | WIP |
@@ -62,6 +62,7 @@
 | #3421 | nezuko | H14 cosine T_max sweep {14, 20} | Closed — obsolete after OneCycleLR merged |
 | #3197 | askeladd | H8v3 EMA v4 on OneCycleLR | Closed — +29% regression, EMA shadow can't catch up in truncated schedule |
 | #3628 | nezuko | H29 per-block geom_proj | Closed — +20% regression, gradient interference from 5× MLP duplication |
+| #3517 | frieren | H19 DropPath=0.20 + LayerScale+OneCycleLR rebase | Closed — +31.7% regression, ls2 depth pattern inverted, geom_gates failed, high seed variance |
 
 ## Research insights so far
 
@@ -72,11 +73,12 @@
 5. **EMA + OneCycleLR is incompatible**: H8v3 v4 +29% regression. EMA β=0.999 needs ~1000 stable low-LR steps; OneCycleLR's truncated schedule never gives them. SAM (H31) is the gradient-side replacement.
 6. **Per-block parameter duplication hurts without supervision**: H29 +20% — 5× geom_proj MLPs caused gradient interference with no specialization in 15 epochs.
 7. **Inverted-U for weight decay**: H26 found wd=0.001 (10× current 1e-4) is optimal; canonical DeiT-III 0.05 underperforms in this regime.
+8. **DropPath + LayerScale compete on the FFN-depth axis**: H19 DropPath +31.7% on full stack. LayerScale's monotone-growth depth pattern and DropPath's depth-scaled dropout fight over the same dimension. Non-compositional.
 
 ## Open questions
 
 - **Highest priority**: Does slice_num=32 compose with OneCycleLR? (alphonse H23 retest — prediction: ≤60 val_avg, new best of round)
-- Does DropPath compose with OneCycleLR + LayerScale? (frieren H19 rebase)
+- Does robust loss (L1/smooth_l1) improve OOD splits? (frieren H32 — new)
 - Does wd=0.001 compose with OneCycleLR? (fern H26 retest)
 - Does n_layers=6 compose with OneCycleLR? (edward H25 retest)
 - Optimal max_lr for OneCycleLR? (tanjiro H27 {1e-3, 2e-3})
@@ -87,7 +89,6 @@
 ## Next directions (after current wave resolves)
 
 - **slice_num + n_layers product sweep**: if both H23 and H25 work, test {slice_num=32, n_layers=6} combo
-- **DropPath rate extension**: if 0.20 confirmed, sweep {0.30, 0.40}
 - **OneCycleLR pct_start sweep**: {0.1, 0.2, 0.4} once max_lr converged
 - **Auxiliary physics loss**: lift/drag prediction head as auxiliary task
 - **Geometry features**: curvature/normals as additional input channels

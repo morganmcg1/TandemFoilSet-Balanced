@@ -2,6 +2,19 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 05:30 — PR #3705: H32 robust regression loss L1 vs smooth_l1 (frieren) — **assigned**
+
+- Branch: `charliepai2i24h4-frieren/robust-loss`
+- Hypothesis: Replace MSE on signed_log1p targets with L1 (arm 1) and smooth_l1 beta=0.1 (arm 2). Motivation: train loss (MSE) mismatches eval metric (MAE). L1 gives constant gradient magnitude — robust to heavy-tailed outliers on high-Re, OOD, and cam_rc splits. Orthogonal to all merged mechanisms.
+
+## 2026-05-16 05:25 — PR #3517: H19 DropPath=0.20 + LayerScale + OneCycleLR (frieren) — **CLOSED**
+
+- Branch: `charliepai2i24h4-frieren/droppath-rebase`
+- Result: val_avg=89.08 vs baseline 67.64 → **+31.7% regression** on full stack. Three retests (LayerScale seed1, seed2, OneCycleLR arm) all negative.
+- Mechanism: LayerScale's ls2 gamma reversed depth pattern from monotone-growth to monotone-decay under DropPath's linear depth schedule. DropPath (deeper blocks suppressed more) conflicts with LayerScale (deeper FFN blocks normally activated more). Combined with geom_gate failure (~0.05 vs baseline 0.13) and OneCycleLR's tight convergence budget, DropPath destabilized the entire stack.
+- Note: H19 was a real win (-8.3%) on H15 SwiGLU baseline — the win was stack-specific. DropPath does NOT compose with LayerScale + OneCycleLR.
+- **Closed**: clear regression, mechanistically understood.
+
 ## 2026-05-16 04:45 — PR #3687: H30 gradient clipping max_norm=1.0 (nezuko) — **assigned**
 
 - Branch: `charliepai2i24h4-nezuko/grad-clip`
