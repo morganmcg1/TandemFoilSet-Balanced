@@ -188,9 +188,34 @@ class LayerScale(nn.Module):
         return self.gamma * x
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth: zero the entire residual contribution
+    of a block for a fraction of samples, scale the survivors by 1/keep_prob.
+
+    Disabled at inference (the ``self.training`` check). The drop is applied
+    per-sample (shape (B, 1, ...)) so all tokens of a sample are kept or
+    dropped together — Huang et al. 2016, DeiT (Touvron et al. 2021), Swin
+    (Liu et al. 2021) for the standard linear-rate schedule across depth.
+    """
+
+    def __init__(self, drop_prob=0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if not self.training or self.drop_prob == 0.0:
+            return x
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor = torch.floor(random_tensor + keep_prob)
+        return x * random_tensor / keep_prob
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -203,6 +228,7 @@ class TransolverBlock(nn.Module):
                              dropout=0.1)
         self.ls1 = LayerScale(hidden_dim)
         self.ls2 = LayerScale(hidden_dim)
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -211,8 +237,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.ls1(self.attn(self.ln_1(fx))) + fx
-        fx = self.ls2(self.mlp(self.ln_2(fx))) + fx
+        fx = self.drop_path(self.ls1(self.attn(self.ln_1(fx)))) + fx
+        fx = self.drop_path(self.ls2(self.mlp(self.ln_2(fx)))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -247,7 +273,8 @@ class Transolver(nn.Module):
                  rff_n_freq: int = 32, rff_sigma: float = 1.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 geom_ctx_dim: int = 11, geom_ctx_start: int = 13):
+                 geom_ctx_dim: int = 11, geom_ctx_start: int = 13,
+                 drop_path: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -268,11 +295,16 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        drop_path_rates = [drop_path * i / max(n_layers - 1, 1) for i in range(n_layers)]
+        self.drop_path_rates = drop_path_rates
+        print(f"DropPath rates per block: {[round(r, 4) for r in drop_path_rates]}")
+        print("FFN dropout: 0.1 (hardcoded, unchanged)")
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path=drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -464,6 +496,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    drop_path: float = 0.0  # max DropPath rate for deepest block (linearly scaled; 0.0 = off)
 
 
 cfg = sp.parse(Config)
@@ -525,6 +558,7 @@ model_config = dict(
     rff_sigma=1.0,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path=cfg.drop_path,
 )
 
 model = Transolver(**model_config).to(device)
