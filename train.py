@@ -477,6 +477,7 @@ class Config:
     ema_decay: float = 0.999  # max decay; warmup ramp protects early training
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
+    n_layers: int = 5  # number of TransolverBlocks (depth)
 
 
 cfg = sp.parse(Config)
@@ -510,7 +511,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
