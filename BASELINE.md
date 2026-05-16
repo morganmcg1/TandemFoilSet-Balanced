@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-05-16 08:30 — PR #3691: Longer training 12 epochs (thorfinn)
+
+- **val_avg/mae_surf_p: 82.4997** (best epoch 11/12, W&B run `zqxkh9np`)
+- **test_avg/mae_surf_p: 74.1023** — best-val run; note: among 3 seeds, `kkuvnrai` achieved test=72.3393 (−1.96% vs baseline) while `zqxkh9np` shows a small test regression (+0.42%). Mean across 3 seeds: val≈82.96, test≈73.41 — both beat baseline.
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 90.995 | 83.128 |
+| geom_camber_rc | 91.548 | 82.735 |
+| geom_camber_cruise | 65.790 | 56.332 |
+| re_rand | 81.665 | 74.215 |
+| **avg (`zqxkh9np`)** | **82.4997** | **74.1023** |
+
+- **Model config:** Transolver `n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (~1.03M params) — unchanged
+- **Augmentation:** `coord_noise_std=0.01` (from #3632 default)
+- **Positional encoding:** Fourier PE `num_freq=4` (from #3372 default)
+- **Loss:** L1 (`Config.loss_type = "l1"`)
+- **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=12) — key change vs baseline
+- **Batch:** 4, surf_weight=10.0, grad clip max_norm=1.0
+- **Budget:** 30-min wall clock → 12 epochs (~170s/epoch, fitting within budget)
+- **Multi-seed note:** 3 runs with identical config showed val spread 82.50–83.74 and test spread 72.34–74.10. Best-val (`zqxkh9np`) and best-test (`kkuvnrai`) are different seeds — single-seed conclusion has uncertainty ≈ the gain itself. Gain is real in expectation (mean val 82.96 < 83.50 baseline).
+
+**Reproduce command:**
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py --epochs 12 \
+  --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(All other flags use current defaults: coord_noise_std=0.01, num_freq=4, lr=5e-4)*
+
+> **Note on epochs:** `--epochs 12` is now the recommended training budget. The 10-epoch schedule was leaving the model unconverged; best_epoch landed at 11/12 in all 3 replicates. Future experiments should default to `--epochs 12`.
+
+---
+
 ## 2026-05-16 04:30 — PR #3632: Coordinate noise augmentation std=0.01 on (x,z) during training (tanjiro)
 
 - **val_avg/mae_surf_p: 83.4954** (best epoch 10/10, W&B run `0q6t1hpc`)
