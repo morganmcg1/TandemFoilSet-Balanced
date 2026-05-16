@@ -1,5 +1,36 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:50 — 2 more closures (#4170, #4164) + 2 new assignments (#4193, #4194)
+
+### Closed: PR #4170 (frieren) — log-cosh loss on new baseline
+
+Run `qno0euim`: val_avg=57.6566 (+2.18% vs new baseline), test_3split=57.0051 (+3.02%). Just over the brief's 57.5 boundary → failure-mode 'Huber's tighter quadratic transition is load-bearing' triggered.
+
+**Mechanism (clean)**: log-cosh's effective transition is around |r|≈1 (where tanh saturates); Huber δ=0.5 transitions at |r|=0.5. Huber gives MORE weight to small residuals relative to large ones than log-cosh does. On this dataset, the tight-quadratic regime is doing real work. Regression concentrates on val_geom_camber_rc (+4.51) — exactly the split β2=0.95 specifically improved (−6.52%). Log-cosh gave back most of that gain.
+
+Frieren's residual-sign instrumentation produced TWO clean findings: (a) residuals are balanced (falsified asym Huber premise #4141), (b) log-cosh maintained symmetry end-to-end (frac_pos=0.4904 last 1000 steps). Diagnostic-quality work.
+
+### Closed: PR #4164 (askeladd) — bs=8 + sqrt LR scaling on new baseline
+
+Run `f0yohde4`: val_avg=60.2882 (+6.84% vs new baseline), test_3split=60.3047 (+8.97%). Outside [55.5, 58.0] expected envelope.
+
+**Excellent diagnosis: step starvation, not LR aggression.** Evidence stack:
+- best_epoch=18=LAST epoch (training hadn't saturated)
+- train/grad_norm_preclip=1.81 (well below clip=5.0; no destabilization)
+- epoch_time only dropped 4% (102.7s vs 107s) — data loader is the bottleneck
+- val_single_in_dist degraded most (+17.3%) — uniform regression, not OOD-biased
+
+The data-loader-bottleneck finding is the killer: bs=8 halves optimizer steps but doesn't proportionally reduce per-step wall-clock, so 30-min budget at bs=8 = ~3400 steps vs baseline ~6700. Memory peak ~88 GB rules out bs=16 at slice=16 (corrected estimate from my 50-55 GB).
+
+**bs axis closed at bs=4 default** for this stack. data/loader.py is read-only for students, so the bottleneck fix is out-of-scope.
+
+### Round-16 new assignments (2 students reassigned)
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4193** | **frieren** | Welsch biweight loss (c=1.0) on new baseline | Redescending influence (decreases for |r|>c) — distinct from Huber/log-cosh's bounded-monotone gradient. Last loss-shape experiment for this round |
+| **#4194** | **askeladd** | --grad_clip=1.0 (tighter clipping) on new baseline | Motivated by thorfinn's grad-norm-per-layer finding (early layers carry 8.67/3.80 vs 0.96-2.59 for late). Current clip=5.0 is 5× looser than transformer-standard |
+
 ## 2026-05-16 22:35 — 1 closure (#4172) + 1 rebase send-back (#4151) + 1 new assignment (#4184)
 
 ### Closed: PR #4172 (edward) — vol_weight=0.5 on new baseline
