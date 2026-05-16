@@ -62,6 +62,51 @@ ACTIVATION = {
 }
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, "Symbolic Discovery of Optimization
+    Algorithms"). Sign-based updates: update = sign(beta1*m + (1-beta1)*g),
+    then theta <- theta - lr*(update + wd*theta), m <- beta2*m + (1-beta2)*g.
+    Stores a single momentum buffer (half AdamW state). Decoupled weight decay.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                # Decoupled weight decay (matches AdamW decoupled style).
+                if wd != 0.0:
+                    p.mul_(1.0 - lr * wd)
+                # Update direction uses (beta1*m + (1-beta1)*g); compute on a
+                # fresh tensor so m is untouched until the buffer update below.
+                update = torch.lerp(g, m, beta1).sign_()
+                p.add_(update, alpha=-lr)
+                # Momentum buffer update: m <- beta2*m + (1-beta2)*g.
+                m.mul_(beta2).add_(g, alpha=1.0 - beta2)
+        return loss
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -428,6 +473,9 @@ def write_experiment_summary(
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
+        "optimizer": cfg.optimizer,
+        "beta1": cfg.beta1,
+        "beta2": cfg.beta2,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
@@ -518,6 +566,9 @@ class Config:
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
+    optimizer: str = "adamw"   # 'adamw' (default) or 'lion'
+    beta1: float = 0.9    # Optimizer beta1 (AdamW default 0.9, Lion default 0.9)
+    beta2: float = 0.999  # Optimizer beta2 (AdamW default 0.999, Lion default 0.99)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -577,7 +628,16 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(model.parameters(), lr=cfg.lr,
+                     betas=(cfg.beta1, cfg.beta2),
+                     weight_decay=cfg.weight_decay)
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
+                                  betas=(cfg.beta1, cfg.beta2),
+                                  weight_decay=cfg.weight_decay)
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=15, eta_min=cfg.eta_min
 )
@@ -694,6 +754,11 @@ for epoch in range(MAX_EPOCHS):
         "clip_grad_norm": cfg.clip_grad_norm,
         "norm_type": cfg.norm_type,
         "ffn_act": cfg.ffn_act,
+        "optimizer": cfg.optimizer,
+        "beta1": cfg.beta1,
+        "beta2": cfg.beta2,
+        "weight_decay": cfg.weight_decay,
+        "lr": cfg.lr,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "gate_stats": gate_stats,
