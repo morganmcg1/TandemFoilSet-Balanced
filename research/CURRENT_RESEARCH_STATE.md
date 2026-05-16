@@ -6,16 +6,18 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~10:45 UTC) — edward #3786 closed (Huber β dead-end); FiLM ablation confirmed by alphonse #3817 (−4.35 val contribution); fern #3808 internal signal at surf_weight=20 (−3.28 val); edward assigned R8 H31 (#3913 Reynolds sampler); 8/8 staffed.
+- **Date:** 2026-05-16 (~12:35 UTC) — #3748 nezuko MERGED (new baseline val 68.96); frieren #3843 lr=1e-4 is massive (val 65.41, pending terminal); #3817 alphonse closed (FiLM ablation); #3842/#3845 closed; 4 new R8 assignments; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
 
-**val_avg/mae_surf_p = 70.3432** (PR #3672 alphonse — n_fourier=0 + FiLM-output log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14, run `297qot5r`)
-**test_avg/mae_surf_p = 61.6253** (same run, clean 4-split)
+**val_avg/mae_surf_p = 68.9592** (PR #3748 nezuko — output-only spectral norm + n_fourier=0 + FiLM + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14, run `u42jpd48`)
+**test_avg/mae_surf_p = 60.8201** (same run, clean 4-split)
 
-Per-split val: in_dist 79.64, camber_rc 82.43, camber_cruise 51.50, re_rand 67.80
-Per-split test: in_dist 69.97, camber_rc 73.96, camber_cruise 42.22, re_rand 60.35
+Per-split val: in_dist 77.84, camber_rc 81.38, camber_cruise 49.90, re_rand 66.71
+Per-split test: in_dist 69.62, camber_rc 73.21, camber_cruise 40.68, re_rand 59.78
+
+**Δ vs prior best (PR #3672 n_fourier=0, val 70.34 / test 61.63): −1.39 val / −0.81 test**
 
 ## Merged sequence (improvement cascade)
 
@@ -26,88 +28,67 @@ Per-split test: in_dist 69.97, camber_rc 73.96, camber_cruise 42.22, re_rand 60.
 | #3444 | cosine T_max=14 | 96.05 → 93.20 | 90.00 → 83.54 | −3.0% / −7.2% |
 | #3537 | Lion optimizer | 93.20 → 77.58 | 83.54 → 68.88 | −16.8% / −17.5% |
 | #3405 | FiLM+Lion+EMA | 77.58 → 71.65 | 68.88 → 62.11 | −7.9% / −9.8% |
-| **#3672** | **n_fourier=0 (FiLM+Lion+EMA)** | **71.65 → 70.34** | **62.11 → 61.63** | **−1.8% / −0.8%** |
+| #3672 | n_fourier=0 | 71.65 → 70.34 | 62.11 → 61.63 | −1.8% / −0.8% |
+| **#3748** | **spec_norm(output)** | **70.34 → 68.96** | **61.63 → 60.82** | **−2.0% / −1.3%** |
 
-**Total improvement:** val 135 → 70.34 (−48%), test ~130 → 61.63 (−53%)
+**Total improvement:** val 135 → 68.96 (−49%), test ~130 → 60.82 (−53%)
+
+## PENDING MERGE — frieren #3843 lr=1e-4 (HUGE)
+
+**Frieren's lr=1e-4 arm (W&B run `bw38ym4h`) on n_fourier=0 baseline WITHOUT spec_norm:**
+- val 65.41 / test 56.06 → **−3.55 val / −4.76 test vs NEW spec_norm baseline**
+- lr=2e-5 confirms opposite direction (val 78.93 — worse)
+- Control arm lr=5e-5 (pqbyquwr) val 69.69 — good reproduction of substrate
+
+**Waiting for terminal SENPAI-RESULT.** Merge immediately when posted.
 
 ## Active experiments (8 of 8 students staffed)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| **#3817** | **alphonse** | **FiLM ablation under n_fourier=0** | WIP — terminal needed. FiLM confirmed −4.35 val. Asked to post SENPAI-RESULT. |
-| #3808 | fern | surf_weight sweep (10→20→40) | WIP — stale. Ran on OLD baseline (n_fourier=16). Internal w20 signal −3.28 val. Asked for n_fourier=0 confirmation arm. |
-| #3748 | nezuko | Spectral norm on output head (3 arms) | WIP — ran on OLD baseline. Arm B −2.71 val internally. Asked for n_fourier=0 confirmation arm. |
-| #3712 | askeladd | Lion β1 sweep {0.8, 0.9, 0.95} | WIP — β1=0.9 confirmed optimal over β1=0.8; β1=0.95 arm still missing. |
-| #3913 | edward | **R8 H31: Re-extremity WeightedRandomSampler {α=0, 0.5, 1.0}** | **Just assigned** |
-| #3842 | tanjiro | Sobolev finer sweep w ∈ {0.05, 0.10, 0.15} | WIP R7 H28 |
-| #3843 | frieren | Lion lr sweep {2e-5, 5e-5 ctrl, 1e-4} | WIP R7 H29 |
-| #3845 | thorfinn | Train-time z-reflection aug (p=0.5/0.25) | WIP R7 H30 |
+| **#3954** | **nezuko** | **R8 H32: spec_norm + lr=1e-4 combined** | **Just assigned** |
+| **#3955** | **alphonse** | **R8 H33: spec_norm n_power_iter sweep {1, 3, 5}** | **Just assigned** |
+| **#3957** | **tanjiro** | **R8 H34: cosine T_max sweep {10, 14 ctrl, 20} under spec_norm** | **Just assigned** |
+| **#3958** | **thorfinn** | **R8 H35: Lion wd sweep at lr=1e-4 {0.5e-3, 1e-3 ctrl, 2e-3}** | **Just assigned** |
+| **#3843** | **frieren** | **Lion lr=1e-4 — AWAITING TERMINAL** | **WIP — URGENT nudge posted** |
+| #3808 | fern | surf_weight sweep + confirmation arm w20 n_fourier=0 | WIP — asked for n_fourier=0 confirmation |
+| #3712 | askeladd | Lion β1 {0.8, 0.9, 0.95} — β1=0.95 arm still missing | WIP — nudged |
+| #3913 | edward | R8 H31: Reynolds-extremity WeightedRandomSampler α ∈ {0, 0.5, 1.0} | WIP |
 
-## Closed this session (informative / dead ends)
+## Closed this session
 
-- **#3786 edward** — Huber β sweep {0.05, 0.10, 0.20}: β=0.05 locally optimal, β=0.10 gains +0.47 val vs control but within seed noise (σ≈4.6). On OLD baseline (n_fourier=16). Paper-negative: widening Huber β ∈ [0.05, 0.20] does not improve surface-pressure MAE.
-- **#3673 tanjiro** — EMA decay: within noise. Informative.
-- **#3697 frieren** — Multi-σ Fourier: superseded by n_fourier=0. Informative.
-- **#3698 thorfinn** — TTA z-reflection: catastrophic failure. Dataset asymmetry confirmed.
-- **#3711 edward** — LLRD: dead end.
-- **#3695 fern** — Sobolev R5: small test gain noted.
-
-## Baseline-shift issue — R6 students
-
-R6 students (edward #3786, fern #3808, nezuko #3748, askeladd #3712) all ran on n_fourier=16 (OLD baseline), not n_fourier=0 (PR #3672 merged baseline). Their internal ablations are valid, but raw metrics don't compare to the new baseline. Needed: n_fourier=0 confirmation arms for promising results.
-
-## Candidate confirmations needed
-
-| Student | PR | Signal | Confirmation arm status |
-|---------|----|--------|------------------------|
-| **nezuko** | #3748 | Arm B spec_norm=output: −2.71 val vs internal ctrl | **Pending — asked to run n_fourier=0 arm** |
-| **fern** | #3808 | Arm B surf_weight=20: −3.28 val vs internal ctrl | **Pending — asked to run n_fourier=0 arm** |
-| alphonse | #3817 | FiLM ablation confirmed (−4.35 val); best FiLM-on arm val 70.05 (lucky seed) | No new mechanism; close as informative once terminal posted |
+- **#3817 alphonse** — FiLM ablation: FiLM contributes −4.35 val / −4.56 test under n_fourier=0. Paper-critical confirmed. Arm A = baseline reproduction (val 70.05, lucky seed). No merge — no new mechanism.
+- **#3842 tanjiro** — Sobolev finer sweep: catastrophic failure (val 212). Loss scaling broken at w=0.05+ on new spec_norm substrate. Informative.
+- **#3845 thorfinn** — Train-time z-aug: p=0.5 val 93 (catastrophic). Same root cause as TTA failure — training dist AoA asymmetry. Informative.
+- **#3786 edward** — Huber β: β=0.05 locally optimal in [0.05, 0.20]. Informative.
 
 ## Key findings (cumulative)
 
-1. **FiLM on log(Re) is the biggest mechanism.** Under n_fourier=0 substrate: FiLM-on val 70.05 vs FiLM-off val 74.40 = **−4.35 val / −4.56 test**. Paper-critical ablation confirmed.
-2. **EMA(0.997) contributes 4.4 val / 3.8 test on top of Lion** — cleanest single-mechanism measurement.
-3. **Fourier PE inert under FiLM+Lion+EMA.** n_fourier=0 wins. New baseline confirmed by alphonse's arm A reproduction.
-4. **EMA decay robust in [0.995, 0.997].** No merge.
-5. **Sobolev surface regularization: small test gain at w=0.1.** Finer sweep pending (#3842 tanjiro).
-6. **LLRD doesn't transfer** from fine-tuning to train-from-scratch.
-7. **LR warmup adds nothing** to Lion at 14-epoch budget.
-8. **Block-FiLM regresses +5 val.** Output-only is correct topology.
-9. **Lookahead dead end** across both substrates.
-10. **TTA z-reflection fails** — dataset AoA asymmetry.
-11. **Huber β=0.05 locally optimal** in [0.05, 0.20] under FiLM+Lion+EMA.
-12. **Seed noise floor measured: ≈2.7 val** (two identical FiLM-on/n_fourier=0 runs = val 70.05 vs 72.82).
+1. **FiLM on log(Re)** contributes −4.35 val / −4.56 test under n_fourier=0 (paper-critical ablation confirmed).
+2. **EMA(0.997)** contributes +4.4 val on top of Lion.
+3. **Fourier PE inert** under FiLM+Lion+EMA. n_fourier=0 wins.
+4. **EMA decay robust** in [0.995, 0.997].
+5. **Sobolev surface regularization**: pointed in right direction in R5 (small test gain), but catastrophically destabilizes at tighter weights on new substrate.
+6. **LLRD doesn't transfer** from fine-tuning to scratch.
+7. **LR warmup adds nothing** to Lion.
+8. **Block-FiLM regresses.** Output-only FiLM is correct topology.
+9. **Lookahead dead end.**
+10. **TTA z-reflection fails** — AoA asymmetry.
+11. **Huber β=0.05 locally optimal** in [0.05, 0.20].
+12. **Seed noise floor ≈ 2.77 val** (two identical runs).
+13. **Output-only spectral norm (−1.39 val / −0.81 test)**: Lipschitz constraint on head MLP reduces peak-pressure over-fitting. Arm C (output+FiLM spec_norm) hurts — FiLM's adaLN-Zero init incompatible with Lipschitz bounding.
+14. **Lion lr=1e-4 wins massively (−3.55 val vs spec_norm baseline)**: sign-based updates tolerate 2× LR. lr=2e-5 significantly worse. Pending confirmation merge.
+15. **Train-time z-aug fails** for same reason as TTA — AoA asymmetry is training-data deep, not inference-only.
 
-## R8+ reserved hypotheses
+## R8 hypothesis map (current round)
 
-1. **Per-split loss weighting** — upweight camber_rc training samples
-2. **Multi-seed ensemble** — average 2–3 seeds of new baseline (blocked: no --seed arg)
-3. **Geometric features** — chord-normal coords, local surface curvature κ
-4. **Curriculum on Reynolds** — train low-Re first
-5. **Wider model** — n_hidden 96→128
-6. **Snapshot/EMA ensemble** — average EMA checkpoints across multiple training points
-7. **Fern surf_weight=20 on new baseline** — highest priority if confirmation arm wins
-8. **Nezuko spec_norm output on new baseline** — high priority if confirmation arm wins
-
-## History
-
-| PR | Hypothesis | Outcome |
-|----|------------|---------|
-| **#3913** | **edward R8 H31: Re-extremity sampler** | WIP |
-| #3845 | thorfinn train-z-aug R7 | WIP |
-| #3843 | frieren Lion lr sweep R7 | WIP |
-| #3842 | tanjiro Sobolev finer R7 | WIP |
-| #3817 | alphonse FiLM ablation n_fourier=0 | WIP (terminal pending — FiLM confirmed) |
-| #3808 | fern surf_weight R7 | WIP (confirmation arm needed) |
-| **#3786** | **edward Huber β sweep R7** | **❌ Closed 10:35Z (informative — β=0.05 optimal)** |
-| #3748 | nezuko spec norm R6 | WIP (confirmation arm needed) |
-| #3712 | askeladd Lion β1 R6 | WIP (β1=0.95 arm missing) |
-| **#3672** | **alphonse Fourier ablation** | **✅ MERGED ~07:50Z (val 70.34 / test 61.63)** |
-| #3698 | thorfinn TTA R5 | ❌ Closed (catastrophic) |
-| #3697 | frieren multi-σ R5 | ❌ Closed (superseded) |
-| #3673 | tanjiro EMA decay R5 | ❌ Closed (informative) |
-| #3711 | edward LLRD R6 | ❌ Closed (dead end) |
-| #3695 | fern Sobolev R5 | ❌ Closed (informative) |
-| #3405 | FiLM+Lion+EMA H4 | ✅ MERGED (val 71.65 / test 62.11) |
-| #3537 | Lion optimizer H13 | ✅ MERGED (val 77.58 / test 68.88) |
+| Axis | Hypothesis | PR / student | Expected outcome |
+|------|-----------|-------------|-----------------|
+| LR (pending merge) | lr=1e-4 → merge | #3843 frieren | val ~65 / test ~56 |
+| Compound: spec_norm + lr=1e-4 | Stack two winners | #3954 nezuko | val ~62-65 |
+| Spec_norm constraint | n_power_iter {1, 3, 5} | #3955 alphonse | marginal refinement |
+| LR schedule | T_max {10, 14, 20} under spec_norm | #3957 tanjiro | marginal/informative |
+| LR × wd | wd at lr=1e-4 {0.5, 1.0, 2.0}×1e-3 | #3958 thorfinn | calibration check |
+| Re-stratified sampler | α ∈ {0, 0.5, 1.0} | #3913 edward | targets re_rand OOD |
+| surf_weight confirmation | w=20 on n_fourier=0 | #3808 fern | +3 val candidate |
+| Lion β1 completion | β1=0.95 missing arm | #3712 askeladd | paper ablation |

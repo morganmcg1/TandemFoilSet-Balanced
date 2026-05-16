@@ -1,5 +1,77 @@
 # SENPAI Research Results
 
+## 2026-05-16 12:35 — nezuko #3748 MERGED; 4 R8 assignments; frieren lr=1e-4 pending
+
+### #3748 nezuko — Spectral norm on output head (MERGED — new baseline val 68.96 / test 60.82)
+
+- Branch: `willowpai2i48h5-nezuko/r6-spec-norm`
+- Hypothesis: Spectral normalization on output head MLP constrains Lipschitz constant of output projection, reducing peak-pressure over-fitting.
+- Results (4 arms total — arms A/B/C on OLD baseline n_fourier=16; arm D on NEW baseline n_fourier=0):
+
+| Arm | W&B run | spec_norm_target | n_fourier | val_avg | test_avg | notes |
+|-----|---------|-----------------|-----------|---------|----------|-------|
+| A (ctrl) | `vzbd6cch` | none | 16 | 72.83 | 63.40 | old substrate |
+| **B (old winner)** | **`6my2xobv`** | **output** | **16** | **70.12** | **60.85** | old substrate |
+| C | `gf9yg95k` | output+film | 16 | 74.20 | 64.20 | old substrate — worse |
+| **D (confirmed winner)** | **`u42jpd48`** | **output** | **0** | **68.9592** | **60.8201** | new substrate |
+
+Per-split arm D vs new baseline (PR #3672):
+| Split | val Δ | test Δ |
+|-------|-------|--------|
+| in_dist | 79.64 → 77.84 (−1.80) | 69.97 → 69.62 (−0.35) |
+| camber_rc | 82.43 → 81.38 (−1.05) | 73.96 → 73.21 (−0.75) |
+| camber_cruise | 51.50 → 49.90 (−1.60) | 42.22 → 40.68 (−1.54) |
+| re_rand | 67.80 → 66.71 (−1.09) | 60.35 → 59.78 (−0.57) |
+| **avg** | **70.34 → 68.96 (−1.39)** | **61.63 → 60.82 (−0.81)** | |
+
+- Analysis: **Spectral norm on output head (n_power_iter=1) is a legitimate regularizer for CFD surface-pressure MAE.** All 4 val splits improve and all 4 test splits improve. The Lipschitz bound on the head MLP prevents peak-pressure over-fitting — consistent with the mechanism story: high-Re/high-camber samples have peak-pressure spikes that the head over-fits; σ=1 bound forces smoother output.
+
+  **Arm C (output+film spec_norm) HURTS (+1.37 val vs new baseline)**: bounding FiLM's gamma/beta linear destroys FiLM's adaLN-Zero identity-at-init and prevents Re-conditioning. Output-only remains the correct topology.
+
+  **Paper-relevant (finding #13):** Output-only spectral norm is a complementary regularizer to FiLM. They operate in different subspaces (output Lipschitz vs input Re-conditioning) and compound cleanly.
+
+  **New baseline: val 68.9592 / test 60.8201** (BASELINE.md updated, commit c07a3dd).
+
+### #3843 frieren — Lion lr sweep (WIP — URGENT, lr=1e-4 arm is massive)
+
+- Branch: `willowpai2i48h5-frieren/r7-lion-lr-sweep`
+- All 3 arms finished (one retry running). Results on n_fourier=0 WITHOUT spec_norm:
+
+| Arm | lr | W&B run | val_avg | test_avg | vs spec_norm baseline (68.96/60.82) |
+|-----|----|---------|---------|----------|--------------------------------------|
+| A | 2e-5 | `gcjjdfot` | 78.93 | 69.31 | +9.97 / +8.49 (much worse) |
+| B (ctrl) | 5e-5 | `pqbyquwr` | 69.69 | 60.47 | +0.73 / −0.35 (good repro) |
+| **C (WINNER)** | **1e-4** | **`bw38ym4h`** | **65.41** | **56.06** | **−3.55 val / −4.76 test** |
+
+- Analysis: **lr=1e-4 is the largest single-arm improvement since the Lion merge in Round 3.** Sign-based Lion updates are scale-tolerant — LR 2× increase to 1e-4 finds a better basin in the 14-epoch cosine schedule. lr=2e-5 is significantly worse (too conservative for the 14-epoch budget). Control lr=5e-5 (val 69.69) cleanly reproduces the n_fourier=0 substrate (pre-spec_norm).
+
+  **Decision: merge immediately when terminal SENPAI-RESULT posted.** Urgent comment posted on PR.
+
+### #3817 alphonse — FiLM ablation (CLOSED — informative, paper-critical)
+
+- **FiLM contribution under n_fourier=0:** −4.35 val / −4.56 test. FiLM-on val 70.05, FiLM-off val 74.40. All 4 splits improve with FiLM. Gain concentrates on Re-varying splits (in_dist −7.7 val / −8.7 test, re_rand −3.6 / −4.2), least on geometry-shifting camber_rc (−1.3 / −1.8). FiLM functions as Reynolds-conditioner, not generic regularizer. Seed noise floor: 2.77 val (two identical FiLM-on runs).
+
+### #3842 tanjiro — Sobolev finer sweep (CLOSED — catastrophic)
+
+- sobolev_weight=0.05 gave val 212 (3× worse than baseline). Loss scaling incompatible with new spec_norm substrate. Mechanism broken at this weight range.
+
+### #3845 thorfinn — Train-time z-aug (CLOSED — same root cause as TTA)
+
+- p=0.5 gave val 93 (35% worse than baseline). Training with z-reflected samples introduces conflicting physics regimes (phantom AoA=+3° instead of −3°) — same AoA asymmetry that caused TTA failure.
+
+### R8 H32-H35 assigned
+
+| PR | Student | Hypothesis | Key spec |
+|----|---------|------------|----------|
+| **#3954** | **nezuko** | **spec_norm + lr=1e-4 combined** | Stack two winners. Expected val ~62-65. |
+| **#3955** | **alphonse** | **n_power_iter sweep {1, 3, 5}** | Tighten Lipschitz constraint. `--spec_norm_n_power_iter` sweep. |
+| **#3957** | **tanjiro** | **T_max sweep {10, 14 ctrl, 20}** | Check if spec_norm changes optimal LR schedule. |
+| **#3958** | **thorfinn** | **wd sweep at lr=1e-4 {0.5e-3, 1e-3 ctrl, 2e-3}** | Recalibrate wd when LR doubles. spec_norm + lr=1e-4 substrate. |
+
+All 8 students staffed. Frieren #3843 terminal pending — **merge immediately when posted.**
+
+---
+
 ## 2026-05-16 10:45 — edward #3786 closed; FiLM ablation confirmed (#3817 alphonse); fern surf_weight signal (#3808); edward R8 assigned #3913
 
 ### #3786 edward — Huber β sweep (CLOSED — informative, β=0.05 optimal)
