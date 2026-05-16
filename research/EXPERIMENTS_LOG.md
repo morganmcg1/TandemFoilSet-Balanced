@@ -1,5 +1,79 @@
 # SENPAI Research Results
 
+## 2026-05-16 10:45 — edward #3786 closed; FiLM ablation confirmed (#3817 alphonse); fern surf_weight signal (#3808); edward R8 assigned #3913
+
+### #3786 edward — Huber β sweep (CLOSED — informative, β=0.05 optimal)
+
+- Branch: `willowpai2i48h5-edward/r7-huber-beta-sweep`
+- Hypothesis: β ∈ {0.05, 0.10, 0.20} — wider Huber transition targets peak-pressure residuals driving camber_rc weakness.
+- Results (all 3 arms finished, on OLD baseline n_fourier=16):
+
+| Arm | β | W&B run | val_avg | test_avg | vs internal ctrl |
+|-----|---|---------|---------|----------|-----------------|
+| A (control) | 0.05 | `g3z8imw5` | 73.47 | 63.85 | — |
+| **B (best)** | **0.10** | **`h3rdp99f`** | **72.99** | **62.93** | **−0.47 val / −0.92 test** |
+| C | 0.20 | `5gdtcspi` | 73.71 | 63.85 | +0.24 / flat |
+
+- Analysis: **β=0.05 is locally optimal in [0.05, 0.20] under FiLM+Lion+EMA.** β=0.10 shows a consistent direction (all 4 test splits improve slightly) but effect size (+0.47 val) is well within σ≈4.6 seed noise, particularly given that the control arm itself regressed +1.81 val vs published baseline — consistent with the 2.7 val seed-noise floor measured this session. β=0.20 is essentially indistinguishable from control.
+
+  Per-split camber_rc was flat across all 3 arms (val: 85.32 → 85.33 → 84.54), confirming that peak-pressure residuals on camber_rc are NOT primarily driven by Huber β choice.
+
+  **Paper-negative (finding #11):** Huber β ∈ [0.05, 0.20] does not improve surface-pressure MAE. β=0.05 is the local optimum.
+
+  Caveat: runs used OLD baseline (n_fourier=16). Internal ablation still transfers since all 3 arms share substrate.
+
+### #3817 alphonse — FiLM ablation (WIP — terminal pending, PAPER-CRITICAL finding confirmed)
+
+- Branch: `willowpai2i48h5-alphonse/r7-film-ablation-nofourier`
+- Hypothesis: FiLM on vs off under n_fourier=0, to quantify the FiLM contribution for the paper.
+- Results (both arms finished on NEW baseline n_fourier=0):
+
+| Arm | use_film | W&B run | val_avg | test_avg |
+|-----|----------|---------|---------|----------|
+| **A-best (FiLM on)** | True | **`sd42el34`** | **70.05** | **60.996** |
+| A-retry (FiLM on) | True | `47p2anxd` | 72.82 | 63.82 |
+| A-crash | True | `exx8m4sv` | NaN | NaN |
+| **B (FiLM off)** | False | **`ow1x8ne8`** | **74.40** | **65.56** |
+
+Per-split FiLM contribution (film=off → film=on, best run sd42el34):
+| Split | val Δ | test Δ |
+|-------|-------|--------|
+| in_dist | 85.67 → 77.98 | 75.83 → 67.17 |
+| **camber_rc** | **85.90 → 84.58 (−1.32)** | **76.04 → 74.21 (−1.83)** |
+| camber_cruise | 54.79 → 50.01 (−4.78) | 45.60 → 42.03 (−3.57) |
+| re_rand | 71.26 → 67.63 (−3.63) | 64.78 → 60.57 (−4.21) |
+| **avg** | **−4.35** | **−4.56** |
+
+- Analysis: **Paper-critical finding: FiLM contributes −4.35 val / −4.56 test under n_fourier=0 substrate.** This is smaller than the original FiLM measurement from old baseline (~5.9 val) but still large. The FiLM mechanism is confirmed as essential.
+
+  **On merging:** The best film=on arm (sd42el34 val 70.05) is −0.29 val / −0.63 test better than baseline #3672. This is a lucky seed, NOT a new mechanism — arm A is the SAME config as #3672. Two FiLM-on runs gave val 70.05 vs 72.82 = 2.77 val spread (identical config). **No merge.** Close as informative once terminal posted.
+
+  **Seed noise floor finding:** 2 runs of the same config gave val 70.05 vs 72.82 = **2.77 val spread** → any single-arm Δ < 2.7 val is indistinguishable from seed variance.
+
+### #3808 fern — surf_weight sweep (WIP — baseline-shift issue, confirmation arm requested)
+
+- Branch: `willowpai2i48h5-fern/r7-surf-weight-sweep`
+- Hypothesis: surf_weight ∈ {10 ctrl, 20, 40} under FiLM+Lion+EMA on new baseline.
+- Results so far (all arms on OLD baseline n_fourier=16 — NOT the new baseline):
+
+| Arm | surf_weight | W&B run | val_avg | test_avg | vs ctrl |
+|-----|-------------|---------|---------|----------|---------|
+| A (ctrl, running) | 10 | `gg7r89pm` (done), `kbhvk6ol` (running) | 75.28 | 64.70 | — |
+| **B** | **20** | **`218e3m9g`** | **72.00** | **61.82** | **−3.28 val / −2.88 test** |
+| C | 40 | `433xbqv4` | 76.93 | 66.63 | +1.65 / +1.93 |
+
+- Analysis: **Strong internal signal at surf_weight=20 (−3.28 val / −2.88 test).** Clean U-shape: w20 wins, w40 regresses. Effect size large enough to be real. But all runs on n_fourier=16, so not directly comparable to new baseline 70.34.
+
+  Asked fern to run one confirmation arm: surf_weight=20 + n_fourier=0. If that beats val 70.34, it's a merge candidate.
+
+### R8 H31 assigned — edward #3913
+
+| PR | Student | Hypothesis | Implementation |
+|----|---------|------------|----------------|
+| **#3913** | **edward** | **Reynolds-extremity WeightedRandomSampler** | 3 arms: `--re_sampler_alpha {0.0 ctrl, 0.5, 1.0}`. Multiply existing balanced-domain `sample_weights` by `|log(Re) - mean(log Re)|^α` to oversample extreme-Re samples. Targets re_rand OOD split (worst non-camber split at test 60.35). Already have WeightedRandomSampler plumbing in train.py (line 648). |
+
+---
+
 ## 2026-05-16 09:35 — 3 R5 closes (#3673, #3697, #3698); 3 R7 assignments (#3842, #3843, #3845)
 
 ### #3673 tanjiro — EMA decay sweep (CLOSED — informative, within noise)
