@@ -1749,3 +1749,155 @@ Under SF-AdamW, the question is whether AGC's per-tensor direction normalization
 
 - `models/model-charliepai2i48h4-edward-agc-r1-arma-clip025-20260516-150051/metrics.jsonl` (control, val_avg=83.233)
 - `models/model-charliepai2i48h4-edward-agc-r1-armb-agc-lambda01-20260516-142616/metrics.jsonl` (AGC, val_avg=81.552)
+
+---
+
+## 2026-05-16 16:05 — PR #3980 [SENT BACK for rebase]: Lion optimizer (sign projection) on full clip stack (frieren)
+
+**Branch:** `charliepai2i48h4-frieren/lion-optimizer`
+
+**Hypothesis:** Replace AdamW's `m̂ / (√v̂ + ε)` update with Lion's `sign(β1·m + (1−β1)·g)`. Under `grad_clip_norm=0.25` (100% clip rate), AdamW's per-coordinate adaptive scaling fights the global L2 clip — Lion's sign projection is internally consistent direction normalization at the L∞ extreme.
+
+### Results (R1 paired, AdamW + cosine T_max=15 + clip=0.25 stack, seed=1)
+
+| Arm | Config | val_avg/mae_surf_p | test 3-split |
+|---|---|---:|---:|
+| A | AdamW + clip=0.25 (control) | 83.812 | 79.376 |
+| **B** | **Lion + clip=0.25** | **63.336** | **60.549** |
+| **Paired Δ** | — | **−24.43%** | **−23.72%** |
+
+**Arm B absolute val 63.336 beats current SF-AdamW baseline 65.618 by −3.48%; test 60.549 vs 62.853 (−3.67%).** This is the largest paired Δ observed on this track and the lowest absolute val_avg on any single experiment.
+
+### Per-split paired Δ
+
+| Split | A | B | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 95.651 | 65.069 | **−31.97%** |
+| `val_geom_camber_rc`     | 94.700 | 77.134 | −18.55% |
+| `val_geom_camber_cruise` | 66.706 | 47.166 | **−29.29%** |
+| `val_re_rand`            | 78.193 | 63.975 | −18.18% |
+| `test_single_in_dist`    | 80.977 | 56.001 | **−30.84%** |
+| `test_geom_camber_rc`    | 82.523 | 69.853 | −15.35% |
+| `test_re_rand`           | 74.628 | 55.794 | −25.24% |
+
+Wins every split, every metric. Largest wins on `single_in_dist` (−31% val/test) where heavy-tail outliers seem to most benefit from sign projection's coordinate-equalization.
+
+### Diagnostics
+
+- **Wall-clock parity**: Lion 112.4 sec/epoch vs AdamW 111.4 (no speedup from no-`v²`; data/activations dominate at 845k params).
+- **Grad clip rate**: ~100% in both arms — every step's pre-optimizer norm exceeded 0.25.
+- **Training stability**: Lion's val_loss strictly lower from epoch 2 onward. No instability.
+
+### Mechanism reading
+
+Sign projection is a **strictly better direction normalizer than L2 clip** on this task. Why:
+1. **Component-equalization vs vector-rescaling**: clip preserves coordinate ratios then L2-rescales; sign projection forces every coordinate to ±1 then scales by lr. On heavy-tailed gradient distributions, this re-weights toward components AdamW under-weighted.
+2. **No internal-vs-external normalization conflict**: AdamW + L2 clip applies per-coordinate scaling (Adam's `v̂`) then global L2 rescaling — two normalizers in series, producing inconsistent direction. Lion's single sign step is internally coherent.
+
+This generalizes the "direction normalization is load-bearing" mechanism from PR #3906 (clip=0.25 win): Lion is the L∞ extreme of the same mechanism family.
+
+### Decision: SEND BACK for rebase
+
+Branch has merge conflicts against the SF-AdamW HEAD. Re-run after rebase to confirm paired Δ holds. Within-run Δ at 12× noise floor; single seed sufficient for definitive merge once rebased.
+
+### What this implies for the stack
+
+If Lion's win reproduces post-rebase, **Lion likely becomes the new canonical optimizer**, displacing AdamW from the stack. Open follow-on questions:
+- Does Lion + SF-AdamW compose, or are they testing the same mechanism via different routes? (SF-AdamW removes the LR schedule; Lion changes the update direction. Likely orthogonal but needs paired test.)
+- Lion + AGC: another extreme of direction normalization on top of Lion's sign step.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-frieren-lion-r1-arma-adamw-clip25-20260516-143719/metrics.jsonl` (control)
+- `models/model-charliepai2i48h4-frieren-lion-r1-armb-lion-clip25-20260516-152650/metrics.jsonl` (Lion, val_avg=63.336)
+
+---
+
+## 2026-05-16 16:08 — PR #3390 [CLOSED]: T_max=20 R2 superseded by SF-AdamW (thorfinn)
+
+**Branch:** `charliepai2i48h4-thorfinn/bf16-tmax20-compose`
+
+**Hypothesis:** Composing bf16 with cosine T_max=20 (R1 found −14.2% on bf16-only stack) should help on the FiLM stack. R2 was a 2-arm paired test: T_max=15 control vs T_max=20.
+
+### Result: Arm A completed, Arm B aborted
+
+| | val_avg/mae_surf_p | best epoch |
+|---|---:|---:|
+| Arm A (T_max=15, control) | 84.480 | 17 |
+| Arm B (T_max=20) | aborted | — |
+
+**Smart hold call by thorfinn**: while Arm A was running, PR #3594 SF-AdamW merged at 15:34 UTC and the stack moved from "AdamW + cosine T_max=15" to "AdamW + SF-AdamW (no cosine)". The decision rule "if Arm B beats Arm A by >1% → merge T_max=20" presumed cosine remained in the stack. SF-AdamW's paired Δ −16.80% is strictly larger than the best plausible T_max=20 Δ (R1 was −14.2% on a weaker stack), so the merge path was foreclosed.
+
+### Decision: CLOSE as superseded
+
+Three options offered (close, run Arm B, pivot to SF+cosine). Student recommended option 1, I agreed. Cosine schedule axis is now formally closed.
+
+### Two-mechanisms-for-same-role pattern (now repeated)
+
+- **n_layers=4** (#3758): cheaper depth-as-proxy-for-late-training-stability. Subsumed by grad_clip which owns the role directly.
+- **T_max=20** (#3390): better-use-of-the-cosine-tail. Subsumed by SF-AdamW which removes the tail entirely.
+
+The lesson is becoming a research-program-level principle worth its own writeup section: **when a hypothesis worked via a mechanism that a later baseline now owns directly, the hypothesis loses even if its earlier evidence was real**.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-thorfinn-tmax20-r2-arma-tmax15-clip025-20260516-152533/metrics.jsonl` (Arm A only — control reproduction)
+
+### Next assignment: PR #4051 SF-AdamW weight-decay sweep (thorfinn)
+
+4-arm wd sweep {1e-4 control, 3e-4, 1e-3, 1e-2}. Under SF-AdamW, effective regularization no longer decays with cosine, so the AdamW-tuned wd=1e-4 may be sub-optimal. Three orders of magnitude swept, paired control.
+
+---
+
+## 2026-05-16 16:10 — PR #3492 [SENT BACK for SF retest]: n_hidden=192 R3 — third paired replication (nezuko)
+
+**Branch:** `charliepai2i48h4-nezuko/n-hidden-bigger`
+
+**Hypothesis:** Wider Transolver (n_hidden 128→192, +2.05× params) compounds with grad_clip=1.0 stack. Tested R1 (bf16+T_max=15+EMA, paired −2.99%), R2 (+FiLM, paired −8.21%), R3 (+clip=1.0, paired −5.17%).
+
+### Results (R3 paired, FiLM + clip=1.0 stack, seed=1)
+
+| Arm | n_hidden | n_params | best epoch | val_avg/mae_surf_p | test 3-split |
+|---|---:|---:|---:|---:|---:|
+| A | 128 | 845,527 | 17 | 83.741 | 79.927 |
+| B | **192** | 1,737,559 | 13 | **79.409** | **75.751** |
+| **Δ** | — | +2.05× | — | **−5.17%** | **−5.22%** |
+
+**Third consecutive paired replication of the capacity win.** Mechanism robust across three stack changes.
+
+But **Arm B absolute 79.409 > current SF-AdamW baseline 65.618 by +21.0%** — cannot merge on a stale stack.
+
+### Per-split val Δ
+
+| Split | A | B | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 97.913 | 88.525 | **−9.59%** |
+| `val_geom_camber_rc`     | 93.093 | 91.018 | −2.23% |
+| `val_geom_camber_cruise` | 63.990 | 60.133 | −6.03% |
+| `val_re_rand`            | 79.969 | 77.961 | −2.51% |
+
+`single_in_dist` always biggest winner — wider model best at heavy-tailed raceCar-single pressure distributions.
+
+### Diagnostics (excellent — student added `--seed` flag mid-PR)
+
+- **n_params:** 845,527 → 1,737,559 (+2.05×)
+- **VRAM:** 38.92 → 51.98 GB (+33.6%, well within 96 GB budget)
+- **Throughput:** 111.4 → 141.7 sec/epoch (+27.2%). Arm B fits 13 epochs in 30 min vs Arm A's 17.
+- **Clip rate:** A 98.6%, B 99.2% — direction normalization mechanism preserved at higher capacity.
+- **Train loss at common epoch 13:** A=0.0498 vs B=0.0471 (B fits 5.4% tighter; capacity benefit + better generalization).
+- **Seed pinning added:** `train.py` now accepts `--seed N`. Removes R2's ~8% absolute drift concern.
+
+### Decision: SEND BACK for R4 SF-AdamW retest
+
+Rebase-if-positive-Δ protocol fires. R4 instructions: paired 2-arm n_hidden=128 vs 192 on the **SF-AdamW** stack (`--use_schedule_free --grad_clip_norm 1.0` + EMA + FiLM + two-shot FiLM). Same seed=1 pinning.
+
+If R4 reproduces the paired Δ at <0 with Arm B absolute < 65.618 → **n_hidden=192 + SF becomes the new canonical capacity** and likely the largest absolute win on the track (capacity + SF compounded). Expected if mechanisms are orthogonal.
+
+### Highest-EV in-flight retest
+
+R2's −8.21% paired and three independent replications make this the strongest mechanism candidate not yet on the current baseline. If it lands at even a fraction of R2's gain on top of SF, val_avg could drop to sub-60.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-nezuko-capacity-r3-arma-nh128-clip-20260516-143410/metrics.jsonl` (control)
+- `models/model-charliepai2i48h4-nezuko-capacity-r3-armb-nh192-clip-20260516-152649/metrics.jsonl` (n_hidden=192)
