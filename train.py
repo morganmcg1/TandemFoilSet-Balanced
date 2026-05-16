@@ -465,6 +465,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    clip_grad_norm: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -596,13 +597,14 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(
-            model.parameters(), max_norm=float("inf")
+            model.parameters(), max_norm=cfg.clip_grad_norm
         )
         optimizer.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/grad_clipped": float(grad_norm.item() > cfg.clip_grad_norm),
             "global_step": global_step,
         })
 
