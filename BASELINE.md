@@ -2,10 +2,46 @@
 
 ## Current Best
 
-**PR #3450 — H25: Per-channel Huber δ_vel=1.0, δ_p=0.25 on H19 stack (askeladd)**
-Merged 2026-05-15. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
+**PR #3445 — H20: Gradient clip=1.0 on H19 triple compound (nezuko)**
+Merged 2026-05-16. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **75.4955** | PR #3445 Arm A |
+| val_single_in_dist/mae_surf_p | 85.7272 | PR #3445 Arm A |
+| val_geom_camber_rc/mae_surf_p | 85.4700 | PR #3445 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 55.7886 | PR #3445 Arm A |
+| val_re_rand/mae_surf_p | 74.9964 | PR #3445 Arm A |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3445 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **73.1556** | PR #3445 Arm A |
+| test_single_in_dist/mae_surf_p | 77.4314 | PR #3445 Arm A |
+| test_geom_camber_rc/mae_surf_p | 77.5658 | PR #3445 Arm A |
+| test_re_rand/mae_surf_p | 64.4696 | PR #3445 Arm A |
+
+**Configuration:** FiLM cond_dim=11 (default) + Huber δ=0.5 + CosineAnnealingLR T_max=15 (default) + clip_grad_norm=1.0.
+
+**Why grad clipping works:** Pre-clip gradient norm was 5–17× throughout training, meaning clipping was active at every step. Clamping per-step update magnitude to max_norm=1.0 prevents the Huber-activated tail gradients (from high-Re samples with large pressure spikes) from taking disproportionately large optimizer steps. Combined with FiLM's regime conditioning and T_max=15's full annealing, clip=1.0 provides the final stabilization layer that lets the model refine more consistently across all splits.
+
+**Note on Arm B (clip=0.5):** val_avg=77.0687 — also beats H19, but over-clips gradient (17–34× reduction vs Arm A's 5–17×). clip=1.0 is the optimum.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT; `test_avg/mae_surf_p = NaN` for all PRs. File is read-only.
+
+**Artifacts:** `models/model-h20-clip1-h19-20260515-212335/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h20-clip1-h19 --agent <student> \
+  --huber_delta 0.5 --clip_grad_norm 1.0
+# FiLM cond_dim=11 and CosineAnnealingLR T_max=15 are now the merged defaults
+```
+
+## Previous Best (overridden by #3445)
+
+**PR #3450 — H25: Per-channel Huber δ_vel=1.0, δ_p=0.25 on H19 stack (askeladd)**
+Merged 2026-05-15. 14 epochs completed (30-min timeout cap; LR fully annealed — best epoch = final epoch).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -20,23 +56,7 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 | test_geom_camber_rc/mae_surf_p | 78.8537 | PR #3450 Arm B |
 | test_re_rand/mae_surf_p | 65.8246 | PR #3450 Arm B |
 
-**Configuration:** FiLM cond_dim=11 (default) + per-channel Huber δ_vel=1.0, δ_p=0.25 + CosineAnnealingLR T_max=15 (default).
-
-**Why per-channel Huber works:** Pressure has heavier tails at high-Re — clamping extremes aggressively (δ_p=0.25) prevents pressure outliers from dominating optimization. Velocities are better treated near-MSE (δ_vel=1.0) because their distribution is more Gaussian. Decoupling the clipping thresholds per output channel yields a 9.6% improvement in val_avg over the uniform-Huber H19 baseline.
-
-**Note on Arm A (δ_vel=0.5, δ_p=0.25):** val_avg=78.2286 — also beats H19, but Arm B (δ_vel=1.0) is the winner.
-
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT; `test_avg/mae_surf_p = NaN` for all PRs. File is read-only.
-
-**Artifacts:** `models/model-charliepai2i48h3-askeladd-h25-perchan-huber-vel10-p025-h19-20260515-222431/`
-
-**Reproduce:**
-```bash
-cd target/ && python train.py --epochs 50 \
-  --experiment_name h25-perchan-huber-vel10-p025-h19 --agent <student> \
-  --huber_delta_vel 1.0 --huber_delta_p 0.25
-# FiLM cond_dim=11 and CosineAnnealingLR T_max=15 are now the merged defaults
-```
+**Configuration:** FiLM cond_dim=11 + per-channel Huber δ_vel=1.0, δ_p=0.25 + T_max=15.
 
 ## Previous Best (overridden by #3450)
 
