@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -619,6 +620,7 @@ class Config:
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
+    mixup_alpha: float = 0.0  # Beta(alpha, alpha) MixUp on per-node (x, y); 0 disables
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -840,6 +842,19 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # MixUp augmentation (Zhang et al. 2017, arXiv:1710.09412): interpolate
+        # (x, y) per-node-index across the batch with a single lam~Beta(a, a).
+        # is_surface / mask are NOT mixed — sample A's mask defines real nodes,
+        # so loss is computed at sample A's positions with mixed (x, y). FiLM's
+        # log(Re) conditioning is derived from x AFTER mixing, so it sees the
+        # same interpolated Re value the rest of the network does.
+        mixup_lam = 1.0
+        if cfg.mixup_alpha > 0:
+            mixup_lam = float(np.random.beta(cfg.mixup_alpha, cfg.mixup_alpha))
+            perm = torch.randperm(x.shape[0], device=x.device)
+            x = mixup_lam * x + (1 - mixup_lam) * x[perm]
+            y = mixup_lam * y + (1 - mixup_lam) * y[perm]
+
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -871,11 +886,14 @@ for epoch in range(MAX_EPOCHS):
         if ema_model is not None:
             ema_model.update_parameters(model)
         global_step += 1
-        wandb.log({
+        log_step = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm,
             "global_step": global_step,
-        })
+        }
+        if cfg.mixup_alpha > 0:
+            log_step["train/mixup_lam"] = mixup_lam
+        wandb.log(log_step)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
