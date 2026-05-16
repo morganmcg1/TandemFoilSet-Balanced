@@ -2135,3 +2135,84 @@ Arm B within noise floor. Arms C/D regress. **All arms at 100% clip rate** at ev
 - Arm C: `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-armc-clip0_05-20260516-172649/metrics.jsonl`
 - Arm D: `models/model-charliepai2i48h4-tanjiro-clipthresh-r2-armd-clip0_15-20260516-182441/metrics.jsonl`
 
+
+---
+
+## 2026-05-16 21:07 — PR #3980 [MERGED]: Lion optimizer — sign projection vs AdamW (post-rebase R2 confirmation)
+
+- **Student branch:** `charliepai2i48h4-frieren/lion-optimizer`
+- **Hypothesis:** Lion's sign-projection update (L∞ direction normalization) provides a more internally consistent gradient direction than L2-clipped AdamW when clip rate ≈ 100%. Expected −5% to −20% on val_avg/mae_surf_p.
+
+### Results (R2 post-rebase, seed=1)
+
+| Arm | optimizer | clip | val_avg/mae_surf_p | Paired Δ | Test 3-split | Test Δ |
+|-----|---|---|---|---|---|---|
+| **A (AdamW control)** | AdamW + cosine T_max=15 | 0.25 | 83.812 | — | 79.376 | — |
+| **B (Lion)** | Lion + cosine T_max=15 | 0.25 | **63.336** | **−24.43%** | **60.549** | **−23.72%** |
+
+Per-split val (lower is better):
+
+| Split | Arm A AdamW | Arm B Lion | Δ % |
+|-------|---:|---:|---:|
+| `val_single_in_dist`      | 95.651 | **65.069** | −31.97% |
+| `val_geom_camber_rc`      | 94.700 | **77.134** | −18.55% |
+| `val_geom_camber_cruise`  | 66.706 | **47.166** | −29.29% |
+| `val_re_rand`             | 78.193 | **63.975** | −18.18% |
+| **val_avg**               | **83.812** | **63.336** | **−24.43%** |
+
+Lion wins on **every single split**, both val and test. Paired Δ is 12× the seed-variance noise floor (±1.5-2%). Bit-exact reproduction across R1 and R2 (same numbers — rebase changed nothing in the training code path).
+
+### Comparison vs current baseline
+
+**Lion 63.336 beats the previously-merged SF-AdamW baseline (65.618) by −3.48% val / −3.67% test.**
+
+This means:
+- Lion on AdamW+cosine stack outperforms SF-AdamW on the same base metrics
+- Falsifies the implicit assumption that SF-AdamW was the strongest single mechanism
+- Lion's −24% paired Δ over AdamW+cosine > SF-AdamW's −16.8% paired Δ over matched cosine
+
+### Operational metrics
+
+| metric | Arm A AdamW | Arm B Lion |
+|---|---|---|
+| epochs | 17 | 17 |
+| best epoch | 17 | 17 |
+| sec/epoch | 111.4 | 112.5 |
+| peak GPU (GB) | 38.92 | 38.92 |
+| clip_rate | ~100% | ~100% |
+| train/surf_loss (ep17) | 0.0440 | 0.0296 |
+
+Wall-clock and memory are essentially identical — Lion's ~3.4 MB optimizer state savings negligible vs 39 GB activations.
+
+### Mechanism
+
+With clip_rate ≈ 100%: AdamW updates in `m̂/(√v̂+ε)` direction (per-coordinate rescaling) then globally L2-rescaled to ≤0.25 = **two normalizers in series**. Lion updates as `sign(β₁m + (1-β₁)g)` = **single internally consistent normalizer** that forces all coordinates to ±1 (scaled by lr). Sign projection re-weights toward under-represented gradient components that AdamW de-emphasizes via its adaptive scaling, then globally rescales to cancel that de-emphasis.
+
+### Decision: MERGED as new canonical optimizer (2026-05-16 21:07 UTC)
+
+### New canonical stack
+
+```bash
+python train.py \
+  --amp_dtype bf16 --cosine_t_max 15 \
+  --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film \
+  --grad_clip_norm 0.25 \
+  --optimizer lion --lion_lr 1.5e-4 --lion_weight_decay 3e-4 \
+  --lion_betas 0.9,0.99
+```
+
+### Impact on in-flight experiments
+
+Following the merge, Lion replaces SF-AdamW as canonical. In-flight SF-specific sweeps (#4019, #4038, #4087, #4113, #4114) will be evaluated against the new 63.336 baseline when they complete. Their results remain informative as mechanistic diagnostics even if the canonical stack changed.
+
+Key redirects:
+- **#4012 fern Sobolev R2**: Redirected to Lion stack (same 2-arm design, Lion control instead of SF control).
+- **#4144 frieren**: New assignment — Lion + SF composition (3-way comparison).
+
+### Metric artifacts
+
+- Winner R2: `models/model-charliepai2i48h4-frieren-lion-r2-armb-lion-clip25-rebased-20260516-183306/metrics.jsonl`
+- Control R2: `models/model-charliepai2i48h4-frieren-lion-r2-arma-adamw-clip25-rebased-20260516-172945/metrics.jsonl`
+- Original R1 winner: `models/model-charliepai2i48h4-frieren-lion-r1-armb-lion-clip25-20260516-152650/metrics.jsonl`
+
