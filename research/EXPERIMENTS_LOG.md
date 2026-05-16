@@ -794,4 +794,61 @@ The δ_p knob is exhausted. Clip already handles outlier suppression; further δ
 
 This is the 4th confirmed instance of the interaction pattern: interventions that helped on H19's unclipped base fail on H20's clipped base.
 
+**Status: CLOSED — dead end.**
+
+---
+
+## 2026-05-16 05:40 — PR #3629: H37: n_head sweep (n_head=8, n_head=2) on H20 base (tanjiro) — SENT BACK for lr=1e-3 retest
+
+- Branch: `charliepai2i48h3-tanjiro/n-head-sweep-h20`
+- Hypothesis: n_head=8 (more specialization, head_dim=16) vs n_head=2 (richer per-head, head_dim=64) on H20 base (lr=5e-4, clip=1.0).
+
+| Arm | n_head | head_dim | n_params | val_avg | test 3-split | vs H20 (75.50) |
+|-----|--------|----------|----------|---------|-------------|----------------|
+| Arm A | 8 | 16 | 818K | 86.2584 | 82.8366 | +10.76 regress |
+| **Arm B** | **2** | **64** | **891K** | **72.8859** | **71.0276** | **-2.61 win** |
+| H20 baseline | 4 | 32 | 835K | 75.4955 | 73.1556 | ref |
+
+Per-split Arm B (n_head=2):
+- val_single_in_dist: 86.1650 (+0.44 slight regress)
+- val_geom_camber_rc: 85.4584 (≈ flat)
+- val_geom_camber_cruise: **50.4336** (-5.36 win)
+- val_re_rand: **69.4868** (-5.51 win)
+
+**n_head=2 beats H20 on 3/4 splits and all 3 test splits.** However, **current baseline has moved to 69.4381 (H32, lr=1e-3)**. H37 Arm B (72.89) does not beat the new baseline.
+
+**Key insight from tanjiro:** Transolver PhysicsAttention has per-head linear layers (not fused W_O), so n_params scales with dim_head². n_head=2 adds ~56K params (+6.7%). Memory also drops from 44.6 GB to 39.6 GB — valuable headroom.
+
+**Interpretation:** H33 showed wider n_hidden (192/256) regresses. H37 widens head_dim (32→64) with fixed n_hidden=128 and wins. Bottleneck is per-head feature richness, not total capacity. Default 4-head split over-fragments the 128-dim space.
+
+- Artifacts: `models/model-h37-nhead2-h20-20260516-032300/`, `models/model-h37-nhead8-h20-20260516-023633/`
+
+**Status: SENT BACK — Run H37b (n_head=2 + lr=1e-3 + clip=1.0 stacking test). Predicted val_avg ≈ 66.8 if additive. Highest priority experiment.**
+
+---
+
+## 2026-05-16 05:40 — PR #3626: H36: AdamW beta2 sweep (0.95, 0.999) on H20 base (askeladd) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-askeladd/beta2-sweep-h20`
+- Hypothesis: β₂=0.95 (14-step half-life) better tracks rapidly-changing gradient landscape in the short 14-epoch regime vs default β₂=0.999.
+
+| Arm | β₂ | val_avg | vs H20 (75.50) |
+|-----|-----|---------|----------------|
+| Arm A | 0.95 | 79.4254 | +3.93 (worse) |
+| Arm B (control) | 0.999 | 76.0547 | +0.56 (within noise) |
+
+Per-epoch trajectory: arms track until ep6, then β₂=0.999 widens the gap monotonically through cosine decay tail.
+
+**Result: β₂=0.95 clearly hurts.** β₂=0.999 control replicate (76.05) reproduces H20 baseline within ~1pt run-to-run variance, confirming Arm A's +3.93 is real signal not noise.
+
+**Mechanism:** In the cosine-decay tail (small LR), β₂=0.95's responsive second-moment estimator amplifies short-timescale gradient noise into per-parameter LR. β₂=0.999 averages over ~1000 steps → stable normalizer when each step's update is tiny. β₂=0.95 is right when you want rapid adaptation; it's wrong here where you want settling.
+
+The "short-budget β₂=0.95" prior from GPT-3/LLaMA fine-tuning doesn't transfer to batch_size=4 CFD. **β₂=0.999 stays.**
+
+Note: Both arms were on H20 base (lr=5e-4). Neither would have beaten current best H32 (69.44) regardless.
+
+- Artifacts: `models/model-h36-beta2-095-h20-20260516-032352/`, `models/model-h36-beta2-0999-h20-20260516-042356/`
+
+**Status: CLOSED — dead end. β₂ direction fully exhausted. askeladd reassigned to H43.**
+
 **Status: CLOSED — informative negative. cond_dim=11 remains optimal on clipped stack.**
