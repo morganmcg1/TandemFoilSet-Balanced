@@ -417,6 +417,14 @@ cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+import random
+import numpy as np
+SEED = 42
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
