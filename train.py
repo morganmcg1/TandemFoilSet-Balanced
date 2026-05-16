@@ -402,6 +402,7 @@ class Config:
     huber_delta_p: float = 0.25   # Huber delta for pressure channel p (per-channel)
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
+    adamw_beta2: float = 0.999   # AdamW beta2 (second-moment decay); default 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -453,7 +454,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, cfg.adamw_beta2))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -562,6 +563,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        "adamw_beta2": cfg.adamw_beta2,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
