@@ -1,17 +1,21 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~16:45 UTC
+- **Last updated:** 2026-05-16 ~16:55 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 56.4402, test_avg/mae_surf_p = 48.8947** — from PR #3969 (askeladd, SwiGLU mlp_ratio=2 + epochs=14), merged 2026-05-16 ~15:50 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 53.8221, test_avg/mae_surf_p = 47.2742** — from PR #3981 (thorfinn, **bf16 + epochs=18** cut at ep16/18), merged 2026-05-16 ~16:42 UTC. See `BASELINE.md` for full details.
 
-Per-split test (dwyzcs0e): single_in_dist=55.3088, geom_camber_rc=61.1577, geom_camber_cruise=32.0157, re_rand=47.0968.
+Per-split test (b9h4bvnm): single_in_dist=54.72, geom_camber_rc=59.71, geom_camber_cruise=29.13, re_rand=45.53.
 
-Val curve (ep11=65.49, ep12=61.10, ep13=58.40, ep14=56.44) — still descending at epoch 14. ep13→ep14 delta = −1.96. Strong signal that more epochs would help.
+ALL four test splits improve vs #3969. Largest gains: geom_camber_cruise (32.02→29.13, −9.0%), re_rand (47.10→45.53, −3.3%). Val curve still descending at ep16 cut.
+
+**Throughput finding:** bf16 autocast gives 1.47× per-epoch speedup vs fp32; 41.9 GB peak VRAM. This effectively converts ~50% more training epochs into the same wall clock budget.
+
+New reproduce command: `cd target/ && SENPAI_TIMEOUT_MINUTES=35 python train.py --epochs 18 --use_bf16`
 
 Baseline progression (val_avg/mae_surf_p):
 - #3091: 109.42 (warmup + clip + lr=1e-3, MSE)
@@ -24,7 +28,8 @@ Baseline progression (val_avg/mae_surf_p):
 - #3905: 60.72 (SwiGLU + epochs=12, −5.5% vs #3814)
 - #3908: 59.00 (SwiGLU + mlp_ratio=3, −2.83% vs #3905; inner_dim 216→320)
 - #4002: 57.35 (SwiGLU + mlp_ratio=3 + epochs=14, −2.80% vs #3908)
-- **#3969: 56.44 (SwiGLU + mlp_ratio=2 + epochs=14, −1.60% vs #4002; inner_dim=216) ← CURRENT**
+- #3969: 56.44 (SwiGLU + mlp_ratio=2 + epochs=14, −1.60% vs #4002; inner_dim=216)
+- **#3981: 53.82 (bf16 mixed-precision + epochs=18 cut at ep16; ALL 4 test splits improve; 1.47× speedup) ← CURRENT**
 
 ## Winning stack (all additive, all merged)
 
@@ -39,9 +44,10 @@ Baseline progression (val_avg/mae_surf_p):
 | **SwiGLU + epochs=12** | **#3905** | **−5.5%** | Extended budget on still-descending curve; best_epoch=12/12; curve still descending |
 | **SwiGLU + mlp_ratio=3** | **#3908** | **−2.83%** | Wider gated FFN inner_dim 216→320 (+0.25M params); best_epoch=12/12; still descending |
 | **SwiGLU + mlp_ratio=3 + epochs=14** | **#4002** | **−2.80%** | Even longer training on wider model; best_epoch=14/14; still descending |
-| **SwiGLU + mlp_ratio=2 + epochs=14** | **#3969** | **−1.60%** | Narrower model (inner_dim=216) with longer training beats wider (inner_dim=320); CURRENT BEST |
+| **SwiGLU + mlp_ratio=2 + epochs=14** | **#3969** | **−1.60%** | Narrower model (inner_dim=216) with longer training beats wider (inner_dim=320) |
+| **bf16 + epochs=18 (cut at ep16)** | **#3981** | **−4.64%** | bf16 autocast unlocks 1.47× speedup; same wall clock budget → 50% more epochs; ALL 4 test splits improve; CURRENT BEST |
 
-**Total improvement from baseline:** 109.42 → 56.44 (−48.4%)
+**Total improvement from baseline:** 109.42 → 53.82 (−50.8%)
 
 ## Critical mlp_ratio finding
 
@@ -85,7 +91,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#3979** | frieren | SwiGLU + n_hidden=176 (mlp_ratio=3 base) | CLOSED — stale (mlp_ratio=2 now baseline) | — |
 | **#4000** | fern | attn_dropout=0.2 + epochs=14 | CLOSED ~16:00 — val=57.02 (+1.02% regress vs #3969); test=50.14 (+2.56% regress); attn_dropout exhausted on this stack | — |
 | **#4001** | tanjiro | slice_num=32 on SwiGLU+mlp_ratio=3 | CLOSED ~16:30 — val=61.32 (+8.6% regress); all 4 splits regress; slice direction exhausted | — |
-| **#3981** | thorfinn | bf16 mixed-precision (ep16 best) | WIP — REBASE needed; result val=53.82/test=47.27 is major win; sent back 16:40 | 53.8221 ⚠️ |
+| **#3981** | thorfinn | bf16 mixed-precision (ep16 best) | **MERGED ~16:42** → new baseline | 53.8221 |
+| **#4054** | thorfinn | **Round-7:** mlp_ratio=3 + bf16 + epochs=18 (let wider model converge) | WIP — assigned ~16:55 | awaiting |
 | **#4047** | tanjiro | **Round-7:** Extended training probe (epochs=16/18 fp32) | WIP — assigned ~16:40 | awaiting |
 | **#4034** | alphonse | **Round-7:** n_layers=6 depth scaling | WIP — assigned ~16:00 | awaiting |
 | **#4036** | askeladd | **Round-7:** Camber flip augmentation (z-flip + AoA negate) | WIP — assigned ~16:00 | awaiting |
@@ -109,7 +116,7 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 **Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing. Clip=3σ is a no-op. Tighter clip values (2.5, 2.0) would touch the surface-side tail near sharp leading/trailing edges.
 
-## Round-7 assignments (all assigned ~16:00 UTC, all use --epochs 14 + mlp_ratio=2 base)
+## Round-7 assignments (assigned ~16:00–16:55 UTC, --epochs 14 + mlp_ratio=2 base unless noted)
 
 | PR | Student | Hypothesis | Key CLI / change |
 |---|---|---|---|
@@ -119,6 +126,8 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | #4040 | fern | DropPath stochastic depth | `--drop_path_rate 0.1` and 0.15 |
 | #4042 | frieren | Curvature-weighted surface loss (DSDF-norm proxy) | `--use_curvature_weight` |
 | #4043 | nezuko | AdamW weight_decay sweep + eta_min floor | `--weight_decay 1e-3` (+ eta_min variants) |
+| #4047 | tanjiro | Extended training probe (epochs=16/18, fp32 only) | `--epochs 18` |
+| #4054 | thorfinn | mlp_ratio=3 + bf16 + epochs=18 (let wider model converge) | `--mlp_ratio 3 --use_bf16 --epochs 18` |
 
 Deferred to round-8 (backlog):
 - SAM optimizer (rho=0.05) — costly; screen at epochs=10 first

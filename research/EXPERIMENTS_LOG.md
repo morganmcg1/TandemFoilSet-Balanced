@@ -973,3 +973,26 @@ All 6 idle students assigned. Round-7 focuses on improving OOD generalization an
 | #4042 | frieren | Curvature-weighted surface loss (DSDF-norm proxy) | `--use_curvature_weight --epochs 14` |
 | #4043 | nezuko | AdamW weight_decay sweep + eta_min floor | `--weight_decay 1e-3 --epochs 14` |
 | #4047 | tanjiro | Extended training probe (epochs=16/18 fp32) | `--epochs 16 / --epochs 18` |
+
+---
+
+## 2026-05-16 16:42 — Round-6 Tail: PR #3981 MERGED → NEW BASELINE
+
+### PR #3981 — MERGED: bf16 mixed-precision + epochs=18 (thorfinn)
+- Branch: willowpai2i48h4-thorfinn/thorfinn-bf16-extended-epochs
+- Hypothesis: bf16 autocast wraps the forward pass; 1.47× per-epoch throughput lets us fit ~18 epochs in the same wall clock budget where fp32 fits 12. Test whether the extra effective compute beats #3969.
+- W&B runs:
+  - Arm 1 `54i8pmmg` — ep12+bf16 parity sanity (val=61.34, test=52.31). Confirms bf16 doesn't degrade accuracy; 1.47× speedup; 41.9 GB peak VRAM.
+  - Arm 2 `b9h4bvnm` — ep18+bf16 with SENPAI_TIMEOUT_MINUTES=35; run cut at ep16/18 by the timeout.
+- **Arm 2 results (current baseline):**
+  - val_avg/mae_surf_p: **53.8221** vs #3969 baseline 56.4402 → **−4.64%**
+  - test_avg/mae_surf_p: **47.2742** vs #3969 baseline 48.8947 → **−3.31%**
+  - Per-split test: single_in_dist=54.72 (−1.07%), geom_camber_rc=59.71 (−2.37%), geom_camber_cruise=29.13 (**−9.0%**), re_rand=45.53 (−3.34%) — ALL FOUR splits improve.
+  - Val curve still descending at the ep16 cut (ep15=54.31, ep16=53.82).
+- **Decision: MERGED ~16:42 UTC** as new baseline after second merge attempt (first attempt blocked by conflict; student rebased and resubmitted).
+- **Key insight: bf16 unlocks 50% more training epochs at the same wall clock budget without accuracy loss.** This is the most significant throughput improvement in the project's history. New default reproduce command uses `--use_bf16 --epochs 18` and `SENPAI_TIMEOUT_MINUTES=35`. bf16 remains OFF by default in code so existing experiments are unchanged.
+
+### PR #4054 — ASSIGNED: mlp_ratio=3 + bf16 + epochs=18 (thorfinn round-7)
+- Hypothesis: bf16 throughput now lets the wider mlp_ratio=3 model converge under the same budget. Tests whether mlp_ratio=3 simply needed more compute to beat mlp_ratio=2.
+- Key CLI: `--mlp_ratio 3 --use_bf16 --epochs 18`
+- Expected: closes the open question of whether width or depth-of-training was the limiter for #4002 (mlp_ratio=3 + ep14 lost to #3969).
