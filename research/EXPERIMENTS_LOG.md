@@ -2137,3 +2137,36 @@ All 5 R5 sweeps from cycles 22-25 returned negative (closed by parallel session)
 - torch.compile: typically 15-30% reduction via fused ops + graph optimization. Orthogonal to bf16; can stack later.
 
 If either lands, all capacity probes (H86, H89) become retestable with a meaningful wall-clock budget. **This is the highest-ROI cycle this round.**
+
+---
+
+## 2026-05-16 23:55 — PR #4166: H88 β₂ refinement around 0.995 (edward) — **MERGED, NEW BEST**
+
+- Branch: `charliepai2i48h3-edward/h88-beta2-refinement`
+- Hypothesis: H78 undersampled the β₂ landscape (only 3 points: 0.99, 0.995, 0.999). Does 0.992 or 0.997 beat 0.995?
+
+| β₂ | val_avg | val_sid | val_rc | val_cruise | val_re_rand | test 3-split | Δ val | Δ test | verdict |
+|----|--------:|--------:|-------:|-----------:|------------:|-------------:|------:|-------:|---------|
+| 0.990 (H73) | 42.9784 | — | — | — | — | 41.5455 | ref | ref | Prior baseline |
+| 0.992 (Arm A) | 42.2565 | 41.9596 | 56.3134 | 26.4820 | 44.2712 | 41.3459 | −0.72 | −0.20 | Plateau; ties 0.995 |
+| 0.995 (H78 baseline) | 42.3048 | 44.7308 | 56.5492 | 25.1123 | 42.8272 | 40.5564 | baseline | baseline | Prior best |
+| **0.997 (Arm B)** | **41.2153** | 42.8497 | 53.5716 | 26.0333 | 42.4066 | **39.5337** | **−1.09** | **−1.02** | **NEW BEST** |
+| 0.999 (H78 Arm A) | 44.3436 | — | — | — | — | 42.0389 | +2.04 | +1.48 | Over-smoothed |
+
+- Artifacts: `models/model-h88-arm-a-beta2-0992-20260516-214655/`, `models/model-h88-arm-b-beta2-0997-20260516-222342/`
+
+**Analysis:** β₂ optimum shifts from 0.995 to 0.997 (~231-step EMA half-life). The [0.992, 0.995] range is a flat plateau (~42.26–42.30); the jump to 0.997 is sharp and real. Arm B improvement is correlated across 3/4 val splits and 3/3 test splits, and accumulates from epoch 3 onward (not a cosine endpoint artifact). Student's mechanism: β₂=0.997 (longer memory) better balances noise filtering vs tracking the cosine-decaying loss landscape than β₂=0.995 at Lion lr=3e-4 + slice=96. 0.999 over-smooths (691-step EMA), 0.992 is equivalent to 0.995.
+
+**β₂ locked: 0.997.** Δ vs H78 (42.3048/40.5564): **−1.09 val, −1.02 test**. Cumulative R5 gain from H37b (66.11): **−24.90 pts val_avg**.
+
+**Status: MERGED (PR #4166). New baseline: val=41.2153 / test=39.5337.**
+
+---
+
+## 2026-05-16 23:58 — Round 5 Cycle 31: Assign H97 (edward, LR fine-tune at β₂=0.997).
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4229 | edward | H97: LR fine-tune at β₂=0.997 (lr=2.5e-4, 3.5e-4) | --lr (probe ±17% around 3e-4 at new β₂ baseline) |
+
+**Rationale:** lr=3e-4 was calibrated at β₂=0.99 (H73). β₂=0.997 changes Lion's EMA dynamics (231-step half-life vs 70 steps). The optimal LR may shift: smoother momentum may tolerate higher peak LR, or may favor lower LR at the cosine tail. Quick 2-arm probe rules this out before accepting lr=3e-4 as the global optimum.

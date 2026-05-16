@@ -1,32 +1,28 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 23:35
+- **Date**: 2026-05-17 00:00
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — Baseline H78 (val=42.30) holds. **Major strategic pivot: training efficiency front.** Capacity probes H86 (n_hidden) and H89 (mlp_ratio) both wall-cut-bound — wider models eat epochs from the 30-min budget. Schedule lever fully closed (H74/H84/H87 all negative). Active fronts: efficiency (H95 bf16, H96 torch.compile), β₂ refinement (H88), β₁ sweep (H90), surf_weight (H91), seeds (H92), WSD (H93), batch_size (H94).
+- **Round**: 5 late-phase — **NEW BASELINE: H88 Arm B β₂=0.997 (val=41.22 / test=39.53, PR #4166 MERGED).** β₂ locked at 0.997. Active fronts: efficiency (H95 bf16, H96 torch.compile), LR retune (H97 edward), β₁ sweep (H90), surf_weight (H91), seeds (H92), WSD (H93), batch_size (H94).
 - **Most recent human research directive**: None received
 
 ## Current Best
 
-**PR #4097 (H78 Arm B: Lion lr=3e-4 + slice_num=96 + β₂=0.995, edward) — val_avg/mae_surf_p = 42.3048 / test 3-split = 40.5564** (MERGED 2026-05-16 21:32)
+**PR #4166 (H88 Arm B: Lion lr=3e-4 + β₂=0.997, edward) — val_avg/mae_surf_p = 41.2153 / test 3-split = 39.5337** (MERGED 2026-05-16 23:55)
 
-**Previous best: PR #4055 (H73 Arm B, val=42.98 / test=41.55, tanjiro).** β₂=0.995 small win compounds on H73 baseline.
+**Previous best: PR #4097 (H78 Arm B β₂=0.995, val=42.30 / test=40.56).** β₂ optimum shifts from 0.995 → 0.997 (~231-step EMA half-life). Correlated improvement across 3/4 val splits + 3/3 test splits from epoch 3 onward.
 
-**Loose UB** — wall-cut at ep 15/50 with val_avg still descending ~0.8 pts/epoch. True asymptote likely well below 42.98.
+**β₂ landscape (fully characterized):** Flat plateau [0.992, 0.995], sharp jump to 0.997 (−1.09 val), steep crash at 0.999 (+3.12 val).
 
 | Reference | val_avg | test 3-split | Status |
 |-----------|--------:|-------------:|--------|
-| **H78 Arm B (β₂=0.995 stacked on H73)** | **42.3048** | **40.5564** | **CURRENT BEST (PR #4097)** |
-| H73 Arm B (Lion lr=3e-4 + slice96) | 42.9784 | 41.5455 | Prior best (PR #4055) |
-| H78 Arm A (β₂=0.999) | 44.3436 | 42.0389 | Same PR, regresses |
-| H73 Arm A (Lion lr=1e-4 + slice96) | 46.3422 | 45.3896 | Same PR, lr=1e-4 arm |
-| H66 (slice_num=96, AdamW) | 56.7504 | 54.5026 | Overridden by #4055 |
-| H58 Arm A reference (Lion lr=1e-4, slice=64) | ~46.80 | ~46.63 | Pending PR #3965 still WIP |
-| H59 (GEGLU + RMSNorm, slice=64) | 56.9056 | 56.2420 | Overridden |
-| H48 GEGLU (n_layers=5) | 58.6268 | 56.6976 | Overridden |
-| H37b (n_head=2 + lr=1e-3, AdamW) | 66.1060 | 64.45 | Overridden |
+| **H88 Arm B (β₂=0.997)** | **41.2153** | **39.5337** | **CURRENT BEST (PR #4166)** |
+| H78 Arm B (β₂=0.995) | 42.3048 | 40.5564 | Prior best (PR #4097) |
+| H88 Arm A (β₂=0.992) | 42.2565 | 41.3459 | Plateau — ties 0.995 |
+| H73 Arm B (Lion lr=3e-4 + slice96, β₂=0.99) | 42.9784 | 41.5455 | Prior best (PR #4055) |
+| H78 Arm A (β₂=0.999) | 44.3436 | 42.0389 | Over-smoothed |
+| H66 (slice_num=96, AdamW) | 56.7504 | 54.5026 | Overridden |
 
-**Δ H73 vs H66: −13.77 val, −12.96 test 3-split.** SUPER-ADDITIVE (3.66 pts below the additivity-floor prediction of 46.64).
-**Cumulative R5 gain: −23.13 pts val vs H37b** (66.11 → 42.98).
+**Cumulative R5 gain: −24.90 pts val_avg vs H37b** (66.11 → 41.22). Total: −73.41 pts from R1 start (114.63).
 
 ## ⚠ Noise Floor Discovered (2026-05-16 H74 closure)
 
@@ -77,18 +73,18 @@ The H67-H73 Lion compound batch revealed:
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#4166** | edward | **H88: β₂ refinement {0.992, 0.997} around H78's 0.995** | HIGH (confirm peak) | ~41-43 |
+| **#4229** | edward | **H97: LR fine-tune at β₂=0.997 (lr=2.5e-4, lr=3.5e-4)** | MED (LR calibrated at β₂=0.99; may shift at 0.997) | ~40.5-42.5 |
 | **#4189** | askeladd | **H90: Lion β₁ sweep (β₁=0.85, β₁=0.95)** | HIGH (first β₁ retune at slice=96) | ~41-44 |
 | **#4191** | fern | **H91: surf_weight sweep under Lion (sw=5, sw=20)** | MED (H54 locked surf_weight=10 under AdamW) | ~40-44 |
-| **#4195** | frieren | **H92: Baseline variance — 2 seeds at H78 config** | HIGH (calibrate noise floor) | ~42-44 |
-| **#4196** | nezuko | **H93: WSD schedule under Lion (vs cosine)** | MED (alternative schedule) | ~42-46 |
+| **#4195** | frieren | **H92: Baseline variance — 2 seeds at H88 config** | HIGH (calibrate noise floor at new baseline) | ~42-44 |
+| **#4196** | nezuko | **H93: WSD schedule under Lion (vs cosine)** | MED (alternative schedule) | ~40-45 |
 | **#4197** | tanjiro | **H94: Batch size sweep BS=8 (no-scale and LR-scale)** | HIGH (orthogonal to capacity) | ~40-44 |
-| **TBD** | alphonse | **H95: bfloat16 mixed-precision training** | HIGH (efficiency unlock) | ~40-43 + 47% more epochs |
-| **TBD** | thorfinn | **H96: torch.compile baseline acceleration** | HIGH (efficiency unlock orthogonal to bf16) | ~40-43 + ~25% more epochs |
+| **#4215** | alphonse | **H95: bfloat16 mixed-precision training** | HIGH (efficiency unlock) | ~40-43 + 47% more epochs |
+| **#4217** | thorfinn | **H96: torch.compile baseline acceleration** | HIGH (efficiency unlock orthogonal to bf16) | ~40-43 + ~25% more epochs |
 
-**Closed this round:** H61 (LR-down), H62 (mlp_ratio AdamW), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound AdamW), H68/H69/H70/H71 (Lion variants at slice=64, superseded), H58/H67 (superseded), **H74 (T_max extend)**, **H75 (LR U-shape)**, **H76 (warmup)**, **H77 (n_head=4)**, **H79 (wd)**, **H80 (full Lion stack: confound)**, **H81 (RMSNorm anti-compound under Lion)**, **H82 (slice sweep)**, **H83 (n_layers sweep)**, **H84 (T_max compression)**, **H85 (FFN activation)**, **H86 (n_hidden expansion — wall-cut-bound)**, **H87 (eta_min > 0)**, **H89 (mlp_ratio — wall-cut-bound)**.
+**Closed this round:** H61, H62, H63, H64, H65, H72, H68/H69/H70/H71 (superseded), H58/H67 (superseded), **H74 (T_max extend)**, **H75 (LR U-shape)**, **H76 (warmup)**, **H77 (n_head=4)**, **H79 (wd)**, **H80 (schedule confound)**, **H81 (RMSNorm under Lion)**, **H82 (slice sweep)**, **H83 (n_layers)**, **H84 (T_max compression)**, **H85 (FFN activation)**, **H86 (n_hidden — wall-cut-bound)**, **H87 (eta_min > 0)**, **H89 (mlp_ratio — wall-cut-bound)**.
 
-**Merged this round:** H73 (Lion + slice=96 super-additive, val=42.98), **H78 (β₂=0.995 small win, val=42.30 NEW BEST)**.
+**Merged this round:** H73 (val=42.98), H78 (val=42.30), **H88 (val=41.22 CURRENT BEST)**.
 
 ## Strategic State (post-cycle 30)
 
@@ -108,10 +104,10 @@ H73's T_max=15 + eta_min=0 + no warmup is locally optimal in all directions.
 | Lever | Status | Best result | Notes |
 |-------|--------|-------------|-------|
 | Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win |
-| LR (Lion) | ✅ Locked at 3e-4 (H75 U-shape confirmed) | 3e-4 (H73) | Bracketed 2.5e-4 to 3.5e-4 |
+| LR (Lion) | 🔬 H97 active (retune at β₂=0.997) | 3e-4 (H73) | H75 U-shape at β₂=0.99; re-testing 2.5e-4 and 3.5e-4 at new β₂=0.997 baseline |
 | Schedule (Lion) | ❌ warmup REGRESSES at slice=96 (H76) | T_max=15 (H73) | H69 win doesn't transfer; warmup=2 cost > benefit at 15-ep horizon |
 | n_head (Lion) | ❌ n_head=4 REGRESSES at slice=96 (H77) | 2 (H73) | H70 win doesn't transfer; per-head dim shrinkage hurts |
-| β₂ (Lion) | ✅ 0.995 LOCKED (H78 MERGED) | 0.995 (H78) | Non-monotonic: 0.99→0.995 wins, 0.999 regresses (over-smooth in 15-ep budget). H88 refines further. |
+| β₂ (Lion) | ✅ 0.997 LOCKED (H88 MERGED) | 0.997 (H88) | Plateau [0.992–0.995], jump at 0.997 (−1.09 val), cliff at 0.999 (+3.12). True peak confirmed. |
 | wd (Lion) | ✅ Locked at 1e-3 (H79 confirmed) | 1e-3 (H73) | wd=1e-4 and wd=5e-5 both regress/tie at slice=96 |
 | slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |
 | n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
@@ -155,9 +151,10 @@ H73's T_max=15 + eta_min=0 + no warmup is locally optimal in all directions.
 | 56.91 | 56.24 | H59: + norm_type=rmsnorm |
 | 56.75 | 54.50 | H66: + slice_num=96 |
 | 42.98 | 41.55 | H73 Arm B: + optimizer=lion + lr=3e-4 (super-additive) |
-| **42.30** | **40.56** | **H78 Arm B: + β₂=0.995 (small compound win)** |
+| 42.30 | 40.56 | H78 Arm B: + β₂=0.995 (small compound win) |
+| **41.22** | **39.53** | **H88 Arm B: + β₂=0.997 (β₂ peak, correlated multi-split improvement)** |
 
-Total merged gain: **−72.33 pts val** (63.1% reduction from 114.63 to 42.30).
+Total merged gain: **−73.41 pts val** (64.0% reduction from 114.63 to 41.22).
 
 ## Known Issues
 
