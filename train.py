@@ -499,6 +499,8 @@ class Config:
     # (~14 epochs in the 30-min cap); cfg.epochs=50 would never trigger SWA
     # if we keyed off 50%, so we use the actual-training-aware default.
     swa_start_epoch: int = 7
+    # EMA decay for SWA averaging; use 0 for uniform SWA (original behavior).
+    ema_decay: float = 0.999
 
 
 cfg = sp.parse(Config)
@@ -546,8 +548,17 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 # SWA: wrap a deep copy of the model so per-batch weight averages start
-# accumulating once cfg.swa_start_epoch is reached. Default simple averaging.
-swa_model = AveragedModel(model)
+# accumulating once cfg.swa_start_epoch is reached. ema_decay>0 → EMA
+# averaging biased toward recent updates; ema_decay=0 → uniform SWA.
+if cfg.ema_decay > 0:
+    _ema_decay = cfg.ema_decay  # capture in closure
+    def _ema_avg(avg_param, cur_param, num_averaged):
+        return _ema_decay * avg_param + (1 - _ema_decay) * cur_param
+    swa_model = AveragedModel(model, avg_fn=_ema_avg)
+    print(f"SWA averaging: EMA (decay={cfg.ema_decay})")
+else:
+    swa_model = AveragedModel(model)  # uniform SWA
+    print("SWA averaging: uniform")
 swa_n_updates = 0
 print(
     f"SWA: averaging starts at 1-indexed epoch {cfg.swa_start_epoch + 1} "
