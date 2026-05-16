@@ -530,6 +530,7 @@ class Config:
     use_lookahead: bool = False  # wrap AdamW with Lookahead (Zhang et al. 2019)
     lookahead_k: int = 5  # Lookahead inner steps before slow-weights sync
     lookahead_alpha: float = 0.5  # Lookahead slow-weights interpolation factor
+    llrd_decay: float = 1.0  # layer-wise LR decay factor; 1.0 = uniform LR (baseline); <1.0 enables LLRD
 
 
 cfg = sp.parse(Config)
@@ -582,15 +583,82 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 ema_decay = cfg.ema_decay
 
-base_optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
-    betas=(0.9, cfg.adamw_beta2),
+def build_llrd_param_groups(model, base_lr, weight_decay, decay, n_layers):
+    """Layer-wise learning rate decay parameter groups.
+
+    Returns a list of param groups with per-group ``lr`` scaled by ``decay``.
+    Output-side layers get the full ``base_lr``; input-side layers get the
+    most decay. Layout for the Transolver here (n_layers=5):
+      depth 0: embed (preprocess + placeholder) — lr * decay^(n_layers-1)
+      depth 1: blocks.0                          — lr * decay^(n_layers-1)
+      depth 2: blocks.1                          — lr * decay^(n_layers-2)
+      ...
+      depth n_layers:   blocks.{n_layers-1} main — lr * decay^0 = base_lr
+      depth n_layers+1: head (blocks.{n_layers-1}.mlp2/ln_3) — lr * decay^0
+    Total groups = n_layers + 2 = 7. When decay==1.0 every group gets base_lr.
+    """
+    head_block = n_layers - 1
+    head_keys = (f"blocks.{head_block}.mlp2.", f"blocks.{head_block}.ln_3.")
+
+    buckets: dict[int, list] = {d: [] for d in range(n_layers + 2)}
+    bucket_names: dict[int, list[str]] = {d: [] for d in range(n_layers + 2)}
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if name.startswith(head_keys):
+            depth = n_layers + 1  # head
+        elif name.startswith("blocks."):
+            block_idx = int(name.split(".")[1])
+            depth = block_idx + 1
+        elif name.startswith("preprocess.") or name == "placeholder":
+            depth = 0
+        else:
+            raise ValueError(f"Unmapped parameter for LLRD: {name}")
+        buckets[depth].append(p)
+        bucket_names[depth].append(name)
+
+    param_groups = []
+    for depth in range(n_layers + 2):
+        params = buckets[depth]
+        if not params:
+            continue
+        if depth == 0:
+            exp = n_layers - 1
+        elif depth == n_layers + 1:
+            exp = 0
+        else:
+            exp = n_layers - depth
+        lr_mult = decay ** exp
+        param_groups.append({
+            "params": params,
+            "lr": base_lr * lr_mult,
+            "weight_decay": weight_decay,
+            "_llrd_depth": depth,
+            "_llrd_mult": lr_mult,
+            "_llrd_n_params": sum(p.numel() for p in params),
+        })
+    return param_groups
+
+
+llrd_param_groups = build_llrd_param_groups(
+    model, cfg.lr, cfg.weight_decay, cfg.llrd_decay, n_layers=model_config["n_layers"]
 )
+print(
+    f"LLRD: decay={cfg.llrd_decay} -> {len(llrd_param_groups)} param groups "
+    f"(expected {model_config['n_layers'] + 2})"
+)
+for g in llrd_param_groups:
+    print(
+        f"  depth={g['_llrd_depth']}  lr={g['lr']:.3e}  mult={g['_llrd_mult']:.4f}  "
+        f"n_params={g['_llrd_n_params']}"
+    )
+base_optimizer = torch.optim.AdamW(llrd_param_groups, betas=(0.9, cfg.adamw_beta2))
 if cfg.use_lookahead:
     optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
-    print(f"Optimizer: Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) wrapping AdamW(beta2={cfg.adamw_beta2})")
+    print(
+        f"Optimizer: Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) "
+        f"wrapping AdamW(beta2={cfg.adamw_beta2})"
+    )
 else:
     optimizer = base_optimizer
 if cfg.sgdr_t0 > 0:
@@ -684,6 +752,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # Per-LLRD-group grad norms (pre-clip). Helps diagnose whether early
+        # layers' grads collapse vs. late layers' grads dominate.
+        group_grad_norms: dict[str, float] = {}
+        for g in optimizer.param_groups:
+            depth = g.get("_llrd_depth")
+            if depth is None:
+                continue
+            sq = 0.0
+            for p in g["params"]:
+                if p.grad is not None:
+                    sq += p.grad.detach().pow(2).sum().item()
+            group_grad_norms[f"train/grad_norm_depth_{depth}"] = sq ** 0.5
         grad_norm_preclip: float | None = None
         if cfg.grad_clip > 0:
             grad_norm_preclip = torch.nn.utils.clip_grad_norm_(
@@ -697,6 +777,7 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+        step_log.update(group_grad_norms)
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
