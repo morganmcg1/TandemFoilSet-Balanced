@@ -531,7 +531,45 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+decay_params = []
+no_decay_params = []
+decay_names = []
+no_decay_names = []
+for name, p in model.named_parameters():
+    if not p.requires_grad:
+        continue
+    if (
+        p.ndim < 2
+        or name.endswith(".bias")
+        or "ls1" in name
+        or "ls2" in name
+        or "norm" in name.lower()
+    ):
+        no_decay_params.append(p)
+        no_decay_names.append(name)
+    else:
+        decay_params.append(p)
+        decay_names.append(name)
+
+n_decay = sum(p.numel() for p in decay_params)
+n_no_decay = sum(p.numel() for p in no_decay_params)
+n_total = n_decay + n_no_decay
+print(
+    f"Param groups: decay={n_decay:,} ({len(decay_params)} tensors), "
+    f"no_decay={n_no_decay:,} ({len(no_decay_params)} tensors), "
+    f"no_decay fraction={100.0 * n_no_decay / max(n_total, 1):.2f}%"
+)
+print(f"First 5 no_decay params: {no_decay_names[:5]}")
+print(f"Last 5 no_decay params: {no_decay_names[-5:]}")
+print(f"First 5 decay params: {decay_names[:5]}")
+
+optimizer = torch.optim.AdamW(
+    [
+        {"params": decay_params, "weight_decay": cfg.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ],
+    lr=cfg.lr,
+)
 if cfg.use_onecycle:
     total_steps = len(train_loader) * MAX_EPOCHS
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
