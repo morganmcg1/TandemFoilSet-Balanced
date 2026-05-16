@@ -440,6 +440,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_epochs: int = 0  # Linear LR warmup epochs before cosine decay (0 = off)
+    cosine_eta_min: float = 0.0  # eta_min floor for cosine scheduler
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -513,7 +515,47 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+# Cosine scheduler period (kept at 15 to match the historical baseline). With
+# H22 warmup, the cosine portion shrinks to (SCHED_T_MAX - warmup_epochs).
+SCHED_T_MAX = 15
+if cfg.warmup_epochs > 0:
+    warmup_start_lr = 1e-5
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=warmup_start_lr / cfg.lr,  # warmup_start_lr -> cfg.lr
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, SCHED_T_MAX - cfg.warmup_epochs),
+        eta_min=cfg.cosine_eta_min,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs],
+    )
+    print(f"LR warmup: {cfg.warmup_epochs} epochs ({warmup_start_lr:.0e} -> {cfg.lr:.0e})")
+    print(
+        f"Then cosine to eta_min={cfg.cosine_eta_min} over "
+        f"{max(1, SCHED_T_MAX - cfg.warmup_epochs)} epochs"
+    )
+    for ep in [1, 2, 3, 5, 10, 14]:
+        if ep <= cfg.warmup_epochs:
+            lr_at = warmup_start_lr + (cfg.lr - warmup_start_lr) * ep / cfg.warmup_epochs
+        else:
+            t = ep - cfg.warmup_epochs
+            T = max(1, SCHED_T_MAX - cfg.warmup_epochs)
+            lr_at = cfg.cosine_eta_min + (cfg.lr - cfg.cosine_eta_min) * (
+                1 + math.cos(math.pi * min(t, T) / T)
+            ) / 2
+        print(f"  ep {ep}: expected_lr ~ {lr_at:.2e}")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=SCHED_T_MAX, eta_min=cfg.cosine_eta_min
+    )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -629,11 +671,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    epoch_lr = float(optimizer.param_groups[0]["lr"])
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr_after_step": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
