@@ -709,6 +709,33 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 10:35 — PR #3841 — n_head=4→8 probe (CLOSED, -6.7% val regression)
+
+- **Branch:** `charliepai2i48h1-alphonse/n-head-8`
+- **Hypothesis:** Double attention heads (4→8, dim_head 32→16) for finer compositional attention at "zero compute cost." Single-line change to attack val_single_in_dist gap.
+- **Results vs baseline (val=80.88, test=71.18):**
+
+| Metric | Baseline | n_head=8 | Δ |
+|--------|---------:|---------:|--:|
+| `val_avg/mae_surf_p` | 80.88 | 86.29 | **+6.7%** (regression) |
+| `test_avg/mae_surf_p` | 71.18 | 77.55 | **+8.9%** (regression) |
+| `val_single_in_dist` | 94.59 | 103.04 | +8.9% |
+| `val_geom_camber_rc` | 90.88 | 96.63 | +6.3% |
+| `val_geom_camber_cruise` | 61.04 | 64.69 | +6.0% |
+| `val_re_rand` | 77.02 | 80.81 | +4.9% |
+| sec/epoch | 105.2 | 115.9 | +10.2% |
+| epochs in 30-min cap | 18 | 16 | -2 |
+| peak GPU mem (GB) | 35.27 | 37.76 | +7.0% |
+
+- **Metrics path:** `models/model-n-head-8-20260516-094041/metrics.jsonl`
+- **Decision:** CLOSED. >5% regression on both val and test.
+- **Key diagnostic (student's per-epoch trajectory table):** At equal epochs, architectures are essentially tied (|Δ|≈1.5 across 16 shared epochs). The 5.4-pt val gap is entirely explained by the 2 epochs lost to the wall-clock cap. **No architectural benefit from finer heads** — model learns at same rate per epoch but with 10% wall-clock penalty.
+- **Mechanism:** Doubling heads doubles per-block softmax launches and shrinks per-head matmuls (16×N×N vs 32×N×N), both GPU-unfriendly. Activation memory grows proportionally (+7% peak).
+- **Anti-prediction:** Hypothesis predicted n_head=8 would especially help val_single_in_dist; it actually regressed most (+8.9% val, +11.4% test). Strong evidence the gap is structural, not attention-bandwidth-limited.
+- **Next probe (student suggestion):** n_head=2 (dim_head=64) — symmetric bracket; fewer softmaxes should save per-epoch wall-clock.
+
+---
+
 ## 2026-05-16 09:30 — PR #3783 — EMA decay 0.998→0.997 probe (MERGED → new baseline)
 
 - **Branch:** `charliepai2i48h1-alphonse/ema-0997-probe`
