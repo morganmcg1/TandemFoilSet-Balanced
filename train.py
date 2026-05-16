@@ -263,6 +263,76 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Sharpness-Aware Minimization (Foret et al. 2021, arxiv:2010.01412)
+# ---------------------------------------------------------------------------
+
+
+class SAM(torch.optim.Optimizer):
+    """Two-pass optimizer wrapper that minimises loss AND loss sharpness.
+
+    Use ``first_step`` / ``second_step`` instead of ``step``: first_step climbs
+    the loss landscape by ``rho * grad / ||grad||``; second_step restores the
+    original weights and applies the base optimizer using the gradient computed
+    at the perturbed point.
+    """
+
+    def __init__(self, params, base_optimizer_cls, rho: float = 0.05, **kwargs):
+        defaults = dict(rho=rho, **kwargs)
+        super().__init__(params, defaults)
+        self.base_optimizer = base_optimizer_cls(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad: bool = False) -> None:
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                e_w = p.grad * scale.to(p)
+                p.add_(e_w)
+                self.state[p]["e_w"] = e_w
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad: bool = False) -> None:
+        for group in self.param_groups:
+            for p in group["params"]:
+                state = self.state.get(p, {})
+                if "e_w" not in state:
+                    continue
+                p.sub_(state["e_w"])
+        self.base_optimizer.step()
+        if zero_grad:
+            self.zero_grad()
+
+    def _grad_norm(self) -> torch.Tensor:
+        shared_device = self.param_groups[0]["params"][0].device
+        norms = [
+            p.grad.norm(p=2).to(shared_device)
+            for group in self.param_groups
+            for p in group["params"]
+            if p.grad is not None
+        ]
+        return torch.stack(norms).norm(p=2)
+
+    def step(self, closure=None):
+        raise NotImplementedError("Use first_step/second_step pair instead")
+
+    def state_dict(self):
+        return self.base_optimizer.state_dict()
+
+    def load_state_dict(self, sd):
+        self.base_optimizer.load_state_dict(sd)
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -401,6 +471,8 @@ def write_experiment_summary(
         "lr_t_max": cfg.lr_t_max,
         "layer_scale_init": cfg.layer_scale_init,
         "ema_decay": cfg.ema_decay,
+        "use_sam": cfg.use_sam,
+        "sam_rho": cfg.sam_rho if cfg.use_sam else None,
     }
     if "raw_val_avg/mae_surf_p" in best_metrics:
         summary["best_raw_val_avg/mae_surf_p"] = best_metrics["raw_val_avg/mae_surf_p"]
@@ -456,6 +528,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
     ema_decay: float | None = None  # None disables EMA; typical values 0.999 / 0.9995
+    use_sam: bool = False  # Sharpness-Aware Minimization (Foret et al. 2021); 2x compute per step
+    sam_rho: float = 0.05  # SAM neighborhood radius; standard vision default
 
 
 cfg = sp.parse(Config)
@@ -516,17 +590,22 @@ if cfg.layer_scale_init > 0:
             no_decay_params.append(p)
         else:
             decay_params.append(p)
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay_params, "weight_decay": cfg.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ],
-        lr=cfg.lr,
-    )
+    optimizer_params = [
+        {"params": decay_params, "weight_decay": cfg.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
+    optimizer_kwargs = dict(lr=cfg.lr)
     print(f"Optimizer: AdamW with {len(no_decay_params)} no-decay gamma params, "
           f"{len(decay_params)} decay params")
 else:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer_params = list(model.parameters())
+    optimizer_kwargs = dict(lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+if cfg.use_sam:
+    optimizer = SAM(optimizer_params, torch.optim.AdamW, rho=cfg.sam_rho, **optimizer_kwargs)
+    print(f"SAM enabled (rho={cfg.sam_rho}); two forward/backward passes per step")
+else:
+    optimizer = torch.optim.AdamW(optimizer_params, **optimizer_kwargs)
 
 ema_model: AveragedModel | None = None
 if cfg.ema_decay is not None:
@@ -566,6 +645,9 @@ for epoch in range(MAX_EPOCHS):
     grad_norm_sum = 0.0
     grad_norm_max = 0.0
     n_clipped = 0
+    sam_step2_grad_norm_sum = 0.0
+    sam_step2_grad_norm_max = 0.0
+    sam_step2_n_clipped = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -576,15 +658,17 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
-
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
 
+        def compute_loss():
+            pred = model({"x": x_norm})["preds"]
+            sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            return vol_loss + cfg.surf_weight * surf_loss, vol_loss, surf_loss
+
+        loss, vol_loss, surf_loss = compute_loss()
         optimizer.zero_grad()
         loss.backward()
         if cfg.grad_clip_max_norm is not None:
@@ -593,7 +677,25 @@ for epoch in range(MAX_EPOCHS):
                 n_clipped += 1
         else:
             gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
-        optimizer.step()
+
+        if cfg.use_sam:
+            optimizer.first_step(zero_grad=True)
+            # Second forward + backward at perturbed weights
+            loss2, _, _ = compute_loss()
+            loss2.backward()
+            if cfg.grad_clip_max_norm is not None:
+                gnorm2 = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_max_norm)
+                if gnorm2.item() > cfg.grad_clip_max_norm:
+                    sam_step2_n_clipped += 1
+            else:
+                gnorm2 = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
+            optimizer.second_step(zero_grad=True)
+            gnorm2_val = gnorm2.item()
+            sam_step2_grad_norm_sum += gnorm2_val
+            if gnorm2_val > sam_step2_grad_norm_max:
+                sam_step2_grad_norm_max = gnorm2_val
+        else:
+            optimizer.step()
         if ema_model is not None:
             ema_model.update_parameters(model)
 
@@ -666,10 +768,18 @@ for epoch in range(MAX_EPOCHS):
         "train/clip_frac": clip_frac,
         "grad_clip_max_norm": cfg.grad_clip_max_norm,
         "ema_decay": cfg.ema_decay,
+        "use_sam": cfg.use_sam,
+        "sam_rho": cfg.sam_rho if cfg.use_sam else None,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     }
+    if cfg.use_sam:
+        epoch_record["train/sam_step2_grad_norm_mean"] = sam_step2_grad_norm_sum / max(n_batches, 1)
+        epoch_record["train/sam_step2_grad_norm_max"] = sam_step2_grad_norm_max
+        epoch_record["train/sam_step2_clip_frac"] = (
+            sam_step2_n_clipped / max(n_batches, 1) if cfg.grad_clip_max_norm is not None else 0.0
+        )
     gstats = gamma_stats(model)
     if gstats:
         epoch_record.update(gstats)
