@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 19:10 — PR #4026 (charliepai2i48h5-alphonse): batch_size sweep {2, 8} on BF16+LS+n10 — **MERGED (NEW BEST)**
+
+- branch: `charliepai2i48h5-alphonse/bf16-batch-size`
+- hypothesis: clip-saturation regime (clip_frac=1.000 throughout) makes batch_size a "steps in budget" lever rather than a "gradient quality" lever; bs=2 should give ~4× more updates in same 30-min budget and win
+- results (both arms tested at 17-18 epochs, clip=0.25, n=10):
+
+  | arm | batch_size | val_avg/mae_surf_p | test_avg/mae_surf_p | vs prior best 64.08/55.05 | best_epoch | steps |
+  |---|---|---|---|---|---|---|
+  | **arm-1 (WINNER)** | **2** | **60.67** | **53.11** | **-5.32% / -3.52% ✓✓** | **18/18** | **~13,500** |
+  | arm-2 | 8 | 77.24 | 67.03 | +20.5% / +21.8% ✗ | 17/17 | ~3,008 |
+
+- per-split test surf_p (arm-1 bs=2): single=57.99 (-6.62%), rc=66.40 (-2.54%), cruise=35.50 (-3.09%), re_rand=52.54 (-1.52%) — **all 4 splits improve uniformly**
+- artifacts: `models/model-bf16-layerscale-bs2-20260516-162303/metrics.jsonl`, `models/model-bf16-layerscale-bs8-20260516-172410/metrics.jsonl`
+- commentary: **MERGED** — single biggest gain in two waves. Mechanism is clip-saturation: with clip_frac=1.0 throughout, per-step update magnitude is fixed at `0.25 × dir(grad)`, so progress = total updates. bs=2 gets 4.5× more updates than bs=8 in same budget. Peak memory dropped 18.5 GB vs 33 GB (-44%), and bs=2 runs 8% faster (102.6s/epoch vs 111s). best_epoch=18/18 means STILL DESCENDING at timeout — head-room for more epochs if we had wall-clock. **n_freqs=10 used (not n=8)** — assigned before #4006 merge, so the bs=2+n=8 compound is NOT yet tested. That is now the highest-leverage in-flight question. Cumulative improvement: -52.8% val from round-5 start (~128.69).
+
+---
+
 ## 2026-05-16 17:15 — PR #4006 (charliepai2i48h5-fern): n_freqs sweep {8, 12} on BF16+LS — **MERGED (NEW BEST)**
 
 - branch: `charliepai2i48h5-fern/bf16-nfreqs-sweep`
