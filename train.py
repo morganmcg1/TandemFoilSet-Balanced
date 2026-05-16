@@ -262,6 +262,73 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer wrapper (Zhang et al. 2019)
+# ---------------------------------------------------------------------------
+
+
+class Lookahead(torch.optim.Optimizer):
+    """Meta-optimizer: slow anchor pulls toward fast inner optimizer every k steps.
+
+    `slow <- slow + alpha * (fast - slow)`, then `fast <- slow`. Reduces variance
+    of noisy/heavy-tailed gradients without changing per-step learning signal.
+    """
+
+    def __init__(self, base_optimizer: torch.optim.Optimizer, k: int = 5, alpha: float = 0.5):
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"Invalid alpha: {alpha}")
+        if k < 1:
+            raise ValueError(f"Invalid k: {k}")
+        self.base_optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        # Forward param_groups (LR scheduler mutates these in place — flows to base)
+        self.param_groups = base_optimizer.param_groups
+        self.defaults = base_optimizer.defaults
+        # Slow weights initialized to fast weights, on the same device.
+        self.slow_weights = [
+            [p.data.clone().detach() for p in group["params"]]
+            for group in self.param_groups
+        ]
+
+    @property
+    def state(self):
+        return self.base_optimizer.state
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None):
+        loss = self.base_optimizer.step(closure)
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            for group, slow_group in zip(self.param_groups, self.slow_weights):
+                for p, slow in zip(group["params"], slow_group):
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def state_dict(self):
+        return {
+            "base": self.base_optimizer.state_dict(),
+            "k": self.k,
+            "alpha": self.alpha,
+            "step_count": self.step_count,
+            "slow_weights": [[s.cpu() for s in group] for group in self.slow_weights],
+        }
+
+    def load_state_dict(self, sd):
+        self.base_optimizer.load_state_dict(sd["base"])
+        self.k = sd["k"]
+        self.alpha = sd["alpha"]
+        self.step_count = sd["step_count"]
+        self.slow_weights = [
+            [s.to(p.device) for s, p in zip(group, pg["params"])]
+            for group, pg in zip(sd["slow_weights"], self.param_groups)
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -399,6 +466,9 @@ def write_experiment_summary(
         "fourier_base": cfg.fourier_base,
         "lr_t_max": cfg.lr_t_max,
         "layer_scale_init": cfg.layer_scale_init,
+        "use_lookahead": cfg.use_lookahead,
+        "lookahead_k": cfg.lookahead_k,
+        "lookahead_alpha": cfg.lookahead_alpha,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -445,6 +515,9 @@ class Config:
     fourier_base: float = 2.0
     lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS if None
     layer_scale_init: float = 0.0  # CaiT-style per-channel residual gain; 0.0 disables (baseline behavior)
+    use_lookahead: bool = False  # wrap AdamW in Lookahead meta-optimizer (Zhang et al. 2019)
+    lookahead_k: int = 5  # apply slow-weight pull every k steps
+    lookahead_alpha: float = 0.5  # slow-weight interpolation factor (0 = no pull, 1 = identity)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -522,6 +595,11 @@ if cfg.layer_scale_init > 0:
           f"{len(decay_params)} decay params")
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+if cfg.use_lookahead:
+    optimizer = Lookahead(optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Optimizer: wrapped in Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})")
+
 cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
