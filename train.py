@@ -195,7 +195,7 @@ class Transolver(nn.Module):
         ])
         self.n_layers = n_layers
         self.film_head = nn.Sequential(
-            nn.Linear(1, n_hidden),
+            nn.Linear(3, n_hidden),   # 3 conditioning scalars: log_Re, AoA0, AoA1
             nn.GELU(),
             nn.Linear(n_hidden, 2 * n_layers * n_hidden),
         )
@@ -217,11 +217,12 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        # x[:, :, 13] = log(Re), broadcast across N mesh points per sample
-        # (see data/prepare_splits.py:92). Sample at node 0 since it's always real.
-        log_re = x[:, 0:1, 13]  # [B, 1]
+        # Conditioning scalars (broadcast across N mesh points per sample,
+        # see data/prepare_splits.py:88-95): idx 13=log_Re, 14=AoA0, 18=AoA1.
+        # Sample at node 0 since it's always a real (non-padding) node.
+        cond = x[:, 0, [13, 14, 18]]  # [B, 3]
         B = x.shape[0]
-        film = self.film_head(log_re).view(B, self.n_layers, 2, self.n_hidden)
+        film = self.film_head(cond).view(B, self.n_layers, 2, self.n_hidden)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
             gamma = film[:, i, 0, :].unsqueeze(1)  # [B, 1, n_hidden]
