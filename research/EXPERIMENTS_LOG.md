@@ -1101,3 +1101,51 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
 - **CLOSED — clear negative.** All 4 val/test splits regressed. Curve still descending at E14 — convergence drag, same pattern as DropPath p=0.1 (#3646).
 - **Analysis:** This is the **4th consecutive textbook-magnitude uniform regularizer failure** on the post-SwiGLU+n_head=2 stack (DropPath, EMA, attn-dropout, FFN dropout). Program finding confirmed: standard-magnitude uniform regularizers are past their optimum on this stack. The post-SwiGLU model has lower intrinsic overfitting risk; any regularization at standard magnitudes just adds convergence drag within the 14-epoch budget.
 - **Decision:** Close attention-dropout axis at p=0.1. Moving alphonse to LayerScale (#3819) — fundamentally different architectural axis.
+
+## 2026-05-16 09:23 — PR #3819: LayerScale γ=1e-4 [CLOSED — NEGATIVE, BUDGET-CONSTRAINED]
+
+- charliepai2i24h2-alphonse/layer-scale-init-1e-4
+- **Hypothesis:** LayerScale (Touvron 2021 CaiT) — learnable per-channel residual scalars γ initialized at 1e-4. Stabilizes deep residual training; init at 1e-4 grows to O(1) during training. Predicted 0.5-2% improvement, worst case zero effect.
+- **Artifacts:** `models/model-layer-scale-init-1e-4-20260516-083700/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | LayerScale γ=1e-4 | Δ |
+|--------|--------------------|--------------------|---|
+| val_avg/mae_surf_p | 70.925 | 76.589 | **+7.98%** |
+| test_avg/mae_surf_p | 61.914 | 66.404 | **+7.25%** |
+
+- Per-split: val_re_rand 70.923 / val_geom_cruise 56.084 / val_geom_rc 88.371 / val_single 90.977. n_params +960 (0.19%), wall-clock ~neutral.
+- **CLOSED — clear negative.** Val curve monotonically descending at every epoch, still −1.5/epoch at E14. Mechanism: γ=1e-4 throttles residuals to ~1e-4× at init → network spends most of 14-epoch budget growing γ toward O(1) instead of fitting. CaiT regime is depth 24-48 where residual instability is real; at depth 5 we have no instability problem to solve, so small-init penalty dominates.
+- **Analysis:** Same "budget-constrained" pattern as DropPath/EMA/n_layers=6/hidden_inner=256 — anything that slows convergence per-step or per-epoch can't fit the 14-epoch / 30-min budget. The 30-min cap is now consistently the binding constraint across this round.
+- **Decision:** Close LayerScale axis. Pivoting alphonse to RMSNorm — budget-neutral architectural alternative (faster forward, fewer params per norm).
+
+## 2026-05-16 09:23 — PR #3744: SwiGLU hidden_inner 192→256 [CLOSED — PAST CAPACITY KNEE]
+
+- charliepai2i24h2-tanjiro/swiglu-hidden-inner-256
+- **Hypothesis:** Continue SwiGLU FFN scaling (128 → 192 paid -3.6%; does 192 → 256 continue?). PR scoped against old n_head=4 baseline 75.578.
+- **Artifacts:** `models/model-swiglu-hidden-inner-256-20260516-072237/metrics.{jsonl,yaml}`
+
+| Metric | vs old 75.578 | vs new 70.925 | hidden_inner=256 | Δ vs new |
+|--------|---------------|---------------|------------------|----------|
+| val_avg/mae_surf_p | +5.96% | +12.9% | 80.079 | **+12.9%** |
+| test_avg/mae_surf_p | +4.70% | +12.9% | 69.878 | **+12.9%** |
+
+- Per-split: all 4 val splits regressed vs 192; only test_geom_cruise ticked down marginally. n_params 0.56M (+20% vs 192). Peak VRAM 52GB. Hit wall-clock cap at 12/14 epochs (154.6s/epoch).
+- **CLOSED — past capacity knee.** SwiGLU FFN scaling curve: 128 → 192 = -3.6%, 192 → 256 = +6%. The knee is in [192, 224]. Train loss still falling at E12 (0.038), so this is generalization gap not optimization. Wall-clock confound is real (12 vs baseline 13 epochs) but the gap is too large to close in 1-2 more epochs.
+- **Analysis:** Confirms the budget-binding pattern: 256 params adds compute per epoch → fewer completed epochs → can't reach low-lr regime. SwiGLU FFN is now pinned at hidden_inner=192 for this stack.
+- **Decision:** Close hidden_inner axis at this stack. Pivoting tanjiro to schedule probe: warmup 2→1 epoch + cosine T_max=13 (give more annealing time for the "still descending at E14" pattern).
+
+## 2026-05-16 09:23 — PR #3775: n_layers 5→6 retest on SwiGLU+n_head=2 [CLOSED — BUDGET-CONSTRAINED]
+
+- charliepai2i24h2-fern/n-layers-6-nhead2
+- **Hypothesis:** Old GELU+n_head=4 depth=6 (#3506) failed +15%. SwiGLU's gating + wider per-head attention may now unlock depth capacity.
+- **Artifacts:** `models/model-n-layers-6-swiglu-nhead2-20260516-073226/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | n_layers=6 | Δ |
+|--------|--------------------|------------|---|
+| val_avg/mae_surf_p | 70.925 | 76.083 | **+7.28%** |
+| test_avg/mae_surf_p | 61.914 | 66.899 | **+8.05%** |
+
+- Per-split val: single 89.713 (+16.6) / geom_rc 87.711 (+2.5) / geom_cruise 56.456 (+2.3) / re_rand 70.453 (-0.3). n_params 604,623 (+18.7%). Wall-clock 31min, hit cap at 13/14 epochs (~144 s/epoch). Curve still descending at E13 (-2.9 last epoch).
+- **CLOSED — budget-constrained negative.** Two evidence points for under-training rather than depth incapacity: (1) single_in_dist +16.6 outsize hit suggests the high-magnitude split needs more steps; (2) val curve descending sharply at E13. But the budget IS the operating constraint: even with curve descending, +7.28% is too large to close in 1 more epoch.
+- **Analysis:** 3rd "budget-constrained capacity regression" this round (alongside LayerScale, hidden_inner=256). The 14-epoch / 30-min cap consistently kills experiments that need more time to mature. SwiGLU+n_head=2 at depth=5 is well-tuned to the budget; depth=6 isn't.
+- **Decision:** Close depth axis at this stack. Pivoting fern to budget-neutral optimization axis: AdamW β2 0.999→0.95 (faster second-moment EMA tracking, more responsive to mature-stack gradient statistics).
