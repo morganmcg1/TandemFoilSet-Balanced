@@ -478,6 +478,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    n_layers: int = 5  # Number of TransolverBlock layers (depth)
 
 
 cfg = sp.parse(Config)
@@ -512,7 +513,7 @@ model_config = dict(
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
     out_dim=3,
     n_hidden=cfg.n_hidden,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
