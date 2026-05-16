@@ -21,8 +21,10 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 - **Gradient clipping**: `clip_grad_norm_(max_norm=0.5)` — **default is now 0.5**
   (PR #3418 added lever; PR #3494 flipped default from 0.0 → 0.5). Bare
   `python train.py` now clips at 0.5 automatically — no explicit flag needed.
-- **Precision**: `bfloat16` AMP mixed precision — **default is now bf16** (**merged
-  from PR #3330**). 1.33× per-epoch speedup → deeper cosine decay in 30-min budget.
+- **Precision**: `bfloat16` AMP mixed precision available as a **lever via `--amp_dtype bf16`**
+  (PR #3330 added the flag and verified val=83.54/test=73.02). 1.33× per-epoch speedup →
+  deeper cosine decay in 30-min budget. **Default `Config.amp_dtype` is still `"fp32"`** —
+  must pass `--amp_dtype bf16` explicitly to activate.
 - Eval: non-finite ground truth samples filtered at `evaluate_split` boundary,
   so `test_avg/mae_surf_p` is now finite (**merged from PR #3138**)
 - Batch size: 4 (mesh-padded by `pad_collate`)
@@ -32,8 +34,27 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 
 ✅ **Loss-fn default correct as of PR #3440.** Charbonnier ε=1e-3 auto-applies.
 ✅ **Grad-clip default correct as of PR #3494.** Bare `python train.py` now clips at 0.5. No explicit flag needed.
-✅ **Fourier positional encoding default as of PR #3348.** `pos_enc_mode=fourier_basic`, L=8 auto-applies.
-✅ **bf16 AMP default correct as of PR #3330.** 1.33× per-epoch speedup auto-applies.
+⚠️ **Fourier positional encoding is a LEVER (PR #3348), not a default.** `Config.pos_enc_mode` default is `"raw"`. Activate with `--pos_enc_mode fourier_basic`.
+⚠️ **bf16 AMP is a LEVER (PR #3330), not a default.** `Config.amp_dtype` default is `"fp32"`. Activate with `--amp_dtype bf16`.
+⚠️ **GeGLU MLPs is a LEVER (PR #3370), not a default.** `Config.mlp_type` default is `"vanilla"`. Activate with `--mlp_type geglu`.
+
+### To reproduce current best (val=81.48, test=72.68 from PR #3370 run 8ile1q1j):
+
+```
+cd target/
+python train.py --mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 \
+  --wandb_group baseline --wandb_name current_best_repro --epochs 50
+```
+
+**However**, the published 8ile1q1j run was on tanjiro's branch BEFORE bf16 (#3330) was merged. Per W&B verification by fern (PR #3600 comment, 2026-05-16), 8ile1q1j actually used `amp_dtype=None` (fp32) — the val=81.48 number reflects **fp32 + raw_pos_enc + GeGLU + Charbonnier + clip 0.5**. To reproduce *exactly* that run:
+
+```
+cd target/
+python train.py --mlp_type geglu \
+  --wandb_group baseline --wandb_name 81p48_repro --epochs 50
+```
+
+A confirmation arm with all three levers stacked (`--mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16`) is the natural "true best baseline" and is queued.
 
 ## 2026-05-16 — PR #3370: Gated MLPs (GeGLU) in TransolverBlocks — **MERGED ⭐⭐ (new val AND test best)**
 
@@ -55,14 +76,18 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
   ```
 
 **Caveat:** Run 8ile1q1j was on the no-bf16 base (bf16 #3330 merged AFTER tanjiro's run).
-After this merge, the advisor head includes GeGLU lever + bf16 default + Fourier L=8. A bare
-`python train.py --mlp_type geglu` will now run GeGLU+bf16+Fourier — expected val ~70-73
-(GeGLU's −14.7% gain on Charb+clip base applied to current bf16+Fourier baseline 83.54).
-The published 81.48 should be treated as a conservative lower bound; the actual merged config
-is likely better. A sanity confirmation arm is queued.
+Per W&B verification by fern (#3600), 8ile1q1j used `amp_dtype=None` (fp32) and `pos_enc_mode=raw`,
+so val=81.48 reflects **fp32 + raw + GeGLU + Charbonnier + clip 0.5** — NOT the stacked
+GeGLU+bf16+Fourier config. To reproduce the published number, pass only `--mlp_type geglu`.
+To explore stacking all three levers together, pass `--mlp_type geglu --pos_enc_mode fourier_basic
+--amp_dtype bf16` (predicted val ~70-73 if effects compose proportionally; queued as a confirmation
+arm).
 
-**Operational follow-up needed:** Flip `mlp_type` Config default `"vanilla"` → `"geglu"` so bare
-`python train.py` gets the win automatically.
+**Operational follow-up needed:** Flip three Config defaults so bare `python train.py` gets the
+stacked win automatically:
+- `mlp_type`:    `"vanilla"` → `"geglu"`
+- `pos_enc_mode`: `"raw"` → `"fourier_basic"`
+- `amp_dtype`:   `"fp32"` → `"bf16"`
 
 ---
 
@@ -79,18 +104,17 @@ is likely better. A sanity confirmation arm is queued.
   - test_geom_camber_rc mae_surf_p = 78.83
   - test_geom_camber_cruise mae_surf_p = 52.60
   - test_re_rand mae_surf_p = 72.97
-- **Reproduce:**
+- **Reproduce (must pass both `--pos_enc_mode fourier_basic` and `--amp_dtype bf16` explicitly):**
   ```
   cd target/
-  python train.py --pos_enc_mode fourier_basic \
+  python train.py --pos_enc_mode fourier_basic --amp_dtype bf16 \
     --wandb_group bf16-amp-fourier --wandb_name bf16_fourier_v1 --epochs 50
   ```
-  (No `--grad_clip_max_norm` or `--amp_dtype` flags needed — both now default.)
 
 Notes: Composes multiplicatively with Fourier L=8 (PR #3348). 1.33× per-epoch speedup lets
 cosine schedule decay 36% deeper (ep 19 vs 14), with bf16 numerical stability confirmed across
-~60 aggregate training epochs and all 4 test splits finite. Post-merge, all subsequent experiments
-get the speedup automatically.
+~60 aggregate training epochs and all 4 test splits finite. bf16 is a lever (default `fp32`)
+— must pass `--amp_dtype bf16` to activate.
 
 ---
 
@@ -181,10 +205,14 @@ Implicit pre-warmup baseline ≈ **130 ± 3**, run-to-run variance ~3-4 units.
 W&B project: `wandb-applied-ai-team/senpai-v1` — research tag
 `willow-pai2i-24h-r1`.
 
-Reproduce current best baseline (all defaults correct — no explicit flags needed):
+Reproduce current best baseline (must pass three explicit levers):
 ```
 cd target/
-python train.py --wandb_name baseline_default --wandb_group baseline
+python train.py --mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 \
+  --wandb_name baseline_stacked --wandb_group baseline
 ```
 
-All defaults now correct: Charbonnier ε=1e-3 (#3440), grad_clip=0.5 (#3494), Fourier L=8 positional encoding (#3348).
+Defaults that ARE correct (no flag needed): Charbonnier ε=1e-3 (#3440), grad_clip=0.5 (#3494).
+
+Levers (must be passed explicitly): `--mlp_type geglu` (#3370), `--pos_enc_mode fourier_basic` (#3348),
+`--amp_dtype bf16` (#3330). Operational follow-up PRs to flip these three defaults are needed.
