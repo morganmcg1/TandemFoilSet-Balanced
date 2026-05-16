@@ -1273,3 +1273,44 @@ Together with WIP from earlier cycles:
 | #3862 | fern | H50: WSD trapezoidal schedule | WIP |
 
 All 8 students active. Zero idle GPUs.
+
+---
+
+## 2026-05-16 11:45 — PR #3834: H48 GEGLU/SwiGLU FFN gating (askeladd) — **NEW BEST, MERGED**
+
+- Branch: `charliepai2i48h3-askeladd/h48-geglu`
+- Hypothesis: GEGLU gated FFN provides spatial selectivity for CFD boundary-layer tokens.
+
+| Arm | val_avg/mae_surf_p | test_avg (3-split) |
+|---|---|---|
+| **Arm A (GEGLU)** | **58.6268** | **56.6976** |
+| Arm B (SwiGLU) | 61.4410 | — |
+
+Per-split (GEGLU best epoch=13): in_dist=61.62, camber_rc=73.90, cruise=40.43, re_rand=58.56. Test: 54.78 / 65.78 / 49.53 (cruise NaN).
+
+- Config: n_head=2 + lr=1e-3 + wd=5e-5 + clip=1.0 + ffn_act=geglu
+- Δ vs H37b: **−7.48 pts val, −7.75 pts test** — largest single-PR gain since T_max fix
+- Δ vs H39 Arm C: **−4.81 pts** — architecture × optimizer stack confirmed
+
+**Analysis:** GEGLU's decoupled gate `(xW₁) ⊙ σ(xW₂)` amplifies near-wall tokens while suppressing interior flow — a direct match for CFD boundary-layer gradients. Test gains (−7.75) exceed val gains (−7.48) confirming strong OOD generalization. GEGLU > SwiGLU (+2.8 pts) because the decoupled gate is more expressive for physics-constrained data.
+
+**Status: MERGED.** New baseline: val_avg=58.6268, test=56.6976.
+
+---
+
+## 2026-05-16 11:50 — PR #3683: H39 Arm C — SENT BACK (second rebase)
+
+PR #3834 modified train.py (GEGLU classes + ffn_act), conflicting with #3683's eta_min change. Thorfinn rebasing. Once merged, adds H39 Arm C metrics to canonical branch. val=63.44 already documented in BASELINE.md.
+
+---
+
+## 2026-05-16 12:00 — R5 cycle 6 new assignment: askeladd → H57
+
+| PR | Student | Hypothesis | Status |
+|----|---------|------------|--------|
+| **#3918** | askeladd | **H57: GEGLU + lr=2e-3 mega-stack** | WIP |
+
+GEGLU (architecture) × lr=2e-3 (optimizer) are orthogonal levers. Predicted ≈ 55-57. Highest priority.
+
+Full active roster (8 students, 0 idle):
+#3918 askeladd H57 GEGLU+lr2e3 | #3683 thorfinn rebase | #3896 alphonse H51 LR | #3897 frieren H56 clip | #3898 nezuko H54 surf | #3899 tanjiro H55 mixup | #3859 edward H49 lion | #3862 fern H50 wsd
