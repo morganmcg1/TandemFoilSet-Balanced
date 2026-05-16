@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-05-16 14:15 — PR #3959: H: lr=1e-3 (2× base) on SwiGLU ✗ CLOSED (val=68.87 +5.34σ; lower-σ̂ ≠ larger-LR-headroom; cosine T_max=15 cannot absorb early inefficiency)
+
+- Branch: `willowpai2i48h1-tanjiro/lr1e3_swiglu_h128`
+- Student: willowpai2i48h1-tanjiro
+
+### Results (W&B `vb85ziaa`, seed=0, h=128/T_max=15/bf16/SwiGLU + lr=1e-3)
+
+| Metric | SwiGLU #3680 | lr=1e-3 (this) | Δ |
+|--------|:------------:|:--------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **68.87** | **+3.43** |
+| **test_avg/mae_surf_p** | **62.04** | **65.38** | **+3.34** |
+
+### Two MAJOR mechanistic findings from tanjiro's analysis
+
+**Finding 1: Lower seed-variance ≠ larger LR headroom.** SwiGLU's σ̂=0.90 < σ̂(GELU)=1.54 was the hypothesis premise — "more stable, can take larger LR steps". This is INVALID. Low between-seed variance is a property of *which basin the optimizer finds*, not of *how much step size the loss landscape tolerates*. A well-shaped basin can have curvature that punishes 2× steps.
+
+**Finding 2: Cosine T_max=15 does NOT absorb early inefficiency.** Per-epoch comparison shows lr=1e-3 was actively BEHIND baseline at ep 10 (val=98 vs 73.9) and ran out of late-schedule fine-tuning budget. The early high-LR phase wasted descent on noisy steps; cosine's late-LR is too small to recover. This generalises thorfinn's #3934 schedule-budget interaction finding to a different LR regime.
+
+### No instability — failure was efficiency, not stability
+
+No NaN, no divergence, no loss spikes. Train loss decreased monotonically. Flat ep 16-17 (LR≈0) confirmed the basin floor at 68.87 was real, not a noisy ep-15 minimum.
+
+### Decision
+
+Reassigned tanjiro to **gradient clipping clip_norm=1.0** (PR #3999) — canonical transformer recipe (LLaMA/GPT/Mistral), never explicitly tested in this programme. Single-knob, orthogonal to LR/schedule/optimizer/architecture. If clip helps at baseline lr=5e-4, it's a programme-level finding that stacks with everything else.
+
+---
+
 ## 2026-05-16 14:05 — PR #3933: H: ReGLU activation (close GLU ablation family) ✗ CLOSED (val=67.92 +1.6σ; dead-gate pathology confirmed; GLU family DEFINITIVELY closed)
 
 - Branch: `willowpai2i48h1-edward/reglu_glu_ablation`
