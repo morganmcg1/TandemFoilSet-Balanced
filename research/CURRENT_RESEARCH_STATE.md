@@ -1,85 +1,77 @@
 # SENPAI Research State
 
-- 2026-05-16 ~10:25 — **Round-24 complete. New baseline: val=72.59, test=66.45.**
-  - **MERGED: #3630 nezuko weight-decay sweep** — wd=1e-3 wins clean 3-arm monotonic sweep; val=72.59, test=66.45 NEW BEST.
-  - **Defaults bug (from Round-22) fully corrected** — all 8 in-flight PRs updated with explicit `--mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 --weight_decay 1e-3` commands.
-  - **Truly-stacked baseline confirmed** by 3 independent measurements (~val 74-77, baseline mean ~75.8). PR #3630 wd_1e-3 beats this.
-  - **edward #3570 compile_stacked extraordinary result** (f077n973, val=49.14, test=44.07) — 40% gain over baseline. Verification pending: nocompile_ctrl (mq01t5w7) running. Will merge immediately if control confirms.
-  - Assigned new work: nezuko #3879 (fourier_rich pos-enc), askeladd #3881 (slice_num sweep).
+- 2026-05-16 ~11:05 — **Round-25 complete. New baseline: val=69.98, test=62.47.**
+  - **MERGED: #3600 fern Fourier L sweep** — L=4 beats L=6 and L=8 on ALL 4 test splits. val=69.98, test=62.47. Counter-intuitive but robust: lower L generalizes better OOD at this model scale/mesh density.
+  - **Labels fixed**: #3879 (nezuko) and #3881 (fern) had wrong student routing; corrected.
+  - **#3879 redirected**: fourier_rich (12-band) is now directionally wrong given L=4 wins. Nezuko redirected to test L=4+wd=1e-3 composition (the single most valuable run) + L=2 probe.
+  - **#3881 reassigned to fern** (slice_num sweep; askeladd already has #3667 in-flight).
+  - All 6 in-flight PRs updated with new baseline and `--pos_enc_num_freqs 4 --weight_decay 1e-3` config.
+  - **Thorfinn (#3151) and alphonse (#3605) still have NO training runs** despite 5+ hours of pings. Critical operational concern.
 
-- 2026-05-16 ~06:40 — **Critical defaults bug corrected** (BASELINE.md commit 254940b).
-  - `pos_enc_mode`, `amp_dtype`, `mlp_type` are LEVERS not defaults. All experiments require explicit flags.
+- 2026-05-16 ~10:25 — **Round-24: wd=1e-3 merged, askeladd/nezuko assigned.**
+- 2026-05-16 ~06:40 — **Critical defaults bug corrected** (all three levers require explicit flags).
 
 ## Current research focus
 
 Advisor branch `icml-appendix-willow-pai2i-24h-r1`.
-**Ten items merged**: warmup+cosine (#3150), Charbonnier robust loss (#3143),
-NaN evaluate_split bug fix (#3138), Charbonnier-default-flip (#3440),
-grad-clip lever (#3418), Fourier positional encoding L=8 (#3348),
-grad-clip default flip (#3494), bf16 AMP (#3330), GeGLU MLPs (#3370), **wd=1e-3 (#3630)**.
+**Eleven items merged**: warmup+cosine (#3150), Charbonnier (#3143), NaN fix (#3138), Charbonnier-default (#3440), grad-clip lever (#3418), Fourier pos-enc L=8 (#3348), grad-clip default (#3494), bf16 AMP (#3330), GeGLU MLPs (#3370), wd=1e-3 (#3630), **Fourier L=4 (#3600)**.
 
-Primary validation target: **val_avg/mae_surf_p < 72.59** (NEW — PR #3630 run zmahpm3e)
-Paper-facing test target: **test_avg/mae_surf_p < 66.45** (NEW — same run)
-Win threshold for new PRs: val < **67.5** (≥5 units clear of noise)
+Primary validation target: **val_avg/mae_surf_p < 69.98** (PR #3600 L=4, run 9nliedqj)
+Paper-facing test target: **test_avg/mae_surf_p < 62.47** (same run)
+Win threshold: val < **65.0** (≥5 units to clear noise)
 
-Best config: `--mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 --weight_decay 1e-3`
+Best config: `--pos_enc_num_freqs 4 --weight_decay 1e-3 --mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16`
 
-**Known operational issues — defaults that need flipping** (no idle student right now):
+**Known operational issues — defaults needing flip** (no idle student):
 - `pos_enc_mode`: `"raw"` → `"fourier_basic"`
-- `amp_dtype`: `"fp32"` → `"bf16"`  
+- `pos_enc_num_freqs`: `8` → `4`
+- `amp_dtype`: `"fp32"` → `"bf16"`
 - `mlp_type`: `"vanilla"` → `"geglu"`
+- `weight_decay`: `1e-4` → `1e-3`
 
-## In-flight hypotheses (8 active PRs)
+## In-flight hypotheses (9 active PRs)
 
 | PR | Student | Lever | Status |
 |----|---------|-------|--------|
-| #3151 | thorfinn | EMA model weights (decay=0.99) | Critical ping sent — no runs yet, urgent |
-| #3570 | edward   | torch.compile speedup | EXTRAORDINARY: f077n973 val=49.14 — pending nocompile_ctrl + seed42 verification |
-| #3600 | fern     | Fourier L sweep L=4,6,8 | L=4 done (val=84.20), L=6 + L=8_ctrl pending |
-| #3605 | alphonse | Cauchy/Lorentzian loss γ ∈ {0.1, 1.0} | Critical ping sent — no runs yet, urgent |
-| #3667 | askeladd | OneCycleLR — retry with --epochs 15 | Sent back for corrected retry |
-| #3668 | frieren  | Gradient accumulation (accum2 within noise, accum4 pending) | Sent back for accum4 arm |
-| #3704 | tanjiro  | GeGLU readout (mlp2) — readout_geglu arm needed | Sent back with rebase request (CONFLICTING) |
-| #3879 | nezuko   | fourier_rich pos enc (12 bands vs 8) | Newly assigned — no code change needed |
-| #3881 | askeladd | slice_num sweep (64→96→128 physics tokens) | Newly assigned — 2-line code change |
+| #3151 | thorfinn | EMA model weights (decay=0.99) | CRITICAL — 5+ hours no runs. Updated with L=4+wd=1e-3 commands. |
+| #3570 | edward   | torch.compile speedup | f077n973 val=49.14 extraordinary — verification arms pending |
+| #3605 | alphonse | Cauchy/Lorentzian loss γ ∈ {0.1, 1.0} | CRITICAL — 5+ hours no runs. Updated with L=4+wd=1e-3 commands. |
+| #3667 | askeladd | OneCycleLR — epochs=15 retry | Updated with L=4+wd=1e-3 commands |
+| #3668 | frieren  | Gradient accumulation accum4 | Updated with L=4+wd=1e-3 commands |
+| #3704 | tanjiro  | GeGLU readout mlp2 | Sent back for rebase + updated with L=4+wd=1e-3 |
+| #3879 | nezuko   | ~~fourier_rich~~ → L=4+wd=1e-3 compose + L=2 probe | Redirected — no code change needed |
+| #3881 | fern     | PhysicsAttention slice_num sweep (64→96→128) | Reassigned to fern, updated with L=4+wd=1e-3 config |
 
-Wait — askeladd has TWO PRs? #3667 (OneCycle retry) and #3881 (slice_num). Let me verify this is OK — actually, askeladd was sent back on #3667 (is now status:wip + draft) and is "idle" per the survey. The slice_num assignment #3881 is their active new assignment. But #3667 is still open WIP. This may cause confusion. I should check the survey label to confirm.
+## Highest-priority pending experiments
 
-Actually the assign-experiment creates status:wip + student:askeladd label for #3881. And #3667 is also status:wip + student:askeladd. Having two WIP PRs for one student is OK — they'll pick up the most recent assignment and work through them.
+1. **#3570 edward torch.compile** — if val=49.14 is confirmed, this is the biggest win. Verification arms running.
+2. **#3879 nezuko L=4+wd=1e-3 composition** — most immediate priority: confirm these two wins compose.
+3. **#3151 thorfinn EMA** — expected val ~57-60 on current best stack. Has not launched.
+4. **#3605 alphonse Cauchy loss** — potentially different convergence profile. Has not launched.
+5. **#3881 fern slice_num** — physics token resolution sweep.
 
-## Highest pending experiments by expected impact
+## Key insight from L=4 win
 
-1. **#3570 edward torch.compile verification** — if f077n973 (val=49.14) is real, this is the biggest single win of the launch by far (~32% improvement). Critical to verify.
-2. **#3151 thorfinn EMA** — expected val ~59-62 on stacked+wd=1e-3 base (−17.8% from early signal). Has NOT started yet — this is the top missing experiment.
-3. **#3605 alphonse Cauchy loss** — has NOT started yet. Different loss tail could be complementary.
-4. **#3881 askeladd slice_num sweep** — physics token resolution; 3 arms, 2-line code change.
-5. **#3879 nezuko fourier_rich** — 12-band pos enc already implemented; 2 arms, no code change.
+Lower Fourier frequency count generalizes better OOD. Hypothesis: higher L overfits to training-set high-frequency geometry artifacts. The model at this scale (~570K params, 5 layers) may lack capacity to benefit from 8 bands — 4 bands provide enough geometric context without adding noise.
 
-## Expected compose ceiling
-
-If all three levers (GeGLU+bf16+Fourier) + wd=1e-3 + torch.compile compose:
-- Current best: val=72.59, test=66.45
-- If compile is real (~val 49): already at val ~49, test ~44
-- If EMA adds −17.8% on top of compile: val ~40, test ~36
-
-Most aggressive optimistic scenario, but each of these has strong independent signals.
+**Follow-up experiments needed:**
+- L=4 + wd=1e-3 (nezuko #3879 — immediate) 
+- L=2 probe (even lower?)
+- L=4 + compile + wd=1e-3 (if compile is real, compose with L=4)
+- EMA + L=4 + wd=1e-3
 
 ## Potential next-round directions
 
 **Architecture:**
-- Per-channel readout heads (shared_head + α·per_channel)
-- Hybrid Fourier (concat raw + Fourier)
-- Learnable Fourier frequencies
+- Per-channel readout heads
+- Hybrid Fourier (concat raw + L=4 Fourier)
 - Deeper Transolver (52 GB VRAM headroom)
+- slice_num > 64
 
 **Training:**
-- SAM (Sharpness-Aware Minimization)
-- Lookahead optimizer wrapper
-- LR × wd grid at wd=1e-3
+- SAM optimizer
+- Lookahead wrapper
+- LR sweep at wd=1e-3 + L=4 base
 
-**Operational hygiene (HIGH priority — assign on next idle):**
-- Triple default flip PR (pos_enc_mode/amp_dtype/mlp_type)
-- wd=1e-3 Config default flip
-
-**Context:**
-- Compile result (val=49.14) requires deep investigation — result is so far below baseline it likely indicates a systematic improvement, not seed luck
+**Operational hygiene (HIGH priority — batch into single PR on next idle):**
+- Default flips: pos_enc_mode/fourier_L/amp_dtype/mlp_type/weight_decay

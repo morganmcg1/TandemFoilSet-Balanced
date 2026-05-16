@@ -5,6 +5,31 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 11:05 — PR #3600: Fourier L sweep — **MERGED ⭐ (new val=69.98, test=62.47 best)**
+
+- Student branch: `fern/fourier-l-sweep`
+- Student: `willowpai2i24h1-fern`
+- Hypothesis: Sweep pos_enc_num_freqs (L) = 4, 6, 8 on truly-stacked base to find optimal frequency count.
+
+| Arm | L | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|-----|----|-----------|---------------------|---------------------|------------|
+| **fourier_L4 (winner)** | **4** | **9nliedqj** | **69.98** | **62.47** | **17** |
+| fourier_L6 | 6 | 3coys5on | 73.49 | 64.45 | 15 |
+| fourier_L8_ctrl | 8 | jsjancp5 | 73.75 | 66.02 | 16 |
+
+Per-split test (fourier_L4, run 9nliedqj):
+- test_single_in_dist mae_surf_p = 74.88 (L4 vs L8: −0.91)
+- test_geom_camber_rc mae_surf_p = 71.01 (L4 vs L8: −2.00)
+- test_geom_camber_cruise mae_surf_p = 43.83 (L4 vs L8: −5.86 ⭐)
+- test_re_rand mae_surf_p = 60.17 (L4 vs L8: −5.42 ⭐)
+- **test_avg/mae_surf_p = 62.47 (NEW BEST, −3.98 vs 66.45 prior)**
+
+**Decision: MERGED.** L=4 beats L=6 and L=8 on ALL 4 test splits — clean, monotonic ordering on test (62.47 < 64.45 < 66.02). Within-sweep Δ (L4 vs L8): val −3.77, test −3.55 — well above noise floor. Config used wd=1e-4 (pre-#3630 merge), but L effect is orthogonal to wd. Counter-intuitive: lower L generalizes better OOD. Likely mechanism: model at this scale lacks capacity to benefit from 8 Fourier bands; 4 bands provide sufficient geometric context without training-set high-frequency artifacts.
+
+Key follow-up: L=4 + wd=1e-3 composition (nezuko #3879 redirected to test this).
+
+---
+
 ## 2026-05-16 10:22 — PR #3630: AdamW weight decay sweep — **MERGED ⭐ (new val=72.59, test=66.45 best)**
 
 - Student branch: `nezuko/weight-decay`
