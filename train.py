@@ -279,7 +279,8 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1") -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1",
+                   dsdf_clip: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -299,6 +300,9 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if dsdf_clip > 0:
+                x_norm = x_norm.clone()
+                x_norm[..., 4:12] = x_norm[..., 4:12].clamp(-dsdf_clip, dsdf_clip)
             x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_enc})["preds"]
@@ -466,6 +470,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    dsdf_clip: float = 0.0   # 0 = disabled; e.g. 3.0 = clip normalized DSDF (dims 4:12) to ±3σ
 
 
 cfg = sp.parse(Config)
@@ -586,6 +591,9 @@ for epoch in range(MAX_EPOCHS):
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
+        if cfg.dsdf_clip > 0:
+            x_norm = x_norm.clone()
+            x_norm[..., 4:12] = x_norm[..., 4:12].clamp(-cfg.dsdf_clip, cfg.dsdf_clip)
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_enc})["preds"]
@@ -619,7 +627,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type,
+                             dsdf_clip=cfg.dsdf_clip)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -687,7 +696,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type,
+                                 dsdf_clip=cfg.dsdf_clip)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
