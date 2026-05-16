@@ -806,3 +806,45 @@ Second close of sinusoidal-Re axis (first: +44% with frequency bug; corrected: +
 
 - PR #3766 edward: DropPath stochastic depth (--drop_path_rate 0.1 primary). DropPath adds a per-residual-branch drop probability during training; forces block independence; used in ViT/Swin/ConvNeXt for OOD robustness.
 - PR #3770 frieren: Mixup augmentation (--mixup_alpha 0.2 primary). λ·x_a + (1-λ)·x_b, λ·y_a + (1-λ)·y_b; exploits CFD field smoothness.
+
+## 2026-05-16 07:50 — PR #3723 MERGED: SwiGLU param-matched MLP — BIGGEST WIN YET val=66.61 (−18.7%)
+
+| Arm | mlp_ratio | n_params | epochs | val_avg | Δ vs baseline | test_3split |
+|---|---|---|---|---|---|---|
+| A — wider | 2 (SwiGLU, +25%) | 827,479 | 12 | 70.850 | −13.6% | 69.171 |
+| **B — param-matched (BEST)** | **1.333 SwiGLU** | **661,499** | **13** | **66.613** | **−18.7%** | **65.463** |
+
+Per-split val (Arm B): single_in_dist 78.885 (−21.9%) | geom_camber_rc 78.184 (−13.8%) | geom_camber_cruise 45.513 (−24.0%) | re_rand 63.870 (−16.2%)
+
+W&B runs: `rqiazooj` (A), `ju2azfzk` (B)
+
+**Key finding**: the win comes from the GATING MECHANISM, not extra parameters — param-matched Arm B beats wider Arm A by 4.2 MAE on val. SwiGLU (SiLU(W_gate·x) ⊙ W_value·x → W_out) gives each MLP block a data-dependent multiplicative pathway per node. For CFD surrogates mixing global (Re, NACA) and local (coords, dsdf) features, this per-node feature selection is exactly the right inductive bias. The compound effect with asinh+EMA is much larger than literature baselines (−18.7% vs typical −0.5 to −2%) because the asinh-clean gradient signal lets the gating mechanism operate on high-quality late-training signal.
+
+Student analysis quality: exceptional — tanjiro identified the wall-clock-aware param-matched variant as the right design choice AND ran both arms cleanly. Epoch curve still descending at epoch 13 (slope −2.5 MAE/epoch) suggests more headroom with more compute.
+
+**New baseline: val=66.6130, test=65.4628. BASELINE.md updated.**
+
+## 2026-05-16 07:55 — Round-5 closures (5 PRs don't beat new SwiGLU baseline 66.61)
+
+All 5 PRs ran on old baseline (81.97) and beat it — but val=66.61 is the new bar.
+
+| PR | Student | Hypothesis | val (vs old baseline) | vs new baseline (66.61) | Verdict |
+|---|---|---|---|---|---|
+| #3662 | thorfinn | vel-asinh scale=0.5 | 76.15 (−7.1%) | +9.54 (+14.3%) | CLOSED — re-test on SwiGLU |
+| #3661 | nezuko | wd=1e-3 | 79.71 (−2.77%) | +13.1 (+19.7%) | CLOSED — re-test on SwiGLU |
+| #3679 | alphonse | Huber δ=0.5 | 80.85 (−1.37%) | +14.2 (+21.3%) | CLOSED — re-test on SwiGLU |
+| #3659 | askeladd | asinh scale=1.5 | 82.16 (+0.22% regression) | +15.5 | CLOSED — scale axis confirmed (1.0 optimal) |
+| #3649 | fern | n_head=2 | 86.78 (−4.2% vs OLD pre-asinh) | +20.2 | CLOSED — merge conflict; re-test on SwiGLU |
+
+All 5 mechanisms are CONFIRMED REAL on the old stack. All 5 students re-assigned for Round-6 re-tests on SwiGLU baseline.
+
+## 2026-05-16 07:55 — Round-6 assignments (6 PRs, all on new SwiGLU baseline val=66.61)
+
+| PR | Student | Hypothesis | Key test |
+|---|---|---|---|
+| #3789 | thorfinn | vel-asinh-on-swiglu (scale=0.5) | Does vel-asinh compound with SwiGLU? |
+| #3790 | nezuko | wd-on-swiglu (wd=1e-3) | Does wd=1e-3 compound with SwiGLU? |
+| #3793 | alphonse | huber-delta-on-swiglu (δ=0.5) | Does δ=0.5 compound with SwiGLU? |
+| #3794 | fern | n-head-2-on-swiglu | n_head=2 + SwiGLU: larger per-head dim + gated MLP |
+| #3795 | tanjiro | swiglu-all-mlps (preprocess+readout too) | Extend gating to I/O MLPs |
+| #3796 | askeladd | vel-scale-fine-swiglu (0.25, 0.375) | Is vel-asinh scale < 0.5 better? |

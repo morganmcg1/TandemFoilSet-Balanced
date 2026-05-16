@@ -1,37 +1,50 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 07:35 UTC
+- **Last updated:** 2026-05-16 08:00 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (checked 07:30 UTC — no open issues).
+- **Most recent direction from human researcher team:** None (checked 07:55 UTC — no open issues).
 
-## Current best baseline (UNCHANGED — 2 strong winners awaiting SENPAI-RESULT)
+## Current best baseline (UPDATED — SwiGLU merge 07:50 UTC)
 
 | Metric | Value | Source |
 |---|---|---|
-| `val_avg/mae_surf_p` | **81.9754** | run `j5214ii4` (PR #3475 asinh-pressure, merged 03:30 UTC) |
-| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **81.3654** | run `j5214ii4` |
+| `val_avg/mae_surf_p` | **66.6130** | run `ju2azfzk` (PR #3723 SwiGLU param-matched, merged 07:50 UTC) |
+| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **65.4628** | run `ju2azfzk` |
 
-## 🔥 Pending merges (W&B confirmed, awaiting terminal SENPAI-RESULT)
+Per-split validation (best arm `ju2azfzk` vs prev baseline #3475, 81.9754):
 
-| PR | Student | W&B best run | val_avg | Δ | Status |
-|---|---|---|---|---|---|
-| **#3662** | **thorfinn** | **`699fhd8k` vel-asinh-scale-0.5** | **76.15** | **−7.1%** | Pod active (iter 183); awaiting SENPAI-RESULT |
-| **#3661** | **nezuko** | **`ymfjl55c` wd-1e-3-asinh** | **79.71** | **−2.77%** | Pod active (iter 60); awaiting SENPAI-RESULT |
+| Split | mae_surf_p | Δ vs #3475 |
+|---|---|---|
+| val_single_in_dist | 78.885 | **−21.9%** |
+| val_geom_camber_rc | 78.184 | **−13.8%** |
+| val_geom_camber_cruise | 45.513 | **−24.0%** |
+| val_re_rand | 63.870 | **−16.2%** |
 
-Both pods confirmed running assignments at 07:24 UTC. Claude will invoke again at ~07:30-07:35 UTC (300s sleep cadence). SENPAI-RESULT expected imminently.
+**Reproduce new baseline**:
+```bash
+cd target/ && python train.py \
+  --grad_clip 5.0 --huber_delta 1.0 --ema_decay 0.99 --asinh_p_scale 1.0 \
+  --use_swiglu --mlp_ratio 1.333 \
+  --agent <student>
+```
 
-## Active PRs — All 8 students assigned, zero idle
+## Active PRs — Round-6 (all on new SwiGLU baseline val=66.61)
+
+| PR | Student | Hypothesis | Key test |
+|----|---------|-----------|----------|
+| #3789 | thorfinn | vel-asinh scale=0.5 on SwiGLU | Does vel-asinh compound with SwiGLU? (~−7% expected) |
+| #3790 | nezuko | wd=1e-3 on SwiGLU | Does wd=1e-3 compound? (~−2.8% expected) |
+| #3793 | alphonse | Huber δ=0.5 on SwiGLU | Does δ=0.5 compound? (~−1.4% expected) |
+| #3794 | fern | n_head=2 on SwiGLU | Larger per-head dim + gated MLP interaction |
+| #3795 | tanjiro | SwiGLU in all MLPs (preprocess+readout) | Extend gating to I/O layers |
+| #3796 | askeladd | vel-asinh fine scale sweep (0.25, 0.375) | Is scale < 0.5 better on lighter-tailed velocity? |
+
+### Round-5 carry-overs still WIP (assigned before SwiGLU)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3649 | fern | n_head sweep (n_head=2 arm B) | n_head=8 +20%; awaiting n_head=2 result |
-| #3659 | askeladd | asinh-scale-sweep confirmation | 1.5 tied, 2.0 +2%; awaiting SENPAI-RESULT (close) |
-| #3661 | nezuko | wd=1e-3 on asinh | **W&B win val=79.71**; awaiting SENPAI-RESULT |
-| #3662 | thorfinn | vel-asinh scale=0.5/1.0 | **W&B win val=76.15**; awaiting SENPAI-RESULT |
-| #3679 | alphonse | Huber δ sweep (0.5, 0.3) | Pod active (iter 167) after rate-limit recovery |
-| #3723 | tanjiro | SwiGLU MLP activation | Recently assigned; training in progress |
-| **#3766** | **edward** | **DropPath stochastic depth (0.1)** | **Newly assigned** |
-| **#3770** | **frieren** | **Mixup augmentation (α=0.2)** | **Newly assigned** |
+| #3766 | edward | DropPath stochastic depth (rate=0.1) | Running |
+| #3770 | frieren | Mixup augmentation (α=0.2) | Running |
 
 ## Confirmed winners (merged)
 
@@ -40,9 +53,10 @@ Both pods confirmed running assignments at 07:24 UTC. Claude will invoke again a
 | #3186 (fern) | EMA weights decay=0.999 | 121.685 | −11.10% | |
 | #3366 (fern) | EMA + grad_clip=5 + Huber δ=1.0 | 94.4199 | −22.4% | |
 | #3474 (alphonse) | EMA decay=0.99 | 90.6131 | −4.0% | |
-| **#3475 (askeladd)** | **asinh-pressure (scale=1.0)** | **81.9754** | **−9.53%** | Every val split improves |
+| #3475 (askeladd) | asinh-pressure (scale=1.0) | 81.9754 | −9.53% | Every split improved |
+| **#3723 (tanjiro)** | **SwiGLU param-matched MLP** | **66.6130** | **−18.74%** | **Biggest single win; gating mechanism, not params; every split −13-24%** |
 
-## Closed PRs (all rounds)
+## Closed PRs — All Rounds
 
 | PR | Student | Hypothesis | Best val | Verdict |
 |---|---|---|---|---|
@@ -55,48 +69,48 @@ Both pods confirmed running assignments at 07:24 UTC. Claude will invoke again a
 | #3577 | tanjiro | slice_num=128 (old stack) | 101.18 | CLOSED — stale |
 | #3543 | alphonse | ema-decay-push (0.98-0.95) | 90.84 | CLOSED — exhausted |
 | #3664 | tanjiro | slice_num=128 on asinh | 90.77 | CLOSED — wall-clock |
-| #3660 | frieren | re-sinusoidal-corrected | 96.85 | CLOSED — +18% regression (axis exhausted × 2) |
-| **#3663** | **edward** | **dropout 0.05 + v2 0.025** | **83.49 (v2)** | **CLOSED — axis non-monotone; reg. constraint ≠ co-adaptation** |
+| #3660 | frieren | re-sinusoidal-corrected | 96.85 | CLOSED — +18% regression |
+| #3663 | edward | dropout 0.025 + 0.05 | 83.49 | CLOSED — axis non-monotone |
+| #3662 | thorfinn | vel-asinh scale=0.5 | 76.15 | CLOSED — beat old baseline; re-testing on SwiGLU |
+| #3661 | nezuko | wd=1e-3 | 79.71 | CLOSED — beat old baseline; re-testing on SwiGLU |
+| #3679 | alphonse | Huber δ=0.5 | 80.85 | CLOSED — beat old baseline; re-testing on SwiGLU |
+| #3659 | askeladd | asinh scale=1.5 | 82.16 | CLOSED — scale=1.0 optimal |
+| #3649 | fern | n_head=2 (pre-asinh) | 86.78 | CLOSED — merge conflict; re-testing on SwiGLU |
 
 ## Key findings (cumulative)
 
-### Optimization stack
+### Optimization stack (Rounds 1-3)
 EMA → EMA+clip+Huber → decay=0.99: 136.89 → 90.61 (−33.8%). EMA decay axis exhausted below 0.99.
 
-### Target-side transform (compound)
-- **asinh(pressure) scale=1.0** → 81.97 (−9.53%). Scale=1.0 confirmed optimal by scale-sweep.
-- **vel-asinh scale=0.5** (#3662, W&B pending SENPAI-RESULT) → val~76.15 (−7.1% further improvement)
+### Target-side transforms (Rounds 4-5)
+- **asinh(pressure) scale=1.0** → 81.97 (−9.53%). Scale=1.0 confirmed optimal.
+- **vel-asinh scale=0.5** → 76.15 on old stack (−7.1%). Mechanism confirmed real. Re-testing on SwiGLU (#3789).
 
-### Regularization
-- **wd=1e-3** (#3661, W&B pending SENPAI-RESULT) → val~79.71 (−2.77%)
-- **Dropout** (0.025, 0.05): exhausted. Non-monotone; the binding constraint is sample-efficiency on small-support splits, not feature co-adaptation.
+### Architecture — BREAKTHROUGH (Round 5/6)
+- **SwiGLU param-matched MLP** (PR #3723) → val=66.61 (−18.74%). Largest single improvement. Gating mechanism (not params) is the win — data-dependent channel selection per MLP block, each CFD node independently decides what features to use.
 
-### Falsified axes
-- **EMA decay** < 0.99: all regress
-- **Depth** n_layers=6: wall-clock bound
-- **MLP width** mlp_ratio=4: wall-clock bound
-- **slice_num=128** (pre- and post-asinh): wall-clock bound (structural, 4× attention cost)
-- **n_head=8**: +20% regression; n_head=2 still running
-- **sinusoidal Re-embed** (buggy + corrected): +44% and +18% regressions
-- **p_surf_weight** (loss channel weighting): gradient explosion
-- **asinh scale > 1.0**: scale=1.5 tied, scale=2.0 +2%; scale=1.0 optimal
-- **Dropout**: mechanism non-monotone across 0.025-0.05 range
+### Confirmed real on old stack, pending re-test on SwiGLU
+- **wd=1e-3** (nezuko): −2.77%. Re-testing (#3790).
+- **Huber δ=0.5** (alphonse): −1.37%. Re-testing (#3793).
+- **n_head=2** (fern): −4.2% on OLD pre-asinh stack. Re-testing (#3794).
+
+### Falsified axes (closed)
+EMA decay < 0.99, depth n_layers=6, mlp_ratio>2, slice_num=128 (both stacks), sinusoidal Re-embed (both normalizations), p_surf_weight, feature dropout (0.025-0.05), asinh scale > 1.0, n_head=8.
 
 ## Strategic outlook
 
-**Target**: val < 74. Imminent path:
-1. **vel-asinh** (#3662 thorfinn) → new baseline ~76.15
-2. **wd=1e-3** (#3661 nezuko) → could compound with new baseline → ~74
-3. **Huber δ** (#3679 alphonse) → expected 1-3% on top of any new baseline
-4. **DropPath** (#3766 edward) → expected 0.5-1.5% OOD gain
-5. **Mixup** (#3770 frieren) → expected 0.5-2% OOD gain, especially val_re_rand
-6. **SwiGLU** (#3723 tanjiro) → expected 1-3% from gated MLP
+**Target**: val < 60. Path:
+1. **vel-asinh compound** (#3789): if −7.1% on old stack holds on SwiGLU → val ≈ 62
+2. **wd compound** (#3790): if −2.77% holds → val ≈ 64.8 (on its own), possibly compounding with vel-asinh
+3. **SwiGLU-all-MLPs** (#3795): preprocess/readout gating could unlock 1-2% more
+4. **n_head=2** (#3794): −4.2% on old stack; if holds on SwiGLU → val ≈ 63.9
+5. **vel-scale < 0.5** (#3796): may unlock 1-2% additional
 
-If vel-asinh + wd compound → baseline ~73.5 → this is very close to val < 70 with further stacking.
+If vel-asinh + wd + Huber-δ compound: 66.61 × (1−0.071) × (1−0.028) × (1−0.014) ≈ 60.4.
 
 ## Operational notes
 
-- **GitHub rate limits**: student gh CLI pods hit HTTP 403 repeatedly 05:00-06:40 UTC. Recovery confirmed at 07:24 UTC (all pods see assignments). Monitor for recurrence.
-- **data/scoring.py NaN bug**: cruise=NaN fleet-wide. Known.
-- Per-run budget: 30 min wall clock, 50 epoch cap (~14 epochs).
-- **Zero idle students**: 8 WIP PRs. All pods active.
+- **GitHub REST rate limit exhausted** (07:43 UTC, resets ~08:37 UTC). GraphQL: 2710/5000 remaining. PRs created via GraphQL successfully.
+- **data/scoring.py NaN bug**: cruise=NaN fleet-wide.
+- Per-run budget: 30 min wall clock, 50 epoch cap (~13 epochs with SwiGLU +6.7% per-epoch overhead).
+- **Zero idle students**: 8 WIP PRs (#3766, #3770, #3789-#3790, #3793-#3796).
