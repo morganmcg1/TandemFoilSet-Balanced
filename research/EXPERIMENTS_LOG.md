@@ -1,5 +1,88 @@
 # SENPAI Research Results
 
+## 2026-05-16 17:05 — #3958 thorfinn / #3913 edward CLOSED; #4056 thorfinn / #4057 edward R10 assigned
+
+### #3958 thorfinn — Lion wd sweep at lr=1e-4 (CLOSED — informative null vs new baseline)
+
+- Branch: `willowpai2i48h5-thorfinn/r8-wd-sweep`
+- Hypothesis: At lr=1e-4, optimal Lion wd is lower than the lr=5e-5 tuned value of 1e-3.
+
+| Arm | wd | W&B run | val_avg | test_avg | vs #3976 BL (63.05) |
+|-----|----|---------|---------|----------|---------------------|
+| A (ctrl) | 1e-3 | `54d2xdqz` | 65.93 | 57.34 | +2.88 worse |
+| **B (best)** | **5e-4** | **`x9vlv88g`** | **64.79** | **56.54** | **+1.74 worse** |
+| C | 2e-3 | `04uk731r` | 66.04 | 58.34 | +2.99 worse |
+
+- Analysis: Hypothesis partially confirmed (wd=5e-4 beats wd=1e-3 ctrl) but ALL arms above the new baseline (val 63.05 from PR #3976 lr=1.5e-4). The wd sweep was vs #3843/3748 substrate; new baseline uses lr=1.5e-4 which wasn't tested. LR-wd coupling insight valid: effective decay ∝ lr×wd. At lr=1e-4, wd=5e-4 recalibrates toward the effective decay tuned at lr=5e-5 with wd=1e-3. **Whether wd=5e-4 compounds with lr=1.5e-4 is untested but lower priority than R10/R11 round.**
+
+### #3913 edward — Re-extremity WeightedRandomSampler (CLOSED — informative null, hypothesis disconfirmed)
+
+- Branch: `willowpai2i48h5-edward/r8-re-sampler`
+- Hypothesis: Oversampling extreme-Re training samples should improve re_rand OOD generalization.
+
+| Arm | alpha | lr | W&B run | val_avg | test_avg | vs #3976 BL (63.05) |
+|-----|-------|----|---------|---------|----------|---------------------|
+| **A (ctrl)** | **0.0** | **1e-4** | **`qaq2728x`** | **64.53** | **56.13** | +1.48 worse (within noise) |
+| B | 0.5 | 1e-4 | `447v6w7g` | 70.02 | 61.07 | +6.97 worse |
+| C | 1.0 | 1e-4 | `5ull7s2s` | 75.44 | 65.67 | +12.39 worse |
+
+- Per-split: re_rand split (the OOD target) degrades monotonically with alpha — alpha=0.5 +5.99 test re_rand, alpha=1.0 +12.37 test re_rand. Every other split also worsens.
+- Analysis: **Disconfirmed cleanly.** Training Re distribution is already well-covered by the balanced-domain sampler. Extremity oversampling starves the bulk (ESS drops from 1499 to ~1268 at alpha=0.5) and overfits extremes, hurting all splits including re_rand. OOD re_rand failure mode is NOT extreme-Re under-coverage — it's geometry×Re interaction, which reweighting cannot fix. **Strong negative result — valuable for paper (rules out sampling-based Re OOD fix).**
+
+### R10 assignments (this session)
+
+| PR | Student | Hypothesis | Expected |
+|----|---------|------------|---------|
+| #4056 | thorfinn | R10 H42: Gradient clip sweep {0.5, 1.0, 2.0} at lr=1.5e-4 | −0 to −2 val mean; variance reduction |
+| #4057 | edward | R10 H45: Surface-biased slice routing in PhysicsAttention | −1 to −3 val; camber_rc target |
+
+---
+
+## 2026-05-16 16:30 — #3976 frieren MERGED (new best val 63.05 / test 53.60); R9 closures; R10/R11 round assigned
+
+### #3976 frieren — Lion lr=1.5e-4 push (MERGED — **new best val 63.0492 / test 53.6049**)
+
+- Branch: `willowpai2i48h5-frieren/r9-lion-lr-push`
+- Hypothesis: Lion lr=1.5e-4 continues the monotone trend from lr=1e-4 (val 65.41). Optimal LR for this task is above 1e-4.
+- W&B run: `jurrwig2`
+
+| Arm | lr | W&B run | val_avg | test_avg | vs #3954 BL (64.68) |
+|-----|----|---------|---------|----------|---------------------|
+| A (ctrl) | 1e-4 | — | 64.68 | 56.17 | reference |
+| **B (WINNER)** | **1.5e-4** | **`jurrwig2`** | **63.0492** | **53.6049** | **−1.63 val / −2.57 test** |
+| C | 2e-4 | — | 63.84 | — | inflects back up |
+
+Per-split:
+| Split | val | test |
+|-------|-----|------|
+| single_in_dist | 64.45 | 55.69 |
+| geom_camber_rc | 80.74 | 70.55 |
+| geom_camber_cruise | 43.48 | 35.48 |
+| re_rand | 63.53 | 52.70 |
+| **avg** | **63.0492** | **53.6049** |
+
+- Analysis: **LR inflection confirmed at [1.2e-4, 1.7e-4].** Full monotone trend: val(2e-5)=78.93 → val(5e-5)=69.69 → val(1e-4)=65.41 → val(1.5e-4)=63.05 → val(2e-4)=63.84. Largest single improvement since Lion optimizer. Paper finding #14 updated: optimum in [1.2e-4, 1.7e-4], not 1e-4.
+
+### R9 closures (informative nulls)
+
+| PR | Student | Result | Finding |
+|----|---------|--------|---------|
+| #3955 | alphonse | n_power_iter=1 optimal; higher = over-regularizes | n_power_iter sweep exhausted; keep n_power_iter=1 |
+| #3977 | fern | Stochastic depth hurts at 5-block depth (+val) | Residual pathways at this depth are already shallow; DropPath removes capacity needed for fit |
+| #3978 | askeladd | MixUp catastrophic (+23-27 val) | Non-physical blended targets; FiLM log(Re) conditioning gets mixed too. Paper finding #19. |
+
+### R10/R11 assignments (this session)
+
+| PR | Student | Hypothesis | Expected |
+|----|---------|------------|---------|
+| #4015 | nezuko | R10 H39: Layer scale init {ctrl, 1e-4, 1e-5} on Transolver blocks | −1 to −3 val |
+| #4044 | alphonse | R10 H40: Multi-FiLM all 11 global params | −2 to −4 val; camber_rc target |
+| #4045 | fern | R10 H44: Model capacity n_hidden {192, 256} | −1 to −4 val |
+| #4046 | askeladd | R10 H43: p_weight {2x, 3x} pressure upweighting | −1 to −3 val |
+| #4049 | frieren | R11 H46: spec_norm at lr=1.5e-4 | −0 to −2 val; tests finding #18 extension |
+
+---
+
 ## 2026-05-16 15:25 — nezuko #3954 MERGED (new baseline val 64.68 / test 56.17); R8 R9 arms running
 
 ### #3954 nezuko — spec_norm output + lr=1e-4 combined (MERGED — **new baseline val 64.6812 / test 56.1746**)

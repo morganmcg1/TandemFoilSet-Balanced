@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~16:45 UTC) — #3976 frieren MERGED (val 63.05 / test 53.60, lr=1.5e-4 inflection confirmed); closed 4 informative nulls (#3955 alphonse, #3977 fern, #3978 askeladd, + see below); 5 R10/R11 assignments; 8/8 staffed.
+- **Date:** 2026-05-16 (~17:10 UTC) — #3958 thorfinn / #3913 edward CLOSED (informative nulls); #4056 thorfinn gradclip / #4057 edward surfrouting R10 assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -42,26 +42,26 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| **#4049** | **frieren** | **R11 H46: spec_norm at lr=1.5e-4 (2-arm)** | **Just assigned** |
-| **#4044** | **alphonse** | **R10 H40: Multi-param FiLM (all 11 global params)** | **Just assigned** |
-| **#4045** | **fern** | **R10 H44: Model capacity n_hidden {192, 256}** | **Just assigned** |
-| **#4046** | **askeladd** | **R10 H43: Pressure channel upweighting {2×, 3×}** | **Just assigned** |
-| **#4015** | **nezuko** | **R10 H39: Layer scale init {1e-4, 1e-5}** | WIP — just assigned ~1h ago |
-| #3958 | thorfinn | R8 H35: wd sweep — nudged to post terminal (null) | WIP — awaiting terminal |
-| #3913 | edward | R8 H31: Re-sampler — nudged to post terminal (null) | WIP — awaiting terminal |
-| #3957 | tanjiro | R8 H34: T_max=20 running (informative) | WIP — near terminal |
+| **#4056** | **thorfinn** | **R10 H42: Gradient clip sweep {0.5, 1.0, 2.0} at lr=1.5e-4** | **Just assigned** |
+| **#4057** | **edward** | **R10 H45: Surface-biased slice routing in PhysicsAttention** | **Just assigned** |
+| #4049 | frieren | R11 H46: spec_norm at lr=1.5e-4 (2-arm) | WIP |
+| #4044 | alphonse | R10 H40: Multi-param FiLM (all 11 global params) | WIP |
+| #4045 | fern | R10 H44: Model capacity n_hidden {192, 256} | WIP |
+| #4046 | askeladd | R10 H43: Pressure channel upweighting {2×, 3×} | WIP |
+| #4015 | nezuko | R10 H39: Layer scale init {1e-4, 1e-5} | WIP |
+| #3957 | tanjiro | R8 H34: T_max=20 still running (T_max=10/14 complete, worse than BL) | Near terminal |
 
 ## Recent closures (informative nulls — this session)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
-| #3955 | alphonse | n_power_iter=1 optimal; higher = over-regularizes | CLOSED |
+| #3958 | thorfinn | wd=5e-4 best (val 64.79) — above new BL 63.05 | CLOSED |
+| #3913 | edward | Re-sampler monotonically hurts; alpha=0 ctrl=64.53 | CLOSED |
 | #3977 | fern | Stochastic depth hurts at 5-block depth | CLOSED |
 | #3978 | askeladd | MixUp catastrophic (+23-27 val) — non-physical targets | CLOSED |
-| #3913 | edward | Pending terminal — alpha=0 reproduces BL, alpha=0.5 hurts | Awaiting |
-| #3958 | thorfinn | Pending terminal — wd=5e-4 above new BL 63.05 | Awaiting |
+| #3955 | alphonse | n_power_iter=1 optimal; higher = over-regularizes | CLOSED |
 
-## R10/R11 hypothesis map (new round)
+## R10/R11 hypothesis map (current round)
 
 | Axis | Hypothesis | PR / student | Expected outcome |
 |------|-----------|-------------|-----------------|
@@ -69,7 +69,16 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 | Architecture capacity | n_hidden 192/256 vs 128 | #4045 fern | −1 to −4 val |
 | Metric alignment | p_weight {2x, 3x} Huber loss | #4046 askeladd | −1 to −3 val |
 | Architecture stability | Layer scale init {1e-4, 1e-5} | #4015 nezuko | −1 to −3 val |
-| Spec_norm at new LR | spec_norm at lr=1.5e-4 | #4049 frieren | −0 to −2 val; determines if finding #18 extends |
+| Spec_norm at new LR | spec_norm at lr=1.5e-4 | #4049 frieren | −0 to −2 val; tests finding #18 |
+| Optimizer stability | Grad clip {0.5, 1.0, 2.0} at lr=1.5e-4 | #4056 thorfinn | −0 to −2 val mean; variance reduction |
+| Architecture routing | Surface-biased PhysicsAttention routing | #4057 edward | −1 to −3 val; camber_rc target |
+
+## Tanjiro #3957 T_max sweep — current status
+
+T_max=10 arms: val 76.72 / 78.76 (both finished, both worse than BL).
+T_max=14 ctrl: val 68.75 / 70.64 (finished, at lr=1e-4 substrate — these are expected to be above the new lr=1.5e-4 BL).
+T_max=20: still running (~step 3055, mid-convergence, val 81.48 — may come down, but trajectory looks above BL).
+**Expected closure: informative null on T_max sweep.** T_max=14 confirmed as optimal already in merged baseline.
 
 ## Key findings (cumulative, 19)
 
@@ -95,7 +104,7 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 
 ## Next priorities
 
-1. **Monitor R10/R11 hypotheses** — multi-FiLM (H40) and capacity (H44) have highest expected upside
-2. **thorfinn/edward terminal results** — close as informative when posted
-3. **tanjiro T_max=20** — close as informative when terminal
-4. **Watch for camber_rc breakthrough** — weakest split (val 80.74); multi-FiLM (alphonse) is the strongest candidate
+1. **Monitor R10/R11 hypotheses** — multi-FiLM (H40) and capacity (H44) have highest expected upside; camber_rc split (val 80.74) remains the weakest target
+2. **Watch tanjiro #3957 T_max=20** — close as informative when terminal (T_max=20 unlikely to beat BL based on mid-run trajectory)
+3. **Unassigned R10 hypotheses** (if more students become idle): H41 SWA (Priority 6 — may overlap with EMA)
+4. **If current R10/R11 round produces winners**: investigate whether multi-FiLM + capacity compound (both target different bottlenecks), and whether wd recalibration (wd=5e-4 at lr=1.5e-4) is worth testing after specnorm result is known
