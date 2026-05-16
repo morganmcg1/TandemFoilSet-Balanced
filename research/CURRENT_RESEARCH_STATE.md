@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 01:40 after EMA merge + nezuko decay sweep assignment)
+- **Date:** 2026-05-16 (updated 02:30 after edward Cauchy robust loss assignment)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 61.43`, `test_avg/mae_surf_p (excl cruise) = 60.92`
@@ -47,6 +47,7 @@ Old launch baseline: 135.30. Total gain: −54.6% over 4 compounding improvement
 | **#3501** | **thorfinn** | **SOAP surf_weight sweep {5, 10, 20}** | **Optimization** | **WIP — running SOAP-baseline arms; notify when done** |
 | **#3415** | **frieren** | **Log-Re sinusoidal (SOAP stack, seed=42)** | **Inputs** | **WIP — arm1 done (77.88), variants in progress** |
 | **#3316** | **fern** | **Huber beta sweep (0.5/1.0/2.0) on SOAP stack** | **Loss tuning** | **WIP — rebased, arms running** |
+| **#3612** | **edward** | **Cauchy robust loss sweep (c=0.5, 1.0) on EMA+SOAP** | **Loss tuning** | **WIP (new)** |
 
 Note: PRs #3493, #3495, #3497, #3501 are running against the SOAP-without-EMA baseline. Advisor has notified all 4 students about the new EMA canonical. Within-PR comparison is still valid for identifying the best hyperparameter setting; winners will be asked to rebase onto EMA+SOAP stack.
 

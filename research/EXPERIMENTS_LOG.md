@@ -535,3 +535,17 @@ Test split breakdown: not separately logged to W&B (from PR comment only).
 **Decision: CLOSED.** Variant regresses within the PR (+1.9% worse than baseline on SOAP). The direction is definitively falsified. With SOAP's curvature-aware preconditioning, the per-channel upweighting introduces redundant gradient imbalance that SOAP already compensates for. The mechanism that led to channel-loss upweighting (MSE's uniform channel treatment) no longer applies with SOAP's layer-wise preconditioner.
 
 **Historical note:** The round-1 p×3 attempt on MSE (PR #3152 original) showed only +0.6% noise. Both MSE and SOAP iterations confirm the channel-upweighting direction is not productive for this task. The physical-units loss normalization direction (edward's own suggestion from round 1) remains an open hypothesis for a future round.
+
+---
+
+## 2026-05-16 02:30 — PR #3612 (edward): Cauchy robust loss sweep (c=0.5, 1.0) — **ASSIGNED**
+
+- Branch: `willowpai2i48h3-edward/cauchy-robust-loss`
+- W&B group: `cauchy-robust-loss`
+- 3 arms, seed=42: arm1-baseline-huber (control), arm2-cauchy-c0.5, arm3-cauchy-c1.0
+
+**Hypothesis:** Cauchy loss ρ(r) = c²/2 × log(1 + (r/c)²) has heavier tails than Huber — asymptotically log(r²) vs linear — so it more aggressively discounts extreme outlier pressure samples at turbulent wakes and leading-edge stagnation points. This may improve OOD generalization (re_rand, geom_camber_rc) where the MSE→Huber transition already showed a large gain.
+
+**Baseline target:** val_avg/mae_surf_p < 61.43 (run 4iw1n8xw, EMA+SOAP+Huber canonical)
+
+**Status:** WIP — waiting for student to run arms.
