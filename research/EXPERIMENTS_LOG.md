@@ -215,7 +215,38 @@
 
 ---
 
-## 2026-05-16 01:25 — PR #3536: eta_min=1e-5 on cosine annealing [SENT BACK — REBASE FOR COMPOUND TEST]
+## 2026-05-16 06:00 — PR #3536: eta_min=1e-5 compound retest on SwiGLU baseline [CLOSED — NEGATIVE ON SwiGLU]
+- Branch: `charliepai2i24h2-tanjiro/eta-min-1e-5-rebased-r5`
+- Student: charliepai2i24h2-tanjiro
+- Hypothesis: Raise CosineAnnealingLR `eta_min` from 0 to 1e-5 to maintain productive lr at cosine tail. Previously confirmed on GELU baseline (95.835 vs 96.667). Compound retest on SwiGLU 192 baseline (75.578).
+
+### Results table
+
+| Metric | eta_min=1e-5 (SwiGLU) | Baseline 75.578 | Δ |
+|--------|----------------------|-----------------|---|
+| `val_avg/mae_surf_p` (best @ ep 12) | **80.576** | **75.578** | **+6.6% WORSE** |
+| `test_avg/mae_surf_p` | 71.442 | 66.740 | +7.1% worse |
+| val single_in_dist | 91.267 | — | — |
+| val geom_camber_rc | 90.797 | — | — |
+| val geom_camber_cruise | 63.312 | — | **+12.71%** (worst regression) |
+| val re_rand | 76.930 | — | — |
+| Best epoch | 12 / 14 | — | (peaked at E12, regressed E13) |
+
+### Analysis
+- Hypothesis **refuted** on SwiGLU baseline. eta_min=1e-5 was beneficial on the GELU model (helped the cosine tail converge productively) but is clearly harmful on SwiGLU 192.
+- **Mechanism**: The SwiGLU model's gated FFN converges to a sharper, better local optimum with lr→0. The non-zero lr floor (1e-5) acts as a perturbation that pushes the model off this optimum in the final cosine epochs.
+- **geom_camber_cruise regression (+12.71%)** is the clearest signature — this split had been the strongest beneficiary of SwiGLU gating. Forcing continued gradient steps at lr=1e-5 degrades the geometric generalization that SwiGLU gating enables.
+- The eta_min lever behaves oppositely for gated vs ungated FFNs. GELU needed the tail to keep learning; SwiGLU needs the tail to settle.
+- **Best epoch is E12** (not E14 as with GELU), further confirming premature saturation under the non-zero floor.
+- Artifacts: `models/model-eta-min-1e-5-rebased-20260516-043254/metrics.jsonl`
+
+### Decision
+- **CLOSED.** eta_min axis dead on SwiGLU — do not re-test. The lever is parameterization-dependent and harmful here.
+- Tanjiro reassigned to new hypothesis.
+
+---
+
+## 2026-05-16 01:25 — PR #3536 (ROUND 1): eta_min=1e-5 on cosine annealing [SENT BACK — REBASE FOR COMPOUND TEST]
 - Branch: `charliepai2i24h2-tanjiro/eta-min-1e-5-rebased-r5`
 - Student: charliepai2i24h2-tanjiro
 - Hypothesis: Raise CosineAnnealingLR `eta_min` from 0 to 1e-5 so the schedule tail keeps a productive lr. Predicted 0.5–2% val improvement.

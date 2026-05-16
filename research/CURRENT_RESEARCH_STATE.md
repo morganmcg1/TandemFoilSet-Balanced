@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 05:35 (SwiGLU full mlp_ratio=2 PR #3654 merged — new baseline 75.578; all in-flight PRs notified; frieren assigned GEGLU ablation PR #3727)
+- **Last updated:** 2026-05-16 06:00 (PR #3536 eta_min=1e-5 closed as negative on SwiGLU baseline — +6.6% regression; tanjiro now idle and being reassigned; PRs #3655 and #3607 sent back for rebase)
 - **Most recent research direction from human researcher team:** none (no open issues — verified 05:30Z).
 - **Current best (merged):** `val_avg/mae_surf_p` = **75.578** (PR #3654 SwiGLU hidden_inner=192)
 - **GH rate-limit status:** ~2200/5000 remaining.
@@ -9,14 +9,14 @@
 
 | PR | Student | Hypothesis | State | Notes |
 |----|---------|-----------|-------|-------|
-| #3536 | tanjiro | eta_min=1e-5 (compound retest on SwiGLU) | WIP | Notified new baseline 75.578 |
-| #3607 | thorfinn | FFN dropout p=0.05 (SwiGLU, rebased) | WIP | Notified new baseline 75.578 |
+| #3536 | tanjiro | eta_min=1e-5 (compound retest on SwiGLU) | CLOSED — NEGATIVE (+6.6% val regression on SwiGLU) | eta_min lever inverted on gated FFN; tanjiro reassigning |
+| #3607 | thorfinn | FFN dropout p=0.05 (SwiGLU, rebased) | WIP (sent back for rebase onto current HEAD) | Merge conflict; rebase instructions posted |
 | #3639 | alphonse | EMA / Polyak α=0.999 (SwiGLU) | WIP | Notified new baseline 75.578 |
 | #3643 | askeladd | n_head=2 (head_dim=48, SwiGLU) | WIP | Notified new baseline 75.578 |
 | #3645 | edward | surf_weight=10→5 (SwiGLU) | WIP | Notified new baseline 75.578 |
 | #3646 | fern | stochastic depth DropPath p=0.1 (SwiGLU) | WIP | Notified new baseline 75.578 |
-| #3655 | nezuko | RFF σ=3 + learnable-σ 2-arm (SwiGLU) | WIP (pod stuck in watchdog loop since 04:22Z) | Notified new baseline 75.578; pod has not committed results |
-| #3727 | frieren | GEGLU ablation: SiLU→GELU gate at hidden_inner=192 | WIP (newly assigned) | Gate-function ablation on new baseline |
+| #3655 | nezuko | RFF σ=3 + learnable-σ 2-arm (SwiGLU) | WIP (sent back for rebase onto current HEAD) | Merge conflict; rebase instructions posted |
+| #3727 | frieren | GEGLU ablation: SiLU→GELU gate at hidden_inner=192 | WIP | Gate-function ablation on new baseline |
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
@@ -47,8 +47,8 @@ Key insight from #3654: **Gating does most of the work** — ~83% of the total S
 
 ### Tier 1 (gate-function ablation and high-value compounds on SwiGLU 192)
 1. **GEGLU at hidden_inner=192** — frieren (#3727). Is the win from gating per se or SiLU specifically? Direct head-to-head SiLU vs GELU at matched hidden_inner=192.
-2. **eta_min=1e-5 on SwiGLU** — tanjiro (#3536). In isolation on OLD baseline: 95.835. Should compound orthogonally on SwiGLU 192.
-3. **SwiGLU + dropout p=0.05** — thorfinn (#3607). Rebase onto SwiGLU stack; test FFN dropout at p=0.05.
+2. **SwiGLU + dropout p=0.05** — thorfinn (#3607, rebase in progress). Rebase onto SwiGLU stack; test FFN dropout at p=0.05.
+3. **hidden_inner=256 capacity probe** — tanjiro (being assigned). Does capacity scaling continue? 128→192 gave −3.6%; 192→256 (+33% more) is the natural bracket. eta_min axis is DEAD on SwiGLU (confirmed harmful, #3536 closed).
 
 ### Tier 2 (regularization + optimization axes)
 4. **EMA/Polyak α=0.999** — alphonse (#3639). Orthogonal to FFN parameterization.
@@ -61,8 +61,8 @@ Key insight from #3654: **Gating does most of the work** — ~83% of the total S
 
 ## Open questions (on new SwiGLU 192 baseline)
 - Is the SwiGLU win from gating or SiLU specifically? (frieren GEGLU, #3727)
-- Does hidden_inner=256 continue the capacity scaling trend? (queued, not yet assigned)
-- Does eta_min=1e-5 compound orthogonally on SwiGLU 192? (tanjiro #3536)
+- Does hidden_inner=256 continue the capacity scaling trend? (tanjiro — being assigned)
+- ~~Does eta_min=1e-5 compound orthogonally on SwiGLU 192?~~ **ANSWERED: NO — harmful on gated FFN. eta_min axis dead.**
 - Does dropout p=0.05 help geom_cruise without hurting single_in_dist? (thorfinn #3607)
 - Does EMA smooth the cosine tail on the SwiGLU 192 model? (alphonse #3639)
 - Does drop-path regularize productively on the new FFN? (fern #3646)
@@ -72,6 +72,7 @@ Key insight from #3654: **Gating does most of the work** — ~83% of the total S
 - What is the theoretical floor? 75.578 = −35.2% from original baseline. A full 14-epoch run of hidden_inner=192 might reach ~73-74.
 
 ## Closed/regressed (cumulative)
+- #3536 tanjiro eta_min=1e-5 on SwiGLU: **+6.6%** (lever INVERTED on gated FFN — SwiGLU needs lr→0 to settle; eta_min floor is harmful)
 - #3579 alphonse lr=1e-3: +2.47%
 - #3569 fern wd=5e-4: +1.30%
 - #3564 edward n_layers=4: +2.71%
