@@ -525,7 +525,7 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(
-    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
+    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.97)
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17)
 
