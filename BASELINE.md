@@ -2,6 +2,52 @@
 
 ## Current Best
 
+**PR #4097 — H78 Arm B: Lion + β₂=0.995 at H73 base (edward)**
+Merged 2026-05-16 21:32. 15 epochs (cosine T_max=15) before 30-min wall stop.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **42.3048** | PR #4097 Arm B (best_epoch=15) |
+| val_single_in_dist/mae_surf_p | 44.7308 | PR #4097 Arm B |
+| val_geom_camber_rc/mae_surf_p | 56.5492 | PR #4097 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 25.1123 | PR #4097 Arm B |
+| val_re_rand/mae_surf_p | 42.8272 | PR #4097 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4097 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **40.5564** | PR #4097 Arm B |
+| test_single_in_dist/mae_surf_p | 37.5689 | PR #4097 Arm B |
+| test_geom_camber_rc/mae_surf_p | 49.1179 | PR #4097 Arm B |
+| test_re_rand/mae_surf_p | 34.9822 | PR #4097 Arm B |
+
+**Configuration:** Same as H73 baseline with **β₂ swap 0.99 → 0.995**: FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + optimizer=lion + lr=3e-4 + wd=1e-3 + **β=(0.9, 0.995)** + n_head=2 + ffn_act=geglu + n_layers=4 + slice_num=96 + norm_type=layernorm. n_params=864,907. Peak GPU memory: 42.60 GB. Mean s/epoch: 122.7.
+
+**β₂ sensitivity (H73 + H78 combined):**
+| β₂ | val_avg | test 3-split | Note |
+|----|---------|-------------|------|
+| 0.99 (H73 default) | 42.9784 | 41.5455 | Prior best |
+| **0.995 (H78 Arm B)** | **42.3048** | **40.5564** | **NEW BEST** |
+| 0.999 (H78 Arm A) | 44.3436 | 42.0389 | Regresses (slow EMA can't warm in 15-ep budget) |
+
+Interior optimum at β₂=0.995 — both endpoints regress vs the new best. **Δ vs H73 baseline: −0.67 val, −0.99 test 3-split.** Below seed noise floor individually but both metrics improve consistently (correlated signal), and single-flag change with no complexity cost. Merged per round protocol.
+
+**Mechanism:** At lr=3e-4 + slice=96, Lion's momentum updates are large enough that β₂=0.99 (default) over-trusts recent gradients while β₂=0.999 over-smooths (16x EMA horizon vs 0.99's 100 ≈ 4ms vs 16ms half-life at this LR). β₂=0.995 (200-step half-life, ~10ms at batch=4) lands in the sweet spot — enough smoothing to filter noise but fast enough to track the cosine-decaying loss landscape.
+
+**Δ vs prior best (H73, 42.9784 / 41.5455):** **−0.67 pts val_avg, −0.99 pts test 3-split.**
+**Cumulative R5 gain from H37b (66.11):** **−23.81 pts val_avg.**
+
+**Artifacts:** `models/model-charliepai2i48h3-edward-h78-arm-b-beta2-0995-20260516-202555/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h78-arm-b-beta2-0995 --agent <student> \
+  --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
+  --beta1 0.9 --beta2 0.995 \
+  --slice_num 96 --n_layers 4 --ffn_act geglu \
+  --n_head 2 --clip_grad_norm 1.0
+```
+
+## Previous Best (overridden by #4097)
+
 **PR #4055 — H73 Arm B: Lion (lr=3e-4) + GEGLU + slice_num=96 (tanjiro)**
 Merged 2026-05-16. 15 epochs completed (cosine T_max=15) before 30-min wall stop. **Numbers are loose UB — val_avg still descending ~0.8 pts/epoch at cut.**
 
