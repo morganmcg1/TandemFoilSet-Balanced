@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import subprocess
 import time
@@ -190,6 +191,13 @@ class TransolverBlock(nn.Module):
 
 
 COND_DIMS = slice(13, 24)  # dims 13-23: log Re, AoAs, NACAs, gap, stagger (11 dims, constant per sample)
+
+# TTA dim layout (confirmed against data/__init__.py + program.md spec):
+#   13: log_Re   14: AoA1 (rad)   15-17: NACA1   18: AoA2 (rad)
+#   19-21: NACA2   22: gap   23: stagger
+AOA_DIMS = (14, 18)                  # both AoAs (foil 1, foil 2)
+COND_OTHER_DIMS = (13, 22, 23)       # log_Re, gap, stagger (skip NACA — categorical-like)
+TANDEM_FLAG_DIM = 22                 # gap == 0 ⇒ single-foil sample
 
 # Bernoulli pressure residual constants. Kinematic Bernoulli is 0.5 * V_inf**2
 # (target p is kinematic, p_actual/ρ in m²/s²). V_inf is recovered from log(Re)
@@ -380,6 +388,7 @@ def update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
 def evaluate_split(
     model, loader, stats, surf_weight, device,
     bernoulli_residual: bool = False, bernoulli_chord_correction: bool = False,
+    tta_k: int = 1, tta_aoa_sigma: float = 0.0, tta_cond_sigma: float = 0.0,
 ) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -391,11 +400,21 @@ def evaluate_split(
     residual ``p - p_B`` before normalization, and the model's denormalized
     prediction has p_B added back before MAE accumulation so the reported MAE
     remains on raw p.
+
+    Test-time augmentation: if ``tta_k > 1``, the model is run ``tta_k`` times
+    with per-sample Gaussian jitter added (in raw input space) to the AoA dims
+    (and optionally to log_Re/gap/stagger), and the resulting predictions are
+    averaged in normalized space. ``tta_aoa_sigma`` is in degrees; AoA dims are
+    stored in radians, so we convert. Jitter is per-sample (constant across
+    nodes) to preserve the per-sample-constant property of the cond features.
+    For single-foil samples (gap == 0), jitter on AoA2/gap/stagger is masked to
+    zero so we don't perturb the encoding-flag zeros.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    aoa_sigma_rad = tta_aoa_sigma * math.pi / 180.0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -424,11 +443,45 @@ def evaluate_split(
                 y_for_norm = y_clean
 
             y_norm = (y_for_norm - stats["y_mean"]) / stats["y_std"]
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                pred = model({"x": x_norm})["preds"]
-            # Compute surface-pressure MAE and the normalized loss in fp32
-            # to avoid loss-of-precision in the aggregation over many nodes.
-            pred = pred.float()
+            if tta_k > 1 and (tta_aoa_sigma > 0 or tta_cond_sigma > 0):
+                B = x.shape[0]
+                # Tandem flag from gap dim; broadcast across nodes via [B, 1].
+                is_tandem = (x[:, 0, TANDEM_FLAG_DIM] != 0).to(x.dtype).view(B, 1)
+                pred_sum = None
+                for _ in range(tta_k):
+                    x_pert = x.clone()
+                    if tta_aoa_sigma > 0:
+                        # Per-sample (not per-node) scalar noise, broadcast across
+                        # the N dim. Preserves the per-sample-constant property of
+                        # the cond features that the model relies on.
+                        aoa1_noise = torch.randn(B, 1, device=x.device, dtype=x.dtype) * aoa_sigma_rad
+                        aoa2_noise = torch.randn(B, 1, device=x.device, dtype=x.dtype) * aoa_sigma_rad
+                        # AoA2 is encoded as 0 for single-foil samples — preserve that signal.
+                        aoa2_noise = aoa2_noise * is_tandem
+                        x_pert[..., AOA_DIMS[0]] = x_pert[..., AOA_DIMS[0]] + aoa1_noise
+                        x_pert[..., AOA_DIMS[1]] = x_pert[..., AOA_DIMS[1]] + aoa2_noise
+                    if tta_cond_sigma > 0:
+                        re_noise = torch.randn(B, 1, device=x.device, dtype=x.dtype) * tta_cond_sigma
+                        gap_noise = torch.randn(B, 1, device=x.device, dtype=x.dtype) * tta_cond_sigma
+                        stag_noise = torch.randn(B, 1, device=x.device, dtype=x.dtype) * tta_cond_sigma
+                        # gap/stagger only meaningful for tandem (zeros for single-foil).
+                        gap_noise = gap_noise * is_tandem
+                        stag_noise = stag_noise * is_tandem
+                        x_pert[..., COND_OTHER_DIMS[0]] = x_pert[..., COND_OTHER_DIMS[0]] + re_noise
+                        x_pert[..., COND_OTHER_DIMS[1]] = x_pert[..., COND_OTHER_DIMS[1]] + gap_noise
+                        x_pert[..., COND_OTHER_DIMS[2]] = x_pert[..., COND_OTHER_DIMS[2]] + stag_noise
+                    x_pert_norm = (x_pert - stats["x_mean"]) / stats["x_std"]
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        pred_k = model({"x": x_pert_norm})["preds"]
+                    pred_k = pred_k.float()
+                    pred_sum = pred_k if pred_sum is None else pred_sum + pred_k
+                pred = pred_sum / tta_k
+            else:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    pred = model({"x": x_norm})["preds"]
+                # Compute surface-pressure MAE and the normalized loss in fp32
+                # to avoid loss-of-precision in the aggregation over many nodes.
+                pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -489,6 +542,10 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    tta_val_metrics: dict | None = None,
+    tta_val_avg: dict | None = None,
+    test_metrics_tta: dict | None = None,
+    test_avg_tta: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -507,6 +564,9 @@ def write_experiment_summary(
         "surf_p_l1_weight": cfg.surf_p_l1_weight,
         "epochs_configured": cfg.epochs,
         "ema_decay": EMA_DECAY,
+        "tta_k": cfg.tta_k,
+        "tta_aoa_sigma_deg": cfg.tta_aoa_sigma,
+        "tta_cond_sigma": cfg.tta_cond_sigma,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -518,6 +578,18 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+    if tta_val_avg is not None and "avg/mae_surf_p" in tta_val_avg:
+        summary["tta_val_avg/mae_surf_p"] = tta_val_avg["avg/mae_surf_p"]
+        if tta_val_metrics is not None:
+            for split_name, m in tta_val_metrics.items():
+                for k, v in m.items():
+                    summary[f"tta_val/{split_name}/{k}"] = v
+    if test_avg_tta is not None and "avg/mae_surf_p" in test_avg_tta:
+        summary["test_tta_avg/mae_surf_p"] = test_avg_tta["avg/mae_surf_p"]
+        if test_metrics_tta is not None:
+            for split_name, m in test_metrics_tta.items():
+                for k, v in m.items():
+                    summary[f"test_tta/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -568,11 +640,28 @@ class Config:
     # Arm B: add a per-node chord-position correction 0.5·(1-cos(2π·x)) to p_B.
     # Only takes effect when bernoulli_residual is also True.
     bernoulli_chord_correction: bool = False
+    # Test-time augmentation. K=1 disables. K>1 runs K eval-time forward passes
+    # with Gaussian jitter on input AoA / log_Re / gap / stagger and averages
+    # predictions. Training stays single-pass.
+    tta_k: int = 1
+    tta_aoa_sigma: float = 0.0  # degrees (converted to rad internally for AoA dims)
+    tta_cond_sigma: float = 0.0  # normalized scale for log_Re/gap/stagger (raw-space units)
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
-MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+# Reserve wall-clock for the final eval. TTA adds K× cost to the post-training
+# val + test eval (single-pass and TTA both run, on val and test), so subtract
+# a small safety margin from the per-epoch training timeout to keep the entire
+# run under SENPAI_TIMEOUT_MINUTES.
+_tta_enabled = cfg.tta_k > 1 and (cfg.tta_aoa_sigma > 0 or cfg.tta_cond_sigma > 0)
+_eval_reserve_min = 0.0
+if _tta_enabled:
+    # Each TTA forward pass costs ~0.1s; final eval runs 4 val + 4 test splits
+    # twice (once single-pass, once TTA-averaged). Reserve ~1 min + 0.4*K min,
+    # which covers K=4 (~2.6 min) and K=8 (~4.2 min) with a small safety margin.
+    _eval_reserve_min = 1.0 + 0.4 * cfg.tta_k
+MAX_TIMEOUT_MIN = max(1.0, DEFAULT_TIMEOUT_MIN - _eval_reserve_min)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -703,6 +792,18 @@ if cfg.bernoulli_residual:
         "y_p_std_ratio": y_p_std_resid / y_p_std_raw,
     })
 
+if cfg.tta_k > 1:
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "tta_setup",
+        "tta_k": cfg.tta_k,
+        "tta_aoa_sigma_deg": cfg.tta_aoa_sigma,
+        "tta_aoa_sigma_rad": cfg.tta_aoa_sigma * math.pi / 180.0,
+        "tta_cond_sigma": cfg.tta_cond_sigma,
+        "tta_aoa_dims": list(AOA_DIMS),
+        "tta_cond_other_dims": list(COND_OTHER_DIMS),
+        "tta_tandem_flag_dim": TANDEM_FLAG_DIM,
+    })
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -796,6 +897,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_mask_mean /= max(n_batches, 1)
 
     # --- Validate (EMA weights) ---
+    # Per-epoch validation uses single-pass eval so that TTA's K× forward
+    # cost does not cut into the training-time budget. TTA is applied once
+    # at the end on the best checkpoint (val + test) for the reported numbers.
     ema_model.eval()
     split_metrics = {
         name: evaluate_split(
@@ -857,8 +961,41 @@ if best_metrics:
     ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     ema_model.eval()
 
+    tta_enabled = cfg.tta_k > 1 and (cfg.tta_aoa_sigma > 0 or cfg.tta_cond_sigma > 0)
+
+    # If TTA is enabled, re-evaluate val on best checkpoint with TTA so we get
+    # an apples-to-apples (same checkpoint) comparison of single-pass vs TTA val.
+    tta_val_metrics = None
+    tta_val_avg = None
+    if tta_enabled:
+        print("\nRe-evaluating val splits with TTA on best checkpoint...")
+        tta_val_metrics = {
+            name: evaluate_split(
+                ema_model, loader, stats, cfg.surf_weight, device,
+                bernoulli_residual=cfg.bernoulli_residual,
+                bernoulli_chord_correction=cfg.bernoulli_chord_correction,
+                tta_k=cfg.tta_k,
+                tta_aoa_sigma=cfg.tta_aoa_sigma,
+                tta_cond_sigma=cfg.tta_cond_sigma,
+            )
+            for name, loader in val_loaders.items()
+        }
+        tta_val_avg = aggregate_splits(tta_val_metrics)
+        print(f"\n  TTA VAL avg_surf_p={tta_val_avg['avg/mae_surf_p']:.4f} (no-TTA={best_avg_surf_p:.4f})")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, tta_val_metrics[name])
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "tta_val",
+            "best_epoch": best_metrics["epoch"],
+            "tta_val_avg": tta_val_avg,
+            "tta_val_splits": tta_val_metrics,
+            "no_tta_val_avg/mae_surf_p": best_avg_surf_p,
+        })
+
     test_metrics = None
     test_avg = None
+    test_metrics_tta = None
+    test_avg_tta = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -866,6 +1003,8 @@ if best_metrics:
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+        # Always run single-pass test eval (this is the apples-to-apples baseline
+        # comparison number — same trained model, no TTA at eval).
         test_metrics = {
             name: evaluate_split(
                 ema_model, loader, stats, cfg.surf_weight, device,
@@ -875,7 +1014,7 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (no TTA)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
@@ -884,6 +1023,31 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+        if tta_enabled:
+            print("\nEvaluating test splits with TTA...")
+            test_metrics_tta = {
+                name: evaluate_split(
+                    ema_model, loader, stats, cfg.surf_weight, device,
+                    bernoulli_residual=cfg.bernoulli_residual,
+                    bernoulli_chord_correction=cfg.bernoulli_chord_correction,
+                    tta_k=cfg.tta_k,
+                    tta_aoa_sigma=cfg.tta_aoa_sigma,
+                    tta_cond_sigma=cfg.tta_cond_sigma,
+                )
+                for name, loader in test_loaders.items()
+            }
+            test_avg_tta = aggregate_splits(test_metrics_tta)
+            print(f"\n  TEST (TTA)  avg_surf_p={test_avg_tta['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_metrics_tta[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "test_tta",
+                "best_epoch": best_metrics["epoch"],
+                "test_avg_tta": test_avg_tta,
+                "test_splits_tta": test_metrics_tta,
+                "no_tta_test_avg/mae_surf_p": test_avg["avg/mae_surf_p"],
+            })
 
     write_experiment_summary(
         model_path=model_path,
@@ -895,6 +1059,10 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        tta_val_metrics=tta_val_metrics,
+        tta_val_avg=tta_val_avg,
+        test_metrics_tta=test_metrics_tta,
+        test_avg_tta=test_avg_tta,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
