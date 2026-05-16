@@ -799,3 +799,39 @@ Tested baseline (90.34) is pre-Bernoulli (which gave −4.70%) and pre-T_max (wh
 Predicted full-stack outcome (sub-multiplicative compounding): n_hidden=192 + T_max=25 + Bernoulli ≈ 75.40 × (1 − 0.11) ≈ **67** val_avg. Even with more conservative compounding, low-70s is realistic.
 
 Arm B (n_hidden=256) is dropped from the re-run — wall-clock-undertrained regardless of stack changes; spending GPU on a single solid Arm A confirmation is higher value.
+
+## 2026-05-16 03:15 — PR #3519: Fourier-embedded FiLM conditioning [CLOSED — regression vs current baseline]
+
+- Branch: `charliepai2i24h5-nezuko/fourier-embedded-film`
+- Student: charliepai2i24h5-nezuko
+- Hypothesis: Tancik-style multi-frequency sin/cos encoding of the 11-dim flow vector before FiLM MLP; targets single_in_dist via richer angular resolution on AoA.
+- Status: CLOSED. Arm A (-0.18% vs old #3315 reference) is actually +4.75% vs Bernoulli baseline (86.09) and +19.6% vs current T_max baseline (75.40). Arm B (+8.16% vs old reference) is a clear regression everywhere.
+
+### Results vs stated baseline (PR #3315 at 90.34, NOT accounting for merged improvements)
+
+| Arm | n_freqs | sigma | val_avg | delta vs #3315 | delta vs current 75.40 |
+|---|---:|---:|---:|---:|---:|
+| A: moderate | 4 | 1.0 | 90.18 | -0.18% | +19.6% |
+| B: rich | 8 | 2.0 | 97.70 | +8.16% | +29.6% |
+
+Per-split Arm A (key deltas vs #3315 baseline):
+- `val_single_in_dist`: -5.18% (only winner — 109.91 → 104.21)
+- `val_geom_camber_rc`: +5.53% (regression)
+- `val_geom_camber_cruise`: +3.40% (regression)
+- `val_re_rand`: -3.50% (minor win)
+
+### Analysis
+
+The hypothesis got partial confirmation: Fourier FiLM improved single_in_dist (-5.2%) but degraded all OOD geometry splits. This is the expected "overfit to in-distribution flow-param structure" signature: a richer cond basis let the FiLM MLP make sharper conditional modulations that don't transfer to held-out camber geometry.
+
+Arm B failure: at sigma=2.0 with k=8, max frequency is 256pi. For unit-scale normalized cond inputs, this is ~128 cycles per std unit — effectively random noise mapping. Single_in_dist still improved (103.46) but OOD splits were severely damaged (+11.6%, +23.3%).
+
+FiLM scale magnitude increased (|scale| 0.18→0.24, |shift| 0.09→0.11) correlating with the OOD regression. Cautious mask stayed flat at 0.617 — optimizer orthogonal.
+
+The student correctly identified the issue in follow-up note #5: their 90.34 reference was pre-bf16 pre-Bernoulli, so the real comparison was against 86.09 (regression), not 90.34 (near-neutral). Excellent self-analysis.
+
+**Implication**: Enriching the cond path hurts OOD geometry. Enrich the spatial path instead (new assignment #3631 Fourier positional encoding on x,y coords).
+
+## 2026-05-16 03:15 — New assignment: nezuko Fourier positional encoding
+
+- **PR #3631 (nezuko): NeRF-style Fourier features on spatial coordinates** — encode (x, y) and optionally dsdf with multi-frequency sin/cos basis before the input MLP. Directly targets OOD geometry splits (geom_camber_rc, geom_camber_cruise) where spatial representation must extrapolate. Arm A: n_freqs=6, sigma=0.5 on (x, y). Arm B: n_freqs=6, sigma=0.5 on (x, y, dsdf). Conservative sigma avoids #3519's aliasing failure mode. Builds on nezuko's Fourier implementation expertise.

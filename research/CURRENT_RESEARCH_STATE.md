@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 03:05 UTC
+- **Updated:** 2026-05-16 03:20 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -33,7 +33,7 @@ Strongest remaining axes (in priority order):
 2. **Higher peak LR on aligned schedule** (#3581 thorfinn new): lr=7e-4 / lr=1e-3 with T_max=25 — descent active at cutoff, higher LR may accelerate it within the budget.
 3. **Optimizer alternative head-to-head** (#3425 tanjiro): SF-AdamW must beat 75.40 after rebasing onto latest tip. Rebase comment posted. Decision: SF-AdamW (no cosine scheduler) may have a natural schedule alignment advantage.
 4. **Cp normalization** (#3547 askeladd WIP): divide by p_B in addition to subtract — the natural physics extension of the Bernoulli win. Standard CFD non-dimensionalization. Baseline updated to 75.40.
-5. **Conditioning richness** (#3519 nezuko WIP): Fourier-embedded FiLM — Tancik-style multi-frequency sin/cos encoding of the 11-dim flow vector before FiLM MLP; targets single_in_dist via richer angular resolution on AoA.
+5. **Spatial representation** (#3631 nezuko new): NeRF-style Fourier positional encoding on (x, y) and optionally dsdf before input MLP. Addresses OOD geometry weakness (#3519 showed cond-path Fourier hurts camber extrapolation; spatial-path is the correct target).
 6. **EMA refinement** (#3545 alphonse WIP): EMA decay annealing — low decay early, high decay late, addresses cold-start.
 7. **Test-time augmentation** (#3548 frieren WIP): AoA-jitter TTA — K-ensemble of inference with small AoA perturbations.
 8. **Capacity revisit** (#3463 edward WIP, actively training): n_hidden=192/256 sweep, tractable with bf16 VRAM savings.
@@ -59,7 +59,8 @@ Strongest remaining axes (in priority order):
 | #3432 | fern | CLOSED (this loop) | SEMA — both arms regressed +22-33%; EMA-lag reset mechanism |
 | #3425 | tanjiro | WIP (rebase done, re-running on 75.40 baseline) | Schedule-Free AdamW — head-to-head vs Cautious AdamW |
 | #3463 | edward | WIP (sent back this loop — strong n=192 win on old baseline, rebase + re-run on 75.40) | Capacity revisit: n_hidden=192 |
-| #3519 | nezuko | WIP | Fourier-embedded FiLM conditioning — 2 arms |
+| #3519 | nezuko | CLOSED (this loop) | Fourier FiLM — +4.75% regression vs actual baseline; OOD geometry degraded |
+| #3631 | nezuko | WIP (new this loop) | Fourier positional encoding on spatial coords (x,y,dsdf) — NeRF-style, targets OOD geometry |
 | #3545 | alphonse | WIP | EMA decay annealing — 2 arms (linear5, cosine19) |
 | #3547 | askeladd | WIP | Cp normalization — 2 arms (cp, halfcp) |
 | #3548 | frieren | WIP | AoA-jitter TTA — 2 arms |
@@ -70,7 +71,7 @@ Strongest remaining axes (in priority order):
 
 Round 5 now shows 8 compounding wins totaling −39.15% val_avg. No plateau signal. The val_single_in_dist split improved dramatically this loop (102.04 → 84.88, −16.8%), driven by the schedule alignment's unlock of more productive LR range. Model still undercooked at each wall-clock cutoff — throughput/speed improvements (torch.compile) and LR optimization (LR sweep) are the highest-leverage axes right now.
 
-Note: WIPs (#3425, #3463, #3519, #3545, #3547, #3548) started before T_max alignment merged. Schedule alignment is additive to all of them *except* #3425 SF-AdamW (which removes CosineAnnealingLR entirely — SF-AdamW's internal schedule may provide equivalent or better alignment). Rebases should be clean for all non-optimizer WIPs.
+Note: WIPs (#3425, #3463, #3545, #3547, #3548) started before T_max alignment merged. Schedule alignment is additive to all of them *except* #3425 SF-AdamW (which removes CosineAnnealingLR entirely — SF-AdamW's internal schedule may provide equivalent or better alignment). Rebases should be clean for all non-optimizer WIPs.
 
 ## Potential next research directions (post-current batch)
 
