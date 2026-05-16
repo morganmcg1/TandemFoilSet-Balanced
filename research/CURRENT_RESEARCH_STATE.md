@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 05:20 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 05:35 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -10,15 +10,18 @@
 
 **Current best: 89.784 val_avg/mae_surf_p** (frieren #3584, two-shot FiLM on full stack, 2026-05-16 04:50)
 
-Multiple in-flight composition tests and new architectural hypotheses:
-- **🔥 Schedule-Free AdamW (alphonse #3594):** R1 showed **−20.75% intra-PR (71.492 vs 90.207)** and uniform per-split wins on val + test. Branch CONFLICTING (pre-two-shot-FiLM); sent back to rebase + verify on current stack. If reproduces, this is the largest single advance in the track.
-- **Fourier scale=2 (fern #3117 R4):** −3.16% confirmed on EMA+T_max=15 stack; R4 rebasing onto post-two-shot-FiLM HEAD, expected ~86-88 if Fourier+two-shot-FiLM compose
-- **Gradient clipping clip=1.0 (tanjiro #3511):** −4.03% on pre-FiLM stack; sent back for rebase + rerun on full two-shot-FiLM stack, expected ~86-88
-- **Three-shot FiLM (frieren #3681):** preprocess injection as third FiLM site, just assigned, expected −1-3%
-- **Slice-num sweep (edward #3684):** test slice_num=32/64/96 on full stack; 32 trades modes for speed, 96 richer; just assigned
+**Fourier features CLOSED (subsumed by FiLM, #3117 R4):** Paired Δ −0.10% at R4 (was −9.10% at R2, −3.16% at R3). FiLM absorbed the spatial-frequency signal Fourier provided. Test direction reversed (+0.86%). Clean closure.
+
+Key in-flight composition tests:
+- **🔥 Schedule-Free AdamW (alphonse #3594 R2):** R1 showed **−20.75% intra-PR (71.492 vs 90.207)** on pre-two-shot-FiLM stack. Sent back for verify on full current stack. If reproduces, largest single advance in track.
+- **Gradient clipping clip=1.0 (tanjiro #3511 R2):** −4.03% on pre-FiLM stack; sent back for rebase + rerun on two-shot-FiLM stack, expected ~86-88 if additive.
+- **Three-shot FiLM (frieren #3681):** preprocess injection as third FiLM site, assigned, expected −1-3%.
+- **Slice-num sweep (edward #3684):** test slice_num=32/64/96 on full stack; just assigned.
+- **n_layers=4 (fern #3752):** depth axis ablation; 4 layers faster per epoch → more fine-tune epochs in 30-min budget. Motivated by edward #3595 depth-vs-epochs finding.
 
 **LR axis closed:** 5e-4 is optimal for bf16+T_max=15.
-**n_layers axis (adjacent):** n_layers=6 regresses under 30-min budget (epoch cost kills fine-tune time); n_layers=4 not yet tested.
+**n_layers axis:** n_layers=6 regresses (+2.47%, #3595). n_layers=4 now in test (#3752). n_layers=5 remains current best.
+**Fourier axis CLOSED:** Subsumed by FiLM (#3117 R4, −0.10% Δ).
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
@@ -33,7 +36,7 @@ Multiple in-flight composition tests and new architectural hypotheses:
 | #3122 | FiLM conditioning — log Re, AoA, NACA, gap, stagger (frieren) | −4.00% vs EMA baseline | 92.606 |
 | #3584 | Two-shot FiLM — attn + MLP per block, shared module, +0 params (frieren) | −3.05% vs FiLM baseline | **89.784** |
 
-## Falsified hypotheses (closed, informative)
+## Falsified / closed hypotheses
 
 | PR | Hypothesis | Result | Lesson |
 |----|-----------|--------|--------|
@@ -42,6 +45,7 @@ Multiple in-flight composition tests and new architectural hypotheses:
 | #3321 | lr=1e-3/1.5e-3+warmup on fp32+bf16 | +2.2-12% regression (6 arms) | Higher LR dead end, two-seed confirmed |
 | #3443 | lr ∈ {2.5e-4, 3.5e-4} on bf16+T_max=15 | +0.78-2.60% regression | LR axis closed: 5e-4 is magnitude optimum |
 | #3595 | n_layers=6 vs 5 on full FiLM stack | +2.47% regression | Depth costs wall-clock epochs; 6 layers net-negative under 30-min budget |
+| #3117 | Fourier scale=2 (R2-R4) | −0.10% at R4 (tie) | FiLM absorbed Fourier's spatial-frequency signal; test direction +0.86% |
 
 ## Active experiments
 
@@ -54,41 +58,45 @@ Multiple in-flight composition tests and new architectural hypotheses:
 | alphonse | #3594 | Schedule-Free AdamW (R2 on two-shot FiLM, post −20.75% R1) | bf16+T_max=15+EMA+2xFiLM | Sent back for verify+rebase |
 | edward | #3684 | slice_num=32/64/96 sweep | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 | frieren | #3681 | Three-shot FiLM (preprocess + attn + MLP) | bf16+T_max=15+EMA+2xFiLM | Just assigned |
-| fern | #3117 | Fourier scale=2 + concat raw (recompose R4 on two-shot-FiLM) | bf16+T_max=15+EMA+2xFiLM | Sent back to rebase |
+| fern | #3752 | n_layers=4 depth ablation | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 
 ## Key research questions
 
 1. **🔥 SF-AdamW + two-shot-FiLM compose (alphonse #3594 R2):** R1 showed −20.75% on pre-two-shot stack (71.492). Does it reproduce on current stack? Expected ~70-75 if additive; ~75-80 if sub-additive.
-2. **Fourier + two-shot-FiLM compose (fern #3117 R4):** R3 confirmed −3.16% on EMA+T_max=15; does Fourier compose with two-shot-FiLM? Expected ~86-88 if additive.
-3. **Gradient clip=1.0 + two-shot-FiLM compose (tanjiro #3511 rebase):** Pre-FiLM signal strong (−4.03%). Expected ~86-88 if composes with full stack.
-4. **Three-shot FiLM (frieren #3681):** Preprocess injection adds third conditioning site; expected −1-3%.
+2. **Three-shot FiLM (frieren #3681):** Preprocess injection adds third conditioning site; expected −1-3%.
+3. **Gradient clip=1.0 + two-shot-FiLM compose (tanjiro #3511 rebase):** Pre-FiLM signal strong (−4.03%). Expected ~86-88 if composes.
+4. **n_layers=4 (fern #3752):** Faster epochs → more fine-tune at lr≈0. Depth axis closing.
 5. **Slice-num sweep (edward #3684):** Richer attention modes (96) vs faster fine-tune (32). Unknown direction.
-6. **Model width (nezuko #3492):** n_hidden=192 on EMA stack (pre-FiLM); confirms if width is a bottleneck.
+6. **Model width (nezuko #3492):** n_hidden=192 on EMA stack (pre-FiLM); confirms if width is bottleneck.
 7. **Batch size (askeladd #3365):** bs=6/8; if wins, compose with full stack.
 
 ## LR axis (closed)
 
 **5e-4 is the optimum** for bf16+T_max=15. Both lower (2.5e-4, 3.5e-4) and higher (1e-3, 1.5e-3) directions falsified across 4+ seeds.
 
-## Depth axis (partially explored)
+## Depth axis (explored)
 
 - n_layers=6: regresses under 30-min budget (+2.47%, epoch cost kills fine-tune time)
-- n_layers=4: NOT YET TESTED — might recover fine-tune epochs (faster per epoch)
-- Current best stays at n_layers=5
+- n_layers=4: IN TEST (#3752) — hypothesis: faster epochs → more fine-tune
+- Current best stays at n_layers=5 until #3752 resolves
 
-## Potential next hypotheses
+## Fourier axis (CLOSED)
 
-1. **n_layers=4** — faster epochs → more fine-tune at lr≈0; directly motivated by edward #3595 finding
-2. **Sobolev loss** — gradient supervision near surface (dU/dx, dp/dx). Physically motivated, untested. Complex to implement.
-3. **SDF input features** — signed distance to surface. Orthogonal to Fourier features.
-4. **Per-block independent FiLM** — give each of the 5 blocks its own conditioner instead of shared; more expressive, ~5K more params/block
-5. **Lion optimizer** — gradient-sign updates directly; tanjiro's finding suggests normalized GD helps, Lion is the extreme case
-6. **Lower LR with two-shot FiLM** — FiLM+EMA smoothing may widen optimal LR range (but #3443 falsified this pre-FiLM; revisit if needed)
+Fourier features subsumed by FiLM. The spatial-frequency signal FiLM provides via γ,β modulation is functionally equivalent to what Fourier basis expansion added on the input side. The per-round compression (−9.10% → −3.16% → −0.10%) cleanly tracks each merged feature's absorption of the Fourier signal. Not worth re-testing unless the FiLM stack is removed.
+
+## Potential next hypotheses (not yet assigned)
+
+1. **Per-block independent FiLM** — give each of the 5 blocks its own conditioner instead of shared; more expressive, ~5K more params/block. Three-shot FiLM result may inform priority.
+2. **Lion optimizer** — gradient-sign updates directly; tanjiro's finding suggests normalized GD helps, Lion is the extreme case. SF-AdamW result may make this redundant.
+3. **Sobolev loss** — gradient supervision near surface (dU/dx, dp/dx). Physically motivated, untested. Complex to implement.
+4. **SDF input features** — signed distance to surface. Orthogonal to FiLM. May help geometry-variant splits (geom_camber splits benefited from Fourier at half-magnitude).
+5. **n_layers=4 + n_hidden=192** — if both depth-reduction and width increase show promise, compose them together for one compact model.
+6. **Lower LR with two-shot FiLM** — FiLM+EMA smoothing may widen optimal LR range (but #3443 falsified pre-FiLM; revisit if SF-AdamW doesn't land).
 
 ## Operational notes
 
 - **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond --two_shot_film`
 - **GH API rate limits:** recurring ~40-min windows; student pods auto-recover.
 - **test_geom_camber_cruise NaN:** cruise-sample overflow in read-only `data/scoring.py`; use 3-split partial mean for test comparisons.
-- **edward anomaly resolved:** old closed #3113 branch redirected; new assignment #3684 (slice_num sweep).
 - **Depth-vs-epochs insight:** Under 30-min budget, per-epoch cost matters as much as model capacity. n_layers=6 loses 3 fine-tune epochs to n_layers=5. This asymmetry is load-bearing for hypothesis design.
+- **FiLM-owns-velocity insight:** Fourier per-split decomposition (#3117 R4) shows mae_surf_Ux regresses +4.64% with Fourier under FiLM stack. FiLM fully owns the velocity channel; geometric multi-foil splits (geom_camber_*) still benefit from Fourier at half-magnitude but insufficient to overcome Ux regression.

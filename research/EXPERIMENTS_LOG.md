@@ -847,3 +847,65 @@ Predicted outcome:
 - If composition sub-additive: Arm B ≈ 75-80
 - If gain reproduces but doesn't compose: still likely beats current 89.784 baseline
 
+
+---
+
+## 2026-05-16 05:30 — PR #3117 [CLOSED]: NeRF-style Fourier features on (x,z) positions — R4 (Fourier subsumed by FiLM)
+
+- **Student branch:** `charliepai2i48h4-fern/fourier-features` (R4)
+- **Hypothesis:** Apply random-Gaussian NeRF-style positional Fourier features on (x,z) with `fourier_num_bands=10, fourier_scale=2.0`, concat raw+sin/cos, drop into Transolver as pre-input. Composes with full current best stack including two-shot FiLM.
+- **Stack:** bf16 + cosine T_max=15 + EMA(0.999) + FiLM + two-shot-FiLM (advisor HEAD `7af79ac` rebased)
+
+### Results
+
+| Arm | Stack | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` (3 finite splits) |
+|-----|-------|----------------------|----|
+| A (full stack, no Fourier) | bf16 + cosine + EMA + 2xFiLM | **90.240** | 81.249 |
+| B (full stack + Fourier scale=2) | + `--use_fourier --fourier_scale 2.0 --fourier_num_bands 10` | **90.149** | 81.947 |
+| **Δ (B − A)** | — | **−0.10%** (tie, within ±0.5% band) | **+0.86%** (slight regression) |
+
+### Compression story across 4 rounds (Fourier intra-PR Δ)
+
+| Round | Composition stack | Intra-PR Δ |
+|-------|-------------------|-----------|
+| R2 | bf16-only | **−9.10%** |
+| R3 | + EMA + cosine T_max=15 | **−3.16%** |
+| R4 | + FiLM + two-shot-FiLM | **−0.10%** (this round) |
+
+Half-life decay pattern. Each merged feature absorbs progressively more of Fourier's signal.
+
+### Per-split val MAE pressure (R4)
+
+| Split | Arm A | Arm B (Fourier) | Δ % |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 64.05 | 65.77 | **+2.68%** (Fourier *hurts*) |
+| `val_geom_camber_rc`     | 65.16 | 63.35 | **−2.78%** (Fourier helps) |
+| `val_geom_camber_cruise` | 161.42 | 159.25 | **−1.34%** (Fourier helps) |
+| `val_re_rand`            | 89.16 | 89.85 | **+0.77%** (tie/slight regression) |
+| `mae_surf_Ux`            | — | — | **+4.64%** (FiLM owns velocity) |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-fern-fourier-features-r4-arma-*/metrics.jsonl`
+- `models/model-charliepai2i48h4-fern-fourier-features-r4-armb-*/metrics.jsonl`
+
+### Analysis & conclusions
+
+**Closed per the decision rule defined in R3 send-back:** "If Arm B ties Arm A (±0.5% paired Δ) → close cleanly with a clear 'Fourier subsumed by FiLM' conclusion."
+
+The R4 Δ of −0.10% sits squarely in the tie band AND the test direction reverses (+0.86%). This is a textbook "feature absorbed by an earlier-merged feature" outcome. As the model gained:
+1. **Global physics conditioning** via FiLM (γ,β modulation conditioned on log(Re), AoA, NACA, gap, stagger)
+2. **Two-shot FiLM** (γ,β applied at both attn and MLP sites)
+
+...the marginal value of Fourier positional features fell from large → meaningful → noise. FiLM's spatial-frequency-relevant γ,β scaling is functionally similar to the basis-expansion effect Fourier provides on the input side.
+
+**The per-split decomposition** is mechanistically informative: Fourier still helps multi-foil geometry splits (`geom_camber_rc` −2.78%, `geom_camber_cruise` −1.34%) but at insufficient magnitude to overcome single-foil regression (+2.68%) and the dominant velocity-channel regression (`mae_surf_Ux` +4.64%). FiLM "owns" the velocity channel and in-distribution split; Fourier residual contributes only on multi-foil rich-geometry tasks.
+
+**Test direction:** Slight regression (+0.86%) on `test_avg/mae_surf_p` (3 finite splits, cruise NaN). This is the strongest argument for closing rather than merging — val tie + test regression = no business adding complexity.
+
+### Decision: CLOSED (Fourier subsumed by FiLM)
+
+- Full credit to fern for clean reporting and graceful handling of 3 baseline shifts during the rebase
+- Fourier code in branch is preserved as template for future positional-feature experiments (SDF, etc.)
+- Fourier-as-default is off the table for this track
+
