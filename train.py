@@ -477,7 +477,7 @@ model_config = dict(
     space_dim=2,  # unchanged; only used as input-dim split for preprocess MLP
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
     out_dim=3,
-    n_hidden=160,
+    n_hidden=176,
     n_layers=5,
     n_head=4,
     slice_num=64,
