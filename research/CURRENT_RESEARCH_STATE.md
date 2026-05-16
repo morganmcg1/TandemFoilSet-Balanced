@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 00:30 UTC
+- **As of:** 2026-05-16 00:42 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -28,12 +28,12 @@ All remaining PRs must beat **test_avg/mae_surf_p < 80.08**.
 | 2 | frieren  | #3504 | Richer FiLM conditioning (cond_dim 1→11: log_Re+AoA+NACA+gap+stagger) | WIP |
 | 3 | thorfinn | #3468 | Per-block FiLM heads — **post-block v1 won OLD base** (test −6.73%); rebase + rerun on new cosine base | WIP (sent back 00:25) |
 | 4 | tanjiro  | #3406 | surf_weight sweep — **sw5 winner on OLD base** (test=88.80 vs 94.35); rebase + rerun on new cosine base | WIP (sent back 23:21) |
-| 5 | alphonse | — | (idle after #3358 R2#1 merge) — needs new assignment | needs hypothesis |
+| 5 | alphonse | #3565 | AdamW betas=(0.9,0.95) + weight_decay=0.05 sweep (3 arms) | WIP (assigned 00:40) |
 | 6 | askeladd | #3351 | EMA β=0.99 (shorter horizon) | WIP (CONFLICTING, pod actively training) |
 | 7 | edward   | #3262 | RFF σ=1.0 on (x, z) — orthogonal to FiLM | WIP (MERGEABLE) |
 | 8 | fern     | #3258 | Grad-clip 1.0 + 5-epoch warmup — MERGEABLE post-FiLM | WIP |
 
-**alphonse just freed up after winning** — needs a new hypothesis (cosine T_max=14 just merged).
+**All 8 students are now active.** Alphonse assigned #3565 (AdamW sweep) at 00:40 UTC.
 
 ## R1/R2 closed/merged history
 
@@ -71,6 +71,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 80.08**.
 - **edward RFF σ=1.0 (#3262):** Feature encoding orthogonal to loss & FiLM. Old gain −9.8% val. Predicted val ~85–90, test ~74–78.
 - **fern grad-clip+warmup (#3258):** Grad norms median 56/peak 1000+ with MSE loss — should still help under MAE+FiLM+cosine. Predicted val ~85–90, test ~74–78. **High confidence merge.**
 - **askeladd EMA β=0.99 (#3351):** Short EMA horizon ~0.3 epoch averages recent near-converged weights. Now with cosine T_max=14 the LR-end is 0 — EMA may have less value since weights aren't oscillating. Predicted val ~88–92, test ~78–82.
+- **alphonse AdamW sweep (#3565):** beta2=(0.999→0.95) + weight_decay=(1e-4→0.05). 3 arms: combined, beta2-only, WD-only. Standard transformer optimizer recipe not yet tested. Predicted val ~85–91, test ~75–81. Conservative expectation: ~2% gain from one knob.
 
 ## Open issues / live diagnostics
 
@@ -88,7 +89,7 @@ All remaining PRs must beat **test_avg/mae_surf_p < 80.08**.
 4. ✗ Per-block FiLM heads ← REBASE IN FLIGHT (#3468)
 5. ✗ Richer FiLM conditioning ← IN FLIGHT (#3504)
 6. ✗ Volume MAE reformulation ← IN FLIGHT (#3550)
-7. **AdamW betas / weight-decay sweep** ← next idle slot (alphonse just freed)
+7. ✗ **AdamW betas / weight-decay sweep** ← IN FLIGHT (#3565 alphonse)
 8. **Per-block × richer-FiLM compose** (if both #3468 + #3504 land)
 9. **Geometry-aware input features** (node distance to nearest surface; may be redundant with dsdf)
 10. **Loss decomposition by domain** (per-split loss tracking + dynamic per-split weight)
@@ -101,4 +102,11 @@ All remaining PRs must beat **test_avg/mae_surf_p < 80.08**.
 
 ## Next immediate action
 
-**alphonse is idle** after winning #3358. Will assign **AdamW betas/weight-decay sweep** as a clean cheap orthogonal experiment to give us another stacking candidate.
+**All 8 students active.** Monitor for results from the rebase reruns (#3468 thorfinn, #3406 tanjiro) and first-run assignments (#3504 frieren, #3550 nezuko, #3565 alphonse). Rate limit resets ~01:20 UTC — review next wave then.
+
+**Key monitors:**
+- #3468 thorfinn per-block FiLM rerun on cosine base: predicted hopeful test ~73–77
+- #3406 tanjiro sw=5 rerun on cosine base: predicted test ~75–78
+- #3262 edward RFF σ=1.0: MERGEABLE label set — check when rate limit resets
+- #3258 fern grad-clip+warmup: MERGEABLE label set — check when rate limit resets
+- #3565 alphonse AdamW sweep: 3 arms, ~90 min total
