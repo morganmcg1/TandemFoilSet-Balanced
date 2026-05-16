@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 02:45 UTC
+- **Updated:** 2026-05-16 03:05 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -57,8 +57,8 @@ Strongest remaining axes (in priority order):
 | #3422 | frieren | CLOSED | Huber loss for surf-pressure aux — both arms regressed +5-8% |
 | #3433 | alphonse | CLOSED | Per-domain target normalization — both arms regressed +3-11% |
 | #3432 | fern | CLOSED (this loop) | SEMA — both arms regressed +22-33%; EMA-lag reset mechanism |
-| #3425 | tanjiro | WIP (rebase pending — new baseline 75.40) | Schedule-Free AdamW — head-to-head vs Cautious AdamW |
-| #3463 | edward | WIP (actively training) | Capacity revisit: n_hidden=192, n_hidden=256 |
+| #3425 | tanjiro | WIP (rebase done, re-running on 75.40 baseline) | Schedule-Free AdamW — head-to-head vs Cautious AdamW |
+| #3463 | edward | WIP (sent back this loop — strong n=192 win on old baseline, rebase + re-run on 75.40) | Capacity revisit: n_hidden=192 |
 | #3519 | nezuko | WIP | Fourier-embedded FiLM conditioning — 2 arms |
 | #3545 | alphonse | WIP | EMA decay annealing — 2 arms (linear5, cosine19) |
 | #3547 | askeladd | WIP | Cp normalization — 2 arms (cp, halfcp) |

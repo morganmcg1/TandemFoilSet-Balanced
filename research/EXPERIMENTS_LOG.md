@@ -766,3 +766,36 @@ Implication: SEMA may become viable if (a) EMA decay is lowered to ≈0.99 so EM
 
 - **PR #3581 (thorfinn): Peak LR sweep on T_max=25 aligned schedule** — test lr=7e-4 (Arm A) and lr=1e-3 (Arm B) with the fixed T_max=25/eta_min_factor=0.10 schedule. Descent still active at −2.74/epoch at epoch 17; higher LR may unlock faster per-epoch improvement. Cautious AdamW masking (0.62) stabilizes high-LR runs by zeroing ~38% of update components.
 - **PR #3582 (fern): torch.compile() for more effective epochs** — JIT-compile the model graph (Arm A: default mode; Arm B: reduce-overhead) to reduce per-epoch wall-clock time by 10–25%. Expected to unlock 2–4 additional effective epochs within the 30-min cap. At −2.74/epoch descent rate, this translates to 5.5–11 point improvement. First pure speed experiment in round 5.
+
+## 2026-05-16 02:50 — PR #3463: Capacity revisit n_hidden=192/256 [SENT BACK — strong win on old baseline, needs rebase + re-run]
+
+- Branch: `charliepai2i24h5-edward/capacity-revisit-with-bf16`
+- Student: charliepai2i24h5-edward
+- Hypothesis: With bf16's VRAM savings (#3373), the tractable capacity budget shifts. Test n_hidden=192 and n_hidden=256 (vs baseline 128) on the full merged stack to see if the model is undersized.
+- Status: SENT BACK. Arm A (n_hidden=192) is a strong −11.16% win against the pre-Bernoulli/pre-T_max baseline (#3315 at 90.34). Tested at val_avg=80.26 / test_avg=71.27 with uniform 8.5–13.5% improvement across all 8 val+test cells. Mergeable=CONFLICTING vs current 75.40 baseline; needs rebase + re-run with T_max=25 + Bernoulli + full stack.
+
+### Results vs tested baseline (PR #3315 Cautious AdamW, val_avg=90.34)
+
+| Arm | n_hidden | n_params | Epochs | val_avg | Δ | test_avg | Δ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **A** | **192** | **1.84M** | **14** | **80.26** | **−11.16%** | **71.27** | **−11.10%** |
+| B | 256 | 3.26M | 12 | 91.27 | +1.03% | 81.89 | +2.15% |
+
+Per-split Arm A (vs #3315): single_in_dist −13.43%, geom_camber_rc −8.52%, geom_camber_cruise −11.68%, re_rand −11.01%. **Uniform broad-based win**.
+
+### Analysis
+
+Arm A is a clean, broad-based capacity win. Three load-bearing signals:
+1. **Uniform gain across all 8 cells** (8.5–13.5%) rules out a "wider helps in-distribution at OOD's cost" interpretation. Added width helps every regime.
+2. **Cautious mask invariant** at 0.614 (vs 0.620 at n=128) — optimizer dynamics are width-agnostic. Argues for orthogonal compounding with all other merged mechanisms.
+3. **Arm A descent at cutoff: −4.31/epoch** (Arm B: −6.78/epoch). Both arms still descending sharply — wall-clock-bound. Arm B at 161s/epoch fits only 12 epochs (vs 14 for Arm A); the n=256 loss is undertraining, not capacity hurting.
+
+VRAM: Arm A 46.78 GB / Arm B 58.13 GB — both well within 96 GB budget. Capacity is not VRAM-bound, only wall-clock-bound.
+
+### Why send back instead of merge?
+
+Tested baseline (90.34) is pre-Bernoulli (which gave −4.70%) and pre-T_max (which gave −12.42%). Current merged baseline is 75.40. Even with the strong −11.16% Arm A win, 80.26 > 75.40 in absolute terms. The capacity win must compound with the new schedule alignment + Bernoulli residual to be merge-eligible.
+
+Predicted full-stack outcome (sub-multiplicative compounding): n_hidden=192 + T_max=25 + Bernoulli ≈ 75.40 × (1 − 0.11) ≈ **67** val_avg. Even with more conservative compounding, low-70s is realistic.
+
+Arm B (n_hidden=256) is dropped from the re-run — wall-clock-undertrained regardless of stack changes; spending GPU on a single solid Arm A confirmation is higher value.
