@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 15:40 — #3736 thorfinn sent back (surf_weight rerun on Huber β=0.1); #3728 nezuko CLOSED (EMA decay=0.99 is optimal floor); nezuko assigned #4021 SWA)
+- **Date:** 2026-05-16 (updated 16:59 — #3497 tanjiro sent back (grad-clip rerun on Huber β=0.1); all 8 students active, zero idle)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 50.5133`, `test_avg/mae_surf_p (excl cruise) = 49.8493`
@@ -66,7 +66,7 @@ Old launch baseline: 135.30. Total gain: **−62.7%** over 9 compounding improve
 | **#4037** | **fern** | **Huber beta lower bound: {0.05, 0.025, 0.01} vs β=0.1** | **Loss tuning** | **WIP — just assigned (#4010 dead from accidental merge, replaced by #4037)** |
 | **#4021** | **nezuko** | **SWA: uniform late-epoch averaging on top of EMA** | **Training** | **WIP — just assigned** |
 | **#3736** | **thorfinn** | **surf_weight {10,5} rerun on Huber β=0.1 canonical** | **Optimization** | **WIP — sent back, 2-arm rerun on new canonical** |
-| **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} — BIGGEST within-PR signal (−12.1%)** | **Optimization** | **WIP — running on Cauchy stack, notified of new canonical** |
+| **#3497** | **tanjiro** | **Grad-clip {none, clip=1} rerun on Huber β=0.1 canonical** | **Optimization** | **WIP — sent back. Clean −3.79% val on Cauchy stack but TIES new canonical (50.503 vs 50.5133). Huber β=0.1 should amplify clip's value (noisier L1-dominant gradients).** |
 | **#3952** | **edward** | **Log-pressure aux loss (weight 0.05 vs 0.1)** | **Loss tuning** | **WIP — 3 arms on Cauchy stack** |
 | **#3975** | **askeladd** | **bfloat16 autocast: more epochs in 30-min cap** | **Throughput** | **WIP — implementing** |
 

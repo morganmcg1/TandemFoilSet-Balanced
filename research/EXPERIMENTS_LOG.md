@@ -1008,3 +1008,24 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 - willowpai2i48h3-fern/huber-beta-lower-bound-rerun
 - **Bug fix:** PR #4010 was accidentally merged into advisor branch when research state commits were made on the fern assignment branch before switching back to advisor. GitHub marked it MERGED → student pod saw "no assigned PRs." Fresh PR #4037 created with identical instructions.
 - Same 4-arm sweep: β=0.1 baseline, β=0.05, β=0.025, β=0.01 — all with `--precondition_frequency 5`
+
+## 2026-05-16 16:59 — PR #3497 (tanjiro): Grad-clip {none, 5, 1} on Cauchy stack — SENT BACK
+
+- Branch: `willowpai2i48h3-tanjiro/gradient-clipping-canonical-rerun`
+- W&B runs: `w5wapxwr` (baseline, no clip), `fadhh5g8` (clip=5), `ndg6yxks` (clip=1)
+- Ran on Cauchy c=1.0 + SOAP freq=5 stack (canonical at PR launch; superseded by Huber β=0.1 mid-run)
+
+| Arm | grad_clip | val_avg/mae_surf_p | test_excl_cruise | Δ within-PR val |
+|---|---|---|---|---|
+| Arm 1 baseline (no clip) | none | 52.494 (reproduces canonical exactly) | 51.220 | — |
+| Arm 2 (clip=5) | 5.0 | 51.353 | — | −2.17% |
+| **Arm 3 (clip=1)** | 1.0 | **50.503** | **50.124** | **−3.79%** |
+
+**Analysis:** Strong, clean within-PR signal. Arm 1 perfectly reproduces canonical mep5yevo (val=52.494) — excellent determinism check. clip=1 active on 99.92% of steps (pre-clip grad_norm distribution: p50=17.44, p99=90.48); the dynamic range is massive. Student's mechanism diagnosis is sharp: "Cauchy is itself a robust-statistics technique — it already down-weights outlier samples that grad-clip targets. The marginal value of clip shrinks when Cauchy is active."
+
+**vs new Huber β=0.1 canonical:** TIED on val (50.503 vs 50.5133, Δ=−0.02%), +0.55% WORSE on test (50.124 vs 49.8493). Result on Cauchy ties the post-Huber canonical but doesn't beat it — the gains from clip on Cauchy stack overlap heavily with what Huber β=0.1 already delivers (both attack outlier dominance).
+
+**Decision: SENT BACK** for 2-arm rerun on Huber β=0.1 canonical. Hypothesis: Huber β=0.1 produces noisier per-step gradients than Cauchy (L1-dominant signal with finite influence). Grad-clip's mechanism (bound update magnitudes) should be MORE valuable on Huber β=0.1 than on Cauchy. If clip=1 still wins by >2% val on Huber stack, this is a merge candidate. If signal evaporates, the mechanism was Cauchy-specific and the PR closes.
+
+- 2 arms only: Arm 1 (no clip, Huber β=0.1 baseline = canonical reproduction), Arm 2 (clip=1.0, Huber β=0.1)
+- `--wandb_group grad-clip-huber-beta-01` for tracking
