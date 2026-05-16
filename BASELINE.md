@@ -79,6 +79,25 @@ Per-split test (ALL SPLITS NOW FINITE — NaN fix merged):
 better than the best single-seed result across all PRs). With run-to-run
 variance ~3-4 units, improvements need to be ≥5 units to be clearly attributable.
 
+## 2026-05-16 — PR #3348: Fourier positional encoding L=8 (fern)
+
+- **val_avg/mae_surf_p:** 98.16 (within noise of 97.47 val best — effectively tied)
+- **test_avg/mae_surf_p: 86.22 (NEW TEST BEST, −6.49 vs 92.71 prior best)**
+- **Surface MAE (test, fourier_L8_charb, run jum9x071):**
+  - test_single_in_dist mae_surf_p = 96.53
+  - test_geom_camber_rc mae_surf_p = 102.56
+  - test_geom_camber_cruise mae_surf_p = 55.77
+  - test_re_rand mae_surf_p = 90.04
+- **W&B run:** jum9x071
+- **Reproduce:**
+  ```
+  cd target/
+  python train.py --pos_enc_mode fourier_basic --grad_clip_max_norm 0.5 \
+    --wandb_group fourier-pos-enc-charb --wandb_name fourier_L8_charb --epochs 50
+  ```
+
+Notes: val primary metric is within noise (98.16 vs 97.47), but test improvement is −6.49 absolute (−7.0%) — decisive on the paper-facing metric. Per-split test gains largest on geom_camber_cruise (−8.22). Fourier L=8 default baked into merged train.py via `pos_enc_mode` flag.
+
 ## Pre-merge history
 
 | Source | wandb run | val_avg/mae_surf_p | Notes |
