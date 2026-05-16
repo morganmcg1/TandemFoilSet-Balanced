@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:10
+- **Date:** 2026-05-16 11:40
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -35,7 +35,7 @@
 | fern | #3883 | T_max schedule sweep {12, 25} on triple compound | wave-9 |
 | frieren | #3909 | Learnable Fourier frequencies on triple compound | NEW (wave-9) |
 | tanjiro | #3527 | BF16 + LS + n14 + EMA quad compound | SENT BACK (BF16+LS+n10 already at val=67.19/test=58.05; needs EMA arm + rebase) |
-| nezuko | #3823 | Lookahead optimizer wrapper {k=5, k=10} on LayerScale stack | wave-8 — pinged 8h stale |
+| nezuko | #3941 | AdamW weight_decay sweep {3e-5, 3e-4} on triple compound | NEW (wave-9) |
 | thorfinn | #3784 | Peak LR sweep {7e-4, 1e-3} on LayerScale stack | wave-8 — stale; pinged |
 | askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | stale 21h — pinged urgently |
 
@@ -61,6 +61,7 @@
 | #3730 (alphonse) | LayerScale+n14 compound sub-additive WITHOUT EMA; superseded by #3192 |
 | #3782 (fern) | AdamW eps sweep falsified: both 1e-6/1e-7 worse; default 1e-8 optimal |
 | #3740 (frieren) | Asymmetric LayerScale γ-init: both arms regress; γ converges to natural asymmetry regardless of init |
+| #3823 (nezuko) | Lookahead optimizer: both k=5/k=10 ~15-21% worse; slow-anchor averaging disrupts LayerScale γ trajectory |
 
 ## Current research themes
 
@@ -74,7 +75,7 @@
 
 5. **Learnable Fourier frequencies (frieren #3909) — wave-9 NEW**: Fixed log-spaced Fourier saturated at n=14; making frequencies a learnable nn.Parameter lets gradient descent reshape the basis. Two arms: default LR vs 10× LR multiplier on freq params. Diagnostic: log initial vs final freq values to confirm/falsify whether they migrate.
 
-6. **Lookahead optimizer (nezuko #3823)**: Zhang et al. 2019 slow anchor weights. Two arms: k=5, k=10. Stale 8h — pinged.
+6. **Weight decay sweep (nezuko #3941) — wave-9 NEW**: Last untested AdamW hyperparameter. With LayerScale+EMA providing implicit regularization, the optimal WD may have shifted from 1e-4. Testing {3e-5, 3e-4} on triple compound.
 
 7. **Peak LR sweep on triple compound (thorfinn #3784)**: lr=1e-3 survived on n14+clip=1.0 stack. Retesting on triple compound; pinged.
 
@@ -87,7 +88,7 @@
 - **EMA enables under-converged compounds**: Without EMA, n14+LayerScale fails (-4-5% regression). EMA checkpoint averaging bridges the ~12-epoch convergence gap.
 - **LayerScale γ converges to natural asymmetry regardless of init**: Asymmetric γ_attn=0.001/γ_mlp=0.03 init (PR #3740) converges to same resting values as symmetric γ=0.01 (γ_attn ~0.007-0.017, γ_mlp ~0.030-0.052). Manual init steering provides no benefit.
 - **Fourier scaling SATURATED at n=14**: n=18/n=20 both regress. n=14 is the sweet spot at fixed log-spaced freqs.
-- **AdamW denominator knobs exhausted**: β2<0.999 harmful (PR #3708), eps>1e-8 harmful (PR #3782). Default AdamW settings optimal given grad_clip=0.25.
+- **AdamW + inner-optimizer modification family exhausted**: β2<0.999 harmful (PR #3708), eps>1e-8 harmful (PR #3782), Lookahead wrapper harmful (PR #3823). Inner-optimizer state is well-tuned given grad_clip=0.25; only WD (PR #3941 in flight) remains untested.
 - **LayerScale γ=0.01 is the biggest single win**: -10.2% val from per-channel selective residual gating.
 - **clip=0.25 is regularization at n_freqs≥14**: Always use clip=0.25 when n_freqs≥12.
 - **EMA 0.998 sweet spot for ~600-step runs**: Half-life ~350 steps = 58% of training budget.

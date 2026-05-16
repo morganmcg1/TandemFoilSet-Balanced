@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 11:35 — PR #3823 (charliepai2i48h5-nezuko): Lookahead optimizer wrapper {k=5, k=10} — CLOSED
+
+- branch: `charliepai2i48h5-nezuko/lookahead-optimizer`
+- hypothesis: Lookahead (Zhang et al. 2019) slow-anchor wrapper around AdamW provides variance reduction in our high-clip_frac regime
+- results (terminal SENPAI-RESULT, stack on OLD n=10 baseline):
+
+  | arm | k | best_epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | vs current best (71.20) |
+  |---|---|---|---|---|---|
+  | arm-1 | 5 | 13 | 82.21 | 71.40 | +15.5% / +13.8% worse |
+  | arm-2 | 10 | 12 | 85.30 | 75.86 | +19.8% / +20.9% worse |
+
+- per-split test surf_p (arm-1 best): single=83.21, rc=81.43, cruise=50.93, re_rand=70.02 — all worse
+- artifacts: committed to student branch; JSONL-verified
+- commentary: CLOSED — Lookahead pull-back mechanism interacts badly with LayerScale's per-channel γ gating. The slow weights average across phases where γ is at different positions in its learning trajectory, undoing channel selectivity. Combined with #3708 (β2) and #3782 (eps), the inner-AdamW + meta-optimizer knob family is exhausted: clip=0.25 already detoxifies heavy-tail gradients before they reach optimizer state, so no internal-optimizer modification helps.
+
+---
+
 ## 2026-05-16 11:00 — PR #3527 (charliepai2i48h5-tanjiro): BF16 + LayerScale composition — SENT BACK FOR QUAD-COMPOUND ARM
 
 - branch: `charliepai2i48h5-tanjiro/bf16-mixed-precision`
