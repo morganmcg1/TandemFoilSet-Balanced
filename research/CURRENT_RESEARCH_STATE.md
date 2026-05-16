@@ -1,15 +1,15 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~09:30 UTC
+- **Last updated:** 2026-05-16 ~11:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
 
 ## Current baseline
 
-**val_avg/mae_surf_p = 82.4997, test_avg/mae_surf_p = 74.1023** — from PR #3691 (thorfinn, --epochs 12 longer training), merged 2026-05-16 ~08:30 UTC. See `BASELINE.md` for full details.
+**val_avg/mae_surf_p = 64.2430, test_avg/mae_surf_p = 55.5454** — from PR #3814 (askeladd, SwiGLU FFN), merged 2026-05-16 ~11:30 UTC. See `BASELINE.md` for full details.
 
-Per-split test (zqxkh9np): single_in_dist=83.13, geom_camber_rc=82.74, geom_camber_cruise=56.33, re_rand=74.22. Note: companion seed kkuvnrai achieved test=72.34 (−1.96% vs previous baseline) — run-to-run variance is real.
+Per-split test (dvcj6w25): single_in_dist=64.10, geom_camber_rc=66.03, geom_camber_cruise=37.61, re_rand=54.44.
 
 Baseline progression (val_avg/mae_surf_p):
 - #3091: 109.42 (warmup + clip + lr=1e-3, MSE)
@@ -17,7 +17,8 @@ Baseline progression (val_avg/mae_surf_p):
 - #3507: 96.10 (n_hidden=160 width scaling)
 - #3372: 88.24 (Fourier PE 4-freq, lr=1e-3)
 - #3632: 83.50 (coord noise augmentation std=0.01, lr=5e-4)
-- **#3691: 82.50 (--epochs 12 longer training, 3-seed mean val=82.96) ← CURRENT**
+- #3691: 82.50 (--epochs 12 longer training, 3-seed mean val=82.96)
+- **#3814: 64.24 (SwiGLU FFN in TransolverBlock, −22% vs prev best) ← CURRENT**
 
 ## Winning stack (all additive, all merged)
 
@@ -28,147 +29,47 @@ Baseline progression (val_avg/mae_surf_p):
 | Fourier PE num_freq=4 | #3372 | −8.2% | log-spaced sinusoidal on (x,z), lr=1e-3 |
 | Coord noise std=0.01 | #3632 | −5.4% | Spatial augmentation during training, lr=5e-4 |
 | --epochs 12 (longer training) | #3691 | −1.2% | Cosine T_max=12; best_epoch=11 in all 3 seeds |
+| **SwiGLU FFN** | **#3814** | **−22.1%** | Gated FFN in TransolverBlock; inner_dim=216; mlp2 (output head) left as standard MLP |
 
-**Total improvement from baseline:** 109.42 → 82.50 (−24.6%)
+**Total improvement from baseline:** 109.42 → 64.24 (−41.3%)
 
 ## Most recent research direction from human researcher team
 
-No GitHub Issues open for this track. Proceeding from the program contract only.
+No GitHub Issues open for this track as of last check. Proceeding from the program contract only.
 
 ## Cross-cutting findings (apply to ALL in-flight PRs)
 
-1. **L1 loss is the default** (Config.loss_type = "l1").
-2. **n_hidden=160 is the width sweet spot** — n_hidden=176 and n_hidden=192 both regress.
-3. **Fourier PE num_freq=4 is the default** — num_freq=2 and num_freq=6 have been tested; 4 appears to be the sweet spot.
-4. **coord_noise_std=0.01 is the new default** (merged in #3632).
-5. **lr footgun:** Config.lr default is 5e-4, but the Fourier PE baseline used lr=1e-3. The coord noise win used lr=5e-4. lr=1e-3 + coord noise is UNTESTED — #3639 will test this.
-6. **Use `--epochs 10`** so cosine fully anneals within the 30-min budget.
-7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
-8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
+1. **SwiGLU FFN is now the default** (merged in #3814). All new experiments build on this.
+2. **L1 loss is the default** (Config.loss_type = "l1").
+3. **n_hidden=160 is the width sweet spot** — n_hidden=176 and n_hidden=192 both regress (pre-SwiGLU; may be worth retesting on SwiGLU stack).
+4. **Fourier PE num_freq=4 is the default** — confirmed sweet spot.
+5. **coord_noise_std=0.01 is the default** (merged in #3632).
+6. **lr=5e-4 is the default** — lr=1e-3 + coord noise regressed in 3-seed test (#3690).
+7. **--epochs 12** is the recommended training budget. SwiGLU run was at --epochs 10, best val still at final epoch — strongly suggests epochs=12 will stack further.
+8. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
+9. **SwiGLU key detail:** `mlp2` (output head) is left as standard MLP; only `self.mlp` in TransolverBlock is replaced. inner_dim=216 = round_to_mult(160*2*2/3, 8).
+10. **DSDF distribution finding (nezuko #3836):** normalized DSDF max abs=2.88 → clip=3.0 is a no-op. Clip=2.0 or 2.5 would actually touch 0.33-1.37% of values.
 
-## Active in-flight PRs (status as of 09:45 UTC)
+## Active in-flight PRs (status as of 11:30 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
-| **#3632** | tanjiro | Coord noise augmentation std=0.01 | **MERGED** 04:30 → baseline | 83.495 🏆 |
-| **#3716** | fern | n_head=8 (attention diversity) | CLOSED (val=93.17) | — |
-| **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | **CLOSED 08:00** (val=93.17, +9.68) | — |
-| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | **CLOSED 08:00** (val=85.98, +2.48) | — |
-| **#3691** | thorfinn | --epochs 12 longer training | **MERGED 08:30** → baseline val=82.50/test=74.10 | 82.4997 🏆 |
-| **#3690** | edward | lr=1e-3 + coord noise | **CLOSED 08:30** (val=84.70, 3-seed best, +1.2%) | — |
-| **#3714** | alphonse | surf_weight=15 sweep | **CLOSED 08:30** (val=89.30, +5.8%) | — |
-| **#3718** | nezuko | AoA jitter augmentation | **CLOSED 08:30** (val=84.96, +1.47%) | — |
-| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | **CLOSED 09:30** (std=0.03 val=86.29; std=0.005 val=87.39) | — |
-| **#3741** | fern | eta_min=1e-5 cosine floor | WIP — W&B FAIL (`1emrdpva` val=86.22; `xp76t6g6` val=87.66); 3rd run `u0nphp8l` mid-flight; advisor commented | close on submission |
-| **#3814** | askeladd | **SwiGLU FFN (round-5)** | WIP (assigned 08:00) | running |
-| **#3815** | tanjiro | **TTA coord noise K=4/K=8 (round-5)** | WIP (assigned 08:00) | running |
-| **#3833** | thorfinn | **OneCycleLR schedule (round-5)** | WIP (assigned 08:35) | awaiting |
-| **#3835** | edward | **asinh output transform (round-5)** | WIP (assigned 08:35) | awaiting |
-| **#3836** | nezuko | **DSDF clip pivoted to 2.0/2.5 (round-5)** | WIP — student found DSDF already capped at [0,5] raw, max abs(norm)=2.88 so clip=3 was no-op; sent back to run clip=2.0/2.5 instead | awaiting |
-| **#3838** | alphonse | **per-domain output norm (round-5)** | WIP (assigned 08:35) | awaiting |
-| **#3857** | frieren | **attention dropout p=0.1/0.2 (round-5)** | WIP (assigned 09:30) | awaiting |
+| **#3814** | askeladd | **SwiGLU FFN** | **MERGED 11:30** → new baseline | 64.2430 🏆 |
+| **#3838** | alphonse | per-domain output norm | **CLOSED 11:30** (val=89.28 FAIL vs both 82.50 and 64.24) | — |
+| **#3741** | fern | eta_min=1e-5 cosine floor | **CLOSED 11:30** (best val=86.21 FAIL × 3 seeds) | — |
+| **#3815** | tanjiro | TTA coord noise K=4/K=8 | **stale_wip** — 0 comments yet; checking W&B | pending review |
+| **#3833** | thorfinn | OneCycleLR schedule | WIP (assigned 08:35) | awaiting |
+| **#3835** | edward | asinh output transform | WIP (assigned 08:35) | awaiting |
+| **#3836** | nezuko | DSDF clip pivoted to 2.0/2.5 | WIP — pivoted from clip=3 (no-op) to clip=2.0/2.5 per sanity check | awaiting |
+| **#3857** | frieren | attention dropout p=0.1/0.2 | WIP (assigned 09:30, pre-SwiGLU baseline) | awaiting |
 
-## Round-3 summary (vs old baseline val=88.24)
+## Round-5 new assignments (pending, to be created after rate-limit reset at 11:20 UTC)
 
-| PR | Student | Result | Δ vs 88.24 | Decision |
-|---|---|---|---|---|
-| #3632 | tanjiro | val=83.50, test=73.79 | −5.38% 🏆 | MERGED |
-| #3637 | thorfinn | val=88.45, test=79.29 | +0.21% | CLOSED |
-| #3635 | edward | val=94.50, test=83.52 | +7.1% | CLOSED |
-| #3633 | askeladd | val=88.02, test=77.10 | −0.25% (marginal) | WIP retry |
-| #3638 | alphonse | val=86.52, test=76.72 | −1.9% vs old | WIP retry (vs NEW 83.50) |
-| #3634 | fern | val=88.82, test=78.55 | +0.66% | WIP retry |
-| #3636 | nezuko | val=89.45 (num_freq=2), num_freq=6 FAILED | +1.4% | WIP retry |
-
-## Merged wins (cumulative, best first)
-
-| PR | Description | val_avg | test_avg |
+| Student | Slug | Hypothesis | Rationale |
 |---|---|---|---|
-| **#3632** | **Coord noise std=0.01 (tanjiro)** | **83.4954** ← CURRENT | **73.7918** |
-| **#3372** | **Fourier PE 4-freq (askeladd)** | **88.2442** | **77.0880** |
-| **#3507** | **Width n_hidden=160 (alphonse)** | **96.0997** | **85.5256** |
-| #3089 | L1 loss + scoring fix (alphonse) | 100.5275 | 90.1489 |
-| #3091 | LR warmup + clip + lr=1e-3 (edward) | 109.42 | NaN |
-
-## Round-4 active hypotheses (8 PRs, all running or polling)
-
-### Round-4a (assigned 04:40 UTC, runs started 05:22)
-| PR | Student | Hypothesis | Expected gain |
-|---|---|---|---|
-| #3690 | edward | lr=1e-3 + coord noise (single flag, zero code) | −2–5% (lr compound) |
-| #3691 | thorfinn | --epochs 12 longer training (zero code) | −1–3% (free gradient steps) |
-| #3692 | tanjiro | Feature noise aug on condition cols 2:24 | −1–3% (OOD splits) |
-
-### Round-4b (assigned 05:28-30 UTC, after round-3 closes)
-| PR | Student | Hypothesis | Expected gain | Status |
-|---|---|---|---|---|
-| #3714 | alphonse | surf_weight=15 sweep (single flag) | −1–3% (direct metric alignment) | running |
-| #3715 | askeladd | mlp_ratio=4 (FFN capacity, untested arch lever) | −2–5% (if FFN-bottlenecked) | running |
-| #3716 | fern | n_head=8 (attention head diversity) | −1–3% (speculative) | CLOSED (val=93.17, head_dim=20 too narrow) |
-| #3717 | frieren | coord_noise_std sweep (0.03, 0.005) | −0–2% (pin augmentation optimum) | running |
-| #3718 | nezuko | AoA jitter augmentation std=0.02 | −1–3% (OOD splits) | running |
-
-### Round-4c (assigned 05:55 UTC, after #3716 close)
-| PR | Student | Hypothesis | Expected gain | Status |
-|---|---|---|---|---|
-| #3741 | fern | eta_min=1e-5 cosine LR floor | −0.5–2% (meaningful gradients in last epoch) | running |
-
-## Round-5 (assigned 08:00 UTC — plateau-protocol tier change)
-
-7 of 8 round-4 experiments failed to beat baseline (only thorfinn #3691 epochs=12 won at W&B val≈82.50). Per plateau protocol, round-5 moves up a tier from incremental tuning to architecture/inference/loss reformulation. Hypotheses ranked on public-literature merit + on-task fit only (see `RESEARCH_IDEAS_2026-05-16_07:25.md`).
-
-| PR | Student | Hypothesis | Expected gain | Risk |
-|---|---|---|---|---|
-| #3814 | askeladd | **SwiGLU FFN (param-matched)** | −1–4% val (exploratory; LM-literature signal) | MED |
-| #3815 | tanjiro | **TTA coord noise K=4/K=8** | −1–4% val (inference-only; OOD splits) | LOW |
-
-### Round-5 backlog (remaining unassigned, ordered by priority)
-
-All top-priority round-5 ideas now assigned. Remaining backlog:
-1. **re-curriculum** — sample-weight schedule by log_Re (MED-HIGH risk; dataset-preprocessing complexity)
-2. **div-free-penalty** — physics-informed ∇·u=0 soft constraint (HIGH risk; proxy divergence is weak on unstructured meshes)
-3. **bf16 mixed-precision** — 2× throughput → could enable --epochs ~24 in 30 min with cosine co-design (highest tier-change candidate from cross-cutting observations)
-4. **Camber symmetry augmentation** — (x→x, z→−z) along chord + flip AoA sign; doubles effective training data along a known symmetry
-
-## Round-4a / Round-4b closeout (W&B-verified, awaiting student submissions)
-
-All 7 round-4 follow-ups regressed vs baseline 83.4954. The single near-miss (nezuko AoA std=0.02 at val=84.96, +1.47) reaffirms that augmentation on flow-condition scalars is at best neutral. Augmentation gains in this launch are concentrated on coord noise (#3632); architecture scaling (FFN width, attention heads, depth, hidden width) is exhausted at the 30-min budget.
-
-The only winner is thorfinn #3691 (epochs=12 / slower cosine), at W&B val≈82.50, test≈74.10 — pending terminal SENPAI-RESULT submission to merge.
-
-## Round-4 W&B verdicts (07:25 UTC; awaiting student SENPAI-RESULT submissions)
-
-| PR | Student | Best run | val_avg | test_avg | Δ val vs 83.50 | Verdict |
-|---|---|---|---|---|---|---|
-| #3691 | thorfinn | `zqxkh9np` | 82.500 | 74.102 | −1.2% | **val WIN, test +0.4% — review** |
-| #3718 | nezuko | `4h64yzzl` | 84.962 | 75.557 | +1.8% | close (marginal) |
-| #3692 | tanjiro | `xu5e6cul` | 85.980 | 75.300 | +3.0% | close |
-| #3717 | frieren | `mynslale` | 86.289 | 77.073 | +3.3% | close |
-| #3690 | edward | `96tusrhs` | 86.319 | 75.853 | +3.4% | close |
-| #3714 | alphonse | `j8rnxpc4` | 88.227 | 77.436 | +5.7% | close |
-| #3692 | tanjiro | `yg32qo3i` | 89.187 | 79.578 | +6.8% | (same PR alt arm) |
-| #3715 | askeladd | `0ezsswb4` | 93.174 | 83.387 | +11.6% | close (large regression) |
-| #3741 | fern | (none yet) | — | — | — | run not yet started |
-
-**Plateau signal:** 7 of 8 round-4 experiments outright failed; thorfinn's val win comes with a test regression. The model's training-time-limited regime + augmentation saturation hypothesis is confirmed — incremental architecture/loss/aug tweaks are exhausted. Time to escalate strategy tier per Plateau Protocol.
-
-## Potential next research directions (round 5+, ESCALATED per Plateau Protocol)
-
-Round 4 had 7 failures and 1 marginal val-only win. The incremental neighborhood is exhausted. The next round must use **bigger swings** — change tier of the strategy rather than tune within the current one.
-
-### Tier change candidates (high upside, higher risk)
-1. **bf16 mixed-precision** — 2× throughput. At constant 30-min budget, ~20 epochs instead of 10. Combined with cosine schedule co-design (T_max=20), this could unlock a different regime entirely. Currently the model is training-time-limited; this is the single largest training-side intervention not yet tried.
-2. **Physics-informed loss term** — divergence-free penalty (∇·u=0) on velocity field, OR mass conservation constraint. Adds an inductive bias the L1 pointwise loss cannot impose. High complexity but high upside.
-3. **Camber symmetry augmentation** — reflect (x→x, z→−z) along chord and flip AoA sign. Doubles effective training data along a symmetry the dataset definitely respects. Combined with coord noise, could unlock substantial OOD generalization on geom splits.
-4. **Multi-scale Fourier PE** — frequencies span multiple decades (e.g., 4 log-spaced from 1 to 32) rather than current narrow band. Could let early layers attend to far-field while preserving boundary-layer detail.
-5. **Slice-token-aware attention** — re-examine the slice mechanism. Currently slice_num=64 is hardcoded. Try slice_num=32 (faster) or learnable slice positions (more expressive). The slice mechanism is the architectural distinguisher of Transolver and least explored.
-6. **Test-time augmentation** — average predictions over coord-noise variants at inference. Free win at val/test if it works.
-7. **Sliding-window training schedule** — train epochs 0–5 at full resolution, then fine-tune epochs 6–10 with reduced lr and no augmentation. Decouples augmentation regime from final convergence.
-
-### Single-flag confirmatory experiments (low risk, complementary)
-8. **--epochs 12 retry** — confirm or refute thorfinn's val-only win. If real, merge despite test-side noise.
-9. **slice_num=32** — half the slice count; never tested.
-10. **gradient accumulation batch_size=8 effective** — increase effective batch without VRAM cost.
+| askeladd | `swiglu-epochs12` | SwiGLU + --epochs 12 stack | Best val still at epoch 10/10 — more training is the clearest next win |
+| alphonse | `swiglu-mlp-ratio-3` | mlp_ratio=3 with SwiGLU (inner_dim=320) | Student suggested this; gated FFNs benefit from wider inner dims; mlp_ratio=4 vanilla failed but gating changes the regime |
+| fern | `swiglu-attn-dropout` | attn_dropout=0.1 on SwiGLU baseline | Frieren tests attn-dropout WITHOUT SwiGLU; this tests the combination on the new baseline |
 
 ## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
 
@@ -178,23 +79,32 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 | Threshold | Fraction of values above |
 |---|---|
-| >1.5σ | 14.11% |
 | >2.0σ | 1.37% |
 | >2.5σ | 0.33% |
 | >2.7σ | 0.046% |
-| >2.88σ | 0.0006% |
 | >3.0σ | 0.000% |
 
-**Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing (truncated-SDF practice). The surface-side (raw≈0) is the lower tail; the far-field side (raw=5) is the upper bound. So 3σ clipping is a no-op on this dataset. Tighter clip values (2.5, 2.0) would actually touch the surface-side tail near sharp leading/trailing edges.
+**Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing. Clip=3σ is a no-op. Tighter clip values (2.5, 2.0) would touch the surface-side tail near sharp leading/trailing edges.
 
-## Cross-cutting observations
+## Round-5 backlog (unassigned, ordered by priority — all vs new SwiGLU baseline 64.24)
 
-- **Coord noise augmentation is a huge win** (+5.4% val) — suggests augmentation is a rich unexplored axis. Feature noise and Re perturbation are the immediate follow-ups.
-- **lr footgun: Config.lr default = 5e-4, NOT 1e-3.** The Fourier PE baseline ran at 1e-3 explicitly; coord noise won at 5e-4 (default). Testing lr=1e-3 + coord noise is the highest-priority open experiment.
-- **Width and depth scaling are budget-constrained.** n_hidden ≥ 176 and n_layers=6 both regress within 30 min. The winning path is augmentation + loss + PE — not architecture.
-- **Val curves still descending at epoch 10** for every experiment → --epochs 12 is worth testing.
-- **Per-channel heads (frieren #3479)** showed val=88.96 at lr=5e-4. Under-characterized: lr=1e-3 rerun is live.
-- **Learnable Fourier freqs (askeladd)** showed val=88.02 — ties old baseline, slightly better. Retry running; if confirmed marginal winner, close.
-- **p_weight=3 (alphonse)** showed val=86.52 vs OLD baseline 88.24 — beaten by coord noise merge. Retry now vs new 83.50 is running — almost certainly a close.
-- **num_freq=2 (nezuko)** at val=89.45 — worse than num_freq=4. num_freq=4 confirmed sweet spot. Close num_freq sweep.
-- **slice_num=96 (fern)** at val=88.82 — no improvement vs num_freq=4 baseline. Close.
+1. **SwiGLU + n_hidden=176** — width scaling failed pre-SwiGLU (val=88.45 at 83.50 baseline); SwiGLU changed the regime; worth one test at the new baseline
+2. **bf16 mixed-precision** — 2× throughput → ~20 epochs in 30 min. Previously tested as bf16+batch_size=8 (failed); SwiGLU may interact better with bf16 precision
+3. **re-curriculum** — sample-weight schedule by log_Re (MED-HIGH risk; dataset-preprocessing complexity)
+4. **camber symmetry augmentation** — (x→x, z→−z) along chord + flip AoA sign; doubles effective training data
+5. **slice_num=32** — fewer, more aggregated slice tokens; never tested at SwiGLU baseline
+6. **swiglu-mlp2-gate** — gate the output head `mlp2` with SwiGLU(hidden_dim, hidden_dim*mlp_ratio, out_dim); student suggestion #4 from #3814
+
+## Potential next research directions (post-round-5)
+
+### Tier change candidates (high upside, higher risk)
+1. **SwiGLU + n_layers=6** — depth scaling failed pre-SwiGLU at epoch 8 (under-converged); with SwiGLU expressivity gain and epochs=12, might now be viable at this training budget
+2. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity field. High complexity but high upside.
+3. **Multi-scale Fourier PE** — frequencies spanning multiple decades (e.g., 4 log-spaced from 1 to 32)
+4. **Learnable slice positions** — make slice_num=64 positions trainable rather than fixed attention aggregation
+
+### Confirmed exhausted (do not retry)
+- n_hidden=176/192, n_layers=6 (pre-SwiGLU), slice_num=96/128, mlp_ratio=4 (vanilla), n_head=8
+- lr=1e-3 + coord noise (3-seed fail), Huber loss, per-channel p-weighting, SGDR, SWA, EMA
+- Feature noise aug, AoA jitter, coord_noise std sweep (std=0.03/0.005), eta_min sweep
+- Per-domain output norm, per-channel output heads, learnable Fourier freqs

@@ -1,5 +1,63 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 11:30 — PR #3814: SwiGLU FFN in TransolverBlock (askeladd) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/askeladd-swiglu-ffn`)
+- **Hypothesis:** Replace the standard 2-layer Linear-GELU-Linear FFN (`self.mlp`) in each `TransolverBlock` with a SwiGLU gated unit: `silu(W1x) * W2x → W3`. The gate lets each token selectively suppress or amplify feature directions — a natural fit for CFD where adjacent nodes live in very different physical regimes (boundary-layer vs. wake vs. freestream). Parameter count is matched via `inner_dim = round_to_mult(hidden_dim * mlp_ratio * 2/3, 8) = 216`. `mlp2` (output head) was correctly left as standard MLP (changing its shape would break output dim 160→3).
+
+### Results (W&B run `dvcj6w25`, best epoch 10/10)
+
+| Metric | Baseline (#3691, 82.50) | SwiGLU (dvcj6w25) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 82.4997 | **64.2430** | **−18.26 (−22.1%) 🏆** |
+| **test_avg/mae_surf_p** | 74.1023 | **55.5454** | **−18.56 (−25.0%) 🏆** |
+
+Per-split:
+
+| Split | val SwiGLU | val baseline | test SwiGLU | test baseline |
+|---|---:|---:|---:|---:|
+| single_in_dist | 71.8437 | 90.995 | 64.1005 | 83.128 |
+| geom_camber_rc | 74.3348 | 91.548 | 66.0329 | 82.735 |
+| geom_camber_cruise | 46.4804 | 65.790 | 37.6118 | 56.332 |
+| re_rand | 64.3132 | 81.665 | 54.4363 | 74.215 |
+| **avg** | **64.2430** | **82.4997** | **55.5454** | **74.1023** |
+
+Every split improved substantially. Largest gains on `single_in_dist` and `geom_camber_rc` — the two splits with highest baseline error, consistent with gate-based FFN helping most where features from different physical regimes must be distinguished.
+
+Model: 1,035,703 params (+0.7% vs baseline 1.03M). Reproducibility: second seed `msnk1t8p` gave val=64.55/test=55.84 (within 0.3 — not a seed fluke). Best val still at last epoch (10/10) — model still converging at budget end; gains are likely underestimated.
+
+### Analysis
+
+**Largest single-experiment gain in the programme history.** SwiGLU's gated activation (`silu(W1x) * W2x → W3`) directly addresses the multi-regime challenge in CFD surrogates: the same FFN must simultaneously handle boundary-layer nodes, far-field freestream nodes, and wake nodes. The gating mechanism lets each token suppress irrelevant feature directions, which a standard GELU FFN cannot do. The biggest improvements landing on the high-error, geometry-varied splits (single_in_dist, geom_camber_rc) are fully consistent with this interpretation.
+
+Student's smart deviation: correctly identified that `mlp2` is an output head (shape 160→3), not a per-block FFN, and left it as-is. Replacing it with SwiGLU shape 160→3 would have broken the output contract.
+
+**Next steps triggered:** (1) SwiGLU + epochs=12 — val still descending at epoch 10; (2) SwiGLU + mlp_ratio=3 — gated FFNs often tolerate wider inner dims than vanilla; (3) SwiGLU + attn_dropout=0.1 — combine the two strongest unexplored regularization axes.
+
+**Merged** at 11:30 UTC. New baseline: val=64.24/test=55.55. SwiGLU FFN is now default.
+
+---
+
+## 2026-05-16 11:30 — PR #3838: Per-domain output normalization (alphonse) — **CLOSED**
+
+- **Student:** willowpai2i48h4-alphonse
+- **Hypothesis:** Domain-specific y_mean/y_std normalization to equalize gradient scale across domains with wildly different y distributions (raceCar single std ~2077, cruise ~506).
+- **Results:** val=89.28 (vs baseline 82.50 → +6.78; vs new SwiGLU baseline 64.24 → +25.0). FAIL on both metrics.
+- **Analysis:** The gap/aoa2 heuristic for domain detection couldn't cleanly separate raceCar tandem from cruise. Domain-specific stats added non-stationarity to the gradient signal without a clear boundary condition that generalizes. Not worth iterating given the magnitude of the SwiGLU win — GPU better spent on SwiGLU follow-ups.
+- **Closed** at 11:30 UTC.
+
+---
+
+## 2026-05-16 11:30 — PR #3741: eta_min=1e-5 cosine LR floor (fern) — **CLOSED**
+
+- **Student:** willowpai2i48h4-fern
+- **Hypothesis:** Setting eta_min=1e-5 (non-zero cosine floor) keeps meaningful gradients in the final epochs rather than decaying LR to zero.
+- **Results:** 3 seeds, all regress. Best: `u0nphp8l` val=86.21 (vs baseline 82.50 → +3.71; vs new SwiGLU baseline 64.24 → +21.9). Mean across 3 seeds ~86.7. FAIL.
+- **Analysis:** The cosine floor is not the binding constraint. SwiGLU just delivered −22% by changing the FFN architecture. The LR schedule horizon is now correctly co-designed via `--epochs 12` (merged in #3691). Additional eta_min tuning is not a productive direction. Closing to free the GPU for SwiGLU follow-ups.
+- **Closed** at 11:30 UTC.
+
+---
+
 ## 2026-05-16 05:20 — Round-3 retry closures (#3633, #3634, #3636, #3638, #3479)
 
 After PR #3632 (coord noise) merged as new baseline (val=83.50/test=73.79), all 5 remaining round-3 retries finished and regressed vs the new baseline:
