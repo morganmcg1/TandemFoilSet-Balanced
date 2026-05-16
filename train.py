@@ -253,20 +253,44 @@ class Transolver(nn.Module):
 
 
 class TransolverFiLM(Transolver):
-    """Transolver with single-point FiLM conditioning on log(Re) (dim 13)."""
+    """Transolver with single-point FiLM conditioning on log(Re) (dim 13).
+
+    Plus a parallel surface-only decoder head that adds a zero-initialized
+    residual correction on surface nodes only.
+    """
 
     def __init__(self, *args, film_mid: int = 64, **kwargs):
         super().__init__(*args, **kwargs)
         self.film = FiLM(cond_dim=1, hidden_dim=self.n_hidden, mid_dim=film_mid)
+        # Surface-only residual head — same shape as the trunk's mlp2,
+        # zero-init final layer so training starts identical to baseline.
+        out_dim = self.blocks[-1].mlp2[-1].out_features  # = 3
+        self.surf_head = nn.Sequential(
+            nn.Linear(self.n_hidden, self.n_hidden), nn.GELU(),
+            nn.Linear(self.n_hidden, out_dim),
+        )
+        nn.init.zeros_(self.surf_head[-1].weight)
+        nn.init.zeros_(self.surf_head[-1].bias)
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data["is_surface"].unsqueeze(-1).float()  # [B, N, 1]
         re_cond = x[..., 13:14]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         fx = self.film(re_cond, fx)
-        for block in self.blocks:
+        # All blocks except the last
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return {"preds": fx}
+        # Manually expand the last (last_layer=True) block so we can
+        # capture the pre-mlp2 hidden state for the surface head.
+        last = self.blocks[-1]
+        fx = last.attn(last.ln_1(fx)) + fx
+        fx = last.mlp(last.ln_2(fx)) + fx
+        h = last.ln_3(fx)                    # shared hidden state [B, N, hidden]
+        vol_pred = last.mlp2(h)              # baseline 3-ch projection
+        surf_correction = self.surf_head(h)  # surface residual (zero at init)
+        pred = vol_pred + is_surface * surf_correction
+        return {"preds": pred}
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +336,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, pos_enc) -> dict[s
             # RFF computed from unnormalized (x, z) coords; concat to normalized x.
             rff = pos_enc(x[..., 0:2])
             x_aug = torch.cat([x_norm, rff], dim=-1)
-            pred = model({"x": x_aug})["preds"]
+            pred = model({"x": x_aug, "is_surface": is_surface})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -586,7 +610,7 @@ for epoch in range(MAX_EPOCHS):
         # RFF computed from unnormalized (x, z) coords; concat to normalized x.
         rff = pos_enc(x[..., 0:2])
         x_aug = torch.cat([x_norm, rff], dim=-1)
-        pred = model({"x": x_aug})["preds"]
+        pred = model({"x": x_aug, "is_surface": is_surface})["preds"]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
