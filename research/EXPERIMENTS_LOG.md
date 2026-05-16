@@ -709,6 +709,30 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 09:30 — PR #3783 — EMA decay 0.998→0.997 probe (MERGED → new baseline)
+
+- **Branch:** `charliepai2i48h1-alphonse/ema-0997-probe`
+- **Hypothesis:** Probe whether EMA window can be tightened further from 0.998 (500 steps, 14-17% of budget) to 0.997 (330 steps, ~10% of budget). Monotone trend from 0.999→0.998 not yet bracketed.
+- **Results vs baseline (val=81.16, test=71.77):**
+
+| Metric | Baseline (EMA=0.998) | EMA=0.997 | Δ |
+|--------|----------------------|-----------|---|
+| `val_avg/mae_surf_p` | 81.16 | **80.88** | **-0.34%** |
+| `test_avg/mae_surf_p` | 71.77 | **71.18** | **-0.82%** |
+| `val_single_in_dist` | 94.05 | 94.59 | +0.57% |
+| `val_geom_camber_rc` | 92.73 | 90.88 | -2.00% |
+| `val_geom_camber_cruise` | 60.45 | 61.04 | +0.98% |
+| `val_re_rand` | 77.42 | 77.02 | -0.52% |
+| Best epoch | 18 | 18 | — |
+
+- **Metrics path:** `models/model-ema-0997-probe-20260516-082433/metrics.jsonl`
+- **Decision:** MERGED. Both val and test improved together (correlated signal). Single-line change, zero complexity. Per CLAUDE.md merge policy: small wins compound.
+- **Analysis:** Diminishing returns clear — 0.999→0.998 was -3.88%, 0.998→0.997 is -0.34% (10× smaller gain). The EMA axis has effectively converged at [0.997, 0.998]. Per-split reversal (single/cruise regressed, rc improved) consistent with saturation rather than regime change. **EMA axis CLOSED.**
+- **Student suggestion:** "Move the lever" — next experiment should be orthogonal (capacity, architecture, loss). On-point advice incorporated into next assignment.
+- **New baseline: val_avg/mae_surf_p = 80.88, test_avg/mae_surf_p = 71.18.**
+
+---
+
 ## 2026-05-16 09:00 — PR #3601 — EMA decay 0.999→0.998 re-test on slice_num=16 (MERGED → new baseline)
 
 - **Branch:** `charliepai2i48h1-alphonse/ema-0998-sn16-run1`
