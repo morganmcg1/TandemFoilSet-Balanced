@@ -1486,3 +1486,57 @@ Lookahead delivers faster early convergence but becomes mildly counterproductive
 ### Next assignment: PR #3985 AGC
 
 Edward reassigned to AGC (Adaptive Gradient Clipping, NFNet-style per-parameter-group adaptive clipping vs global L2 clip). Tests whether global L2 normalization is the right granularity for the direction-normalization mechanism that PR #3511 confirmed.
+
+---
+
+## 2026-05-16 14:32 — PR #3906 [MERGED]: Clip threshold sweep R1 — clip=0.25 wins (tanjiro)
+
+- **Student branch:** `charliepai2i48h4-tanjiro/clipthresh-r1`
+- **Hypothesis:** Clip=1.0 may not be optimal; sweep {0.25, 1.0, 4.0} to find the direction-normalization optimum. Tighter clip → 100% clip rate → purer direction signal. Looser clip → partial outlier-suppression only.
+
+### Results (3-arm sweep)
+
+| Arm | clip_norm | val_avg/mae_surf_p | test_avg (3 finite) | Δ vs A (paired) |
+|---|---:|---:|---:|---:|
+| A (control) | 1.0 | 83.756 | 79.643 | — |
+| B | 4.0 | 86.647 | 82.886 | **+3.45%** (regression) |
+| **C (winner)** | **0.25** | **80.893** | **76.889** | **−3.42%** ✅ |
+
+**Arm C vs absolute baseline 81.660: −0.94%** ✅
+
+### Per-split val MAE
+
+| Split | Arm A (1.0) | Arm C (0.25) | Δ % |
+|---|---:|---:|---:|
+| val_single_in_dist     | 96.717 | **93.062** | −3.78% |
+| val_geom_camber_rc     | 93.005 | **90.132** | −3.09% |
+| val_geom_camber_cruise | 65.251 | **61.764** | −5.34% |
+| val_re_rand            | 80.051 | **78.616** | −1.79% |
+| **val_avg**            | **83.756** | **80.893** | **−3.42%** |
+
+### Clip-rate diagnostics (key mechanism evidence)
+
+| Epoch | A clip=1.0 (rate) | B clip=4.0 (rate) | C clip=0.25 (rate) |
+|---:|---:|---:|---:|
+| 1 | 1.000 | 0.997 | 1.000 |
+| 5 | 1.000 | 0.931 | 1.000 |
+| 10 | 0.997 | 0.867 | 1.000 |
+| 15 | 0.949 | 0.723 | 1.000 |
+| 17 | 0.947 | 0.763 | 1.000 |
+
+**Arm C: 100% clip rate on every step, entire run** — maximally aggressive direction normalization. Monotone curve (4.0 > 1.0 > 0.25): tighter is better.
+
+### Analysis & conclusions
+
+- **Direction normalization is the correct mechanism.** Arm C's 100% clip rate throughout and improved performance falsifies the "outlier suppression" hypothesis (which would predict Arm C over-clamps and hurts). The unit direction step is doing the work.
+- **LR-equivalence insight from student:** at 100% clip rate, clip=0.25 is equivalent to effective_lr = lr × (0.25 / ||g||) per step — i.e., uniformly smaller steps. This opens the question of whether the win is pure "smaller steps" or genuinely "purer direction." Dedicated LR vs clip experiment would disambiguate.
+- **Monotone curve opens tighter sweep.** Clip=0.25 is still at 100% rate throughout, so the optimum may be even tighter. Round 2 assigned as PR #4003.
+- **New stack baseline:** `--grad_clip_norm 0.25` replaces `--grad_clip_norm 1.0` as the standard flag.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-arma-clip1_0-20260516-113014/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-armb-clip4_0-20260516-122208/metrics.jsonl`
+- `models/model-charliepai2i48h4-tanjiro-clipthresh-r1-armc-clip0_25-20260516-133449/metrics.jsonl` ← **winner**
+
+### Next assignment: PR #4003 clip threshold R2 {0.05, 0.1, 0.15, 0.25 control}

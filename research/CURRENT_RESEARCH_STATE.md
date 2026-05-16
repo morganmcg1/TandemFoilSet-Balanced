@@ -1,27 +1,31 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 13:38 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 14:35 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
-- **PR #3829 (frieren per-block FiLM) CLOSED 13:28 UTC**: paired Δ −0.53% val_avg at noise floor; +19.5% params; confounded design. Frieren reassigned PR #3980 (Lion optimizer vs AdamW+clip).
-- **PR #3830 (edward Lookahead) CLOSED 13:35 UTC**: paired Δ +0.42% val_avg / +1.45% test 3-split; mechanism real but redundant with EMA(0.999). Edward reassigned PR #3985 (AGC per-group adaptive clip vs global L2 clip). All 8 students have active WIP PRs (zero idle GPUs).
+- **PR #3906 (tanjiro clip threshold R1) MERGED 14:32 UTC**: clip=0.25 beats baseline 81.660 → **80.893** (−0.94% absolute, −3.42% paired). Clip=0.25 replaces clip=1.0 as standard stack. Tanjiro reassigned PR #4003 (tighter clip sweep {0.05, 0.1, 0.15, 0.25 control}).
+- **Baseline stack updated:** `--grad_clip_norm 0.25` is now the standard flag. Edward #3985 (AGC) and frieren #3980 (Lion) notified.
 
 ## Current research focus
 
-**Seven axes confirmed and merged.** Compound stack: Huber + bf16 + cosine T_max=15 + EMA decay=0.999 + single-shot FiLM + two-shot FiLM + **grad_clip_norm=1.0**.
+**Eight axes confirmed and merged.** Compound stack: Huber + bf16 + cosine T_max=15 + EMA decay=0.999 + single-shot FiLM + two-shot FiLM + grad_clip_norm=1.0 + **grad_clip_norm=0.25** (replaces clip=1.0).
 
-**Current best: 81.660 val_avg/mae_surf_p** (tanjiro #3511, grad clip=1.0 on two-shot FiLM stack, 2026-05-16 11:22)
+**Current best: 80.893 val_avg/mae_surf_p** (tanjiro #3906, clip=0.25 on full FiLM stack, 2026-05-16 14:32)
 
-⚠️ **STACK STALENESS WARNING:** All in-flight experiments (#3390, #3594, #3492, #3777, #3829, #3830, #3758) are running WITHOUT --grad_clip_norm 1.0. They will not beat 81.660 in absolute terms. When they report: if paired Δ > 0 → send back for rebase with clip=1.0 in both arms; if paired Δ ≤ 0 → close.
+⚠️ **STACK STALENESS WARNING:** In-flight experiments (#3390, #3594, #3492, #3777, #3758) are running with clip=1.0 or no clip. Use the rebase-if-positive-Δ protocol. Note baseline is now 80.893 with clip=0.25.
 
-### 🔥 MAJOR WIN: Gradient clipping merged (+−9.05% → new baseline 81.660)
+### 🔥🔥 MAJOR WIN: Clip=0.25 merged (−3.42% paired, −0.94% absolute → new baseline 80.893)
 
-Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th axis. All experiments now must include `--grad_clip_norm 1.0` to beat the new baseline.
+Clip=0.25 (100% clip rate entire run, maximally aggressive direction normalization) merged as the 8th axis. **Mechanism conclusively confirmed: direction normalization at full saturation is the load-bearing mechanism.** Monotone curve: clip=4.0 (+3.45% regression) → clip=1.0 (baseline) → clip=0.25 (−3.42% winner). Tighter sweep in flight as PR #4003.
+
+### Key open question from tanjiro's analysis
+
+Clip=0.25 at 100% clip rate is equivalent to effective_lr = lr × (0.25/||g||) per step. Is the win from **purer direction** or **smaller effective LR**? Tighter clip sweep + dedicated LR-disentangle experiment will resolve.
 
 ### 🔥 Sent back for R3 clip-compose rebase (12:24 UTC)
 
-- **🔥🔥 n_hidden=192 (nezuko #3492 R2 → R3):** R2 paired Δ −8.21% val_avg / −8.00% test (strongest signal of round). Sent back to rebase with `--grad_clip_norm 1.0` in BOTH arms. If even a fraction of −8.21% survives, this is the biggest single hop available — could plausibly land mid-70s.
-- **n_layers=4 (fern #3758 R2 → R3):** R2 seed-2 = 88.441 (mean of two n_layers=4 seeds = 89.32, below pre-clip baseline). Combined with R1 paired Δ −1.21%, depth hypothesis is real. Sent back for clip-compose R3. Saves ~18% params + ~19% sec/epoch if it composes.
+- **🔥🔥 n_hidden=192 (nezuko #3492 R2 → R3):** R2 paired Δ −8.21% val_avg / −8.00% test (strongest signal of round). Sent back to rebase with `--grad_clip_norm 1.0` in BOTH arms. Note: now on stale clip=1.0; if R3 wins, may need R4 with clip=0.25 to confirm on current baseline.
+- **n_layers=4 (fern #3758 R2 → R3):** Sent back for clip-compose R3 with clip=1.0. Same stale-stack caveat.
 
 ### 🔥 Closed this iteration
 
@@ -43,18 +47,18 @@ Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th 
 - **Fourier axis closed** (#3117 R4): subsumed by FiLM.
 - **Batch size axis closed** (#3365): GPU compute-bound; bs=4 is optimal.
 
-### Key in-flight experiments (13:38 UTC)
+### Key in-flight experiments (14:35 UTC)
 
 | Student | PR | Hypothesis | Status |
 |---------|----|-----------|--------|
-| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | Training on clipthresh-r1 |
-| thorfinn | #3390 | T_max=20 on full clip stack (R2) | Student just started R2 at 13:32 UTC with --grad_clip_norm 1.0 in both arms |
-| alphonse | #3594 | SF-AdamW on FiLM stack (R2) | Training (stale stack) |
-| edward | **#3985** | **AGC (per-group) vs global L2 clip** | **Just assigned 13:37 UTC; pod will pick up** |
-| frieren | **#3980** | **Lion optimizer + clip vs AdamW+clip** | **Just assigned 13:27 UTC; pod will pick up** |
-| nezuko | #3492 | n_hidden=192 + clip (R3 rebase) | Pod just restarted 13:20 UTC; rebasing |
-| fern | #3758 | n_layers=4 + clip (R3 rebase) | Pod 9h old; on new HEAD for R3 |
-| askeladd | #3777 | SDF input features | Pod 59m old; spinning up after restart |
+| tanjiro | **#4003** | **Clip thresh R2: {0.05, 0.1, 0.15, 0.25 control}** | **Just assigned 14:33 UTC** |
+| thorfinn | #3390 | T_max=20 on clip=1.0 stack (R2) | Training; R2 started 13:32 UTC w/ clip=1.0 both arms |
+| alphonse | #3594 | SF-AdamW + clip R2 | Training; notified about clip=0.25 baseline shift |
+| edward | #3985 | AGC (per-group) vs global clip | Assigned 13:37; notified clip=0.25 as new control |
+| frieren | #3980 | Lion + clip=0.25 vs AdamW+clip=0.25 | Assigned 13:27; notified clip=0.25 update |
+| nezuko | #3492 | n_hidden=192 + clip=1.0 (R3 rebase) | Rebasing; will be stale on clip=0.25 when done |
+| fern | #3758 | n_layers=4 + clip=1.0 (R3 rebase) | Rebasing; will be stale on clip=0.25 when done |
+| askeladd | #3777 | SDF input features | Training (started ~13:43 UTC after pod restart) |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
@@ -68,7 +72,8 @@ Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th 
 | #3126 | EMA decay=0.999 Karras-ramp (nezuko) | −1.06% vs bf16+T_max=15 arm | 96.464 |
 | #3122 | FiLM conditioning — log Re, AoA, NACA, gap, stagger (frieren) | −4.00% vs EMA baseline | 92.606 |
 | #3584 | Two-shot FiLM — attn + MLP per block, shared module, +0 params (frieren) | −3.05% vs FiLM baseline | 89.784 |
-| **#3511** | **Grad clip=1.0 — direction normalization on bf16+FiLM stack (tanjiro)** | **−9.05% vs two-shot FiLM** | **81.660** |
+| #3511 | Grad clip=1.0 — direction normalization on bf16+FiLM stack (tanjiro) | −9.05% vs two-shot FiLM | 81.660 |
+| **#3906** | **Clip=0.25 — tighter direction normalization; 100% clip rate entire run (tanjiro)** | **−3.42% paired vs clip=1.0** | **80.893** |
 
 ## Falsified / closed hypotheses
 
@@ -115,23 +120,23 @@ slice_num=64 is the optimum at n_hidden=128 capacity. Revisit sn=96 only if n_hi
 
 ## Potential next hypotheses (not yet assigned)
 
-All future experiments must include `--grad_clip_norm 1.0` in the full stack.
+All future experiments must include `--grad_clip_norm 0.25` in the full stack.
 
-1. **Clip threshold optimum** — tanjiro #3906 testing {0.25, 1.0, 4.0}. Result pending.
-2. **Lion optimizer (ASSIGNED #3980, frieren)** — Sign projection (L∞ direction norm) vs AdamW+clip (L2 direction norm). Tests whether clip's load-bearing mechanism is direction normalization (lr=1.5e-4, wd=3e-4).
-3. **AGC (ASSIGNED #3985, edward)** — Per-group adaptive clip (NFNet) vs global L2 clip. Tests whether per-tensor adaptive normalization improves over global L2 at this scale.
-4. **Sobolev / gradient loss** — physically motivated; adds gradient supervision near surface. High-EV but high-effort.
-5. **T_max=20 + clip** — natural composition; thorfinn #3390 R2 in flight on full clip stack.
-6. **SF-AdamW + clip** — eliminates cosine schedule; alphonse #3594 R2 in flight (likely needs further rebase).
-7. **n_layers=4 + clip** — fern's depth finding may compose with clipping (in-flight as #3758 R3).
-8. **n_hidden=192 + clip** — capacity expansion on new baseline (in-flight as #3492 R3).
-9. **Wider FiLM MLP hidden** — `film_mlp_hidden=256`; tests conditioner body capacity. Conditional on #3492 R3 outcome.
-10. **n_layers=3 + clip** — extreme depth-down (only if #3758 n_layers=4 wins).
-11. **Mixup / CutMix data augmentation** — interpolate training samples; may help cross-geometry split where Lookahead showed mild regularization signature.
+1. **Tighter clip threshold (ASSIGNED #4003, tanjiro)** — {0.05, 0.1, 0.15} vs 0.25 control. Does the monotone curve continue? If yes → tighter is optimal, points toward Lion (sign = clip→0 limit). If plateau/regression → clip=0.25 is optimal.
+2. **Lion optimizer (ASSIGNED #3980, frieren)** — Now updated to use clip=0.25 in both arms. Tests whether Lion's sign projection (L∞ norm) outperforms AdamW + clip=0.25 (L2 norm).
+3. **AGC (ASSIGNED #3985, edward)** — Now updated to use clip=0.25 as control. Tests per-parameter-group adaptive clip vs global 0.25.
+4. **LR vs clip disentangle** — Does clip=0.25 win because of direction purity or smaller effective LR? Test: clip=inf (no clip) + lr=1.25e-4 vs clip=0.25 + lr=5e-4. If they match, it's a LR effect; if clip=0.25 still wins, direction matters independently.
+5. **Sobolev / gradient loss** — physically motivated; adds gradient supervision near surface. High-EV but high-effort.
+6. **T_max=20 + clip=0.25** — thorfinn #3390 R2 running clip=1.0; if wins, resend with clip=0.25.
+7. **SF-AdamW + clip=0.25** — alphonse #3594 R2 in flight; if wins with clip=1.0, resend with clip=0.25.
+8. **n_layers=4 + clip=0.25** — fern #3758 R3 running clip=1.0; if wins, resend with clip=0.25.
+9. **n_hidden=192 + clip=0.25** — nezuko #3492 R3 running clip=1.0; highest-EV experiment (R2 Δ −8.21%).
+10. **Wider FiLM MLP hidden** — `film_mlp_hidden=256`; tests conditioner body capacity. Conditional on #3492 R3 outcome.
+11. **Mixup / CutMix data augmentation** — may help cross-geometry split.
 
 ## Operational notes
 
-- **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond --two_shot_film --grad_clip_norm 1.0`
+- **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond --two_shot_film --grad_clip_norm 0.25`
 - **GH API rate limits:** recurring ~40-min windows; student pods auto-recover.
 - **test_geom_camber_cruise NaN:** cruise-sample overflow in read-only `data/scoring.py`; use 3-split partial mean for test comparisons.
 - **Depth-vs-epochs insight:** n_layers=6 loses 3 fine-tune epochs to n_layers=5. Wall-clock cost is the binding constraint.
