@@ -1,11 +1,13 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 00:45
+- **Date:** 2026-05-16 01:45
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
 - **Primary metric:** `val_avg/mae_surf_p` (lower is better)
-- **Current baseline:** `val_avg/mae_surf_p = 79.52, test_avg=68.95` (PR #3514 edward H18 LayerScale; **#3197 askeladd EMA 74.18 is winner pending rebase**)
+- **Current baseline:** `val_avg/mae_surf_p = 79.52, test_avg=68.95` (PR #3514 edward H18 LayerScale)
+- **Top pending winner:** `#3517 frieren H19 DropPath=0.20: 73.55 val / 67.05 test` — **SENT BACK FOR REBASE + RETEST on H18 baseline**
+- **Second pending winner:** `#3197 askeladd H8v3 EMA=0.999: 74.18 val` — **rebased, WIP retest in progress**
 
 ## Merged improvements so far (baseline stack)
 
@@ -18,30 +20,29 @@
 | #3224 tanjiro H13 | GALE-style geom-cond per block + T_max=15 | -7.64 (-8.2%) | 85.16 |
 | #3423 edward H15 | SwiGLU gated FFN (replaces GELU) | -4.95 (-5.8%) | 80.21 |
 | **#3514 edward H18** | **LayerScale residual scaling (CaIT init=1e-6)** | **-0.69 (-0.86%)** | **79.52** |
-| *#3197 askeladd H8v3* | *EMA weights (decay=0.999) — PENDING MERGE* | *-5.34 (-6.7%)* | *74.18* |
 
-## Per-split current best (H18 baseline)
+## Per-split current best (H18 LayerScale baseline)
 
-| Split | val (H18) | val (EMA, pending) | test (H18) |
+| Split | val (H18) | val (DropPath 0.20, pending rebase) | test (H18) |
 |---|---|---|---|
-| `single_in_dist` | 104.62 | 98.18 | — |
-| `geom_camber_rc` | 93.29 | 81.38 | — |
-| `geom_camber_cruise` | 50.00 | 49.79 | — |
-| `re_rand` | 70.14 | 67.37 | — |
-| **avg** | **79.52** | **74.18** | **68.95** |
+| `single_in_dist` | 104.62 | 91.50 | — |
+| `geom_camber_rc` | 93.29 | 84.83 | — |
+| `geom_camber_cruise` | 50.00 | 49.93 | — |
+| `re_rand` | 70.14 | 67.92 | — |
+| **avg** | **79.52** | **73.55** | **68.95** |
 
 ## Current active WIP PRs (8 students, all assigned)
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| **#3197** | **askeladd** | **H8v3 EMA (val_avg=74.18, WINNER 6.7% gain)** | **Sent back for rebase onto new H18 baseline; merge after fix** |
+| **#3197** | **askeladd** | **H8v3 EMA decay=0.999 — val=74.18 on H15 baseline, now rebased onto H18** | **WIP retest** |
+| **#3517** | **frieren** | **H19 DropPath=0.20 — val=73.55 on H15 baseline, SENT BACK for H18 rebase + retest** | **WIP (rebase pending)** |
 | #3421 | nezuko | H14v2 cosine T_max=14 + eta_min=1e-5 single-arm retest | WIP |
-| #3467 | fern | H17 attention dropout sweep {0.05, 0.10} | WIP (picked up 00:21 UTC) |
-| #3517 | frieren | H19 DropPath stochastic depth {0.10, 0.20} | WIP |
+| **#3583** | **fern** | **H26 AdamW weight_decay sweep {0.001, 0.01, 0.05}** | **WIP (just assigned)** |
 | #3538 | thorfinn | H22 LR warmup (2-epoch linear) + cosine eta_min=1e-5 | WIP |
 | #3539 | alphonse | H23 slice_num sweep {32, 64, 128} | WIP |
 | #3540 | tanjiro | H24 OneCycleLR super-convergence | WIP |
-| **#3559** | **edward** | **H25 n_layers=6 deeper Transolver with LayerScale** | **WIP (just assigned)** |
+| #3559 | edward | H25 n_layers=6 deeper Transolver with LayerScale | WIP |
 
 ## Closed/Failed this round
 
@@ -51,39 +52,39 @@
 | #3210 | fern | H2 scale 4M params | Closed — cap-bound |
 | #3222 | nezuko | H9v2 Cautious AdamW | Closed — +1.0% vs H12 baseline |
 | #3201 | edward | H3 channel-loss (p=3, p=1.5) | Closed — severe in-dist regression |
-| #3375 | fern | H12b dropout sweep {0.05, 0.15, 0.20} | Closed — U-shape minimum at 0.10 |
-| #3318 | frieren | H6v2 SGDR+grad-clip | Closed — SGDR can't fire 2nd restart in 14-epoch budget |
+| #3375 | fern | H12b dropout sweep | Closed — U-shape, 0.10 confirmed optimal |
+| #3318 | frieren | H6v2 SGDR+grad-clip | Closed — can't fire 2nd restart in 14 epochs |
 | #3417 | thorfinn | H11b log1p alpha sweep | Closed — α=1.0 confirmed optimal |
 | #3184 | alphonse | H1 LinearNO ablation | Closed — +16% regression, attention essential |
 | #3461 | tanjiro | H16 FiLM multiplicative geom-cond | Closed — camber_rc structural regression |
+| #3467 | fern | H17 attention dropout {0.05, 0.10} | Closed — both arms regress; softmax routing low-entropy |
 
 ## Research insights so far
 
-1. **EMA is a major win**: -6.7% val, -8.9% test on full combined stack (pending merge). Orthogonal to architecture.
-2. **LayerScale confirms**: -0.86% val, -5.80% test. FFN gamma monotone with depth (textbook). Attention U-shaped. Cam_rc regression pattern (same as FiLM) — watch this.
-3. **SwiGLU FFN**: -5.8% val. OOD gains 1.5-1.7× in-dist. Gate modulation structural.
-4. **GALE geom-cond**: -8.2% val. Additive shift — NOT multiplicative (FiLM closed).
-5. **Log-domain transform**: -17.5%, α=1.0 optimal (confirmed).
-6. **FFN dropout=0.1**: Optimal, U-shape confirmed. Closed.
-7. **Cam_rc regression pattern**: Both FiLM and LayerScale regress on geom_camber_rc (+3.18 and +5.42 respectively). This split requires OOD geometry interpolation — multiplicative/scale-based mechanisms seem to hurt it. Only additive mechanisms (GALE) helped it. Flag for future experiments.
+1. **Regularization is the dominant lever at 1499 samples**: Every major win this round is some form of regularization — FFN dropout (-8.4%), DropPath (-8.3%), EMA (-6.7%). Architecture wins (SwiGLU, LayerScale) are smaller but compound.
+2. **DropPath=0.20 is the best raw result** (73.55 val, 67.05 test, pending H18 rebase confirmation). At 5 layers, 0.20 beats 0.10 because the regularizer needs more force at this depth.
+3. **EMA** (74.18 val) and **DropPath** (73.55 val) are orthogonal: stochastic depth operates at forward-pass training time; EMA operates on weight averaging at inference. Should compose.
+4. **Multiplicative/scale mechanisms hurt cam_rc**: FiLM (+structural regression) and LayerScale (+5.4% cam_rc, partly offset by test gains) — both harmed the hardest OOD split. Only additive (GALE) helped it.
+5. **Attention-weight noise doesn't help**: H17 attn dropout tried; failed. Residual-level stochastic depth (H19 DropPath) works. The mechanism matters: routing softmax is already low-entropy.
+6. **Weight decay 1e-4 is suspect**: Never tuned for this dataset. AdamW typically uses 0.01–0.1. Next probe: H26 sweep.
 
 ## Open questions
 
-- Does EMA compose with LayerScale? (Askeladd rebase will answer this post-merge)
-- Does n_layers=6 help now that LayerScale enables identity init for new blocks? (edward H25)
-- Does DropPath block-level regularization help on 1499 samples? (frieren H19)
+- Does DropPath compose with LayerScale? (frieren H19 rebase will answer — both are standard CaIT/DeiT companions targeting different axes)
+- Does EMA compose with DropPath+LayerScale? (askeladd H8v3 rebase/retest in progress)
+- Optimal weight_decay? (fern H26, 3-arm sweep)
 - Does LR warmup reduce early noise without hurting peak? (thorfinn H22)
 - What's optimal slice_num? (alphonse H23)
 - Does OneCycleLR super-convergence beat cosine for 14-epoch budget? (tanjiro H24)
-- Does attention dropout help? (fern H17)
 - Does T_max=14 + eta_min=1e-5 beat T_max=15? (nezuko H14v2)
-- **Cam_rc recovery**: How do we recover the geom_camber_rc split? It was gained by GALE (-12.7%) but partially lost by LayerScale (+5.4%). EMA pending shows rc=81.38 (partly recovered via weight averaging).
+- Does n_layers=6 help with LayerScale identity-init of new blocks? (edward H25)
 
-## Next directions
+## Next directions (after current wave resolves)
 
-- **Architectural**: Hierarchical attention, per-block independent geom_proj
-- **Loss**: Auxiliary lift/drag prediction head, physics-informed conservation terms
-- **Optimizer**: Lookahead, Lion, weight decay sweep
+- **Cam_rc recovery**: Still the hardest split. Pure additive mechanisms help; scale-based mechanisms hurt. Needs dedicated investigation — possibly per-split loss weighting.
+- **DropPath refinement**: Sweep 0.30–0.40 if 0.20 is confirmed optimal (frieren suggested it, trajectory still descending at timeout)
+- **Auxiliary loss**: Lift/drag prediction head — physics-informed auxiliary signal
+- **Optimizer**: Lion optimizer, Lookahead wrapper
 - **Data**: Geometry-derivative features (curvature, normals), TTA
-- **EMA refinements**: decay {0.9999, 0.999, 0.99}, EMA + BN/LN stats
-- **Cam_rc focus**: The hardest-to-improve OOD split. Pure additive mechanisms help; scale-based mechanisms hurt. Needs dedicated investigation.
+- **Architecture**: Per-block independent geom_proj, hierarchical attention
+- **EMA refinements**: decay {0.9999, 0.999, 0.99} sweep once H8v3 merges

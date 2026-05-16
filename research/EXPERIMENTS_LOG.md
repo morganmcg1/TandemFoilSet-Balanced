@@ -2,6 +2,28 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 01:30 — PR #3467: H17 attention dropout {0.05, 0.10} (fern) — **CLOSED**
+
+- Branch: `charliepai2i24h4-fern/attention-dropout`
+- Result vs H13 GALE reference (85.16, stale at time of assignment): arm 0.05 val=85.98 (+0.97%), arm 0.10 val=87.31 (+2.52%). Both regress.
+- Against current baseline (H18 LayerScale, 79.52): both arms regress severely (+8.1% / +9.6%).
+- Arm 0.05 had interesting test-side improvement (-1.3% test, driven by test_single_in_dist -4.98%) but val ranking metric regressed.
+- **Decision**: Close. Attention routing softmax (slice_num=64, 4 heads) doesn't benefit from dropout noise on weights — softmax is already low-entropy, so dropout corrupts more signal than overfitting it prevents.
+- Useful contrast: confirms H19 DropPath (residual-side) >> H17 attn dropout (weight-side) for this architecture.
+
+## 2026-05-16 01:30 — PR #3517: H19 DropPath {0.10, 0.20} on SwiGLU baseline (frieren) — **SENT BACK FOR REBASE**
+
+- Branch: `charliepai2i24h4-frieren/droppath`
+- Result vs H15 SwiGLU baseline (80.21): arm 0.10 val=75.65 (-5.7%), **arm 0.20 val=73.55 (-8.3%), test=67.05 (-8.4%)** — best raw metric this round.
+- best_epoch=11 with trajectory still descending sharply at timeout (sched T_max=15). Per-split: 0.20 dominates with -12.4% on val_single_in_dist (the dominant in-dist bottleneck).
+- Status: CONFLICTING (built on SwiGLU, advisor branch has H18 LayerScale). **Sent back for rebase + single-arm retest at max_drop_path=0.20 to confirm composition with LayerScale.**
+- Predicted compose value: val_avg ≤ 75 (likely 70-73). If confirmed, becomes the winner over askeladd EMA (74.18). Both target orthogonal axes (residual stochastic depth vs weight averaging) so could potentially compose.
+
+## 2026-05-16 01:45 — PR #3583: H26 AdamW weight_decay sweep {0.001, 0.01, 0.05} (fern) — **assigned**
+
+- Branch: `charliepai2i24h4-fern/weight-decay-sweep`
+- Hypothesis: Current `weight_decay=1e-4` is two orders of magnitude below standard transformer range (0.01–0.1). In the small-data, regularization-bound regime (1499 samples, 880K params), this should compound with FFN dropout, DropPath, and LayerScale. Three arms: {0.001, 0.01, 0.05}. Predicted: -1% to -4% val_avg.
+
 ## 2026-05-16 00:40 — PR #3559: H25 n_layers=6 deeper Transolver (edward) — **assigned**
 
 - Branch: `charliepai2i24h4-edward/n-layers-6`
