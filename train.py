@@ -213,12 +213,21 @@ class Transolver(nn.Module):
             nn.GELU(),
             nn.Linear(n_hidden, 2 * n_layers * n_hidden),
         )
+        # Per-node geometric FiLM: 11 local features (saf[2] + dsdf[8] + is_surface[1])
+        # at indices 2-12 of x. Produces per-node γ,β that sum additively with film_head.
+        self.geom_film_head = nn.Sequential(
+            nn.Linear(11, n_hidden),
+            nn.GELU(),
+            nn.Linear(n_hidden, 2 * n_layers * n_hidden),
+        )
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
         # Identity init AFTER apply (so trunc_normal_ doesn't overwrite zeros):
         # γ=0, β=0 → (1+γ)*fx + β = fx, model starts equivalent to baseline.
         nn.init.zeros_(self.film_head[-1].weight)
         nn.init.zeros_(self.film_head[-1].bias)
+        nn.init.zeros_(self.geom_film_head[-1].weight)
+        nn.init.zeros_(self.geom_film_head[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -235,12 +244,15 @@ class Transolver(nn.Module):
         # see data/prepare_splits.py:88-95): idx 13=log_Re, 14=AoA0, 18=AoA1.
         # Sample at node 0 since it's always a real (non-padding) node.
         cond = x[:, 0, [13, 14, 18]]  # [B, 3]
-        B = x.shape[0]
+        B, N = x.shape[:2]
         film = self.film_head(cond).view(B, self.n_layers, 2, self.n_hidden)
+        # Per-node geometric features: saf[2] + dsdf[8] + is_surface[1] at idx 2-12.
+        geom = x[:, :, 2:13]  # [B, N, 11]
+        geom_film = self.geom_film_head(geom).view(B, N, self.n_layers, 2, self.n_hidden)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
-            gamma = film[:, i, 0, :].unsqueeze(1)  # [B, 1, n_hidden]
-            beta = film[:, i, 1, :].unsqueeze(1)   # [B, 1, n_hidden]
+            gamma = film[:, i, 0, :].unsqueeze(1) + geom_film[:, :, i, 0, :]  # [B, N, n_hidden]
+            beta = film[:, i, 1, :].unsqueeze(1) + geom_film[:, :, i, 1, :]   # [B, N, n_hidden]
             fx = (1.0 + gamma) * fx + beta          # identity at init
             fx = block(fx)
         return {"preds": fx}
