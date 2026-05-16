@@ -56,9 +56,9 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | **#3634** | fern | slice_num 64→96 | WIP (run `i19cjebc` done at val=88.82; retry `fagaonns` running) | ~88.82 |
 | **#3636** | nezuko | num_freq sweep {2, 6} | WIP (num_freq=2: val=89.45; num_freq=6: FAILED; retry `2fnr2k1z` running) | ~89.45 |
 | **#3638** | alphonse | p_weight=3 pressure upweighting | WIP (run `va4qt6uq` done at val=86.52; retry `fort2r4i` running) | ~86.52 |
-| **#3639** | edward | **lr=1e-3 + coord noise compound** | WIP (assigned 04:35) | awaiting |
-| **#3640** | thorfinn | **Longer training --epochs 12** | WIP (assigned 04:35) | awaiting |
-| **#3641** | tanjiro | **Feature noise augmentation** | WIP (assigned 04:35) | awaiting |
+| **#3690** | edward | **lr=1e-3 + coord noise compound** | WIP (assigned 04:40) | awaiting |
+| **#3691** | thorfinn | **Longer training --epochs 12** | WIP (assigned 04:40) | awaiting |
+| **#3692** | tanjiro | **Feature condition noise aug (cols 2:24)** | WIP (assigned 04:40) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
@@ -86,9 +86,9 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
-| #3639 | edward | lr=1e-3 + coord noise (single flag, zero code) | −2–5% (lr compound) |
-| #3640 | thorfinn | --epochs 12 longer training (zero code) | −1–3% (free gradient steps) |
-| #3641 | tanjiro | Feature noise aug on condition cols 2:24 | −1–3% (OOD splits) |
+| #3690 | edward | lr=1e-3 + coord noise (single flag, zero code) | −2–5% (lr compound) |
+| #3691 | thorfinn | --epochs 12 longer training (zero code) | −1–3% (free gradient steps) |
+| #3692 | tanjiro | Feature noise aug on condition cols 2:24 | −1–3% (OOD splits) |
 
 ## Potential next research directions (round 5+)
 
