@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import subprocess
 import time
@@ -377,6 +378,31 @@ def update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
         b_ema.copy_(b_model)
 
 
+def compute_ema_decay(
+    start: float | None,
+    final: float,
+    anneal_epochs: int,
+    schedule: str,
+    epoch: int,
+) -> float:
+    """Compute the EMA decay for the current epoch.
+
+    Returns the fixed ``final`` decay when ``start`` is None. Otherwise ramps
+    from ``start`` toward ``final`` over ``anneal_epochs`` according to
+    ``schedule`` (``"linear"`` or ``"cosine"``). After the ramp the decay is
+    held at ``final``.
+    """
+    if start is None:
+        return final
+    progress = min(1.0, epoch / max(1, anneal_epochs))
+    if schedule == "linear":
+        return start + progress * (final - start)
+    if schedule == "cosine":
+        # ease-in/ease-out: 0 at progress=0, 1 at progress=1
+        return start + (final - start) * (0.5 - 0.5 * math.cos(math.pi * progress))
+    raise ValueError(f"Unknown ema_decay_schedule: {schedule!r}")
+
+
 def evaluate_split(
     model, loader, stats, surf_weight, device,
     bernoulli_residual: bool = False, bernoulli_chord_correction: bool = False,
@@ -568,6 +594,13 @@ class Config:
     # Arm B: add a per-node chord-position correction 0.5·(1-cos(2π·x)) to p_B.
     # Only takes effect when bernoulli_residual is also True.
     bernoulli_chord_correction: bool = False
+    # EMA decay annealing (PR #3545). If ema_decay_start is None, decay is held
+    # fixed at EMA_DECAY=0.999 (legacy behaviour). Otherwise decay ramps from
+    # ema_decay_start to EMA_DECAY over ema_decay_anneal_epochs according to
+    # ema_decay_schedule (linear or cosine).
+    ema_decay_start: float | None = None
+    ema_decay_anneal_epochs: int = 5
+    ema_decay_schedule: str = "linear"
 
 
 cfg = sp.parse(Config)
@@ -686,6 +719,14 @@ with open(model_dir / "config.yaml", "w") as f:
         "ema_decay": EMA_DECAY,
     }, f, sort_keys=True)
 
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "ema_setup",
+    "ema_decay_final": EMA_DECAY,
+    "ema_decay_start": cfg.ema_decay_start,
+    "ema_decay_anneal_epochs": cfg.ema_decay_anneal_epochs,
+    "ema_decay_schedule": cfg.ema_decay_schedule,
+})
+
 if cfg.bernoulli_residual:
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "bernoulli_setup",
@@ -711,6 +752,11 @@ for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    current_ema_decay = compute_ema_decay(
+        cfg.ema_decay_start, EMA_DECAY, cfg.ema_decay_anneal_epochs,
+        cfg.ema_decay_schedule, epoch,
+    )
 
     t0 = time.time()
     model.train()
@@ -775,7 +821,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        update_ema(ema_model, model, EMA_DECAY)
+        update_ema(ema_model, model, current_ema_decay)
 
         epoch_vol += vol_loss_log.item()
         epoch_surf += surf_loss_log.item()
@@ -832,6 +878,7 @@ for epoch in range(MAX_EPOCHS):
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
         "train/cautious_mask_mean": epoch_mask_mean,
+        "train/ema_decay": current_ema_decay,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -841,7 +888,8 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
         f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f} "
-        f"mask={epoch_mask_mean:.3f}]  "
+        f"mask={epoch_mask_mean:.3f} "
+        f"ema_decay={current_ema_decay:.5f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
