@@ -102,13 +102,15 @@ class SwiGLUMLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 attn_drop_rate=0.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
+        self.attn_drop_rate = attn_drop_rate
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -145,7 +147,7 @@ class PhysicsAttention(nn.Module):
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
+            dropout_p=self.attn_drop_rate if self.training else 0.0,
             is_causal=False,
         )
 
@@ -157,13 +159,14 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False):
+                 use_swiglu=False, attn_drop_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            attn_drop_rate=attn_drop_rate,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         mlp_hidden = int(hidden_dim * mlp_ratio)
@@ -193,7 +196,8 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu: bool = False):
+                 use_swiglu: bool = False,
+                 attn_drop_rate: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -215,6 +219,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu,
+                attn_drop_rate=attn_drop_rate,
             )
             for i in range(n_layers)
         ])
@@ -448,6 +453,7 @@ class Config:
     use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
+    attn_drop_rate: float = 0.0  # dropout on post-softmax attention weights inside PhysicsAttention (training only)
 
 
 cfg = sp.parse(Config)
@@ -486,6 +492,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=cfg.mlp_ratio,
     use_swiglu=cfg.use_swiglu,
+    attn_drop_rate=cfg.attn_drop_rate,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -493,7 +500,8 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
-      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}]")
+      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, "
+      f"attn_drop_rate={cfg.attn_drop_rate}]")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
