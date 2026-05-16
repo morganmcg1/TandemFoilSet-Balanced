@@ -136,8 +136,8 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
-class GEGLUBlock(nn.Module):
-    """Single GEGLU FFN layer: projects to 2*d, gates one half via GELU, projects back."""
+class SwiGLUBlock(nn.Module):
+    """Single SwiGLU FFN layer: projects to 2*d, gates one half via SiLU, projects back."""
     def __init__(self, in_dim, out_dim, hidden_dim=None):
         super().__init__()
         hidden_dim = hidden_dim or out_dim
@@ -146,7 +146,7 @@ class GEGLUBlock(nn.Module):
 
     def forward(self, x):
         gate, val = self.w1(x).chunk(2, dim=-1)
-        return self.w2(F.gelu(gate) * val)
+        return self.w2(F.silu(gate) * val)
 
 
 class TransolverBlock(nn.Module):
@@ -160,8 +160,8 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        # GEGLU FFN: effective hidden=hidden_dim, gated feature selection
-        self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim)
+        # SwiGLU FFN: effective hidden=hidden_dim, gated feature selection (SiLU gate)
+        self.mlp = SwiGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
