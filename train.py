@@ -474,6 +474,7 @@ class Config:
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
+    n_hidden: int = 128  # model hidden dim (channels per slice token); slice=16 baseline uses 128
 
 
 cfg = sp.parse(Config)
@@ -506,7 +507,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
