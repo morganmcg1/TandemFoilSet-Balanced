@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-15 23:45 — round 11 of `icml-appendix-charlie-pai2i-48h-r2`
+- 2026-05-16 — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
 
 ## Baseline progression
@@ -27,9 +27,20 @@
 | #3442 | tanjiro | signed log1p on pressure (stronger compression) | WIP | Notified of 70.25 target |
 | #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP | Notified of 70.25 target |
 | #3485 | alphonse | bf16 autocast: faster forward → more epochs | WIP | Notified of 70.25 target |
-| #3354 | nezuko | Lion + cap-matched cosine (T_max=12) | NEEDS REBASE | Conflicting; sent back to rebase |
+| #3586 | nezuko | Higher Lion LR: 2.5e-4/3.4e-4 vs 1.7e-4 on 4-mech stack | WIP — NEW | On 4-mech baseline 70.25; #3354 closed, key insight: curve still descending at epoch 14 |
 | #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP | Notified of 70.25 target |
 | #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs | WIP | Notified of 70.25 target |
+
+## Key open questions (round 12)
+
+1. **Can higher LR compress convergence within the budget?** (#3586 nezuko) — curve still descending at epoch 14; 1.5–2× LR multiplier on the denoised 4-mech stack should converge faster
+2. **Is max_norm=1.0 over-clipping?** (#3528 fern) — post-asinh norms 25-180 mean; threshold of 5-10 may let bulk curvature signal through while still clipping spikes
+3. **Is surf_weight=30 still optimal with 4 mechanisms?** (#3530 frieren) — asinh+clip both reduce effective pressure weighting; may need sw reduction to 20-25
+4. **Does signed log1p beat asinh?** (#3442 tanjiro) — now needs to beat 70.25, harder target
+5. **Does EMA decay=0.995 converge faster within budget?** (#3470 askeladd)
+6. **Does bf16 give meaningful epoch count boost?** (#3485 alphonse) — key to unlocking capacity and schedule changes
+7. **Does warmup-cosine help?** (#3383 edward) — on the 4-mech stack
+8. **Does SwiGLU activate gating help?** (#3275 thorfinn) — doesn't increase per-epoch cost
 
 ## Closed / falsified experiments this round
 
@@ -42,6 +53,7 @@
 | #3411 (tanjiro asinh-all-channels) | +5.8% regression; velocity z-scores light-tailed |
 | #3099 (alphonse capacity 192h/6L/6H) | +60.5% regression; wall-clock budget dominates |
 | #3106 (frieren Slice128/head8/mlp3) | +98.6% regression; same wall-clock penalty, 7 epochs vs 14 |
+| #3354 (nezuko Lion+cosine T_max=12) | +15.96% regression (81.45 vs 70.25); key insight: val still descending at epoch 12, curve is budget-limited not LR-limited |
 
 ## 4-mechanism stack: gradient pipeline analysis
 
@@ -52,7 +64,7 @@ Three mechanisms target DIFFERENT points:
 
 They compose cleanly because they're orthogonal. This is the theoretical grounding for why each subsequent mechanism can add value even after the prior one reduced noise at its own level.
 
-## Key open questions (round 11)
+## Key open questions (round 11 — superseded, see round 12 below)
 
 1. **Is max_norm=1.0 over-clipping?** (#3528 fern) — post-asinh norms 25-180 mean; threshold of 5-10 may let bulk curvature signal through while still clipping spikes
 2. **Is surf_weight=30 still optimal with 4 mechanisms?** (#3530 frieren) — asinh+clip both reduce effective pressure weighting; may need sw reduction to 20-25
