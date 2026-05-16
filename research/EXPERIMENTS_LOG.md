@@ -581,3 +581,43 @@ Assigned 4 fresh orthogonal hypotheses to freed-up students:
 | #3577 | tanjiro | slice-num-128: PhysicsAttention tokens 64→128 | Architecture capacity (token count) | 1+1 conditional |
 | #3578 | frieren | re-sinusoidal-embed: log(Re) → 8-d sinusoidal embedding | Feature representation (Re encoding) | 1 |
 
+
+---
+
+## 2026-05-16 02:25 UTC — Round-4 progress check + thorfinn closure
+
+### W&B status at 02:25 UTC
+
+| Student | PR | Best so far | State |
+|---|---|---|---|
+| askeladd | #3475 | **val_avg=85.815** (run @ 01:26 UTC, ema_decay=0.99 + asinh=1.0) | **−5.3% vs baseline 90.61 — WINNER pending SENPAI-RESULT** |
+| alphonse | #3543 | val_avg=90.839 (0.98 arm, ≈ tied with baseline) | Stuck re-running 0.98 (5 launches); nudged to move to 0.97/0.95 |
+| fern | #3571 | val_avg=93.829 (n_layers=6) | +3.6% (not a win); depth=7 still pending |
+| edward | #3575 | val_avg=94.654 (p_surf_weight=3.0) | +4.5% (not a win); p_surf=5.0 still pending |
+| nezuko | #3576 | val_avg=90.746 (wd=1e-3) | **+0.15% ≈ TIED**; wd=5e-3 currently running |
+| tanjiro | #3577 | first arm slice=128 debug 487 (debug-only); new run started 02:22 | First proper arm pending |
+| frieren | #3578 | No runs yet | Code implementation work likely |
+| thorfinn | (#3477 CLOSED) | physics-continuity all arms regress | **CLOSED 02:24 UTC**; reassigned to #3610 mlp-ratio |
+
+### PR #3477 thorfinn (physics-continuity) — CLOSED
+
+All 3 arms complete, all regress vs new baseline 90.61:
+- w=0.01: 98.66 (+8.9%)
+- w=0.1: 98.62 (+8.8%)
+- w=0.5: 105.95 (+16.9%)
+
+Random-pair FD divergence proxy too noisy on irregular meshes. Mechanism: high variance in pair-sampled gradient estimates overwhelms the main MAE signal.
+
+### Round-4 hypothesis preview (sorted by current best to date)
+
+1. **askeladd asinh-pressure 85.815** — winner, awaiting terminal SENPAI-RESULT
+2. **nezuko wd=1e-3 90.746** — first arm ≈ TIED; wd=5e-3 may push lower
+3. fern depth=6 93.83 — modest regression, depth=7 pending
+4. edward p_surf=3.0 94.65 — modest regression, p_surf=5.0 pending
+5. tanjiro slice=128 — first real arm running
+6. frieren re-sinusoidal-embed — no runs yet (implementation in progress)
+
+## 2026-05-16 02:30 UTC — thorfinn reassigned: mlp-ratio sweep
+
+PR #3610 (mlp-ratio-sweep). Hypothesis: bump Transolver MLP block ratio from 2 to 4 (standard transformer default). Orthogonal to fern (depth) and tanjiro (slice_num) — three independent capacity dimensions in parallel.
+
