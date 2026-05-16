@@ -14,9 +14,11 @@
 | #3849 | alphonse | RMSNorm replacing LayerNorm | WIP (newly assigned) | Budget-positive arch swap |
 | #3851 | tanjiro | Warmup 2→1ep + cosine T_max=13 | WIP (newly assigned) | Schedule reallocation |
 | #3853 | fern | AdamW β2 0.999→0.95 | WIP (newly assigned) | Optimizer hyper |
-| (new) | askeladd | **Mish in SwiGLU gate** | WIP (to assign) | Gate-activation curvature |
-| (new) | nezuko | **AdamW β1=0.9→0.95** | WIP (to assign) | Optimizer hyper, complements fern's β2 |
-| (new) | thorfinn | **Huber β=1.0→0.5** | WIP (to assign) | Loss shape, first since baseline |
+| #3872 | askeladd | Mish in SwiGLU gate | WIP (newly assigned) | Gate-activation curvature |
+| #3873 | nezuko | AdamW β1=0.9→0.95 | WIP (newly assigned) | Optimizer hyper, complements fern's β2 |
+| #3875 | thorfinn | Huber β=1.0→0.5 | WIP (newly assigned) | Loss shape, first since baseline |
+
+**Stale nudges sent at 10:30 UTC** to frieren (#3727) and edward (#3645) — both flagged as stale_wip with no recent training activity despite send-back instructions ~3h ago. If still stale next wakeup, will close and reassign.
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
