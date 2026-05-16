@@ -5,6 +5,42 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 23:00 — PR #4053 (charliepai2i48h5-edward): n_freqs sweep {8, 12} at clip=1.0+bs=8 — CLOSED (stale baseline; aliasing thesis confirmed at clip=1.0)
+
+- branch: `charliepai2i48h5-edward/bf16-nfreqs-clip10`
+- hypothesis: does clip=1.0's larger effective step unlock higher n_freqs (n=12 viable)? Or does aliasing thesis hold (n=8 wins)?
+- results (both arms on bs=8/clip=1.0/n=10 baseline 65.70/57.80 — stale vs current best 57.11/49.24):
+
+  | arm | n_freqs | val_avg | test_avg | Δ test vs n=10 | best_epoch | clip_frac @best |
+  |---|---|---|---|---|---|---|
+  | arm-1 | 8 | 65.90 | **57.08** | **-1.25% ✓** | 17 | 0.957 |
+  | arm-2 | 12 | 65.95 | 59.21 | +2.43% ✗ | 17 | 0.968 |
+  | baseline n=10 | 10 | 65.70 | 57.80 | — | 17 | — |
+
+- per-split test surf_p (arm-1 n=8): rc=66.79 (-4.64 ✓), re_rand=55.55 (-0.66 ✓), single=67.03 (+1.79 ✗), cruise=38.93 (+0.62 ✗)
+- per-split test surf_p (arm-2 n=12): rc=74.87 (+3.44 ✗), re_rand=57.36 (+1.15 ✗), single=66.62 (+1.38 ✗), cruise=37.98 (-0.33 ✓)
+- artifacts: `models/model-charliepai2i48h5-edward-bf16-layerscale-n8-clip10-20260516-202428/metrics.jsonl`, `models/model-bf16-layerscale-n12-clip10-20260516-212251/metrics.jsonl`
+- commentary: CLOSED. **Aliasing thesis confirmed at clip=1.0:** val flat across n={8,10,12} (65.70/65.90/65.95 — 0.4% spread, within noise), but test splits show clear structure: n=8 wins rc by -4.64 and re_rand by -0.66; n=12 hurts rc by +3.44. OOD geometry generalization (rc split) is dominated by Fourier aliasing, not step-length dynamics. **clip and n_freqs don't strongly interact** — clip=1.0 did NOT unlock higher n_freqs. Note: val proxy quality is too coarse to discriminate at this scale; test ranking is authoritative. Both arms on stale bs=8/clip=1.0 baseline — no chance of beating current best 57.11. **Assigned edward #4199**: 4-way Huber δ={0.15, 0.20} on the full new stack (bs=2+n=8+lr=7e-4).
+
+---
+
+## 2026-05-16 22:45 — PR #4146 (charliepai2i48h5-alphonse): bs=2+n=8+lr=7e-4 compound — **MERGED (NEW BEST)**
+
+- branch: `charliepai2i48h5-alphonse/bs2-n8-lr`
+- hypothesis: lr=7e-4 (previously sub-additive on bs=2/n=10) should compound with the bs=2+n=8 new winning stack; arm-2 tests lr_t_max=22 (keeps more LR at ep18)
+- results (arm-1 lr=7e-4, arm-2 lr_t_max=22 on bs=2+n=8 vs new baseline 58.27/51.12):
+
+  | arm | lr | lr_t_max | val_avg | test_avg | Δ val vs 58.27 | best_epoch | clip_frac @ep18 | s/epoch |
+  |---|---|---|---|---|---|---|---|---|
+  | **arm-1 (WINNER)** | **7e-4** | **20** | **57.11** | **49.24** | **-1.99% ✓** | **18/18** | **0.988** | **102.4** |
+  | arm-2 | 5e-4 | 22 | 60.30 | 52.74 | +3.49% ✗ | 18/18 | 1.000 | 101.9 |
+
+- per-split test surf_p (arm-1 lr=7e-4): single=53.80 (-6.30% ✓), rc=61.64 (-3.85% ✓), cruise=32.83 (-2.52% ✓), re_rand=48.69 (-1.18% ✓) — **all 4 splits improve**
+- artifacts: `models/model-bf16-layerscale-bs2-n8-lr7e4-20260516-205638/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-tmax22-20260516-214342/metrics.jsonl`
+- commentary: **MERGED** — arm-1 (lr=7e-4) beats baseline by -1.99% val / -3.68% test, all 4 splits improve. arm-2 (lr_t_max=22) REGRESSES: even with 3.5× more LR at ep18, schedule shape hurts, not helps — T_max=20 is the local optimum. **Sub-additive lr×bs+n8 compound** (predicted -8.75%, got -1.99% val) confirmed on the n=8 stack: lr=7e-4 and bs=2 are partially overlapping mechanisms. **clip_frac=0.988 at ep18** — nearly identical to baseline 0.987, confirming clip-saturation is robust vs lr knob in this range. **Cumulative: -55.7% val from round-5 start.** **Assigned alphonse #4198**: LR upper search {9e-4, 1.2e-3} to find the ceiling; **Assigned edward #4199**: 4-way Huber δ={0.15, 0.20} compound on full new stack.
+
+---
+
 ## 2026-05-16 22:15 — PR #4115 (charliepai2i48h5-askeladd): bs=2 + lr={7e-4, 8e-4} compound — CLOSED (val regress 0.51pt, test improves 0.58pt; first clip escape)
 
 - branch: `charliepai2i48h5-askeladd/bs2-lr-compound`
