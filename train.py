@@ -478,6 +478,9 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    use_pmag_weight: bool = False  # weight surface L1 loss by |y_true_pressure| magnitude (top-quantile mask)
+    pmag_weight_alpha: float = 1.0  # weight multiplier for top-|p| nodes; weight = 1 + alpha * mask
+    pmag_weight_quantile: float = 0.90  # quantile of |y_norm_p| at which to threshold
 
 
 cfg = sp.parse(Config)
@@ -615,7 +618,33 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        pmag_log: dict = {}
+        if cfg.use_pmag_weight and surf_mask.any():
+            # Pressure-magnitude weighting on the surface L1 path.
+            # Threshold is computed over surface-node |y_norm_p| only, in fp32 + detached
+            # (no autograd through the quantile cutoff). Weight is normalized so its mean
+            # over surface nodes is 1.0 — this redistributes gradient mass, doesn't amplify.
+            p_abs = y_norm[..., 2].abs().float()  # [B, N] |normalized pressure|
+            surf_p_abs = p_abs[surf_mask]  # surface-only pressure magnitudes
+            thresh = torch.quantile(surf_p_abs, cfg.pmag_weight_quantile).detach()
+            hi_p = (p_abs >= thresh).to(err.dtype)  # [B, N], 1.0 where |p| >= q-threshold
+            weight = 1.0 + cfg.pmag_weight_alpha * hi_p  # [B, N], baseline 1.0 + boost on top tail
+            mean_w_surf = (weight * surf_mask.to(weight.dtype)).sum() / surf_mask.sum().clamp(min=1)
+            weight = weight / mean_w_surf.clamp(min=1e-8)
+            surf_err = err * weight.unsqueeze(-1) * surf_mask.unsqueeze(-1)
+            surf_loss = surf_err.sum() / surf_mask.sum().clamp(min=1)
+            # Diagnostics: weight max/mean ratio + fraction of surface nodes above threshold
+            with torch.no_grad():
+                surf_w = weight[surf_mask]
+                pmag_log = {
+                    "train/pmag_weight_ratio": (surf_w.max() / surf_w.mean().clamp(min=1e-8)).item(),
+                    "train/pmag_hi_frac": ((hi_p * surf_mask.to(hi_p.dtype)).sum() / surf_mask.sum().clamp(min=1)).item(),
+                    "train/pmag_threshold": thresh.item(),
+                }
+        else:
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -627,6 +656,7 @@ for epoch in range(MAX_EPOCHS):
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
+            **pmag_log,
         })
 
         epoch_vol += vol_loss.item()
