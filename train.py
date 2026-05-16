@@ -361,6 +361,10 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    focal_gamma: float = 2.0
+    focal_floor: float = 0.1
+    focal_alpha_ema: float = 0.1
+    focal_warmup_epochs: int = 2
 
 
 cfg = sp.parse(Config)
@@ -373,19 +377,43 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)
+
+class _IndexedDataset(torch.utils.data.Dataset):
+    """Wraps a SplitDataset to pass the dataset index through to the loader."""
+
+    def __init__(self, base):
+        self.base = base
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, sf = self.base[idx]
+        return x, y, sf, idx
+
+
+def _indexed_pad_collate(batch):
+    xs, ys, surfs, idxs = zip(*batch)
+    x_pad, y_pad, surf_pad, mask = pad_collate(list(zip(xs, ys, surfs)))
+    return x_pad, y_pad, surf_pad, mask, torch.tensor(idxs, dtype=torch.long)
+
+
+train_ds_indexed = _IndexedDataset(train_ds)
+train_loader_kwargs = dict(collate_fn=_indexed_pad_collate, num_workers=4, pin_memory=True,
+                           persistent_workers=True, prefetch_factor=2)
+val_loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+                         persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_ds_indexed, batch_size=cfg.batch_size,
+                              shuffle=True, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(train_ds_indexed, batch_size=cfg.batch_size,
+                              sampler=sampler, **train_loader_kwargs)
 
 val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
     for name, ds in val_splits.items()
 }
 
@@ -428,6 +456,16 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# Focal surface loss: track per-sample EMA of normalized-space surface Huber loss
+N_train = len(train_ds_indexed)
+ema_mae = torch.zeros(N_train, dtype=torch.float32)
+ema_seen = torch.zeros(N_train, dtype=torch.bool)
+focal_w_global = torch.ones(N_train, dtype=torch.float32)
+focal_alpha = cfg.focal_alpha_ema
+focal_gamma = cfg.focal_gamma
+focal_floor = cfg.focal_floor
+focal_warmup = cfg.focal_warmup_epochs
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -435,10 +473,27 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_surf_unweighted = 0.0
+    epoch_focal_w_mean = epoch_focal_w_max = epoch_focal_w_min = 0.0
     n_batches = 0
+    focal_active = epoch >= focal_warmup and ema_seen.any()
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    # Precompute focal weights for the population once per epoch (ranks change
+    # slowly; recomputing per-batch is O(N log N) overhead with no real benefit).
+    if focal_active:
+        difficulty = ema_mae.clone()
+        seen_mask = ema_seen
+        median_seen = difficulty[seen_mask].median()
+        difficulty[~seen_mask] = median_seen  # unseen get median rank
+        # Percentile rank in [0, 1]
+        ranks = torch.argsort(torch.argsort(difficulty)).float() / max(N_train - 1, 1)
+        focal_w_global = ranks ** focal_gamma + focal_floor  # [floor, 1 + floor]
+        # Normalize so the population mean is 1.0; preserves global loss scale
+        focal_w_global = focal_w_global / focal_w_global.mean().clamp(min=1e-6)
+
+    for x, y, is_surface, mask, batch_idx in tqdm(
+        train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -452,7 +507,18 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Per-sample surface loss: sum-over-channels Huber, averaged over the
+            # sample's surface nodes — matches baseline `surf_loss` scale so the
+            # tuned `surf_weight=10` still applies under focal reweighting.
+            surf_err = (sq_err * surf_mask.unsqueeze(-1).float()).sum(dim=(1, 2))  # [B]
+            n_surf_per = surf_mask.sum(dim=1).clamp(min=1).float()  # [B]
+            surf_loss_per_sample = surf_err / n_surf_per  # [B]
+            # Apply focal weight (uniform during warmup or before any sample is seen)
+            if focal_active:
+                batch_focal_w = focal_w_global[batch_idx].to(pred.device)
+            else:
+                batch_focal_w = torch.ones(len(batch_idx), device=pred.device)
+            surf_loss = (surf_loss_per_sample * batch_focal_w).mean()
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -461,11 +527,33 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_unweighted += surf_loss_per_sample.detach().mean().item()
+        epoch_focal_w_mean += batch_focal_w.mean().item()
+        epoch_focal_w_max = max(epoch_focal_w_max, batch_focal_w.max().item())
+        epoch_focal_w_min = (
+            min(epoch_focal_w_min, batch_focal_w.min().item()) if n_batches else batch_focal_w.min().item()
+        )
         n_batches += 1
 
+        # Update per-sample EMA (CPU, no grad). First touch overwrites init=0
+        # so the cold-start bias doesn't dominate ranking.
+        with torch.no_grad():
+            per_sample_loss = surf_loss_per_sample.detach().float().cpu()
+            idx_list = batch_idx.tolist()
+            for i, idx in enumerate(idx_list):
+                v = per_sample_loss[i].item()
+                if ema_seen[idx]:
+                    ema_mae[idx] = focal_alpha * v + (1.0 - focal_alpha) * ema_mae[idx].item()
+                else:
+                    ema_mae[idx] = v
+                    ema_seen[idx] = True
+
+    epoch_lr = optimizer.param_groups[0]["lr"]
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_unweighted /= max(n_batches, 1)
+    epoch_focal_w_mean /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -489,21 +577,46 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    ema_seen_fraction = ema_seen.float().mean().item()
+    seen_vals = ema_mae[ema_seen]
+    if seen_vals.numel() > 0:
+        ema_min = seen_vals.min().item()
+        ema_max = seen_vals.max().item()
+        ema_mean = seen_vals.mean().item()
+        ema_std = seen_vals.std().item() if seen_vals.numel() > 1 else 0.0
+    else:
+        ema_min = ema_max = ema_mean = ema_std = 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_unweighted": epoch_surf_unweighted,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "focal_active": bool(focal_active),
+        "focal_w/mean": epoch_focal_w_mean,
+        "focal_w/min": epoch_focal_w_min,
+        "focal_w/max": epoch_focal_w_max,
+        "ema_mae/min": ema_min,
+        "ema_mae/max": ema_max,
+        "ema_mae/mean": ema_mean,
+        "ema_mae/std": ema_std,
+        "ema_seen_fraction": ema_seen_fraction,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    )
+    print(
+        f"    focal[active={focal_active} seen={ema_seen_fraction:.2f} "
+        f"ema_mae={ema_mean:.4f}±{ema_std:.4f} min={ema_min:.4f} max={ema_max:.4f} "
+        f"w_min={epoch_focal_w_min:.3f} w_max={epoch_focal_w_max:.3f} w_mean={epoch_focal_w_mean:.3f}]"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -524,7 +637,7 @@ if best_metrics:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
