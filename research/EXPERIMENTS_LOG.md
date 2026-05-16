@@ -1,5 +1,49 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 01:27 — PR #3262: Random Fourier Features σ=1.0 — MERGED (R2 winner #2)
+
+- **Student/branch:** willowpai2i24h4-edward / `willowpai2i24h4-edward/fourier-pos-enc`
+- **Hypothesis:** Replace raw (x, z) coordinate inputs with 32-dim RFF basis (16 sin+cos pairs, σ=1.0). Resolves higher-frequency surface pressure patterns.
+- **W&B run:** `tnna02ob` (run on fully-stacked #3358+#3263+#3257 base)
+
+### Result vs #3358 baseline (val=90.44, test=80.08)
+
+| Metric | Baseline `b9qv36aq` | RFF `tnna02ob` | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 90.44 | **79.28** | **−12.3%** |
+| `test_avg/mae_surf_p` | 80.08 | **69.27** | **−13.5%** |
+| `test_single_in_dist` | 96.49 | 78.69 | **−18.4%** |
+| `test_geom_camber_rc` | 90.24 | 79.59 | −11.8% |
+| `test_geom_camber_cruise` | 55.95 | 49.16 | −12.1% |
+| `test_re_rand` | 77.65 | 69.65 | −10.3% |
+
+Best epoch: 14/50. Wall-clock: 32.3 min. Params: 687,319 (+8K over #3358 base).
+
+### Decision: MERGED as R2 winner #2
+
+**Analysis:** Largest single gain in this track (−13.5% test). Gain SCALES UP on the better base (old MSE gain: −9.8% val → new stacked base: −12.3% val). Biggest gain on hardest split (single_in_dist: −18.4%). All four mechanisms (loss, FiLM, schedule, input encoding) are orthogonal and composing constructively. Cumulative path: vanilla 106.23 → #3257 94.35 → #3263 90.06 → #3358 80.08 → #3262 **69.27** (−34.8% from vanilla).
+
+---
+
+## 2026-05-16 01:30 — PR #3504: Richer FiLM conditioning (cond_dim 1→11) — SENT BACK (rebase needed)
+
+- **Student/branch:** willowpai2i24h4-frieren / `willowpai2i24h4-frieren/richer_film`
+- **Hypothesis:** Extend FiLM conditioning cond_dim=1 (log_Re) → 11 (log_Re + AoA_1 + NACA_1 + AoA_2 + NACA_2 + gap + stagger).
+- **W&B runs:** v1 `tkxld39k` (film_mid=64), mid128-v1 `y4bphsbs` (film_mid=128) — both on OLD #3263 base
+
+### Result vs #3263 baseline (val=100.24, test=90.06) — OLD base, pre-#3358 and pre-#3262
+
+| Arm | test_avg | vs #3263 | vs CURRENT (69.27) |
+|-----|--------:|--------:|---------:|
+| v1 film_mid=64 (`tkxld39k`) | 83.61 | −7.16% | +20.7% above |
+| mid128 (`y4bphsbs`) | **81.07** | **−9.98%** | +17% above |
+
+### Decision: SENT BACK for rebase+rerun on full RFF-stacked base
+
+**Analysis:** Mechanism strong (−9.98% on ref base). Timing complication: #3358 + #3262 merged while running, raising the target. VRAM concern: mid128 at 94.0 GiB; start with film_mid=64. Predicted on new stack: hopeful test ~64.4 (−7%), conservative ~65.8–67.2.
+
+---
+
 ## 2026-05-16 00:25 — PR #3429: Multi-scale slice tokens — CLOSED
 
 - **Student/branch:** willowpai2i24h4-nezuko / `willowpai2i24h4-nezuko/multi-scale-slice`
