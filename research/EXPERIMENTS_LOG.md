@@ -954,3 +954,112 @@ The bf16-freed VRAM is available but not usable profitably via batch scaling wit
 
 ---
 
+
+---
+
+## 2026-05-16 08:30 — PR #3492 [SENT BACK]: n_hidden=192 — wider model on pre-FiLM stack
+
+- **Student branch:** `charliepai2i48h4-nezuko/model-capacity-nhidden192`
+- **Hypothesis:** Model capacity-limited at n_hidden=128. Wider model (n_hidden=192) should improve generalization.
+- **Stack (run R1):** bf16 + T_max=15 + EMA (pre-FiLM, pre-two-shot-FiLM)
+
+### Results
+
+| Arm | n_hidden | params | VRAM | epochs | sec/epoch | `val_avg/mae_surf_p` | best epoch | `test_avg/mae_surf_p` (3 finite) |
+|-----|---------|---|---|---|---|---|---|---|
+| A | 128 | 0.66M | 32.95 GB | 19 | 98.3 s | 96.886 | 19 | 94.296 |
+| B | **192** | **1.47M** | 43.04 GB | 15 | 122.1 s | **93.989** | 15 | **91.025** |
+| **Δ** | **2.22×** | +30.6% | −4 epochs | +24% | **−2.99%** | — | **−3.47%** |
+
+### Per-split val MAE pressure
+
+| Split | A (128) | B (192) | Δ % |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 115.749 | **109.303** | **−5.57%** |
+| `val_geom_camber_rc`     | 103.732 | **101.157** | −2.48% |
+| `val_geom_camber_cruise` |  75.658 |  **75.083** | −0.76% |
+| `val_re_rand`            |  92.408 |  **90.413** | −2.16% |
+
+### Per-split test MAE (3 finite splits)
+
+| Split | A | B | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist`     | 99.247 | **93.810** | **−5.48%** |
+| `test_geom_camber_rc`     | 96.952 | **93.911** | −3.14% |
+| `test_re_rand`            | 86.688 | **85.354** | −1.54% |
+
+### Mechanism analysis (from student)
+
+- Train losses similar (Arm A 0.0578 vs Arm B 0.0612 at end) but val gap ~3% → "better inductive bias at same fit" mode, NOT raw memorization
+- Wider model finds solutions that generalize better at similar fit quality
+- Consistent with "capacity gives better inductive bias when combined with EMA + cosine"
+- 2.22× param ratio but only 1.31× VRAM ratio → activations dominate memory on large meshes
+
+### Decision: SENT BACK FOR REBASE + VERIFY ON FULL FILM STACK
+
+Rationale:
+1. PR ran on pre-FiLM stack — current best is 89.784 (FiLM stack)
+2. Arm B (93.989) is +4.7% worse than current best, even though n_hidden=192 won within PR
+3. Composition with FiLM unknown — FiLM modulation capacity grows with n_hidden too
+4. Student's mechanistic finding (capacity → smoother optimization landscape) predicts compositional behavior
+
+Rerun:
+- Arm A: full current stack (n_hidden=128) — expected ~89.8
+- Arm B: full stack + n_hidden=192 — predicted **86.5-88.5** if additive
+
+---
+
+## 2026-05-16 08:30 — PR #3390 [SENT BACK]: bf16 + T_max compose verify — T_max=20 found as new optimum
+
+- **Student branch:** `charliepai2i48h4-thorfinn/bf16-tmax-compose`
+- **Hypothesis:** Verify bf16 × cosine_T_max composition. Test T_max=15 and T_max=20 vs baseline T_max=50.
+- **Stack (run R1):** bf16-only (pre-EMA, pre-FiLM, pre-two-shot-FiLM)
+
+### Results
+
+| Arm | `cosine_t_max` | epochs | LR @ end | `val_avg/mae_surf_p` | best epoch | `test_avg/mae_surf_p` (3 finite) |
+|-----|---:|---:|---:|---:|---:|---:|
+| A | 50 (default) | 19 | 3.564e-4 (71% of init) | 102.794 | 19 | 101.855 |
+| B | 15 | 19 | 5.000e-8 (floor at ep 16) | 97.968 | 19 | 94.747 |
+| **C** | **20** | 19 | **1.224e-5 (2.4% of init)** | **88.229** | 19 | **84.598** |
+| **Δ C vs A** | — | — | — | **−14.2%** | — | **−16.9%** |
+
+### LR-vs-epoch trace (showing T_max=15 wastes epochs at LR floor)
+
+| Epoch | A (T_max=50) | B (T_max=15) | C (T_max=20) |
+|---:|---:|---:|---:|
+| 14 | 4.211e-4 | 2.161e-5 | 1.365e-4 |
+| 15 | 4.094e-4 | 5.463e-6 | 1.031e-4 |
+| 16 | 3.969e-4 | **5.000e-8 floor** | 7.322e-5 |
+| 19 | 3.564e-4 | **5.000e-8 floor** | 1.224e-5 |
+
+### Per-split val MAE pressure (Arm C wins every split)
+
+| Split | A | B | **C** | Δ C vs A |
+|---|---:|---:|---:|---:|
+| `val_single_in_dist`     | 119.018 | 117.811 | **98.618** | **−17.1%** |
+| `val_geom_camber_rc`     | 119.550 | 104.910 | **95.728** | **−19.9%** |
+| `val_geom_camber_cruise` |  74.632 |  76.938 | **72.692** |  −2.6% |
+| `val_re_rand`            |  97.977 |  92.214 | **85.877** | **−12.4%** |
+
+### Mechanism analysis (from student)
+
+- T_max=15 was calibrated for fp32's 14-epoch budget; on bf16's 19-epoch budget it hits LR floor at epoch 16, wasting 3 epochs
+- T_max=20 keeps cosine arc decaying continuously, finishing at LR=1.224e-5 (still meaningful gradient signal)
+- **Composition super-additive:** bf16 (−7.8% vs Huber) + T_max=15 (−10.3% vs Huber) → T_max=20 (−20.9% vs Huber); not just orthogonal but synergistic
+- Simple rule: `cosine_t_max ≈ expected_epoch_budget` for the wall-clock
+
+### Decision: SENT BACK FOR REBASE + VERIFY ON FULL FILM STACK
+
+Rationale:
+1. **Arm C (88.229) is better than current track best (89.784)** — but on bf16-only stack
+2. Cannot merge bf16-only as new "winner" — would lose FiLM (−4%) and two-shot FiLM (−3%) wins
+3. **Composition unknown:** T_max=20 + FiLM stack — likely additive (mechanism is LR-schedule-shape, independent of conditioning) but unverified
+4. **Parallel investigation:** alphonse #3594 testing SF-AdamW (eliminates cosine) — both attack same LR-floor issue. If both win, merge larger Δ.
+
+Rerun:
+- Arm A: full current stack with T_max=15 — expected ~89.8
+- Arm B: full stack with T_max=20 — predicted **80-85** if composition holds; **86-89** if sub-additive
+
+### This may be the largest unmerged single-change improvement available right now.
+
