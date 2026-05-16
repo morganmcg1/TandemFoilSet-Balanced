@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 01:40 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 03:30 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -11,8 +11,8 @@
 **Current best: 92.606 val_avg/mae_surf_p** (frieren #3122, FiLM on full stack, 2026-05-16 01:28)
 
 Two additional architectural wins pending composition confirmation:
-- **Fourier scale=2 (fern #3117):** −9.10% intra-PR on bf16-only → sent back to recompose on full EMA+T_max+FiLM stack
-- **Two-shot FiLM (frieren #3584):** just assigned, expected −2-6% on top of single-shot FiLM
+- **Fourier scale=2 (fern #3117 R3):** −3.16% intra-PR on EMA+T_max=15+bf16 stack (composition confirmed), but Arm B (92.694) is +0.095% worse than the post-FiLM baseline (92.606). Sent back for one more rebase to test Fourier+FiLM composition (R4).
+- **Two-shot FiLM (frieren #3584):** in-flight, expected −2-6% on top of single-shot FiLM
 
 **LR axis closed:** 5e-4 is optimal for bf16+T_max=15 (alphonse #3443 falsified both 2.5e-4 and 3.5e-4).
 
@@ -49,11 +49,11 @@ Two additional architectural wins pending composition confirmation:
 | alphonse | #3594 | Schedule-Free AdamW | bf16+T_max=15+EMA+FiLM | Just assigned |
 | edward | #3595 | n_layers=6 vs 5 | bf16+T_max=15+EMA+FiLM | Just assigned |
 | frieren | #3584 | Two-shot FiLM (attn + MLP per block) | bf16+T_max=15+EMA+FiLM | Just assigned |
-| fern | #3117 | Fourier scale=2 + concat raw (recompose R3) | bf16+T_max=15+EMA+FiLM | Sent back to rebase + rerun |
+| fern | #3117 | Fourier scale=2 + concat raw (recompose R4 on FiLM) | bf16+T_max=15+EMA+FiLM | R3 confirmed −3.16% intra-PR; sent back for FiLM compose verify |
 
 ## Key research questions
 
-1. **Fourier composition:** fern #3117 showed −9.10% on bf16-only. Does scale=2 win when stacked on EMA+T_max+FiLM? Expected ~84-88 if composition holds.
+1. **Fourier+FiLM composition:** fern #3117 R3 confirmed −3.16% on EMA+T_max=15+bf16 (Arm A 95.714 → Arm B 92.694). Does scale=2 still win when stacked on FiLM? R4 in flight. Expected ~89-91 if additive, ~91-93 if sub-additive, decision rule: any Δ < 0 → merge, tie → close as subsumed.
 2. **Two-shot FiLM (frieren #3584):** incremental over single-shot (92.606 baseline).
 3. **Schedule-Free AdamW (alphonse #3594):** eliminates schedule sensitivity; compatible with EMA+FiLM.
 4. **n_layers=6 (edward #3595):** deeper model; FiLM-enriched blocks may benefit from more layers.
@@ -67,7 +67,7 @@ Two additional architectural wins pending composition confirmation:
 
 ## Potential next hypotheses
 
-1. **Fourier + FiLM compose** — fern #3117 recompose; very high priority, expected to push below 85.
+1. **Fourier + FiLM compose** — fern #3117 R4 in flight; very high priority, predicted ~89-91 if additive.
 2. **Two-shot FiLM** — frieren #3584, in-flight.
 3. **Sobolev loss** — gradient supervision near surface. Physically motivated, untested. Next for one student after current batch lands.
 4. **SDF input features** — signed distance to surface. Orthogonal to Fourier features.

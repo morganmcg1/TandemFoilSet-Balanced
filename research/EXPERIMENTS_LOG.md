@@ -618,3 +618,71 @@ Reproduce: `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_d
 ### Decision: CLOSED (falsification)
 
 New assignments: alphonse → Schedule-Free AdamW (#3594)
+
+---
+
+## 2026-05-16 03:25 — PR #3117 [SENT BACK ×3]: Fourier features Round 3 — composes with EMA+T_max=15, pending FiLM compose verify
+
+- **Student branch:** `charliepai2i48h4-fern/fourier-pos-features`
+- **Hypothesis (Round 3 framing):** Does Fourier scale=2 + concat raw (Round 2 winner, −9.10% intra-PR on bf16-only) still win when stacked on EMA decay=0.999 + cosine T_max=15 + bf16?
+- **Round 3 setup:** Rebased onto advisor `5c53212` (pre-FiLM). 2 paired arms, both with the full EMA+T_max=15+bf16 stack. 50-epoch budget, 30-min wall-clock cap, `best_epoch=19` for both arms (budget-bound).
+
+### Results — paired arms (val_avg/mae_surf_p, lower is better)
+
+| Arm | Fourier | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|-----|---------|---------------------|---------------------|
+| A   | off (full stack baseline) | **95.714** | 85.416 |
+| B   | on (scale=2, num_bands=10) | **92.694** | **82.719** |
+| **Δ (B − A)** | — | **−3.16%** ✅ | **−3.16%** ✅ |
+
+### Per-split val (best_val/.../mae_surf_p)
+
+| Split | Arm A | Arm B (Fourier) | Δ |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 109.466 | 108.328 | −1.04% ✅ |
+| `val_geom_camber_cruise` |  76.837 |  73.071 | −4.90% ✅ |
+| `val_geom_camber_rc`     | 104.686 |  98.762 | −5.66% ✅ |
+| `val_re_rand`            |  91.865 |  90.614 | −1.36% ✅ |
+| **val_avg**              | **95.714** | **92.694** | **−3.16%** ✅ |
+
+### Per-split test (test/.../mae_surf_p)
+
+| Split | Arm A | Arm B (Fourier) | Δ |
+|-------|---:|---:|---:|
+| `test_single_in_dist`     |  95.102 |  91.905 | −3.36% ✅ |
+| `test_geom_camber_cruise` |  65.102 |  61.039 | −6.24% ✅ |
+| `test_geom_camber_rc`     |  94.729 |  90.408 | −4.56% ✅ |
+| `test_re_rand`            |  86.730 |  87.523 | +0.91% (≈tie) |
+| **test_avg**              | **85.416** | **82.719** | **−3.16%** ✅ |
+
+### Other channels (val_avg)
+
+| Channel | Arm A | Arm B | Δ |
+|---|---:|---:|---:|
+| `mae_surf_Ux` | 1.396 | 1.393 | −0.2% |
+| `mae_surf_Uy` | 0.683 | 0.677 | −0.8% |
+| `mae_vol_p`   | 103.4 |  99.3 | **−4.0%** ✅ |
+| `mae_vol_Ux`  | 4.250 | 4.144 | −2.5% |
+| `mae_vol_Uy`  | 1.982 | 1.946 | −1.8% |
+
+### Composition delta vs Round 2
+
+| Stack | Paired Δ (B − A) |
+|-------|-----------------|
+| bf16 only (R2) | **−9.10%** |
+| bf16 + T_max=15 + EMA (R3) | **−3.16%** |
+
+The win composes but shrinks — EMA + T_max=15 captures part of the bf16-noise mitigation that Fourier features were doing on their own. Still a clean, real signal: every val split improves, three of four test splits improve, the only tie is `test_re_rand`.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-fern-r3-armA-baseline-20260516-013819/metrics.jsonl`
+- `models/model-charliepai2i48h4-fern-r3-armB-fourier-scale2-20260516-021245/metrics.jsonl`
+
+### Analysis & conclusions
+
+- **Round 3 confirmed composition on EMA+T_max=15+bf16.** Fourier scale=2 + concat raw is robust across stack components.
+- **The `val_geom_camber_rc` recovery is notable.** In Round 1 (pre-rebase), Fourier hurt `*_rc` by +9%. In Round 2 (concat raw + scale=2), it was flat (+0.84%). In Round 3 (EMA+T_max=15), it now wins (−5.66%). The combination of concat raw + lower scale + EMA smoothing eliminated the OOD penalty.
+- **Cannot merge as-is.** The current advisor baseline moved to 92.606 while Round 3 was running (FiLM merged in PR #3122). Arm B (92.694) is +0.095% worse than current baseline (92.606), and the branch is `CONFLICTING`. Final composition question — does Fourier compose with FiLM? — is still unmeasured.
+- **Sent back for Round 4:** rebase onto advisor HEAD `9adc607` (post-FiLM), run 2 paired arms on the full current stack including FiLM. Decision rule: any Δ > 0 → merge; tie → close as "Fourier subsumed by FiLM"; regression → close with interaction warning.
+
