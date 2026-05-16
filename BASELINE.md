@@ -2,6 +2,53 @@
 
 ## Current best
 
+**PR #3806 (fern) — Surface-Dedicated Refinement MLP on FiLM-Re+SWA baseline** — merged 2026-05-16 11:28
+
+| Metric | Value | Checkpoint |
+|---|---|---|
+| `val_avg/mae_surf_p_swa` | **76.2033** | SWA-averaged checkpoint |
+| `test_avg/mae_surf_p_swa` | **67.1099** | SWA-averaged checkpoint |
+| W&B run | `pnmb6bd5` | |
+
+### Per-split surface-pressure MAE (SWA checkpoint, run `pnmb6bd5`)
+
+| Split | val | test | Δ val | Δ test |
+|---|---|---|---|---|
+| `single_in_dist` | 89.13 | 77.64 | +1.17 | +0.07 |
+| `geom_camber_rc` | 88.15 | 77.27 | −1.25 | **−3.18** |
+| `geom_camber_cruise` | 54.46 | 47.31 | −1.13 | −0.61 |
+| `re_rand` | 73.07 | 66.21 | −0.41 | −0.65 |
+
+Gain is concentrated on `test_geom_camber_rc` (−3.18, −4%), which is the hardest OOD geometry split. `single_in_dist` is flat (within noise). Overall: val −0.41 (−0.53%), test −1.09 (−1.60%).
+
+### SurfaceRefinementMLP Configuration
+
+| Component | Value |
+|---|---|
+| Model | FiLM-Re + SWA Transolver (same as #3669) |
+| **SurfaceRefinementMLP** | 3 output channels, 12 input features, hidden=64; zero-init output; applied as residual delta on surface nodes |
+| Features | Normalized x[indices: 0,1,13,14,15,16,17,18,19,20,21,22] = coords, log_Re, AoA1, NACA1, AoA2, NACA2, gap |
+| SWA on MLP | Second `AveragedModel` wraps the refinement MLP; SWA of (model+mlp) jointly |
+| Activation | MLP exits identity at init, reaches surf_delta_norm ≈ 0.05–0.10 mid-training |
+| Params | 1,219 (negligible overhead; peak VRAM 47.3 GB = same as #3669) |
+| Wall-clock | 31.8 min (13 epochs) |
+
+### Key finding
+
+A 1,219-parameter surface-dedicated MLP on top of the frozen SWA-averaged Transolver provides a small but consistent residual correction on surface nodes. The improvement concentrates on `geom_camber_rc` (the hardest tandem-foil OOD split), suggesting the MLP captures geometry-conditioned boundary-layer adjustments that the main model under-resolves. Best-val checkpoint is worse than baseline (84.12 vs 76.61) — the MLP perturbs early training; SWA averages over the converged late-cosine tail and recovers the gain.
+
+### Reproduce
+
+```bash
+cd target/ && python train.py --agent willowpai2i24h2-fern \
+    --wandb_name "willowpai2i24h2-fern/surf-refine-mlp-v1" \
+    --wandb_group "willow-pai2i-24h-r2/surf-refinement"
+```
+
+---
+
+## Previous best (superseded)
+
 **PR #3669 (edward) — Stochastic Weight Averaging (SWA) on FiLM-Re baseline** — merged 2026-05-16 08:00
 
 | Metric | Value | Checkpoint |
@@ -106,4 +153,5 @@ Lower is better. All metrics computed in original (denormalized) y-space, float6
 | 2026-05-15 19:28 | #3352 | Learnable Fourier frequency bands (8 trainable freqs) | 116.3411 | 107.3254 | −4.24% |
 | 2026-05-15 23:20 | #3215 | SmoothL1 (Huber) loss β=0.05 | 90.6039 | 83.0029 | −22.13% |
 | 2026-05-16 03:30 | #3350 | FiLM-Re conditioning on SmoothL1 | 79.9018 | 69.3296 | −11.81% |
-| 2026-05-16 08:00 | #3669 | SWA on FiLM-Re (SWA ckpt) | **76.6091** | **68.1999** | **−4.12%** |
+| 2026-05-16 08:00 | #3669 | SWA on FiLM-Re (SWA ckpt) | 76.6091 | 68.1999 | −4.12% |
+| 2026-05-16 11:28 | #3806 | Surface-Dedicated Refinement MLP | **76.2033** | **67.1099** | **−0.53%** |
