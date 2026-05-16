@@ -2,6 +2,20 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 10:25 — PR #3867: H41 Domain-type indicator embedding is_tandem (thorfinn) — **assigned**
+
+- Branch: `charliepai2i24h4-thorfinn/domain-type-indicator`
+- Hypothesis: val_single=80.32 is the worst split despite being in-distribution. Root cause: single-foil samples have dims 18-23 all zero (gap, stagger, foil2 params) — structurally indistinguishable from degenerate tandem at zero gap/stagger. `nn.Embedding(2, n_hidden)` indexed by `is_tandem = (x[:, 0, 18:24].abs() > 1e-6).any(dim=-1)`, zero-init (no-op initially), added as bias to preprocess output. BERT token type IDs / segment embeddings. Predicted -3 to -8 (highest priority from researcher-agent survey).
+
+## 2026-05-16 10:25 — PR #3762: H34 RFF n_freq sweep {16,64} (thorfinn) — **CLOSED**
+
+- Branch: `charliepai2i24h4-thorfinn/rff-nfreq-sweep`
+- Result: n_freq=16: val=76.52 (+13.1%), n_freq=64: val=81.97 (+21.2%). Both arms regress uniformly across all 4 splits. No split where richer/sparser RFF helps.
+- Key insight: n_freq=32 (frieren H5 merged choice) is empirically near-optimal. Asymmetry (doubling hurts more than halving): larger input dilutes per-input-dim weight magnitude — preprocess bottleneck stays at n_hidden=256 regardless of input size. CFD pressure fields are spatially smoother than 3D NeRF textures; 32-mode basis with σ=1 captures relevant spatial frequencies.
+- Truncation caveat: 1-epoch gap (n_freq=16 got 11 vs baseline's 12), but trend robust — n_freq=64 would need unrealistically fast convergence to catch baseline.
+- Student suggested sigma sweep (σ ∈ {0.5, 1.0, 2.0} at fixed n_freq=32) as follow-up. Also correctly identified val_single anomaly as next target — exactly what H41 tests.
+- **Closed**: definitive negative. RFF frequency axis exhausted at n_freq=32.
+
 ## 2026-05-16 09:40 — PR #3852: H40 SWA tail-averaging K={3,5} (edward) — **assigned**
 
 - Branch: `charliepai2i24h4-edward/swa-tail-averaging`

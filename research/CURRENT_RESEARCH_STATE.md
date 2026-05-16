@@ -1,12 +1,12 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 09:40
+- **Date:** 2026-05-16 10:28
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
 - **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 - **Current baseline:** `val_avg/mae_surf_p = 67.64, test_avg=62.12` (PR #3540 tanjiro H24 OneCycleLR, epoch 12/15 truncated)
-- **Key pending wins:** alphonse H23 slice_num=32 (62.63 on H15 SwiGLU baseline — predicted ≤60 on OneCycleLR), frieren H36 channel-weighted surf_loss, tanjiro H33 pct_start sweep, askeladd H39 AMP BF16 (highest-leverage: 18+ epochs in budget)
+- **Key pending wins:** alphonse H23 slice_num=32 (62.63 on H15 SwiGLU baseline — predicted ≤60 on OneCycleLR), thorfinn H41 domain-type indicator (predicted -3 to -8, highest researcher priority), askeladd H39 AMP BF16 (highest-leverage: 18+ epochs in budget), frieren H36 channel-weighted surf_loss, tanjiro H33 pct_start sweep
 
 ## Merged improvements so far (baseline stack)
 
@@ -38,11 +38,11 @@
 | **#3539** | **alphonse** | **H23 slice_num=32 (rebased) — was val=62.63 on H15 SwiGLU; sent back for OneCycleLR retest** | **WIP (retest in progress)** |
 | **#3788** | **frieren** | **H36 channel-weighted surf_loss surf_p_weight sweep {2,3,5} — direct metric/loss alignment** | **WIP** |
 | **#3824** | **fern** | **H38 input Gaussian noise injection sweep {0.01, 0.03, 0.10} — Bishop 1995 Tikhonov-equiv** | **WIP** |
-| **#3852** | **edward** | **H40 SWA tail-averaging K={3,5} — pseudo-ensemble from converged tail epochs** | **WIP (new, replaces H37)** |
-| **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP** |
-| **#3762** | **thorfinn** | **H34 RFF n_freq sweep {16,64} — richer/sparser spatial Fourier basis** | **WIP** |
-| **#3850** | **askeladd** | **H39 BF16 AMP mixed precision — unlock 18+ epochs in 30-min budget** | **WIP (new, replaces H31)** |
-| **#3687** | **nezuko** | **H30 gradient clipping max_norm=1.0 — 2-line stability fix** | **WIP** |
+| **#3852** | **edward** | **H40 SWA tail-averaging K={3,5} — pseudo-ensemble from converged tail epochs** | **WIP (new)** |
+| **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP (training in progress)** |
+| **#3867** | **thorfinn** | **H41 domain-type indicator embedding (is_tandem 2-class) — fix val_single bottleneck** | **WIP (new, replaces H34)** |
+| **#3850** | **askeladd** | **H39 BF16 AMP mixed precision — unlock 18+ epochs in 30-min budget** | **WIP (new)** |
+| **#3687** | **nezuko** | **H30 gradient clipping max_norm=1.0 — 2-line stability fix** | **WIP (training in progress)** |
 
 ## Closed/Failed this round
 
@@ -71,6 +71,7 @@
 | #3760 | fern | H35 AdamW no-decay param groups | Closed — +13.3%. Mechanism empirically absent: ls2 norms flat at ~0.42 under no_decay vs baseline's monotone 0.43→0.51. Integrated WD shrinkage on LS is ~1e-4 over 4125 steps — numerically negligible at wd=1e-4 |
 | #3686 | askeladd | H31 SAM ρ=0.05 OneCycleLR | Closed — 84-95% worse baseline. 5.3 min/epoch (2.1×) → only 5-6 epochs fit in 30-min. Budget collision, not SAM failure. Best contingency val=124.68 (ep 6/10 truncated). AMP (H39) assigned as structural fix. |
 | #3792 | edward | H37 OneCycleLR epochs=12 | Closed — +14.3% (val=77.30). Lost ~20% gradient steps. Per-epoch drift 130s→166s (+27%) meant realized 10.8 epochs, schedule still truncated. Schedule truncation cannot be fixed by epoch-count alone under variable wall-time. |
+| #3762 | thorfinn | H34 RFF n_freq sweep {16,64} | Closed — n_freq=16: +13.1% (val=76.52), n_freq=64: +21.2% (val=81.97). Both regress uniformly. n_freq=32 is empirically optimal. Asymmetry (doubling hurts more than halving) — larger input dilutes per-input-dim weights at fixed n_hidden=256 bottleneck. |
 
 ## OneCycleLR budget constraint (critical insight)
 
@@ -134,6 +135,8 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11-13 epochs depe
 17. **No-decay carve-out needs higher WD to matter**: H35 closed +13.3%. ls2 norm comparison showed flat ~0.42 under no_decay vs baseline's monotone 0.43→0.51 — deep-block LS actually grew LESS, refuting the "uniform WD silently shrinks LayerScale" premise. Integrated shrinkage at wd=1e-4 is ~1e-4 relative — numerically negligible.
 18. **Input-side regularization is unexplored**: We've tested FFN dropout (H12 merged), attention dropout (H17 closed), weight decay (H26 closed), no-decay groups (H35 closed). Input-Jacobian regularization (Bishop 1995 equivalence) is a third axis — H38 tests this.
 19. **SAM structurally incompatible with 30-min cap**: H31 closed. 2.1× per-step slowdown → 5-6 SAM epochs max. OneCycleLR schedules need 12+ epochs for fine-tune tail. Per-epoch wall-time variance (130s → 166s across node SKUs) is a confound for all schedule-fitting experiments — future proposals must use step-count targets, not epoch-count.
+20. **n_freq=32 is empirically optimal for RFF on this dataset**: H34 closed. n_freq=16: +13.1%, n_freq=64: +21.2%. CFD pressure fields are spatially smoother than 3D NeRF textures — 32-mode basis with σ=1.0 captures all relevant frequencies. Asymmetry (doubling worse than halving) → fixed preprocess bottleneck (n_hidden=256) dilutes per-input-dim weights as rff_dim grows.
+21. **val_single=80.32 anomaly explained by structural input ambiguity**: Single-foil samples have dims 18-23 all zero — indistinguishable from degenerate tandem at zero gap/stagger. Model must infer regime from continuous geometry as a corner case. H41 tests explicit is_tandem embedding (zero-init BERT-style token type ID) to give the model a direct routing signal.
 
 ## Next directions (after current wave resolves)
 
