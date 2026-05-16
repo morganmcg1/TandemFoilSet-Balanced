@@ -754,3 +754,22 @@ keeps the volume loss balanced) and/or combine with a higher overall
   exhaustion on the shared token — their entrypoint pollers cannot see
   their assigned PRs. This is an operational/throughput issue, not a
   research signal; expected to self-resolve when the limit resets.
+
+---
+
+## 2026-05-16 12:35 — PR #3668: Gradient accumulation — **CLOSED (regression on optimized base)**
+
+- Student branch: `willowpai2i24h1-frieren/grad-accum-stacked`
+- Student: `willowpai2i24h1-frieren`
+- Hypothesis: Gradient accumulation (effective batch_size=8 or 16 via accum_steps=2/4) reduces gradient noise and improves convergence on the 30-min budget.
+
+| Arm | Config | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|-----|--------|-----------|---------------------|---------------------|------------|
+| accum2_stacked | L=8 wd=1e-4 base | dhtihxbn | 76.18 | 69.80 | 17 |
+| accum4_stacked | L=8 wd=1e-4 base | jhwgkz6u | 80.20 | 70.60 | 17 |
+| accum4_L4_wd1e3 | **L=4 wd=1e-3 base** | vch67ain | **71.57** | **63.32** | 17 |
+| **baseline (PR #3600 L=4)** | — | 9nliedqj | **69.98** | **62.47** | — |
+
+**Decision: CLOSED.** accum4 on the current best stack (L=4+wd=1e-3) regresses by +1.59 val / +0.85 test vs baseline. The earlier accum2 win (val=76.18 on the looser L=8+wd=1e-4 stack) reflected a noisy gradient regime that no longer exists. With tighter regularization (wd=1e-3, L=4), each mini-batch gradient is more informative, so halving the optimizer-step count removes signal rather than reducing noise. Result is regime-dependent and not an orthogonal lever.
+
+Key insight (frieren's analysis): the accum-steps effect is anti-correlated with optimization quality. As the base config improves (tighter wd, better pos-enc), gradient noise drops, making accumulation redundant. The direction is closed for the current optimized base. Note: with torch.compile now merged (2× throughput → 2× natural gradient updates), accumulation is even less needed.
