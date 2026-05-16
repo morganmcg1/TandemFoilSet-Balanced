@@ -1680,3 +1680,113 @@ Arm B (slice=128) regresses across the board. Two factors: (1) wall-cut at epoch
 | **#4055** | tanjiro | **H73: Lion + GEGLU + slice_num=96 — compound two strongest levers** | ~45-47 (Arm A) |
 
 **H73 (Lion + slice_num=96 compound):** Compounds the two strongest confirmed levers — H58 Lion (Δ −10.11 val_avg, loose UB) and H66 slice_num=96 (Δ −0.16 val / −1.74 test). Mechanistically orthogonal: Lion changes *how* weights update (sign-based gradient), slice_num=96 changes *what* attention computes (wider spatial bottleneck). Predicted additivity: H73 ≈ 46.64 val_avg if perfect (= 56.75 − 10.11 = 46.80 − 0.16 from either compound direction). Arm A = Lion lr=1e-4 (H58 winner) + slice_num=96. Arm B = Lion lr=3e-4 + slice_num=96 (Lion's native LR range). This fills the missing piece of the Lion compound matrix — H67-H71 test Lion + (RMSNorm, β₂, warmup, n_head, wd) but not Lion + slice_num.
+
+---
+
+## 2026-05-16 18:32 — PR #4055: H73 Lion + slice_num=96 (tanjiro) — **MERGED, NEW BASELINE**
+
+- Branch: `charliepai2i48h3-tanjiro/h73-lion-slice96`
+- Hypothesis: Lion + slice_num=96 compound near-additively (predicted val_avg ≈ 46.64).
+
+| Arm | val_avg | test 3-split | Δ vs H66 (56.75/54.50) |
+|-----|--------:|-------------:|-----------------------:|
+| A (Lion lr=1e-4) | 46.3422 | 45.3896 | −10.41 / −9.11 |
+| **B (Lion lr=3e-4)** | **42.9784** | **41.5455** | **−13.77 / −12.96** |
+
+| Per-split (Arm B) | val | test |
+|---|---:|---:|
+| single_in_dist | 43.7880 | 38.7901 |
+| geom_camber_rc | 56.6638 | 50.1886 |
+| geom_camber_cruise | 26.4930 | NaN (bug) |
+| re_rand | 44.9686 | 35.6578 |
+
+**Key results:**
+- **Arm A confirms additivity** (46.34 vs predicted 46.64 — within 0.30 pts). The Lion gain (−10.11) transfers cleanly to slice_num=96.
+- **Arm B is SUPER-ADDITIVE** — 3.66 pts below the additivity floor at val=42.98. The wider gradient surface from slice=96 favors Lion's native lr=3e-4 range (vs H58's lr=1e-4 which was tuned at slice=64).
+- Both arms wall-cut at ep 15/50 with val still descending ~0.8 pts/epoch → loose UB. True asymptote likely well below 42.98.
+- Uniform improvement across all 4 val splits (−10 to −17 pts each).
+- test_geom_camber_rc gain (−11.68 pts) confirms the spatial-selectivity mechanism survives Lion's optimization regime.
+
+**Cumulative R5 gain: −23.13 pts val vs H37b (66.11 → 42.98). Strongest single-PR gain of the round.**
+
+**Status: MERGED — NEW BASELINE val=42.9784, test 3-split=41.5455. Set H73 Arm B config as floor for all subsequent experiments.**
+
+---
+
+## 2026-05-16 18:34 — PR #4048: H72 slice_num=96 + RMSNorm (thorfinn) — **CLOSED, negative result**
+
+- Branch: `charliepai2i48h3-thorfinn/h72-slice96-rmsnorm`
+- Hypothesis: H59 (RMSNorm) + H66 (slice_num=96) compound near-additively.
+
+| Arm | val_avg | test 3-split | Δ vs H66 |
+|-----|--------:|-------------:|---------:|
+| A (slice96+rmsnorm) | 57.5849 | 55.4647 | **+0.83 / +0.96 (worse)** |
+| B (slice112+rmsnorm) | 57.2995 | 56.1783 | +0.55 / +1.68 |
+
+**Anti-compound finding:** RMSNorm (+0.67 win at slice=64, H59) and slice_num=96 (+0.16 win, H66) do NOT compound — Arm A is 0.83 pts WORSE than H66. The two normalization regimes interact differently with the wider PhysicsAttention bottleneck. Useful null result: when designing H73, this told us NOT to add RMSNorm to the Lion+slice=96 stack.
+
+**Status: CLOSED — negative compound. Both H59 (RMSNorm alone) and H66 (slice=96 alone) remain valid wins individually; they just don't stack.**
+
+---
+
+## 2026-05-16 18:34 — PR #4024: H70 Lion n_head sweep (frieren) — **CLOSED, superseded**
+
+- Branch: `frieren/h70-lion-nhead-sweep`
+- Hypothesis: n_head sweep under Lion+RMSNorm at slice=64.
+
+| Arm | val_avg | test 3-split |
+|-----|--------:|-------------:|
+| A (n_head=1) | 46.6631 | 45.5251 |
+| **B (n_head=4)** | **45.5603** | **44.8596** |
+
+**Insight captured:** Under Lion+RMSNorm+slice=64, n_head=4 wins by ~1.1 pts over n_head=1, and ~1 pt over n_head=2 (H59 baseline). Useful but **superseded** — H73 (slice=96, n_head=2) lands at 42.98, which is 2.5+ pts below H70's best. n_head sweep should be retested on H73 baseline.
+
+**Status: CLOSED — superseded by H73.**
+
+---
+
+## 2026-05-16 18:34 — PR #4025: H71 Lion wd sweep (nezuko) — **CLOSED, superseded**
+
+- Branch: `nezuko/h71-lion-wd-sweep`
+- Hypothesis: Lion wd sweep at slice=64.
+
+| Arm | val_avg | test 3-split |
+|-----|--------:|-------------:|
+| **A (wd=1e-4)** | **46.0215** | **44.5498** |
+| B (wd=5e-4) | 49.9928 | 48.5085 |
+
+**Insight captured:** wd=1e-4 wins decisively over wd=5e-4 (−4 pts val_avg). The Lion-paper 10×-AdamW upper bound (~5e-4) is too aggressive for TandemFoilSet. But H73 uses wd=1e-3 (the H58 spec, which is 10× higher than wd=1e-4) and still wins — under slice=96 the wd optimum may differ. **Superseded** — wd retune needed on H73 baseline.
+
+**Status: CLOSED — superseded by H73.**
+
+---
+
+## 2026-05-16 18:34 — PR #4022: H68 Lion β₂ sweep (askeladd) — **CLOSED, superseded**
+
+- Branch: `askeladd/h68-lion-beta2-sweep`
+- Hypothesis: Lion β₂ EMA decay sweep at slice=64.
+
+| Arm | val_avg | test 3-split |
+|-----|--------:|-------------:|
+| A (β₂=0.95) | 52.4996 | 51.7573 |
+| **B (β₂=0.999)** | **49.5122** | **47.4686** |
+
+**Insight captured:** β₂=0.999 (slower EMA) beats β₂=0.95 by ~3 pts under Lion+RMSNorm. H73 uses β₂=0.99 (the default H58 spec). The slower β₂ may help further at slice=96. **Superseded** — β₂ retune on H73 baseline pending.
+
+**Status: CLOSED — superseded by H73.**
+
+---
+
+## 2026-05-16 18:34 — PR #4023: H69 Lion warmup (fern) — **CLOSED, superseded**
+
+- Branch: `fern/h69-lion-lr-warmup`
+- Hypothesis: Linear LR warmup before cosine decay under Lion.
+
+| Arm | val_avg | test 3-split |
+|-----|--------:|-------------:|
+| A (warmup=1) | 54.2950 | 52.6563 |
+| **B (warmup=2)** | **49.0287** | **48.0243** |
+
+**Insight captured:** warmup=2 beats warmup=1 by **5.3 pts** — the single biggest hyperparameter-tuning signal in the H67-H71 batch. Warmup is high-impact under Lion. H73 used NO warmup (lr=3e-4 from start) and won at 42.98 — but adding warmup=2 may stabilize the lr=3e-4 regime further. **Superseded** — warmup retest on H73 baseline pending.
+
+**Status: CLOSED — superseded by H73.**

@@ -1,101 +1,103 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 17:28
+- **Date**: 2026-05-16 18:36
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 active — Lion optimizer compounding phase (H58 rebase started 17:24Z; H67-H73 in-flight)
+- **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); refining the Lion stack on the new baseline
 - **Most recent human research directive**: None received
 
 ## Current Best
 
-**PR #4011 (H66: slice_num=96 at GEGLU n_layers=4, thorfinn) — val_avg/mae_surf_p = 56.7504** (MERGED 2026-05-16 16:31)
+**PR #4055 (H73 Arm B: Lion lr=3e-4 + slice_num=96, tanjiro) — val_avg/mae_surf_p = 42.9784 / test 3-split = 41.5455** (MERGED 2026-05-16 18:32)
 
-Test 3-split avg (excl. cruise NaN bug): **54.5026**
+**Loose UB** — wall-cut at ep 15/50 with val_avg still descending ~0.8 pts/epoch. True asymptote likely well below 42.98.
 
-| Reference | val_avg/mae_surf_p | test 3-split | Status |
-|-----------|--------------------|--------------|--------|
-| **H66 Arm A (slice_num=96)** | **56.7504** | **54.5026** | **CURRENT BEST (PR #4011)** |
-| H59 (GEGLU + RMSNorm, slice=64) | 56.9056 | 56.2420 | Overridden by #4011 |
-| H60 Arm B (n_layers=4 at GEGLU) | 57.5750 | 56.4610 | Overridden by #3966 |
+| Reference | val_avg | test 3-split | Status |
+|-----------|--------:|-------------:|--------|
+| **H73 Arm B (Lion lr=3e-4 + slice96)** | **42.9784** | **41.5455** | **CURRENT BEST (PR #4055)** |
+| H73 Arm A (Lion lr=1e-4 + slice96) | 46.3422 | 45.3896 | Same PR, lr=1e-4 arm |
+| H66 (slice_num=96, AdamW) | 56.7504 | 54.5026 | Overridden by #4055 |
+| H58 Arm A reference (Lion lr=1e-4, slice=64) | ~46.80 | ~46.63 | Pending PR #3965 still WIP |
+| H59 (GEGLU + RMSNorm, slice=64) | 56.9056 | 56.2420 | Overridden |
 | H48 GEGLU (n_layers=5) | 58.6268 | 56.6976 | Overridden |
-| H37b (n_head=2 + lr=1e-3) | 66.1060 | 64.45 | Overridden |
-| (H58 Arm A Lion+GEGLU — pending rebase) | (46.7957) | (46.6320) | **PENDING — loose UB, wall-cut** |
+| H37b (n_head=2 + lr=1e-3, AdamW) | 66.1060 | 64.45 | Overridden |
 
-**Δ H66 vs H59: −0.16 val, −1.74 test 3-split.** Test-side gain concentrates on geometry-OOD (test_geom_camber_rc −3.33 pts).
-**Cumulative R5 gain: −9.36 pts val vs H37b** (66.11 → 56.75).
+**Δ H73 vs H66: −13.77 val, −12.96 test 3-split.** SUPER-ADDITIVE (3.66 pts below the additivity-floor prediction of 46.64).
+**Cumulative R5 gain: −23.13 pts val vs H37b** (66.11 → 42.98).
 
-## Pending Strategic Result
+## Round 5 Insights (post-merge wave)
 
-**PR #3965 — H58 Lion + GEGLU (edward) — TERMINAL but SENT BACK FOR REBASE**
+The H67-H73 Lion compound batch revealed:
+- **Lion + slice_num=96 is super-additive** (H73 Arm B at val=42.98, 3.66 pts below additivity floor). The wider gradient surface from slice=96 favors Lion's native lr=3e-4 range.
+- **RMSNorm + slice_num=96 anti-compounds under AdamW** (H72, val=57.58 vs predicted 56.0). The H59 RMSNorm win at slice=64 does NOT transfer to slice=96.
+- **n_head=4 wins over n_head=2 under Lion+RMSNorm+slice=64** (H70, +1.1 pts). Untested at slice=96.
+- **warmup=2 wins over warmup=1 under Lion** (H69, +5.3 pts — biggest single hyperparameter signal). Untested on lr=3e-4 / slice=96.
+- **β₂=0.999 wins over β₂=0.95 under Lion** (H68, +3 pts). H73 used β₂=0.99 (default).
+- **wd=1e-4 beats wd=5e-4 at slice=64+Lion** (H71, +4 pts). But H73 won at wd=1e-3 — interaction with slice=96 unclear.
 
-- **Arm A (lr=1e-4, wd=1e-3, β=(0.9,0.99)) val_avg = 46.7957** (loose upper bound — wall-clock cut at epoch 13/50 with val still dropping ~2.4 pt/ep)
-- Δ −10.11 vs current baseline 56.75 — **strongest single-PR signal of the round**
-- Sent back at 15:37Z for train.py rebase onto post-H59 codebase; edward's pod recovered from rate-limit at 16:23Z and is working on rebase
-- 5 Lion-compound hypotheses (H67-H71) seeded in parallel
+## Pending Strategic Results
+
+**PR #4020 — H67 Lion + GEGLU + RMSNorm compound (alphonse) — STILL WIP**
+- Pod was rate-limited, just resumed; results expected shortly.
+
+**PR #3965 — H58 Lion + GEGLU (edward) — REBASE IN PROGRESS / WIP**
+- Edward's pod just finished rebase training (~18:17Z) and is writing up results now.
+- Likely will be **superseded by H73 Arm A** (which already reproduces H58 spec at slice=96, val=46.34). May close once results land.
 
 ## Key Confirmed Insights
 
-1. **Lion optimizer is a massive win on GEGLU (H58)**: val=46.80 vs 58.63 H48 base, −11.83 pts uniform across all 4 val splits. Numbers are loose upper bounds — wall-cut mid-cosine.
-2. **GEGLU gated FFN is a major win (H48)**: val=58.63 vs H37b 66.11. GEGLU outperforms SwiGLU by 2.8 pts.
-3. **RMSNorm (fused kernel) wins under GEGLU (H59)**: −0.67 val_avg vs LayerNorm at H60 baseline. Win is dominated by per-epoch speedup (fused F.rms_norm kernel) yielding one extra training step within wall budget.
-4. **slice_num=96 wins on test-OOD (H66)**: −0.16 val, −1.74 test 3-split vs H59 baseline. Test gain concentrates on geometry-OOD (camber_rc −3.33 pts), confirming the spatial-selectivity mechanism. slice_num=128 regresses (overfit at 1499 training samples).
-5. **n_layers=4 wins under GEGLU (H60)**: Pre-GEGLU H42 finding (deeper+n_head=2 hurts) does NOT transfer to gated regime. Frees ~13% s/epoch.
-6. **GEGLU has different LR sensitivity than vanilla FFN (H57 falsified)**: lr=2e-3 hurts GEGLU. Optimum ≤1e-3 for AdamW, ~1e-4 for Lion.
-7. **clip_grad_norm=1.0 is locked (H56)**, surf_weight=10 locked (H54), n_head=2 locked under AdamW (H37b/H46).
-8. **Schedule lever exhausted under AdamW**: Cosine T_max=15 is optimal. Lion + linear warmup still open → H69.
-9. **Mixup is wrong inductive bias for PDE CFD (H55 closed)**: PDE nonlinearity + mesh-identity corruption.
-10. **Scoring NaN bug**: test_geom_camber_cruise sample 20 non-finite GT. Read-only. Use 3-split excl. cruise.
+1. **Lion + slice_num=96 is the new floor** (H73 Arm B, val=42.98). Super-additive compound.
+2. **Lion optimizer is a massive win** (H58, H73). Sign-based gradient update fixes systemic AdamW optimization issue. Uniform −10 to −17 pt per-split improvement under Lion+slice=96.
+3. **slice_num=96 amplifies under Lion** (H66 → H73). Test_geom_camber_rc gain (−11.68 vs H66) confirms spatial-selectivity survives Lion.
+4. **GEGLU gated FFN is a major win (H48)**: val=58.63 vs H37b 66.11. GEGLU > SwiGLU > vanilla.
+5. **RMSNorm wins under GEGLU at slice=64 (H59)** but does NOT compound with slice=96 (H72 negative).
+6. **n_layers=4 wins under GEGLU (H60)**: Shallower wins under gated regime.
+7. **Schedule lever exhausted under AdamW**: T_max=15 is optimal. Lion+warmup=2 wins big (H69) but untested at lr=3e-4.
+8. **clip_grad_norm=1.0 is locked (H56)**, surf_weight=10 locked (H54).
+9. **Mixup is wrong inductive bias for PDE CFD (H55 closed)**.
+10. **EMA averaging fails at current budget (H65)**: Need oscillation regime, but T_max=15 cosine still in translation regime.
 
 ## Active WIP Experiments
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#3965** | edward | **H58 REBASE: Lion + GEGLU + RMSNorm verification** | **CRITICAL** | ~45-47 (rebase started 17:24Z) |
-| **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm compound** | **CRITICAL** | ~45-48 |
-| **#4022** | askeladd | **H68: Lion β₂ sweep (0.95, 0.999)** | **HIGH** | ~46-48 |
-| **#4023** | fern | **H69: Lion + linear LR warmup** | **HIGH** | ~45-47 |
-| **#4024** | frieren | **H70: n_head sweep under Lion** | **HIGH** | ~46-48 |
-| **#4025** | nezuko | **H71: Lion wd sweep (1e-4, 5e-4)** | **HIGH** | ~46-48 |
-| **#4048** | thorfinn | **H72: slice_num=96 + RMSNorm compound** | **HIGH** | ~56.0-56.5 |
-| **#4055** | tanjiro | **H73: Lion + slice_num=96 compound** | **CRITICAL** | ~45-47 |
+| **#3965** | edward | **H58 REBASE: Lion + GEGLU verification on slice=64** | LOW (superseded by H73) | ~46-47 (Arm A reproduction) |
+| **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm at slice=64** | LOW (slice=64 already superseded) | ~45-48 |
 
-All 8 students WIP, 7 Lion-track + 1 slice/RMSNorm + 1 EMA-closed. Tanjiro actively training at 17:27Z (GPU 99%, 52GB). Other 6 pods completed branch checkout, train.py modified, about to launch.
+Other 6 students just freed by H67-H73 batch closures. Need new assignments.
 
-**Closed this round:** H61 (LR-down GEGLU), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p retune), H65 (EMA).
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73).
 
-**Rate-limit note:** Edward's pod cleared rate-limit at 17:24:44Z (after 50min wait). Other pods recovered earlier (~17:21Z) and are launching training.
-
-## Lever Status
+## Lever Status (post-H73)
 
 | Lever | Status | Best result | Notes |
 |-------|--------|-------------|-------|
-| Optimizer | 🏆 Lion wins big (H58) | 46.80 (loose UB) | Δ −10.11. H67-H71 exploring Lion compounds |
-| LR (Lion) | 🔬 H67/H69 testing | 1e-4 (H58) | H67 tests 1e-4/3e-4; H69 tests warmup |
-| LR (AdamW+GEGLU) | 🔬 H61 testing | 1e-3 (H48) | H57 shows 2e-3 hurts; 7e-4/5e-4 in-flight |
+| Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win |
+| LR (Lion) | 🔬 More to find | 3e-4 (H73) | Sweet spot may be 2-4e-4 at slice=96 |
+| Schedule (Lion) | 🔬 warmup helps | T_max=15 (H73) | warmup=2 won at slice=64 (H69); test on H73 |
+| n_head (Lion) | 🔬 4 wins at slice=64 | 2 (H73) | H70 found n_head=4; retest at slice=96 |
+| β₂ (Lion) | 🔬 0.999 wins at slice=64 | 0.99 (H73) | H68 found β₂=0.999 helps; retest |
+| wd (Lion) | 🔬 Interaction unclear | 1e-3 (H73) | wd=1e-4 won at slice=64 (H71); wd=1e-3 won at slice=96 |
+| slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |
+| n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
+| FFN activation | ✅ GEGLU locked (H48) | GEGLU | > SwiGLU > vanilla |
+| Normalization | 🔀 LayerNorm at slice=96 | LN (H73) | RMSNorm anti-compounds with slice=96 (H72) |
+| n_hidden | ✅ Locked at 128 | H33 | — |
 | clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | — |
 | surf_weight | ✅ Locked at 10 | H54 | — |
-| Schedule | ✅ AdamW exhausted | T_max=15 | LR warmup under Lion still open → H69 |
-| n_head (AdamW) | ✅ Locked at 2 | H37b/H46 | May differ under Lion → H70 |
-| n_hidden | ✅ Locked at 128 | H33 | Width fails |
-| n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
-| slice_num | 🏆 96 wins (H66) | 56.7504 / 54.5026 | Confirmed vs H59 baseline. 128 regresses. |
-| FFN activation | ✅ GEGLU wins | H48: 58.63 | GEGLU > SwiGLU > vanilla |
-| mlp_ratio | 🔬 H62 testing | 2 current | — |
-| Huber δ_p | 🔬 H64 testing | 0.25 (H25) | May need retune at tighter baseline |
-| Normalization | 🏆 RMSNorm wins (fused) | H59: 56.9056 | Per-epoch speedup gives extra step |
-| slice_num+RMSNorm | 🔬 H72 testing | TBD | Compound of H66+H59; predicted near-additive |
-| Lion+slice_num=96 | 🔬 H73 testing | TBD | Compound of H58+H66; predicted ~46.6 if additive |
-| DropPath | 🔬 H63 testing | 0.0 | Novel for this arch/size |
-| EMA averaging | ❌ Closed (H65) | N/A | Both arms regressed (65.82, 327.27). Polyak needs more epochs than budget. |
-| β₂ (Lion) | 🔬 H68 testing | 0.99 (H58) | Lion-specific |
-| wd (Lion) | 🔬 H71 testing | 1e-3 (H58) | — |
+| Huber δ_p | ✅ Locked at 0.25 | H25/H64 | — |
+| DropPath | ❌ No effect | 0.0 (H63) | — |
+| Mixup | ❌ Wrong inductive bias | None (H55) | — |
+| EMA averaging | ❌ Wrong regime | None (H65) | Needs oscillation, not translation |
+| mlp_ratio | ✅ 2 locked (H62) | 2 | — |
+| Cond_dim | ✅ Locked at 11 (FiLM) | 11 | — |
 
 ## Key Open Questions
 
-1. **What's the true Lion+GEGLU asymptote?** H58 at val=46.80 is loose UB — cut at epoch 13/50 with val still dropping. Edward rebasing; H67-H71 explore Lion compounds.
-2. **Does slice_num=96 + RMSNorm compound additively?** H72 thorfinn (#4048). Predicted: ~56.0-56.5 if additive (H66 −0.16 + H59 −0.67 = −0.83 from H60).
-3. **Does Lion+RMSNorm compound?** H67 alphonse (#4020). H58 used LayerNorm; adding RMSNorm should give +0.67 pts from the fused-kernel speedup.
-4. **Are β₂, wd, n_head, warmup levers under Lion well-characterized?** H68/H69/H70/H71 mapping this space.
-5. **Do slice_num=96 and Lion compound?** H73 tanjiro (#4055). Predicted ~46.6 val_avg if perfectly additive (56.75 − 10.11 from Lion, or 46.80 − 0.16 from slice_num).
+1. **How low can Lion+slice=96 go with extended budget?** H73 wall-cut at ep 15 still descending — full cosine at T_max=20-25 could reveal the true floor.
+2. **Do the slice=64 Lion-variant wins (warmup=2, β₂=0.999, n_head=4, wd retune) compound on top of H73?** Most likely YES for warmup, less clear for the others. Need to test each on slice=96.
+3. **Can we push slice_num=112 or 128 under Lion?** H66 found 128 regresses at AdamW. Lion's faster effective convergence may shift the optimum.
+4. **Is RMSNorm still negative under Lion+slice=96?** H72 showed anti-compound under AdamW; not directly tested under Lion.
+5. **What's the asymptote with all best Lion hyperparams stacked?** lr=3e-4 + warmup=2 + β₂=0.999 + n_head=4 + wd retuned — potentially ~38-40.
 
 ## Baseline Progression
 
@@ -107,17 +109,16 @@ All 8 students WIP, 7 Lion-track + 1 slice/RMSNorm + 1 EMA-closed. Tanjiro activ
 | 71.77 | 70.62 | H27b/H32: lr=1e-3 |
 | 68.19 | 65.44 | H38: wd=5e-5 |
 | 66.11 | 64.45 | H37b: n_head=2 + lr=1e-3 |
-| 63.44 | 61.39 | H39 Arm C: + lr=2e-3 (merged #3683, documentation) |
+| 63.44 | 61.39 | H39 Arm C: + lr=2e-3 (documentation) |
 | 58.63 | 56.70 | H48 GEGLU: + ffn_act=geglu |
 | 57.58 | 56.46 | H60: + n_layers=4 |
-| 56.91 | 56.24 | H59: + norm_type=rmsnorm (fused) |
-| **56.75** | **54.50** | **H66: + slice_num=96** |
-| (46.80) | (46.63) | (H58 Arm A — pending rebase; loose UB) |
+| 56.91 | 56.24 | H59: + norm_type=rmsnorm |
+| 56.75 | 54.50 | H66: + slice_num=96 |
+| **42.98** | **41.55** | **H73 Arm B: + optimizer=lion + lr=3e-4 (super-additive)** |
 
-Total merged gain: **−57.9 pts val** (50.5% reduction from 114.63 to 56.75). Pending Lion merge would push to ~−68 pts.
+Total merged gain: **−71.65 pts val** (62.5% reduction from 114.63 to 42.98).
 
 ## Known Issues
 
 - `data/scoring.py` NaN propagation: test_geom_camber_cruise sample 20 non-finite GT. Read-only. Use 3-split excl. cruise.
 - `train.py`: `huber_delta` Config field NOT used in loss — no-op.
-- **H66 + H59 config nuance:** H66 was measured with LayerNorm (pre-H59 merge). The merged codebase has both flags available; run with `--norm_type rmsnorm --slice_num 96` to stack both (→ H72).

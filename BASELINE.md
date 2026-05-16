@@ -2,44 +2,56 @@
 
 ## Current Best
 
-**PR #4011 — H66 Arm A: slice_num=96 at n_layers=4 GEGLU base (thorfinn)**
-Merged 2026-05-16. 15 epochs completed (full cosine T_max=15 schedule within 30-min wall).
+**PR #4055 — H73 Arm B: Lion (lr=3e-4) + GEGLU + slice_num=96 (tanjiro)**
+Merged 2026-05-16. 15 epochs completed (cosine T_max=15) before 30-min wall stop. **Numbers are loose UB — val_avg still descending ~0.8 pts/epoch at cut.**
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| val_avg/mae_surf_p | **56.7504** | PR #4011 Arm A (best_epoch=15) |
-| val_single_in_dist/mae_surf_p | 60.9717 | PR #4011 Arm A |
-| val_geom_camber_rc/mae_surf_p | 70.7939 | PR #4011 Arm A |
-| val_geom_camber_cruise/mae_surf_p | 38.2785 | PR #4011 Arm A |
-| val_re_rand/mae_surf_p | 56.9576 | PR #4011 Arm A |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4011 |
-| test_avg/mae_surf_p (3-split, excl. cruise) | **54.5026** | PR #4011 Arm A |
-| test_single_in_dist/mae_surf_p | 54.5425 | PR #4011 Arm A |
-| test_geom_camber_rc/mae_surf_p | 61.8680 | PR #4011 Arm A |
-| test_re_rand/mae_surf_p | 47.0974 | PR #4011 Arm A |
+| val_avg/mae_surf_p | **42.9784** | PR #4055 Arm B (best_epoch=15) |
+| val_single_in_dist/mae_surf_p | 43.7880 | PR #4055 Arm B |
+| val_geom_camber_rc/mae_surf_p | 56.6638 | PR #4055 Arm B |
+| val_geom_camber_cruise/mae_surf_p | 26.4930 | PR #4055 Arm B |
+| val_re_rand/mae_surf_p | 44.9686 | PR #4055 Arm B |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4055 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **41.5455** | PR #4055 Arm B |
+| test_single_in_dist/mae_surf_p | 38.7901 | PR #4055 Arm B |
+| test_geom_camber_rc/mae_surf_p | 50.1886 | PR #4055 Arm B |
+| test_re_rand/mae_surf_p | 35.6578 | PR #4055 Arm B |
 
-**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + ffn_act=geglu + n_layers=4 + **slice_num=96** + norm_type=layernorm (note: H66 was branched pre-H59 merge, so norm is still LayerNorm). n_params=864,907. Mean s/epoch=121.8. Peak GPU mem=42.60 GB.
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + **optimizer=lion + lr=3e-4 + wd=1e-3 + β=(0.9, 0.99)** + n_head=2 + ffn_act=geglu + n_layers=4 + **slice_num=96** + norm_type=layernorm.
 
-**Why slice_num=96 wins:** Transolver's `PhysicsAttention` projects mesh nodes into a fixed-size slice-token space (`in_project_slice = Linear(dim_head, slice_num)`). Widening this bottleneck from 64 → 96 (+50%) gives the model finer spatial selectivity. The gain concentrates exactly where the hypothesis predicted: **test_geom_camber_rc (−3.33 pts)** — the geometry-OOD split where local mesh structure of unseen camber shapes matters most. test_single_in_dist also improved meaningfully (−1.98 pts). Arm B (slice_num=128) regressed: it hit the wall one epoch short and even at equal-epoch comparison (ep14) trailed Arm A by 1.6 pts — capacity vs. small training set (1499) tips into overfit territory above 96.
+**Why Lion + slice_num=96 wins super-additively:** H73 stacks two confirmed orthogonal wins:
+1. **Lion sign-update** (H58 win, ~−10 from AdamW at slice=64) — fixes a systemic optimization issue across all val splits.
+2. **slice_num=96** (H66 win, −0.16 val / −1.74 test 3-split from slice=64) — wider PhysicsAttention bottleneck.
 
-**Δ vs prior best (H59 GEGLU+RMSNorm, 56.9056 / 56.2420):** −0.16 pts val_avg, **−1.74 pts test 3-split** (big test-side gain).
-**Δ vs H37b (66.11):** −9.36 pts val_avg cumulative gain.
+Predicted floor under perfect additivity: 56.75 − 10.11 = **46.64**. Arm A (lr=1e-4, H58 spec) lands at **46.34** — matches the additivity prediction to within 0.30. Arm B (lr=3e-4, Lion's native range) lands at **42.98** — **3.66 pts below the additivity floor**. The slice=96 wider gradient surface favors Lion's slightly higher native LR; this is super-additive.
 
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+Uniform improvement across val splits (−10 to −17 pts each), confirming Lion+slice is a systemic improvement rather than regime-specific. test_geom_camber_rc gain (−11.68 pts vs H66) shows H66's spatial-selectivity mechanism survives Lion's optimizer regime and amplifies under it.
 
-**⚠ Configuration nuance — H66 vs H59:** H66 was branched against the pre-H59 advisor branch, so it uses **LayerNorm**, not the merged RMSNorm. The H59 RMSNorm change is still present in `train.py` on the post-H66 merge (squash merge took the union via mergeable=true). The default `norm_type` flag governs which is used at runtime — when reproducing, pass `--norm_type rmsnorm` explicitly to stack H59 with H66, or omit to use LayerNorm (matching H66's measured numbers). Combining the two is a high-priority follow-up — likely near-additive.
+**Δ vs prior best (H66, 56.75 / 54.50):** **−13.77 pts val_avg, −12.96 pts test 3-split** — strongest single-PR gain of the round.
+**Δ vs H37b (66.11):** **−23.13 pts val_avg cumulative gain**.
 
-**Artifacts:** `models/model-h66-slice96-geglu-n4-20260516-145043/`
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only. Report 3-split excl. cruise.
+
+**Artifacts:** `models/model-h73-arm-b-lion-lr3e4-slice96-geglu-20260516-172548/`
 
 **Reproduce:**
 ```bash
 cd target/ && python train.py --epochs 50 \
-  --experiment_name h66-slice96-geglu-n4 --agent <student> \
+  --experiment_name h73-lion-lr3e4-slice96-geglu \
+  --agent <student> \
+  --optimizer lion --lr 3e-4 --weight_decay 1e-3 \
+  --beta1 0.9 --beta2 0.99 \
   --slice_num 96 --n_layers 4 --ffn_act geglu \
-  --n_head 2 --lr 1e-3 --weight_decay 5e-5 --clip_grad_norm 1.0
+  --n_head 2 --clip_grad_norm 1.0
 ```
+
+## Previous Best (overridden by #4055)
+
+**PR #4011 — H66 Arm A: slice_num=96 at n_layers=4 GEGLU base (thorfinn)**
+Merged 2026-05-16. val_avg=56.7504 / test 3-split=54.5026. AdamW + GEGLU + n_layers=4 + slice_num=96 + LayerNorm. n_params=864,907.
 
 ## Previous Best (overridden by #4011)
 
