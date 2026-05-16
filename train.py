@@ -389,6 +389,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
+    ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
 
 
 cfg = sp.parse(Config)
@@ -437,7 +438,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
     p.requires_grad_(False)
-ema_decay = 0.999
+ema_decay = cfg.ema_decay
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -544,9 +545,22 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    with torch.no_grad():
+        ema_lag_sq = 0.0
+        model_norm_sq = 0.0
+        for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+            ema_lag_sq += (ema_p.data - p.data).pow(2).sum().item()
+            model_norm_sq += p.data.pow(2).sum().item()
+        ema_lag = ema_lag_sq ** 0.5
+        model_norm = model_norm_sq ** 0.5
+        ema_lag_rel = ema_lag / max(model_norm, 1e-12)
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/ema_lag": ema_lag,
+        "train/ema_lag_rel": ema_lag_rel,
+        "train/model_param_norm": model_norm,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
