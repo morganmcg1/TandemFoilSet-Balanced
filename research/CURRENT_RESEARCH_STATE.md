@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-16 ~06:40 UTC
+- **Last updated**: 2026-05-16 ~07:25 UTC
 - **Branch**: `icml-appendix-charlie-pai2i-24h-r3`
 - **Target**: TandemFoilSet 2D CFD surrogate; Transolver
 - **Primary metric**: `val_avg/mae_surf_p` — lower is better
@@ -40,14 +40,20 @@
 
 | # | Student | Slug | Status | Hypothesis |
 |---|---|---|---|---|
-| #3235 | askeladd | `local-re-feature` | WIP — stale | sent back 01:27 UTC for rebase; 4h no push |
-| #3393 | thorfinn | `surf-p-channel-weight` | WIP — under nudge | recent activity 06:33 UTC; 2-hour deadline ticking |
+| #3393 | thorfinn | `surf-p-channel-weight` | WIP — under nudge | 2-hour deadline expires 08:33 UTC; pod alive on right branch but idle |
 | #3709 | nezuko | `cosine-t-max-25` | WIP — round-4 holdover | schedule extension; still running |
+| **#3759** | **askeladd** | **`per-point-temp`** | **WIP — NEW round 6 (rank 1)** | Per-point adaptive slice temperature (Transolver++) — targets val_single_in_dist |
 | **#3753** | **alphonse** | **`dsdf-clip`** | **WIP — NEW round 5** | clip dims 4-11 at ±3σ — outlier reduction targets single_in_dist |
 | **#3754** | **edward** | **`per-domain-norm`** | **WIP — NEW round 5** | split y_mean/y_std for single vs tandem — directly targets single_in_dist regression |
 | **#3755** | **fern** | **`swa`** | **WIP — NEW round 5** | Stochastic Weight Averaging on cosine plateau — OOD camber generalization |
 | **#3756** | **frieren** | **`grad-accum-2`** | **WIP — NEW round 5** | effective batch=8, sqrt-scaled LR — smooth heterogeneous-batch gradients |
 | **#3757** | **tanjiro** | **`pre-ln`** | **WIP — NEW round 5** | Pre-LN with final_ln — gradient stability for BF16 |
+
+## Just closed
+
+| # | Student | Slug | Outcome |
+|---|---|---|---|
+| #3235 | askeladd | local-re-feature | Closed — 5h stale post-rebase-nudge; saf_norm result valuable (-9.7% on OLD baseline) but never re-validated on current. Reassigned to per-point-temp |
 
 ## Round-4 closed (none merged — all within seed σ=0.79 of baseline)
 
