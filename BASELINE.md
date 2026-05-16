@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-05-16 04:30 — PR #3632: Coordinate noise augmentation std=0.01 on (x,z) during training (tanjiro)
+
+- **val_avg/mae_surf_p: 83.4954** (best epoch 10/10, W&B run `0q6t1hpc`)
+- **test_avg/mae_surf_p: 73.7918** — clean finite metric, −4.28% vs previous best
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 95.1365 | 83.7744 |
+| geom_camber_rc | 91.6051 | 80.5539 |
+| geom_camber_cruise | 64.7562 | 55.2016 |
+| re_rand | 82.4838 | 75.6371 |
+| **avg** | **83.4954** | **73.7918** |
+
+- **Model config:** Transolver `n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (~1.03M params)
+- **Augmentation:** `coord_noise_std=0.01` — Gaussian jitter on normalized (x,z) coords during training only
+- **Positional encoding:** Fourier PE `num_freq=4` (from PR #3372)
+- **Loss:** L1 (`Config.loss_type = "l1"`)
+- **Optimizer:** AdamW, lr=5e-4 (Config default), weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=10)
+- **Grad clip:** max_norm=1.0
+- **Batch:** 4, surf_weight=10.0
+- **Budget:** 30-min wall clock → 10 epochs (~170s/epoch)
+
+**Reproduce command:**
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py --epochs 10 \
+  --coord_noise_std 0.01 --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(coord_noise_std=0.01 will be the new default after this merge; num_freq=4 is already default)*
+
+> **Note on lr:** This winning run used lr=5e-4 (Config default). The previous baseline #3372 used lr=1e-3. Testing lr=1e-3 with coord noise is an open experiment — expected to compound.
+
+---
+
 ## 2026-05-16 02:25 — PR #3372: Fourier positional encoding 4-freq on (x,z) coords (askeladd)
 
 - **val_avg/mae_surf_p: 88.2442** (best epoch 10/10, W&B run `qyc68z5k`)
