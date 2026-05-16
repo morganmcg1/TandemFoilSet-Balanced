@@ -1,6 +1,27 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-15 22:30) — PR #3283: SOAP optimizer
+## Current best (as of 2026-05-16 01:35) — PR #3430: EMA of model weights
+
+Four winners merged: **Huber loss** (PR #3155, −18.1%) + **LR warmup 1e-3** (PR #3147, −8.9%) + **SOAP optimizer** (PR #3283, −31.7%) + **EMA of model weights decay=0.999** (PR #3430, nezuko, **−18.8% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **61.43** (run `4iw1n8xw`, nezuko EMA, best epoch)
+
+**Test (paper-facing, from nezuko PR #3430 comment):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **60.92** (PR comment; not W&B-logged)
+  - Note: per-split test breakdown not separately reported; full W&B re-logging recommended in next round
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=10) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, Huber loss (SmoothL1 beta=1.0) `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.999, updated each training step, used for all validation/test evaluation)
+- Wall-clock: ~136 s/epoch (EMA update is near-zero overhead)
+- `param count = 0.66M`
+
+---
+
+## Previous best (as of 2026-05-15 22:30) — PR #3283: SOAP optimizer
 
 Three round-1/2 winners merged: **Huber loss** (PR #3155, fern, −18.1%) + **LR warmup + peak 1e-3** (PR #3147, askeladd, −8.9%) + **SOAP optimizer** (PR #3283, alphonse, **−31.7% vs previous canonical**).
 
