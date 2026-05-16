@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 20:35 UTC
+- **Last updated:** 2026-05-16 20:55 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 20:35 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 20:55 UTC)
 
 ## Current best baseline (after fern #4062 merge — second consecutive fern WIN)
 
@@ -33,7 +33,7 @@ cd target/ && python train.py \
 
 ## Plateau status
 
-**7 consecutive closes since the fern #4062 merge at 18:40 UTC** (no improvement for ~2h):
+**8 consecutive closes since the fern #4062 merge at 18:40 UTC** (no improvement for ~2h15m):
 1. #4065 frieren SGDR T_0=15 — math equivalent to baseline cosine
 2. #4080 fern slice=4 — capacity cliff at 4 slice tokens
 3. #4075 edward RMSNorm — mixed (helps OOD test, hurts in-dist val)
@@ -41,8 +41,11 @@ cd target/ && python train.py \
 5. #4100 fern n_head=4 — dim_head=32 lost OOD-camber generalization
 6. #4086 frieren δ=0.25 (3-seed) — δ axis saturated past 0.5
 7. #4076 nezuko SWA K=5 — SWA needs converged trajectory we don't have
+8. **#4066 thorfinn slice=12 (2-seed, val=59.22/60.52) — slice axis bracket closed; non-monotonic between 8 and 16**
 
-Plateau is **real but not yet panic-worthy**: 5 in-flight experiments could still produce winners. Strategy: 1 more round of orthogonal axis exploration before invoking researcher-agent for fresh hypotheses.
+**Slice axis bracket** is now fully closed: {4 cliff, 8 winner, 12 cliff, 16 prior, 32 worse, 64 worse}. Non-monotonicity between 8 and 16 is a clean finding — single-seed variance (±3) doesn't fully explain a 2-seed mean of ~59.9 between two endpoints at 56.9 and 57.7.
+
+Strategy: 1 more round of orthogonal-axis exploration before invoking researcher-agent. Round-13 now has 4 new orthogonal axes (regularization/asymHuber/Lookahead/LLRD) — if ALL fail, escalate.
 
 ## Active PRs (8 WIP, 0 idle — zero idle GPUs)
 
@@ -51,11 +54,11 @@ Plateau is **real but not yet panic-worthy**: 5 in-flight experiments could stil
 | **#4138** | **fern** | **attn_dropout=mlp_dropout=0.1** | NEW slice=8 baseline | Regularization: orthogonal to EMA/wd; targets dropout axis (untested ever) |
 | **#4141** | **frieren** | **asymmetric Huber (δ_pos=0.25, δ_neg=1.0)** | NEW slice=8 baseline | Loss: pushes under-prediction harder than over-prediction (their suggestion) |
 | **#4142** | **nezuko** | **Lookahead optimizer (k=5, α=0.5)** | NEW slice=8 baseline | Optimizer: in-training averaging (k-step inner loop); fixes SWA's convergence requirement |
+| **#4151** | **thorfinn** | **Layer-wise LR decay (factor=0.85)** | NEW slice=8 baseline | Optimizer: per-layer LR scaling; preserves early features, adapts late layers (BERT/ViT proven) |
 | #4101 | edward | asinh_vel_scale=1.0 | NEW slice=8 baseline | Data: velocity-scale axis extension; symmetric with asinh_p_scale |
 | #4102 | tanjiro | temperature_init=0.7 (diffuse) | NEW slice=8 baseline | Architecture: dead-slice hypothesis; sign-flip from closed #3877 |
-| #4066 | thorfinn | slice_num=12 | slice=16 baseline (stale_wip) | Conservative slice axis bracket point — bumped 20:35 UTC |
-| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline (stale_wip) | Optimizer: faster 2nd-moment EMA adaptation — bumped 20:35 UTC |
-| #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | Capacity: more channels per slice token |
+| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline | Optimizer: faster 2nd-moment EMA adaptation; healthy `3pc74k8f` ETA terminal ~21:05 UTC |
+| #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | Capacity: more channels per slice token; 3rd attempt `hapwhewl` started 20:43 UTC |
 
 ## Round-12 results (18:30-20:30 UTC, 8 PRs)
 
@@ -114,13 +117,13 @@ Plateau is **real but not yet panic-worthy**: 5 in-flight experiments could stil
 **Loss axis** (1, NEW):
 - Asymmetric Huber δ_pos=0.25 / δ_neg=1.0 (frieren #4141) — pushes under-prediction harder
 
-**Optimizer axes** (2):
-- AdamW β2=0.95 (alphonse #4067, slice=16 stale)
+**Optimizer axes** (3):
+- AdamW β2=0.95 (alphonse #4067, slice=16)
 - Lookahead k=5 α=0.5 wrapping AdamW (nezuko #4142, NEW) — in-training averaging
+- **Layer-wise LR decay 0.85** (thorfinn #4151, NEW) — per-layer LR scaling (BERT/ViT)
 
 **Architecture axes** (2):
-- slice_num=12 (thorfinn #4066, slice=16 stale, conservative bracket)
-- n_hidden=192 (askeladd #4074, capacity-per-slice)
+- n_hidden=192 (askeladd #4074, capacity-per-slice on slice=16 stack)
 - temperature_init=0.7 (tanjiro #4102, diffuse-softmax hypothesis at slice=8)
 
 **Data axis** (1):

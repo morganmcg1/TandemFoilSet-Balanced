@@ -1,5 +1,31 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:55 — Round-13 thorfinn #4066 closure + LLRD assignment
+
+### Closed: PR #4066 (thorfinn) — slice_num=12 conservative bracket
+
+Run `15igzmtz`: val_avg=59.2184, test_3split=58.0466. Replicate `b2afng0l`: val_avg=60.52. **Both seeds regress materially** (>+2.6% vs slice=16 baseline 57.70, >+4% vs slice=8 baseline 56.90). Both seeds cross the failure-mode threshold (val > 58.5).
+
+**Per-split signature (15igzmtz)**:
+- `val_single_in_dist`: 71.53 (+8.4% regress — in-dist capacity bottleneck)
+- `val_geom_camber_rc`: 71.01 (−1.1% ~tie)
+- `val_geom_camber_cruise`: 38.15 (+0.4% ~tie)
+- `val_re_rand`: 56.18 (+2.2% regress)
+
+**Mechanism**: thorfinn's analysis is exact — slice=12 over-coarsens for high-mesh-density single-foil samples (~85 K nodes pre-pad). Each slice must aggregate ~7 K nodes, collapsing in-distribution geometric detail. The OOD-camber splits hold (those have lower mesh density) but in-dist regresses sharply.
+
+**Slice axis bracket fully closed**: {4 cliff at 61.5+, 8 winner at 56.90, 12 cliff at ~59.9 mean, 16 prior at 57.70, 32 at 60.89, 64 at 61.61}. The axis is **non-monotonic** between 8 and 16 — a real finding, not pure variance. slice=8 is the optimum on this axis.
+
+**Operational note**: thorfinn handled the session-resumption protocol correctly — bumped stale_wip turned out to have 2 valid completed runs in W&B. They killed the redundant 3rd run (`zkaelzdy`) once the prior 2 already answered the hypothesis. Excellent compute discipline. Pattern logged for future stale_wip handling.
+
+**Cruise NaN flag** (their suggested follow-up #3): noted; data/scoring.py is read-only for students. We compute test_3split (cruise dropped) fleet-wide. The Infinity in vol_loss on cruise camber is a known issue waiting on a separate fleet-level fix.
+
+### Round-13 new assignment
+
+| PR | Student | Hypothesis | Mechanism |
+|----|---------|-----------|-----------|
+| **#4151** | **thorfinn** | Layer-wise LR decay (factor=0.85) on slice=8 | **Per-layer LR scaling** (BERT/ViT proven technique): preserves early-layer features (mesh-to-token encoding) while letting late layers adapt aggressively to surface pressure peaks (dominant residual at val_geom_camber_rc=70.07) |
+
 ## 2026-05-16 20:35 — Round-12 final closures (3 more) + Round-13 new assignments (3 students)
 
 ### Closed: PR #4100 (fern) — n_head=4 (dim_head=32) on slice=8
