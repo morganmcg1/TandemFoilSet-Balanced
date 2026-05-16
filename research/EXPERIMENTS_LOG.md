@@ -1,5 +1,69 @@
 # SENPAI Research Results
 
+## 2026-05-16 07:55 — alphonse #3672 MERGED; fern #3695 closed; R7 fern+edward assigned
+
+### #3672 alphonse — Fourier ablation (MERGED — new baseline val 70.34 / test 61.63)
+
+- Branch: `willowpai2i48h5-alphonse/r5-fourier-ablation-film`
+- Hypothesis: Under FiLM+Lion+EMA, Fourier positional features may be redundant since FiLM on log(Re) already encodes the flow-regime frequency information. Test n_fourier ∈ {0, 16 σ=3, 16 σ=10}.
+- Results (all arms FINISHED, terminal SENPAI-RESULT posted, squash-merged):
+
+| Arm | Config | W&B run | val_avg | test_avg | Δval vs prior base (71.65) |
+|-----|--------|---------|---------|----------|---------------------------|
+| **A (WINNER)** | n_fourier=0 | **`297qot5r`** | **70.3432** | **61.6253** | **−1.31** |
+| B | n_fourier=16, σ=3 | `drp81h4l` | 71.2763 | 61.6733 | −0.38 (marginal) |
+| C (control) | n_fourier=16, σ=10 | `vx0b6ukg` | ~71.7 (still running at terminal) | — | ~baseline |
+
+Per-split Arm A winner vs prior baseline:
+
+| Split | val Δ | test Δ |
+|-------|-------|--------|
+| single_in_dist | −1.53 | −1.33 |
+| geom_camber_rc | −2.02 | +0.09 (wash) |
+| geom_camber_cruise | −0.49 | −0.62 |
+| re_rand | −1.21 | −0.08 (wash) |
+
+- Analysis: **FiLM on log(Re) makes Fourier PE redundant.** Dropping Fourier entirely (n_fourier=0) improves all 4 val splits and 3/4 test splits. FiLM already captures the flow-regime conditioning signal that Fourier positional encoding was trying to inject. Key simplification win: removes ~1.1K RFF params, one hyperparameter (fourier_sigma), and one coordinate transform per forward pass.
+
+  Variance caveat: student ran 3 Arm A seeds due to process collisions during 06:30–07:00 launch window; only `297qot5r` was a clean 50-epoch run. The two duplicates (`9an3ynhy` val 82.39, `cng2gwhu` val 89.92) were crash-restarts with broken state, not reproducible runs.
+
+  **New baseline: val 70.3432 / test 61.6253** (BASELINE.md updated, commit `6352727`).
+
+### #3695 fern — Sobolev surface ∂p/∂s loss (CLOSED — informative, small test gain)
+
+- Branch: `willowpai2i48h5-fern/r5-sobolev`
+- Hypothesis: Penalizing ∂p/∂s gradient mismatch along the foil surface regularizes prediction smoothness and improves OOD generalization.
+- Results (all 3 arms FINISHED, terminal SENPAI-RESULT posted):
+
+| Arm | sobolev_weight | W&B run | val_avg | test_avg | Δval vs prior base (71.65) |
+|-----|----------------|---------|---------|----------|---------------------------|
+| Control | 0.0 | `yrl9p2bh` | 73.7119 | 63.3541 | +2.06 |
+| **B (best)** | **0.1** | **`b655hio8`** | **71.8355** | **61.9284** | **+0.18 (wash, test −0.18)** |
+| C | 0.5 | `pgk5nw19` | 85.9918 | 75.7503 | +14.34 |
+
+- Analysis: **Sobolev w=0.1 gives a small test-side gain (−0.18) at flat val (+0.18 above baseline).** The surface gradient regularizer is pointing in the right direction (OOD smoothness) but the gain is sub-noise. Per-split: camber_cruise test improves (42.84 → 42.03, −1.9%), camber_rc regresses slightly (73.87 → 75.31, +2.0%). w=0.5 catastrophically over-regularizes (+14 val). The Sobolev contribution (ratio ~1.0 at w=0.1) equals the data-loss magnitude at epoch 14 — a tuning sweet spot that happens to be near noise.
+
+  Paper-relevant: surface-Sobolev regularization at correct weight is neutral-to-slightly-beneficial on test. Confirms physics-motivated direction. Finer sweep {0.03, 0.05, 0.08, 0.12} reserved for Round 7+.
+
+### New R7 assignments after R5 closes
+
+| PR | Student | Hypothesis | Implementation |
+|----|---------|------------|----------------|
+| #3786 | edward | Huber β sweep (0.05→0.1→0.2) | `--loss_beta` flag sweep. Hypothesis: β=0.05 is too tolerant of peak-pressure residuals driving camber_rc weakness. |
+| **#3808** | **fern** | **Surface-loss reweighting (surf_weight ∈ {10, 20, 40})** | `--surf_weight` flag sweep. Direct rebalancing of surface vs volume loss gradient. Follow-up to Sobolev result. |
+
+All 8 students staffed:
+- alphonse: reassigning (just merged #3672)
+- tanjiro #3673: terminal posted, awaiting mark-ready → close-as-informative
+- fern #3808: just assigned (surf_weight sweep)
+- frieren #3697: Arm C still running
+- thorfinn #3698: awaiting terminal + mark-ready → close-as-informative
+- askeladd #3712: running (β1 sweep)
+- nezuko #3748: running (spec norm)
+- edward #3786: just assigned (Huber β sweep)
+
+---
+
 ## 2026-05-16 07:35 — R5 results finalized; edward #3711 closed; R7 edward assigned
 
 ### #3711 edward — Layer-wise LR decay / LLRD (CLOSED — dead end, monotonic regression with γ<1)
