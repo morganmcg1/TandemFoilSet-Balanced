@@ -1,5 +1,55 @@
 # SENPAI Research Results
 
+## 2026-05-16 12:31 — PR #3855: H: Bilinear gate (no activation) ✗ CLOSED (val=66.88; closes GLU ablation — gating mechanism = 94% of gain)
+
+- Branch: `willowpai2i48h1-tanjiro/bilinear-gate-no-activation`
+- Student: willowpai2i48h1-tanjiro
+
+### Results (W&B `p1fb18nk`, seed=0, h=128/T_max=15/bf16/Bilinear gate, no activation)
+
+| Metric | This (Bilinear) | GeGLU #3810 (best) | SwiGLU #3680 | GELU baseline | Δ vs GeGLU |
+|--------|:---:|:---:|:---:|:---:|:---:|
+| **val_avg/mae_surf_p** | **66.88** | **65.37** | 65.44 | 90.77 | **+1.51** |
+| **test_avg/mae_surf_p** | **62.89** | **61.68** | 62.04 | 85.85 | **+1.21** |
+
+### Major mechanistic finding: gating ≫ activation choice
+
+Bilinear gate closes **94% of the GLU gain over GELU** (23.89 / 25.40 val units). Combined with #3810's SiLU↔GELU swap (Δ=0.07), this triangulates the activation-mechanism question:
+
+| Variant | Gate activation | Δ val (relative) | Interpretation |
+|---------|-----------------|------------------|----------------|
+| GELU baseline | none + element-wise | reference (90.77) | non-gated |
+| **Bilinear** | **identity (none)** | **−23.89 vs GELU** | **gating mechanism only** |
+| SwiGLU | SiLU | −25.33 vs GELU | gating + SiLU smoothness |
+| GeGLU | GELU | −25.40 vs GELU | gating + GELU smoothness |
+
+**Conclusion:** Multiplicative interaction (the gate mechanism itself) is the **primary lever**, contributing ~94% of the GLU performance gain. The gate **nonlinearity** contributes ~6% (~1.5 val units). Note: 1.5 val units is *smaller* than SwiGLU's between-seed σ̂=0.90 × 2 — so the Bilinear↔GeGLU gap could be within seed noise; single-seed result here, cannot rule out population-level tie.
+
+### Per-split val (best epoch 17)
+| Split | mae_surf_p |
+|---|---:|
+| single_in_dist | 78.44 |
+| geom_camber_rc | 80.20 |
+| geom_camber_cruise | 46.67 |
+| re_rand | 62.23 |
+| **val_avg** | **66.88** |
+
+Bilinear is worst on `single_in_dist` (the "easy" in-distribution split) and roughly tied on `geom_camber_cruise`. Pattern: gate nonlinearity helps most on the harder splits — consistent with "nonlinearity = capacity to fit harder regimes."
+
+### Training stability check
+
+No NaN/inf, no loss spikes, smooth monotonic descent through epoch 15. The concern about unbounded `fc_main(x) * fc_gate(x)` activations was unfounded — LayerNorm-before-MLP and the 2/3 hidden-dim factor keep activations bounded.
+
+### Closure rationale
+
+val=66.88 in tie zone but above 65.37 → per decision tree, closes. ReGLU (#3933 edward) still in flight to formally close the GLU ablation family (SiLU/GELU/identity/ReLU).
+
+### Follow-up: PR #3959 tanjiro lr=1e-3 SwiGLU
+
+Pivot away from GLU axes. Tanjiro reassigned to test **2× the base LR (5e-4 → 1e-3) on SwiGLU h=128**. SwiGLU's σ̂=0.90 < GELU's σ̂=1.54 means SwiGLU has measurable stability headroom that LR=5e-4 (inherited from GELU era) doesn't exploit.
+
+---
+
 ## 2026-05-16 11:44 — PR #3837: H: β_p=20 + SwiGLU h=128 ✗ CLOSED (modest anti-additive regression val=67.58)
 
 - Branch: `willowpai2i48h1-edward/betap20_swiglu_h128`

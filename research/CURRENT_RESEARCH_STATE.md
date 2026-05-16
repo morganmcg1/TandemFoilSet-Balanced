@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:50
+- **Date:** 2026-05-16 12:32
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; programme best val=65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
@@ -61,19 +61,20 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| **#3934** | **thorfinn** | **T_max=12 cosine on SwiGLU h=128** | **NEW — assigned 11:48** |
-| **#3933** | **edward** | **ReGLU activation (close GLU family)** | **NEW — assigned 11:48** |
-| **#3932** | **askeladd** | **head_and_embed 2.5× LR boost on SwiGLU** | **NEW — assigned 11:48** |
+| **#3959** | **tanjiro** | **lr=1e-3 (2× base) on SwiGLU h=128** | **NEW — assigned 12:31** |
+| #3934 | thorfinn | T_max=12 cosine on SwiGLU h=128 | Running |
+| #3933 | edward | ReGLU activation (close GLU family) | Running |
+| #3932 | askeladd | head_and_embed 2.5× LR boost on SwiGLU | Running |
 | #3904 | fern | GeGLU seed confirm (seeds 1+2) | Running |
 | #3888 | frieren | fc_main LR boost 1.5× within SwiGLU | Running |
 | #3886 | alphonse | DropPath (Stochastic Depth) on SwiGLU | Running |
-| #3855 | tanjiro | Bilinear gate (no activation) | Running |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (re-running on SwiGLU regime) |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA (rebased onto SwiGLU) | WIP (re-running on SwiGLU regime; conflict cleared 12:23) |
 
 ## Recently closed PRs (this session)
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
+| **#3855** | **Bilinear gate (tanjiro)** | **66.88** | **Closes GLU ablation family. MAJOR finding: gating mechanism = 94% of GLU gain; activation choice = ~6%. SwiGLU ≈ GeGLU > Bilinear ≫ GELU.** |
 | **#3837** | **β_p=20 + SwiGLU (edward)** | **67.58** | **Modest anti-additive regression. MAJOR finding: per-channel weighting is width-coupled.** |
 | **#3832** | **head_and_embed 1.75× (askeladd)** | **67.16** | **Slight regression; lever direction correct, magnitude undersized (head/block_0 ratio essentially unchanged at 3.3×).** |
 | **#3764** | **h=192+SwiGLU stacking (thorfinn)** | **79.22** | **Anti-additive; compute-starvation (12 ep vs 17 at h=128), schedule mismatch — not architectural antagonism.** |
@@ -105,10 +106,12 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 2. **head_and_embed + block_4 dual boost** — block_4 is 2nd-largest grad-norm group (1.41), might benefit from concurrent boost.
 3. **T_max scan extended** — if T_max=12 wins, scan T_max ∈ {10, 12, 14} for the sweet spot.
 4. **LeakyReGLU** — if ReGLU dies due to dead-gate, LeakyReLU(0.01) rescue.
-5. **Higher base LR (1e-3) on SwiGLU h=128** — lower seed variance suggests stability headroom for higher LR.
+5. **LR scan extended (1.5e-3, 2e-3)** — if lr=1e-3 (tanjiro #3959) wins, find the stability edge.
 6. **RMSNorm vs LayerNorm swap** — modern LLaMA-style. Param-matched, single-knob test of normalization geometry.
-7. **Combine winners (Round 7)** — if multiple PRs win independently, test their stacks.
-8. **SwiGLU + SWA over SwiGLU-converged checkpoint** — extends nezuko's mechanism finding if her #3644 SWA wins on SwiGLU.
+7. **AdamW betas scan** — (0.9, 0.95) vs default (0.9, 0.999); LLaMA-style β2.
+8. **slice_num scan on SwiGLU h=128** — current slice_num=64 was inherited; test 32, 128 for attention granularity.
+9. **Combine winners (Round 7)** — if multiple PRs win independently, test their stacks.
+10. **SwiGLU + SWA over SwiGLU-converged checkpoint** — extends nezuko's mechanism finding if her #3644 SWA wins on SwiGLU.
 
 ## Dead-end lever classes (do not revisit)
 
@@ -124,11 +127,13 @@ Cross-context comparison of β_p=20 (from #3611, #3837):
 10. **Per-channel weighting (β_p=20) on h=128 width** — #3611, #3837. Width-coupled; needs h=192-class capacity to absorb redistribution.
 11. **h=192+SwiGLU stacking under current budget** — #3764. Compute-starved at 12 epochs; needs faster-converging h=192 setup before retesting.
 12. **head_and_embed 1.75× LR boost** — #3832. Right direction, undersized lever; superseded by 2.5× #3932.
+13. **Bilinear gate (no activation)** — #3855. Closes GLU ablation family: works mechanistically (94% of GLU gain) but does not improve on GeGLU/SwiGLU; reduced complexity does not translate to better minima.
 
 ## Plateau status
 
-**Not in plateau.** Active investigation on 4 parallel fronts:
-1. **GLU ablation family** (bilinear #3855, ReGLU #3933) — mechanistic science on gating activation choice.
+**Not in plateau.** Active investigation on 5 parallel fronts:
+1. **GLU ablation family** (ReGLU #3933) — formally closing with the last activation choice (ReLU); Bilinear #3855 just landed as 94%-of-gain check.
 2. **Gradient-informed LR scaling** (head_and_embed 2.5× #3932, fc_main 1.5× #3888) — frieren's inversion finding points at bottlenecks; #3832 confirms lever direction.
 3. **Schedule tuning** (T_max=12 #3934, SWA tail #3644 on SwiGLU regime) — aligning cosine to actual budget on h=128/gated-FFN.
 4. **Regularization layered with gating** (DropPath #3886) — block-granularity, complementary to SwiGLU's per-token gates.
+5. **Base LR scaling** (lr=1e-3 #3959) — using SwiGLU's measured σ̂=0.90 stability headroom that 5e-4 inherits from GELU era.
