@@ -621,3 +621,33 @@ Random-pair FD divergence proxy too noisy on irregular meshes. Mechanism: high v
 
 PR #3610 (mlp-ratio-sweep). Hypothesis: bump Transolver MLP block ratio from 2 to 4 (standard transformer default). Orthogonal to fern (depth) and tanjiro (slice_num) — three independent capacity dimensions in parallel.
 
+
+## 2026-05-16 02:50 — PR #3571 (fern): depth-sweep CLOSED; PR #3649 assigned n_head-sweep
+
+### PR #3571 closure
+
+| Run | Student | Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | Vs baseline | Status |
+|---|---|---|---|---|---|---|
+| enxjsoys | fern | n_layers=6 | 93.8290 | 91.9389 | **+3.55% REGRESS** | Arm B skipped per brief |
+
+**Per-split val (n_layers=6 vs baseline)**:
+| split | depth=6 | baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 108.965 | 106.135 | +2.67% |
+| val_geom_camber_rc | 104.950 | 99.466 | +5.51% |
+| val_geom_camber_cruise | 72.883 | 70.358 | +3.59% |
+| val_re_rand | 88.517 | 86.494 | +2.34% |
+
+**Diagnostics**: Peak GPU=49.6 GB. Wall-time 156 s/epoch (vs 129 s baseline → 12 epochs instead of 14). Val curve still monotonically decreasing at epoch 12 → wall-clock bound, not capacity bound.
+
+**Conclusion**: Depth-6 regresses within 30-min budget — extra capacity was traded for fewer optimizer steps and the 5-layer trajectory wins. Architecture-via-depth falsified at this wall-clock budget. The val trajectory was still improving, so depth might win with a 60-min budget, but that's outside the run-limit constraints.
+
+**Depth sweep closed. No Arm B (n_layers=7) per brief rules.**
+
+### PR #3649 — fern n_head sweep (newly assigned)
+
+Hypothesis: Increase attention heads 4→8. n_head changes the attention partition but NOT parameter count or wall-clock time, making it the lowest-cost architecture axis available.
+
+- Arm A (primary): `--n_head 8` (per-head dim 16)
+- Arm B (conditional if A wins decisively): `--n_head 16` or `--n_head 2` depending on direction
+- W&B group: `n-head-sweep`
