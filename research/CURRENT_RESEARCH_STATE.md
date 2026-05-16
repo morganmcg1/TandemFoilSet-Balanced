@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 13:08
+- **Date:** 2026-05-16 13:58
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -37,7 +37,7 @@
 | tanjiro | #3527 | BF16 + LS + n14 + EMA quad compound | SENT BACK (BF16+LS+n10 already at val=67.19/test=58.05; needs EMA arm + rebase) |
 | nezuko | #3941 | AdamW weight_decay sweep {3e-5, 3e-4} on triple compound | NEW (wave-9) |
 | thorfinn | #3784 | Peak LR sweep {7e-4, 1e-3} on LayerScale stack | wave-8 — stale; pinged |
-| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | stale 21h — pinged urgently |
+| askeladd | #3983 | Huber δ sweep {0.15, 0.5} on triple compound | NEW (wave-10) |
 
 ## Closed this round
 
@@ -64,6 +64,7 @@
 | #3823 (nezuko) | Lookahead optimizer: both k=5/k=10 ~15-21% worse; slow-anchor averaging disrupts LayerScale γ trajectory |
 | #3882 (alphonse) | SAM optimizer ρ=0.05: structural failure under 30-min budget; 2× overhead halves epochs, no flat-min benefit overcomes |
 | #3878 (edward) | EMA decay sweep {0.995, 0.999}: both worse than 0.998; 0.999 EMA doesn't "open" in 12-epoch budget — needs warm-up |
+| #3424 (askeladd) | clip=0.1 × Huber δ both arms regress 5%; LayerScale already gates gradients, tighter clip starves optimizer |
 
 ## Current research themes
 
@@ -81,7 +82,7 @@
 
 7. **Peak LR sweep on triple compound (thorfinn #3784)**: lr=1e-3 survived on n14+clip=1.0 stack. Retesting on triple compound; pinged.
 
-8. **Tighter clip sweep (askeladd #3424)**: clip=0.1 + Huber delta sweep. Stale 21h — pinged urgently.
+8. **Huber δ sweep (askeladd #3983) — wave-10 NEW**: PR #3424 side-finding showed δ=0.1 beat δ=0.3 under tight clip. Testing δ ∈ {0.15, 0.5} at standard clip=0.25 on triple compound — does the optimal δ shift on the new stack? Smaller δ may compose with LayerScale+EMA regularization.
 
 ## Key insights accumulated
 

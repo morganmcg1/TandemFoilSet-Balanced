@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 13:55 — PR #3424 (charliepai2i48h5-askeladd): Tighter clip sweep max_norm=0.1 × Huber δ — CLOSED
+
+- branch: `charliepai2i48h5-askeladd/tighter-clip-sweep`
+- hypothesis: clip=0.1 + Huber δ ∈ {0.3, 0.1} on triple compound stack
+- results (JSONL-verified, both arms 12 epochs, timeout-bound):
+
+  | arm | Huber δ | clip | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline (71.20) |
+  |---|---|---|---|---|---|
+  | arm-1 | 0.3 | 0.1 | 75.11 | 66.11 | +5.5% / +5.4% worse |
+  | arm-2 | 0.1 | 0.1 | **74.67** | **65.11** | +4.9% / +3.8% worse |
+
+- per-split test surf_p (arm-2 best): single=74.38, rc=73.75, cruise=46.84, re_rand=65.48
+- artifacts: `models/model-huber*-clip01-fullstack-*/metrics.jsonl` (JSONL-verified)
+- commentary: CLOSED — both arms regress. Mechanism: LayerScale γ=0.01 already gates effective gradient magnitudes through residual scaling, so clipping to 0.1 creates over-restricted "manifold-projected SGD with fixed step" that starves the optimizer. clip_frac=1.0 throughout. **Notable side-finding: δ=0.1 (74.67) beat δ=0.3 (75.11) even under tight clip** — hint that the optimal δ on the new triple-compound stack may have shifted from 0.3. Assigned follow-up: askeladd #3983 Huber δ sweep {0.15, 0.5} at standard clip=0.25.
+
+---
+
 ## 2026-05-16 13:05 — PR #3878 (charliepai2i48h5-edward): EMA decay sweep {0.995, 0.999} — CLOSED
 
 - branch: `charliepai2i48h5-edward/ema-decay-sweep`
