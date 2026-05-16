@@ -499,6 +499,12 @@ class Config:
     # (~14 epochs in the 30-min cap); cfg.epochs=50 would never trigger SWA
     # if we keyed off 50%, so we use the actual-training-aware default.
     swa_start_epoch: int = 7
+    # Bernoulli aux loss: penalises variance of (p + 0.5|U|^2) across surface
+    # nodes. Soft physics coupling between (Ux, Uy, p). 0.0 disables.
+    bernoulli_weight: float = 0.0
+    # Reserved for future formulations (e.g. p_∞ + 0.5*U_∞^2 reference); not
+    # used by the variance-based loss since variance is invariant to constants.
+    bernoulli_u_inf: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -607,6 +613,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_bernoulli = 0.0
+    epoch_bernoulli_gt = 0.0
     n_batches = 0
 
     for batch_idx, (x, y, is_surface, mask) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)):
@@ -652,6 +660,43 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
+        # Bernoulli aux loss: penalise variance of (p + 0.5|U|^2) across each
+        # sample's surface nodes. Physically motivated coupling between the
+        # three predicted channels (Ux, Uy, p). Variance is invariant to the
+        # per-streamline constant, so we don't need a U_inf reference here.
+        # Always compute predicted + ground-truth Bernoulli variance for
+        # diagnostic logging (cheap; gives post-hoc baseline comparison the
+        # advisor wants without a separate run).
+        surf_float = surf_mask.to(pred.dtype)  # [B, N]
+        n_surf_per = surf_float.sum(dim=1)  # [B]
+        denom = n_surf_per.clamp(min=1.0)
+        valid_samples = n_surf_per >= 2
+
+        def _bernoulli_var(y_phys):
+            ux_ = y_phys[..., 0]; uy_ = y_phys[..., 1]; p_ = y_phys[..., 2]
+            b_sum = p_ + 0.5 * (ux_ ** 2 + uy_ ** 2)  # [B, N]
+            mean_b = (b_sum * surf_float).sum(dim=1) / denom  # [B]
+            diff_sq = ((b_sum - mean_b.unsqueeze(1)) ** 2) * surf_float
+            return diff_sq.sum(dim=1) / denom  # [B]
+
+        pred_phys = pred * stats["y_std"] + stats["y_mean"]
+        var_pred = _bernoulli_var(pred_phys)
+        var_gt = _bernoulli_var(y)  # y is already in physical units
+
+        if valid_samples.any():
+            bernoulli_loss = var_pred[valid_samples].mean()
+            bernoulli_loss_gt = var_gt[valid_samples].mean().detach()
+        else:
+            bernoulli_loss = torch.zeros((), device=device, dtype=pred.dtype)
+            bernoulli_loss_gt = torch.zeros((), device=device, dtype=pred.dtype)
+
+        if cfg.bernoulli_weight > 0.0:
+            loss = loss + cfg.bernoulli_weight * bernoulli_loss
+        bernoulli_loss_val = bernoulli_loss.item()
+        bernoulli_loss_gt_val = bernoulli_loss_gt.item()
+        epoch_bernoulli += bernoulli_loss_val
+        epoch_bernoulli_gt += bernoulli_loss_gt_val
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -659,7 +704,13 @@ for epoch in range(MAX_EPOCHS):
             swa_model.update_parameters(model)
             swa_n_updates += 1
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        step_log = {
+            "train/loss": loss.item(),
+            "train/bernoulli_loss": bernoulli_loss_val,
+            "train/bernoulli_loss_gt": bernoulli_loss_gt_val,
+            "global_step": global_step,
+        }
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -668,6 +719,8 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_bernoulli /= max(n_batches, 1)
+    epoch_bernoulli_gt /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -690,6 +743,8 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    log_metrics["train/bernoulli_loss_epoch"] = epoch_bernoulli
+    log_metrics["train/bernoulli_loss_gt_epoch"] = epoch_bernoulli_gt
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -714,9 +769,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    bern_str = f" bern={epoch_bernoulli:.2e} bern_gt={epoch_bernoulli_gt:.2e}"
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}{bern_str}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
