@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-05-16 11:30 — PR #3814: SwiGLU FFN in TransolverBlock (askeladd)
+
+- **val_avg/mae_surf_p: 64.2430** (best epoch 10/10, W&B run `dvcj6w25`) — **−22% vs previous best 82.4997**
+- **test_avg/mae_surf_p: 55.5454** — **−25% vs previous best 74.1023**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 71.8437 | 64.1005 |
+| geom_camber_rc | 74.3348 | 66.0329 |
+| geom_camber_cruise | 46.4804 | 37.6118 |
+| re_rand | 64.3132 | 54.4363 |
+| **avg** | **64.2430** | **55.5454** |
+
+- **Model config:** Transolver `n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (~1.04M params, +0.7% vs baseline)
+- **SwiGLU change:** `self.mlp` in `TransolverBlock` replaced with `SwiGLUFFN(hidden_dim, hidden_dim*mlp_ratio, hidden_dim)`. Inner dim=216 (`round_to_mult(160*2*2/3, 8)`). `mlp2` (output head) left as standard MLP.
+- **Augmentation:** `coord_noise_std=0.01`
+- **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1
+- **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=10)
+- **Batch:** 4, surf_weight=10.0, grad clip max_norm=1.0
+- **Budget:** 30-min wall clock → 10 epochs (~173s/epoch); peak VRAM ~54.6 GB
+- **Reproducibility:** second seed `msnk1t8p` gave val=64.5454, test=55.8364 (within 0.3 of canonical run — not a seed fluke)
+- **Note:** best val still at last epoch (10/10) — model still improving at budget end; gains are likely underestimated at fixed compute. **Future SwiGLU experiments should use --epochs 12** to stack with the epochs win.
+
+**Reproduce command:**
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py --epochs 12 \
+  --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(SwiGLU is now merged into train.py defaults; coord_noise_std=0.01, num_freq=4, lr=5e-4 all default)*
+
+---
+
 ## 2026-05-16 08:30 — PR #3691: Longer training 12 epochs (thorfinn)
 
 - **val_avg/mae_surf_p: 82.4997** (best epoch 11/12, W&B run `zqxkh9np`)
