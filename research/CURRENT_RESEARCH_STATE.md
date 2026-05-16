@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 07:50 UTC
+- **Updated:** 2026-05-16 09:15 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
 - **Metrics:** local JSONL only (no remote tracking on this branch)
-- **Current round-5 baseline (PR #3666 MERGED):** `val_avg/mae_surf_p = 54.0564`, `test_avg/mae_surf_p = 48.1422`
-  - Note: lr=1e-3 (up from 5e-4) on full compile stack. Epoch-1 instability (seen at lr=1e-3 without compile in PR #3581) **entirely absent** with compile + TF32. Arm B (lr=1e-3) sits strictly below Arm A (lr=7e-4) from epoch 1 to 32. Cautious mask invariant at ~0.61. All 8 val/test cells improve uniformly. Still descending at −0.5/epoch at epoch-32 cutoff.
-- **Cumulative round-5 improvement:** −56.37% val_avg (123.88 → 54.06) and −57.90% test_avg (114.37 → 48.14) vs pre-round-5 floor. **Ten compounding wins in sequence.**
+- **Current round-5 baseline (PR #3463 MERGED):** `val_avg/mae_surf_p = 53.1915`, `test_avg/mae_surf_p = 47.5701`
+  - Note: n_hidden=192 + lr=1e-3 + compile stack. Sub-multiplicative compounding: lr=1e-3 already saturated camber_rc headroom (geom_camber_rc regressed +2.0% vs n=128 baseline), so only 39% of predicted gain materialized. geom_camber_cruise continues to benefit from width (−6.23%). 5/8 cells improve. Still descending at −0.97/epoch at cutoff (epoch 24, LR already at eta_min). Cautious mask invariant at 0.6105.
+- **Cumulative round-5 improvement:** −57.07% val_avg (123.88 → 53.19) and −58.40% test_avg (114.37 → 47.57) vs pre-round-5 floor. **Eleven compounding wins in sequence.**
 
 ## Most recent research direction from human researcher team
 (none — no open Issues directed at this launch)
@@ -47,12 +47,20 @@ Strongest remaining axes (in priority order):
 1. **LR continuation** (#3771 thorfinn WIP, new loop 17): lr=1.5e-3 vs 2e-3 — continuing the monotonic sweep (5e-4→7e-4→1e-3 all improved). Key question: at what LR does TF32+compile fail to neutralize the epoch-1 spike?
 2. **T_max=35 + lr=1e-3 compound** (#3665 fern WIP, sent back loop 17): schedule realignment compounds with LR win. fern's analysis predicted optimal T_max shifts under LR scaling. Expected −1–3% additional.
 3. **n_hidden=192 + lr=1e-3** (#3463 edward WIP, sent back loop 17): capacity compound at new LR. Prior win was −4.09% at lr=5e-4; at lr=1e-3 the higher gradient signal should accelerate convergence on the 24-epoch budget.
-4. **Gradient clipping sweep** (#3809 frieren WIP, new loop 19): clip_norm=1.0 vs 0.5 on lr=1e-3 + compile baseline. train.py has no clipping today — defensive measure that compounds with all other axes.
-5. **Weight decay sweep at lr=1e-3** (#3785 tanjiro WIP, new loop 18): wd=5e-5 vs wd=5e-4 — bracketing 1e-4 default ±5×. Never swept on the merged stack.
-6. **slice_num sweep** (#3739 alphonse WIP, new loop 16): slice_num=96 vs 128 on compile baseline — physics-region granularity in Physics_Attention; untested on merged stack. OOD-geometry motivation.
-7. **Cp normalization** (#3547 askeladd WIP, rebase needed): physics-motivated output normalization.
-8. **Spatial Fourier positional encoding** (#3631 nezuko WIP): OOD geometry encoding.
-9. **max-autotune compile mode** (fern suggestion, deferred): single arm, low complexity.
+4. **Bernoulli residual verify** (#3839 edward WIP, new loop 20): bernoulli=True on n=192 + lr=1e-3 + compile. Targets the geom_camber_rc regression from loop 20 — physics prior should help on OOD geometry.
+5. **Gradient clipping sweep** (#3809 frieren WIP, new loop 19): clip_norm=1.0 vs 0.5. Orthogonal defensive measure.
+6. **Weight decay sweep** (#3785 tanjiro WIP, new loop 18): wd=5e-5 vs wd=5e-4 — never swept on merged stack.
+7. **slice_num sweep** (#3739 alphonse WIP, baseline-update sent loop 20): slice_num=96 vs 128 — physics-region granularity, OOD-geometry motivation.
+8. **Cp normalization** (#3547 askeladd WIP, sent back for rebase loop 20): physics-motivated output normalization.
+9. **Spatial Fourier positional encoding** (#3631 nezuko WIP, sent back for rebase loop 20): OOD geometry encoding.
+10. **max-autotune compile mode** (fern suggestion, deferred): single arm, low complexity.
+
+**Closed/merged/assigned in this loop (Loop 20)**:
+- **#3463 (edward n_hidden=192 + lr=1e-3 + compile)** — MERGED (commit `f7c3b8e`). New best val_avg=53.1915 / test_avg=47.5701. Capacity + LR compounding is sub-multiplicative (camber_rc regresses +2% due to saturation between lr=1e-3 and n=192 on that split), but val_avg gate met (−1.60%). Eleven compounding wins.
+- **#3739 (alphonse slice_num sweep)** — baseline-update comment posted (new target: 53.19). Label fixed from stale-wip → wip.
+- **#3631 (nezuko Fourier)** — sent back for rebase (merge conflict, baseline moved 61.20 → 53.19). Must re-run on current n=192 + lr=1e-3 + compile full stack.
+- **#3547 (askeladd Cp normalization)** — sent back for rebase (merge conflict, baseline moved 54.06 → 53.19). Must re-run on current full stack.
+- **#3839 (edward Bernoulli verify)** — ASSIGNED (Loop 20). bernoulli_residual=True on n=192 + lr=1e-3 + compile. Long-deferred; never properly tested on any compile-era baseline. Strongest motivation on geom_camber_rc (the split that regressed +2% in loop 20) — Bernoulli correction accounts for free-stream pressure variation that the model has to infer from scratch without it.
 
 **Closed/assigned in this loop (Loop 19)**:
 - **#3694 (frieren Bernoulli verify + enable)** — SELF-CLOSED by student at 07:37 UTC after baseline-update comment posted in Loop 17. Same pattern as #3702 tanjiro: force-pushed and closed simultaneously, no results submitted. Treated as clean abandon. Two students self-closing after baseline shifts is now a recurring pattern — they appear to prefer fresh-axis assignments over re-running on a moved target.
@@ -109,22 +117,23 @@ Strongest remaining axes (in priority order):
 | #3581 | thorfinn | CLOSED (loop 13) | Peak LR sweep on T_max=25 — both arms +9-15% regression |
 | #3425 | tanjiro | CLOSED (loop 14) | SF-AdamW head-to-head — 3 rounds, consistently +40%+ regression |
 | #3548 | frieren | CLOSED (loop 14) | AoA-jitter TTA — FiLM already smooth, Jensen bias kills Arm B |
-| #3463 | edward | WIP (sent back loop 17 — rebase + lr=1e-3 + n_hidden=192) | Capacity revisit: n_hidden=192 + lr=1e-3 compound |
-| #3631 | nezuko | WIP | Fourier positional encoding on spatial coords (x,y,dsdf) |
+| #3463 | edward | MERGED (loop 20) | Capacity revisit: n_hidden=192 + lr=1e-3 + compile — new best val_avg 53.19 |
+| #3631 | nezuko | WIP (sent back loop 20 — rebase + re-run on n=192+lr=1e-3+compile stack) | Fourier positional encoding on spatial coords (x,y,dsdf) |
 | #3647 | alphonse | CLOSED (loop 16) | surf_weight sweep: 5 vs 20 — both arms +12-20% regression, sw=10 confirmed local optimum |
 | #3739 | alphonse | WIP (new loop 16) | slice_num sweep: 96 vs 128 — physics-region granularity |
-| #3547 | askeladd | WIP (baseline update posted, rebase needed) | Cp normalization — 2 arms (cp, halfcp) |
+| #3547 | askeladd | WIP (sent back loop 20 — rebase + re-run on n=192+lr=1e-3+compile stack) | Cp normalization — 2 arms (cp, halfcp) |
 | #3665 | fern | WIP (sent back loop 17 — rebase + lr=1e-3 + T_max=35) | T_max alignment for compile: T_max=35 + lr=1e-3 compound |
-| #3666 | thorfinn | MERGED (loop 17) | LR sweep with compile: lr=1e-3 wins — new best val_avg 54.06 |
+| #3666 | thorfinn | MERGED (loop 17) | LR sweep with compile: lr=1e-3 wins — val_avg 54.06 (now superseded) |
 | #3771 | thorfinn | WIP (new loop 17) | LR continuation: lr=1.5e-3 vs 2e-3 |
 | #3694 | frieren | CLOSED (loop 19, self-closed) | Bernoulli verify + enable — abandoned after baseline shift to 54.06 |
 | #3702 | tanjiro | CLOSED (loop 18, self-closed) | Batch size sweep — abandoned after baseline shift to 54.06 |
 | #3785 | tanjiro | WIP (new loop 18) | Weight decay sweep: wd=5e-5 vs wd=5e-4 |
 | #3809 | frieren | WIP (new loop 19) | Gradient clipping sweep: clip_norm=1.0 vs 0.5 |
+| #3839 | edward | WIP (new loop 20) | Bernoulli residual verify on n=192 + lr=1e-3 + compile |
 
 ## Plateau watch
 
-Round 5 now has **10 compounding wins totaling −56.37% val_avg**. **No plateau signal — the LR axis has been productive for 3 consecutive loops** (T_max → compile → LR). Still descending at −0.5/epoch at epoch-32 cutoff. The LR continuation sweep (lr=1.5e-3 vs 2e-3) is the next test of the momentum curve. The key risk: the epoch-1 instability at high LR may return — TF32+compile appears to neutralize it but the threshold is unknown.
+Round 5 now has **11 compounding wins totaling −57.07% val_avg**. **No plateau signal — improvements continue to land every 1–2 loops.** The capacity (n=192) win is sub-multiplicative with LR (only 39% of predicted gain) — indicating the LR and capacity axes are not perfectly orthogonal. The camber_rc split now shows a regression (+2%) relative to the n=128 + lr=1e-3 baseline, which is the primary focus of the next round (Bernoulli, thorfinn LR continuation, fern T_max). The LR continuation sweep (lr=1.5e-3 vs 2e-3, thorfinn #3771) is the highest-variance pending test — if high-LR succeeds at n=192, it could be a much larger win than seen at n=128.
 
 ## Potential next research directions (post-current batch)
 

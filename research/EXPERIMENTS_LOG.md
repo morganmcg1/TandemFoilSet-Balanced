@@ -1213,3 +1213,43 @@ Tanjiro now idle → assigned PR #3702 (batch-size-sweep).
   - nezuko: #3631 (Fourier spatial pos encoding, baseline-update sent)
   - tanjiro: #3785 (weight decay sweep, assigned Loop 18)
   - thorfinn: #3771 (LR continuation lr=1.5e-3 vs 2e-3, assigned Loop 17)
+
+## 2026-05-16 09:15 UTC — Loop 20 — PR #3463 MERGED + advisor actions
+
+**PR #3463 (edward n_hidden=192 + lr=1e-3 + compile) — MERGED — New best val_avg=53.1915**
+
+| Arm | n_hidden | lr | Epochs | s/ep | Peak VRAM | val_avg | Δ vs 54.06 | test_avg | Δ vs 48.14 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **Baseline (#3666)** | 128 | 1e-3 | 32 | 57.7 | 24.38 GB | 54.0564 | — | 48.1422 | — |
+| **n=192 + lr=1e-3 (MERGED)** | **192** | **1e-3** | **24** | **75.5** | **33.84 GB** | **53.1915** | **−1.60%** | **47.5701** | **−1.19%** |
+
+Per-split:
+| Split | val_mae (Δ) | test_mae (Δ) |
+|---|---:|---:|
+| single_in_dist | 55.368 (−1.70%) | 51.739 (−2.81%) |
+| geom_camber_rc | 70.212 (**+2.01%**) | 65.107 (**+2.33%**) |
+| geom_camber_cruise | 33.776 (−6.23%) | 27.234 (−8.88%) |
+| re_rand | 53.411 (−2.97%) | 46.201 (**+0.82%**) |
+| **avg** | **53.1915 (−1.60%)** | **47.5701 (−1.19%)** |
+
+Analysis: Sub-multiplicative compounding. lr=1e-3 already saturated geom_camber_rc capacity headroom — this split REGRESSES at n=192 + lr=1e-3 (+2% vs the n=128 + lr=1e-3 baseline). geom_camber_cruise keeps benefiting from width regardless of LR (−6.23%). Cautious mask invariant at 0.6105. 24 epochs in 30.2 min; LR at eta_min at cutoff (1.14e-4 ≈ 1e-4 eta_min). Still descending −0.97/epoch. Edward's analysis: compounding captured only ~39% of predicted gain because camber_rc's capacity ceiling shifts under LR. This is the most precise capacity-LR interaction signal observed this round.
+
+Metric artifact: `models/model-charliepai2i24h5-edward-capacity_n192_lr1e3_compile-20260516-072856/metrics.jsonl`
+Commit merge: `f7c3b8e`. Baseline updated: val_avg 54.06 → **53.19**, test_avg 48.14 → **47.57**. Eleven compounding wins.
+
+**Advisor actions in Loop 20:**
+- **#3739 alphonse slice_num sweep**: Baseline-update comment posted (new target 53.19 from 54.06). Label fixed stale-wip → wip.
+- **#3631 nezuko Fourier**: Sent back for rebase + re-run on new n=192 + lr=1e-3 + compile full stack. Baseline target updated to 53.19.
+- **#3547 askeladd Cp normalization**: Sent back for rebase + re-run on new full stack. Baseline target updated to 53.19.
+- **#3839 edward Bernoulli verify** — ASSIGNED (Loop 20). bernoulli_residual=True on n=192 + lr=1e-3 + compile. First proper test of Bernoulli on any compile-era baseline. Targets geom_camber_rc (regressed +2.01% in this loop) — Bernoulli pressure correction accounts for free-stream variation that the model must otherwise infer from scratch, strongest on OOD geometry.
+
+**Pod state at loop 20 close:**
+- All 8 charlie-r5 pods should be alive. All 8 students have assigned PRs. Zero idle GPUs.
+  - alphonse: #3739 (slice_num sweep, baseline-update sent)
+  - askeladd: #3547 (Cp normalization, sent back for rebase)
+  - edward: #3839 (Bernoulli verify — just assigned loop 20)
+  - fern: #3665 (T_max=35 + lr=1e-3, sent back loop 17)
+  - frieren: #3809 (grad clipping sweep, assigned loop 19)
+  - nezuko: #3631 (Fourier spatial pos encoding, sent back for rebase)
+  - tanjiro: #3785 (weight decay sweep, assigned loop 18)
+  - thorfinn: #3771 (LR continuation lr=1.5e-3 vs 2e-3, assigned loop 17)
