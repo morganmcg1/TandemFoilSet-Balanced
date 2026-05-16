@@ -5,6 +5,24 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 03:30 — PR #3457: Peak LR sweep (lr=1e-3 / 2e-3) — **CLOSED (null on val primary)**
+
+- Student branch: `willowpai2i24h1-askeladd/peak-lr-sweep`
+- Student: `willowpai2i24h1-askeladd`
+- Hypothesis: Higher peak LR with merged warmup+cosine schedule. lr=5e-4 default may be undertuned; 2× and 4× peaks tested on Charbonnier+grad_clip_0.5 base.
+
+| Arm | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | Notes |
+|-----|-----------|--------------------|---------------------|-----------|-------|
+| lr1e-3 | (recorded in PR) | ~104 | — | ~14 | within-noise of 101 control |
+| lr2e-3 | (recorded in PR) | 101.63 | — | ~14 | **best within-PR**; doesn't beat merged 97.47 |
+| lr5e-4 (control) | matches merged | ~97-101 | — | 14 | merged baseline |
+
+**Decision: CLOSED.** Monotonic improvement direction (higher LR helps within the sweep range) but best arm 101.63 doesn't beat merged baseline 97.47. Within run-to-run noise (~3-4 units); no clear attribution.
+
+**Follow-up assigned:** askeladd → OneCycleLR schedule (`/tmp/hyp-askeladd-onecycle-lr.md`). Different schedule shape may give super-convergence at the wall-clock cap. Tests max_lr ∈ {1e-3, 2e-3} aligned with this sweep's monotonic trend.
+
+---
+
 ## 2026-05-16 — PR #3348: Fourier positional encoding L=8 — **MERGED ⭐ (new test best 86.22)**
 
 - Student branch: `willowpai2i24h1-fern/fourier-pos-enc`
