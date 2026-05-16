@@ -1,138 +1,149 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-17 (cycle 36)
+- **Date**: 2026-05-16 21:35
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — **CURRENT BEST: H95 Arm A bf16 (val=40.51 / test=39.02, PR #4215).** Cycle 36 closed H98 (β₁ retune tie); identified **H93 Arm C WSD 0/5/10 as standing winner at val=39.51 / test=38.53, pending nezuko rebase before merge.** Re-sent H96 compound test. Assigned H112 (fern, OOD input jitter). 8 WIP, 0 idle.
+- **Round**: 5 late-phase — **NEW BASELINE: H78 Arm B β₂=0.995, val=42.30 / test 3-split=40.56 (PR #4097 MERGED).** β₂ is the latest unlocked lever. Capacity scaling (H86 n_hidden) + schedule-tail (H84/H87) + FFN-width (H89) + β₂ refinement (H88) are active fronts.
 - **Most recent human research directive**: None received
 
 ## Current Best
 
-**PR #4215 (H95 Arm A: bf16 walltime, alphonse) — val_avg/mae_surf_p = 40.5066 / test 3-split = 39.0160** (MERGED 2026-05-17)
+**PR #4097 (H78 Arm B: Lion lr=3e-4 + slice_num=96 + β₂=0.995, edward) — val_avg/mae_surf_p = 42.3048 / test 3-split = 40.5564** (MERGED 2026-05-16 21:32)
 
-**Standing winner (cycle 36, pending merge):** PR #4196 H93 Arm C (WSD 0/5/10, nezuko) — val=39.5100 / test=38.5345 (Δ-1.00 val vs H95, Δ-0.48 test). Schedule signal real: forcing 10-epoch decay tail beats T_max=15 cosine by Δ-3.28 on hardest split (val_geom_camber_rc). Sent back for clean rebase against current advisor branch.
+**Previous best: PR #4055 (H73 Arm B, val=42.98 / test=41.55, tanjiro).** β₂=0.995 small win compounds on H73 baseline.
+
+**Loose UB** — wall-cut at ep 15/50 with val_avg still descending ~0.8 pts/epoch. True asymptote likely well below 42.98.
 
 | Reference | val_avg | test 3-split | Status |
 |-----------|--------:|-------------:|--------|
-| **H93 Arm C (WSD 0/5/10)** | **39.5100** | **38.5345** | **STANDING WINNER pending rebase (PR #4196)** |
-| **H95 Arm A (bf16 walltime)** | **40.5066** | **39.0160** | **CURRENT BEST MERGED (PR #4215)** |
-| H88 Arm B (β₂=0.997) | 41.2153 | 39.5337 | Prior best (PR #4166) |
-| H98 Arm A (β₁=0.85) | 40.5804 | 39.4821 | Tie vs H95 (within 1.7σ); CLOSED |
-| H78 Arm B (β₂=0.995) | 42.3048 | 40.5564 | Overridden (PR #4097) |
-| H73 Arm B (Lion lr=3e-4 + slice96) | 42.9784 | 41.5455 | Overridden (PR #4055) |
+| **H78 Arm B (β₂=0.995 stacked on H73)** | **42.3048** | **40.5564** | **CURRENT BEST (PR #4097)** |
+| H73 Arm B (Lion lr=3e-4 + slice96) | 42.9784 | 41.5455 | Prior best (PR #4055) |
+| H78 Arm A (β₂=0.999) | 44.3436 | 42.0389 | Same PR, regresses |
+| H73 Arm A (Lion lr=1e-4 + slice96) | 46.3422 | 45.3896 | Same PR, lr=1e-4 arm |
+| H66 (slice_num=96, AdamW) | 56.7504 | 54.5026 | Overridden by #4055 |
+| H58 Arm A reference (Lion lr=1e-4, slice=64) | ~46.80 | ~46.63 | Pending PR #3965 still WIP |
+| H59 (GEGLU + RMSNorm, slice=64) | 56.9056 | 56.2420 | Overridden |
+| H48 GEGLU (n_layers=5) | 58.6268 | 56.6976 | Overridden |
+| H37b (n_head=2 + lr=1e-3, AdamW) | 66.1060 | 64.45 | Overridden |
 
-**Cumulative R5 gain: −25.60 pts val_avg vs H37b (66.11 → 40.51) merged; another −1.00 pts pending if H93C lands.** Total: −74.12 pts from R1 start (114.63).
+**Δ H73 vs H66: −13.77 val, −12.96 test 3-split.** SUPER-ADDITIVE (3.66 pts below the additivity-floor prediction of 46.64).
+**Cumulative R5 gain: −23.13 pts val vs H37b** (66.11 → 42.98).
 
-## Noise Floor (revised H92)
+## ⚠ Noise Floor Discovered (2026-05-16 H74 closure)
 
-**Revised: 2σ = 1.67 pts** on val_avg/mae_surf_p (H92, n=3 seeds at H78 config). Test 3-split 2σ ≈ 1.02 pts. H93 Arm C is a boundary win on val (Δ-1.00 < 1.7) but breaks through on test (Δ-0.48 < 1.0 yet supported by mechanism + per-split decomposition).
+H74 Arm B (T_max=15 SGDR with restart firing AFTER wall cut) used effectively the same first-15-epoch schedule as H73 baseline. It landed at val=45.57 vs H73's 42.98 — a **2.60 pt single-seed gap** despite identical schedule.
 
-Decision thresholds:
-- Δ < 1.7 pts → noise (tie)
-- Δ ≥ 2.5 pts → real signal
-- Δ ≥ 4.0 pts → strong signal
+**Implication: H73 baseline (val=42.9784) has ≥2.6 pts of seed variance.**
 
-## Round 5 Insights (cumulative)
+Future reviews must apply this noise floor:
+- Δ < 2.6 pts vs H73 → likely tie, not win/loss
+- Δ ≥ 3 pts → real signal (clearly outside noise)
+- Δ ≥ 5 pts → strong signal
 
-**Schedule has new headroom (cycle 36 discovery):** H93 Arm C (WSD: 0 warmup / 5 stable / 10 decay) substantially outperformed cosine T_max=15 on the hardest splits. Mechanism: long decay tail (10 of 15 epochs at decaying LR) gives more fine-tune time near zero LR. Per-split: val_geom_camber_rc Δ-3.28, val_geom_camber_cruise Δ-1.40, val_re_rand Δ-0.28, val_single_in_dist Δ+0.97. **Future high-EV compound: WSD 0/5/10 + bf16 (~21 epochs at bf16 → maybe 0/7/14 reshape). Predicted val ~37-38.**
+Marginal H79 Arm B (+0.38 val, −0.15 test) and H77 Arm B (+1.67 val) may be ties not losses. Future hypothesis predictions should target ≥3 pt gains to be worth testing.
 
-**bf16 unlock (cycle 34):** Reduced s/epoch by ~30% without changing memory, unlocking capacity probes that were previously wall-cut-bound. H100/H101/H102/H103 active.
+## Round 5 Insights (post-merge wave)
 
-**Lion optimizer axis fully saturated:**
-- β₂=0.997: LOCKED (H88)
-- β₁=0.9: LOCKED (H90 at β₂=0.995; H98 confirms at β₂=0.997 — β₁=0.85 ties within noise, β₁=0.95 regresses badly)
-- LR=3e-4: LOCKED (H97)
-- wd=1e-3: LOCKED (H79)
-- surf_weight=10: LOCKED (H91)
+The H67-H73 Lion compound batch revealed:
+- **Lion + slice_num=96 is super-additive** (H73 Arm B at val=42.98, 3.66 pts below additivity floor). The wider gradient surface from slice=96 favors Lion's native lr=3e-4 range.
+- **RMSNorm + slice_num=96 anti-compounds under AdamW** (H72, val=57.58 vs predicted 56.0). The H59 RMSNorm win at slice=64 does NOT transfer to slice=96.
+- **n_head=4 wins over n_head=2 under Lion+RMSNorm+slice=64** (H70, +1.1 pts). Untested at slice=96.
+- **warmup=2 wins over warmup=1 under Lion** (H69, +5.3 pts — biggest single hyperparameter signal). Untested on lr=3e-4 / slice=96.
+- **β₂=0.999 wins over β₂=0.95 under Lion** (H68, +3 pts). H73 used β₂=0.99 (default).
+- **wd=1e-4 beats wd=5e-4 at slice=64+Lion** (H71, +4 pts). But H73 won at wd=1e-3 — interaction with slice=96 unclear.
 
-**OOD robustness explored:** H112 (fern) tests input-space jitter on continuous conditioning (AoA, log(Re), gap, stagger) — first OOD-explicit regularization experiment of R5.
+## Pending Strategic Results
 
-## Active WIP Experiments (8 / 8 students, 0 idle)
+**PR #4020 — H67 Lion + GEGLU + RMSNorm compound (alphonse) — STILL WIP**
+- Pod was rate-limited, just resumed; results expected shortly.
+
+**PR #3965 — H58 Lion + GEGLU (edward) — REBASE IN PROGRESS / WIP**
+- Edward's pod just finished rebase training (~18:17Z) and is writing up results now.
+- Likely will be **superseded by H73 Arm A** (which already reproduces H58 spec at slice=96, val=46.34). May close once results land.
+
+## Key Confirmed Insights
+
+1. **Lion + slice_num=96 is the new floor** (H73 Arm B, val=42.98). Super-additive compound.
+2. **Lion optimizer is a massive win** (H58, H73). Sign-based gradient update fixes systemic AdamW optimization issue. Uniform −10 to −17 pt per-split improvement under Lion+slice=96.
+3. **slice_num=96 amplifies under Lion** (H66 → H73). Test_geom_camber_rc gain (−11.68 vs H66) confirms spatial-selectivity survives Lion.
+4. **GEGLU gated FFN is a major win (H48)**: val=58.63 vs H37b 66.11. GEGLU > SwiGLU > vanilla.
+5. **RMSNorm wins under GEGLU at slice=64 (H59)** but does NOT compound with slice=96 (H72 negative).
+6. **n_layers=4 wins under GEGLU (H60)**: Shallower wins under gated regime.
+7. **Schedule lever exhausted under AdamW**: T_max=15 is optimal. Lion+warmup=2 wins big (H69) but untested at lr=3e-4.
+8. **clip_grad_norm=1.0 is locked (H56)**, surf_weight=10 locked (H54).
+9. **Mixup is wrong inductive bias for PDE CFD (H55 closed)**.
+10. **EMA averaging fails at current budget (H65)**: Need oscillation regime, but T_max=15 cosine still in translation regime.
+
+## Active WIP Experiments
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#4272** | alphonse | **H99: bf16 + T_max=21 schedule fix** | HIGH (T_max=15 bounce confound; aligns to bf16 budget) | ~38.5-40.5 |
-| **#4276** | askeladd | **H100: n_hidden=192 under bf16 (H86 retest)** | HIGH (wall-cut-bound at fp32; bf16 gives ~14 epochs) | ~38-42 |
-| **#4277** | frieren | **H101: n_layers=5 depth probe under bf16** | HIGH (depth unexplored; bf16 gives ~17 epochs) | ~39-42 |
-| **#4291** | edward | **H102: slice_num=128 attention capacity under bf16** | HIGH (slice negative under AdamW; new regime may unlock) | ~38-42 |
-| **#4292** | tanjiro | **H103: mlp_ratio=3 FFN capacity retest under bf16** | HIGH (H89 wall-cut at fp32; bf16 should reach ~17 ep) | ~38-42 |
-| **#4196** | nezuko | **H93 Arm C: WSD 0/5/10 — STANDING WINNER pending clean rebase** | TOP (val=39.51, test=38.53; merge once rebase clean) | confirmed |
-| **#4217** | thorfinn | **H96 (re-sent): compile + bf16 + T_max=21 compound (Arms C, D)** | HIGH (efficiency stack test; compile -27% + bf16 -30% may compound) | ~38-41 |
-| **#4316** | fern | **H112: AoA + log(Re) + gap/stagger input jitter (σ ∈ {0.02, 0.05, 0.1})** | MED (first explicit OOD regularization; targets val_re_rand and val_geom_camber_cruise) | ~39-41 |
+| **#4133** | askeladd | **H84: T_max compression (T_max=12, T_max=10)** | HIGH (askeladd's own follow-up) | ~41-44 |
+| **#4147** | tanjiro | **H86: n_hidden expansion (192, 256) — capacity scaling** | HIGH (new frontier) | ~36-44 |
+| **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
+| **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
+| **#4135** | nezuko | **H85: FFN activation (swiglu, vanilla) under Lion** | MED (test if GEGLU locked under Lion) | ~43-47 |
+| **#4156** | alphonse | **H87: CosineAnnealingLR eta_min > 0** | HIGH (schedule-tail counter to H84) | ~40-44 |
+| **TBD** | edward | **H88: β₂ refinement {0.992, 0.997} around H78's 0.995** | HIGH (confirm peak) | ~41-43 |
+| **TBD** | thorfinn | **H89: mlp_ratio sweep under Lion+slice=96 (3, 4)** | MED (FFN-width orthogonal to H86 n_hidden) | ~40-44 |
 
-## Lever Status
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio under AdamW), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**, **H81 (RMSNorm anti-compound under Lion confirmed; normalization locked)**, H75 (LR U-shape), **H80 (full Lion stack: schedule confound + 3/4 levers individually negative)**.
+
+**Merged this round:** H73 (Lion + slice=96 super-additive, val=42.98), **H78 (β₂=0.995 small win, val=42.30 NEW BEST)**.
+
+## Lever Status (post-H73)
 
 | Lever | Status | Best result | Notes |
 |-------|--------|-------------|-------|
-| Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win vs AdamW |
-| LR (Lion) | ✅ 3e-4 LOCKED at β₂=0.997 (H97) | 3e-4 (H73) | LR optimum stable across β₂ shift |
-| Schedule T_max | 🔬 H99 active (fix T_max=21 for bf16) | 15 (H73) | T_max=15 hardcoded; confound at 21 bf16 epochs |
-| Schedule WSD | 🏆 **NEW SIGNAL — H93 Arm C 0/5/10 standing winner (pending rebase)** | 39.51 (H93C) | Long decay tail outperforms cosine on hardest splits |
-| Schedule warmup | ❌ Regresses at slice=96 (H76); H93 confirms 0-warmup optimal | none | — |
-| n_head | ❌ n_head=4 regresses at slice=96 (H77) | 2 | — |
-| β₂ (Lion) | ✅ 0.997 locked (H88) | 0.997 | Peak confirmed |
-| β₁ (Lion) | ✅ 0.9 locked (H90, H98 confirmed at β₂=0.997) | 0.9 | Asymmetric: 0.85 ties, 0.95 regresses |
-| wd (Lion) | ✅ 1e-3 locked (H79) | 1e-3 | — |
-| slice_num | 🔬 H102 active (128 under bf16+β₂=0.997) | 96 (H73) | Lion+bf16+β₂=0.997 regime may shift |
-| n_layers | 🔬 H101 active (5 under bf16) | 4 (H60/H83) | Depth unexplored at bf16 speed |
-| n_hidden | 🔬 H100 active (192 under bf16) | 128 | H86 wall-cut at fp32; retesting |
-| mlp_ratio | 🔬 H103 active (3 under bf16) | 2 (default) | H89 wall-cut at fp32; retesting |
-| FFN act | ✅ GEGLU locked (H48) | GEGLU | — |
-| Normalization | ✅ LayerNorm locked (H72, H81) | LN | — |
-| Mixed precision (bf16) | 🏆 MERGED WINNER (H95) | −0.71 val / −30% s/epoch | — |
-| torch.compile | 🔬 H96 active (compile+bf16 compound + T_max=21, Arms C, D) | -27% s/epoch alone | First pass beat H78 -1.25; compound test active |
-| OOD input jitter | 🔬 H112 active (AoA+log(Re)+gap/stagger) | none | First R5 explicit OOD regularization |
-| surf_weight | ✅ 10 locked (H54 AdamW, H91 Lion) | 10 | — |
-| clip_grad_norm | ✅ 1.0 locked (H20, H56) | 1.0 | — |
-| Huber δ_p | ✅ 0.25 locked (H25/H64) | 0.25 | — |
-| Batch size | ✅ 4 LOCKED (H94) | 4 | — |
-| cond_dim | ✅ 11 locked (FiLM) | 11 | — |
-| EMA averaging | ❌ Wrong regime (H65) | none | — |
-| Mixup | ❌ Wrong inductive bias (H55) | none | — |
-| DropPath | ❌ No effect (H63) | 0.0 | — |
-| eta_min | ❌ H87 negative | 0 | — |
+| Optimizer | 🏆 Lion locked | 42.98 (H73) | Massive super-additive win |
+| LR (Lion) | ✅ Locked at 3e-4 (H75 U-shape confirmed) | 3e-4 (H73) | Bracketed 2.5e-4 to 3.5e-4 |
+| Schedule (Lion) | ❌ warmup REGRESSES at slice=96 (H76) | T_max=15 (H73) | H69 win doesn't transfer; warmup=2 cost > benefit at 15-ep horizon |
+| n_head (Lion) | ❌ n_head=4 REGRESSES at slice=96 (H77) | 2 (H73) | H70 win doesn't transfer; per-head dim shrinkage hurts |
+| β₂ (Lion) | ✅ 0.995 LOCKED (H78 MERGED) | 0.995 (H78) | Non-monotonic: 0.99→0.995 wins, 0.999 regresses (over-smooth in 15-ep budget). H88 refines further. |
+| wd (Lion) | ✅ Locked at 1e-3 (H79 confirmed) | 1e-3 (H73) | wd=1e-4 and wd=5e-5 both regress/tie at slice=96 |
+| slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |
+| n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
+| FFN activation | ✅ GEGLU locked (H48) | GEGLU | > SwiGLU > vanilla |
+| Normalization | ✅ LayerNorm locked (H72 AdamW, H81 Lion) | LN (H73) | RMSNorm anti-compounds at slice=96 under BOTH optimizers (+1.58 AdamW, +2.44 Lion) |
+| n_hidden | 🔬 H86 expansion test active | 128 (H73) | First Lion+slice=96 test of 192/256 |
+| Schedule eta_min | 🔬 H87 active | 0 (H73 default) | Val still descending at ep 15; eta_min>0 keeps LR meaningful through wall-cut |
+| clip_grad_norm | ✅ Locked at 1.0 | H20+H56 | — |
+| surf_weight | ✅ Locked at 10 | H54 | — |
+| Huber δ_p | ✅ Locked at 0.25 | H25/H64 | — |
+| DropPath | ❌ No effect | 0.0 (H63) | — |
+| Mixup | ❌ Wrong inductive bias | None (H55) | — |
+| EMA averaging | ❌ Wrong regime | None (H65) | Needs oscillation, not translation |
+| mlp_ratio | 🔬 H89 retest under Lion | 2 (H62 closed under AdamW) | First test under Lion+slice=96 regime |
+| Cond_dim | ✅ Locked at 11 (FiLM) | 11 | — |
+
+## Key Open Questions
+
+1. **How low can Lion+slice=96 go with extended budget?** H73 wall-cut at ep 15 still descending — full cosine at T_max=20-25 could reveal the true floor.
+2. **Do the slice=64 Lion-variant wins (warmup=2, β₂=0.999, n_head=4, wd retune) compound on top of H73?** Most likely YES for warmup, less clear for the others. Need to test each on slice=96.
+3. **Can we push slice_num=112 or 128 under Lion?** H66 found 128 regresses at AdamW. Lion's faster effective convergence may shift the optimum.
+4. **Is RMSNorm still negative under Lion+slice=96?** H72 showed anti-compound under AdamW; not directly tested under Lion.
+5. **What's the asymptote with all best Lion hyperparams stacked?** lr=3e-4 + warmup=2 + β₂=0.999 + n_head=4 + wd retuned — potentially ~38-40.
 
 ## Baseline Progression
 
 | Val avg/mae_surf_p | Test 3-split | Event |
 |---|---|---|
 | 114.63 | — | R1 start (FiLM only, T_max=50 mismatch) |
+| 83.81 | 80.24 | H19: T_max=15 + Huber + FiLM |
+| 75.50 | 73.16 | H20: clip=1.0 |
+| 71.77 | 70.62 | H27b/H32: lr=1e-3 |
+| 68.19 | 65.44 | H38: wd=5e-5 |
 | 66.11 | 64.45 | H37b: n_head=2 + lr=1e-3 |
-| 58.63 | 56.70 | H48 GEGLU |
-| 57.58 | 56.46 | H60: n_layers=4 |
-| 56.75 | 54.50 | H66: slice_num=96 |
-| 42.98 | 41.55 | H73 Arm B: Lion + lr=3e-4 |
-| 42.30 | 40.56 | H78 Arm B: β₂=0.995 |
-| 41.22 | 39.53 | H88 Arm B: β₂=0.997 |
-| **40.51** | **39.02** | **H95 Arm A: bf16 autocast (CURRENT MERGED BEST)** |
-| (39.51) | (38.53) | (H93 Arm C: WSD 0/5/10 — pending rebase + merge) |
+| 63.44 | 61.39 | H39 Arm C: + lr=2e-3 (documentation) |
+| 58.63 | 56.70 | H48 GEGLU: + ffn_act=geglu |
+| 57.58 | 56.46 | H60: + n_layers=4 |
+| 56.91 | 56.24 | H59: + norm_type=rmsnorm |
+| 56.75 | 54.50 | H66: + slice_num=96 |
+| 42.98 | 41.55 | H73 Arm B: + optimizer=lion + lr=3e-4 (super-additive) |
+| **42.30** | **40.56** | **H78 Arm B: + β₂=0.995 (small compound win)** |
 
-Total merged gain: **−74.12 pts val (64.7% reduction).** Pending: another −1.00 pts if H93C lands.
-
-## Strategic State
-
-**Schedule axis is the new engine (cycle 36 discovery).** H93 Arm C reveals real headroom in LR schedule shape — the WSD 0/5/10 schedule (5 stable, 10 decay) beats cosine T_max=15 on the hardest OOD splits. This is the first non-saturated lever in cycles. The compound with bf16 (where we have 21 epochs available — reshape to 0/7/14?) is the highest-EV future experiment.
-
-**Capacity probes converging.** H100/H101/H102/H103 cover the four capacity dimensions (width, depth, slice_num, mlp_ratio) all under bf16. Even if 2 of 4 land in noise, the other 2 give a real architectural improvement path.
-
-**Efficiency stack maturing.** bf16 merged (−30% s/epoch), torch.compile (−27% s/epoch alone) compound under test (H96). If compile+bf16 compounds even partially, that's ~45% more effective compute per wall-minute → genuinely longer schedules possible.
-
-**OOD generalization is now in scope (H112).** First experiment to explicitly attack the OOD splits via input-space regularization rather than capacity/scheduling.
-
-**Open strategic questions:**
-1. **Does H93 Arm C rebase clean?** (Top priority — would land new best at val=39.51 / test=38.53)
-2. **Does WSD 0/5/10 + bf16 compound?** (Reshape to 0/7/14 for 21-epoch budget. Predicted val ~37-38. Assign next idle student.)
-3. **Does any capacity probe (H100/H101/H102/H103) break through under bf16?**
-4. **Does H99's T_max fix improve on H95?** (orthogonal to WSD if both schedules end up beating cosine)
-5. **Does compile+bf16 compound** (H96 Arms C, D)?
-6. **Does input jitter improve OOD splits** (H112) without hurting in-dist?
-
-## Pending Research Ideas (researcher-agent output, cycle 35)
-
-`research/RESEARCH_IDEAS_2026-05-17_02.md` — H104 (per-sample p std normalization), H105 (SWA), H106 (Fourier PE), H107 (log(Re) aux head), H108 (AoA+Re jitter — became H112), H109 (split surf/vol normalization), H110 (n_hidden=256 gated on H100), H111 (surf-P residual head).
+Total merged gain: **−72.33 pts val** (63.1% reduction from 114.63 to 42.30).
 
 ## Known Issues
 
 - `data/scoring.py` NaN propagation: test_geom_camber_cruise sample 20 non-finite GT. Read-only. Use 3-split excl. cruise.
 - `train.py`: `huber_delta` Config field NOT used in loss — no-op.
-- `train.py`: `T_max=15` hardcoded at line 649 (not a CLI arg). H99 student adding `--T_max` arg.
-- `train.py`: `n_hidden=128` hardcoded at line 621 (not a CLI arg). H100 student adding `--n_hidden` arg.
