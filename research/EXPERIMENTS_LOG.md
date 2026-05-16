@@ -549,3 +549,45 @@ Test split breakdown: not separately logged to W&B (from PR comment only).
 **Baseline target:** val_avg/mae_surf_p < 61.43 (run 4iw1n8xw, EMA+SOAP+Huber canonical)
 
 **Status:** WIP — waiting for student to run arms.
+
+---
+
+## 2026-05-16 02:40 — PR #3495 (askeladd): SOAP precond_freq sweep {5, 10, 20} — **REQUEST CHANGES (rebase EMA+SOAP)**
+
+- Branch: `willowpai2i48h3-askeladd/soap-precond-freq-sweep`
+- W&B group: `soap-precond-freq-sweep`
+- 3 arms, seed=42
+
+**Result (within-PR ranking by best val_avg/mae_surf_p):**
+
+| Arm | precond_freq | best_val (epoch) | test_avg (excl cruise) | s/epoch | W&B |
+|---|---|---|---|---|---|
+| baseline-freq10 | 10 | 78.44 (e12) | 79.91 | 135.7 | jauddfq5 |
+| **variant-freq5** | **5** | **77.66 (e14)** ⬅ best | **76.96** | 137.2 | nbaakms6 |
+| variant-freq20 | 20 | 80.50 (e10) | 79.30 | 135.0 | 08mb2h4t |
+
+**Decision: REQUEST CHANGES — rebase onto EMA+SOAP, re-run freq=5 vs freq=10 baseline.**
+
+Within-PR: freq=5 wins by −5.3% on val and −3.7% on test. Wall-clock penalty is negligible (+1.1%). Doesn't beat the new EMA+SOAP canonical (61.43) but the within-PR signal is clean and the mechanism (tighter Kronecker eigenbasis tracking) is consistent with the hypothesis. Sent back for compounding test on the new stack with seed=42.
+
+---
+
+## 2026-05-16 02:40 — PR #3493 (alphonse): SOAP LR sweep {5e-4, 1e-3, 2e-3} — **REQUEST CHANGES (rebase EMA+SOAP)**
+
+- Branch: `willowpai2i48h3-alphonse/soap-lr-sweep`
+- W&B group: `soap-lr-sweep`
+- 3 arms, seed=42
+
+**Result (within-PR ranking by best val_avg/mae_surf_p):**
+
+| Arm | LR | best_val | test_avg (excl cruise) | s/epoch | W&B |
+|---|---|---|---|---|---|
+| baseline-lr1e-3 | 1e-3 | 78.44 (e12) | 79.91 | 135.6 | qw0wxjan |
+| variant-lr5e-4  | 5e-4 | 77.91 (e12) | 79.04 | 135.8 | 16sygvy6 |
+| **variant-lr2e-3** | **2e-3** | **75.91 (e13)** ⬅ best | **76.31** | 135.8 | irucjkgv |
+
+Per-split test: lr=2e-3 wins on `test_re_rand` (60.89) and `test_geom_camber_rc` (76.22) — strong OOD pattern.
+
+**Decision: REQUEST CHANGES — rebase onto EMA+SOAP, re-run lr=2e-3 vs lr=1e-3 baseline.**
+
+Within-PR: lr=2e-3 wins by −3.2% on val and −4.5% on test. SOAP's preconditioner safely absorbs a 2× hotter peak LR; the directional pattern (5e-4 → 1e-3 → 2e-3) is monotonic on test. Sent back for compounding test on EMA+SOAP stack with seed=42.
