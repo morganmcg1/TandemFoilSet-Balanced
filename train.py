@@ -482,6 +482,7 @@ class Config:
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
     amp_dtype: str = "fp32"   # "fp32" | "bf16"
     mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
+    accum_steps: int = 1  # gradient accumulation steps (effective_bs = batch_size * accum_steps)
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -612,6 +613,24 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    n_optim_steps = 0
+    accum_count = 0
+    optimizer.zero_grad()
+
+    def _clip_step_log():
+        if cfg.grad_clip_max_norm > 0:
+            total_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip_max_norm
+            )
+            grad_norm_key = "train/grad_norm_pre_clip"
+        else:
+            total_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float("inf")
+            )
+            grad_norm_key = "train/grad_norm_unclipped"
+        optimizer.step()
+        optimizer.zero_grad()
+        return {grad_norm_key: total_norm.item()}
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -647,29 +666,36 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        if cfg.grad_clip_max_norm > 0:
-            total_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=cfg.grad_clip_max_norm
-            )
-            grad_norm_key = "train/grad_norm_pre_clip"
-        else:
-            total_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=float("inf")
-            )
-            grad_norm_key = "train/grad_norm_unclipped"
-        optimizer.step()
+        # Scale loss so the accumulated gradient is the MEAN over the window
+        # (matches semantics of a single bs*accum_steps batch); without this,
+        # accumulated grads would effectively multiply LR by accum_steps.
+        (loss / cfg.accum_steps).backward()
+        accum_count += 1
+
         global_step += 1
-        wandb.log({
-            "train/loss": loss.item(),
-            grad_norm_key: total_norm.item(),
+        log_dict = {
+            "train/loss": loss.item(),  # pre-divide loss — comparable across accum_steps
             "global_step": global_step,
-        })
+        }
+        if accum_count == cfg.accum_steps:
+            log_dict.update(_clip_step_log())
+            accum_count = 0
+            n_optim_steps += 1
+            log_dict["train/optim_step"] = n_optim_steps
+        wandb.log(log_dict)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+    # Handle trailing partial accumulation window (n_batches % accum_steps != 0).
+    if accum_count > 0:
+        partial_log = _clip_step_log()
+        n_optim_steps += 1
+        partial_log["train/optim_step"] = n_optim_steps
+        partial_log["global_step"] = global_step
+        wandb.log(partial_log)
+        accum_count = 0
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
