@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~16:55 UTC
+- **Last updated:** 2026-05-16 ~18:40 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -97,7 +97,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4034** | alphonse | **Round-7:** n_layers=6 depth scaling | WIP — assigned ~16:00 | awaiting |
 | **#4036** | askeladd | **Round-7:** Camber flip augmentation (z-flip + AoA negate) | WIP — assigned ~16:00 | awaiting |
 | **#4039** | edward | **Round-7:** Multi-scale Fourier PE (num_freq=8, freq-range sweep) | WIP — assigned ~16:00 | awaiting |
-| **#4040** | fern | **Round-7:** DropPath stochastic depth (0.1, 0.15) | WIP — assigned ~16:00 | awaiting |
+| **#4040** | fern | **Round-7:** DropPath stochastic depth (0.1, 0.15) | CLOSED ~18:35 — val=59.32/61.43 (+5.1%/+8.8% vs #3969); all 4 splits regress | — |
+| **#4082** | fern | **Round-7 reassign:** n_hidden=176 + bf16 + epochs=18 (width retest on new stack) | WIP — assigned ~18:35 | awaiting |
 | **#4042** | frieren | **Round-7:** Curvature-weighted surface loss (DSDF-norm proxy) | WIP — assigned ~16:00 | awaiting |
 | **#4043** | nezuko | **Round-7:** AdamW weight_decay sweep (1e-3, 3e-4) + eta_min | WIP — assigned ~16:00 | awaiting |
 
@@ -123,7 +124,8 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | #4034 | alphonse | n_layers=6 depth scaling | `--n_layers 6` (also arm B at epochs=12) |
 | #4036 | askeladd | Camber flip augmentation (z-flip + AoA negate) | `--camber_flip_aug` |
 | #4039 | edward | Multi-scale Fourier PE num_freq=8 + wider freq range | `--num_freq 8` (+ wider exp range arm B) |
-| #4040 | fern | DropPath stochastic depth | `--drop_path_rate 0.1` and 0.15 |
+| #4040 | fern | DropPath stochastic depth | CLOSED 18:35 — both arms regress >5% on every split; under-training, not overfit |
+| #4082 | fern | Width retest with bf16 budget — n_hidden=176 + bf16 + ep18 | `--n_hidden 176 --use_bf16 --epochs 18` (ASSIGNED 18:35) |
 | #4042 | frieren | Curvature-weighted surface loss (DSDF-norm proxy) | `--use_curvature_weight` |
 | #4043 | nezuko | AdamW weight_decay sweep + eta_min floor | `--weight_decay 1e-3` (+ eta_min variants) |
 | #4047 | tanjiro | Extended training probe (epochs=16/18, fp32 only) | `--epochs 18` |

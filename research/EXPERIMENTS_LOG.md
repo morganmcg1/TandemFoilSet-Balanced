@@ -996,3 +996,22 @@ All 6 idle students assigned. Round-7 focuses on improving OOD generalization an
 - Hypothesis: bf16 throughput now lets the wider mlp_ratio=3 model converge under the same budget. Tests whether mlp_ratio=3 simply needed more compute to beat mlp_ratio=2.
 - Key CLI: `--mlp_ratio 3 --use_bf16 --epochs 18`
 - Expected: closes the open question of whether width or depth-of-training was the limiter for #4002 (mlp_ratio=3 + ep14 lost to #3969).
+
+---
+
+## 2026-05-16 18:35 — Round-7 first close + fern reassign
+
+### PR #4040 — CLOSED: DropPath stochastic depth (fern)
+- Branch: willowpai2i48h4-fern/fern-drop-path
+- Hypothesis: Stochastic-depth regularization at residual scope may help OOD generalization on the SwiGLU+mlp_ratio=2+ep14 stack.
+- W&B runs: `jq1g0rpt` (dp=0.1), `qmofzlxw` (dp=0.15), group `willow-r7-droppath`.
+- Arm A (dp=0.1): val=**59.3213** (+5.1% vs #3969 / +10.2% vs current #3981) | test=**51.4867** (+5.3% / +8.9%)
+- Arm B (dp=0.15): val=**61.4316** (+8.8% / +14.1%) | test=**52.7194** (+7.8% / +11.5%)
+- All four test splits regress monotonically with stronger DropPath. The OOD-generalization hypothesis (geom_camber_*, re_rand) was not realized — every split was worse, in-dist and OOD alike.
+- Student's honest analysis identified the right cause: best_epoch=14/14 with descending curve is more consistent with under-training than over-fit. The #3981 bf16+ep18 win confirms this directly — adding compute, not regularization, is the right direction.
+- **Decision: CLOSED.** Combined with #3912 / #4000 (attn_dropout), block-level and within-attention stochastic regularization are now fully exhausted on this stack.
+
+### PR #4082 — ASSIGNED: Width retest with bf16 budget — n_hidden=176 + bf16 + epochs=18 (fern)
+- Hypothesis: Earlier n_hidden=176 regress was tested on **mlp_ratio=3 + fp32 + epochs=12**. The current stack is fundamentally different (mlp_ratio=2 + bf16 + epochs=18). bf16's 1.47× speedup makes the ~21% per-epoch cost of n_hidden=176 affordable for the first time. Tests whether the prior regress was capacity-limited *and* budget-limited simultaneously.
+- Key CLI: `SENPAI_TIMEOUT_MINUTES=45 python train.py --n_hidden 176 --epochs 18 --use_bf16`
+- Single arm; n_hidden=192 won't fit in budget. If this wins, the next student can push wider.
