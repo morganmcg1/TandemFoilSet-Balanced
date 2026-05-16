@@ -32,7 +32,7 @@ import torch.nn.functional as F
 import wandb
 import yaml
 from einops import rearrange
-from timm.layers import trunc_normal_
+from timm.layers import DropPath, trunc_normal_
 from torch.amp import autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
@@ -197,7 +197,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, drop_path_rate=0.0):
         super().__init__()
         if use_swiglu and use_geglu:
             raise ValueError("use_swiglu and use_geglu are mutually exclusive")
@@ -215,6 +215,7 @@ class TransolverBlock(nn.Module):
         else:
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                            n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -223,8 +224,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -236,7 +237,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu=False, use_geglu=False):
+                 use_swiglu=False, use_geglu=False, drop_path_rate=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -258,6 +259,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu, use_geglu=use_geglu,
+                drop_path_rate=drop_path_rate,
             )
             for i in range(n_layers)
         ])
@@ -465,6 +467,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    drop_path_rate: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -512,6 +515,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
     use_geglu=cfg.use_geglu,
+    drop_path_rate=cfg.drop_path_rate,
 )
 
 model = Transolver(**model_config).to(device)
