@@ -904,3 +904,92 @@ Note: Edward's redirect comment (run on H38 base) arrived 41 seconds AFTER their
 **Status: CLOSED — walltime-confounded, slice_num direction shelved until more compute headroom. Edward reassigned to H45 (DropPath / stochastic depth).**
 
 **Status: CLOSED — informative negative. cond_dim=11 remains optimal on clipped stack.**
+
+---
+
+## 2026-05-16 07:36 — PR #3629: H37b: n_head=2 + lr=1e-3 + clip=1.0 stacking test (tanjiro) — MERGED, NEW BEST
+
+- Branch: `charliepai2i48h3-tanjiro/h37b-nhead2-lr1e3-clip1` (retest of #3626 H37, now on lr=1e-3 base)
+- Hypothesis: Stack H37 (n_head=2, val=72.89 on H20 base) on top of lr=1e-3+clip=1.0 (H32 base, val=69.44). Predicted ~66.83 if additive from H37's -2.61 gain. H37b = n_head=2 + lr=1e-3 + clip=1.0 + wd=1e-4 (default).
+
+| Arm | n_head | head_dim | lr | wd | val_avg | test_avg (3-split) | vs H38 (68.19) |
+|-----|--------|----------|----|----|---------|---------------------|----------------|
+| H37b | 2 | 64 | 1e-3 | 1e-4 | **66.1060** | **64.4522** | **−2.09 (WIN)** |
+
+Per-split (best epoch = 15, final completed):
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------|-----------------|
+| val_single_in_dist | 74.3956 | 63.9533 |
+| val_geom_camber_rc | 78.9959 | 73.0967 |
+| val_geom_camber_cruise | 46.4384 | NaN (scoring bug) |
+| val_re_rand | 64.5940 | 56.3067 |
+| **avg** | **66.1060** | **64.4522** (3-split) |
+
+n_params: 891,469 (+56K vs baseline), peak memory 39.6 GB (vs 44.6 GB). Ran 16 epochs (LR≈0 at ep16), best at ep15.
+
+**Key finding:** Stacking is **super-additive** — predicted 66.83 from independent gains, actual 66.11 (-0.72 better than additive). n_head=8→4→2 is a confirmed monotone improving trend; head_dim=64 is clearly better than 32. Did NOT use wd=5e-5 (predates H38 merge) — that finding is orthogonal and stackable on top.
+
+- Artifacts: `models/model-h37b-nhead2-lr1e3-clip1-20260516-062645/`
+
+**Status: MERGED — new best (66.1060). Tanjiro reassigned to H46 (n_head=1 limit test, PR #3805).**
+
+---
+
+## 2026-05-16 07:45 — PR #3683: H39: LR ceiling push (lr=1.5e-3, 2e-3) at clip=1.0 (thorfinn) — SENT BACK
+
+- Branch: `charliepai2i48h3-thorfinn/lr-ceiling-h32`
+- Hypothesis: Test whether lr>1e-3 continues the monotone LR trend. Predicted: pre-clip grad norms should scale proportionally with LR.
+
+| Arm | lr | val_avg | test_avg (3-split) | Δ vs H32 (69.44) |
+|-----|----|---------|--------------------|------------------|
+| Arm A | 1.5e-3 | 68.1245 | 66.2912 | −1.31 |
+| **Arm B** | **2e-3** | **66.3351** | **64.2953** | **−3.10** |
+
+Key observation: Pre-clip grad norms did NOT scale with LR (7.8→7.1→7.0 across lr=1e-3/1.5e-3/2e-3). Clip absorbs proportionally; gradient magnitudes are driven by loss curvature, not LR. Arm B has one non-monotone epoch (ep6: 149 spike) but recovers immediately. No divergence.
+
+**Decision:** Arm B (66.34) beats H38 (68.19) but does NOT beat H37b (66.11) by 0.23 pts. Sent back to test **Arm C: n_head=2 + lr=2e-3 + wd=5e-5 + clip=1.0** — predicted val_avg ≈ **63–64** if stacking compounds.
+
+- Artifacts: `models/model-h39-lr15e4-clip1-20260516-052217/`, `models/model-h39-lr2e3-clip1-20260516-062344/`
+
+**Status: SENT BACK — thorfinn running Arm C stack (PR #3683 → draft).**
+
+---
+
+## 2026-05-16 07:45 — PR #3685: H40: Clip sweep (2.0, 3.0) at lr=1e-3 (nezuko) — CLOSED
+
+- Branch: `charliepai2i48h3-nezuko/clip-sweep-lr1e3`
+- Hypothesis: Looser clip at lr=1e-3 might allow beneficial larger steps that clip=1.0 suppresses.
+
+| Arm | clip | val_avg | vs H32 (69.44) |
+|-----|------|---------|----------------|
+| Arm A | 2.0 | 71.7373 | +2.30 (regression) |
+| Arm B | 3.0 | 72.4215 | +2.98 (regression) |
+
+**Key finding:** Clip=1.0 is the confirmed optimum at lr=1e-3. Looser clipping allows harmful large steps. Per H39's finding that pre-clip grad norms remain ~7.0-7.8 throughout, clip=1.0 is an active per-step safety rail — loosening it to 2.0/3.0 lets those ~7.0 norm steps through more fully, causing regression. Knob exhausted.
+
+- Artifacts: `models/model-h40-lr1e3-clip2-20260516-052237/`, `models/model-h40-lr1e3-clip3-20260516-062340/`
+
+**Status: CLOSED — dead end. clip=1.0 confirmed optimal at lr=1e-3. Nezuko reassigned to H47 (cosine eta_min, PR #3807).**
+
+---
+
+## 2026-05-16 07:45 — PR #3688: H41: T_max sweep (20, 18) at lr=1e-3 + clip=1.0 (fern) — SENT BACK
+
+- Branch: `charliepai2i48h3-fern/tmax-sweep-lr1e3`
+- Hypothesis: T_max=15 anneals LR to ~4.5% of peak at our ~14-epoch wall. T_max=20 keeps last-epoch LR at ~21% of peak, leaving the optimizer in a more active regime.
+
+| Arm | T_max | best_epoch | val_avg | test_avg (3-split) | Δ vs H32 (69.44) |
+|-----|-------|-----------|---------|---------------------|------------------|
+| **Arm A** | **20** | **14** | **66.9242** | **64.3028** | **−2.5139 (WIN)** |
+| Arm B | 18 | 13 | 72.3357 | 71.2192 | +2.90 (regression) |
+
+Per-split Arm A: single_in_dist 77.23, rc 81.58, cruise 44.08, re_rand 64.80. All 4 splits improve vs baseline.
+
+**Key mechanism:** Arm A got 14 epochs in the budget, Arm B only 13 (wall-clock variance from loader/GPU contention). The *marginal 14th epoch at LR=2.06e-4* dropped val by 5.33 pts (72.25→66.92). This confirms the model is still actively descending at wall budget and the LR floor at that epoch is critical.
+
+**Decision:** Arm A (66.92) beats H38 (68.19) but does NOT beat H37b (66.11) by 0.81 pts. Sent back to test **Arm C: T_max=20 + n_head=2 + wd=5e-5 + clip=1.0** — predicted val_avg ≈ **63–64** if stacking compounds.
+
+- Artifacts: `models/model-h41-tmax20-lr1e3-clip1-20260516-052215/`, `models/model-h41-tmax18-lr1e3-clip1-20260516-062247/`
+
+**Status: SENT BACK — fern running Arm C stack (PR #3688 → draft).**
