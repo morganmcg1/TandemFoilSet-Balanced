@@ -355,6 +355,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 25.0
     epochs: int = 50
+    warmup_steps: int = 375  # ~1 epoch at bs=4 (1499 samples → 375 batches)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -412,7 +413,27 @@ for p in ema_model.parameters():
 print(f"EMA shadow model created with decay={ema_decay}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# Step-based scheduler: linear warmup → cosine anneal to 0.
+# scheduler.step() must be called once per optimizer step (not once per epoch).
+steps_per_epoch = len(train_loader)
+total_steps = MAX_EPOCHS * steps_per_epoch
+warmup_steps = min(cfg.warmup_steps, max(total_steps - 1, 1))
+cosine_steps = max(total_steps - warmup_steps, 1)
+warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_steps
+)
+cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=cosine_steps
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[warmup_steps]
+)
+print(
+    f"Scheduler: LinearLR warmup({warmup_steps} steps, 1e-3→1.0) → "
+    f"CosineAnnealingLR(T_max={cosine_steps}); total_steps={total_steps}, "
+    f"steps_per_epoch={steps_per_epoch}"
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -434,6 +455,8 @@ best_metrics: dict = {}
 train_start = time.time()
 nan_events: list[dict] = []
 halt_for_nan = False
+optim_step = 0  # counts successful optimizer steps; drives the LR schedule
+STEP_LR_LOG = {0, 100, 200, warmup_steps, warmup_steps + 1}
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -471,6 +494,7 @@ for epoch in range(MAX_EPOCHS):
                 "event": "nan_loss",
                 "epoch": epoch + 1,
                 "step": n_batches,
+                "optim_step": optim_step,
                 "vol_loss": float(vol_loss.detach().item()) if torch.isfinite(vol_loss).item() else None,
                 "surf_loss": float(surf_loss.detach().item()) if torch.isfinite(surf_loss).item() else None,
             }
@@ -481,9 +505,26 @@ for epoch in range(MAX_EPOCHS):
             n_batches += 1
             continue
 
+        # Log lr at boundary-of-interest optimizer steps BEFORE the step uses it.
+        if optim_step in STEP_LR_LOG:
+            current_lr = optimizer.param_groups[0]["lr"]
+            phase = "warmup" if optim_step < warmup_steps else "cosine"
+            evt = {
+                "event": "step_lr",
+                "optim_step": optim_step,
+                "epoch": epoch + 1,
+                "step_in_epoch": n_batches,
+                "lr": current_lr,
+                "phase": phase,
+            }
+            append_metrics_jsonl(metrics_jsonl_path, evt)
+            print(f"[StepLR] optim_step={optim_step} lr={current_lr:.6e} phase={phase}")
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
+        optim_step += 1
 
         with torch.no_grad():
             for ep, p in zip(ema_model.parameters(), model.parameters()):
@@ -501,7 +542,6 @@ for epoch in range(MAX_EPOCHS):
         print(f"[HALT] epoch {epoch+1} had {nan_count_epoch}/{n_batches} non-finite loss events — stopping training (lr likely above bf16 stability ceiling).")
         halt_for_nan = True
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -540,6 +580,7 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "nan_count_epoch": nan_count_epoch,
         "lr_current": scheduler.get_last_lr()[0],
+        "optim_step": optim_step,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
