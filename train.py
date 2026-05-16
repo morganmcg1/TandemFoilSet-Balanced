@@ -390,6 +390,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
+    n_head: int = 4  # PhysicsAttention head count; n_hidden must be divisible
 
 
 cfg = sp.parse(Config)
@@ -424,7 +425,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -555,12 +556,15 @@ for epoch in range(MAX_EPOCHS):
         model_norm = model_norm_sq ** 0.5
         ema_lag_rel = ema_lag / max(model_norm, 1e-12)
 
+    peak_gpu_mb = torch.cuda.max_memory_allocated() / 1e6 if torch.cuda.is_available() else 0.0
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/ema_lag": ema_lag,
         "train/ema_lag_rel": ema_lag_rel,
         "train/model_param_norm": model_norm,
+        "train/wall_time_per_epoch": dt,
+        "train/peak_gpu_mb": peak_gpu_mb,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -584,7 +588,7 @@ for epoch in range(MAX_EPOCHS):
         torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    peak_gb = peak_gpu_mb / 1e3
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
