@@ -1,6 +1,31 @@
 # SENPAI Research Results
 
-## 2026-05-16 17:40 — Round-11 results: fern WIN; 6 closes; tanjiro rebase
+## 2026-05-16 18:40 — PR #4062 fern WIN: slice_num=8
+
+### Merged: PR #4062 (fern) — slice_num=8 — axis extension WIN
+
+| Metric | run `vzpgr8us` | vs prior baseline #3854 (57.6953/56.8613) |
+|---|---|---|
+| val_avg/mae_surf_p | **56.8954** | **−1.39%** |
+| test_3split/mae_surf_p | **55.9817** | **−1.55%** |
+
+Per-split val (vs #3854):
+
+| Split | mae_surf_p | Δ |
+|---|---|---|
+| val_single_in_dist | 66.966 | +1.48% ⚠️ |
+| val_geom_camber_rc | 70.071 | **−2.43%** |
+| val_geom_camber_cruise | 35.324 | **−7.06%** |
+| val_re_rand | 55.221 | +0.46% |
+
+**Analysis**: Slice axis is decelerating but still alive (64→32: −3.02%, 32→16: −5.16%, 16→8: −1.39%). Per-split signature is informative — coarser slicing (~100 nodes/slice vs ~50) **trades in-distribution precision for OOD-geometric generalization**: in-dist regresses slightly (+1.48%) while camber-rc improves −2.43% and camber-cruise improves an impressive −7.06%. This is the expected signature of a regularizing change. Test (−1.55%) tracks val (−1.39%) closely, validating the win as paper-facing. Best epoch 18 hit the 32-min wall-clock cap — training was still descending.
+
+**Strategic outlook for slice axis**: The deceleration suggests we are crossing into diminishing returns. Next datapoint should bracket toward the saturation point:
+- slice=4 (extends one more notch; bet on continued small improvement)
+- slice=12 (already in-flight in thorfinn #4066)
+The intersection of these two tells us where slice axis saturates.
+
+
 
 ### Merged: PR #3854 (fern) — slice_num=16 + Huber δ=0.5 — **MASSIVE WIN**
 
