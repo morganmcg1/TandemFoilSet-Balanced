@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 02:50
-- **Launch:** willow-pai2i-48h-r1 (round 4 continuing; 3 PRs closed this turn, 2 fresh assignments pending rate-limit reset)
+- **Date:** 2026-05-16 03:30
+- **Launch:** willow-pai2i-48h-r1 (round 4 continuing; frieren+nezuko PRs assigned; 2 negative results pending student SENPAI-RESULT posts)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~18 epochs achievable in bf16 at bs=4)
 - **Latest direction from human team:** None
@@ -49,19 +49,39 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Primary 
 | #3580 | SWA over last 5 ckpts | 89.86 | SWA ≈ best-by-val under cosine T_max=15 (frozen tail) |
 | #3563 | Train-aug h-flip | 111.70 | **+27% catastrophic — confirms #3542 dataset finding** |
 
-## Active WIP — 8 students total
+## Active WIP — 8 students total (zero idle)
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3546 | alphonse | Seed control + 4 baseline replicates (σ̂ on 87.91 base) | ACTIVE — pod 100% GPU |
-| #3562 | askeladd | Wider Transolver h=192 slice=96 T_max=18 under bf16 | In flight |
-| #3611 | edward | Per-channel surf weight β_p=20 (Ux/Uy at α=10) | NEW after #3542 close |
-| #3566 | fern | Unified positional encoding (Transolver unified_pos=True) | In flight |
-| (pending) | frieren | **Layer-wise LR decay γ=0.85 (5 Transolver blocks)** | NEW after #3563 close, awaiting rate-limit reset |
-| (pending) | nezuko | **Cosine T_max=10 + 8-ep constant LR tail + SWA-over-tail** | NEW after #3580 close, awaiting rate-limit reset |
+| #3546 | alphonse | Seed control + 4 baseline replicates (σ̂ on 87.91 base) | **4 runs DONE — pending SENPAI-RESULT post** |
+| #3562 | askeladd | Wider Transolver h=192 slice=96 T_max=18 under bf16 | ACTIVE — run `fqzs1zk1` training |
+| #3611 | edward | Per-channel surf weight β_p=20 (Ux/Uy at α=10) | In flight |
+| #3566 | fern | Unified positional encoding (Transolver unified_pos=True) | **2 runs DONE (val ~107, regress) — pending SENPAI-RESULT** |
+| #3642 | frieren | Layer-wise LR decay γ=0.85 (5 Transolver blocks) | NEW after #3563 close |
+| #3644 | nezuko | Cosine T_max=10 + 8-ep constant LR tail + SWA-over-tail | NEW after #3580 close |
 | #3574 | tanjiro | Per-channel Huber-δ (δ_p=0.05 on surf-p only) | In flight |
-| #3521 | thorfinn | EMA decay=0.99 (faster forgetting) | ACTIVE — pod 100% GPU after restart |
+| #3521 | thorfinn | EMA decay=0.99 (faster forgetting) | ACTIVE — run `s35tc2it` training (post-pod-restart) |
 
-**Pending assignments:** frieren (LLRD) and nezuko (constant-LR-tail SWA) hypothesis files are written; PR creation gated on GitHub REST rate limit reset at **03:19 UTC**.
+## Round 4 surfacing results (preliminary, pending SENPAI-RESULT posts)
+
+### alphonse #3546 — 4 baseline replicates (W&B):
+| Run | Seed | val_avg | test_avg |
+|---|---|---:|---:|
+| `ek21s9hy` | seed0 (retry) | 91.11 | 85.64 |
+| `8vcv4ojk` | seed1 | 90.16 | 85.54 |
+| `1y3my9x2` | seed2 | 93.60 | 86.83 |
+| `0ekl0alh` | seed3 | 90.25 | 85.37 |
+| **mean** |  | **91.28** | **85.85** |
+| **σ̂** |  | **~1.60** | **~0.65** |
+
+**Critical implication:** baseline #3480 val=87.91 is **~2σ below** the canonical-config seed distribution mean. The 87.91 number may have been a downward outlier. *True* expected val under canonical bf16+T_max=15 is ~91 ± 1.6. **All future PR evaluations should be calibrated against this distribution**, not the point-estimate 87.91. Will update BASELINE.md variance notes once alphonse posts terminal marker.
+
+### fern #3566 — unified_pos=True (W&B):
+| Run | val_avg | test_avg |
+|---|---:|---:|
+| `nugotxr6` | 106.51 | 99.76 |
+| `s0tj1q82` | 108.07 | 103.13 |
+
+>10σ regression on both runs. **Closing pending SENPAI-RESULT post.** Per-split breakdown will determine whether the regression is OOD-concentrated (informative finding about positional encoding's role in geom generalization) or uniform (clean dead end).
 
 ## Key insights from rounds 3 & 4 (cumulative)
 1. **bf16 is a clean orthogonal win** (PR #3480). 18 epochs/30min, 32.9GB VRAM. Now in canonical train.py. Stacks with all other levers.
