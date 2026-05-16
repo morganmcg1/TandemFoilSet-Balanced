@@ -2,6 +2,42 @@
 
 ## Current Best
 
+### 2026-05-16 14:35 — PR #3527: BF16 mixed precision + LayerScale γ=0.01 + n_freqs=10 — charliepai2i48h5-tanjiro
+
+- **val_avg/mae_surf_p**: **67.19** (best_epoch=17/50, timeout-bound, still descending)
+- **test_avg/mae_surf_p**: **58.05** (NaN-safe eval)
+- **Improvement over prior best**: -5.6% val / -7.4% test vs triple compound (71.20/62.71)
+- **Cumulative improvement**: -47.8% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior |
+  |---|---|---|
+  | single_in_dist | 67.42 | -5.3% ✓ |
+  | geom_camber_rc | 69.79 | -3.4% ✓ |
+  | geom_camber_cruise | 38.66 | -14.5% ✓ |
+  | re_rand | 56.35 | -9.4% ✓ |
+- **Metric artifacts**: `models/model-bf16-layerscale-fullstack-20260516-082748/metrics.jsonl`
+- **Stack**: BF16 autocast forward + LayerScale γ-init=0.01 + n_freqs=10 + Huber-0.3 + T_max=20 + clip=0.25 (no EMA, no n_freqs=14)
+- **Key findings**:
+  - BF16 delivers 1.30× speedup + −21% peak memory (42→33 GB) → 17 epochs vs 12 epochs in 30-min budget
+  - With the extended budget, n_freqs=10 BEATS n_freqs=14: lower aliasing risk at 1499 train samples pays off at 17 epochs
+  - EMA+n14 (quad-compound) also beats baseline at val=68.50/test=60.15 but is weaker: EMA costs ~9% per epoch (loses ~2 epochs vs n10), and n14 over-fits at this horizon
+  - All four test splits improve — uniform convergence effect, not one-split shift
+  - BF16 does NOT need GradScaler (same exponent range as FP32); only forward pass is BF16; Huber loss + optimizer in FP32
+  - LayerScale γ dynamics unaffected: γ_attn ~0.01 mean, γ_mlp grows 2–3× — same as FP32 baseline
+- **Reproduce** (arm-1: BF16 + LayerScale + n_freqs=10, the winner):
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --bf16 \
+      --layer_scale_init 0.01 \
+      --n_freqs 10 --huber_delta 0.3 --lr_t_max 20 --grad_clip_max_norm 0.25 \
+      --experiment_name bf16-layerscale-fullstack \
+      --agent charliepai2i48h5-tanjiro
+  ```
+- **Secondary result** (quad-compound, beats old baseline but weaker than arm-1):
+  - val=68.50/test=60.15 — BF16+LS+n14+EMA 0.998 — `models/model-charliepai2i48h5-tanjiro-bf16-quad-compound-20260516-133104/metrics.jsonl`
+
+---
+
 ### 2026-05-16 10:45 — PR #3192: EMA 0.998 + LayerScale γ=0.01 + n_freqs=14 on full stack — charliepai2i48h5-edward
 
 - **val_avg/mae_surf_p**: **71.20** (best_epoch=12/50, timeout-bound)
