@@ -1,6 +1,40 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3954 (spec_norm output + lr=1e-4 combined — marginal improvement over lr-only)
+## Current best — PR #3976 (Lion lr=1.5e-4 — inflection point of monotone LR gain)
+
+**val_avg/mae_surf_p = 63.0492** (W&B run: `jurrwig2`, PR #3976 Lion lr=1.5e-4 + n_fourier=0 + FiLM + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14; NO spec_norm)
+**test_avg/mae_surf_p = 53.6049** (same run `jurrwig2`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 64.45 | 55.69 |
+| geom_camber_rc | 80.74 | 70.55 |
+| geom_camber_cruise | **43.48** | **35.48** |
+| re_rand | 63.53 | 52.70 |
+
+**Δ vs prior best (PR #3954 spec_norm+lr=1e-4, val 64.68 / test 56.17): −1.63 val / −2.57 test**
+
+Note: camber_rc val is slightly worse (+0.56 vs baseline) but all other splits improve. The lr push wins 3/4 splits on val and 3/4 on test. Arm C (lr=2e-4, val 63.84) confirms inflection at 1.5e-4 — the LR optimum is now bracketed in [1.2e-4, 1.7e-4].
+
+This run has NO spec_norm. The spec_norm config from PR #3954 adds no additional value at this LR (confirmed by finding #18).
+
+**Reproduce (PR #3976 arm B — winner):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-frieren --epochs 50 \
+  --wandb_group round9-lr-push-frieren \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 \
+  --cosine_t_max 14 \
+  --optimizer_name lion --lr 1.5e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --wandb_name frieren-r9-lr1p5e4
+```
+
+---
+
+## Prior best — PR #3954 (spec_norm output + lr=1e-4 combined — marginal improvement over lr-only)
 
 **val_avg/mae_surf_p = 64.6812** (W&B run: `pc7lsis0`, PR #3954 Lion lr=1e-4 + spec_norm(output, n_power_iter=1) + n_fourier=0 + FiLM-output log(Re) + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14)
 **test_avg/mae_surf_p = 56.1746** (same run `pc7lsis0`, clean 4-split)
