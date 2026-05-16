@@ -552,4 +552,61 @@ cd target && python train.py --agent <student> \
 ```
 (In-tree defaults: T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999, compile_mode=none — must pass all five explicitly.)
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **44.2439** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **44.2439**~~ — superseded by PR #3953 below.
+
+---
+
+## 2026-05-16 21:35 — PR #3953: LR × T_max re-calibration for 33-epoch compile horizon — 11th compounding mechanism
+
+**Student:** charliepai2i48h2-frieren  
+**Change:** Joint re-calibration of `lr_init` (1.7e-4 → 2.5e-4) and `cosine_t_max_epochs` (30 → 40) for the 33-epoch compile horizon. The original T_max=30/lr=1.7e-4 pair was tuned for 18 epochs; under 33 epochs the LR × schedule coupling shifts: longer budget + gentler anneal (T_max=40 leaves ~10% LR floor at epoch 33) allows a higher lr_init to remain stable throughout. Frieren's LR/schedule coupling hypothesis, confirmed across three regimes (T_max=80, T_max=30/18ep, T_max=40/33ep).
+
+| Metric | Arm A (lr=2.1e-4, T_max=40) | **Arm B (lr=2.5e-4, T_max=40) — WINNER** |
+|--------|------------------------------|-------------------------------------------|
+| **val_avg/mae_surf_p** | 41.0110 (−7.30%) | **40.6869 (−8.04%)** |
+| val_single_in_dist/mae_surf_p | 43.6699 | 44.5780 |
+| val_geom_camber_rc/mae_surf_p | 54.2719 | 54.5227 |
+| val_geom_camber_cruise/mae_surf_p | 24.6291 | 23.7332 |
+| val_re_rand/mae_surf_p | 41.4732 | 39.9137 |
+| **test_avg/mae_surf_p** | 35.9024 | **34.9776** |
+| test_single_in_dist/mae_surf_p | 39.4387 | 38.0930 |
+| test_geom_camber_rc/mae_surf_p | 49.7494 | 48.1880 |
+| test_geom_camber_cruise/mae_surf_p | 20.3493 | 19.9850 |
+| test_re_rand/mae_surf_p | 34.0719 | 33.6445 |
+| Best epoch | 33 (timeout-bound; val still descending) | 33 (timeout-bound; val still descending) |
+| Per-epoch time | ~55s | ~55s |
+| Peak GPU memory | 23.84 GB | 23.84 GB |
+
+**Model config:** unchanged — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** Lion **lr=2.5e-4** (was 1.7e-4), wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** **CosineAnnealingLR(T_max=40)** (was T_max=30)  
+**Loss:** unchanged — vol_loss + 25·surf_loss with asinh(z) on pressure + pressure_weight=2.0  
+**Precision:** unchanged — bf16 autocast on forward+loss  
+**EMA:** unchanged — decay=0.995  
+**Gradient clipping:** unchanged — max_norm=1.0  
+**Compile:** unchanged — torch.compile(mode='default', dynamic=True)  
+**Batch:** 4  
+**Metric artifacts:**  
+- `models/model-charliepai2i48h2-frieren-lr-tmax-coupling-compile-tmax40-21e4-20260516-192650/metrics.jsonl` (Arm A)  
+- `models/model-charliepai2i48h2-frieren-lr-tmax-coupling-compile-tmax40-25e4-20260516-202729/metrics.jsonl` (Arm B)
+
+**Note:** −8.04% on val (40.69 vs 44.24), −7.98% on test (34.98 vs 38.01). Both arms clear the strong-win threshold (val < 41.6). Both trajectories smooth, still descending at epoch 33 — T_max=40 leaves ~10% LR floor at final epoch vs T_max=30 hitting near-zero at epoch 30. Arm B beats Arm A on 3/4 val splits and 4/4 test splits. Key mechanism: the 33-epoch budget changes the LR/schedule coupling: a higher lr_init can now be supported by the extended training horizon without instability. The confound between T_max and lr changes is real — edward's #4079 (pure T_max sweep at lr=1.7e-4) will isolate contributions.
+
+**11-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.995) + grad_clip(max_norm=1.0) + bf16 autocast + **cosine T_max=40** + pressure_weight=2.0 + torch.compile(mode=default, dynamic=True) + **lr=2.5e-4**
+
+**Cumulative improvement from initial baseline:** 135.02 → 40.69 = **−69.8%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 40 \
+    --pressure_weight 2.0 \
+    --ema_decay 0.995 \
+    --compile_mode default \
+    --lr 2.5e-4
+```
+(In-tree defaults: lr=1.7e-4, T_max=80, surf_weight=30, pressure_weight=1.0, ema_decay=0.999, compile_mode=none — must pass all six explicitly.)
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **40.6869** with a terminal `SENPAI-RESULT` marker.
