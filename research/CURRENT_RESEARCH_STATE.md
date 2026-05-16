@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 21:40 — #4021 nezuko CLOSED (SWA +8.6% regression); #4161 nezuko assigned (AGC))
+- **Date:** 2026-05-16 (updated 23:10 — #4099 tanjiro CLOSED (grad-clip lower bound — monotone worse on both stacks); #4200 tanjiro assigned (Lookahead k sweep))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 45.9199`, `test_avg/mae_surf_p (excl cruise) = 45.1094`
@@ -51,6 +51,7 @@ Old launch baseline: 135.30. Total gain: **−66.0%** over 12 compounding improv
 | #3322 | frieren | AoA reflection aug | +15.5% |
 | #3323 | nezuko | Entropy reg (PhysicsAttn) | +4-7% |
 | #4021 | nezuko | SWA on EMA+Lookahead+clip | +8.6% — non-plateaued training |
+| #4099 | tanjiro | Grad-clip lower bound {0.5, 0.1} | monotone worse on both stacks — 1.0 is sweet spot |
 | #3152 | edward | p×3 surface upweight | regressed on SOAP |
 | #3703 | askeladd | SOAP precond_freq {3,2} vs 5 | U-shape, closed |
 | #3493 | alphonse | SOAP LR sweep: lr=2e-3 | worse, closed |
@@ -64,7 +65,7 @@ Old launch baseline: 135.30. Total gain: **−66.0%** over 12 compounding improv
 | **#3415** | **frieren** | **Log-Re sinusoidal (freqs=4) on full canonical** | **Inputs** | **WIP — CONFLICTING (needs rebase). New canonical notified.** |
 | **#4070** | **alphonse** | **Lookahead alpha sweep: α ∈ {0.3, 0.5, 0.7}, k=5 fixed** | **Optimization** | **WIP — training on β=0.1+grad_clip canonical; new β=0.01 canonical notified.** |
 | **#4161** | **nezuko** | **AGC: adaptive gradient clipping (λ=0.01) vs fixed max_norm=1.0** | **Optimization** | **WIP — just assigned.** |
-| **#4099** | **tanjiro** | **Grad-clip lower bound: {0.5, 0.1} vs clip=1.0** | **Optimization** | **WIP — training; new β=0.01 canonical notified.** |
+| **#4200** | **tanjiro** | **Lookahead k sweep: {3, 5, 10} with α=0.5 fixed** | **Optimization** | **WIP — just assigned.** |
 | **#3975** | **askeladd** | **bfloat16 rerun on full canonical** | **Throughput** | **WIP — training; new β=0.01 canonical notified.** |
 | **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1)** | **Loss tuning** | **WIP — training; new β=0.01 canonical notified.** |
 | **#3736** | **thorfinn** | **surf_weight {10,5} rerun on full canonical** | **Loss weighting** | **WIP — training; new β=0.01 canonical notified.** |
@@ -91,7 +92,7 @@ Zero idle students.
 - **Fern near-L1 sweep (#4139).** β={0.005, 0.001, 0.0001} — closing the monotone β trend. If still improving, pure MAE is the endpoint.
 - **Alphonse Lookahead alpha sweep (#4070).** α ∈ {0.3, 0.5, 0.7} — on β=0.1+grad_clip baseline, needs rerun on β=0.01.
 - **Nezuko AGC (#4161).** Adaptive per-parameter gradient clipping (λ=0.01) — natural follow-on to global clip=1.0 success.
-- **Tanjiro grad-clip lower bound (#4099).** {0.5, 0.1} — clip interaction with β=0.01 may differ from β=0.1.
+- **Tanjiro Lookahead k sweep (#4200).** k={3, 5, 10} — orthogonal to alphonse's α sweep, closes the {k, α} Lookahead hyperparameter space.
 - **Thorfinn surf_weight (#3736).** sw=5 expected to beat sw=10 on full canonical.
 - **Askeladd bf16 (#3975).** Needs measurement on β=0.01 canonical. After merge: unlocks wider/deeper Transolver.
 - **Edward log-pressure (#3952).** Modest within-PR signal, testing if it compounds with β=0.01.

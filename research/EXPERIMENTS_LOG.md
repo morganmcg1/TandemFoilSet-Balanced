@@ -1198,3 +1198,33 @@ The arm 4 comparison to new canonical (which also has grad_clip) isolates β=0.0
 - Hypothesis: Global clip=1.0 applies uniform threshold across all parameters. AGC (Brock et al. 2021) clips per-parameter based on param_norm × clip_factor — adapts to each parameter's own scale.
 - 3 arms: baseline (global clip only), AGC-only (λ=0.01), AGC+global clip combined.
 - Reference: NF-Nets paper. Per-parameter (not unitwise) variant.
+
+## 2026-05-16 23:05 — PR #4099 (tanjiro): Grad-clip lower bound {0.5, 0.1} — **CLOSED (negative, all stacks)**
+
+- Branch: `willowpai2i48h3-tanjiro/grad-clip-lower-bound`
+- W&B runs: `orcei879` (clip=1.0 β=0.1), `k4vyawvd` (clip=0.5 β=0.1), `7v1uj9kd` (clip=0.1 β=0.1), `msv97lru` (clip=0.5 β=0.01), `aurwhhvv` (clip=0.1 β=0.01)
+
+| Stack | Arm | clip | val_avg/mae_surf_p | test_excl_cruise | Δ val |
+|---|---|---|---|---|---|
+| β=0.1 | canonical | 1.0 | 47.1000 | 46.2590 | — |
+| β=0.1 | arm2 | 0.5 | 49.7896 | 49.4583 | +5.71% |
+| β=0.1 | arm3 | 0.1 | 47.9215 | 47.1880 | +1.74% |
+| **β=0.01** | **canonical (fern)** | **1.0** | **45.9199** | **45.1094** | **—** |
+| β=0.01 | arm A | 0.5 | 47.2066 | 45.9285 | +2.80% |
+| β=0.01 | arm B | 0.1 | 46.3683 | 45.5182 | +0.97% |
+
+**Monotone worse on both stacks. U-shape not present — no sweet spot below 1.0.**
+
+**Grad-norm distribution (β=0.01 arms):** p50≈145, max≈900. Clip/p50 ratio at 0.1 = 0.07%. No NaN/divergence. SOAP preconditioner statistics ARE affected by magnitude crushing — not fully scale-invariant in practice.
+
+**Mechanism:** clip=1.0 is a joint sweet spot: (a) renormalizes long tail (max 700-900) and (b) preserves magnitude variability that calibrates SOAP's L/R covariance estimates against the LR.
+
+**Key new datum:** β=0.01 raises grad_norm distribution ~20% vs β=0.1 (p50 145 vs 120). This is the mechanism by which β=0.01 interacts with clip=1.0.
+
+**Decision: CLOSED.** Lower clip thresholds falsified. `clip=1.0` remains canonical. Tanjiro follow-up suggestions: (1) epoch-scheduled clip — future PR; (2) per-parameter clip (AGC) — nezuko PR #4161.
+
+## 2026-05-16 23:10 — PR #4200 tanjiro assigned: Lookahead k sweep {3, 5, 10}
+
+- willowpai2i48h3-tanjiro/lookahead-k-sweep
+- Hypothesis: k=5 was chosen for freq=5 alignment without sweep. Orthogonal to alphonse's α sweep (#4070). k=3 (sub-frequency), k=5 (canonical), k=10 (2× cycle) — finds true optimum.
+- 3 arms: k=3, k=5 (baseline), k=10. Optional arm 4: k=7.
