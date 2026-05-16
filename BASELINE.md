@@ -1,6 +1,49 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3672 (Fourier ablation: n_fourier=0 under FiLM+Lion+EMA)
+## Current best — PR #3748 (Spectral norm on output head under n_fourier=0)
+
+**val_avg/mae_surf_p = 68.9592** (W&B run: `u42jpd48`, PR #3748 output-only spectral norm (n_power_iter=1) + n_fourier=0 + FiLM-output log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14)
+**test_avg/mae_surf_p = 60.8201** (same run `u42jpd48`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 77.8448 | 69.6160 |
+| geom_camber_rc | 81.3790 | 73.2110 |
+| geom_camber_cruise | **49.9026** | **40.6773** |
+| re_rand | 66.7103 | 59.7759 |
+
+**Comparison vs prior best (PR #3672 n_fourier=0, val 70.3432 / test 61.6253):**
+
+| Split | Prior val (297qot5r) | New val (u42jpd48) | Δval | Prior test | New test | Δtest |
+|-------|---------------------:|--------------------:|-----:|-----------:|---------:|------:|
+| single_in_dist | 79.64 | 77.8448 | **−1.80** | 69.97 | 69.6160 | **−0.35** |
+| geom_camber_rc | 82.43 | 81.3790 | **−1.05** | 73.96 | 73.2110 | **−0.75** |
+| geom_camber_cruise | 51.50 | 49.9026 | **−1.60** | 42.22 | 40.6773 | **−1.54** |
+| re_rand | 67.80 | 66.7103 | **−1.09** | 60.35 | 59.7759 | **−0.57** |
+| **avg** | **70.34** | **68.96** | **−1.39** | **61.63** | **60.82** | **−0.81** |
+
+**All 4 val splits and all 4 test splits improve.** Largest gains: camber_cruise (−1.60 val / −1.54 test), in_dist (−1.80 val / −0.35 test). Consistent direction across all OOD splits.
+
+**PR #3748 (Spectral normalization on output head):** Applies `torch.nn.utils.parametrizations.spectral_norm` (n_power_iter=1) to the 2 linear layers of the last Transolver block's MLP (`blocks[-1].mlp2[0]` and `blocks[-1].mlp2[2]`). This bounds the Lipschitz constant of the output-projection head, acting as a regularizer that reduces peak-pressure over-fitting. Arm C (output+film spectral norm) regressed, confirming that bounding FiLM's gamma/beta linear also destroys FiLM's conditioning. Output-only is the correct topology.
+
+**Reproduce (PR #3748 arm D — n_fourier=0 baseline):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-nezuko --epochs 50 \
+  --wandb_group round6-specnorm-nezuko \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 \
+  --cosine_t_max 14 \
+  --optimizer_name lion --lr 5e-5 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --spec_norm_target output --spec_norm_n_power_iter 1 \
+  --wandb_name nezuko-r6-specnorm-arm-D-output-nofourier
+```
+
+---
+
+## Prior best — PR #3672 (Fourier ablation: n_fourier=0 under FiLM+Lion+EMA)
 
 **val_avg/mae_surf_p = 70.3432** (W&B run: `297qot5r`, PR #3672 n_fourier=0 + FiLM-output log(Re) + Lion lr=5e-5 wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14)
 **test_avg/mae_surf_p = 61.6253** (same run `297qot5r`, clean 4-split)
