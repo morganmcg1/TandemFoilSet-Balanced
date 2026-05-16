@@ -1,5 +1,57 @@
 # SENPAI Research Results
 
+## 2026-05-16 08:35 — PR #3678: H: Dropout (attn_drop=proj_drop=0.1) on h=128+GELU (2-seed) ✗ CLOSED (null result)
+
+- Branch: `willowpai2i48h1-alphonse/dropout_regularizer`
+- Student: willowpai2i48h1-alphonse
+
+### Results (W&B `qaqvfdrz`/`p90uji7q`, seeds 0+1, h=128/T_max=15/bf16)
+
+| Seed | val_avg | test_avg | Δ vs μ̂=90.77 |
+|------|--------:|---------:|:-------------:|
+| 0 | **89.18** | 83.89 | −1.6 (~1.0σ below) |
+| 1 | **91.35** | 86.82 | +0.6 (~0.4σ above) |
+| **2-seed mean** | **90.27** | **85.35** | −0.5 (~0.3σ below) |
+
+2-seed mean within ±0.3σ of canonical μ̂=90.77 ± 1.54 — null effect. One below, one above μ̂ → inconclusive, close per decision tree.
+
+OOD-disproportionate benefit not observed (geom_camber_cruise seed 0: val=68.62, seed 1: 72.72 — spread comparable to in-dist). Dropout confirms eval determinism correctly via PyTorch training/eval mode distinction.
+
+### Root cause
+
+Underfitting regime at h=128+bf16: model isn't memorizing, dropout has nothing to regularize. T_max=15 budget is also too short for dropout's slower learning signal. Even a 3% win on GELU (val ~88) would be 22pt above SwiGLU 65.44 — dead end vs current frontier.
+
+### Follow-up: PR #3811 dropout+SwiGLU
+
+SwiGLU's gating changes the regularization surface (learned soft regularizer via multiplicative gate). GELU-null result does not transfer. Alphonse assigned dropout 0.1 on SwiGLU (h=128/T_max=15/seed=0,1).
+
+---
+
+## 2026-05-16 08:35 — PR #3644: H: Cosine T_max=10 + constant LR tail + SWA — GELU arm closed, SwiGLU rebase in progress
+
+- Branch: `willowpai2i48h1-nezuko/cosine10_constant_tail_swa`
+- Student: willowpai2i48h1-nezuko
+
+### Results — original h=128+GELU arm (W&B `72dajqcz`, seed 0, 18 epochs, 30.4 min wall)
+
+| Arm | val_avg | test_avg | Δ vs baseline |
+|-----|--------:|---------:|:-------------:|
+| pre_swa (cosine best, ep 10) | 106.90 | 101.35 | +18.99 vs 87.91 |
+| tail_best (ep 17) | 96.65 | 90.51 | +8.74 |
+| **swa_tail (avg of 8)** | **96.02** | **90.46** | **+8.11** |
+
+SWA won directionally vs tail_best by 0.63 val (6/8 splits improved, consistent bounce-regime pattern). But both arms are 8.1pt above baseline — clear close per decision tree.
+
+Root cause: T_cosine=10 undertrained the model (val=106.90 at ep 10 vs baseline ~89.76 at ep 15). Constant tail recovered 10.25pt but couldn't bridge the remaining gap. SWA averaging requires a well-converged basin; here the basin was too far from baseline minimum.
+
+Tail oscillation confirmed bounce-regime dynamics (range = 14.30 over 8 epochs). The SWA mechanism is real and directionally consistent — the budget allocation was the issue, not the mechanism.
+
+### Status: SwiGLU rebase in progress
+
+Student committed to option (a) at 08:22 UTC. Rationale: SwiGLU converges faster (val descent ~188→65 over 17 epochs), so ep 10 may be at/near the SwiGLU basin floor — making T_cosine=10 more appropriate for SwiGLU than it was for GELU. LR=1e-4 kick may still cause kick-out; student will document. Win threshold: val < 65.44.
+
+---
+
 ## 2026-05-16 07:30 — PR #3724: H: Corrected h-flip aug (z-flip + Uy/AoA/gap sign-flip, preserve NACA, skip cruise) ✗ CLOSED (catastrophic regression — ground-effect physics breaks z-symmetry)
 
 - Branch: `willowpai2i48h1-tanjiro/corrected-hflip-uy-aoa`
