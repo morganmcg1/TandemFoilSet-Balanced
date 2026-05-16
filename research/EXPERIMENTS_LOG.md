@@ -1,5 +1,93 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 22:45 — PRs #4150 + #4110 closed; #4187 + #4190 assigned — frieren pmag-weight, tanjiro nh144
+
+### #4150 tanjiro lr=7e-4 + warmup=1 + ep14 — **CLOSED** (val=64.87, +27%; ep1 val=199.6 confirms early instability)
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/lr-7e4-warmup1-ep14`)
+- **Hypothesis:** Trade epochs for lr+warmup at 30-min budget — lr=7e-4 + warmup=1 + ep14 may compensate for 4-epoch deficit vs baseline.
+- **Result:** val=64.8724 (+27% vs 50.9008), test=56.3650 (+28% vs 43.8989). All 4 splits regressed badly. Run completed cleanly 14/14 in 30.4 min. W&B `xhb32mvg`.
+
+### Headline (vs #4082 baseline)
+
+| Metric | Baseline (lr=5e-4, warmup=2, ep18) | This run (lr=7e-4, warmup=1, ep14) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 50.9008 | 64.8724 | +27.4% |
+| test_avg/mae_surf_p | 43.8989 | 56.3650 | +28.4% |
+| single_in_dist | 48.97 | 61.36 | +25.3% |
+| geom_camber_rc | 55.45 | 67.15 | +21.1% |
+| geom_camber_cruise | 28.27 | 40.71 | +44.0% |
+| re_rand | 42.91 | 56.24 | +31.1% |
+
+### Mechanistic finding
+
+ep1 val=199.6 vs baseline's gentler start = strong evidence of early-training instability. With warmup_epochs=1, the warmup ramp `0.1 + 0.9*(epoch+1)/warmup_epochs` evaluates to 1.0 at epoch 0 — essentially **no warmup**. Combined with lr=7e-4 (40% higher peak), the model takes a worse early trajectory it never recovers from. Decline from ep13→ep14 (66.41→64.87) is only ~1.5 pts at lr ≈ 0 — fully converged at a poor endpoint. More epochs would not save it.
+
+### Key takeaway
+
+**At this scale, lr cannot substitute for epochs by simply scaling up.** The aggressive lr + no-warmup combination destabilizes early training so badly that cosine annealing cannot recover the lost progress. For comparison, the n_hidden=160 + bf16 + ep16 reference reached val=53.82 — 11 points better than this run despite a smaller model. **LR/warmup, not budget, was decisive.**
+
+### Round-9 backlog (from student's follow-ups)
+
+- **lr=5e-4 + warmup=1 + ep14 isolation** (#4150 follow-up #1) — isolates warmup-shortening from LR-increase
+- **lr=6e-4 + warmup=2 + ep13 milder bump** (#4150 follow-up #2) — preserves stabilization, modest LR push
+- **Smaller model + more epochs at 30-min budget** (#4150 follow-up #3) — **TAKEN UP AS #4190** (n_hidden=144 + ep18)
+
+### #4110 frieren curvature retest (sharpened) — **CLOSED** (ARM A val=57.13 +12.2% regress; ARM B control val=50.54 within noise)
+
+- **Student:** willowpai2i48h4-frieren (branch: `willowpai2i48h4-frieren/frieren-curvature-retest-newbase`)
+- **Hypothesis:** Sharpened (squared-DSDF) curvature weighting on #4082 baseline + matched control to anchor.
+- **Result:** ARM A (curvature ON sharpened) val=57.1275 (+12.2% vs 50.9008), test=49.7633 (+13.4%). ARM B (control) val=50.5396 (within noise of baseline). Both arms completed 18/18 epochs in ~39.5 min each. W&B `2rali8dt` (ARM A), `ip8xoj2a` (ARM B).
+
+### Headline arm comparison
+
+| Arm | val_avg | test_avg | single_in_dist | geom_camber_rc | geom_camber_cruise | re_rand |
+|---|---:|---:|---:|---:|---:|---:|
+| ARM A (curv ON sharpened) | 57.13 | 49.76 | 53.00 | 62.18 | 34.41 | 49.47 |
+| ARM B (control) | 50.54 | 43.78 | 48.15 | 55.67 | 28.21 | 43.07 |
+| **A − B** | **+13.0%** | **+13.7%** | +10.1% | +11.7% | **+22.0%** | +14.9% |
+| #4082 baseline | 50.90 | 43.90 | 48.97 | 55.45 | 28.27 | 42.91 |
+
+### Diagnostic confirmation (sharpening worked numerically)
+
+Student's DSDF-norm sharpened proxy diagnostic at last epoch:
+- max/mean = 2.02 (vs ~1.45 in #4042 unsharpened) — sharpening pushed weight distribution to predicted shape
+- min = 0.111 — top 10% of surface nodes had ~10× more gradient than bottom 10%
+- std = 0.47 — moderately heavy tail confirmed
+
+So this is a **genuine test of "more aggressive curvature emphasis"** — and the answer is unambiguously **no**, the direction is dead.
+
+### Key insight (frieren's diagnosis, captured in student comment)
+
+**DSDF-norm is a distance-from-boundary proxy, not a curvature proxy.** It's elevated near LE/TE because mesh density is high there, not because curvature is high. Concentrating gradient on the DSDF tail amplifies the mesh-density bias, not the true geometric difficulty. This explains why:
+1. All 4 test splits regress (mesh density is a confound, not a useful signal)
+2. geom_camber_cruise regresses worst (+22%) — largest meshes, longest surfaces, most mesh-density distortion
+3. The #4042 within-arm signal may have been measuring "mesh-density-weighted loss" rather than true curvature-weighted loss
+
+### Round-9 backlog (from student's follow-ups)
+
+- **True geometric curvature via ‖∇DSDF‖** along arc-length (#4110 follow-up #1) — actual curvature proxy, not mesh-density proxy
+- **Pressure-magnitude weighting** (#4110 follow-up #2) — **TAKEN UP AS #4187** — decouples from mesh-density artefacts
+- **Linear-DSDF #4042 retest on new baseline** — isolate whether prior signal was real-but-tiny or baseline-specific
+
+### #4187 frieren pressure-magnitude weighted L1 loss — **ASSIGNED**
+
+- **Hypothesis:** Weight surface L1 loss by |ground-truth pressure| (top-decile gets 2× weight). Directly answers "weight the hard targets" without mesh-density confound. Single-knob, loss-only, decoupled from geometric proxies.
+- **Implementation:** Add `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90`. Compute per-batch quantile of |y_norm| on surface; mask above → 1+α weight, normalize so mean=1.0 (preserves gradient mass, redistributes only).
+- **Defaults rationale:** quantile=0.90 → top-10% emphasis; alpha=1.0 → 2× weight, max/mean=1.9 (intentionally milder than #4110's 2.0+ which hurt).
+- **Decision criteria:** Merge if val<50.90 AND test<43.90; send back for quantile/alpha sweep if val<51.5; close if val≥52.5.
+- **Why high-EV:** Loss-only change → stacks orthogonally with everything in flight (width, optimizer params, attention configs). If it wins, it compounds.
+
+### #4190 tanjiro n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) — **ASSIGNED**
+
+- **Hypothesis:** Capacity-vs-epochs frontier at fixed 30-min wall budget. Tanjiro's #4150 showed lr/warmup can't compensate for budget cap at n_hidden=176. Question: does a smaller model that completes full cosine schedule beat a bigger model truncated at ep14?
+- **Throughput estimate:** n_hidden=144 + bf16 → ~95-105 s/ep, ep18 in 28-31 min. Fits 30-min cap.
+- **n_hidden divisibility:** 144/4=36 head_dim ✓, SwiGLU inner_dim=192 ✓.
+- **Decision criteria:** Merge if val<50.90 AND test<43.90 (smaller-model-full-schedule wins); send back if val∈[50.9, 53.0] (try nh=160 + ep16 to bracket); close if val>53.5 (capacity dominates).
+- **Cross-experiment value:** Even closing gives us a real n_hidden=144 measurement to extrapolate the capacity-vs-epoch curve at 30-min budget.
+
+---
+
 ## 2026-05-16 21:55 — PR #4143 closed; #4178 assigned — thorfinn EMA retest on current stack
 
 ### #4143 thorfinn n_head=8 retest — **CLOSED** (val=53.50, +2.60 vs 50.90, all 4 test splits regress)

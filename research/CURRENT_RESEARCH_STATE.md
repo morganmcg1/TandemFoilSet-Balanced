@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~22:30 UTC
+- **Last updated:** 2026-05-16 ~22:45 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -79,15 +79,15 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 
 ## Active in-flight PRs (status as of ~19:45 UTC)
 
-### Round-8 active (assigned 19:35–20:35 UTC, all on bf16 stack)
+### Round-8 active (assigned 19:35–22:45 UTC, all on bf16 stack)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
-| **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 | WIP |
-| **#4110** | frieren | Curvature loss retest with sharpened proxy on new baseline | WIP |
-| **#4150** | tanjiro | lr=7e-4 + warmup=1 on n_hidden=176+bf16+ep14 (30-min budget test) | WIP (assigned 20:50) |
-| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP |
-| **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP (assigned 21:35) |
-| **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval — free-lunch retest on current stack | WIP (assigned 21:55) |
+| **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 | WIP — run completed (W&B `u0vq13g7` val=50.92), awaiting student SENPAI-RESULT post |
+| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP — started training 22:30 |
+| **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP |
+| **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP |
+| **#4187** | frieren | Pressure-magnitude weighted L1 loss (top-decile \|p_true\|, alpha=1.0) | WIP (assigned 22:45) |
+| **#4190** | tanjiro | Capacity-vs-epochs at 30-min budget: n_hidden=144 + bf16 + ep18 | WIP (assigned 22:45) |
 
 ### Round-7 still in-flight (assigned earlier, results pending)
 | # | Student | Hypothesis | State |
@@ -110,6 +110,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4039(v1)** | edward | Multi-scale Fourier PE (3 arms on prior baseline) | Arm B WIN on #3981 (val=51.47, −4.34%/-5.22%); doesn't beat #4082 (val=50.90); **sent back for stacked retest on n_hidden=176** |
 | **#4140** | alphonse | slice_num=96 retest on new baseline | CLOSED ~21:30 (val=74.47 cut ep12/18; monotonic worse 64→96; #4165 slice=48 assigned) |
 | **#4143** | thorfinn | n_head=8 retest on new baseline | CLOSED ~21:50 (val=53.50 +2.6%, test=46.16 +2.3%, all 4 splits regress; +32% wall-clock from head_dim=22 < matmul threshold; #4178 EMA assigned) |
+| **#4150** | tanjiro | lr=7e-4 + warmup=1 + ep14 (30-min budget pivot) | CLOSED ~22:40 (val=64.87 +27%, test=56.37 +28%; ep1 val=199.6 confirms early-training instability from aggressive lr+no-warmup; #4190 nh144+ep18 assigned) |
+| **#4110** | frieren | Curvature loss retest sharpened (squared-DSDF) | CLOSED ~22:40 (ARM A val=57.13 +12.2% regress; ARM B control val=50.54 within noise; **diagnostic insight: DSDF-norm is distance-from-boundary proxy not curvature** → mesh-density bias; #4187 pressure-mag weight assigned) |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -141,14 +143,17 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 |---|---|---|---|---|
 | #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 | `--n_hidden 192 --use_bf16 --epochs 18`, T=50 | WIP |
 | #4108 | alphonse | n_layers=6 retest with bf16 + ep18 | `--n_layers 6 --use_bf16 --epochs 18`, T=45 | CLOSED (val=62.05 undertrained at 30-min env) |
-| #4110 | frieren | Curvature loss retest with sharpened proxy | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) | WIP |
+| #4110 | frieren | Curvature loss retest with sharpened proxy | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) | CLOSED (ARM A val=57.13 +12.2%, ARM B control val=50.54 within noise; DSDF-norm is mesh-density proxy not curvature) |
 | #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 | CLOSED (pod env 30-min cap can't fit ep22 ≈ 48 min) |
 | #4112 | thorfinn | DSDF-norm as input feature | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 | CLOSED (val +2.57% regress) |
 | #4129 | askeladd | AdamW beta2 sweep (0.95, 0.98) | `--adam_beta2 0.95/0.98 --n_hidden 176 --use_bf16 --epochs 18`, T=45 (2 arms) | WIP |
 | #4140 | alphonse | slice_num=96 retest on new baseline | `--slice_num 96 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | CLOSED (val=74.47 cut ep12; monotonic worse from 64→96) |
 | #4143 | thorfinn | n_head=8 retest on new baseline | `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | CLOSED (val=53.50 +2.6%, all 4 splits regress; +32% wall-clock from head_dim=22 < matmul threshold) |
+| #4150 | tanjiro | lr=7e-4 + warmup=1 + ep14 (30-min budget pivot) | `--n_hidden 176 --use_bf16 --epochs 14 --lr 7e-4 --warmup_epochs 1` | CLOSED (val=64.87 +27%, ep1 val=199.6 confirms early-training instability; can't trade epochs for higher LR) |
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | `--slice_num 48 --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
-| **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP (new) |
+| **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP |
+| **#4187** | frieren | Pressure-magnitude weighted L1 (top-decile \|p_true\|) | `--use_pmag_weight --pmag_weight_alpha 1.0 --pmag_weight_quantile 0.90 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
+| **#4190** | tanjiro | n_hidden=144 + bf16 + ep18 (capacity-vs-epochs at 30-min budget) | `--n_hidden 144 --use_bf16 --epochs 18` (no T override) | WIP (new) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 
@@ -160,9 +165,12 @@ Deferred to round-9 (backlog):
 - Soft equivariance loss `‖f(x) - flip(f(flip(x)))‖` (askeladd's #4036 follow-up — sidesteps NACA-M asymmetry by operating on predictions)
 - Stacking interactions: depth + width, curvature loss + DSDF feature, etc.
 - Mixup-style geometry blending across samples
-- Stronger curvature proxy variants (gradient of DSDF, learned curvature head)
+- **True geometric curvature via ‖∇DSDF‖ along arc-length** (frieren #4110 follow-up #1 — addresses mesh-density confound in DSDF-magnitude proxy)
 - n_head=2 head_dim=88 sanity foil (thorfinn #4143 follow-up — closes n_head axis if 4 is true peak)
 - n_head=8 + n_hidden≥256 stacking (head_dim≥32 to clear matmul compute-bound threshold)
+- lr=5e-4 + warmup=1 + ep14 isolation (tanjiro #4150 follow-up #1 — isolates warmup-shortening from LR-increase)
+- lr=6e-4 + warmup=2 + ep13 milder LR bump (tanjiro #4150 follow-up #2)
+- pmag_weight quantile=0.80 / alpha=0.5 sweep (frieren #4187 follow-up if winner)
 
 ## Potential next research directions (post-round-8)
 
