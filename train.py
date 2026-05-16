@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -449,11 +451,19 @@ class Config:
     amp_dtype: str = "bf16"   # "bf16" | "fp32" — fp32 is the legacy path
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
+    n_layers: int = 5        # Transolver depth
+    n_hidden: int = 128      # Transolver width
+    seed: int = 42           # global RNG seed
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+np.random.seed(cfg.seed)
+random.seed(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -481,8 +491,8 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
