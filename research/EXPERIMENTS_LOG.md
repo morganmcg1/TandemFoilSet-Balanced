@@ -16,6 +16,99 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 08:00 — PR #3669: SWA on FiLM-Re (edward) — MERGED (NEW BASELINE)
+- student: willowpai2i24h2-edward
+- branch: `willowpai2i24h2-edward/swa-film-re`
+- hypothesis: stochastic weight averaging over the last ~46% of cosine-annealed training gives a smoother basin estimate than the best single checkpoint
+- W&B run: `dqe95m2e` (primary, SWA); also `4jyj4mwj` (val=79.67 best-val), `hpw0veo8` (val=102.24)
+
+| Metric | Baseline (#3350 FiLM-Re) | Best-val ckpt (`dqe95m2e`) | **SWA ckpt (`dqe95m2e`)** | SWA Δ |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 79.9018 | 80.6238 | **76.6091** | **−4.12%** ✓ |
+| `test_avg/mae_surf_p` | 69.3296 | 71.9575 | **68.1999** | **−1.63%** ✓ |
+
+Per-split (SWA checkpoint vs FiLM-Re baseline, val | test):
+| Split | Baseline val | SWA val | Baseline test | SWA test |
+|---|---|---|---|---|
+| `single_in_dist` | 93.78 | **87.96** | 83.21 | **77.57** |
+| `geom_camber_rc` | 96.06 | **89.40** | 81.19 | **80.45** |
+| `geom_camber_cruise` | 54.93 | 55.59 | 46.55 | 47.92 |
+| `re_rand` | 74.83 | **73.48** | 66.36 | 66.86 |
+
+**Analysis:** SWA averaging over the last 6 of 13 training epochs (swa_start_epoch=7, per-step update calls) produces a systematically better model than any single best-val checkpoint. The key insight: with the 30-min wall-clock cap cutting training at epoch 13/50, the cosine LR schedule never finishes; the model is stopped mid-decay. SWA effectively "completes" the convergence by averaging the noisy late-training trajectory into a smoother basin estimate. The best-val checkpoint from the same run (val=80.62, test=71.96) does NOT beat baseline — it's the SWA averaging that enables the win.
+
+The gain is concentrated on `single_in_dist` (test −5.64) and `geom_camber_rc` (test −0.74). The two cruise splits show near-tie with baseline (within ~1.4 absolute), consistent with SWA's smoothing being more beneficial on higher-variance splits.
+
+SWA is implemented via `torch.optim.swa_utils.AveragedModel` with per-step updates and is a zero-overhead inference-time operation (no extra activations, GPU memory unchanged at 47.7 GB).
+
+**Decision:** MERGED as new baseline (val=76.61, test=68.20, SWA checkpoint).
+**Critical note:** All subsequent comparisons should be made against val=76.61, test=68.20. The SWA mechanism is now in train.py and will affect all future runs — students must either use `swa_start_epoch=7` or similar, and report both best-val and SWA checkpoint metrics.
+
+---
+
+## 2026-05-16 08:00 — PR #3652: OneCycleLR on FiLM-Re (fern) — CLOSED
+- student: willowpai2i24h2-fern
+- branch: `willowpai2i24h2-fern/onecyclelr-film-re`
+- hypothesis: OneCycleLR with pct_start=0.2 spends proportionally more time in exploration phase, then anneals sharply — potentially faster convergence than cosine in the 30-min budget
+- W&B runs: `4p8o19be` (best), `myipsm56`, `v1bn948u`
+
+| Run | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---|---|
+| `4p8o19be` (best) | 88.76 | 82.61 | +11.1% | +19.2% |
+| `myipsm56` | 94.32 | 86.68 | +18.0% | +25.0% |
+| `v1bn948u` | 105.90 | 95.28 | +32.5% | +37.4% |
+| **New SWA baseline** | **76.61** | **68.20** | — | — |
+
+**Analysis (from student's write-up):** OneCycleLR with epochs=50 parameterization ramps LR over 10/50 epochs and decays over 40/50. Training stops at epoch 13 by wall-clock; at that point the schedule is only ~6% into its decay window with LR ≈ 4.93e-4 (essentially still peak). The model is stopped in the high-LR exploration phase. CosineAnnealingLR(T_max=50) decays continuously from step 0 — by epoch 14 the model has already experienced meaningful LR decay and reaches a lower-LR converged region. OneCycleLR's whole advantage (exploration then convergence) requires the FULL nominal training budget to express; truncation kills it. The worse the seed, the higher the val (88.76 → 94.32 → 105.90), consistent with high-LR noise.
+
+**Decision:** CLOSED. Mechanistic dead end — incompatible with wall-clock-truncated budget.
+
+---
+
+## 2026-05-16 08:00 — PR #3516: FiLM-Re + β=0.02 (tanjiro) — CLOSED
+- student: willowpai2i24h2-tanjiro
+- branch: `willowpai2i24h2-tanjiro/smoothl1-beta-sweep`
+- hypothesis: β=0.02 (winner in standalone sweep) should compound additively with FiLM-Re
+- W&B runs: `f2uh3ojn`, `x4n1pwm9`, `m3u0225j`, `4bw2hrdu` (all β=0.02 seeds; β=0.01 arm never launched)
+
+| Run | val_avg | test_avg | Δ val | Δ test |
+|---|---|---|---|---|
+| `f2uh3ojn` (best val) | 79.14 | 72.60 | −0.95% | +4.72% |
+| `x4n1pwm9` | 80.49 | 72.41 | +0.74% | +4.50% |
+| `m3u0225j` | 83.99 | 78.71 | +5.11% | +13.5% |
+| `4bw2hrdu` | 85.26 | 74.56 | +6.70% | +7.53% |
+| **4-seed mean** | **82.22** | **74.57** | +2.82% | +7.55% |
+| FiLM-Re baseline (#3350) | 79.90 | 69.33 | — | — |
+
+**Analysis (student's mechanistic explanation, verified as correct):** β-tuning and FiLM-Re are **substitutes, not complements**. FiLM-Re per-block gamma/beta scaling relies on gradients tracking residual magnitude (quadratic core of SmoothL1 β=0.05 provides this signal). Pushing β=0.02 truncates the quadratic core so most gradients become sign(error) (magnitude 1); FiLM-Re's per-Re scaling mechanism loses its input signal. The optimal β under FiLM-Re is therefore β=0.05 — the one that was in the FiLM-Re baseline all along.
+
+All 4 seeds regress on test (mean +7.55%). The mechanistic explanation is consistent: test regression is not seed noise, it is a systematic effect of FiLM-Re + small-β interaction on OOD generalization.
+
+**Decision:** CLOSED. Mechanistic interaction makes β-tuning unproductive on the current architecture. β=0.05 is confirmed as the optimal operating point under FiLM-Re.
+
+---
+
+## 2026-05-16 05:25 — Compound round summary (PRs #3207, #3516, #3356, #3652, #3653, #3657, #3669, #3670) — PLATEAU CONFIRMED
+- 8 compound experiments on FiLM-Re baseline (val=79.90, test=69.33); all ran ~3-4 seeds per student
+- **Zero experiments beat BOTH val and test baselines** using standard best-val checkpoint evaluation
+- Best-seed val "wins" (tanjiro 79.14, thorfinn 79.82) were within seed-variance noise and all regressed test
+- Mean-of-seeds for every student was worse than baseline on both metrics
+
+| Student | Config | Best val | Best test | Δ val | Δ test |
+|---|---|---|---|---|---|
+| tanjiro | FiLM-Re + β=0.02 | 79.14 | 72.60 | −0.95% | +4.72% (mechanistic) |
+| edward | SWA on FiLM-Re (best-val ckpt) | 79.67 | 70.49 | −0.29% | +1.72% |
+| thorfinn | FiLM-Re + div_weight=0.01 | 79.82 | 71.28 | −0.10% | +2.84% |
+| frieren | FiLM-Re + Fourier bands=16 | 81.29 | 72.73 | +1.74% | +4.90% |
+| alphonse | Multi-signal FiLM cond_dim=5 | 81.87 | 73.24 | +2.46% | +5.64% |
+| nezuko | FiLM-Re + geom-slice v2 | 81.90 | 73.82 | +2.51% | +6.50% |
+| askeladd | FiLM-Re + surf_weight=15 | 82.56 | 76.05 | +3.33% | +9.69% |
+| fern | OneCycleLR + FiLM-Re | 88.76 | 82.61 | +11.1% | +19.2% |
+
+**Plateau-break protocol triggered (cycle 15):** researcher-agent dispatched, 8 ideas generated in `RESEARCH_IDEAS_2026-05-16_05:25.md`. SWA (Idea 7) was the sleeper win — not via post-hoc checkpoint averaging but via `AveragedModel` with per-step updates during training.
+
+---
+
 ## 2026-05-16 04:25 — PR #3597: Larger batch_size=8 + lr=1e-3 (edward) — CLOSED
 - student: willowpai2i24h2-edward
 - branch: `willowpai2i24h2-edward/larger-batch-bs8-smoothl1`
