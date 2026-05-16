@@ -360,7 +360,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
-    ema_decay: float = 0.999  # EMA decay for shadow model evaluated at val/test
+    ema_decay: float = 0.998  # EMA decay for shadow model evaluated at val/test
 
 
 cfg = sp.parse(Config)
