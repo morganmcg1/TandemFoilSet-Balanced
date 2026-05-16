@@ -252,12 +252,13 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
-                   smooth_l1_beta, device) -> dict[str, float]:
+                   device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``score.py`` (float64, non-finite samples skipped). Surface uses L1 and
+    volume uses MSE in normalized space — see training loop comment.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -287,7 +288,8 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             x_aug = torch.cat([x_norm, ff], dim=-1)
             pred = model({"x": x_aug})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=smooth_l1_beta, reduction="none")
+            abs_err = (pred - y_norm).abs()
+            sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -295,7 +297,7 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (abs_err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -434,7 +436,6 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    smooth_l1_beta: float = 0.05  # quadratic-to-linear transition in normalized y space
 
 
 cfg = sp.parse(Config)
@@ -546,12 +547,15 @@ for epoch in range(MAX_EPOCHS):
         ff = fourier_encoder(x_norm[..., :2])
         x_aug = torch.cat([x_norm, ff], dim=-1)
         pred = model({"x": x_aug})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.smooth_l1_beta, reduction="none")
+        # Surface: pure L1 (directly aligns with MAE eval metric).
+        # Volume: MSE (precise low-error fitting where the quadratic helps).
+        abs_err = (pred - y_norm).abs()
+        sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -572,7 +576,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, fourier_encoder, loader, stats,
-                             cfg.surf_weight, cfg.smooth_l1_beta, device)
+                             cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -657,7 +661,7 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, fourier_encoder, loader, stats,
-                                 cfg.surf_weight, cfg.smooth_l1_beta, device)
+                                 cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
