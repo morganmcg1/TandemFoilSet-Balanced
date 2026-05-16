@@ -423,6 +423,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    attn_dropout: float = 0.0  # PhysicsAttention dropout (softmax + to_out); FFN dropout fixed at 0.1
 
 
 cfg = sp.parse(Config)
@@ -484,11 +485,13 @@ model_config = dict(
     rff_sigma=1.0,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    dropout=cfg.attn_dropout,  # PhysicsAttention dropout; FFN MLP dropout=0.1 hardcoded in TransolverBlock
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Attention dropout: {cfg.attn_dropout} | FFN dropout: 0.1 (hardcoded)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
