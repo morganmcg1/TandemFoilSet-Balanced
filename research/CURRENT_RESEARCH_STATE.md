@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~21:55 UTC) — **#4122 edward wd-sweep CLOSED** (2/4 arms incomplete, both finished worse; obsolete substrate); **#4180 edward clip-ratio @ lr=2e-4** assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~22:35 UTC) — **#4173 thorfinn triple-compose REVIEWED+SENT BACK** (val tied +0.086, test better −0.69; sent back for lr=1.8e-4 + T_max=18 arms); **#4128 fern surf_weight CLOSED** (1/3 arms launched, obsolete substrate); **#4192 fern Huber β@lr=2e-4** assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -48,9 +48,9 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 |----|---------|------------|--------|
 | #4145 | alphonse | R11 H55: grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24 extension) | WIP |
 | #4015 | nezuko | R10 H39: layer_scale=1e-4 + T_max=20 composition (Arms F+G) | WIP |
-| #4128 | fern | R10 H54: surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} | WIP |
+| **#4192** | **fern** | **R11 H61: Huber β recalibration at lr=2e-4 {0.03, 0.05 ctrl, 0.10}** | **Just assigned** |
 | #4153 | askeladd | R11 H58: Lion β2 sweep at T_max=20 {0.98, 0.99 ctrl, 0.995} | WIP |
-| **#4173** | **thorfinn** | **R11 H59: Triple composition T_max=20 + lr=2e-4 + clip=1.0 (+ T_max=24 arm)** | **Just assigned** |
+| #4173 | thorfinn | R11 H59 (extended): Triple composition + Arms D (lr=1.8e-4 + T_max=20) and E (lr=2e-4 + T_max=18) | Sent back |
 | **#4180** | **edward** | **R11 H60: Clip ratio sweep at lr=2e-4 {0.7, 1.0 ctrl, 1.4}** | **Just assigned** |
 | #4152 | frieren | R11 H57: EMA decay sweep at T_max=20 {0.995, 0.997 ctrl, 0.999} | WIP |
 | #4148 | tanjiro | R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4} | WIP |
@@ -61,6 +61,7 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4128 | fern | surf_weight@clip=1.0 (old substrate): sw=5 → 60.59 val / 51.95 test (worse); sw=10 ctrl & sw=20 never launched; obsolete substrate | CLOSED |
 | #4122 | edward | wd@clip=1.0 (old substrate): wd=3e-4 → 62.99 (+1.8 vs ctrl 61.18), wd=5e-4 → 61.45 (within noise); wd=1e-3 ctrl & wd=2e-3 never launched; substrate obsolete | CLOSED |
 | #4096 | frieren | SGDR cosine restarts: T_0=7 → val 64.14 (+6.48), T_0=4 T_mult=2 → 69.51 (+11.85). Restarts oppose T_max=20 mechanism. | CLOSED |
 | #4085 | askeladd | Batch size: bs=8 catastrophic (3 reps best 76.93 = +19.27 above BL); bs=16 not launched. Lion+bs=4 correctly tuned. | CLOSED |
@@ -78,14 +79,14 @@ Key mechanism: clip=1.0 clips every step (pre-clip ‖g‖ median ~23.7 >> 1.0).
 
 | Axis | Hypothesis | PR / student | Expected outcome |
 |------|-----------|-------------|-----------------|
-| **Triple composition** | **T_max=20 + lr=2e-4 + clip=1.0 (+ T_max=24 arm)** | **#4173 thorfinn** | **−1 to −2.5 val; triple composition of all three wins** |
+| **Triple composition (extended)** | **T_max=20 + lr=2e-4 + clip=1.0 → val 56.98 (tied); Arms D (lr=1.8e-4@T_max=20) + E (lr=2e-4@T_max=18)** | **#4173 thorfinn** | **First arm tied on val (+0.086) but test better −0.69; localizing the lr×T_max minimum** |
 | Schedule+clip composition | grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24) | #4145 alphonse | −0 to −2 val; tests if clip×T_max compose (suboptimal lr) |
-| LR recalibration at T_max=20 | lr {1.3e-4, 1.5e-4 ctrl, 1.7e-4} at T_max=20 | #4148 tanjiro | −0 to −1 val; note lr=2e-4 likely wins — may need Arm D |
+| LR recalibration at T_max=20 | lr {1.3e-4, 1.5e-4 ctrl, 1.7e-4} at T_max=20 | #4148 tanjiro | −0 to −1 val; note lr=2e-4 tied — needs Arm D |
 | EMA decay at T_max=20 | ema_decay {0.995, 0.997 ctrl, 0.999} at T_max=20 | #4152 frieren | −0 to −1 val; longer averaging at noisy endpoint |
 | Lion β2 at T_max=20 | lion_beta2 {0.98, 0.99 ctrl, 0.995} at T_max=20 | #4153 askeladd | −0 to −1.5 val; untested optimizer-state axis |
 | Architecture stability composition | layer_scale=1e-4 + T_max=20 | #4015 nezuko | −0 to −2 val; tests if both wins stack |
-| Loss balance | surf_weight {5, 10 ctrl, 20} at clip=1.0 substrate | #4128 fern | −0 to −2 val; substrate-dependent (note: on old LR, will need T_max=20+lr=2e-4 re-test) |
-| **Clip ratio recalibration at lr=2e-4** | **clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4** | **#4180 edward** | **−0 to −1.5 val; parallel to finding #22, tests whether clip optimum also shifts** |
+| **Huber β recalibration at lr=2e-4** | **β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0** | **#4192 fern** | **−0 to −1.5 val; tests whether finding #11 extends to new substrate; β=0.03 is novel** |
+| Clip ratio recalibration at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; parallel to finding #22 |
 
 ## Key findings (cumulative, 22)
 

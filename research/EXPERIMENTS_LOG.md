@@ -1,5 +1,44 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:35 — #4173 thorfinn triple-compose REVIEWED+SENT BACK (val tied, test better); #4128 fern surf_weight CLOSED; #4192 fern Huber β@lr=2e-4 assigned
+
+### #4173 thorfinn — R11 H59: Triple composition T_max=20 + lr=2e-4 + clip=1.0 (REVIEWED, NOT MERGED, sent back)
+
+- W&B run `422k0yfk`
+- val_avg 56.9769 (vs BL 56.8913 → **+0.086 tied within noise**)
+- test_avg 48.3409 (vs BL 49.0322 → **−0.6913 better**)
+
+| Split | Arm B val | BL val | Δ | Arm B test | BL test | Δ |
+|-------|-----------|--------|---|------------|---------|---|
+| in_dist | 58.31 | 61.01 | **−2.70** | 49.84 | 52.64 | **−2.80** |
+| camber_rc | 71.71 | 71.92 | −0.21 | 63.05 | 64.54 | **−1.49** |
+| camber_cruise | 39.69 | 37.30 | **+2.39** | 32.83 | 31.01 | **+1.82** |
+| re_rand | 58.20 | 57.34 | +0.86 | 47.65 | 47.94 | −0.29 |
+
+**Decision: NOT merged (val_avg primary metric tied at +0.086).** But 3/4 test splits improve and test_avg −0.69 is meaningful. The regression is concentrated on camber_cruise (+2.39 val) — a split that saturates early under T_max=14 and gets pushed off by the elevated LR endpoint of T_max=20. Best epoch = 14/50 even at T_max=20.
+
+**Key finding to record:** Val/test direction-disagreement is interesting — may indicate val is slightly overfit to T_max=14 substrate. test-aware selection would favor the triple composition.
+
+Sent back for Arm D (lr=1.8e-4 + T_max=20 + clip=1.0) and Arm E (lr=2e-4 + T_max=18 + clip=1.0) to localize the minimum.
+
+### #4128 fern — surf_weight @ clip=1.0 (CLOSED — informative null, incomplete, no terminal)
+
+W&B group `round10-surfweight-fern` shows only sw=5 launched (3 reps). sw=10 ctrl and sw=20 never launched. Student never posted any PR comment.
+
+| Arm | sw | val_avg | test_avg | State |
+|-----|-----|---------|----------|-------|
+| sw=5 (best of 3) | 5 | 60.59 | 51.95 | finished, worse than BL |
+| sw=10 ctrl | 10 | NEVER LAUNCHED | — | — |
+| sw=20 | 20 | NEVER LAUNCHED | — | — |
+
+**Key finding to record:** sw=5 (down from default 10) regresses on old substrate. Substrate now obsolete after PR #4120.
+
+### #4192 fern — R11 H61: Huber β recalibration at lr=2e-4 {0.03, 0.05 ctrl, 0.10} (just assigned)
+
+Tests whether finding #11 (β=0.05 optimal in [0.05, 0.20] at lr=1.5e-4) extends to the new lr=2e-4 + clip=1.0 substrate. Arm A β=0.03 (extends below previous sweep floor), Arm B β=0.10 (re-test old finding).
+
+---
+
 ## 2026-05-16 21:55 — #4122 edward wd-sweep CLOSED (incomplete + obsolete substrate); edward #4180 assigned (clip ratio @ lr=2e-4)
 
 ### #4122 edward — wd recalibration at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} (CLOSED — informative null, incomplete, no terminal posted)
