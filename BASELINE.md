@@ -2,7 +2,68 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-16 09:45 — PR #3771: LR continuation — lr=1.5e-3 + compile (current best)
+## 2026-05-16 10:35 — PR #3809: Gradient clipping — clip=0.5 + lr=1e-3 + compile (current best)
+
+Stacks on top of PR #3666 (lr=1e-3 + compile) plus a new `--grad_clip_norm` CLI flag and `torch.nn.utils.clip_grad_norm_` call between `loss.backward()` and `optimizer.step()`. **The single biggest win of round 5** — Arm B (clip_norm=0.5) beats current baseline by −10.31% val_avg. The unclipped gradient distribution had been silently far higher than expected: pre-clip mean ‖g‖ = 7.4, worst-step ‖g‖ = 200–273. Clipping fires on **~100% of steps in both arms** at lr=1e-3, with the tighter 0.5 threshold acting as a stronger implicit regularizer and yielding a uniform improvement across all 16 val/test cells. The Cautious mask mean (0.624) is invariant under clipping (clipping preserves gradient direction, only rescales magnitude — the sign-agreement test is unaffected). Clipping and Cautious compose cleanly: clipping bounds magnitude, Cautious gates direction.
+
+**Important stack note:** This baseline reverts LR from 1.5e-3 → 1e-3. Frieren's run was on lr=1e-3 (assigned in Loop 19 before #3771 merged). The natural follow-up is the compound **lr=1.5e-3 + clip=0.5** — if both mechanisms compose, the next win could be substantially larger. Assigned to frieren as #3920 (TBD).
+
+**Primary** (Arm B: grad_clip_norm=0.5 + lr=1e-3 + compile, n_hidden=128)
+- `val_avg/mae_surf_p` = **45.4964** (best epoch 31 / 50, run cut by 30-min wall clock; **−10.31% vs PR #3771**, **−63.27% vs round-5 anchor**)
+- `test_avg/mae_surf_p` = **38.3732** (**−13.48% vs PR #3771**, **−66.45% vs round-5 anchor**)
+- **Cumulative round-5 improvement:** −63.27% val_avg (123.88 → 45.50), −66.45% test_avg (114.37 → 38.37). **Thirteen compounding wins.**
+
+**Per-split surface pressure MAE (Arm B — grad_clip=0.5 at lr=1e-3)**
+
+| Split | val_mae_surf_p | test_mae_surf_p | Δ val vs PR #3771 | Δ test vs PR #3771 |
+|---|---:|---:|---:|---:|
+| single_in_dist | 45.415 | 39.907 | −12.59% | −14.89% |
+| geom_camber_rc | 62.109 | 54.158 | −4.55% | −8.36% |
+| geom_camber_cruise | 28.200 | 22.447 | −14.50% | −17.66% |
+| re_rand | 46.261 | 36.981 | −12.39% | −16.24% |
+| **avg** | **45.4964** | **38.3732** | **−10.31%** | **−13.48%** |
+
+All 16 val/test cells improve. Largest gains on test_geom_camber_cruise (−17.66%) and test_re_rand (−16.24%). camber_rc improvement is the smallest (−4.55% val) — consistent with the camber_rc capacity-saturation finding from #3463.
+
+**Arm A (clip_norm=1.0):** val_avg=47.1697 (−6.93% vs 50.70). Also a winner but clip=0.5 is decisively better. Tells us the optimum is below 1.0; the next refinement (clip=0.25 vs 0.1) is the natural follow-up.
+
+**Mechanism — why grad-norm clipping helps this much:**
+The unclipped gradient distribution had outlier steps with ‖g‖ up to 273 (vs the mean of 7.4). Without clipping, these outliers translate to ~37× larger parameter updates than typical, "punching" the model into bad regions. Cautious AdamW absorbed these in aggregate (no NaN, no training divergence), but generalization suffered: the model carries inherited bias from those outlier updates. Clipping caps the per-step update norm at a global budget; the model navigates the loss landscape with smaller, more consistent steps, which the merged stack's implicit-regularization mechanisms (FiLM, scale-inv loss, Cautious) handle better.
+
+**Model config**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- 829,015 parameters; EMA shadow at decay=0.999; torch_compile_active=True (default mode, dynamic=True)
+- **CautiousAdamW lr=1e-3**, wd=1e-4, **grad_clip_norm=0.5** (new flag added in this PR)
+- CosineAnnealingLR(T_max=25, eta_min=1e-4, eta_min_factor=0.10)
+- bf16 AMP, surf_weight=10.0, surf_p_l1_weight=1.0
+- bernoulli_residual=False
+- Peak VRAM: 24.39 GB (zero memory overhead from clipping)
+- Avg s/epoch: 58.1 (within noise of compile baseline)
+- Cautious mask mean: 0.6244 (invariant under clipping — clipping preserves direction)
+- Pre-clip gradient norm: mean 7.578, range [3.686, 21.253] per epoch, worst-step 199.48
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-frieren-gradclip0p5_lr1e3_compile-20260516-092643/metrics.jsonl`
+- `models/model-charliepai2i24h5-frieren-gradclip0p5_lr1e3_compile-20260516-092643/metrics.yaml`
+- `models/model-charliepai2i24h5-frieren-gradclip0p5_lr1e3_compile-20260516-092643/config.yaml`
+- (Arm A): `models/model-charliepai2i24h5-frieren-gradclip1p0_lr1e3_compile-20260516-083415/metrics.jsonl`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --agent charliepai2i24h5-frieren \
+    --experiment_name "baseline_repro_gradclip0p5_lr1e3_compile" \
+    --torch_compile \
+    --lr 1e-3 --grad_clip_norm 0.5 \
+    --t_max 25 --eta_min_factor 0.10 \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+(Wall clock capped by `SENPAI_TIMEOUT_MINUTES`; run hit 32 epochs in 30 min.)
+
+---
+
+## 2026-05-16 09:45 — PR #3771: LR continuation — lr=1.5e-3 + compile (previous best)
 
 Stacks on top of full round-5 merged baseline: scale-inv loss + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25/eta_min_factor=0.10 + torch.compile + lr=1e-3 (PR #3666 stack). Pure optimizer-hyperparameter change: lr 1e-3 → 1.5e-3 on n_hidden=128. Arm A wins decisively on all 8 val/test cells. Arm B (lr=2e-3) regresses (val_avg 53.41) — not from epoch-1 instability (both arms had clean ~370 epoch-1 val, fully neutralised by compile + TF32), but from the late-schedule eta_min floor (2e-4) being too high to settle. The LR-vs-val_avg curve has an interior optimum at lr=1.5e-3 in the 32-epoch budget. Arm B already rebounding at epoch 32 (53.49 vs 53.41 at epoch 31), confirming the floor effect.
 
