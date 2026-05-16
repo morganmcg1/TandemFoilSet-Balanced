@@ -1,5 +1,24 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 14:05 — PR #3912: SwiGLU + attn_dropout p=0.1/0.2 (fern) — **CLOSED** (mixed signal vs current baseline)
+
+- **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/swiglu-attn-dropout`)
+- **Hypothesis:** Attention dropout on PhysicsAttention's `F.scaled_dot_product_attention(dropout_p=...)` regularizes slice-level attention; expected to compound with SwiGLU expressivity.
+- **Results vs current baseline #3905 (val=60.7195, test=51.9559):**
+
+| Arm | val | Δ val | test | Δ test |
+|---|---:|---:|---:|---:|
+| p=0.2 (`wkbrirr6`) | 60.3264 | **−0.65%** ✓ | 52.2454 | **+0.56%** ✗ |
+| p=0.1 (`dv80xt6p`) | 62.3096 | +2.62% | 53.3195 | +2.62% |
+
+**Per-split test (Arm 2 vs #3905):** single_in_dist −1.25%, geom_camber_rc **+2.55%**, geom_camber_cruise −0.42%, re_rand +0.96%, avg +0.56%. The camber-OOD split regressed materially.
+
+- **Why closed:** val gain (0.65%) doesn't justify test regress (0.56%), particularly geom_camber_rc test +2.55%. Student's analysis was rigorous but used the OLD SwiGLU baseline (#3814: val=64.24/test=55.55) for comparison; against the actual current baseline (#3905, which already captured the epochs=12 benefit) the signal is mixed.
+- **Strong cross-baseline learning:** monotone val improvement from p=0.0 → 0.1 → 0.2; best val at last epoch (12/12). The regularizer is paying its cost but hasn't yet collected its full benefit — needs longer training.
+- **Reassigned fern to attn_dropout=0.2 + epochs=14 (PR #4000)** — captures the still-descending headroom student observed. Will merge only if BOTH val AND test improve vs #3905.
+
+---
+
 ## 2026-05-16 13:30 — PR #3951: OneCycleLR + SwiGLU (thorfinn) — **CLOSED** (slight regress vs current baseline)
 
 - **Student:** willowpai2i48h4-thorfinn (branch: `willowpai2i48h4-thorfinn/swiglu-onecycle`)

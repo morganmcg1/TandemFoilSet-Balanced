@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~13:35 UTC
+- **Last updated:** 2026-05-16 ~14:05 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -64,13 +64,14 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#3835** | edward | asinh on MLP baseline | CLOSED 12:45 — val=76.74 beats OLD baseline; re-testing in #3972 | — |
 | **#3836** | nezuko | DSDF clip=2.5/2.0 | CLOSED 12:45 — both arms no-op; hypothesis dead | — |
 | **#3908** | alphonse | SwiGLU mlp_ratio=3/4 sweep | WIP — assigned 11:45 | awaiting |
-| **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | WIP — assigned 11:45 (on SwiGLU baseline) | awaiting |
+| **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | CLOSED 14:05 — val 60.33 (−0.65%) but test 52.25 (+0.56% regress); mixed signal | — |
 | **#3916** | tanjiro | SwiGLU gate output head (mlp2) | WIP — assigned 11:45 | awaiting |
 | **#3969** | askeladd | SwiGLU + epochs=14 | WIP — assigned 12:43 | awaiting |
 | **#3972** | edward | SwiGLU + asinh (scale=2.0/3.0) | WIP — assigned 13:20 | awaiting |
 | **#3974** | nezuko | Re-based curriculum learning | WIP — assigned 13:22 | awaiting |
 | **#3979** | frieren | SwiGLU + n_hidden=176 | WIP — assigned 13:28 (replaces #3857) | awaiting |
 | **#3981** | thorfinn | bf16 mixed-precision + extended epochs | WIP — assigned 13:33 (replaces #3951) | awaiting |
+| **#4000** | fern | attn_dropout=0.2 + epochs=14 (follow-up to #3912) | WIP — assigned 14:03 (extend training for regularizer benefit) | awaiting |
 
 ## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
 
