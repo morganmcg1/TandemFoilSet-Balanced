@@ -850,3 +850,65 @@ _New entries appended as each PR is reviewed._
 ## 2026-05-16 08:35 — Wave-8 additions
 
 - PR #3823 — charliepai2i48h5-nezuko: Lookahead optimizer wrapper {k=5 α=0.5, k=10 α=0.5} on LayerScale stack (Zhang et al. 2019; slow anchor weights with periodic pull-back — variance reduction in heavy-tail/high clip_frac regime; orthogonal to β2/eps changes; near-zero compute overhead)
+
+---
+
+## 2026-05-16 14:40 — PR #3527 (charliepai2i48h5-tanjiro): Mixed precision BF16 training — MERGED ★ NEW BEST
+
+- branch: `tanjiro/mixed-precision-bf16`
+- hypothesis: BF16 autocast forward buys extra epochs in 30-min budget via 1.30× speedup + −21% memory
+- results:
+
+| Arm | Config | epochs | val | test | vs baseline |
+|---|---|---|---|---|---|
+| arm-1 (BF16+LS+n10) | BF16+LS+n_freqs=10 | 17 | **67.19** | **58.05** | **-5.6%/-7.4%** |
+| arm-2 (BF16+LS+n14) | BF16+LS+n_freqs=14 | 17 | 67.00 | 59.31 | marginally worse |
+| quad (BF16+LS+n14+EMA) | BF16+LS+n14+EMA 0.998 | 15 | 68.50 | 60.15 | beats old but not arm-1 |
+
+- metric artifacts: `models/model-bf16-layerscale-fullstack-20260516-082748/metrics.jsonl`
+- **NEW BEST: arm-1 val=67.19/test=58.05 — uniform improvement across all 4 test splits**
+- Key findings:
+  - BF16 1.30× speedup → 17 epochs vs 12 (FP32)
+  - At 17-epoch horizon, n10 BEATS n14: aliasing advantage dominates at convergence
+  - EMA+n14 quad at 68.50/60.15: better than old baseline but worse than n10 alone
+  - EMA overhead ~9%/epoch (121s vs 111s) costs ~2 epochs; at 17-epoch horizon the tradeoff is net negative
+  - BF16: no GradScaler needed; only forward in BF16, Huber + optimizer in FP32
+  - LayerScale γ dynamics unaffected; per-split improvement uniform (cruise -14.5%, re_rand -9.4%)
+
+---
+
+## 2026-05-16 14:45 — PR #3784 (charliepai2i48h5-thorfinn): Peak LR sweep {7e-4, 1e-3} — CLOSED
+
+- branch: `charliepai2i48h5-thorfinn/lr-sweep-on-layerscale`
+- hypothesis: higher LR might help LayerScale stack escape local minima
+- results: arm-1 (7e-4): val=75.37/test=65.39; arm-2 (1e-3): val=72.06/test=62.18
+- both worse than old baseline 71.20; both far from new best 67.19
+- Key findings: clip_frac=1.0 throughout — LR can't manifest because clip=0.25 caps every step. Ran on FP32 triple (now superseded). arm-2 descends faster per epoch but can't beat baseline before timeout.
+
+---
+
+## 2026-05-16 14:45 — PR #3883 (charliepai2i48h5-fern): T_max schedule sweep {12, 25} — CLOSED
+
+- branch: `charliepai2i48h5-fern/tmax-sweep`
+- hypothesis: T_max=12 (aligned to budget) or T_max=25 (slower decay) might improve convergence
+- results: arm-1 (T_max=12): val=79.26/test=70.76 (+11.3%); arm-2 (T_max=25): val=75.94/test=66.29 (+6.7%)
+- Key findings: T_max=12 worst — pre-converges to suboptimal basin (LR hits ~0 at ep12, then flat). T_max=20 confirmed optimal. arm-2 still descending at timeout (Δ4.6/epoch). T_max=20 is ~85% cycle at 17 epochs (BF16) — still well-calibrated; no re-sweep needed on new stack.
+
+---
+
+## 2026-05-16 14:46 — PR #3909 (charliepai2i48h5-frieren): Learnable Fourier frequencies — CLOSED
+
+- branch: `charliepai2i48h5-frieren/learnable-fourier-freqs`
+- hypothesis: making Fourier freqs nn.Parameter lets gradient descent find optimal freq basis
+- results: arm-1 default LR: val=73.20/test=64.21; arm-2 lr10x: val=75.62/test=65.69; replication: val=74.14/test=65.11
+- Key findings: frequencies barely migrate — only k=0,1,2 shift >2%; k≥3 essentially frozen by clip=0.25. nn.Parameter overhead costs ~2 epochs (12 vs 14 effective). Log-spaced init is near a fixed point for this architecture. Dead end.
+
+---
+
+## 2026-05-16 14:46 — PR #3941 (charliepai2i48h5-nezuko): AdamW WD sweep {3e-5, 3e-4} — CLOSED
+
+- branch: `charliepai2i48h5-nezuko/adamw-wd-sweep`
+- hypothesis: WD=1e-4 may not be optimal on LayerScale+EMA stack
+- results: arm-1 (3e-5): val=73.22/test=64.25; arm-2 (3e-4): val=75.66/test=66.35
+- Key findings: WD=1e-4 is optimal. Lighter WD closer to baseline than heavier (asymmetric). Model is regularization-constrained — clip+LS already regularize; increasing WD forces larger γ_mlp as compensation (counterintuitive). WD range {3e-5 to 3e-4} falsified.
+

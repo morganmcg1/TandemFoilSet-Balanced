@@ -1,16 +1,16 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 13:58
+- **Date:** 2026-05-16 14:55
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
 ## Current best
 
-- **PR #3192 (edward, merged):** LayerScale γ=0.01 + n_freqs=14 + EMA 0.998 + Huber-0.3 + T_max=20 + clip=0.25
-- **val_avg/mae_surf_p: 71.20** | **test_avg/mae_surf_p: 62.71**
-- Per-split test surf_p: single=71.22, rc=72.24, cruise=45.19, re_rand=62.19
-- **Cumulative improvement: -44.7% val from round-5 start (~128.69)**
-- Key insight: EMA checkpoint averaging bridges the under-convergence of the LayerScale+n_freqs=14 compound. Without EMA, that compound fails (alphonse #3730 confirmed: val=75.76-76.49). With EMA, it beats baseline.
+- **PR #3527 (tanjiro, merged):** BF16 + LayerScale γ=0.01 + n_freqs=10 (no EMA)
+- **val_avg/mae_surf_p: 67.19** | **test_avg/mae_surf_p: 58.05**
+- Per-split test surf_p: single=67.42, rc=69.79, cruise=38.66, re_rand=56.35
+- **Cumulative improvement: -47.8% val from round-5 start (~128.69)**
+- Key insight: BF16 buys 17 epochs vs 12 (FP32). At 17 epochs, n_freqs=10 BEATS n_freqs=14 — fewer aliased Fourier components outperforms at convergence. EMA+n14 (quad-compound) also beats old baseline at 68.50/60.15 but is weaker than n10 alone — EMA costs ~2 epochs overhead and n14 over-fits at the extended horizon.
 
 ## Improvement history
 
@@ -24,88 +24,77 @@
 | #3529 (frieren, merged) | clip=0.25→1.0 on full stack | 84.01 | 72.95 | -0.7% |
 | #3438 (nezuko, merged) | n_freqs=14 on full stack | 81.08 | 71.52 | -3.5% |
 | #3593 (alphonse, merged) | LayerScale γ-init=0.01 on full stack | 72.77 | 65.12 | -10.2% |
-| **#3192 (edward, merged)** | **LayerScale + n_freqs=14 + EMA 0.998** | **71.20** | **62.71** | **-2.16%** |
+| #3192 (edward, merged) | LayerScale + n_freqs=14 + EMA 0.998 | 71.20 | 62.71 | -2.16% |
+| **#3527 (tanjiro, merged)** | **BF16 + LayerScale + n_freqs=10** | **67.19** | **58.05** | **-5.6%** |
 
 ## Active WIP
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} | NEW (wave-10) |
-| alphonse | #3964 | LayerScale γ-init sweep {0.005, 0.02} on triple compound | NEW (wave-10) |
-| fern | #3883 | T_max schedule sweep {12, 25} on triple compound | wave-9 |
-| frieren | #3909 | Learnable Fourier frequencies on triple compound | NEW (wave-9) |
-| tanjiro | #3527 | BF16 + LS + n14 + EMA quad compound | SENT BACK (BF16+LS+n10 already at val=67.19/test=58.05; needs EMA arm + rebase) |
-| nezuko | #3941 | AdamW weight_decay sweep {3e-5, 3e-4} on triple compound | NEW (wave-9) |
-| thorfinn | #3784 | Peak LR sweep {7e-4, 1e-3} on LayerScale stack | wave-8 — stale; pinged |
-| askeladd | #3983 | Huber δ sweep {0.15, 0.5} on triple compound | NEW (wave-10) |
+| edward | #3971 | EMA warm-up ramping {0.9→0.998 @100, 0.9→0.9995 @200} on FP32 triple | wave-10 WIP |
+| alphonse | #3964 | LayerScale γ-init sweep {0.005, 0.02} on FP32 triple compound | wave-10 WIP |
+| askeladd | #3983 | Huber δ sweep {0.15, 0.5} on FP32 triple compound | wave-10 WIP |
+| tanjiro | #4005 | BF16+LS+n10+EMA 0.998 — missing cell | wave-11 NEW |
+| fern | #4006 | n_freqs sweep {8, 12} on BF16+LS stack | wave-11 NEW |
+| frieren | #4007 | Width scaling: n_hidden=144 on BF16+LS+n10 | wave-11 NEW |
+| thorfinn | #4008 | surf_weight sweep {5.0, 20.0} on BF16+LS+n10 | wave-11 NEW |
+| nezuko | #4009 | Gradient clip sweep {0.5, 1.0} on BF16+LS+n10 | wave-11 NEW |
 
 ## Closed this round
 
 | PR | Reason |
 |---|---|
-| #3225 (tanjiro) | Multiscale (32+128) too slow: only 8ep in budget |
-| #3178 (alphonse) | Per-sample scale + Huber anti-synergistic |
-| #3334 (tanjiro) | n_hidden=192: 5× per-epoch slowdown, only 9ep |
-| #3355 (alphonse) | Physics features: MLP synthesizes implicitly |
-| #3199 (fern) | Dualhead redundant with Huber loss |
-| #3420 (alphonse) | Log-space loss: anti-aligned with MAE |
-| #3419 (tanjiro) | n_hidden=160: 4.6× per-epoch slowdown, only 10-11ep |
-| #3509 (alphonse) | DropPath: underfit regime, 5-block net, convergence-speed penalty |
-| #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests |
-| #3439 (fern) | RFF σ∈{1,3,5,7} all worse than log-spaced; σ=3 best at val=85.25 |
-| #3650 (nezuko) | clip=1.0 at n_freqs≥14 removes regularization; n=18+clip=1.0 bad |
-| #3648 (frieren) | LR warmup: start_factor=1e-6 kills epoch 1 in timeout-bound regime |
-| #3708 (fern) | AdamW β2 sweep falsified: both 0.99/0.95 much worse; default β2=0.999 optimal |
-| #3682 (thorfinn) | LR sweep on wrong stack (n14+clip=1.0 vs current LayerScale best) |
-| #3732 (nezuko) | Fourier saturated at n=14: n=18/n=20 both worse |
-| #3730 (alphonse) | LayerScale+n14 compound sub-additive WITHOUT EMA; superseded by #3192 |
-| #3782 (fern) | AdamW eps sweep falsified: both 1e-6/1e-7 worse; default 1e-8 optimal |
-| #3740 (frieren) | Asymmetric LayerScale γ-init: both arms regress; γ converges to natural asymmetry regardless of init |
-| #3823 (nezuko) | Lookahead optimizer: both k=5/k=10 ~15-21% worse; slow-anchor averaging disrupts LayerScale γ trajectory |
-| #3882 (alphonse) | SAM optimizer ρ=0.05: structural failure under 30-min budget; 2× overhead halves epochs, no flat-min benefit overcomes |
-| #3878 (edward) | EMA decay sweep {0.995, 0.999}: both worse than 0.998; 0.999 EMA doesn't "open" in 12-epoch budget — needs warm-up |
-| #3424 (askeladd) | clip=0.1 × Huber δ both arms regress 5%; LayerScale already gates gradients, tighter clip starves optimizer |
+| #3424 (askeladd) | clip=0.1 × Huber δ both arms regress 5%; LayerScale already gates gradients |
+| #3878 (edward) | EMA decay sweep {0.995, 0.999}: both worse than 0.998 |
+| #3882 (alphonse) | SAM ρ=0.05: 2× overhead halves epochs; no flat-min benefit |
+| #3823 (nezuko) | Lookahead: both k=5/k=10 ~15-21% worse; disrupts LayerScale γ |
+| #3740 (frieren) | Asymmetric LayerScale γ-init: γ converges naturally regardless of init |
+| #3730 (alphonse) | LayerScale+n14 sub-additive WITHOUT EMA |
+| #3782 (fern) | AdamW eps sweep falsified; default 1e-8 optimal |
+| #3784 (thorfinn) | LR sweep on FP32 triple: clip_frac=1.0 throughout; superseded by BF16 |
+| #3883 (fern) | T_max sweep: T_max=12 worst, T_max=20 optimal |
+| #3909 (frieren) | Learnable Fourier: frequencies barely migrate; overhead costs ~2 epochs |
+| #3941 (nezuko) | WD sweep {3e-5, 3e-4} both worse; WD=1e-4 confirmed optimal |
 
 ## Current research themes
 
-1. **BF16 quad compound (tanjiro #3527) — HIGHEST PRIORITY**: arm-1 of original BF16 run (BF16+LS+n10, no EMA) at 17 epochs already hits val=67.19/test=58.05 — beats current best (71.20/62.71) by -7.4% test. Sent back to rebase + run BF16+LS+n14+EMA quad compound. Even arm-2 (BF16+LS+n14, no EMA, 16 epochs) hit val=67.00/test=59.31. BF16's extra epochs are extremely valuable; the quad compound should land sub-60 val if it composes.
+### BF16 regime shift (wave-11 — all new assignments target BF16+LS+n10)
 
-2. **LayerScale γ-init sweep (alphonse #3964) — wave-10 NEW**: γ=0.01 won on n=10 stack; with n_freqs=14 (richer input) + EMA (averages γ-trajectory) the optimal may have shifted. Testing γ ∈ {0.005, 0.02} narrow bracket on triple compound.
+Key insight: **BF16 extended convergence horizon changes optimal hyperparameters**. At 12 epochs (FP32), n14>n10 and EMA helps. At 17 epochs (BF16), n10>n14 and EMA costs more than it gains. All sweepable hyperparameters need re-evaluation on the new BF16+LS+n10 stack.
 
-3. **EMA warm-up ramping (edward #3971) — wave-10 NEW**: edward's own follow-up — static 0.999 decay couldn't "open" in 12-epoch budget. Warm-up ramps decay 0.9→target over first N steps to unlock the deeper-averaging regime. arm-1: 0.9→0.998 @100 steps (validates warm-up doesn't hurt). arm-2: 0.9→0.9995 @200 steps (unlocks 0.9995 regime).
+1. **Missing cell — tanjiro #4005**: BF16+LS+n10+EMA 0.998. Does EMA help or hurt n10 at 17 epochs? EMA's half-life is 41% of training — potentially meaningful. One arm, cheap, decisive.
 
-4. **T_max schedule sweep (fern #3883) — wave-9**: Current T_max=20 with ~12 effective epochs means cosine only completes 60-70% of its cycle. T_max=12 (aligned to budget) vs T_max=25 (slower decay).
+2. **n_freqs on BF16+LS — fern #4006**: n=8 and n=12. Aliasing regime reversed: n10>n14 at 17 epochs. Does n=8 win? n=12 interpolates.
 
-5. **Learnable Fourier frequencies (frieren #3909) — wave-9 NEW**: Fixed log-spaced Fourier saturated at n=14; making frequencies a learnable nn.Parameter lets gradient descent reshape the basis. Two arms: default LR vs 10× LR multiplier on freq params. Diagnostic: log initial vs final freq values to confirm/falsify whether they migrate.
+3. **Width scaling — frieren #4007**: n_hidden=144 with BF16+LS+n10. BF16's −21% memory opens wider models. LayerScale's γ gating lets model stay sparse if extra width isn't needed. Expected ~14 epochs.
 
-6. **Weight decay sweep (nezuko #3941) — wave-9 NEW**: Last untested AdamW hyperparameter. With LayerScale+EMA providing implicit regularization, the optimal WD may have shifted from 1e-4. Testing {3e-5, 3e-4} on triple compound.
+4. **surf_weight sweep — thorfinn #4008**: surf_weight={5.0, 20.0} vs default 10.0. **Never tested in this programme.** Direct control over surface vs volume loss weighting.
 
-7. **Peak LR sweep on triple compound (thorfinn #3784)**: lr=1e-3 survived on n14+clip=1.0 stack. Retesting on triple compound; pinged.
+5. **Clip sweep — nezuko #4009**: clip={0.5, 1.0} vs 0.25. clip_frac=1.0 throughout all runs. LayerScale provides implicit gating; maybe clip=0.25 is double-regularizing. Prior clip=1.0 test (PR #3529) was pre-LayerScale.
 
-8. **Huber δ sweep (askeladd #3983) — wave-10 NEW**: PR #3424 side-finding showed δ=0.1 beat δ=0.3 under tight clip. Testing δ ∈ {0.15, 0.5} at standard clip=0.25 on triple compound — does the optimal δ shift on the new stack? Smaller δ may compose with LayerScale+EMA regularization.
+### Old FP32 triple stack (wave-10, completing)
+
+Edward, alphonse, askeladd still running on FP32 triple. Results informative — EMA warm-up and Huber δ findings will inform wave-12+ planning.
 
 ## Key insights accumulated
 
-- **Triple compound confirmed**: LayerScale + n_freqs=14 + EMA 0.998 → val=71.20 (-44.7% from round-5 start)
-- **BF16 epochs are the most valuable lever**: BF16+LS+n10 at 17 epochs beats LS+n14+EMA at 12 epochs by -7.4% test (PR #3527 arm-1: val=67.19/test=58.05). Implication: any technique that gives more epochs in budget compounds with everything else.
-- **EMA enables under-converged compounds**: Without EMA, n14+LayerScale fails (-4-5% regression). EMA checkpoint averaging bridges the ~12-epoch convergence gap.
-- **LayerScale γ converges to natural asymmetry regardless of init**: Asymmetric γ_attn=0.001/γ_mlp=0.03 init (PR #3740) converges to same resting values as symmetric γ=0.01 (γ_attn ~0.007-0.017, γ_mlp ~0.030-0.052). Manual init steering provides no benefit.
-- **Fourier scaling SATURATED at n=14**: n=18/n=20 both regress. n=14 is the sweet spot at fixed log-spaced freqs.
-- **AdamW + inner-optimizer modification family exhausted**: β2<0.999 harmful (PR #3708), eps>1e-8 harmful (PR #3782), Lookahead wrapper harmful (PR #3823). Inner-optimizer state is well-tuned given grad_clip=0.25; only WD (PR #3941 in flight) remains untested.
-- **LayerScale γ=0.01 is the biggest single win**: -10.2% val from per-channel selective residual gating.
-- **clip=0.25 is regularization at n_freqs≥14**: Always use clip=0.25 when n_freqs≥12.
-- **EMA 0.998 sweet spot for ~600-step runs**: Half-life ~350 steps = 58% of training budget.
+- **BF16 regime shift**: n_freqs=10 > n_freqs=14 at 17 epochs. Everything from FP32 triple needs re-evaluation on BF16+LS+n10.
+- **clip=0.25 is 100% saturated**: Every step is clipped. Effective LR = clip × grad direction. clip sweep is high priority on new stack.
+- **T_max=20 confirmed optimal** for 12-17 epoch runs. T_max=12 traps in suboptimal basin. No re-sweep needed.
+- **surf_weight=10.0 never swept**: Only major hyperparameter unexplored. High priority.
+- **AdamW fully confirmed**: β2=0.999, eps=1e-8, WD=1e-4 all optimal. Inner-optimizer exhausted.
+- **Learnable Fourier dead**: Frequencies don't migrate; overhead too costly.
+- **LayerScale γ=0.01 biggest single win**: −10.2% val from per-channel residual gating.
+- **EMA at 12 epochs helps; at 17 epochs (BF16), its cost (~2 epochs) exceeds benefit on n10 stack.**
 
 ## Potential next research directions
 
-- **EMA decay ∈ {0.995, 0.999}** — bracket the winning 0.998 (edward #3878 now testing)
-- **SAM ρ=0.05** — flat minima for OOD generalization (alphonse #3882 now testing)
-- **T_max ∈ {12, 25}** — schedule aligned to budget (fern #3883 now testing)
-- **BF16 + triple compound** — quad compound toward sub-60 val (tanjiro #3527)
-- **Asymmetric LayerScale + EMA** — upgrade frieren's test to full triple compound
-- **LayerScale γ-init ∈ {0.003, 0.005}** on triple compound — even smaller init
-- **Learned frequency basis** — fixed log-spaced Fourier saturated; try learnable/adaptive freqs
-- **Sub-60 target**: LayerScale + n14 + EMA + BF16 quad compound if BF16 confirmed composable
+- **n_layers depth scaling** — no current flag; requires train.py modification; BF16 memory headroom makes viable
+- **Batch size 8** — BF16 memory freed; better gradient estimates
+- **n_freqs=6** — if n=8 wins on fern's sweep, continue the aliasing trend lower
+- **n_hidden=160** — if frieren's n=144 shows width helps, scale further
+- **Huber δ on new BF16 stack** — askeladd's FP32 result will inform whether to re-test
+- **Sub-60 target**: val=67.19 now; missing cell + width scaling could push to 63-65
 
 ## Ideas dossier
 - Full hypothesis catalogue: `research/RESEARCH_IDEAS_2026-05-15.md` (13 ranked entries)
