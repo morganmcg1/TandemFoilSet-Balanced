@@ -561,6 +561,7 @@ for epoch in range(MAX_EPOCHS):
         "train/ema_lag": ema_lag,
         "train/ema_lag_rel": ema_lag_rel,
         "train/model_param_norm": model_norm,
+        "train/param_norm_l2": model_norm,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
