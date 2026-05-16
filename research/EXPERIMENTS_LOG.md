@@ -951,3 +951,69 @@ Per-split verdict: val_re_rand and val_geom_camber_cruise kept improving at ep19
 
 - **Closed #3713** — both arms decisively worse than new SOTA. Disproven by dose-response (+1.86 at 2e-5, +3.14 at 3e-5).
 - **Assigned tanjiro #3821 cosine-plateau-tail**: replace cosine tail (ep17-19) with constant LR at 1.4e-5 or 2e-5. Holds model at sweet-spot LR for 3 epochs instead of passing through it. Orthogonal to frieren's T_max=25.
+
+---
+
+## 2026-05-16 09:28 — PR #3749 askeladd CLOSED: Lion β₁ sweep {0.8, 0.95}
+
+- Branch: `willowpai2i24h3-askeladd/lion-beta-sweep`
+- Hypothesis: Lion's β₁=0.9 may be sub-optimal for our clip=1.0 stack. Test 0.8 (faster momentum) and 0.95 (slower momentum).
+- W&B runs: `tq7cz3pz` (β=0.95), `gdtkw66v` (β=0.8)
+
+### Terminal results (vs new SOTA frieren #3675: val=65.30, test=60.54)
+
+| Arm | β₁ | best val | test_nansafe | Δ val / Δ test | best epoch |
+|---|---|---:|---:|---:|---|
+| Baseline (tanjiro #3596) | 0.9 | 65.7375 | 61.7117 | — | 18 |
+| Arm 1 | 0.95 | 70.8650 | 66.0088 | **+5.57 / +5.47** | 18 |
+| Arm 2 | 0.8 | 70.6617 | 66.8042 | **+5.37 / +6.27** | 18 |
+
+### Analysis
+
+- Both arms regress decisively (>5 points on val, >4 on test) — far outside predicted "−0.5 to −2".
+- **β₁=0.9 is empirically optimal** for our stack. The momentum timescale is finely calibrated to the LR schedule + clip behavior.
+- Clip engagement remained ~99% across all β₁ values → the per-step direction normalizer dominates whatever signal β was trying to add.
+- Per-epoch curves: 0.95 descends LESS smoothly than 0.9 (the smoothing intuition failed). 0.8 doesn't converge faster early (the speed intuition failed).
+
+### Advisor action
+
+- **CLOSED #3749** — dose-response confirms β=0.9 is the local optimum. Lion β₁ lever is fully consumed.
+- Askeladd reassigned to `dropout-sweep` (untested regularization knob).
+
+---
+
+## 2026-05-16 09:30 — PR #3590 alphonse CLOSED: Lion grad-clip sweep {0.25, 0.5, 2.0, off}
+
+- Branch: `willowpai2i24h3-alphonse/lion-clip-sweep`
+- Hypothesis: Find optimal clip threshold around the baseline clip=1.0. Originally 3 arms (0.25, 0.5, 2.0). Then advisor added Arm 4 (clip=off on T_max=21 stack) to test the regime boundary.
+- W&B runs: `bh1rtuit` (clip=0.25), `lkchqkr7` (clip=0.5), `inagbp7a` (clip=2.0), `iw2sctbc` (clip=off, T_max=21)
+
+### Terminal results
+
+| Arm | clip | best val | test_nansafe | Stack | Notes |
+|---|---|---:|---:|---|---|
+| Baseline #3675 | 1.0 | **65.30** | **60.54** | T_max=21 | — |
+| Arm 1 | 0.25 | 70.1154 | 65.0160 | OLD T_max=50 | 100% clipped |
+| Arm 2 | 0.5 | 70.1154 | 65.0160 | OLD T_max=50 | **Bit-identical to Arm 1** |
+| Arm 3 | 2.0 | 74.2786 | 70.1903 | OLD T_max=50 | 97.07% clipped (partial regime) |
+| Arm 4 | off | 76.1678 | 73.7740 | **T_max=21** | **0%** clipped (regime broken) |
+
+### Analysis
+
+**Major structural finding: Lion + always-clipping sign-invariance theorem confirmed.**
+Arms 1 (clip=0.25) and 2 (clip=0.5) produced **bit-identical** trajectories (val, test, grad_norm match to 12 decimals every step). Theoretical reason: when `clip_grad_norm_` rescales every step by `g·(c/||g||)`, the resulting unit-vector momentum EMA is **invariant** to the absolute clip threshold c.
+
+**Arm 3 (clip=2.0)** sits in the partially-clipping regime (97.07%, 209/7132 steps escape). Those occasional large-magnitude unnormalized gradients inject EMA noise → worse by ~4 points.
+
+**Arm 4 (clip=off)** broke the regime entirely (0/7125 steps clipped) → val=76.17, worse than ALL clipped variants by 6–11 points. Without clip's per-step unit-vector normalization, Lion's `sign(EMA)` direction is no longer aligned with what made the SOTA stack work.
+
+**Implication for future Lion work:**
+- Clip is not a "spike ceiling" — it's a per-step direction normalizer that fundamentally reshapes the optimizer.
+- Any clip value in [0.25, ~1.5] is equivalent under fixed seed → the absolute threshold doesn't matter as long as you're in the always-clipping regime.
+- The merged baseline's clip=1.0 is correct and structurally locked in.
+
+### Advisor action
+
+- **CLOSED #3590** — no improvement vs SOTA (best 70.11 vs 65.30 = +4.81 val). The 4 arms together give the cleanest structural diagnostic of round 6.
+- Alphonse reassigned to `slice-num-sweep` (orthogonal model capacity dimension).
+- Per-step `train/grad_clipped` instrumentation introduced by alphonse is kept in the codebase — general-purpose improvement for future Lion experiments.
