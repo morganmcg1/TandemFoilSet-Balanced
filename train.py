@@ -394,6 +394,9 @@ def write_experiment_summary(
         "surf_p_l1_weight": cfg.surf_p_l1_weight,
         "epochs_configured": cfg.epochs,
         "ema_decay": EMA_DECAY,
+        "use_sema": cfg.use_sema,
+        "sema_freq": cfg.sema_freq,
+        "sema_warmup_epochs": cfg.sema_warmup_epochs,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -447,6 +450,12 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # SEMA (Switch EMA, Kaddour et al. 2024): periodically copy EMA shadow
+    # weights back into the live model so subsequent gradient steps depart from
+    # the smoothed flat-minimum region rather than the rough live iterate.
+    use_sema: bool = False
+    sema_freq: int = 1  # copy every Nth epoch when active
+    sema_warmup_epochs: int = 5  # delay copies until the model has found a basin
 
 
 cfg = sp.parse(Config)
@@ -614,6 +623,14 @@ for epoch in range(MAX_EPOCHS):
         torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
+    # SEMA: copy EMA weights back into live model so the next epoch starts from
+    # the smoothed flat-minimum region. Optimizer state (momenta) is preserved.
+    sema_applied = False
+    if cfg.use_sema and epoch >= cfg.sema_warmup_epochs:
+        if epoch % cfg.sema_freq == 0:
+            model.load_state_dict(ema_model.state_dict())
+            sema_applied = True
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -628,13 +645,15 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "sema_applied": sema_applied,
     })
+    sema_tag = "  [SEMA copy]" if sema_applied else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
         f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{sema_tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
