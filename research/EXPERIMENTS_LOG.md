@@ -1449,3 +1449,37 @@ After closing H57/H51/H56/H54 (LR ceiling, clip, surf_weight levers all exhauste
 **H63 (DropPath):** Stochastic depth regularization for OOD generalization. Linear schedule per layer (deeper layers see higher drop_prob). Predicted to help camber_rc and re_rand OOD splits more than in_dist. Requires implementing `DropPath` class and `--drop_path` flag.
 
 **H64 (Huber δ_p):** Re-tune Huber loss shape for the improved GEGLU baseline. H25's δ_p=0.25 was tuned at val=83.81 with a heavy error tail. At val=58.63 with GEGLU's spatial selectivity, the error distribution is different — may benefit from more aggressive L1 (δ_p=0.1) or less aggressive L2 (δ_p=0.5). No code changes needed.
+
+---
+
+## 2026-05-16 15:30 — PR #3899: H55 Mixup data augmentation (tanjiro) — CLOSED, decisive negative
+
+- Branch: `charliepai2i48h3-tanjiro/h55-mixup`
+- Hypothesis: Mixup with α∈{0.2, 0.4} regularizes training by interpolating raw inputs and targets between sample pairs.
+
+| Arm | val_avg/mae_surf_p | Δ vs H39 Arm C (63.44) | Δ vs H48 GEGLU (58.63) | test 3-split |
+|-----|--------------------|------------------------|------------------------|-------------|
+| Arm A (α=0.2) | 78.9548 | +15.52 | +20.33 | 75.6663 |
+| Arm B (α=0.4) | 88.1268 | +24.69 | +29.50 | 86.4545 |
+
+**Analysis:** Both arms regressed strongly and uniformly across all splits — including OOD splits Mixup was predicted to help (val_geom_camber_rc +22.3, val_re_rand +14.3).
+
+**Mechanism (decisive):** Two failure modes compound, both flagged in the original hypothesis:
+
+1. **PDE nonlinearity.** Mixup enforces local linearity of the model f(x), which is the wrong inductive bias for Navier–Stokes solutions. Velocity and pressure fields are highly nonlinear in geometry and Reynolds number; linear input interpolation creates fictitious physics problems.
+
+2. **Mesh-identity corruption.** The 24-D node feature vector entangles three categories: per-node geometric descriptors (dims 0-11), surface flag (dim 12), and sample-level conditioning (dims 13-23). Only the third interpolates sensibly. Mixing per-node position/distance features creates fictitious node positions; mixing the boolean surface flag creates inconsistent surface/volume signals between input and target.
+
+The student's dual-loss implementation (mathematically equivalent to mixed-target for MSE, slight deviation for L1/Huber) is principled and would not load-bear on a 15+ pt regression.
+
+**Status: CLOSED — Mixup is the wrong inductive bias for PDE-driven CFD surrogates. The Mixup lever is exhausted for this dataset.**
+
+---
+
+## 2026-05-16 15:30 — R5 cycle 11 new assignment (1 idle student)
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#3997** | tanjiro | **H65: EMA weight averaging (0.999, 0.9999)** | ~57.5-58.5 |
+
+**H65 (EMA):** Maintain exponential moving average of model weights during training; evaluate using EMA weights. The most-cited "free improvement" in modern deep learning (Polyak 1991, Izmailov et al. 2018 SWA). Finds flatter loss-landscape regions which generalize better — especially helpful for OOD splits. H2 (edward, R1) tested EMA at the original baseline (val=114.6), result wasn't transformative because baseline was too noisy. Worth revisiting at the tighter GEGLU baseline. Arms: ema_decay=0.999 (standard) and 0.9999 (slow, may undertrain in 15-epoch budget).

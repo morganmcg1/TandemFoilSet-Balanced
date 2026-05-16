@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 14:45
+- **Date**: 2026-05-16 15:30
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
 - **Round**: 5 active — GEGLU architecture breakthrough; architectural lever exploration phase
 - **Most recent human research directive**: None received
@@ -48,13 +48,15 @@ Test 3-split avg (excl. cruise NaN bug): **56.6976** — largest OOD gains in th
 | **#3965** | edward | **H58: Lion + GEGLU** (mega-stack) | **CRITICAL** | ~52-55 |
 | **#3966** | fern | **H59: RMSNorm in GEGLU Transolver** | HIGH | ~57-58 |
 | **#3968** | thorfinn | **H60: GEGLU + n_layers (4 vs 6)** | HIGH | ~57-58 |
-| **#3899** | tanjiro | H55: Mixup (α=0.2, 0.4) | HIGH | Beats 58.63 if orthogonal |
 | **#3988** | alphonse | H61: GEGLU + LR down (7e-4, 5e-4) | HIGH | ~57.5-58.5 |
 | **#3990** | askeladd | H62: GEGLU + mlp_ratio (3, 4) | HIGH | ~57-58 |
 | **#3991** | frieren | H63: DropPath (0.05, 0.10) | MEDIUM | ~57-58 |
 | **#3992** | nezuko | H64: Huber δ_p retune (0.1, 0.5) | MEDIUM | ~57.5-58.5 |
+| **#3997** | tanjiro | H65: EMA weight averaging (0.999, 0.9999) | MEDIUM | ~57.5-58.5 |
 
 All 8 students active. Zero idle.
+
+**H55 (Mixup) closed:** Both arms regressed +15.5 / +24.7 pts. PDE nonlinearity + mesh-identity feature corruption make raw-input Mixup the wrong inductive bias for CFD surrogates. Mixup lever exhausted for this dataset.
 
 ## Lever Status
 
@@ -74,7 +76,8 @@ All 8 students active. Zero idle.
 | Optimizer | 🔬 H58 testing | AdamW | Lion wins at H37b base by 5.8 pts |
 | Normalization | 🔬 H59 testing | LayerNorm | RMSNorm may benefit GEGLU gate |
 | DropPath | 🔬 H63 testing | 0.0 | Novel for this arch/size |
-| Mixup augmentation | 🔬 H55 testing | None | Cross-sample mixing for OOD |
+| Mixup augmentation | ✅ Closed negative (H55) | None | Wrong inductive bias for PDE/CFD: +15-25 pt regression both arms |
+| EMA weight averaging | 🔬 H65 testing | None | Polyak/SWA — flatter minima for OOD |
 | β₁ (Adam momentum) | ✅ Locked at 0.9 | H44 | 0.8 isolated win doesn't stack |
 | wd | ✅ Locked at 5e-5 | H38 | LR-normalized |
 
@@ -87,7 +90,8 @@ All 8 students active. Zero idle.
 5. **Does depth become a fresh lever in GEGLU?** H60 thorfinn (#3968). n_layers=3 failed at vanilla FFN base; GEGLU's stronger per-layer capacity may change optimal depth.
 6. **Does DropPath help OOD?** H63 frieren (#3991). Strong mechanistic motivation for generalization across geom/Re distributions.
 7. **Does Huber δ_p need re-tuning?** H64 nezuko (#3992). H25 optimized at val=83.81; error distribution is radically different at val=58.63.
-8. **What's next below 55?**:
+8. **Does EMA weight averaging help OOD?** H65 tanjiro (#3997). Polyak averaging finds flatter minima — should help most where the model is least confident (OOD splits).
+9. **What's next below 55?**:
    - GEGLU + Lion + optimal LR (if H58 + H61 both win)
    - GEGLU + RMSNorm + wider mlp (if H59 + H62 win)
    - GEGLU + deeper network + Lion (if H60 + H58 win)
