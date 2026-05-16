@@ -1,5 +1,28 @@
 # SENPAI Research Results
 
+## 2026-05-16 04:50 — Round 4 first reviews + 2 new assignments
+
+3 review-ready PRs (frieren #3622 final_div, thorfinn #3614 max_lr=2e-3, tanjiro #3360 clip=0.5 retest) — all regress vs 81.66. Closed 2, sent back 1 for midpoint retest.
+
+| PR | Student | Hypothesis | Best val_avg | 3-arm mean | Δ vs 81.66 | Decision |
+|---|---|---|---|---|---|---|
+| #3622 | frieren | final_div_factor ∈ {1e3, 1e5} | 83.28 (arm1) | 83.39 (2-arm) | +1.73 pp (+2.12%) | **CLOSED** — locks final_div_factor=1e4 |
+| #3614 | thorfinn | max_lr=2e-3 | 81.50 (arm1) | 82.77 | +1.11 pp (+1.35%) on val, but **−0.49 pp on test 3-split** | **SENT BACK** — retest at midpoint 1.5e-3 |
+| #3360 | tanjiro | grad_clip max_norm=0.5 retest | 82.23 | 83.24 | +1.58 pp (+1.94%) | **CLOSED** — schedule subsumes clip-strength |
+
+**Thorfinn #3614 nuance:** the val_avg regresses on the mean, but test_3split-excl-cruise BEATS baseline (−0.49 pp on mean, arm1 test=77.52 vs baseline best 77.97). Higher LR has a real but ambiguous effect — sent back for max_lr=1.5e-3 to map the curve.
+
+**New round-4 assignments:**
+
+| PR | Student | New experiment |
+|---|---|---|
+| #3696 | frieren | OneCycleLR max_lr=5e-4 (low end of LR sensitivity sweep — pairs with thorfinn at 1.5e-3) |
+| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) optimizer wrapper |
+
+LR sensitivity sweep coverage: {0.5, 1.0, 1.5, 2.0}e-3 across baseline + thorfinn #3614 + frieren #3696.
+
+---
+
 ## 2026-05-16 02:35 — Round 4 portfolio (7 assignments)
 
 All 7 idle students assigned simultaneously to round-4 hypotheses on the OneCycleLR + L1 baseline (81.66). Tanjiro #3360 retest in flight (from round-3 send-back).

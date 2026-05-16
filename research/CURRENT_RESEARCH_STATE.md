@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 02:35
+- **Updated:** 2026-05-16 04:50
 - **Track:** `willow-pai2i-24h-r5` (advisor branch `icml-appendix-willow-pai2i-24h-r5`, base `icml-appendix-willow`)
 - **Per-run budget:** 30 min wall clock, ≤50 epochs, 1 GPU @ 96 GB VRAM
 
@@ -37,16 +37,25 @@ Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_star
 
 | PR | Student | Hypothesis | Status |
 |---|---|---|---|
-| #3360 | tanjiro | grad_clip max_norm=0.5 on **OneCycleLR** baseline (retest) | Rebasing + running 3 arms vs 81.66 baseline |
-| #3613 | askeladd | OneCycleLR `pct_start=0.05` (faster warmup, longer anneal) | New |
-| #3614 | thorfinn | OneCycleLR `max_lr=2e-3` (higher peak) | New |
-| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | New |
-| #3616 | fern | `batch_size=2` (2× gradient updates/epoch) | New |
-| #3617 | edward | log-space L1 surface pressure loss | New |
-| #3619 | alphonse | weight_decay=0 retest on OneCycle baseline | New |
-| #3622 | frieren | OneCycleLR `final_div_factor` ∈ {1e3, 1e5} (2-arm sensitivity) | New |
+| #3613 | askeladd | OneCycleLR `pct_start=0.05` (faster warmup, longer anneal) | Running — 2 arm1 attempts both regress (84.59, 85.94); arm running |
+| #3614 | thorfinn | OneCycleLR **max_lr=1.5e-3** (midpoint retest after 2e-3 regressed) | Sent back; 3 new arms incoming |
+| #3615 | nezuko | SWA on final 3-4 OneCycle epochs | Running — first attempt crashed 2 arms; retry arm1=82.73, arm2 running |
+| #3616 | fern | `batch_size=2` (2× gradient updates/epoch) | Running — arm1 attempt 1 hit **77.98** (potential round winner); follow-on arms running |
+| #3617 | edward | log-space L1 surface pressure loss | Running — arm1 attempt 1 hit **78.13** (potential round winner); high variance attempt 2 = 82.78 |
+| #3619 | alphonse | weight_decay=0 retest on OneCycle baseline | Running |
+| #3696 | frieren | OneCycleLR **max_lr=5e-4** (low end of LR sweep) | New (after #3622 close) |
+| #3699 | tanjiro | Lookahead(AdamW, k=5, α=0.5) optimizer wrapper | New (after #3360 close) |
 
-## Round 3 closed (cumulative this round of decisions)
+## Round 4 closed/sent-back so far
+
+| PR | Student | Change | Decision |
+|---|---|---|---|
+| #3622 | frieren | final_div_factor ∈ {1e3, 1e5} | closed — locks 1e4 (both sides regress ~0.2 pp) |
+| #3614 | thorfinn | max_lr=2e-3 | **sent back** for max_lr=1.5e-3 retest (val regresses but test improves) |
+| #3360 | tanjiro | grad_clip=0.5 retest on OneCycle | closed — schedule subsumes clip-strength (+1.94% regression mean) |
+| #3464 | frieren | slice_num=32 (corrected close) | closed — beats old baseline but regresses on OneCycle (+15.7%) |
+
+## Round 3 closed
 
 | PR | Student | Change | Decision |
 |---|---|---|---|
@@ -54,7 +63,6 @@ Head config: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_star
 | #3489 | thorfinn | Huber surf (delta={1.0, 0.5}) | closed — pure L1 wins; grad clip neutralizes Huber advantage |
 | #3488 | edward | Full L1 vol+surf | closed — vol MSE provides stronger far-field structure |
 | #3487 | alphonse | weight_decay=0 (on warm-restarts baseline) | closed THERE; **reassigned for OneCycle retest** (#3619) |
-| #3464 | frieren | slice_num=32 | closed — capacity floor at 64 |
 | #3462 | fern | surf_weight 10 → 5 | closed — 10 is right balance |
 | #3431 | nezuko | EMA weights (decay=0.999) | closed — incompatible with warm-restarts cycles |
 | #3436 | alphonse | T_0=3 warm-restarts | closed — too many restart penalties |
