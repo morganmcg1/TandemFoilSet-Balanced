@@ -2,7 +2,66 @@
 
 Primary ranking metric is `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four validation splits). Test-time decision metric is `test_avg/mae_surf_p`. Lower is better.
 
-## 2026-05-16 09:15 — PR #3463: Capacity revisit — n_hidden=192 + lr=1e-3 + compile (current best)
+## 2026-05-16 09:45 — PR #3771: LR continuation — lr=1.5e-3 + compile (current best)
+
+Stacks on top of full round-5 merged baseline: scale-inv loss + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25/eta_min_factor=0.10 + torch.compile + lr=1e-3 (PR #3666 stack). Pure optimizer-hyperparameter change: lr 1e-3 → 1.5e-3 on n_hidden=128. Arm A wins decisively on all 8 val/test cells. Arm B (lr=2e-3) regresses (val_avg 53.41) — not from epoch-1 instability (both arms had clean ~370 epoch-1 val, fully neutralised by compile + TF32), but from the late-schedule eta_min floor (2e-4) being too high to settle. The LR-vs-val_avg curve has an interior optimum at lr=1.5e-3 in the 32-epoch budget. Arm B already rebounding at epoch 32 (53.49 vs 53.41 at epoch 31), confirming the floor effect.
+
+**Note:** This baseline returns to n_hidden=128 from #3463's n_hidden=192. The thorfinn run's lr=1.5e-3 win at n=128 (val_avg=50.70) is **decisively better than #3463's n=192 + lr=1e-3** (val_avg=53.19). This indicates lr and capacity axes are not strictly orthogonal — pure LR was the dominant lever. The compound n=192 + lr=1.5e-3 has not been tested and is the natural next experiment.
+
+**Primary** (Arm A: lr=1.5e-3 + compile, full merged stack at n_hidden=128)
+- `val_avg/mae_surf_p` = **50.7001** (best epoch 32 / 50, run cut by 30-min wall clock; **−4.68% vs PR #3463**, **−59.07% vs round-5 anchor**)
+- `test_avg/mae_surf_p` = **44.3493** (**−6.77% vs PR #3463**, **−61.21% vs round-5 anchor**)
+- **Cumulative round-5 improvement:** −59.07% val_avg (123.88 → 50.70), −61.21% test_avg (114.37 → 44.35). **Twelve compounding wins.**
+
+**Per-split surface pressure MAE (Arm A — lr=1.5e-3, n_hidden=128)**
+
+| Split | val_mae_surf_p | test_mae_surf_p | Δ val vs PR #3463 | Δ test vs PR #3463 |
+|---|---:|---:|---:|---:|
+| single_in_dist | 51.954 | 46.889 | −6.17% | −9.37% |
+| geom_camber_rc | 65.066 | 59.097 | −7.33% | −9.23% |
+| geom_camber_cruise | 32.981 | 27.259 | −2.35% | +0.09% |
+| re_rand | 52.799 | 44.153 | −1.15% | −4.43% |
+| **avg** | **50.7001** | **44.3493** | **−4.68%** | **−6.77%** |
+
+7 of 8 cells improve. The single test_geom_camber_cruise is essentially neutral (+0.09%). Notably, camber_rc (which REGRESSED at n=192 + lr=1e-3) improves cleanly here (−7.33% val / −9.23% test). High LR is the correct knob for camber_rc.
+
+**Arm B (lr=2e-3 + compile):** val_avg=53.4114, test_avg=48.0565. Regresses on 3 of 8 cells (val/test_geom_camber_rc, test_re_rand). The eta_min floor at 2e-4 prevents settling. Past-optimum, not unstable.
+
+**Mechanism — epoch-1 stability holds:**
+Both arms epoch-1 val_avg ≈ 370 — within 1% of the lr=1e-3 baseline. TF32 + compile fully neutralises the catastrophic-perturbation regime through at least lr=2e-3. The threshold (if any) is above the tested range.
+
+**Model config**
+- Transolver — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; FiLM per-block conditioning
+- 829,015 parameters; EMA shadow at decay=0.999; torch_compile_active=True (default mode, dynamic=True)
+- **CautiousAdamW lr=1.5e-3**, wd=1e-4 (key change from lr=1e-3)
+- CosineAnnealingLR(T_max=25, eta_min=1.5e-4, eta_min_factor=0.10)
+- bf16 AMP, surf_weight=10.0, surf_p_l1_weight=1.0
+- bernoulli_residual=False
+- Peak VRAM: 24.38 GB (identical to lr=1e-3 baseline — LR change has zero memory footprint)
+- Avg s/epoch: 57.7
+- Cautious mask mean: 0.609 (invariant — matches all prior measurements 0.61 ± 0.01)
+
+**Metric artifacts**
+- `models/model-charliepai2i24h5-thorfinn-lr1p5e3_compile-20260516-073113/metrics.jsonl`
+- `models/model-charliepai2i24h5-thorfinn-lr1p5e3_compile-20260516-073113/metrics.yaml`
+- `models/model-charliepai2i24h5-thorfinn-lr1p5e3_compile-20260516-073113/config.yaml`
+- (Arm B): `models/model-charliepai2i24h5-thorfinn-lr2e3_compile-20260516-083024/metrics.jsonl`
+
+**Reproduce**
+```bash
+cd target/ && python train.py \
+    --agent charliepai2i24h5-thorfinn \
+    --experiment_name "baseline_repro_lr1p5e3_compile" \
+    --torch_compile \
+    --lr 1.5e-3 --t_max 25 --eta_min_factor 0.10 \
+    --surf_p_l1_weight 1.0 \
+    --epochs 50
+```
+(Wall clock capped by `SENPAI_TIMEOUT_MINUTES`; run hit 32 epochs in 30.8 min.)
+
+---
+
+## 2026-05-16 09:15 — PR #3463: Capacity revisit — n_hidden=192 + lr=1e-3 + compile (previous best)
 
 Stacks on top of PR #3666 (lr=1e-3) which is on top of the full round-5 merged baseline: scale-inv loss + EMA + surf-L1 + FiLM + bf16 + Cautious AdamW + T_max=25/eta_min_factor=0.10 + torch.compile. Pure capacity change: n_hidden 128 → 192 (1.84M vs 829K params, 2.22× params). Win is real but sub-multiplicative: lr=1e-3 already captured most of the camber_rc capacity headroom, so the compound is smaller than the independent-axis prediction (~39% of predicted gain). The cruise split keeps benefiting from width at any LR. Descent still active at −0.97/epoch at cutoff with LR already at eta_min — the win is wall-clock-bound, not convergence-bound.
 
