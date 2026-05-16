@@ -5,6 +5,59 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 17:15 — PR #4006 (charliepai2i48h5-fern): n_freqs sweep {8, 12} on BF16+LS — **MERGED (NEW BEST)**
+
+- branch: `charliepai2i48h5-fern/bf16-nfreqs-sweep`
+- hypothesis: at extended BF16 17-epoch horizon, lower n_freqs (less aliasing) may beat n=10
+- results (both arms beat old baseline 67.19/58.05; both timeout-bound at 17 epochs):
+
+  | arm | n_freqs | space_dim | val_avg/mae_surf_p | test_avg/mae_surf_p | vs new (clip=1.0) baseline 65.70/57.80 |
+  |---|---|---|---|---|---|
+  | **arm-1 (WINNER)** | **8** | **34** | **64.08** | **55.05** | **-2.47% / -4.76% ✓✓** |
+  | arm-2 | 12 | 50 | 65.18 | 56.71 | -0.79% / -1.88% ✓ |
+
+- per-split test surf_p (arm-1 n=8): single=62.10 (-4.81%), rc=68.13 (-4.62%), cruise=36.63 (-4.39%), re_rand=53.35 (-5.09%) — **all 4 splits improve uniformly**
+- artifacts: `models/model-bf16-layerscale-n8-20260516-144643/metrics.jsonl` (JSONL-verified)
+- commentary: **MERGED** — biggest single-PR win this wave. n_freqs ordering on this stack (matched recipes): val n=8 (64.08) < n=12 (65.18) < n=14 (66.99) < n=10 (67.19). The "n=14 over-fits" framing was confounded by EMA overhead — under matched recipes, n=14 ≈ n=10. Lower n_freqs wins decisively on a small (1499) train set: fewer wider Fourier bands → cleaner gradients → better generalization. **Not yet compounded with clip=1.0** (PR #4009) — edward #4053 testing that compound now. Cumulative improvement breaks -50% threshold from round-5 start.
+
+---
+
+## 2026-05-16 17:20 — PR #4008 (charliepai2i48h5-thorfinn): surf_weight sweep {5.0, 20.0} on BF16+LS+n10 — CLOSED (independent win, superseded by parallel #4006 merge)
+
+- branch: `charliepai2i48h5-thorfinn/bf16-surf-weight-sweep`
+- hypothesis: surf_weight=10.0 (default) may not be optimal on the BF16 stack
+- results (both arms tested at 17 epochs, clip=0.25, n=10):
+
+  | arm | surf_weight | val_avg | test_avg | vs OLD baseline (67.19/58.05) | vs NEW post-fern baseline (64.08/55.05) |
+  |---|---|---|---|---|---|
+  | arm-1 | 5.0 | 64.10 | 56.21 | -4.6% / -3.2% ✓ | +0.03% / +2.1% (tied val, weaker test) |
+  | arm-2 | 20.0 | 67.99 | 59.32 | +1.2% / +2.2% ✗ | regress |
+
+- per-split test surf_p (arm-1 sw=5): single=62.00 (-8.0% vs 67.42), rc=68.21 (-2.3%), cruise=40.16 (+3.9%), re_rand=54.48 (-3.3%)
+- artifacts: `target/models/model-bf16-layerscale-surfweight5-20260516-144448/metrics.jsonl`
+- commentary: CLOSED — sw=5 was a real -4.6% val win on old baseline but landed essentially tied with fern's parallel n=8 win (val 64.10 vs 64.08). Net post-merge: doesn't beat new baseline. Mechanism: lower surf_weight lets volume gradients carry more useful signal → better representation → propagates to better surface predictions. Higher sw (20) doesn't reduce surface loss because clip_frac=1.0 truncates the larger gradients to same effective step. **sw and n_freqs are independent levers and may compound on n=8** — assigned thorfinn follow-up #4059 to test sw={2.5, 5.0} on the n=8 stack.
+
+---
+
+## 2026-05-16 17:25 — PR #4014 (charliepai2i48h5-frieren): Narrower width n_hidden=120 on BF16+LS+n10 — CLOSED
+
+- branch: `charliepai2i48h5-frieren/bf16-narrow-width`
+- hypothesis: narrower n_hidden frees memory/compute for more epochs + denser LayerScale γ usage
+- results (1 arm, 17 epochs timeout-bound):
+
+  | Metric | n=120 | n=128 baseline | Δ |
+  |---|---|---|---|
+  | val_avg/mae_surf_p | 65.97 | 67.19 | -1.83% (small val win) |
+  | test_avg/mae_surf_p | 58.28 | 58.05 | +0.40% (tied) |
+  | sec/epoch | 112 | 111 | NO SPEEDUP |
+  | peak_memory | 35.4 GB | 33 GB | -7% slightly higher |
+
+- per-split test surf_p (n=120): single=66.57 (-1.26%), rc=69.48 (-0.44%), cruise=41.01 (**+6.10%**), re_rand=56.06 (-0.51%)
+- artifacts: `models/model-bf16-layerscale-n120-20260516-153747/metrics.jsonl`
+- commentary: CLOSED — narrower width produces val-only marginal win, test ties, and the throughput hypothesis fundamentally fails. ~112 s/epoch identical to n=128 baseline — Transolver attention slicing over mesh nodes dominates runtime, not FFN width. The "extra epochs from speedup" half of the hypothesis is invalidated. LayerScale γ dynamics indistinguishable from n=128 (no "denser γ" effect). Cruise regression (+6.10%) is the consistent volatility pattern under width reduction. Don't pursue narrower than n=120. Assigned frieren #4060 fourier_base sweep at n=8 (the only unexplored fundamental hyperparameter).
+
+---
+
 ## 2026-05-16 16:55 — PR #4009 (charliepai2i48h5-nezuko): Gradient clip sweep {0.5, 1.0} on BF16+LS+n10 — **MERGED (NEW BEST)**
 
 - branch: `charliepai2i48h5-nezuko/bf16-clip-sweep`
