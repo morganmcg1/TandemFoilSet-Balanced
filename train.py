@@ -617,6 +617,7 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
+    dropout: float = 0.0   # FFN + projection dropout in Transolver blocks (0 = disabled)
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
 
@@ -740,6 +741,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     use_film=cfg.use_film,
