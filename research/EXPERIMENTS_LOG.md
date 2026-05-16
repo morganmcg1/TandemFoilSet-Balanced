@@ -5,6 +5,39 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 11:00 — PR #3527 (charliepai2i48h5-tanjiro): BF16 + LayerScale composition — SENT BACK FOR QUAD-COMPOUND ARM
+
+- branch: `charliepai2i48h5-tanjiro/bf16-mixed-precision`
+- hypothesis: BF16 mixed precision composes with LayerScale; extra epochs from 1.30× speedup compound the gains
+- results (terminal=true SENPAI-RESULT posted, but merge conflict + missing EMA arm):
+
+  | arm | stack | epochs | val_avg/mae_surf_p | test_avg/mae_surf_p | vs current best (71.20/62.71) |
+  |---|---|---|---|---|---|
+  | arm-1 (best test) | BF16 + LS + n=10, no EMA | 17 | 67.19 | **58.05** | -5.6% val / -7.4% test ✓ |
+  | arm-2 | BF16 + LS + n=14, no EMA | 16 | 67.00 | 59.31 | -5.9% val / -5.4% test ✓ |
+
+- per-split test surf_p (arm-1, JSONL-verified): single=67.42, rc=69.79, cruise=38.66, re_rand=56.35
+- artifacts: `models/model-bf16-layerscale-fullstack-20260516-082748/metrics.jsonl` (JSONL-verified arm-1)
+- commentary: **STRONG WIN** — BF16 enables 17 epochs vs current best's 12, and that extra convergence beats the n14+EMA triple compound on test. Even arm-2 (BF16+LS+n14 WITHOUT EMA) beats the triple compound (val=67.00 vs 71.20), demonstrating that BF16's epoch budget is more valuable than EMA's smoothing in this regime. Per-split: best gains on OOD (cruise -11.8%, re_rand -9.4%) — exactly the splits we most needed to fix. Peak VRAM 36.9 GB. **Sent back** to: (1) rebase onto new advisor HEAD (which has EMA from #3192), (2) run BF16 + LS + n_freqs=14 + EMA 0.998 quad-compound to lock in the new best. If quad-compound holds, we land at sub-60 val. If it regresses, arm-1's 58.05 test is still merge-worthy.
+
+---
+
+## 2026-05-16 11:05 — PR #3740 (charliepai2i48h5-frieren): Asymmetric LayerScale γ-init attn vs MLP — CLOSED
+
+- branch: `charliepai2i48h5-frieren/asymmetric-layerscale`
+- hypothesis: γ_attn=0.001, γ_mlp=0.01/0.03 — separate inits to match natural trajectory
+- results (terminal SENPAI-RESULT posted, stack on OLD n=10 baseline):
+
+  | arm | γ_attn / γ_mlp | val_avg/mae_surf_p | test_avg/mae_surf_p | vs current best (71.20) |
+  |---|---|---|---|---|
+  | arm-1 | 0.001 / 0.01 | 80.49 | 70.63 | +13.0% worse |
+  | arm-2 | 0.001 / 0.03 | 77.54 | 66.86 | +8.9% worse |
+
+- per-split test surf_p (arm-2): single=77.87, rc=76.52, cruise=47.40, re_rand=65.64 — all worse than current best
+- commentary: CLOSED — γ-stats nail the mechanism. Both arms converge to similar resting values regardless of init (γ_attn ~0.007-0.017, γ_mlp ~0.030-0.052). Symmetric γ=0.01 already discovers the right effective asymmetry through learning; manual init steering provides no benefit. clip_frac=1.0 throughout — further constraining what's already optimal. Test was on old n=10 stack but mechanism analysis is conclusive enough that re-running on triple compound wouldn't change the verdict.
+
+---
+
 ## 2026-05-16 10:45 — PR #3192 (charliepai2i48h5-edward): EMA decay sweep on LayerScale+n14 stack — MERGED (NEW BEST)
 
 - branch: `charliepai2i48h5-edward/ema-on-layerscale`

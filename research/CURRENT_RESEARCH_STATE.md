@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 10:55
+- **Date:** 2026-05-16 11:10
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -30,14 +30,14 @@
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| edward | #3878 | EMA decay sweep {0.995, 0.999} on triple compound | NEW (wave-9) |
-| alphonse | #3882 | SAM optimizer (ρ=0.05) on triple compound | NEW (wave-9) |
-| fern | #3883 | T_max schedule sweep {12, 25} on triple compound | NEW (wave-9) |
-| nezuko | #3823 | Lookahead optimizer wrapper {k=5, k=10} on LayerScale stack | wave-8 — WIP |
-| frieren | #3740 | Asymmetric LayerScale γ_attn=0.001 vs γ_mlp=0.01 | wave-7 — stale; pinged to add n14+EMA |
-| tanjiro | #3527 | BF16 + triple compound (LayerScale + n14 + EMA) | needs rebase onto new best; pinged |
-| thorfinn | #3784 | Peak LR sweep {7e-4, 1e-3} on LayerScale stack | wave-8 — stale; pinged to add n14+EMA |
-| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | stale — picking up |
+| edward | #3878 | EMA decay sweep {0.995, 0.999} on triple compound | wave-9 |
+| alphonse | #3882 | SAM optimizer (ρ=0.05) on triple compound | wave-9 |
+| fern | #3883 | T_max schedule sweep {12, 25} on triple compound | wave-9 |
+| frieren | #3909 | Learnable Fourier frequencies on triple compound | NEW (wave-9) |
+| tanjiro | #3527 | BF16 + LS + n14 + EMA quad compound | SENT BACK (BF16+LS+n10 already at val=67.19/test=58.05; needs EMA arm + rebase) |
+| nezuko | #3823 | Lookahead optimizer wrapper {k=5, k=10} on LayerScale stack | wave-8 — pinged 8h stale |
+| thorfinn | #3784 | Peak LR sweep {7e-4, 1e-3} on LayerScale stack | wave-8 — stale; pinged |
+| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | stale 21h — pinged urgently |
 
 ## Closed this round
 
@@ -60,33 +60,35 @@
 | #3732 (nezuko) | Fourier saturated at n=14: n=18/n=20 both worse |
 | #3730 (alphonse) | LayerScale+n14 compound sub-additive WITHOUT EMA; superseded by #3192 |
 | #3782 (fern) | AdamW eps sweep falsified: both 1e-6/1e-7 worse; default 1e-8 optimal |
+| #3740 (frieren) | Asymmetric LayerScale γ-init: both arms regress; γ converges to natural asymmetry regardless of init |
 
 ## Current research themes
 
-1. **EMA decay sweep (edward #3878) — wave-9**: EMA 0.998 won by enabling n14+LayerScale. Is 0.998 the optimal decay for ~12 epochs (~600 steps)? Testing {0.995, 0.999} to bracket: 0.995 may be more responsive to short runs, 0.999 may lag too much.
+1. **BF16 quad compound (tanjiro #3527) — HIGHEST PRIORITY**: arm-1 of original BF16 run (BF16+LS+n10, no EMA) at 17 epochs already hits val=67.19/test=58.05 — beats current best (71.20/62.71) by -7.4% test. Sent back to rebase + run BF16+LS+n14+EMA quad compound. Even arm-2 (BF16+LS+n14, no EMA, 16 epochs) hit val=67.00/test=59.31. BF16's extra epochs are extremely valuable; the quad compound should land sub-60 val if it composes.
 
-2. **SAM optimizer (alphonse #3882) — wave-9 BOLD BET**: Sharpness-Aware Minimization finds flat minima → better OOD generalization. Our biggest remaining challenge is OOD splits (rc=72.24, re_rand=62.19). 2× compute overhead → ~6-7 epochs in budget. Theoretically well-motivated for distribution-shift robustness.
+2. **EMA decay sweep (edward #3878) — wave-9**: EMA 0.998 won by enabling n14+LayerScale. Is 0.998 the optimal decay for ~12 epochs (~600 steps)? Testing {0.995, 0.999} to bracket.
 
-3. **T_max schedule sweep (fern #3883) — wave-9**: Current T_max=20 with ~12 effective epochs means cosine only completes 60-70% of its cycle. T_max=12 (aligned to budget) vs T_max=25 (slower decay). Follows fern's own post-experiment analysis that schedule tuning is the next lever.
+3. **SAM optimizer (alphonse #3882) — wave-9 BOLD BET**: Sharpness-Aware Minimization finds flat minima → better OOD generalization. 2× compute overhead → ~6-7 epochs in budget. Theoretically well-motivated for distribution-shift robustness.
 
-4. **Lookahead optimizer on LayerScale (nezuko #3823)**: Zhang et al. 2019 slow anchor weights. Two arms: k=5, k=10. In our high-clip_frac regime, Lookahead provides variance reduction without the β2-lowering instability. Still WIP.
+4. **T_max schedule sweep (fern #3883) — wave-9**: Current T_max=20 with ~12 effective epochs means cosine only completes 60-70% of its cycle. T_max=12 (aligned to budget) vs T_max=25 (slower decay).
 
-5. **Asymmetric LayerScale (frieren #3740)**: γ-attn=0.001, γ-mlp=0.01/0.03. Testing on n_freqs=10 stack; pinged to upgrade to n14+EMA. Stale.
+5. **Learnable Fourier frequencies (frieren #3909) — wave-9 NEW**: Fixed log-spaced Fourier saturated at n=14; making frequencies a learnable nn.Parameter lets gradient descent reshape the basis. Two arms: default LR vs 10× LR multiplier on freq params. Diagnostic: log initial vs final freq values to confirm/falsify whether they migrate.
 
-6. **BF16 + triple compound (tanjiro #3527)**: BF16 alone ties LayerScale at val=72.75 (+4 epochs). On triple compound (n14+EMA), BF16 could reach epoch ~16 → better convergence at ~12-epoch timeout-bound regime. Needs rebase onto new best (val=71.20).
+6. **Lookahead optimizer (nezuko #3823)**: Zhang et al. 2019 slow anchor weights. Two arms: k=5, k=10. Stale 8h — pinged.
 
-7. **Peak LR sweep on triple compound (thorfinn #3784)**: lr=1e-3 survived on n14+clip=1.0 stack. Retesting on full triple compound; pinged to update commands.
+7. **Peak LR sweep on triple compound (thorfinn #3784)**: lr=1e-3 survived on n14+clip=1.0 stack. Retesting on triple compound; pinged.
 
-8. **Tighter clip sweep (askeladd #3424)**: clip=0.1 + Huber delta sweep. Stale.
+8. **Tighter clip sweep (askeladd #3424)**: clip=0.1 + Huber delta sweep. Stale 21h — pinged urgently.
 
 ## Key insights accumulated
 
 - **Triple compound confirmed**: LayerScale + n_freqs=14 + EMA 0.998 → val=71.20 (-44.7% from round-5 start)
-- **EMA enables under-converged compounds**: Without EMA, n14+LayerScale fails (-4-5% regression). EMA checkpoint averaging acts as implicit regularization that bridges the ~12-epoch convergence gap.
-- **Fourier scaling SATURATED at n=14**: n=18/n=20 both regress. n=14 is the sweet spot.
+- **BF16 epochs are the most valuable lever**: BF16+LS+n10 at 17 epochs beats LS+n14+EMA at 12 epochs by -7.4% test (PR #3527 arm-1: val=67.19/test=58.05). Implication: any technique that gives more epochs in budget compounds with everything else.
+- **EMA enables under-converged compounds**: Without EMA, n14+LayerScale fails (-4-5% regression). EMA checkpoint averaging bridges the ~12-epoch convergence gap.
+- **LayerScale γ converges to natural asymmetry regardless of init**: Asymmetric γ_attn=0.001/γ_mlp=0.03 init (PR #3740) converges to same resting values as symmetric γ=0.01 (γ_attn ~0.007-0.017, γ_mlp ~0.030-0.052). Manual init steering provides no benefit.
+- **Fourier scaling SATURATED at n=14**: n=18/n=20 both regress. n=14 is the sweet spot at fixed log-spaced freqs.
 - **AdamW denominator knobs exhausted**: β2<0.999 harmful (PR #3708), eps>1e-8 harmful (PR #3782). Default AdamW settings optimal given grad_clip=0.25.
 - **LayerScale γ=0.01 is the biggest single win**: -10.2% val from per-channel selective residual gating.
-- **BF16 virtual tie with LayerScale (independent)**: BF16 extra epochs ≈ LayerScale gating benefit (val=72.75 vs 72.77). Both compose.
 - **clip=0.25 is regularization at n_freqs≥14**: Always use clip=0.25 when n_freqs≥12.
 - **EMA 0.998 sweet spot for ~600-step runs**: Half-life ~350 steps = 58% of training budget.
 
