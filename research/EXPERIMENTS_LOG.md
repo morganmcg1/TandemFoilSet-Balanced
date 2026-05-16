@@ -1,5 +1,105 @@
 # SENPAI Research Results
 
+## 2026-05-16 22:15 — PR #4123: H: Lion optimizer on triple-stack ← SENT BACK FOR REBASE + 2-ARM VERIFICATION
+
+- Branch: `willowpai2i48h1-edward/lion-optimizer-triple-stack`
+- Student: willowpai2i48h1-edward
+- W&B run: `rv8hjgtx`
+- Hypothesis: Replace AdamW(β2=0.95) with Lion (lr/3, sign-based updates) on triple-stack.
+
+### Reported results (W&B verified to 4dp, but pre-Lookahead-merge)
+
+| Metric | Triple-stack | Lookahead (current best) | Lion (reported) | Δ vs Lookahead |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 60.4338 | 57.2203 | **49.0721** | **−8.15** |
+| test_avg/mae_surf_p | 57.4381 | 54.0468 | **47.0707** | **−6.98** |
+
+All 4 val splits and 4 test splits improve uniformly. Per-channel test diagnostics (Ux, Uy, p) all in physically reasonable ranges.
+
+### Action: rebase + 2-arm verification
+
+A Δ=−8.15 val on top of Lookahead is roughly −13σ relative to the GeGLU-era seed noise (σ̂≈1) — larger than the cumulative gain of every prior intervention this round combined. Magnitude warrants verification before merging.
+
+Sent back with 2-arm requirement:
+- **Arm 1 — Pure Lion**: Replace AdamW with Lion on the rebased branch (no Lookahead wrapper). Verifies seed=0 reproducibility post-rebase.
+- **Arm 2 — Lookahead-Lion composition**: Wrap Lion with Lookahead(k=5, α=0.5). Tests if the two basin-variance reduction mechanisms compose orthogonally.
+
+If Arm 1 reproduces val < 51, the win is real. If Arm 2 beats Arm 1, composition is orthogonal and we merge Arm 2. If they're tied or Arm 1 is better, merge Arm 1.
+
+### Mechanism (student's claim, plausible)
+
+Lion's sign-only update is invariant to gradient-scale noise. At batch=4 on heterogeneous CFD with O(10⁵) mesh nodes, AdamW's `sqrt(v_t)` denominator is itself noisy from small-batch squared-gradient estimates. The triple-stack's β2=0.95 was a partial fix for this; Lion sidesteps the variance problem entirely with constant-magnitude updates.
+
+## 2026-05-16 22:10 — PR #4121: H: EMA model weights (decay=0.999) on triple-stack ← CLOSED
+
+- Branch: `willowpai2i48h1-tanjiro/ema-weights-triple-stack`
+- Student: willowpai2i48h1-tanjiro
+- W&B run: `xiu9s9ke`
+
+### Results
+
+| Metric | Triple-stack | EMA-arm (this) | Δ |
+|---|---|---|---|
+| val_avg | 60.4338 | 62.9808 | +2.55 |
+| test_avg | 57.4381 | 59.5020 | +2.06 |
+
+Raw best checkpoint matches triple-stack baseline exactly — training was unaffected; EMA-only metrics are uniformly worse.
+
+### Mechanism diagnosis (student's, exactly right)
+
+EMA(0.999) has ~1.87-epoch half-life. With cosine LR → 0 at T_max=17, the raw final checkpoint sits at a tight minimum; EMA drags in higher-loss weights from epochs 11–14, averaging the model back to a worse basin.
+
+**Same failure mode as PRs #3644 and #4089 SWA on fast weights:** post-hoc weight averaging on the FAST trajectory needs a stationary tail window, and T_max=17 cosine doesn't provide one. The win came from online averaging (Lookahead) instead.
+
+### Decision
+
+Closed. Reassigned tanjiro to **Lookahead + SWA of slow weights** — the slow-weight trajectory under Lookahead is smoother than the fast trajectory, and may have the stationary tail that fast-weight averaging could not find.
+
+## 2026-05-16 22:05 — PR #4118: H: β1=0.95 on triple-stack (compound momentum) ← CLOSED
+
+- Branch: `willowpai2i48h1-askeladd/b1-095-tripleStack`
+- Student: willowpai2i48h1-askeladd
+- W&B run: `j4d3l8jm`
+
+### Results
+
+| Metric | Triple-stack | β1=0.95 (this) | Δ |
+|---|---|---|---|
+| val_avg | 60.4338 | 63.2973 | +2.86 |
+| test_avg | 57.4381 | 59.9677 | +2.53 |
+
+All 4 val splits regress uniformly. Largest regression on val_geom_camber_rc (+4.19) and val_single_in_dist (+0.07 — smallest).
+
+### Mechanism (student's, sharp)
+
+β1=0.95 over-smooths gradient direction in a short 6375-step cosine-to-zero run. The heavier first-moment damping slows early descent and the fast LR decay prevents recovery. **β2=0.95 (variance stabilisation) and β1=0.9 (responsive mean) are the right operating point** — adding β1=0.95 does not compound; they're antagonistic in this regime.
+
+### Decision
+
+Closed. Confirmed dead-end lever. Reassigned askeladd to **Lookahead α sweep (α∈{0.3, 0.7})** to characterize the slow-step blend ratio optimum.
+
+## 2026-05-16 22:00 — PR #4117: H: Triple-stack seed=2 (3-seed canonical) ← CLOSED
+
+- Branch: `willowpai2i48h1-alphonse/triple-stack-seed2-canonical`
+- Student: willowpai2i48h1-alphonse
+- W&B run: `7lwdpglm`
+
+### Results — completes 3-seed canonical for triple-stack
+
+| seed | val_avg | test_avg |
+|---|---|---|
+| 0 (PR #3995) | 60.4338 | 57.4381 |
+| 1 (PR #4116) | 61.5427 | 58.5320 |
+| 2 (this PR) | 63.0089 | 59.0956 |
+| **μ̂** | **61.66** | **58.36** |
+| σ̂ | 1.32 | 0.83 |
+
+seed=0 was 1.23 below mean (slightly lucky), seed=2 was 1.34 above (slightly unlucky). Spread ~2σ, consistent with the GELU-era σ̂=1.54 noise floor.
+
+### Decision
+
+Closed — establishes triple-stack's noise floor for the paper appendix but **new programme best is PR #4132 Lookahead val=57.22 / test=54.05**, ahead of even triple-stack seed=0. Reassigned alphonse to **Lookahead seed=2 (3-seed canonical for new best)**.
+
 ## 2026-05-16 21:40 — PR #4132: H: Lookahead optimizer (k=5, α=0.5) on triple-stack ← MERGED (NEW PROGRAMME BEST)
 
 - Branch: `willowpai2i48h1-nezuko/lookahead-optimizer-triple-stack`
