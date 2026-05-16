@@ -1,5 +1,43 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 22:55 — PR #4106 sent back for ep20 retest — fern width=192 borderline
+
+### #4106 fern n_hidden=192 + bf16 + ep18 — **SENT BACK** (val=50.9206 +0.04%; test=43.7652 −0.30%; curve still descending at cut)
+
+- **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/fern-nhidden192-bf16-ep18`)
+- **Hypothesis:** Push wider — n_hidden=192 (+18% params over #4082) on the same ep18+bf16 stack.
+- **Result:** val=50.9206 (+0.04% vs 50.9008), test=43.7652 (−0.30% vs 43.8989). Borderline — not merge-eligible (val regressed by hair), not close-eligible (test marginally improved, far from close threshold). Completed 18/18 epochs in 39.0 min. W&B `u0vq13g7`.
+
+### Per-split test pattern (the key insight)
+
+| Split | n_hidden=192 | Baseline (n_hidden=176) | Δ% |
+|---|---:|---:|---:|
+| single_in_dist | 47.19 | 48.97 | **−3.64%** |
+| geom_camber_rc | 55.55 | 55.45 | +0.19% |
+| geom_camber_cruise | 28.79 | 28.27 | +1.85% |
+| re_rand | 43.53 | 42.91 | +1.44% |
+
+**Classic mild-overfitting signature when adding capacity without regularization pressure:** big in-distribution win (−3.6% on single_in_dist), small but consistent OOD regressions (+0.2-1.9% on the 3 OOD splits). For OOD-emphasized research, this is a wash at best.
+
+### Why "send back" instead of close/merge
+
+**val curve still descending at ep18 (−1.93% last epoch: 51.91→50.92)** — strong evidence the wider model is **compute-starved at ep18, not capacity-saturated**. Fern's interpretation is correct: the wider model needs more cosine annealing time to fairly compete with the narrower baseline.
+
+The right next experiment isn't to abandon width=192, it's to give it more epochs. Per fern's #1 follow-up:
+
+- **ep20 × ~130 s = 43 min wall** — fits 50-min cap with margin
+- If val<50.90 AND test<43.90 at ep20 → **MERGE** (width-was-compute-starved confirmed; new sweet spot)
+- If val∈[50.90, 51.5] and OOD improves → send back further (ep22 if budget allows)
+- If val≥51.5 or OOD regresses further → close (capacity needs regularization to unlock; separate experiment)
+
+### Round-9 backlog (from fern's follow-ups, if ep20 doesn't unlock width)
+
+- **n_hidden=176 + dropout 0.05-0.10** on attention or FFN — fights in-distribution overfitting, may help OOD splits
+- **n_hidden=208 + ep16** (~48 min wall, T=55+) — only if ep20 still wants more width
+- **Dedicated geom_camber_rc shape-aware feature** — consistently hardest split (mae ~55 across baselines)
+
+---
+
 ## 2026-05-16 22:45 — PRs #4150 + #4110 closed; #4187 + #4190 assigned — frieren pmag-weight, tanjiro nh144
 
 ### #4150 tanjiro lr=7e-4 + warmup=1 + ep14 — **CLOSED** (val=64.87, +27%; ep1 val=199.6 confirms early instability)

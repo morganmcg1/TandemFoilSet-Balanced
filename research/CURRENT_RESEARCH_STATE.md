@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~22:45 UTC
+- **Last updated:** 2026-05-16 ~22:55 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -82,7 +82,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 ### Round-8 active (assigned 19:35–22:45 UTC, all on bf16 stack)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
-| **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 | WIP — run completed (W&B `u0vq13g7` val=50.92), awaiting student SENPAI-RESULT post |
+| **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 → **sent back for ep20 retest** | WIP (sent back ~22:55; val=50.92 borderline, curve still descending −1.93%/ep at cut, single_in_dist −3.6% wins but OOD splits slight regress) |
 | **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP — started training 22:30 |
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP |
 | **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval | WIP |
@@ -141,7 +141,7 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 | PR | Student | Hypothesis | Key CLI / change | Status |
 |---|---|---|---|---|
-| #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 | `--n_hidden 192 --use_bf16 --epochs 18`, T=50 | WIP |
+| #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 → **sent back for ep20** | `--n_hidden 192 --use_bf16 --epochs 20`, T=50 | WIP (sent back; v1 val=50.92 borderline) |
 | #4108 | alphonse | n_layers=6 retest with bf16 + ep18 | `--n_layers 6 --use_bf16 --epochs 18`, T=45 | CLOSED (val=62.05 undertrained at 30-min env) |
 | #4110 | frieren | Curvature loss retest with sharpened proxy | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) | CLOSED (ARM A val=57.13 +12.2%, ARM B control val=50.54 within noise; DSDF-norm is mesh-density proxy not curvature) |
 | #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 | CLOSED (pod env 30-min cap can't fit ep22 ≈ 48 min) |
