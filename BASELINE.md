@@ -1,6 +1,40 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #4056 (grad_clip=1.0 — gradient norm clipping on Lion at lr=1.5e-4)
+## Current best — PR #4063 (T_max=20 — longer cosine schedule within 14-epoch wall-clock budget)
+
+**val_avg/mae_surf_p = 57.6606** (W&B run: `fh3jmkd1`, PR #4063 Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + **T_max=20**; NO spec_norm; NO grad_clip)
+**test_avg/mae_surf_p = 49.4491** (same run `fh3jmkd1`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 57.88 | 51.04 |
+| **geom_camber_rc** | **71.61** | **64.76** |
+| **geom_camber_cruise** | **40.47** | **32.44** |
+| **re_rand** | **60.69** | **49.55** |
+
+**Δ vs prior best (PR #4056 grad_clip=1.0, val 61.18 / test 52.09): −3.52 val / −2.64 test**
+
+All 8 splits (val × 4, test × 4) improve. Monotone trend T_max=14 → T_max=18 → T_max=20. No split-specific story — this is a global training-dynamics win.
+
+Mechanism: SENPAI_TIMEOUT_MINUTES=30 caps training at ~14 epochs. With T_max=14 the cosine schedule fully decays within budget (LR ends ≈ 0). With T_max=20 the schedule stops at LR ≈ 1.20e-4 (~80% of peak). The model maintains a higher time-averaged LR throughout training — never "lands" but keeps exploring a better basin. EMA(0.997) smooths the late-training noise from the higher-LR endpoint.
+
+**Reproduce (PR #4063 Arm C — winner):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-tanjiro --epochs 50 \
+  --wandb_group round10-tmax-lr15e4-tanjiro \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 \
+  --cosine_t_max 20 \
+  --optimizer_name lion --lr 1.5e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --wandb_name tanjiro-r10-tmax20
+```
+
+---
+
+## Prior best — PR #4056 (grad_clip=1.0 — gradient norm clipping on Lion at lr=1.5e-4)
 
 **val_avg/mae_surf_p = 61.1778** (W&B run: `y5tua53k`, PR #4056 Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm)
 **test_avg/mae_surf_p = 52.0853** (same run `y5tua53k`, clean 4-split)
