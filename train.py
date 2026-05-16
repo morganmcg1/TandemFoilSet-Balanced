@@ -263,8 +263,14 @@ class Transolver(nn.Module):
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(rff_dim + fun_dim, n_hidden * 2, n_hidden,
-                                  n_layers=0, res=False, act=act)
+            # H28: widened preprocess (hidden=4*n_hidden=512) + dropout=0.1.
+            # Was: MLP(86, 256, 128, dropout=0.0)  → 55,168 params.
+            # Now: MLP(86, 512, 128, dropout=0.1)  → 110,208 params.
+            self.preprocess = MLP(rff_dim + fun_dim, n_hidden * 4, n_hidden,
+                                  n_layers=0, res=False, act=act, dropout=0.1)
+
+        n_preprocess_params = sum(p.numel() for p in self.preprocess.parameters())
+        print(f"Preprocess params: {n_preprocess_params:,} (was: 55,168 at width=256)")
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
