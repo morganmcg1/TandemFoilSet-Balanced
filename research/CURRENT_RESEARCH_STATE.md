@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 07:50
+- **Date:** 2026-05-16 09:00
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
@@ -37,7 +37,7 @@
 |---|---|---|---|
 | **#3539** | **alphonse** | **H23 slice_num=32 (rebased) — was val=62.63 on H15 SwiGLU; sent back for OneCycleLR retest** | **WIP (retest)** |
 | **#3788** | **frieren** | **H36 channel-weighted surf_loss surf_p_weight sweep {2,3,5} — direct metric/loss alignment** | **WIP (new)** |
-| **#3760** | **fern** | **H35 AdamW no-decay param groups (biases/LN/LayerScale exempt from WD)** | **WIP (new)** |
+| **#3824** | **fern** | **H38 input Gaussian noise injection sweep {0.01, 0.03, 0.10} — Bishop 1995 Tikhonov-equiv** | **WIP (new)** |
 | **#3792** | **edward** | **H37 OneCycleLR epochs=12 — fit schedule to realized budget** | **WIP (new)** |
 | **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP** |
 | **#3762** | **thorfinn** | **H34 RFF n_freq sweep {16,64} — richer/sparser spatial Fourier basis** | **WIP (new)** |
@@ -68,6 +68,7 @@
 | #3583 | fern | H26 wd=0.001 retest on OneCycleLR | Closed — +12%; WD and OneCycleLR are not orthogonal; long low-LR tail amplifies integrated shrinkage |
 | #3705 | frieren | H32 robust loss L1/smooth_l1 β=0.1 | Closed — L1 +7.7%, smooth_l1 +11.9%. signed_log1p already neutralizes heavy tail; MSE confirmed optimal for this dataset |
 | #3559 | edward | H25 n_layers=6 OneCycleLR retest | Closed — +26.5% (2 seeds, spread 4.1). Depth + OneCycleLR non-orthogonal: 199s/epoch model gets only 10 epochs, never reaches fine-tune tail (LR=2.3e-4 at termination vs 9.4e-5 for baseline) |
+| #3760 | fern | H35 AdamW no-decay param groups | Closed — +13.3%. Mechanism empirically absent: ls2 norms flat at ~0.42 under no_decay vs baseline's monotone 0.43→0.51. Integrated WD shrinkage on LS is ~1e-4 over 4125 steps — numerically negligible at wd=1e-4 |
 
 ## OneCycleLR budget constraint (critical insight)
 
@@ -96,6 +97,8 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11-13 epochs depe
 14. **Depth (n_layers=6) + OneCycleLR is structurally non-orthogonal under 30-min cap**: H25 retest closed +26.5% (2 seeds). 199s/epoch model never reaches fine-tune tail. The architecture is sound (H18 baseline showed -2.7%); the budget interaction is the barrier.
 15. **Primary metric is p-channel only but loss is channel-uniform**: val_avg/mae_surf_p is pure pressure. `surf_loss` averages Ux, Uy, p equally → p gets 1/3 of gradient signal. H36 tests upweighting p directly.
 16. **Schedule truncation is a first-class bug**: H24 baseline reaches LR=9.4e-5 at best_epoch=12 but schedule ends at LR=0 (epoch 15, never reached). H33 (pct_start) and H37 (epochs=12) both attack this truncation from different angles.
+17. **No-decay carve-out needs higher WD to matter**: H35 closed +13.3%. ls2 norm comparison showed flat ~0.42 under no_decay vs baseline's monotone 0.43→0.51 — deep-block LS actually grew LESS, refuting the "uniform WD silently shrinks LayerScale" premise. Integrated shrinkage at wd=1e-4 is ~1e-4 relative — numerically negligible. The canonical DeiT-III recipe needs wd=0.05 to shine, which H26 closure rules out.
+18. **Input-side regularization is unexplored**: We've tested FFN dropout (H12 merged), attention dropout (H17 closed), weight decay (H26 closed), no-decay groups (H35 closed). Input-Jacobian regularization (Bishop 1995 equivalence) is a third axis — H38 tests this.
 
 ## Open questions
 
@@ -103,7 +106,7 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11-13 epochs depe
 - Does channel-weighted surf_loss (surf_p_weight={2,3,5}) align gradient with metric? (frieren H36 — prediction: -1% to -4%)
 - Does fitting the schedule to budget (epochs=12) complete the fine-tune tail? (edward H37 — prediction: -1% to -3%)
 - Does compressing pct_start give more fine-tune budget? (tanjiro H33 {0.10,0.15,0.20})
-- Does no-decay param grouping protect LayerScale and improve WD? (fern H35)
+- Does input Gaussian noise (Bishop 1995 Tikhonov-equivalent) regularize the input Jacobian? (fern H38)
 - Does n_freq=64 RFF improve spatial resolution? (thorfinn H34)
 - Does grad-clip stabilize OneCycleLR high-LR phase? (nezuko H30)
 - Does SAM replace EMA's flat-minimum role? (askeladd H31)

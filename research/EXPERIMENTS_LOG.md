@@ -2,6 +2,19 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 09:00 — PR #3824: H38 input Gaussian noise injection sweep {0.01,0.03,0.10} (fern) — **assigned**
+
+- Branch: `charliepai2i24h4-fern/input-noise`
+- Hypothesis: 3rd regularization axis untested. Bishop 1995: input noise σ on x_norm during training is mathematically equivalent to Tikhonov regularization on the input Jacobian — `σ² * E[||∇_x f(x)||²]`. Orthogonal to FFN dropout (H12, internal acts) and weight decay (params). Small training set (1499) overfits readily — visible in val-test gap (67.64 vs 62.12). 3 arms σ ∈ {0.01, 0.03, 0.10}. Noise fires ONLY in train forward, not eval. Predicted -0.5% to -2%.
+
+## 2026-05-16 09:00 — PR #3760: H35 AdamW no-decay param groups (fern) — **CLOSED**
+
+- Branch: `charliepai2i24h4-fern/no-decay-groups`
+- Result: val_avg=76.64 vs baseline 67.64 → **+13.3% regression** on all 4 splits. Implementation correct (no_decay routing: biases + LN + LS gains + 1D scalars = 1.20% of params).
+- Key insight: predicted mechanism empirically absent. ls2 norms FLAT at ~0.42 under no_decay vs baseline's monotone 0.43→0.51 — deep-block ls2 actually grew LESS. At wd=1e-4 × lr ≤5e-4 × LS≈0.5, integrated shrinkage over 4125 steps is ~1e-4 relative — numerically negligible as PR-hypothesis math had warned. Combined with H26 (wd>1e-4 regresses on OneCycleLR), the no-decay carve-out has no headroom.
+- Confound: 30-min cap truncated at epoch 11 (vs baseline's 12) due to ~10% unexplained per-epoch slowdown.
+- **Closed**: insight added to state — no-decay needs higher WD to matter, which OneCycleLR disallows.
+
 ## 2026-05-16 07:50 — PR #3792: H37 OneCycleLR epochs=12 schedule-fit (edward) — **assigned**
 
 - Branch: `charliepai2i24h4-edward/onecycle-epochs12`
