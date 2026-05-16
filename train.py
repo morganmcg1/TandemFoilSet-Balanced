@@ -472,6 +472,7 @@ class Config:
     use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
+    warmup_steps: int = 0  # linear warmup batches before cosine (per-batch stepping during warmup)
 
 
 cfg = sp.parse(Config)
@@ -525,7 +526,27 @@ for p in ema_model.parameters():
 ema_decay = cfg.ema_decay
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+steps_per_epoch = len(train_loader)
+if cfg.warmup_steps > 0:
+    warmup_sched = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-3,
+        end_factor=1.0,
+        total_iters=cfg.warmup_steps,
+    )
+    remaining_epochs = max(1, MAX_EPOCHS - (cfg.warmup_steps // steps_per_epoch))
+    cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=remaining_epochs)
+    scheduler = None
+    print(
+        f"LR schedule: per-step LinearLR warmup over {cfg.warmup_steps} batches "
+        f"(steps_per_epoch={steps_per_epoch}), then per-epoch CosineAnnealingLR over "
+        f"{remaining_epochs} epochs."
+    )
+else:
+    warmup_sched = None
+    cosine_sched = None
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -621,16 +642,27 @@ for epoch in range(MAX_EPOCHS):
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        step_log = {
+            "train/loss": loss.item(),
+            "train/lr": optimizer.param_groups[0]["lr"],
+            "global_step": global_step,
+        }
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
         wandb.log(step_log)
+        if cfg.warmup_steps > 0 and global_step <= cfg.warmup_steps:
+            warmup_sched.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if cfg.warmup_steps > 0:
+        if global_step >= cfg.warmup_steps:
+            cosine_sched.step()
+        # else: still in warmup; the per-batch warmup_sched handles lr
+    else:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -665,7 +697,7 @@ for epoch in range(MAX_EPOCHS):
         "train/ema_lag_rel": ema_lag_rel,
         "train/model_param_norm": model_norm,
         "val/loss": val_loss_mean,
-        "lr": scheduler.get_last_lr()[0],
+        "lr": optimizer.param_groups[0]["lr"],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
