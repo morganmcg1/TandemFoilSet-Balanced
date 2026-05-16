@@ -1423,3 +1423,66 @@ If R3 wins, also unlocks: slice_num=96 (currently locked at 64 at n_hidden=128),
 ### Next assignment: PR #3980 Lion optimizer
 
 Frieren reassigned to Lion optimizer (sign projection on full clip stack vs AdamW+clip). Tests the mechanistic question of whether clip's load-bearing mechanism is direction normalization, in which case Lion's sign-projection (L∞ direction normalization, more extreme than L2 clip) should compose or supersede.
+
+---
+
+## 2026-05-16 13:35 — PR #3830 [CLOSED]: Lookahead optimizer wrapper (edward R1)
+
+- **Student branch:** `charliepai2i48h4-edward/lookahead-optimizer`
+- **Hypothesis:** Lookahead (Zhang et al. 2019, k=5, α=0.5) wraps AdamW with slow-weight interpolation; produces smoother val trajectories and improved generalization. Composes with EMA at different time scales.
+
+### Results (R1 paired)
+
+| Split | Arm A (no Lookahead) | Arm B (Lookahead k=5, α=0.5) | Δ % |
+|---|---:|---:|---:|
+| val_single_in_dist     | 107.363 | 108.533 | +1.09% |
+| val_geom_camber_rc     |  98.067 |  97.082 | −1.00% |
+| val_geom_camber_cruise |  72.106 |  74.073 | +2.73% |
+| val_re_rand            |  88.108 |  87.479 | −0.71% |
+| **val_avg**            | **91.411** | **91.792** | **+0.42%** |
+| **test_avg (3 finite)** | **87.947** | **89.225** | **+1.45%** |
+
+### Mechanism check (Lookahead's claim: smoother trajectory)
+
+| Quantity | Arm A | Arm B | Δ |
+|---|---:|---:|---:|
+| Mean epoch-to-epoch \|Δval\| | 7.237 | 6.457 | −10.8% |
+| Last-half (ep 9-17) val std  | 4.801 | 4.423 | −7.9% |
+
+**Mechanism real but small** — trajectory IS measurably smoother, but the smoothing benefit doesn't reach the best checkpoint. EMA(0.999) already low-passes the trajectory at ~693-step half-life; Lookahead's ~25-step half-life is redundant.
+
+### Per-epoch convergence trace (Lookahead leads early, loses by cosine tail)
+
+```
+ep    Arm A    Arm B  (Δ B−A)
+ 1  207.21   195.11  −12.10   ← Lookahead +5.8% better
+ 8  109.57   109.20   −0.37   ← edge gone
+14   92.71    92.88   +0.17   ← Arm A overtakes
+17   91.41    91.79   +0.38   ← best checkpoint, Arm A wins
+```
+
+Lookahead delivers faster early convergence but becomes mildly counterproductive once cosine LR drops below ~7% of peak (epoch 13+). The slow-weight pull clamps the fine-grained refinement of the cosine tail.
+
+### Decision: CLOSE
+
+**Rationale:**
+1. **Paired Δ within noise band** for val (+0.42% < ±1.8% seed variance), but **outside band for test 3-split** (+1.45%).
+2. **Arm B 91.792 absolute vs current baseline 81.660**: +12.4% worse — not competitive even with clip rebase.
+3. **Mechanism captured by EMA.** Trajectory smoothing role is occupied. Lookahead's shorter time constant doesn't add value on top of EMA(0.999) + cosine T_max=15.
+4. **Per-split pattern (helps `val_geom_camber_rc` by 1%, hurts in-dist + Re-rand by 1-3%)** shows the regularization signature — smoothing trades fine-detail fitting for generalization. We don't need this trade on this stack.
+5. **Wall-clock overhead ~0%** (slow-weight clone + 1275 sync steps disappear into per-epoch noise). PR's "+5%" estimate was conservative.
+
+### Lessons captured
+
+- **Trajectory smoothing as a research axis is largely saturated by EMA at this scale.** Any future technique proposing to smooth the trajectory (SWA, polyak averaging, longer EMA half-life) competes with an entrenched mechanism.
+- **`val_geom_camber_rc` selectively benefits from smoothing.** Future hypotheses targeting cross-geometry generalization specifically should revisit Lookahead in that ablation.
+- **The orthogonal axes that remain** are direction normalization at the gradient step (Lion, AGC), per-group clip granularity (AGC), cosine schedule replacement (SF-AdamW), cosine schedule extension (T_max=20).
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-edward-lookahead-r1-arma-baseline-paired-20260516-113402/metrics.jsonl`
+- `models/model-charliepai2i48h4-edward-lookahead-r1-armb-lookahead-20260516-122639/metrics.jsonl`
+
+### Next assignment: PR #3985 AGC
+
+Edward reassigned to AGC (Adaptive Gradient Clipping, NFNet-style per-parameter-group adaptive clipping vs global L2 clip). Tests whether global L2 normalization is the right granularity for the direction-normalization mechanism that PR #3511 confirmed.

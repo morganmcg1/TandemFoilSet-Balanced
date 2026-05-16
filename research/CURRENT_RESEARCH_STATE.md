@@ -1,9 +1,10 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 13:30 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 13:38 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
-- **PR #3829 (frieren per-block FiLM) CLOSED 13:28 UTC** — paired Δ −0.53% val_avg at noise floor, +19.5% params, confounded design. Frieren reassigned PR #3980 (Lion optimizer + clip vs AdamW+clip). All 8 students have active WIP PRs (zero idle GPUs).
+- **PR #3829 (frieren per-block FiLM) CLOSED 13:28 UTC**: paired Δ −0.53% val_avg at noise floor; +19.5% params; confounded design. Frieren reassigned PR #3980 (Lion optimizer vs AdamW+clip).
+- **PR #3830 (edward Lookahead) CLOSED 13:35 UTC**: paired Δ +0.42% val_avg / +1.45% test 3-split; mechanism real but redundant with EMA(0.999). Edward reassigned PR #3985 (AGC per-group adaptive clip vs global L2 clip). All 8 students have active WIP PRs (zero idle GPUs).
 
 ## Current research focus
 
@@ -22,36 +23,37 @@ Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th 
 - **🔥🔥 n_hidden=192 (nezuko #3492 R2 → R3):** R2 paired Δ −8.21% val_avg / −8.00% test (strongest signal of round). Sent back to rebase with `--grad_clip_norm 1.0` in BOTH arms. If even a fraction of −8.21% survives, this is the biggest single hop available — could plausibly land mid-70s.
 - **n_layers=4 (fern #3758 R2 → R3):** R2 seed-2 = 88.441 (mean of two n_layers=4 seeds = 89.32, below pre-clip baseline). Combined with R1 paired Δ −1.21%, depth hypothesis is real. Sent back for clip-compose R3. Saves ~18% params + ~19% sec/epoch if it composes.
 
-### 🔥 Closed this iteration (13:28 UTC)
+### 🔥 Closed this iteration
 
-- **Per-block FiLM (frieren #3829) CLOSED:** Paired Δ −0.53% val_avg averaged over 2 runs (R1 +0.29%, R2 −1.34%). Confounded design (per-block + per-site γ,β), +19.5% params (13× predicted), won't beat 81.660 even w/ clip rebase. **FiLM injection-count + per-block-capacity axes now saturated at n_hidden=128.** May revisit if nezuko #3492 R3 merges n_hidden=192. Frieren reassigned to Lion optimizer.
+- **Per-block FiLM (frieren #3829) CLOSED 13:28:** Paired Δ −0.53% val_avg averaged over 2 runs (R1 +0.29%, R2 −1.34%). Confounded design (per-block + per-site γ,β), +19.5% params (13× predicted), won't beat 81.660 even w/ clip rebase. **FiLM injection-count + per-block-capacity axes now saturated at n_hidden=128.** Frieren reassigned PR #3980 Lion optimizer.
+- **Lookahead (edward #3830) CLOSED 13:35:** Paired Δ +0.42% val_avg / +1.45% test 3-split. Mechanism confirmed (val trajectory ~11% smoother) but redundant with EMA(0.999). Per-split pattern shows regularization signature (helps `val_geom_camber_rc`, hurts in-dist + Re-rand). **Trajectory-smoothing role occupied by EMA on our stack.** Edward reassigned PR #3985 AGC.
 
-### Other in-flight experiments (all on stale stack, no clip — apply rebase-if-positive-Δ protocol)
+### Other in-flight experiments (stale stack — apply rebase-if-positive-Δ protocol)
 
-- **🔥 T_max=20 (thorfinn #3390 R2):** Actively training. R1 showed 88.229 on bf16-only; R2 tests FiLM stack. Will need rebase with clip if paired Δ positive.
-- **🔥 SF-AdamW (alphonse #3594 R2):** Actively training. R1 showed −20.75% pre-FiLM; R2 needs FiLM-stack verify. Will need rebase with clip if paired Δ positive.
-- **Lookahead (edward #3830):** Actively training. Will need rebase with clip if paired Δ positive.
-- **SDF features (askeladd #3777):** Pod restarted 12:28 UTC; spinning up.
+- **🔥 T_max=20 (thorfinn #3390 R2):** Student just started R2 at 13:32 UTC with `--grad_clip_norm 1.0` in BOTH arms (smart — caught the baseline move). R1 showed 88.229 on bf16-only; R2 tests full clip stack composition.
+- **🔥 SF-AdamW (alphonse #3594 R2):** Training. R1 showed −20.75% pre-FiLM; R2 needs FiLM+clip stack verify.
+- **SDF features (askeladd #3777):** Pod 59m old; spinning up after restart.
 
 ### Confirmed closed axes
 
 - **slice_num=64 locked in** (#3684 closed): 32 and 96 both regress by +3.8-4.9%. 64 is the knee point at n_hidden=128 capacity. (Note: 96 may unlock at n_hidden=192.)
 - **Three-shot FiLM falsified** (#3681 closed): +4.08% regression. Shared conditioner head over-stretched; preprocess injection site is wrong (not inside residual stream).
 - **Per-block FiLM closed** (#3829 closed 13:28 UTC): noise-floor signal (paired Δ −0.53%), +19.5% params, confounded design.
+- **Lookahead closed** (#3830 closed 13:35 UTC): paired Δ +0.42% val / +1.45% test; mechanism real but redundant with EMA(0.999). Trajectory-smoothing role occupied.
 - **Fourier axis closed** (#3117 R4): subsumed by FiLM.
 - **Batch size axis closed** (#3365): GPU compute-bound; bs=4 is optimal.
 
-### Key in-flight experiments (13:30 UTC)
+### Key in-flight experiments (13:38 UTC)
 
 | Student | PR | Hypothesis | Status |
 |---------|----|-----------|--------|
-| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | Training (GPU active) on clipthresh-r1 |
-| thorfinn | #3390 | T_max=20 on FiLM stack (R2) | Training (stale stack) |
+| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | Training on clipthresh-r1 |
+| thorfinn | #3390 | T_max=20 on full clip stack (R2) | Student just started R2 at 13:32 UTC with --grad_clip_norm 1.0 in both arms |
 | alphonse | #3594 | SF-AdamW on FiLM stack (R2) | Training (stale stack) |
-| edward | #3830 | Lookahead optimizer | Training (stale stack) |
+| edward | **#3985** | **AGC (per-group) vs global L2 clip** | **Just assigned 13:37 UTC; pod will pick up** |
 | frieren | **#3980** | **Lion optimizer + clip vs AdamW+clip** | **Just assigned 13:27 UTC; pod will pick up** |
-| nezuko | #3492 | n_hidden=192 + clip (R3 rebase) | Pod just restarted at 13:20 UTC; rebasing |
-| fern | #3758 | n_layers=4 + clip (R3 rebase) | Pod 9h old; force-pushed onto new HEAD for R3 |
+| nezuko | #3492 | n_hidden=192 + clip (R3 rebase) | Pod just restarted 13:20 UTC; rebasing |
+| fern | #3758 | n_layers=4 + clip (R3 rebase) | Pod 9h old; on new HEAD for R3 |
 | askeladd | #3777 | SDF input features | Pod 59m old; spinning up after restart |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
@@ -117,14 +119,15 @@ All future experiments must include `--grad_clip_norm 1.0` in the full stack.
 
 1. **Clip threshold optimum** — tanjiro #3906 testing {0.25, 1.0, 4.0}. Result pending.
 2. **Lion optimizer (ASSIGNED #3980, frieren)** — Sign projection (L∞ direction norm) vs AdamW+clip (L2 direction norm). Tests whether clip's load-bearing mechanism is direction normalization (lr=1.5e-4, wd=3e-4).
-3. **Sobolev / gradient loss** — physically motivated; adds gradient supervision near surface. High-EV but high-effort.
-4. **T_max=20 + clip** — natural composition; thorfinn #3390 will likely need rebase onto full stack.
-5. **SF-AdamW + clip** — eliminates cosine schedule; alphonse #3594 likely needs rebase.
-6. **n_layers=4 + clip** — fern's depth finding may compose with clipping (in-flight as #3758 R3).
-7. **n_hidden=192 + clip** — capacity expansion on new baseline (in-flight as #3492 R3).
-8. **Wider FiLM MLP hidden** — `film_mlp_hidden=256`; tests conditioner body capacity. Conditional on #3492 R3 outcome.
-9. **Adaptive Gradient Clipping (AGC, NFNet)** — per-parameter group clip based on param norm; finer-grained than global L2 clip.
+3. **AGC (ASSIGNED #3985, edward)** — Per-group adaptive clip (NFNet) vs global L2 clip. Tests whether per-tensor adaptive normalization improves over global L2 at this scale.
+4. **Sobolev / gradient loss** — physically motivated; adds gradient supervision near surface. High-EV but high-effort.
+5. **T_max=20 + clip** — natural composition; thorfinn #3390 R2 in flight on full clip stack.
+6. **SF-AdamW + clip** — eliminates cosine schedule; alphonse #3594 R2 in flight (likely needs further rebase).
+7. **n_layers=4 + clip** — fern's depth finding may compose with clipping (in-flight as #3758 R3).
+8. **n_hidden=192 + clip** — capacity expansion on new baseline (in-flight as #3492 R3).
+9. **Wider FiLM MLP hidden** — `film_mlp_hidden=256`; tests conditioner body capacity. Conditional on #3492 R3 outcome.
 10. **n_layers=3 + clip** — extreme depth-down (only if #3758 n_layers=4 wins).
+11. **Mixup / CutMix data augmentation** — interpolate training samples; may help cross-geometry split where Lookahead showed mild regularization signature.
 
 ## Operational notes
 
