@@ -567,6 +567,7 @@ class Config:
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     slice_num: int = 64   # Transolver attention slice token count
+    mlp_ratio: int = 2   # FFN inner-dim multiplier: hidden -> mlp_ratio*hidden -> hidden
     optimizer: str = "adamw"   # 'adamw' or 'lion'
     beta1: float = 0.9   # Optimizer momentum coefficient (Adam/Lion)
     beta2: float = 0.999  # Optimizer second-moment coefficient (Adam) / EMA coeff (Lion)
@@ -617,7 +618,7 @@ model_config = dict(
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     ffn_act=cfg.ffn_act,
     norm_type=cfg.norm_type,
