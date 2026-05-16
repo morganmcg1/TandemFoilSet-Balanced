@@ -1,6 +1,50 @@
 # Baseline — icml-appendix-willow-pai2i-48h-r3
 
-## Current best (as of 2026-05-16 17:30) — PR #3947: Lookahead k=5 on SOAP (precondition_frequency=5)
+## Current best (as of 2026-05-16 19:20) — PR #3497: Gradient clipping (max_norm=1.0)
+
+Eleven winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + Lookahead k=5 (PR #3947, −4.14%) + **Gradient clipping max_norm=1.0** (PR #3497, tanjiro, **−2.72% vs previous canonical**).
+
+**Primary ranking metric:**
+- `val_avg/mae_surf_p` = **47.1000** (run `epby4q4n`, tanjiro variant-clip1-huber01-look-v2, best epoch 14)
+
+**Test (paper-facing):**
+- `test_avg/mae_surf_p_excl_cruise` (3-split mean) = **46.2590** (−3.23% vs previous 47.8034)
+  - `test_single_in_dist/mae_surf_p` = 50.9813
+  - `test_geom_camber_rc/mae_surf_p` = 50.7476
+  - `test_re_rand/mae_surf_p` = 37.0480
+  - `test_geom_camber_cruise/mae_surf_p` = NaN (pre-existing bug)
+
+**Config (post-merge):**
+- Transolver: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0
+- **SOAP optimizer** (precondition_frequency=5) lr=1e-3, warmup_epochs=3 (LinearLR) → CosineAnnealingLR, weight_decay=1e-4, batch_size=4, surf_weight=10.0
+- 50 epochs, **Huber loss (huber_beta=0.1, cauchy_c=0.0)**; `vol_loss + 10*surf_loss`
+- **EMA of model weights** (ema_decay=0.99, updated each training step)
+- **Lookahead (k=5, alpha=0.5)** wrapping SOAP
+- **Gradient clipping (max_norm=1.0)** applied before optimizer.step()
+- Wall-clock: ~35 min / arm (hit 30-min cap; best epoch 14, 5,250 steps)
+- Peak VRAM: 42.1 GB
+- `param count = 0.66M`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --optimizer soap \
+  --precondition_frequency 5 \
+  --lr 1e-3 --warmup_epochs 3 \
+  --huber_beta 0.1 \
+  --surf_weight 10.0 --seed 42 \
+  --ema_decay 0.99 \
+  --use_lookahead --lookahead_k 5 --lookahead_alpha 0.5 \
+  --grad_clip 1.0 \
+  --wandb_group grad-clip-huber01-look \
+  --wandb_run_name variant-clip1-huber01-look-v2
+```
+
+**Mechanism note:** Huber β=0.1 produces explosive pre-clip grad_norm (p50=112, max=730) vs Cauchy (p50=17). L1-dominant gradients have huge dynamic range — clip=1.0 renormalizes 100% of steps. SOAP preconditioner cares about gradient direction (relative curvature), not absolute magnitude, so aggressive scaling doesn't hurt and stabilizes per-step updates.
+
+---
+
+## Previous best (as of 2026-05-16 17:30) — PR #3947: Lookahead k=5 on SOAP (precondition_frequency=5)
 
 Ten winners merged: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + SOAP optimizer (PR #3283, −31.7%) + SOAP precond_freq=5 (PR #3495, −1.78%) + EMA model weights decay=0.999 (PR #3430, −18.8%) + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + Cauchy loss c=1.0 (PR #3612, −3.67%) + Huber beta=0.1 (PR #3868, −3.77%) + **Lookahead k=5** (PR #3947, alphonse, **−4.14% vs previous canonical**).
 
