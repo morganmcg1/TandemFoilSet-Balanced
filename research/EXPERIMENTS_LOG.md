@@ -696,3 +696,27 @@ Merged. New baseline: val=81.9754, test_3split=81.3654. BASELINE.md updated.
 | #3662 | thorfinn | vel-asinh (scale=1.0) | Apply asinh to Ux/Uy channels too |
 | #3663 | edward | dropout-sweep (0.05, 0.1) | MLP dropout for OOD regularization |
 | #3664 | tanjiro | slice-num-on-asinh (128) | Retest with cleaner loss landscape |
+
+## 2026-05-16 04:35 — PR #3543 CLOSED: EMA decay push (alphonse) — all arms fail new baseline
+
+| Arm | ema_decay | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | Vs new baseline (81.97) |
+|---|---|---|---|---|---|
+| A (best) | 0.98 | x14urdxg | 90.8394 | 88.0412 | +8.87 (+10.8%) |
+| B | 0.97 | oz0q2f1e | 93.2994 | 89.3332 | +11.33 (+13.8%) |
+| C | 0.95 | sc2bmjob | 95.6469 | 91.9280 | +13.68 (+16.7%) |
+
+Per-split val (best arm 0.98, run x14urdxg): single_in_dist 107.784 | geom_camber_rc 103.664 | geom_camber_cruise 67.885 | re_rand 84.025
+
+**Verdict: CLOSED.** Best arm 0.98 essentially ties the OLD baseline (90.84 vs 90.61) but does NOT beat the new merged baseline 81.97. The EMA decay axis is exhausted in [0.95, 0.99] — descent reversed immediately below 0.99.
+
+**Key finding (alphonse):** ema_lag_rel stays ~1-2% across the entire bracket, counter-intuitively decreasing as decay decreases (at low decay the shadow tracks live in 1 step). The gain from 0.997→0.99 came from reducing smoothing bias on the live-side optimum, not from shrinking lag. Per-split residuals: single_in_dist and geom_camber_rc are now the bottleneck splits (>100 mae).
+
+**alphonse reassigned** → PR #3679: Huber δ sweep on asinh baseline (0.5, 0.3). Mechanistic motivation: asinh-compressed targets have ~2.5× smaller residual scale; δ=1.0 tuned for raw pressure is now in the wrong place (too many residuals in L2 region).
+
+## 2026-05-16 04:35 — PR #3679 ASSIGNED: Huber δ sweep on asinh baseline (alphonse)
+
+Hypothesis: δ=1.0 was calibrated for raw-pressure residuals (|p| up to ~5+). Post-asinh, the effective residual scale is ~2.5× smaller; optimal δ should be ~0.4–0.5. Sweep arms:
+- Arm A (primary): `--huber_delta 0.5`
+- Arm B (conditional if A wins ≤82.5): `--huber_delta 0.3`; if A regresses >84: `--huber_delta 2.0`
+
+Stack: grad_clip=5.0, ema_decay=0.99, asinh_p_scale=1.0. No other changes.

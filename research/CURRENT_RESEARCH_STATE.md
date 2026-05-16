@@ -1,10 +1,10 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 04:00 UTC
+- **Last updated:** 2026-05-16 04:35 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (checked 03:45 UTC — no open issues).
+- **Most recent direction from human researcher team:** None (checked 04:30 UTC — no open issues).
 
-## Current best baseline (UPDATED)
+## Current best baseline (UNCHANGED)
 
 | Metric | Value | Source |
 |---|---|---|
@@ -29,12 +29,11 @@ cd target/ && python train.py \
 
 ## Active PRs (zero idle students)
 
-### Round-4 carry-over (WIP, pre-merge, OLD BASELINE)
+### Round-4 carry-over (WIP, pre-merge, OLD BASELINE — benchmarked vs 81.97)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3543 | alphonse | ema-decay-push (0.97, 0.95) | 0.97 arm running; 0.95 pending |
-| #3649 | fern | n_head sweep (4→8, cond. 16) | running on OLD baseline (90.61) |
+| #3649 | fern | n_head sweep (4→8) | No comments yet — still running |
 
 ### Round-5 (WIP, NEW baseline: val=81.9754)
 
@@ -46,6 +45,7 @@ cd target/ && python train.py \
 | #3662 | thorfinn | vel-asinh (scale=1.0) | asinh on Ux/Uy channels |
 | #3663 | edward | dropout-sweep (0.05, 0.1) | MLP dropout for OOD |
 | #3664 | tanjiro | slice-num-on-asinh (128) | Retest capacity on cleaner loss |
+| #3679 | alphonse | Huber δ sweep (0.5, 0.3) on asinh | Loss-shape companion to asinh transform |
 
 ## Confirmed winners (merged)
 
@@ -56,17 +56,18 @@ cd target/ && python train.py \
 | #3474 (alphonse) | EMA decay=0.99 | 90.6131 | −4.0% | |
 | **#3475 (askeladd)** | **asinh-pressure (scale=1.0)** | **81.9754** | **−9.53%** | **Every val split improves; val_re_rand −11.8%; test_3split=81.37** |
 
-## Closed PRs (Round 4)
+## Closed PRs (Rounds 4–5)
 
-| PR | Student | Hypothesis | Result | Verdict |
+| PR | Student | Hypothesis | Best val | Verdict |
 |---|---|---|---|---|
-| #3477 | thorfinn | physics-continuity | all REGRESS 98-106 | CLOSED |
-| #3571 | fern | depth-sweep n_layers=6 | val=93.83 (+3.55%) | CLOSED — wall-clock bound |
-| #3610 | thorfinn | mlp_ratio=4 | val=93.12 (+2.76%) | CLOSED — wall-clock bound |
-| #3576 | nezuko | wd-sweep (old baseline) | val=90.46 (TIED) | CLOSED — superseded |
-| #3575 | edward | p_surf_weight=3/5 | val=94.65 (+4.5%) | CLOSED — decisive regression |
-| #3578 | frieren | re-sinusoidal-embed | val=130.82 (+44%) | CLOSED — frequency mismatch bug |
-| #3577 | tanjiro | slice-num=128 (old stack) | val=101.18 (+11.6%) | CLOSED — stale, pre-asinh |
+| #3477 | thorfinn | physics-continuity | 98-106 all REGRESS | CLOSED |
+| #3571 | fern | depth-sweep n_layers=6 | 93.83 (+3.55%) | CLOSED — wall-clock bound |
+| #3610 | thorfinn | mlp_ratio=4 | 93.12 (+2.76%) | CLOSED — wall-clock bound |
+| #3576 | nezuko | wd-sweep (old baseline) | 90.46 (TIED) | CLOSED — superseded |
+| #3575 | edward | p_surf_weight=3/5 | 94.65 (+4.5%) | CLOSED — decisive regression |
+| #3578 | frieren | re-sinusoidal-embed | 130.82 (+44%) | CLOSED — frequency mismatch bug |
+| #3577 | tanjiro | slice-num=128 (old stack) | 101.18 (+11.6%) | CLOSED — stale, pre-asinh |
+| **#3543** | **alphonse** | **ema-decay-push (0.98, 0.97, 0.95)** | **90.84 (best arm 0.98)** | **CLOSED — exhausted below 0.99; best arm +10.8% vs new baseline** |
 
 ## Key findings (cumulative)
 
@@ -78,33 +79,35 @@ EMA → EMA+clip+Huber → faster EMA decay (0.99) compounds cleanly. Combined: 
 - val_re_rand drops 86.49 → 76.26 (−11.8%) — largest OOD improvement yet
 - Every val split improves
 
-### Architecture/regularization axes (Round 4 — falsified on OLD baseline)
-- Depth (n_layers=6): +3.55% REGRESS — wall-clock bound, fewer epochs
-- MLP width (mlp_ratio=4): +2.76% REGRESS — wall-clock bound  
-- Weight decay (wd sweep): TIED — 90.46, marginal; worth retesting on new baseline
-- Channel loss weighting (p_surf_weight): decisive REGRESS (+4-18%) — gradient norm explosion
+### Exhausted axes
+- **EMA decay** (Round 4+5): optimum firmly at 0.99. 0.997→0.99 improved; 0.98→0.95 all regress. ema_lag_rel ~1-2% throughout — lag is not the binding constraint.
+- **Depth** (n_layers=6): +3.55% REGRESS — wall-clock bound, fewer epochs
+- **MLP width** (mlp_ratio=4): +2.76% REGRESS — wall-clock bound
+- **Weight decay** (wd sweep, old baseline): TIED — worth retesting on new baseline (in-flight #3661)
+- **Channel loss weighting** (p_surf_weight): decisive REGRESS (+4-18%) — gradient norm explosion
+- **Re-sinusoidal (buggy version)**: +44% catastrophic — wrong normalization
 
-### Bad implementations (closed, correctable)
-- Re-sinusoidal: catastrophic failure due to wrong normalization (log_re/16 spans [0.78, 0.96] not [0,1]). Fix: normalize to actual [10.8, 13.4] range. Reassigned as corrected version.
-- Slice_num=128 on old stack: run completed but not reported; retesting on new baseline.
+### Open axes (Round 5)
+- **asinh scale** (#3659): optimal compression in 1.5/2.0 range
+- **Corrected Re-embed** (#3660): fixed normalization log_re in [10.8, 13.4] — targets val_re_rand
+- **wd on asinh** (#3661): regularization with clean loss landscape
+- **vel-asinh** (#3662): apply asinh to Ux/Uy (less heavy-tailed but free)
+- **dropout** (#3663): MLP regularization for OOD
+- **slice_num=128 on asinh** (#3664): architecture retest on cleaner loss
+- **n_head sweep** (#3649): architecture attention granularity (on OLD baseline; benchmarked vs 81.97)
+- **Huber δ on asinh** (#3679): loss-shape companion — δ=1.0 was tuned for raw-pressure; asinh requires smaller δ
 
-## Strategic outlook (Round 5)
+## Strategic outlook
 
-**Target**: val < 78 (−5% improvement from 81.97). To get there:
-1. **asinh scale** might find 1-2% via optimal compression
-2. **Corrected Re-embed** could improve val_re_rand toward 70
-3. **wd + asinh** might add 1-2% OOD generalization
-4. **velocity asinh** — likely marginal (vel less heavy-tailed) but cheap to test
-5. **dropout** — regularization, moderate OOD expected gain
-6. **slice_num on asinh** — uncertain, previous regression was pre-asinh
-
-**alphonse #3543 ema-decay-push**: 0.97/0.95 arms — if they beat 0.99, could compound with asinh for another improvement. Note: these will be benchmarked against new baseline (81.97). Val=90.xx on old baseline won't beat it.
-
-**fern #3649 n_head**: same caveat — benchmarked against 81.97. If n_head=8 gives val~85, it's a clear close.
+**Target**: val < 78 (−5% from 81.97). Most promising paths:
+1. **Huber δ on asinh** (#3679 alphonse): mechanistically motivated — δ needs to follow the asinh transform. Expected 1-3% gain.
+2. **asinh scale** (#3659 askeladd): 1-2% expected if 1.0 is suboptimal.
+3. **Corrected Re-embed** (#3660 frieren): could push val_re_rand below 70.
+4. **Compounding**: if Huber δ + asinh scale both win, they stack. That's potentially val < 78.
 
 ## Operational notes
 
 - **data/scoring.py NaN bug**: cruise=NaN fleet-wide. Known, dataset issue.
 - Per-run budget: 30 min wall clock, 50 epoch cap (~14 epochs).
-- **Zero idle students**: 8 WIP PRs (3543, 3649, 3659-3664).
-- REST API: core exhausted (0/5000), resets ~04:19 UTC. GraphQL: 3000+ remaining. PR creation works via GraphQL.
+- **Zero idle students**: 8 WIP PRs (#3649, #3659-#3664, #3679). All r2 pods healthy (1/1).
+- REST API: recovering — last exhausted 03:34 UTC, resets hourly (~04:34 UTC).
