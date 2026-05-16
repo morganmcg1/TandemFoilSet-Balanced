@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import subprocess
@@ -465,6 +466,8 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    head_embed_boost: float = 2.5
+    warmup_steps: int = 500
 
 
 cfg = sp.parse(Config)
@@ -522,8 +525,62 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+# Build per-group params: each TransolverBlock gets its own group, everything
+# else (preprocess MLP + placeholder) goes into ``head_and_embed``. This lets
+# us boost head_and_embed's LR independently (cfg.head_embed_boost) and apply
+# a per-step linear warmup (cfg.warmup_steps) only to that group, while the
+# block groups follow the standard cosine schedule from step 1.
+head_embed_params = []
+block_params_by_idx: dict[int, list] = {}
+for _pname, _p in model.named_parameters():
+    if not _p.requires_grad:
+        continue
+    if "blocks." in _pname:
+        _idx = int(_pname.split("blocks.")[1].split(".")[0])
+        block_params_by_idx.setdefault(_idx, []).append(_p)
+    else:
+        head_embed_params.append(_p)
+
+HEAD_EMBED_LR = cfg.lr * cfg.head_embed_boost
+param_groups: list[dict] = []
+for _i in sorted(block_params_by_idx.keys()):
+    param_groups.append({
+        "params": block_params_by_idx[_i],
+        "lr": cfg.lr,
+        "weight_decay": cfg.weight_decay,
+        "name": f"block_{_i}",
+    })
+param_groups.append({
+    "params": head_embed_params,
+    "lr": HEAD_EMBED_LR,
+    "weight_decay": cfg.weight_decay,
+    "name": "head_and_embed",
+})
+HEAD_EMBED_IDX = len(param_groups) - 1
+GROUP_NAMES = [g["name"] for g in param_groups]
+
+print(f"Optimizer param groups (head_embed_boost={cfg.head_embed_boost}, warmup_steps={cfg.warmup_steps}):")
+for _g in param_groups:
+    _n = sum(p.numel() for p in _g["params"])
+    print(f"  {_g['name']:<16s} lr={_g['lr']:.2e}  params={_n}")
+
+optimizer = torch.optim.AdamW(param_groups)
+# CosineAnnealingLR drives block_* groups via its closed-form cosine. The
+# head_and_embed group is managed manually each step via a closed-form
+# product of (peak lr) x (epoch cosine factor) x (per-step warmup multiplier).
+# We bypass scheduler.get_last_lr() for head_and_embed because PyTorch's
+# CosineAnnealingLR uses a recurrence on group['lr'] after step #1, and the
+# warmup overrides on group['lr'] would otherwise contaminate the per-epoch
+# cosine decay (see commit ddc3a9d analysis).
+COSINE_T_MAX = 15
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=COSINE_T_MAX)
+
+
+def _head_embed_cosine_factor(last_epoch: int) -> float:
+    """Closed-form cosine factor matching CosineAnnealingLR with eta_min=0."""
+    if last_epoch >= COSINE_T_MAX:
+        return 0.0
+    return 0.5 * (1.0 + math.cos(math.pi * last_epoch / COSINE_T_MAX))
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -550,6 +607,9 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+for _gn in GROUP_NAMES:
+    wandb.define_metric(f"lr/{_gn}", step_metric="global_step")
+    wandb.define_metric(f"train/grad_norm/{_gn}", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -598,13 +658,44 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), max_norm=float("inf")
         )
+        # Per-group grad-norm: sqrt(sum of squared L2 norms within the group).
+        # Accumulate on-device per group, one .item() sync per group.
+        per_group_gn: dict[str, float] = {}
+        for _g in optimizer.param_groups:
+            _sq = None
+            for _p in _g["params"]:
+                if _p.grad is not None:
+                    _s = _p.grad.detach().pow(2).sum()
+                    _sq = _s if _sq is None else _sq + _s
+            per_group_gn[_g["name"]] = float(_sq.sqrt().item()) if _sq is not None else 0.0
+
+        # head_and_embed lr is managed manually via the closed-form product:
+        #   HEAD_EMBED_LR * cosine_factor(scheduler.last_epoch) * warmup_mul
+        # Bypass scheduler.get_last_lr()[HEAD_EMBED_IDX] which is contaminated
+        # by previous warmup overrides under PyTorch's CosineAnnealingLR
+        # recurrence (see scheduler construction comment above). Block groups
+        # still follow scheduler.step()'s cosine via their own group['lr'].
+        _he_cosine = _head_embed_cosine_factor(scheduler.last_epoch)
+        _warmup_mul = (
+            min((global_step + 1) / cfg.warmup_steps, 1.0)
+            if cfg.warmup_steps > 0
+            else 1.0
+        )
+        optimizer.param_groups[HEAD_EMBED_IDX]["lr"] = (
+            HEAD_EMBED_LR * _he_cosine * _warmup_mul
+        )
+
         optimizer.step()
         global_step += 1
-        wandb.log({
+        _log = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        for _g in optimizer.param_groups:
+            _log[f"lr/{_g['name']}"] = _g["lr"]
+            _log[f"train/grad_norm/{_g['name']}"] = per_group_gn[_g["name"]]
+        wandb.log(_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -634,12 +725,22 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
+        # Legacy "lr" key kept for back-compat; per-group lr is in lr/<name>.
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "step_time_ms": step_time_ms,
         "gpu_mem_gb_peak": peak_gb,
         "global_step": global_step,
     }
+    for _gi, _gname in enumerate(GROUP_NAMES):
+        if _gi == HEAD_EMBED_IDX:
+            # head_and_embed: use the formula since scheduler.get_last_lr()
+            # is contaminated by per-step warmup overrides on group['lr'].
+            log_metrics[f"lr/{_gname}"] = (
+                HEAD_EMBED_LR * _head_embed_cosine_factor(scheduler.last_epoch)
+            )
+        else:
+            log_metrics[f"lr/{_gname}"] = scheduler.get_last_lr()[_gi]
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
