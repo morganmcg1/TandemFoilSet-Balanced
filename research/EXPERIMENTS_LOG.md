@@ -411,3 +411,23 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 
 ---
 
+
+## 2026-05-16 08:30 — PR #3733: Warmup-cosine schedule (v2): 2-epoch linear warmup + cosine
+- charliepai2i48h2-edward/warmup-cosine-v2
+- **Hypothesis:** 2-epoch linear LR warmup (start_factor=1e-3) before CosineAnnealingLR(T_max=78) would mitigate Lion cold-start instability — first-epoch updates on randomly-initialized weights with fixed-magnitude sign-based steps could encode noise into the EMA shadow. After warmup, cosine continues to lr=0 at original T_max.
+- **Result:** `val_avg/mae_surf_p = 61.3285` at epoch 18 (vs baseline 58.8717, +4.2% regression). All 4 splits regressed.
+
+| Split | Baseline (PR #3485) | warmup-cosine | Δ |
+|-------|---------------------|---------------|---|
+| single_in_dist | 70.2014 | 71.5439 | +1.9% |
+| geom_camber_rc | 68.7070 | 73.1294 | +6.4% |
+| geom_camber_cruise | 39.0294 | 41.4636 | +6.2% |
+| re_rand | 57.5489 | 59.1769 | +2.8% |
+| **val_avg** | **58.8717** | **61.3285** | **+4.2%** |
+| **test_avg** | **51.6269** | **53.5904** | **+3.8%** |
+
+- **Metrics:** `models/model-charliepai2i48h2-edward-warmup-cosine-v2-20260516-072829/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. Per-epoch val curve at epoch 18 (61.33) was roughly where the bf16 baseline was at epoch ~17 — warmup shifted the descent right by one epoch without compensating stability gain.
+- **Key finding:** Lion + EMA + grad-clip already absorb the early-epoch instability the hypothesis worried about. Warmup is essentially zero-sum on this stack in a fixed budget: 2 epochs of slower learning that never get recovered. The val curve was still descending at ~2.3/epoch at end and `is_best` hit on every epoch — the diagnostic is real but the solution is not warmup. Reassigned edward to cosine-tmax-align (#3822): T_max=20/30 vs current 80 (cosine essentially constant at LR 0.85× initial through 18 epochs) — late-schedule complement to this early-schedule failure.
+
+---
