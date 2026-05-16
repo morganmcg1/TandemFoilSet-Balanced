@@ -279,7 +279,7 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1") -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -291,6 +291,12 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
 
+    amp_ctx = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if (use_bf16 and device.type == "cuda")
+        else torch.autocast(device_type="cuda", enabled=False)
+    )
+
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
             x = x.to(device, non_blocking=True)
@@ -301,7 +307,10 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_enc})["preds"]
+            with amp_ctx:
+                pred = model({"x": x_enc})["preds"]
+            # Cast model output back to fp32 for metrics/loss numerical comparability
+            pred = pred.float()
 
             # NaN guard: some samples (e.g. test_geom_camber_cruise idx 20) have
             # non-finite ground-truth. IEEE 754 propagates NaN through NaN * 0,
@@ -467,6 +476,7 @@ class Config:
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
+    use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
 
 
 cfg = sp.parse(Config)
@@ -515,6 +525,12 @@ ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+def train_amp_ctx():
+    """bf16 autocast for the forward pass when --use_bf16 (no GradScaler needed)."""
+    if cfg.use_bf16 and device.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return torch.autocast(device_type="cuda", enabled=False)
 
 warmup_epochs = 2
 def lr_lambda(epoch):
@@ -589,7 +605,10 @@ for epoch in range(MAX_EPOCHS):
             x_norm[..., :2] = x_norm[..., :2] + noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_enc})["preds"]
+        with train_amp_ctx():
+            pred = model({"x": x_enc})["preds"]
+        # Cast model output back to fp32 so loss/metric arithmetic stays in fp32
+        pred = pred.float()
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
         vol_mask = mask & ~is_surface
@@ -620,7 +639,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -688,7 +707,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
