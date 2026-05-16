@@ -389,6 +389,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     grad_clip: float = 0.0  # max grad norm; 0 disables
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
+    augment_prob: float = 0.0  # per-sample vertical mirror prob for single-foil; 0 disables
 
 
 cfg = sp.parse(Config)
@@ -486,12 +487,30 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    aug_single_total = 0
+    aug_flipped_total = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if cfg.augment_prob > 0:
+            # Single-foil iff foil-2 NACA (dims 19:22) is all zero. Global features
+            # are constant across nodes; sample at node 0 (always a real node).
+            is_single = x[:, 0, 19:22].abs().sum(dim=-1) == 0  # [B]
+            flip_draw = torch.rand(x.shape[0], device=x.device) < cfg.augment_prob
+            to_flip = is_single & flip_draw  # [B]
+            aug_single_total += int(is_single.sum().item())
+            aug_flipped_total += int(to_flip.sum().item())
+            if to_flip.any():
+                flip_b1 = to_flip.view(-1, 1)
+                # z, AoA1, AoA2(=0 for single-foil, harmless), Uy sign-flip
+                x[:, :, 1] = torch.where(flip_b1, -x[:, :, 1], x[:, :, 1])
+                x[:, :, 14] = torch.where(flip_b1, -x[:, :, 14], x[:, :, 14])
+                x[:, :, 18] = torch.where(flip_b1, -x[:, :, 18], x[:, :, 18])
+                y[:, :, 1] = torch.where(flip_b1, -y[:, :, 1], y[:, :, 1])
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -552,6 +571,12 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.augment_prob > 0:
+        log_metrics["train/aug_frac_applied"] = (
+            aug_flipped_total / max(aug_single_total, 1)
+        )
+        log_metrics["train/aug_single_count"] = aug_single_total
+        log_metrics["train/aug_flipped_count"] = aug_flipped_total
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
