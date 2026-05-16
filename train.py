@@ -370,6 +370,7 @@ class Config:
     surf_weight: float = 25.0
     epochs: int = 50
     smooth_l1_beta: float = 1.0  # transition point between quadratic/linear regions of SmoothL1
+    compile: bool = False  # enable torch.compile on model + ema_model
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -425,6 +426,15 @@ ema_model = copy.deepcopy(model).eval()
 for p in ema_model.parameters():
     p.requires_grad_(False)
 print(f"EMA shadow model created with decay={ema_decay}")
+
+if cfg.compile:
+    # dynamic=True because per-sample mesh sizes vary 74K-242K nodes; a static
+    # graph would cause recompilation per batch. Compile both train + ema
+    # separately AFTER deepcopy so each gets its own compiled wrapper.
+    print("Compiling model with torch.compile(mode='reduce-overhead', dynamic=True)...")
+    model = torch.compile(model, mode='reduce-overhead', dynamic=True)
+    ema_model = torch.compile(ema_model, mode='reduce-overhead', dynamic=True)
+    torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
