@@ -644,4 +644,46 @@ W&B runs: `xn1ad9ka` (final) · Group: `onecycle_lr`
 - 137.12 vs 112.90 = 21% regression after correct schedule setup. Closed.
 - **Key insight**: Edward diagnosed the schedule mismatch himself and reran with --epochs 9. The schedule fully annealed (4e-5 → 1e-3 → ~0), so the hypothesis was correctly tested.
 - OneCycleLR fails because: (a) 9-epoch total budget means no prolonged low-LR refinement phase, and (b) cosine starts at peak LR and descends immediately, giving better use of the budget.
+
+---
+
+## 2026-05-16 02:25 — PR #3542: H: Test-Time Augmentation via horizontal-flip symmetry
+
+- **Branch:** willowpai2i48h1-edward/tta-hflip
+- **Student:** willowpai2i48h1-edward
+- **Hypothesis:** Predict on original + horizontally flipped input, un-flip, average — exploit approximate z-symmetry of TandemFoilSet to reduce variance and improve OOD splits.
+
+### Results
+
+| Metric | Raw | TTA | Δ vs raw | Baseline |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | **91.14** | 161.10 | **+76.7%** | 87.91 |
+| **test_avg/mae_surf_p** | **85.74** | 153.77 | **+79.4%** | 83.38 |
+
+Per-split breakdown (best epoch 17, W&B `zozun1q2`):
+
+| Split | Val raw | Val TTA | Val Δ | Test raw | Test TTA | Test Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist (raceCar single) | 104.24 | 224.94 | +115.8% | 92.68 | 205.39 | +121.6% |
+| geom_camber_rc (raceCar tandem) | 99.53 | 209.90 | +110.9% | 89.09 | 199.41 | +123.8% |
+| geom_camber_cruise (cruise tandem) | 74.41 | 80.96 | +8.8% | 79.88 | 89.14 | +11.6% |
+| re_rand (mixed tandem) | 86.39 | 128.62 | +48.9% | 81.32 | 121.15 | +49.0% |
+
+Best epoch: 17, Peak VRAM: 32.9 GB, W&B: `zozun1q2`
+
+### Analysis
+**Hypothesis catastrophically falsified.** TTA is +76.7% over raw (not the predicted -1% to -3%). The dataset is **fundamentally not z-symmetric for the dominant raceCar domain:**
+- RaceCar has one-sided `pos_z` (always positive, ground-effect domain). Flip → always-negative `pos_z`, never seen in training. Catastrophic OOD.
+- RaceCar AoA is always-negative (inverted foil convention). Flip → always-positive. Never seen.
+- NACA camber encoded non-negatively (`∈ [0,1]`). Flip sign → negative camber. OOD for all splits.
+- **Only cruise** has z-symmetric distribution (pos_z spans ±9.6, both AoA signs). Cruise TTA degrades only 8.8% val — close to neutral.
+
+Edward's per-split feature distribution audit is the most valuable artifact: a definitive dataset-distribution table explaining the OOD failure. Flip-variant diagnostic confirmed no variant rescues raceCar (geom-only flip still 2.15× on raceCar single).
+
+**Raw val=91.14 (single seed)** is +1.8σ over baseline 87.91 — within noise floor, confirming seed variance.
+
+**Program implications:**
+1. frieren's #3563 (train-aug hflip) is at high risk — creating OOD raceCar inputs during training.
+2. "Reflection-based TTA dead" on this dataset. Cruise-only TTA is a low-upside option if needed later.
+3. Physical symmetries that DO exist on TandemFoilSet (e.g., per-split normalization, geometry-conditioned regularization) are worth exploring instead.
 - NaN on test_geom_camber_cruise is a model-quality issue (extreme prediction on under-converged model at high LR), not the data corruption bug.
