@@ -194,10 +194,11 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.n_layers = n_layers
+        film_hidden = 2 * n_hidden  # wider FiLM head (PR #4072): 256 vs prior 128
         self.film_head = nn.Sequential(
-            nn.Linear(3, n_hidden),   # 3 conditioning scalars: log_Re, AoA0, AoA1
+            nn.Linear(3, film_hidden),   # 3 conditioning scalars: log_Re, AoA0, AoA1
             nn.GELU(),
-            nn.Linear(n_hidden, 2 * n_layers * n_hidden),
+            nn.Linear(film_hidden, 2 * n_layers * n_hidden),
         )
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
