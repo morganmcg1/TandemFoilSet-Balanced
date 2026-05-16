@@ -555,10 +555,12 @@ for epoch in range(MAX_EPOCHS):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
 
-            # asinh loss compression on pressure channel (index 2) only.
-            # Compresses heavy-tail z-scores; Ux/Uy channels unchanged.
+            # signed log1p compression on pressure channel (index 2) only.
+            # Sharper compression than asinh near the extremes; Ux/Uy channels unchanged.
             sq_err_uxuy = (pred[..., :2] - y_norm[..., :2]) ** 2
-            sq_err_p = cfg.pressure_weight * (torch.asinh(pred[..., 2:3]) - torch.asinh(y_norm[..., 2:3])) ** 2
+            p_pred = torch.sign(pred[..., 2:3]) * torch.log1p(torch.abs(pred[..., 2:3]))
+            p_true = torch.sign(y_norm[..., 2:3]) * torch.log1p(torch.abs(y_norm[..., 2:3]))
+            sq_err_p = cfg.pressure_weight * (p_pred - p_true) ** 2
             sq_err = torch.cat([sq_err_uxuy, sq_err_p], dim=-1)
 
             vol_mask = mask & ~is_surface
