@@ -280,6 +280,21 @@ def invert_asinh_vel(pred, scale):
     return out
 
 
+def asymmetric_huber_elem(pred, target, delta_pos, delta_neg):
+    """Per-element asymmetric Huber loss.
+
+    r = pred - target. delta_pos applies to r > 0 (model over-predicting),
+    delta_neg applies to r <= 0 (model under-predicting). Returns the un-reduced
+    elementwise loss so callers can apply masks before reducing.
+    """
+    r = pred - target
+    abs_r = r.abs()
+    delta = torch.where(r > 0, delta_pos, delta_neg)
+    quadratic = 0.5 * r * r
+    linear = delta * abs_r - 0.5 * delta * delta
+    return torch.where(abs_r <= delta, quadratic, linear)
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -465,7 +480,9 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     grad_clip: float = 0.0  # max grad norm; 0 disables
-    huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
+    huber_delta: float = 0.0  # symmetric Huber transition in normalized space; 0 = MSE
+    huber_delta_pos: float = 0.0  # asymmetric Huber transition for r=pred-target > 0 (over-prediction); 0 disables asymmetric path
+    huber_delta_neg: float = 0.0  # asymmetric Huber transition for r=pred-target < 0 (under-prediction); 0 disables asymmetric path
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
     asinh_vel_scale: float = 0.0  # 0 disables; >0 enables asinh on Ux/Uy channels
@@ -578,6 +595,12 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_surf_resid_sum = 0.0
+    epoch_surf_resid_pos = 0
+    epoch_surf_resid_n = 0
+    epoch_vol_resid_sum = 0.0
+    epoch_vol_resid_pos = 0
+    epoch_vol_resid_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -605,7 +628,11 @@ for epoch in range(MAX_EPOCHS):
                     f"pred_inv[p] range=[{pp_inv.min().item():.3f},{pp_inv.max().item():.3f}] "
                     f"pred_phys[p] range=[{pp_phys.min().item():.3f},{pp_phys.max().item():.3f}]"
                 )
-        if cfg.huber_delta > 0:
+        if cfg.huber_delta_pos > 0 and cfg.huber_delta_neg > 0:
+            elem_loss = asymmetric_huber_elem(
+                pred, y_target, cfg.huber_delta_pos, cfg.huber_delta_neg,
+            )
+        elif cfg.huber_delta > 0:
             elem_loss = F.huber_loss(pred, y_target, delta=cfg.huber_delta, reduction="none")
         else:
             elem_loss = (pred - y_target) ** 2
@@ -615,6 +642,21 @@ for epoch in range(MAX_EPOCHS):
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        with torch.no_grad():
+            r_p = (pred[..., 2] - y_target[..., 2])
+            r_p_surf = r_p[surf_mask]
+            n_surf_pts = r_p_surf.numel()
+            if n_surf_pts > 0:
+                epoch_surf_resid_sum += r_p_surf.sum().item()
+                epoch_surf_resid_pos += (r_p_surf > 0).sum().item()
+                epoch_surf_resid_n += n_surf_pts
+            r_p_vol = r_p[vol_mask]
+            n_vol_pts = r_p_vol.numel()
+            if n_vol_pts > 0:
+                epoch_vol_resid_sum += r_p_vol.sum().item()
+                epoch_vol_resid_pos += (r_p_vol > 0).sum().item()
+                epoch_vol_resid_n += n_vol_pts
 
         optimizer.zero_grad()
         loss.backward()
@@ -677,6 +719,12 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if epoch_surf_resid_n > 0:
+        log_metrics["train/surf_p_resid_mean"] = epoch_surf_resid_sum / epoch_surf_resid_n
+        log_metrics["train/surf_p_resid_frac_pos"] = epoch_surf_resid_pos / epoch_surf_resid_n
+    if epoch_vol_resid_n > 0:
+        log_metrics["train/vol_p_resid_mean"] = epoch_vol_resid_sum / epoch_vol_resid_n
+        log_metrics["train/vol_p_resid_frac_pos"] = epoch_vol_resid_pos / epoch_vol_resid_n
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
