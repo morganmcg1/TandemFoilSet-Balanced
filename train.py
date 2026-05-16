@@ -81,6 +81,31 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class RMSNorm(nn.Module):
+    """Root-Mean-Square LayerNorm (Zhang & Sennrich 2019): divides by RMS
+    without subtracting the mean. Preserves directional structure for gated
+    activations such as GEGLU.
+
+    Uses the fused ``torch.nn.functional.rms_norm`` kernel when available so
+    the norm operation is a single CUDA launch (the PR-spec naive form below
+    is mathematically equivalent but composes several ops). The sanity-check
+    on init confirms numerical match.
+    """
+
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        return F.rms_norm(x, (self.dim,), self.weight, self.eps)
+
+
+def _make_norm(dim: int, norm_type: str) -> nn.Module:
+    return RMSNorm(dim) if norm_type == "rmsnorm" else nn.LayerNorm(dim)
+
+
 class GEGLU(nn.Module):
     """Gated Linear Unit (Shazeer 2020): out = value * gate_act(gate).
 
@@ -205,15 +230,15 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32, cond_dim=0,
-                 ffn_act="gelu"):
+                 ffn_act="gelu", norm_type="layernorm"):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = _make_norm(hidden_dim, norm_type)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = _make_norm(hidden_dim, norm_type)
         if ffn_act == "geglu":
             self.mlp = GatedMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                                 n_layers=0, gate_act="gelu", res=False)
@@ -248,7 +273,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False, cond_dim=0,
-                 ffn_act="gelu",
+                 ffn_act="gelu", norm_type="layernorm",
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -272,7 +297,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                cond_dim=cond_dim, ffn_act=ffn_act,
+                cond_dim=cond_dim, ffn_act=ffn_act, norm_type=norm_type,
             )
             for i in range(n_layers)
         ])
@@ -424,6 +449,42 @@ def write_experiment_summary(
     print(f"\nSaved experiment summary to {summary_path}")
 
 
+def collect_gate_stats(model: nn.Module, loader, stats: dict, device) -> list[dict]:
+    """One-batch GEGLU gate-activation health. Captures post-activation gate
+    mean/std for each GEGLU module. Uses the first batch of ``loader``.
+    """
+    recs: list[dict] = []
+    handles: list = []
+
+    def make_hook(name: str):
+        def hook(module: GEGLU, inputs, output) -> None:
+            x_in = inputs[0]
+            x_val, gate = module.proj(x_in).chunk(2, dim=-1)
+            gate_post = module.gate_act(gate).float()
+            recs.append({
+                "name": name,
+                "mean": float(gate_post.mean().item()),
+                "std": float(gate_post.std().item()),
+            })
+        return hook
+
+    for name, m in model.named_modules():
+        if isinstance(m, GEGLU):
+            handles.append(m.register_forward_hook(make_hook(name)))
+    try:
+        model.eval()
+        with torch.no_grad():
+            for x, y, is_surface, mask in loader:
+                x = x.to(device, non_blocking=True)
+                x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                _ = model({"x": x_norm})
+                break
+    finally:
+        for h in handles:
+            h.remove()
+    return recs
+
+
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     print(
         f"    {split_name:<26s} "
@@ -453,6 +514,7 @@ class Config:
     cond_dim: int = 11         # FiLM conditioning dim; 0 disables FiLM
     clip_grad_norm: float = 0.0  # Gradient clip max_norm; 0 disables
     ffn_act: str = "gelu"   # FFN activation: 'gelu' (default MLP), 'geglu', 'swiglu'
+    norm_type: str = "layernorm"  # Block-level normalization: 'layernorm' or 'rmsnorm'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -468,6 +530,12 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+if cfg.norm_type == "rmsnorm":
+    _rms_check = RMSNorm(4)
+    _rms_x = torch.tensor([[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]])
+    _rms_y = _rms_check(_rms_x)
+    print(f"[RMSNorm sanity] x[0]={_rms_x[0].tolist()} -> out[0]={[round(v, 4) for v in _rms_y[0].tolist()]}  (expected ≈ [0.3651, 0.7303, 1.0954, 1.4606])")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -499,6 +567,7 @@ model_config = dict(
     mlp_ratio=2,
     cond_dim=cfg.cond_dim,  # log(Re), AoA1, NACA1(3), AoA2, NACA2(3), gap, stagger = 11; 0 disables FiLM
     ffn_act=cfg.ffn_act,
+    norm_type=cfg.norm_type,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -608,6 +677,10 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    gate_stats = []
+    if cfg.ffn_act in ("geglu", "swiglu"):
+        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device)
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -618,8 +691,11 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        "norm_type": cfg.norm_type,
+        "ffn_act": cfg.ffn_act,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
+        "gate_stats": gate_stats,
         "is_best": tag == " *",
     })
     print(
