@@ -401,6 +401,7 @@ def write_experiment_summary(
         "lr_t_max": cfg.lr_t_max,
         "layer_scale_init": cfg.layer_scale_init,
         "ema_decay": cfg.ema_decay,
+        "bf16": cfg.bf16,
     }
     if "raw_val_avg/mae_surf_p" in best_metrics:
         summary["best_raw_val_avg/mae_surf_p"] = best_metrics["raw_val_avg/mae_surf_p"]
@@ -456,6 +457,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
     ema_decay: float | None = None  # None disables EMA; typical values 0.999 / 0.9995
+    bf16: bool = False  # enable BF16 mixed-precision training via torch.amp.autocast (forward+loss only; eval stays FP32)
+    n_hidden: int = 128  # Transolver hidden dim (width)
 
 
 cfg = sp.parse(Config)
@@ -488,7 +491,7 @@ model_config = dict(
     space_dim=2 + 4 * cfg.n_freqs if cfg.n_freqs > 0 else 2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -576,8 +579,10 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.bf16):
+            pred = model({"x": x_norm})["preds"]
+        # Compute loss in FP32 for numerical stability; BF16 needs no GradScaler.
+        sq_err = F.huber_loss(pred.float(), y_norm, reduction="none", delta=cfg.huber_delta)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -666,6 +671,7 @@ for epoch in range(MAX_EPOCHS):
         "train/clip_frac": clip_frac,
         "grad_clip_max_norm": cfg.grad_clip_max_norm,
         "ema_decay": cfg.ema_decay,
+        "bf16": cfg.bf16,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
