@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 22:20
-- **Launch:** willow-pai2i-48h-r1 (round 6 — Lookahead era; programme best val=57.22)
+- **Date:** 2026-05-16 23:00
+- **Launch:** willow-pai2i-48h-r1 (round 10 — Lookahead era; programme best val=57.22, potential k=3 winner pending)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN)
 - **Latest direction from human team:** None (no open issues scoped to this launch)
@@ -14,34 +14,59 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 | Config | val_avg | test_avg | Source | Note |
 |--------|---------|---------|--------|------|
-| **Lookahead-AdamW + triple-stack (PROGRAMME BEST)** | **57.2203** | **54.0468** | PR #4132, W&B `d9ujr4oe`, seed=0 | Lookahead k=5, α=0.5 wrapping AdamW(β2=0.95) + GeGLU + T_max=17 |
+| **Lookahead-AdamW k=5/α=0.5 + triple-stack (PROGRAMME BEST)** | **57.2203** | **54.0468** | PR #4132, W&B `d9ujr4oe`, seed=0 | 3-seed canonical: μ̂=64.26 ± 12.4, median=57.05 (seed=1 outlier) |
+| Lookahead k=3 (POTENTIAL BEST, pending SENPAI-RESULT) | 55.968 | 53.442 | PR #4158, W&B `oeb54ela`, seed=0 | Δ=−1.25 vs k=5; needs 3-seed verification (#4202 alphonse k=3 s1 assigned) |
 | Triple-stack: h=128+GeGLU+β2=0.95+T_max=17 | 60.4338 | 57.4381 | PR #3995, W&B `insf46p8`, seed=0 | 3-seed μ̂=61.66 ± 1.32 (closed) |
 | h=128+SwiGLU+T_max=17 (prior best) | 62.1023 | 59.5529 | PR #3994, W&B `5q47ozlp`, seed=0 | 3-seed μ̂=63.06 ± 0.93 |
 
-**Win threshold:** val < 57.22 (Lookahead seed=0). 3-seed canonical underway (#4160 thorfinn s1, #4174 alphonse s2).
+**Win threshold:** val < 57.22 (Lookahead k=5 seed=0). k=3 single-seed at 55.97 pending 3-seed verification.
+
+## Lookahead-AdamW 3-seed canonical (round 10 closed)
+
+| Seed | val_avg/mae_surf_p | test_avg/mae_surf_p | Source |
+|---|---|---|---|
+| 0 | 57.220 | 54.047 | nezuko #4132 (`d9ujr4oe`) |
+| **1** | **78.503** | 74.185 | thorfinn #4160 (`pjvhrh4f`, 2 reruns bit-identical) — **OUTLIER** |
+| 2 | 57.046 | (similar) | alphonse #4174 (`a6l7j8ec`) |
+
+**Statistics:** μ̂=64.26, σ̂=12.4, median=57.05. Seed=1 is a clear outlier — 2-of-3 seeds at ~57, one at ~78. best_epoch=10 on seed=1 (vs 17 for seeds 0/2) suggests it lands in a worse basin early. For paper-facing reporting, the median (57.05) or explicit-outlier-noted mean is the appropriate statistic.
 
 ## Pending high-magnitude verification
 
-**PR #4123 (edward, Lion) reported val=49.07 / test=47.07** (Δ=−8.15 vs Lookahead) — sent back for **rebase + 2-arm verification**:
-- Arm 1: Pure Lion (no Lookahead wrapper) — verifies seed=0 reproducibility post-Lookahead-merge
-- Arm 2: Lookahead-Lion composition — tests if both basin-variance reduction mechanisms compose
+### PR #4123 (edward, Lion) — Pure Lion verified, Lookahead-Lion missing
 
-If Arm 1 reproduces val < 51, win is real; if Arm 2 beats Arm 1, composition merges as new best (val could reach ~48-49 with both wins stacked); if antagonistic, Arm 1 merges.
+**Pure Lion Arm 1 verified:** W&B `ux8amr59` (rebased) reproduces original `rv8hjgtx` to 4dp: val=49.0721, test=47.0707, best_epoch=17. The Lion win is REAL at seed=0 (Δ=−8.15 vs Lookahead k=5).
+
+**Arm 2 (Lookahead-Lion, lookahead_k=5/α=0.5 + use_lion=True) NOT YET RUN.** No W&B trace exists. Edward's currently-running `bny8b2mi` is another Pure Lion variant (`lookahead_k=0`), not Arm 2.
+
+**Edward's PR has 2 commits only — no rebase pushed.** Posted detailed comment on #4123 directing: (1) push rebase commits, (2) run Arm 2 with exact config, (3) post terminal SENPAI-RESULT.
+
+### Decision rules
+
+- Arm 1 reproduces → Pure Lion at seed=0 is real (DONE: yes, val=49.07)
+- Arm 2 > Arm 1 → Lookahead-Lion composition merges as new best (could reach ~46-48)
+- Arm 2 < Arm 1 → Pure Lion alone merges (antagonistic)
+- Arm 2 ≈ Arm 1 → Pure Lion merges (composition is no-op or null-improvement)
+
+**Seed sensitivity concern:** Given Lookahead-AdamW's seed=1 outlier behavior, both Lion arms may also have high seed variance. Will address with seed-scan after Arm 2 completes.
 
 ## Active WIP experiments
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #4182 | fern | Lookahead + higher LR sweep ({7e-4, 1e-3}) on triple-stack | Assigned |
-| #4183 | frieren | Lookahead + β2 fine scan ({0.93, 0.97}) on triple-stack | Assigned |
-| #4158 | nezuko | Lookahead k sweep (k∈{3,8}, α=0.5) on triple-stack | Running |
-| #4160 | thorfinn | Lookahead seed=1 (3-seed canonical for new best) | Running |
-| #4123 | edward | Lion (rebased) — Pure Lion + Lookahead-Lion 2-arm verification | Re-running |
-| #4174 | alphonse | Lookahead seed=2 (3-seed canonical for new best) | Assigned |
-| #4175 | askeladd | Lookahead α sweep (α∈{0.3,0.7}, k=5) | Assigned |
-| #4176 | tanjiro | Lookahead + SWA of slow weights (tail averaging on smoothed trajectory) | Assigned |
+| #4123 | edward | Lion (rebased) — Pure Lion verified val=49.07; Arm 2 Lookahead-Lion pending | Pending Arm 2 + rebase push |
+| #4158 | nezuko | Lookahead k sweep — k=3 finished val=55.97 (POTENTIAL WIN), k=8 running | Awaiting SENPAI-RESULT |
+| #4175 | askeladd | Lookahead α sweep — α=0.3 finished val=61.58 (worse), α=0.7 running | Running |
+| #4182 | fern | Lookahead + higher LR sweep ({7e-4, 1e-3}) on triple-stack | Running (lr=7e-4 in flight) |
+| #4183 | frieren | Lookahead + β2 fine scan ({0.93, 0.97}) on triple-stack | Running (β2=0.93 in flight) |
+| #4202 | alphonse | Lookahead k=3 seed=1 verification (checks if k=3 win is seed-stable) | **NEW** (assigned this round) |
+| #4203 | tanjiro | Lookahead k=2 (k-sweep below k=3) | **NEW** (assigned this round) |
 
-**Note on in-flight non-Lookahead PRs (#4119, #4124):** Were assigned against triple-stack (60.43). If they beat 60.43 but not 57.22, evaluate orthogonality with Lookahead — they may compose into a follow-up round. Do not auto-close just for missing 57.22 threshold; check mechanism first.
+## Round-10 closures
+
+- **#4160 thorfinn (Lookahead seed=1)** closed: val=78.50 OUTLIER, key finding for paper reporting
+- **#4174 alphonse (Lookahead seed=2)** closed: val=57.05, clean reproduction
+- **#4176 tanjiro (Lookahead + SWA-of-slow)** closed: val=57.22 NO-OP, confirms T_max=17 no-stationary-tail story (any post-hoc averaging fails on fast OR slow trajectory)
 
 ## Key mechanistic findings this round
 

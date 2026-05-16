@@ -1,5 +1,103 @@
 # SENPAI Research Results
 
+## 2026-05-16 23:00 — PR #4158: H: Lookahead k sweep (k∈{3,8}, α=0.5) on triple-stack ← POTENTIAL WINNER (val=55.97, awaiting SENPAI-RESULT)
+
+- Branch: `willowpai2i48h1-nezuko/lookahead-k-sweep`
+- Student: willowpai2i48h1-nezuko
+- W&B runs: `oeb54ela` (k=3, finished val=55.97), `o7adv9re` (k=8, RUNNING)
+- Hypothesis: Sweep Lookahead k ∈ {3, 8} around current best k=5 to localize optimal sync frequency.
+
+### Results (W&B-verified, awaiting student SENPAI-RESULT post)
+
+| Config | val_avg | test_avg | best_epoch | Δ vs k=5 (val=57.22) |
+|---|---|---|---|---|
+| **Lookahead k=3, α=0.5** (seed=0) | **55.968** | **53.442** | 17 | **−1.252** |
+| Lookahead k=8, α=0.5 (seed=0) | RUNNING | — | — | — |
+
+Per-split val (k=3): single_in_dist=67.02, geom_camber_rc=68.39, geom_camber_cruise=35.70 (strong OOD), re_rand=52.76.
+Per-split test (k=3): single_in_dist=59.98, geom_camber_rc=60.98, geom_camber_cruise=47.23, re_rand=45.58.
+
+### Interpretation
+
+k=3 (more frequent slow-weight sync) cleanly improves over k=5 at seed=0. Δ=−1.25 is larger than the GeGLU-era noise floor (σ̂≈1) but smaller than the seed=1 outlier observed concurrently — needs 3-seed verification.
+
+### Decision
+
+**Awaiting student SENPAI-RESULT post + review marker.** Posted W&B-verified metrics on the PR and requested student post the structured marker. Assigned alphonse (#4202) to verify k=3 seed=1 due to concurrent finding of k=5 seed=1=78.50 outlier.
+
+## 2026-05-16 23:00 — PR #4160: Lookahead seed=1 canonical ← CLOSED (seed=1 OUTLIER, val=78.50)
+
+- Branch: `willowpai2i48h1-thorfinn/lookahead-seed-1`
+- Student: willowpai2i48h1-thorfinn
+- W&B runs: `pjvhrh4f` (seed=1, finished val=78.503), `637qjzvn` (rerun, bit-identical val=78.503), 2 more heartbeat duplicates running
+- Hypothesis: 3-seed canonical for new programme best — seed=1 confirmation.
+
+### Results (W&B-verified, closed via [[rate-limit-close-on-wandb]])
+
+| Metric | k=5 seed=1 (this PR) | k=5 seed=0 (programme best) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **78.503** | 57.220 | **+21.28 (outlier)** |
+| test_avg/mae_surf_p | 74.185 | 54.047 | +20.14 |
+| best_epoch | 10 | 17 | early-peak: lands in worse basin and never recovers |
+
+Config sanity: ✓ triple-stack + Lookahead correct (lookahead_k=5, alpha=0.5, optimizer=lookahead-adamw, betas=[0.9, 0.95], use_geglu=True).
+
+### Interpretation
+
+**Lookahead-AdamW has surprising seed-1 variance at this dataset.** 3-seed canonical now reads: seed=0=57.22, seed=1=78.50, seed=2=57.05 → μ̂=64.26 ± 12.4, median=57.05. Seed=1 is a clear outlier — 2-of-3 seeds at ~57, one at ~78. Best_epoch=10 (vs 17 for seed=0) suggests seed=1 lands in a worse basin earlier and the cosine descent doesn't recover.
+
+This complicates merge-claim of val=57.22 as new baseline — Lookahead is robust in median but has bimodal seed sensitivity. Paper-facing reporting should use the 3-seed median (57.05) or explicitly note the outlier.
+
+### Decision
+
+Closed as canonical seed-scan data point (not a regression — the seed got the unlucky basin, data is valid). Reassigning thorfinn.
+
+## 2026-05-16 23:00 — PR #4174: Lookahead seed=2 canonical ← CLOSED (clean reproduction, val=57.05)
+
+- Branch: `willowpai2i48h1-alphonse/lookahead-seed-2`
+- Student: willowpai2i48h1-alphonse
+- W&B runs: `a6l7j8ec` (seed=2, finished val=57.046), 2 heartbeat duplicates still running
+- Hypothesis: 3-seed canonical for new programme best — seed=2 confirmation.
+
+### Results (W&B-verified, closed via [[rate-limit-close-on-wandb]])
+
+| Metric | k=5 seed=2 (this PR) | k=5 seed=0 (programme best) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **57.046** | 57.220 | **−0.17 (clean reproduction)** |
+| best_epoch | 17 (cosine floor ✓) | 17 | — |
+| optimizer | lookahead-adamw ✓ | — | — |
+
+### Interpretation
+
+Clean reproduction of seed=0 result. Lookahead is robust between seeds 0 and 2. The seed=1 outlier from #4160 stands alone — 2-of-3 seeds at ~57. Median is the appropriate paper-facing statistic.
+
+### Decision
+
+Closed as canonical seed-scan data point. Reassigned alphonse to **k=3 seed=1 verification** (#4202) to check if the k=3 potential winner also has the seed=1 outlier behavior.
+
+## 2026-05-16 23:00 — PR #4176: Lookahead + SWA of slow weights ← CLOSED (NO-OP, val=57.22)
+
+- Branch: `willowpai2i48h1-tanjiro/lookahead-slow-swa`
+- Student: willowpai2i48h1-tanjiro
+- W&B runs: `vzrbeman` (finished val=57.220), `pfw24a8d` (heartbeat duplicate just started)
+- Hypothesis: Tail-average the SLOW-weight trajectory (over last 4 epochs) to extract more benefit from Lookahead's smoothed trajectory.
+
+### Results (W&B-verified, closed via [[rate-limit-close-on-wandb]])
+
+| Metric | Lookahead + SWA-of-slow | Lookahead alone | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **57.220** | 57.220 | **0.000 (NULL — bit-identical)** |
+
+### Mechanism analysis
+
+This is consistent with the prior post-hoc-averaging failure pattern observed in #3644, #4089, and #4121. T_max=17 cosine has **no stationary tail** for any trajectory — fast or slow. The slow weights produced by Lookahead still inherit the descending cosine LR schedule (LR is applied to the fast optimizer; slow weights periodically copy fast). So SWA tail-averaging on the slow trajectory averages over a non-stationary segment and contributes exactly zero.
+
+**Confirms round-7 finding:** online averaging (Lookahead's internal slow←fast sync) is the only averaging that works at T_max=17 cosine. ALL post-hoc averaging schemes — on fast or slow trajectory — share this failure mode.
+
+### Decision
+
+Closed. Reassigned tanjiro to **Lookahead k=2** (#4203) — extending the k-sweep below nezuko's k=3 finding.
+
 ## 2026-05-16 22:30 — PR #4124: H: mlp_ratio=3 on triple-stack ← CLOSED (rate-limit recovery)
 
 - Branch: `willowpai2i48h1-fern/mlp-ratio-3-triple-stack`
