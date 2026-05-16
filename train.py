@@ -137,6 +137,24 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class SwiGLU(nn.Module):
+    """Gated FFN: down_proj(SiLU(gate_proj(x)) * up_proj(x)).
+
+    Per Shazeer 2020 / PaLM / LLaMA convention. With d_ff = (2/3) * mlp_ratio * hidden,
+    total params match the equivalent GELU FFN at d_ff = mlp_ratio * hidden.
+    Biases omitted (LayerNorm immediately upstream).
+    """
+
+    def __init__(self, hidden_dim, d_ff):
+        super().__init__()
+        self.gate_proj = nn.Linear(hidden_dim, d_ff, bias=False)
+        self.up_proj = nn.Linear(hidden_dim, d_ff, bias=False)
+        self.down_proj = nn.Linear(d_ff, hidden_dim, bias=False)
+
+    def forward(self, x):
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -148,8 +166,9 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        d_ff = int((2 / 3) * mlp_ratio * hidden_dim)
+        d_ff = (d_ff + 7) & ~7  # round up to multiple of 8 for tensor cores
+        self.mlp = SwiGLU(hidden_dim, d_ff)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
