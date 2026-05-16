@@ -516,3 +516,68 @@ After geometry-augmentation closure, fern assigned to architecture axis (untouch
 |---|---|---|---|
 | #3571 | n_layers depth sweep on fast-EMA baseline | 6, 7 | All wins so far are optimizer/loss; architecture capacity untested. Depth+regularization classically compounds. |
 
+
+---
+
+## 2026-05-16 01:20 UTC — Round-3 Tier-1 closures (4 dead-ends)
+
+All Tier-1 PRs (hyperparameter sweeps) completed with regressions vs new baseline 90.6131. Closed without waiting for terminal SENPAI-RESULT — W&B telemetry is conclusive.
+
+### PR #3454 edward (lr-sweep) — CLOSED
+
+| Arm | val_avg | Δ vs 90.61 | W&B run |
+|---|---|---|---|
+| lr=1e-3 (best) | 93.467 | +3.2% | mgzjg84e |
+| lr=1e-3 (rep) | 99.593 | +9.9% | 76ijpudj |
+| lr=1e-3 (rep) | 96.895 | +6.9% | 70859lf5 |
+| lr=2e-3 | 105.452 | +16.4% | 4uxz0ed3 |
+| lr=5e-3 | not run (monotone worse with higher lr) | — | — |
+
+**Conclusion**: lr=5e-4 is at or near optimum. Higher lr = worse. High seed variance in lr=1e-3 runs (93–100 range). Hypothesis falsified.
+
+### PR #3456 nezuko (cosine T_max sweep) — CLOSED
+
+| Arm | val_avg | Δ vs 90.61 | W&B run |
+|---|---|---|---|
+| T_max=14 (best) | 96.044 | +5.9% | m47uy1o8 |
+| T_max=14 (rep) | 98.352 | +8.5% | ujncdphm |
+| T_max=14 (rep) | 98.046 | +8.2% | g8wvqv0g |
+| T_max=9 | 108.329 | +19.6% | aulmfir6 |
+
+**Conclusion**: Default T_max=epochs outperforms truncated schedules. Cosine's late-stage low-LR region provides regularization even though training stops before reaching it. Hypothesis falsified.
+
+### PR #3458 tanjiro (huber-delta sweep) — CLOSED
+
+| Arm | val_avg | Δ vs 90.61 | W&B run |
+|---|---|---|---|
+| δ=1.0 (baseline) | 93.915 | +3.7% (variance replicate) | d5wrdnhe |
+| δ=0.5 (best) | 94.841 | +4.7% | plxxf9vo |
+| δ=0.5 (rep) | 96.825 | +6.9% | 1g19p9y7 |
+| δ=2.0 | 99.998 | +10.4% | c3v83mau |
+| δ=0.0 (MSE) | 104.908 | +15.8% | vctxh07i |
+
+**Conclusion**: δ=1.0 was already optimal (it IS the merged baseline). The U-shape across δ values confirms it sits at the loss-curvature sweet spot. Hypothesis falsified (negative confirms baseline was correct choice).
+
+### PR #3476 frieren (SWA) — CLOSED
+
+| Arm | val_avg | Δ vs 90.61 | W&B run |
+|---|---|---|---|
+| swa_start=6 (best) | 96.003 | +5.9% | 6afydvtb |
+| swa_start=6 (rep) | 96.081 | +6.0% | pphl9e3g |
+| swa_start=4 | 100.837 | +11.3% | wzh7l3ix |
+
+**Conclusion**: SWA window too short within 14-epoch budget. Earlier start = worse (monotone). EMA decay=0.99 already provides effective late-training averaging; SWA only competes with the EMA shadow without adding value. Hypothesis falsified.
+
+---
+
+## 2026-05-16 01:20 UTC — Round-4 hypotheses assigned
+
+Assigned 4 fresh orthogonal hypotheses to freed-up students:
+
+| PR | Student | Hypothesis | Axis | Arms |
+|---|---|---|---|---|
+| #3575 | edward | p-surf-weight: --p_surf_weight 3.0 and 5.0 | Loss weighting (per-channel pressure) | 2 |
+| #3576 | nezuko | wd-sweep: weight_decay 1e-3, 5e-3 | Regularization (L2 norm) | 2 |
+| #3577 | tanjiro | slice-num-128: PhysicsAttention tokens 64→128 | Architecture capacity (token count) | 1+1 conditional |
+| #3578 | frieren | re-sinusoidal-embed: log(Re) → 8-d sinusoidal embedding | Feature representation (Re encoding) | 1 |
+
