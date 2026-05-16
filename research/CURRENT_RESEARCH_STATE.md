@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 05:45 UTC
+- **Updated:** 2026-05-16 06:40 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -19,7 +19,7 @@ slice_num=16, single-seed, best epoch 18).
 Per-split val: single=100.09, rc=94.49, cruise=63.60, re_rand=79.60.
 Per-split test: single=88.51, rc=83.91, cruise=53.62, re_rand=72.94.
 
-**Slice_num progression:** 64(96.17) → 32(90.58, -5.81%) → 16(84.44, -6.78%). Both times model was still improving at cap, confirming compute-bound regime. Probing 8 next.
+**Slice_num axis CLOSED at 16.** Progression: 64(96.17) → 32(90.58, -5.81%) → 16(84.44, -6.78%) → 8(85.72, +1.52% regression). Mechanism broke at 8: per-epoch time only dropped 5% (slice attention no longer dominates cost — per-batch FFN overhead does). Same 18 epochs, less capacity, regression. **slice_num=16 is the confirmed local optimum.**
 
 **Key gap:** `val_single_in_dist=100.09` remains worst split (+5.9% above next-worst rc=94.49). All recent slice_num wins improved single proportionally (-7%+), but gap persists structurally.
 
@@ -54,7 +54,7 @@ Per-split test: single=88.51, rc=83.91, cruise=53.62, re_rand=72.94.
 | #3560 | thorfinn | surf per-channel (1,1,3) | loss channel | R6 |
 | #3603 | frieren  | CosineAnnealingLR T_max=16 | LR schedule | R7 |
 | #3601 | alphonse | EMA decay 0.999→0.998 (re-test on slice_num=16) | EMA tuning | R7 |
-| #3677 | askeladd | slice_num=16→8 | compute budget | R8 |
+| #3743 | askeladd | bf16 autocast — attack per-batch overhead | compute budget | R8 |
 
 All students notified of new baseline (val=84.44). All asked to rebase onto advisor branch (slice_num=16 now in place).
 
@@ -69,9 +69,10 @@ All students notified of new baseline (val=84.44). All asked to rebase onto advi
 - **Dropout:** saturated at 0.1.
 - **surf_weight:** saturated at 10.
 - **EMA tighter (0.9995):** catastrophic regression. Closed from tighter direction.
+- **slice_num:** local optimum at 16. Progression: 64(96.17) → 32(90.58) → 16(84.44) → 8(85.72, regression). Axis fully closed — per-batch FFN overhead now dominates.
 
 **OPEN axes (in-flight):**
-- **slice_num (8):** askeladd #3677 — is improvement monotone below 16?
+- **bf16 autocast:** askeladd #3743 — H100 1.5-2× matmul speedup → expected 25-30 epochs vs 18; no capacity loss. (NEW)
 - **EMA looser (0.998) on slice_num=16:** alphonse #3601 — confirm compound win.
 - **LR schedule (WarmRestarts):** nezuko #3572.
 - **LR schedule (matched T_max=16):** frieren #3603.

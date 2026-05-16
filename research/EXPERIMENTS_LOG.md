@@ -625,3 +625,36 @@ alphonse retesting EMA-0.998 on slice_num=16 base (PR #3601 rebase).
 - **Decision:** SENT BACK. Mechanism is real and well-diagnosed: val dropped 8.5% in just the last 4 epochs (LR ∈ [4e-6, 4e-5]) — confirming the low-LR tail is doing genuine fine-tuning work. EMA averaging across the full cosine curve compounds the benefit. However, the result is on the now-superseded slice_num=32 baseline (88.99 > current 84.44).
 - **Re-test ask:** With slice_num=16, training reaches **18 epochs** in budget. T_max=16 would leave the last 2 epochs at LR≈0 (wasted training). Asked frieren to rebase onto slice_num=16 and update T_max=16 → T_max=18 to match the new epoch budget.
 - **Key insight:** OOD geometry split (rc) benefits 10× more from low-LR fine-tuning than ID split (single). Implies in-distribution accuracy is capacity-bound while OOD is fine-tuning-bound.
+
+---
+
+## 2026-05-16 06:30 — PR #3677 — slice_num=16→8 (CLOSED, regression + axis exhausted)
+
+- **Branch:** `charliepai2i48h1-askeladd/slice-num-8`
+- **Hypothesis:** Continue halving slice_num to 8 for further O(K²) cost reduction and more training epochs.
+- **Results:**
+
+| Metric | slice_num=8 | baseline (s=16) | Δ |
+|--------|-------------|-----------------|---|
+| `val_avg/mae_surf_p` | 85.72 | 84.44 | +1.52% (regression) |
+| `test_avg/mae_surf_p` | 75.46 | 74.75 | +0.95% (regression) |
+| Best epoch | 18 (final) | 18 (final) | same |
+| Per-epoch time | 100.5s | 105.5s | -4.7% only |
+
+Per-split: all 4 splits regressed ~1-2 pts. Most hurt: cruise (+3%), rc (+1.9%).
+
+- **Metrics path:** `models/model-slice-num-8-20260516-052307/metrics.jsonl`
+- **Decision:** CLOSED. **Slice_num axis closes at 16.** The mechanism broke: at slice_num=8, per-epoch time only dropped 5% (attention is no longer the dominant cost), so no extra epochs were gained (still 18 epochs). With same epoch count but less expressive 8-slice model, val regressed.
+- **Critical diagnosis (from student):** Per-batch overhead (FFN forward/backward over n_hidden=128 × n_layers=5 × batch=4 × ~40k nodes) is now the bottleneck — not slice attention. The geometric speedup assumption broke because per-batch overhead scales with parameters/layers, not slice_num.
+- **Slice_num monotone final table:** 64(96.17) → 32(90.58) → 16(84.44) → 8(85.72). Crossover is between 8 and 16; 16 is the optimum.
+- **Next lever:** bf16 autocast to attack per-batch overhead directly.
+
+---
+
+## 2026-05-16 06:35 — Round 8 expansion: PR #3743
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3743 | askeladd | bf16 autocast (torch.autocast cuda bfloat16) | Attack per-batch overhead: H100 1.5-2× matmul speedup; no fp16 instability issues. Expected 25-30 epochs vs 18. |
+
+Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 is the standard compute efficiency lever for this class of problem on H100 hardware.
