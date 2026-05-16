@@ -78,6 +78,108 @@ def encode_inputs(x_norm: torch.Tensor, num_freq: int) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Per-domain normalization (PR #3838)
+# ---------------------------------------------------------------------------
+# Domain detection heuristic from raw (unnormalized) features:
+#   d=0  single-foil           (gap == 0)
+#   d=1  tandem aoa2 < 0       (predominantly raceCar tandem; cruise overlap)
+#   d=2  tandem aoa2 >= 0      (predominantly cruise; raceCar overlap)
+#
+# Note: AoA ranges for raceCar tandem and cruise overlap in the data, so the
+# d=1 / d=2 split is not a clean physical-domain split. It is, however,
+# deterministic in x, so the heuristic is self-consistent between training
+# and evaluation, which is what matters for normalization correctness.
+
+DOMAIN_NAMES = ["single", "tandem_aoa2_neg", "tandem_aoa2_pos"]
+
+
+def get_domain_ids(x_raw: torch.Tensor) -> torch.Tensor:
+    """Detect domain IDs for a batch of raw samples.
+
+    Args:
+        x_raw: ``[B, N, 24]`` padded raw features. Index ``[:, 0]`` is a real
+            node — every sample has at least 74K real nodes — and dims 18/22
+            are sample-level constants.
+
+    Returns:
+        ``[B]`` long tensor with values in {0, 1, 2}.
+    """
+    gap = x_raw[:, 0, 22]
+    aoa2 = x_raw[:, 0, 18]
+    is_single = (gap == 0.0)
+    is_tandem_neg = (~is_single) & (aoa2 < 0.0)
+    ids = torch.full(gap.shape, 2, dtype=torch.long, device=gap.device)
+    ids = torch.where(is_tandem_neg, torch.ones_like(ids), ids)
+    ids = torch.where(is_single, torch.zeros_like(ids), ids)
+    return ids
+
+
+def _get_domain_id_cpu(x_first_node: torch.Tensor) -> int:
+    """Scalar version used during the one-time stats pass over the dataset."""
+    gap = x_first_node[22].item()
+    if gap == 0.0:
+        return 0
+    aoa2 = x_first_node[18].item()
+    return 1 if aoa2 < 0.0 else 2
+
+
+def compute_domain_stats(
+    train_ds, y_mean_global: torch.Tensor, y_std_global: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, list[int], list[int]]:
+    """Iterate the training set once and compute per-domain y mean/std.
+
+    Uses node-level (rather than per-sample) accumulation to match the global
+    stats computation: mean/std are over every valid node in the domain's
+    samples. Float64 accumulators with a numerical-safety clamp for variance.
+
+    Returns ``(domain_means [3, C], domain_stds [3, C], sample_counts, node_counts)``.
+    """
+    t0 = time.time()
+    n_per_d = [0, 0, 0]
+    sum_per_d = [torch.zeros(3, dtype=torch.float64) for _ in range(3)]
+    sum_sq_per_d = [torch.zeros(3, dtype=torch.float64) for _ in range(3)]
+    sample_counts = [0, 0, 0]
+
+    for i in range(len(train_ds)):
+        x_i, y_i, _ = train_ds[i]
+        d = _get_domain_id_cpu(x_i[0])
+        y_d = y_i.double()
+        finite_mask = torch.isfinite(y_d).all(dim=-1)
+        if not finite_mask.all():
+            y_d = y_d[finite_mask]
+        if y_d.shape[0] == 0:
+            continue
+        n_per_d[d] += y_d.shape[0]
+        sum_per_d[d] += y_d.sum(0)
+        sum_sq_per_d[d] += (y_d ** 2).sum(0)
+        sample_counts[d] += 1
+
+    domain_means = torch.zeros(3, 3, dtype=torch.float32)
+    domain_stds = torch.zeros(3, 3, dtype=torch.float32)
+    for d in range(3):
+        n = n_per_d[d]
+        if n == 0:
+            domain_means[d] = y_mean_global.cpu().float()
+            domain_stds[d] = y_std_global.cpu().float()
+            continue
+        mean = sum_per_d[d] / n
+        var = (sum_sq_per_d[d] / n - mean ** 2).clamp(min=0)
+        domain_means[d] = mean.float()
+        domain_stds[d] = var.sqrt().clamp(min=1e-6).float()
+
+    dt = time.time() - t0
+    print(f"Per-domain stats computed in {dt:.1f}s:")
+    for d in range(3):
+        print(
+            f"  d{d}={DOMAIN_NAMES[d]:<18s}  "
+            f"{sample_counts[d]:>4d} samples, {n_per_d[d]:>10d} nodes"
+        )
+        print(f"      mean={domain_means[d].tolist()}")
+        print(f"       std={domain_stds[d].tolist()}")
+    return domain_means, domain_stds, sample_counts, n_per_d
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -258,12 +360,20 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1") -> dict[str, float]:
+def evaluate_split(
+    model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1",
+    domain_means: torch.Tensor | None = None,
+    domain_stds: torch.Tensor | None = None,
+) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``domain_means``/``domain_stds`` ([3, C], on device) are provided,
+    per-domain normalization is applied — the domain id is detected per sample
+    from raw x (gap, aoa2) using the same heuristic as training.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -277,9 +387,17 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            if domain_means is not None:
+                domain_ids = get_domain_ids(x)
+                y_mean = domain_means[domain_ids].unsqueeze(1)  # [B, 1, C]
+                y_std = domain_stds[domain_ids].unsqueeze(1)
+            else:
+                y_mean = stats["y_mean"]
+                y_std = stats["y_std"]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_enc = encode_inputs(x_norm, num_freq)
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y - y_mean) / y_std
             pred = model({"x": x_enc})["preds"]
 
             # NaN guard: some samples (e.g. test_geom_camber_cruise idx 20) have
@@ -300,7 +418,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred * y_std + y_mean
             # Subset to fully-finite samples so the scoring accumulator's
             # per-sample skip works (it would otherwise still hit NaN*0=NaN
             # when err contains NaN at non-finite y positions).
@@ -445,6 +563,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    per_domain_norm: bool = False  # per-domain output y normalization (PR #3838)
 
 
 cfg = sp.parse(Config)
@@ -456,6 +575,27 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+domain_means_dev: torch.Tensor | None = None
+domain_stds_dev: torch.Tensor | None = None
+domain_norm_summary: dict = {}
+if cfg.per_domain_norm:
+    print("Computing per-domain y stats from training set...")
+    dm, ds, sample_counts, node_counts = compute_domain_stats(
+        train_ds, stats["y_mean"], stats["y_std"]
+    )
+    domain_means_dev = dm.to(device)
+    domain_stds_dev = ds.to(device)
+    domain_norm_summary = {
+        "domain_norm/scheme": "gap_aoa2_heuristic",
+    }
+    for d in range(3):
+        domain_norm_summary[f"domain_norm/d{d}_name"] = DOMAIN_NAMES[d]
+        domain_norm_summary[f"domain_norm/d{d}_samples"] = sample_counts[d]
+        domain_norm_summary[f"domain_norm/d{d}_nodes"] = node_counts[d]
+        for c, ch in enumerate(["Ux", "Uy", "p"]):
+            domain_norm_summary[f"domain_norm/d{d}_mean_{ch}"] = dm[d, c].item()
+            domain_norm_summary[f"domain_norm/d{d}_std_{ch}"] = ds[d, c].item()
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -529,6 +669,9 @@ for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
+if domain_norm_summary:
+    wandb.summary.update(domain_norm_summary)
+
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
@@ -556,6 +699,14 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        if cfg.per_domain_norm:
+            domain_ids = get_domain_ids(x)
+            y_mean = domain_means_dev[domain_ids].unsqueeze(1)  # [B, 1, C]
+            y_std = domain_stds_dev[domain_ids].unsqueeze(1)
+        else:
+            y_mean = stats["y_mean"]
+            y_std = stats["y_std"]
+
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         if cfg.coord_noise_std > 0:
             pad_mask = mask.unsqueeze(-1).to(x_norm.dtype)  # (B, N, 1); zero at padding
@@ -563,7 +714,7 @@ for epoch in range(MAX_EPOCHS):
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
         x_enc = encode_inputs(x_norm, cfg.num_freq)
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_norm = (y - y_mean) / y_std
         pred = model({"x": x_enc})["preds"]
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
@@ -595,7 +746,10 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type,
+            domain_means=domain_means_dev, domain_stds=domain_stds_dev,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -663,7 +817,10 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type,
+                domain_means=domain_means_dev, domain_stds=domain_stds_dev,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
