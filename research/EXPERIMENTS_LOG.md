@@ -1,5 +1,39 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:55 — #4096 frieren SGDR + #4085 askeladd batchsize CLOSED informative; #4152 frieren EMA-decay + #4153 askeladd lion-β2 assigned
+
+### #4096 frieren — SGDR cosine warm restarts (CLOSED — informative null, no terminal posted)
+
+W&B group `round10-sgdr-frieren` shows 2 finished arms but student did not post terminal SENPAI-RESULT. Closed based on W&B data.
+
+| Arm | val_avg | Δ vs new BL 57.66 |
+|-----|---------|--------------------|
+| T_0=7 T_mult=1 (2 equal cycles) | 64.14 | +6.48 above BL |
+| T_0=4 T_mult=2 (coarse→fine) | 69.51 | +11.85 above BL |
+
+**Key finding to record:** SGDR restarts directly oppose the winning mechanism from PR #4063 T_max=20 (smooth schedule keeping LR high). The model needs sustained moderate LR, not periodic restarts. Schedule monotonicity > schedule modulation at this LR.
+
+### #4085 askeladd — Batch size sweep {8, 16} (CLOSED — informative null, no terminal posted)
+
+W&B group `round10-batchsize-askeladd` shows only bs=8 ran (3 reps); bs=16 never launched.
+
+| Arm | val_avg | Δ vs new BL 57.66 |
+|-----|---------|--------------------|
+| bs=8 (3 reps: 76.93, 79.88, 80.29) | best 76.93 | +19.27 above BL |
+| bs=16 | NOT LAUNCHED | — |
+
+**Key finding to record:** Lion at lr=1.5e-4 is highly sensitive to batch size. At bs=8 throughput halves (~7 effective epochs vs 14 at bs=4) — wall-clock budget bites hard. Default bs=4 is correctly tuned for Lion + SENPAI_TIMEOUT_MINUTES=30 regime.
+
+### #4152 frieren — R11 H57: EMA decay sweep at T_max=20 {0.995, 0.997 ctrl, 0.999} (just assigned)
+
+Tests whether finding #4 (EMA decay robust [0.995, 0.997]) extends to T_max=20 substrate where LR endpoint ≈ 1.20e-4 (noisier weight trajectory needs longer averaging). Pure CLI.
+
+### #4153 askeladd — R11 H58: Lion β2 sweep at T_max=20 {0.98, 0.99 ctrl, 0.995} (just assigned)
+
+Tests untested optimizer-state axis (β2 controls EMA of gradient sign signal). Higher β2 at T_max=20's noisier endpoint may help reduce spurious sign flips. Pure CLI.
+
+---
+
 ## 2026-05-16 20:50 — #4063 tanjiro MERGED (new best val 57.66 / test 49.45); #4044 alphonse CLOSED; #4015 nezuko sent back for T_max=20 composition; #4145 alphonse assigned
 
 ### #4063 tanjiro — T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 (MERGED — **new best val 57.6606 / test 49.4491**)

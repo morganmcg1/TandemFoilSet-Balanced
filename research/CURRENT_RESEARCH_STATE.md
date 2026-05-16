@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~21:05 UTC) — **#4063 tanjiro MERGED** (T_max=20: val 57.66 / test 49.45, new best); **#4044 alphonse CLOSED** (multi-FiLM falsified); **#4015 nezuko sent back** (T_max=20 composition test); **#4145 alphonse** (grad_clip+T_max=20 composition) + **#4148 tanjiro** (LR@T_max=20) assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~21:25 UTC) — **#4096 frieren SGDR** + **#4085 askeladd batchsize** CLOSED informative (no terminals posted; W&B-observed nulls); **#4152 frieren EMA-decay@T_max=20** + **#4153 askeladd Lion-β2@T_max=20** assigned; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -46,10 +46,10 @@ Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.
 | **#4145** | **alphonse** | **R11 H55: grad_clip=1.0 + T_max=20 composition + T_max=24 extension** | **Just assigned** |
 | **#4015** | **nezuko** | **R10 H39: layer_scale=1e-4 + T_max=20 composition (Arms F+G)** | **Sent back for Arms F+G** |
 | #4128 | fern | R10 H54: surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} | WIP |
-| #4085 | askeladd | R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4 | WIP |
+| **#4153** | **askeladd** | **R11 H58: Lion β2 sweep at T_max=20 {0.98, 0.99 ctrl, 0.995}** | **Just assigned** |
 | #4120 | thorfinn | R10 H52: LR re-optimisation at clip=1.0 {1.5e-4, 2e-4, 2.5e-4} | WIP |
 | #4122 | edward | R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} | WIP |
-| #4096 | frieren | R10 H50: SGDR cosine warm restarts {T_0=7, T_0=4 T_mult=2} | WIP |
+| **#4152** | **frieren** | **R11 H57: EMA decay sweep at T_max=20 {0.995, 0.997 ctrl, 0.999}** | **Just assigned** |
 | **#4148** | **tanjiro** | **R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4}** | **Just assigned** |
 
 **All 8 students now staffed.**
@@ -58,6 +58,8 @@ Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4096 | frieren | SGDR cosine restarts: T_0=7 → val 64.14 (+6.48), T_0=4 T_mult=2 → 69.51 (+11.85). Restarts oppose T_max=20 mechanism. | CLOSED |
+| #4085 | askeladd | Batch size: bs=8 catastrophic (3 reps best 76.93 = +19.27 above BL); bs=16 not launched. Lion+bs=4 correctly tuned. | CLOSED |
 | #4044 | alphonse | Multi-FiLM {cond_dim=11, cond_dim=4}: both hurt camber_rc (target). Global γ/β can't substitute per-node geometry. | CLOSED |
 | #4084 | fern | Dropout {0.05, 0.10}: monotone hurt; camber_rc −4.23 val (net-negative breadth) | CLOSED |
 | #4057 | edward | Surfrouting: vec arm val 62.76 (+1.58 vs BL 61.18); scalar bias no-op | CLOSED |
@@ -74,6 +76,8 @@ Per-split test: in_dist 51.04, camber_rc 64.76, camber_cruise 32.44, re_rand 49.
 |------|-----------|-------------|-----------------|
 | Schedule+optimizer composition | grad_clip=1.0 + T_max=20 + T_max=24 extension | #4145 alphonse | −1 to −3 val; tests orthogonal improvements composing |
 | LR recalibration at T_max=20 | lr {1.3e-4, 1.5e-4 ctrl, 1.7e-4} at T_max=20 | #4148 tanjiro | −0 to −2 val; LR optimum may shift with T_max |
+| EMA decay at T_max=20 | ema_decay {0.995, 0.997 ctrl, 0.999} at T_max=20 | #4152 frieren | −0 to −1.5 val; longer averaging at noisy endpoint |
+| Lion β2 at T_max=20 | lion_beta2 {0.98, 0.99 ctrl, 0.995} at T_max=20 | #4153 askeladd | −0 to −1.5 val; untested optimizer-state axis |
 | Architecture stability composition | layer_scale=1e-4 + T_max=20 | #4015 nezuko | −0 to −2 val; tests if both wins stack |
 | Loss balance | surf_weight {5, 10 ctrl, 20} at clip=1.0 substrate | #4128 fern | −0 to −2 val; substrate-dependent finding |
 | Gradient signal | Batch size {8, 16} at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val |
