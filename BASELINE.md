@@ -296,4 +296,53 @@ cd target && python train.py --agent <student> \
     --surf_weight 25
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **67.2991** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **67.2991**~~ — superseded by PR #3485 below.
+
+---
+
+## 2026-05-16 07:00 — PR #3485: bf16 autocast — 6th compounding mechanism
+
+**Student:** charliepai2i48h2-alphonse  
+**Change:** `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` wraps the forward pass and loss computation. Backward, grad-clip, optimizer.step(), and EMA.update() remain in fp32. This is a throughput intervention: per-epoch time 131s → 101s (−23%), peak GPU memory 42.13 → 32.96 GB (−22%), reaching 18 epochs vs 14 within the 30-min cap. The 4 extra epochs on a still-descending loss curve give the primary metric improvement.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **58.8717** |
+| val_single_in_dist/mae_surf_p | 70.2014 |
+| val_geom_camber_rc/mae_surf_p | 68.7070 |
+| val_geom_camber_cruise/mae_surf_p | 39.0294 |
+| val_re_rand/mae_surf_p | 57.5489 |
+| **test_avg/mae_surf_p** | **51.6269** |
+| test_single_in_dist/mae_surf_p | 61.6750 |
+| test_geom_camber_rc/mae_surf_p | 61.9484 |
+| test_geom_camber_cruise/mae_surf_p | 33.2190 |
+| test_re_rand/mae_surf_p | 49.6652 |
+| Best epoch | 18 (timeout-bound; val still descending) |
+| Per-epoch time | ~101s (was ~131s) |
+| Peak GPU memory | 32.96 GB (was 42.13 GB) |
+| n_params | 662,359 |
+
+**Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU  
+**Optimizer:** Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)  
+**Scheduler:** CosineAnnealingLR(T_max=80)  
+**Loss:** vol_loss + 25·surf_loss, with asinh(z) on pressure channel  
+**Precision:** **bf16 autocast on forward+loss; fp32 backward/clip/optimizer/EMA**  
+**EMA:** decay=0.999, applied at val/test passes  
+**Gradient clipping:** max_norm=1.0 (before optimizer.step(), in fp32)  
+**Batch:** 4  
+**Metric artifacts:** `models/model-charliepai2i48h2-alphonse-bf16-autocast-20260516-053111/metrics.jsonl`
+
+**Note:** −12.5% on val (58.87 vs 67.30), −12.4% on test (51.63 vs 58.92). All 4 splits improved (−9.2% to −15.3%). No NaN or instability — asinh and grad-clip compose cleanly with bf16. 9 GB freed VRAM opens the door to moderate capacity expansion. Val curve still descending at epoch 18 — still timeout-bound.
+
+**6-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.999) + grad_clip(max_norm=1.0) + **bf16 autocast**
+
+**Cumulative improvement from initial baseline:** 135.02 → 58.87 = **−56.4%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25
+```
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **58.8717** with a terminal `SENPAI-RESULT` marker.
