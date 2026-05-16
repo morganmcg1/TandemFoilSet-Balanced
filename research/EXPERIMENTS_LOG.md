@@ -1314,3 +1314,63 @@ GEGLU (architecture) × lr=2e-3 (optimizer) are orthogonal levers. Predicted ≈
 
 Full active roster (8 students, 0 idle):
 #3918 askeladd H57 GEGLU+lr2e3 | #3683 thorfinn rebase | #3896 alphonse H51 LR | #3897 frieren H56 clip | #3898 nezuko H54 surf | #3899 tanjiro H55 mixup | #3859 edward H49 lion | #3862 fern H50 wsd
+
+---
+
+## 2026-05-16 12:41 — PR #3683: H39 Arm C (thorfinn) — MERGED (documentation)
+
+- Branch: `charliepai2i48h3-thorfinn/lr-ceiling-h32`
+- Result: val_avg=63.4385, test=61.3910 (3-split excl. cruise)
+- Merged to get metrics artifacts on advisor branch. Not the current best — H48 GEGLU (58.63) superseded it during review cycle.
+
+---
+
+## 2026-05-16 12:41 — PR #3862: H50 WSD trapezoidal schedule (fern) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-fern/hypothesis_h50_wsd`
+- Hypothesis: Warmup-Stable-Decay schedule at 14-epoch budget outperforms cosine.
+
+| Arm | Config | val_avg/mae_surf_p | Δ vs H37b baseline (66.11) |
+|-----|--------|-------------------|---------------------------|
+| Arm A | WSD 2/8/4 | 71.3196 | **+5.21 (regression)** |
+| Arm B | WSD 1/9/4 | 67.2552 | **+1.15 (regression)** |
+
+**Analysis:** Both WSD arms underperform the pre-GEGLU H37b baseline (66.11), and both are far from the current H48 GEGLU baseline (58.63 — ∆ = 14.7%). The diagnosis is clean: at 14 epochs, cosine's smooth decay from epoch 1 does real optimization work that WSD's stable-phase idles. During the stable phase, the model stays in a chaotic high-LR regime; descent only happens in the 4-epoch linear cooldown, which the cosine baseline beats by covering more gradient terrain throughout. This closes the schedule lever conclusively (joins H43 warmup, H41C T_max=20, H47 eta_min — all schedule changes failed at this budget). WSD is correct for long-training regimes (100k+ steps); our 14-epoch budget is the wrong setting.
+
+**Status: CLOSED — regression vs even the pre-GEGLU baseline. Schedule angle exhausted.**
+
+---
+
+## 2026-05-16 12:41 — PR #3859: H49 Lion optimizer sweep (edward) — CLOSED, forwarded as H58
+
+- Branch: `charliepai2i48h3-edward/hypothesis_h49_lion`
+- Hypothesis: Lion sign-based optimizer (lr=1e-4/3e-4 sweep) on H37b base.
+
+| Arm | lr | wd | val_avg/mae_surf_p | Δ vs H37b (66.11) | Δ vs H48 GEGLU (58.63) |
+|-----|----|----|-------------------|-------------------|------------------------|
+| **A** | 1e-4 | 1e-3 | **60.3008** | **−5.80** | **+1.67** |
+| B | 3e-4 | 3e-4 | 61.1256 | −4.98 | +2.49 |
+
+Test 3-split: Arm A = 59.02, Arm B = 58.80.
+
+**Analysis:** Both Lion arms cleanly beat H37b (66.11), confirming Lion's sign-based update normalization removes gradient-magnitude imbalance between high-Re and low-Re samples. The biggest gains landed on val_single_in_dist (−9.4) and val_re_rand (−4.26) — exactly the mixed-Re splits where gradient imbalance is worst. Arm A (lr=1e-4, wd=1e-3) wins validation; Arm B narrowly wins 3-split test (58.80 vs 59.02). However, while this PR was running, H48 GEGLU merged at val=58.63, which is 1.67 pts better than Lion's best (60.30). Lion cannot merge as new baseline.
+
+**Mechanism:** Lion's update direction (sign of the weighted gradient) prevents high-Re samples from dominating weight updates. GEGLU's mechanism (spatial gate selectivity) is orthogonal — different layer, different compute step. If they stack additively: predicted 58.63 − 5.80 = **~52.8**.
+
+**Status: CLOSED — 1.67 pts below H48 GEGLU baseline. Lion forwarded as H58 (Lion + GEGLU mega-stack) for edward.**
+
+---
+
+## 2026-05-16 12:45 — R5 cycle 8 new assignments (3 idle students)
+
+| PR | Student | Hypothesis | Predicted val_avg |
+|----|---------|------------|-------------------|
+| **#3965** | edward | **H58: Lion + GEGLU mega-stack** | ~52-55 |
+| **#3966** | fern | **H59: RMSNorm vs LayerNorm in GEGLU Transolver** | ~57-58 |
+| **#3968** | thorfinn | **H60: GEGLU + n_layers sweep (4 vs 6)** | ~57-58 |
+
+**H58 (Lion + GEGLU):** If gains compound additively, predicted 58.63 − 5.80 = ~52.8. Highest-risk/highest-reward experiment this cycle. Lion's sign-normalization is orthogonal to GEGLU's gate mechanism — different levers, different parts of the forward pass.
+
+**H59 (RMSNorm):** Replace LayerNorm with RMSNorm in Transolver blocks. Mechanistically motivated: GEGLU gates depend on directional activation structure; LayerNorm's mean-subtraction can distort that signal. RMSNorm preserves it. Small gain expected (0.5-2 pts) but clean test with no new hyperparameters.
+
+**H60 (n_layers sweep):** Revisit depth in GEGLU context. H42 Arm C showed n_layers=3 + n_head=2 compound destructively at vanilla FFN; GEGLU's extra parameter capacity per block may change the optimal depth. Arms: n_layers=4 (shallower) and n_layers=6 (deeper). Uses existing --n_layers flag.
