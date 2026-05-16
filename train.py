@@ -619,6 +619,7 @@ class Config:
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
+    p_weight: float = 1.0   # multiplier on pressure channel in training Huber/MSE loss
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -855,6 +856,18 @@ for epoch in range(MAX_EPOCHS):
         y_norm_safe = torch.where(torch.isfinite(y_norm), y_norm, torch.zeros_like(y_norm))
         mask_safe = mask & y_finite_sample[:, None].expand_as(mask)
         sq_err = _residual_err(pred, y_norm_safe, cfg.loss_type, cfg.loss_beta)
+
+        # H43: upweight pressure channel (dim 2) in the training loss to align
+        # the gradient with the primary eval metric (surface-pressure MAE).
+        # Applied before mask-reduction so both vol_loss and surf_loss get the
+        # same per-channel emphasis. Eval (evaluate_split) is intentionally
+        # unchanged — the val/test MAE pipeline aggregates physical-space
+        # residuals via accumulate_batch and is independent of this weighting.
+        if cfg.p_weight != 1.0:
+            channel_weights = torch.tensor(
+                [1.0, 1.0, cfg.p_weight], device=sq_err.device, dtype=sq_err.dtype
+            )
+            sq_err = sq_err * channel_weights
 
         vol_mask = mask_safe & ~is_surface
         surf_mask = mask_safe & is_surface
