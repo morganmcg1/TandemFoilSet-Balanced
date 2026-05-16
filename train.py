@@ -232,6 +232,60 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class Lookahead(torch.optim.Optimizer):
+    """Wraps a base optimizer with k-step lookahead (Zhang et al. 2019).
+
+    Reference: "Lookahead Optimizer: k steps forward, 1 step back"
+    https://arxiv.org/abs/1907.08610
+
+    Maintains a slow-weight copy and interleaves k fast (base optimizer) steps
+    with a slow-weight sync ``θ_slow ← θ_slow + α·(θ_fast - θ_slow)``; the fast
+    weights then restart from the new slow weights. The scheduler attaches to
+    the base optimizer; param_groups/defaults/state are passthroughs so existing
+    code that inspects the wrapper sees the base optimizer's view.
+
+    Side effect: ``self.last_sync_diff_norm`` is set to the L2 norm of
+    ``θ_fast - θ_slow`` just before each sync (and ``None`` between syncs) for
+    optional logging of how far the fast trajectory wanders from the slow one.
+    """
+
+    def __init__(self, base_optimizer, k=5, alpha=0.5):
+        self.base = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.last_sync_diff_norm: float | None = None
+        self.slow_state = {}
+        for group in base_optimizer.param_groups:
+            for p in group["params"]:
+                self.slow_state[p] = p.data.clone().detach()
+        self.param_groups = base_optimizer.param_groups
+        self.defaults = base_optimizer.defaults
+        self.state = base_optimizer.state
+
+    def zero_grad(self, set_to_none=True):
+        self.base.zero_grad(set_to_none=set_to_none)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.base.step(closure)
+        self.step_count += 1
+        self.last_sync_diff_norm = None
+        if self.step_count % self.k == 0:
+            sq_sum = None
+            for group in self.base.param_groups:
+                for p in group["params"]:
+                    slow = self.slow_state[p]
+                    diff = p.data - slow
+                    s = diff.pow(2).sum()
+                    sq_sum = s if sq_sum is None else sq_sum + s
+                    slow.add_(diff, alpha=self.alpha)
+                    p.data.copy_(slow)
+            if sq_sum is not None:
+                self.last_sync_diff_norm = float(sq_sum.sqrt().item())
+        return loss
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -467,6 +521,8 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    lookahead_k: int = 5
+    lookahead_alpha: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -524,10 +580,11 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-optimizer = torch.optim.AdamW(
+base_optimizer = torch.optim.AdamW(
     model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17)
+optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=17)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -569,8 +626,12 @@ train_start = time.time()
 # Wiring sanity: confirm AdamW betas reached every param group.
 _betas_per_group = [tuple(g["betas"]) for g in optimizer.param_groups]
 print(f"AdamW betas per group: {_betas_per_group}")
+print(f"Lookahead wrap: k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}")
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
+run.summary["optimizer"] = "lookahead-adamw"
+run.summary["lookahead_k"] = cfg.lookahead_k
+run.summary["lookahead_alpha"] = cfg.lookahead_alpha
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -615,11 +676,14 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         loss_val = loss.item()
         _train_loss_window.append(loss_val)
-        wandb.log({
+        _log_dict = {
             "train/loss": loss_val,
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if optimizer.last_sync_diff_norm is not None:
+            _log_dict["train/lookahead_sync_diff_norm"] = optimizer.last_sync_diff_norm
+        wandb.log(_log_dict)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
