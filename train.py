@@ -410,6 +410,26 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 print(f"EMA shadow model created with decay={ema_decay}")
 
+# torch.compile the live training model only (EMA stays in eager).
+# dynamic=True handles the variable mesh-size workload without recompiling
+# per shape; fullgraph=False lets inductor fall back to eager on any subgraph
+# it can't trace cleanly (e.g. einops rearrange) instead of crashing.
+compile_mode = "default"
+compile_dynamic: bool | None = True
+compile_fullgraph = False
+compile_status = "enabled"
+try:
+    model = torch.compile(
+        model,
+        dynamic=compile_dynamic,
+        fullgraph=compile_fullgraph,
+        mode=compile_mode,
+    )
+    print(f"torch.compile(dynamic={compile_dynamic}, fullgraph={compile_fullgraph}, mode={compile_mode!r})")
+except Exception as e:  # pragma: no cover — defensive
+    compile_status = f"failed: {type(e).__name__}: {e}"
+    print(f"torch.compile failed, falling back to eager: {compile_status}")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -430,6 +450,7 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+epoch_times: list[float] = []
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -499,6 +520,7 @@ for epoch in range(MAX_EPOCHS):
         torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
+    epoch_times.append(dt)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -521,6 +543,33 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# Throughput summary — epoch 1 includes torch.compile graph capture and is
+# not representative; steady-state mean over epochs 2..N is the diagnostic.
+epoch_1_seconds = epoch_times[0] if epoch_times else None
+steady_state_epochs = epoch_times[1:]
+epoch_2_through_N_mean_seconds = (
+    sum(steady_state_epochs) / len(steady_state_epochs) if steady_state_epochs else None
+)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "throughput_summary",
+    "compile_status": compile_status,
+    "compile_dynamic": compile_dynamic,
+    "compile_fullgraph": compile_fullgraph,
+    "compile_mode": compile_mode,
+    "epochs_realized": len(epoch_times),
+    "epoch_1_seconds": epoch_1_seconds,
+    "epoch_2_through_N_mean_seconds": epoch_2_through_N_mean_seconds,
+    "all_epoch_seconds": epoch_times,
+    "total_train_minutes": total_time,
+})
+if epoch_1_seconds is None:
+    print("Throughput summary: 0 epochs")
+else:
+    print(f"Throughput summary: epochs={len(epoch_times)}  epoch_1={epoch_1_seconds:.1f}s")
+    if epoch_2_through_N_mean_seconds is not None:
+        print(f"  epoch_2_through_N_mean={epoch_2_through_N_mean_seconds:.1f}s "
+              f"(over {len(steady_state_epochs)} epochs)")
 
 # --- Test evaluation + local summary ---
 if best_metrics:
