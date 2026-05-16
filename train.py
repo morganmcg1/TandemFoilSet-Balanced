@@ -575,6 +575,24 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# Per-layer grad-norm tracking groups (preprocess, blocks.{i}, placeholder)
+layer_groups: dict[str, list[tuple[str, torch.nn.Parameter]]] = {}
+for _name, _p in model.named_parameters():
+    if _name.startswith("preprocess"):
+        _key = "preprocess"
+    elif _name.startswith("blocks."):
+        _key = f"blocks.{_name.split('.')[1]}"
+    else:
+        _key = "other"
+    layer_groups.setdefault(_key, []).append((_name, _p))
+per_layer_norm_acc = {k: torch.zeros((), device=device) for k in layer_groups}
+
+# Clip-fraction / pre vs post-clip running tracking (Python scalars; preclip already syncs)
+clip_n_steps = 0
+clip_n_clipped = 0
+clip_sum_preclip = 0.0
+clip_sum_postclip = 0.0
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -624,11 +642,31 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+
+        # Per-layer grad norms (before any clipping). Accumulates on-device to
+        # avoid per-step CUDA syncs; .item() only at end-of-training.
+        with torch.no_grad():
+            for _gname, _plist in layer_groups.items():
+                _sumsq = None
+                for _, _p in _plist:
+                    if _p.grad is not None:
+                        _ps = _p.grad.detach().pow(2).sum()
+                        _sumsq = _ps if _sumsq is None else _sumsq + _ps
+                if _sumsq is not None:
+                    per_layer_norm_acc[_gname] = per_layer_norm_acc[_gname] + _sumsq.sqrt()
+
         grad_norm_preclip: float | None = None
+        grad_norm_postclip: float | None = None
         if cfg.grad_clip > 0:
             grad_norm_preclip = torch.nn.utils.clip_grad_norm_(
                 model.parameters(), cfg.grad_clip
             ).item()
+            grad_norm_postclip = min(grad_norm_preclip, cfg.grad_clip)
+            clip_n_steps += 1
+            if grad_norm_preclip > cfg.grad_clip:
+                clip_n_clipped += 1
+            clip_sum_preclip += grad_norm_preclip
+            clip_sum_postclip += grad_norm_postclip
         optimizer.step()
         with torch.no_grad():
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
@@ -637,6 +675,8 @@ for epoch in range(MAX_EPOCHS):
         step_log = {"train/loss": loss.item(), "global_step": global_step}
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
+            step_log["train/grad_norm_postclip"] = grad_norm_postclip
+            step_log["train/clip_binding"] = float(grad_norm_preclip > cfg.grad_clip)
         wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
@@ -683,6 +723,10 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if clip_n_steps > 0:
+        log_metrics["train/clip_fraction_cum"] = clip_n_clipped / clip_n_steps
+        log_metrics["train/mean_preclip_cum"] = clip_sum_preclip / clip_n_steps
+        log_metrics["train/mean_postclip_cum"] = clip_sum_postclip / clip_n_steps
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -712,6 +756,35 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- Clipping diagnostics + per-layer mean grad norm summary ---
+if clip_n_steps > 0:
+    final_clip_fraction = clip_n_clipped / clip_n_steps
+    final_mean_preclip = clip_sum_preclip / clip_n_steps
+    final_mean_postclip = clip_sum_postclip / clip_n_steps
+    print(
+        f"\nClip diagnostics (grad_clip={cfg.grad_clip}): steps={clip_n_steps} "
+        f"clipped={clip_n_clipped} ({100*final_clip_fraction:.1f}%) "
+        f"mean_preclip={final_mean_preclip:.4f} mean_postclip={final_mean_postclip:.4f}"
+    )
+    wandb.summary.update({
+        "clip/total_steps": clip_n_steps,
+        "clip/n_clipped": clip_n_clipped,
+        "clip/fraction": final_clip_fraction,
+        "clip/mean_preclip": final_mean_preclip,
+        "clip/mean_postclip": final_mean_postclip,
+    })
+
+per_layer_means = {
+    k: (v.item() / max(clip_n_steps, 1)) if clip_n_steps > 0 else 0.0
+    for k, v in per_layer_norm_acc.items()
+}
+if clip_n_steps > 0:
+    print("\nPer-layer mean grad norm (pre-clip, averaged over all training steps):")
+    for k in sorted(per_layer_means):
+        print(f"  {k:14s}  {per_layer_means[k]:.4f}")
+    for k, v in per_layer_means.items():
+        wandb.summary[f"grad_norm_per_layer/{k}"] = v
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
