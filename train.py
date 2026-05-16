@@ -47,6 +47,75 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Per-domain normalization
+# ---------------------------------------------------------------------------
+# Targets (y) are normalized with per-domain (mean, std) instead of global stats.
+# Two domains: "single" (single-foil samples) and "tandem" (tandem-foil samples).
+# A sample is "single" iff its gap (x[..., 22]) and stagger (x[..., 23]) are 0
+# everywhere — these features are zero exactly for single-foil samples per
+# program.md. Splits map to a single fixed domain (val/test split names) so
+# val_re_rand (mixed-tandem) consistently uses the combined "tandem" stats.
+
+DOMAIN_NAMES = ("single", "tandem")
+SPLIT_TO_DOMAIN = {
+    "val_single_in_dist": "single",
+    "val_geom_camber_rc": "tandem",
+    "val_geom_camber_cruise": "tandem",
+    "val_re_rand": "tandem",
+    "test_single_in_dist": "single",
+    "test_geom_camber_rc": "tandem",
+    "test_geom_camber_cruise": "tandem",
+    "test_re_rand": "tandem",
+}
+
+
+def _sample_domain(x: torch.Tensor) -> str:
+    """Detect domain from features: gap (dim 22) and stagger (dim 23) are 0
+    exactly for single-foil samples per program.md."""
+    # x: [N, 24]; per-foil scalars are constant across nodes, so first row suffices.
+    if x[0, 22].abs().item() < 1e-8 and x[0, 23].abs().item() < 1e-8:
+        return "single"
+    return "tandem"
+
+
+def _compute_per_domain_y_stats(
+    train_ds, fallback_y_mean, fallback_y_std, device
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, int]]:
+    """Stream the training set and compute per-domain (y_mean, y_std).
+
+    Stats are computed in float64 over all training nodes. If a domain has no
+    training samples in this run (e.g. tiny debug subset), it falls back to
+    the global stats so the pipeline still runs end-to-end.
+    """
+    sums = {d: torch.zeros(3, dtype=torch.float64) for d in DOMAIN_NAMES}
+    sqsums = {d: torch.zeros(3, dtype=torch.float64) for d in DOMAIN_NAMES}
+    counts = {d: 0 for d in DOMAIN_NAMES}
+    samples = {d: 0 for d in DOMAIN_NAMES}
+    for idx in range(len(train_ds)):
+        x, y, _ = train_ds[idx]
+        d = _sample_domain(x)
+        y64 = y.to(torch.float64)
+        sums[d] += y64.sum(dim=0)
+        sqsums[d] += (y64 ** 2).sum(dim=0)
+        counts[d] += y.shape[0]
+        samples[d] += 1
+
+    y_means: dict[str, torch.Tensor] = {}
+    y_stds: dict[str, torch.Tensor] = {}
+    for d in DOMAIN_NAMES:
+        if counts[d] == 0:
+            print(f"  WARNING: no training samples for domain {d!r}, falling back to global stats")
+            y_means[d] = fallback_y_mean.clone()
+            y_stds[d] = fallback_y_std.clone()
+            continue
+        mean = sums[d] / counts[d]
+        var = (sqsums[d] / counts[d]) - mean ** 2
+        std = var.clamp(min=0).sqrt()
+        y_means[d] = mean.to(torch.float32).to(device)
+        y_stds[d] = std.to(torch.float32).to(device)
+    return y_means, y_stds, samples
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -217,12 +286,14 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, y_mean_dom, y_std_dom, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``score.py`` (float64, non-finite samples skipped). ``y_mean_dom`` and
+    ``y_std_dom`` are the per-domain y stats for this split (all samples in a
+    val/test split share the same domain assignment, see SPLIT_TO_DOMAIN).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -237,7 +308,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y - y_mean_dom) / y_std_dom
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
                 pred = model({"x": x_norm})["preds"]
 
@@ -254,7 +325,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred * y_std_dom + y_mean_dom
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -373,21 +444,76 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)
+# --- Compute per-domain y stats from training set ---
+print("Computing per-domain y stats (single vs tandem)...")
+per_domain_y_mean, per_domain_y_std, per_domain_samples = _compute_per_domain_y_stats(
+    train_ds, stats["y_mean"], stats["y_std"], device
+)
+print(f"  Per-domain sample counts: {per_domain_samples}")
+for d in DOMAIN_NAMES:
+    m = per_domain_y_mean[d].cpu().tolist()
+    s = per_domain_y_std[d].cpu().tolist()
+    print(f"  {d}: y_mean=({m[0]:.3f}, {m[1]:.3f}, {m[2]:.3f})  "
+          f"y_std=({s[0]:.3f}, {s[1]:.3f}, {s[2]:.3f})")
 
+
+class _DomainTaggedDataset(torch.utils.data.Dataset):
+    """Wraps a SplitDataset to also return the per-sample domain index."""
+
+    def __init__(self, base):
+        self.base = base
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        d_idx = DOMAIN_NAMES.index(_sample_domain(x))
+        return x, y, is_surface, d_idx
+
+
+def _pad_collate_with_domain(batch):
+    """Like data.pad_collate but also returns a per-sample domain index tensor."""
+    xs, ys, surfs, doms = zip(*batch)
+    max_n = max(x.shape[0] for x in xs)
+    B = len(xs)
+    x_pad = torch.zeros(B, max_n, xs[0].shape[1])
+    y_pad = torch.zeros(B, max_n, ys[0].shape[1])
+    surf_pad = torch.zeros(B, max_n, dtype=torch.bool)
+    mask = torch.zeros(B, max_n, dtype=torch.bool)
+    for i, (x, y, sf) in enumerate(zip(xs, ys, surfs)):
+        n = x.shape[0]
+        x_pad[i, :n] = x
+        y_pad[i, :n] = y
+        surf_pad[i, :n] = sf
+        mask[i, :n] = True
+    dom_idx = torch.tensor(doms, dtype=torch.long)
+    return x_pad, y_pad, surf_pad, mask, dom_idx
+
+
+train_loader_kwargs = dict(collate_fn=_pad_collate_with_domain, num_workers=4,
+                           pin_memory=True, persistent_workers=True, prefetch_factor=2)
+val_loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+                         persistent_workers=True, prefetch_factor=2)
+
+train_ds_tagged = _DomainTaggedDataset(train_ds)
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_ds_tagged, batch_size=cfg.batch_size,
+                              shuffle=True, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(train_ds_tagged, batch_size=cfg.batch_size,
+                              sampler=sampler, **train_loader_kwargs)
 
 val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
     for name, ds in val_splits.items()
 }
+
+# Stack per-domain stats so we can index by domain idx during training.
+# Shape: [n_domains, 3]
+y_mean_by_idx = torch.stack([per_domain_y_mean[d] for d in DOMAIN_NAMES], dim=0)
+y_std_by_idx = torch.stack([per_domain_y_std[d] for d in DOMAIN_NAMES], dim=0)
 
 model_config = dict(
     space_dim=2,
@@ -415,6 +541,14 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+per_domain_stats_payload = {
+    d: {
+        "y_mean": per_domain_y_mean[d].cpu().tolist(),
+        "y_std": per_domain_y_std[d].cpu().tolist(),
+        "n_samples": per_domain_samples[d],
+    }
+    for d in DOMAIN_NAMES
+}
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
@@ -422,7 +556,14 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "per_domain_y_stats": per_domain_stats_payload,
+        "split_to_domain": SPLIT_TO_DOMAIN,
     }, f, sort_keys=True)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "per_domain_y_stats",
+    "per_domain": per_domain_stats_payload,
+    "split_to_domain": SPLIT_TO_DOMAIN,
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -438,14 +579,18 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for x, y, is_surface, mask, dom_idx in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+        dom_idx = dom_idx.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        # Per-sample per-domain y normalization. y_mean_batch / y_std_batch: [B, 1, 3]
+        y_mean_batch = y_mean_by_idx[dom_idx].unsqueeze(1)
+        y_std_batch = y_std_by_idx[dom_idx].unsqueeze(1)
+        y_norm = (y - y_mean_batch) / y_std_batch
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
             pred = model({"x": x_norm})["preds"]
             sq_err = F.huber_loss(pred, y_norm, reduction='none', delta=cfg.huber_delta)
@@ -470,7 +615,12 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(
+            model, loader, stats,
+            per_domain_y_mean[SPLIT_TO_DOMAIN[name]],
+            per_domain_y_std[SPLIT_TO_DOMAIN[name]],
+            cfg.surf_weight, device,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -524,11 +674,16 @@ if best_metrics:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **val_loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(
+                model, loader, stats,
+                per_domain_y_mean[SPLIT_TO_DOMAIN[name]],
+                per_domain_y_std[SPLIT_TO_DOMAIN[name]],
+                cfg.surf_weight, device,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
