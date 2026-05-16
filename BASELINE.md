@@ -21,6 +21,8 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 - **Gradient clipping**: `clip_grad_norm_(max_norm=0.5)` — **default is now 0.5**
   (PR #3418 added lever; PR #3494 flipped default from 0.0 → 0.5). Bare
   `python train.py` now clips at 0.5 automatically — no explicit flag needed.
+- **Precision**: `bfloat16` AMP mixed precision — **default is now bf16** (**merged
+  from PR #3330**). 1.33× per-epoch speedup → deeper cosine decay in 30-min budget.
 - Eval: non-finite ground truth samples filtered at `evaluate_split` boundary,
   so `test_avg/mae_surf_p` is now finite (**merged from PR #3138**)
 - Batch size: 4 (mesh-padded by `pad_collate`)
@@ -31,6 +33,35 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 ✅ **Loss-fn default correct as of PR #3440.** Charbonnier ε=1e-3 auto-applies.
 ✅ **Grad-clip default correct as of PR #3494.** Bare `python train.py` now clips at 0.5. No explicit flag needed.
 ✅ **Fourier positional encoding default as of PR #3348.** `pos_enc_mode=fourier_basic`, L=8 auto-applies.
+✅ **bf16 AMP default correct as of PR #3330.** 1.33× per-epoch speedup auto-applies.
+
+## 2026-05-16 — PR #3330: bf16 AMP mixed precision — **MERGED ⭐⭐ (new val AND test best)**
+
+- **val_avg/mae_surf_p: 83.54** (NEW BEST, −13.93 vs 97.47 prior best, −14.3%)
+- **test_avg/mae_surf_p: 73.02** (NEW BEST, −13.20 vs 86.22 prior best, −15.3%)
+- **W&B run:** 5a0rym2t (bf16_fourier_v1)
+- **Control:** ku86zau9 (fp32_ref_v2, val=103.62, test=92.43) — 1.33× speedup confirmed
+- **best_epoch:** 19 (vs 14 for fp32 — deeper cosine decay in same 30-min budget)
+- **Speedup:** 1.329× per-epoch (99.4 s/epoch bf16 vs 132.1 s/epoch fp32)
+- **Surface MAE (test, bf16_fourier_v1, run 5a0rym2t):**
+  - test_single_in_dist mae_surf_p = 87.67
+  - test_geom_camber_rc mae_surf_p = 78.83
+  - test_geom_camber_cruise mae_surf_p = 52.60
+  - test_re_rand mae_surf_p = 72.97
+- **Reproduce:**
+  ```
+  cd target/
+  python train.py --pos_enc_mode fourier_basic \
+    --wandb_group bf16-amp-fourier --wandb_name bf16_fourier_v1 --epochs 50
+  ```
+  (No `--grad_clip_max_norm` or `--amp_dtype` flags needed — both now default.)
+
+Notes: Composes multiplicatively with Fourier L=8 (PR #3348). 1.33× per-epoch speedup lets
+cosine schedule decay 36% deeper (ep 19 vs 14), with bf16 numerical stability confirmed across
+~60 aggregate training epochs and all 4 test splits finite. Post-merge, all subsequent experiments
+get the speedup automatically.
+
+---
 
 ## Current best baseline result (PR #3418 — grad-clip merged)
 
