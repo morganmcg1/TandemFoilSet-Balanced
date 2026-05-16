@@ -419,6 +419,7 @@ class Config:
     ema_decay: float = 0.0   # EMA decay (0 = disabled, 0.999 = recommended)
     precondition_frequency: int = 10  # SOAP: steps between eigenbasis refreshes (PR #3495)
     seed: int = 0            # RNG seed (used for torch + cuda + numpy)
+    huber_beta: float = 1.0  # SmoothL1/Huber transition (delta); >0 — PR #3316 sweep
 
 
 cfg = sp.parse(Config)
@@ -563,8 +564,8 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = F.smooth_l1_loss(
-            pred, y_norm, reduction="none", beta=1.0
-        )  # Huber in normalized space; beta=1.0 transitions at delta=1
+            pred, y_norm, reduction="none", beta=cfg.huber_beta
+        )  # Huber in normalized space; beta=cfg.huber_beta transitions at delta
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
