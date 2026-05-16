@@ -140,7 +140,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layer_scale_init: float = 0.0):
+                 layer_scale_init_attn: float = 0.0,
+                 layer_scale_init_mlp: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -151,12 +152,15 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
-        self.layer_scale_init = layer_scale_init
-        if layer_scale_init > 0:
-            self.gamma_attn = nn.Parameter(layer_scale_init * torch.ones(hidden_dim))
-            self.gamma_mlp = nn.Parameter(layer_scale_init * torch.ones(hidden_dim))
+        self.layer_scale_init_attn = layer_scale_init_attn
+        self.layer_scale_init_mlp = layer_scale_init_mlp
+        if layer_scale_init_attn > 0:
+            self.gamma_attn = nn.Parameter(layer_scale_init_attn * torch.ones(hidden_dim))
         else:
             self.register_parameter("gamma_attn", None)
+        if layer_scale_init_mlp > 0:
+            self.gamma_mlp = nn.Parameter(layer_scale_init_mlp * torch.ones(hidden_dim))
+        else:
             self.register_parameter("gamma_mlp", None)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -206,7 +210,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  n_freqs: int = 0, fourier_base: float = 2.0,
-                 layer_scale_init: float = 0.0,
+                 layer_scale_init_attn: float = 0.0,
+                 layer_scale_init_mlp: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -226,13 +231,15 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
-        self.layer_scale_init = layer_scale_init
+        self.layer_scale_init_attn = layer_scale_init_attn
+        self.layer_scale_init_mlp = layer_scale_init_mlp
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                layer_scale_init=layer_scale_init,
+                layer_scale_init_attn=layer_scale_init_attn,
+                layer_scale_init_mlp=layer_scale_init_mlp,
             )
             for i in range(n_layers)
         ])
@@ -398,7 +405,8 @@ def write_experiment_summary(
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
         "lr_t_max": cfg.lr_t_max,
-        "layer_scale_init": cfg.layer_scale_init,
+        "layer_scale_init_attn": cfg.layer_scale_init_attn,
+        "layer_scale_init_mlp": cfg.layer_scale_init_mlp,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -444,7 +452,8 @@ class Config:
     n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
     fourier_base: float = 2.0
     lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS if None
-    layer_scale_init: float = 0.0  # CaiT-style per-channel residual gain; 0.0 disables (baseline behavior)
+    layer_scale_init_attn: float = 0.0  # CaiT-style per-channel residual gain for attention branch; 0.0 disables
+    layer_scale_init_mlp: float = 0.0   # CaiT-style per-channel residual gain for MLP branch; 0.0 disables
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -490,7 +499,8 @@ model_config = dict(
     mlp_ratio=2,
     n_freqs=cfg.n_freqs,
     fourier_base=cfg.fourier_base,
-    layer_scale_init=cfg.layer_scale_init,
+    layer_scale_init_attn=cfg.layer_scale_init_attn,
+    layer_scale_init_mlp=cfg.layer_scale_init_mlp,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -499,7 +509,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-if cfg.layer_scale_init > 0:
+if cfg.layer_scale_init_attn > 0 or cfg.layer_scale_init_mlp > 0:
     # Exclude LayerScale gamma params from weight decay (standard ViT recipe).
     # Otherwise AdamW would slowly pull tiny gamma values back toward zero, defeating
     # the point of LayerScale at small init.
