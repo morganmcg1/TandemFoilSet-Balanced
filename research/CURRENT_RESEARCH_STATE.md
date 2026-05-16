@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~21:05 UTC
+- **Last updated:** 2026-05-16 ~21:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -86,7 +86,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4110** | frieren | Curvature loss retest with sharpened proxy on new baseline | WIP |
 | **#4150** | tanjiro | lr=7e-4 + warmup=1 on n_hidden=176+bf16+ep14 (30-min budget test) | WIP (assigned 20:50) |
 | **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP |
-| **#4140** | alphonse | slice_num=96 retest on new baseline (architectural, orthogonal to n_head) | WIP |
+| **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP (assigned 21:35) |
 | **#4143** | thorfinn | n_head=8 retest on new baseline (architectural, orthogonal to slice_num) | WIP |
 
 ### Round-7 still in-flight (assigned earlier, results pending)
@@ -143,8 +143,9 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 | CLOSED (pod env 30-min cap can't fit ep22 ≈ 48 min) |
 | #4112 | thorfinn | DSDF-norm as input feature | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 | CLOSED (val +2.57% regress) |
 | #4129 | askeladd | AdamW beta2 sweep (0.95, 0.98) | `--adam_beta2 0.95/0.98 --n_hidden 176 --use_bf16 --epochs 18`, T=45 (2 arms) | WIP |
-| **#4140** | alphonse | slice_num=96 retest on new baseline | `--slice_num 96 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
-| **#4143** | thorfinn | n_head=8 retest on new baseline | `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
+| #4140 | alphonse | slice_num=96 retest on new baseline | `--slice_num 96 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | CLOSED (val=74.47 cut ep12; monotonic worse from 64→96) |
+| **#4143** | thorfinn | n_head=8 retest on new baseline | `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP |
+| **#4165** | alphonse | slice_num=48 retest (other side of curve) | `--slice_num 48 --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 

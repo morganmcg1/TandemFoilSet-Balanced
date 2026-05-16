@@ -1,5 +1,73 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 21:35 — PR #4140 closed; #4165 assigned — alphonse slice_num=48 retest
+
+### #4140 alphonse slice_num=96 retest — **CLOSED** (val=74.47, +46.3% regress, cut ep12/18 by 30-min cap)
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/slice-num-96-retest`)
+- **Hypothesis:** That `n_hidden=176 + bf16 + ep18` would unlock `slice_num=96`, mirroring how the same stack unlocked `n_hidden=176` itself. Single-knob architectural retest.
+- **Result:** val=74.4656 (+46.3% vs 50.9008), test=65.0970 (+48.3% vs 43.8989). All 4 test splits regressed. W&B run: `nb0ne9oz`. Best epoch 12/18 (cut at 30-min pod wall).
+
+### Headline results (slice_num=96 vs #4082 baseline at slice_num=64)
+
+| Metric | Baseline #4082 (slice=64) | slice_num=96 (cut @ ep12/18) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 50.9008 | 74.4656 | +46.3% |
+| test_avg/mae_surf_p | 43.8989 | 65.0970 | +48.3% |
+| single_in_dist | 48.97 | 83.11 | +69.7% |
+| geom_camber_rc | 55.45 | 78.91 | +42.3% |
+| geom_camber_cruise | 28.27 | 39.55 | +39.9% |
+| re_rand | 42.91 | 58.82 | +37.1% |
+
+### Val trajectory (5-6 pts/ep decelerating descent)
+
+| Epoch | val | Δ from prev |
+|---|---:|---:|
+| 5 | 121.39 | — |
+| 7 | 99.59 | −10.9/ep |
+| 9 | 88.67 | −5.5/ep |
+| 10 | 87.57 | −1.1 |
+| 11 | 76.35 | −11.2 |
+| 12 | **74.47** (cut) | −1.9 |
+
+Even with 6 more epochs available, the decelerating slope (~5-6 pts/ep then ~2 pts/ep) would not realistically close 23.5 pts to reach the 50.90 baseline. ep12→ep18 cosine tail-off would likely land val≈55-60, still well above baseline.
+
+### Mechanistic interpretation (student's, well-argued)
+
+1. **The n_hidden=176 widening did NOT provide enough per-slice capacity headroom** to compensate for the doubled slice-token count's optimisation burden under the 18-epoch budget. Pre-SwiGLU bottleneck behaviour persists.
+2. **Per-epoch cost grew +17%** (130 → 152 s), confirming slice-attention overhead is real and not amortizable by bf16 throughput at this token count.
+3. **VRAM grew +6.2 GB** (44.6 → 50.8 GB) — comfortably within headroom but indicates the attention compute increased substantially.
+4. **All 4 test splits regressed by 37-70%** including `geom_camber_cruise` which has been the easiest split historically. Hypothesis path is closed.
+
+### Key takeaway
+
+**slice_num=64 confirmed as sweet spot on n_hidden=176+bf16+ep18 stack.** Trend from 64→96 is monotonic worsening; do NOT pursue slice_num=128 (would compound cost without signal of headroom).
+
+### #4165 alphonse slice_num=48 retest — **ASSIGNED**
+
+- **Hypothesis (from alphonse's own follow-up):** If `slice_num=64` is the sweet spot and `96` is worse, is the curve U-shaped (with 64 in the middle) or monotonically decreasing (fewer-is-better tail)? Test slice_num=48 to distinguish.
+- **Architectural intuition:** With wider per-slice features (n_hidden=176), slightly fewer slices may be net positive — lower attention cost, more per-slice expressivity. Plausibly compensates if 64 was the old fp32/n_hidden=160 sweet spot but the new SwiGLU/bf16/n_hidden=176 stack has shifted the optimum.
+- **Budget:** Expected ~115-118 s/ep (vs 130 baseline) → ~21-22 min wall for 18 epochs. Well inside alphonse's 30-min pod cap. **No `SENPAI_TIMEOUT_MINUTES` override required** (and prohibited by isolation rules).
+- **Decision criteria:** Merge if val<50.90 AND test<43.90; send back if val<53.82 (positive signal toward smaller slice_num); close if val≥55.
+- **Command:**
+
+```bash
+cd "target/" && python train.py \
+  --n_hidden 176 --epochs 18 --use_bf16 --slice_num 48 \
+  --wandb_name alphonse-slicenum48-nh176-bf16-ep18
+```
+
+### Why this is high-EV signal
+
+Either outcome is informative:
+- **slice=48 wins:** Confirms the wider-features-prefer-fewer-tokens intuition; opens slice_num=32 as next probe.
+- **slice=48 loses but less than slice=96:** Confirms 64 is a true local optimum (U-shaped curve); slice_num axis closed for round-9 and effort shifts to other architectural axes.
+- **slice=48 loses worse than slice=96:** Surprising and would suggest fundamental token-count interaction with optimization landscape, worth deeper analysis.
+
+This closes the slice_num axis in 1 GPU-day total (one win or three closes — all informative).
+
+---
+
 ## 2026-05-16 21:00 — PR #4039 sent back: multi-scale Fourier PE win on prior baseline
 
 ### #4039 edward multi-scale Fourier PE — **SENT BACK** (Arm B beat #3981 by -4.34% val; retest on #4082 stack)
