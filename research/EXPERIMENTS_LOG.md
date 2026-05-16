@@ -1790,3 +1790,22 @@ Arm B (slice=128) regresses across the board. Two factors: (1) wall-cut at epoch
 **Insight captured:** warmup=2 beats warmup=1 by **5.3 pts** — the single biggest hyperparameter-tuning signal in the H67-H71 batch. Warmup is high-impact under Lion. H73 used NO warmup (lr=3e-4 from start) and won at 42.98 — but adding warmup=2 may stabilize the lr=3e-4 regime further. **Superseded** — warmup retest on H73 baseline pending.
 
 **Status: CLOSED — superseded by H73.**
+
+---
+
+## 2026-05-16 19:10 — Round 5 Cycle 22: New Assignments
+
+Six new hypotheses assigned to freed students after H73 merge established new baseline at val=42.9784.
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4088 | askeladd | H74: Extended cosine schedule | T_max=20/ep=20 (Arm A), T_max=15/ep=30 SGDR restart (Arm B) |
+| #4094 | tanjiro | H75: Lion LR sweep | lr=2e-4 (Arm A), lr=5e-4 (Arm B) |
+| #4090 | fern | H76: Warmup at H73 baseline | warmup=2+lr=3e-4 (Arm A), warmup=2+lr=5e-4 (Arm B) |
+| #4091 | frieren | H77: n_head at slice=96 | n_head=4 (Arm A), n_head=3 (Arm B) |
+| #4092 | nezuko | H79: wd retune at H73 | wd=1e-4 (Arm A), wd=5e-5 (Arm B) |
+| #4093 | thorfinn | H80: Full Lion stack max | warmup=2+wd=1e-4+β₂=0.999+n_head=4 at lr=3e-4 (Arm A) and lr=2e-4 (Arm B) |
+
+**Note:** H78 (β₂ retune only) deferred — thorfinn assigned H80 (bold compound swing including β₂=0.999). If H80 Arm A beats baseline, H78 individual isolation will confirm β₂ contribution.
+
+Still WIP (low priority): #3965 edward H58 rebase, #4020 alphonse H67 — both likely superseded by H73.

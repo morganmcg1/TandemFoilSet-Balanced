@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 18:36
+- **Date**: 2026-05-16 19:12
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); refining the Lion stack on the new baseline
+- **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); 6 new experiments launched to refine the Lion stack
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -60,10 +60,14 @@ The H67-H73 Lion compound batch revealed:
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#3965** | edward | **H58 REBASE: Lion + GEGLU verification on slice=64** | LOW (superseded by H73) | ~46-47 (Arm A reproduction) |
-| **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm at slice=64** | LOW (slice=64 already superseded) | ~45-48 |
-
-Other 6 students just freed by H67-H73 batch closures. Need new assignments.
+| **#4088** | askeladd | **H74: Extended cosine schedule (T_max=20/SGDR)** | HIGH | ~38-41 |
+| **#4094** | tanjiro | **H75: Lion LR sweep (lr=2e-4, lr=5e-4)** | HIGH | ~41-44 |
+| **#4090** | fern | **H76: Warmup=2 at H73 baseline** | HIGH (warmup=2 was +5.3 pts at slice=64) | ~40-42 |
+| **#4091** | frieren | **H77: n_head=4 at slice=96** | HIGH | ~41-43 |
+| **#4092** | nezuko | **H79: wd retune (wd=1e-4, wd=5e-5)** | HIGH | ~41-44 |
+| **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | HIGH (bold swing) | ~35-40 optimistic |
+| **#3965** | edward | **H58 REBASE: Lion + GEGLU verification on slice=64** | LOW (superseded by H73) | ~46-47 |
+| **#4020** | alphonse | **H67: Lion + GEGLU + RMSNorm at slice=64** | LOW (superseded) | ~45-48 |
 
 **Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73).
 
