@@ -281,6 +281,31 @@ def invert_asinh_vel(pred, scale):
 
 
 # ---------------------------------------------------------------------------
+# Loss functions
+# ---------------------------------------------------------------------------
+
+_LOG2 = 0.6931471805599453
+
+
+def log_cosh_loss(pred, target, reduction: str = "none"):
+    """Numerically stable log(cosh(r)) where r = pred - target.
+
+    Identity: log(cosh(r)) = |r| + log1p(exp(-2|r|)) - log(2).
+    Always-non-positive exponent argument means no overflow for any |r|.
+    Behaves quadratically (≈ 0.5 r²) for small |r| and linearly (≈ |r| - log 2)
+    for large |r|, with C² smoothness — no kink like Huber.
+    """
+    r = pred - target
+    abs_r = torch.abs(r)
+    elem = abs_r + torch.log1p(torch.exp(-2.0 * abs_r)) - _LOG2
+    if reduction == "mean":
+        return elem.mean()
+    if reduction == "sum":
+        return elem.sum()
+    return elem
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -475,6 +500,7 @@ class Config:
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
     slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
     adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; default 0.999
+    use_log_cosh: bool = False  # if True, use log-cosh loss instead of Huber/MSE
 
 
 cfg = sp.parse(Config)
@@ -611,7 +637,9 @@ for epoch in range(MAX_EPOCHS):
                     f"pred_inv[p] range=[{pp_inv.min().item():.3f},{pp_inv.max().item():.3f}] "
                     f"pred_phys[p] range=[{pp_phys.min().item():.3f},{pp_phys.max().item():.3f}]"
                 )
-        if cfg.huber_delta > 0:
+        if cfg.use_log_cosh:
+            elem_loss = log_cosh_loss(pred, y_target, reduction="none")
+        elif cfg.huber_delta > 0:
             elem_loss = F.huber_loss(pred, y_target, delta=cfg.huber_delta, reduction="none")
         else:
             elem_loss = (pred - y_target) ** 2
@@ -621,6 +649,17 @@ for epoch in range(MAX_EPOCHS):
         vol_loss = (elem_loss * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (elem_loss * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Residual-sign diagnostic on surface pressure channel (transformed space).
+        # Symmetric losses should keep these balanced; drift signals a sign asymmetry.
+        with torch.no_grad():
+            surf_p_resid = (pred[..., 2] - y_target[..., 2])[surf_mask]
+            if surf_p_resid.numel() > 0:
+                surf_p_resid_mean = surf_p_resid.mean().item()
+                surf_p_resid_frac_pos = (surf_p_resid > 0).float().mean().item()
+            else:
+                surf_p_resid_mean = float("nan")
+                surf_p_resid_frac_pos = float("nan")
 
         optimizer.zero_grad()
         loss.backward()
@@ -634,7 +673,12 @@ for epoch in range(MAX_EPOCHS):
             for ema_p, p in zip(ema_model.parameters(), model.parameters()):
                 ema_p.data.mul_(ema_decay).add_(p.data, alpha=1 - ema_decay)
         global_step += 1
-        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        step_log = {
+            "train/loss": loss.item(),
+            "train/surf_p_resid_mean": surf_p_resid_mean,
+            "train/surf_p_resid_frac_pos": surf_p_resid_frac_pos,
+            "global_step": global_step,
+        }
         if grad_norm_preclip is not None:
             step_log["train/grad_norm_preclip"] = grad_norm_preclip
         wandb.log(step_log)
