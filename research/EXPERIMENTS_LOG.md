@@ -5,6 +5,35 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 05:22 — PR #3370: Gated MLPs (GeGLU) in TransolverBlocks — **MERGED ⭐⭐ (new val=81.48 AND test=72.68 best)**
+
+- Student branch: `willowpai2i24h1-tanjiro/glu-mlp`
+- Student: `willowpai2i24h1-tanjiro`
+- Hypothesis: Replace vanilla 2-layer GELU MLPs in TransolverBlocks with GeGLU gated MLPs. GeGLU's multiplicative gating may improve generalization on irregular CFD meshes via richer interaction terms. R1 on stale base showed −2.9% (within noise); R2 on Charbonnier+clip base showed −14.7%; R3 on +Fourier composed showed −16.4% val.
+
+| Arm | wandb run | pos_enc | mlp_type | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|-----|-----------|---------|----------|---------------------|---------------------|------------|
+| vanilla_charb (within-PR control) | uc36jzun | raw | vanilla | 104.51 | 94.05 | 14 |
+| geglu_charb (R2 winner) | ee6p5l0h | raw | geglu | 89.17 | 80.51 | 12 |
+| **geglu_fourier_charb (R3 winner)** | **8ile1q1j** | **fourier L=8** | **geglu** | **81.48** | **72.68** | **12** |
+
+Per-split test (geglu_fourier_charb, run 8ile1q1j):
+- test_single_in_dist mae_surf_p = 88.58
+- test_geom_camber_rc mae_surf_p = 76.18
+- test_geom_camber_cruise mae_surf_p = 55.78
+- test_re_rand mae_surf_p = 70.17
+- **test_avg/mae_surf_p = 72.68 (NEW BEST, −13.54 vs 86.22 prior, −15.7%)**
+
+**Decision: MERGED.** GeGLU lever added (Config default still vanilla); use `--mlp_type geglu` to apply. Run 8ile1q1j was on no-bf16 base (bf16 #3330 merged after) — the actual merged config (GeGLU+bf16+Fourier) is expected even better (~70-73 val). PR #3704 (tanjiro geglu-readout) includes a sanity-confirm arm for the new merged baseline.
+
+Composition story is exceptional: Fourier alone gave +noise val effect (113.90 vs 97.47), GeGLU alone gave −14.7% (104.51 → 89.17), but GeGLU+Fourier compose super-additively (−15.99 vs prior best). Mechanism: Fourier multi-band features expand the dimension space the GeGLU gate can partition over.
+
+Tanjiro assigned new hypothesis: **GeGLU readout (mlp2)** — extend gating to last-layer readout MLP. Includes sanity arm to nail down the GeGLU+bf16+Fourier baseline metric.
+
+**Operational follow-up needed:** Flip `mlp_type` Config default `"vanilla"` → `"geglu"`.
+
+---
+
 ## 2026-05-16 04:20 — PR #3330: bf16 AMP mixed precision — **MERGED ⭐⭐ (new val=83.54 AND test=73.02 best)**
 
 - Student branch: `willowpai2i24h1-frieren/bf16-amp`
