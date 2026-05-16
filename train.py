@@ -187,11 +187,45 @@ class FourierPosFeatures(nn.Module):
         return torch.cat([pos, sin, cos], dim=-1)  # [B, N, 2 + 4K]
 
 
+class RandomFourierFeatures(nn.Module):
+    """Gaussian Random Fourier Features (Tancik et al. 2020).
+
+    Sample B ~ N(0, sigma^2 I) once, register as a fixed buffer, then
+    project pos through B and apply sin/cos. sigma is interpreted as the
+    Gaussian std of frequencies in rad/unit (matches the PR pseudocode):
+    sigma=1.0 -> period ~= 2*pi ~ 6 units (~1 chord); sigma=5.0 -> ~1.3 units.
+
+    Output dims for input pos of shape [B, N, 2] are 2 + 2 * n_freqs:
+    the raw position plus sin(pos @ B) and cos(pos @ B).
+
+    Reproducibility: B is sampled as a fixed unit normal seeded by
+    rff_seed, then scaled by sigma. This way different sigma values
+    differ only in scale, not in random direction.
+    """
+
+    def __init__(self, n_freqs: int = 10, sigma: float = 1.0,
+                 input_dim: int = 2, seed: int = 42):
+        super().__init__()
+        gen = torch.Generator().manual_seed(seed)
+        B_unit = torch.randn(input_dim, n_freqs, generator=gen)
+        self.register_buffer("B_rff", B_unit * sigma)
+        self.n_freqs = n_freqs
+        self.sigma = sigma
+        self.seed = seed
+
+    def forward(self, pos):  # pos: [B, N, 2]  (normalized x, z)
+        proj = pos @ self.B_rff  # [B, N, K], angular frequency ~ sigma rad/unit
+        sin = proj.sin()  # [B, N, K]
+        cos = proj.cos()  # [B, N, K]
+        return torch.cat([pos, sin, cos], dim=-1)  # [B, N, 2 + 2K]
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  n_freqs: int = 0, fourier_base: float = 2.0,
+                 rff_sigma: float | None = None, rff_seed: int = 42,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -200,7 +234,13 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
         self.n_freqs = n_freqs
-        self.fourier = FourierPosFeatures(n_freqs=n_freqs, base=fourier_base) if n_freqs > 0 else None
+        self.rff_sigma = rff_sigma
+        if n_freqs > 0 and rff_sigma is not None:
+            self.fourier = RandomFourierFeatures(n_freqs=n_freqs, sigma=rff_sigma, seed=rff_seed)
+        elif n_freqs > 0:
+            self.fourier = FourierPosFeatures(n_freqs=n_freqs, base=fourier_base)
+        else:
+            self.fourier = None
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -363,6 +403,8 @@ def write_experiment_summary(
         "n_freqs": cfg.n_freqs,
         "fourier_base": cfg.fourier_base,
         "lr_t_max": cfg.lr_t_max,
+        "rff_sigma": cfg.rff_sigma,
+        "rff_seed": cfg.rff_seed,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -408,6 +450,8 @@ class Config:
     n_freqs: int = 0  # 0 disables Fourier positional features (raw x,z); >0 enables sin/cos at base^k * pi
     fourier_base: float = 2.0
     lr_t_max: int | None = None  # override cosine T_max; defaults to MAX_EPOCHS if None
+    rff_sigma: float | None = None  # if set (with n_freqs>0), use Gaussian RFF B~N(0, sigma^2) instead of log-spaced bands
+    rff_seed: int = 42  # seed used when sampling the RFF projection matrix
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -442,8 +486,15 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+if cfg.n_freqs > 0 and cfg.rff_sigma is not None:
+    pos_feat_dim = 2 + 2 * cfg.n_freqs  # raw pos + sin + cos
+elif cfg.n_freqs > 0:
+    pos_feat_dim = 2 + 4 * cfg.n_freqs  # log-spaced: raw + sin(x), cos(x), sin(z), cos(z)
+else:
+    pos_feat_dim = 2
+
 model_config = dict(
-    space_dim=2 + 4 * cfg.n_freqs if cfg.n_freqs > 0 else 2,
+    space_dim=pos_feat_dim,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
@@ -453,6 +504,8 @@ model_config = dict(
     mlp_ratio=2,
     n_freqs=cfg.n_freqs,
     fourier_base=cfg.fourier_base,
+    rff_sigma=cfg.rff_sigma,
+    rff_seed=cfg.rff_seed,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
