@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 21:25
+- **Date:** 2026-05-16 22:20
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -40,7 +40,7 @@
 | alphonse | #4146 | bs=2+n=8+lr=7e-4 compound; arm-2 lr_t_max=22 schedule fix | wave-14 NEW | **58.27** |
 | nezuko | #4095 | bs=2 + clip=1.0 compound; arm-2: triple bs=2+n=8+clip=1.0 | wave-14 NEW | 60.67 |
 | tanjiro | #4103 | bs=2 + Huber δ={0.15, 0.10} compound | wave-14 NEW | 60.67 |
-| askeladd | #4115 | bs=2 + lr={7e-4, 8e-4} compound | wave-14 NEW | 60.67 |
+| askeladd | #4179 | bs=2+n=8 + Huber δ={0.15, 0.20} compound on new winning stack | wave-14 NEW | **58.27** |
 | fern | #4130 | EMA re-test at bs=2 (τ={0.998, 0.995}) | wave-14 NEW | 60.67 |
 | thorfinn | #4131 | slice_num sweep {128, 192} at bs=2 (first-ever arch sweep) | wave-14 NEW | 60.67 |
 | frieren | #4125 | bs=1 sweep — extreme steps-in-budget (n=10 and n=8 arms) | wave-14 NEW | 60.67 |
@@ -77,6 +77,7 @@
 | #4058 (fern) | n_freqs {4, 6}: n=6 val=63.22 but test=56.76 (rc +4.78%). n=8 is local minimum on test. Pivoted fern to EMA-bs2 (#4130) |
 | #4059 (thorfinn) | sw {2.5, 5.0} on n=8 stack: both ~63.2-63.4 (vs current best 60.67). 3.7pt seed variance makes result noise-level. sw/n_freqs not independent. Pivoted thorfinn to slice_num sweep (#4131) |
 | #4083 (alphonse) | **MERGED** — bs=2+n=8 compound: val=58.27 (-3.96%), test=51.12. All 4 splits improve. ~89% additive compound. lr_t_max=18 arm failed (premature cosine freeze). New best. |
+| #4115 (askeladd) | bs=2+lr={7e-4, 8e-4} on n=10: arm-1 val=58.78 (regress 0.51 vs 58.27) / test=50.54 (improve 0.58); arm-2 dead at val=66.11. **First bs=2 clip escape**: clip_frac→0.984 at ep18 under lr=7e-4. lr×bs sub-additive — both extend optimization distance under clip-saturation. Pivoted askeladd to bs=2+n=8+δ compound (#4179) |
 
 ## Current research themes
 
@@ -91,7 +92,7 @@ The new best stack emerged from compounding the two independent wins:
 1. **alphonse #4146**: bs=2+n=8+lr=7e-4 (biggest single-knob win applied to new stack) + lr_t_max=22 (schedule shape fix)
 2. **nezuko #4095**: bs=2+clip=1.0 (arm-1 n=10, arm-2 n=8) — clip×bs=2 compound
 3. **tanjiro #4103**: bs=2+Huber δ={0.15, 0.10} on n=10 — δ×bs=2 compound
-4. **askeladd #4115**: bs=2+lr={7e-4, 8e-4} on n=10 — lr×bs=2 compound
+4. **askeladd #4179**: bs=2+n=8+Huber δ={0.15, 0.20} — quad compound (orthogonal δ on new winning stack)
 5. **frieren #4125**: bs=1 sweep (n=10, n=8) — extreme steps lever
 6. **fern #4130**: EMA re-test at bs=2 (τ={0.998, 0.995}) — dead at bs=8, may revive at 13,500 steps
 7. **thorfinn #4131**: slice_num={128, 192} at bs=2 — first-ever architectural sweep
@@ -125,6 +126,8 @@ These are still useful: any result <60.67 is a new winner, and they inform wheth
 - **bs=2 + n=8 is the new default** (PR #4083). clip-saturation + reduced aliasing → -54.7% cumulative from round-5 start.
 - **Memory headroom: 18.43 GB peak** — huge head-room for width/depth/Fourier expansion experiments without OOM risk.
 - **best_epoch=18/18 at bs=2**: still descending at timeout → more epochs would help; lr_t_max=22 should extend useful LR to the cutoff.
+- **Clip-saturation NO LONGER absolute at bs=2**: PR #4083 showed clip_frac=0.987 at ep18, #4115 lr=7e-4 dropped further to 0.984. Cosine LR decay + bs=2 → late-epoch gradient shrinkage occasionally falls below the 0.25 clip threshold. "Effective step = lr × clip × dir(grad)" framing becomes approximate in the final 2-3 epochs.
+- **lr × bs sub-additive compound**: lr=7e-4 effect halves when applied on top of bs=2 (8.75% → 3.11%). Both levers extend "total optimization distance" under clip-saturation — partially overlapping mechanisms.
 - **n_freqs=8 confirmed on bs=2 stack** (#4083). Going below n=8 (n=4/6) is a dead end on test — n=8 is local minimum.
 - **n_freqs ordering (matched recipes)**: 8 < 12 < 14 ≈ 10 — non-monotonic; n=8 confirmed on both bs=8 and bs=2.
 - **clip=1.0 wins on n=10 stack** (#4009). Compound with n=8 and with bs=2 not yet tested.

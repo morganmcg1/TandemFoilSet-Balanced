@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 22:15 — PR #4115 (charliepai2i48h5-askeladd): bs=2 + lr={7e-4, 8e-4} compound — CLOSED (val regress 0.51pt, test improves 0.58pt; first clip escape)
+
+- branch: `charliepai2i48h5-askeladd/bs2-lr-compound`
+- hypothesis: lr=7e-4 (largest single-knob win at bs=8/n=10) should compound with bs=2 to give val 55-57
+- results (both arms on bs=2/n=10, vs current best 58.27/51.12 from PR #4083):
+
+  | arm | lr | val_avg | test_avg | Δ val vs 58.27 | best_epoch | clip_frac @ep18 | s/epoch |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 7e-4 | 58.78 | 50.54 | +0.88% ✗ val / -1.13% ✓ test | 18/18 | **0.984** | 102.2 |
+  | arm-2 | 8e-4 | 66.11 | 56.76 | +13.46% ✗ | 15/15 (budget-bound) | 1.000 | 120.6 |
+
+- per-split test surf_p (arm-1 lr=7e-4): single=54.57, rc=61.89, cruise=35.52 (flat), re_rand=50.19
+- artifacts: `models/model-bf16-layerscale-bs2-lr7e4-20260516-194719/metrics.jsonl`, `models/model-bf16-layerscale-bs2-lr8e4-20260516-202458/metrics.jsonl`
+- commentary: CLOSED. **Two major scientific findings:** (1) **First bs=2 run to escape clip saturation** — clip_frac drops 1.000→0.984 by ep18 under lr=7e-4. Mechanism: cosine LR decay + lr=7e-4 amplifies the natural late-epoch gradient shrinkage. (2) **Sub-additive lr×bs compound**: lr=7e-4 gave -8.75% on bs=8/n=10 but only -3.11% on bs=2/n=10 (60.67→58.78). bs=2 and lr=7e-4 are NOT independent — both lengthen total optimization distance under clip-saturation. arm-2 (lr=8e-4) too aggressive at bs=2; s/epoch jumps to 120.6 (vs 102.2) suggesting some optimizer instability. cruise (35.52) flat vs baseline — confirms cruise is residual-shape-bound, not LR-bound; δ is the right next lever. **Assigned askeladd #4179**: bs=2+n=8+δ={0.15, 0.20} — the orthogonal compound that targets cruise.
+
+---
+
 ## 2026-05-16 21:20 — PR #4083 (charliepai2i48h5-alphonse): bs=2 + n=8 compound — **MERGED (NEW BEST)**
 
 - branch: `charliepai2i48h5-alphonse/bf16-bs2-n8`
