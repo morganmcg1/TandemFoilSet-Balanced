@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 17:45 — #3415 frieren sent back (log-Re rerun on Lookahead canonical); #4070 alphonse assigned (Lookahead alpha sweep); tanjiro #3497 rebase nudge sent)
+- **Date:** 2026-05-16 (updated 18:35 — #3975 askeladd sent back (bf16 confirmed pareto-better, needs Lookahead-stack measurement); 8/8 pods active; 2 students completed rebases (tanjiro, edward))
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 48.4191`, `test_avg/mae_surf_p (excl cruise) = 47.8034`
@@ -73,7 +73,7 @@ Old launch baseline: 135.30. Total gain: **−64.2%** over 10 compounding improv
 | **#3736** | **thorfinn** | **surf_weight {10,5} rerun on Lookahead canonical** | **Loss weighting** | **WIP — running, Lookahead added** |
 | **#3497** | **tanjiro** | **Grad-clip {none, clip=1} rerun on Lookahead canonical** | **Optimization** | **WIP — CONFLICTING (needs rebase). Rebase + rerun instructions sent.** |
 | **#3952** | **edward** | **Log-pressure aux loss (logp_weight=0.1) rerun on Lookahead canonical** | **Loss tuning** | **WIP — sent back. CONFLICTING — needs rebase + freq=5 + Lookahead.** |
-| **#3975** | **askeladd** | **bfloat16 autocast: more epochs in 30-min cap** | **Throughput** | **WIP — throughput diagnostic, orthogonal to Lookahead** |
+| **#3975** | **askeladd** | **bfloat16 autocast: more epochs in 30-min cap** | **Throughput** | **WIP — bf16 confirmed pareto-better (1.30× throughput, −22% VRAM, quality-neutral). Sent back for Lookahead-stack measurement to merge.** |
 
 Zero idle students. All 8 pods active.
 

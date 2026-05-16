@@ -1085,3 +1085,33 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 - willowpai2i48h3-alphonse/lookahead-alpha-sweep
 - Hypothesis: PR #3947 used α=0.5 (Lookahead paper default). On SOAP freq=5 stack, preconditioner creates correlated 5-step noise. α=0.3 (more aggressive pull-back) may capture more averaging benefit; α=0.7 (less aggressive) may preserve more within-k curvature. Optimal α is unknown and worth a 3-arm sweep.
 - 3 arms: α=0.3, α=0.5 (canonical reproduction check), α=0.7. k=5 fixed.
+
+## 2026-05-16 18:35 — PR #3975 (askeladd): bf16 autocast — SENT BACK (Lookahead canonical measurement needed)
+
+- Branch: `willowpai2i48h3-askeladd/bf16-autocast`
+- W&B runs: `pzyqaw7f` (fp32 Cauchy stack), `93pu6xem` (bf16 Cauchy stack)
+- Ran on **OLD Cauchy stack** (cauchy_c=1.0) before Lookahead/Huber merges
+
+| Arm | precision | epoch_time_s | epochs in 30min | val_avg/mae_surf_p (best) | Peak VRAM |
+|---|---|---|---|---|---|
+| Arm 1 (fp32) | fp32 | 137.77 | 14 | 54.6343 (ep14) | 42.1 GB |
+| Arm 2 (bf16) | bf16 | **106.09 (−23%)** | **17 (+3)** | **49.5429 (ep17)** | **33.0 GB (−22%)** |
+
+**Quality-neutrality at matched epochs:** bf16 ep14 val=54.47 vs fp32 ep14 val=54.63 — within seed noise (no quality degradation from bf16 precision).
+
+**Throughput:** 1.30× speedup confirms model is COMPUTE-BOUND (above 1.2× threshold the PR hypothesized). VRAM headroom (33/96 GB = 65% free) opens room for batch_size/width sweeps. No NaNs, no GradScaler needed (bf16 has fp32 exponent range).
+
+**vs new canonical (Lookahead, 48.4191):** doesn't beat (49.54 > 48.42) because run was on old Cauchy stack. Apples-to-oranges.
+
+**Decision: SENT BACK** for 2-arm clean measurement on full Lookahead canonical (fp32 vs bf16, both with Huber β=0.1 + Lookahead k=5 α=0.5). Expected: Arm 1 reproduces canonical val ≈ 48.4; Arm 2 ties at ep14 then continues to ep17 for further improvement. If Arm 2 val < 48.4191, merge with bf16 as default.
+
+**This is the most important infrastructure finding of the launch** — bf16 unlocks the entire post-bf16 stack (wider Transolver, longer schedule, batch size sweeps).
+
+## 2026-05-16 18:35 — Active state check
+
+- 8/8 pods healthy (1/1 ready)
+- 3 PRs with merge conflicts (rebase notified): #3415 frieren, #3497 tanjiro, #3952 edward
+- 2 students rebased successfully: #3497 tanjiro (17:50), #3952 edward (18:23)
+- Nezuko #4021 pushed SWA implementation at 17:50 — actively training on Lookahead canonical
+- Fern #4037 rebased at 17:42 — actively training Huber β lower bound on Lookahead canonical
+- Verified nezuko baseline-ema-lookahead arm val=48.42 (reproduces canonical 48.4191, excellent determinism check)
