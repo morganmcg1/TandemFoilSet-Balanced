@@ -74,6 +74,52 @@ class EMAModel:
                 esd[k].copy_(v)
 
 
+class Lookahead:
+    """Lookahead optimizer wrapper (Zhang et al., NeurIPS 2019, arxiv:1907.08610).
+
+    Maintains slow weights synced from the fast optimizer every k steps with
+    interpolation alpha. Orthogonal to EMA: EMA smooths the eval checkpoint;
+    Lookahead smooths the training trajectory.
+    """
+
+    def __init__(self, optimizer, k: int = 5, alpha: float = 0.5):
+        self.optimizer = optimizer
+        self.k = k
+        self.alpha = alpha
+        self._sync_count = 0
+        self.slow_weights = [
+            [p.data.clone() for p in group["params"]]
+            for group in optimizer.param_groups
+        ]
+
+    def step(self):
+        self.optimizer.step()
+        self._sync_count += 1
+        if self._sync_count % self.k == 0:
+            with torch.no_grad():
+                for group_slow, group in zip(self.slow_weights, self.optimizer.param_groups):
+                    for slow_p, p in zip(group_slow, group["params"]):
+                        slow_p.add_(p.data - slow_p, alpha=self.alpha)
+                        p.data.copy_(slow_p)
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+    @property
+    def state(self):
+        return self.optimizer.state
+
+    def state_dict(self):
+        return self.optimizer.state_dict()
+
+    def load_state_dict(self, state):
+        self.optimizer.load_state_dict(state)
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -421,6 +467,9 @@ class Config:
     seed: int = 0            # RNG seed (used for torch + cuda + numpy)
     huber_beta: float = 1.0  # SmoothL1/Huber transition (delta); used when cauchy_c == 0 (PR #3316)
     cauchy_c: float = 0.0    # Cauchy loss scale. 0 = use Huber (smooth_l1).
+    use_lookahead: bool = False    # Wrap optimizer with Lookahead (PR #3947, SOAP only).
+    lookahead_k: int = 5           # Lookahead sync period (steps between slow-weight syncs).
+    lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
 
 
 cfg = sp.parse(Config)
@@ -482,7 +531,7 @@ if ema is not None:
 if cfg.optimizer == "adamw":
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 elif cfg.optimizer == "soap":
-    optimizer = SOAP(
+    _soap = SOAP(
         model.parameters(),
         lr=cfg.lr,
         betas=(0.95, 0.95),
@@ -492,21 +541,26 @@ elif cfg.optimizer == "soap":
         eps=1e-8,
         normalize_grads=False,
     )
+    optimizer = Lookahead(_soap, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha) if cfg.use_lookahead else _soap
 else:
     raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'soap')")
-print(f"Optimizer: {cfg.optimizer}")
+print(f"Optimizer: {cfg.optimizer}" + (f" + Lookahead(k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha})" if cfg.use_lookahead else ""))
+
+# LR schedulers must touch the inner optimizer's LR state, not the Lookahead wrapper
+# (the wrapper's `step` is the Lookahead semantics, not a PyTorch optimizer step).
+_inner_optimizer = optimizer.optimizer if isinstance(optimizer, Lookahead) else optimizer
 warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-    optimizer,
+    _inner_optimizer,
     start_factor=1e-6 / cfg.lr,   # start near-zero
     end_factor=1.0,
     total_iters=cfg.warmup_epochs,
 )
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer,
+    _inner_optimizer,
     T_max=max(MAX_EPOCHS - cfg.warmup_epochs, 1),
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
+    _inner_optimizer,
     schedulers=[warmup_scheduler, cosine_scheduler],
     milestones=[cfg.warmup_epochs],
 )
