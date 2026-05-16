@@ -8,7 +8,7 @@ target base `icml-appendix-charlie`).
 
 | Group | Value |
 |-------|-------|
-| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=1`, `unified_pos=False`, **FiLM-on-Re head** |
+| Model | Transolver, `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=12`, `mlp_ratio=1`, `unified_pos=False`, **FiLM head on [log_Re, AoA0, AoA1]** |
 | Optim | AdamW, `lr=5e-4`, `weight_decay=1e-4`, batch 4, cosine `T_max=epochs` |
 | Loss  | **SmoothL1 (Huber, beta=0.25)** in normalized space, `surf_weight=10.0` (PR #3400) |
 | EMA   | **Polyak averaging, decay=0.997**, evaluated at val/test time (PR #3783) |
@@ -18,43 +18,43 @@ target base `icml-appendix-charlie`).
 | Caps  | `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MIN=30.0` (hard per-run wall clock) |
 | Test  | Best-val EMA checkpoint evaluated on 4 test splits at end of run |
 
-## Current best metrics (PR #4004, FiLM-on-Re, single-seed, best epoch 18)
+## Current best metrics (PR #4018, FiLM-Re+AoA, single-seed, best epoch 18)
 
 **Beat this to be a winner.**
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` **(primary)** | **71.46** |
-| `test_avg/mae_surf_p` | **62.53** |
-| `test/test_single_in_dist/mae_surf_p` | 72.86 |
-| `test/test_geom_camber_rc/mae_surf_p` | 74.86 |
-| `test/test_geom_camber_cruise/mae_surf_p` | 41.88 |
-| `test/test_re_rand/mae_surf_p` | 60.52 |
+| `val_avg/mae_surf_p` **(primary)** | **68.80** |
+| `test_avg/mae_surf_p` | **59.49** |
+| `test/test_single_in_dist/mae_surf_p` | 68.75 |
+| `test/test_geom_camber_rc/mae_surf_p` | 72.54 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 39.27 |
+| `test/test_re_rand/mae_surf_p` | 57.42 |
 
 Per-split val surface-p MAE at best checkpoint (single seed):
 
 | Split | mae_surf_p | Δ vs prev |
 |-------|------------|-----------|
-| `val_single_in_dist`     |  83.22 | -9.9% |
-| `val_geom_camber_rc`     |  81.69 | -9.6% |
-| `val_geom_camber_cruise` |  50.61 | -14.2% |
-| `val_re_rand`            |  70.32 | -5.5% |
-| **avg** | **71.46** | **-9.6%** |
+| `val_single_in_dist`     |  80.63 | -3.1% |
+| `val_geom_camber_rc`     |  80.24 | -1.8% |
+| `val_geom_camber_cruise` |  47.81 | -5.5% |
+| `val_re_rand`            |  66.50 | -5.4% |
+| **avg** | **68.80** | **-3.7%** |
 
-Artifact: `models/model-film-re-20260516-145147/metrics.jsonl`
+Artifact: `models/model-charliepai2i48h1-alphonse-film-re-aoa-20260516-153907/metrics.jsonl`
 
-Note: landmark win — largest single-PR improvement since the loss-function rounds. val -9.6%, test -10.4%, ALL 4 val and 4 test splits improved. val_single_in_dist (structural gap split): 92.38 → 83.22 (-9.9%). Training still monotonically descending at epoch 18 — 30-min cap is the hard constraint, not overfitting. Peak GPU mem 32.17 GB, +165K params from film_head.
+Note: all 8 splits improved. Zero compute overhead (same 102s/epoch, same 18 epochs vs FiLM-Re baseline). Consistency across splits is the key signal — uniform 2-4 pt improvement across all regimes confirms AoA adds real orthogonal information beyond Re. val_geom_camber_rc improved least (-1.8%) — that OOD split varies NACA shape, which is NOT yet in the FiLM conditioning vector.
 
-Why it works: FiLM (Feature-wise Linear Modulation, Perez 2017) conditions every Transolver block on log(Re) via learned `(γ, β) = MLP(log_Re)`, applied as `(1+γ)·fx + β` before each block. Re is THE fundamental dimensionless parameter in fluid mechanics (sets viscous vs. inertial regime, boundary layer behavior, separation). Treating it as one of 24 input channels buries this signal; FiLM gives it first-class status in every layer. Identity init (γ=0, β=0 at epoch 0) means the model starts equivalent to baseline and freely learns to use conditioning. The global improvement across all 4 splits (not just val_single_in_dist as originally hypothesized) confirms that Re conditioning benefits every flow regime.
+Why it works: AoA (angle of attack) is the second fundamental physical conditioning parameter after Re, setting lift polarity and magnitude per foil. Adding AoA0_rad and AoA1_rad to the FiLM conditioning vector `[log_Re, AoA0, AoA1]` (channels 13, 14, 18 in input x) gives the model per-foil flow context. The largest gain is on val_re_rand (-5.4%) where the cross-regime tandem configuration most benefits from per-foil AoA information. The modest gain on val_geom_camber_rc (-1.8%) points at NACA shape conditioning as the next frontier.
 
-**+6.3% sec/epoch overhead** (102s vs 96s) due to per-block affine ops, costing -1 epoch (18 vs 19). Still a massive net win because the per-epoch improvement rate dominates.
+**FiLM conditioning progression:** Re-only (PR #4004, -9.6%) → Re+AoA (PR #4018, -3.7%). The diminishing returns signal that Re carries most regime information; AoA adds orthogonal signal at zero cost.
 
 Reproduce:
 
 ```bash
 cd target/
-python train.py --experiment_name film-re-repro --agent <name>
-# FiLM-on-Re: film_head = MLP(1 → 128 → 1280) conditioning each of 5 Transolver blocks
+python train.py --experiment_name film-re-aoa-repro --agent <name>
+# FiLM: film_head = MLP(3 → 128 → 1280), cond = x[:, 0, [13, 14, 18]] (log_Re, AoA0, AoA1)
 ```
 
 ### Note on val variance
@@ -104,4 +104,5 @@ After every merged winner, the advisor:
 | 2026-05-16 | #3783 | EMA decay 0.998→0.997 (probe looser; diminishing returns) | 80.88 | -0.34% |
 | 2026-05-16 | #3950 | slice_num 16→12 (triangulate; tie within noise) | 80.60 | -0.34% |
 | 2026-05-16 | #3982 | mlp_ratio 2→1 (halve FFN width, +1 epoch from compute saving) | 79.05 | -1.92% |
-| 2026-05-16 | #4004 | FiLM-on-Re: condition each Transolver block on log(Re) scalar | **71.46** | **-9.6%** |
+| 2026-05-16 | #4004 | FiLM-on-Re: condition each Transolver block on log(Re) scalar | 71.46 | -9.6% |
+| 2026-05-16 | #4018 | FiLM-Re+AoA: expand conditioning to [log_Re, AoA0, AoA1] | **68.80** | **-3.7%** |
