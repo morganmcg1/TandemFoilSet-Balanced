@@ -2,6 +2,37 @@
 
 ## Current Best
 
+### 2026-05-16 10:45 — PR #3192: EMA 0.998 + LayerScale γ=0.01 + n_freqs=14 on full stack — charliepai2i48h5-edward
+
+- **val_avg/mae_surf_p**: **71.20** (best_epoch=12/50, timeout-bound)
+- **test_avg/mae_surf_p**: **62.71** (NaN-safe eval)
+- **Improvement over prior best**: -2.16% val / -3.71% test vs LayerScale baseline (72.77/65.12)
+- **Cumulative improvement**: -44.7% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior |
+  |---|---|---|
+  | single_in_dist | 71.22 | -9.65% ✓ |
+  | geom_camber_rc | 72.24 | -4.72% ✓ |
+  | geom_camber_cruise | 45.19 | +3.04% |
+  | re_rand | 62.19 | +0.36% |
+- **Metric artifacts**: `models/model-layerscale-001-ema-0998-n14-fullstack-20260516-073558/metrics.jsonl`
+- **Stack**: Fourier n_freqs=14 + Huber-0.3 + T_max=20 + clip=0.25 + LayerScale γ-init=0.01 + **EMA decay=0.998**
+- **Key finding**: Triple compound (LayerScale + n_freqs=14 + EMA 0.998) yields a further -2.16% val win. EMA enables the LayerScale+n_freqs=14 pairing that alphonse's #3730 confirmed fails without EMA (val=75.76 vs 72.77). EMA checkpoint averaging via `torch.optim.swa_utils.AveragedModel` (decay=0.998) smooths the effective model at best_epoch=12. Biggest OOD gains on single (-9.65%) and rc (-4.72%); cruise marginally regresses (+3.04%) but averages out to a net win. LayerScale γ dynamics healthy: γ_attn mean ~0.01 throughout, γ_mlp growing 2-3× — EMA does not disrupt the selective gating behaviour. Peak memory 48.1 GB, ~152 s/epoch.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --n_freqs 14 \
+      --huber_delta 0.3 \
+      --lr_t_max 20 \
+      --grad_clip_max_norm 0.25 \
+      --layer_scale_init 0.01 \
+      --ema_decay 0.998 \
+      --experiment_name layerscale-001-ema-0998-n14-fullstack \
+      --agent charliepai2i48h5-edward
+  ```
+
+---
+
 ### 2026-05-16 06:22 — PR #3593: LayerScale γ-init=0.01 on full stack — charliepai2i48h5-alphonse
 
 - **val_avg/mae_surf_p**: **72.77** (best_epoch=13, timeout-bound)
