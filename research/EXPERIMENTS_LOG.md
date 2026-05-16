@@ -1206,3 +1206,70 @@ Two bundled changes: (1) grad clip max_norm=1.0 + AdamW selective decay (LN/bias
   - wd=5e-4 (#3569): +1.3%
 - **Program finding firmly confirmed:** uniform regularizers at textbook magnitudes are past their optimum on this stack. The post-SwiGLU+n_head=2 model has substantially lower intrinsic overfitting risk than the GELU+n_head=4 baseline where these were originally evaluated.
 - **Decision:** Close FFN dropout axis. Pivoting thorfinn to **Huber β=1.0→0.5** — loss-shape axis (never tested on new stack), single-line, budget-neutral.
+
+## 2026-05-16 11:33 — PR #3872: Mish activation in SwiGLU gate [CLOSED — GATE CURVATURE PROBE FAILED]
+
+- charliepai2i24h2-askeladd/mish-swiglu-gate
+- **Hypothesis:** Replace SiLU with Mish in the SwiGLU gate path (`W2(Mish(W1(x)) ⊙ V(x))`). Mish = x·tanh(softplus(x)) has a smoother negative region and slightly higher peak gradient density than SiLU; possible better gate selectivity.
+- **Artifacts:** `models/model-mish-swiglu-gate-20260516-104058/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | Mish gate | Δ |
+|--------|--------------------|-----------|---|
+| val_avg/mae_surf_p | 70.925 | 73.568 | **+3.73%** |
+| test_avg/mae_surf_p | 61.914 | 64.729 | **+4.55%** |
+
+- Per-split val: single 83.441 (+1.85%) / geom_rc 87.067 (+3.35%) / geom_cruise 53.887 (+6.76%) / re_rand 69.875 (+4.21%) — every split worse.
+- Per-split test: single 77.032 (+6.58%) / geom_rc 76.193 (+3.61%) / geom_cruise 43.895 (+4.38%) / re_rand 61.798 (+3.37%) — every split worse.
+- **CLOSED — clear negative across all 8 splits.** Mechanism: SiLU's specific monotonic-but-non-saturating shape is empirically calibrated to multiplicative gating (per Shazeer SwiGLU 2020). Mish's softer negative region weakens the "feature suppression" that SiLU's negative-zone provides — the gate can no longer cleanly zero out features at moderate negative drives. Mish's higher peak gradient density doesn't help because we are not gradient-starved here.
+- **Decision:** Close gate-activation axis. SwiGLU is fixed at SiLU. Pivoting askeladd to **pre-norm → post-norm** ordering — never-tested architectural axis, budget-neutral.
+
+## 2026-05-16 11:33 — PR #3853: AdamW β2 0.999→0.95 [CLOSED — OPTIMIZER β2 TOO RESPONSIVE]
+
+- charliepai2i24h2-fern/adamw-beta2-0p95
+- **Hypothesis:** β2=0.95 (vs default 0.999) gives faster second-moment EMA tracking. At batch=4 with 14-epoch budget, less-stale second-moments could be more aligned to local curvature.
+- **Artifacts:** `models/model-adamw-beta2-0p95-20260516-102621/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | β2=0.95 | Δ |
+|--------|--------------------|---------|---|
+| val_avg/mae_surf_p | 70.925 | 72.254 | **+1.87%** |
+| test_avg/mae_surf_p | 61.914 | 63.220 | **+2.11%** |
+
+- Per-split val: single 85.061 (+3.83%) / geom_rc 82.336 (−2.27%) / geom_cruise 52.687 (+4.38%) / re_rand 68.934 (+2.81%) — mostly worse, geom_rc slightly better.
+- Per-split test: single 71.979 (−0.42%) / geom_rc 76.241 (+3.68%) / geom_cruise 43.486 (+3.40%) / re_rand 61.173 (+2.32%) — mostly worse, single near-neutral.
+- Student noted trajectory is noisier than baseline (epochs 4-5 oscillate ±25 points). At batch=4, β2=0.95 has effective half-life ~14 steps — too short to smooth out gradient noise from tiny minibatches. The 0.999 default ≈ 700-step half-life is what's appropriate for our small-batch regime.
+- **CLOSED — clear negative + noisy convergence.** Mechanism: β2 controls variance estimate; smaller β2 ↔ noisier 1/√v̂ scaling. At batch=4 with already-noisy gradients, β2=0.95 amplifies optimizer step-size variance further. Convergence stays unstable through training.
+- **Decision:** Close β2 axis. Pivoting fern to **learnable slot-attention temperature τ** — never-tested architectural axis, 5 new params, budget-neutral.
+
+## 2026-05-16 11:33 — PR #3851: Warmup 2→1 epoch + cosine T_max=13 [CLOSED — CATASTROPHIC HANDOFF]
+
+- charliepai2i24h2-tanjiro/warmup-1ep-cosine-tmax13
+- **Hypothesis:** Reduce warmup from 2 epochs to 1 epoch, extend cosine T_max from 12 to 13. Hypothesis: more annealing time would help the "still descending at E14" pattern that killed LayerScale/n_layers=6/h=256.
+- **Artifacts:** `models/model-warmup-1ep-cosine-tmax13-20260516-102537/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | warmup=1 + T_max=13 | Δ |
+|--------|--------------------|---------------------|---|
+| val_avg/mae_surf_p | 70.925 | 83.508 | **+17.74%** (catastrophic) |
+| test_avg/mae_surf_p | 61.914 | 73.750 | **+19.12%** (catastrophic) |
+
+- Per-split val: single 94.520 (+15.4%) / geom_rc 93.371 (+10.83%) / geom_cruise 65.372 (+29.51%) / re_rand 80.770 (+20.46%) — all splits significantly worse.
+- Per-split test: single 85.043 (+17.66%) / geom_rc 81.229 (+10.45%) / geom_cruise 53.767 (+27.85%) / re_rand 74.961 (+25.39%) — geom_cruise + re_rand particularly devastated.
+- Student diagnosed the mechanism precisely: with warmup_epochs=1, the schedule jumps from LinearLR-end (peak lr=7e-4 at epoch 1) directly into CosineAnnealingLR starting from peak — but CosineAnnealing's initial step value is also 7e-4, so this should be smooth. The actual issue is the **abrupt 1000× LR rate-of-change** at the warmup/cosine boundary at epoch 1 instead of epoch 2: the optimizer's m̂, v̂ moments have only 1 epoch to stabilize before being slammed by full cosine descent. The LR-velocity discontinuity wrecks Adam state.
+- **CLOSED — catastrophic regression (>5× worse than typical failures).** Mechanism: at batch=4 with 14-epoch budget, 2-epoch warmup is critical for Adam moment stabilization. 1-epoch warmup is fundamentally too short; the small number of optimization steps per epoch (~25 steps for batch=4 over our train set) means Adam can't establish reliable variance estimates before the full LR hits. **Schedule changes are first-order, especially warmup-cosine handoff smoothness.**
+- **Decision:** Close shorter-warmup axis decisively. 2-epoch warmup is at the floor of viability for this stack. Pivoting tanjiro to **truncated normal init (std=0.02)** — never-tested initialization axis, budget-neutral.
+
+## 2026-05-16 11:37 — PR #3849: RMSNorm replacing LayerNorm [CLOSED — REGRESSED + SLOWER]
+
+- charliepai2i24h2-alphonse/rmsnorm-replace-ln
+- **Hypothesis:** RMSNorm removes the mean-centering step of LayerNorm. Saves a few params + theoretically faster forward (one fewer reduce). Hoped: budget-positive — same or better val with possible wall-clock benefit.
+- **Artifacts:** `models/model-rmsnorm-replace-ln-20260516-102805/metrics.{jsonl,yaml}`
+
+| Metric | Baseline (PR #3643) | RMSNorm | Δ |
+|--------|--------------------|---------|---|
+| val_avg/mae_surf_p | 70.925 | 73.255 | **+3.29%** |
+| test_avg/mae_surf_p | 61.914 | 64.471 | **+4.13%** |
+
+- Per-split val: single 87.363 (+6.63%) / geom_rc 82.507 (−2.07%) / geom_cruise 53.018 (+5.03%) / re_rand 70.133 (+4.59%).
+- Per-split test: single 74.973 (+3.72%) / geom_rc 76.256 (+3.70%) / geom_cruise 44.933 (+6.85%) / re_rand 61.722 (+3.24%).
+- **Wall-clock 136 s/ep vs 120 s/ep baseline (~13% slower)** — RMSNorm was supposed to be faster, but at our small width (n_hidden=96) any kernel-level savings are dominated by Python/Pytorch overhead. Worse, the −1,056 params come from removing per-norm β (bias) — losing the learnable shift that LayerNorm provides at our depth.
+- **CLOSED — regressed all but 1 split + slower than baseline.** Mechanism: at depth=5 with n_hidden=96, the mean-centering term in LayerNorm carries real adaptive-shift signal. RMSNorm trades a small forward-pass cost (negligible at this width) for a real loss in normalization expressiveness. Different result than published LLM scaling work because (a) we are bandwidth-bound differently and (b) the per-norm bias has more relative significance at our small param budget.
+- **Decision:** Close RMSNorm axis. LayerNorm is fixed. (No new assignment slot since alphonse is already on next experiment — see in-flight roster.)
