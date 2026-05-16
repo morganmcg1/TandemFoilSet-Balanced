@@ -165,10 +165,7 @@ class TransolverBlock(nn.Module):
         self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            self.mlp2 = GEGLUBlock(hidden_dim, out_dim, hidden_dim=hidden_dim)
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
