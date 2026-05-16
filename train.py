@@ -97,13 +97,15 @@ class SwiGLU(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 attn_dropout=0.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
+        self.attn_dropout = attn_dropout
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -131,6 +133,7 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights = F.dropout(slice_weights, p=self.attn_dropout, training=self.training)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -140,7 +143,7 @@ class PhysicsAttention(nn.Module):
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
+            dropout_p=self.attn_dropout if self.training else 0.0,
             is_causal=False,
         )
 
@@ -152,13 +155,13 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None, attn_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, attn_dropout=attn_dropout,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         if ffn_type == "swiglu":
@@ -193,7 +196,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None, attn_dropout=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -215,6 +218,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 ffn_type=ffn_type, ffn_hidden_inner=ffn_hidden_inner,
+                attn_dropout=attn_dropout,
             )
             for i in range(n_layers)
         ])
@@ -432,6 +436,7 @@ model_config = dict(
     mlp_ratio=2,
     ffn_type="swiglu",
     ffn_hidden_inner=192,
+    attn_dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
