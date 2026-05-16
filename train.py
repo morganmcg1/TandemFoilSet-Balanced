@@ -214,6 +214,100 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer wrapper
+# ---------------------------------------------------------------------------
+
+
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead optimizer wrapper (Zhang et al. 2019, arXiv:1907.08610).
+
+    Maintains slow weights (parameter copies) updated every k steps via:
+      slow = slow + alpha * (fast - slow)
+    after which fast weights are copied from slow weights.
+
+    Delegates param_groups/state to the base optimizer so LR schedulers and
+    other tools that expect a vanilla optimizer keep working.
+    """
+
+    def __init__(self, base_optimizer: torch.optim.Optimizer, k: int = 5, alpha: float = 0.5):
+        if k < 1:
+            raise ValueError(f"Lookahead k must be >= 1, got {k}")
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"Lookahead alpha must be in [0,1], got {alpha}")
+        self.base = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_counter = 0
+        self.sync_counter = 0
+        # slow weights: clone of fast weights at start (lives on the same device as the params)
+        self.slow_weights = [
+            [p.detach().clone() for p in group["params"]]
+            for group in self.base.param_groups
+        ]
+
+    @property
+    def param_groups(self):
+        return self.base.param_groups
+
+    @property
+    def state(self):
+        return self.base.state
+
+    @property
+    def defaults(self):
+        return self.base.defaults
+
+    def zero_grad(self, *args, **kwargs):
+        self.base.zero_grad(*args, **kwargs)
+
+    def step(self, *args, **kwargs):
+        loss = self.base.step(*args, **kwargs)
+        self.step_counter += 1
+        if self.step_counter % self.k == 0:
+            for group, slow_group in zip(self.base.param_groups, self.slow_weights):
+                for fast_p, slow_p in zip(group["params"], slow_group):
+                    if fast_p.requires_grad:
+                        slow_p.add_(fast_p.data - slow_p, alpha=self.alpha)
+                        fast_p.data.copy_(slow_p)
+            self.sync_counter += 1
+        return loss
+
+    @torch.no_grad()
+    def slow_fast_delta_norm(self) -> tuple[float, float]:
+        """Return (L2 norm of fast-minus-slow across all params, L2 norm of slow params).
+
+        Useful as a diagnostic — at a sync step the delta should be exactly 0.
+        Between sync steps it grows as the fast optimizer takes new steps.
+        """
+        diff_sq = 0.0
+        slow_sq = 0.0
+        for group, slow_group in zip(self.base.param_groups, self.slow_weights):
+            for fast_p, slow_p in zip(group["params"], slow_group):
+                if fast_p.requires_grad:
+                    diff_sq += (fast_p.data - slow_p).pow(2).sum().item()
+                    slow_sq += slow_p.pow(2).sum().item()
+        return diff_sq ** 0.5, slow_sq ** 0.5
+
+    def state_dict(self):
+        return {
+            "base": self.base.state_dict(),
+            "slow_weights": self.slow_weights,
+            "step_counter": self.step_counter,
+            "sync_counter": self.sync_counter,
+            "k": self.k,
+            "alpha": self.alpha,
+        }
+
+    def load_state_dict(self, sd):
+        self.base.load_state_dict(sd["base"])
+        self.slow_weights = sd["slow_weights"]
+        self.step_counter = sd["step_counter"]
+        self.sync_counter = sd.get("sync_counter", 0)
+        self.k = sd.get("k", self.k)
+        self.alpha = sd.get("alpha", self.alpha)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -386,6 +480,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    lookahead_k: int = 5
+    lookahead_alpha: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -431,7 +527,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+base_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+print(
+    f"Optimizer: Lookahead(AdamW, k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}) — "
+    f"slow_weights cloned on device {next(model.parameters()).device}"
+)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=1e-3,
@@ -463,6 +564,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("lookahead/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -541,7 +643,16 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "lookahead/sync_counter": optimizer.sync_counter,
+        "lookahead/step_counter": optimizer.step_counter,
     }
+    # Sample fast-vs-slow weight delta (epochs 1, 7, 14 per PR; cheap enough to log every epoch).
+    fast_minus_slow_norm, slow_norm = optimizer.slow_fast_delta_norm()
+    log_metrics["lookahead/fast_minus_slow_l2"] = fast_minus_slow_norm
+    log_metrics["lookahead/slow_l2"] = slow_norm
+    log_metrics["lookahead/rel_delta"] = (
+        fast_minus_slow_norm / max(slow_norm, 1e-12)
+    )
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
