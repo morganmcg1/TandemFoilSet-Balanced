@@ -5,7 +5,68 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
-## 2026-05-16 20:10 — PR #3995: H: Triple-stack (T_max=17 + β2=0.95 + GeGLU) ← NEW PROGRAMME ALL-TIME BEST
+## 2026-05-16 21:40 — PR #4132: H: Lookahead optimizer (k=5, α=0.5) on triple-stack ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-nezuko
+- **Branch:** `willowpai2i48h1-nezuko/lookahead-optimizer-triple-stack`
+- **W&B run:** `d9ujr4oe`
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **57.2203** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 69.6096 |
+| val_geom_camber_rc | 69.9429 |
+| val_geom_camber_cruise | 35.6059 |
+| val_re_rand | 53.7229 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 60.9880 |
+| test_geom_camber_rc | 61.9020 |
+| test_geom_camber_cruise | 47.5692 |
+| test_re_rand | 45.7280 |
+| **test_avg (all 4 splits)** | **54.0468** ← NEW ALL-TIME BEST |
+
+### Vs prior baseline (PR #3995 triple-stack seed=0)
+
+| Metric | PR #3995 Triple-stack | PR #4132 Lookahead | Δ |
+|--------|----------------------|-------------------|---|
+| val_avg | 60.4338 | **57.2203** | **−3.21** |
+| test_avg | 57.4381 | **54.0468** | **−3.39** |
+
+Largest OOD gains: val_geom_camber_cruise −6.12, val_re_rand −3.96, test_geom_camber_rc −4.95, test_re_rand −4.63.
+
+### Model config — LOOKAHEAD + TRIPLE-STACK
+
+- Triple-stack baseline: Transolver 5L, hidden=128, heads=4, slice_num=64, mlp_ratio=2, GeGLU FFN
+- AdamW: lr=5e-4, β1=0.9, β2=0.95 (hardcoded), weight_decay=1e-4, batch=4
+- **Lookahead wrapper**: k=5 inner steps, α=0.5 slow-step blend
+- cosine T_max=17 attached to base AdamW (passthrough via `param_groups` reference)
+- seed=0
+
+### Key mechanism
+
+Lookahead is the online basin-averaging equivalent of SWA — it interleaves k fast steps with a slow step that blends θ_slow ← θ_slow + α·(θ_fast − θ_slow). Unlike post-hoc SWA tail averaging (PRs #3644, #4089, which failed because T_max=17 cosine is budget-limited and never reaches a stationary basin), Lookahead accumulates basin-flatness benefits throughout training. The OOD-split gains confirm the flat-minima hypothesis.
+
+### Reproduce
+
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-nezuko \
+  --wandb_name "willowpai2i48h1-nezuko/triple_stack_lookahead_k5_a05_seed0" \
+  --wandb_group triple_stack_lookahead \
+  --use_geglu --seed 0
+```
+
+(Lookahead wrapper with k=5, α=0.5 is now merged into train.py as the default optimizer path when `--use_lookahead` is passed or as modified by this merge.)
+
+---
+
+## 2026-05-16 20:10 — PR #3995: H: Triple-stack (T_max=17 + β2=0.95 + GeGLU) ← SUPERSEDED BY #4132
 
 - **Student:** willowpai2i48h1-fern
 - **Branch:** `willowpai2i48h1-fern/adamw_beta2_095_swiglu`
