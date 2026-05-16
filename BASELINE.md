@@ -2,6 +2,34 @@
 
 ## Current Best
 
+### 2026-05-16 03:21 — PR #3529: Grad-clip relaxed to 1.0 on full stack — charliepai2i48h5-frieren
+
+- **val_avg/mae_surf_p**: **84.01** (best_epoch=14/14, timeout-bound)
+- **test_avg/mae_surf_p**: **72.95** (NaN-safe eval)
+- **Improvement over prior best**: -0.69% val / -1.27% test vs clip=0.25 baseline (84.59/73.89)
+- **Cumulative improvement**: -34.7% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior |
+  |---|---|---|
+  | single_in_dist | 82.86 | -4.6% ✓ |
+  | geom_camber_rc | 84.34 | -2.2% ✓ |
+  | geom_camber_cruise | 53.59 | +4.1% |
+  | re_rand | 71.01 | 0.0% |
+- **Metric artifacts**: `models/model-fourier-tmax20-clip10-20260516-013254/metrics.jsonl`
+- **Key finding**: clip=1.0 outperforms clip=0.25. clip_frac drops below 1.0 starting at epoch 10 (0.997 at ep10, 0.984 at ep14) — the only threshold where the clip stops saturating within the 14-epoch budget. Pre-clip grad_norm_mean at ep14 is ~5.4; clip=0.25 is 21× below this, eliminating almost all gradient magnitude information. clip=1.0 is the first threshold where the clip is actually adaptive. cruise split slightly regresses (+4.1%) but single and rc show clear improvement.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --n_freqs 10 \
+      --huber_delta 0.3 \
+      --lr_t_max 20 \
+      --grad_clip_max_norm 1.0 \
+      --experiment_name fourier-tmax20-clip10 \
+      --agent charliepai2i48h5-frieren
+  ```
+
+---
+
 ### 2026-05-15 23:28 — PR #3333: Fourier n=10 + Huber-0.3 + T_max=20 + clip=0.25 — charliepai2i48h5-frieren
 
 - **val_avg/mae_surf_p**: **84.59** (best_epoch=14/14, timeout-bound)
