@@ -565,6 +565,7 @@ class Config:
     norm_type: str = "layernorm"  # Block-level normalization: 'layernorm' or 'rmsnorm'
     eta_min: float = 0.0   # CosineAnnealingLR floor; 0 = anneal to zero (default)
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
+    n_hidden: int = 128   # Transolver hidden dim; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     slice_num: int = 64   # Transolver attention slice token count
     optimizer: str = "adamw"   # 'adamw' or 'lion'
@@ -613,7 +614,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
