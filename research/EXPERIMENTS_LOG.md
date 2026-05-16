@@ -1,5 +1,82 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 12:45 — PR #3905: SwiGLU + epochs=12 (askeladd) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/swiglu-epochs12`)
+- **Hypothesis:** SwiGLU at epochs=10 (#3814) had best val at the final epoch (10/10) — model still converging. Extend to epochs=12 with T_max=12 cosine. Zero architecture changes.
+
+### Results (W&B run `j4ej0kge`, best epoch 12/12)
+
+| Metric | SwiGLU base (#3814, ep=10) | This run (ep=12) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 64.2430 | **60.7195** | **−5.49% 🏆** |
+| **test_avg/mae_surf_p** | 55.5454 | **51.9559** | **−6.46% 🏆** |
+
+Per-split:
+
+| Split | val ep12 | val base | test ep12 | test base |
+|---|---:|---:|---:|---:|
+| single_in_dist | 66.25 | 71.84 | 58.93 | 64.10 |
+| geom_camber_rc | 71.27 | 74.33 | 61.23 | 66.03 |
+| geom_camber_cruise | 44.90 | 46.48 | 36.82 | 37.61 |
+| re_rand | 60.46 | 64.31 | 50.84 | 54.44 |
+| **avg** | **60.72** | **64.24** | **51.96** | **55.55** |
+
+Per-epoch val curve: monotonically descending through epoch 12 at the same rate as epoch 11 (−3.70 vs −3.80). Model still converging at budget end — epochs=14 follow-up triggered.
+
+### Analysis
+
+Clean no-risk stacking win. The model was simply under-budgeted at epochs=10; the SwiGLU gating architecture benefits from more gradient steps. Gains uniform across all splits (−2% to −8%). Val-test gap healthy (test ≈ val − 9). Key: curve still descending at epoch 12 at the same rate, so epochs=14 is the next experiment.
+
+**Merged** at 12:45 UTC. New baseline: val=60.72/test=51.96. epochs=12 is now the default budget.
+
+---
+
+## 2026-05-16 12:45 — PR #3836: DSDF clip ±2.5/2.0σ (nezuko) — **CLOSED**
+
+- **Student:** willowpai2i48h4-nezuko
+- **Hypothesis:** DSDF (dims 4-11) might have outliers beyond ±3σ near sharp leading/trailing edges that destabilize LayerNorm.
+- **Pre-flight finding:** Nezuko ran a sanity check before the experiment — max |DSDF_norm| = 2.88σ across all 108M values (raw DSDF is hardcoded to [0, 5] in preprocessing). Original arms (clip=3.0, 5.0) would be no-ops. Pivoted to clip=2.5 (clips 0.33%) and clip=2.0 (clips 1.37%).
+- **Results:**
+  - Arm 1 (clip=2.5, `u8gqw6uh`): val=82.52 vs MLP baseline 82.50 (+0.03%) — no-op
+  - Arm 2 (clip=2.0, `z0de8kck`): val=82.81 (+0.37%) — slight regression, within seed noise
+- **Analysis:** Hypothesis dead on this dataset. The surface-side DSDF tail (near sharp edges) appears to carry genuine signal the model uses; clipping it doesn't help and may marginally hurt. The raw [0, 5] cap is the real structural constraint, not a statistical artifact. No need to re-test on SwiGLU — the data distribution is model-independent.
+- **Closed** at 12:45 UTC.
+
+---
+
+## 2026-05-16 12:45 — PR #3835: asinh output transform scale=0.5/1.0/2.0 (edward) — **CLOSED** (re-testing on SwiGLU)
+
+- **Student:** willowpai2i48h4-edward
+- **Hypothesis:** `asinh(y_norm/scale)` compresses heavy-tailed y distribution (per-sample y std spans 164→2077) before L1 loss, giving balanced gradient signal across low-Re/high-Re samples.
+- **Results (all on pre-SwiGLU MLP baseline 82.50/74.10):**
+
+| Arm | val | test | Δ test |
+|---|---:|---:|---:|
+| scale=2.0 (`mqsdyfm0`) | **76.74** | **67.10** | **−9.46%** |
+| scale=0.5 (`v1dh7xbx`) | 79.35 | 70.09 | −5.42% |
+| scale=1.0 (`g8ycjdbb`) | 80.89 | 71.62 | −3.35% |
+
+Monotonic trend: larger scale = better (scale=2.0 most linear, scale=0.5 most aggressive compression). Per-split: single_in_dist −12.5%, geom_camber_cruise −11.0%, re_rand −8.2%, geom_camber_rc −6.4%.
+
+- **Analysis:** Clear winning direction but on the wrong baseline. Current baseline is 60.72/51.96 (SwiGLU+epochs=12). asinh is orthogonal to SwiGLU (target transform vs architecture). Re-testing asinh_scale=2.0 AND 3.0/4.0 on the SwiGLU stack — potentially transformative (if −9.5% test carries over: 51.96 × 0.905 ≈ test=47).
+- **Closed** at 12:45 UTC. Re-test assigned as PR to edward (swiglu-asinh).
+
+---
+
+## 2026-05-16 12:15 — PR #3833: OneCycleLR schedule (thorfinn) — **CLOSED** (re-testing on SwiGLU)
+
+- **Student:** willowpai2i48h4-thorfinn
+- **Hypothesis:** OneCycleLR (max_lr=1e-3, pct_start=0.3, cycle_momentum=False) with super-convergence on 12-epoch budget.
+- **Results (on pre-SwiGLU MLP baseline 82.50/74.10):**
+  - Arm 1 (max_lr=1e-3, `z3nj8xpe`): val=77.52/test=67.68 — **−8.7% test** ✓
+  - Arm 2 (max_lr=5e-4, `ou3tbyhc`): val=80.15/test=70.53 — −4.8% test
+- **LR curve Arm 1:** initial=1e-4 → peak=1e-3 (step ~1338, 30% of budget) → final ~9e-5. Scheduler correctly per-batch.
+- **Analysis:** Clear win; max_lr=1e-3 engages super-convergence. Gains uniform across all 4 splits. OneCycleLR is orthogonal to SwiGLU (schedule vs architecture). Re-testing on SwiGLU stack — thorfinn assigned #3951 (swiglu-onecycle).
+- **Closed** at 12:15 UTC.
+
+---
+
 ## 2026-05-16 11:30 — PR #3814: SwiGLU FFN in TransolverBlock (askeladd) — **MERGED** → new baseline
 
 - **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/askeladd-swiglu-ffn`)
