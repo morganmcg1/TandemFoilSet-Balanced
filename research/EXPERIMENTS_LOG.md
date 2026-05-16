@@ -637,3 +637,33 @@ Within-PR: −12.08% on val is the largest signal of round-3 sweeps. If clip=5 c
 **Action:** Commented on PR asking nezuko to (1) stop any duplicate baseline reruns, (2) launch missing arm 3 (variant-decay0.9999), (3) post terminal SENPAI-RESULT, (4) mark for review.
 
 **Pending merge:** Once terminal SENPAI-RESULT is posted, variant-decay0.99 will be merged as new canonical pending verification that it's a reproducible single-seed result.
+
+---
+
+## 2026-05-16 04:50 — PR #3501 (thorfinn): SOAP surf_weight sweep {5, 10, 20} — **REQUEST CHANGES (rebase EMA+SOAP)**
+
+- Branch: `willowpai2i48h3-thorfinn/soap-surf-weight-sweep`
+- W&B group: `soap-surf-weight-sweep`
+- 3 arms, seed=42
+
+**Result (within-PR ranking by best val_avg/mae_surf_p):**
+
+| Arm | surf_weight | val_avg | test_avg (excl cruise) | best_epoch | W&B |
+|---|---|---|---|---|---|
+| **variant-sw5** | **5.0** | **77.28 (−1.5%)** ⬅ best | **78.08 (−2.3%)** | 14 | mt6f1ze7 |
+| baseline-sw10 | 10.0 | 78.44 | 79.91 | 12 | kgr2j3bu |
+| variant-sw20 | 20.0 | 81.93 (+4.4%) | 83.31 (+4.3%) | 13 | 6pq8zcmo |
+
+Monotonic ranking sw5 < sw10 < sw20. Key diagnostic from val loss components:
+
+| Arm | unweighted val surf_loss | unweighted val vol_loss |
+|---|---|---|
+| sw5 | **0.1642** | **0.2273** |
+| sw10 | 0.2017 | 0.2603 |
+| sw20 | 0.1883 | 0.2800 |
+
+The naive expectation (higher surf_weight → lower surf_loss) is **violated**: sw=5 has the lowest unweighted surf_loss AND lowest vol_loss. This confirms SOAP's per-block preconditioner already does the channel rebalancing that surf_weight=10 was compensating for; over-emphasizing surface loss at sw=10/sw=20 hurts the underlying optimization.
+
+**Decision: REQUEST CHANGES — rebase onto EMA+SOAP, run 2 arms (sw=10 baseline, sw=5 variant).**
+
+Within-PR signal is modest (−1.5%) but the mechanism is sound and the loss-component data is convincing. Sent back for compounding test on EMA+SOAP stack.
