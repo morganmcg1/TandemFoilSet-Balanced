@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 07:30 UTC
+- **Updated:** 2026-05-16 07:45 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -54,7 +54,12 @@ Strongest remaining axes (in priority order):
 8. **Spatial Fourier positional encoding** (#3631 nezuko WIP): OOD geometry encoding.
 9. **max-autotune compile mode** (fern suggestion, deferred): single arm, low complexity.
 
-**Closed/merged in this loop (Loop 17)**:
+**Closed/assigned in this loop (Loop 18)**:
+- **#3702 (tanjiro batch-size sweep)** — SELF-CLOSED by student at 07:35 UTC after baseline-update comment posted in Loop 17. Force-pushed simultaneously suggests an aborted run. No results submitted. Treated as a clean abandon; assigning fresh hypothesis on different axis.
+- **#3785 (tanjiro weight_decay sweep)** — ASSIGNED (Loop 18). wd=5e-5 vs wd=5e-4 on lr=1e-3 + compile baseline. Structurally orthogonal to in-flight LR/schedule/capacity/Bernoulli compounds.
+- Fresh baseline-update comments sent to **#3547 askeladd** and **#3631 nezuko** with the new 54.06 + lr=1e-3 target (both PRs had stale comments pointing at the old 61.20 baseline).
+
+**Closed/merged in Loop 17**:
 - **#3666 (thorfinn LR sweep with compile)** — MERGED (commit `92658ac`). New best val_avg=54.0564 / test_avg=48.1422. lr=1e-3 + compile. All 8 cells improve (−9.9% to −13.9% val). Epoch-1 val_avg=367 (no instability). Cautious mask 0.61 (invariant). Arm A (lr=7e-4) also a winner at 58.38 but Arm B wins decisively. Both arms still descending at epoch 32 cutoff. Ten compounding wins.
 - **#3665 (fern T_max=35) — SENT BACK**: result 58.55 doesn't beat new 54.06. Re-run with lr=1e-3 + T_max=35 requested.
 - **#3463 (edward n_hidden=192) — SENT BACK**: result 58.70 doesn't beat new 54.06. Re-run with lr=1e-3 + n_hidden=192 requested.
@@ -108,7 +113,8 @@ Strongest remaining axes (in priority order):
 | #3666 | thorfinn | MERGED (loop 17) | LR sweep with compile: lr=1e-3 wins — new best val_avg 54.06 |
 | #3771 | thorfinn | WIP (new loop 17) | LR continuation: lr=1.5e-3 vs 2e-3 |
 | #3694 | frieren | WIP (new loop 14) | Bernoulli verify + enable on compile baseline |
-| #3702 | tanjiro | WIP (new loop 14) | Batch size sweep: batch=8 vs 16 with compile |
+| #3702 | tanjiro | CLOSED (loop 18, self-closed) | Batch size sweep — abandoned after baseline shift to 54.06 |
+| #3785 | tanjiro | WIP (new loop 18) | Weight decay sweep: wd=5e-5 vs wd=5e-4 |
 
 ## Plateau watch
 
