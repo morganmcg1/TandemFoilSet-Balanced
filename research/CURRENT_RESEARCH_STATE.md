@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 05:30
+- **Date:** 2026-05-16 07:35
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
@@ -39,7 +39,7 @@
 | **#3705** | **frieren** | **H32 robust loss L1 vs smooth_l1 (β=0.1) — MSE↔MAE mismatch fix** | **WIP (new)** |
 | **#3583** | **fern** | **H26 weight_decay=0.001 — winner on H18 (-7%); sent back for OneCycleLR retest** | **WIP (retest)** |
 | **#3559** | **edward** | **H25 n_layers=6 — winner on H18 with cam_rc -8% recovery; sent back for OneCycleLR retest** | **WIP (retest)** |
-| #3625 | tanjiro | H27 OneCycleLR max_lr sweep {1e-3, 2e-3} | WIP |
+| **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP (new)** |
 | #3627 | thorfinn | H28 widen preprocess MLP (256→512) | WIP |
 | **#3686** | **askeladd** | **H31 SAM (Sharpness-Aware Minimization) ρ=0.05 — replaces failed EMA direction** | **WIP (new)** |
 | **#3687** | **nezuko** | **H30 gradient clipping max_norm=1.0 — 2-line stability fix** | **WIP (new)** |
@@ -63,6 +63,14 @@
 | #3197 | askeladd | H8v3 EMA v4 on OneCycleLR | Closed — +29% regression, EMA shadow can't catch up in truncated schedule |
 | #3628 | nezuko | H29 per-block geom_proj | Closed — +20% regression, gradient interference from 5× MLP duplication |
 | #3517 | frieren | H19 DropPath=0.20 + LayerScale+OneCycleLR rebase | Closed — +31.7% regression, ls2 depth pattern inverted, geom_gates failed, high seed variance |
+| #3625 | tanjiro | H27 OneCycleLR max_lr sweep {1e-3, 2e-3} | Closed — all arms regress; 30-min cap truncates schedule before fine-tune tail |
+
+## OneCycleLR budget constraint (critical insight)
+
+The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11 epochs. This has major implications:
+- max_lr > 5e-4 **hurts** (H27 closed): extra exploration burns budget before fine-tune
+- H24's pct_start=0.30 leaves LR at ~3e-4 at ep11 — still not fully converged
+- **H33** tests if compressing pct_start to {0.10, 0.15, 0.20} extends the low-LR fine-tune phase within the same wall-clock budget
 
 ## Research insights so far
 
@@ -74,14 +82,15 @@
 6. **Per-block parameter duplication hurts without supervision**: H29 +20% — 5× geom_proj MLPs caused gradient interference with no specialization in 15 epochs.
 7. **Inverted-U for weight decay**: H26 found wd=0.001 (10× current 1e-4) is optimal; canonical DeiT-III 0.05 underperforms in this regime.
 8. **DropPath + LayerScale compete on the FFN-depth axis**: H19 DropPath +31.7% on full stack. LayerScale's monotone-growth depth pattern and DropPath's depth-scaled dropout fight over the same dimension. Non-compositional.
+9. **OneCycleLR max_lr is saturated at 5e-4 for 30-min budget**: H27 max_lr sweep both arms regress. Higher peak LR burns schedule budget before fine-tune tail. 5e-4 is near-optimal for this wall-clock window.
 
 ## Open questions
 
 - **Highest priority**: Does slice_num=32 compose with OneCycleLR? (alphonse H23 retest — prediction: ≤60 val_avg, new best of round)
-- Does robust loss (L1/smooth_l1) improve OOD splits? (frieren H32 — new)
+- Does compressing pct_start give more fine-tune budget? (tanjiro H33 {0.10,0.15,0.20})
+- Does robust loss (L1/smooth_l1) improve OOD splits? (frieren H32)
 - Does wd=0.001 compose with OneCycleLR? (fern H26 retest)
 - Does n_layers=6 compose with OneCycleLR? (edward H25 retest)
-- Optimal max_lr for OneCycleLR? (tanjiro H27 {1e-3, 2e-3})
 - Does widening preprocess MLP to 512 help? (thorfinn H28)
 - Does gradient clipping stabilize OneCycleLR high-LR phase? (nezuko H30)
 - Does SAM replace EMA's role as flat-minimum regularizer? (askeladd H31)

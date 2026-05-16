@@ -2,6 +2,18 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 07:30 — PR #3742: H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} (tanjiro) — **assigned**
+
+- Branch: `charliepai2i24h4-tanjiro/pct-start-sweep`
+- Hypothesis: H27 proved max_lr>5e-4 regresses because the fine-tune tail never starts in 30-min budget. pct_start compression gives more budget to the descent phase. Arms: {0.10, 0.15, 0.20} vs baseline 0.30. Predicted -1% to -4%.
+
+## 2026-05-16 07:30 — PR #3625: H27 OneCycleLR max_lr sweep (tanjiro) — **CLOSED**
+
+- Branch: `charliepai2i24h4-tanjiro/max-lr-sweep`
+- Results: max_lr=1e-3 seed1 val=73.22, seed2 val=83.26; max_lr=2e-3 val=70.98. All worse than H24 baseline (67.64).
+- Mechanism: At 30-min cap, ~11/15 epochs complete. Higher max_lr "burns" budget in high-LR exploration — LR at ep11 is 6.3e-4 for 2e-3 arm (higher than H24's peak!), so fine-tune tail never starts. High seed variance at 1e-3 (73 vs 83).
+- **Closed**: clear regression, mechanistically understood. max_lr=5e-4 is near-optimal for the 30-min budget.
+
 ## 2026-05-16 05:30 — PR #3705: H32 robust regression loss L1 vs smooth_l1 (frieren) — **assigned**
 
 - Branch: `charliepai2i24h4-frieren/robust-loss`
