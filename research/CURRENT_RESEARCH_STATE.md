@@ -17,10 +17,10 @@ Key in-flight composition tests:
 - **Gradient clipping clip=1.0 (tanjiro #3511 R2):** −4.03% on pre-FiLM stack; sent back for rebase + rerun on two-shot-FiLM stack, expected ~86-88 if additive.
 - **Three-shot FiLM (frieren #3681):** preprocess injection as third FiLM site, assigned, expected −1-3%.
 - **Slice-num sweep (edward #3684):** test slice_num=32/64/96 on full stack; just assigned.
-- **n_layers=4 (fern #3752):** depth axis ablation; 4 layers faster per epoch → more fine-tune epochs in 30-min budget. Motivated by edward #3595 depth-vs-epochs finding.
+- **n_layers=4 (fern #3758):** depth axis ablation; 4 layers faster per epoch → more fine-tune epochs in 30-min budget. Motivated by edward #3595 depth-vs-epochs finding.
 
 **LR axis closed:** 5e-4 is optimal for bf16+T_max=15.
-**n_layers axis:** n_layers=6 regresses (+2.47%, #3595). n_layers=4 now in test (#3752). n_layers=5 remains current best.
+**n_layers axis:** n_layers=6 regresses (+2.47%, #3595). n_layers=4 now in test (#3758). n_layers=5 remains current best.
 **Fourier axis CLOSED:** Subsumed by FiLM (#3117 R4, −0.10% Δ).
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
@@ -58,14 +58,14 @@ Key in-flight composition tests:
 | alphonse | #3594 | Schedule-Free AdamW (R2 on two-shot FiLM, post −20.75% R1) | bf16+T_max=15+EMA+2xFiLM | Sent back for verify+rebase |
 | edward | #3684 | slice_num=32/64/96 sweep | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 | frieren | #3681 | Three-shot FiLM (preprocess + attn + MLP) | bf16+T_max=15+EMA+2xFiLM | Just assigned |
-| fern | #3752 | n_layers=4 depth ablation | bf16+T_max=15+EMA+2xFiLM | Just assigned |
+| fern | #3758 | n_layers=4 depth ablation | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 
 ## Key research questions
 
 1. **🔥 SF-AdamW + two-shot-FiLM compose (alphonse #3594 R2):** R1 showed −20.75% on pre-two-shot stack (71.492). Does it reproduce on current stack? Expected ~70-75 if additive; ~75-80 if sub-additive.
 2. **Three-shot FiLM (frieren #3681):** Preprocess injection adds third conditioning site; expected −1-3%.
 3. **Gradient clip=1.0 + two-shot-FiLM compose (tanjiro #3511 rebase):** Pre-FiLM signal strong (−4.03%). Expected ~86-88 if composes.
-4. **n_layers=4 (fern #3752):** Faster epochs → more fine-tune at lr≈0. Depth axis closing.
+4. **n_layers=4 (fern #3758):** Faster epochs → more fine-tune at lr≈0. Depth axis closing.
 5. **Slice-num sweep (edward #3684):** Richer attention modes (96) vs faster fine-tune (32). Unknown direction.
 6. **Model width (nezuko #3492):** n_hidden=192 on EMA stack (pre-FiLM); confirms if width is bottleneck.
 7. **Batch size (askeladd #3365):** bs=6/8; if wins, compose with full stack.
@@ -77,8 +77,8 @@ Key in-flight composition tests:
 ## Depth axis (explored)
 
 - n_layers=6: regresses under 30-min budget (+2.47%, epoch cost kills fine-tune time)
-- n_layers=4: IN TEST (#3752) — hypothesis: faster epochs → more fine-tune
-- Current best stays at n_layers=5 until #3752 resolves
+- n_layers=4: IN TEST (#3758) — hypothesis: faster epochs → more fine-tune
+- Current best stays at n_layers=5 until #3758 resolves
 
 ## Fourier axis (CLOSED)
 
