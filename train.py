@@ -380,6 +380,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    sched_epochs: int = 14  # OneCycleLR anneal budget (total_steps = len(train_loader) * sched_epochs)
+    use_bf16: bool = False  # enable bf16 mixed precision autocast for training fwd+loss
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -435,7 +437,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.we
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=1e-3,
-    total_steps=len(train_loader) * 14,
+    total_steps=len(train_loader) * cfg.sched_epochs,
     pct_start=0.1,
     div_factor=25,
     final_div_factor=1e4,
@@ -491,17 +493,18 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
-        abs_err = (pred - y_norm).abs()
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
+            abs_err = (pred - y_norm).abs()
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
