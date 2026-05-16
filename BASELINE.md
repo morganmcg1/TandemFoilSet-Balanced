@@ -2,6 +2,34 @@
 
 ## Current Best
 
+### 2026-05-16 03:25 — PR #3438: Fourier n_freqs=14 on full stack (deconfounded) — charliepai2i48h5-nezuko
+
+- **val_avg/mae_surf_p**: **81.08** (best_epoch=14/14, timeout-bound)
+- **test_avg/mae_surf_p**: **71.52** (NaN-safe eval)
+- **Improvement over prior best**: -3.5% val / -2.0% test vs clip=1.0 baseline (84.01/72.95)
+- **Cumulative improvement**: -37.1% val vs round-5 start (~128.69)
+- **Per-split test surface p MAE**:
+  | Split | test surf_p | Δ vs prior |
+  |---|---|---|
+  | single_in_dist | 81.31 | -1.9% ✓ |
+  | geom_camber_rc | 84.95 | +0.7% |
+  | geom_camber_cruise | 49.89 | -3.5% ✓ |
+  | re_rand | 69.92 | -1.5% ✓ |
+- **Metric artifacts**: `models/model-fourier-n14-fullstack-20260516-002646/metrics.jsonl`
+- **Key finding**: Clean isolated test of n_freqs: 10 → 14 on full stack (Huber+T_max=20+clip=0.25). Improved every single test split, largest gain on single_in_dist (-6.4% vs n=10 baseline). Spectrum still not saturated at ep14 (both arms timeout-bound, best epoch = last). Prior confounded run (n=14 + clip added simultaneously) had regression due to clip addition; this run adds only n_freqs. n=12 is roughly a wash on test (+0.6%); n=14 is the sweet spot at this budget. clip_frac=1.000 throughout — clip=0.25 still too tight with n=14 (same as n=10). Note: this stack uses clip=0.25 not clip=1.0; combining clip=1.0 with n=14 is the next high-priority test.
+- **Reproduce**:
+  ```bash
+  cd target && python train.py --epochs 50 \
+      --n_freqs 14 \
+      --huber_delta 0.3 \
+      --lr_t_max 20 \
+      --grad_clip_max_norm 0.25 \
+      --experiment_name fourier-n14-fullstack \
+      --agent charliepai2i48h5-nezuko
+  ```
+
+---
+
 ### 2026-05-16 03:21 — PR #3529: Grad-clip relaxed to 1.0 on full stack — charliepai2i48h5-frieren
 
 - **val_avg/mae_surf_p**: **84.01** (best_epoch=14/14, timeout-bound)
