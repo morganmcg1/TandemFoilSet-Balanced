@@ -1,5 +1,46 @@
 # SENPAI Research Results
 
+## 2026-05-16 05:25 — Closed edward + askeladd holdovers, assigned Round 6
+
+### #3483 edward — Lion+EMA ablation (CLOSED — no arms beat new FiLM baseline)
+
+- Branch: `willowpai2i48h5-edward/round3-ema-only-on-huber-no-fourier`
+- Hypothesis: Quantify isolated EMA + ablate Fourier under Lion substrate.
+- Results (all 3 arms finished):
+
+| Arm | W&B run | Config | val_avg | test_avg | vs new baseline (71.65 / 62.11) |
+|-----|---------|--------|---------|----------|---------------------------------|
+| A (winner of this PR) | `5pvi79f2` | Lion + EMA(0.997), no Fourier | **73.10** | **63.65** | +1.45 val / +1.54 test |
+| B | `3hgal2fm` | Lion + EMA(0.997), σ=3 Fourier | 73.41 | 64.33 | +1.76 val / +2.22 test |
+| C | `tev95mko` | Pure Lion, no EMA, no Fourier | 77.48 | 67.43 | +5.83 val / +5.32 test |
+
+- Analysis: **Paper-section material — EMA contributes 4.4 val / 3.8 test points on top of Lion** (Arm A vs Arm C). This is the cleanest single-mechanism EMA measurement in the launch. Closed because no arm beats new FiLM baseline (71.65); the EMA gain is already incorporated via #3405 merge.
+
+### #3609 askeladd — Lion + LR warmup ablation (CLOSED — warmup adds nothing)
+
+- Branch: `willowpai2i48h5-askeladd/r4-lion-warmup`
+- Hypothesis: LR warmup improves Lion stability and final performance.
+- Results (all 3 arms finished):
+
+| Arm | W&B run | warmup_steps | val_avg | test_avg | vs new baseline (71.65 / 62.11) |
+|-----|---------|--------------|---------|----------|---------------------------------|
+| A | `379hrdie` | 0 | 79.13 | 68.98 | +7.48 val / +6.87 test |
+| B | `j1pum3n7` | 500 | 79.89 | 69.83 | +8.24 val / +7.72 test |
+| C (winner of this PR) | `jdaof5n2` | 1000 | **78.46** | **68.69** | +6.81 val / +6.58 test |
+
+- Analysis: **LR warmup adds nothing to Lion at our 14-effective-epoch budget.** Non-monotonic in warmup_steps (C 1000 > A 0 > B 500), but effect size (~1.4 val across arms) is below run-to-run variance band (~σ≈4.6). Paper-section material for the LR-schedule ablation: cosine T_max=14 alone is sufficient. Closed; these plain-Lion arms regress against FiLM+Lion+EMA baseline because they're missing FiLM (+5.9 val) and EMA (+4.4 val).
+
+### Round 6 assignments created (edward + askeladd no longer idle)
+
+| PR | Student | Hypothesis | Implementation |
+|----|---------|------------|----------------|
+| #3711 | edward | **Layer-wise LR decay (LLRD)** | Per-block LR multiplier γ; 3 arms γ ∈ {1.0 control, 0.85, 0.65}. Output head full LR, input embed γ^(N+1)·base. Paper-relevant for optimizer-tuning section. |
+| #3712 | askeladd | **Lion β1 sweep** | `--lion_beta1` flag; 3 arms β1 ∈ {0.8, 0.9 control, 0.95}. β2=0.99 fixed. Settles paper-required Lion ablation. |
+
+All 8 students now staffed with active R5 or R6 PRs. REST API budget recovered (2880/5000) after earlier exhaustion. Standard assign-experiment skill used (not GraphQL fallback).
+
+---
+
 ## 2026-05-16 04:35 — Round 5 cleanup + 3 new assignments
 
 ### Closed PRs (informative negatives / superseded)

@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~04:50 UTC, Round 5 fully staffed — 8 of 8 students have active hypotheses on `willow-pai2i-48h-r5`)
+- **Date:** 2026-05-16 (~05:25 UTC, Round 5 + 6 active — 8 of 8 students staffed after closing edward/askeladd holdovers)
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -33,35 +33,40 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 - val: 135 → 71.65 (−47%)
 - test: ~130 → 62.11 (−52%)
 
-## Round 5 — fully staffed (8 of 8 students active)
+## Round 5 + 6 — fully staffed (8 of 8 students active)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #3609 | askeladd | Lion + LR warmup ablation (warmup ∈ {0, 500, 1000}) | WIP — Arms A (79.13) + B (79.89) done, Arm C running; warmup hurts |
-| #3483 | edward | Lion+EMA ablation (no-Fourier 73.10 done, σ=3 + pure-Lion arms running) | WIP |
-| #3671 | nezuko | **FiLM at intermediate Transolver blocks (layer-wise conditioning)** | WIP (R5 H16) |
-| #3672 | alphonse | **Fourier ablation under FiLM+Lion+EMA (n_fourier=0 vs σ=3 vs σ=10)** | WIP (R5 H17) |
-| #3673 | tanjiro | **EMA decay sweep under FiLM+Lion (0.995 vs 0.997 vs 0.999)** | WIP (R5 H18) |
-| **#3695** | **fern** | **Sobolev loss on surface ∂p/∂s (physics-motivated)** | WIP (R5 H19, just assigned) |
-| **#3697** | **frieren** | **Multi-σ Gaussian Fourier features under FiLM+Lion+EMA (proper wiring)** | WIP (R5 H20, just assigned) |
-| **#3698** | **thorfinn** | **TTA via z-reflection symmetry (free inference gain)** | WIP (R5 H21, just assigned) |
+| #3671 | nezuko | FiLM at intermediate Transolver blocks (layer-wise conditioning) | WIP (R5 H16) |
+| #3672 | alphonse | Fourier ablation under FiLM+Lion+EMA (n_fourier=0 vs σ=3 vs σ=10) | WIP (R5 H17) |
+| #3673 | tanjiro | EMA decay sweep under FiLM+Lion (0.995 vs 0.997 vs 0.999) | WIP (R5 H18) |
+| #3695 | fern | Sobolev loss on surface ∂p/∂s (physics-motivated) | WIP (R5 H19) |
+| #3697 | frieren | Multi-σ Gaussian Fourier features under FiLM+Lion+EMA (proper wiring) | WIP (R5 H20) |
+| #3698 | thorfinn | TTA via z-reflection symmetry (free inference gain) | WIP (R5 H21) |
+| **#3711** | **edward** | **Layer-wise LR decay (LLRD) under FiLM+Lion+EMA** | WIP (R6 H22, just assigned) |
+| **#3712** | **askeladd** | **Lion β1 sweep (β1 ∈ {0.8, 0.9, 0.95})** | WIP (R6 H23, just assigned) |
 
 ## Closed this turn (informative negative / superseded)
 
-- **#3544 thorfinn** — Lookahead-on-Lion val 89.39 (+17.7 regression). Dead end across both AdamW and Lion substrates. Paper-relevant negative for optimizer-family ablation.
-- **#3486 fern** — σ=3 + Lion + EMA val 73.81. Beats Lion baseline (−3.77) but loses to new FiLM baseline. Confirms σ-monotonic finding does NOT transfer from AdamW to Lion. Paper-valuable.
-- **#3380 frieren** — Multi-σ config bug (n_fourier=0 at runtime). Effectively Lion+EMA no-Fourier sample (val 76.95). Student agreed to close + reassign.
+- **#3483 edward** — Lion+EMA ablation (3 arms FINISHED). Best arm A (no-Fourier, EMA): val 73.10 / test 63.65 — regresses vs new baseline (71.65). Best paper finding: **EMA contributes 4.4 val / 3.8 test points on top of Lion** (Arm A vs Arm C pure-Lion). Closed as informative ablation.
+- **#3609 askeladd** — Lion + LR warmup (3 arms FINISHED). Best arm C (warmup=1000): val 78.46 / test 68.69 — regresses vs new baseline by ~7 val points. **LR warmup adds nothing to Lion at 14-effective-epoch budget.** Non-monotonic in warmup_steps (1000 > 0 > 500). Paper-section material for LR-schedule ablation.
+
+## Earlier closes this launch
+
+- **#3544 thorfinn** — Lookahead-on-Lion val 89.39 (+17.7 regression). Dead end across both AdamW and Lion substrates. Paper-relevant negative.
+- **#3486 fern** — σ=3 + Lion + EMA val 73.81. Beats Lion baseline (−3.77) but loses to new FiLM baseline. σ-monotonic finding does NOT transfer AdamW→Lion.
+- **#3380 frieren** — Multi-σ config bug (n_fourier=0 at runtime). Student agreed to close + reassign.
 
 ## Key findings (cumulative)
 
 1. **FiLM on log(Re) is the biggest new mechanism on top of Lion+EMA.** Adds ~5.9 val / 6.8 test over Lion+EMA-only.
-2. **EMA(0.997) clearly compounds with Lion** (alphonse + tanjiro avg ~77.7 with EMA vs 77.58 without). Effect is noisy but real.
-3. **Fourier σ is marginal under Lion+EMA.** edward no-Fourier (73.10) ≈ fern σ=3 (73.81) ≈ alphonse σ=10 (76.15). FiLM dominates.
+2. **EMA(0.997) contributes 4.4 val / 3.8 test points on top of Lion** (edward Arm A 73.10 vs Arm C pure-Lion 77.48). Clean single-mechanism measurement.
+3. **Fourier σ is marginal under Lion+EMA.** edward no-Fourier (73.10) ≈ edward σ=3 (73.41) ≈ fern σ=3 (73.81) ≈ alphonse σ=10 (76.15). FiLM dominates.
 4. **Lookahead does NOT compound with Lion or AdamW.** Two distinct optimizer substrates, both regress by ≥17 val points. Confirmed dead end.
-5. **LR warmup hurts Lion** at our 14-effective-epoch budget. askeladd Arm B (warmup=500, val 79.89) > Arm A (warmup=0, val 79.13). Cosine schedule already provides implicit warmup.
+5. **LR warmup adds nothing to Lion** at 14-effective-epoch budget. askeladd Arm C (warmup=1000, val 78.46) ≈ Arm A (warmup=0, val 79.13). Non-monotonic in warmup steps (1000 > 0 > 500). Cosine schedule provides sufficient implicit warmup.
 6. **σ-monotonic finding does NOT transfer from AdamW to Lion.** Under AdamW+EMA, σ=3 was best; under Lion+EMA, σ doesn't matter much (and no-Fourier slightly wins).
 
-## Round 5 hypothesis map (mechanism axes being tested)
+## Hypothesis map (mechanism axes being tested in R5 + R6)
 
 | Axis | Hypothesis | PR / student |
 |------|-----------|--------------|
@@ -71,17 +76,18 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 | EMA decay | 0.995 vs 0.997 vs 0.999 | #3673 tanjiro |
 | Loss regularizer | Sobolev surface ∂p/∂s | #3695 fern |
 | Inference-time | TTA via z-reflection | #3698 thorfinn |
-| Optimizer | Lion + LR warmup | #3609 askeladd |
-| Ablation | Lion+EMA without Fourier (full sweep) | #3483 edward |
+| Optimizer per-block | Layer-wise LR decay (LLRD) γ ∈ {1.0, 0.85, 0.65} | #3711 edward |
+| Optimizer hyperparameter | Lion β1 ∈ {0.8, 0.9, 0.95} | #3712 askeladd |
 
-## Round 6+ / reserved hypotheses
+## Round 7+ reserved hypotheses
 
-- **Lion β1 sweep (β1 ∈ {0.9, 0.95})** — paper ablation. Reserved for askeladd's next round.
-- **Layer-wise LR decay (LLRD)** — per-block LR multiplier.
-- **Per-split loss weighting** — boost cruise/camber splits in training loss.
-- **Architectural variants** — wider slice_num, deeper layers (if budget allows).
-- **Geometric features** — chord-normal coordinates, curvature, etc., conditioning beyond log(Re).
+- **Per-split loss weighting** — boost cruise/camber splits in training loss to address OOD weakness.
+- **Architectural variants** — wider slice_num, deeper layers, larger n_hidden (if budget allows).
+- **Geometric features** — chord-normal coordinates, curvature, surface-normal direction, etc., conditioning beyond log(Re).
 - **Distillation from longer-trained teacher** — if any arm starts converging well past 14 epochs.
+- **Spectral normalization** on output head — Lipschitz constraint to prevent over-fitting peak pressures.
+- **Curriculum on Reynolds** — train low-Re samples first, then ramp up.
+- **Mixup/CutMix on mesh nodes** — geometric data augmentation.
 
 ## History
 
@@ -95,6 +101,8 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 | #3544 | thorfinn Lookahead | ❌ Closed 04:33Z (val 89.39, dead end on both substrates) |
 | #3486 | fern σ=3 Lion+EMA | ❌ Closed 04:33Z (val 73.81, superseded by FiLM merge) |
 | #3380 | frieren multi-σ (config bug) | ❌ Closed 04:33Z (val 76.95, student agreed) |
+| #3483 | edward Lion+EMA ablation | ❌ Closed 05:24Z (best Arm A val 73.10, regresses vs FiLM; EMA contributes 4.4 val) |
+| #3609 | askeladd Lion warmup | ❌ Closed 05:24Z (best Arm C val 78.46, warmup adds nothing to Lion) |
 | #3379 | alphonse EMA compound | Closed (superseded by nezuko) |
 | #3484 | tanjiro EMA decay sweep | Closed (superseded) |
 | #3412/#3407/#3410/#3409 | Various R2 dead ends | ❌ Closed |
