@@ -91,7 +91,7 @@ class SwiGLU(nn.Module):
         self.W2 = nn.Linear(hidden_inner, n_hidden, bias=False)
 
     def forward(self, x):
-        return self.W2(F.silu(self.W1(x)) * self.V(x))
+        return self.W2(F.gelu(self.W1(x)) * self.V(x))
 
 
 class PhysicsAttention(nn.Module):
