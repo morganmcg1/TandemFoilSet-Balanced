@@ -85,7 +85,8 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 surface_routing: bool = False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -103,7 +104,20 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+        # H45 surface-biased slice routing. NB: the PR spec proposed a *scalar*
+        # bias added to slice_logits for surface nodes, but a uniform shift along
+        # the softmax dim is invariant (softmax(x + c) = softmax(x)) and has zero
+        # gradient — verified empirically on PR run t073sqqk (all 5 block biases
+        # stayed within |0.1| from Lion-sign noise on a fp32 no-op). Using a
+        # *per-slice-token* bias vector (shape [slice_num]) instead so the shift
+        # is non-uniform along the softmax dim and the model can learn which
+        # slice tokens to dedicate to surface nodes.
+        self.surface_routing = surface_routing
+        self.slice_num = slice_num
+        if self.surface_routing:
+            self.surface_logit_bias = nn.Parameter(torch.zeros(slice_num))
+
+    def forward(self, x, is_surface=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -118,7 +132,12 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_logits = self.in_project_slice(x_mid)  # [B, heads, N, slice_num]
+        if self.surface_routing and is_surface is not None:
+            surface_mask = is_surface.unsqueeze(1).unsqueeze(-1).to(slice_logits.dtype)  # [B, 1, N, 1]
+            # bias [slice_num] -> [1, 1, 1, slice_num], non-uniform along softmax dim
+            slice_logits = slice_logits + surface_mask * self.surface_logit_bias.view(1, 1, 1, -1)
+        slice_weights = self.softmax(slice_logits / self.temperature)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -170,13 +189,15 @@ class FiLM(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 surface_routing: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            surface_routing=surface_routing,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -188,8 +209,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, film=None, film_ffn=False):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, film=None, film_ffn=False, is_surface=None):
+        fx = self.attn(self.ln_1(fx), is_surface=is_surface) + fx
 
         ffn_out = self.mlp(self.ln_2(fx))
         if film is not None and film_ffn:
@@ -215,7 +236,9 @@ class Transolver(nn.Module):
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
                  use_film: bool = False, film_mode: str = "output_only",
-                 log_re_mean: float = 14.58, log_re_std: float = 0.76):
+                 log_re_mean: float = 14.58, log_re_std: float = 0.76,
+                 surface_routing: bool = False,
+                 surface_routing_last_n: int = 0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -225,6 +248,11 @@ class Transolver(nn.Module):
         self.film_mode = film_mode
         self.log_re_mean = log_re_mean
         self.log_re_std = log_re_std
+        self.surface_routing = surface_routing
+        # surface_routing_last_n=0 → all blocks (default); k>0 → only the
+        # last k blocks get the surface bias parameter (Arm C — preserves
+        # early feature extraction). Clamped to [0, n_layers].
+        self.surface_routing_last_n = max(0, min(surface_routing_last_n, n_layers))
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -235,11 +263,21 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Decide per-block surface_routing flag. When surface_routing_last_n=0
+        # (default) every block gets the bias if surface_routing=True. When >0
+        # only the last k blocks do (Arm C — keep early blocks unconditioned).
+        if surface_routing and self.surface_routing_last_n > 0:
+            first_routed = n_layers - self.surface_routing_last_n
+            block_routing = [surface_routing and (i >= first_routed) for i in range(n_layers)]
+        else:
+            block_routing = [surface_routing for _ in range(n_layers)]
+        self.block_routing = block_routing
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                surface_routing=block_routing[i],
             )
             for i in range(n_layers)
         ])
@@ -268,15 +306,19 @@ class Transolver(nn.Module):
             log_re_n = (log_re - self.log_re_mean) / self.log_re_std
             film_params = self.film(log_re_n)
 
+        # H45 surface-biased routing: surface mask threaded into PhysicsAttention
+        # via the data dict so it can bias slice-token assignment for surface nodes.
+        is_surface = data.get("is_surface") if self.surface_routing else None
+
         n_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
             is_last = (i == n_blocks - 1)
             if film_params is not None and self.film_mode == "all_blocks":
-                fx = block(fx, film=film_params, film_ffn=True)
+                fx = block(fx, film=film_params, film_ffn=True, is_surface=is_surface)
             elif film_params is not None and self.film_mode == "output_only" and is_last:
-                fx = block(fx, film=film_params, film_ffn=False)
+                fx = block(fx, film=film_params, film_ffn=False, is_surface=is_surface)
             else:
-                fx = block(fx)
+                fx = block(fx, is_surface=is_surface)
         return {"preds": fx}
 
 
@@ -345,7 +387,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             x_norm = _apply_fourier(x_norm, model)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
-            pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
+            pred = model({"x": x_norm, "log_re_raw": log_re_raw,
+                          "is_surface": is_surface})["preds"]
 
             # Diagnostic: model produced non-finite values in normalized space?
             nf_pred = (~torch.isfinite(pred)) & mask.unsqueeze(-1)
@@ -619,6 +662,8 @@ class Config:
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
     spec_norm_target: str = "none"  # "none" | "output" | "output+film"
     spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
+    surface_routing_bias: bool = False  # H45: learnable surface-node bias on slice logits
+    surface_routing_last_n: int = 0  # H45 Arm C: if >0, restrict surface bias to last N blocks only
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -746,6 +791,8 @@ model_config = dict(
     film_mode=cfg.film_mode,
     log_re_mean=float(stats["x_mean"][13].item()),
     log_re_std=float(stats["x_std"][13].item()),
+    surface_routing=cfg.surface_routing_bias,
+    surface_routing_last_n=cfg.surface_routing_last_n,
 )
 
 model = Transolver(**model_config).to(device)
@@ -844,7 +891,8 @@ for epoch in range(MAX_EPOCHS):
         x_norm = _apply_fourier(x_norm, model)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         log_re_raw = x[:, 0, 13]  # raw log(Re) per sample, [B]
-        pred = model({"x": x_norm, "log_re_raw": log_re_raw})["preds"]
+        pred = model({"x": x_norm, "log_re_raw": log_re_raw,
+                      "is_surface": is_surface})["preds"]
         # Two-pronged guard (advisor update on PR #3296):
         #   1. Replace inf/nan predictions with 0 (prevents inf gradients).
         #   2. Drop samples whose GT y is non-finite (one known bad sample
@@ -918,6 +966,22 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # H45 diagnostic: log per-block surface_logit_bias vector summary stats.
+    # bias is now [slice_num]; track L2 norm, max abs entry, and how many entries
+    # are "active" (|bias_g| > 0.1). Falsification: norm ≈ 0 ⇒ informative null;
+    # max |entry| > 5 ⇒ unstable; sweet spot with norm in [0.5, 5] and a handful
+    # of active slice tokens dedicated to surface.
+    if cfg.surface_routing_bias:
+        diag_model = ema_model.module if ema_model is not None else model
+        for i, blk in enumerate(diag_model.blocks):
+            if not getattr(blk.attn, "surface_routing", False):
+                continue  # Arm C: this block doesn't have a surface bias param
+            b = blk.attn.surface_logit_bias.detach()
+            log_metrics[f"surf_routing/block_{i}_bias_l2"] = b.norm().item()
+            log_metrics[f"surf_routing/block_{i}_bias_max_abs"] = b.abs().max().item()
+            log_metrics[f"surf_routing/block_{i}_bias_active"] = (b.abs() > 0.1).sum().item()
+            log_metrics[f"surf_routing/block_{i}_bias_mean"] = b.mean().item()
 
     # FiLM γ/β diagnostics across the val_re_rand split's Re range
     if cfg.use_film:
