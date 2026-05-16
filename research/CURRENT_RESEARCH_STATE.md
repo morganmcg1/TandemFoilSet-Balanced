@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 03:50 UTC
+- **Updated:** 2026-05-16 04:55 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -46,17 +46,19 @@ Strongest remaining axes (in priority order):
 
 1. **More compute / better schedule alignment for compile budget** (fern new this loop): T_max=32 vs T_max=35 with compile — schedule alignment for the new 32-epoch budget (the analogue of #3465's fix for the new horizon). Expected −1% to −5%. **The natural compounding follow-up.**
 2. **LR sweep with compile** (thorfinn new this loop): re-run lr=7e-4 / lr=1e-3 with `--torch_compile`. The 32-epoch budget nearly 2× the recovery window thorfinn's first sweep had; late-epoch descent rate at lr=1e-3 was −4.13/epoch which could now compound.
-3. **Bernoulli verify + enable** (cleanup, not yet assigned): fix `--bernoulli_residual` argparse, run one verification arm with bernoulli ON. If positive, this is a free additive win (~+1–4%).
-4. **Larger batch_size with compile** (fern #4 suggestion): VRAM dropped to 24/96 GB. batch_size=8 or 16 may be feasible with compile reducing per-step overhead — fewer steps per epoch, more efficient GPU use.
-5. **Cp normalization** (#3547 askeladd WIP): divide by p_B in addition to subtract — natural physics extension of the (now-suspect) Bernoulli mechanism.
-6. **AoA-jitter TTA** (#3548 frieren WIP): K-ensemble of inference with small AoA perturbations.
-7. **Spatial Fourier positional encoding** (#3631 nezuko WIP): NeRF-style sin/cos on (x,y) ±dsdf. Targets OOD geometry weakness.
-8. **surf_weight sweep** (#3647 alphonse WIP): 5 vs 20 — re-tune the loss weighting for the new merged stack.
-9. **Capacity revisit** (#3463 edward WIP, sent back for rebase): n_hidden=192/256 sweep, tractable with bf16 VRAM savings (and now further headroom from compile).
-10. **SF-AdamW head-to-head** (#3425 tanjiro WIP, needs rebase to current tip): SF-AdamW must beat 61.20 (new baseline) — significant moving target.
-11. **max-autotune compile mode** (fern #3 suggestion): single arm, deferred.
+3. **Bernoulli verify + enable** (#3694 frieren WIP, new loop 14): fix `--bernoulli_residual` argparse and run one verification arm on compile baseline. If confirmed active, expected −1–4% free win.
+4. **Batch size sweep** (#3702 tanjiro WIP, new loop 14): VRAM headroom 24/96 GB. batch=8 vs 16 on compile baseline. Tests whether smoother gradients from larger batches beat the step-count reduction.
+5. **Cp normalization** (#3547 askeladd WIP, rebase needed): divide by p_B — natural physics extension. Needs rebase to 61.20 tip + `--torch_compile`.
+6. **Spatial Fourier positional encoding** (#3631 nezuko WIP): NeRF-style sin/cos on (x,y) ±dsdf. Targets OOD geometry weakness.
+7. **surf_weight sweep** (#3647 alphonse WIP): 5 vs 20 — re-tune the loss weighting for the new merged stack.
+8. **Capacity revisit** (#3463 edward WIP, sent back for rebase): n_hidden=192/256 sweep, tractable with bf16 VRAM savings (and now further headroom from compile).
+9. **max-autotune compile mode** (fern #3 suggestion): single arm, deferred.
 
-**Closed/merged in this loop**:
+**Closed/merged in this loop (Loop 14)**:
+- **#3548 (frieren AoA-TTA)** — CLOSED. +51% regression vs 61.20. Key finding: FiLM-conditioned model is already AoA-smooth at σ=0.1deg (Arm A TTA vs no-TTA delta: 0.02%). Arm B's K-averaged Bernoulli term produces Jensen-biased upward offset. AoA-TTA is a dead end on this stack.
+- **#3425 (tanjiro SF-AdamW)** — CLOSED after 3 rounds. Final result: val_avg=85.99 (+40.5% vs 61.20). Mechanism: SF-AdamW removes cosine annealing entirely (train/lr=5e-4 constant), bypassing the late-epoch polishing that made #3465 a 12.42% win. Cautious AdamW wins the optimizer slot.
+
+**Closed/merged in Loop 13**:
 - **#3582 (fern torch.compile)** — MERGED (commit 34f7c61). New best val_avg 61.20. Ninth compounding win.
 - **#3581 (thorfinn LR sweep)** — CLOSED. +9.4–14.8% regression on 17-epoch budget. Reassigned to compile-enabled re-run (#3666).
 
@@ -75,7 +77,7 @@ Strongest remaining axes (in priority order):
 | #3315 | askeladd | MERGED | Cautious AdamW |
 | #3466 | askeladd | MERGED (Bernoulli claim now suspect — see note above) | Bernoulli pressure residual |
 | #3465 | thorfinn | MERGED | T_max=25 schedule alignment — val_avg 75.40 |
-| #3582 | fern | MERGED (this loop) | torch.compile() — new best val_avg 61.20 |
+| #3582 | fern | MERGED (loop 13) | torch.compile() — new best val_avg 61.20 |
 | #3347 | alphonse | CLOSED | Manifold mixup — mesh-correspondence problem |
 | #3346 | thorfinn | CLOSED | Cosine T_max=15 + warmup + LR=7e-4 — clear regression |
 | #3374 | nezuko | CLOSED | Stochastic depth — 3-seed robust negative |
@@ -84,15 +86,17 @@ Strongest remaining axes (in priority order):
 | #3432 | fern | CLOSED | SEMA — EMA-lag reset mechanism regression |
 | #3519 | nezuko | CLOSED | Fourier FiLM — OOD geometry regression |
 | #3545 | alphonse | CLOSED | EMA decay annealing — cold-start regime null result |
-| #3581 | thorfinn | CLOSED (this loop) | Peak LR sweep on T_max=25 — both arms +9-15% regression |
-| #3425 | tanjiro | WIP (rebase pending re-run on new 61.20 baseline) | Schedule-Free AdamW head-to-head |
+| #3581 | thorfinn | CLOSED (loop 13) | Peak LR sweep on T_max=25 — both arms +9-15% regression |
+| #3425 | tanjiro | CLOSED (loop 14) | SF-AdamW head-to-head — 3 rounds, consistently +40%+ regression |
+| #3548 | frieren | CLOSED (loop 14) | AoA-jitter TTA — FiLM already smooth, Jensen bias kills Arm B |
 | #3463 | edward | WIP (rebase pending re-run) | Capacity revisit: n_hidden=192 |
 | #3631 | nezuko | WIP | Fourier positional encoding on spatial coords (x,y,dsdf) |
 | #3647 | alphonse | WIP | surf_weight sweep: 5 vs 20 |
-| #3547 | askeladd | WIP | Cp normalization — 2 arms (cp, halfcp) |
-| #3548 | frieren | WIP | AoA-jitter TTA — 2 arms |
-| #3665 | fern | WIP (new this loop) | T_max alignment for compile: T_max=32 vs T_max=35 |
-| #3666 | thorfinn | WIP (new this loop) | LR sweep with compile: lr=7e-4 vs 1e-3 on 32-epoch budget |
+| #3547 | askeladd | WIP (baseline update posted, rebase needed) | Cp normalization — 2 arms (cp, halfcp) |
+| #3665 | fern | WIP | T_max alignment for compile: T_max=32 vs T_max=35 |
+| #3666 | thorfinn | WIP | LR sweep with compile: lr=7e-4 vs 1e-3 on 32-epoch budget |
+| #3694 | frieren | WIP (new loop 14) | Bernoulli verify + enable on compile baseline |
+| #3702 | tanjiro | WIP (new loop 14) | Batch size sweep: batch=8 vs 16 with compile |
 
 ## Plateau watch
 
@@ -100,15 +104,14 @@ Round 5 now has 9 compounding wins totaling −50.59% val_avg. **No plateau sign
 
 ## Potential next research directions (post-current batch)
 
-1. **Proper bernoulli verification + enable** (high priority, low complexity): fix argparse, single-arm run with `--bernoulli_residual True` on compile baseline. ~+1–4% expected.
-2. **batch_size sweep with compile** (high priority, low complexity): VRAM headroom 24/96 GB. bs=8 or bs=16. Compounds with compile's per-step overhead reduction.
-3. **`max-autotune` compile mode** (low complexity): single arm; extra autotune cost (~2 min on epoch 1) amortized.
-4. **Bucketed dynamic shapes for `reduce-overhead`** (medium complexity): pad meshes to small bucket sizes, allow CUDA Graph Trees to record per-bucket. Could unlock further throughput.
-5. **Chord-position Bernoulli** (askeladd #3466 follow-up after the verification fix): per-foil chord-boundary detection + chord-position Cp formula.
-6. **LR warm-up** (thorfinn's own #1 suggestion, deferred behind compile-enabled LR sweep): 1–2 epoch linear ramp from 0.1×lr to peak.
-7. **Mach-correction Bernoulli**: at high V_∞, include compressibility term. Small (~0.5%), physics-correct.
-8. **Lift/drag coefficient auxiliary head**: predict integrated lift/drag as side output, L1 against CFD coefficients. Multi-task regularizer.
-9. **Cautious mask ablation** (thorfinn's #4 suggestion): remove Cautious AdamW gating at baseline lr to verify it's still doing useful work. Flat 0.62 across LR ranges is suspicious — gating may be a no-op at the current operating point.
+1. **`max-autotune` compile mode** (low complexity): single arm; extra autotune cost (~2 min on epoch 1) amortized. Fern's suggested follow-up from #3582.
+2. **Bucketed dynamic shapes for `reduce-overhead`** (medium complexity): pad meshes to small bucket sizes, allow CUDA Graph Trees to record per-bucket. Could unlock further throughput.
+3. **Chord-position Bernoulli** (askeladd follow-up after Bernoulli verify): per-foil chord-boundary correction Cp formula.
+4. **LR warm-up** (thorfinn's own #1 suggestion, deferred behind compile-enabled LR sweep): 1–2 epoch linear ramp from 0.1×lr to peak.
+5. **Mach-correction Bernoulli**: at high V_∞, include compressibility term. Small (~0.5%), physics-correct.
+6. **Lift/drag coefficient auxiliary head**: predict integrated lift/drag as side output, L1 against CFD coefficients. Multi-task regularizer.
+7. **Cautious mask ablation** (thorfinn's #4 suggestion): remove Cautious AdamW gating at baseline lr to verify it's still doing useful work. Flat 0.62 across LR ranges is suspicious — gating may be a no-op at the current operating point.
+8. **AoA-TTA with larger sigma** (deferred from #3548): AoA σ=0.5–1deg might force the model to actually generalize across AoA rather than staying on the FiLM-smooth manifold. Not recommended near-term; mechanism is theoretically weak.
 
 ## If plateau hits (5 consecutive no-improvement)
 

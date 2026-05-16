@@ -987,6 +987,74 @@ Closed. Picked re-run of LR sweep with compile (new 32-epoch budget) as the natu
 
 - **PR (forthcoming, thorfinn): LR sweep with `--torch_compile`**. Re-run lr=7e-4 and lr=1e-3 on the new 32-epoch compile baseline. Thorfinn's #3581 closed because the 17-epoch budget couldn't overcome the epoch-1 spike, but at lr=1e-3 the late-epoch descent rate was −4.13/epoch (vs −2.74 baseline). If that rate sustains through 15 more epochs (compile-unlocked), the math has a chance of working. T_max=25 unchanged to factorize cleanly from fern's parallel T_max experiment.
 
+## 2026-05-16 04:52 — Loop 14: PR #3548 closed (frieren AoA-TTA regression), PR #3425 closed (tanjiro SF-AdamW), new assignments
+
+### PR #3548 CLOSED — frieren AoA-TTA
+
+- Branch: `charliepai2i24h5-frieren/aoa-jitter-tta`
+- Hypothesis: K-ensemble inference averaging with small AoA perturbations (σ=0.1deg for Arm A, σ=0.05deg for Arm B)
+- Status: CLOSED — both arms regressed significantly vs 61.20 baseline
+
+| Arm | val_avg (no-TTA) | val_avg (TTA) | Δ vs TTA baseline (61.20) |
+|---|---:|---:|---:|
+| A: K=4, σ=0.1deg AoA | 92.55 | 92.54 | +51.2% regression |
+| B: K=8, σ=0.05deg AoA + σ=0.02deg cond | 98.69 | 99.97 | +63.3% regression |
+
+Key findings:
+1. **FiLM-conditioned Transolver is smooth in AoA at σ=0.1deg.** Arm A shows O(0.02%) TTA vs no-TTA difference — essentially identical. The FiLM conditioning path already makes the model AoA-invariant at small perturbations.
+2. **Bernoulli residual + Jensen bias breaks cond-jitter.** In Arm B, the p_B = 0.5·V_inf² term with K-average produces a Jensen-biased upward offset on all predictions. The logarithmic (Re) conditioning creates a systematic positive bias when averaged over K samples.
+3. **AoA-TTA is a dead end at σ≤0.1deg.** Both arms confirm the model's own FiLM path already handles small AoA uncertainty; TTA adds no information.
+
+Frieren now idle → assigned PR #3694 (Bernoulli verify + enable).
+
+### PR #3425 CLOSED — tanjiro SF-AdamW
+
+- Branch: `charliepai2i24h5-tanjiro/schedule-free-adamw`
+- Hypothesis: Schedule-Free AdamW (drop-in replacement for AdamW + CosineAnnealingLR)
+- Status: CLOSED — consistently regressed across all testing rounds
+
+**Latest results (sf_adamw_full_stack, epoch 18, WITHOUT compile):**
+
+| Split | val_avg | vs baseline (61.20) |
+|---|---:|---:|
+| val_geom_camber_cruise | 67.60 | +10.4% |
+| val_geom_camber_rc | 93.47 | +52.7% |
+| val_re_rand | 81.32 | +32.8% |
+| val_single_in_dist | 101.58 | +65.9% |
+| **avg** | **85.99** | **+40.5%** |
+
+Test: test_avg/mae_surf_p = 77.64 (+43.4% vs 54.01 baseline).
+
+Warmup500 arm: val_avg=89.03, even worse.
+
+Key conclusions:
+1. SF-AdamW replaces CosineAnnealingLR entirely (confirmed: train/lr stays flat at 5e-4 throughout). This means the T_max alignment fix (#3465's key insight) is structurally bypassed — SF-AdamW has no cosine polishing phase.
+2. Runs were WITHOUT compile (VRAM=35.5 GB, ~103s/epoch). Even with compile (32 epochs), closing a 40% gap in 14 extra epochs is implausible given the trajectory.
+3. Cautious AdamW (merged at 98.13, then improved with each subsequent merge) consistently beats SF-AdamW in direct comparison on this problem.
+4. Closed after three rounds of negative results. Excellent student writeup with honest failure analysis.
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-tanjiro-sf_adamw_full_stack-20260516-022959/metrics.jsonl`
+- `models/model-charliepai2i24h5-tanjiro-sf_adamw_full_stack_warmup500-20260516-033246/metrics.jsonl`
+
+Tanjiro now idle → assigned PR #3702 (batch-size-sweep).
+
+### New assignments this loop
+
+**PR #3694 (frieren): Bernoulli verify + enable**
+- Single arm: `--bernoulli_residual` (bare flag), `--torch_compile`, on current 61.20 baseline
+- Fixes the `simple_parsing` bool argparse issue where `--bernoulli_residual freestream` silently dropped the arg
+- Step 1: verify `cfg.bernoulli_residual == True` at run start (paste first 20 stdout lines). Step 2: if confirmed, full 30-min training run.
+- Expected: −1% to −4% val_avg. The mechanism is physically sound (subtract known p_B from target) and the original #3466 win at 86.09 was likely real — it just hasn't been carried forward on any subsequent baseline.
+
+**PR #3702 (tanjiro): Batch size sweep with compile**
+- Two arms: batch_size=8 and batch_size=16 (vs baseline batch_size=4)
+- Compile dropped VRAM from 35.5 → 24.4 GB, leaving 71 GB unused. Current batch_size=4 uses ~25% of available VRAM.
+- Expected: fewer gradient steps per epoch (2× batch → 2× less steps), but smoother gradients from larger mini-batches. Net: uncertain, but VRAM headroom is currently wasted.
+- OOM fallback: batch_size=16 → retry at 12 if needed.
+
+**Askeladd #3547 baseline update**: Posted via GraphQL comment. New target 61.20 (was 86.09 at branch creation). Instructed rebase onto current tip + use `--torch_compile`. Branch is 10 commits behind advisor tip.
+
 ## 2026-05-16 04:25 — Loop 13 continuation: merge completed, assignments created
 
 **Merge of #3582 (fern torch.compile) confirmed** — commit `34f7c61`. BASELINE.md updated to val_avg=61.20, test_avg=54.01. Nine compounding wins in round 5, −50.59% val_avg from anchor.
