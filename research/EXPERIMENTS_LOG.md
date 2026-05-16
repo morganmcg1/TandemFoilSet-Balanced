@@ -1,5 +1,81 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 11:05 — PR #3923: Cosine T_max sweep {16, 18} vs 14 — ASSIGNED to askeladd
+
+- **Student/branch:** willowpai2i24h4-askeladd / `willowpai2i24h4-askeladd/cosine-tmax-sweep`
+- **Hypothesis:** Current cosine_tmax=14 sets LR=0 at the wall-clock-binding best epoch. Direct evidence from askeladd's own #3351 EMA close: ema/avg_diff_norm decayed from 0.073 at ep 6 to 0.00367 at ep 14 — model wasn't moving by epoch 14. Slower annealing (T_max=16 keeps LR≈2.4% of peak at ep 14, T_max=18 keeps ~12%) may extract more improvement before wall-clock cutoff. Orthogonal to FiLM/RFF/grad-clip; stacks if it works.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 11:05 — PR #3921: Slice-attn temperature init sweep {0.1, 1.0} vs 0.5 — ASSIGNED to tanjiro
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/slice-temp-init-sweep`
+- **Hypothesis:** PhysicsAttention's slice-softmax temperature is initialized as a learnable nn.Parameter at 0.5. Even though learnable, the init scale shapes early-epoch slice routing — sharp init (T=0.1) tests whether premature slice collapse hurts; soft init (T=1.0) tests whether diffuse routing helps. Bracket current 0.5 with 1 OOM in each direction. Targets single_in_dist (test=69.69, biggest absolute error) if slice routing diversity is the bottleneck after #3761 falsified raw capacity. Zero compute overhead.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 11:05 — PR #3919: warmup_epochs=2 (shorter warmup on FiLM+RFF stack) — ASSIGNED to fern
+
+- **Student/branch:** willowpai2i24h4-fern / `willowpai2i24h4-fern/warmup-epochs-2`
+- **Hypothesis:** Reduce warmup_epochs 5→2 on current FiLM(11/128) + RFF + grad-clip stack. The 5-epoch warmup was added in fern's #3258 alongside grad-clip when gradient norms were spiky on cond_dim=1 FiLM; current cond_dim=11 FiLM should provide cleaner early gradients. Saves 3 epochs of LR ramp out of 14 effective. Single-arm per fern's own #3746 follow-up #1. Free CLI flag.
+- **Status:** WIP
+
+---
+
+## 2026-05-16 11:00 — PR #3351: EMA β=0.99 — CLOSED (wash, structurally incompatible with cosine-to-zero)
+
+- **Student/branch:** willowpai2i24h4-askeladd / `willowpai2i24h4-askeladd/ema-099`
+- **Hypothesis:** Exponential moving average of weights smooths late-epoch noise in cosine-annealed training.
+- **W&B run:** `nfrk6dq8` (β=0.99 on R3 base)
+
+| Metric | Baseline #3258 | EMA β=0.99 | Δ |
+|--------|------:|-------:|---|
+| val_avg/mae_surf_p | 77.65 | 78.14 | +0.63% |
+| **test_avg/mae_surf_p** | **66.87** | **67.06** | **+0.29% (wash)** |
+| ema/avg_diff_norm (ep 6) | n/a | 0.0731 | — |
+| ema/avg_diff_norm (ep 14) | n/a | 0.00367 | **20× decay** |
+
+- **Results commentary:** Direct mechanistic falsification — **EMA is structurally incompatible with cosine T_max=14**. The cosine schedule already drives LR→0 at the wall-clock-binding best epoch, so model weights are barely moving by epoch 14 (avg_diff_norm collapsed 20×). EMA has nothing to smooth. This is askeladd's second negative-result on EMA, but importantly this run gives the clearest mechanistic logging — which directly motivates the cosine T_max sweep (PR #3923, reassigned to askeladd).
+- **Decision:** CLOSED — wash. Reassigned to cosine T_max sweep where the same logging will drive a different lever.
+
+---
+
+## 2026-05-16 11:00 — PR #3746: grad-clip cap sweep {10.0, 100.0} vs 1.0 — CLOSED (clip=1.0 Goldilocks)
+
+- **Student/branch:** willowpai2i24h4-fern / `willowpai2i24h4-fern/grad_clip_cap_sweep`
+- **Hypothesis:** Test whether grad-clip=1.0 is too aggressive on the new FiLM(11) stack where gradient landscape may have changed.
+- **W&B runs:** `4dhkpfcc` (clip=10.0), `9azkmegt` (clip=100.0)
+
+| Metric | Baseline #3504 (clip=1.0) | clip=10.0 | clip=100.0 |
+|--------|------:|-------:|-------:|
+| val_avg/mae_surf_p | 67.30 | 67.49 | 76.39 |
+| **test_avg/mae_surf_p** | **59.29** | **59.46 (+0.29%)** | **74.81 (+26.2% catastrophic)** |
+
+- **Results commentary:** clip=10.0 is a clean wash (within noise of baseline); clip=100.0 is catastrophic, particularly on single_in_dist. Mechanism: clip=1.0 enforces a **per-batch unit-norm gradient constraint** — every step receives the same effective LR after clipping, which decouples LR schedule from data statistics. clip=10.0 is essentially unclipped on a stable run (gradient norms rarely exceed 10), so it's a no-op; clip=100.0 is fully unclipped and allows outlier batches to dominate. clip=1.0 is the Goldilocks **normalization mechanism**, not just an outlier-suppression cap.
+- **Decision:** CLOSED — clip=1.0 confirmed optimal. Reassigned to fern's own suggested follow-up #1 (warmup_epochs=2, PR #3919).
+
+---
+
+## 2026-05-16 11:00 — PR #3781: Re-conditioned per-sample loss reweighting (α=1.0) — CLOSED (+8.4% regression)
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/re_loss_reweight`
+- **Hypothesis:** Apply per-sample loss weight `1 + α·(log_Re_z)²` to emphasize Re tails. Target single_in_dist (69.69) and re_rand (56.69).
+- **W&B run:** `b8a7tnxx` (α=1.0)
+
+| Metric | Baseline #3504 | α=1.0 | Δ |
+|--------|------:|-------:|---|
+| val_avg/mae_surf_p | 67.30 | 73.42 | +9.1% |
+| **test_avg/mae_surf_p** | **59.29** | **64.28** | **+8.4% (regression)** |
+| test_single_in_dist | 69.69 | 75.40 | +5.71 |
+| test_geom_camber_cruise | 36.63 | 41.55 | +4.92 |
+
+- **Results commentary:** Re-tail emphasis **regressed all four splits including cruise** — cruise has narrow Re range, so the per-sample reweight shouldn't have affected it much in isolation. The cruise regression points to a confound: **per-sample aggregation changes the effective node-count weighting**. Cruise has the largest meshes (242K nodes), so its per-sample mean loss is the lowest-variance estimator in the batch; up-weighting Re-tail samples (which tend to be smaller meshes) implicitly down-weighted cruise via the normalization. This is the same aggregation confound pattern from #3550 (volume MAE reformulation), not a Re-rebalancing failure per se.
+- **Decision:** CLOSED — clean falsification of per-sample-weight approach. Reassigned to slice-attn temperature init sweep (PR #3921) — orthogonal architectural mechanism, no aggregation confound.
+
+---
+
 ## 2026-05-16 10:35 — PR #3891: LayerNorm on FiLM conditioning input — ASSIGNED to thorfinn
 
 - **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/layernorm_film_cond`

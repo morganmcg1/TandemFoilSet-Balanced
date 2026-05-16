@@ -1,6 +1,6 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 10:35 UTC
+- **As of:** 2026-05-16 11:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
@@ -25,14 +25,14 @@ All remaining PRs must beat **test_avg/mae_surf_p < 59.29**.
 
 | # | Student | PR | Hypothesis | Status |
 |---|---------|----|-----------|--------|
-| 1 | **nezuko**  | **#3825** | Per-block FiLM: one cond_dim=11 head per block (5 heads total vs current 1) | WIP (assigned 08:50) |
-| 2 | **frieren** | **#3890** | **p_channel_weight sweep {4, 5}: redirect within-surface gradient toward p** | **WIP (assigned 10:35; fresh)** |
-| 3 | **thorfinn** | **#3891** | **LayerNorm on FiLM conditioning input: free-lunch scale normalization** | **WIP (assigned 10:35; fresh)** |
-| 4 | tanjiro | #3781 | Re-conditioned per-sample loss reweighting (focal on Re tails, α=1.0) | WIP (assigned 07:22) |
-| 5 | alphonse | #3693 | Peak LR sweep {1e-3, 2.5e-4} on full stack | WIP (training, 5h+) |
-| 6 | askeladd | #3351 | EMA β=0.99 — fresh decision-point at 09:27 (rebase or request reassign) | WIP (waiting on student) |
-| 7 | edward   | #3599 | RFF n_freqs=32 rerun on new baseline (sent back 09:14) | WIP (rebase in flight) |
-| 8 | fern     | #3746 | Grad-clip cap sweep {10.0, 100.0} vs winning 1.0 | WIP (assigned 06:40) |
+| 1 | **nezuko**   | **#3825** | Per-block FiLM: one cond_dim=11 head per block (5 heads total vs current 1) | WIP (assigned 08:50) |
+| 2 | **frieren**  | **#3890** | p_channel_weight sweep {4, 5}: redirect within-surface gradient toward p | WIP (assigned 10:35) |
+| 3 | **thorfinn** | **#3891** | LayerNorm on FiLM conditioning input: free-lunch scale normalization | WIP (assigned 10:35) |
+| 4 | **fern**     | **#3919** | **warmup_epochs=2: shorter LR ramp on richer FiLM stack (her own follow-up)** | **WIP (assigned 11:05; fresh)** |
+| 5 | **tanjiro**  | **#3921** | **Slice-attn temperature init sweep {0.1, 1.0} vs 0.5: PhysicsAttention slice routing** | **WIP (assigned 11:05; fresh)** |
+| 6 | **askeladd** | **#3923** | **Cosine T_max sweep {16, 18} vs 14: slower anneal vs wall-clock binding** | **WIP (assigned 11:05; fresh)** |
+| 7 | alphonse | #3693 | Peak LR sweep {1e-3, 2.5e-4} on full stack | WIP (training, 6h+) |
+| 8 | edward   | #3599 | RFF n_freqs=32 rerun on new baseline (sent back 09:14) | WIP (rebase in flight) |
 
 **All 8 students active.**
 
@@ -59,6 +59,9 @@ All remaining PRs must beat **test_avg/mae_surf_p < 59.29**.
 | ✗ | askeladd | Dropout p=0.1 | #3264 | CLOSED (+6% worse) |
 | ✗ | frieren  | surf_weight sweep {7, 5} | #3826 | CLOSED — sw=7 uniform regression +2.69% test; falsified "FiLM substitutes for surf_weight" hypothesis cleanly |
 | ✗ | thorfinn | slice_num sweep {96, 128} | #3761 | CLOSED — both arms regression; capacity-vs-compute lost by budget (10-12 epochs vs 14, LR=0 while val still descending) |
+| ✗ | tanjiro  | Re-conditioned per-sample loss reweighting (α=1.0) | #3781 | CLOSED — +8.4% regression; per-sample aggregation confound (cruise +4.92 despite narrow Re range) |
+| ✗ | fern     | grad-clip cap sweep {10.0, 100.0} | #3746 | CLOSED — clip=10 wash (+0.29%), clip=100 catastrophic (+26.2%); clip=1.0 is per-batch unit-norm normalizer, not outlier cap |
+| ✗ | askeladd | EMA β=0.99 | #3351 | CLOSED — +0.29% wash; ema/avg_diff_norm collapsed 20× (0.073→0.00367) by ep 14 — cosine-to-zero leaves nothing to smooth |
 
 ## Standings — test_avg/mae_surf_p (lower is better)
 
@@ -82,14 +85,14 @@ All remaining PRs must beat **test_avg/mae_surf_p < 59.29**.
 
 ## Active R4 hypotheses and predictions (new target: test < 59.29)
 
-- **nezuko per-block FiLM (#3825):** 5 FiLM(cond_dim=11) heads, one per Transolver block. Current base applies only block-0 conditioning; deeper blocks lose geometry/regime signal through attention transforms. Per-block re-injection should compound cruise+re_rand gains. +71K params, no extra attention FLOPs. Predicted test ~55-58 (hopeful ~55, conservative ~57-58).
-- **frieren surf_weight sweep (#3826):** sw=7 primary, sw=5 gated. The 30× implicit surface bias (10×3) was set before FiLM(cond_dim=11) provided explicit geometry conditioning. With explicit conditioning, relaxing surf_weight may free volume loss to improve spatial consistency. Prior sw=5 attempt (#3406) failed on old cond_dim=1 base — different hypothesis now. Predicted test ~57-59 for sw=7, closer to 59 floor if FiLM already absorbed geometry info.
-- **thorfinn slice_num sweep (#3761):** {96, 128} vs 64. single_in_dist (69.69) still biggest absolute error on new baseline, spans widest Re range. More slice tokens = more partition diversity. Predicted test ~56-59.
-- **tanjiro Re-loss reweighting (#3781):** α=1.0 per-sample weight `1 + α*(log_Re_z)²`. Targets single_in_dist (69.69) and re_rand (56.69). Zero compute overhead. Predicted test ~57-59 conservative.
-- **fern grad-clip cap sweep (#3746):** {10.0, 100.0} vs winning 1.0. Tests outlier batch suppression on new FiLM base where gradient landscape has changed.
+- **nezuko per-block FiLM (#3825):** 5 FiLM(cond_dim=11) heads, one per Transolver block. Current base applies only block-0 conditioning; deeper blocks lose geometry/regime signal through attention transforms. Per-block re-injection should compound cruise+re_rand gains. +71K params, no extra attention FLOPs. Predicted test ~55-58.
+- **frieren p_channel_weight sweep (#3890):** pcw {4, 5} vs 3. Following #3826 falsification (surf_weight and FiLM complementary, not redundant), test the orthogonal direction — redistribute within-surface gradient toward the primary metric (p) rather than reducing total surface signal. Predicted test ~58-59 if pcw=4 helps; pcw=5 gated.
+- **thorfinn LayerNorm on FiLM cond (#3891):** LN on 11-dim FiLM cond vector before first Linear. Raw features have mixed scales (log_Re ~13 vs AoA ~0.1 vs gap ~0.5 vs NACA ~0.05). Free-lunch scale conditioning with +22 params. Predicted test ~57-59.
+- **fern warmup_epochs=2 (#3919):** Reduce from 5→2 on richer FiLM stack. Cond_dim=11 FiLM should provide cleaner early gradients than the cond_dim=1 base where warmup was added. 3 extra epochs of near-peak LR. Predicted test ~58-59.
+- **tanjiro slice-attn temp init sweep (#3921):** {0.1, 1.0} vs 0.5. Bracket current init by 1 OOM. Tests slice routing diversity as the single_in_dist bottleneck (which #3761 left ambiguous). Zero compute overhead. Predicted test ~57-59 (one arm), wash possible.
+- **askeladd cosine T_max sweep (#3923):** {16, 18} vs 14. Direct response to askeladd's own #3351 finding — LR=0 at ep 14 wastes compute. T_max=16 gives ~2.4% peak LR at ep 14; T_max=18 gives ~12%. Risk: less converged earlier. Predicted T_max=16 ~58-59 (safer), T_max=18 either win or regression depending on LR-vs-convergence trade.
 - **alphonse LR sweep (#3693):** {1e-3, 2.5e-4} bracketing 5e-4. May need rebase onto new base.
-- **edward RFF σ sweep (#3599):** σ {0.5, 2.0} × n_freqs {16, 32}. rc split (74.16) and single_in_dist (69.69) show potential. May need rebase.
-- **askeladd EMA (#3351):** Stale, needs rebase.
+- **edward RFF σ sweep (#3599):** σ {0.5, 2.0} × n_freqs {16, 32}. rc split (74.16) and single_in_dist (69.69) show potential. Rebase in flight.
 
 ## Key mechanics and constraints
 
