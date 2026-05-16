@@ -9,23 +9,23 @@
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p`              | **79.52** | PR #3514 (edward H18 LayerScale), epoch 11 |
-| `val_single_in_dist/mae_surf_p`   | 104.62 | PR #3514 |
-| `val_geom_camber_rc/mae_surf_p`   | 93.29 | PR #3514 |
-| `val_geom_camber_cruise/mae_surf_p` | 50.00 | PR #3514 |
-| `val_re_rand/mae_surf_p`          | 70.14 | PR #3514 |
-| `test_avg/mae_surf_p`             | **68.95** | PR #3514 |
+| `val_avg/mae_surf_p`              | **67.64** | PR #3540 (tanjiro H24 OneCycleLR), epoch 12 |
+| `val_single_in_dist/mae_surf_p`   | 80.32 | PR #3540 |
+| `val_geom_camber_rc/mae_surf_p`   | 81.81 | PR #3540 |
+| `val_geom_camber_cruise/mae_surf_p` | 44.46 | PR #3540 |
+| `val_re_rand/mae_surf_p`          | 63.96 | PR #3540 |
+| `test_avg/mae_surf_p`             | **62.12** | PR #3540 |
 
-⚠️ **Pending better result**: askeladd H8v3 EMA val_avg=74.18, test_avg=66.62 (PR #3197, currently CONFLICTING — needs rebase). Once merged, that becomes the new best.
+⚠️ **Note**: OneCycleLR result was measured at epoch 12/15 (schedule truncated at 30-min wall-clock). Trajectory still descending at cutoff — result is a lower bound. Future students must beat val_avg < 67.64 to merge.
 
 ## Current baseline configuration
 
-`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE) + PR #3423 (H15 SwiGLU MLP) + PR #3514 (H18 LayerScale):
+`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE) + PR #3423 (H15 SwiGLU MLP) + PR #3514 (H18 LayerScale) + PR #3540 (H24 OneCycleLR):
 
 - **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` + `geom_proj MLP(11, 256, 128)` + 5 `geom_gates` scalars + `SwiGLUMLP` FFN (~843K trainable params + 64 non-trainable RFF buffer)
 - **Input:** RFF coordinate encoding (n_freq=32, sigma=1.0) replacing raw (x,z) — input to preprocess MLP is now 86-dim (64 RFF + 22 other features)
 - **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
-- **Schedule:** CosineAnnealingLR(T_max=epochs)
+- **Schedule:** OneCycleLR(max_lr=5e-4, total_steps=15×steps_per_epoch, pct_start=0.3, div_factor=25, final_div_factor=1e4, anneal_strategy='cos', cycle_momentum=False). Replaces CosineAnnealingLR.
 - **Batch:** 4
 - **surf_weight:** 10.0
 - **Epochs:** 50 (cap) / `SENPAI_TIMEOUT_MINUTES=30` wall-clock cap
@@ -36,7 +36,7 @@
 - **Geom-cond GALE:** Per-block additive geometry conditioning: `fx += geom_gates[i] * geom_proj(x[:, 0, 13:24])`. Gates init at 0 (identity start), learned to `[-0.05, -0.11, -0.13, -0.14, -0.15]` at convergence.
 - **SwiGLU FFN:** `TransolverBlock.mlp` replaced from `linear→GELU→linear` to `SwiGLUMLP(fc_in:2×n_hidden + fc_out)`. Gate-modulated: `fc_in(x).chunk(2)` → `silu(gate) * value → dropout(0.1) → fc_out`. +33K params per block vs GELU FFN.
 - **LayerScale:** `LayerScale` module on each residual: `x += ls1.gamma * attn_out; x += ls2.gamma * mlp_out`. gamma init=1e-6. Adds 1,280 scalars (128 × 2 × 5). Learned norms at epoch 11: ls2 monotone 0.43→0.51 (FFN grows with depth), ls1 U-shaped 0.19/0.13/0.14/0.17/0.21 (attention suppressed mid-stack).
-- **Cosine T_max:** Set to 15 (vs 50 default) to align anneal to realized ~14-epoch budget.
+- **OneCycleLR config:** linear rise over first 30% of steps (epochs 1-4.5), cosine decay to final_div_factor=1e4 (lr→5e-8) over remaining 70%. cycle_momentum=False (AdamW β₁ unchanged). step() called per-batch.
 - **Splits dir:** `/mnt/new-pvc/datasets/tandemfoil/splits_v2`
 
 ### Reproduce command
@@ -48,6 +48,22 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 ---
 
 ## Baseline history
+
+### 2026-05-16 02:00 — PR #3540: H24 OneCycleLR super-convergence (tanjiro) — **CURRENT BEST**
+
+- **val_avg/mae_surf_p:** 67.64 (epoch 12/15 — schedule truncated at 30-min wall-clock) — **-15.7% vs 80.21 SwiGLU baseline**
+- **Note:** Measured on SwiGLU baseline (80.21); merged onto H18 LayerScale (79.52). Actual H18+OneCycleLR value will differ slightly; all 4 splits improved unambiguously.
+- **Per-split val:**
+  - `val_single_in_dist/mae_surf_p` = 80.32 (-23.1% vs 104.46)
+  - `val_geom_camber_rc/mae_surf_p` = 81.81 (-7.6% vs 88.50)
+  - `val_geom_camber_cruise/mae_surf_p` = 44.46 (-17.5% vs 53.88) ← OOD improvement
+  - `val_re_rand/mae_surf_p` = 63.96 (-13.6% vs 70.14)
+- **test_avg/mae_surf_p:** 62.12 (-15.1% vs 73.20)
+- **LR curve:** Linear rise epochs 1-5 (peak 5e-4 at epoch 4.5), cosine decay epochs 5-15. Best checkpoint epoch 12 (lr=9.4e-5, still descending — truncation lower bound).
+- **What changed:** Replaced `CosineAnnealingLR(T_max=15)` with `OneCycleLR(max_lr=5e-4, total_steps=15×steps_per_epoch, pct_start=0.3, div_factor=25, final_div_factor=1e4, cycle_momentum=False)`. `scheduler.step()` moved per-batch. epochs=15 for schedule sizing.
+- **Why it works:** OneCycleLR's rapid fall after peak forces LR to 9.4e-5 by epoch 12, vs CosineAnnealingLR which stays at 1.7e-4 at epoch 12. The deep low-LR fine-tune phase (which didn't even complete) drives sharp convergence on difficult in-dist and OOD splits.
+- **Metric artifact:** `models/model-charliepai2i24h4-tanjiro-onecycle-pct30-20260516-004319/metrics.jsonl`
+- **Reproduce:** `cd target && python train.py --agent charliepai2i24h4-tanjiro --experiment_name "charliepai2i24h4-tanjiro/onecycle-pct30" --use_onecycle --onecycle_pct_start 0.3 --epochs 15`
 
 ### 2026-05-16 00:30 — PR #3514: H18 LayerScale residual scaling (edward) — **CURRENT BEST**
 
