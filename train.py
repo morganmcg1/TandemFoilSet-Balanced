@@ -176,6 +176,8 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        if getattr(self, "_diag_capture", False):
+            self._diag_slice_weights = slice_weights.detach().float()
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -338,6 +340,59 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    return out
+
+
+def compute_slice_diagnostics(model, loader, stats, device) -> dict[str, float]:
+    """One-batch slice-token utilisation diagnostic per Transolver block.
+
+    Captures softmax slice attention weights (shape [B, heads, N, slice_num])
+    and reports, per layer: mean entropy across valid query nodes (and ratio
+    vs uniform), fraction of "dead" slice tokens whose mean weight is below
+    1/(2*slice_num), and min/max mean slice weight. Padding nodes are masked.
+    """
+    attn_modules = [b.attn for b in model.blocks]
+    for m in attn_modules:
+        m._diag_capture = True
+        m._diag_slice_weights = None
+
+    out: dict[str, float] = {}
+    try:
+        with torch.no_grad():
+            x, _y, _is_surf, mask = next(iter(loader))
+            x = x.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            _ = model({"x": x_norm})
+
+        valid = mask.float()  # [B, N]
+        n_valid = valid.sum().item()
+        for li, m in enumerate(attn_modules):
+            sw = m._diag_slice_weights  # [B, H, N, S]
+            if sw is None:
+                continue
+            B, H, N, S = sw.shape
+            mask4 = valid.unsqueeze(1).unsqueeze(-1)  # [B, 1, N, 1]
+            denom = max(n_valid * H, 1.0)
+            mean_per_slice = (sw * mask4).sum(dim=(0, 1, 2)) / denom  # [S]
+
+            eps = 1e-12
+            entropy_bhn = -(sw * (sw + eps).log()).sum(dim=-1)  # [B, H, N]
+            mean_entropy = (entropy_bhn * valid.unsqueeze(1)).sum().item() / denom
+            max_uniform_entropy = float(np.log(S))
+
+            threshold = 1.0 / (2.0 * S)
+            dead_frac = (mean_per_slice < threshold).float().mean().item()
+
+            out[f"slice_diag/L{li}/mean_entropy"] = mean_entropy
+            out[f"slice_diag/L{li}/entropy_ratio"] = mean_entropy / max_uniform_entropy
+            out[f"slice_diag/L{li}/dead_frac"] = dead_frac
+            out[f"slice_diag/L{li}/max_mean_weight"] = mean_per_slice.max().item()
+            out[f"slice_diag/L{li}/min_mean_weight"] = mean_per_slice.min().item()
+    finally:
+        for m in attn_modules:
+            m._diag_capture = False
+            m._diag_slice_weights = None
     return out
 
 
@@ -506,7 +561,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=128,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -666,6 +721,26 @@ for epoch in range(MAX_EPOCHS):
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    if (epoch + 1) in (5, 15):
+        diag = compute_slice_diagnostics(
+            model, val_loaders["val_single_in_dist"], stats, device,
+        )
+        diag_log = dict(diag)
+        diag_log["global_step"] = global_step
+        wandb.log(diag_log)
+        print(f"  Slice diagnostics @ epoch {epoch+1} (slice_num={model_config['slice_num']}):")
+        n_layers = len(model.blocks)
+        for li in range(n_layers):
+            ent = diag.get(f"slice_diag/L{li}/mean_entropy", float("nan"))
+            er = diag.get(f"slice_diag/L{li}/entropy_ratio", float("nan"))
+            df = diag.get(f"slice_diag/L{li}/dead_frac", float("nan"))
+            mx = diag.get(f"slice_diag/L{li}/max_mean_weight", float("nan"))
+            mn = diag.get(f"slice_diag/L{li}/min_mean_weight", float("nan"))
+            print(
+                f"    L{li}  entropy={ent:.3f} (ratio={er:.3f})  "
+                f"dead_frac={df:.3f}  mean_weight∈[{mn:.4f}, {mx:.4f}]"
+            )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
