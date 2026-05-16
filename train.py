@@ -452,6 +452,8 @@ class Config:
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
     lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override
+    lion_beta1: float = 0.9
+    lion_beta2: float = 0.99
 
 
 cfg = sp.parse(Config)
@@ -502,7 +504,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lion(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(cfg.lion_beta1, cfg.lion_beta2),
+)
 t_max = cfg.lr_T_max if cfg.lr_T_max > 0 else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=t_max, eta_min=cfg.eta_min
@@ -514,7 +521,8 @@ grad_clip_enabled = cfg.grad_clip_norm is not None and cfg.grad_clip_norm > 0
 print(
     f"AMP: dtype={cfg.amp_dtype} enabled={amp_enabled}  "
     f"grad_clip: norm={cfg.grad_clip_norm if grad_clip_enabled else 'off'}  "
-    f"cosine T_max={t_max} eta_min={cfg.eta_min}"
+    f"cosine T_max={t_max} eta_min={cfg.eta_min}  "
+    f"lion betas=({cfg.lion_beta1}, {cfg.lion_beta2})"
 )
 
 run = wandb.init(
