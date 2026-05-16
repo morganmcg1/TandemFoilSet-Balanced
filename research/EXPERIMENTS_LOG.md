@@ -386,3 +386,28 @@ test_avg (3-finite splits): ~140.33; full test NaN (pre-#3274)
 - **Decision:** MERGED — new baseline 67.2991 (sw=25 wins). 5th compounding mechanism on the 5-mechanism stack (Lion + surf_weight=25 + asinh + EMA + grad-clip).
 - **Key finding:** Hypothesis fully confirmed. The asinh/EMA/grad-clip stack implicitly de-emphasizes extreme-pressure gradients, shifting the optimal surface weight left from 30 toward 25. Both arms beat baseline; sw=25 marginally outperforms sw=20 in the aggregate. Split-by-split: cruise and re_rand gain the most (−6%); single_in_dist barely moves. Vol metrics stable — optimizer genuinely rebalanced rather than just shifting surface loss off. Optimum knee is at ~25; going below 20 likely trades away cruise/re_rand gains. Val still descending at epoch 14 (timeout-bound). Cumulative improvement from initial baseline: 135.02 → 67.30 = **−50.2%**.
 
+---
+
+## 2026-05-16 07:00 — PR #3485: bf16 autocast — 6th compounding mechanism
+
+- **Branch:** charliepai2i48h2-alphonse/bf16-autocast
+- **Hypothesis:** bf16 autocast on forward+loss computation reduces per-epoch time by freeing VRAM bandwidth, unlocking more epochs within the 30-min wall-clock cap. Prior baseline was reaching epoch 14 and timing out with val still descending — any extra epochs on a still-descending curve directly improve the primary metric.
+- **Metrics:** `models/model-charliepai2i48h2-alphonse-bf16-autocast-20260516-053111/metrics.jsonl`
+
+| Split | Baseline (PR #3530) | bf16 arm | Δ |
+|-------|---------------------|----------|---|
+| single_in_dist | 80.6871 | 70.2014 | −13.0% |
+| geom_camber_rc | 79.0339 | 68.7070 | −13.1% |
+| geom_camber_cruise | 46.1009 | 39.0294 | −15.3% |
+| re_rand | 63.3746 | 57.5489 | −9.2% |
+| **val_avg** | **67.2991** | **58.8717** | **−12.5%** |
+| **test_avg** | **58.9233** | **51.6269** | **−12.4%** |
+| Epochs | 14 | **18** | +4 |
+| s/epoch | ~131 | **~101** | −23% |
+| Peak GPU memory | 42.13 GB | **32.96 GB** | −22% |
+
+- **Decision:** MERGED — new baseline 58.8717. 6th compounding mechanism (Lion + surf_weight=25 + asinh + EMA + grad-clip + **bf16**).
+- **Key finding:** Throughput intervention fully confirmed. 23% per-epoch speedup from reduced memory bandwidth → 4 extra epochs in same wall-clock → −12.5% val improvement. No NaN, no instability (asinh, grad-clip, EMA all compose cleanly with bf16). 9 GB VRAM freed opens capacity expansion that was previously epoch-budget-constrained. Val still descending at epoch 18 — still timeout-bound. Cumulative improvement: 135.02 → 58.87 = **−56.4%**. The key CLAUDE.md lesson from PR #3106/#3099 is now inverted: any architecture change that previously failed due to per-epoch time can be retested under bf16.
+
+---
+

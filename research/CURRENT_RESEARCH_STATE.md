@@ -2,6 +2,7 @@
 
 - 2026-05-16 — round 12 of `icml-appendix-charlie-pai2i-48h-r2`
 - No active research directives from the human research team
+- **New baseline: val=58.8717** (PR #3485 bf16 autocast merged, −12.5% from 67.30)
 
 ## Baseline progression
 
@@ -13,35 +14,36 @@
 | #3357 (tanjiro, asinh-loss) | 84.9819 | −27.7% | asinh(z) on pressure channel z-scores in training loss |
 | #3382 (askeladd, EMA+asinh) | 83.1874 | −2.1% | EMA shadow decay=0.999 at val/test passes |
 | #3384 (fern, grad-clip+EMA+asinh) | 70.2479 | −15.6% | grad_clip(max_norm=1.0) before optimizer.step() |
-| **#3530 (frieren, surf_weight=25)** | **67.2991** | **−4.20%** | **surf_weight: 30→25 (5-mech stack now complete)** |
+| #3530 (frieren, surf_weight=25) | 67.2991 | −4.20% | surf_weight: 30→25 (5-mech stack now complete) |
+| **#3485 (alphonse, bf16 autocast)** | **58.8717** | **−12.5%** | **bf16 autocast on forward+loss; 18 epochs vs 14** |
 
-**Current HEAD (5 mechanisms):** Lion + surf_weight=25 + asinh pressure-loss + EMA(0.999) + grad_clip(max_norm=1.0). val=67.30 at epoch 14 (timeout-bound, val still descending).
+**Current HEAD (6 mechanisms):** Lion + surf_weight=25 + asinh pressure-loss + EMA(0.999) + grad_clip(max_norm=1.0) + bf16 autocast. val=58.87 at epoch 18 (timeout-bound, val still descending).
 
-**Cumulative improvement from initial baseline:** 135.02 → 67.30 = **−50.2%**
+**Cumulative improvement from initial baseline:** 135.02 → 58.87 = **−56.4%**
 
 ## Active experiments
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3725 | fern | Per-group grad-clip: attention (max_norm=1.0) vs MLP (5.0/10.0) | WIP — NEW | Sub-additivity finding from #3528; test if MLP is over-clipped |
-| #3726 | frieren | Lion weight decay sweep: wd=1e-3 and 3e-3 (Lion paper rec.) | WIP — NEW | Lion paper: 3-10× higher wd than AdamW; current 3e-4 never tested |
-| #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — NEW | On 5-mech baseline 67.30; lr=1.7e-4 confirmed near-optimal |
-| #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2, fresh branch) | WIP — NEW | Closed #3442 (pre-asinh base, never rebased); fresh branch from HEAD |
-| #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP | Rebased on grad-clip baseline; target 67.30 |
-| #3485 | alphonse | bf16 autocast: faster forward → more epochs | WIP | Rebased; target 67.30 |
-| #3733 | edward | Warmup-cosine: 2-epoch linear warmup + cosine (v2, fresh branch) | WIP — NEW | Closed #3383 (pre-asinh base, never rebased); fresh branch from HEAD |
-| #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2, fresh branch) | WIP — NEW | Closed #3275 (pre-Lion base, never rebased); fresh branch from HEAD |
+| #3750 | alphonse | Capacity expansion on bf16: n_hidden=144 vs n_layers=6 | WIP — NEW | bf16 freed 9 GB VRAM; original #3099 capacity fail was throughput-bound |
+| #3725 | fern | Per-group grad-clip: attention (max_norm=1.0) vs MLP (5.0/10.0) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
+| #3726 | frieren | Lion weight decay sweep: wd=1e-3 and 3e-3 (Lion paper rec.) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
+| #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — STALE | Rebase advised; beat 58.87 with bf16 or 67.30 without |
+| #3731 | tanjiro | Signed log1p on pressure: direct asinh competitor (v2) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
+| #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP — IN PROGRESS | Picked up; running 3 arms sequentially; target now 58.87 |
+| #3733 | edward | Warmup-cosine: 2-epoch linear warmup + cosine (v2) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
+| #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP | Needs rebase for bf16; beat 58.87 or 67.30 if pre-bf16 |
 
-## Key open questions (round 12)
+## Key open questions (round 12 — new baseline 58.87)
 
-1. **Is MLP gradient over-clipped?** (#3725 fern) — 100% clip rate at aggregate norms 25-180; per-group clip tests if attention drives the aggregate while MLP is unnecessarily squeezed. Natural successor to #3528 sub-additivity finding.
-2. **Is Lion weight decay too low?** (#3726 frieren) — Lion paper recommends 3-10× higher wd than AdamW; current wd=3e-4 matches AdamW convention, not Lion. wd=1e-3 and 3e-3 not yet tested.
-3. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 (free velocity gradient) vs w_p=2.0 (focus on metric channel).
-4. **Does signed log1p beat asinh?** (#3731 tanjiro) — same loss-level mechanism, more aggressive tail compression. Direct head-to-head with asinh on 5-mech stack.
-5. **Does EMA decay=0.995 converge faster within budget?** (#3470 askeladd)
-6. **Does bf16 give meaningful epoch count boost?** (#3485 alphonse) — key to unlocking capacity and schedule changes
-7. **Does 2-epoch warmup improve early convergence?** (#3733 edward) — Lion cold-start stability; warmup may unlock cleaner late-epoch trajectory
-8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn) — input-dependent gating may specialize per node type (surface vs volume)
+1. **Does moderate capacity expand on bf16 win?** (#3750 alphonse) — 9 GB freed VRAM opens n_hidden=144 or n_layers=6; original #3099 failed due to fp32 epoch budget starvation
+2. **Is MLP gradient over-clipped?** (#3725 fern) — 100% clip rate at norms 25-180; per-group clip tests if attention drives the aggregate while MLP is squeezed
+3. **Is Lion weight decay too low?** (#3726 frieren) — Lion paper recommends 3-10× higher wd; current 3e-4 is AdamW-style; wd=1e-3 and 3e-3 untested
+4. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 vs w_p=2.0; pressure channel rebalancing
+5. **Does signed log1p beat asinh?** (#3731 tanjiro) — more aggressive tail compression; direct competitor to the winning mechanism
+6. **Does EMA decay=0.995 converge faster within 18 epochs?** (#3470 askeladd) — decay optimization on new bf16 budget
+7. **Does 2-epoch warmup improve early convergence?** (#3733 edward) — Lion cold-start stability on bf16 stack
+8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn) — input-dependent gating for surface vs volume node specialization
 
 ## 5-mechanism stack: gradient pipeline analysis
 
