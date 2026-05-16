@@ -347,10 +347,53 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+class Lion(torch.optim.Optimizer):
+    """Sign-momentum optimizer from Chen et al. 2023.
+
+    Update per param p with gradient g:
+        c = beta1 * m + (1 - beta1) * g
+        p = p - lr * (sign(c) + weight_decay * p)
+        m = beta2 * m + (1 - beta2) * g
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta2: {betas[1]}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if "m" not in state:
+                    state["m"] = torch.zeros_like(p)
+                m = state["m"]
+                c = m.mul(beta1).add_(g, alpha=1 - beta1)
+                p.add_(c.sign_().add_(p, alpha=wd), alpha=-lr)
+                m.mul_(beta2).add_(g, alpha=1 - beta2)
+        return loss
+
+
 @dataclass
 class Config:
-    lr: float = 5e-4
-    weight_decay: float = 1e-4
+    lr: float = 1.5e-4
+    weight_decay: float = 1e-3
     batch_size: int = 4
     surf_weight: float = 25.0
     epochs: int = 50
@@ -410,7 +453,7 @@ for p in ema_model.parameters():
     p.requires_grad_(False)
 print(f"EMA shadow model created with decay={ema_decay}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(0.9, 0.99), weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -440,6 +483,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    grad_norms: list[float] = []
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -461,6 +505,12 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        with torch.no_grad():
+            total_sq = torch.zeros((), device=device, dtype=torch.float32)
+            for p in model.parameters():
+                if p.grad is not None:
+                    total_sq = total_sq + p.grad.detach().float().pow(2).sum()
+            grad_norms.append(total_sq.sqrt().item())
         optimizer.step()
 
         with torch.no_grad():
@@ -500,6 +550,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    if grad_norms:
+        gn_tensor = torch.tensor(grad_norms, dtype=torch.float64)
+        gn_mean = gn_tensor.mean().item()
+        gn_max = gn_tensor.max().item()
+        gn_min = gn_tensor.min().item()
+    else:
+        gn_mean = gn_max = gn_min = float("nan")
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -507,6 +564,9 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": gn_mean,
+        "train/grad_norm_max": gn_max,
+        "train/grad_norm_min": gn_min,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -514,6 +574,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"grad_norm[mean={gn_mean:.3f} max={gn_max:.3f} min={gn_min:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
