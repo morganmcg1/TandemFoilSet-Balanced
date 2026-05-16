@@ -160,12 +160,12 @@ class TransolverBlock(nn.Module):
                  use_swiglu=False):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = nn.RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = nn.RMSNorm(hidden_dim)
         mlp_hidden = int(hidden_dim * mlp_ratio)
         if use_swiglu:
             self.mlp = SwiGLUMLP(hidden_dim, mlp_hidden, hidden_dim)
@@ -173,7 +173,7 @@ class TransolverBlock(nn.Module):
             self.mlp = MLP(hidden_dim, mlp_hidden, hidden_dim,
                            n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = nn.RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
