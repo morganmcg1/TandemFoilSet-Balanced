@@ -1,19 +1,23 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 21:30
+- **Date**: 2026-05-16 21:35
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 late-phase — Lion+slice=96 baseline (H73, val=42.98). LR + wd + warmup + n_head + LayerNorm all confirmed locked at H73 values. **Capacity scaling (H86 n_hidden) + schedule-tail (H84/H87) are the active fronts.**
+- **Round**: 5 late-phase — **NEW BASELINE: H78 Arm B β₂=0.995, val=42.30 / test 3-split=40.56 (PR #4097 MERGED).** β₂ is the latest unlocked lever. Capacity scaling (H86 n_hidden) + schedule-tail (H84/H87) + FFN-width (H89) + β₂ refinement (H88) are active fronts.
 - **Most recent human research directive**: None received
 
 ## Current Best
 
-**PR #4055 (H73 Arm B: Lion lr=3e-4 + slice_num=96, tanjiro) — val_avg/mae_surf_p = 42.9784 / test 3-split = 41.5455** (MERGED 2026-05-16 18:32)
+**PR #4097 (H78 Arm B: Lion lr=3e-4 + slice_num=96 + β₂=0.995, edward) — val_avg/mae_surf_p = 42.3048 / test 3-split = 40.5564** (MERGED 2026-05-16 21:32)
+
+**Previous best: PR #4055 (H73 Arm B, val=42.98 / test=41.55, tanjiro).** β₂=0.995 small win compounds on H73 baseline.
 
 **Loose UB** — wall-cut at ep 15/50 with val_avg still descending ~0.8 pts/epoch. True asymptote likely well below 42.98.
 
 | Reference | val_avg | test 3-split | Status |
 |-----------|--------:|-------------:|--------|
-| **H73 Arm B (Lion lr=3e-4 + slice96)** | **42.9784** | **41.5455** | **CURRENT BEST (PR #4055)** |
+| **H78 Arm B (β₂=0.995 stacked on H73)** | **42.3048** | **40.5564** | **CURRENT BEST (PR #4097)** |
+| H73 Arm B (Lion lr=3e-4 + slice96) | 42.9784 | 41.5455 | Prior best (PR #4055) |
+| H78 Arm A (β₂=0.999) | 44.3436 | 42.0389 | Same PR, regresses |
 | H73 Arm A (Lion lr=1e-4 + slice96) | 46.3422 | 45.3896 | Same PR, lr=1e-4 arm |
 | H66 (slice_num=96, AdamW) | 56.7504 | 54.5026 | Overridden by #4055 |
 | H58 Arm A reference (Lion lr=1e-4, slice=64) | ~46.80 | ~46.63 | Pending PR #3965 still WIP |
@@ -78,13 +82,13 @@ The H67-H73 Lion compound batch revealed:
 | **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
 | **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
 | **#4135** | nezuko | **H85: FFN activation (swiglu, vanilla) under Lion** | MED (test if GEGLU locked under Lion) | ~43-47 |
-| **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | LOW (warmup+n_head negative isolated; expecting regress) | ~46-50 revised |
-| **#4097** | edward | **H78: Lion β₂ sweep (β₂=0.999, β₂=0.995)** | HIGH (only Lion β₂ retune at slice=96) | ~41-43 |
-| **TBD** | alphonse | **H87: CosineAnnealingLR eta_min > 0 — keep meaningful LR through wall-cut** | HIGH (schedule-tail counter to H84) | ~41-44 |
+| **#4156** | alphonse | **H87: CosineAnnealingLR eta_min > 0** | HIGH (schedule-tail counter to H84) | ~40-44 |
+| **TBD** | edward | **H88: β₂ refinement {0.992, 0.997} around H78's 0.995** | HIGH (confirm peak) | ~41-43 |
+| **TBD** | thorfinn | **H89: mlp_ratio sweep under Lion+slice=96 (3, 4)** | MED (FFN-width orthogonal to H86 n_hidden) | ~40-44 |
 
-**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**, **H81 (RMSNorm anti-compound under Lion confirmed; normalization locked)**, H75 (LR U-shape).
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio under AdamW), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**, **H81 (RMSNorm anti-compound under Lion confirmed; normalization locked)**, H75 (LR U-shape), **H80 (full Lion stack: schedule confound + 3/4 levers individually negative)**.
 
-**H76/H77 negative-result implication for H80:** H80 (thorfinn full stack) combines warmup=2 + wd=1e-4 + β₂=0.999 + n_head=4. Two of these four levers (warmup, n_head) are now confirmed NEGATIVE at slice=96. **H80's predicted range revised to ~46-50**, expecting regress. Will close once results arrive unless β₂ effect dominates.
+**Merged this round:** H73 (Lion + slice=96 super-additive, val=42.98), **H78 (β₂=0.995 small win, val=42.30 NEW BEST)**.
 
 ## Lever Status (post-H73)
 
@@ -94,7 +98,7 @@ The H67-H73 Lion compound batch revealed:
 | LR (Lion) | ✅ Locked at 3e-4 (H75 U-shape confirmed) | 3e-4 (H73) | Bracketed 2.5e-4 to 3.5e-4 |
 | Schedule (Lion) | ❌ warmup REGRESSES at slice=96 (H76) | T_max=15 (H73) | H69 win doesn't transfer; warmup=2 cost > benefit at 15-ep horizon |
 | n_head (Lion) | ❌ n_head=4 REGRESSES at slice=96 (H77) | 2 (H73) | H70 win doesn't transfer; per-head dim shrinkage hurts |
-| β₂ (Lion) | 🔬 0.999 wins at slice=64 | 0.99 (H73) | H68 found β₂=0.999 helps; retest |
+| β₂ (Lion) | ✅ 0.995 LOCKED (H78 MERGED) | 0.995 (H78) | Non-monotonic: 0.99→0.995 wins, 0.999 regresses (over-smooth in 15-ep budget). H88 refines further. |
 | wd (Lion) | ✅ Locked at 1e-3 (H79 confirmed) | 1e-3 (H73) | wd=1e-4 and wd=5e-5 both regress/tie at slice=96 |
 | slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |
 | n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
@@ -108,7 +112,7 @@ The H67-H73 Lion compound batch revealed:
 | DropPath | ❌ No effect | 0.0 (H63) | — |
 | Mixup | ❌ Wrong inductive bias | None (H55) | — |
 | EMA averaging | ❌ Wrong regime | None (H65) | Needs oscillation, not translation |
-| mlp_ratio | ✅ 2 locked (H62) | 2 | — |
+| mlp_ratio | 🔬 H89 retest under Lion | 2 (H62 closed under AdamW) | First test under Lion+slice=96 regime |
 | Cond_dim | ✅ Locked at 11 (FiLM) | 11 | — |
 
 ## Key Open Questions
@@ -134,9 +138,10 @@ The H67-H73 Lion compound batch revealed:
 | 57.58 | 56.46 | H60: + n_layers=4 |
 | 56.91 | 56.24 | H59: + norm_type=rmsnorm |
 | 56.75 | 54.50 | H66: + slice_num=96 |
-| **42.98** | **41.55** | **H73 Arm B: + optimizer=lion + lr=3e-4 (super-additive)** |
+| 42.98 | 41.55 | H73 Arm B: + optimizer=lion + lr=3e-4 (super-additive) |
+| **42.30** | **40.56** | **H78 Arm B: + β₂=0.995 (small compound win)** |
 
-Total merged gain: **−71.65 pts val** (62.5% reduction from 114.63 to 42.98).
+Total merged gain: **−72.33 pts val** (63.1% reduction from 114.63 to 42.30).
 
 ## Known Issues
 

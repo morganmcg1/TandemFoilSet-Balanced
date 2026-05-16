@@ -2012,3 +2012,53 @@ These two hypotheses target the two architectural levers that have NOT yet been 
 | TBD | alphonse | H87: CosineAnnealingLR eta_min > 0 — keep meaningful LR through wall-cut | eta_min=3e-5 (Arm A, lr/10), eta_min=1e-5 (Arm B, lr/30) |
 
 **Strategic rationale:** Every recent run (H73, H75, H81) shows the val trajectory still monotonically descending at epoch 15 (the wall-cut). The cosine schedule reaches LR=0 at ep 15, so the last few epochs receive near-zero gradient updates. eta_min > 0 holds the LR floor above zero so all 15 epochs contribute meaningful gradient steps. This is the **inverse** of H84 (T_max compression) — H84 lets the model fine-tune at LR=0, H87 prevents the LR from collapsing to zero. The two ideas test opposite sides of the schedule-tail question. Picked from alphonse's own follow-up suggestion list in the H81 PR.
+
+---
+
+## 2026-05-16 21:32 — PR #4097: H78 Lion β₂ sweep (edward) — **MERGED, NEW BEST**
+
+- Branch: `charliepai2i48h3-edward/h78-lion-beta2-at-slice96`
+- Hypothesis: H68's β₂=0.999 win transfers to slice=96; or a sweet-spot interior optimum exists.
+
+| Arm | β₂ | val_avg | Δ vs H73 | test 3-split | Δ vs H73 | best epoch |
+|-----|----|--------:|---------:|-------------:|---------:|-----------:|
+| H73 baseline | 0.99 | 42.9784 | — | 41.5455 | — | — |
+| A | 0.999 | 44.3436 | +1.37 (regress) | 42.0389 | +0.49 | 15 |
+| **B** | **0.995** | **42.3048** | **−0.67** (small win) | **40.5564** | **−0.99** (small win) | **15** |
+
+**Mechanism:** Non-monotonic in β₂ — interior optimum at 0.995. β₂=0.999 over-smooths the gradient EMA, can't track the cosine-decaying loss surface within the 15-ep budget (still 17.8 pts behind at ep 3, never recovers). β₂=0.995 is the sweet spot between noise filtering and adaptation speed at lr=3e-4/slice=96. H68's β₂=0.999 win was specific to lr=1e-4+slice=64+RMSNorm regime.
+
+**Merge decision:** val Δ=−0.67 is within seed noise floor (~2.6 pts) individually, but test Δ=−0.99 is also negative (correlated improvement across both metric channels) and the trajectory analysis shows clean predicted-vs-actual mechanistic agreement. Single-flag change, zero complexity cost. Per round protocol "merge small compoundable wins."
+
+**Status: MERGED — NEW BEST. β₂=0.995 locked in baseline.**
+
+---
+
+## 2026-05-16 21:33 — PR #4093: H80 Full Lion stack (thorfinn) — **CLOSED, schedule confound + known-negative levers**
+
+- Branch: `charliepai2i48h3-thorfinn/h80-lion-stack-max`
+- Hypothesis: Compound H67-H71 wins (warmup=2 + wd=1e-4 + β₂=0.999 + n_head=4) on top of H73 for "optimistic 11 pt compound" swing.
+
+| Arm | lr | val_avg | Δ vs H73 | test 3-split | best epoch | s/epoch |
+|-----|----|--------:|---------:|-------------:|-----------:|--------:|
+| A | 3e-4 | 79.6076 | **+33.0** | 78.7386 | 13 | 145.0 |
+| B | 2e-4 | 75.9733 | +33.0 | 73.2389 | 12 | 145.0 |
+
+**Schedule confound:** `--warmup_epochs 2 --epochs 50` triggered SequentialLR(LinearLR, CosineAnnealingLR(T_max=48)). Under the 30-min wall budget the cosine only traversed 23% of its arc. LR at epoch 13 was ~2.6e-4 (essentially still at peak). H73's T_max=15 hardcoded property was load-bearing for the 30-min budget.
+
+**Compound was also doomed by known-negative levers:** By the time results landed, individual sweeps had already shown three of H80's four levers regress at slice=96 — H76 (warmup=2 negative), H77 (n_head=4 negative), H79 (wd=1e-4 negative/tie). Even H78 (this cycle's β₂ sweep) showed β₂=0.999 specifically regresses (+1.37 vs baseline). H80's full stack hit *all four* anti-additive levers simultaneously.
+
+**Status: CLOSED — negative. Schedule-fair rerun not pursued (3+ levers known-negative).**
+
+---
+
+## 2026-05-16 21:35 — Round 5 Cycle 27: Assign H88 to edward (β₂ tighter grid), H89 to thorfinn (mlp_ratio sweep)
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| TBD | edward | H88: β₂ refinement around 0.995 (β₂=0.992 + β₂=0.997) | Confirm/refine peak from H78 |
+| TBD | thorfinn | H89: mlp_ratio sweep under Lion+slice=96 (mlp_ratio=3 + mlp_ratio=4) | Last tested under AdamW (H62 closed); new regime probe |
+
+**H88 strategic rationale:** H78 found β₂=0.995 wins over both 0.99 and 0.999 (non-monotonic). With 3 sparse samples and only 0.67 pt val win, the peak is undercharacterized. Tighter grid {0.992, 0.997} either confirms 0.995 is local-optimum or reveals a slightly better setting. Same single-flag protocol as H78.
+
+**H89 strategic rationale:** mlp_ratio is one of the few architectural levers untested under Lion+slice=96+LayerNorm. H62 (AdamW era, slice=64) closed mlp_ratio negative — but under Lion's scale-invariance + the wider slice=96 gradient surface, expanded FFN capacity may unlock representational headroom. mlp_ratio=4 doubles FFN width; mlp_ratio=3 is a moderate increase. Complementary to H86 (tanjiro, n_hidden=192/256) — H86 widens attention+FFN+everything; H89 widens FFN only.
