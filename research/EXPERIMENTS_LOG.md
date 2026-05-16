@@ -2,6 +2,31 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 00:40 — PR #3559: H25 n_layers=6 deeper Transolver (edward) — **assigned**
+
+- Branch: `charliepai2i24h4-edward/n-layers-6`
+- Hypothesis: Add a 6th TransolverBlock to the existing 5-block stack. With LayerScale init=1e-6, the new block starts as near-identity and activates only if useful. H18 diagnostics showed block 4 is most active (ls2=0.51 vs 0.43 at block 0) — suggests the model wants more depth. ~880K → ~1.04M params. 
+- Single arm. Target: val_avg < 79.52 (new H18 baseline). Also beat 74.18 (askeladd EMA pending).
+
+## 2026-05-16 00:30 — PR #3514: H18 LayerScale residual scaling (edward) — **MERGED, new best**
+
+- Branch: `charliepai2i24h4-edward/layerscale`
+- Result: val_avg=79.52, test_avg=68.95. Terminated at 30-min cap epoch 11.
+
+| Split | H15 baseline | H18 LayerScale | Delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 104.46 | 104.62 | +0.15% (flat) |
+| val_geom_camber_rc | 88.50 | 93.29 | **+5.42% (worse)** |
+| val_geom_camber_cruise | 53.88 | 50.00 | **-7.21%** |
+| val_re_rand | 74.00 | 70.14 | **-5.22%** |
+| **val_avg** | **80.21** | **79.52** | **-0.86%** |
+| test_avg | 73.20 | 68.95 | **-5.80%** |
+
+- LayerScale gamma diagnostics: ls2 (FFN) monotone 0.43→0.51 (textbook depth-activation). ls1 (attn) U-shaped 0.19/0.13/0.14/0.17/0.21 (attention suppressed mid-stack). All gammas escaped init=1e-6 (grew ~5 orders of magnitude).
+- **Analysis**: Val gain (-0.86%) is within seed variance, but test_avg gain (-5.80%) is a clear generalization win. LayerScale's FFN path shows textbook behavior; attention U-shape is novel — mid-stack blocks suppress attention more. Cam_rc regression (+5.4%) is concerning — same pattern as FiLM. May be related to mid-block attention suppression for OOD geometry.
+- **Decision**: Merged. Small val gain but clear test_avg improvement. +1,280 params overhead negligible.
+- New baseline: val_avg=79.52, test_avg=68.95.
+
 ## 2026-05-16 00:30 — PR #3540: H24 OneCycleLR super-convergence (tanjiro) — **assigned**
 
 - Branch: `charliepai2i24h4-tanjiro/onecycle-lr`
