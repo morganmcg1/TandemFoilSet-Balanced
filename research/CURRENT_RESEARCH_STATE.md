@@ -50,26 +50,22 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 9. **SwiGLU key detail:** `mlp2` (output head) is left as standard MLP; only `self.mlp` in TransolverBlock is replaced. inner_dim=216 = round_to_mult(160*2*2/3, 8).
 10. **DSDF distribution finding (nezuko #3836):** normalized DSDF max abs=2.88 → clip=3.0 is a no-op. Clip=2.0 or 2.5 would actually touch 0.33-1.37% of values.
 
-## Active in-flight PRs (status as of 11:30 UTC)
+## Active in-flight PRs (status as of 11:45 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
 | **#3814** | askeladd | **SwiGLU FFN** | **MERGED 11:30** → new baseline | 64.2430 🏆 |
 | **#3838** | alphonse | per-domain output norm | **CLOSED 11:30** (val=89.28 FAIL vs both 82.50 and 64.24) | — |
 | **#3741** | fern | eta_min=1e-5 cosine floor | **CLOSED 11:30** (best val=86.21 FAIL × 3 seeds) | — |
-| **#3815** | tanjiro | TTA coord noise K=4/K=8 | **stale_wip** — 0 comments yet; checking W&B | pending review |
+| **#3815** | tanjiro | TTA coord noise K=4/K=8 | **CLOSED 11:45** — K=1/4/8 flat (test 76.35/76.39/76.37); on obsolete pre-SwiGLU baseline | — |
 | **#3833** | thorfinn | OneCycleLR schedule | WIP (assigned 08:35) | awaiting |
 | **#3835** | edward | asinh output transform | WIP (assigned 08:35) | awaiting |
 | **#3836** | nezuko | DSDF clip pivoted to 2.0/2.5 | WIP — pivoted from clip=3 (no-op) to clip=2.0/2.5 per sanity check | awaiting |
 | **#3857** | frieren | attention dropout p=0.1/0.2 | WIP (assigned 09:30, pre-SwiGLU baseline) | awaiting |
-
-## Round-5 new assignments (pending, to be created after rate-limit reset at 11:20 UTC)
-
-| Student | Slug | Hypothesis | Rationale |
-|---|---|---|---|
-| askeladd | `swiglu-epochs12` | SwiGLU + --epochs 12 stack | Best val still at epoch 10/10 — more training is the clearest next win |
-| alphonse | `swiglu-mlp-ratio-3` | mlp_ratio=3 with SwiGLU (inner_dim=320) | Student suggested this; gated FFNs benefit from wider inner dims; mlp_ratio=4 vanilla failed but gating changes the regime |
-| fern | `swiglu-attn-dropout` | attn_dropout=0.1 on SwiGLU baseline | Frieren tests attn-dropout WITHOUT SwiGLU; this tests the combination on the new baseline |
+| **#3905** | askeladd | SwiGLU + epochs=12 | **WIP** — assigned 11:45 | awaiting |
+| **#3908** | alphonse | SwiGLU mlp_ratio=3/4 sweep | **WIP** — assigned 11:45 | awaiting |
+| **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | **WIP** — assigned 11:45 | awaiting |
+| **#3916** | tanjiro | SwiGLU gate output head (mlp2) | **WIP** — assigned 11:45 | awaiting |
 
 ## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
 
