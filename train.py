@@ -482,6 +482,7 @@ class Config:
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
     amp_dtype: str = "fp32"   # "fp32" | "bf16"
     mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
+    use_compile: bool = False  # wrap model with torch.compile if True
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -553,6 +554,10 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+if cfg.use_compile:
+    model = torch.compile(model, mode="default")
+    print("Wrapped model with torch.compile(mode='default')")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.warmup_epochs > 0:
