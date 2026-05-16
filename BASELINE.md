@@ -5,7 +5,54 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
-## 2026-05-16 23:30 — PR #4158: Lookahead k=3 on triple-stack ← NEW PROGRAMME ALL-TIME BEST
+## 2026-05-16 23:40 — PR #4123: Lookahead-Lion (Lookahead k=5/α=0.5 wrapping Lion) ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-edward
+- **Branch:** `willowpai2i48h1-edward/lion-optimizer-triple-stack`
+- **W&B run:** `rx3negp7` (Arm 2 — Lookahead-Lion); Arm 1 Pure Lion: `ux8amr59`
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **47.9735** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 52.1223 |
+| val_geom_camber_rc | 62.4302 |
+| val_geom_camber_cruise | 29.3224 |
+| val_re_rand | 48.0193 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 46.7514 |
+| test_geom_camber_rc | 56.6071 |
+| test_geom_camber_cruise | 42.0290 |
+| test_re_rand | 40.5726 |
+| **test_avg/mae_surf_p** | **46.4900** |
+
+- **Surface MAE (test_avg):** Ux=0.5128, Uy=0.2822, p=46.4900
+- **Δ vs prior best (#4158 Lookahead k=3):** val −7.995, test −6.952
+- **Δ vs Lion alone (#4123 Arm 1 `ux8amr59`):** val −1.099, test −0.581 (orthogonal-additive composition)
+
+### Mechanism summary
+
+Lion (sign-based updates, constant step magnitude) eliminates per-step gradient-magnitude variance. Lookahead (every k=5 Lion steps: slow←slow+α·(fast−slow)) reduces per-basin commitment variance. Complementary mechanisms — Lion handles step-level noise, Lookahead handles trajectory-level noise. Composition is additive (−1.10 val lift on top of Lion alone).
+
+### Reproduce
+```bash
+cd target/ && python train.py \
+  --agent willowpai2i48h1-edward \
+  --wandb_name "willowpai2i48h1-edward/lookahead_lion_seed0" \
+  --wandb_group lion_verification \
+  --use_lion --use_geglu --seed 0
+```
+(default lookahead_k=5, lookahead_alpha=0.5)
+
+---
+
+## 2026-05-16 23:30 — PR #4158: Lookahead k=3 on triple-stack ← PROGRAMME ALL-TIME BEST (superseded by #4123)
 
 - **Student:** willowpai2i48h1-nezuko
 - **Branch:** `willowpai2i48h1-nezuko/lookahead-k-sweep`
