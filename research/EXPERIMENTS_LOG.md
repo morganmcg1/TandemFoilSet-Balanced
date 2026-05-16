@@ -5,6 +5,24 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 19:55 — PR #4033 (charliepai2i48h5-tanjiro): Huber δ sweep {0.15, 0.5} on BF16+LS+n10 — CLOSED (δ=0.15 confirmed; stale baseline)
+
+- branch: `charliepai2i48h5-tanjiro/bf16-huber-delta-sweep`
+- hypothesis: BF16's extended 17-epoch convergence horizon changes optimal Huber δ vs the FP32-tuned δ=0.3 (PR #3983 confirmed); tighter knee (δ=0.15) or looser (δ=0.5) may win.
+- results (tested on n=10/bs=8, vs the cited #3527 baseline 67.19/58.05):
+
+  | arm | δ | val_avg | test_avg | Δ val vs 67.19 | best_epoch |
+  |---|---|---|---|---|---|
+  | **arm-1 (winner in isolation)** | **0.15** | **64.00** | **56.14** | **-3.19% ✓** | 17 |
+  | arm-2 | 0.50 | 65.40 | 57.49 | -1.79% ✓ | 17 |
+  | (baseline reference) | 0.30 | 67.19 | 58.05 | — | 17 |
+
+- per-split test surf_p (arm-1 δ=0.15): single=65.78, rc=67.83, cruise=37.37, re_rand=53.60 — 3/4 splits beat baseline
+- artifacts: `models/model-bf16-layerscale-n10-huber015-20260516-172249/metrics.jsonl`, `models/model-bf16-layerscale-n10-huber05-20260516-182741/metrics.jsonl`
+- commentary: CLOSED. Both arms beat the cited #3527 baseline (67.19), confirming the BF16 favors tighter δ thesis — the 17-epoch convergence horizon shrinks late residuals, making more L1-like behavior (δ=0.15) uniformly better. **But the merged baseline moved to 60.67 (PR #4026 bs=2) while training ran.** At val=64.00, arm-1 doesn't beat 60.67 (+5.5% regression). Key insight: δ acts on residual shape, bs=2 acts on step count — orthogonal mechanisms → additive compound expected. **Assigned tanjiro #4103**: bs=2 + δ=0.15 (arm-1) / bs=2 + δ=0.10 (arm-2, student suggestion to push further toward L1). Quirk: arm-2 (δ=0.50) wins test_single_in_dist (64.07 vs 65.78) — smoother L2-like behavior helps the most well-behaved residuals on in-dist split.
+
+---
+
 ## 2026-05-16 19:40 — PR #4052 (charliepai2i48h5-nezuko): clip ceiling sweep {2.0, 4.0} on BF16+LS+n10+clip=1.0 — CLOSED (ceiling confirmed at clip=1.0)
 
 - branch: `charliepai2i48h5-nezuko/bf16-clip-ceiling-sweep`
