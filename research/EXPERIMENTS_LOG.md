@@ -1,5 +1,41 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 14:25 — PR #3908: SwiGLU mlp_ratio=3 (alphonse) — **MERGED** → new baseline
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/swiglu-mlp-ratio-3`)
+- **Hypothesis:** Wider gated FFN (mlp_ratio=3, inner_dim=320 vs baseline 216) leverages SwiGLU's ability to use capacity that vanilla FFNs can't. SwiGLU gating makes wider FFN better-utilized at our dataset scale.
+
+### Results vs current baseline #3905 (val=60.7195, test=51.9559)
+
+| Arm | inner_dim | params | val | Δ val | test | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| **mlp_ratio=3** (`4n7z1mwm`) | 320 | 1.285M | **59.0038** | **−2.83%** | **50.7368** | **−2.35%** |
+| mlp_ratio=4 (`s1aasob4`) | 424 | 1.535M | 59.9421 | −1.94% | 51.1934 | −1.47% |
+
+Per-split test (ratio=3 vs #3905): single_in_dist −2.93%, geom_camber_rc +2.29%, geom_camber_cruise −8.61%, re_rand −2.71%. Large gain on cruise (easiest split), moderate gain on re_rand and single_in_dist. geom_camber_rc test slight regress (+2.3%) but val strongly positive there (−5.87%).
+
+- **Analysis:** Clean compound win. Ratio=3 vs 4: ratio=3 wins val (59.00 < 59.94) and 3 of 4 test splits (geom_camber_rc slightly prefers ratio=4 by 1.06, but other splits prefer ratio=3). The "SwiGLU sweet spot" lands near ratio=3 (LLaMA-2/Mistral use 8/3≈2.67), confirming the literature expectation. Ratio=4 adds +0.25M params with no gain, consistent with our ~1.5K sample training set being small enough to penalize excess capacity.
+- **Best epoch:** 12/12 (last epoch) — val still descending, epochs=14 follow-up assigned to alphonse (#4002).
+- **Merged** at 14:25 UTC. **New baseline: val=59.0038 / test=50.7368**.
+
+---
+
+## 2026-05-16 14:25 — PR #3916: SwiGLU output head gate mlp2 (tanjiro) — **CLOSED** (clear regress)
+
+- **Student:** willowpai2i48h4-tanjiro (branch: `willowpai2i48h4-tanjiro/swiglu-mlp2-gate`)
+- **Hypothesis:** Gate the output head `mlp2` with SwiGLU (same gating as per-block FFN).
+- **Results:** Both arms/seeds regress by 2-3% on both val and test vs #3905 baseline.
+
+| Run | val | Δ val | test | Δ test |
+|---|---:|---:|---:|---:|
+| ucb7ihi8 | 62.50 | +2.93% | 53.78 | +3.50% |
+| 86aw2040 | 62.75 | +3.34% | 53.19 | +2.36% |
+
+- **Analysis:** Output head is a one-shot linear readout, not a residual refinement. Gating adds nonlinearity right before the pressure regression target — orthogonal to the SwiGLU benefit in the TransolverBlock residual stack. Hypothesis dead on this stack.
+- **Reassigned tanjiro to slice_num=32 (#4001)**.
+
+---
+
 ## 2026-05-16 14:05 — PR #3912: SwiGLU + attn_dropout p=0.1/0.2 (fern) — **CLOSED** (mixed signal vs current baseline)
 
 - **Student:** willowpai2i48h4-fern (branch: `willowpai2i48h4-fern/swiglu-attn-dropout`)
