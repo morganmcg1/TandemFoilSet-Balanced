@@ -56,6 +56,67 @@ Per-split test: test_single_in_dist=71.67, test_geom_camber_rc=73.75, test_geom_
 
 ---
 
+## 2026-05-16 02:50 — PR #3518 edward CLOSED: Lion T_max=14 sweep (best val 83.45 on old baseline)
+
+- Branch: `willowpai2i24h3-edward/lion-tmax14`
+- Hypothesis: Set T_max=14 (matching fp32 epoch budget) to ensure cosine annealing reaches LR=0 within training time on old Lion+Huber baseline.
+
+### Terminal results
+
+| Run | epochs | final_lr | val_avg/mae_surf_p | test_nansafe | schedule_annealed |
+|---|---|---|---|---|---|
+| `o3tbb2x2` (arm 1) | 10/14 | 1.88e-5 | 93.44 | 88.44 | No — truncated by pod contention |
+| `45udnd95` (arm 2) | 10/14 | 1.88e-5 | 97.47 | 89.81 | No — truncated |
+| **`d5m5xeyc` (arm 3)** | **14/14** | **0.0** | **83.45** | **78.92** | **Yes — LR fully annealed** |
+
+Per-split (arm 3): val_single_in_dist=91.92, val_geom_camber_rc=92.94, val_geom_camber_cruise=66.89, val_re_rand=82.06.
+
+### Analysis
+
+**T_max=14 annealing confirmed valuable**: When the cosine schedule is allowed to complete (arm 3), val=83.45 vs 93.44 (arm 1 truncated) = −9.99 points. Arms 1/2 ran 10/14 epochs due to pod throughput contention; arm 3 ran clean. This confirms edward's prior finding on AdamW+Huber (−3.9% from T_max fix) scales to Lion, and with greater magnitude (−10.6%).
+
+**Run-to-run variance without fixed seed**: Arms 1/2 truncated at 93.44 and 97.47 (4-point spread). The seed mandate is the right call.
+
+**Superseded by new SOTA stack**: val=83.45 on old Lion (94.08) is a strong relative improvement (+11.3%), but doesn't beat new SOTA 69.86. Tanjiro's #3596 is testing T_max=19 on the full new stack, which is the right follow-on.
+
+### Decision: CLOSED — direction confirmed but superseded
+
+New assignment: edward → ema-weights (PR #3640), testing EMA decay {0.999, 0.9999} on the new SOTA stack.
+
+---
+
+## 2026-05-16 02:50 — PR #3385 askeladd CLOSED: warmup2+clip50 on SOTA stack (val=104.02, throughput-confounded)
+
+- Branch: `willowpai2i24h3-askeladd/warmup-cosine-stacked`
+- Hypothesis: Does warmup=2 + clip=50 (loose clip, allowing free gradient flow) beat the new SOTA baseline where clip=1.0 acts as a per-step normalizer at 99.7% of steps?
+
+### Terminal results (final arm `3gffkqmt`, post-rebase onto new SOTA)
+
+| Run | warmup | clip | epochs | val_avg/mae_surf_p | test_nansafe | epoch_time_s |
+|---|---|---|---|---|---|---|
+| **Baseline #3427 (`f6lnbssy`)** | 0 | 1.0 | 19 | **69.86** | **65.88** | 98.18 |
+| `warmup2-clip50-lion` (`3gffkqmt`) | 2 | 50.0 | 9 | 104.02 | 96.88 | 211.48 |
+| (ref) warmup2-clip1 (`4brvwa73`, pre-rebase) | 2 | 1.0 | 13 | 107.61 | 100.75 | — |
+| (ref) warmup5-clip1 (`gr05e3j0`, pre-rebase) | 5 | 1.0 | 14 | 113.91 | 107.00 | — |
+
+### Analysis
+
+**Throughput confound**: epoch_time=211.48s vs baseline 98.18s — 2.15× slowdown. Only 9 epochs fit in 30 min vs baseline's 19. Suspected cause: 5 other students were concurrently launched in the same round, causing pod contention and I/O throttling.
+
+**Per-epoch trajectory at matched epochs**: At epochs 8-9, askeladd's arm (104.02 at ep9) was 11-15 points AHEAD of baseline (115.05 at ep9). The face-value loss is dominated by fewer total steps, not by a worse optimization trajectory per step.
+
+**Grad-norm telemetry**: clip=50 → only ~5-10% of steps clipped (vs baseline's 99.7% at clip=1.0). Median pre-clip grad norm 23.7. This confirms the clip=1.0 vs clip=50 regimes are fundamentally different: at 1.0, clip is a per-step Lion normalizer; at 50, it's a spike-only ceiling. The early-epoch lag (eps 2-7, 14-40 points behind baseline) suggests Lion benefits from the per-step normalization, not just spike protection.
+
+**Verdict**: Hypothesis not cleanly refutable due to confound. At matched compute, clip=50 might be competitive. But clip=1.0 is clearly the safer choice as a default lever.
+
+### Decision: CLOSED — direction exhausted on this PR
+
+Alphonse's #3590 (clip sweep: 0.25, 0.5, 2.0) covers the lower end of the clip range and will clarify the optimal clip value. If #3590 shows the minimum is approaching clip≈1.0 from above, the mid-range (clip=5/10) can be deferred.
+
+New assignment: askeladd → bs-scaling (PR #3641), testing batch_size {8, 12} on the new SOTA stack to utilize 63 GB VRAM headroom.
+
+---
+
 ## 2026-05-16 01:00 — PR #3392 tanjiro CLOSED: Huber δ sweep (best val 108.37)
 
 - Branch: `willowpai2i24h3-tanjiro/huber-delta-tuning`

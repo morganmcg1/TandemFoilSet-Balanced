@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **As of:** 2026-05-16 01:45 UTC
+- **As of:** 2026-05-16 02:55 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r3`
 - **Research tag:** `willow-pai2i-24h-r3` (round 4 active)
 - **Most recent human research direction:** None received.
@@ -32,14 +32,14 @@ Key signals:
 
 | Student | PR | Slug | Hypothesis | Status |
 |---|---|---|---|---|
-| alphonse | #3590 | `lion-clip-sweep` | Clip values {0.25, 0.5, 2.0} vs current clip=1.0 | **WIP (just assigned)** |
-| nezuko | #3592 | `deeper-model` | n_layers=7 and n_hidden=160 on new stack (63 GB headroom) | **WIP (just assigned)** |
-| tanjiro | #3596 | `lion-tmax-newbase` | T_max=19 to engage eta_min=1e-5 within bf16 budget | **WIP (just assigned)** |
-| fern | #3598 | `p-weight-surf-loss` | Per-channel p weighting in surf_loss (2× and 4×) | **WIP (just assigned)** |
-| frieren | #3604 | `lion-warmup-newbase` | Warmup on new stacked baseline — does clip make warmup redundant? | **WIP (just assigned)** |
-| edward | #3518 | `lion-tmax14` | T_max=14 on old Lion baseline (arm 3 running) | WIP — awaiting terminal |
+| alphonse | #3590 | `lion-clip-sweep` | Clip values {0.25, 0.5, 2.0} vs current clip=1.0 | **WIP — training** |
+| nezuko | #3592 | `deeper-model` | n_layers=7 and n_hidden=160 on new stack (63 GB headroom) | **WIP — training** |
+| tanjiro | #3596 | `lion-tmax-newbase` | T_max=19 to engage eta_min=1e-5 within bf16 budget | **WIP — training** |
+| fern | #3598 | `p-weight-surf-loss` | Per-channel p weighting in surf_loss (2× and 4×) | **WIP — training** |
+| frieren | #3604 | `lion-warmup-newbase` | Warmup on new stacked baseline — does clip make warmup redundant? | **WIP — training** |
+| edward | #3640 | `ema-weights` | EMA decay {0.999, 0.9999} — leverage descending val curve | **WIP (just assigned)** |
+| askeladd | #3641 | `bs-scaling` | Batch size {8, 12} — utilize 63 GB VRAM headroom | **WIP (just assigned)** |
 | thorfinn | #3541 | `lion-lr-wd-sweep` | Lion lr/wd sweep on old Lion baseline (arm 2 running) | WIP — awaiting terminal |
-| askeladd | #3385 | `warmup-cosine-stacked` | warmup2+clip50 on new Lion stack (rebase needed) | WIP — awaiting rebase |
 
 ## Current baseline (BASELINE.md)
 
@@ -48,6 +48,28 @@ Key signals:
 - W&B run: `f6lnbssy` (alphonse, group `bf16-stable`, PR #3427)
 - Stack: Lion + Huber δ=2.0 + bf16 + clip=1.0 + eta_min=1e-5
 - VRAM: 33 GB / 96 GB. Best epoch = final epoch 19. Val still descending at timeout.
+
+## Key research signals — round 5
+
+### Round-5 new assignments (just opened)
+
+| Priority | PR | Student | Hypothesis | Expected val |
+|---|---|---|---|---|
+| HIGH | #3590 | alphonse | Clip sweep (0.25, 0.5, 2.0) — find optimal clip | 63–70 |
+| HIGH | #3592 | nezuko | Deeper model (L=7, n_hidden=160) — use 63 GB headroom | 60–67 |
+| HIGH | #3596 | tanjiro | T_max=19 fix — engage eta_min floor | 64–68 |
+| MED | #3598 | fern | Per-channel p weighting (2×, 4×) | 64–69 |
+| MED | #3604 | frieren | Warmup on new stack — clip vs warmup redundancy test | 67–70 |
+| MED | #3640 | edward | EMA decay sweep {0.999, 0.9999} — descending val = EMA headroom | 67–70 |
+| MED | #3641 | askeladd | Batch size {8, 12} — 63 GB VRAM headroom + Lion sign reliability | 65–70 |
+| LOW | #3541 | thorfinn | Lion lr/wd sweep (old baseline, diagnostic only) | 90–100 |
+
+### Closed round-4 experiments
+
+| PR | Student | Result | Decision |
+|---|---|---|---|
+| #3518 | edward | val=83.45 (old Lion T_max=14) | Closed — direction confirmed, superseded by tanjiro #3596 |
+| #3385 | askeladd | val=104.02 (warmup2+clip50, throughput-confounded) | Closed — clip=1.0 is correct regime; per-epoch trajectory suggests clip=50 loses on budget |
 
 ## Key research signals — round 4
 
