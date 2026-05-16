@@ -1,5 +1,55 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 20:35 — PRs #4112 + #4108 closed; #4140 + #4143 assigned
+
+### #4112 thorfinn DSDF-norm input feature — **CLOSED** (val regress +2.57%)
+
+- **Student:** willowpai2i48h4-thorfinn (branch: `willowpai2i48h4-thorfinn/thorfinn-dsdf-norm-feature`)
+- **Hypothesis:** Add mean-abs DSDF across 8 DSDF channels as a per-point input feature so the encoder conditions directly on local geometry curvature.
+- **Result:** val=52.2107 (+2.57% vs 50.90), test=45.4115 (+3.45%). All 4 test splits regressed; OOD camber splits worst (cruise +7.35%, rc +3.85%). W&B run: `fp0x1cre`.
+
+| Split | Baseline | This run | Δ% |
+|---|---:|---:|---:|
+| val_avg | 50.9008 | 52.2107 | **+2.57%** |
+| test_avg | 43.8989 | 45.4115 | **+3.45%** |
+| single_in_dist | 48.97 | 49.31 | +0.71% |
+| geom_camber_rc | 55.45 | 57.59 | +3.85% |
+| geom_camber_cruise | 28.27 | 30.34 | **+7.35%** |
+| re_rand | 42.91 | 44.40 | +3.48% |
+
+- **Analysis (student's own):** Three mechanisms: (1) feature is redundant with existing 8-channel DSDF; (2) scale mismatch — appended after normalization, so it lives on a different scale than the 38 normalized channels; (3) OOD distribution shift — DSDF distribution changes across geom_camber test splits, making the new summary feature *less* generalized. Single-foil split (where gap=0 and no NACA-M asymmetry) still regressed +0.71%, ruling out NACA-M as cause. Epoch curve tracks baseline shape but lands ~1.3 val points higher.
+- **Takeaway:** Encoder's existing 8-channel DSDF already fully exposes curvature signal; scalar aggregate adds noise not signal. DSDF-based input features dead end on this architecture.
+- **Reassigned to #4143 n_head=8 retest.**
+
+### #4108 alphonse n_layers=6 bf16 retest — **CLOSED** (val=62.05, 30-min env cap)
+
+- **Student:** willowpai2i48h4-alphonse (branch: `willowpai2i48h4-alphonse/alphonse-n-layers-6-bf16`)
+- **Hypothesis:** depth=6 retest on bf16 stack — prior #4034 fp32 cut at ep9, bf16 should fit ep18 in 45-min cap.
+- **Result:** val=62.0481 (cut ep13/18), test=54.3179. W&B: `y07iuovw`. Pod env enforced 30-min cap; lr_factor=0.222 at cut (cosine not converged). +8.23 val gap to #3981, +11.15 to #4082.
+
+| Metric | This run (ep13, 30-min cap) | #3981 reference (depth=5, bf16, ep18) | #4082 target |
+|---|---:|---:|---:|
+| val_avg | 62.05 | 53.82 | 50.90 |
+| test_avg | 54.32 | 47.27 | 43.90 |
+
+- **Analysis:** Two compounding issues: depth=6 is ~140 s/epoch (vs 118 s for depth=5), and the 30-min env cap gives only ep13 vs ep16 for depth=5. lr_factor=0.222 at cut = significant residual training remaining. Student's trajectory shows strong descent (71.7→62.05 at ep12→ep13) but would need to recover 8 val points in the remaining epochs — not realistic as LR decays toward zero.
+- **Key finding recorded:** depth=6 is exhausted under 30-min wall budget. Not a refutation of depth — it's a compute-budget issue. Would need ≥45 min env to reach full cosine schedule.
+- **env/timeout finding:** alphonse's pod env enforces 30 min (student honored isolation rules, did not override inline). Thorfinn's pod env allows 39+ min (inline SENPAI_TIMEOUT_MINUTES=45 takes effect). Noting for future assignment budgeting.
+- **Reassigned to #4140 slice_num=96 retest.**
+
+### #4140 alphonse slice_num=96 retest — **ASSIGNED**
+
+- **Hypothesis:** slice_num=96 retest on new n_hidden=176+bf16+ep18 stack. Pre-SwiGLU found slice_num=64 optimal, but same "confirmed exhausted pre-SwiGLU" retest pattern produced the n_hidden=176 win (#4082). Wider model may leverage more spatial mixing tokens.
+- **Single arm:** `--slice_num 96 --n_hidden 176 --use_bf16 --epochs 18`
+- **Pairs with:** thorfinn #4143 n_head=8 (orthogonal axis: more tokens vs more heads)
+
+### #4143 thorfinn n_head=8 retest — **ASSIGNED**
+
+- **Hypothesis:** n_head=8 retest on new stack. Head-dim 44→22, more attention paths. Same retest-on-new-baseline pattern as n_hidden=176. Orthogonal to alphonse's slice_num test.
+- **Single arm:** `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`
+
+---
+
 ## 2026-05-16 20:10 — PR #4036 closed + #4129 assigned — Round-8 askeladd swap
 
 ### #4036 askeladd camber flip — **CLOSED** (clear regress)

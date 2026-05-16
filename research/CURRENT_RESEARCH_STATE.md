@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~20:10 UTC
+- **Last updated:** 2026-05-16 ~20:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -79,15 +79,15 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 
 ## Active in-flight PRs (status as of ~19:45 UTC)
 
-### Round-8 active (assigned 19:35–20:10 UTC, all on bf16 stack)
+### Round-8 active (assigned 19:35–20:35 UTC, all on bf16 stack)
 | # | Student | Hypothesis | State |
 |---|---|---|---|
 | **#4106** | fern | Push wider: n_hidden=192 + bf16 + ep18 | WIP |
-| **#4108** | alphonse | n_layers=6 retest with bf16 + ep18 (full cosine schedule) | WIP |
 | **#4110** | frieren | Curvature loss retest with sharpened proxy on new baseline | WIP |
 | **#4111** | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending at ep18) | WIP |
-| **#4112** | thorfinn | DSDF-norm as input feature (orthogonal to loss-weighting) | WIP |
-| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP (assigned 20:10) |
+| **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP |
+| **#4140** | alphonse | slice_num=96 retest on new baseline (architectural, orthogonal to n_head) | WIP (assigned 20:30) |
+| **#4143** | thorfinn | n_head=8 retest on new baseline (architectural, orthogonal to slice_num) | WIP (assigned 20:35) |
 
 ### Round-7 still in-flight (assigned earlier, results pending)
 | # | Student | Hypothesis | State |
@@ -95,7 +95,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4039** | edward | Multi-scale Fourier PE num_freq=8 | WIP |
 | **#4043** | nezuko | AdamW weight_decay sweep + eta_min | WIP (redirected 20:08 to new baseline stack) |
 
-### Round-7 results (resolved 19:30–20:10 UTC)
+### Round-7/8 results (resolved 19:30–20:35 UTC)
 | # | Student | Hypothesis | Outcome |
 |---|---|---|---|
 | **#4082** | fern | n_hidden=176 + bf16 + ep18 | **MERGED ~19:32** → new baseline val=50.90 / test=43.90 |
@@ -104,7 +104,9 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4042** | frieren | Curvature-weighted surface loss | CLOSED — real within-arm signal but absolute regress; retest assigned (#4110) |
 | **#4034** | alphonse | n_layers=6 (fp32, ep14) | CLOSED — under-trained (both arms cut at ep9); retest with bf16 assigned (#4108) |
 | **#4040** | fern | DropPath stochastic depth | CLOSED ~18:35 (val regress +5.1%/+8.8%) |
-| **#4036** | askeladd | Camber flip augmentation | CLOSED ~20:05 (val +20.1% / test +19.6% regress; root cause: NACA-M asymmetry can't be flipped; retest assigned as beta2 sweep #4129) |
+| **#4036** | askeladd | Camber flip augmentation | CLOSED ~20:05 (val +20.1% regress; root: NACA-M asymmetry unflippable; beta2 sweep #4129) |
+| **#4112** | thorfinn | DSDF-norm as input feature | CLOSED ~20:30 (val +2.57%, test +3.45%; OOD splits worst; encoder already has full DSDF) |
+| **#4108** | alphonse | n_layers=6 bf16 retest | CLOSED ~20:30 (val=62.05 cut ep13/18 @ 30-min env; depth=6 exhausted on 30-min budget; #4140 assigned) |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -130,16 +132,20 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 **Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing. Clip=3σ is a no-op. Tighter clip values (2.5, 2.0) would touch the surface-side tail near sharp leading/trailing edges.
 
-## Round-8 assignments (assigned 19:35–20:10 UTC, all build on the new n_hidden=176 + bf16 + ep18 baseline)
+## Round-8 assignments (assigned 19:35–20:35 UTC, all build on the new n_hidden=176 + bf16 + ep18 baseline)
 
-| PR | Student | Hypothesis | Key CLI / change |
-|---|---|---|---|
-| #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 | `--n_hidden 192 --use_bf16 --epochs 18`, T=50 |
-| #4108 | alphonse | n_layers=6 retest with bf16 + ep18 (depth-isolated, n_hidden=160) | `--n_layers 6 --use_bf16 --epochs 18`, T=45 |
-| #4110 | frieren | Curvature loss retest with sharpened proxy (squared DSDF-norm) on new baseline | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) |
-| #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 (curve still descending) | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 |
-| #4112 | thorfinn | DSDF-norm as input feature (orthogonal to frieren's loss-weighting) | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 |
-| #4129 | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | `--adam_beta2 0.95 / 0.98 --n_hidden 176 --use_bf16 --epochs 18`, T=45 (2 arms) |
+| PR | Student | Hypothesis | Key CLI / change | Status |
+|---|---|---|---|---|
+| #4106 | fern | Push wider: n_hidden=192 + bf16 + ep18 | `--n_hidden 192 --use_bf16 --epochs 18`, T=50 | WIP |
+| #4108 | alphonse | n_layers=6 retest with bf16 + ep18 | `--n_layers 6 --use_bf16 --epochs 18`, T=45 | CLOSED (val=62.05 undertrained at 30-min env) |
+| #4110 | frieren | Curvature loss retest with sharpened proxy | `--n_hidden 176 --use_bf16 --use_curvature_weight --epochs 18`, T=45 (2 arms) | WIP |
+| #4111 | tanjiro | Push to epochs=22 on n_hidden=176+bf16 | `--n_hidden 176 --use_bf16 --epochs 22`, T=55 | WIP |
+| #4112 | thorfinn | DSDF-norm as input feature | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 | CLOSED (val +2.57% regress) |
+| #4129 | askeladd | AdamW beta2 sweep (0.95, 0.98) | `--adam_beta2 0.95/0.98 --n_hidden 176 --use_bf16 --epochs 18`, T=45 (2 arms) | WIP |
+| **#4140** | alphonse | slice_num=96 retest on new baseline | `--slice_num 96 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
+| **#4143** | thorfinn | n_head=8 retest on new baseline | `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP (new) |
+
+**Note on env timeout:** alphonse's pod enforces 30-min wall (per #4108); thorfinn's pod ran 39 min fine. Instructions include `SENPAI_TIMEOUT_MINUTES=45` inline as override. If alphonse's pod still caps at 30 min for #4140, best-checkpoint result at ep13-14 is still directional.
 
 Deferred to round-9 (backlog):
 - SAM optimizer (rho=0.05) — costly; screen at epochs=10 first
@@ -148,7 +154,7 @@ Deferred to round-9 (backlog):
 - Stacking interactions: depth + width, curvature loss + DSDF feature, etc.
 - Mixup-style geometry blending across samples
 - Stronger curvature proxy variants (gradient of DSDF, learned curvature head)
-- EMA of weights, slice_num=96/128 (architecture)
+- EMA of weights
 
 ## Potential next research directions (post-round-8)
 
