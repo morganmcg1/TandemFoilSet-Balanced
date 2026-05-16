@@ -1019,6 +1019,36 @@ Two arms: naive (+91% wall), fused F.rms_norm (+53% wall). Fused arm: 9 epochs r
 
 **Verdict**: CLOSED. Full RMSNorm axis closed. "Channel-mean preservation" question survives as a separate test.
 
+## 2026-05-16 04:26 — Loop 10: PR #3620 edward depth-nlayers7 CLOSED
+
+- **Student branch**: `charliepai2i24h1-edward/depth-nlayers7`
+- **Hypothesis**: n_layers 5→7 increases representational capacity; predicted biggest improvement on val_geom_camber_rc (the split that improved least from narrow+bf16 win).
+- **Result**: val_avg = 132.9310 (+19.0% regression), test_avg = 119.677 (+20.5% regression).
+
+| Split | n_layers=7 | Baseline (n_layers=5) | Delta |
+|---|---|---|---|
+| val_single_in_dist | 167.05 | 133.64 | +25.0% worse |
+| val_geom_camber_rc | 143.33 | 121.33 | +18.1% worse |
+| val_geom_camber_cruise | 102.33 | 88.92 | +15.1% worse |
+| val_re_rand | 119.02 | 103.10 | +15.4% worse |
+| **val_avg** | **132.93** | **111.75** | **+19.0% worse** |
+
+- n_params: 904,671 (+36.6% vs 662,359 baseline)
+- peak_memory_gb: 44.91 (+36.3% vs 32.95)
+- per-epoch wall time: ~135 s (+38.8% vs ~98 s)
+- realized epochs: 13/13 (budget-aligned) vs baseline 18/18
+- Metric artifacts: `models/model-depth-nlayers7-20260516-032429/metrics.jsonl`
+
+**Analysis**: Two effects confounded. (1) Budget compression: +38.8% per-epoch cost → 13 realized epochs vs 18 for baseline. Trajectory still descending at -3.25/epoch at end of cosine schedule — not converged. (2) Per-split signature falsifies the hypothesis directly: camber_rc regressed the SAME ~18% as the other splits, not less. If depth were specifically helpful for camber_rc, we'd expect camber_rc to lag the others LESS at the equivalent training step. We see the opposite — single_in_dist held up best in relative terms.
+
+**Conclusion**: depth is NOT the binding capacity lever for camber_rc at n_hidden=128. Close the depth axis at this width. Depth can only be revisited with reduced slice_num/batch_size to recover per-epoch budget.
+
+**Verdict**: CLOSED. Depth axis closed (n_hidden=128 budget). Data-side and slice-mechanism levers are the remaining architectural options.
+
+## 2026-05-16 — Loop 10: New dispatch #3676
+
+- **#3676 edward slice-num-48**: slice_num 64→48 at narrow+bf16 baseline. Tests whether slice_num=64 is over-parameterized at the narrow trunk. Reduces per-epoch compute (~-15%), enabling ~21 epochs vs the baseline's 18 — more cosine completion with zero budget penalty. If 48≈64 quality, slice mechanism has slack; if 48 regresses, validates #3500 "slice is capacity-bottlenecked" finding and the next move is slice_num=96. Budget-adjusted epochs=21 (est. ~85s/ep × 21 ≈ 30 min).
+
 ## 2026-05-16 — Loop 7: New dispatches #3620, #3621, #3624
 
 - **#3620 edward depth-nlayers7**: n_layers 5→7 at narrow+bf16 baseline. camber_rc improved least (-4.7%) from the big win — testing whether it's capacity-limited. Budget-adjusted epochs=13 (est. 137s/ep × 13 ≈ 30 min).
