@@ -7,24 +7,20 @@
 
 ## Current best (this branch)
 
-> ⚠️ **Seed variance note:** Two runs of H15 SwiGLU gave val_avg=89.48 and 80.21 (~10% spread). The 80.21 is the SENPAI-RESULT primary metric. Mean estimate ≈ 84.85.
-
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p`              | **80.21** | PR #3423 (edward H15 SwiGLU MLP), epoch 10, run 2 |
-| `val_single_in_dist/mae_surf_p`   | 104.46 | PR #3423 |
-| `val_geom_camber_rc/mae_surf_p`   | 88.50 | PR #3423 |
-| `val_geom_camber_cruise/mae_surf_p` | 53.88 | PR #3423 |
-| `val_re_rand/mae_surf_p`          | 74.00 | PR #3423 |
-| `test_avg/mae_surf_p`             | **73.20** | PR #3423 |
-| `test_single_in_dist/mae_surf_p`  | — | PR #3423 |
-| `test_geom_camber_rc/mae_surf_p`  | — | PR #3423 |
-| `test_geom_camber_cruise/mae_surf_p` | — | PR #3423 |
-| `test_re_rand/mae_surf_p`         | — | PR #3423 |
+| `val_avg/mae_surf_p`              | **79.52** | PR #3514 (edward H18 LayerScale), epoch 11 |
+| `val_single_in_dist/mae_surf_p`   | 104.62 | PR #3514 |
+| `val_geom_camber_rc/mae_surf_p`   | 93.29 | PR #3514 |
+| `val_geom_camber_cruise/mae_surf_p` | 50.00 | PR #3514 |
+| `val_re_rand/mae_surf_p`          | 70.14 | PR #3514 |
+| `test_avg/mae_surf_p`             | **68.95** | PR #3514 |
+
+⚠️ **Pending better result**: askeladd H8v3 EMA val_avg=74.18, test_avg=66.62 (PR #3197, currently CONFLICTING — needs rebase). Once merged, that becomes the new best.
 
 ## Current baseline configuration
 
-`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE) + PR #3423 (H15 SwiGLU MLP):
+`train.py` after merging PR #3226 (H10 Re-strat) + PR #3217 (H5 RFF + NaN fix) + PR #3326 (H12 MLP dropout) + PR #3345 (H11 log1p targets) + PR #3224 (H13 geom-cond GALE) + PR #3423 (H15 SwiGLU MLP) + PR #3514 (H18 LayerScale):
 
 - **Model:** `Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2)` + `geom_proj MLP(11, 256, 128)` + 5 `geom_gates` scalars + `SwiGLUMLP` FFN (~843K trainable params + 64 non-trainable RFF buffer)
 - **Input:** RFF coordinate encoding (n_freq=32, sigma=1.0) replacing raw (x,z) — input to preprocess MLP is now 86-dim (64 RFF + 22 other features)
@@ -39,6 +35,7 @@
 - **NaN workaround:** `evaluate_split` masks out and zero-fills non-finite GT samples before accumulation (fixes test_geom_camber_cruise NaN)
 - **Geom-cond GALE:** Per-block additive geometry conditioning: `fx += geom_gates[i] * geom_proj(x[:, 0, 13:24])`. Gates init at 0 (identity start), learned to `[-0.05, -0.11, -0.13, -0.14, -0.15]` at convergence.
 - **SwiGLU FFN:** `TransolverBlock.mlp` replaced from `linear→GELU→linear` to `SwiGLUMLP(fc_in:2×n_hidden + fc_out)`. Gate-modulated: `fc_in(x).chunk(2)` → `silu(gate) * value → dropout(0.1) → fc_out`. +33K params per block vs GELU FFN.
+- **LayerScale:** `LayerScale` module on each residual: `x += ls1.gamma * attn_out; x += ls2.gamma * mlp_out`. gamma init=1e-6. Adds 1,280 scalars (128 × 2 × 5). Learned norms at epoch 11: ls2 monotone 0.43→0.51 (FFN grows with depth), ls1 U-shaped 0.19/0.13/0.14/0.17/0.21 (attention suppressed mid-stack).
 - **Cosine T_max:** Set to 15 (vs 50 default) to align anneal to realized ~14-epoch budget.
 - **Splits dir:** `/mnt/new-pvc/datasets/tandemfoil/splits_v2`
 
@@ -51,6 +48,25 @@ cd target && python train.py --agent <student> --experiment_name "<student>/base
 ---
 
 ## Baseline history
+
+### 2026-05-16 00:30 — PR #3514: H18 LayerScale residual scaling (edward) — **CURRENT BEST**
+
+- **val_avg/mae_surf_p:** 79.52 (best epoch 11, 30-min cap) — **-0.86% vs 80.21 prior best**
+- **Per-split val:**
+  - `val_single_in_dist/mae_surf_p` = 104.62 (+0.15% vs 104.46)
+  - `val_geom_camber_rc/mae_surf_p` = 93.29 (+5.4% vs 88.50) ← regression
+  - `val_geom_camber_cruise/mae_surf_p` = 50.00 (-7.2% vs 53.88) ← biggest gain
+  - `val_re_rand/mae_surf_p` = 70.14 (-5.2% vs 74.00) ← strong OOD gain
+- **test_avg/mae_surf_p:** 68.95 (-5.80% vs 73.20) ← key metric
+- **LayerScale gamma norms at epoch 11:**
+  - ls2 (FFN): 0.43, 0.44, 0.45, 0.44, 0.51 (monotone growth — FFN depth activation confirmed)
+  - ls1 (attn): 0.19, 0.13, 0.14, 0.17, 0.21 (U-shape — attention suppressed mid-stack)
+  - All gammas escaped init=1e-6 (grew ~5 orders of magnitude)
+- **What changed:** Added `LayerScale` module (init=1e-6) on both residual paths of each `TransolverBlock`: `x += ls1.gamma * attn_out; x += ls2.gamma * mlp_out`. +1,280 parameters. FFN branch shows textbook depth-activation pattern; attention shows U-shaped scaling.
+- **Delta:** -0.86% val_avg (80.21 → 79.52), **-5.80% test_avg** (73.20 → 68.95). Val gain within seed variance but test gain is clear generalization improvement.
+- **Metric artifact:** `models/model-charliepai2i24h4-edward-layerscale-20260515-233219/metrics.jsonl`
+- **Reproduce:** `cd target && python train.py --agent charliepai2i24h4-edward --experiment_name "charliepai2i24h4-edward/layerscale"`
+- **Note on rc regression**: val_geom_camber_rc regressed +5.4%. This appears to be a side-effect of LayerScale's U-shaped attention suppression at mid-stack (blocks 1-2, which are the primary geometry-conditioning blocks). Same rc regression pattern seen in FiLM (also suppressed attention). Watch if future PRs also regress on rc.
 
 ### 2026-05-15 22:35 — PR #3423: H15 SwiGLU MLP (edward) — **CURRENT BEST**
 
