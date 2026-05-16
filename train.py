@@ -454,6 +454,9 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "huber_delta_vol": 0.10,
+        "huber_delta_surf_uxuy": 0.10,
+        "huber_delta_surf_p": 0.05,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -476,6 +479,12 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# Per-channel Huber δ (PR #3574): δ_p=0.05 on surface-p only;
+# δ=0.10 unchanged on surface-Ux/Uy and on every volume channel.
+HUBER_DELTA_VOL = 0.10
+HUBER_DELTA_SURF_UXUY = 0.10
+HUBER_DELTA_SURF_P = 0.05
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -484,6 +493,10 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm = 0.0
+    epoch_surf_p_q_frac = 0.0       # fraction |r_p| < δ_p on surface
+    epoch_surf_uxuy_q_frac = 0.0    # fraction |r_Ux|,|r_Uy| < δ on surface
+    epoch_mean_abs_surf_p = 0.0     # mean |r_p| on surface (normalized space)
     n_batches = 0
 
     train_loop_t0 = time.time()
@@ -497,24 +510,50 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+            # δ=0.10 covers volume (all 3 ch) and surface Ux/Uy (ch 0,1).
+            err_d10 = F.huber_loss(pred, y_norm, delta=HUBER_DELTA_VOL, reduction="none")  # [B, N, 3]
+            # δ=0.05 only for surface-p (ch 2); volume-p still uses δ=0.10 via err_d10.
+            err_d05_p = F.huber_loss(
+                pred[..., 2:3], y_norm[..., 2:3], delta=HUBER_DELTA_SURF_P, reduction="none"
+            )  # [B, N, 1]
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_mask_3d = vol_mask.unsqueeze(-1)
             surf_mask_3d = surf_mask.unsqueeze(-1)
-            vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-            surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
+            vol_loss = (err_d10 * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
+            surf_err = torch.cat([err_d10[..., :2], err_d05_p], dim=-1)  # [B, N, 3]
+            surf_loss = (surf_err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+
+        # Per-channel surface-residual diagnostics (no autocast — float32 for clean stats).
+        with torch.no_grad():
+            abs_r = (pred.float() - y_norm.float()).abs()
+            surf_b = surf_mask.unsqueeze(-1)  # [B, N, 1] bool
+            n_surf_nodes = surf_mask.sum().item()
+            if n_surf_nodes > 0:
+                in_q_p = ((abs_r[..., 2:3] < HUBER_DELTA_SURF_P) & surf_b).float().sum().item()
+                in_q_uxuy = ((abs_r[..., :2] < HUBER_DELTA_SURF_UXUY) & surf_b).float().sum().item()
+                sum_abs_p = (abs_r[..., 2:3] * surf_b.float()).sum().item()
+                epoch_surf_p_q_frac += in_q_p / n_surf_nodes
+                epoch_surf_uxuy_q_frac += in_q_uxuy / (2.0 * n_surf_nodes)
+                epoch_mean_abs_surf_p += sum_abs_p / n_surf_nodes
+
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": float(grad_norm),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_grad_norm += float(grad_norm)
         n_batches += 1
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -523,6 +562,10 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm /= max(n_batches, 1)
+    epoch_surf_p_q_frac /= max(n_batches, 1)
+    epoch_surf_uxuy_q_frac /= max(n_batches, 1)
+    epoch_mean_abs_surf_p /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -539,6 +582,10 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_mean": epoch_grad_norm,
+        "train/surf_p_huber_quadratic_fraction": epoch_surf_p_q_frac,
+        "train/surf_uxuy_huber_quadratic_fraction": epoch_surf_uxuy_q_frac,
+        "train/mean_abs_surf_p_residual": epoch_mean_abs_surf_p,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
