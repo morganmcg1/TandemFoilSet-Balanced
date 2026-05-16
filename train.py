@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import os
 import random
 import statistics
@@ -467,6 +468,7 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    ema_decay: float = 0.999  # EMA decay for parallel weight tracking; eval at end of training
 
 
 cfg = sp.parse(Config)
@@ -517,6 +519,15 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+
+# EMA shadow copy of the model — updated every optimizer step with decay-weighted
+# average of live params. Evaluated at the end of training only; live model is
+# used for validation during training (PR #4121 instructions).
+ema_model = copy.deepcopy(model)
+ema_model.eval()
+for p in ema_model.parameters():
+    p.requires_grad_(False)
+
 n_params = sum(p.numel() for p in model.parameters())
 n_ffn_params = sum(
     p.numel() for n, p in model.named_parameters()
@@ -571,6 +582,8 @@ _betas_per_group = [tuple(g["betas"]) for g in optimizer.param_groups]
 print(f"AdamW betas per group: {_betas_per_group}")
 run.summary["optim/betas"] = list(_betas_per_group[0])
 run.summary["optim/n_param_groups"] = len(_betas_per_group)
+run.summary["ema_decay"] = cfg.ema_decay
+print(f"EMA decay: {cfg.ema_decay}")
 
 # Rolling buffer for per-step train losses to compute volatility (window=100).
 _train_loss_window: deque[float] = deque(maxlen=100)
@@ -612,6 +625,11 @@ for epoch in range(MAX_EPOCHS):
             model.parameters(), max_norm=float("inf")
         )
         optimizer.step()
+        with torch.no_grad():
+            for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                ema_p.lerp_(p, 1.0 - cfg.ema_decay)
+            for ema_buf, buf in zip(ema_model.buffers(), model.buffers()):
+                ema_buf.copy_(buf)
         global_step += 1
         loss_val = loss.item()
         _train_loss_window.append(loss_val)
@@ -704,6 +722,7 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_loaders = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -728,6 +747,50 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    # --- EMA model evaluation (PR #4121) ---
+    print(f"\nEvaluating EMA model (decay={cfg.ema_decay}) on val splits...")
+    ema_model.eval()
+    ema_val_metrics = {
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    ema_val_avg = aggregate_splits(ema_val_metrics)
+    print(f"\n  EMA VAL  avg_surf_p={ema_val_avg['avg/mae_surf_p']:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(f"ema_{name}", ema_val_metrics[name])
+
+    ema_log: dict[str, float] = {}
+    for split_name, m in ema_val_metrics.items():
+        for k, v in m.items():
+            ema_log[f"ema_val/{split_name}/{k}"] = v
+    for k, v in ema_val_avg.items():
+        ema_log[f"ema_val_{k}"] = v
+
+    if not cfg.skip_test and test_loaders is not None:
+        print(f"\nEvaluating EMA model on held-out test splits...")
+        ema_test_metrics = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        ema_test_avg = aggregate_splits(ema_test_metrics)
+        print(f"\n  EMA TEST avg_surf_p={ema_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(f"ema_{name}", ema_test_metrics[name])
+
+        for split_name, m in ema_test_metrics.items():
+            for k, v in m.items():
+                ema_log[f"ema_test/{split_name}/{k}"] = v
+        for k, v in ema_test_avg.items():
+            ema_log[f"ema_test_{k}"] = v
+
+    wandb.log(ema_log)
+    wandb.summary.update(ema_log)
+
+    # Persist EMA weights alongside best raw checkpoint so they're recoverable.
+    ema_path = model_dir / "ema_checkpoint.pt"
+    torch.save(ema_model.state_dict(), ema_path)
+    print(f"Saved EMA weights to {ema_path}")
 
     save_model_artifact(
         run=run,
