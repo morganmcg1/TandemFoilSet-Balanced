@@ -82,8 +82,9 @@ class MLP(nn.Module):
 
 
 class SwiGLU(nn.Module):
-    # SwiGLU(x) = W2( SiLU(W1 x) * (V x) ). Param-matched to GELU FFN when
-    # hidden_inner ≈ (2/3) * (mlp_ratio * n_hidden).
+    # SwiGLU(x) = W2( Mish(W1 x) * (V x) ). Mish gate replaces SiLU on the gate
+    # path only (PR #3872, activation curvature probe). Param-matched to GELU
+    # FFN when hidden_inner ≈ (2/3) * (mlp_ratio * n_hidden).
     def __init__(self, n_hidden, hidden_inner):
         super().__init__()
         self.W1 = nn.Linear(n_hidden, hidden_inner, bias=False)
@@ -91,7 +92,7 @@ class SwiGLU(nn.Module):
         self.W2 = nn.Linear(hidden_inner, n_hidden, bias=False)
 
     def forward(self, x):
-        return self.W2(F.silu(self.W1(x)) * self.V(x))
+        return self.W2(F.mish(self.W1(x)) * self.V(x))
 
 
 class PhysicsAttention(nn.Module):
