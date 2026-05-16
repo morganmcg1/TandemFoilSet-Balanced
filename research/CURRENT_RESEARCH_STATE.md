@@ -1,48 +1,67 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 18:30 UTC
+- **Last updated:** 2026-05-16 18:45 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 18:30 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 18:45 UTC)
 
-## Current best baseline (after fern #3854 merge — MASSIVE WIN)
+## Current best baseline (after fern #4062 merge — second consecutive fern WIN)
 
 | Metric | Value | Source |
 |---|---|---|
-| `val_avg/mae_surf_p` | **57.6953** | PR #3854 fern (slice=16 + δ=0.5, run `bg8etivu`) |
-| `test_3split/mae_surf_p` | **56.8613** | PR #3854 fern |
+| `val_avg/mae_surf_p` | **56.8954** | PR #4062 fern (slice=8 + δ=0.5, run `vzpgr8us`) |
+| `test_3split/mae_surf_p` | **55.9817** | PR #4062 fern |
 
-Per-split val (PR #3854):
+Per-split val (PR #4062 vs PR #3854 slice=16):
 
-| Split | mae_surf_p | Δ vs #3924 baseline |
+| Split | mae_surf_p | Δ vs slice=16 |
 |---|---|---|
-| val_single_in_dist | 65.990 | −4.95% |
-| val_geom_camber_rc | 71.815 | −3.24% |
-| val_geom_camber_cruise | 38.006 | −6.17% |
-| val_re_rand | 54.970 | −7.45% |
+| val_single_in_dist | 66.966 | +1.48% ⚠️ |
+| val_geom_camber_rc | 70.071 | −2.43% |
+| val_geom_camber_cruise | 35.324 | −7.06% |
+| val_re_rand | 55.221 | +0.46% |
 
 Reproduce:
 ```bash
 cd target/ && python train.py \
   --grad_clip 5.0 --huber_delta 0.5 --ema_decay 0.99 --asinh_p_scale 1.0 \
   --use_swiglu --mlp_ratio 1.333 --n_head 2 --asinh_vel_scale 0.5 \
-  --slice_num 16 \
+  --slice_num 8 \
   --agent <student>
 ```
 
 **NO SGDR** in current baseline. Frieren #4013 confirmed SGDR+δ=0.5 super-compound conflicts.
 
+**IMPORTANT**: The 7 in-flight PRs below were all submitted against the previous (slice=16, val=57.6953) baseline. Their results must now be compared against the **new slice=8 baseline (val=56.8954, test=55.9817)** for merge eligibility. The decision tree on review:
+- If a PR result beats val=56.8954 AND test=55.9817 → merge (compounds with slice=8).
+- If a PR result beats val=57.6953 only (slice=16 baseline) but NOT val=56.8954 → mechanism real, send back for re-test on slice=8 baseline.
+- If a PR result fails to beat val=57.6953 → close (mechanism doesn't even work on old baseline).
+
 ## Active PRs (8 WIP, 0 idle — zero idle GPUs)
 
-| PR | Student | Hypothesis | Status | Brief / Mechanism |
-|----|---------|-----------|--------|------------------|
-| #4062 | fern | slice_num=8 | WIP | Direct axis extension; 64→32 (−3.02%), 32→16 (−5.16%) accelerating |
-| #4065 | frieren | SGDR T_0=15 single-cycle | WIP | Frieren's own suggested follow-up; removes restart-bump that killed PR #4013 |
-| #4066 | thorfinn | slice_num=12 | WIP | Conservative midpoint; brackets fern's slice=8 |
-| #4067 | alphonse | AdamW β2=0.95 | WIP | Faster 2nd-moment EMA adaptation for short-budget training (RoBERTa intuition) |
-| #4074 | askeladd | n_hidden=192 (1.5× width) | WIP | More channels per slice token to compensate for slice=16 spatial coarsening |
-| #4075 | edward | RMSNorm vs LayerNorm | WIP | Preserve surface/volume scale contrast in feature norms (Llama-2 intuition) |
-| #4076 | nezuko | SWA tail averaging (last 5 EMA) | WIP | Flatter-minimum generalization via cross-epoch checkpoint averaging |
-| #3877 | tanjiro | temperature_init=0.1 on slice=16 | WIP — rebase | Mechanism real (-1.86% to -3.20%); needs re-test on new baseline |
+| PR | Student | Hypothesis | Submitted Against | Brief / Mechanism |
+|----|---------|-----------|-------------------|-------------------|
+| #4080 | fern | **slice_num=4** (saturation test) | NEW slice=8 baseline | Extends winning axis; brackets the slice optimum with thorfinn's #4066 |
+| #4065 | frieren | SGDR T_0=15 single-cycle | slice=16 baseline | Frieren's own follow-up; removes restart-bump that killed PR #4013 |
+| #4066 | thorfinn | slice_num=12 | slice=16 baseline | Conservative midpoint; with new #4080 brackets slice axis at {4,8,12,16} |
+| #4067 | alphonse | AdamW β2=0.95 | slice=16 baseline | Faster 2nd-moment EMA adaptation (RoBERTa intuition) |
+| #4074 | askeladd | n_hidden=192 (1.5× width) | slice=16 baseline | More channels per slice token to compensate for spatial coarsening |
+| #4075 | edward | RMSNorm vs LayerNorm | slice=16 baseline | Preserve surface/volume scale contrast (Llama-2 intuition) |
+| #4076 | nezuko | SWA tail averaging (last 5 EMA) | slice=16 baseline | Flatter-minimum generalization via cross-epoch checkpoint averaging |
+| #3877 | tanjiro | temperature_init=0.1 | slice=16 baseline | Mechanism real (-1.86% to -3.20%); needs re-test on slice=8 if wins |
+
+## Round-12 results (18:30 UTC)
+
+| PR | Student | Hypothesis | val | test_3split | Action |
+|----|---------|-----------|-----|-------------|--------|
+| **#4062** | **fern** | **slice_num=8** | **56.8954** | **55.9817** | ✓ **MERGED — NEW BASELINE** |
+
+Per-split signature for slice=8 win (vs slice=16):
+- val_single_in_dist: +1.48% (slight regression)
+- val_geom_camber_rc: −2.43% ✓
+- val_geom_camber_cruise: −7.06% ✓ (big OOD gain)
+- val_re_rand: +0.46% (~unchanged)
+
+Slice axis decelerating but alive: 64→32 (−3.02%), 32→16 (−5.16%), 16→8 (−1.39%). Coarser slicing trades in-dist precision for OOD-geometric generalization — textbook regularizing signature. Next datapoint (slice=4, PR #4080) tests the saturation point.
 
 ## Round-11 results (17:35 UTC, in summary)
 
@@ -60,7 +79,7 @@ cd target/ && python train.py \
 ## Key findings (cumulative)
 
 ### Merged stack progression
-136.89 → 90.61 → 66.61 → 64.34 → 63.74 → 61.61 → 60.89 → **57.70** (−57.85% total from seed; **sub-58 achieved**)
+136.89 → 90.61 → 66.61 → 64.34 → 63.74 → 61.61 → 60.89 → 57.70 → **56.90** (−58.43% total from seed; **sub-57 achieved**)
 
 ### What works on the full stack
 - EMA decay=0.99, grad_clip=5.0
@@ -69,7 +88,8 @@ cd target/ && python train.py \
 - n_head=2 wider per-head dim (dim_head=64)
 - vel-asinh scale=0.5 on Ux+Uy
 - Huber δ=0.5 (tighter quadratic transition; merged via PR #3901 alphonse)
-- **slice_num=16 (coarser slicing): val=57.70, test=56.86 (NEW)** — ~50 nodes per slice; biggest single win since SwiGLU
+- slice_num=16 (PR #3854): biggest single win since SwiGLU
+- **slice_num=8 (PR #4062): val=56.90, test=55.98 (NEW)** — ~100 nodes per slice; trades in-dist for OOD gains
 
 ### Confirmed mechanisms with broad-split improvement (pending re-test on new baseline)
 - **temperature_init=0.1** (tanjiro #3877): −2.62% val vs alphonse baseline; rebased to slice=16 (in-flight)
@@ -85,7 +105,7 @@ cd target/ && python train.py \
 
 ## Strategic outlook
 
-**Target**: val < 56 (we just broke sub-58 with fern's slice=16). Current: 57.70. Need −2.9% more.
+**Target**: val < 56. Current: 56.90. Need −1.6% more. (Test target: <55.0; current 55.98, need −1.8%.)
 
 ### Round-12 axes being explored in parallel (current PR slate)
 
