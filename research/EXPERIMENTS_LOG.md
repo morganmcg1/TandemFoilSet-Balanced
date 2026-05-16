@@ -1,5 +1,176 @@
 # SENPAI Research Results
 
+## 2026-05-16 10:10 — PR #3810: H: GeGLU activation ✓ MERGED (new programme best val=65.37 / test=61.68)
+
+- Branch: `willowpai2i48h1-tanjiro/geglu_activation`
+- Student: willowpai2i48h1-tanjiro
+
+### Results (W&B `db8bp8i8`, seed=0, h=128/T_max=15/bf16, GeGLU gate)
+
+| Metric | SwiGLU (PR #3680) | GeGLU (this) | Δ |
+|--------|:-----------------:|:------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **65.3704** | **−0.07** |
+| **test_avg/mae_surf_p** | **62.04** | **61.6819** | **−0.36** |
+
+### Per-split val (best epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 76.1988 |
+| val_geom_camber_rc | 77.2247 |
+| val_geom_camber_cruise | 46.4254 |
+| val_re_rand | 61.6328 |
+
+### Per-split test
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 66.3419 |
+| test_geom_camber_rc | 70.3427 |
+| test_geom_camber_cruise | 55.7412 |
+| test_re_rand | 54.3020 |
+
+### Mechanistic finding: gating architecture (not SiLU) is the lever
+
+**Theory (1) confirmed:** swapping SiLU → GELU in the gate moved val by only 0.07 and test by 0.36 — both within seed noise (σ̂≈1.54). GeGLU and SwiGLU are equivalent on this task. The gating mechanism (multiplicative `main × gate(x)` with 2 parallel projections) is what matters for CFD pressure fields, not the specific gate activation.
+
+**Param parity exact:** 663,429 == 663,429 (2/3 hidden ratio = 171 for both).
+
+**Convergence profile:** identical to SwiGLU (smooth 195→65 descent over 17 epochs). The gating-driven optimization landscape is similar regardless of the specific gate activation.
+
+### Merger rationale
+
+Per PR's own decision tree: val=65.37 < 65.44 (win threshold) in 63-68 tie band → merge. The 0.07 delta is statistical noise but the improvement direction is clean. New effective win threshold: val < 65.37.
+
+### Suggested follow-ups (tanjiro's recommendations, highly informative)
+
+1. **Bilinear gate (no activation):** if `main × gate(x)` with no nonlinearity also lands at ~65, then the multiplicative interaction alone is the lever — not even the gate's smoothness matters.
+2. **ReGLU (ReLU gate):** sharper/discontinuous gate. If regression, smooth gates matter; if same, any gate works.
+3. **GeGLU at h=192** — does gating still compound with capacity?
+4. **T_max tail:** epochs 16-17 gave only +0.12 improvement — cosine effectively done at epoch 16.
+
+---
+
+## 2026-05-16 09:30 — PR #3768: H: Inverse-LLRD + SwiGLU stacking ✗ CLOSED (anti-additive, +8.6 val regression) — BUT major mechanistic finding
+
+- Branch: `willowpai2i48h1-frieren/inverse-llrd-swiglu-stack`
+- Student: willowpai2i48h1-frieren
+
+### Results (W&B `ltkofn3r`, seed 0, h=128/T_max=15/bf16/SwiGLU + γ_inv=1.176)
+
+| Metric | SwiGLU-only (PR #3680) | + Inverse-LLRD | Δ |
+|--------|:----------------------:|:--------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **74.0067** | **+8.57** |
+| **test_avg/mae_surf_p** | **62.04** | **68.9819** | **+6.94** |
+
+### The major finding: gradient profile inversion under SwiGLU
+
+Per-group L2 grad norm at epoch 5 (averaged across batches in epoch):
+
+| Group | grad_norm | Rank |
+|-------|:---------:|:----:|
+| **head_and_embed** | **3.48** | 1 |
+| **block_4** (incl. pred mlp2) | **1.41** | 2 |
+| block_0 | 1.12 | 3 |
+| block_1 | 0.18 | 4 |
+| block_2 | 0.17 | 5 |
+| block_3 | 0.16 | 6 |
+
+**Under SwiGLU, the gradient bottleneck shifts OUTSIDE the block stack** — head_and_embed (preprocess MLP + placeholder) carries the dominant gradient signal, then block_4 (which contains the prediction head mlp2), then block_0. Middle blocks (1-3) are an order of magnitude lower.
+
+This **falsifies the GELU-era assumption** (PR #3722 evidence) that block_0 is the universal Transolver gradient bottleneck. The gradient profile inverted with the activation-function change.
+
+### Why inverse-LLRD failed
+
+Frieren's PR boosted block_0 by 1.92x (γ_inv=1.176^4). But block_0 ranks #3 in gradient mass under SwiGLU, while head_and_embed (rank #1) and block_4 (rank #2) received baseline LR. The boost was mis-targeted.
+
+Worse: the 1.92x LR on block_0 added optimizer noise without targeting the actual bottleneck, slowing convergence (val 188 → 74 over 17 ep, vs 188 → 65 for SwiGLU-only).
+
+### Implications for LR-scaling research
+
+1. **All GELU-era LR-stacking experiments are invalid under SwiGLU.** Inverse-LLRD (#3722, #3768), standard LLRD (#3642) — both assumed the block_0-dominant gradient profile.
+2. **New research directions opened by this diagnostic:**
+   - head_and_embed LR boost → assigned to askeladd (PR #3832)
+   - fc_gate within-block LR boost → assigned to frieren (PR #3840)
+   - BERT-style (top-high) LLRD → held for now (overlaps with head_and_embed boost)
+   - Re-do grad-norm probe at h=192 → held for thorfinn's #3764 result
+
+### Closure rationale
+
+Decision tree: val ≥ 68 = anti-additive stacking. Closing per recipe.
+
+But this is the most important diagnostic finding of the SwiGLU era. Three follow-up experiments directly motivated by it.
+
+---
+
+## 2026-05-16 09:30 — PR #3611: H: Per-channel surf_weight β_p=20 (h=192 retest) ✗ CLOSED (within noise, still below SwiGLU floor)
+
+- Branch: `willowpai2i48h1-edward/per_channel_surf_weight_p20`
+- Student: willowpai2i48h1-edward
+
+### Results (W&B `wp9ejp7u`, seed 0, h=192/slice=96/T_max=18/bf16, retest after #3562 merge)
+
+| Metric | h=192 baseline (#3562) | β_p=20 on h=192 | Δ vs h=192 baseline |
+|--------|:----------------------:|:---------------:|:------------------:|
+| val_avg/mae_surf_p | 86.81 | **86.5931** | −0.22 |
+| test_avg/mae_surf_p | 81.35 | **80.6548** | −0.70 |
+
+Single seed=0, well within h=192 σ̂≈2.97. Directionally positive but statistically tied.
+
+### Per-split (validation, best epoch 13)
+
+| Split | h=192 baseline | β_p=20 on h=192 | Δ | Note |
+|-------|:--------------:|:---------------:|:---:|:----:|
+| single_in_dist | 103.64 | 103.39 | −0.25 | flat |
+| **geom_camber_rc** | **98.01** | **95.61** | **−2.41** | **IMPROVED** |
+| geom_camber_cruise | 65.11 | 67.37 | +2.25 | slight regression |
+| re_rand | 80.47 | 80.01 | −0.47 | flat |
+
+### The capacity-interaction finding
+
+| Metric | h=128+GELU (3-run mean) | h=192+GELU (single seed) |
+|--------|:-----------------------:|:------------------------:|
+| val_avg Δ | +0.69 (≈0.4σ noise) | −0.22 (≈0.07σ noise) |
+| rc Δ | **+3.32 (REGRESSED)** | **−2.41 (IMPROVED)** |
+| cruise Δ | −0.59 (slight) | +2.25 (regression) |
+
+**The rc sign-flip between h=128 (regression) and h=192 (improvement)** is the most interesting signal. Per-channel surface weighting interacts with model capacity: wider models redistribute the extra p-gradient mass productively. Narrow models cannot absorb it.
+
+### Diagnostics
+
+Per-channel gradient norms verified (β/α=2 → realized ratio 2.12 → 2.46 over training). No Ux/Uy starvation. Param-group construction correct.
+
+### Closure rationale
+
+vs new SwiGLU baseline (65.44/62.04): val 86.59 / test 80.65 is 21pt above floor — dead in GELU regime. Even confirmed h=192+GELU+β_p=20 win cannot beat SwiGLU. Student's own read: "lean close rather than merge".
+
+### Follow-up: PR #3837 β_p=20 + SwiGLU
+
+The capacity-interaction finding suggests SwiGLU (per-token selectivity = another form of "capacity") may compound with per-channel weighting. Edward assigned to test β_p=20 + SwiGLU at h=128/seed=0.
+
+---
+
+## 2026-05-16 09:30 — PR #3735: H: h=192 4-seed variance characterization ✗ CLOSED (lower-priority pivot)
+
+- Branch: `willowpai2i48h1-askeladd/h192-baseline-variance`
+- Student: willowpai2i48h1-askeladd
+
+### Status
+
+3+ hours since assignment (06:27 UTC) with zero comments. Harness flagged stale_wip.
+
+### Closure rationale
+
+NOT a performance close. The original h=192 variance characterization was high-value when h=192/GELU was the merged baseline. After PR #3680 (SwiGLU val=65.44), h=192+GELU dropped from "current best" to "old GELU regime" — variance characterization for an obsolete baseline is no longer the highest-value use of GPU time.
+
+The canonical noise floor we need now is σ̂(SwiGLU), which fern #3765 is already establishing.
+
+### Reassignment: PR #3832 head_and_embed LR boost on SwiGLU
+
+Direct follow-up to frieren's just-closed #3768 mechanistic finding. Askeladd's variance-characterization rigor (per-group LR + per-group grad_norm logging) is exactly the skill set needed.
+
+---
+
 ## 2026-05-16 08:35 — PR #3678: H: Dropout (attn_drop=proj_drop=0.1) on h=128+GELU (2-seed) ✗ CLOSED (null result)
 
 - Branch: `willowpai2i48h1-alphonse/dropout_regularizer`

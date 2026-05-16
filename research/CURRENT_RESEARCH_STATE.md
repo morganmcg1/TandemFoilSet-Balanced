@@ -1,10 +1,10 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 08:35
-- **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU era; new all-time best 65.44)
+- **Date:** 2026-05-16 10:15
+- **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; new all-time best 65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
-- **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/SwiGLU, ~13ep at h=192+SwiGLU)
-- **Latest direction from human team:** None (no open issues as of 08:35)
+- **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN, ~13ep at h=192+gated-FFN)
+- **Latest direction from human team:** None (no open issues scoped to this launch)
 
 ## Research contract
 
@@ -14,15 +14,22 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 
 | Config | val_avg | test_avg | Source | Note |
 |--------|---------|---------|--------|------|
-| **h=128+SwiGLU (PROGRAMME BEST)** | **65.44** | **62.04** | PR #3680, W&B `8on2llcv`, seed=0 | Requires `--use_swiglu` + h=128/T_max=15 override |
+| **h=128+GeGLU (PROGRAMME BEST)** | **65.3704** | **61.6819** | PR #3810, W&B `db8bp8i8`, seed=0 | `--use_geglu` + h=128/T_max=15 override |
+| h=128+SwiGLU (former best) | 65.44 | 62.04 | PR #3680, W&B `8on2llcv`, seed=0 | GeGLU ≈ SwiGLU (statistical tie) |
 | h=192+GELU (advisor default) | 86.81 | 81.35 | PR #3562 | Current train.py default |
 | h=128+GELU μ̂ (canonical) | 90.77 ± 1.54 | 85.85 ± 0.67 | PR #3546 | Old 4-seed canonical |
 
-**⚠️ Two unresolved questions before declaring a new canonical:**
-1. **Seed reproducibility**: val=65.44 is single seed=0 — fern #3765 running seeds 1+2 to confirm
-2. **h=192 stacking**: does SwiGLU compound with capacity? — thorfinn #3764
+**Effective win threshold:** val < 65.37 (or test < 61.68).
 
-**Effective win threshold** (pending seed confirmation): val < 65.44 on the h=128+SwiGLU or h=192+SwiGLU config.
+**Key mechanistic insight from PR #3810 (GeGLU):** The gating architecture — not SiLU specifically — drives the +25pt gain. GeGLU and SwiGLU are equivalent for CFD pressure prediction. The multiplicative `main × gate(x)` interaction is the lever. This opens the bilinear/ReGLU/gating-ablation research line.
+
+**Key mechanistic insight from PR #3768 (frieren):** Under SwiGLU, the gradient profile inverts — head_and_embed (3.48) > block_4 (1.41) > block_0 (1.12). Middle blocks (1-3) are ~0.17 (10× lower). All GELU-era LR-stacking experiments are invalid under SwiGLU; the block_0-dominant assumption was falsified.
+
+**Unresolved questions:**
+
+1. **Seed reproducibility:** val=65.37 is single-seed — fern #3765 running SwiGLU seeds 1+2. GeGLU has not been seed-confirmed yet.
+2. **h=192 stacking:** does gating compound with capacity? — thorfinn #3764 (SwiGLU+h=192).
+3. **grad bottleneck targeting:** head_and_embed LR boost (askeladd #3832) and fc_gate LR boost (frieren #3840) directly motivated by frieren's inversion finding.
 
 ## Merged PRs (all)
 
@@ -34,74 +41,88 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 | #3480 | bf16 autocast | 87.91 | 83.38 |
 | #3546 | Seed control + variance | μ̂=90.77, σ̂=1.54 | μ̂=85.85, σ̂=0.67 |
 | #3562 | h=192/slice=96/T_max=18 | 86.81 | 81.35 |
-| **#3680** | **SwiGLU activation** | **65.44** | **62.04** |
+| #3680 | SwiGLU activation | 65.44 | 62.04 |
+| **#3810** | **GeGLU activation (mechanistic isolation)** | **65.37** | **61.68** |
 
 ## Active WIP — 8/8 students (zero idle)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3764 | thorfinn | **h=192+SwiGLU stacking** | Running (2 seeds) |
+| #3764 | thorfinn | **h=192+SwiGLU stacking** | Running |
 | #3765 | fern | **SwiGLU h=128 seed confirm (seeds 1+2)** | Running |
-| #3768 | frieren | **Inverse-LLRD+SwiGLU stacking** | Running |
-| #3735 | askeladd | h=192 4-seed σ̂ variance char | Running |
-| **#3811** | **alphonse** | **Dropout 0.1 on h=128+SwiGLU (2-seed)** | **NEW — assigned 08:32 (follow-up to #3678)** |
-| #3611 | edward | Per-channel β_p=20 (rebasing onto h=192) | WIP (rebasing) |
-| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA on SwiGLU | WIP (rebasing onto SwiGLU; committed to option (a) at 08:22) |
-| **#3810** | **tanjiro** | **GeGLU activation (SiLU vs GELU gate ablation)** | **NEW — assigned 08:30** |
+| #3832 | askeladd | **head_and_embed LR boost 1.75x on SwiGLU** | Running (NEW — motivated by frieren's grad-norm inversion finding) |
+| #3811 | alphonse | **Dropout 0.1 on SwiGLU (2-seed)** | Running |
+| #3840 | frieren | **fc_gate LR boost 1.5x within SwiGLU blocks** | Running (NEW — surgical within-block LR targeting) |
+| #3837 | edward | **β_p=20 + SwiGLU stacking at h=128** | Running (NEW — capacity-interaction sign-flip finding) |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA on SwiGLU | WIP (rebasing) |
+| #3810 | tanjiro | GeGLU activation | ✓ MERGED (reassign pending) |
 
-## Recently closed PRs
+**Note:** tanjiro just finished #3810. Needs new assignment.
+
+## Recently closed PRs (this session)
 
 | PR | Hypothesis | val | Reason |
 |----|-----------|-----|--------|
-| **#3678** | **Dropout 0.1 on h=128+GELU (2-seed)** | **μ̂=90.27** | **2-seed mean within ±0.3σ of GELU μ̂=90.77 — null result. Follow-up: dropout+SwiGLU (PR #3811).** |
-| **#3724** | **Corrected h-flip (z-flip + Uy/AoA/gap sign-flip, skip cruise)** | **103.91** | **Catastrophic regression; per-split diagnostic decisive. Ground-effect physics breaks z-symmetry — 3rd z-flip-class failure.** |
-| #3721 | DropPath rate=0.1 | 92.06 | Regression on h=128 GELU; regularization not the bottleneck |
-| #3722 | Inverse-LLRD γ_inv=1.176 | 88.03 | 1σ win on GELU but far above SwiGLU 65.44. Queued as #3768 on SwiGLU. |
-| #3642 | LLRD γ=0.85 | 92.45 | Inverted gradient profile; block_0 needs highest LR |
-| #3566 | unified_pos=True | 102.63 | Encoding mismatch in 2D asymmetric flow |
-| #3574 | Per-channel Huber-δ | 91.78 | Loss-formulation lever exhausted |
+| **#3768** | **Inverse-LLRD+SwiGLU (frieren)** | **74.01** | **Anti-additive; MAJOR finding: grad-norm inverts under SwiGLU** |
+| **#3611** | **β_p=20 on h=192 (edward)** | **86.59** | **Within noise; but capacity-interaction sign-flip finding** |
+| **#3735** | **h=192 variance characterization (askeladd)** | stale | Lower-priority pivot; h=192+GELU obsolete vs SwiGLU floor |
+| #3678 | Dropout 0.1 on h=128+GELU | μ̂=90.27 | Null result; follow-up #3811 on SwiGLU |
+| #3724 | Corrected h-flip | 103.91 | Catastrophic regression; ground-effect physics |
+| #3721 | DropPath rate=0.1 | 92.06 | Regression |
+| #3722 | Inverse-LLRD γ_inv=1.176 | 88.03 | GELU-era; below SwiGLU floor |
+| #3644 (GELU arm) | LLRD+GELU | 91.68 | Null vs GELU baseline |
 
-## SwiGLU discovery — key implications
+## The SwiGLU/GeGLU era — key insights
 
-The SwiGLU result (val 90.77→65.44, −27.9%) reframes the entire programme:
+1. **Gating is the dominant lever.** PR #3680 (SwiGLU) gave −25pt val vs GELU (90.77→65.44). PR #3810 (GeGLU) confirms the gating architecture — not SiLU — is what matters.
 
-1. **The FFN nonlinearity was the dominant unexplored lever.** All prior work (loss shape, LR schedule, weight averaging, regularization) operated within the old GELU regime. The activation class was untouched.
+2. **Gating mechanism is ideally suited to CFD pressure.** Pressure fields have sharp spatial gradients (boundary layers, wake regions). The multiplicative gate selectively suppresses irrelevant tokens per-step. GELU cannot do this.
 
-2. **Selective gating is ideally matched to CFD pressure.** Pressure fields have sharp spatial gradients (boundary layers, wake regions). SwiGLU's gate learns to suppress "irrelevant" tokens (far-field, wake) and amplify "relevant" ones (surface boundary layer) per-step. GELU cannot do this.
+3. **Param parity is exact.** The 2/3 hidden-dim factor (171 vs 256) preserves n_params=663K. This is a pure architectural expressiveness gain, not capacity.
 
-3. **Param parity is exact.** The 2/3 hidden-dim factor (171 vs 256) preserves n_params=663K vs 663K. This is not a capacity gain — it's purely an architectural expressiveness gain.
+4. **Grad profile inverts under gating (frieren #3768 finding).** head_and_embed (3.48) > block_4 (1.41) > block_0 (1.12). Middle blocks at 0.17. GELU-era block_0-dominant assumption is falsified. LR scaling must be redesigned for gated-FFN regime.
 
-4. **All prior h=128+GELU experiments are now sub-threshold.** PRs that showed gains vs GELU μ̂=90.77 (inverse-LLRD 88.03, h=192 89.70) are below the new floor. Future experiments compare to 65.44.
+5. **β_p=20 capacity-interaction sign flip (edward #3611).** The per-channel surf weighting reverses sign between h=128 (regression) and h=192 (improvement). Suggests capacity mediates how extra gradient mass is absorbed.
+
+6. **All GELU-era experiments are sub-threshold.** Any result > 65.37 from GELU-regime work (h=192+GELU, dropout+GELU, LLRD+GELU) is irrelevant — the new floor is set by gated FFN.
 
 ## Immediate next priorities
 
-1. **#3765 fern seed confirmation** — CRITICAL. Must confirm val=65.44 is reproducible before any follow-on work.
-2. **#3764 thorfinn h=192+SwiGLU** — determines the canonical production config.
-3. **#3768 frieren inverse-LLRD+SwiGLU** — lever stacking test.
-4. **#3810 tanjiro GeGLU** — ablation: is gating-in-general or SiLU specifically the lever?
-5. **#3811 alphonse dropout+SwiGLU** — does regularization compound with gating?
+1. **#3764 thorfinn h=192+SwiGLU** — determines if capacity and gating compound.
+2. **#3765 fern seed confirm** — CRITICAL for seed reproducibility of the 65.44/65.37 era.
+3. **#3832 askeladd head_and_embed LR boost** — direct follow-up to grad-norm inversion finding.
+4. **#3840 frieren fc_gate LR boost** — within-block surgical LR targeting.
+5. **#3811 alphonse dropout+SwiGLU** — regularization interaction with gating.
+6. **Reassign tanjiro** — #3810 just merged; tanjiro needs a new experiment. Priority: Bilinear gate (strongest discriminator for gating mechanism theory) or T_max scan on GeGLU/SwiGLU.
 
 ## Next research directions (queue for next idle students)
 
-1. **Wider SwiGLU (h=256+SwiGLU)** — extend stacking test to even larger capacity (if thorfinn confirms h=192+SwiGLU > h=128+SwiGLU).
-2. **SwiGLU + per-channel surf weight β_p=20** — stacking edward's #3611 lever with the new activation.
-3. **SwiGLU + constant-tail SWA** — nezuko #3644 rebasing; directional SWA gain (0.35σ) may persist on SwiGLU's converged basin.
-4. **ReGLU / Bilinear gate alternatives** — follow-up to GeGLU (#3810) if gating-mechanism theory confirmed.
-5. **Per-layer SwiGLU** — selective gating in only some blocks (bottom 2-3 layers where geometry encoding is primary).
-6. **T_max scan on SwiGLU** — optimal cosine schedule may differ under the new activation's convergence profile.
-7. **Non-z-flip augmentations** (parked): x-translation, Re-jitter, inlet velocity perturbations — preserve ground-effect physics.
+1. **Bilinear gate (no activation):** `fc_out(fc_main(x) * fc_gate(x))`. If this also lands at ~65, the multiplicative interaction alone is the lever. Strongest discriminator in the GLU ablation family.
+2. **ReGLU (ReLU gate):** sharp/discontinuous gate. Resolves whether smooth gates specifically matter.
+3. **GeGLU/SwiGLU at h=192** — does gating still compound with wider capacity? (Also covered by thorfinn #3764 with SwiGLU.)
+4. **T_max scan on SwiGLU/GeGLU** — optimal cosine schedule may differ under gated-FFN convergence profile.
+5. **β_p=20 + SwiGLU at h=128** — edward's #3837. Capacity-interaction sign flip hints this may work.
+6. **SwiGLU + constant-tail SWA** — nezuko #3644 rebasing; directional SWA gain may persist in gated basin.
+7. **Wider SwiGLU (h=256+SwiGLU)** — extend stacking if thorfinn confirms h=192+SwiGLU > h=128+SwiGLU.
+8. **Per-layer gating** — selective gating in only some blocks (bottom 2-3 layers).
+9. **Non-z-flip augmentations** (parked): Re-jitter, inlet velocity perturbations.
 
 ## Dead-end lever classes (do not revisit)
 
 1. **Z-flip augmentation family (ALL VARIANTS)** — #3542, #3563, #3724. Ground-effect physics (no-slip wall at z=0) makes z-flip non-physical for raceCar. 3 independent failures.
-2. **Dropout on GELU** — #3678, #3721. Regularization is not the bottleneck on h=128+GELU. Closed with null result.
-3. **SWA/EMA on frozen cosine tail at T_max<15** — #3644 GELU arm, #3580, #3521. T_cosine=10 undertrained the model.
-4. **LLRD standard** — #3642. Inverted gradient profile in Transolver.
-5. **unified_pos=True** — #3566. Incompatible with 2D asymmetric flow.
-6. **Per-channel Huber-δ** — #3574. Loss-formulation exhausted.
-7. **Uniform surf_weight scan** — #3428, #3174, #3522.
-8. **Any h=128+GELU experiments** — val ceiling ~88 < new floor 65.44.
+2. **Dropout on GELU** — #3678, #3721. Null result. Follow-up dropout+SwiGLU (#3811) still live.
+3. **SWA/EMA on frozen cosine tail at T_max<15** — #3644 GELU arm, #3580, #3521. T_cosine=10 undertrained.
+4. **Standard LLRD** — #3642. Inverted gradient profile in Transolver.
+5. **Inverse-LLRD on SwiGLU** — #3768. Falsified: block_0 is not the SwiGLU bottleneck.
+6. **GELU-era LR-stacking experiments** — all invalid under SwiGLU (grad profile inverts).
+7. **unified_pos=True** — #3566. Incompatible with 2D asymmetric flow.
+8. **Per-channel Huber-δ** — #3574. Loss-formulation exhausted.
+9. **Any h=128+GELU experiments** — val ceiling ~88 < new floor 65.37.
+10. **β_p=20 on h=192+GELU** — #3611. Within noise + below SwiGLU floor; but β_p+SwiGLU still live (#3837).
 
 ## Plateau status
 
-**Decidedly not in plateau.** SwiGLU represents the first major architectural insight in this programme — switching from GELU to gated linear units gave a 28% relative val improvement. The SwiGLU era is just beginning; the programme is now exploring what stacks with gating (capacity, LR scaling, regularization, gate activation form).
+**Decidedly not in plateau.** The GeGLU result confirms the gating mechanism is the lever. Three active lines of investigation:
+1. **GLU ablation family** (Bilinear, ReGLU) — pure gate-mechanism science.
+2. **Gradient-informed LR scaling** (head_and_embed, fc_gate boosts) — frieren's inversion finding points directly at the bottleneck.
+3. **Lever stacking** (capacity × gating, β_p × gating, SWA × gating) — any of these may compound.
