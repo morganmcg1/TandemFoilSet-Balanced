@@ -445,6 +445,7 @@ class Config:
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
+    aoa_jitter_std: float = 0.0  # Gaussian relative-jitter std on AoA columns during training
 
 
 cfg = sp.parse(Config)
@@ -562,6 +563,15 @@ for epoch in range(MAX_EPOCHS):
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
+        if cfg.aoa_jitter_std > 0:
+            # Per-sample multiplicative jitter on AoA columns (foil 1=14, foil 2=18).
+            # Same epsilon per sample across both AoAs and all nodes (sample-level flow condition).
+            pad_mask_aoa = mask.unsqueeze(-1).to(x_norm.dtype)
+            aoa_eps = torch.randn(x_norm.shape[0], 1, 1, dtype=x_norm.dtype, device=x_norm.device) * cfg.aoa_jitter_std
+            jitter_factor = 1.0 + aoa_eps * pad_mask_aoa  # 1.0 at padding, (1+eps) at real nodes
+            x_norm = x_norm.clone()
+            for c in (14, 18):
+                x_norm[..., c:c+1] = x_norm[..., c:c+1] * jitter_factor
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_enc})["preds"]
