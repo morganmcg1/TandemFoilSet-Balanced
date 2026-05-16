@@ -91,7 +91,11 @@ class PhysicsAttention(nn.Module):
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # Per-point adaptive temperature: maps per-head node features → per-node τ ∈ [0.1, 2.0].
+        # sigmoid(0) * 1.9 + 0.1 = 1.05 at neutral init (bias=0).
+        self.temp_proj = nn.Linear(self.dim_head, 1, bias=True)
+        nn.init.constant_(self.temp_proj.bias, 0.0)
+        self._last_tau = None
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -117,7 +121,10 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # tau: [B, heads, N, 1] — broadcasts against slice logits [B, heads, N, slice_num]
+        tau = torch.sigmoid(self.temp_proj(x_mid)) * 1.9 + 0.1
+        self._last_tau = tau.detach()
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / tau)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -332,6 +339,35 @@ def write_experiment_summary(
     print(f"\nSaved experiment summary to {summary_path}")
 
 
+def collect_tau_stats(model: nn.Module) -> list[dict]:
+    """Per-layer τ statistics from the most recent PhysicsAttention forward pass."""
+    stats = []
+    for i, block in enumerate(model.blocks):
+        attn = block.attn
+        t = getattr(attn, "_last_tau", None)
+        if t is None:
+            continue
+        stats.append({
+            "layer": i,
+            "tau_min": t.min().item(),
+            "tau_max": t.max().item(),
+            "tau_mean": t.mean().item(),
+            "tau_std": t.std().item(),
+        })
+    return stats
+
+
+def print_tau_stats(label: str, stats: list[dict]) -> None:
+    if not stats:
+        return
+    print(f"  per-point τ ({label}):")
+    for s in stats:
+        print(
+            f"    layer {s['layer']}: min={s['tau_min']:.3f} max={s['tau_max']:.3f} "
+            f"mean={s['tau_mean']:.3f} std={s['tau_std']:.3f}"
+        )
+
+
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     print(
         f"    {split_name:<26s} "
@@ -513,6 +549,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    tau_stats = collect_tau_stats(model)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -523,6 +560,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "tau_stats": tau_stats,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -531,6 +569,8 @@ for epoch in range(MAX_EPOCHS):
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+    if epoch == 0 or epoch == MAX_EPOCHS - 1:
+        print_tau_stats(f"epoch {epoch+1}", tau_stats)
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
@@ -559,11 +599,14 @@ if best_metrics:
         print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+        final_tau_stats = collect_tau_stats(model)
+        print_tau_stats("best-ckpt test eval", final_tau_stats)
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "tau_stats": final_tau_stats,
         })
 
     write_experiment_summary(
