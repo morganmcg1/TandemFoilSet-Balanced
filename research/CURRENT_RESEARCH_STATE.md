@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~17:10 UTC) — #3958 thorfinn / #3913 edward CLOSED (informative nulls); #4056 thorfinn gradclip / #4057 edward surfrouting R10 assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~17:55 UTC) — #3957 tanjiro CLOSED (informative); #4063 tanjiro R10 T_max sweep at lr=1.5e-4 assigned; nezuko #4015 confirmed active (3+ arms done in W&B; PR was false-positive stale); 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -49,12 +49,13 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 | #4045 | fern | R10 H44: Model capacity n_hidden {192, 256} | WIP |
 | #4046 | askeladd | R10 H43: Pressure channel upweighting {2×, 3×} | WIP |
 | #4015 | nezuko | R10 H39: Layer scale init {1e-4, 1e-5} | WIP |
-| #3957 | tanjiro | R8 H34: T_max=20 still running (T_max=10/14 complete, worse than BL) | Near terminal |
+| **#4063** | **tanjiro** | **R10 H47: T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 substrate** | **Just assigned** |
 
-## Recent closures (informative nulls — this session)
+## Recent closures (informative nulls — recent sessions)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #3957 | tanjiro | T_max=20 best within-substrate (val 67.48 lr=5e-5) — above new BL | CLOSED |
 | #3958 | thorfinn | wd=5e-4 best (val 64.79) — above new BL 63.05 | CLOSED |
 | #3913 | edward | Re-sampler monotonically hurts; alpha=0 ctrl=64.53 | CLOSED |
 | #3977 | fern | Stochastic depth hurts at 5-block depth | CLOSED |
@@ -72,13 +73,7 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 | Spec_norm at new LR | spec_norm at lr=1.5e-4 | #4049 frieren | −0 to −2 val; tests finding #18 |
 | Optimizer stability | Grad clip {0.5, 1.0, 2.0} at lr=1.5e-4 | #4056 thorfinn | −0 to −2 val mean; variance reduction |
 | Architecture routing | Surface-biased PhysicsAttention routing | #4057 edward | −1 to −3 val; camber_rc target |
-
-## Tanjiro #3957 T_max sweep — current status
-
-T_max=10 arms: val 76.72 / 78.76 (both finished, both worse than BL).
-T_max=14 ctrl: val 68.75 / 70.64 (finished, at lr=1e-4 substrate — these are expected to be above the new lr=1.5e-4 BL).
-T_max=20: still running (~step 3055, mid-convergence, val 81.48 — may come down, but trajectory looks above BL).
-**Expected closure: informative null on T_max sweep.** T_max=14 confirmed as optimal already in merged baseline.
+| Schedule depth | T_max sweep {14, 18, 20} at lr=1.5e-4 | #4063 tanjiro | ≤−1 to +1 val; tests within-substrate T_max=20 transfer |
 
 ## Key findings (cumulative, 19)
 

@@ -1,5 +1,41 @@
 # SENPAI Research Results
 
+## 2026-05-16 17:55 — #3957 tanjiro CLOSED (informative); #4063 tanjiro R10 T_max sweep at lr=1.5e-4 assigned
+
+### #3957 tanjiro — cosine T_max sweep (CLOSED — informative null)
+
+- Branch: `willowpai2i48h5-tanjiro/r8-tmax`
+- Hypothesis: T_max sweep on the spec_norm+lr=5e-5 substrate. Within-substrate finding (best arm slightly better than ctrl) does not transfer cleanly to new lr=1.5e-4 baseline.
+
+| Arm | T_max | W&B run | val_avg | test_avg | vs new BL 63.05/53.60 |
+|-----|-------|---------|---------|----------|----------------------|
+| | 10 | 1gh5u4ka | 76.72 | 67.32 | +13.67 / +13.72 |
+| | 10 | d3jr861j | 78.76 | 69.56 | +15.71 / +15.96 |
+| | 14 ctrl | ftfb85ej | 68.75 | 60.41 | +5.70 / +6.81 |
+| | 14 ctrl | exhex088 | 70.64 | 62.01 | +7.59 / +8.41 |
+| **best** | **20** | **q7bw6nql** | **67.48** | **58.92** | **+4.43 / +5.32** |
+
+- Analysis: Best arm T_max=20 (val 67.48) above new baseline by +4.43 val. Within-substrate (lr=5e-5 + spec_norm output), T_max=20 beat T_max=14 ctrl by ~1.3 val. T_max=10 catastrophic on both replicates (steep decay under-trains). Follow-up at lr=1.5e-4 assigned as #4063.
+
+### #4063 tanjiro — T_max sweep at lr=1.5e-4 substrate (R10 H47 — assigned this session)
+
+3 arms {14 ctrl, 18, 20} on new baseline substrate. Tests whether tanjiro's within-substrate T_max=20 preference transfers to lr=1.5e-4.
+
+### Active experiments status (8 of 8 staffed)
+
+| PR | Student | Hypothesis | Notes |
+|----|---------|------------|-------|
+| #4015 | nezuko | R10 H39 layer scale | Active — 3/3+ arms done in W&B; pod healthy (false `stale_wip` due to no PR comments) |
+| #4044 | alphonse | R10 H40 multi-FiLM | WIP |
+| #4045 | fern | R10 H44 capacity | WIP |
+| #4046 | askeladd | R10 H43 channel weight | WIP |
+| #4049 | frieren | R11 H46 spec_norm at lr=1.5e-4 | WIP |
+| #4056 | thorfinn | R10 H42 gradient clip sweep | WIP |
+| #4057 | edward | R10 H45 surface-biased routing | WIP |
+| #4063 | tanjiro | R10 H47 T_max at lr=1.5e-4 | Just assigned |
+
+---
+
 ## 2026-05-16 17:05 — #3958 thorfinn / #3913 edward CLOSED; #4056 thorfinn / #4057 edward R10 assigned
 
 ### #3958 thorfinn — Lion wd sweep at lr=1e-4 (CLOSED — informative null vs new baseline)
