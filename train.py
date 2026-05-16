@@ -433,6 +433,7 @@ def write_experiment_summary(
         "amp_dtype": cfg.amp_dtype,
         "use_ema": cfg.use_ema,
         "ema_decay": cfg.ema_decay if cfg.use_ema else None,
+        "grad_clip_norm": cfg.grad_clip_norm,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -486,6 +487,7 @@ class Config:
     film_cond: bool = False  # enable per-block FiLM conditioning on x[:,0,13:24]
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
+    grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
 
 
 cfg = sp.parse(Config)
@@ -584,6 +586,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norms_epoch: list[float] = []
+    clip_active_epoch = 0
+
+    clip_threshold = cfg.grad_clip_norm if cfg.grad_clip_norm is not None else float("inf")
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -605,6 +611,11 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm_before = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold)
+        grad_norm_val = grad_norm_before.item()
+        grad_norms_epoch.append(grad_norm_val)
+        if cfg.grad_clip_norm is not None and grad_norm_val > cfg.grad_clip_norm:
+            clip_active_epoch += 1
         optimizer.step()
         if ema is not None:
             ema.update(model)
@@ -660,6 +671,20 @@ for epoch in range(MAX_EPOCHS):
     if ema is not None:
         epoch_record["ema_step"] = ema.step
         epoch_record["ema_effective_decay"] = ema.effective_decay()
+    if grad_norms_epoch:
+        gn = torch.tensor(grad_norms_epoch, dtype=torch.float64)
+        gn_finite = gn[torch.isfinite(gn)]
+        if gn_finite.numel() > 0:
+            epoch_record["grad_norm/p50"] = torch.quantile(gn_finite, 0.5).item()
+            epoch_record["grad_norm/p90"] = torch.quantile(gn_finite, 0.9).item()
+            epoch_record["grad_norm/p99"] = torch.quantile(gn_finite, 0.99).item()
+            epoch_record["grad_norm/max"] = gn_finite.max().item()
+            epoch_record["grad_norm/mean"] = gn_finite.mean().item()
+        epoch_record["grad_norm/n_nonfinite"] = int((gn.numel() - gn_finite.numel()))
+        epoch_record["grad_norm/n_steps"] = int(gn.numel())
+        if cfg.grad_clip_norm is not None:
+            epoch_record["grad_clip_norm"] = cfg.grad_clip_norm
+            epoch_record["grad_norm/clip_rate"] = clip_active_epoch / max(gn.numel(), 1)
     append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
