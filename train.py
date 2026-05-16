@@ -108,13 +108,19 @@ class SwiGLUMLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 attn_dropout=0.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
+        # PR #3071: per-element dropout on the slice-routing softmax output.
+        # Separate Module from self.dropout (which feeds scaled_dot_product_attention
+        # and to_out). Apply once; the same dropped pattern is reused for
+        # aggregation, normalization, and redistribution to keep them consistent.
+        self.slice_dropout = nn.Dropout(attn_dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -142,6 +148,7 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights = self.slice_dropout(slice_weights)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -200,13 +207,13 @@ class SqueezeExcitation(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4, use_se=True):
+                 layerscale_init=1e-4, use_se=True, attn_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, attn_dropout=attn_dropout,
         )
         # POST-NORM topology + γ=1.0 constant (Vaswani 2017 recipe). LayerScale
         # removed: γ is a plain Python float, not nn.Parameter — no learnable
@@ -239,7 +246,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 attn_dropout=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -260,7 +268,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                use_se=(i == n_layers - 1),
+                use_se=(i == n_layers - 1), attn_dropout=attn_dropout,
             )
             for i in range(n_layers)
         ])
@@ -468,6 +476,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # PR #3071: per-element dropout on slice-routing softmax output (PhysicsAttention).
+    # Default 0.05 matches the experiment hypothesis; pass 0.0 to disable.
+    attn_dropout: float = 0.05
 
 
 cfg = sp.parse(Config)
@@ -538,9 +549,18 @@ model_config = dict(
     mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    attn_dropout=cfg.attn_dropout,
 )
 print(f"slice_num: {model_config['slice_num']}")
 print(f"slice_num: 24 (down from 32, -25% slicing ops/block) — budget-freeing PhysicsAttention granularity probe; 3rd orthogonal budget-bound axis after n_layers (#2268) and n_hidden (#2290)")
+print(
+    f"Attention dropout (PR #3071): p={model_config['attn_dropout']} applied to slice-routing softmax output "
+    f"in PhysicsAttention (4 blocks × 1 slice_dropout module per block); +0 params; "
+    f"single dropped pattern reused for aggregation, normalization, and redistribution; "
+    f"training-only stochastic (eval deterministic); fresh intra-block stochastic-regularization site, "
+    f"orthogonal to DropPath (#3065 in-flight residual-branch drop); "
+    f"180th active axis; baseline to beat: val_avg/mae_surf_p < 29.5318 (PR #3006)"
+)
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
@@ -780,6 +800,98 @@ def capture_residual_magnitudes(model_obj, loader, stats_, amp_ctx, device_, epo
     return captured
 
 
+def capture_slice_routing_stats(model_obj, loader, stats_, amp_ctx, device_, epoch_tag,
+                                 slice_num):
+    """Probe slice-routing softmax utilization per PhysicsAttention block.
+
+    Runs in eval mode (slice_dropout = identity) so the measured pattern reflects
+    the underlying routing, not the per-step dropout noise. Logs:
+      - per-head per-slice usage = mean over (B, N) of slice_weights[b, h, n, g]
+      - entropy per head over slice_usage distribution
+      - dead-slice fraction at thresholds 0.01/slice_num (PR), 1/(3*slice_num), 1/(10*slice_num)
+      - per-token routing entropy (mean over B, h, N of -Σ p log p)
+    """
+    inner = getattr(model_obj, "_orig_mod", model_obj)
+    block_softmaxes = [(bi, blk.attn.softmax) for bi, blk in enumerate(inner.blocks)]
+    captured: list[dict] = []
+
+    def make_hook(block_idx):
+        def hook(_module, _args, output):
+            with torch.no_grad():
+                w = output.detach().float()  # [B, n_head, N, slice_num]
+                B, H, N, S = w.shape
+                slice_usage = w.mean(dim=(0, 2))  # [H, S]
+                token_entropy = -(w * (w + 1e-12).log()).sum(dim=-1)  # [B, H, N]
+                token_entropy_mean = token_entropy.mean().item()
+                token_entropy_min = token_entropy.min().item()
+                token_entropy_max = token_entropy.max().item()
+                slice_usage_norm = slice_usage / slice_usage.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+                slice_dist_entropy = -(slice_usage_norm * (slice_usage_norm + 1e-12).log()).sum(dim=-1)  # [H]
+                uniform = 1.0 / S
+                dead_pr = (slice_usage < (0.01 * uniform)).float().mean().item()
+                dead_one_third = (slice_usage < (uniform / 3.0)).float().mean().item()
+                dead_one_tenth = (slice_usage < (uniform / 10.0)).float().mean().item()
+                captured.append({
+                    "block_idx": block_idx,
+                    "slice_usage_per_head": slice_usage.cpu().tolist(),
+                    "slice_usage_mean": slice_usage.mean().item(),
+                    "slice_usage_max": slice_usage.max().item(),
+                    "slice_usage_min": slice_usage.min().item(),
+                    "slice_dist_entropy_per_head": slice_dist_entropy.cpu().tolist(),
+                    "slice_dist_entropy_mean": slice_dist_entropy.mean().item(),
+                    "token_entropy_mean": token_entropy_mean,
+                    "token_entropy_min": token_entropy_min,
+                    "token_entropy_max": token_entropy_max,
+                    "dead_slice_frac_pr_thresh": dead_pr,
+                    "dead_slice_frac_one_third_thresh": dead_one_third,
+                    "dead_slice_frac_one_tenth_thresh": dead_one_tenth,
+                    "n_head": H,
+                    "slice_num": S,
+                    "n_tokens": N,
+                    "batch": B,
+                })
+        return hook
+
+    handles = [sm.register_forward_hook(make_hook(bi)) for bi, sm in block_softmaxes]
+
+    model_obj.eval()
+    with torch.no_grad():
+        x_b, _, _, mask_b = next(iter(loader))
+        x_b = x_b.to(device_, non_blocking=True)
+        mask_b = mask_b.to(device_, non_blocking=True)
+        x_norm = (x_b - stats_["x_mean"]) / stats_["x_std"]
+        with amp_ctx():
+            _ = inner({"x": x_norm, "mask": mask_b})
+
+    for h in handles:
+        h.remove()
+
+    uniform_target = 1.0 / max(slice_num, 1)
+    max_entropy = (torch.tensor(float(slice_num)).log().item()
+                   if slice_num > 1 else 0.0)
+    print(f"\nSlice-routing utilization probe @ {epoch_tag} "
+          f"(slice_num={slice_num}, uniform={uniform_target:.4f}, max-entropy={max_entropy:.3f} nats):")
+    for site in captured:
+        print(
+            f"  block[{site['block_idx']}]: usage mean={site['slice_usage_mean']:.4f} "
+            f"min={site['slice_usage_min']:.4f} max={site['slice_usage_max']:.4f}  "
+            f"slice-dist entropy mean={site['slice_dist_entropy_mean']:.3f} (max {max_entropy:.3f})  "
+            f"per-token entropy mean={site['token_entropy_mean']:.3f}  "
+            f"dead@PR={site['dead_slice_frac_pr_thresh']:.3f} "
+            f"dead@1/3={site['dead_slice_frac_one_third_thresh']:.3f} "
+            f"dead@1/10={site['dead_slice_frac_one_tenth_thresh']:.3f}"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "slice_routing_utilization",
+        "epoch_tag": epoch_tag,
+        "slice_num": slice_num,
+        "uniform_target": uniform_target,
+        "max_entropy_nats": max_entropy,
+        "blocks": captured,
+    })
+    return captured
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -876,6 +988,16 @@ for epoch in range(MAX_EPOCHS):
             model, _probe_loader, stats, amp_ctx_factory, device, epoch_tag="ep1",
         )
 
+    # PR #3071: slice-routing utilization probe at ep1/30/59 (final-ish) to track
+    # dead-slice fraction, slice-distribution entropy, and per-token routing entropy
+    # with attn_dropout=0.05 vs baseline expectations.
+    if (epoch + 1) in (1, 30, 59):
+        _probe_loader = val_loaders.get("val_single_in_dist") or next(iter(val_loaders.values()))
+        capture_slice_routing_stats(
+            model, _probe_loader, stats, amp_ctx_factory, device,
+            epoch_tag=f"ep{epoch+1}", slice_num=model_config['slice_num'],
+        )
+
     # Cross-block α convergence probe: log each scalar at ep1/10/30/60 to track
     # drift away from 1.0 init and per-position pattern (PR #3006 hypothesis test).
     if (epoch + 1) in (1, 10, 30, 60):
@@ -928,6 +1050,14 @@ if best_metrics:
     capture_residual_magnitudes(
         model, _probe_loader_end, stats, amp_ctx_factory, device,
         epoch_tag=f"best_ep{best_metrics['epoch']}",
+    )
+
+    # PR #3071: slice-routing utilization @ best checkpoint — settled routing
+    # pattern after attn_dropout regularization.
+    capture_slice_routing_stats(
+        model, _probe_loader_end, stats, amp_ctx_factory, device,
+        epoch_tag=f"best_ep{best_metrics['epoch']}",
+        slice_num=model_config['slice_num'],
     )
 
     # LayerScale diagnostic: γ_attn = γ_mlp = 1.0 CONSTANT (no learnable Parameter).
