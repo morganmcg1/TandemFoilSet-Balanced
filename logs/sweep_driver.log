@@ -1,0 +1,9 @@
+=== Arm A (warmup=500) start: 2026-05-16T18:48:47Z ===
+=== Arm A (warmup=500) end:   2026-05-16T19:23:38Z rc=0 ===
+=== Arm B (warmup=100) start: 2026-05-16T19:23:38Z ===
+=== Arm B (warmup=100) end:   2026-05-16T19:58:19Z rc=0 ===
+=== Arm C (warmup=1000) start: 2026-05-16T19:58:19Z ===
+=== Arm C (warmup=1000) end:   2026-05-16T20:33:06Z rc=0 ===
+=== Arm D (warmup=2000) start: 2026-05-16T20:33:06Z ===
+=== Arm D (warmup=2000) end:   2026-05-16T21:07:55Z rc=0 ===
+=== SWEEP COMPLETE: 2026-05-16T21:07:55Z ===
