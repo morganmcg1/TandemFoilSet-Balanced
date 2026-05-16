@@ -18,9 +18,9 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 - Optimizer: AdamW, `lr=5e-4`, `weight_decay=1e-4`
 - Schedule: `SequentialLR(LinearLR warmup → CosineAnnealingLR)`,
   `warmup_epochs=3`, `eta_min=1e-6` (**merged from PR #3150**)
-- **Gradient clipping**: opt-in via `--grad_clip_max_norm 0.5` (Config default is
-  still 0.0). PR #3418 added the lever and demonstrated clip_0p5 wins by 9.4
-  units within-PR. Default flip is queued as a follow-up.
+- **Gradient clipping**: `clip_grad_norm_(max_norm=0.5)` — **default is now 0.5**
+  (PR #3418 added lever; PR #3494 flipped default from 0.0 → 0.5). Bare
+  `python train.py` now clips at 0.5 automatically — no explicit flag needed.
 - Eval: non-finite ground truth samples filtered at `evaluate_split` boundary,
   so `test_avg/mae_surf_p` is now finite (**merged from PR #3138**)
 - Batch size: 4 (mesh-padded by `pad_collate`)
@@ -29,12 +29,8 @@ Lower is better. Per-split diagnostic metrics (`{split}/mae_surf_{Ux,Uy,p}`,
 - Run budget: `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MINUTES=30.0`
 
 ✅ **Loss-fn default correct as of PR #3440.** Charbonnier ε=1e-3 auto-applies.
-
-⚠️ **Grad-clip default caveat (pending follow-up flip).** PR #3418 added the
-`--grad_clip_max_norm` flag but kept the default at 0.0. The current best
-baseline (97.47) used `--grad_clip_max_norm 0.5` explicitly. Until a follow-up
-flips the default, pass it explicitly. Bare `python train.py` will land in
-~106 (the no_clip arm range), NOT in 97.47.
+✅ **Grad-clip default correct as of PR #3494.** Bare `python train.py` now clips at 0.5. No explicit flag needed.
+✅ **Fourier positional encoding default as of PR #3348.** `pos_enc_mode=fourier_basic`, L=8 auto-applies.
 
 ## Current best baseline result (PR #3418 — grad-clip merged)
 
@@ -79,6 +75,13 @@ Per-split test (ALL SPLITS NOW FINITE — NaN fix merged):
 better than the best single-seed result across all PRs). With run-to-run
 variance ~3-4 units, improvements need to be ≥5 units to be clearly attributable.
 
+## 2026-05-16 — PR #3494: Default grad_clip flip 0.0 → 0.5 (nezuko)
+
+- **Operational hygiene.** Flips `Config.grad_clip_max_norm` default from 0.0 to 0.5 so bare `python train.py` matches the documented best config.
+- **Sanity run:** val_avg/mae_surf_p = 101.19, test_avg/mae_surf_p = 90.50 (W&B w8th8428). No metric improvement expected — just verifies the flip works.
+- **W&B run:** w8th8428 (willowpai2i24h1-nezuko/default_clip_sanity)
+- **Reproduce:** `cd "target/" && python train.py --epochs 50` (no flags needed)
+
 ## 2026-05-16 — PR #3348: Fourier positional encoding L=8 (fern)
 
 - **val_avg/mae_surf_p:** 98.16 (within noise of 97.47 val best — effectively tied)
@@ -116,13 +119,10 @@ Implicit pre-warmup baseline ≈ **130 ± 3**, run-to-run variance ~3-4 units.
 W&B project: `wandb-applied-ai-team/senpai-v1` — research tag
 `willow-pai2i-24h-r1`.
 
-Reproduce current best baseline (requires explicit `--grad_clip_max_norm 0.5`
-flag until default flip lands):
+Reproduce current best baseline (all defaults correct — no explicit flags needed):
 ```
 cd target/
-python train.py --grad_clip_max_norm 0.5 \
-  --wandb_name baseline_default --wandb_group baseline
+python train.py --wandb_name baseline_default --wandb_group baseline
 ```
 
-Loss-fn default is correct (Charbonnier ε=1e-3, PR #3440). Grad-clip default
-will be flipped in an upcoming follow-up PR.
+All defaults now correct: Charbonnier ε=1e-3 (#3440), grad_clip=0.5 (#3494), Fourier L=8 positional encoding (#3348).
