@@ -426,10 +426,10 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=192,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=96,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -440,7 +440,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -536,6 +536,7 @@ for epoch in range(MAX_EPOCHS):
     dt = time.time() - t0
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
+    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -543,6 +544,7 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "step_time_ms": step_time_ms,
+        "gpu_mem_gb_peak": peak_gb,
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
@@ -563,7 +565,7 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
