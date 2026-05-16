@@ -2,6 +2,51 @@
 
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r5`. Primary ranking metric: `val_avg/mae_surf_p` (lower better). Test-time decision metric: `test_avg/mae_surf_p`.
 
+## 2026-05-16 06:30 — PR #3647: surf_weight sweep (5 vs 20) [CLOSED — local optimum confirmed]
+
+- Branch: `charliepai2i24h5-alphonse/surf-weight-sweep`
+- Student: charliepai2i24h5-alphonse
+- Hypothesis: The merged-stack `surf_weight=10` was inherited from an older run; a systematic ±2× sweep (5 vs 20) on the full merged baseline might find a better loss-weighting balance between surface-pressure and volume channels.
+
+### Results
+
+| Arm | surf_weight | val_avg/mae_surf_p | Δ vs 75.40 | test_avg/mae_surf_p |
+|---|---:|---:|---:|---:|
+| Baseline | 10.0 | 75.4040 | — | 65.8592 |
+| Arm A | 5.0 | 84.4892 | +12.05% | 74.7287 |
+| Arm B | 20.0 | 90.4227 | +19.92% | 81.0551 |
+
+Both arms regressed vs the old 75.40 baseline, which equates to +38% (Arm A) and +48% (Arm B) vs the current 61.20 baseline.
+
+Per-split val surface-p MAE:
+
+| Split | Baseline | Arm A (sw=5) | Δ A | Arm B (sw=20) | Δ B |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 84.88 | 100.49 | +18.4% | 101.02 | +19.0% |
+| geom_camber_rc | 85.90 | 93.48 | +8.8% | 103.21 | +20.2% |
+| geom_camber_cruise | 57.65 | 64.42 | +11.8% | 70.60 | +22.5% |
+| re_rand | 73.19 | 79.56 | +8.7% | 86.86 | +18.7% |
+
+Volume MAE: Arm A +9.1%, Arm B +28.9% (catastrophic backbone collapse at sw=20).
+
+Configuration: both runs on pre-compile stack (17 epochs, 35.55 GB VRAM), `bernoulli_residual=True` via bare flag (independently confirmed simple_parsing accepts it).
+
+Metric artifacts:
+- `models/model-charliepai2i24h5-alphonse-surf_weight5-20260516-033556/metrics.jsonl`
+- `models/model-charliepai2i24h5-alphonse-surf_weight20-20260516-042241/metrics.jsonl`
+
+### Analysis
+
+**surf_weight=10 is a real local optimum on the merged stack.** Symmetric harm on both sides: halving (sw=5) → +12%, doubling (sw=20) → +20%. The classic representational-overfitting signal is present: train/surf_loss decreases for both arms (0.025/0.032 vs baseline 0.057) while val MAE worsens — the model fits training surface patterns harder but generalizes worse.
+
+Arm B's 28.9% volume MAE collapse shows the shared backbone can't maintain useful volume features when the surface gradient dominates too strongly. The shared-backbone breakage is global, not a selective surface-for-volume trade.
+
+Loss-weight ratio analysis: sw=10 lands at ~5.8× weighted-surf/vol contribution; sw=5 lands at ~2.0× (too low to specialize), sw=20 at ~7.3× (breaks joint representation). The dynamic range that preserves useful backbone is narrow.
+
+**Conclusion**: re-running with compile would not change the direction (loss-weight landscape shape is invariant to kernel fusion). Loss-weight tuning is a closed avenue. Next lever: structural Transolver parameter sweep (slice_num, see #3739).
+
+Also: `--bernoulli_residual` bare flag parsed correctly in both arms (config shows `bernoulli_residual=True`). Independent verification supplementing PR #3694.
+
 ## 2026-05-15 14:25 — PR #3266: Per-sample scale-invariant loss to equalize Re-regime gradients [MERGED — round-5 baseline anchor]
 
 - Branch: `charliepai2i24h5-frieren/per-sample-instance-norm-targets`

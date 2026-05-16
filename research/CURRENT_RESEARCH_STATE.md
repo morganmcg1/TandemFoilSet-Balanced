@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 04:55 UTC
+- **Updated:** 2026-05-16 06:35 UTC
 - **Launch:** `charlie-pai2i-24h-r5` (round 5)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-24h-r5`
 - **Target base branch:** `icml-appendix-charlie`
@@ -50,11 +50,15 @@ Strongest remaining axes (in priority order):
 4. **Batch size sweep** (#3702 tanjiro WIP, new loop 14): VRAM headroom 24/96 GB. batch=8 vs 16 on compile baseline. Tests whether smoother gradients from larger batches beat the step-count reduction.
 5. **Cp normalization** (#3547 askeladd WIP, rebase needed): divide by p_B — natural physics extension. Needs rebase to 61.20 tip + `--torch_compile`.
 6. **Spatial Fourier positional encoding** (#3631 nezuko WIP): NeRF-style sin/cos on (x,y) ±dsdf. Targets OOD geometry weakness.
-7. **surf_weight sweep** (#3647 alphonse WIP): 5 vs 20 — re-tune the loss weighting for the new merged stack.
+7. **slice_num sweep** (#3739 alphonse WIP, new loop 16): slice_num=96 vs 128 on compile baseline — physics-region granularity in Physics_Attention; untested on merged stack. OOD-geometry motivation (camber_rc/cruise remain worst splits).
 8. **Capacity revisit** (#3463 edward WIP, sent back for rebase): n_hidden=192/256 sweep, tractable with bf16 VRAM savings (and now further headroom from compile).
 9. **max-autotune compile mode** (fern #3 suggestion): single arm, deferred.
 
-**Closed/merged in this loop (Loop 14)**:
+**Closed/merged in this loop (Loop 16)**:
+- **#3647 (alphonse surf_weight sweep)** — CLOSED. surf_weight=5 → +12.05% regression (val_avg 84.49), surf_weight=20 → +19.92% regression (val_avg 90.42), both vs OLD 75.40 baseline (=+38-48% vs current 61.20). All 8 val + 8 test cells regress for both arms. Clean representational-overfitting signal: train/surf_loss decreases for both arms while val MAE worsens. surf_weight=10 confirmed as a real local optimum on the full merged stack. Arm B also catastrophically degrades volume (+28.9% mae_vol_p), showing the shared backbone collapses globally when surface is over-weighted. Key finding: loss-weight ratio dynamic range that preserves shared backbone is narrow (~2–7× weighted-surf/vol); sw=10 lands at ~5.8×, which is the sweet spot. Also confirmed independently that bare `--bernoulli_residual` flag parses correctly via simple_parsing — alphonse's runs had bernoulli_residual=True and ran cleanly.
+- **#3739 (alphonse slice_num sweep)** — ASSIGNED (Loop 16). Testing slice_num=96 vs 128 (default=64) on full compile stack. Mechanistic story: finer physics-region decomposition → more capacity for OOD geometry generalization on camber splits.
+
+**Closed/merged in prior loops (Loop 14)**:
 - **#3548 (frieren AoA-TTA)** — CLOSED. +51% regression vs 61.20. Key finding: FiLM-conditioned model is already AoA-smooth at σ=0.1deg (Arm A TTA vs no-TTA delta: 0.02%). Arm B's K-averaged Bernoulli term produces Jensen-biased upward offset. AoA-TTA is a dead end on this stack.
 - **#3425 (tanjiro SF-AdamW)** — CLOSED after 3 rounds. Final result: val_avg=85.99 (+40.5% vs 61.20). Mechanism: SF-AdamW removes cosine annealing entirely (train/lr=5e-4 constant), bypassing the late-epoch polishing that made #3465 a 12.42% win. Cautious AdamW wins the optimizer slot.
 
@@ -91,7 +95,8 @@ Strongest remaining axes (in priority order):
 | #3548 | frieren | CLOSED (loop 14) | AoA-jitter TTA — FiLM already smooth, Jensen bias kills Arm B |
 | #3463 | edward | WIP (rebase pending re-run) | Capacity revisit: n_hidden=192 |
 | #3631 | nezuko | WIP | Fourier positional encoding on spatial coords (x,y,dsdf) |
-| #3647 | alphonse | WIP | surf_weight sweep: 5 vs 20 |
+| #3647 | alphonse | CLOSED (loop 16) | surf_weight sweep: 5 vs 20 — both arms +12-20% regression, sw=10 confirmed local optimum |
+| #3739 | alphonse | WIP (new loop 16) | slice_num sweep: 96 vs 128 — physics-region granularity |
 | #3547 | askeladd | WIP (baseline update posted, rebase needed) | Cp normalization — 2 arms (cp, halfcp) |
 | #3665 | fern | WIP | T_max alignment for compile: T_max=32 vs T_max=35 |
 | #3666 | thorfinn | WIP | LR sweep with compile: lr=7e-4 vs 1e-3 on 32-epoch budget |
