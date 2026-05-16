@@ -1045,6 +1045,43 @@ Two arms: naive (+91% wall), fused F.rms_norm (+53% wall). Fused arm: 9 epochs r
 
 **Verdict**: CLOSED. Depth axis closed (n_hidden=128 budget). Data-side and slice-mechanism levers are the remaining architectural options.
 
+## 2026-05-16 07:10 — Loop 15: PR #3127 askeladd SmoothL1-rebased MERGED ← NEW BEST
+
+- **Student branch**: `charliepai2i24h1-askeladd/smoothl1-loss`
+- **Hypothesis**: Replace MSE with `F.smooth_l1_loss(beta=1.0)` in training loop and evaluate_split. SmoothL1 better matches the `mae_surf_p` L1 evaluation metric and de-emphasizes outlier samples via bounded gradient.
+- **Result**: val_avg = 94.9723 (**−15.0%** vs 111.7473 baseline), test_avg = 85.0372 (−14.4%). MERGED.
+
+| Split | SmoothL1 | MSE Baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 110.85 | 133.64 | −17.0% |
+| val_geom_camber_rc | 103.78 | 121.33 | −14.5% |
+| val_geom_camber_cruise | 75.84 | 88.92 | −14.7% |
+| val_re_rand | 89.42 | 103.10 | −13.3% |
+| **val_avg** | **94.97** | **111.75** | **−15.0%** |
+| test_single_in_dist | 97.18 | 113.39 | −14.3% |
+| test_geom_camber_rc | 93.68 | 109.86 | −14.7% |
+| test_geom_camber_cruise | 64.13 | 73.92 | −13.2% |
+| test_re_rand | 85.16 | 100.05 | −14.9% |
+| **test_avg** | **85.04** | **99.31** | **−14.4%** |
+
+- n_params: 662,359 (unchanged — pure loss-axis change)
+- peak_memory_gb: 32.95 (unchanged)
+- per-epoch wall: ~98 s (unchanged)
+- epochs realized: 18/18 (full cosine anneal, monotone descent throughout)
+- Metric artifacts: `models/model-charliepai2i24h1-askeladd-smoothl1-rebased-20260516-052919/metrics.jsonl`
+
+**Analysis**: Dramatic and uniform win. Every epoch was a new best (monotone training throughout). The improvement is symmetric across all 4 val splits (13-17%) — consistent with the loss-metric alignment mechanism (SmoothL1 gradient targets the same L1 objective as `mae_surf_p`). No instability, no NaN. Zero compute overhead. This is the highest single-PR gain on the track since #3478 narrow+bf16 (-11.5%). Combined with #3478, the two changes account for: 126.32 → 111.75 → **94.97** — a cumulative -24.8% from the pre-narrow baseline.
+
+The original #3127 submission (val=114.14) was on the pre-merge config (n_hidden=128, surf_weight=10, no EMA). The rebased run on narrow+bf16+EMA+surf_w25 shows SmoothL1 compounds cleanly with all prior wins rather than substituting for them.
+
+**camber_rc note**: improved from 121.33 → 103.78 (-14.5%). Still the highest-error split but no longer an outlier — all 4 splits now cluster in a narrower range (75-111 vs 89-134 before).
+
+**Verdict**: MERGED. New best. Active loss changed to SmoothL1 beta=1.0. All 7 in-flight WIPs notified of new baseline 94.97 and instructed to rebase before training.
+
+## 2026-05-16 — Loop 15: New dispatch #3763
+
+- **#3763 askeladd smoothl1-beta-sweep**: 2-arm sweep of beta=0.5 and beta=0.25 on the new SmoothL1 baseline. No source edits needed — `smooth_l1_beta` is a Config CLI field. Tests whether pushing the L1/L2 transition lower improves further given the underfit baseline (loss still descending at epoch 18).
+
 ## 2026-05-16 05:26 — Loop 12: PR #3621 frieren batch-size-8 CLOSED
 
 - **Student branch**: `charliepai2i24h1-frieren/batch-size-8`
