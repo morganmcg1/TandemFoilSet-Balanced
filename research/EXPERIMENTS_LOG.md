@@ -1045,6 +1045,38 @@ Two arms: naive (+91% wall), fused F.rms_norm (+53% wall). Fused arm: 9 epochs r
 
 **Verdict**: CLOSED. Depth axis closed (n_hidden=128 budget). Data-side and slice-mechanism levers are the remaining architectural options.
 
+## 2026-05-16 05:26 — Loop 12: PR #3621 frieren batch-size-8 CLOSED
+
+- **Student branch**: `charliepai2i24h1-frieren/batch-size-8`
+- **Hypothesis**: bs=4→8 reduces per-step gradient variance; predicted 0.5-2% improvement, biggest on camber_rc (noisy-grad split).
+- **Result**: val_avg = 162.1397 (+45.1% regression), test_avg = 146.10 (+47.1%). Two arms (12 ep, 15 ep) both deeply regressed.
+
+| Split | bs=8 (ep15) | Baseline (bs=4, ep18) | Delta |
+|---|---|---|---|
+| val_single_in_dist | 218.98 | 133.64 | +63.9% |
+| val_geom_camber_rc | 175.53 | 121.33 | +44.7% |
+| val_geom_camber_cruise | 119.93 | 88.92 | +34.9% |
+| val_re_rand | 134.11 | 103.10 | +30.1% |
+| **val_avg** | **162.14** | **111.75** | **+45.1% worse** |
+
+- peak_memory_gb: 65.87 (vs 32.95, +99%)
+- per-epoch wall: 104.4 s (vs ~98 s, +6%) — barely budged
+- realized epochs: 15/15 (cosine fully annealed) — best == last epoch (still descending)
+- grad steps: 2,820 vs baseline 6,750 (-58%)
+- Metric artifacts: `models/model-batch8-20260516-042449/metrics.jsonl`
+
+**Critical systemic finding** (high-value diagnostic from frieren's analysis): per-epoch time barely changed (+6%) with 2× batch → compute-bound, not memory-bandwidth-bound at n_hidden=128 + bf16. Doubling batch_size HALVES gradient steps in the budget. Loss still monotonically descending at the cosine-annealed final epoch — **the narrow+bf16 baseline at 18 epochs is itself underfit**. The model is step-quality limited, not capacity limited.
+
+Per-split signature also rules out the gradient-noise hypothesis: regression is roughly uniform (30-64%) across splits, including camber_rc (+44.7%). Gradient noise at bs=4 is NOT a dominant bottleneck for any split.
+
+**Conclusion**: Close batch-size axis at this budget (2nd close — also failed at wider trunk). **The new high-priority lever is LR/schedule tuning** to attack the underfit-baseline finding.
+
+**Verdict**: CLOSED. Frieren reassigned to attack underfit via lr=5e-4→1e-3 (#3719).
+
+## 2026-05-16 — Loop 12: New dispatch #3719
+
+- **#3719 frieren lr-1e3**: lr 5e-4→1e-3 at narrow+bf16. Directly attacks underfit-baseline finding from #3621. Doubles effective lr integral over cosine schedule. Zero budget cost (per-step time unchanged, same 18 epochs). bf16 stability is the only real risk — instrumented to halt on early NaN. If wins, follow-up is lr=2e-3 + warmup. If diverges, indicates 5e-4 was at the bf16 stability ceiling and the next move is warmup ramp.
+
 ## 2026-05-16 — Loop 10: New dispatch #3676
 
 - **#3676 edward slice-num-48**: slice_num 64→48 at narrow+bf16 baseline. Tests whether slice_num=64 is over-parameterized at the narrow trunk. Reduces per-epoch compute (~-15%), enabling ~21 epochs vs the baseline's 18 — more cosine completion with zero budget penalty. If 48≈64 quality, slice mechanism has slack; if 48 regresses, validates #3500 "slice is capacity-bottlenecked" finding and the next move is slice_num=96. Budget-adjusted epochs=21 (est. ~85s/ep × 21 ≈ 30 min).
