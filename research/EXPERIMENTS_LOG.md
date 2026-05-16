@@ -3,6 +3,45 @@
 Track: `charlie-pai2i-24h-r1`
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 
+## 2026-05-16 — Loop 18 actions (compile axis closed; 1 dispatch)
+
+**Context**: Pure L1 (#3798) still in-flight pending frieren's seed-pin confirmation. SmoothL1 baseline still active (94.97/85.04). Three open WIP from Loop 16 (#3676 edward), Loop 17 dispatches (5 new), and #3802 alphonse compile arrived for review.
+
+**PR closure (1)**:
+
+### PR #3802 — alphonse — torch.compile determinism + 23-ep budget-soak — CLOSED (determinism failed)
+
+- **Student branch**: `charliepai2i24h1-alphonse/compile-determinism`
+- **Hypothesis**: Test whether `torch.compile(mode='reduce-overhead', dynamic=True)` produces deterministic, quality-preserving training on SmoothL1; if so, trade speedup for more epochs.
+- **Arm A result (18 epochs, compile vs eager baseline)**: val_avg=**97.5971** vs baseline 94.9723 (+2.76% regression), test_avg=**87.5734** vs 85.0372 (+2.99%). **Outside the ±0.5 determinism window by 2.12 — determinism failed.** Per PR stop-condition, Arm B (23-epoch budget-soak) correctly NOT run.
+- **Throughput finding (HIGH VALUE)**:
+  - Mean epoch 2-18 wall: 54.40 s vs eager 98.27 s → **1.81× speedup (44.6%)** — much better than the 22% prior estimate
+  - peak_memory_gb: 23.83 vs eager 32.95 (−27.7%)
+  - Total 18-ep wall: 17.1 min vs eager 29.5 min
+- **Divergence shape**: gap small early (within ±5 through epoch 6), widens sharply at epochs 8-11 (+8.54 peak), partially recovers via cosine anneal but doesn't close (+2.62 at final epoch). Mid-training divergence > cosine-anneal recovery in 18 epochs.
+- **Verdict**: CLOSED. Quality regression makes the throughput win unusable. The compile axis on `mode='reduce-overhead' + dynamic=True + in-place EMA update` pattern is closed; future revisits should try `mode='default'` (drop cudagraphs to eliminate EMA-aliasing risk) or static-shape compile with batch-level padding bucketing. Alphonse reassigned to Adam β2=0.99 (#3869).
+- **Mechanistic hypothesis (from student)**: EMA + cudagraph interaction. EMA model is compile-wrapped but updated via in-place `mul_/add_` from eager code; cudagraph replay path may interact unexpectedly with EMA mutation cadence. Well-documented compile gotcha — published recipes either don't compile EMA or use state_dict swap instead of in-place mutation.
+- **Metric artifacts**: `models/model-compile-arm-a-18ep-20260516-083129/metrics.jsonl`
+
+**PR awaiting student recovery (1)**:
+
+### PR #3676 — edward — slice_num=48 + 21 epochs + rebased to SmoothL1 — pod blocked by GH API rate limit
+
+- **Status**: Sent back Loop 16 with rebased SmoothL1 single-arm instructions. Pod is on the correct branch but heartbeat polls fail with `gh: API rate limit exceeded for user ID 20516801` since at least iteration 6 (10:09 UTC). Pod's poll-for-work skill returns "No assigned PRs or issues" because the gh-API JSON parse fails.
+- **Verdict**: Leave PR as-is. Operational issue (token rate limit) — closing/reassigning would not help because the same rate limit blocks any new assignment too. Student will pick up work when GH API recovers (typically 30-60 min). Re-check next loop.
+
+**1 new dispatch**:
+
+| PR | Student | Axis | One-line summary |
+|---|---|---|---|
+| #3869 | alphonse | Optimizer (Adam) | Adam β2 = 0.99 (default 0.999); more responsive second-moment for small-batch transformer |
+
+**Loop 18 systemic findings**:
+
+1. **`torch.compile(mode='reduce-overhead', dynamic=True)` is NOT numerically equivalent** to eager on this Blackwell + bf16 + SmoothL1 + EMA stack. Divergence accumulates mid-training (epochs 8-11) and isn't fully recovered by cosine anneal in 18 epochs. The cause is likely EMA + cudagraph interaction (in-place EMA update from eager code into a compiled forward).
+2. **Throughput speedup under compile is real and large** (44.6%, 1.81×) — much higher than prior 22% estimate. The infrastructure win exists if we can find a quality-preserving compile configuration. Defer revisits to a future plateau.
+3. **GitHub API rate limits can effectively idle a student pod** (#3676 case): poll-for-work fails silently because the API call returns rate-limit error and the json parser dies. Systemic observation: pods should have rate-limit-aware retry with backoff.
+
 ## 2026-05-16 — Loop 17 actions (Pure L1 BIG win in flight; 3 closures, 1 send-back, 2 stale closures, 5 fresh dispatches)
 
 **Context**: 4 PRs landed for review against the SmoothL1 baseline (#3127, val_avg=94.97 / test_avg=85.04). Pure L1 (#3798 frieren) crushed the field with val_avg=86.66 (−8.75%), test_avg=77.21 (−9.20%) — but single-seed and `use_l1` default left at False. Sent back for seed-pin confirmation + default flip before merge. 3 of the other PRs dominated by the Pure L1 mechanism and closed. 2 stale_wip PRs (#3588 Lookahead, #3589 SWA) had no commits across 2 baseline shifts — closed as stale and the students reassigned with fresh hypotheses.

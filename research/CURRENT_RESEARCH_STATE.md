@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 (Loop 17)
+- **Date**: 2026-05-16 (Loop 18)
 - **Track**: `charlie-pai2i-24h-r1` on advisor branch `icml-appendix-charlie-pai2i-24h-r1`
 - **Latest direction from human researcher team**: none received
 - **Per-student GPU budget**: 1 × 96GB, 30-min wall-clock per training run
@@ -29,17 +29,20 @@ Active advisor config: `n_hidden=128, n_head=4, n_layers=5, slice_num=64, mlp_ra
 
 | PR | Student | Axis | One-line summary | Status |
 |---|---|---|---|---|
-| #3676 | edward | Architecture (slice) | slice_num=48 + 3-seed + 21-ep on SmoothL1 | wip (sent back L16) |
+| #3676 | edward | Architecture (slice) | slice_num=48 + 21-ep on SmoothL1 (rebased) | wip (sent back L16; pod GH-rate-limited L18) |
 | #3798 | frieren | Loss formulation | **Pure L1 −8.75% win** — seed-pin + use_l1 default flip pending | wip (sent back L17) |
-| #3802 | alphonse | Throughput | torch.compile determinism + 23-ep budget-soak on SmoothL1 | wip |
 | #3861 | askeladd | Loss formulation | Charbonnier `sqrt(eps² + r²) − eps`; eps∈{1e-3, 1e-2} | dispatched Loop 17 |
 | #3863 | fern | Optimizer stability | Gradient norm clipping max_norm=1.0 + per-epoch telemetry | dispatched Loop 17 |
 | #3864 | nezuko | Schedule shape | CosineAnnealingLR eta_min=1e-5 | dispatched Loop 17 |
 | #3865 | tanjiro | Per-block lr | LLRD γ∈{0.9, 0.75} — follow-up to #3719 global-lr closure | dispatched Loop 17 |
 | #3866 | thorfinn | Weight averaging | SWA uniform tail-3 averaging (complementary to EMA) | dispatched Loop 17 |
+| #3869 | alphonse | Optimizer (Adam) | Adam β2 = 0.99 — more responsive second-moment for small-batch | dispatched Loop 18 |
 
 ## Recent decisions
 
+- **Loop 18: #3802 CLOSED** alphonse compile axis — `mode='reduce-overhead' + dynamic=True` failed determinism (+2.76% val regression). Throughput speedup was real (1.81×, 44.6%) but quality regression makes it unusable. Mechanistic hypothesis: EMA + cudagraph in-place mutation interaction.
+- **Loop 18: #3676 awaiting student recovery** — pod blocked by GH API rate limit (HTTP 403 on heartbeat polls). Leave PR as-is; will pick up when GH API recovers.
+- **Loop 18: #3869 alphonse Adam β2=0.99 dispatched** — fresh optimizer-hyperparameter axis, orthogonal to all in-flight work.
 - **Loop 17: #3798 SENT BACK** Pure L1 −8.75% win, single-seed risk + default flag needed. Asked frieren for 1 confirmation seed (seed=42) and to flip `use_l1: bool = False` → `True`.
 - **Loop 17: 3 closures of dominated PRs**:
   - #3763 askeladd β sweep: β=0.5 and β=0.25 beat SmoothL1 but decisively dominated by Pure L1.
@@ -63,7 +66,7 @@ Active advisor config: `n_hidden=128, n_head=4, n_layers=5, slice_num=64, mlp_ra
 8. **Per-domain weighting at narrow+bf16 ineffective** (#3585): mechanism mostly absorbed by SmoothL1's L1 tail at camber_rc; cruise budget squeeze dominates.
 9. **Coord-jitter at σ=0.01 ineffective** (#3555): cost asymmetry (cruise damage > rc help); slice projection already provides soft spatial pooling.
 10. **Per-channel surf_p 4× reweighting actively HURTS** under SmoothL1/L1 tail (#3800 uniform regression).
-11. **torch.compile throughput win is real** (22% speedup, no graph breaks) from prior work — being re-tested for determinism on SmoothL1 in #3802.
+11. **torch.compile `mode='reduce-overhead' + dynamic=True` FAILED determinism on SmoothL1 stack** (#3802, Loop 18): val_avg+2.76% regression; throughput speedup is 1.81× (44.6%) — much higher than prior 22% estimate, but unusable due to quality regression. EMA + cudagraph in-place mutation is the likely mechanism. Future compile revisits should try `mode='default'` or static-shape compile.
 12. **Slice mechanism is capacity-bottlenecked** (#3500): being re-tested by #3676 (slice_num=48 → 3-seed).
 13. **Gated-FFN (SwiGLU) axis exhausted at narrow trunk** (prior work): MLP is too small a FLOPs fraction.
 14. **Domain curriculum has +50% wall-time overhead** (DataLoader rebuild structural).
