@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 03:30
-- **Launch:** willow-pai2i-48h-r1 (round 4 continuing; frieren+nezuko PRs assigned; 2 negative results pending student SENPAI-RESULT posts)
+- **Date:** 2026-05-16 04:20
+- **Launch:** willow-pai2i-48h-r1 (round 4/5 in progress; #3546 merged, #3521 closed, 8/8 students active)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~18 epochs achievable in bf16 at bs=4)
 - **Latest direction from human team:** None
@@ -49,19 +49,32 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Primary 
 | #3580 | SWA over last 5 ckpts | 89.86 | SWA ≈ best-by-val under cosine T_max=15 (frozen tail) |
 | #3563 | Train-aug h-flip | 111.70 | **+27% catastrophic — confirms #3542 dataset finding** |
 
-## Active WIP — 8 students total (zero idle)
+## Merged PRs (cumulative)
+| PR | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|----|-----------|---------------------|---------------------|
+| #3159 | Huber loss δ=0.1 | 112.9001 | 115.7589 |
+| #3309 | NaN fix (cruise test) | 112.8295 | 106.5996 |
+| #3317 | Cosine T_max=15 | 91.3319 | 88.4260 |
+| #3480 | bf16 autocast (bs=4) | **87.9105** | **83.3782** |
+| #3546 | **Seed control + variance** | μ̂=90.77, σ̂=1.54 | μ̂=85.85, σ̂=0.67 |
+
+## Active WIP — 8/8 students (zero idle)
 | PR | Student | Hypothesis | Status |
 |----|---------|-----------|--------|
-| #3546 | alphonse | Seed control + 4 baseline replicates (σ̂ on 87.91 base) | **4 runs DONE — pending SENPAI-RESULT post** |
-| #3562 | askeladd | Wider Transolver h=192 slice=96 T_max=18 under bf16 | ACTIVE — run `fqzs1zk1` training |
-| #3611 | edward | Per-channel surf weight β_p=20 (Ux/Uy at α=10) | In flight |
-| #3566 | fern | Unified positional encoding (Transolver unified_pos=True) | **2 runs DONE (val ~107, regress) — pending SENPAI-RESULT** |
-| #3642 | frieren | Layer-wise LR decay γ=0.85 (5 Transolver blocks) | NEW after #3563 close |
-| #3644 | nezuko | Cosine T_max=10 + 8-ep constant LR tail + SWA-over-tail | NEW after #3580 close |
-| #3574 | tanjiro | Per-channel Huber-δ (δ_p=0.05 on surf-p only) | In flight |
-| #3521 | thorfinn | EMA decay=0.99 (faster forgetting) | ACTIVE — run `s35tc2it` training (post-pod-restart) |
+| #3678 | alphonse | **Dropout (attn_drop=proj_drop=0.1), 2-seed** | NEW after #3546 merge |
+| #3562 | askeladd | Wider h=192, slice=96, T_max=18 under bf16 | **Best run val=86.81 (`hzxs6zx9`) — NUDGED for SENPAI-RESULT** |
+| #3611 | edward | Per-channel surf weight β_p=20 | In flight |
+| #3566 | fern | Unified pos encoding (unified_pos=True) | Runs done val~107 regress, pending SENPAI-RESULT |
+| #3642 | frieren | Layer-wise LR decay γ=0.85 | In flight |
+| #3644 | nezuko | Cosine T_max=10 + constant tail + SWA | In flight |
+| #3574 | tanjiro | Per-channel Huber-δ δ_p=0.05 | Active run in progress |
+| #3680 | thorfinn | **SwiGLU activation in MLP blocks** | NEW after #3521 close |
 
-## Round 4 surfacing results (preliminary, pending SENPAI-RESULT posts)
+## URGENT — askeladd #3562 val=86.81 awaiting SENPAI-RESULT
+
+Run `hzxs6zx9` (h=192/slice=96/T_max=18) shows val_avg=86.81 — beats all-time best 87.91 and is 2.6σ below canonical mean 90.77. Two other completed runs: `sv85254i` val=91.06 and `fqzs1zk1` val=92.97. Student nudged to post terminal marker; advisor action on merge as soon as it posts.
+
+## Round 4 surfacing results (preliminary / logged)
 
 ### alphonse #3546 — 4 baseline replicates (W&B):
 | Run | Seed | val_avg | test_avg |

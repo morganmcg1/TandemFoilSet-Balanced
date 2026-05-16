@@ -769,3 +769,65 @@ W&B run: `4tbuq9ql` · Group: `train_time_augmentation` · Flip rate: 0.496 (744
 3. **Mesh-permutation augmentation**: random node-ordering permutation (true symmetry of the mesh encoder).
 
 **Follow-up assigned to frieren:** Layer-wise LR decay (LLRD) γ=0.85 — orthogonal optimization-space regularizer, completely different lever.
+
+---
+
+## 2026-05-16 04:05 — PR #3546: Seed control + 4 baseline replicates ✓ MERGED (infrastructure)
+
+- **Branch:** willowpai2i48h1-alphonse/seed-control-baseline-variance
+- **Student:** willowpai2i48h1-alphonse
+- **Hypothesis:** Add seed control to train.py; run 4 replicates of the canonical bf16+T_max=15 config to characterize the run-to-run variance under the new baseline.
+
+### Results
+
+| Seed | run_id | val_avg/mae_surf_p (best-ep) | test_avg/mae_surf_p | Best epoch |
+|------|--------|------------------------------|---------------------|------------|
+| 0 | ek21s9hy | 89.71 | 85.64 | 15 |
+| 1 | 8vcv4ojk | 90.16 | 85.54 | 18 |
+| 2 | 1y3my9x2 | 93.05 | 86.83 | 17 |
+| 3 | 0ekl0alh | 90.14 | 85.37 | 17 |
+| **μ̂** | — | **90.77** | **85.85** | — |
+| **σ̂ (ddof=1)** | — | **1.54** | **0.67** | — |
+
+### Analysis
+
+**CRITICAL META-FINDING:** The baseline 87.91 (PR #3480) sits 1.86σ below the canonical-config 4-seed mean μ̂=90.77. The 87.91 result was a downward lucky-draw outlier, not a representative lower bound.
+
+**Practical consequences:**
+- Single-seed results in [89.2, 92.3] are statistically indistinguishable from the canonical config.
+- Future PRs need to beat val < 89.2 (μ̂-1σ) for a meaningful win, ideally < 87.7 (μ̂-2σ).
+- **The all-time best 87.91 remains the paper headline** — it's a valid point estimate, just not the expected value.
+
+σ̂=1.54 is consistent with PR #3305's estimate of 1.80 (14% smaller, same order of magnitude). The test-set variance is much smaller: σ̂_test=0.67. This suggests test-set evaluation is more stable than val (fewer samples but less geometric diversity in the test splits).
+
+**Code changes merged (27 insertions):**
+- `set_all_seeds(seed)` — covers random, numpy, torch, torch.cuda
+- `seed_worker(worker_id)` — per-worker RNG for DataLoader
+- `Config.seed=42`, `Config.deterministic=False`
+- `--seed` CLI arg now in canonical train.py
+
+---
+
+## 2026-05-16 04:10 — PR #3521: H: EMA decay=0.99 ✗ CLOSED (within canonical noise)
+
+- **Branch:** willowpai2i48h1-thorfinn/ema-decay99
+- **Student:** willowpai2i48h1-thorfinn
+- **Hypothesis:** In-training EMA with faster-forgetting decay=0.99 to reduce val trajectory variance.
+
+### Results
+
+| Run | Config | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| s35tc2it | decay=0.99, seed=0 | 91.07 | 86.13 |
+| goxpz2nn | decay=0.99 (prior run) | 90.89 | 86.12 |
+| ihb7926k | decay=0.95 (prior run) | 89.62 | 84.87 |
+| Canonical μ̂ | (PR #3546) | 90.77 | 85.85 |
+
+Terminal SENPAI-RESULT: val=91.07, test=86.13.
+
+### Analysis
+EMA decay=0.99 val=91.07 = within 0.20pt of canonical μ̂=90.77 (<<σ=1.54). No significant improvement. Root cause: identical to nezuko's SWA finding (#3580). Cosine T_max=15 pins LR≈0 from epoch 15-16 onward → EMA updates in the tail are near-zero → EMA model ≈ best-by-val snapshot at the end of the cosine phase. The decay=0.95 arm (89.62) is slightly better than decay=0.99 (91.07) — faster decay concentrates on more-recent (near-converged) weights. But both are within noise of baseline.
+
+**EMA lever dead under cosine T_max=15.** If nezuko's #3644 (constant-LR tail) shows the tail regime matters, EMA with decay=0.99 + constant tail is the right follow-up. Not now.
+
+Pod restart at 02:21 UTC (uncommitted train.py blocking checkout) caused the stale_wip appearance. Multiple run restarts visible in W&B.
