@@ -429,6 +429,13 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    # Per-channel surface weights. When any is set, loss uses per-channel mode:
+    #   loss = vol + w_ux * mean(huber_ux on surface) + w_uy * mean(huber_uy) + w_p * mean(huber_p)
+    # When all None: legacy uniform mode (mathematically identical to old behavior).
+    surf_weight_p: float | None = None
+    surf_weight_ux: float | None = None
+    surf_weight_uy: float | None = None
+    huber_delta: float = 0.1
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -477,10 +484,10 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=192,
+    n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=96,
+    slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -496,7 +503,20 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+# Per-channel surface weights. When any of surf_weight_{p,ux,uy} is set, use it;
+# otherwise fall back to surf_weight/3 each so the total surface gradient mass
+# matches legacy (vol + surf_weight * mean_huber_over_surf_and_channels).
+_w_ux = cfg.surf_weight_ux if cfg.surf_weight_ux is not None else cfg.surf_weight / 3.0
+_w_uy = cfg.surf_weight_uy if cfg.surf_weight_uy is not None else cfg.surf_weight / 3.0
+_w_p  = cfg.surf_weight_p  if cfg.surf_weight_p  is not None else cfg.surf_weight / 3.0
+_per_channel = any(w is not None for w in (cfg.surf_weight_p, cfg.surf_weight_ux, cfg.surf_weight_uy))
+print(
+    f"Surface weighting: per_channel={_per_channel}  "
+    f"w_ux={_w_ux:.4f}  w_uy={_w_uy:.4f}  w_p={_w_p:.4f}  "
+    f"(huber_delta={cfg.huber_delta})"
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -543,6 +563,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_ux = epoch_surf_uy = epoch_surf_p = 0.0
+    epoch_grad_ux = epoch_grad_uy = epoch_grad_p = 0.0
     n_batches = 0
 
     train_loop_t0 = time.time()
@@ -556,15 +578,36 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            err = F.huber_loss(pred, y_norm, delta=0.1, reduction="none")  # [B, N, 3]
+            err = F.huber_loss(pred, y_norm, delta=cfg.huber_delta, reduction="none")
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_mask_3d = vol_mask.unsqueeze(-1)
             surf_mask_3d = surf_mask.unsqueeze(-1)
             vol_loss = (err * vol_mask_3d).sum() / vol_mask_3d.sum().clamp(min=1)
-            surf_loss = (err * surf_mask_3d).sum() / surf_mask_3d.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            n_surf = surf_mask.sum().clamp(min=1).float()
+            err_surf = err * surf_mask_3d  # [B, N, 3]
+            surf_loss_ux = err_surf[..., 0].sum() / n_surf
+            surf_loss_uy = err_surf[..., 1].sum() / n_surf
+            surf_loss_p  = err_surf[..., 2].sum() / n_surf
+            # Aggregate (mean over surf nodes & channels) for tracking continuity
+            surf_loss = (surf_loss_ux + surf_loss_uy + surf_loss_p) / 3.0
+            loss = vol_loss + _w_ux * surf_loss_ux + _w_uy * surf_loss_uy + _w_p * surf_loss_p
+
+        # Per-channel surface gradient L2 norm. Huber derivative is the clipped
+        # residual, so ||dL/d(pred_ch on surf)||_2 = w_ch/n_surf * ||clip(pred-y, ±δ)||_2.
+        with torch.no_grad():
+            resid_clip = (pred.float() - y_norm).clamp(-cfg.huber_delta, cfg.huber_delta)
+            sq_clip = (resid_clip ** 2) * surf_mask_3d
+            sum_sq_ux = sq_clip[..., 0].sum()
+            sum_sq_uy = sq_clip[..., 1].sum()
+            sum_sq_p  = sq_clip[..., 2].sum()
+            grad_norm_surf_ux = _w_ux / n_surf * torch.sqrt(sum_sq_ux.clamp(min=1e-30))
+            grad_norm_surf_uy = _w_uy / n_surf * torch.sqrt(sum_sq_uy.clamp(min=1e-30))
+            grad_norm_surf_p  = _w_p  / n_surf * torch.sqrt(sum_sq_p.clamp(min=1e-30))
+            grad_norm_surf_uxuy_mean = 0.5 * (grad_norm_surf_ux + grad_norm_surf_uy)
+            realized_beta_alpha = grad_norm_surf_p / grad_norm_surf_uxuy_mean.clamp(min=1e-30)
 
         optimizer.zero_grad()
         loss.backward()
@@ -575,12 +618,27 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/vol_loss_batch": vol_loss.item(),
+            "train/surf_loss_batch": surf_loss.item(),
+            "train/surf_loss_ux_unweighted": surf_loss_ux.item(),
+            "train/surf_loss_uy_unweighted": surf_loss_uy.item(),
+            "train/surf_loss_p_unweighted": surf_loss_p.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/grad_norm_surf_ux": grad_norm_surf_ux.item(),
+            "train/grad_norm_surf_uy": grad_norm_surf_uy.item(),
+            "train/grad_norm_surf_p": grad_norm_surf_p.item(),
+            "train/realized_beta_over_alpha": realized_beta_alpha.item(),
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_ux += surf_loss_ux.item()
+        epoch_surf_uy += surf_loss_uy.item()
+        epoch_surf_p  += surf_loss_p.item()
+        epoch_grad_ux += grad_norm_surf_ux.item()
+        epoch_grad_uy += grad_norm_surf_uy.item()
+        epoch_grad_p  += grad_norm_surf_p.item()
         n_batches += 1
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -589,6 +647,12 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_ux /= max(n_batches, 1)
+    epoch_surf_uy /= max(n_batches, 1)
+    epoch_surf_p  /= max(n_batches, 1)
+    epoch_grad_ux /= max(n_batches, 1)
+    epoch_grad_uy /= max(n_batches, 1)
+    epoch_grad_p  /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -603,9 +667,20 @@ for epoch in range(MAX_EPOCHS):
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    epoch_grad_uxuy_mean = 0.5 * (epoch_grad_ux + epoch_grad_uy)
+    epoch_realized_ratio = (
+        epoch_grad_p / epoch_grad_uxuy_mean if epoch_grad_uxuy_mean > 0 else 0.0
+    )
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_ux": epoch_surf_ux,
+        "train/surf_loss_uy": epoch_surf_uy,
+        "train/surf_loss_p":  epoch_surf_p,
+        "train/grad_norm_surf_ux_epoch": epoch_grad_ux,
+        "train/grad_norm_surf_uy_epoch": epoch_grad_uy,
+        "train/grad_norm_surf_p_epoch":  epoch_grad_p,
+        "train/realized_beta_over_alpha_epoch": epoch_realized_ratio,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -634,7 +709,9 @@ for epoch in range(MAX_EPOCHS):
 
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"ux={epoch_surf_ux:.4f} uy={epoch_surf_uy:.4f} p={epoch_surf_p:.4f} "
+        f"β/α={epoch_realized_ratio:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
