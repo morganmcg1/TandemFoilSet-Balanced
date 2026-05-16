@@ -4,25 +4,36 @@ Active advisor branch baseline. Updated after each merged winner. All
 val/test MAE numbers below come from the committed `models/<experiment>/metrics.jsonl`
 on the listed PR.
 
-## Current best — PR #3478 (charliepai2i24h1-edward / narrow-bf16)
+## Current best — PR #3127 (charliepai2i24h1-askeladd / smoothl1-rebased)
 
-- **val_avg/mae_surf_p**: **111.7473** (best at epoch 18; 18 of 18 epochs realized — full cosine anneal)
-- **test_avg/mae_surf_p**: **99.3066** (NaN-safe 4-split — first sub-100 test result on this track)
+- **val_avg/mae_surf_p**: **94.9723** (best at epoch 18; 18 of 18 epochs realized — full cosine anneal)
+- **test_avg/mae_surf_p**: **85.0372** (NaN-safe 4-split — first sub-90 test result on this track)
 - **Per-val-split mae_surf_p** (best epoch 18):
-  - val_single_in_dist: 133.64
-  - val_geom_camber_rc: 121.33
-  - val_geom_camber_cruise: 88.92
-  - val_re_rand: 103.10
+  - val_single_in_dist: 110.85 (−17.0% vs #3478)
+  - val_geom_camber_rc: 103.78 (−14.5% vs #3478)
+  - val_geom_camber_cruise: 75.84 (−14.7% vs #3478)
+  - val_re_rand: 89.42 (−13.3% vs #3478)
 - **Per-test-split mae_surf_p** (from best-val EMA checkpoint):
-  - test_single_in_dist: 113.39
-  - test_geom_camber_rc: 109.86
-  - test_geom_camber_cruise: 73.92
-  - test_re_rand: 100.05
-- **n_params**: 662,359 (vs 1,447,521 on wider trunk — 54% smaller)
-- **peak_memory_gb**: 32.95 (63 GB headroom remaining vs 96 GB cap)
-- **per_epoch_wall_time**: ~98 s/epoch (bf16 narrow trunk)
-- **epochs_realized**: 18 of 18 (full cosine annealing — no budget-wall at this config)
-- **Metric artifacts**: `models/model-narrow-bf16-aligned-20260516-002225/metrics.jsonl`, `models/model-narrow-bf16-aligned-20260516-002225/metrics.yaml`
+  - test_single_in_dist: 97.18
+  - test_geom_camber_rc: 93.68
+  - test_geom_camber_cruise: 64.13
+  - test_re_rand: 85.16
+- **n_params**: 662,359 (unchanged — pure loss-axis change)
+- **peak_memory_gb**: 32.95 (unchanged)
+- **per_epoch_wall_time**: ~98 s/epoch (unchanged)
+- **epochs_realized**: 18 of 18 (full cosine annealing)
+- **Metric artifacts**: `models/model-charliepai2i24h1-askeladd-smoothl1-rebased-20260516-052919/metrics.jsonl`, `models/model-charliepai2i24h1-askeladd-smoothl1-rebased-20260516-052919/metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --experiment_name smoothl1-rebased --agent charliepai2i24h1-askeladd --epochs 18`
+
+### SmoothL1 win note
+
+PR #3127 replaces MSE with `F.smooth_l1_loss(..., beta=1.0, reduction='none')` in both the training loop and `evaluate_split`. Zero compute overhead — same wall time, same memory, same n_params. The gain is −15.0% on val_avg across all 4 splits uniformly (13–17%). SmoothL1's bounded-gradient L1 tail better matches the `mae_surf_p` evaluation metric and de-emphasizes outlier samples. Also includes a per-sample `y_finite` filter in `evaluate_split` for NaN-safe test eval (complements the `data/scoring.py` fix from #3378). Active recipe now has **SmoothL1 loss** as the standard.
+
+## Previous best — PR #3478 (charliepai2i24h1-edward / narrow-bf16)
+
+- **val_avg/mae_surf_p**: 111.7473 (epoch 18 of 18)
+- **test_avg/mae_surf_p**: 99.3066 (NaN-safe 4-split)
+- **Per-val-split**: single_in_dist=133.64, geom_camber_rc=121.33, geom_camber_cruise=88.92, re_rand=103.10
 - **Reproduce**: `cd target/ && python train.py --experiment_name narrow-bf16-aligned --agent charliepai2i24h1-edward --epochs 18`
 
 ### Architecture revert note
@@ -49,7 +60,7 @@ PR #3478 reverts #3130 (wider trunk n_hidden 192→128, n_head 6→4) and adds b
 | epochs (configured) | **18** (budget-aligned: ~98 s/ep × 18 ≈ 29.4 min) |
 | schedule | CosineAnnealingLR (T_max=**18**) |
 | sampler | WeightedRandomSampler (3-domain balanced) |
-| loss | MSE on normalized targets, `vol_loss + surf_weight * surf_loss` |
+| **loss** | **SmoothL1** (`F.smooth_l1_loss, beta=1.0`) on normalized targets, `vol_loss + surf_weight * surf_loss` (from #3127) |
 
 ## Metrics contract
 
@@ -86,3 +97,4 @@ new advisor configuration.
 | 2026-05-15 14:35 | #3136 | frieren | surf_weight 10→25 | **126.3241** |
 | 2026-05-15 20:30 | #3378 | thorfinn | data/scoring.py NaN-safe (`err*mask` → `where(mask, err, 0)`) — system fix, val unchanged | 126.3241 |
 | 2026-05-16 | #3478 | edward | Narrow+bf16: n_hidden 192→128, n_head 6→4, bf16 autocast, epochs 14→18 full anneal | **111.7473** |
+| 2026-05-16 | #3127 | askeladd | SmoothL1 loss (Huber beta=1.0) replacing MSE — pure loss-axis, zero compute cost | **94.9723** |
