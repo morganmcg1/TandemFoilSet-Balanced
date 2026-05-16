@@ -531,6 +531,7 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     scheduler.step()
+    lr_after_step = optimizer.param_groups[0]["lr"]
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_pre /= max(n_batches, 1)
@@ -566,6 +567,8 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_pre_clip": epoch_grad_norm_pre,
         "clip_grad_norm": cfg.clip_grad_norm,
+        "eta_min": cfg.eta_min,
+        "lr_after_step": lr_after_step,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
