@@ -5,6 +5,24 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 19:40 — PR #4052 (charliepai2i48h5-nezuko): clip ceiling sweep {2.0, 4.0} on BF16+LS+n10+clip=1.0 — CLOSED (ceiling confirmed at clip=1.0)
+
+- branch: `charliepai2i48h5-nezuko/bf16-clip-ceiling-sweep`
+- hypothesis: does pushing clip above 1.0 continue to yield val improvement? clip=1.0 showed 5% step-escape by ep17; higher ceiling could expand effective step size further.
+- results (both arms on n=10/bs=8, tested against 65.70/57.80 baseline):
+
+  | arm | clip | val_avg | test_avg | Δ val vs 65.70 | best_epoch | clip_frac @ep17 |
+  |---|---|---|---|---|---|---|
+  | baseline | 1.0 | 65.70 | 57.80 | — | 17 | ~5% escape |
+  | arm-1 | 2.0 | 68.21 | 61.79 | +3.81% ✗ | 17 | 15.5% escape |
+  | arm-2 | 4.0 | 66.46 | 57.24 | +1.16% ✗ val / -1.04% test ✓ | 17 | 46.4% escape |
+
+- per-split test surf_p (arm-2 clip=4.0): single=63.17 (-3.18% ✓), rc=68.29 (-4.39% ✓), cruise=40.48 (+5.66% ✗), re_rand=57.02 (+1.44% ✗) — mixed, noise-level
+- artifacts: `models/model-bf16-layerscale-clip20-20260516-164137/metrics.jsonl`, `models/model-bf16-layerscale-clip40-20260516-173228/metrics.jsonl`
+- commentary: CLOSED. **Clip ceiling definitively confirmed at 1.0 on val_avg.** Mechanism explained by three phases: (1) 0.25→1.0: clip is effective step-length cap, loosening expands step → monotone gain. (2) 1.0 (peak): clip_frac=0.95 at ep17 — 5% of steps escape, "barely binding", sweet spot. (3) 2.0: newly-escaped steps have moderate-magnitude gradients that displace optimizer trajectory without being true outliers — worst-of-both regime (+3.81% val). (4) 4.0: near-no-clip, optimizer follows its natural noise profile → marginal +1.16% val regression, but test improves on single+rc (larger-magnitude splits), worsens on cruise+re_rand. LayerScale γ remained stable across both arms (no divergence; γ_attn ~0.012, γ_mlp ~0.038). The pre-clip grad norm fell faster than predicted — clip=2.0 got only 15.5% escape (vs predicted 30-50%), showing the optimizer is more self-regulating than we assumed. **Follow-on: clip ceiling may shift under bs=2 (4.5× more steps, different gradient noise profile)** — nezuko assigned #4095 to test bs=2+clip=1.0 compound.
+
+---
+
 ## 2026-05-16 19:10 — PR #4026 (charliepai2i48h5-alphonse): batch_size sweep {2, 8} on BF16+LS+n10 — **MERGED (NEW BEST)**
 
 - branch: `charliepai2i48h5-alphonse/bf16-batch-size`

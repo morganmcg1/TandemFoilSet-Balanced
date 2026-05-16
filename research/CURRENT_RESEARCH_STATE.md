@@ -32,23 +32,20 @@
 | #4006 (fern, merged) | BF16 + LS + n_freqs=8 (clip=0.25) | 64.08 | 55.05 | -2.47% |
 | **#4026 (alphonse, merged)** | **BF16 + LS + n10 + batch_size=2** | **60.67** | **53.11** | **-5.32%** |
 
-## Active WIP (7 students)
+## Active WIP (8 students)
 
 | Student | PR | Hypothesis | Status | Baseline |
 |---|---|---|---|---|
+| alphonse | #4083 | bs=2 + n_freqs=8 compound (+ lr_t_max=18 arm) | wave-14 NEW | 60.67 |
+| nezuko | #4095 | bs=2 + clip=1.0 compound; arm-2: triple bs=2+n=8+clip=1.0 | wave-14 NEW | 60.67 |
 | fern | #4058 | n_freqs lower {4, 6} on BF16+LS+n8 | wave-13 WIP | 64.08 |
 | thorfinn | #4059 | sw {2.5, 5.0} compound test on BF16+LS+n8 | wave-13 WIP | 64.08 |
 | frieren | #4060 | fourier_base {1.5, 2.5} on BF16+LS+n8 | wave-13 WIP | 64.08 |
 | edward | #4053 | n_freqs {8, 12} at clip=1.0 — INCLUDES critical n=8+clip=1.0 compound | wave-12 WIP | 65.70 |
-| nezuko | #4052 | clip ceiling {2.0, 4.0} on BF16+LS+n10+clip=1.0 | wave-12 WIP | 65.70 |
 | tanjiro | #4033 | Huber δ {0.15, 0.5} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
-| askeladd | #4027 | LR {7e-4, 1e-3} on BF16+LS+n10+clip=0.25 | wave-11 WIP (recovered from rate-limit) | 67.19 |
+| askeladd | #4027 | LR {7e-4, 1e-3} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
 
-**Note:** All in-flight PRs were assigned against pre-bs=2 baselines. Any result <60.67 is a new winner. Otherwise their findings still inform variable optimums independently of batch_size (which acts on a different lever entirely).
-
-## Idle / new assignment in flight
-
-- **alphonse** (idle after #4026 merge) — to be assigned bs=2 + n=8 compound
+**Note:** All in-flight PRs assigned before bs=2 merge → baseline now 60.67. Any result below that is a new winner. Wave-11 results still inform variable optimums independently (different lever axes from bs).
 
 ## Closed this round
 
@@ -72,6 +69,7 @@
 | #3971 (edward) | EMA warm-up on FP32 triple: arm-1 +4.1%, arm-2 +50%. Superseded by BF16+clip=1.0 |
 | #4008 (thorfinn) | sw=5: val=64.10 — independent win superseded by parallel #4006 (n=8) merge |
 | #4014 (frieren) | Width n=120: throughput hypothesis fails (no speedup), test ties |
+| #4052 (nezuko) | clip ceiling {2.0, 4.0}: both arms regress on val (68.21 / 66.46 vs 65.70). Ceiling confirmed at clip=1.0. Non-monotone: clip=2.0 worst (+3.81%), clip=4.0 mixed (+1.16% val / -1.04% test) |
 
 ## Current research themes
 
