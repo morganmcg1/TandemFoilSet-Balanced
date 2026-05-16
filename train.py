@@ -451,6 +451,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
+    adam_eps: float = 1e-8  # AdamW denominator epsilon: θ ← θ − lr·m̂/(√v̂ + eps)
 
 
 cfg = sp.parse(Config)
@@ -517,11 +518,12 @@ if cfg.layer_scale_init > 0:
             {"params": no_decay_params, "weight_decay": 0.0},
         ],
         lr=cfg.lr,
+        eps=cfg.adam_eps,
     )
     print(f"Optimizer: AdamW with {len(no_decay_params)} no-decay gamma params, "
-          f"{len(decay_params)} decay params")
+          f"{len(decay_params)} decay params, eps={cfg.adam_eps}")
 else:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, eps=cfg.adam_eps)
 cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
