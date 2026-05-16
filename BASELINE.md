@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-05-16 14:25 — PR #3908: SwiGLU mlp_ratio=3 (alphonse) — ← CURRENT BEST
+
+- **val_avg/mae_surf_p: 59.0038** (best epoch 12/12, W&B run `4n7z1mwm`) — **−2.83% vs previous best 60.7195**
+- **test_avg/mae_surf_p: 50.7368** — **−2.35% vs previous best 51.9559**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 62.4661 | 57.1946 |
+| geom_camber_rc | 71.9954 | 62.6291 |
+| geom_camber_cruise | 41.9057 | 33.6630 |
+| re_rand | 59.6480 | 49.4603 |
+| **avg** | **59.0038** | **50.7368** |
+
+- **Model config:** SwiGLU FFN, n_hidden=160, n_layers=5, n_head=4, slice_num=64, **mlp_ratio=3**, inner_dim=320, ~1.285M params (+0.25M vs mlp_ratio=2 baseline)
+- **Change from previous baseline:** `--mlp_ratio 3` (inner_dim 216 → 320); wider gated FFN
+- **Val curve:** Best epoch 12/12 (last epoch). Model still converging at budget end.
+- **Also tested:** mlp_ratio=4 (inner_dim=424, 1.535M params) → val=59.9421/test=51.1934; ratio=3 wins both val and test
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=12); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+
+**Reproduce command:**
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=40 python train.py --epochs 12 --mlp_ratio 3
+```
+
+---
+
 ## 2026-05-16 12:45 — PR #3905: SwiGLU + epochs=12 (askeladd)
 
 - **val_avg/mae_surf_p: 60.7195** (best epoch 12/12, W&B run `j4ej0kge`) — **−5.5% vs previous best 64.2430**
