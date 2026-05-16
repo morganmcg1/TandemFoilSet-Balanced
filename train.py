@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -340,6 +341,18 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     )
 
 
+def get_temperature(epoch: int, cfg) -> float:
+    """Cosine anneal from temp_anneal_start to temp_anneal_end over cosine_t_max epochs."""
+    progress = min(epoch / cfg.cosine_t_max, 1.0)
+    return cfg.temp_anneal_end + (cfg.temp_anneal_start - cfg.temp_anneal_end) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def set_temperature(model, tau: float):
+    for m in model.modules():
+        if isinstance(m, PhysicsAttention):
+            m.temperature.data.fill_(tau)
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -355,6 +368,9 @@ class Config:
     surf_weight: float = 10.0
     huber_delta: float = 1.0
     cosine_t_max: int = 20
+    temp_anneal: bool = True
+    temp_anneal_start: float = 1.0
+    temp_anneal_end: float = 0.1
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -403,6 +419,10 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+if cfg.temp_anneal:
+    for m in model.modules():
+        if isinstance(m, PhysicsAttention):
+            m.temperature.requires_grad_(False)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
@@ -432,6 +452,13 @@ for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    if cfg.temp_anneal:
+        tau = get_temperature(epoch, cfg)
+        set_temperature(model, tau)
+        print(f"  temperature τ = {tau:.4f}")
+    else:
+        tau = None
 
     t0 = time.time()
     model.train()
@@ -499,6 +526,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "temperature": tau,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
