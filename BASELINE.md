@@ -1,6 +1,41 @@
 # Baseline — TandemFoilSet (willow-pai2i-48h-r5)
 
-## Current best — PR #3976 (Lion lr=1.5e-4 — inflection point of monotone LR gain)
+## Current best — PR #4056 (grad_clip=1.0 — gradient norm clipping on Lion at lr=1.5e-4)
+
+**val_avg/mae_surf_p = 61.1778** (W&B run: `y5tua53k`, PR #4056 Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm)
+**test_avg/mae_surf_p = 52.0853** (same run `y5tua53k`, clean 4-split)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|------------------|
+| single_in_dist | 65.37 | 56.81 |
+| **geom_camber_rc** | **76.90** | **66.84** |
+| **geom_camber_cruise** | **41.74** | **34.22** |
+| **re_rand** | **60.70** | **50.47** |
+
+**Δ vs prior best (PR #3976 lr=1.5e-4 no-clip, val 63.05 / test 53.60): −1.87 val / −1.51 test**
+
+Key: 3/4 splits improve on val AND test. Largest gain on camber_rc (val −3.84 / test −3.71 — the weakest OOD split). re_rand also large (val −2.83 / test −2.23). in_dist regresses slightly (+0.92 val / +1.12 test — within seed noise).
+
+Mechanism: grad norm clipping clips EVERY step (pre-clip norm median ~27, clip threshold 1.0 → every step is rescaled). This acts as a constant per-step update scale on top of Lion's sign-update, further stabilizing the OOD splits. Not an outlier-clipping story — the entire gradient norm distribution sits above clip=1.0. Sweet spot at clip=1.0 (not 0.5 or 2.0).
+
+**Reproduce (PR #4056 Arm B — winner):**
+```bash
+cd target/
+python train.py --agent willowpai2i48h5-thorfinn --epochs 50 \
+  --wandb_group round10-gradclip-thorfinn \
+  --loss_type smooth_l1 --loss_beta 0.05 \
+  --n_fourier 0 \
+  --cosine_t_max 14 \
+  --optimizer_name lion --lr 1.5e-4 --weight_decay 1e-3 \
+  --ema_decay 0.997 \
+  --use_film \
+  --grad_clip 1.0 \
+  --wandb_name thorfinn-r10-gradclip-1p0
+```
+
+---
+
+## Prior best — PR #3976 (Lion lr=1.5e-4 — inflection point of monotone LR gain)
 
 **val_avg/mae_surf_p = 63.0492** (W&B run: `jurrwig2`, PR #3976 Lion lr=1.5e-4 + n_fourier=0 + FiLM + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14; NO spec_norm)
 **test_avg/mae_surf_p = 53.6049** (same run `jurrwig2`, clean 4-split)
