@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~21:35 UTC
+- **Last updated:** 2026-05-16 ~21:55 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -87,7 +87,7 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4150** | tanjiro | lr=7e-4 + warmup=1 on n_hidden=176+bf16+ep14 (30-min budget test) | WIP (assigned 20:50) |
 | **#4129** | askeladd | AdamW beta2 sweep (0.95, 0.98) on n_hidden=176+bf16+ep18 | WIP |
 | **#4165** | alphonse | slice_num=48 retest (other side of curve) | WIP (assigned 21:35) |
-| **#4143** | thorfinn | n_head=8 retest on new baseline (architectural, orthogonal to slice_num) | WIP |
+| **#4178** | thorfinn | EMA of weights (decay=0.999) for val/test eval — free-lunch retest on current stack | WIP (assigned 21:55) |
 
 ### Round-7 still in-flight (assigned earlier, results pending)
 | # | Student | Hypothesis | State |
@@ -108,6 +108,8 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 | **#4112** | thorfinn | DSDF-norm as input feature | CLOSED ~20:30 (val +2.57%, test +3.45%; OOD splits worst; encoder already has full DSDF) |
 | **#4108** | alphonse | n_layers=6 bf16 retest | CLOSED ~20:30 (val=62.05 cut ep13/18 @ 30-min env; depth=6 exhausted on 30-min budget; #4140 assigned) |
 | **#4039(v1)** | edward | Multi-scale Fourier PE (3 arms on prior baseline) | Arm B WIN on #3981 (val=51.47, −4.34%/-5.22%); doesn't beat #4082 (val=50.90); **sent back for stacked retest on n_hidden=176** |
+| **#4140** | alphonse | slice_num=96 retest on new baseline | CLOSED ~21:30 (val=74.47 cut ep12/18; monotonic worse 64→96; #4165 slice=48 assigned) |
+| **#4143** | thorfinn | n_head=8 retest on new baseline | CLOSED ~21:50 (val=53.50 +2.6%, test=46.16 +2.3%, all 4 splits regress; +32% wall-clock from head_dim=22 < matmul threshold; #4178 EMA assigned) |
 
 ### Prior baseline progression
 | # | Student | Hypothesis | Outcome |
@@ -144,8 +146,9 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 | #4112 | thorfinn | DSDF-norm as input feature | `--n_hidden 176 --use_bf16 --use_dsdf_norm_feature --epochs 18`, T=45 | CLOSED (val +2.57% regress) |
 | #4129 | askeladd | AdamW beta2 sweep (0.95, 0.98) | `--adam_beta2 0.95/0.98 --n_hidden 176 --use_bf16 --epochs 18`, T=45 (2 arms) | WIP |
 | #4140 | alphonse | slice_num=96 retest on new baseline | `--slice_num 96 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | CLOSED (val=74.47 cut ep12; monotonic worse from 64→96) |
-| **#4143** | thorfinn | n_head=8 retest on new baseline | `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | WIP |
-| **#4165** | alphonse | slice_num=48 retest (other side of curve) | `--slice_num 48 --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP (new) |
+| #4143 | thorfinn | n_head=8 retest on new baseline | `--n_head 8 --n_hidden 176 --use_bf16 --epochs 18`, T=45 | CLOSED (val=53.50 +2.6%, all 4 splits regress; +32% wall-clock from head_dim=22 < matmul threshold) |
+| **#4165** | alphonse | slice_num=48 retest (other side of curve) | `--slice_num 48 --n_hidden 176 --use_bf16 --epochs 18` (no T override) | WIP |
+| **#4178** | thorfinn | EMA of weights for val/test eval (decay=0.999) | `--n_hidden 176 --use_bf16 --epochs 18 --use_ema --ema_decay 0.999` | WIP (new) |
 
 **Note on env timeout (important):** Pod env caps vary. Alphonse and tanjiro pods enforce 30-min hard wall (per #4108, #4111 student flags). Fern and thorfinn pods run 39+ min fine. Future assignments to alphonse/tanjiro must be designed for ≤30-min wall. Instructions to these students should NOT include `SENPAI_TIMEOUT_MINUTES` override since isolation rules prohibit it. Nezuko, askeladd, frieren, edward: budget unknown — assume 30 min unless evidence otherwise.
 
@@ -156,7 +159,8 @@ Deferred to round-9 (backlog):
 - Stacking interactions: depth + width, curvature loss + DSDF feature, etc.
 - Mixup-style geometry blending across samples
 - Stronger curvature proxy variants (gradient of DSDF, learned curvature head)
-- EMA of weights
+- n_head=2 head_dim=88 sanity foil (thorfinn #4143 follow-up — closes n_head axis if 4 is true peak)
+- n_head=8 + n_hidden≥256 stacking (head_dim≥32 to clear matmul compute-bound threshold)
 
 ## Potential next research directions (post-round-8)
 

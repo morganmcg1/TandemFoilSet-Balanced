@@ -1,5 +1,76 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 21:55 — PR #4143 closed; #4178 assigned — thorfinn EMA retest on current stack
+
+### #4143 thorfinn n_head=8 retest — **CLOSED** (val=53.50, +2.60 vs 50.90, all 4 test splits regress)
+
+- **Student:** willowpai2i48h4-thorfinn (branch: `willowpai2i48h4-thorfinn/n-head-8-retest`)
+- **Hypothesis:** n_head=8 (head_dim=22) might unlock more attention paths on the new n_hidden=176+bf16+ep18 stack, orthogonal to slice_num.
+- **Result:** val=53.5034 (+2.60 vs 50.9008), test=46.1605 (+2.26 vs 43.8989). All 4 test splits regressed by +2-3%. Truncated at ep16/18 due to 45-min cap. W&B run: `y5d3y61e`.
+
+### Headline (vs #4082 baseline at n_head=4)
+
+| Metric | Baseline #4082 (n_head=4) | n_head=8 (cut @ ep16/18) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 50.9008 | 53.5034 | +2.60 (+5.1%) |
+| test_avg/mae_surf_p | 43.8989 | 46.1605 | +2.26 (+5.1%) |
+| single_in_dist | 48.97 | 51.66 | +2.69 |
+| geom_camber_rc | 55.45 | 58.28 | +2.83 |
+| geom_camber_cruise | 28.27 | 30.53 | +2.26 |
+| re_rand | 42.91 | 44.17 | +1.26 |
+
+### Key diagnostic: +32% wall-clock cost from head_dim=22 below matmul threshold
+
+n_head=8 at n_hidden=176 gives head_dim=22. Per-epoch time went from ~130 s (n_head=4) → ~172 s (+32%), even though attention FLOPs should be invariant to head count at fixed n_hidden. Student's hypothesis: **head_dim=22 falls below the tensor-core compute-bound threshold**, pushing the attention kernel into a less efficient memory-bound regime. This is the most important finding from #4143 — it bounds future n_head exploration to configurations where head_dim ≥ 32 (likely n_hidden ≥ 256 for n_head=8).
+
+### Val trajectory (still descending at cut)
+
+| Epoch | val | Δ from prev |
+|---|---:|---:|
+| 13 | 66.17 | — |
+| 14 | 60.36 | −5.81 |
+| 15 | 58.14 | −2.22 |
+| 16 | **53.50** (cut) | −4.64 |
+
+Even granting 2 more epochs at ~4 pts/ep, n_head=8 would land at ~46-50 val — still parity at best, not a clear win, at +32% cost. Not productive on this stack.
+
+### Decision
+
+**Closed.** PR's send-back band (val<53.82) was technically hit, but:
+1. The 32% per-epoch cost makes stacking n_head=8 + wider n_hidden infeasible until n_hidden ≥ 256 (>30 min wall for 18 epochs even at baseline n_head=4).
+2. All 4 test splits regressed — broad-based, not a single-split artifact.
+3. The right next step (n_head=8 + n_hidden=256) is a separate larger experiment, not a send-back variation.
+
+### Round-9 backlog items recorded
+
+- **n_head=2 head_dim=88 sanity foil** (student's own suggestion) — closes the n_head axis if 4 is true peak.
+- **n_head=8 + n_hidden ≥ 256** stacking — only viable when head_dim ≥ 32 clears the matmul compute-bound threshold.
+
+### #4178 thorfinn EMA of weights — **ASSIGNED**
+
+- **Hypothesis:** Exponential Moving Average (EMA) of model weights is the canonical "free lunch" — averaging late-training oscillations under cosine annealing typically gives +0.5% to +2% on val/test. Orthogonal to architecture/loss/optimizer changes; stacks with everything.
+- **Implementation:** ~50 lines added to `target/train.py`. Custom `EMA` class (init, update, apply_shadow, restore). CLI flags `--use_ema --ema_decay 0.999`. Apply EMA weights for val/test eval, restore live weights for training.
+- **Why decay=0.999:** With ~700 train samples × bs=4 = ~175 steps/epoch, by ep18 the initial random init is washed out (0.999^3150 ≈ 0.04). Well-tuned for the 18-epoch schedule.
+- **Why now:** EMA appears in our "confirmed exhausted" notes (from earlier track inheritance, no record of testing on current stack). The stack has changed materially: bf16, SwiGLU, n_hidden=176, ep18. The result on this stack is unknown and worth a single principled test.
+- **Budget:** ~+1-3% per-epoch overhead from EMA update step. Total ~40 min — within thorfinn's normal pod cap.
+- **Decision criteria:** Merge if val<50.90 AND test<43.90; send back for decay sweep (0.9995, 0.995) if val<51.5; close if val≥52.
+- **Command:**
+
+```bash
+cd "target/" && python train.py \
+  --n_hidden 176 --epochs 18 --use_bf16 \
+  --use_ema --ema_decay 0.999 \
+  --wandb_name thorfinn-ema-nh176-bf16-ep18
+```
+
+### EV reasoning
+
+- If EMA wins: stacks with all currently-in-flight wins (fern n_hidden=192, edward Fourier PE retest, frieren curvature retest). One winning experiment that compounds with everything else is high-leverage.
+- If EMA loses on this stack: confirms cosine schedule already finds the right neighborhood, and we can definitively close the EMA axis (which currently has uncertain prior status from older stacks).
+- Either outcome is informative.
+
+---
+
 ## 2026-05-16 21:35 — PR #4140 closed; #4165 assigned — alphonse slice_num=48 retest
 
 ### #4140 alphonse slice_num=96 retest — **CLOSED** (val=74.47, +46.3% regress, cut ep12/18 by 30-min cap)
