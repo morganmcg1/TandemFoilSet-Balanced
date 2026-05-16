@@ -376,6 +376,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 5e-4
+    max_lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -431,10 +432,42 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Symbolic Discovery of Optimization Algorithms, Chen et al. 2023)."""
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if "momentum" not in state:
+                    state["momentum"] = torch.zeros_like(p)
+                m = state["momentum"]
+                update = m.clone().mul_(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update.mul_(-lr))
+                if wd != 0:
+                    p.mul_(1.0 - lr * wd)
+                m.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
+optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    max_lr=1e-3,
+    max_lr=cfg.max_lr,
     total_steps=len(train_loader) * 14,
     pct_start=0.1,
     div_factor=25,
