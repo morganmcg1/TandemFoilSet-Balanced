@@ -5,7 +5,48 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
-## 2026-05-16 21:40 — PR #4132: H: Lookahead optimizer (k=5, α=0.5) on triple-stack ← NEW PROGRAMME ALL-TIME BEST
+## 2026-05-16 23:30 — PR #4158: Lookahead k=3 on triple-stack ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-nezuko
+- **Branch:** `willowpai2i48h1-nezuko/lookahead-k-sweep`
+- **W&B run:** `oeb54ela`
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **55.9681** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 67.0196 |
+| val_geom_camber_rc | 68.3884 |
+| val_geom_camber_cruise | 35.7004 |
+| val_re_rand | 52.7639 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 59.9794 |
+| test_geom_camber_rc | 60.9830 |
+| test_geom_camber_cruise | 47.2302 |
+| test_re_rand | 45.5767 |
+| **test_avg/mae_surf_p** | **53.4423** |
+
+- **Surface MAE (test_avg):** Ux=0.6913, Uy=0.3631, p=53.4423
+- **Δ vs prior best (#4132 k=5):** val −1.252, test −0.605
+
+### Reproduce
+```bash
+cd target/ && python train.py \
+  --agent willowpai2i48h1-nezuko \
+  --wandb_name "willowpai2i48h1-nezuko/lookahead_k3_a05_triple_stack_seed0" \
+  --wandb_group lookahead_k_sweep \
+  --use_geglu --seed 0 --lookahead_k 3 --lookahead_alpha 0.5
+```
+
+---
+
+## 2026-05-16 21:40 — PR #4132: H: Lookahead optimizer (k=5, α=0.5) on triple-stack ← PROGRAMME ALL-TIME BEST (superseded by #4158)
 
 - **Student:** willowpai2i48h1-nezuko
 - **Branch:** `willowpai2i48h1-nezuko/lookahead-optimizer-triple-stack`
