@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 20:50
+- **Date:** 2026-05-16 21:10
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -40,8 +40,8 @@
 | nezuko | #4095 | bs=2 + clip=1.0 compound; arm-2: triple bs=2+n=8+clip=1.0 | wave-14 NEW | 60.67 |
 | tanjiro | #4103 | bs=2 + Huber δ={0.15, 0.10} compound | wave-14 NEW | 60.67 |
 | askeladd | #4115 | bs=2 + lr={7e-4, 8e-4} compound | wave-14 NEW | 60.67 |
-| fern | #4058 | n_freqs lower {4, 6} on BF16+LS+n8 | wave-13 WIP | 64.08 |
-| thorfinn | #4059 | sw {2.5, 5.0} compound test on BF16+LS+n8 | wave-13 WIP | 64.08 |
+| fern | #4130 | EMA re-test at bs=2 (τ={0.998, 0.995}) | wave-14 NEW | 60.67 |
+| thorfinn | #4131 | slice_num sweep {128, 192} at bs=2 (first-ever arch sweep) | wave-14 NEW | 60.67 |
 | frieren | #4125 | bs=1 sweep — extreme steps-in-budget (n=10 and n=8 arms) | wave-14 NEW | 60.67 |
 | edward | #4053 | n_freqs {8, 12} at clip=1.0 — INCLUDES critical n=8+clip=1.0 compound | wave-12 WIP | 65.70 |
 | tanjiro | #4033 | Huber δ {0.15, 0.5} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
@@ -75,6 +75,8 @@
 | #4033 (tanjiro) | Huber δ {0.15, 0.5}: δ=0.15 beats δ=0.3 on n=10 stack (val=64.00, -3.19%), stale baseline (post-#4026 merge best is 60.67). BF16 favors tighter δ thesis confirmed. Compound (δ=0.15 + bs=2) assigned #4103 |
 | #4027 (askeladd) | LR {7e-4, 1e-3}: lr=7e-4 wins by -8.75% val (61.31 vs 67.19 baseline). Largest single-knob win any wave. Stale baseline (current best 60.67). clip_frac=1.000 throughout — effective step = lr × 0.25 × dir(g). Compound (lr=7e-4 + bs=2) assigned #4115 |
 | #4060 (frieren) | fourier_base {1.5, 2.5}: both regress vs 64.08 baseline (64.79 / 65.03). fourier_base=2.0 locally optimal. octave spacing not tunable here — pivoted frieren to bs=1 sweep (#4125) |
+| #4058 (fern) | n_freqs {4, 6}: n=6 val=63.22 but test=56.76 (rc +4.78%). n=8 is local minimum on test. Pivoted fern to EMA-bs2 (#4130) |
+| #4059 (thorfinn) | sw {2.5, 5.0} on n=8 stack: both ~63.2-63.4 (vs current best 60.67). 3.7pt seed variance makes result noise-level. sw/n_freqs not independent. Pivoted thorfinn to slice_num sweep (#4131) |
 
 ## Current research themes
 
@@ -91,11 +93,11 @@ The big shift this wave:
 3. **bs=1** — push the steps lever further; does it keep paying? Or does gradient variance start mattering once we're saturating the GPU pipeline overhead?
 4. **bs=2 + longer epochs / different lr_t_max** — best_epoch=18/18 means we hit timeout still descending; lr_t_max=18 (per student suggestion) lets the cosine schedule finish
 
-### Wave-13 (in flight, on n=8 baseline 64.08)
+### Wave-13 (all closed; n=8 baseline 64.08 experiments complete)
 
-- **fern #4058**: n_freqs lower {4, 6} — does the curve bottom at n=8 or keep going?
-- **thorfinn #4059**: sw {2.5, 5.0} compound test on n=8
-- **frieren #4060** CLOSED: fourier_base {1.5, 2.5} both regress vs 64.08. base=2.0 locally optimal. Reassigned to **#4125 bs=1 sweep**
+- **frieren #4060** CLOSED: fourier_base {1.5, 2.5} both regress. base=2.0 locally optimal. → #4125 bs=1 sweep
+- **fern #4058** CLOSED: n_freqs {4, 6} — n=8 confirmed local minimum on test. → #4130 EMA-bs2
+- **thorfinn #4059** CLOSED: sw {2.5, 5.0} — noise-level, sw/n_freqs not independent, 3.7pt seed variance. → #4131 slice_num sweep
 
 These are still useful: any result <60.67 is a new winner, and they inform whether the optimum of each independent lever shifts on the n=8 stack.
 
@@ -132,10 +134,10 @@ These are still useful: any result <60.67 is a new winner, and they inform wheth
 - **bs=1** — push the steps lever further. ~27,000 updates in 30 min budget. Caveat: GPU pipeline overhead may dominate. **ASSIGNED: frieren #4125** (arm-1 n=10, arm-2 n=8).
 - **bs=2 + n=8 + clip=1.0 triple** — combine all three independent wins
 - **bs=2 + lr_t_max=18** — let cosine finish given best_epoch=18 (student-suggested)
-- **bs=2 + EMA re-test** — EMA's "smoothing window covers <50%" critique partly inverts when steps double; the question is open at 13,500 updates
-- **bs=2 + width expansion** — 18.5 GB headroom means n_hidden=256 fits, slice_num=128 fits
-- **mlp_ratio sweep** — currently 2; with extra memory budget, mlp_ratio=4 is safe
-- **slice_num sweep** — Transolver's slice_num=64 default never swept; attention-bound runtime makes this high-leverage; with bs=2 memory headroom we can try slice_num=128/256
+- **bs=2 + EMA re-test** — **ASSIGNED: fern #4130** (τ={0.998, 0.995}); EMA dead at bs=8 but 13,500 steps may revive it
+- **slice_num sweep at bs=2** — **ASSIGNED: thorfinn #4131** ({128, 192}); first-ever architectural sweep, enabled by bs=2 memory headroom
+- **bs=2 + width expansion** — 18.5 GB headroom means n_hidden=256 fits after #4130/#4131 results inform priority
+- **mlp_ratio sweep** — currently hardcoded 2; mlp_ratio=4 with bs=2 memory headroom
 - **Sub-55 val target**: val=60.67 now; bs=2 + n=8 compound is the obvious next push toward 55-57; +lr_t_max=18 could go lower
 
 ## Ideas dossier

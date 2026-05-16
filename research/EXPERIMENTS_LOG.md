@@ -5,6 +5,44 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 21:00 — PR #4059 (charliepai2i48h5-thorfinn): surf_weight {2.5, 5.0} on BF16+LS+n8 — CLOSED (sw/n_freqs not independent; seed variance dominates)
+
+- branch: `charliepai2i48h5-thorfinn/bf16-surf-weight-n8`
+- hypothesis: surf_weight=5.0 win (from #4008 on n=10 stack) should compound with n_freqs=8; arm-2 pushes sw lower to 2.5
+- results (both arms on n=8/bs=8, vs the cited baseline 64.08/55.05):
+
+  | arm | surf_weight | val_avg | test_avg | Δ val vs 64.08 | best_epoch | clip_frac |
+  |---|---|---|---|---|---|---|
+  | arm-1 | 5.0 | 63.35 | 55.15 | -1.14% | 17 | 0.995 |
+  | arm-2 | 2.5 | **63.24** | **55.48** | **-1.31%** | 17 | 0.992 |
+  | (baseline reference) | 10.0 | 64.08 | 55.05 | — | — | — |
+
+- **Critical finding**: student ran arm-1 (sw=5) twice and got val=67.04 (run 1) vs val=63.35 (run 2) — a **3.7-point seed variance** from random init alone. The ~1.1-1.3% apparent improvement over 64.08 is entirely within this noise window.
+- per-split test surf_p (arm-2 sw=2.5): single=59.80 (-3.70% ✓), rc=69.46 (+1.95% ✗), cruise=38.29 (+4.53% ✗), re_rand=54.35 (+1.87% ✗) — cruise regression persists at ALL sw<10 values
+- artifacts: `models/model-bf16-layerscale-n8-sw5-20260516-192443/metrics.jsonl`, `models/model-bf16-layerscale-n8-sw25-20260516-183420/metrics.jsonl`
+- commentary: CLOSED. **surf_weight and n_freqs are NOT independent levers** — both target the gradient balance between surface and volume loss. n_freqs=8 already resolves most of this imbalance; reducing surf_weight further provides no additional benefit and hurts cruise. Cruise regression (+4.4%) is structural across n=10 and n=8 at sw<10. Note: even arm-2's best val=63.24 is far worse than the current best (60.67 from bs=2). **Key new finding: ~3.7-point seed variance** at this operating point — any result within ±2pt of baseline is noise-level. **Assigned thorfinn #4131**: slice_num sweep {128, 192} at bs=2 — first-ever architectural sweep of Transolver slot granularity, enabled by bs=2 memory headroom.
+
+---
+
+## 2026-05-16 21:00 — PR #4058 (charliepai2i48h5-fern): n_freqs lower sweep {4, 6} on BF16+LS+n8 — CLOSED (n=8 is local minimum on test)
+
+- branch: `charliepai2i48h5-fern/bf16-nfreqs-lower`
+- hypothesis: continuing to lower n_freqs below 8 may further improve val_avg/mae_surf_p; n=6 and n=4 arms
+- results (both arms on n=8 baseline 64.08/55.05, bs=8):
+
+  | arm | n_freqs | space_dim | val_avg | test_avg | Δ val vs 64.08 | Δ test vs 55.05 | best_epoch |
+  |---|---|---|---|---|---|---|---|
+  | arm-1 | 6 | 26 | **63.22** | 56.76 | **-1.34% ✓ val** | +3.11% ✗ test | 17 |
+  | arm-2 | 4 | 18 | 64.08 | 56.70 | 0.00% | +3.00% ✗ test | 17 |
+  | (baseline) | 8 | 34 | 64.08 | 55.05 | — | — | — |
+
+- per-split test surf_p (arm-1 n=6): single=62.02 (-0.08%), rc=72.91 (+4.78% ✗), cruise=37.76 (+1.13% ✗), re_rand=54.36 (+1.01% ✗) — val improvement concentrated in test_single, but rc badly regresses
+- **Note**: student initially ran both arms concurrently on 1 GPU (→ ~2.1× slowdown, only 7-8 epochs/budget). Killed and restarted sequentially — correct diagnosis and response.
+- artifacts: `models/model-charliepai2i48h5-fern-bf16-layerscale-n6-20260516-184040/metrics.jsonl`, `models/model-bf16-layerscale-n4-20260516-192247/metrics.jsonl`
+- commentary: CLOSED. **n=8 is definitively the local minimum on test_avg.** Full sweep: n=4→n=6→n=8→n=10→n=12→n=14 on test_avg reads 56.70→56.76→**55.05**→58.05→56.71→59.31. n=8 is a clear valley. The val improvement at n=6 (63.22 vs 64.08) is a generalization artifact: 5-point test_rc regression at n=6 shows that sub-octave Fourier spacing fails on the hardest geometry-extrapolation split. n=4 loses positional fidelity for single-foil meshes (+4.24 test_single). Both arms well below current best (60.67). **Assigned fern #4130**: EMA re-test at bs=2 (τ={0.998, 0.995}) — EMA was dead at bs=8 (~3,000 steps), but at bs=2 (~13,500 steps) the mechanism changes.
+
+---
+
 ## 2026-05-16 20:45 — PR #4060 (charliepai2i48h5-frieren): fourier_base sweep {1.5, 2.5} on BF16+LS+n8 — CLOSED (base=2.0 locally optimal)
 
 - branch: `charliepai2i48h5-frieren/fourier-base-sweep`
