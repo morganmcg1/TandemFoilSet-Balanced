@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 10:15
+- **Date:** 2026-05-16 10:25
 - **Launch:** willow-pai2i-48h-r1 (round 6 — SwiGLU/GeGLU era; new all-time best 65.37)
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r1`
 - **Budget per run:** 30 min wall clock, 50 epochs max (~17ep at h=128/gated-FFN, ~13ep at h=192+gated-FFN)
@@ -55,9 +55,7 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 | #3840 | frieren | **fc_gate LR boost 1.5x within SwiGLU blocks** | Running (NEW — surgical within-block LR targeting) |
 | #3837 | edward | **β_p=20 + SwiGLU stacking at h=128** | Running (NEW — capacity-interaction sign-flip finding) |
 | #3644 | nezuko | Cosine T_max=10 + constant tail + SWA on SwiGLU | WIP (rebasing) |
-| #3810 | tanjiro | GeGLU activation | ✓ MERGED (reassign pending) |
-
-**Note:** tanjiro just finished #3810. Needs new assignment.
+| **#3855** | **tanjiro** | **Bilinear gate (no activation) — closes GLU ablation** | **NEW — assigned 09:39** |
 
 ## Recently closed PRs (this session)
 
@@ -93,7 +91,7 @@ Beat the Transolver baseline on `val_avg/mae_surf_p` (lower is better). Paper-fa
 3. **#3832 askeladd head_and_embed LR boost** — direct follow-up to grad-norm inversion finding.
 4. **#3840 frieren fc_gate LR boost** — within-block surgical LR targeting.
 5. **#3811 alphonse dropout+SwiGLU** — regularization interaction with gating.
-6. **Reassign tanjiro** — #3810 just merged; tanjiro needs a new experiment. Priority: Bilinear gate (strongest discriminator for gating mechanism theory) or T_max scan on GeGLU/SwiGLU.
+6. **#3855 tanjiro Bilinear gate** — closes the GLU ablation family. If bilinear ≈ SwiGLU, multiplicative interaction alone explains gain.
 
 ## Next research directions (queue for next idle students)
 
