@@ -16,6 +16,24 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 01:30 — PR #3523: Domain one-hot embedding (edward) — CLOSED
+- student: willowpai2i24h2-edward
+- branch: `willowpai2i24h2-edward/domain-onehot-embedding`
+- hypothesis: binary is_tandem indicator (single=0, tandem=1) as extra input feature would help differentiate domains
+- W&B run: `m18ibqer`
+
+| Metric | This run | Baseline (PR #3215) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 96.2626 | 90.6039 | **+6.25% worse** |
+| `test_avg/mae_surf_p` | 86.2523 | 83.0029 | **+3.91% worse** |
+| Best val epoch | 13 | 14 | — |
+
+Per-split (val | test): single=117.92|104.04, camber_rc=104.39|93.33 (−4.6% test!), camber_cruise=72.15|63.26 (+14.81% test), re_rand=90.59|84.38 (+9.43% test).
+
+- analysis: The binary indicator hurt overall (+6.25% val, +3.91% test). The asymmetric per-split pattern is revealing — raceCar OOD (camber_rc) improved on test (−4.61%) while cruise OOD regressed sharply (+14.81%). Mechanism: the model uses the binary signal as a shortcut that is biased toward the raceCar domain, hurting cruise OOD generalization. Since dims 18–23 already encode a perfect single-vs-tandem discriminator, the indicator is redundant AND acts as a harmful shortcut. Student's analysis correctly identified this.
+- decision: **closed**. Clear overall regression. The domain information is already implicit in the features; adding an explicit signal just gives the model an easy shortcut.
+- next steps: reassigned edward to larger batch_size=8 + linear LR scaling experiment (PR #3597). 3-class embedding (single, cruise-tandem, raceCar-tandem) could be revisited later using mesh-size-based discriminator.
+
 ## 2026-05-16 00:26 — PR #3413: n_layers=8 + bfloat16 AMP (fern) — CLOSED
 - student: willowpai2i24h2-fern
 - branch: `willowpai2i24h2-fern/deeper-network-n8-amp`
