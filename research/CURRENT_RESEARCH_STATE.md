@@ -1,23 +1,24 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 11:45 (round-12 triage: closed #3872 Mish, #3853 β2=0.95, #3851 warmup 2→1 catastrophic, #3849 RMSNorm; pending 3 new assignments for askeladd, fern, tanjiro)
-- **Most recent research direction from human researcher team:** none (no open issues — verified 09:28Z).
+- **Last updated:** 2026-05-16 12:32 (round-12 triage complete: closed #3872 Mish, #3853 β2=0.95, #3851 warmup catastrophic, #3849 RMSNorm, #3727 frieren GEGLU stale; assigned 5 fresh PRs)
+- **Most recent research direction from human researcher team:** none (no open issues — verified 12:32Z).
 - **Current best (merged):** `val_avg/mae_surf_p` = **70.925** (PR #3643 n_head=2 head_dim=48)
-- **GH rate-limit status:** exhausted at 11:37 UTC; window reset at ~12:20 UTC.
+- **GH rate-limit status:** fresh window (~4100 remaining); next reset 13:20 UTC.
 
 ## Active PRs after this triage
 
 | PR | Student | Hypothesis | State | Notes |
 |----|---------|-----------|-------|-------|
-| #3645 | edward | surf_weight=10→5 (SwiGLU) | WIP (active 11:23 UTC) | Loss rebalance — back from stale, training now |
-| #3727 | frieren | GEGLU at hidden_inner=192 | WIP (stale 10:31 UTC) | Was −3.10% standalone — still stuck after 2nd nudge |
+| #3645 | edward | surf_weight=10→5 (SwiGLU) | WIP (active 11:23 UTC) | Loss rebalance — back from stale |
 | #3873 | nezuko | AdamW β1=0.9→0.95 | WIP (training) | Optimizer momentum hyper |
 | #3875 | thorfinn | Huber β=1.0→0.5 | WIP (training) | Loss-shape axis |
-| #PENDING | askeladd | Pre-norm → Post-norm in TransolverBlock | NEW (pending push) | Architectural reordering, budget-neutral |
-| #PENDING | fern | Learnable slot-attention temperature τ | NEW (pending push) | 5 params (one per block), init=1.0 |
-| #PENDING | tanjiro | trunc_normal init (std=0.02) on all Linear | NEW (pending push) | Initialization axis, never tested |
+| **#3935** | askeladd | Pre-norm → Post-norm in TransolverBlock | NEW (assigned 12:25) | Architectural reordering, budget-neutral |
+| **#3937** | fern | Learnable slot-attention temperature τ | NEW (assigned 12:28) | 5 params (one per block), init=1.0 |
+| **#3938** | tanjiro | trunc_normal init (std=0.02) on all Linear | NEW (assigned 12:30) | Initialization axis, never tested |
+| **#3939** | alphonse | GEGLU retest on n_head=2 stack | NEW (assigned 12:31) | Reassigned from frieren #3727 (stale) |
+| **#3940** | frieren | Log-magnitude pressure target | NEW (assigned 12:32) | First hypothesis attacking single_in_dist 81.93 worst-split |
 
-**#3727 frieren** still stuck after 2 nudges. If no commits by next wakeup, close and reassign — pod may need restart.
+All 8 students busy. **#3727 frieren GEGLU closed** after 3 nudges + 6h stale; GEGLU hypothesis preserved by reassignment to alphonse on a fresh pod.
 
 ## Branch context
 `icml-appendix-charlie-pai2i-24h-r2`. Local JSONL metrics only.
@@ -79,23 +80,24 @@ At batch=4 the gradient noise floor is high; Adam's default β1=0.9, β2=0.999 a
 
 Both pushed in the **opposite direction of conventional ML wisdom**. The physics surrogate prefers fewer-wider heads + gated FFN — suggests the relevant features are dense interactions across mesh tokens, not sparse multi-pattern attention.
 
-### Standing surprise: GEGLU > SwiGLU at hidden_inner=192 (pending compound retest)
-Frieren's #3727 showed GELU-gated FFN beats SiLU-gated by −3.1% val on the OLD stack. Retest on n_head=2 stack STILL STALE after 2 nudges over ~5h. If no progress by next wakeup, close and reassign.
+### Standing surprise: GEGLU > SwiGLU at hidden_inner=192 (compound retest now with alphonse #3939)
+Frieren's #3727 (old stack) showed GELU-gated FFN beats SiLU-gated by −3.1% val. #3727 closed 12:31 UTC after 6h stale + 3 nudges; hypothesis reassigned to alphonse as #3939 on a fresh pod. If GEGLU compounds with n_head=2, this is a candidate for another architectural axis.
 
 ## Current research focus
 
-### Tier 1 (compound architectural wins — in flight or stale)
-1. **GEGLU + n_head=2** — frieren (#3727 retest, **STALE — final nudge or close**).
+### Tier 1 (compound architectural wins — in flight)
+1. **GEGLU + n_head=2 retest** — alphonse (#3939, reassigned from frieren).
 2. **surf_weight=10→5** — edward (#3645, ACTIVE 11:23 UTC).
+3. **Log-magnitude pressure target** — frieren (#3940, NEW). First direct attack on single_in_dist worst-split.
 
-### Tier 2 (budget-neutral architectural & schedule alternatives — in flight)
-3. **AdamW β1=0.9→0.95** — nezuko (#3873).
-4. **Huber β=1.0→0.5** — thorfinn (#3875).
+### Tier 2 (budget-neutral architectural alternatives — in flight)
+4. **Pre-norm → Post-norm in TransolverBlock** — askeladd (#3935). Architectural reorder, never-tested.
+5. **Learnable slot-attention temperature τ per block** — fern (#3937). 5 new params init=1.0.
+6. **Truncated normal init (std=0.02) on Linear weights** — tanjiro (#3938). Initialization axis untested.
 
-### Tier 3 (round-12 new assignments — pending push)
-5. **Pre-norm → Post-norm in TransolverBlock** — askeladd (next assignment). Architectural reorder, never-tested.
-6. **Learnable slot-attention temperature τ per block** — fern (next assignment). 5 new params init=1.0.
-7. **Truncated normal init (std=0.02) on Linear weights** — tanjiro (next assignment). Initialization axis untested.
+### Tier 3 (optimizer/loss hypers — in flight)
+7. **AdamW β1=0.9→0.95** — nezuko (#3873).
+8. **Huber β=1.0→0.5** — thorfinn (#3875).
 
 ## Open questions
 - Does GEGLU compound with n_head=2 to give an additional −2-3%? (frieren #3727 STALE — possibly dead pod)
