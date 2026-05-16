@@ -416,6 +416,8 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "loss_type": cfg.loss_type,
+        "smooth_l1_beta": cfg.smooth_l1_beta,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -464,6 +466,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    loss_type: str = "mse"  # training loss: mse (current), l1, smooth_l1
+    smooth_l1_beta: float = 0.1  # beta for smooth_l1 loss (controls L2<->L1 transition)
 
 
 cfg = sp.parse(Config)
@@ -472,6 +476,7 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Training loss: {cfg.loss_type}" + (f" (beta={cfg.smooth_l1_beta})" if cfg.loss_type == "smooth_l1" else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -610,7 +615,21 @@ for epoch in range(MAX_EPOCHS):
         # gradients are magnitude-comparable across the Re range.
         y_log = signed_log1p(y_norm)
         pred_log = signed_log1p(pred)
-        sq_err = (pred_log - y_log) ** 2
+        err = pred_log - y_log
+        if cfg.loss_type == "mse":
+            pointwise = err ** 2
+        elif cfg.loss_type == "l1":
+            pointwise = err.abs()
+        elif cfg.loss_type == "smooth_l1":
+            abs_err = err.abs()
+            beta = cfg.smooth_l1_beta
+            pointwise = torch.where(
+                abs_err < beta,
+                0.5 * err ** 2 / beta,
+                abs_err - 0.5 * beta,
+            )
+        else:
+            raise ValueError(f"Unknown loss_type: {cfg.loss_type}")
 
         if not slog1p_diag_printed:
             with torch.no_grad():
@@ -634,8 +653,8 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (pointwise * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (pointwise * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
