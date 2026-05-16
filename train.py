@@ -360,6 +360,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    coord_jitter_sigma: float = 0.01  # Gaussian noise on normalized (x, z) inputs during training
 
 
 cfg = sp.parse(Config)
@@ -432,6 +433,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+_jitter_logged = False  # one-shot sanity log for coord jitter
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -451,6 +453,23 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Coordinate jitter: Gaussian noise on the normalized (x, z) channels during training only.
+        # Channels 0-1 are node position (x, z) per the dataset feature contract.
+        if cfg.coord_jitter_sigma > 0:
+            coord_noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_jitter_sigma
+            pre_jitter_sample = x_norm[0, 0, :2].detach().clone() if not _jitter_logged else None
+            x_norm = x_norm.clone()
+            x_norm[..., :2] = x_norm[..., :2] + coord_noise
+            if not _jitter_logged:
+                post_jitter_sample = x_norm[0, 0, :2].detach()
+                print(
+                    f"[coord-jitter] sigma={cfg.coord_jitter_sigma:.4f} on channels [0,1] (x,z) "
+                    f"| pre={pre_jitter_sample.cpu().tolist()} "
+                    f"-> post={post_jitter_sample.cpu().tolist()}"
+                )
+                _jitter_logged = True
+
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
             sq_err = (pred - y_norm) ** 2
