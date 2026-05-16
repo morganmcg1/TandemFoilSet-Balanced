@@ -22,6 +22,7 @@ import math
 import os
 import subprocess
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -464,6 +465,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    swa_tail_k: int = 0  # if >0, average weights from the last K epochs into a SWA model
 
 
 cfg = sp.parse(Config)
@@ -577,6 +579,12 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 slog1p_diag_printed = False
+
+swa_snapshots = deque(maxlen=cfg.swa_tail_k) if cfg.swa_tail_k > 0 else None
+print(
+    f"SWA tail-averaging: K={cfg.swa_tail_k} "
+    f"{'(disabled)' if cfg.swa_tail_k == 0 else 'enabled'}"
+)
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -698,8 +706,67 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    if swa_snapshots is not None:
+        swa_snapshots.append(
+            {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        )
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+swa_sd: dict[str, torch.Tensor] | None = None
+swa_val_split_metrics = None
+swa_val_avg: float | None = None
+snapshot_l2: list[float] = []
+if swa_snapshots is not None and len(swa_snapshots) > 0 and best_metrics:
+    print(f"\nComputing SWA tail-K={len(swa_snapshots)} weight average...")
+    keys = list(swa_snapshots[0].keys())
+    swa_sd = {}
+    for k in keys:
+        ref = swa_snapshots[0][k]
+        stacked = torch.stack([sd[k].float() for sd in swa_snapshots], dim=0)
+        swa_sd[k] = stacked.mean(dim=0).to(device).to(ref.dtype)
+    swa_path = model_dir / "checkpoint_swa.pt"
+    torch.save(swa_sd, swa_path)
+    print(f"SWA checkpoint saved to {swa_path}")
+
+    if len(swa_snapshots) >= 2:
+        param_keys = [k for k in keys if "weight" in k or "bias" in k or "gamma" in k]
+        for i in range(1, len(swa_snapshots)):
+            d2 = 0.0
+            for k in param_keys:
+                diff = (swa_snapshots[i][k].float() - swa_snapshots[i - 1][k].float())
+                d2 += float((diff * diff).sum().item())
+            snapshot_l2.append(math.sqrt(d2))
+        print(f"Per-snapshot ||Δθ|| (consecutive tail epochs): {snapshot_l2}")
+
+    model.load_state_dict(swa_sd)
+    model.eval()
+    swa_val_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_val_split_metrics)["avg/mae_surf_p"]
+    print(
+        f"\nSWA val_avg/mae_surf_p = {swa_val_avg:.4f} "
+        f"(vs best_epoch={best_metrics.get('epoch', '?')}: {best_avg_surf_p:.4f})"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "swa_eval",
+        "tail_k": len(swa_snapshots),
+        "swa_val_avg/mae_surf_p": swa_val_avg,
+        "swa_val_splits": swa_val_split_metrics,
+        "best_epoch_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_epoch": best_metrics.get("epoch"),
+        "snapshot_consecutive_l2": snapshot_l2,
+    })
+    if swa_val_avg < best_avg_surf_p:
+        delta = best_avg_surf_p - swa_val_avg
+        pct = 100.0 * delta / best_avg_surf_p
+        print(f"SWA beats best_epoch by {delta:.4f} ({pct:.2f}%) on val")
+    else:
+        delta = swa_val_avg - best_avg_surf_p
+        print(f"SWA worse than best_epoch by {delta:.4f} on val")
 
 # --- Test evaluation + local summary ---
 if best_metrics:
@@ -745,8 +812,10 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    swa_test_metrics = None
+    swa_test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (best_epoch checkpoint)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -757,7 +826,7 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (best_epoch)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
@@ -766,6 +835,46 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+        if swa_sd is not None:
+            print("\nEvaluating on held-out test splits (SWA checkpoint)...")
+            model.load_state_dict(swa_sd)
+            model.eval()
+            swa_test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  TEST (SWA tail-K={len(swa_snapshots)})  avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "swa_test",
+                "tail_k": len(swa_snapshots),
+                "swa_test_avg": swa_test_avg,
+                "swa_test_splits": swa_test_metrics,
+            })
+
+            best_val = best_avg_surf_p
+            cmp_val = swa_val_avg if swa_val_avg is not None else float("inf")
+            winner = "swa" if cmp_val < best_val else "best_epoch"
+            winner_val = cmp_val if winner == "swa" else best_val
+            winner_test = swa_test_avg["avg/mae_surf_p"] if winner == "swa" else test_avg["avg/mae_surf_p"]
+            print(
+                f"\nWinner by val_avg/mae_surf_p: {winner}  "
+                f"(val={winner_val:.4f}  test={winner_test:.4f})"
+            )
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "swa_decision",
+                "tail_k": len(swa_snapshots),
+                "winner": winner,
+                "winner_val_avg/mae_surf_p": winner_val,
+                "winner_test_avg/mae_surf_p": winner_test,
+                "best_epoch_val_avg/mae_surf_p": best_avg_surf_p,
+                "best_epoch_test_avg/mae_surf_p": test_avg["avg/mae_surf_p"],
+                "swa_val_avg/mae_surf_p": swa_val_avg,
+                "swa_test_avg/mae_surf_p": swa_test_avg["avg/mae_surf_p"],
+            })
 
     write_experiment_summary(
         model_path=model_path,
