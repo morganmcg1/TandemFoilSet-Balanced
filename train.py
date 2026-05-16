@@ -459,6 +459,9 @@ def write_experiment_summary(
         "surf_p_l1_weight": cfg.surf_p_l1_weight,
         "epochs_configured": cfg.epochs,
         "ema_decay": EMA_DECAY,
+        "t_max": cfg.t_max if cfg.t_max is not None else cfg.epochs,
+        "eta_min_factor": cfg.eta_min_factor,
+        "eta_min": cfg.lr * cfg.eta_min_factor,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -507,6 +510,13 @@ class Config:
     # training objective with the L1 (MAE) eval metric. 0 disables the term.
     surf_p_l1_weight: float = 0.0
     epochs: int = 50
+    # CosineAnnealingLR T_max. Defaults to MAX_EPOCHS (matches pre-flag behaviour).
+    # Set to the wall-clock-bounded epoch count so the schedule actually reaches its
+    # low-LR tail within the run (default 50 truncated at ~19 epochs is essentially
+    # a constant LR — see PR #3465).
+    t_max: int | None = None
+    # eta_min = lr * eta_min_factor. 0.0 reproduces pre-flag default behaviour.
+    eta_min_factor: float = 0.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -563,7 +573,10 @@ ema_model.eval()
 print(f"EMA model initialized (decay={EMA_DECAY})")
 
 optimizer = CautiousAdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+t_max = cfg.t_max if cfg.t_max is not None else MAX_EPOCHS
+eta_min = cfg.lr * cfg.eta_min_factor
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=eta_min)
+print(f"CosineAnnealingLR(T_max={t_max}, eta_min={eta_min:.2e})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -659,6 +672,8 @@ for epoch in range(MAX_EPOCHS):
             epoch_mask_mean += optimizer.last_mask_mean
         n_batches += 1
 
+    # Capture the LR used during this epoch's optimizer steps before stepping the scheduler.
+    epoch_lr = optimizer.param_groups[0]["lr"]
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -694,6 +709,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "train/lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/surf_p_l1": epoch_surf_p_l1,
@@ -706,6 +722,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"lr={epoch_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
         f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f} "
