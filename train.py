@@ -451,7 +451,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 5e-4
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-2
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
@@ -523,6 +523,7 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+print(f"AdamW: lr={optimizer.param_groups[0]['lr']:.2e}, weight_decay={optimizer.param_groups[0]['weight_decay']:.2e}")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 run = wandb.init(
@@ -630,6 +631,8 @@ for epoch in range(MAX_EPOCHS):
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    with torch.no_grad():
+        param_l2_norm = float(torch.sqrt(sum((p.detach().float() ** 2).sum() for p in model.parameters())).item())
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -638,6 +641,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "step_time_ms": step_time_ms,
         "gpu_mem_gb_peak": peak_gb,
+        "param_l2_norm": param_l2_norm,
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
