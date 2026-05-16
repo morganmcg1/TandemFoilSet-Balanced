@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~20:00 UTC) — **#4056 thorfinn MERGED** (grad_clip=1.0: val 61.18 / test 52.09, new best); #4057 edward CLOSED; #4120 thorfinn LR@clip1 / #4122 edward wd@clip1 assigned; tanjiro T_max=18 (val 59.22) WINNING, pending terminal; 8/8 staffed.
+- **Date:** 2026-05-16 (~20:35 UTC) — **#4084 fern CLOSED** (dropout informative null; camber_rc −4.23 val notable but net-negative); **#4128 fern surf_weight assigned**; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -45,8 +45,8 @@ Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| **#4084** | **fern** | **R10 H48: Dropout sweep {0.05, 0.10} on Transolver blocks at lr=1.5e-4** | **Just assigned** |
-| **#4085** | **askeladd** | **R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4** | **Just assigned** |
+| **#4128** | **fern** | **R10 H54: surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20}** | **Just assigned** |
+| **#4085** | **askeladd** | **R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4** | **WIP** |
 | **#4120** | **thorfinn** | **R10 H52: LR sweep at clip=1.0 {1.5e-4 ctrl, 2e-4, 2.5e-4}** | **Just assigned** |
 | **#4122** | **edward** | **R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3}** | **Just assigned** |
 | #4096 | frieren | R10 H50: SGDR cosine warm restarts {T_0=7, T_0=4 T_mult=2} | WIP |
@@ -58,6 +58,7 @@ Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4084 | fern | Dropout {0.05, 0.10}: monotone hurt (+0.67/+1.24 val vs ctrl); camber_rc −4.23 val (notable but net-negative) | CLOSED |
 | #4057 | edward | Surfrouting: vec arm val 62.76 (+1.58 vs new BL 61.18); falsification triggered (bias→0) | CLOSED |
 | #4049 | frieren | spec_norm at lr=1.5e-4: Arm B −0.27 val vs ctrl (within noise) | CLOSED |
 | #4046 | askeladd | p_weight upweighting monotone hurts (1→2→3 worsens) | CLOSED |
@@ -80,7 +81,7 @@ Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.
 | Optimizer stability | Grad clip {0.5, 1.0, 2.0} at lr=1.5e-4 | #4056 thorfinn | −0 to −2 val mean; variance reduction |
 | Architecture routing | Surface-biased PhysicsAttention routing | #4057 edward | −1 to −3 val; camber_rc target |
 | Schedule depth | T_max sweep {14, 18, 20} at lr=1.5e-4 | #4063 tanjiro | ≤−1 to +1 val; tests within-substrate T_max=20 transfer |
-| Block regularization | Dropout sweep {0.05, 0.10} in PhysicsAttention + FFN | #4084 fern | −0 to −2 val; targets camber_rc generalization |
+| Loss balance | surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} | #4128 fern | −0 to −2 val; tests loss balance on new substrate |
 | Gradient signal cleanliness | Batch size {8, 16} with Lion at lr=1.5e-4 | #4085 askeladd | −0 to −1.5 val; risk: wall-clock budget |
 | LR schedule reformulation | SGDR cosine warm restarts {T_0=7×2, T_0=4 T_mult=2} | #4096 frieren | −0 to −2 val; tests Lion+EMA × restarts compositional |
 
@@ -111,6 +112,6 @@ Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.
 1. **Tanjiro #4063 T_max=18 terminal** — T_max=18 val 59.22 / test 50.79 beats new BL 61.18/52.09. T_max=20 still running. Merge when terminal posted → likely new best.
 2. **Multi-FiLM treatment arm (alphonse #4044)** — highest-priority R10 hypothesis (camber_rc target). Currently ctrl-only; nudged for treatment launch.
 3. **Layer scale at new substrate (nezuko Arms D+E)** — if layer_scale=1e-4 on clip=1.0+lr=1.5e-4 beats val 61.18.
-4. **R10 in flight**: SGDR (#4096 frieren), dropout (#4084 fern), batchsize (#4085 askeladd), LR@clip1 (#4120 thorfinn), wd@clip1 (#4122 edward).
+4. **R10 in flight**: surf_weight (#4128 fern), batchsize (#4085 askeladd), SGDR (#4096 frieren), LR@clip1 (#4120 thorfinn), wd@clip1 (#4122 edward).
 5. **Combine T_max=18 + clip=1.0** — the biggest follow-up after tanjiro's PR merges; both axes are independent.
 6. **Unassigned hypotheses** (if more idle): H41 SWA, finer T_max sweep, EMA decay at new substrate.

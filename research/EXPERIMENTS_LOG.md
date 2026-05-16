@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:35 — #4084 fern CLOSED informative (dropout monotone hurts, camber_rc gain noted); #4128 fern surf_weight assigned
+
+### #4084 fern — Dropout sweep {0.05, 0.10} at lr=1.5e-4 (CLOSED — informative null)
+
+- Branch: `willowpai2i48h5-fern/r10-dropout`
+- Hypothesis: Dropout inside Transolver blocks could improve camber_rc OOD generalization via regularization.
+- W&B runs: `rwalaqva` (0.05), `fn880kax` (0.10)
+
+| Arm | Dropout | val_avg | test_avg | vs ctrl 63.05 | vs NEW BL 61.18/52.09 |
+|-----|---------|---------|----------|---------------|-----------------------|
+| ctrl (jurrwig2) | 0.00 | 63.0492 | 53.6049 | reference | +1.87 / +1.51 above |
+| B | 0.05 | 63.7189 | 54.4936 | +0.67 / +0.89 | +2.54 / +2.40 |
+| C | 0.10 | 64.2869 | 55.2573 | +1.24 / +1.66 | +3.11 / +3.17 |
+
+Per-split (Arm B, dropout=0.05):
+| Split | ctrl val | B val | Δ val | ctrl test | B test | Δ test |
+|-------|----------|-------|-------|-----------|--------|--------|
+| in_dist | 64.45 | 63.73 | −0.72 | 55.69 | 54.58 | −1.11 |
+| **camber_rc** | **80.74** | **76.51** | **−4.23** | **70.55** | **67.94** | **−2.61** |
+| camber_cruise | 43.48 | 48.57 | +5.09 | 35.48 | 39.67 | +4.19 |
+| re_rand | 63.53 | 66.06 | +2.53 | 52.70 | 55.78 | +3.08 |
+
+**Key finding:** Monotone hurt with increasing dropout. Falsification threshold (Arm C ≥ +2 val) not strictly hit (+1.24 val above ctrl). Closed as informative.
+
+**Non-null result:** Dropout=0.05 improved camber_rc by −4.23 val (real and large), but at the cost of +5.09 val on camber_cruise and +2.53 val on re_rand. Net negative. Breadth-targeted regularization (FFN+attn together) disrupts the slice-token routing that the well-represented splits rely on.
+
+**Mechanism:** At 5-block Transolver depth with slice_num=64, uniform dropout disrupts slice-token routing on distributions where model is already well-calibrated (cruise, re_rand). Camber_rc has unseen rotated/curved foils where routing noise helps generalization, but trade is net-negative.
+
+**Connection to prior finding (#3977 DropPath):** Two independent regularizers (DropPath at branch level, Dropout at neuron level) both monotone hurt. Residual stream is not over-fitting through capacity; it is under-fitting through breadth.
+
+**Student suggestion:** Split-targeted attn_dropout (only inside slice-attention, not FFN) to preserve the camber_rc gain without breadth-cost. Valuable future hypothesis.
+
+### #4128 fern — surf_weight recalibration at clip=1.0 {5, 10 ctrl, 20} (R10 H54 — just assigned)
+
+Tests whether surf_weight=10 remains optimal on the new clip=1.0 substrate. Per-split breadth signal from #4084 suggests volume representations may be gradient-starved at current surf_weight. Pure CLI sweep, no code changes.
+
+---
+
 ## 2026-05-16 20:00 — #4056 thorfinn MERGED (new best val 61.18 / test 52.09); #4057 edward CLOSED; #4120 thorfinn LR@clip1 / #4122 edward wd@clip1 assigned; tanjiro T_max=18 winner pending
 
 ### #4056 thorfinn — Gradient clip sweep at lr=1.5e-4 (MERGED — **new best val 61.1778 / test 52.0853**)
