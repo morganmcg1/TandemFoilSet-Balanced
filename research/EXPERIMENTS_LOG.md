@@ -6,6 +6,43 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2i-24h-r3`
 
+## 2026-05-16 00:25 — PR #3391 thorfinn CLOSED: NACA Fourier stacked (val 115.45 regression)
+
+- Branch: `willowpai2i24h3-thorfinn/naca-fourier-stacked`
+- Hypothesis: NACA 4-digit Fourier positional features (sin/cos harmonics of camber c, camber position m, thickness t) prepended to Transolver input, predicting better cross-geometry generalization on camber OOD splits.
+
+### Terminal results
+
+| Run | val_avg | test_nansafe | Δ vs Lion baseline 94.08 |
+|---|---:|---:|---:|
+| `jge3bnk4` (primary, K=4 Fourier) | 115.4505 | 112.1973 | **+21.37 (regression)** |
+
+Per-split val: single_in_dist=126.97, geom_camber_rc=122.26, geom_camber_cruise=98.58, re_rand=113.98.
+All four val splits worse than Lion baseline (single_in_dist: 108.05, geom_camber_rc: 109.69, camber_cruise: 69.35, re_rand: 89.22).
+
+### Analysis (thorfinn's diagnosis confirmed correct)
+
+Three compounding failure modes identified by thorfinn, all accepted:
+
+1. **Standardized input breaks Fourier periodicity**: Features applied to z-scored camber parameters — sin(2π·k·x) is only meaningful when x ∈ [0,1]; after z-scoring, the periodicity is lost and the features carry noise not signal.
+2. **Capacity dilution**: Input expanded from 22→38 channels in the first Linear layer; without increasing hidden width, per-channel attention capacity drops by ~40%.
+3. **Huber already subsumed the geometry signal**: The camber/OOD outlier gradient problem that NACA Fourier was intended to fix has already been absorbed by Huber's δ=2.0 elbow, leaving no residual signal for geometry encoding to capture.
+
+Thorfinn's own recommendation was correct: "Probably stop trying NACA Fourier on top of Huber. The signal from this run is strong enough."
+
+### Decision: CLOSED
+
+- val_avg 115.45 is +22.7% regression vs Lion baseline 94.08 ✗
+- All 4 val splits worsened ✗
+- No recovery path: the three identified failure modes each require architectural changes that constitute a different hypothesis
+- NACA Fourier as a 22-channel input augmentation on standardized features is eliminated
+
+### Reassignment
+
+Thorfinn reassigned to `lion-lr-wd-sweep` (PR #3541) — test Lion paper's published hyperparameter ratios (lr 3–10× smaller, wd 3–10× larger than AdamW optimal). Highest-confidence orthogonal lever not covered by any other in-flight PR.
+
+---
+
 ## 2026-05-15 23:00 — PR #3394 frieren CLOSED: surface-only Huber (val 103.20, high variance)
 
 - Branch: `willowpai2i24h3-frieren/huber-surface-only`
