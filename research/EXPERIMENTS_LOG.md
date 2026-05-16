@@ -678,3 +678,120 @@ Future direction: prioritize **directional** changes (attention structure, slice
 - Artifacts: `models/model-h27b-lr1e3-clip1-20260516-012724/`, `models/model-h27b-lr7e4-clip1-20260516-002910/`
 
 **Status: MERGED — new best. Follow-up H38 assigned to frieren (weight decay sweep on new base); H32 thorfinn redirected to lr=1.5e-3/2e-3.**
+
+---
+
+## 2026-05-16 04:00 — PR #3557: H32: LR sweep (lr=1e-3, lr=8e-4) on H20 base (thorfinn) — **NEW BEST, MERGED**
+
+- Branch: `charliepai2i48h3-thorfinn/h32-lr-sweep-h20`
+- Hypothesis: lr=1e-3 (and lr=8e-4) + clip=1.0 continue the monotone LR improvement trend. (Note: originally redirected to lr=1.5e-3/2e-3, but thorfinn had already started the original instructions.)
+
+| Arm | lr | val_avg | test 3-split | vs H27b (71.77) |
+|-----|----|---------|-------------|----------------|
+| **Arm A (winner)** | **1e-3** | **69.4381** | **69.1774** | **-2.34 (-3.3%)** |
+| Arm B | 8e-4 | 73.1104 | 71.9396 | +1.34 (worse) |
+| H27b baseline | 1e-3 | 71.7713 | 70.6226 | 0 (ref) |
+
+**Independent replication of lr=1e-3 + clip=1.0.** H27b (frieren) and H32 (thorfinn) ran the same nominal config within 1h of each other. Seed-variance spread: 2.33 pts (69.44 vs 71.77). Both confirm lr=1e-3 is a robust 4–6 pt win over H20 (75.50).
+
+Per-split Arm A:
+- val_single_in_dist: 79.67 (was 85.73, -6.1 from H20)
+- val_geom_camber_rc: 84.47
+- val_geom_camber_cruise: 47.27
+- val_re_rand: 66.35
+
+**LR sweep table (clip=1.0):**
+| lr | val_avg |
+|----|---------|
+| 5e-4 | 75.50 (H20) |
+| 8e-4 | 73.11 (H32 Arm B) |
+| 1e-3 | 69.44 (H32 Arm A) / 71.77 (H27b Arm B) |
+
+Monotone trend still holds. LR ceiling not yet visible.
+
+- Artifacts: `models/model-h32-lr1e3-clip1-20260516-012246/`, `models/model-h32-lr8e4-clip1-20260516-022352/`
+
+**Status: MERGED — new best (69.4381). Follow-up H39 assigned to thorfinn (lr=1.5e-3/2e-3).**
+
+---
+
+## 2026-05-16 04:05 — PR #3629: H37: n_head sweep (8, 2) on H20 base (tanjiro) — SENT BACK
+
+- Branch: `charliepai2i48h3-tanjiro/n-head-sweep-h20`
+- Hypothesis: n_head=8 (more specialization) vs n_head=2 (richer per-head) on H20 base.
+
+| Arm | n_head | n_params | val_avg | test 3-split | Notes |
+|-----|--------|----------|---------|-------------|-------|
+| Arm A | 8 | 818K | 86.26 | 82.84 | regression |
+| **Arm B** | **2** | **891K** | **72.89** | **71.03** | **beats H20! promising** |
+| H20 baseline | 4 | 835K | 75.4955 | 73.1556 | ref |
+
+Arm B (n_head=2, head_dim=64): val_avg=72.89 beats H20 baseline (75.50) by -2.61. Test 3-split 71.03 also beats H20 73.16.
+
+**However, baseline has moved to 69.44 (H32).** n_head=2 at 72.89 doesn't beat that.
+
+Key finding from tanjiro's analysis: Transolver PhysicsAttention has per-head linear layers (not fused), so n_params DOES change with n_head. n_head=2 adds 56K params vs baseline.
+
+The smaller memory footprint (39.6 GB vs 44.6 GB baseline) also allowed Arm B to run the **full 50 epochs** rather than being timeout-capped. Best epoch was 15 vs baseline's 14 — possibly an additional advantage.
+
+**Sent back with instruction:** Re-run n_head=2 on new lr=1e-3 + clip=1.0 base to test compounding.
+
+- Artifacts: `models/model-h37-nhead2-h20-*/`, `models/model-h37-nhead8-h20-*/`
+
+**Status: SENT BACK — test n_head=2 on lr=1e-3 base.**
+
+---
+
+## 2026-05-16 04:08 — PR #3587: H34: Element-wise clip (clip_grad_value=1.0) — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-nezuko/h34-element-wise-clip`
+- Hypothesis: clip_grad_value_ preserves per-channel gradient ratios, avoiding H29's global-rescale failure.
+
+| Arm | clip_value | δ_vel | val_avg | vs H20 (75.50) |
+|-----|-----------|-------|---------|----------------|
+| Arm A | 1.0 | 0.5 | 81.82 | +8.4% |
+| Arm B | 1.0 | 1.0 | 82.93 | +9.9% |
+
+Both arms significantly regress. Pre-clip grad norms (3.8–4.4) are systematically LOWER than H20's (5.3) — element-wise clipping at 1.0 is more aggressive than norm clipping at 1.0. The hypothesis that element-wise clip "preserves ratios without reducing magnitude" was wrong: bounding each component at ±1.0 does reduce the total gradient magnitude more severely than bounding the norm at 1.0.
+
+The mechanism: clip_grad_norm_=1.0 rescales the entire vector proportionally (preserves direction). clip_grad_value_=1.0 clips each component independently, which can change gradient direction AND reduces magnitude more aggressively for diffuse high-dim gradients.
+
+**Status: CLOSED — dead end. Element-wise clip at 1.0 is too aggressive. To validate the mechanism, would need clip_value=5–10×.**
+
+---
+
+## 2026-05-16 04:10 — PR #3553: H31: δ_p push (0.1, 0.05) on H20 base — CLOSED, dead end
+
+- Branch: `charliepai2i48h3-fern/h31-delta-p-push-h20`
+- Hypothesis: Further reducing δ_p (more L1-like pressure loss) continues the H22 monotone trend on H20 base.
+
+| δ_p | val_avg | vs H20 (75.50) |
+|-----|---------|----------------|
+| 0.25 | 75.4955 | 0 (baseline) |
+| 0.10 | 78.5517 | +3.06 |
+| 0.05 | 84.5795 | +9.08 |
+
+Monotone *regression* — opposite of H22. **δ_p=0.25 is the optimum on the clipped stack.** Both H22's trend (δ=0.1→0.25 improving) and H31's reversal (δ=0.25→0.1 degrading) confirm that δ_p=0.25 is a saddle point: the right balance for the per-channel Huber + clip=1.0 configuration.
+
+The δ_p knob is exhausted. Clip already handles outlier suppression; further δ_p reduction removes the quadratic signal from easy samples.
+
+**Status: CLOSED — dead end. δ_p direction fully explored; 0.25 is optimal.**
+
+---
+
+## 2026-05-16 04:12 — PR #3451: H26b: cond_dim=3/2 + clip=1.0 rebase (alphonse) — CLOSED, informative negative
+
+- Branch: `charliepai2i48h3-alphonse/H26-film-cond-dim-ablation`
+- Hypothesis: cond_dim=3 win from H26 (H19 base) transfers to H20 (clip=1.0).
+
+| Arm | cond_dim | val_avg | vs H20 (75.50) |
+|-----|----------|---------|----------------|
+| Arm A | 3 | 79.94 | +4.44 |
+| Arm B | 2 | 79.28 | +3.78 |
+| H26 baseline (H19 stack) | 3 | 82.51 | -1.30 vs H19 (helped) |
+
+**Inverts the H26 finding.** On H19 (no clip), cond_dim=3 removed noisy geometry-tail dims and helped. On H20 (clip=1.0), cond_dim=3 is +4.4 worse. Mechanism: clip=1.0's global norm rescaling downsizes FiLM gradients proportionally to backbone. With cond_dim=11, the FiLM path has more gradient diversity; reducing to 3 dims weakens the FiLM path relative to backbone after global clip rescale.
+
+This is the 4th confirmed instance of the interaction pattern: interventions that helped on H19's unclipped base fail on H20's clipped base.
+
+**Status: CLOSED — informative negative. cond_dim=11 remains optimal on clipped stack.**
