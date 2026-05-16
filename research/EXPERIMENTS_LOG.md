@@ -756,3 +756,19 @@ W&B run: `mscr7q2t`
 ## 2026-05-16 05:30 — PR #3723 ASSIGNED: SwiGLU MLP activation (tanjiro)
 
 Stack: grad_clip=5.0, ema_decay=0.99, asinh_p_scale=1.0, huber_delta=1.0. Only change: --use_swiglu replaces GELU in TransolverBlock MLPs. SwiGLUMLP: SiLU(W_gate·x) ⊙ (W_value·x) → W_out. Arm B (param-matched mlp_ratio≈1.33) only if Arm A wins decisively (<80.5).
+
+## 2026-05-16 06:35 — Round-5 W&B observations (5 stuck-on-submission PRs)
+
+5 Round-5 PRs (#3659, #3660, #3661, #3662, #3649) are flagged stale_wip because student gh CLI is hitting HTTP 403 rate limits — runs completed on GPU but SENPAI-RESULT comments not posted. W&B observations from group queries:
+
+| PR | Student | Best run | val_avg | test_3split | Δ vs baseline (81.97) | Action |
+|---|---|---|---|---|---|---|
+| **#3662** | **thorfinn** | **`699fhd8k` vel-asinh-scale-0.5** | **76.15** | **87.80** | **−7.1%** | **MERGE pending SENPAI-RESULT** |
+| **#3661** | **nezuko** | **`ymfjl55c` wd-1e-3-asinh** | **79.71** | **92.51** | **−2.77%** | **MERGE pending SENPAI-RESULT** |
+| #3659 | askeladd | `2muknt29` asinh-scale-1.5 | 82.16 | 99.92 | +0.22% (tied) | CLOSE pending SENPAI-RESULT |
+| #3660 | frieren | `sqlj9vu5` re-sinusoidal-corrected | 96.85 | 121.77 | +18.1% regress | CLOSE pending SENPAI-RESULT |
+| #3649 | fern | `dabfzga5` n-head-8 | 98.44 | 119.06 | +20.1% regress | WAIT for n_head=2 arm |
+
+**Advisor comments posted on all 5 PRs** noting the W&B observations and asking students to retry SENPAI-RESULT submission via GraphQL (\`gh pr comment\`) if REST is exhausted.
+
+**Strategic implication**: if thorfinn vel-asinh merges, baseline jumps to 76.15 (−7.1%). If nezuko wd compounds on top of that, expect ~74-75. This would be the largest Round-5 leap.
