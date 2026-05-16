@@ -1,5 +1,52 @@
 # SENPAI Research Results
 
+## 2026-05-16 23:50 — grad_clip=1.0 closure (#4194) + β1=0.85 closure (#4171); 2 new assignments AGC (#4218) + β1=0.95 (#4219)
+
+### Closed: PR #4194 (askeladd) — grad_clip=1.0 on new baseline
+
+Run `kj0u4xqf`: val_avg=56.4546 (+0.03 vs new baseline 56.4260, flat), test_3split=56.0892 (+0.75 vs baseline 55.3387, worse). Per-split val: single_in_dist=64.36 (−1.27%), geom_camber_rc=67.96 (+1.24%), geom_camber_cruise=38.83 (+2.39%), re_rand=54.67 (−1.42%) — net flat with redistribution.
+
+**Mechanism reading (askeladd's analysis, load-bearing for next experiment)**: 99.6% clip-binding rate (mean preclip=6.54 vs cap=1.0) yet val barely moved. The diagnostic table makes the failure mode crisp:
+- Per-layer preclip grad norms: preprocess≈8.67, blocks.0≈3.80, blocks.1-3≈0.96-2.59, blocks.4≈2.5 (last block, pre-head!), head≈0.5
+- Global scalar clip rescales ALL layer groups uniformly by `c/||g||`. The *ratios* between preprocess/blocks/head are unchanged.
+- LLRD modifies these ratios (per-layer LR). That's why thorfinn's LLRD showed a mild positive — it targets the asymmetry directly, while global clip doesn't.
+
+**Two new findings packaged for paper appendix**:
+1. **Global scalar clip is wrong instrument for layer-asymmetric noise**: clipping rescales uniformly, leaves ratios unchanged.
+2. **blocks.4 grad norm ~2.5 (last block, pre-head) — non-monotonic decay**: confirms thorfinn's #4151 early-layer heaviness AND adds new late-layer observation. Heavy ends sit on BOTH sides of the stack.
+
+**Next experiment motivated by mechanism reading**: AGC (Adaptive Gradient Clipping, Brock et al. 2021 NF-Net). Per-parameter clip by `||g_p|| > λ·||θ_p||` — naturally addresses asymmetry without per-layer LR scaling. Assigned to askeladd as #4218 (λ=0.01 first arm).
+
+### Closed: PR #4171 (tanjiro) — AdamW β1=0.85 + β2=0.95 on new baseline
+
+Run `nwo3rpx5`: val_avg=57.6497 (+2.17% vs new baseline 56.4260), test_3split=57.0028 (+3.00% vs baseline 55.3387). Failure-mode #1 triggered (val > 57.5).
+
+**Per-split decomposition (key diagnostic)**: val_single_in_dist=72.84 (+11.78% — EASIEST split regressed MOST), val_geom_camber_rc=66.94 (−0.29%), val_geom_camber_cruise=38.59 (+1.76%), val_re_rand=52.23 (−5.82%). Easy-split-regresses-most signature → convergence-time noise smoothing failure, not OOD generalization issue.
+
+**Mechanism reading (load-bearing for AdamW EMA appendix)**: β1=0.85 → half-life 4 steps (vs default β1=0.9 half-life 7 steps). FASTER momentum EMA reduces gradient noise smoothing. At convergence on a short (50-epoch) budget, the optimizer needs MORE smoothing, not less. The val_single_in_dist regression is precisely the at-convergence noise signature.
+
+**Critical asymmetry finding**: β2 (second-moment EMA) and β1 (first-moment EMA / momentum) are NOT symmetric in their interaction with horizon. β2=0.95 (FASTER) was the biggest win (alphonse #4067). β1=0.85 (FASTER) regresses. The two EMAs prefer OPPOSITE directions:
+- β2 fast (snappy per-parameter step-size adaptation) WINS on short budget
+- β1 slow (stable momentum direction smoothing) WINS on short budget
+
+This is a paper-worthy mechanism finding for the AdamW EMA appendix. Bracket-closure arm β1=0.95 (slower momentum, half-life 14 steps) assigned to tanjiro as #4219.
+
+### New assignments (2 — both fill closed-PR slots)
+
+| Round | Student | PR | Hypothesis | On baseline |
+|-------|---------|-----|-----------|-------------|
+| 17 | askeladd | #4218 | Adaptive Gradient Clipping (AGC λ=0.01) per-parameter, with global clip=5.0 safety net | new alphonse |
+| 17 | tanjiro | #4219 | AdamW β1=0.95 (slower momentum, bracket closure) + β2=0.95 | new alphonse |
+
+**AGC mechanism**: clipping is triggered when per-parameter `||g_p|| > λ · ||θ_p||` rather than absolute `||g|| > c`. Layers with smaller parameters get tighter effective thresholds, layers with larger parameters get looser ones — exactly the differential that askeladd's per-layer grad norm table and thorfinn's LLRD result both pointed to. From Brock et al. 2021 NF-Net, well-established in literature.
+
+**β1=0.95 mechanism**: half-life 14 steps, similar timescale to β2=0.95's 13 steps. Tests if SLOWER smoothing helps after FASTER (β1=0.85) hurt. If val < 56.0, slow-momentum direction is winning and motivates β1 sweep ∈ {0.95, 0.97, 0.99}. If val > 57.5, β1 axis closes cleanly at default 0.9 as optimum. The single-arm closes the AdamW EMA appendix story end-to-end.
+
+### GPU utilization
+8 students assigned, 0 idle as of 23:50 UTC.
+
+---
+
 ## 2026-05-16 23:35 — Welsch closure (#4193) + per-sample reweight assignment (#4204); loss-shape axis FULLY CLOSED
 
 ### Closed: PR #4193 (frieren) — Welsch biweight c=1.0 on new baseline
