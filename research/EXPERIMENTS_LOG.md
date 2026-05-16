@@ -772,3 +772,37 @@ Stack: grad_clip=5.0, ema_decay=0.99, asinh_p_scale=1.0, huber_delta=1.0. Only c
 **Advisor comments posted on all 5 PRs** noting the W&B observations and asking students to retry SENPAI-RESULT submission via GraphQL (\`gh pr comment\`) if REST is exhausted.
 
 **Strategic implication**: if thorfinn vel-asinh merges, baseline jumps to 76.15 (−7.1%). If nezuko wd compounds on top of that, expect ~74-75. This would be the largest Round-5 leap.
+
+## 2026-05-16 07:30 — PR #3663 CLOSED: dropout sweep (edward) — mechanism non-monotone, axis exhausted
+
+| Arm | dropout | val_avg | test_3split | Δ vs baseline |
+|---|---|---|---|---|
+| v1 | 0.05 | 82.4592 | 80.8435 | +0.59% (within noise) |
+| **v2** | **0.025** | **83.4872** | **81.2940** | **+1.84% (regression)** |
+
+W&B runs: `mscr7q2t` (v1), `eqznyg59` (v2)
+
+Per-split v2 (0.025): single_in_dist 100.999 (tie) | **geom_camber_rc 96.960 (+6.9%)** | geom_camber_cruise 58.903 (−1.7%) | **re_rand 77.087 (+1.1%)**
+
+**Verdict: CLOSED.** Lighter dropout (0.025) did NOT recover val_re_rand (it got slightly worse vs 0.05) and did NOT recover geom_camber_rc. The mechanism (co-adaptation suppression for OOD) is non-monotone — 0.05 was marginally better on re_rand than 0.025, but neither beats baseline. Dropout axis exhausted on this stack.
+
+Key insight: the bottleneck on val_geom_camber_rc (smallest support, 457 samples) is NOT feature co-adaptation — it's structural sample efficiency. Dropout doesn't address this.
+
+**edward reassigned** → PR #3766: DropPath stochastic depth. Drops ENTIRE residual branches rather than individual neurons; forces each block to be independently useful. Different binding constraint from feature dropout.
+
+## 2026-05-16 07:30 — PR #3660 CLOSED: corrected Re-sinusoidal embed (frieren) — axis definitively falsified
+
+| Metric | run `sqlj9vu5` | Baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 96.848 | 81.975 | +14.87 (+18.1%) |
+| val_re_rand (target) | 87.677 | 76.263 | +11.41 (+15.0%) |
+| test_3split/mae_surf_p | 94.856 | 81.365 | +13.49 (+16.6%) |
+
+Second close of sinusoidal-Re axis (first: +44% with frequency bug; corrected: +18%). Even with proper [0, 1] normalization, sinusoidal expansion of log_re regresses significantly. Raw scalar already a clean signal; high-frequency expansion injects noise the model can't filter in 14 epochs.
+
+**frieren reassigned** → PR #3770: Mixup augmentation. Interpolates pairs of (input, target) training samples (λ drawn from Beta(α,α)). Exploits physical smoothness of CFD: small perturbations of geometry/Re → small perturbations of output. Target: OOD improvement on val_re_rand and val_geom_camber_rc.
+
+## 2026-05-16 07:30 — PRs #3766 and #3770 ASSIGNED
+
+- PR #3766 edward: DropPath stochastic depth (--drop_path_rate 0.1 primary). DropPath adds a per-residual-branch drop probability during training; forces block independence; used in ViT/Swin/ConvNeXt for OOD robustness.
+- PR #3770 frieren: Mixup augmentation (--mixup_alpha 0.2 primary). λ·x_a + (1-λ)·x_b, λ·y_a + (1-λ)·y_b; exploits CFD field smoothness.
