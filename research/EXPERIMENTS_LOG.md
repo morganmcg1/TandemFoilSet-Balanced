@@ -893,3 +893,26 @@ vs **NEW canonical (54.494)**: freqs=4 at 54.895 is +0.73% WORSE. Cannot merge. 
 - Hypothesis: log-space auxiliary loss on pressure channel (ch idx 2) penalizes relative error regardless of Re-driven absolute scale; expected to improve val_re_rand and val_geom_camber_rc
 - Run 3 arms: baseline (no aux), log_p_weight=0.1, log_p_weight=0.05 in `log-p-aux-sweep`
 - Pre-flight: verify distribution of normalized pressure values before committing to the eps_log choice
+
+## 2026-05-16 12:35 — PR #3926: Cosine LR floor — CLOSED (design flaw caught by student)
+- willowpai2i48h3-askeladd/cosine-lr-floor
+- Hypothesis: Adding non-zero floor (eta_min=1e-5) to CosineAnnealingLR would prevent LR decay-to-zero at epochs 12-13, allowing more effective learning under 30-min cap
+- **Student caught critical design flaw before launching:** T_max = MAX_EPOCHS - warmup = 47 (not 14). At wall-clock cap (step 11/47), LR is at 87% of peak. Proposed floors (1e-5, 1e-4) << 8.71e-4 active LR, so `max(lr, eta_min) = lr` throughout — eta_min has no effect.
+- **The premise "cosine decays to near-zero by epoch 12-13" from the research agent was wrong about our actual schedule.** Cosine reaches near-zero only at step 43-47 (well past our cap).
+- Decision: CLOSED. Excellent analytical work from the student. Replaced with bf16 autocast hypothesis (different angle on the wall-clock cap).
+
+## 2026-05-16 12:35 — PR #3415: log-Re sinusoidal — SENT BACK (winner pending rebase)
+- willowpai2i48h3-frieren/log-re-sinusoidal (rebase round 5)
+- Hypothesis: Sinusoidal encoding of log(Re) gives the model better Re-OOD generalization
+- W&B group: `log-re-sinusoidal` (rebased onto Huber β=0.5 canonical)
+
+| Arm | Encoding | W&B id | val_avg/mae_surf_p | test_3split | Δval vs baseline |
+|---|---|---|---|---|---|
+| baseline-no-embed | none | `kg7s26ak` | **54.4936** | 52.8374 | — (matches canonical 54.494) |
+| **variant-freqs4** | **log-Re sin** | `9tsd84fv` | **51.0991** | **50.9922** | **−6.23%** |
+
+- variant_freqs4 ALREADY BEATS Cauchy canonical (52.494, 51.220) by −2.66% val and −0.44% test on Huber β=0.5 stack
+- Largest within-PR gain since SOAP/EMA family
+- BUT: PR is CONFLICTING vs current advisor branch (now includes Cauchy c=1.0)
+- Decision: SENT BACK for rebase + 2-arm confirmation on Cauchy canonical
+- Expected post-rebase: log_re effect orthogonal to Cauchy (input-side vs loss-side), predicted val ≈ 49.22 if fully compounding
