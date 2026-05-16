@@ -82,9 +82,21 @@ class MLP(nn.Module):
 
 
 class PhysicsAttention(nn.Module):
-    """Physics-aware attention for irregular meshes."""
+    """Physics-aware attention for irregular meshes.
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    With ``use_multi_scale_slice=True`` and ``slice_num_surf>0`` the slice
+    layer maintains two parallel groups:
+      * coarse-global — existing ``slice_num`` slices, routed from ``x_mid``.
+      * fine-surface — ``slice_num_surf`` slices, routed from ``[x_mid; is_surface]``
+        so the surface flag conditions the routing directly.
+    Each group has its own routing projection and an independent softmax over
+    its slice dim. The pooled tokens are concatenated along the slice axis and
+    share Q/K/V + attention; scatter-back uses the concatenated routing
+    weights so each node receives contributions from both groups.
+    """
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 slice_num_surf=0, use_multi_scale_slice=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -93,16 +105,25 @@ class PhysicsAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
+        self.use_multi_scale_slice = use_multi_scale_slice and slice_num_surf > 0
+        self.slice_num = slice_num
+        self.slice_num_surf = slice_num_surf if self.use_multi_scale_slice else 0
+        self.total_slice = self.slice_num + self.slice_num_surf
+
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        if self.use_multi_scale_slice:
+            # Surface-focused routing: takes per-head features + is_surface flag.
+            self.in_project_slice_surf = nn.Linear(dim_head + 1, self.slice_num_surf)
+            torch.nn.init.orthogonal_(self.in_project_slice_surf.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+    def forward(self, x, is_surface=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -118,6 +139,26 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+
+        if self.use_multi_scale_slice:
+            if is_surface is None:
+                # Fallback so the model still runs without is_surface; the
+                # surface group degrades to a second global group.
+                surf = torch.zeros(B, self.heads, N, 1,
+                                   dtype=x_mid.dtype, device=x_mid.device)
+            else:
+                surf = (
+                    is_surface.to(x_mid.dtype)
+                    .view(B, 1, N, 1)
+                    .expand(-1, self.heads, -1, -1)
+                )
+            x_mid_surf = torch.cat([x_mid, surf], dim=-1)
+            slice_weights_surf = self.softmax(
+                self.in_project_slice_surf(x_mid_surf) / self.temperature
+            )
+            # Concat along slice dim so both groups share Q/K/V + attention.
+            slice_weights = torch.cat([slice_weights, slice_weights_surf], dim=-1)
+
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -138,13 +179,16 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 slice_num_surf=0, use_multi_scale_slice=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            slice_num_surf=slice_num_surf,
+            use_multi_scale_slice=use_multi_scale_slice,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -156,8 +200,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, is_surface=None):
+        fx = self.attn(self.ln_1(fx), is_surface=is_surface) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -168,6 +212,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 slice_num_surf=0, use_multi_scale_slice=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -190,6 +235,8 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num_surf=slice_num_surf,
+                use_multi_scale_slice=use_multi_scale_slice,
             )
             for i in range(n_layers)
         ])
@@ -207,9 +254,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, is_surface=is_surface)
         return {"preds": fx}
 
 
@@ -253,7 +301,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -418,6 +466,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    slice_num_surf: int = 32  # surface-focused slice group size (0 disables surf group)
+    use_multi_scale_slice: bool = True  # enable parallel coarse-global + fine-surface slices
 
 
 cfg = sp.parse(Config)
@@ -455,6 +505,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    slice_num_surf=cfg.slice_num_surf,
+    use_multi_scale_slice=cfg.use_multi_scale_slice,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -518,7 +570,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
