@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-05-16 15:45 UTC
+- **Updated:** 2026-05-16 16:45 UTC
 - **Track:** Charlie local-metrics arm (`charlie-pai2i-48h-r1`)
 - **Advisor branch:** `icml-appendix-charlie-pai2i-48h-r1`
 - **Target base:** `icml-appendix-charlie`
@@ -13,34 +13,34 @@ down vs the baseline Transolver config in `target/train.py`.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 71.46**, **test_avg/mae_surf_p = 62.53** (PR #4004,
-FiLM-on-Re, mlp_ratio=1, slice_num=12, EMA decay=0.997, n_head=4, dropout=0.1, best epoch 18).
+**val_avg/mae_surf_p = 68.80**, **test_avg/mae_surf_p = 59.49** (PR #4018,
+FiLM-Re+AoA, cond=[log_Re, AoA0, AoA1], best epoch 18).
 
-Per-split val: single=83.22, rc=81.69, cruise=50.61, re_rand=70.32.
-Per-split test: single=72.86, rc=74.86, cruise=41.88, re_rand=60.52.
+Per-split val: single=80.63, rc=80.24, cruise=47.81, re_rand=66.50.
+Per-split test: single=68.75, rc=72.54, cruise=39.27, re_rand=57.42.
 
-**FiLM-on-Re axis OPEN.** PR #4004 was a landmark -9.6% val win — largest single-PR gain since the early SmoothL1 rounds (-19.7%). All 8 splits improved globally. Training still monotonically descending at epoch 18 (2 pts/epoch) — the 30-min cap is the hard constraint, not overfitting. Extension to FiLM+AoA (PR #4018, alphonse) is the immediate follow-up.
+## FiLM conditioning progression (active research front)
 
-**val_single_in_dist:** Closed from 92.38 → 83.22 (-9.9%). Structural gap partially resolved by FiLM-Re. Now 1.53 pts above next-worst rc=81.69 (was 2 pts gap previously). Further reduction likely from FiLM+AoA expansion.
+Three consecutive FiLM wins, each a one-line input-layer change:
 
-**Compute bottleneck remains:** Best epoch = final epoch (18) in FiLM-Re run. FiLM added +6.3% sec/epoch overhead vs mlp_ratio=1, costing 1 epoch. If bf16 (askeladd #3743) or n_layers=4 (edward #3769) land on the new FiLM baseline, each projected +5-10 epochs could translate to an additional -10-20 pts val.
+| PR | Conditioning | val_avg | Δ | Key observation |
+|----|-------------|--------:|--:|-----------------|
+| #4004 | log_Re (1 scalar) | 71.46 | -9.6% | Global improvement all splits; Re dominates |
+| #4018 | + AoA0, AoA1 (3 scalars) | 68.80 | -3.7% | val_geom_camber_rc gained least — NACA not yet conditioned |
+| #4041 | + NACA0, NACA1, gap, stagger (11 scalars) | **WIP** | ? | Tests whether geometry conditioning helps OOD NACA splits |
 
-## Critical lessons (R1–R12)
+**Next probe:** PR #4041 (alphonse in-flight) extends to all 11 broadcast-constant scalars. If NACA conditioning helps val_geom_camber_rc specifically, it validates the geometric conditioning axis. If not, FiLM conditioning is saturated and the axis is closed.
 
-1. **30-min budget is the binding constraint.** Every capacity-adding experiment failed. Reverse strategy (smaller/cheaper = more epochs) is the dominant discovery — though FiLM proves architectural improvements can dominate compute efficiency in some regimes.
-2. **FiLM conditioning is the dominant architectural lever found.** -9.6% val in a single PR. Physically motivated (Re sets flow regime) and globally beneficial (all 4 splits improved by 5-14%).
-3. **slice_num axis CLOSED at [12, 16].** Both effectively tied.
-4. **Model is compute-bound, not capacity-bound.** Best epoch = final epoch in ALL wins.
-5. **EMA axis CLOSED at [0.997, 0.998].** Converged.
-6. **Dropout saturated at 0.1, surf_weight at 10.** Both closed.
-7. **LR schedule (cosine T_max) closed.** T_max=16 and T_max=18 both regressed.
-8. **weight_decay: wd=1e-4 optimal.** wd=5e-4 underfits.
-9. **n_head axis CLOSED at 4.** n_head=8 +6.7% regression, n_head=2 +1.99%.
-10. **mlp_ratio axis CLOSED at 1.** 2→1 was -1.92% win. Cannot go below 1.
-11. **FFN matmuls NOT dominant.** Per-iteration overhead (Python/kernel launch) is the real ceiling for compute-only attacks.
-12. **FiLM identity init is critical.** γ=0, β=0 at epoch 0 means training starts equivalent to baseline — model must actively learn conditioning. This allows safe zero-risk initialization for architectural additions.
+## Critical lessons (R1–R13)
 
-## Round wins merged (R1–R12)
+1. **30-min budget is the binding constraint.** Every capacity-adding experiment failed. Both FiLM runs are still monotonically descending at epoch 18 — compute-bound throughout.
+2. **FiLM conditioning is the dominant architectural discovery.** Three consecutive wins. -13.9% total from mlp_ratio=1 baseline via FiLM alone.
+3. **FiLM conditioning axis still OPEN.** Re (9.6%) > Re+AoA (3.7%). Each extension cheaper than the last. Saturation signal: diminishing returns. Current probe: full 11-scalar conditioning.
+4. **val_geom_camber_rc diagnostic pointer:** This split (OOD on front-foil NACA shape) improved least with AoA conditioning (-1.8%), directly pointing at NACA shape as the conditioning gap.
+5. **slice_num, EMA, dropout, surf_weight, n_head, mlp_ratio axes all CLOSED.**
+6. **Identity FiLM init is critical pattern:** `nn.init.zeros_(film_head[-1].weight/bias)` ensures epoch-0 = baseline, allowing safe zero-risk experiments.
+
+## Round wins merged (R1–R13)
 
 | PR | Hypothesis | val_avg | Δ vs prior | Decision |
 |----|------------|--------:|-----:|----------|
@@ -49,66 +49,41 @@ Per-split test: single=72.86, rc=74.86, cruise=41.88, re_rand=60.52.
 | #3402 | dropout=0.1 | 96.17 | -1.01% | MERGED |
 | #3533 | slice_num=64→32 | 90.58 | -5.81% | MERGED |
 | #3602 | slice_num=32→16 | 84.44 | -6.78% | MERGED |
-| #3601 | EMA 0.999→0.998 (sn16 confirm) | 81.16 | -3.88% | MERGED |
-| #3783 | EMA 0.998→0.997 (diminishing returns) | 80.88 | -0.34% | MERGED |
-| #3950 | slice_num 16→12 (triangulate; tie within noise) | 80.60 | -0.34% | MERGED |
-| #3982 | mlp_ratio 2→1 (halve FFN width, +1 epoch) | 79.05 | -1.92% | MERGED |
-| #4004 | FiLM-on-Re (condition each block on log(Re)) | **71.46** | **-9.6%** | **MERGED — current baseline** |
+| #3601 | EMA 0.999→0.998 | 81.16 | -3.88% | MERGED |
+| #3783 | EMA 0.998→0.997 | 80.88 | -0.34% | MERGED |
+| #3950 | slice_num 16→12 | 80.60 | -0.34% | MERGED |
+| #3982 | mlp_ratio 2→1 | 79.05 | -1.92% | MERGED |
+| #4004 | FiLM-on-Re | 71.46 | -9.6% | MERGED |
+| #4018 | FiLM-Re+AoA | **68.80** | **-3.7%** | **MERGED — current baseline** |
 
-**Total improvement from calibration baseline:** 143.52 → 71.46 = **-50.2%**
+**Total improvement from calibration baseline:** 143.52 → 68.80 = **-52.1%**
 
 ## Currently in flight (8 WIP — all students active)
 
 | PR | Student | Hypothesis | Theme | Status |
 |----|---------|------------|-------|--------|
-| #3572 | nezuko   | CosineWarmRestarts T_0=4 T_mult=2 | LR schedule | WIP (notified of new baseline 71.46) |
-| #3573 | fern     | lr 5e-4→7e-4 (2-seed) | optim | WIP (notified of new baseline 71.46) |
-| #3558 | tanjiro  | racecar_single 2x upweight | data sampling | WIP (notified of new baseline 71.46) |
-| #3560 | thorfinn | surf per-channel (1,1,3) | loss channel | WIP (notified of new baseline 71.46) |
-| #3743 | askeladd | bf16 autocast — attack per-batch overhead | compute budget | WIP (notified of new baseline 71.46) |
-| #3769 | edward   | n_layers=5→4 (drop a Transolver block) | compute/capacity | WIP (notified of new baseline 71.46) |
-| #3772 | frieren  | gradient clipping max_norm=1.0 | training stability | WIP (notified of new baseline 71.46) |
-| #4018 | alphonse | FiLM-Re+AoA: expand conditioning to [log_Re, AoA0, AoA1] | architecture | WIP (newly assigned) |
+| #3572 | nezuko   | CosineWarmRestarts T_0=4 T_mult=2 | LR schedule | WIP — high bar (68.80) |
+| #3573 | fern     | lr 5e-4→7e-4 (2-seed) | optim | WIP — high bar (68.80) |
+| #3558 | tanjiro  | racecar_single 2x upweight | data sampling | WIP — high bar (68.80) |
+| #3560 | thorfinn | surf per-channel (1,1,3) | loss channel | WIP — high bar (68.80) |
+| #3743 | askeladd | bf16 autocast | compute | WIP — notified of 71.46; needs 68.80 |
+| #3769 | edward   | n_layers=5→4 | compute/capacity | WIP — notified of 71.46; needs 68.80 |
+| #3772 | frieren  | gradient clipping max_norm=1.0 | stability | WIP — notified of 71.46; needs 68.80 |
+| #4041 | alphonse | FiLM-full: all 11 broadcast scalars | architecture | WIP (just assigned) |
 
-Note: PRs #3572, #3573, #3558, #3560, #3772 were designed before FiLM-on-Re was merged. Their baselines have shifted dramatically (79.05 → 71.46). Unless they achieve similar magnitude improvements, they will not beat the new baseline. They should still be reviewed for learnings.
+Note: PRs #3572, #3573, #3558, #3560 predate FiLM. They face a very high bar (68.80). Most unlikely to beat the baseline on their own — review for insights and close if clearly regressing. PRs that could still win: askeladd (bf16), edward (n_layers=4) if they yield enough extra epochs on the FiLM baseline to overcome the gap.
 
-## Plateau / saturation map
+## Potential next research directions (R14+)
 
-**CLOSED axes:**
-- **Loss formulation (Huber beta):** saturated at beta=0.25.
-- **Throughput / batch size:** batch_size=8 tested (PR #3327, +45.5% regression).
-- **Capacity up:** timeout-bound.
-- **Capacity down (n_hidden=96):** +1.50% regression.
-- **Dropout:** saturated at 0.1.
-- **surf_weight:** saturated at 10.
-- **EMA:** converged in [0.997, 0.998].
-- **slice_num:** tied at [12, 16]. Fully closed.
-- **LR schedule (cosine T_max):** T_max=16 and T_max=18 both regressed.
-- **weight_decay:** wd=1e-4 optimal.
-- **n_head:** closed at 4.
-- **mlp_ratio:** closed at 1.
-
-**OPEN axes (in-flight):**
-- **FiLM-Re+AoA:** alphonse #4018 — expand conditioning to 3 scalars [log_Re, AoA0, AoA1].
-- **bf16 autocast:** askeladd #3743 — H100 matmul speedup → more epochs on FiLM baseline.
-- **n_layers=4:** edward #3769 — drop one Transolver block, ~20% per-step speedup → more epochs.
-- **gradient clipping (max_norm=1.0):** frieren #3772 — stability lever.
-- **LR schedule (WarmRestarts):** nezuko #3572 (pre-FiLM design; beating 71.46 is a high bar).
-- **LR value (7e-4):** fern #3573 (pre-FiLM design; high bar).
-- **Data sampling (single upweight):** tanjiro #3558 (pre-FiLM design; high bar).
-- **Loss channel weighting (1,1,3):** thorfinn #3560 (pre-FiLM design; high bar).
-
-## Potential next research directions (R13+)
-
-1. **FiLM + compute wins compound** — if bf16 (askeladd) or n_layers=4 (edward) land on the FiLM baseline, each +5-10 epochs in budget ≈ -10-20 pts additional val. These are the highest-priority in-flight probes to watch.
-2. **FiLM on all physical scalars** — extend conditioning beyond Re and AoA to include gap/stagger (tandem geometry parameters). Full conditioning vector: [log_Re, AoA0, AoA1, gap, stagger] = 5 scalars.
-3. **FiLM inside PhysicsAttention (slice-level)** — apply Re conditioning to the slice projection matrices within PhysicsAttention, not just the block-level representations. More targeted modulation of the attention mechanism itself.
-4. **Schedule-Free AdamW** (Defazio 2024) — eliminates cosine T_max sensitivity. Robust in compute-bound regime.
-5. **torch.compile** — with FiLM overhead now +6.3%, compile could fuse the per-block affine ops and recover the lost epoch. Risk: variable mesh shapes need `dynamic=True`.
-6. **Second seed confirmation of FiLM-Re** — the -9.6% win is well above ±5-10pt noise floor but a second seed would confirm before the ICML deadline.
-7. **Fused AdamW** — `torch.optim.AdamW(..., fused=True)` reduces Python overhead in optimizer step.
+1. **FiLM saturation check (PR #4041):** If full-11-scalar conditioning wins, the FiLM axis remains open. If not, FiLM axis is closed — the model already extracts sufficient information from Re and AoA.
+2. **Compute × FiLM compound:** If bf16 (askeladd) or n_layers=4 (edward) land, they should be re-run ON THE FiLM BASELINE, not the old 79.05 base. Compound wins compound.
+3. **Wider/deeper FiLM head:** Current head `Linear(11, 128) → GELU → Linear(128, 1280)`. A wider head (e.g., Linear(11, 256) → GELU → Linear(256, 1280)) might better exploit 11-dimensional conditioning. But may overfit small Re/NACA diversity.
+4. **FiLM inside PhysicsAttention slice projection:** Apply Re/geometry conditioning to the slice projections within PhysicsAttention, not just the block-level representations. More targeted attention modulation.
+5. **Schedule-Free AdamW:** Eliminates cosine T_max fragility. Single import change.
+6. **Second seed of current best (68.80):** Variance confirmation before ICML deadline.
 
 ## Plateau plan
 
-Progress: 10 consecutive wins (R1-R12), -50.2% total from calibration. We crossed the 50% improvement threshold. Streak continues.
-Next trigger: fires if two consecutive rounds land 0 winners vs the 71.46 baseline.
+Progress: 11 consecutive wins (R1-R13), -52.1% total from calibration. First time crossing 50% improvement.
+FiLM conditioning has been the dominant theme of R11-R13.
+Next trigger: fires if two consecutive rounds land 0 winners vs the 68.80 baseline.

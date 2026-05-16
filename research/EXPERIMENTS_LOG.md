@@ -709,6 +709,32 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 16:30 — PR #4018 — FiLM-Re+AoA (MERGED → new baseline, -3.7%)
+
+- **Branch:** `charliepai2i48h1-alphonse/film-re-aoa`
+- **Hypothesis:** Extend FiLM conditioning from 1-scalar (log_Re) to 3-scalar ([log_Re, AoA0_rad, AoA1_rad]). AoA sets lift polarity per foil — physically the second most important parameter after Re. Single input-layer change: `nn.Linear(1, n_hidden)` → `nn.Linear(3, n_hidden)`, `cond = x[:, 0, [13, 14, 18]]`.
+- **Results vs baseline (val=71.46, test=62.53):**
+
+| Metric | Baseline (FiLM-Re) | FiLM-Re+AoA | Δ |
+|--------|-------------------:|------------:|--:|
+| `val_avg/mae_surf_p` | 71.46 | **68.80** | **-3.7%** |
+| `test_avg/mae_surf_p` | 62.53 | **59.49** | **-4.9%** |
+| `val_single_in_dist` | 83.22 | 80.63 | -3.1% |
+| `val_geom_camber_rc` | 81.69 | 80.24 | **-1.8%** (smallest — OOD on NACA shape, not yet conditioned) |
+| `val_geom_camber_cruise` | 50.61 | 47.81 | -5.5% |
+| `val_re_rand` | 70.32 | 66.50 | -5.4% |
+| sec/epoch | 102s | 102s | 0% |
+| best epoch | 18 | 18 | 0 |
+
+- **Metrics path:** `models/model-charliepai2i48h1-alphonse-film-re-aoa-20260516-153907/metrics.jsonl`
+- **Decision:** MERGED. All 8 splits improved. Zero compute overhead. Per CLAUDE.md: small wins compound.
+- **Key diagnostic:** val_geom_camber_rc improved least (-1.8%) — that split holds out front-foil NACA shape as the OOD axis, which AoA conditioning doesn't address. Points directly at NACA shape conditioning as the next FiLM extension.
+- **Student's analysis:** Marginal gain smaller than Re-only (-3.7% vs -9.6%) because "Re may already proxy the AoA distribution partly" in this corpus (racecar at high Re / large AoA, cruise at mixed Re/AoA). val_re_rand (-5.4%) gained most — per-foil AoA context most useful in cross-regime tandem configurations.
+- **New baseline: val=68.80, test=59.49.**
+- **Next probe (student suggestion + advisor decision):** FiLM on all 11 broadcast scalars (add NACA0, NACA1, gap, stagger) — PR #4041 (alphonse).
+
+---
+
 ## 2026-05-16 15:30 — PR #4004 — FiLM-on-Re (MERGED → new baseline, **landmark -9.6% win**)
 
 - **Branch:** `charliepai2i48h1-alphonse/film-re`
