@@ -291,6 +291,11 @@ def _apply_fourier(x_norm, model):
     same encoding is applied at train and eval time (it travels with
     ``state_dict``). Handles ``AveragedModel`` by falling through to
     ``model.module`` when the buffer is not on the wrapper.
+
+    ``B`` has shape ``(n_total, 2)`` — each row is a 2D frequency vector. For
+    multi-scale Fourier features (PR #3697) the rows are partitioned across
+    scales by concatenation; from the projection's point of view all rows
+    are treated identically (sin/cos of inner product with coord).
     """
     B = getattr(model, "fourier_B", None)
     if B is None and hasattr(model, "module"):
@@ -298,7 +303,7 @@ def _apply_fourier(x_norm, model):
     if B is None:
         return x_norm
     coord = x_norm[..., :2]                       # [..., 2]
-    proj = coord @ B                              # [..., n_fourier]
+    proj = coord @ B.T                            # [..., n_total]
     ff = torch.cat([torch.sin(2 * math.pi * proj),
                     torch.cos(2 * math.pi * proj)], dim=-1)
     return torch.cat([x_norm, ff], dim=-1)
@@ -607,6 +612,8 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     n_fourier: int = 0       # 0 disables; otherwise number of random Fourier features over (x, z)
     fourier_sigma: float = 10.0
+    fourier_sigmas: str = ""  # CSV like "3,10,30"; empty disables multi-scale
+    n_fourier_per_scale: int = 8  # features per scale when multi-scale is enabled
     loss_type: str = "mse"   # "mse" or "smooth_l1"
     loss_beta: float = 0.1   # SmoothL1 beta (normalized-space)
     cosine_t_max: int | None = None  # Cosine T_max in epochs; defaults to MAX_EPOCHS
@@ -654,7 +661,13 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-fun_dim = X_DIM - 2 + (2 * cfg.n_fourier if cfg.n_fourier > 0 else 0)
+if cfg.fourier_sigmas:
+    _fourier_sigmas_list = [float(s) for s in cfg.fourier_sigmas.split(",")]
+    _n_fourier_total = len(_fourier_sigmas_list) * cfg.n_fourier_per_scale
+else:
+    _fourier_sigmas_list = []
+    _n_fourier_total = cfg.n_fourier
+fun_dim = X_DIM - 2 + (2 * _n_fourier_total if _n_fourier_total > 0 else 0)
 model_config = dict(
     space_dim=2,
     fun_dim=fun_dim,
@@ -673,13 +686,28 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-if cfg.n_fourier > 0:
+if _n_fourier_total > 0:
     fourier_gen = torch.Generator()
     fourier_gen.manual_seed(0)
-    fourier_B = (torch.randn(2, cfg.n_fourier, generator=fourier_gen)
-                 * cfg.fourier_sigma).to(device)
+    if _fourier_sigmas_list:
+        # Multi-scale Gaussian Fourier features: concat (n_per_scale, 2) blocks
+        # at each sigma, so the final B has shape (sum_scales * n_per_scale, 2).
+        Bs = [torch.randn(cfg.n_fourier_per_scale, 2, generator=fourier_gen) * s
+              for s in _fourier_sigmas_list]
+        fourier_B = torch.cat(Bs, dim=0).to(device)
+        print(
+            f"[multi-scale Fourier] sigmas={_fourier_sigmas_list}, "
+            f"n_per_scale={cfg.n_fourier_per_scale}, "
+            f"n_total={_n_fourier_total}, B.shape={tuple(fourier_B.shape)}"
+        )
+    else:
+        fourier_B = (torch.randn(cfg.n_fourier, 2, generator=fourier_gen)
+                     * cfg.fourier_sigma).to(device)
+        print(
+            f"[single-scale Fourier] sigma={cfg.fourier_sigma}, "
+            f"n={cfg.n_fourier}, B.shape={tuple(fourier_B.shape)}"
+        )
     model.register_buffer("fourier_B", fourier_B, persistent=True)
-    print(f"Fourier features: n_fourier={cfg.n_fourier}, sigma={cfg.fourier_sigma}")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
