@@ -31,6 +31,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -386,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    swa_start_epoch: int = 11  # 1-indexed; <=0 disables SWA
 
 
 cfg = sp.parse(Config)
@@ -441,6 +443,12 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     final_div_factor=1e4,
 )
 
+# SWA: uniform average of late-epoch checkpoints, passive observer of OneCycleLR.
+# Transolver uses LayerNorm only — no BatchNorm — so update_bn is unnecessary
+# (torch's update_bn early-returns when no BN layers exist).
+swa_enabled = cfg.swa_start_epoch > 0
+swa_model = AveragedModel(model).to(device) if swa_enabled else None
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -463,6 +471,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("val_swa/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -474,6 +483,12 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+
+# SWA tracking (full SWA val + test eval run once, after the training loop).
+swa_n_updates = 0
+final_swa_epoch: int | None = None
+final_swa_val_avg: dict | None = None
+final_swa_split_metrics: dict | None = None
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -523,6 +538,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # --- SWA parameter update (passive observer, no SWALR) ---
+    swa_active = swa_enabled and (epoch + 1) >= cfg.swa_start_epoch
+    if swa_active:
+        swa_model.update_parameters(model)
+        swa_n_updates += 1
+
     # --- Validate ---
     model.eval()
     split_metrics = {
@@ -532,6 +553,9 @@ for epoch in range(MAX_EPOCHS):
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    if swa_active:
+        final_swa_epoch = epoch + 1  # full SWA val is run after the train loop
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -547,6 +571,8 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if swa_active:
+        log_metrics["swa_n_updates"] = swa_n_updates
     wandb.log(log_metrics)
 
     tag = ""
@@ -561,10 +587,11 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    swa_tag = f"  swa_n_updates={swa_n_updates}" if swa_active else ""
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{swa_tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -625,5 +652,69 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+
+# --- SWA: save state, run val + test eval, update summary ---
+# Per-epoch SWA val is skipped to preserve OneCycleLR's final epoch within the
+# wall-clock budget; the full SWA val is done once here, after training.
+if swa_enabled and final_swa_epoch is not None:
+    swa_state_path = model_dir / "swa_checkpoint.pt"
+    torch.save(swa_model.state_dict(), swa_state_path)
+    swa_model.eval()
+
+    print("\nEvaluating SWA model on val splits...")
+    swa_val_split_metrics = {
+        name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_val_split_metrics)
+    final_swa_val_avg = swa_val_avg
+    final_swa_split_metrics = swa_val_split_metrics
+
+    swa_val_log: dict[str, float] = {}
+    for split_name, m in swa_val_split_metrics.items():
+        short = split_name.removeprefix("val_")
+        for k, v in m.items():
+            swa_val_log[f"val_swa/{short}/{k}"] = v
+    for k, v in swa_val_avg.items():
+        swa_val_log[f"val_swa/{k}"] = v
+    wandb.log(swa_val_log)
+
+    final_swa_val_avg_surf_p = final_swa_val_avg["avg/mae_surf_p"]
+    print(
+        f"Final SWA: epoch {final_swa_epoch}, n_updates={swa_n_updates}, "
+        f"val_swa/avg/mae_surf_p = {final_swa_val_avg_surf_p:.4f}"
+    )
+    swa_summary = {
+        "final_swa_epoch": final_swa_epoch,
+        "swa_n_updates": swa_n_updates,
+        "final_val_swa/avg/mae_surf_p": final_swa_val_avg_surf_p,
+    }
+    for k, v in final_swa_val_avg.items():
+        swa_summary[f"final_val_swa/{k}"] = v
+    wandb.summary.update(swa_summary)
+
+    if not cfg.skip_test:
+        print("\nEvaluating SWA model on held-out test splits...")
+        # test_loaders was created in the regular test block above.
+        swa_test_metrics = {
+            name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        swa_test_avg = aggregate_splits(swa_test_metrics)
+        print(f"  SWA TEST  avg_surf_p={swa_test_avg['avg/mae_surf_p']}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, swa_test_metrics[name])
+
+        swa_test_log: dict[str, float] = {}
+        for split_name, m in swa_test_metrics.items():
+            short = split_name.removeprefix("test_")
+            for k, v in m.items():
+                swa_test_log[f"test_swa/{short}/{k}"] = v
+        for k, v in swa_test_avg.items():
+            swa_test_log[f"test_swa/{k}"] = v
+        wandb.log(swa_test_log)
+        wandb.summary.update(swa_test_log)
+elif swa_enabled:
+    print(f"\nSWA enabled (start_epoch={cfg.swa_start_epoch}) but no SWA-active epoch completed.")
 
 wandb.finish()
