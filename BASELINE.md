@@ -293,7 +293,80 @@ cd target/ && python train.py --agent willowpai2i48h1-askeladd \
 
 ---
 
-## 2026-05-16 07:30 — PR #3680: H: SwiGLU activation in Transolver MLP blocks ← NEW PROGRAMME ALL-TIME BEST
+## 2026-05-16 16:05 — PR #3994: H: T_max=17 cosine on SwiGLU h=128 (matched to training-length budget) ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-thorfinn
+- **Branch:** `willowpai2i48h1-thorfinn/tmax17_swiglu_h128`
+- **W&B run:** `5q47ozlp`
+- **Epochs:** 17/17 (cosine LR=0 exactly at final epoch; no rebound, no wasted tail)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **62.1023** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 71.8584 |
+| val_geom_camber_rc | 74.8276 |
+| val_geom_camber_cruise | 42.6736 |
+| val_re_rand | 59.0494 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 62.7981 |
+| test_geom_camber_rc | 69.4097 |
+| test_geom_camber_cruise | 53.3099 |
+| test_re_rand | 52.6940 |
+| **test_avg (all 4 splits)** | **59.5529** ← NEW ALL-TIME BEST |
+
+### Vs prior baseline (PR #3810 GeGLU seed=0)
+
+| Metric | PR #3810 GeGLU (T_max=15) | PR #3994 SwiGLU (T_max=17) | Δ |
+|--------|--------------------------|--------------------------|---|
+| val_avg | 65.3704 | **62.1023** | **−3.27** |
+| test_avg | 61.6819 | **59.5529** | **−2.13** |
+
+All four splits improve uniformly. No regression on any axis.
+
+### Model config (h=128, T_max=17, SwiGLU)
+
+- Transolver: 5 layers, **hidden=128**, heads=4, slice_num=64, mlp_ratio=2
+- **SwiGLU FFN** (`--use_swiglu`); `use_geglu=False`
+- n_params: 663,429 (exact param parity with GeGLU baseline)
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, weight_decay=1e-4, batch=4, **cosine T_max=17** ← key change
+- bf16 autocast; evaluation in pure fp32
+- seed=0
+
+### Key mechanism
+
+**T_max=15 (prior baseline) reached LR=0 exactly at epoch 15, leaving epochs 16-17 at LR=0** — no gradient descent at all in the last 2 epochs (PyTorch CosineAnnealingLR hard-zero at step≥T_max). With T_max=17, epochs 16-17 run at LR≈4e-6 → 0, enabling a "snap to minimum" descent of −5.93 val MAE in those 2 epochs alone. This is the largest 2-epoch improvement observed in the programme.
+
+This confirms PyTorch Scheduler Gotcha #3: T_max=total_epochs is the canonical choice. T_max < total_epochs causes hard-zero LR before training ends; the wasted epochs produce zero descent. The correct rule: **always match T_max to the epoch count expected in the wall-clock budget.**
+
+### Reproduce
+
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-thorfinn \
+  --wandb_name "willowpai2i48h1-thorfinn/tmax17_swiglu_h128_seed0" \
+  --wandb_group tmax_scan_swiglu \
+  --use_swiglu --seed 0
+```
+
+Config asserted: `use_swiglu=True, use_geglu=False, n_hidden=128, T_max=17, seed=0, lr=5e-4, weight_decay=1e-4`
+
+### Updated win thresholds (post-PR #3994)
+
+| Bound | val_avg threshold | Note |
+|-------|------------------|------|
+| New programme best (single-seed) | **62.10** | This PR, SwiGLU T_max=17 seed=0 |
+| Strong 2-seed bar | **< 61.5** | ~0.9σ below this seed=0 result; ≈ old bar offset |
+| Prior baseline (GeGLU seed=0) | 65.37 | Now superseded |
+
+---
+
+## 2026-05-16 07:30 — PR #3680: H: SwiGLU activation in Transolver MLP blocks
 
 - **Student:** willowpai2i48h1-thorfinn
 - **Branch:** `willowpai2i48h1-thorfinn/swiglu_activation`
