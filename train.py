@@ -62,6 +62,24 @@ ACTIVATION = {
 }
 
 
+class FourierPositionEncoder(nn.Module):
+    """Random Fourier Features (Tancik et al. 2020) of 2D coordinates.
+
+    B is sampled once at construction (frozen buffer), so the encoding is fixed
+    across the run. With unnormalized (x, z) inputs (x_std~1.6, z_std~1.5),
+    sigma=1.0 targets chord-scale spatial frequencies.
+    """
+
+    def __init__(self, n_freqs: int = 16, sigma: float = 1.0):
+        super().__init__()
+        B = torch.randn(2, n_freqs) * sigma
+        self.register_buffer("B_mat", B)
+
+    def forward(self, xy):  # xy: [B, N, 2]
+        proj = 2 * torch.pi * (xy @ self.B_mat)  # [B, N, n_freqs]
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # [B, N, 2*n_freqs]
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -255,7 +273,7 @@ class TransolverFiLM(Transolver):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, pos_enc) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -291,7 +309,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # RFF computed from unnormalized (x, z) coords; concat to normalized x.
+            rff = pos_enc(x[..., 0:2])
+            x_aug = torch.cat([x_norm, rff], dim=-1)
+            pred = model({"x": x_aug})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -457,6 +478,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    fourier_n_freqs: int = 16
+    fourier_sigma: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -465,6 +488,8 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+pos_enc = FourierPositionEncoder(n_freqs=cfg.fourier_n_freqs, sigma=cfg.fourier_sigma).to(device)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -485,9 +510,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+N_RFF = 2 * cfg.fourier_n_freqs  # appended Fourier features after the X_DIM raw inputs
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=(X_DIM - 2) + N_RFF,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -557,7 +583,10 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        # RFF computed from unnormalized (x, z) coords; concat to normalized x.
+        rff = pos_enc(x[..., 0:2])
+        x_aug = torch.cat([x_norm, rff], dim=-1)
+        pred = model({"x": x_aug})["preds"]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -591,7 +620,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, pos_enc)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -662,7 +691,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, pos_enc)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
