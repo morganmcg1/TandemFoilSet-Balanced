@@ -182,7 +182,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 mlp_type="vanilla"):
+                 mlp_type="vanilla", readout_mlp_type="vanilla"):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -204,10 +204,23 @@ class TransolverBlock(nn.Module):
             raise ValueError(f"unknown mlp_type={mlp_type}")
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            # Readout follows the prior in-block MLP's hidden-width convention:
+            # hidden_dim -> hidden_dim * mlp_ratio -> out_dim (with the existing
+            # vanilla path collapsing mlp_ratio to 1 to preserve param count and
+            # exact-match the merged baseline).
+            if readout_mlp_type == "vanilla":
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+            elif readout_mlp_type == "swiglu":
+                self.mlp2 = GLUMLP(hidden_dim, hidden_dim * mlp_ratio, out_dim,
+                                   glu_act="silu")
+            elif readout_mlp_type == "geglu":
+                self.mlp2 = GLUMLP(hidden_dim, hidden_dim * mlp_ratio, out_dim,
+                                   glu_act="gelu")
+            else:
+                raise ValueError(f"unknown readout_mlp_type={readout_mlp_type}")
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
@@ -225,7 +238,8 @@ class Transolver(nn.Module):
                  output_dims: list[int] | None = None,
                  pos_enc_mode: str = "raw",
                  pos_enc_num_freqs: int = 8,
-                 mlp_type: str = "vanilla"):
+                 mlp_type: str = "vanilla",
+                 readout_mlp_type: str = "vanilla"):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -259,6 +273,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 mlp_type=mlp_type,
+                readout_mlp_type=readout_mlp_type,
             )
             for i in range(n_layers)
         ])
@@ -482,6 +497,7 @@ class Config:
     pos_enc_num_freqs: int = 8        # frequency bands when mode != raw
     amp_dtype: str = "fp32"   # "fp32" | "bf16"
     mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu"
+    readout_mlp_type: str = "vanilla"  # "vanilla" | "swiglu" | "geglu" — final mlp2 readout
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -548,6 +564,7 @@ model_config = dict(
     pos_enc_mode=cfg.pos_enc_mode,
     pos_enc_num_freqs=cfg.pos_enc_num_freqs,
     mlp_type=cfg.mlp_type,
+    readout_mlp_type=cfg.readout_mlp_type,
 )
 
 model = Transolver(**model_config).to(device)
