@@ -709,6 +709,39 @@ Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 i
 
 ---
 
+## 2026-05-16 15:30 — PR #4004 — FiLM-on-Re (MERGED → new baseline, **landmark -9.6% win**)
+
+- **Branch:** `charliepai2i48h1-alphonse/film-re`
+- **Hypothesis:** Condition each of the 5 Transolver blocks on log(Re) via FiLM affine modulation `(γ,β) = MLP(log_Re)`, applied as `(1+γ)·fx + β` before each block. Re is the fundamental dimensionless fluid parameter; treating it as one of 24 input channels undersells it. Identity init ensures epoch-0 behavior is equivalent to baseline.
+- **Results vs baseline (val=79.05, test=69.76):**
+
+| Metric | Baseline (mlp_ratio=1) | FiLM-on-Re | Δ |
+|--------|----------------------:|----------:|--:|
+| `val_avg/mae_surf_p` | 79.05 | **71.46** | **-9.6%** |
+| `test_avg/mae_surf_p` | 69.76 | **62.53** | **-10.4%** |
+| `val_single_in_dist` | 92.38 | 83.22 | -9.9% |
+| `val_geom_camber_rc` | 90.41 | 81.69 | -9.6% |
+| `val_geom_camber_cruise` | 58.997 | 50.61 | -14.2% |
+| `val_re_rand` | 74.42 | 70.32 | -5.5% |
+| `test_single_in_dist` | 81.55 | 72.86 | -10.7% |
+| `test_geom_camber_rc` | 79.44 | 74.86 | -5.8% |
+| `test_geom_camber_cruise` | 49.32 | 41.88 | -15.1% |
+| `test_re_rand` | 68.73 | 60.52 | -11.9% |
+| sec/epoch | 96s | 102s | +6.3% |
+| best epoch | 19 | 18 | -1 |
+| peak GPU mem (GB) | 29.69 | 32.17 | +8.3% |
+| params | ~2.86M | ~3.02M | +165K |
+
+- **Metrics path:** `models/model-film-re-20260516-145147/metrics.jsonl`
+- **Decision:** MERGED. Landmark win — largest single-PR improvement since PR #3111 (SmoothL1 switch, -19.7%). All 8 splits improved. Training monotonically descending at epoch 18 — 30-min cap is hard constraint, not overfitting.
+- **Key analysis:** The improvement is global (4-14% across ALL splits), not split-specific, confirming Re conditioning benefits every flow regime. FiLM gives Re first-class status in every layer's representation, enabling each block to dynamically adapt to the flow regime. The identity init (γ=0, β=0 at epoch 0) means the model must actively learn the conditioning — and it does, heavily.
+- **Val trajectory (monotone throughout):** ep1=282.3 → ep5=130.7 → ep10=93.1 → ep14=80.8 → ep18=71.5. Rate of descent ~2 pts/epoch at cap: strong evidence the 30-min budget is the constraint.
+- **+6.3% sec/epoch overhead** cost one epoch (18 vs 19), contributing ~2 pts val penalty. This is the FiLM design's one regret.
+- **New baseline: val=71.46, test=62.53.**
+- **Next probe (student suggestion):** Expand FiLM input to include AoA0_rad and AoA1_rad — PR #4018 (alphonse). AoA is the other physically fundamental conditioning variable (sets lift regime per foil).
+
+---
+
 ## 2026-05-16 14:30 — PR #3982 — mlp_ratio=2→1 (MERGED → new baseline, **clean -1.92% win**)
 
 - **Branch:** `charliepai2i48h1-alphonse/mlp-ratio-1`
