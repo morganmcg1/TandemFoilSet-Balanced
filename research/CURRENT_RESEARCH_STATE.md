@@ -1,23 +1,24 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 21:10
+- **Date:** 2026-05-16 21:25
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
 ## Current best
 
-- **PR #4026 (alphonse, merged):** BF16 + LayerScale γ=0.01 + n_freqs=10 + **batch_size=2** + Huber-0.3 + T_max=20 + clip=0.25 (no EMA)
-- **val_avg/mae_surf_p: 60.67** | **test_avg/mae_surf_p: 53.11**
-- Per-split test surf_p: single=57.99, rc=66.40, cruise=35.50, re_rand=52.54 — **all 4 splits improve uniformly**
-- best_epoch=18/18 (timeout-bound, still descending — head-room remains)
-- Peak memory **18.5 GB** (vs 33 GB baseline, -44%); throughput 102.6 s/epoch (-8%)
-- **Cumulative improvement: -52.8% val from round-5 start (~128.69)**
-- Key insight: in the **clip-saturation regime** (clip_frac=1.0 throughout), batch_size acts purely as a "steps in budget" lever — bs=2 gets 4.5× more updates than bs=8 in the same 30-min budget. The per-step update magnitude is fixed at `clip × dir(grad)`, so optimization progress is dominated by total update count.
+- **PR #4083 (alphonse, merged):** BF16 + LayerScale γ=0.01 + n_freqs=**8** + **batch_size=2** + Huber-0.3 + T_max=20 + clip=0.25 (no EMA)
+- **val_avg/mae_surf_p: 58.27** | **test_avg/mae_surf_p: 51.12**
+- Per-split test surf_p: single=57.42, rc=64.11, cruise=33.68, re_rand=49.27 — **all 4 splits improve**
+- best_epoch=18/18 (timeout-bound, still descending — headroom remains)
+- Peak memory **18.43 GB**; throughput 102.4 s/epoch
+- **Cumulative improvement: -54.7% val from round-5 start (~128.69)**
+- Key insight: compound is **~89% additive** — bs=2 (step count) and n_freqs=8 (representation) are near-independent mechanisms. clip_frac drops from 1.000 → 0.987 at epoch 18 — first late-epoch gradient escape this round.
 
 ## Improvement history
 
 | PR | Method | val_avg | test_avg | Δ val |
 |---|---|---|---|---|
+| **#4083 (alphonse, merged)** | **BF16 + LS + n8 + batch_size=2** | **58.27** | **51.12** | **-3.96%** |
 | (round 5 baseline) | ~128 (no-clip no-Huber) | ~128.69 | — | — |
 | #3213 (frieren, merged) | Huber delta=0.3 | 103.18 | 92.02 | -19% |
 | #3182 (askeladd, merged) | Huber-0.3 + clip-0.25 | 98.62 | 88.14 | -4.4% |
@@ -36,16 +37,14 @@
 
 | Student | PR | Hypothesis | Status | Baseline |
 |---|---|---|---|---|
-| alphonse | #4083 | bs=2 + n_freqs=8 compound (+ lr_t_max=18 arm) | wave-14 NEW | 60.67 |
+| alphonse | #4146 | bs=2+n=8+lr=7e-4 compound; arm-2 lr_t_max=22 schedule fix | wave-14 NEW | **58.27** |
 | nezuko | #4095 | bs=2 + clip=1.0 compound; arm-2: triple bs=2+n=8+clip=1.0 | wave-14 NEW | 60.67 |
 | tanjiro | #4103 | bs=2 + Huber δ={0.15, 0.10} compound | wave-14 NEW | 60.67 |
 | askeladd | #4115 | bs=2 + lr={7e-4, 8e-4} compound | wave-14 NEW | 60.67 |
 | fern | #4130 | EMA re-test at bs=2 (τ={0.998, 0.995}) | wave-14 NEW | 60.67 |
 | thorfinn | #4131 | slice_num sweep {128, 192} at bs=2 (first-ever arch sweep) | wave-14 NEW | 60.67 |
 | frieren | #4125 | bs=1 sweep — extreme steps-in-budget (n=10 and n=8 arms) | wave-14 NEW | 60.67 |
-| edward | #4053 | n_freqs {8, 12} at clip=1.0 — INCLUDES critical n=8+clip=1.0 compound | wave-12 WIP | 65.70 |
-| tanjiro | #4033 | Huber δ {0.15, 0.5} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
-| askeladd | #4027 | LR {7e-4, 1e-3} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
+| edward | #4053 | n_freqs {8, 12} at clip=1.0+bs=8 (stale baseline; informative for clip×n_freqs interaction) | wave-12 WIP | 65.70 |
 
 **Note:** All in-flight PRs assigned before bs=2 merge → baseline now 60.67. Any result below that is a new winner. Wave-11 results still inform variable optimums independently (different lever axes from bs).
 
@@ -77,21 +76,31 @@
 | #4060 (frieren) | fourier_base {1.5, 2.5}: both regress vs 64.08 baseline (64.79 / 65.03). fourier_base=2.0 locally optimal. octave spacing not tunable here — pivoted frieren to bs=1 sweep (#4125) |
 | #4058 (fern) | n_freqs {4, 6}: n=6 val=63.22 but test=56.76 (rc +4.78%). n=8 is local minimum on test. Pivoted fern to EMA-bs2 (#4130) |
 | #4059 (thorfinn) | sw {2.5, 5.0} on n=8 stack: both ~63.2-63.4 (vs current best 60.67). 3.7pt seed variance makes result noise-level. sw/n_freqs not independent. Pivoted thorfinn to slice_num sweep (#4131) |
+| #4083 (alphonse) | **MERGED** — bs=2+n=8 compound: val=58.27 (-3.96%), test=51.12. All 4 splits improve. ~89% additive compound. lr_t_max=18 arm failed (premature cosine freeze). New best. |
 
 ## Current research themes
 
-### Wave-14: BF16+LS+n10+bs=2 (new merged baseline)
+### Wave-14: BF16+LS+n8+bs=2 (new merged baseline: 58.27)
 
-The big shift this wave:
-- **batch_size=2 (PR #4026)**: 4.5× more updates in same wall-clock budget — wave-14 winner. Mechanism is clip-saturation, not gradient noise.
+The new best stack emerged from compounding the two independent wins:
+- **batch_size=2 (PR #4026)**: 4.5× more updates in same wall-clock budget — clip-saturation mechanism
+- **n_freqs=8 (PR #4006/4083)**: finer-grained Fourier representation with less aliasing
+- **#4083 compound**: ~89% additive (-3.96% val on top of #4026)
 
-**Critical implication:** bs=2 is independent of every other lever swept so far because it operates on *step count*, not on per-step quality. So it should compound with: n_freqs (representation), clip ceiling (step size), Huber δ (residual shape), surf_weight (loss balance).
+**Wave-14 active compound tests (all targeting 58.27 baseline):**
+1. **alphonse #4146**: bs=2+n=8+lr=7e-4 (biggest single-knob win applied to new stack) + lr_t_max=22 (schedule shape fix)
+2. **nezuko #4095**: bs=2+clip=1.0 (arm-1 n=10, arm-2 n=8) — clip×bs=2 compound
+3. **tanjiro #4103**: bs=2+Huber δ={0.15, 0.10} on n=10 — δ×bs=2 compound
+4. **askeladd #4115**: bs=2+lr={7e-4, 8e-4} on n=10 — lr×bs=2 compound
+5. **frieren #4125**: bs=1 sweep (n=10, n=8) — extreme steps lever
+6. **fern #4130**: EMA re-test at bs=2 (τ={0.998, 0.995}) — dead at bs=8, may revive at 13,500 steps
+7. **thorfinn #4131**: slice_num={128, 192} at bs=2 — first-ever architectural sweep
 
-**Wave-14 priorities (orthogonal compound tests):**
-1. **alphonse new assignment**: bs=2 + n_freqs=8 — the most obvious compound (both #4006 and #4026 are independently merged winners)
-2. **bs=2 + clip=1.0 compound** — clip=1.0 already merged at #4009; needs re-test now that bs=2 changes step count
-3. **bs=1** — push the steps lever further; does it keep paying? Or does gradient variance start mattering once we're saturating the GPU pipeline overhead?
-4. **bs=2 + longer epochs / different lr_t_max** — best_epoch=18/18 means we hit timeout still descending; lr_t_max=18 (per student suggestion) lets the cosine schedule finish
+**Key next questions:**
+- Does lr=7e-4 compound with bs=2+n=8 to push below 52-53? (#4146)
+- Does clip=1.0 help at bs=2? (#4095 arm-2)
+- Does bs=1 continue to pay off, or does GPU underutilization dominate? (#4125)
+- Does slice_num increase help? (#4131 — needs small code change)
 
 ### Wave-13 (all closed; n=8 baseline 64.08 experiments complete)
 
@@ -113,11 +122,11 @@ These are still useful: any result <60.67 is a new winner, and they inform wheth
 
 ## Key insights accumulated
 
-- **batch_size=2 is the new default**. clip-saturation regime turns batch_size into pure steps-in-budget lever (mechanism is independent of gradient noise).
-- **Memory headroom: 18.5 GB peak** — huge head-room for width/depth/Fourier expansion experiments without OOM risk.
-- **best_epoch=18/18 at bs=2**: still descending at timeout → more epochs would help; lr_t_max=18 (per student note) lets cosine finish.
-- **n_freqs=8 is the right default at bs=8/clip=0.25**. Compound with bs=2 not yet tested.
-- **n_freqs ordering (matched recipes)**: 8 < 12 < 14 ≈ 10 — non-monotonic; the "n=10 sweet spot" framing from PR #3527 was confounded by EMA overhead in the n=14 arm.
+- **bs=2 + n=8 is the new default** (PR #4083). clip-saturation + reduced aliasing → -54.7% cumulative from round-5 start.
+- **Memory headroom: 18.43 GB peak** — huge head-room for width/depth/Fourier expansion experiments without OOM risk.
+- **best_epoch=18/18 at bs=2**: still descending at timeout → more epochs would help; lr_t_max=22 should extend useful LR to the cutoff.
+- **n_freqs=8 confirmed on bs=2 stack** (#4083). Going below n=8 (n=4/6) is a dead end on test — n=8 is local minimum.
+- **n_freqs ordering (matched recipes)**: 8 < 12 < 14 ≈ 10 — non-monotonic; n=8 confirmed on both bs=8 and bs=2.
 - **clip=1.0 wins on n=10 stack** (#4009). Compound with n=8 and with bs=2 not yet tested.
 - **Clip acts as lr-scale in fully-clipped regime.** clip_frac=1.0 throughout most runs; effective step ≈ clip × grad/‖grad‖.
 - **BF16 regime shift**: extended convergence horizon (17-18 epochs vs 12) changes optimal hyperparameters.

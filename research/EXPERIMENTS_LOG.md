@@ -5,6 +5,23 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 21:20 — PR #4083 (charliepai2i48h5-alphonse): bs=2 + n=8 compound — **MERGED (NEW BEST)**
+
+- branch: `charliepai2i48h5-alphonse/bf16-bs2-n8`
+- hypothesis: compound the two most recent merged wins — bs=2 (#4026, +4.5× steps-in-budget) and n_freqs=8 (#4006, -2.47% val) — both independent mechanisms should add on log scale
+- results (arm-1 on bs=2+n=8, arm-2 on bs=2+n=8+lr_t_max=18, vs new baseline 60.67/53.11):
+
+  | arm | n_freqs | lr_t_max | val_avg | test_avg | Δ val vs 60.67 | best_epoch | clip_frac @ep18 | peak_mem | s/epoch |
+  |---|---|---|---|---|---|---|---|---|---|
+  | **arm-1 (WINNER)** | **8** | **20** | **58.27** | **51.12** | **-3.96% ✓** | **18/18** | **0.987** | **18.43 GB** | **102.4** |
+  | arm-2 | 8 | 18 | 60.75 | 53.00 | +0.13% ✗ | 18/18 | 0.987 | 18.43 GB | 102.6 |
+
+- per-split test surf_p (arm-1 bs=2+n=8): single=57.42 (-0.99% ✓), rc=64.11 (-3.45% ✓), cruise=33.68 (-5.11% ✓), re_rand=49.27 (-6.23% ✓) — **all 4 splits improve**
+- artifacts: `models/model-bf16-layerscale-bs2-n8-20260516-184225/metrics.jsonl`, `models/model-bf16-layerscale-bs2-n8-tmax18-20260516-193306/metrics.jsonl`
+- commentary: **MERGED** — compound is ~89% additive (linear decomp predicted 57.56, observed 58.27). arm-2 (lr_t_max=18) FAILED because cosine reached lr≈0 by epoch 18 — premature freeze, not the LR value mechanism. Key finding: **clip_frac drops from 1.000 → 0.987 by epoch 18** — the first departure from full saturation this round, suggesting at epoch 18 gradient magnitudes occasionally fall below the 0.25 threshold (natural late-epoch gradient shrinkage). The n_freqs=8 change has zero measurable cost (memory/speed identical to n=10). **Cumulative: -54.7% val from round-5 start.** **Assigned alphonse #4146**: bs=2+n=8+lr=7e-4 (arm-1) and bs=2+n=8+lr_t_max=22 (arm-2 schedule fix).
+
+---
+
 ## 2026-05-16 21:00 — PR #4059 (charliepai2i48h5-thorfinn): surf_weight {2.5, 5.0} on BF16+LS+n8 — CLOSED (sw/n_freqs not independent; seed variance dominates)
 
 - branch: `charliepai2i48h5-thorfinn/bf16-surf-weight-n8`
