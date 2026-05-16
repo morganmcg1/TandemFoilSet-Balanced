@@ -5,6 +5,24 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 20:45 — PR #4060 (charliepai2i48h5-frieren): fourier_base sweep {1.5, 2.5} on BF16+LS+n8 — CLOSED (base=2.0 locally optimal)
+
+- branch: `charliepai2i48h5-frieren/fourier-base-sweep`
+- hypothesis: default fourier_base=2.0 may not be optimal on n=8 stack; sub-octave base=1.5 (denser coverage, slower frequency growth) or wider-spaced base=2.5 might improve representation of airfoil boundary-layer physics
+- results (both arms on n=8/bs=8, vs the cited baseline 64.08/55.05):
+
+  | arm | fourier_base | val_avg | test_avg | Δ val vs 64.08 | best_epoch |
+  |---|---|---|---|---|---|
+  | arm-1 | 1.5 | 64.79 | 56.44 | +1.11% ✗ | 17 |
+  | arm-2 | 2.5 | 65.03 | 56.72 | +1.48% ✗ | 17 |
+  | (baseline reference) | 2.0 | 64.08 | 55.05 | — | — |
+
+- notable per-split signal: base=2.5 wins on rc split (-0.68% vs baseline) but loses on all others; base=1.5 uniformly regresses
+- artifacts: `models/model-bf16-layerscale-n8-base15-*/metrics.jsonl`, `models/model-bf16-layerscale-n8-base25-*/metrics.jsonl`
+- commentary: CLOSED. **fourier_base=2.0 is locally optimal on this stack.** The octave spacing of the Fourier basis isn't tunable here — both sub-octave (1.5) and super-octave (2.5) fail to improve. Three possible explanations: (1) 2.0 is genuinely the sweet spot for the 2D airfoil coordinate domain (unit-normalized inputs); (2) at n=8 frequencies, the frequency density difference between base=1.5 vs 2.0 is small enough to be noise-level; (3) clip-saturation normalizes the gradient direction, making the model insensitive to small input representation differences. Base=2.5's rc split advantage is a noise artifact (rc is the largest-error split, most susceptible to variance). **Pivoting frieren to bs=1 (extreme steps lever)** via #4125. This is an orthogonal and higher-priority question given bs=2 was the wave-14 winner.
+
+---
+
 ## 2026-05-16 20:10 — PR #4027 (charliepai2i48h5-askeladd): LR sweep {7e-4, 1e-3} on BF16+LS+n10 — CLOSED (lr=7e-4 confirmed; stale baseline)
 
 - branch: `charliepai2i48h5-askeladd/bf16-lr-sweep`

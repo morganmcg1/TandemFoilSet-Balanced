@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 19:15
+- **Date:** 2026-05-16 20:50
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -42,7 +42,7 @@
 | askeladd | #4115 | bs=2 + lr={7e-4, 8e-4} compound | wave-14 NEW | 60.67 |
 | fern | #4058 | n_freqs lower {4, 6} on BF16+LS+n8 | wave-13 WIP | 64.08 |
 | thorfinn | #4059 | sw {2.5, 5.0} compound test on BF16+LS+n8 | wave-13 WIP | 64.08 |
-| frieren | #4060 | fourier_base {1.5, 2.5} on BF16+LS+n8 | wave-13 WIP | 64.08 |
+| frieren | #4125 | bs=1 sweep — extreme steps-in-budget (n=10 and n=8 arms) | wave-14 NEW | 60.67 |
 | edward | #4053 | n_freqs {8, 12} at clip=1.0 — INCLUDES critical n=8+clip=1.0 compound | wave-12 WIP | 65.70 |
 | tanjiro | #4033 | Huber δ {0.15, 0.5} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
 | askeladd | #4027 | LR {7e-4, 1e-3} on BF16+LS+n10+clip=0.25 | wave-11 WIP | 67.19 |
@@ -74,6 +74,7 @@
 | #4052 (nezuko) | clip ceiling {2.0, 4.0}: both arms regress on val (68.21 / 66.46 vs 65.70). Ceiling confirmed at clip=1.0. Non-monotone: clip=2.0 worst (+3.81%), clip=4.0 mixed (+1.16% val / -1.04% test) |
 | #4033 (tanjiro) | Huber δ {0.15, 0.5}: δ=0.15 beats δ=0.3 on n=10 stack (val=64.00, -3.19%), stale baseline (post-#4026 merge best is 60.67). BF16 favors tighter δ thesis confirmed. Compound (δ=0.15 + bs=2) assigned #4103 |
 | #4027 (askeladd) | LR {7e-4, 1e-3}: lr=7e-4 wins by -8.75% val (61.31 vs 67.19 baseline). Largest single-knob win any wave. Stale baseline (current best 60.67). clip_frac=1.000 throughout — effective step = lr × 0.25 × dir(g). Compound (lr=7e-4 + bs=2) assigned #4115 |
+| #4060 (frieren) | fourier_base {1.5, 2.5}: both regress vs 64.08 baseline (64.79 / 65.03). fourier_base=2.0 locally optimal. octave spacing not tunable here — pivoted frieren to bs=1 sweep (#4125) |
 
 ## Current research themes
 
@@ -94,7 +95,7 @@ The big shift this wave:
 
 - **fern #4058**: n_freqs lower {4, 6} — does the curve bottom at n=8 or keep going?
 - **thorfinn #4059**: sw {2.5, 5.0} compound test on n=8
-- **frieren #4060**: fourier_base {1.5, 2.5} on n=8
+- **frieren #4060** CLOSED: fourier_base {1.5, 2.5} both regress vs 64.08. base=2.0 locally optimal. Reassigned to **#4125 bs=1 sweep**
 
 These are still useful: any result <60.67 is a new winner, and they inform whether the optimum of each independent lever shifts on the n=8 stack.
 
@@ -128,7 +129,7 @@ These are still useful: any result <60.67 is a new winner, and they inform wheth
 
 ## Potential next research directions
 
-- **bs=1** — push the steps lever further. ~27,000 updates in 30 min budget. Caveat: GPU compute headroom may not exist at bs=1.
+- **bs=1** — push the steps lever further. ~27,000 updates in 30 min budget. Caveat: GPU pipeline overhead may dominate. **ASSIGNED: frieren #4125** (arm-1 n=10, arm-2 n=8).
 - **bs=2 + n=8 + clip=1.0 triple** — combine all three independent wins
 - **bs=2 + lr_t_max=18** — let cosine finish given best_epoch=18 (student-suggested)
 - **bs=2 + EMA re-test** — EMA's "smoothing window covers <50%" critique partly inverts when steps double; the question is open at 13,500 updates
