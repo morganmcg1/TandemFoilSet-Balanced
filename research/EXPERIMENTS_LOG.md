@@ -1,5 +1,34 @@
 # SENPAI Research Results — willow-pai2i-24h-r4
 
+## 2026-05-16 07:22 — PR #3781: Re-conditioned loss reweighting α=1.0 — ASSIGNED to tanjiro
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/re_loss_weighting`
+- **Hypothesis:** `test_single_in_dist` (78.65 — largest residual error) spans Re 104K-5M (widest range). Training distribution under-samples Re tails. Per-sample loss weight `1 + α*(log_Re_z)²` up-weights tail Re samples (2σ from median gets 5× weight at α=1.0). Weights normalized to preserve batch loss scale. Zero compute overhead — purely a loss modification.
+- **Status:** WIP, sanity test at α=0.0 mandatory first
+
+---
+
+## 2026-05-16 07:30 — PR #3658: Transolver depth n_layers=6 — CLOSED (budget-limited)
+
+- **Student/branch:** willowpai2i24h4-tanjiro / `willowpai2i24h4-tanjiro/depth`
+- **Hypothesis:** Add one Transolver block (n_layers 5→6) to increase capacity.
+- **Best W&B run:** `4zhloinn` (cosine_tmax=12, 12 epochs — best-calibrated of 3 full attempts)
+
+| Metric | Baseline (#3258) | PR #3658 | Δ |
+|--------|-------------:|-------:|---|
+| val_avg/mae_surf_p | 77.65 | 85.40 | +10.0% |
+| **test_avg/mae_surf_p** | **66.87** | **75.31** | **+12.6%** |
+| test_single_in_dist | 78.65 | 87.10 | +10.7% |
+| test_geom_camber_rc | 77.66 | 84.55 | +8.9% |
+| test_geom_camber_cruise | 46.17 | 54.62 | +18.3% |
+| test_re_rand | 65.00 | 74.98 | +15.4% |
+
+- **Result commentary:** Budget-limited regression. +17% per-step compute → only 12 epochs vs baseline 14. Two lost epochs ≈ 7% budget-regression (matches ~−3.5%/epoch from cumulative path). Uniform regression across all splits confirms "lost 2 epochs everywhere" story — no split-specific benefit from depth. 5-layer is not depth-limited within 30-min cap; it's epoch-limited.
+- **Key insight for future:** Within 30-min cap, capacity additions that increase per-step compute must deliver gains exceeding ~7% per 2 epoch-loss. Depth=6 didn't. Reassigned to Re-loss reweighting (zero compute overhead, targets Re-tail capacity).
+- **Decision:** CLOSED — clear regression across all splits per own success criteria.
+
+---
+
 ## 2026-05-16 07:03 — PR #3761: Slice_num capacity sweep {96, 128} — ASSIGNED to thorfinn
 
 - **Student/branch:** willowpai2i24h4-thorfinn / `willowpai2i24h4-thorfinn/slice_num_cap`
