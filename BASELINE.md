@@ -11,10 +11,9 @@ Model: **Transolver** (~1.5M params)
 Training:
 - `lr=5e-4`, `weight_decay=1e-4`, `batch_size=4`, `surf_weight=10.0`
 - Optimizer: `AdamW`
-- Scheduler: `CosineAnnealingWarmRestarts(T_0=5, T_mult=2)` with per-batch `scheduler.step()`
+- Scheduler: `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` with per-batch `scheduler.step()` (guarded: `if global_step < scheduler.total_steps`)
 - Loss: vol_loss (MSE) + surf_weight × surf_loss (L1/MAE), `total = vol_loss + surf_weight * surf_loss`
 - Grad clip: `clip_grad_norm_(max_norm=1.0)`
-- No mixed precision, no grad clipping
 - `epochs=50` (max), capped by `SENPAI_TIMEOUT_MINUTES=30`
 
 Per-run limits enforced by the harness:
@@ -27,6 +26,35 @@ Per-run limits enforced by the harness:
 `val_avg/mae_surf_p` — equal-weight mean surface pressure MAE across the four validation splits. Lower is better. The paper-facing metric is `test_avg/mae_surf_p`, computed at the end of training using the best-val checkpoint.
 
 ## Baseline metrics
+
+### 2026-05-16 01:35 — PR #3307: OneCycleLR right-sized to actual budget + L1 surf (compound win)
+
+**New best: `val_avg/mae_surf_p = 81.66`** — 3-arm mean, **−8.38 pp (−9.30%)** vs prior baseline 90.04. All 3 arms beat baseline; spread 3.80 pp.
+
+| Split | val mae_surf_p (best run `iomzoqit`) | 3-arm mean | Δ mean vs baseline |
+|---|---|---|---|
+| val_single_in_dist | 92.04 | 93.33 | −15.62 |
+| val_geom_camber_rc | 92.30 | 92.67 | −5.03 |
+| val_geom_camber_cruise | 60.31 | 61.87 | −8.53 |
+| val_re_rand | 76.60 | 78.79 | −4.32 |
+| **val_avg** | **80.31** | **81.66** | **−8.38** |
+| test avg (3-split excl. cruise) | 77.97 | 79.28 | −8.50 |
+
+- **W&B runs:** `ut8w1dsk` (84.11), `iomzoqit` (80.31 ★ best), `f4lha65v` (80.57) — group `willow-pai2i-24h-r5-round2`
+- **Epochs:** 14 / 50 (30-min wall-clock cap; scheduler exhausted at step 5250 = 14 × 375 batches)
+- **Peak VRAM:** ~71 GB (~70% of H100 80GB; unchanged — OneCycleLR peak LR is higher but same model)
+- **Change vs prior baseline:** replaced `CosineAnnealingWarmRestarts` with `OneCycleLR(max_lr=1e-3, total_steps=len(train_loader)*14, pct_start=0.1, div_factor=25, final_div_factor=1e4)` with per-batch stepping + `if global_step < scheduler.total_steps: scheduler.step()` guard. L1 surf loss (from #3434) retained.
+- **Why it works:** Right-sizing `total_steps` to the actual 14-epoch budget makes the peak hit at epoch ~1.4, then aggressive anneal to ~4e-9 by epoch 14. The OOD splits improve most (`val_geom_camber_cruise` −8.53 pp, `val_single_in_dist` −15.62 pp on mean). OneCycle + L1 are orthogonal and stack: L1 chooses the median minimum, OneCycle finds it faster with a shaped LR trajectory.
+- **Reproduce (best arm):**
+  ```bash
+  cd target/ && python train.py \
+    --lr 5e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10.0 --epochs 50 \
+    --agent willowpai2i24h5-askeladd \
+    --wandb_group willow-pai2i-24h-r5-round2 \
+    --wandb_name askeladd-onecyclelr-1e3-rightsized-repl2
+  ```
+
+---
 
 ### 2026-05-15 21:30 — PR #3434: L1 surface loss (vol MSE + surf L1)
 
