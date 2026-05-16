@@ -2,6 +2,48 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 11:40 — Round closures and reassignments (4 PRs)
+
+### PR #3742: H33 OneCycleLR pct_start sweep (tanjiro) — **CLOSED**
+- 3 arms (pct_start ∈ {0.10, 0.15, 0.20}). Best val=77.77 (+15%). All regress. best_epoch stays at 10-11; compression shifts LR lower sooner without moving the optimum. val_single hit hardest (+17 to +21). Together with H37, schedule axis is exhausted.
+- **Next**: reassigned to H44 foil-relative coords (PR #3930).
+
+### PR #3788: H36 channel-weighted surf_loss (frieren) — **CLOSED**
+- 3 arms (surf_p_weight ∈ {2, 3, 5}). Best val=76.73 (+13.4%, w=2). All regress monotonically.
+- **Critical insight**: Ux/Uy surface supervision is auxiliary regularization for the shared backbone. Cutting velocity weight corrupts the multi-task representation that p depends on. val_single (most p-dominated) hit hardest, +17 to +31. Rules out output-loss reweighting axis.
+- **Next**: reassigned to H45 pressure-head split (PR #3928) — architectural rather than loss-side intervention for the same channel-imbalance question.
+
+### PR #3539: H23 slice_num=32 retest on H24 baseline (alphonse) — **CLOSED**
+- 4 seeds, mean val=72.22 (range 71.16-73.80, σ=1.1), +6.8% regression. test=62.80 within noise. Original SwiGLU-baseline win (-22%) does NOT compose with OneCycleLR.
+- **Insight**: slice_num=32 and OneCycleLR are anti-synergistic — both regularize the same overfitting axis. Compositionality lesson for the project.
+- **Next**: reassigned to H43 flow-condition MixUp (PR #3929) — first data-augmentation experiment, attacks a different axis.
+
+### PR #3850: H39 BF16 AMP mixed precision (askeladd) — **CLOSED**
+- Single arm. val=69.69 (+3.0%), test=60.92 (-1.9% improved). Schedule completed cleanly (LR=2.1e-9, best_epoch=15, monotone descent through all 15 epochs).
+- val regression is structural (val_single +10.3% dominates), not BF16 numerical (slog1p stats clean, no NaN). Same single-foil bottleneck thorfinn H41 targets. Speedup only 5-25%, not 30-40% — attention dominates compute here, not matmul.
+- **Insight**: AMP works mechanistically but speedup is too small for this compute regime. Stays available for future hypotheses needing more wall-clock budget.
+- **Next**: reassigned to H46 gradient accumulation 2x (PR #3931) — variance-reducing optimizer steps from a different angle.
+
+## 2026-05-16 11:40 — PR #3928: H45 Pressure-specific output head (frieren) — **assigned**
+- Branch: `charliepai2i24h4-frieren/pressure-head-split`
+- Hypothesis: Split final block output into `vel_head: Linear(n_hidden, 2)` for [Ux, Uy] and `p_head: SwiGLUMLP(n_hidden, n_hidden//2, 1)` for p. Keeps full Ux/Uy supervision intact while giving p dedicated capacity. Architectural counterpart to closed H36 (which reweighted output losses and corrupted multi-task representations). Predicted -2 to -5 from 67.64.
+- Replaces: #3788 (H36 channel-weighted loss closed +13.4%)
+
+## 2026-05-16 11:40 — PR #3929: H43 Flow-condition MixUp (alphonse) — **assigned**
+- Branch: `charliepai2i24h4-alphonse/flow-condition-mixup`
+- Hypothesis: MixUp on flow-condition subspace (dims 13-23: log_Re, AoA, NACA params, gap, stagger) and target y; keep node positions (dims 0-1) and shape descriptors (dims 2-11) from primary sample. Creates synthetic (geometry, flow condition) combinations without physically inconsistent node interpolation. Two arms α ∈ {0.4, 0.2}. First data-augmentation experiment in the project. Predicted -2 to -6, concentrated on val_geom_camber splits.
+- Replaces: #3539 (H23 slice_num=32 retest closed +6.8%)
+
+## 2026-05-16 11:40 — PR #3930: H44 Foil-relative coordinate encoding (tanjiro) — **assigned**
+- Branch: `charliepai2i24h4-tanjiro/foil-relative-coords`
+- Hypothesis: Augment input with per-node `log(1 + dist_to_surface_centroid)`. Computed from existing surface flag (dim 12) + position dims. Gives the model an explicit boundary-layer physics prior; dsdf features (dims 4-11) may already encode this, in which case redundant. First input-feature engineering since H5 RFF was merged. Predicted -1 to -4.
+- Replaces: #3742 (H33 pct_start sweep closed +15%)
+
+## 2026-05-16 11:40 — PR #3931: H46 Gradient accumulation 2x (askeladd) — **assigned**
+- Branch: `charliepai2i24h4-askeladd/grad-accum-2x`
+- Hypothesis: accum_steps=2 doubles effective batch from 4 to 8 without VRAM increase. Reduces gradient variance during OneCycleLR's high-LR warmup phase. Scheduler step interval tied to optimizer step (every 2 micro-batches) to keep schedule length constant. Chen et al. ICLR 2021 establishes the technique for small-batch fine-tuning. Predicted -1 to -4.
+- Replaces: #3850 (H39 AMP closed +3.0% on val despite test improvement and clean schedule completion)
+
 ## 2026-05-16 11:22 — PR #3900: H42 Auxiliary Re/AoA prediction head (nezuko) — **assigned (recreates #3889)**
 
 - Branch: `charliepai2i24h4-nezuko/aux-re-aoa-head-v2`
