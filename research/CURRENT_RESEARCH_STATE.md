@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~22:55 UTC) — **#4015 nezuko layer_scale+T_max=20 MERGED** (new best val 54.30/test 47.29; 2-seed mean 55.97/48.60); **#4201 nezuko four-way composition** (layer_scale+clip+lr=2e-4+T_max=20) assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~23:37 UTC) — **#4153 askeladd β2 CLOSED**, **#4152 frieren EMA CLOSED** (both on now-obsolete pre-#4015 substrate); **#4212 askeladd layer_scale magnitude sweep** assigned at new substrate; **#4214 frieren EMA decay sweep** assigned at new layer_scale+T_max=20 substrate. 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -48,13 +48,12 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
 | #4145 | alphonse | R11 H55: grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24 extension) | WIP |
-| #4015 | nezuko | R10 H39: layer_scale=1e-4 + T_max=20 composition (Arms F+G) | WIP |
-| **#4192** | **fern** | **R11 H61: Huber β recalibration at lr=2e-4 {0.03, 0.05 ctrl, 0.10}** | **Just assigned** |
-| #4153 | askeladd | R11 H58: Lion β2 sweep at T_max=20 {0.98, 0.99 ctrl, 0.995} | WIP |
+| #4192 | fern | R11 H61: Huber β recalibration at lr=2e-4 {0.03, 0.05 ctrl, 0.10} | WIP |
 | #4173 | thorfinn | R11 H59 (extended): triple comp Arms D (lr=1.8e-4+T_max=20) + E (lr=2e-4+T_max=18) | Sent back |
-| **#4201** | **nezuko** | **R11 H62: layer_scale=1e-4 + clip=1.0 + lr=2e-4 + T_max=20 (four-way composition)** | **Just assigned** |
-| **#4180** | **edward** | **R11 H60: Clip ratio sweep at lr=2e-4 {0.7, 1.0 ctrl, 1.4}** | **Just assigned** |
-| #4152 | frieren | R11 H57: EMA decay sweep at T_max=20 {0.995, 0.997 ctrl, 0.999} | WIP |
+| #4201 | nezuko | R11 H62: layer_scale=1e-4 + clip=1.0 + lr=2e-4 + T_max=20 (four-way composition) | WIP |
+| #4180 | edward | R11 H60: Clip ratio sweep at lr=2e-4 {0.7, 1.0 ctrl, 1.4} | WIP |
+| **#4212** | **askeladd** | **R11 H63: layer_scale magnitude sweep {1e-3, 1e-5, 3e-4} at new BL substrate** | **Just assigned** |
+| **#4214** | **frieren** | **R11 H64: EMA decay {0.995, 0.997 ctrl, 0.999} at layer_scale+T_max=20 substrate** | **Just assigned** |
 | #4148 | tanjiro | R11 H56: LR recalibration at T_max=20 {1.3e-4, 1.5e-4 ctrl, 1.7e-4} | WIP |
 
 **All 8 students now staffed.**
@@ -63,6 +62,8 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4153 | askeladd | Lion β2@T_max=20 (old substrate): β2=0.995 σ huge (range 12.71 across 3 seeds); β2=0.98 has layer_scale_init=1.0 confound; ctrl never launched; substrate obsolete vs val 54.30 | CLOSED |
+| #4152 | frieren | EMA@T_max=20 (old substrate): ema=0.995 within noise; ema=0.999 unstable (1 crashed/1 diverged/1 worse); ctrl never launched; substrate obsolete | CLOSED |
 | #4128 | fern | surf_weight@clip=1.0 (old substrate): sw=5 → 60.59 val / 51.95 test (worse); sw=10 ctrl & sw=20 never launched; obsolete substrate | CLOSED |
 | #4122 | edward | wd@clip=1.0 (old substrate): wd=3e-4 → 62.99 (+1.8 vs ctrl 61.18), wd=5e-4 → 61.45 (within noise); wd=1e-3 ctrl & wd=2e-3 never launched; substrate obsolete | CLOSED |
 | #4096 | frieren | SGDR cosine restarts: T_0=7 → val 64.14 (+6.48), T_0=4 T_mult=2 → 69.51 (+11.85). Restarts oppose T_max=20 mechanism. | CLOSED |
@@ -84,9 +85,8 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 | **Triple composition (extended)** | **T_max=20 + lr=2e-4 + clip=1.0 → val 56.98 (tied); Arms D (lr=1.8e-4@T_max=20) + E (lr=2e-4@T_max=18)** | **#4173 thorfinn** | **First arm tied on val (+0.086) but test better −0.69; localizing the lr×T_max minimum** |
 | Schedule+clip composition | grad_clip=1.0 + T_max=20 at lr=1.5e-4 (+ T_max=24) | #4145 alphonse | −0 to −2 val; tests if clip×T_max compose (suboptimal lr) |
 | LR recalibration at T_max=20 | lr {1.3e-4, 1.5e-4 ctrl, 1.7e-4} at T_max=20 | #4148 tanjiro | −0 to −1 val; note lr=2e-4 tied — needs Arm D |
-| EMA decay at T_max=20 | ema_decay {0.995, 0.997 ctrl, 0.999} at T_max=20 | #4152 frieren | −0 to −1 val; longer averaging at noisy endpoint |
-| Lion β2 at T_max=20 | lion_beta2 {0.98, 0.99 ctrl, 0.995} at T_max=20 | #4153 askeladd | −0 to −1.5 val; untested optimizer-state axis |
-| Architecture stability composition | layer_scale=1e-4 + T_max=20 | #4015 nezuko | −0 to −2 val; tests if both wins stack |
+| **EMA decay at new substrate** | **ema_decay {0.995, 0.997 ctrl, 0.999} at layer_scale=1e-4 + T_max=20** | **#4214 frieren** | **−0 to −1 val; may stabilize σ=1.67 seed variance at new BL** |
+| **layer_scale magnitude sweep** | **layer_scale {1e-3, 1e-5, 3e-4} at T_max=20 + lr=1.5e-4 (new BL substrate)** | **#4212 askeladd** | **−0 to −1.5 val; tests whether 1e-4 is locally optimal** |
 | **Huber β recalibration at lr=2e-4** | **β {0.03, 0.05 ctrl, 0.10} at lr=2e-4 + clip=1.0** | **#4192 fern** | **−0 to −1.5 val; tests whether finding #11 extends to new substrate; β=0.03 is novel** |
 | Clip ratio recalibration at lr=2e-4 | clip {0.7, 1.0 ctrl, 1.4} at lr=2e-4 | #4180 edward | −0 to −1.5 val; parallel to finding #22 |
 
@@ -119,7 +119,11 @@ Key mechanism: layer_scale_init=1e-4 (CaiT/DeiT-III) initializes each block resi
 ## Next priorities
 
 1. **nezuko #4201 four-way composition**: layer_scale=1e-4 + T_max=20 + lr=2e-4 + clip=1.0. This is the highest-priority composition — four orthogonal wins stacked. Potential val ~51–54.
-2. **alphonse #4145 updated** (WIP, awaiting Arm D+E): Arm B (T_max=20+clip at lr=1.5e-4 → val 56.71) doesn't beat new BL (54.30). Asked student to add Arm E (layer_scale + clip + T_max=20 at lr=1.5e-4) as the natural next composition.
-3. **thorfinn #4173 sent back**: Arms D (lr=1.8e-4 + T_max=20 + clip) and E (lr=2e-4 + T_max=18 + clip) — localizing the lr×T_max minimum at clip=1.0. These won't beat new BL unless layer_scale further composes.
-4. **tanjiro #4148**: LR@T_max=20 (no clip, no layer_scale). Results will now compare to val 54.30; only Arm D (lr=2e-4) has any hope.
-5. **Paper completeness**: T_max ablation (done), clip (done), layer_scale (done), LR shift finding (done), four-way composition (in-flight #4201). Need layer_scale ablation on paper-facing splits.
+2. **askeladd #4212 layer_scale magnitude**: tests whether 1e-4 is locally optimal at the new BL substrate. If smaller magnitude (1e-5) wins, theory suggests even slower residual growth helps.
+3. **frieren #4214 EMA on new substrate**: σ=1.67 seed variance on T_max=20 is concerning; heavier EMA (0.999) may stabilize, OR may be unstable (carried over from prior substrate). Resolves whether substrate change rescues ema=0.999.
+4. **alphonse #4145** (WIP, awaiting Arm D+E): Arm B (T_max=20+clip at lr=1.5e-4 → val 56.71) doesn't beat new BL (54.30). Asked student to add Arm E (layer_scale + clip + T_max=20 at lr=1.5e-4) as the natural next composition.
+5. **thorfinn #4173 sent back**: Arms D (lr=1.8e-4 + T_max=20 + clip) and E (lr=2e-4 + T_max=18 + clip) — localizing the lr×T_max minimum at clip=1.0. These won't beat new BL unless layer_scale further composes.
+6. **tanjiro #4148**: LR@T_max=20 (no clip, no layer_scale). Results will now compare to val 54.30; only Arm D (lr=2e-4) has any hope.
+7. **edward #4180**: Clip ratio @ lr=2e-4. Now compared against new BL — only if layer_scale composes with clip will this beat 54.30.
+8. **fern #4192**: Huber β @ lr=2e-4. Same — needs to compose with layer_scale.
+9. **Paper completeness**: T_max ablation (done), clip (done), layer_scale (done), LR shift finding (done), four-way composition (in-flight #4201), layer_scale magnitude sweep (in-flight #4212). Need EMA ablation on new substrate (in-flight #4214).

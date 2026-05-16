@@ -1,5 +1,43 @@
 # SENPAI Research Results
 
+## 2026-05-16 23:00 — #4153 askeladd β2 CLOSED; #4152 frieren EMA CLOSED; #4212 askeladd layer_scale-mag, #4214 frieren EMA on new substrate assigned
+
+### #4153 askeladd — R11 H58: Lion β2 sweep at T_max=20 (CLOSED — informative null, obsolete substrate + high variance)
+
+W&B group `round11-beta2-askeladd`. Assigned before #4015 layer_scale merged; substrate now obsolete.
+
+| β2 | layer_scale | val_avg | test_avg | Notes |
+|-----|-------------|---------|----------|-------|
+| 0.995 (seed 1) | — | 72.71 | — | high variance |
+| 0.995 (seed 2) | — | 70.71 | — | |
+| 0.995 (seed 3) | — | 60.00 | — | best of 3 reps |
+| 0.98 | **1.0** confound | 63.33 | — | layer_scale_init=1 not 0 |
+| 0.99 ctrl | — | not launched | — | |
+
+**Closed because:** (1) β2=0.995 σ huge (range 12.71); (2) β2=0.98 arm has layer_scale_init=1.0 confound (not the default 0); (3) ctrl 0.99 never launched; (4) all on T_max=20-only substrate, now superseded by #4015's layer_scale+T_max=20 (val 54.30). No way to extract a clean signal even if best-of-3 (60.00) would have beat old BL by a little.
+
+### #4152 frieren — R11 H57: EMA decay at T_max=20 (CLOSED — informative null, obsolete substrate)
+
+W&B group `round11-ema-frieren`. Same pre-merge substrate.
+
+| ema | val_avg | test_avg | State |
+|-----|---------|----------|-------|
+| 0.995 | 58.16 | — | within noise of pre-#4015 BL (57.66) |
+| 0.997 ctrl | — | — | not launched |
+| 0.999 (3 seeds) | crashed / diverged / worse | — | unstable |
+
+**Closed because:** (1) ema=0.995 essentially no change; (2) ema=0.999 unstable across 3 seeds; (3) ctrl never launched; (4) substrate obsolete vs val 54.30 BL. **Per-substrate finding worth keeping:** ema=0.999 is unstable at T_max=20.
+
+### #4212 askeladd — R11 H63: layer_scale magnitude sweep on new substrate (just assigned)
+
+Sweeps layer_scale_init ∈ {1e-3, 1e-5, 3e-4} at T_max=20 + lr=1.5e-4 + no clip (the **new BL substrate**). Tests whether 1e-4 (the merged value) is locally optimal. Per nezuko's #4015 followup #3.
+
+### #4214 frieren — R11 H64: EMA decay on new substrate (just assigned)
+
+Sweeps ema_decay ∈ {0.995, 0.997 ctrl, 0.999} at **layer_scale=1e-4 + T_max=20** substrate. Motivated by σ=1.67 seed variance on the new substrate — heavier EMA averaging may stabilize the endpoint. ema=0.999 was unstable on the prior substrate but the substrate is now different (lower residual magnitude via layer_scale).
+
+---
+
 ## 2026-05-16 22:55 — #4015 nezuko layer_scale MERGED (new best val 54.30 / test 47.29); #4201 nezuko assigned (four-way composition)
 
 ### #4015 nezuko — R10 H39: layer_scale_init=1e-4 + T_max=20 (MERGED — **new best val 54.3009 / test 47.2883**)
