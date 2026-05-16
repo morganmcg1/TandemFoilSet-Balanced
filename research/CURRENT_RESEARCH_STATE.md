@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-16 19:35
+- **Date**: 2026-05-16 21:00
 - **Branch**: icml-appendix-charlie-pai2i-48h-r3
-- **Round**: 5 mid-phase — Lion+slice=96 super-additive win (H73 merged); 8 experiments active, H76+H77 closed negative (warmup/n_head don't transfer to slice=96)
+- **Round**: 5 mid-phase — Lion+slice=96 baseline (H73, val=42.98). H74-H77+H79 closed negative. **Noise floor ≥2.6 pts** discovered from H74 same-schedule run.
 - **Most recent human research directive**: None received
 
 ## Current Best
@@ -23,6 +23,19 @@
 
 **Δ H73 vs H66: −13.77 val, −12.96 test 3-split.** SUPER-ADDITIVE (3.66 pts below the additivity-floor prediction of 46.64).
 **Cumulative R5 gain: −23.13 pts val vs H37b** (66.11 → 42.98).
+
+## ⚠ Noise Floor Discovered (2026-05-16 H74 closure)
+
+H74 Arm B (T_max=15 SGDR with restart firing AFTER wall cut) used effectively the same first-15-epoch schedule as H73 baseline. It landed at val=45.57 vs H73's 42.98 — a **2.60 pt single-seed gap** despite identical schedule.
+
+**Implication: H73 baseline (val=42.9784) has ≥2.6 pts of seed variance.**
+
+Future reviews must apply this noise floor:
+- Δ < 2.6 pts vs H73 → likely tie, not win/loss
+- Δ ≥ 3 pts → real signal (clearly outside noise)
+- Δ ≥ 5 pts → strong signal
+
+Marginal H79 Arm B (+0.38 val, −0.15 test) and H77 Arm B (+1.67 val) may be ties not losses. Future hypothesis predictions should target ≥3 pt gains to be worth testing.
 
 ## Round 5 Insights (post-merge wave)
 
@@ -60,16 +73,16 @@ The H67-H73 Lion compound batch revealed:
 
 | PR | Student | Hypothesis | Priority | Expected |
 |----|---------|------------|----------|---------|
-| **#4088** | askeladd | **H74: Extended cosine schedule (T_max=20/SGDR)** | HIGH | ~38-41 |
+| **#4133** | askeladd | **H84: T_max compression (T_max=12, T_max=10)** | HIGH (askeladd's own follow-up) | ~41-44 |
 | **#4094** | tanjiro | **H75: Lion LR sweep (lr=2e-4, lr=5e-4)** | HIGH | ~41-44 |
 | **#4126** | fern | **H82: slice_num sweep under Lion (slice=128, slice=80)** | HIGH (untested Lion regime) | ~40-46 |
 | **#4127** | frieren | **H83: n_layers sweep under Lion (n_layers=5, n_layers=3)** | MED (depth retune at slice=96) | ~41-46 |
-| **#4092** | nezuko | **H79: wd retune (wd=1e-4, wd=5e-5)** | HIGH | ~41-44 |
+| **#4135** | nezuko | **H85: FFN activation (swiglu, vanilla) under Lion** | MED (test if GEGLU locked under Lion) | ~43-47 |
 | **#4093** | thorfinn | **H80: Full Lion stack — warmup+wd+β₂+n_head compound** | HIGH (bold swing) | ~35-40 optimistic |
 | **#4097** | edward | **H78: Lion β₂ sweep (β₂=0.999, β₂=0.995)** | HIGH | ~41-43 |
 | **#4098** | alphonse | **H81: RMSNorm under Lion+slice=96** | HIGH (closes normalization question) | ~41-44 |
 
-**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (closed cycle 22b — superseded by H73), **H76 (warmup negative at slice=96)**, **H77 (n_head negative at slice=96)**.
+**Closed this round:** H61 (LR-down), H62 (mlp_ratio), H63 (DropPath), H64 (Huber δ_p), H65 (EMA), H72 (RMSNorm+slice96 anti-compound), H68/H69/H70/H71 (Lion variants at slice=64, all superseded by H73), H58/H67 (superseded by H73), **H76 (warmup negative)**, **H77 (n_head negative)**, **H79 (wd negative, partly ties)**, **H74 (schedule extension negative; revealed noise floor)**.
 
 **H76/H77 negative-result implication for H80:** H80 (thorfinn full stack) combines warmup=2 + wd=1e-4 + β₂=0.999 + n_head=4. Two of these four levers (warmup, n_head) are now confirmed NEGATIVE at slice=96. H80's predicted range should be revised downward — still possible to win if wd+β₂ wins compensate, but less likely.
 
@@ -82,7 +95,7 @@ The H67-H73 Lion compound batch revealed:
 | Schedule (Lion) | ❌ warmup REGRESSES at slice=96 (H76) | T_max=15 (H73) | H69 win doesn't transfer; warmup=2 cost > benefit at 15-ep horizon |
 | n_head (Lion) | ❌ n_head=4 REGRESSES at slice=96 (H77) | 2 (H73) | H70 win doesn't transfer; per-head dim shrinkage hurts |
 | β₂ (Lion) | 🔬 0.999 wins at slice=64 | 0.99 (H73) | H68 found β₂=0.999 helps; retest |
-| wd (Lion) | 🔬 Interaction unclear | 1e-3 (H73) | wd=1e-4 won at slice=64 (H71); wd=1e-3 won at slice=96 |
+| wd (Lion) | ✅ Locked at 1e-3 (H79 confirmed) | 1e-3 (H73) | wd=1e-4 and wd=5e-5 both regress/tie at slice=96 |
 | slice_num | 🏆 96 locked | 42.98 (H73) | Confirmed under Lion. 128 still untested under Lion. |
 | n_layers | ✅ Locked at 4 (H60) | 4 | Shallower wins under GEGLU |
 | FFN activation | ✅ GEGLU locked (H48) | GEGLU | > SwiGLU > vanilla |

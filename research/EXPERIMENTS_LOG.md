@@ -1903,3 +1903,55 @@ All 8 students now active. H78 tests the β₂ individual isolation (thorfinn ha
 - H83 retunes depth under Lion at the new slice=96 baseline (H60's n_layers=4 win was AdamW+slice=64-specific).
 
 These two hypotheses target the two architectural levers that have NOT yet been tested under Lion+slice=96.
+
+---
+
+## 2026-05-16 20:55 — PR #4092: H79 wd retune on H73 (nezuko) — **CLOSED, negative**
+
+- Branch: `nezuko/h79-lion-wd-at-slice96`
+- Hypothesis: wd=1e-4 (H71 winner at slice=64) ports to H73 slice=96.
+
+| Arm | val_avg | Δ vs H73 | test 3-split | Δ vs H73 test |
+|-----|--------:|---------:|-------------:|--------------:|
+| A (wd=1e-4) | 44.1701 | +1.19 | 43.5136 | +1.97 |
+| B (wd=5e-5) | 43.3561 | +0.38 | **41.3990** | **−0.15** |
+
+**Insight captured:** Non-monotonic wd curve at slice=96 — wd=1e-4 is worse than both neighbors. Weight L2 norms scale with wd as expected (wd=5e-5: 114.9, wd=1e-4: 106.0). Arm B is essentially tied with H73 on val (+0.38) and slightly better on test (−0.15) — within seed variance (see H74 result). **wd=1e-3 locked at slice=96.**
+
+**Status: CLOSED — negative. H71 lever does NOT transfer to slice=96.**
+
+---
+
+## 2026-05-16 20:55 — PR #4088: H74 Extended schedule (askeladd) — **CLOSED, negative**
+
+- Branch: `askeladd/h74-extended-schedule`
+- Hypothesis: T_max=20 or SGDR restart captures wall-cut tail.
+
+| Arm | val_avg | Δ vs H73 | test 3-split | best_epoch |
+|-----|--------:|---------:|-------------:|-----------:|
+| A (T_max=20, ep=20) | 49.5990 | +6.62 | 47.77 | 15/15 wall-cut |
+| B (T_max=15, ep=30 SGDR) | 45.5738 | +2.60 | 43.84 | 15/15 wall-cut |
+
+**Critical insight from this PR:** Arm B's schedule is identical to H73's for the first 15 epochs (CosineAnnealingWarmRestarts T_0=15 == CosineAnnealingLR T_max=15 for the first cycle, and the restart fires AFTER the wall cut at ep 16). Therefore the **+2.60 val gap between Arm B and H73 is essentially single-seed variance**. The H73 baseline number itself has ≥2.6 pts of seed noise.
+
+**Implications for our methodology:**
+- Closures with Δ ≤ 2.6 pts vs baseline (e.g., H79 Arm B, +0.38 val / −0.15 test) may be ties not true losses.
+- True wins require Δ ≥ 3 pts to clearly exceed noise.
+- Future hypotheses should target levers with predicted gains > 3 pts.
+
+**Status: CLOSED — negative; major methodology insight on seed variance.**
+
+---
+
+## 2026-05-16 21:00 — Round 5 Cycle 24: Re-assign askeladd and nezuko + noise-floor insight
+
+| PR | Student | Hypothesis | Key Change |
+|----|---------|-----------|------------|
+| #4133 | askeladd | H84: T_max compression below wall budget | T_max=12 (Arm A), T_max=10 (Arm B); 3-5 epochs LR-fine-tune |
+| #4135 | nezuko | H85: FFN activation under Lion+slice=96 | swiglu (Arm A), vanilla (Arm B) |
+
+**H84** implements askeladd's own follow-up suggestion — compress T_max below the wall budget so the cosine reaches LR=0 before timeout and the remaining epochs serve as a low-LR fine-tune phase.
+
+**H85** tests whether GEGLU's H48 dominance (under AdamW+slice=64) persists under Lion+slice=96, or whether the optimization regime change shifts the optimum.
+
+**Methodology update:** Future PR reviews will weight Δ vs baseline against the ~2.6 pt seed noise floor. Improvements within ±2-3 pts are likely ties, not wins or losses.
