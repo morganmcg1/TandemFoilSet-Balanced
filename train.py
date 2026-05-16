@@ -279,7 +279,7 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False, use_dsdf_norm_feature: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -305,6 +305,9 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if use_dsdf_norm_feature:
+                dsdf_norm = x[..., 4:12].abs().mean(dim=-1, keepdim=True)
+                x_norm = torch.cat([x_norm, dsdf_norm], dim=-1)
             x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx:
@@ -478,6 +481,7 @@ class Config:
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
     n_hidden: int = 160  # Transolver hidden dim (embedding/attention/FFN base width)
+    use_dsdf_norm_feature: bool = False  # append per-point mean|DSDF| (dims 4-11) as extra input feature
 
 
 cfg = sp.parse(Config)
@@ -507,6 +511,8 @@ val_loaders = {
 }
 
 ENCODED_X_DIM = 4 * cfg.num_freq + (X_DIM - 2)  # 4*num_freq Fourier feats + 22 non-coord feats
+if cfg.use_dsdf_norm_feature:
+    ENCODED_X_DIM += 1
 model_config = dict(
     space_dim=2,  # unchanged; only used as input-dim split for preprocess MLP
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
@@ -604,6 +610,9 @@ for epoch in range(MAX_EPOCHS):
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
+        if cfg.use_dsdf_norm_feature:
+            dsdf_norm = x[..., 4:12].abs().mean(dim=-1, keepdim=True)
+            x_norm = torch.cat([x_norm, dsdf_norm], dim=-1)
         x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with train_amp_ctx():
@@ -640,7 +649,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16, cfg.use_dsdf_norm_feature)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -708,7 +717,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16, cfg.use_dsdf_norm_feature)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
