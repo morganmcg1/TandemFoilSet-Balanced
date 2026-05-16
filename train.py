@@ -218,21 +218,33 @@ class Transolver(nn.Module):
 # Output transforms
 # ---------------------------------------------------------------------------
 
-def apply_asinh_p(y_norm, scale):
-    """Compress the pressure channel of a normalized target tensor with asinh."""
-    if scale <= 0:
+def apply_asinh(y_norm, p_scale, vel_scale=0.0):
+    """Compress per-channel targets with asinh using `asinh(x*s)/s`.
+
+    p_scale  > 0 → compress pressure (channel 2).
+    vel_scale > 0 → compress Ux (channel 0) and Uy (channel 1).
+    """
+    if p_scale <= 0 and vel_scale <= 0:
         return y_norm
     y = y_norm.clone()
-    y[..., 2] = torch.asinh(y_norm[..., 2] * scale) / scale
+    if vel_scale > 0:
+        y[..., 0] = torch.asinh(y_norm[..., 0] * vel_scale) / vel_scale
+        y[..., 1] = torch.asinh(y_norm[..., 1] * vel_scale) / vel_scale
+    if p_scale > 0:
+        y[..., 2] = torch.asinh(y_norm[..., 2] * p_scale) / p_scale
     return y
 
 
-def invert_asinh_p(pred, scale):
-    """Inverse of apply_asinh_p; clamps before sinh to avoid overflow."""
-    if scale <= 0:
+def invert_asinh(pred, p_scale, vel_scale=0.0):
+    """Inverse of apply_asinh; clamps before sinh to avoid overflow."""
+    if p_scale <= 0 and vel_scale <= 0:
         return pred
     out = pred.clone()
-    out[..., 2] = torch.sinh(pred[..., 2].clamp(-10, 10) * scale) / scale
+    if vel_scale > 0:
+        out[..., 0] = torch.sinh(pred[..., 0].clamp(-10, 10) * vel_scale) / vel_scale
+        out[..., 1] = torch.sinh(pred[..., 1].clamp(-10, 10) * vel_scale) / vel_scale
+    if p_scale > 0:
+        out[..., 2] = torch.sinh(pred[..., 2].clamp(-10, 10) * p_scale) / p_scale
     return out
 
 
@@ -241,17 +253,18 @@ def invert_asinh_p(pred, scale):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   asinh_p_scale: float = 0.0) -> dict[str, float]:
+                   asinh_p_scale: float = 0.0,
+                   asinh_vel_scale: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
 
-    When ``asinh_p_scale > 0`` the model predicts in asinh-compressed normalized
-    space on the pressure channel; we mirror the training loss target via
-    ``apply_asinh_p`` and invert the prediction with ``invert_asinh_p`` BEFORE
-    denormalizing for the MAE accumulator.
+    When ``asinh_p_scale > 0`` (or ``asinh_vel_scale > 0``) the model predicts in
+    asinh-compressed normalized space on the relevant channels; we mirror the
+    training loss target via ``apply_asinh`` and invert the prediction with
+    ``invert_asinh`` BEFORE denormalizing for the MAE accumulator.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -267,7 +280,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            y_target = apply_asinh_p(y_norm, asinh_p_scale)
+            y_target = apply_asinh(y_norm, asinh_p_scale, asinh_vel_scale)
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_target) ** 2
@@ -283,7 +296,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             ).item()
             n_batches += 1
 
-            pred_norm = invert_asinh_p(pred, asinh_p_scale)
+            pred_norm = invert_asinh(pred, asinh_p_scale, asinh_vel_scale)
             pred_orig = pred_norm * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
@@ -421,6 +434,7 @@ class Config:
     huber_delta: float = 0.0  # Huber transition in normalized space; 0 = MSE
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
+    asinh_vel_scale: float = 0.0  # 0 disables; >0 enables asinh on Ux/Uy channels
 
 
 cfg = sp.parse(Config)
@@ -527,23 +541,26 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        y_target = apply_asinh_p(y_norm, cfg.asinh_p_scale)
+        y_target = apply_asinh(y_norm, cfg.asinh_p_scale, cfg.asinh_vel_scale)
         pred = model({"x": x_norm})["preds"]
-        if cfg.debug and global_step == 0 and cfg.asinh_p_scale > 0:
+        if cfg.debug and global_step == 0 and (cfg.asinh_p_scale > 0 or cfg.asinh_vel_scale > 0):
             with torch.no_grad():
-                yp = y_norm[..., 2][mask]
-                yt = y_target[..., 2][mask]
-                pp = pred[..., 2][mask]
-                pp_inv = invert_asinh_p(pred, cfg.asinh_p_scale)[..., 2][mask]
-                pp_phys = (invert_asinh_p(pred, cfg.asinh_p_scale) * stats["y_std"] + stats["y_mean"])[..., 2][mask]
-                print(
-                    f"[ASINH-DEBUG scale={cfg.asinh_p_scale}] "
-                    f"y_norm[p] range=[{yp.min().item():.3f},{yp.max().item():.3f}] "
-                    f"y_target[p] range=[{yt.min().item():.3f},{yt.max().item():.3f}] "
-                    f"pred[p] range=[{pp.min().item():.3f},{pp.max().item():.3f}] "
-                    f"pred_inv[p] range=[{pp_inv.min().item():.3f},{pp_inv.max().item():.3f}] "
-                    f"pred_phys[p] range=[{pp_phys.min().item():.3f},{pp_phys.max().item():.3f}]"
-                )
+                pred_inv = invert_asinh(pred, cfg.asinh_p_scale, cfg.asinh_vel_scale)
+                pred_phys = pred_inv * stats["y_std"] + stats["y_mean"]
+                for ch_idx, ch_name in enumerate(["Ux", "Uy", "p"]):
+                    yn = y_norm[..., ch_idx][mask]
+                    yt = y_target[..., ch_idx][mask]
+                    pp = pred[..., ch_idx][mask]
+                    pi = pred_inv[..., ch_idx][mask]
+                    pph = pred_phys[..., ch_idx][mask]
+                    print(
+                        f"[ASINH-DEBUG p_scale={cfg.asinh_p_scale} vel_scale={cfg.asinh_vel_scale} ch={ch_name}] "
+                        f"y_norm=[{yn.min().item():.3f},{yn.max().item():.3f}] "
+                        f"y_target=[{yt.min().item():.3f},{yt.max().item():.3f}] "
+                        f"pred=[{pp.min().item():.3f},{pp.max().item():.3f}] "
+                        f"pred_inv=[{pi.min().item():.3f},{pi.max().item():.3f}] "
+                        f"pred_phys=[{pph.min().item():.3f},{pph.max().item():.3f}]"
+                    )
         if cfg.huber_delta > 0:
             elem_loss = F.huber_loss(pred, y_target, delta=cfg.huber_delta, reduction="none")
         else:
@@ -585,7 +602,8 @@ for epoch in range(MAX_EPOCHS):
     ema_model.eval()
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
-                             asinh_p_scale=cfg.asinh_p_scale)
+                             asinh_p_scale=cfg.asinh_p_scale,
+                             asinh_vel_scale=cfg.asinh_vel_scale)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -667,7 +685,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 asinh_p_scale=cfg.asinh_p_scale)
+                                 asinh_p_scale=cfg.asinh_p_scale,
+                                 asinh_vel_scale=cfg.asinh_vel_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
