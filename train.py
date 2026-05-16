@@ -434,6 +434,8 @@ def write_experiment_summary(
         "use_ema": cfg.use_ema,
         "ema_decay": cfg.ema_decay if cfg.use_ema else None,
         "grad_clip_norm": cfg.grad_clip_norm,
+        "use_schedule_free": cfg.use_schedule_free,
+        "sf_warmup_steps": cfg.sf_warmup_steps if cfg.use_schedule_free else None,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -488,6 +490,8 @@ class Config:
     film_mlp_hidden: int = 128
     two_shot_film: bool = False  # apply FiLM modulation at both attn and mlp sites per block
     grad_clip_norm: float | None = None  # if set, clip gradient L2 norm before optimizer.step()
+    use_schedule_free: bool = False  # AdamWScheduleFree — drop the cosine scheduler
+    sf_warmup_steps: int = 500  # warmup steps for Schedule-Free (README recommends warmup)
 
 
 cfg = sp.parse(Config)
@@ -542,21 +546,36 @@ ema = EMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
 if ema is not None:
     print(f"EMA: enabled (decay={cfg.ema_decay}, warmup ramp (1+step)/(10+step))")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-t_max_eff = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
-if cfg.cosine_t_max is not None:
-    # Decay fully across t_max_eff epochs, then hold near zero for any overshoot.
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[
-            torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max_eff),
-            torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1e-4, total_iters=1_000_000),
-        ],
-        milestones=[t_max_eff],
+if cfg.use_schedule_free:
+    from schedulefree import AdamWScheduleFree
+    optimizer = AdamWScheduleFree(
+        model.parameters(),
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
+        warmup_steps=cfg.sf_warmup_steps,
+    )
+    scheduler = None
+    t_max_eff = None
+    print(
+        f"Optimizer: AdamWScheduleFree(lr={cfg.lr}, weight_decay={cfg.weight_decay}, "
+        f"warmup_steps={cfg.sf_warmup_steps}); no scheduler"
     )
 else:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
-print(f"Scheduler: cosine T_max={t_max_eff}, max_epochs={MAX_EPOCHS}")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    t_max_eff = cfg.cosine_t_max if cfg.cosine_t_max is not None else MAX_EPOCHS
+    if cfg.cosine_t_max is not None:
+        # Decay fully across t_max_eff epochs, then hold near zero for any overshoot.
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[
+                torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max_eff),
+                torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1e-4, total_iters=1_000_000),
+            ],
+            milestones=[t_max_eff],
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"Scheduler: cosine T_max={t_max_eff}, max_epochs={MAX_EPOCHS}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -584,6 +603,8 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    if cfg.use_schedule_free:
+        optimizer.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
     grad_norms_epoch: list[float] = []
@@ -625,12 +646,15 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     epoch_lr = optimizer.param_groups[0]["lr"]
-    scheduler.step()
+    if scheduler is not None:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate (with EMA-applied weights if enabled; save best while applied) ---
     model.eval()
+    if cfg.use_schedule_free:
+        optimizer.eval()  # swap params to Polyak-averaged iterate for eval
     restore = ema.apply_to(model) if ema is not None else None
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.amp_dtype)
@@ -667,7 +691,10 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "use_schedule_free": cfg.use_schedule_free,
     }
+    if cfg.use_schedule_free:
+        epoch_record["sf_warmup_steps"] = cfg.sf_warmup_steps
     if ema is not None:
         epoch_record["ema_step"] = ema.step
         epoch_record["ema_effective_decay"] = ema.effective_decay()
