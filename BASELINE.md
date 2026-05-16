@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-05-16 12:45 — PR #3905: SwiGLU + epochs=12 (askeladd)
+
+- **val_avg/mae_surf_p: 60.7195** (best epoch 12/12, W&B run `j4ej0kge`) — **−5.5% vs previous best 64.2430**
+- **test_avg/mae_surf_p: 51.9559** — **−6.5% vs previous best 55.5454**
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 66.2504 | 58.9275 |
+| geom_camber_rc | 71.2693 | 61.2299 |
+| geom_camber_cruise | 44.9014 | 36.8245 |
+| re_rand | 60.4569 | 50.8417 |
+| **avg** | **60.7195** | **51.9559** |
+
+- **Model config:** Same as #3814 (SwiGLU FFN, n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, inner_dim=216, 1.04M params)
+- **Change:** `--epochs 12` instead of 10; cosine T_max=12
+- **Val curve:** Still descending at epoch 12 (−3.70 from epoch 11→12, comparable to −3.80 from 10→11). Model NOT yet converged.
+- **Augmentation:** `coord_noise_std=0.01`; **Positional encoding:** Fourier PE `num_freq=4`
+- **Loss:** L1; **Optimizer:** AdamW, lr=5e-4, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=12); **Batch:** 4, surf_weight=10.0, grad_clip=1.0
+- **Budget:** 40-min wall clock → 34.8 min / 12 epochs (~173s/epoch); Peak VRAM ~98.2% of 100.78 GB
+
+**Reproduce command:**
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=40 python train.py --epochs 12 \
+  --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(All other flags use defaults: SwiGLU FFN, coord_noise_std=0.01, num_freq=4, lr=5e-4)*
+
+> **Note on convergence:** Val curve still descending at epoch 12 at the same rate as epoch 11. The model is under-converged. Next experiments should try `--epochs 14` or `--epochs 16` with `SENPAI_TIMEOUT_MINUTES=50`.
+
+---
+
 ## 2026-05-16 11:30 — PR #3814: SwiGLU FFN in TransolverBlock (askeladd)
 
 - **val_avg/mae_surf_p: 64.2430** (best epoch 10/10, W&B run `dvcj6w25`) — **−22% vs previous best 82.4997**
