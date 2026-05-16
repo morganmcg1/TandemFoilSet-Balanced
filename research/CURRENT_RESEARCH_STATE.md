@@ -6,18 +6,20 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~19:00 UTC) — #4049 frieren spec_norm at lr=1.5e-4 CLOSED informative (finding #18 extends); #4096 frieren R10 SGDR (cosine warm restarts) assigned; 8/8 staffed.
+- **Date:** 2026-05-16 (~20:00 UTC) — **#4056 thorfinn MERGED** (grad_clip=1.0: val 61.18 / test 52.09, new best); #4057 edward CLOSED; #4120 thorfinn LR@clip1 / #4122 edward wd@clip1 assigned; tanjiro T_max=18 (val 59.22) WINNING, pending terminal; 8/8 staffed.
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
 
-**val_avg/mae_surf_p = 63.0492** (PR #3976 frieren — Lion lr=1.5e-4 + n_fourier=0 + FiLM + Lion wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14; NO spec_norm; run `jurrwig2`)
-**test_avg/mae_surf_p = 53.6049** (same run, clean 4-split)
+**val_avg/mae_surf_p = 61.1778** (PR #4056 thorfinn — Lion lr=1.5e-4 + n_fourier=0 + FiLM + wd=1e-3 + EMA(0.997) + Huber β=0.05 + T_max=14 + **grad_clip=1.0**; NO spec_norm; run `y5tua53k`)
+**test_avg/mae_surf_p = 52.0853** (same run, clean 4-split)
 
-Per-split val: in_dist 64.45, camber_rc 80.74, camber_cruise 43.48, re_rand 63.53
-Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.70
+Per-split val: in_dist 65.37, camber_rc 76.90, camber_cruise 41.74, re_rand 60.70
+Per-split test: in_dist 56.81, camber_rc 66.84, camber_cruise 34.22, re_rand 50.47
 
-**Δ vs prior best (PR #3954 spec_norm+lr=1e-4, val 64.68 / test 56.17): −1.63 val / −2.57 test**
+**Δ vs prior best (PR #3976 lr=1.5e-4 no-clip, val 63.05 / test 53.60): −1.87 val / −1.51 test**
+
+⚠️ **PENDING**: tanjiro #4063 T_max=18 (val 59.22 / test 50.79) may set a new best once terminal is posted.
 
 ## Merged sequence (improvement cascade)
 
@@ -33,6 +35,7 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 | #3843 | Lion lr=1e-4 | 68.96 → 65.41 | 60.82 → 56.06 | −5.2% / −7.8% |
 | #3954 | spec_norm + lr=1e-4 | 65.41 → 64.68 | 56.06 → 56.17 | −1.1% / +0.2% |
 | **#3976** | **Lion lr=1.5e-4** | **64.68 → 63.05** | **56.17 → 53.60** | **−2.5% / −4.6%** |
+| **#4056** | **grad_clip=1.0** | **63.05 → 61.18** | **53.60 → 52.09** | **−3.0% / −2.8%** |
 
 **Total improvement:** val 135 → 63.05 (−53%), test ~130 → 53.60 (−59%)
 
@@ -44,17 +47,18 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 |----|---------|------------|--------|
 | **#4084** | **fern** | **R10 H48: Dropout sweep {0.05, 0.10} on Transolver blocks at lr=1.5e-4** | **Just assigned** |
 | **#4085** | **askeladd** | **R10 H49: Batch size sweep {8, 16} with Lion at lr=1.5e-4** | **Just assigned** |
-| **#4096** | **frieren** | **R10 H50: SGDR (cosine warm restarts) at lr=1.5e-4 — 2 cycle configs** | **Just assigned** |
-| #4015 | nezuko | R10 H39: Layer scale init {1e-4, 1e-5} — sent back for Arm D+E on new substrate | Sent back |
-| #4063 | tanjiro | R10 H47: T_max sweep {14 ctrl, 18, 20} at lr=1.5e-4 substrate | WIP |
-| #4057 | edward | R10 H45: Surface-biased slice routing in PhysicsAttention | WIP |
-| #4056 | thorfinn | R10 H42: Gradient clip sweep {0.5, 1.0, 2.0} at lr=1.5e-4 | WIP |
-| #4044 | alphonse | R10 H40: Multi-param FiLM — ctrl-only so far, treatment not launched | Nudged |
+| **#4120** | **thorfinn** | **R10 H52: LR sweep at clip=1.0 {1.5e-4 ctrl, 2e-4, 2.5e-4}** | **Just assigned** |
+| **#4122** | **edward** | **R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3}** | **Just assigned** |
+| #4096 | frieren | R10 H50: SGDR cosine warm restarts {T_0=7, T_0=4 T_mult=2} | WIP |
+| #4063 | tanjiro | R10 H47: T_max=18 WINNING (val 59.22) — T_max=20 still running | WIP, **near terminal** |
+| #4015 | nezuko | R10 H39: Layer scale — sent back, Arm D+E (new substrate) | Sent back |
+| #4044 | alphonse | R10 H40: Multi-param FiLM — ctrl-only, treatment not launched | Nudged |
 
 ## Recent closures (informative nulls — recent sessions)
 
 | PR | Student | Result | Note |
 |----|---------|--------|------|
+| #4057 | edward | Surfrouting: vec arm val 62.76 (+1.58 vs new BL 61.18); falsification triggered (bias→0) | CLOSED |
 | #4049 | frieren | spec_norm at lr=1.5e-4: Arm B −0.27 val vs ctrl (within noise) | CLOSED |
 | #4046 | askeladd | p_weight upweighting monotone hurts (1→2→3 worsens) | CLOSED |
 | #4045 | fern | Capacity bottleneck = wall clock (n=128 ctrl best within budget) | CLOSED |
@@ -104,8 +108,9 @@ Per-split test: in_dist 55.69, camber_rc 70.55, camber_cruise 35.48, re_rand 52.
 
 ## Next priorities
 
-1. **Layer scale at new substrate (nezuko Arms D+E)** — highest-confidence pending experiment. If layer_scale=1e-4 + lr=1.5e-4 ≤ 62.3 val, it's a real win → merge.
+1. **Tanjiro #4063 T_max=18 terminal** — T_max=18 val 59.22 / test 50.79 beats new BL 61.18/52.09. T_max=20 still running. Merge when terminal posted → likely new best.
 2. **Multi-FiLM treatment arm (alphonse #4044)** — highest-priority R10 hypothesis (camber_rc target). Currently ctrl-only; nudged for treatment launch.
-3. **R10/R11 in flight**: dropout (#4084), batchsize (#4085), T_max (#4063), gradclip (#4056), surfrouting (#4057), spec_norm@lr=1.5e-4 (#4049).
-4. **Unassigned R10 hypotheses** (if more students idle): H41 SWA, gradient accumulation, slice_num sweep, alternative loss formulations.
-5. **Confidence on baseline**: future PR — 2-seed reproduction of #3976 (jurrwig2) to measure variance directly; would let us better calibrate the ~2.77 noise floor at this substrate.
+3. **Layer scale at new substrate (nezuko Arms D+E)** — if layer_scale=1e-4 on clip=1.0+lr=1.5e-4 beats val 61.18.
+4. **R10 in flight**: SGDR (#4096 frieren), dropout (#4084 fern), batchsize (#4085 askeladd), LR@clip1 (#4120 thorfinn), wd@clip1 (#4122 edward).
+5. **Combine T_max=18 + clip=1.0** — the biggest follow-up after tanjiro's PR merges; both axes are independent.
+6. **Unassigned hypotheses** (if more idle): H41 SWA, finer T_max sweep, EMA decay at new substrate.

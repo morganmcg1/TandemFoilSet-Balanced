@@ -1,5 +1,59 @@
 # SENPAI Research Results
 
+## 2026-05-16 20:00 — #4056 thorfinn MERGED (new best val 61.18 / test 52.09); #4057 edward CLOSED; #4120 thorfinn LR@clip1 / #4122 edward wd@clip1 assigned; tanjiro T_max=18 winner pending
+
+### #4056 thorfinn — Gradient clip sweep at lr=1.5e-4 (MERGED — **new best val 61.1778 / test 52.0853**)
+
+- Branch: `willowpai2i48h5-thorfinn/r10-gradclip`
+- Hypothesis: Lion with heavy-tailed CFD gradients benefits from norm clipping.
+- W&B run: `y5tua53k` (grad_clip=1.0 winner)
+
+| Arm | grad_clip | val_avg | test_avg | vs prior BL 63.05/53.60 |
+|-----|-----------|---------|----------|------------------------|
+| ctrl | 0.0 | 63.05 | 53.60 | jurrwig2 reference |
+| **B WINNER** | **1.0** | **61.18** | **52.09** | **−1.87 / −1.51** |
+| C | 0.5 | 62.29 | 52.88 | −0.76 / −0.72 |
+| D | 2.0 | 61.94 | 53.95 | −1.11 / +0.35 |
+
+Per-split (Arm B vs prior BL):
+| Split | val Δ | test Δ |
+|-------|-------|--------|
+| in_dist | +0.92 | +1.12 (slight regression) |
+| **camber_rc** | **−3.84** | **−3.71** |
+| **camber_cruise** | **−1.74** | **−1.26** |
+| **re_rand** | **−2.83** | **−2.23** |
+
+**KEY DIAGNOSTIC (paper finding):** Pre-clip gradient norm is median ~27 — every step gets clipped. clip=1.0 is NOT outlier suppression; it rescales every step by ~1/27, acting as a constant per-step scale on top of Lion's sign-update. Sweet spot at clip=1.0 (not 0.5 which under-trains, not 2.0 which doesn't change OOD enough).
+
+**Mechanism:** Larger stabilization of OOD splits (camber_rc, re_rand) vs slight in_dist regression. Heavy-tailed Re distribution → high-Re samples produce large gradient norms → clip normalizes per-step contribution uniformly, reducing OOD over-fitting.
+
+**New baseline: val 61.1778 / test 52.0853** (BASELINE.md updated, PR #4056 squash-merged).
+
+### #4057 edward — Surface-biased slice routing (CLOSED — informative null)
+
+Best arm (vec, per-slice bias): val 62.76 / test 53.92 vs NEW BL 61.18/52.09 → +1.58 / +1.83 (above new BL).
+Key finding: scalar surface-bias is a no-op under softmax (shift-invariant). Vectorized per-slice bias is the proper form. Learned bias magnitude near 0 (max block mean 0.038) — model already routes adequately.
+camber_rc improved (−2.98 val) but offset by small regressions elsewhere.
+
+### #4063 tanjiro — T_max sweep at lr=1.5e-4 (PENDING — T_max=18 winning, T_max=20 still running)
+
+| Arm | T_max | val_avg | test_avg | vs NEW BL 61.18/52.09 |
+|-----|-------|---------|----------|----------------------|
+| ctrl | 14 | 65.46 | 56.54 | +4.28 / +4.45 (seed effect) |
+| **WINNER** | **18** | **59.22** | **50.79** | **−1.96 / −1.30 BEATS** |
+| | 20 | running (step 3644/5264) | — | in progress |
+
+Within-student T_max=18 vs ctrl: −6.24 val / −5.75 test (same-seed reliable signal). Awaiting T_max=20 to finish before terminal.
+
+### New assignments
+
+| PR | Student | Hypothesis | Expected |
+|----|---------|------------|---------|
+| #4120 | thorfinn | R10 H52: LR sweep at clip=1.0 {1.5e-4 ctrl, 2e-4, 2.5e-4} | −0 to −2 val; tests effective-LR shift from clip |
+| #4122 | edward | R10 H53: wd sweep at clip=1.0 {3e-4, 5e-4, 1e-3 ctrl, 2e-3} | −1 to −2 val; wd may need lower at clip substrate |
+
+---
+
 ## 2026-05-16 19:00 — #4049 frieren CLOSED informative; #4096 frieren R10 SGDR assigned
 
 ### #4049 frieren — spec_norm at lr=1.5e-4 (R11 H46, CLOSED — informative null)
