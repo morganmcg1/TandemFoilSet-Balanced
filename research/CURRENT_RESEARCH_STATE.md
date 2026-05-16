@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 05:00 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 05:20 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -11,6 +11,7 @@
 **Current best: 89.784 val_avg/mae_surf_p** (frieren #3584, two-shot FiLM on full stack, 2026-05-16 04:50)
 
 Multiple in-flight composition tests and new architectural hypotheses:
+- **🔥 Schedule-Free AdamW (alphonse #3594):** R1 showed **−20.75% intra-PR (71.492 vs 90.207)** and uniform per-split wins on val + test. Branch CONFLICTING (pre-two-shot-FiLM); sent back to rebase + verify on current stack. If reproduces, this is the largest single advance in the track.
 - **Fourier scale=2 (fern #3117 R4):** −3.16% confirmed on EMA+T_max=15 stack; R4 rebasing onto post-two-shot-FiLM HEAD, expected ~86-88 if Fourier+two-shot-FiLM compose
 - **Gradient clipping clip=1.0 (tanjiro #3511):** −4.03% on pre-FiLM stack; sent back for rebase + rerun on full two-shot-FiLM stack, expected ~86-88
 - **Three-shot FiLM (frieren #3681):** preprocess injection as third FiLM site, just assigned, expected −1-3%
@@ -50,18 +51,18 @@ Multiple in-flight composition tests and new architectural hypotheses:
 | askeladd | #3365 | batch_size=6/8 on bf16 | bf16 | Stale_wip — training |
 | tanjiro | #3511 | grad_clip=1.0 on two-shot FiLM stack (rebase) | bf16+T_max+EMA+2xFiLM | Sent back to rebase |
 | nezuko | #3492 | n_hidden=192 vs 128 | bf16+T_max=15+EMA | Stale_wip — training |
-| alphonse | #3594 | Schedule-Free AdamW | bf16+T_max=15+EMA+FiLM | Stale_wip — training |
+| alphonse | #3594 | Schedule-Free AdamW (R2 on two-shot FiLM, post −20.75% R1) | bf16+T_max=15+EMA+2xFiLM | Sent back for verify+rebase |
 | edward | #3684 | slice_num=32/64/96 sweep | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 | frieren | #3681 | Three-shot FiLM (preprocess + attn + MLP) | bf16+T_max=15+EMA+2xFiLM | Just assigned |
 | fern | #3117 | Fourier scale=2 + concat raw (recompose R4 on two-shot-FiLM) | bf16+T_max=15+EMA+2xFiLM | Sent back to rebase |
 
 ## Key research questions
 
-1. **Fourier + two-shot-FiLM compose (fern #3117 R4):** R3 confirmed −3.16% on EMA+T_max=15; does Fourier compose with two-shot-FiLM? Expected ~86-88 if additive.
-2. **Gradient clip=1.0 + two-shot-FiLM compose (tanjiro #3511 rebase):** Pre-FiLM signal strong (−4.03%). Expected ~86-88 if composes with full stack.
-3. **Three-shot FiLM (frieren #3681):** Preprocess injection adds third conditioning site; expected −1-3%.
-4. **Slice-num sweep (edward #3684):** Richer attention modes (96) vs faster fine-tune (32). Unknown direction.
-5. **Schedule-Free AdamW (alphonse #3594):** Eliminates schedule sensitivity; compatible with EMA+FiLM.
+1. **🔥 SF-AdamW + two-shot-FiLM compose (alphonse #3594 R2):** R1 showed −20.75% on pre-two-shot stack (71.492). Does it reproduce on current stack? Expected ~70-75 if additive; ~75-80 if sub-additive.
+2. **Fourier + two-shot-FiLM compose (fern #3117 R4):** R3 confirmed −3.16% on EMA+T_max=15; does Fourier compose with two-shot-FiLM? Expected ~86-88 if additive.
+3. **Gradient clip=1.0 + two-shot-FiLM compose (tanjiro #3511 rebase):** Pre-FiLM signal strong (−4.03%). Expected ~86-88 if composes with full stack.
+4. **Three-shot FiLM (frieren #3681):** Preprocess injection adds third conditioning site; expected −1-3%.
+5. **Slice-num sweep (edward #3684):** Richer attention modes (96) vs faster fine-tune (32). Unknown direction.
 6. **Model width (nezuko #3492):** n_hidden=192 on EMA stack (pre-FiLM); confirms if width is a bottleneck.
 7. **Batch size (askeladd #3365):** bs=6/8; if wins, compose with full stack.
 

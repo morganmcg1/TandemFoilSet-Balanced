@@ -783,3 +783,67 @@ Arm B at 91.861 beats the EMA pre-FiLM baseline (96.464) by 4.77%, and even beat
 
 New rerun: Arm A (two-shot FiLM, no clip) vs Arm B (two-shot FiLM + clip=1.0). Expected ~86-88 if composition holds.
 
+
+---
+
+## 2026-05-16 05:15 — PR #3594 [SENT BACK FOR VERIFY+REBASE]: Schedule-Free AdamW — eliminate cosine schedule, optimizer-native convergence
+
+- **Student branch:** `charliepai2i48h4-alphonse/schedule-free-adamw`
+- **Hypothesis:** Replace `AdamW + CosineAnnealingLR(T_max=15)` with `AdamWScheduleFree` (Defazio et al., schedulefree library). Polyak-averaged Z-iterate provides convergence smoothing internally; eliminates schedule sensitivity.
+
+### Results (Round 1, pre-two-shot-FiLM stack, `git_commit: 1c0f616` / `9adc607`)
+
+| Arm | Optimizer/schedule | val_avg/mae_surf_p | best_epoch | Δ vs Arm A | Δ vs merged FiLM (92.606) |
+|-----|--------------------|---------------------|------------|------------|---------------------------|
+| A   | AdamW + cosine T_max=15 (current best at runtime) | **90.207** | 18 | — | −2.59% |
+| **B** | **AdamWScheduleFree (no schedule)** | **71.492** | **18 (still descending)** | **−20.75%** ✅ | **−22.80%** ✅ |
+
+### Per-split val (lower is better)
+
+| Split | Arm A | **Arm B (SF-AdamW)** | Δ % |
+|-------|---:|---:|---:|
+| `val_single_in_dist`     | 103.855 |  **80.542** | −22.45% |
+| `val_geom_camber_rc`     |  97.931 |  **84.946** | −13.26% |
+| `val_geom_camber_cruise` |  71.925 |  **51.568** | **−28.30%** ✅ |
+| `val_re_rand`            |  87.118 |  **68.912** | −20.90% |
+| **val_avg**              | **90.207** | **71.492** | **−20.75%** ✅ |
+
+### Per-split test (3 finite splits)
+
+| Split | Arm A | **Arm B (SF-AdamW)** | Δ % |
+|-------|---:|---:|---:|
+| `test_single_in_dist`    | 89.701 | **69.706** | −22.29% |
+| `test_geom_camber_rc`    | 89.474 | **76.488** | −14.51% |
+| `test_re_rand`           | 82.075 | **62.206** | −24.21% |
+| **avg (3 splits)**       | **87.083** | **69.467** | **−20.23%** ✅ |
+
+### Verified metrics (committed to student branch)
+
+- `models/model-charliepai2i48h4-alphonse-schedule-free-armb-sf-adamw-20260516-032817/metrics.yaml` → `best_val_avg/mae_surf_p: 71.49214002634584`
+- Per-split confirms uniform improvement, no measurement anomaly
+- No NaN/inf in training, EMA shadow updates ran identically to Arm A
+
+### Mechanism analysis (from student)
+
+- Cosine T_max=15 schedule decays lr from 5e-4 to 5e-8 by epoch 15-16 (effective floor); Arm A is essentially frozen from ep 16 onward
+- SF-AdamW maintains internal Polyak-averaged Z-iterate at constant base lr; warmup_steps=500 (≈epoch 2); full magnitude steps for remaining 16 epochs
+- Loss trajectory smooth: train surf_loss 0.393 → 0.044, train vol_loss 0.602 → 0.097 (monotonic)
+- Peak VRAM essentially unchanged (35.93 vs 35.94 GB)
+- bf16 + SF-AdamW composed cleanly (optimizer state held in fp32)
+
+### Decision: SENT BACK FOR REBASE + VERIFY ON TWO-SHOT FILM STACK
+
+Rationale:
+1. **PR is CONFLICTING.** Branch ran on `1c0f616` (post-FiLM, pre-two-shot-FiLM); current advisor HEAD is `be679d4` (post-two-shot-FiLM, baseline 89.784).
+2. **A −20.75% intra-PR delta is unprecedented in this track.** Previous max was Huber −15.7% (loss-function change). Independent seed on current baseline required before merge.
+3. **Composition with two-shot FiLM unknown.** Likely additive (orthogonal mechanisms), but needs measurement.
+
+Rerun:
+- **Arm A:** Full current stack with cosine T_max=15 — `--amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond --two_shot_film`
+- **Arm B:** Full current stack with SF-AdamW (no cosine) — `--amp_dtype bf16 --use_ema --ema_decay 0.999 --film_cond --two_shot_film --use_schedule_free`
+
+Predicted outcome:
+- If composition additive: Arm B ≈ 70-75 (matches SF gain + small two-shot FiLM bonus)
+- If composition sub-additive: Arm B ≈ 75-80
+- If gain reproduces but doesn't compose: still likely beats current 89.784 baseline
+
