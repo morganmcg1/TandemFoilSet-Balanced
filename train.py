@@ -81,6 +81,19 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLU(nn.Module):
+    # SwiGLU(x) = W2( SiLU(W1 x) * (V x) ). Param-matched to GELU FFN when
+    # hidden_inner ≈ (2/3) * (mlp_ratio * n_hidden).
+    def __init__(self, n_hidden, hidden_inner):
+        super().__init__()
+        self.W1 = nn.Linear(n_hidden, hidden_inner, bias=False)
+        self.V = nn.Linear(n_hidden, hidden_inner, bias=False)
+        self.W2 = nn.Linear(hidden_inner, n_hidden, bias=False)
+
+    def forward(self, x):
+        return self.W2(F.silu(self.W1(x)) * self.V(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -138,7 +151,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 ffn_type="gelu", ffn_hidden_inner=None):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -147,8 +161,17 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        if ffn_type == "swiglu":
+            # Param-match GELU FFN: 3*hidden_inner*hidden_dim ≈ 2*mlp_ratio*hidden_dim^2
+            # => hidden_inner ≈ (2/3)*mlp_ratio*hidden_dim. With hidden_dim=96, mlp_ratio=2
+            # that's 128 (rounded from 96*4/3=128.0). Caller can override.
+            inner = ffn_hidden_inner if ffn_hidden_inner is not None else int(round((2 * mlp_ratio / 3) * hidden_dim))
+            self.mlp = SwiGLU(hidden_dim, hidden_inner=inner)
+        elif ffn_type == "gelu":
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                           n_layers=0, res=False, act=act)
+        else:
+            raise ValueError(f"Unknown ffn_type: {ffn_type}")
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -169,7 +192,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 ffn_type="gelu", ffn_hidden_inner=None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +214,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                ffn_type=ffn_type, ffn_hidden_inner=ffn_hidden_inner,
             )
             for i in range(n_layers)
         ])
@@ -405,6 +430,8 @@ model_config = dict(
     n_head=4,
     slice_num=96,
     mlp_ratio=2,
+    ffn_type="swiglu",
+    ffn_hidden_inner=128,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
