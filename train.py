@@ -452,6 +452,8 @@ class Config:
     grad_clip_norm: float = 1.0  # 0 or negative disables clipping
     eta_min: float = 1e-5    # CosineAnnealingLR LR floor
     lr_T_max: int = 0  # 0 = use MAX_EPOCHS; >0 = override
+    n_hidden: int = 128  # Transolver width
+    n_layers: int = 5    # Transolver depth
 
 
 cfg = sp.parse(Config)
@@ -489,8 +491,8 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,

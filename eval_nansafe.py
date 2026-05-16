@@ -19,6 +19,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader
@@ -230,18 +231,25 @@ def eval_nansafe(model, loader, stats, device):
 
 def main():
     run_id = sys.argv[1] if len(sys.argv) > 1 else "f9w6yzoq"
-    ckpt = Path(f"models/model-{run_id}/checkpoint.pt")
+    model_dir = Path(f"models/model-{run_id}")
+    ckpt = model_dir / "checkpoint.pt"
     if not ckpt.exists():
         raise SystemExit(f"missing checkpoint: {ckpt}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using checkpoint: {ckpt} on {device}")
 
-    model_config = dict(
-        space_dim=2, fun_dim=X_DIM - 2, out_dim=3, n_hidden=128, n_layers=5,
-        n_head=4, slice_num=64, mlp_ratio=2,
-        output_fields=["Ux", "Uy", "p"], output_dims=[1, 1, 1],
-    )
+    config_yaml = model_dir / "config.yaml"
+    if config_yaml.exists():
+        with open(config_yaml) as f:
+            model_config = yaml.safe_load(f)
+        print(f"Loaded model_config from {config_yaml}: n_hidden={model_config.get('n_hidden')} n_layers={model_config.get('n_layers')}")
+    else:
+        model_config = dict(
+            space_dim=2, fun_dim=X_DIM - 2, out_dim=3, n_hidden=128, n_layers=5,
+            n_head=4, slice_num=64, mlp_ratio=2,
+            output_fields=["Ux", "Uy", "p"], output_dims=[1, 1, 1],
+        )
     model = Transolver(**model_config).to(device)
     state = torch.load(ckpt, map_location=device, weights_only=True)
     model.load_state_dict(state)
