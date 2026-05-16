@@ -50,6 +50,39 @@ from data import (
 # Transolver model
 # ---------------------------------------------------------------------------
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023). Sign-based update, decoupled wd.
+
+    update_t = sign(beta1 * m_{t-1} + (1 - beta1) * g_t)
+    m_t      = beta2 * m_{t-1} + (1 - beta2) * g_t
+    p_t      = p_{t-1} - lr * update_t - lr * wd * p_{t-1}
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                beta1, beta2 = group["betas"]
+                update = (exp_avg * beta1 + grad * (1 - beta1)).sign_()
+                p.add_(update, alpha=-group["lr"])
+                if group["weight_decay"] != 0:
+                    p.add_(p, alpha=-group["lr"] * group["weight_decay"])
+                exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+        return loss
+
+
 ACTIVATION = {
     "gelu": nn.GELU,
     "tanh": nn.Tanh,
@@ -385,6 +418,45 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     return out
 
 
+def collect_geglu_gate_stats(model, x_norm) -> dict[str, float]:
+    """Capture GEGLU post-activation gate stats per block on one forward pass.
+
+    Returns mean / std / abs_mean of the gate-path activation in each GEGLU
+    block. Low std (<0.05) or near-constant mean signals saturation, which is
+    a known failure mode for sign-based optimizers on gated FFNs.
+    """
+    captured: list[tuple[int, float, float, float]] = []
+    handles = []
+
+    def make_hook(idx):
+        def hook(mod, inp, out):
+            o = out.detach().float()
+            captured.append((idx, o.mean().item(), o.std().item(), o.abs().mean().item()))
+        return hook
+
+    for i, block in enumerate(model.blocks):
+        if isinstance(block.mlp, GatedMLP):
+            handles.append(block.mlp.linear_pre.gate_act.register_forward_hook(make_hook(i)))
+
+    if not handles:
+        return {}
+    with torch.no_grad():
+        _ = model({"x": x_norm})
+    for h in handles:
+        h.remove()
+
+    stats_out: dict[str, float] = {}
+    for i, m, s, a in captured:
+        stats_out[f"gate/block_{i}/mean"] = m
+        stats_out[f"gate/block_{i}/std"] = s
+        stats_out[f"gate/block_{i}/abs_mean"] = a
+    if captured:
+        stats_out["gate/mean_across_blocks"] = sum(m for _, m, _, _ in captured) / len(captured)
+        stats_out["gate/std_across_blocks"] = sum(s for _, _, s, _ in captured) / len(captured)
+        stats_out["gate/abs_mean_across_blocks"] = sum(a for _, _, _, a in captured) / len(captured)
+    return stats_out
+
+
 def _sanitize_path_token(s: str) -> str:
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
     return out.strip("-_.") or "experiment"
@@ -519,6 +591,9 @@ class Config:
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     slice_num: int = 64   # Transolver attention slice token count
+    optimizer: str = "adamw"   # Optimizer: 'adamw' or 'lion'
+    beta1: float = 0.9         # First moment coefficient
+    beta2: float = 0.999       # Second moment / Lion momentum EMA coefficient
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -578,7 +653,19 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(
+        model.parameters(), lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2), weight_decay=cfg.weight_decay,
+    )
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=cfg.lr,
+        betas=(cfg.beta1, cfg.beta2), weight_decay=cfg.weight_decay,
+    )
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer}")
+print(f"Optimizer: {cfg.optimizer} (lr={cfg.lr}, wd={cfg.weight_decay}, betas=({cfg.beta1}, {cfg.beta2}))")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=15, eta_min=cfg.eta_min
 )
@@ -601,6 +688,15 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+
+# Fixed val minibatch used for GEGLU gate health probing. Loader is shuffle=False
+# so the first batch is deterministic across epochs and runs.
+gate_probe_x_norm = None
+if cfg.ffn_act in ("geglu", "swiglu"):
+    _probe_iter = iter(val_loaders["val_single_in_dist"])
+    _probe_x, _, _, _ = next(_probe_iter)
+    gate_probe_x_norm = ((_probe_x.to(device, non_blocking=True) - stats["x_mean"]) / stats["x_std"])
+    del _probe_iter
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -679,11 +775,10 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
-    gate_stats = []
-    if cfg.ffn_act in ("geglu", "swiglu"):
-        gate_stats = collect_gate_stats(model, val_loaders["val_single_in_dist"], stats, device)
-
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    gate_stats: dict[str, float] = {}
+    if gate_probe_x_norm is not None:
+        gate_stats = collect_geglu_gate_stats(model, gate_probe_x_norm)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
