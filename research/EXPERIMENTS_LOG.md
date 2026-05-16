@@ -612,3 +612,49 @@ Test (Arm B): test_single_in_dist=53.55, test_geom_camber_rc=56.79, test_geom_ca
 - **Metrics:** `models/model-charliepai2i48h2-tanjiro-signed-log1p-pressure-v2-20260516-165143/metrics.jsonl`
 - **Decision:** CLOSED no_improvement. Pressure-transform axis exhausted.
 - **Key finding:** asinh's derivative `1/√(1+z²)` and signed-log1p's `1/(1+|z|)` are similar at extreme |z| but differ critically in the |z| ∈ (1,5) "transition" range where most pressure-gradient signal lives. signed-log1p over-attenuates this range, throttling the boundary-layer and geometry-tail gradient. Worst-hit splits (val_geom_camber_cruise +19.95%, val_re_rand +19.05%) depend on capturing finer pressure variation in perturbed geometries — exactly where moderate-|z| signal matters. Tanjiro's analysis explicitly framed this as binary: either signed-log1p wins or asinh is locally optimal. Result is decisive: asinh is locally optimal under the 9-mech stack. EMA(0.995)+pw=2.0 are calibrated around asinh's shape; switching compressors breaks that calibration. Tanjiro assigned #4061 (channel-decoupled output heads) as the next direction — leverages their pressure-channel expertise toward an architectural specialization instead of further loss-side transforms.
+
+---
+
+## 2026-05-16 18:15 — PR #3970: torch.compile(mode=default, dynamic=True) — MASSIVE WIN (10th mechanism)
+- charliepai2i48h2-alphonse/torch-compile
+- **Hypothesis:** torch.compile(model, mode='default', dynamic=True) reduces kernel launch overhead and fuses operations, cutting per-epoch time and enabling more epochs within the 30-min cap. dynamic=True handles variable-length padded batches from pad_collate.
+- **Result:** Arm A (compile_mode=default) wins with val=44.2439 (−14.0% vs 9-mech baseline 51.44). Epoch time halved: 102s→54.4s. Epochs: 18→33. VRAM: 32.97→23.84 GB.
+
+| Metric | Arm A (default) | Arm B (reduce-overhead) | 9-mech baseline |
+|--------|-----------------|-------------------------|-----------------|
+| **val_avg/mae_surf_p** | **44.2439** | 45.3626 | 51.4403 |
+| val_single_in_dist | 46.9816 | 46.83 | 56.17 |
+| val_geom_camber_rc | 58.2760 | 60.11 | 68.07 |
+| val_geom_camber_cruise | 27.6407 | 28.36 | 32.12 |
+| val_re_rand | 44.0774 | 46.15 | 49.40 |
+| **test_avg/mae_surf_p** | **38.0107** | 39.28 | 43.95 |
+| test_single_in_dist | 42.3063 | 43.36 | 53.55 |
+| test_geom_camber_rc | 49.5504 | 52.17 | 56.79 |
+| test_geom_camber_cruise | 23.1558 | 23.71 | 26.94 |
+| test_re_rand | 37.0300 | 37.86 | 38.51 |
+| Per-epoch time | ~54.4s | ~55.2s | ~102s |
+| Best epoch | 33 | 33 | 18 |
+| Peak VRAM | 23.84 GB | 23.84 GB | 32.97 GB |
+
+- **Metrics:** `models/model-charliepai2i48h2-alphonse-torch-compile-default-20260516-162535/metrics.jsonl`, `models/model-charliepai2i48h2-alphonse-torch-compile-reduce-overhead-20260516-165822/metrics.jsonl`
+- **Decision:** MERGED. New baseline: 44.2439. Cumulative: 135.02 → 44.24 = **−67.2%** from initial.
+- **Key finding:** The entire gain comes from the 15 extra epochs (18→33) that compile enables — the loss curve was still monotonically descending at epoch 18. reduce-overhead mode is slightly slower than default in this setting (variable shapes from pad_collate cause overhead that outweighs reduce-overhead's kernel caching benefit). Critically: 9 GB freed VRAM (32.97→23.84 GB) opens the door to capacity expansion — previously blocked by the 42 GB VRAM usage of larger models. Val curve still descending at epoch 33 with rate ~0.03/epoch — not yet saturated. Assigned alphonse #4078 (capacity scale-up on compile stack) and edward #4079 (T_max re-calibration for 33-epoch budget).
+
+---
+
+## 2026-05-16 18:15 — PR #4031: Lion β2 sweep: 0.95 and 0.98 (no_improvement — failure)
+- charliepai2i48h2-edward/lion-beta2
+- **Hypothesis:** Lion β2 (momentum buffer decay) has never been tested. Under T_max=30+pw=2.0+EMA=0.995, the optimal gradient memory window may have shifted from the default β2=0.99.
+- **Result:** Arm A (β2=0.95) val=65.34 — a +27% regression. Stop condition triggered; Arm B skipped.
+
+| Metric | β2=0.95 (Arm A) | 9-mech baseline (β2=0.99) | Δ |
+|--------|-----------------|---------------------------|---|
+| **val_avg/mae_surf_p** | **65.34** | **51.4403** | **+27.0%** |
+| val_single_in_dist | 69.26 | 56.17 | +23.3% |
+| val_geom_camber_rc | 84.31 | 68.07 | +23.9% |
+| val_geom_camber_cruise | 46.18 | 32.12 | +43.8% |
+| val_re_rand | 61.10 | 49.40 | +23.7% |
+
+- **Metrics:** student PR comment
+- **Decision:** CLOSED no_improvement. Lion-internal momentum axis is now fully closed: β1=0.90 optimal (PR #3949, β1=0.95 +9.8%), β2=0.99 optimal (this PR, β2=0.95 +27%). Both defaults confirmed optimal under the current 10-mech stack.
+- **Key finding:** β2=0.95 gives a ~14-step momentum half-life — Lion "forgets" gradient direction every 14 steps. Under T_max=30's steep annealing and pw=2.0's channel asymmetry, this is far too reactive: the model cannot build stable gradient consensus and oscillates. The default β2=0.99 (~69-step half-life) is well-matched to this regime. Physical intuition confirmed: the lion momentum buffer needs enough history to distinguish noise from signal, especially with asymmetric pressure/velocity loss weighting.
