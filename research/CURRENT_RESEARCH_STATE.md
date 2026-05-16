@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~05:55 UTC
+- **Last updated:** 2026-05-16 ~07:25 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -44,20 +44,20 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 05:55 UTC)
+## Active in-flight PRs (status as of 07:25 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
 | **#3632** | tanjiro | Coord noise augmentation std=0.01 | **MERGED** 04:30 → baseline | 83.495 🏆 |
 | **#3716** | fern | n_head=8 (attention diversity) | CLOSED (val=93.17, head_dim=20 too narrow) | — |
-| **#3690** | edward | lr=1e-3 + coord noise | WIP (W&B `96tusrhs` val~86.32 — failed) | awaiting submission |
-| **#3691** | thorfinn | --epochs 12 longer training | WIP (W&B `zqxkh9np` val~82.50 = **WINNER**) | awaiting submission |
-| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | WIP (W&B `xu5e6cul` val~85.98 — failed) | awaiting submission |
-| **#3714** | alphonse | surf_weight=15 sweep | WIP (assigned 05:28) | running |
-| **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | WIP (assigned 05:28) | running |
-| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP (assigned 05:28) | running |
-| **#3718** | nezuko | AoA jitter augmentation | WIP (assigned 05:30) | running |
-| **#3741** | fern | **eta_min=1e-5 cosine floor** | WIP (assigned 05:55) | awaiting |
+| **#3690** | edward | lr=1e-3 + coord noise | stale_wip — W&B FAIL (`96tusrhs` 86.32 / `x0icixhu` 87.54); advisor commented | close on submission |
+| **#3691** | thorfinn | --epochs 12 longer training | stale_wip — W&B `zqxkh9np` val=**82.50**, test=**74.10**; val wins −1.2% but test regresses +0.4%; advisor commented | merge candidate (val), test caveat |
+| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | stale_wip — W&B FAIL (`xu5e6cul` 85.98 / `yg32qo3i` 89.19); advisor commented | close on submission |
+| **#3714** | alphonse | surf_weight=15 sweep | WIP — W&B FAIL (`j8rnxpc4` 88.23 / `84azuean` 88.27); `ru8t1lhr` running | close pending submission |
+| **#3715** | askeladd | mlp_ratio=4 (FFN capacity) | WIP — W&B FAIL (`emg4e9cv` 89.30 / `0ezsswb4` 93.17) | close pending submission |
+| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP — W&B FAIL (`4hpbl4nx` 89.06 / `mynslale` 86.29) | close pending submission |
+| **#3718** | nezuko | AoA jitter augmentation | WIP — W&B FAIL (`4h64yzzl` 84.96 — marginal) | close pending submission |
+| **#3741** | fern | eta_min=1e-5 cosine floor | WIP (no run started yet; gh rate limit on student pod) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
@@ -104,24 +104,39 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 |---|---|---|---|---|
 | #3741 | fern | eta_min=1e-5 cosine LR floor | −0.5–2% (meaningful gradients in last epoch) | running |
 
-## Round-4a observation (W&B only, awaiting SENPAI-RESULT submissions)
+## Round-4 W&B verdicts (07:25 UTC; awaiting student SENPAI-RESULT submissions)
 
-- **#3691 thorfinn epochs=12** — W&B `zqxkh9np` val≈82.50, test≈74.10 → **WINNER vs 83.50/73.79**. Single-flag change, zero code risk. Merge when terminal SENPAI-RESULT arrives.
-- **#3690 edward lr=1e-3 + coord noise** — W&B `96tusrhs` val≈86.32 → regression. lr=5e-4 (Config default) is now optimal with coord noise. Close on terminal submission.
-- **#3692 tanjiro feature noise std=0.005** — W&B `xu5e6cul` val≈85.98 → regression. Feature noise hurts at this scale. Close on terminal submission.
+| PR | Student | Best run | val_avg | test_avg | Δ val vs 83.50 | Verdict |
+|---|---|---|---|---|---|---|
+| #3691 | thorfinn | `zqxkh9np` | 82.500 | 74.102 | −1.2% | **val WIN, test +0.4% — review** |
+| #3718 | nezuko | `4h64yzzl` | 84.962 | 75.557 | +1.8% | close (marginal) |
+| #3692 | tanjiro | `xu5e6cul` | 85.980 | 75.300 | +3.0% | close |
+| #3717 | frieren | `mynslale` | 86.289 | 77.073 | +3.3% | close |
+| #3690 | edward | `96tusrhs` | 86.319 | 75.853 | +3.4% | close |
+| #3714 | alphonse | `j8rnxpc4` | 88.227 | 77.436 | +5.7% | close |
+| #3692 | tanjiro | `yg32qo3i` | 89.187 | 79.578 | +6.8% | (same PR alt arm) |
+| #3715 | askeladd | `0ezsswb4` | 93.174 | 83.387 | +11.6% | close (large regression) |
+| #3741 | fern | (none yet) | — | — | — | run not yet started |
 
-## Potential next research directions (round 5+)
+**Plateau signal:** 7 of 8 round-4 experiments outright failed; thorfinn's val win comes with a test regression. The model's training-time-limited regime + augmentation saturation hypothesis is confirmed — incremental architecture/loss/aug tweaks are exhausted. Time to escalate strategy tier per Plateau Protocol.
 
-1. **mlp_ratio=4** — double FFN width inside each TransolverBlock; never tested; highest-upside untested arch lever
-2. **n_head=8** — more attention heads; head_dim goes 40→20; forces diverse attention patterns
-3. **Larger coord noise (std=0.03)** — bracket the augmentation optimum above std=0.01
-4. **surf_weight sweep** — surf_weight=10 was never revisited post-L1; testing 15 or 20
-5. **Per-channel heads (#3479 frieren)** — if lr=1e-3 confirm succeeds
-6. **Num_freq=3** — if nezuko's sweep shows num_freq=2 better than 4, try 3 as a middle ground
-7. **Learnable Fourier freq + coord noise** — compose of two wins (askeladd #3633 retry)
-8. **Physics-informed loss** — divergence-free penalty (∇·u=0); high complexity, high upside
-9. **bf16 training** — 2× throughput → 20 epochs in 30 min if careful schedule co-design
-10. **Data augmentation at scale** — AoA jitter, camber symmetry, Re perturbation
+## Potential next research directions (round 5+, ESCALATED per Plateau Protocol)
+
+Round 4 had 7 failures and 1 marginal val-only win. The incremental neighborhood is exhausted. The next round must use **bigger swings** — change tier of the strategy rather than tune within the current one.
+
+### Tier change candidates (high upside, higher risk)
+1. **bf16 mixed-precision** — 2× throughput. At constant 30-min budget, ~20 epochs instead of 10. Combined with cosine schedule co-design (T_max=20), this could unlock a different regime entirely. Currently the model is training-time-limited; this is the single largest training-side intervention not yet tried.
+2. **Physics-informed loss term** — divergence-free penalty (∇·u=0) on velocity field, OR mass conservation constraint. Adds an inductive bias the L1 pointwise loss cannot impose. High complexity but high upside.
+3. **Camber symmetry augmentation** — reflect (x→x, z→−z) along chord and flip AoA sign. Doubles effective training data along a symmetry the dataset definitely respects. Combined with coord noise, could unlock substantial OOD generalization on geom splits.
+4. **Multi-scale Fourier PE** — frequencies span multiple decades (e.g., 4 log-spaced from 1 to 32) rather than current narrow band. Could let early layers attend to far-field while preserving boundary-layer detail.
+5. **Slice-token-aware attention** — re-examine the slice mechanism. Currently slice_num=64 is hardcoded. Try slice_num=32 (faster) or learnable slice positions (more expressive). The slice mechanism is the architectural distinguisher of Transolver and least explored.
+6. **Test-time augmentation** — average predictions over coord-noise variants at inference. Free win at val/test if it works.
+7. **Sliding-window training schedule** — train epochs 0–5 at full resolution, then fine-tune epochs 6–10 with reduced lr and no augmentation. Decouples augmentation regime from final convergence.
+
+### Single-flag confirmatory experiments (low risk, complementary)
+8. **--epochs 12 retry** — confirm or refute thorfinn's val-only win. If real, merge despite test-side noise.
+9. **slice_num=32** — half the slice count; never tested.
+10. **gradient accumulation batch_size=8 effective** — increase effective batch without VRAM cost.
 
 ## Cross-cutting observations
 
