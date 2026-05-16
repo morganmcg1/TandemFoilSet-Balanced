@@ -345,4 +345,54 @@ cd target && python train.py --agent <student> \
     --surf_weight 25
 ```
 
-> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **58.8717** with a terminal `SENPAI-RESULT` marker.
+> ~~**Beat this:** submit a PR improving `val_avg/mae_surf_p` below **58.8717**~~ — superseded by PR #3822 below.
+
+---
+
+## 2026-05-16 10:30 — PR #3822: Cosine T_max alignment (T_max=30) — 7th compounding mechanism
+
+**Student:** charliepai2i48h2-edward
+**Change:** `CosineAnnealingLR(T_max=80)` → `CosineAnnealingLR(T_max=cfg.cosine_t_max_epochs=30)`. The previous T_max=80 with an 18-epoch realistic budget left LR essentially constant (0.852× initial at epoch 18). T_max=30 lets the schedule reach a meaningful late-epoch LR floor (40% of initial at epoch 18, 6.73e-5) while keeping useful update magnitude throughout the run. Pure scheduler-shape intervention.
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **56.0011** |
+| val_single_in_dist/mae_surf_p | 62.2099 |
+| val_geom_camber_rc/mae_surf_p | 68.5030 |
+| val_geom_camber_cruise/mae_surf_p | 37.7010 |
+| val_re_rand/mae_surf_p | 55.5904 |
+| **test_avg/mae_surf_p** | **48.9470** |
+| test_single_in_dist/mae_surf_p | 56.2906 |
+| test_geom_camber_rc/mae_surf_p | 60.3303 |
+| test_geom_camber_cruise/mae_surf_p | 32.2264 |
+| test_re_rand/mae_surf_p | 46.9408 |
+| Best epoch | 18 (timeout-bound; val still descending) |
+| Per-epoch time | ~102s (was ~101s; negligible overhead) |
+| Peak GPU memory | 32.97 GB |
+
+**Model config:** unchanged — n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, GELU
+**Optimizer:** unchanged — Lion lr=1.7e-4, wd=3e-4, betas=(0.9, 0.99)
+**Scheduler:** **CosineAnnealingLR(T_max=30)** (was T_max=80)
+**Loss:** unchanged — vol_loss + 25·surf_loss with asinh(z) on pressure
+**Precision:** unchanged — bf16 autocast on forward+loss
+**EMA:** unchanged — decay=0.999
+**Gradient clipping:** unchanged — max_norm=1.0
+**Batch:** 4
+**Metric artifacts:** `models/model-charliepai2i48h2-edward-cosine-tmax-30-20260516-093553/metrics.jsonl`
+
+**Note:** −4.88% on val (56.00 vs 58.87), −5.20% on test (48.95 vs 51.63). All 8 splits improved (val: −2.4% to −11.4%; test: −2.6% to −8.7%). Arm A (T_max=20) regressed +0.36% — the aggressive anneal pushes final LR to 5.4% of initial (9.26e-6) and gives up too much late-update magnitude. Arm B's moderate anneal (40% of initial at epoch 18) hits the optimal: enough decay to refine, enough magnitude to keep learning. Val curve still descending at epoch 18 even with the better schedule — runs are still timeout-bound, not LR-starved.
+
+**7-mechanism stack:** Lion + surf_weight=25 + asinh(pressure) + EMA(0.999) + grad_clip(max_norm=1.0) + bf16 autocast + **cosine T_max=30**
+
+**Cumulative improvement from initial baseline:** 135.02 → 56.00 = **−58.5%**
+
+**Reproduce:**
+```bash
+cd target && python train.py --agent <student> \
+    --experiment_name "<student>/your-experiment-name" \
+    --surf_weight 25 \
+    --cosine_t_max_epochs 30
+```
+(In-tree default is still 80 — must pass `--cosine_t_max_epochs 30` explicitly.)
+
+> **Beat this:** submit a PR improving `val_avg/mae_surf_p` below **56.0011** with a terminal `SENPAI-RESULT` marker.
