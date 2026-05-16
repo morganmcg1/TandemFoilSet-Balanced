@@ -617,6 +617,8 @@ class Config:
     film_mode: str = "output_only"  # "output_only" or "all_blocks"
     ema_decay: float = 0.0   # 0 disables EMA; e.g. 0.999 enables EMA-of-weights
     grad_clip: float = 0.0   # 0 disables; e.g. 1.0 clips global grad norm
+    spec_norm_target: str = "none"  # "none" | "output" | "output+film"
+    spec_norm_n_power_iter: int = 1  # power iterations per forward (Miyato default = 1)
 
 
 def _residual_err(pred, target, loss_type, beta):
@@ -626,6 +628,80 @@ def _residual_err(pred, target, loss_type, beta):
     if loss_type == "smooth_l1":
         return F.smooth_l1_loss(pred, target, reduction="none", beta=beta)
     raise ValueError(loss_type)
+
+
+def apply_spectral_norm(model: "Transolver", target: str, n_power_iter: int = 1) -> list[str]:
+    """Wrap selected linear layers with Miyato et al. (2018) spectral norm.
+
+    Uses ``nn.utils.parametrizations.spectral_norm`` (the modern parametrization
+    API). Unlike the legacy hook-based ``nn.utils.spectral_norm`` — which
+    materializes ``weight`` as a non-leaf tensor after each forward and breaks
+    ``deepcopy`` (see pytorch#103001) — the parametrization variant computes
+    ``weight`` on demand from the underlying parameter
+    ``module.parametrizations.weight.original``, so ``AveragedModel`` (EMA)
+    can deepcopy the model at init without issue.
+
+    target:
+      ``"none"``: no-op.
+      ``"output"``: both linears in ``model.blocks[-1].mlp2`` (the per-node
+        output head — ``Linear(hidden, hidden)`` and ``Linear(hidden, out_dim)``).
+        Wrapping both bounds the head Lipschitz constant since
+        ``||W1 W2||_2 <= ||W1||_2 * ||W2||_2``.
+      ``"output+film"``: above plus ``model.film.mlp[0]`` (``Linear(1, 64)``).
+        ``model.film.mlp[2]`` is intentionally skipped — it is zero-initialized
+        for the adaLN-Zero identity start (gamma=1, beta=0); spectral_norm on
+        a zero matrix produces sigma=0 -> weight/0 = NaN. Constraining only
+        ``mlp[0]`` still bounds FiLM's first layer; the second is left free to
+        retain the identity-at-init property of FiLM.
+    """
+    if target == "none":
+        return []
+    if target not in ("output", "output+film"):
+        raise ValueError(f"Unknown spec_norm_target: {target!r}")
+    from torch.nn.utils.parametrizations import spectral_norm as p_spectral_norm
+    wrapped: list[str] = []
+    head = model.blocks[-1].mlp2  # Sequential(Linear, GELU, Linear)
+    head[0] = p_spectral_norm(head[0], n_power_iterations=n_power_iter)
+    wrapped.append("blocks[-1].mlp2[0]")
+    head[2] = p_spectral_norm(head[2], n_power_iterations=n_power_iter)
+    wrapped.append("blocks[-1].mlp2[2]")
+    if target == "output+film":
+        if not hasattr(model, "film"):
+            raise ValueError("spec_norm_target='output+film' requires --use_film")
+        film_mlp = model.film.mlp  # Sequential(Linear, SiLU, Linear)
+        film_mlp[0] = p_spectral_norm(film_mlp[0], n_power_iterations=n_power_iter)
+        wrapped.append("film.mlp[0]")
+        # film.mlp[2] intentionally skipped (zero-init) — see docstring.
+    return wrapped
+
+
+def refresh_spectral_norm_buffers(module: nn.Module, n_iter: int = 20) -> int:
+    """Run power iteration on each spectral_norm parametrization to refresh
+    ``_u``/``_v`` from the current ``parametrizations.weight.original``.
+
+    ``AveragedModel`` (EMA) averages parameters but not buffers, so the EMA
+    model's ``_u``/``_v`` stay at their init-time values while its averaged
+    weight drifts. Without this refresh, sigma at eval time = ``u_stale @ W_ema @ v_stale``
+    is a poor estimate of ``sigma_max(W_ema)``, so the effective EMA weight
+    ``W_ema / sigma`` deviates from the Lipschitz-1 constraint.
+
+    Call before EMA validation and after loading an EMA checkpoint into a
+    fresh model. Returns the number of parametrizations refreshed.
+    """
+    n_refreshed = 0
+    target = module.module if hasattr(module, "module") else module
+    for mod in target.modules():
+        if not (hasattr(mod, "parametrizations") and "weight" in dict(mod.parametrizations)):
+            continue
+        sn = mod.parametrizations.weight[0]
+        if not hasattr(sn, "_power_method"):
+            continue
+        with torch.no_grad():
+            W = mod.parametrizations.weight.original
+            W_mat = sn._reshape_weight_to_matrix(W)
+            sn._power_method(W_mat, n_iter)
+        n_refreshed += 1
+    return n_refreshed
 
 
 cfg = sp.parse(Config)
@@ -680,6 +756,15 @@ if cfg.n_fourier > 0:
                  * cfg.fourier_sigma).to(device)
     model.register_buffer("fourier_B", fourier_B, persistent=True)
     print(f"Fourier features: n_fourier={cfg.n_fourier}, sigma={cfg.fourier_sigma}")
+if cfg.spec_norm_target != "none":
+    wrapped_layers = apply_spectral_norm(model, cfg.spec_norm_target, cfg.spec_norm_n_power_iter)
+    if not wrapped_layers:
+        raise RuntimeError(
+            f"[spectral_norm] spec_norm_target={cfg.spec_norm_target!r} requested but no layers were wrapped — wiring failed."
+        )
+    print(f"[spectral_norm] target={cfg.spec_norm_target} n_power_iter={cfg.spec_norm_n_power_iter} "
+          f"wrapped={wrapped_layers}")
+
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
@@ -806,6 +891,11 @@ for epoch in range(MAX_EPOCHS):
     eval_model = ema_model if ema_model is not None else model
     eval_model.eval()
     model.eval()
+    if cfg.spec_norm_target != "none" and ema_model is not None:
+        # Refresh EMA's spectral_norm u, v buffers against the averaged weights
+        # (AveragedModel averages parameters but not buffers; without this,
+        # sigma at eval uses stale u, v and the Lipschitz=1 constraint drifts).
+        refresh_spectral_norm_buffers(ema_model)
     split_metrics = {
         name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device, split_name=name)
         for name, loader in val_loaders.items()
@@ -879,6 +969,12 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+    if cfg.spec_norm_target != "none":
+        # The saved checkpoint contains EMA-averaged weight_original plus the
+        # frozen u, v from EMA-init time. Refresh u, v against the loaded
+        # weights so test-time sigma reflects the actual checkpoint Lipschitz.
+        n_ref = refresh_spectral_norm_buffers(model)
+        print(f"[spectral_norm] refreshed {n_ref} parametrization(s) after checkpoint load")
 
     test_metrics = None
     test_avg = None
