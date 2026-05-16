@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~08:35 UTC
+- **Last updated:** 2026-05-16 ~09:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -46,7 +46,7 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 08:35 UTC)
+## Active in-flight PRs (status as of 09:30 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
@@ -58,14 +58,15 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | **#3690** | edward | lr=1e-3 + coord noise | **CLOSED 08:30** (val=84.70, 3-seed best, +1.2%) | — |
 | **#3714** | alphonse | surf_weight=15 sweep | **CLOSED 08:30** (val=89.30, +5.8%) | — |
 | **#3718** | nezuko | AoA jitter augmentation | **CLOSED 08:30** (val=84.96, +1.47%) | — |
-| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | WIP — W&B FAIL (std=0.03 `mynslale` 86.29; std=0.005 arm awaited) | awaiting submission |
-| **#3741** | fern | eta_min=1e-5 cosine floor | WIP (no run started yet) | awaiting |
+| **#3717** | frieren | coord_noise_std sweep (0.03, 0.005) | **CLOSED 09:30** (std=0.03 val=86.29; std=0.005 val=87.39) | — |
+| **#3741** | fern | eta_min=1e-5 cosine floor | WIP — W&B FAIL (`1emrdpva` val=86.22; `xp76t6g6` val=87.66); 3rd run `u0nphp8l` mid-flight; advisor commented | close on submission |
 | **#3814** | askeladd | **SwiGLU FFN (round-5)** | WIP (assigned 08:00) | running |
 | **#3815** | tanjiro | **TTA coord noise K=4/K=8 (round-5)** | WIP (assigned 08:00) | running |
 | **#3833** | thorfinn | **OneCycleLR schedule (round-5)** | WIP (assigned 08:35) | awaiting |
 | **#3835** | edward | **asinh output transform (round-5)** | WIP (assigned 08:35) | awaiting |
 | **#3836** | nezuko | **DSDF clip ±3σ (round-5)** | WIP (assigned 08:35) | awaiting |
 | **#3838** | alphonse | **per-domain output norm (round-5)** | WIP (assigned 08:35) | awaiting |
+| **#3857** | frieren | **attention dropout p=0.1/0.2 (round-5)** | WIP (assigned 09:30) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
@@ -121,11 +122,13 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | #3814 | askeladd | **SwiGLU FFN (param-matched)** | −1–4% val (exploratory; LM-literature signal) | MED |
 | #3815 | tanjiro | **TTA coord noise K=4/K=8** | −1–4% val (inference-only; OOD splits) | LOW |
 
-### Round-5 backlog (top 4 unassigned, ordered by priority)
-1. **onecycle-lr** — schedule change; super-convergence for short-budget training; pairs with lr=5e-4
-2. **asinh-output-norm** — target transform for heavy-tailed y (per-sample std 164→2077)
-3. **dsdf-clip** — 2-line input regularization (clip dims 4-11 to ±3σ)
-4. **per-domain-output-norm** — separate y_stats per (single, racecar, cruise) domain
+### Round-5 backlog (remaining unassigned, ordered by priority)
+
+All top-priority round-5 ideas now assigned. Remaining backlog:
+1. **re-curriculum** — sample-weight schedule by log_Re (MED-HIGH risk; dataset-preprocessing complexity)
+2. **div-free-penalty** — physics-informed ∇·u=0 soft constraint (HIGH risk; proxy divergence is weak on unstructured meshes)
+3. **bf16 mixed-precision** — 2× throughput → could enable --epochs ~24 in 30 min with cosine co-design (highest tier-change candidate from cross-cutting observations)
+4. **Camber symmetry augmentation** — (x→x, z→−z) along chord + flip AoA sign; doubles effective training data along a known symmetry
 
 ## Round-4a / Round-4b closeout (W&B-verified, awaiting student submissions)
 
