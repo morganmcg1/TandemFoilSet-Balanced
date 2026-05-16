@@ -5,6 +5,54 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 01:00 — PR #3398: Charbonnier ε sweep (3e-4 / 1e-3 / 3e-3) — **CLOSED (null, ε=1e-3 default confirmed optimal)**
+
+- Student branch: `willowpai2i24h1-edward/charbonnier-eps-sweep`
+- Student: `willowpai2i24h1-edward`
+- Hypothesis: the merged ε=1e-3 may not be the optimal Charbonnier
+  hyperparameter. At ε=1e-3 essentially all residuals are in the L1 regime
+  (|diff| ≫ ε); going larger (ε=3e-3) expands the L2 region into low-residual
+  neighborhoods which may improve precision on well-resolved surface segments.
+  Going smaller (ε=3e-4) tests if outlier-driven gradients are still the
+  bottleneck.
+
+| Arm | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | total_min |
+|-----|-----------|--------------------|---------------------:|-----------|-----------|
+| charb_eps3e-4 | q2sbsull | 105.75 | 95.19 | 14 | 30.85 |
+| **charb_eps1e-3 (control)** | **o1v0gsqa** | **101.40** | **91.32** | 14 | 30.70 |
+| charb_eps3e-3 | hm38w5vh | 106.35 | _None_ (cruise pressure NaN) | 14 | 30.65 |
+
+Per-split val at best epoch (ε=1e-3 winner):
+single_in_dist=127.01, geom_camber_rc=113.08, geom_camber_cruise=74.70, re_rand=90.79.
+
+**Key per-split finding:** ε=3e-3 wins on val_single_in_dist by 5.05 absolute
+(121.96) but loses on all OOD splits, especially geom_camber_cruise (88.07 vs
+74.70, +13.4). This is textbook L2-helps-IID / L1-helps-OOD: the more
+quadratic the loss near zero, the better it fits the bulk in-distribution,
+but the heavier-tailed OOD residuals are underweighted.
+
+**Compose sanity vs PR #3143 winner (lukq8jry):** 1e-3 control at 101.40 is
++2.80 units vs pre-warmup Charbonnier 98.60, within run-to-run noise (~3-4
+units). Confirms "true" composed baseline at ~101-102, and the #3143 98.60
+was a lucky seed. Warmup × Charbonnier compose correctly.
+
+**ε=3e-3 NaN issue:** model produces non-finite pressure predictions on one
+`test_geom_camber_cruise` sample. val cruise was finite all epochs; Ux/Uy on
+same test split are finite. Suggests ε=3e-3 model state is brittle on the
+cruise distribution's tail. Not a framework bug (NaN-fix only filters GT, not
+preds); a future fix would guard non-finite *predictions* in scoring.
+
+**Decision:** Closed — no improvement on primary metric. Best arm (101.40)
+does not beat merged baseline (97.47). More importantly, ε=1e-3 was already
+the Config default; this sweep formally validates the existing choice.
+Suggested follow-up of per-channel adaptive ε is interesting but not
+high-priority given bigger orthogonal levers in flight.
+
+Assigned edward to fresh hypothesis: **PR #3570 torch.compile** (orthogonal
+per-step speedup, may reach deeper cosine decay in same 30-min budget).
+
+---
+
 ## 2026-05-15 22:30 — PR #3418: Gradient clipping max_norm sweep — **MERGED ⭐ (new best 97.47)**
 
 - Student branch: `willowpai2i24h1-nezuko/grad-clip-sweep`
