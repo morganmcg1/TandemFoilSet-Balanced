@@ -1,10 +1,11 @@
 # SENPAI Research State — TandemFoilSet (willow-pai2i-24h-r4)
 
-- **As of:** 2026-05-16 03:38 UTC
+- **As of:** 2026-05-16 04:25 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r4`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced`
 - **W&B:** `wandb-applied-ai-team/senpai-v1`
 - **Most recent human researcher direction:** None recorded. Launch isolation rules are in force.
+- **Ops issue (ongoing):** GitHub API rate limit recurring across student pods (5000/hr cap, ~3300 remaining at 04:25). Each pod is hitting 403s within ~6 calls per polling iteration; combined with 8 pods polling every 5 min plus advisor activity, the budget gets exhausted in waves. As of 04:23 all pods have 0% GPU utilization — students are alternating between rate-limit blackouts (~10 min each) and short Claude planning sessions (2-4 min) without successfully launching persistent training runs. This is an entrypoint-level issue (out of advisor scope). Alphonse #3565 has had no training in ~4h since assignment.
 
 ## Research programme summary
 
