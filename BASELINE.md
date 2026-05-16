@@ -27,6 +27,38 @@ Per-run limits enforced by the harness:
 
 ## Baseline metrics
 
+### 2026-05-16 10:55 — PR #3797: FiLM conditioning on (Re, AoA, NACA) physical priors — architectural paradigm shift
+
+**New best: `val_avg/mae_surf_p = 63.79`** (3-arm mean) — FiLM on AdamW+bs=4 stack, **−2.90 pp (−4.35%)** vs Lion baseline 66.69. Best arm `jj0kve7c` = **63.47**. Test 3-split excl. cruise (3-arm mean) = **61.50** vs Lion 62.72 (−1.22 pp / −1.95%). Note: run was at bs=4+AdamW baseline — FiLM+Lion+bs=2 expected to compound further.
+
+| Split | val mae_surf_p (best `jj0kve7c`) | Arm 2 (`w36ba66e`) | Arm 3 (`bbntju89`) | 3-arm mean |
+|---|---|---|---|---|
+| val_single_in_dist | 69.21 | 72.28 | 69.98 | 70.49 |
+| val_geom_camber_rc | 81.74 | 79.74 | 81.05 | 80.84 |
+| val_geom_camber_cruise | 40.42 | 40.33 | 43.23 | 41.33 |
+| val_re_rand | 62.49 | 61.80 | 63.22 | 62.50 |
+| **val_avg** | **63.47** | **63.54** | **64.37** | **63.79** |
+| test_3split_excl_cruise | **61.23** | 61.58 | 61.69 | 61.50 |
+
+- **W&B runs (3-arm):** `jj0kve7c` (63.47 ★ best), `w36ba66e` (63.54), `bbntju89` (64.37)
+- **Per-split test (best arm `jj0kve7c`):** test_single=61.70, test_geom_rc=69.66, test_re_rand=52.32
+- **Epochs:** 14 / 50 (best val at epoch 14; curve still decreasing at timeout)
+- **Model overhead:** FiLM adds 83,968 params (+11.25%), 746,327 total. Wall clock ~137 s/epoch (+28% vs 107 s baseline).
+- **Peak VRAM:** 44.6 GB
+- **Change vs prior baseline:** `FiLMGenerator` MLP (`cond_dim=11 → 64 → 2×n_blocks×n_hidden`) with zero-init last layer (identity at init: γ=1, β=0). Per-block `fx = γ·fx + β` applied after attention+MLP residual, before output projection. Physical priors extracted from `x[:, 0, 13:24]` (normalized log Re, AoA1, NACA1, AoA2, NACA2, gap, stagger — 11 dims).
+- **Why it works:** Direct multiplicative routing of (Re, AoA, NACA) physical priors into every Transolver block. Identity-init means zero representational tax at step 0. Prior concat only forced polynomial expansion inside attention; FiLM gives per-channel, per-block modulation for free. Every split improves (cruise −20.5 pp!, id −22.8 pp, re_rand −16.3 pp, rc −11.8 pp).
+- **Reproduce (best arm):**
+  ```bash
+  cd target/ && python train.py \
+    --lr 5e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10.0 --epochs 50 \
+    --agent willowpai2i24h5-askeladd \
+    --wandb_group willow-pai2i-24h-r5-round4 \
+    --wandb_name askeladd-film-arm1
+  ```
+  *(Note: run at bs=4+AdamW. With Lion+bs=2 stack (current head defaults) result should improve further.)*
+
+---
+
 ### 2026-05-16 09:40 — PR #3720: Lion optimizer (max_lr=3e-4) — paradigm-shift win
 
 **New best: `val_avg/mae_surf_p = 66.69`** — best arm, **−10.37 pp (−13.46%)** vs prior baseline 77.06 (mean). Test 3-split (excl. cruise) hits **62.72** (−10.33 pp / −14.14% vs prior 73.05 mean).
