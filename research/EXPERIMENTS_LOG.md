@@ -658,3 +658,53 @@ Per-split: all 4 splits regressed ~1-2 pts. Most hurt: cruise (+3%), rc (+1.9%).
 | #3743 | askeladd | bf16 autocast (torch.autocast cuda bfloat16) | Attack per-batch overhead: H100 1.5-2× matmul speedup; no fp16 instability issues. Expected 25-30 epochs vs 18. |
 
 Slice_num axis fully closed. Bottleneck is now per-batch matmul overhead. bf16 is the standard compute efficiency lever for this class of problem on H100 hardware.
+
+---
+
+## 2026-05-16 07:30 — PR #3603 — CosineAnnealingLR T_max=18 on slice_num=16 (CLOSED, axis closed)
+
+- **Branch:** `charliepai2i48h1-frieren/cosine-t16-matched`
+- **Hypothesis:** Match cosine LR schedule to actual 18-epoch training duration on slice_num=16 base.
+- **Results on slice_num=16 base:**
+
+| Metric | slice_num=16 baseline | This run | Δ |
+|--------|----------------------|----------|---|
+| `val_avg/mae_surf_p` | 84.44 | 85.71 | +1.50% (regression) |
+| `test_avg/mae_surf_p` | 74.75 | 76.52 | +2.36% (regression) |
+| `val_single_in_dist` | 100.09 | 99.20 | -0.89% (only improver) |
+| `val_geom_camber_rc` | 94.49 | 96.35 | +1.97% |
+| `val_geom_camber_cruise` | 63.60 | 66.44 | +4.45% |
+| `val_re_rand` | 79.60 | 80.86 | +1.58% |
+| Best epoch | 18 (final) | 18 (final) | — |
+| LR at epoch 18 | — | 0 | cosine completed |
+
+- **Decision:** CLOSED. Mechanism worked perfectly (LR cosine completed, low-LR tail active, val improved monotonically 12.5% in last 5 epochs). But no compound with slice_num=16: OOD splits reversed while ID improved, suggesting slice_num=16 already provides implicit LR-decay benefit. **Cosine T_max axis fully closed** (tested T_max=16 and T_max=18 on both old and new base, never beat baseline on slice_num=16 stack).
+- **Key insight:** Per-split pattern reversal (ID improves, OOD regresses) is a fingerprint: cosine tail biases EMA toward sharper in-distribution minima on the smaller model.
+
+---
+
+## 2026-05-16 07:35 — PR #3554 — weight_decay=5e-4 2-seed (CLOSED, underfit)
+
+- **Branch:** `charliepai2i48h1-edward/wd-5e4-v2`
+- **Hypothesis:** wd=5e-4 (5× current 1e-4) adds L2 regularization to attack val_single OOD generalization.
+- **Results (2-seed, slice_num=16 base):**
+
+| Metric | baseline (s=16) | 2-seed mean | Δ |
+|--------|-----------------|-------------|---|
+| `val_avg/mae_surf_p` | 84.44 | 86.99 | +3.02% (regression) |
+| `test_avg/mae_surf_p` | 74.75 | 77.33 | +3.45% (regression) |
+| All 4 val splits | — | all regressed | 4/4 regressed |
+| Train surf at ep18 | 0.104 | 0.148 | **+42%** (underfit) |
+
+- **Decision:** CLOSED. Clear 2-seed evidence of underfitting: train loss +42% above reference. The regularization budget is consumed by dropout=0.1 + slice_num=16's implicit reg + SmoothL1 L1-flavor. wd=5e-4 cannot compound on this stack. **wd axis closed at 1e-4.** Key insight: "new bottleneck is capacity/training-time, not regularization" (student's own diagnosis, confirmed by data).
+
+---
+
+## 2026-05-16 07:45 — Round 9 assigned (2 PRs)
+
+| PR | Student | Hypothesis | Rationale |
+|----|---------|------------|-----------|
+| #3769 | edward | n_layers=5→4 (drop a Transolver block) | Attack per-batch FFN overhead; ~20% speedup → 22-23 epochs. Compute-efficiency play. |
+| #3772 | frieren | gradient clipping max_norm=1.0 | Stability lever, untested in this launch. Bounds gradient spikes, may improve late-training convergence and EMA quality. |
+
+State: wd and cosine-T_max axes now fully closed. New bottleneck is per-batch FFN overhead. Three concurrent compute/stability experiments: askeladd (bf16), edward (n_layers=4), frieren (grad_clip).
