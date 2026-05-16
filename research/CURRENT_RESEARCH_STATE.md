@@ -28,14 +28,14 @@
 | #3442 | tanjiro | signed log1p on pressure (stronger compression) | WIP — REBASING | Rebase guided; target 67.30 |
 | #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP — REBASING | Rebased on grad-clip; target 67.30 |
 | #3485 | alphonse | bf16 autocast: faster forward → more epochs | WIP — REBASING | Rebase guided; target 67.30 |
-| #3586 | nezuko | Higher Lion LR: 2.5e-4/3.4e-4 vs 1.7e-4 | WIP | On 4-mech baseline 70.25; needs rebase to 5-mech |
+| #3674 | nezuko | Per-channel pressure weight: w_p=0.5 and 2.0 vs 1.0 | WIP — NEW | On 5-mech baseline 67.30; #3586 closed (lr=2.5e-4 regressed +2.74%) |
 | #3383 | edward | Lion + 2-epoch linear warmup then cosine | WIP — REBASING | Rebase guided; target 67.30 |
 | #3275 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs | WIP — REBASING | Rebase guided; target 67.30 |
 
 ## Key open questions (round 12)
 
 1. **Is max_norm=1.0 over-clipping?** (#3528 fern) — post-asinh norms 25-180 mean; threshold of 5-10 may let bulk curvature signal through. Now also needs rebase.
-2. **Can higher LR compress convergence within the budget?** (#3586 nezuko) — curve still descending at epoch 14; 1.5–2× LR multiplier on the denoised stack should converge faster
+2. **Does per-channel pressure weight matter?** (#3674 nezuko) — w_p=0.5 (free velocity gradient) vs w_p=2.0 (focus on metric channel). Both w_p=1.0 equilibrium and LR tested; lr=1.7e-4 is near-optimal (#3586 finding)
 3. **Does signed log1p beat asinh?** (#3442 tanjiro) — now needs to beat 67.30
 4. **Does EMA decay=0.995 converge faster within budget?** (#3470 askeladd)
 5. **Does bf16 give meaningful epoch count boost?** (#3485 alphonse) — key to unlocking capacity and schedule changes
@@ -65,11 +65,12 @@ They compose cleanly because they're orthogonal. The surf_weight reduction from 
 | #3099 (alphonse capacity 192h/6L/6H) | +60.5% regression; wall-clock budget dominates |
 | #3106 (frieren Slice128/head8/mlp3) | +98.6% regression; same wall-clock penalty, 7 epochs vs 14 |
 | #3354 (nezuko Lion+cosine T_max=12) | +15.96% regression (81.45 vs 70.25); val still descending at epoch 12, curve is budget-limited not LR-limited |
+| #3586 (nezuko higher LR 2.5e-4) | +2.74% regression (69.14 vs 67.30); lr=1.7e-4 is near-optimal for 5-mech stack; closed without running Arm B |
 
 ## Potential next research directions
 
 - **Finer surf_weight sweep around 25**: frieren's data suggests the optimum knee is between 20-25; a {22, 23, 27} sweep could tighten this further
-- **Higher LR on 5-mech stack**: nezuko's experiment needs to complete on the new surf_weight=25 code
+- ~~Higher LR sweep~~ — CLOSED: lr=2.5e-4 regressed +2.74%; lr=1.7e-4 is near-optimal for 5-mech stack
 - **bf16 × capacity**: if bf16 cuts per-epoch time to 90s, a moderate capacity bump (n_hidden=160) could reach 18+ epochs within budget
 - **Per-group grad-clip**: attention projection and output head dominate the aggregate norm; per-group clipping lets us tune aggressiveness separately
 - **WeightedRandomSampler**: inverse-error reweighting after epoch 1 — fundamentally different mechanism from all 5 current wins
