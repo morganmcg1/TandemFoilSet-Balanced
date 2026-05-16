@@ -1115,3 +1115,26 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 - Nezuko #4021 pushed SWA implementation at 17:50 — actively training on Lookahead canonical
 - Fern #4037 rebased at 17:42 — actively training Huber β lower bound on Lookahead canonical
 - Verified nezuko baseline-ema-lookahead arm val=48.42 (reproduces canonical 48.4191, excellent determinism check)
+
+## 2026-05-16 19:20 — PR #3497 (tanjiro): Grad-clip max_norm=1.0 on Lookahead canonical — **MERGED (new canonical)**
+
+- Branch: `willowpai2i48h3-tanjiro/gradient-clip-sweep`
+- W&B runs (Lookahead canonical rerun): `o2mfnw5m` (baseline-noclip), `epby4q4n` (clip=1.0)
+- Ran on full Lookahead canonical: SOAP freq=5 + Huber β=0.1 + EMA 0.99 + Lookahead k=5 α=0.5
+
+| Arm | grad_clip | val_avg/mae_surf_p | test_excl_cruise | Δ within-PR val | Δ vs canonical |
+|---|---|---|---|---|---|
+| Arm 1 (baseline-noclip) | none | 48.4191 (reproduces exactly) | 47.8034 | — | — |
+| **Arm 2 (clip=1.0) ★** | 1.0 | **47.1000** | **46.2590** | **−2.72%** | **−2.72% ★** |
+
+**Per-split test (clip=1.0):** single_in_dist=50.98 (−5.64%) | geom_camber_rc=50.75 (+0.26%) | re_rand=37.05 (−4.42%)
+
+**Critical mechanism discovery:** Huber β=0.1 produces explosive pre-clip grad_norm under the L1-dominant regime — p50=112, max=730 — compared to Cauchy stack (p50=17, max=205). clip=1.0 active on 100% of 5,255 steps. Despite 100× median rescaling, val improves 2.72%: SOAP preconditioner is direction-sensitive (relative curvature), not magnitude-sensitive, so aggressive global scaling doesn't destroy the useful signal. The clip concentrates the gradient update into a tighter, more stable effective step size.
+
+**Decision: MERGED as new canonical.** val=47.10, test=46.26. All 7 active students notified. Cumulative stack: SOAP freq=5 + Huber β=0.1 + EMA 0.99 + Lookahead k=5 α=0.5 + **grad_clip=1.0**. Total: 11 compounding wins.
+
+## 2026-05-16 19:22 — PR #4099 tanjiro assigned: Grad-clip lower bound {0.5, 0.1}
+
+- willowpai2i48h3-tanjiro/grad-clip-lower-bound
+- Hypothesis: Canonical clip=1.0 renormalizes 100% of steps; pre-clip p5=28, so even tighter clip (0.5, 0.1) may preserve the direction-preserving benefit. If SOAP is truly scale-invariant (only direction matters), lower thresholds should work equally well or better.
+- 3 arms: clip=1.0 (canonical reproduction), clip=0.5, clip=0.1
