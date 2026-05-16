@@ -149,10 +149,25 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth (drop the residual update with probability p)."""
+    def __init__(self, p=0.0):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x):
+        if self.p == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.p
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = x.new_empty(shape).bernoulli_(keep_prob)
+        return x.div(keep_prob) * mask
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None, drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -172,6 +187,7 @@ class TransolverBlock(nn.Module):
                            n_layers=0, res=False, act=act)
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
+        self.drop_path = DropPath(drop_path)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -180,8 +196,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -193,7 +209,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None, drop_path=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -215,6 +231,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 ffn_type=ffn_type, ffn_hidden_inner=ffn_hidden_inner,
+                drop_path=drop_path,
             )
             for i in range(n_layers)
         ])
@@ -388,6 +405,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 14
+    drop_path: float = 0.1
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -432,6 +450,7 @@ model_config = dict(
     mlp_ratio=2,
     ffn_type="swiglu",
     ffn_hidden_inner=192,
+    drop_path=cfg.drop_path,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
