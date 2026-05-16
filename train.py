@@ -495,6 +495,54 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optimizer: Lion (Chen et al. 2023, "Symbolic Discovery of Optimization Algorithms")
+# ---------------------------------------------------------------------------
+
+
+class Lion(torch.optim.Optimizer):
+    """Sign-based momentum optimizer. update = sign(beta1 * m + (1-beta1) * g).
+    Decoupled weight decay (AdamW-style). Lion native lr is ~3-10x smaller than AdamW.
+    """
+
+    def __init__(self, params, lr: float = 1e-4, betas: tuple[float, float] = (0.9, 0.99),
+                 weight_decay: float = 0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta2: {betas[1]}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                if wd != 0.0:
+                    p.mul_(1.0 - lr * wd)
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                update = exp_avg.mul(beta1).add(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -519,6 +567,9 @@ class Config:
     n_head: int = 4   # Transolver attention heads; head_dim = n_hidden // n_head
     n_layers: int = 5   # Transolver depth (number of TransolverBlocks)
     slice_num: int = 64   # Transolver attention slice token count
+    optimizer: str = "adamw"   # 'adamw' or 'lion'
+    beta1: float = 0.9   # Optimizer momentum coefficient (Adam/Lion)
+    beta2: float = 0.999  # Optimizer second-moment coefficient (Adam) / EMA coeff (Lion)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -578,7 +629,17 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2),
+                     weight_decay=cfg.weight_decay)
+    print(f"Optimizer: Lion (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
+                                  betas=(cfg.beta1, cfg.beta2),
+                                  weight_decay=cfg.weight_decay)
+    print(f"Optimizer: AdamW (lr={cfg.lr}, betas=({cfg.beta1}, {cfg.beta2}), wd={cfg.weight_decay})")
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=15, eta_min=cfg.eta_min
 )
