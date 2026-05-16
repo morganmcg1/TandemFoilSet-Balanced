@@ -104,6 +104,31 @@ class FiLMConditioner(nn.Module):
         return scale, shift
 
 
+class FourierEmbedFiLM(nn.Module):
+    """Tancik-style fixed Fourier feature embedding for the FiLM condition.
+
+    Encodes each raw conditioning dim as a stack of sin/cos at log-spaced
+    frequencies ``[sigma, 2*sigma, ..., 2**(n_freqs-1)*sigma] * pi``, then
+    concatenates with the raw vector (residual-friendly NeRF wiring so the
+    downstream MLP can still fall back to the original signal).
+    """
+
+    def __init__(self, n_freqs: int, sigma: float, raw_dim: int):
+        super().__init__()
+        self.n_freqs = n_freqs
+        self.raw_dim = raw_dim
+        freqs = (sigma * torch.pi) * (2.0 ** torch.arange(n_freqs).float())  # [n_freqs]
+        self.register_buffer("freqs", freqs)
+        self.out_dim = raw_dim + raw_dim * n_freqs * 2
+
+    def forward(self, cond: torch.Tensor) -> torch.Tensor:
+        # cond: [B, raw_dim]
+        projected = cond.unsqueeze(-1) * self.freqs.view(1, 1, -1)  # [B, raw_dim, n_freqs]
+        sin = projected.sin().flatten(-2)  # [B, raw_dim * n_freqs]
+        cos = projected.cos().flatten(-2)  # [B, raw_dim * n_freqs]
+        return torch.cat([cond, sin, cos], dim=-1)  # [B, raw_dim * (1 + 2*n_freqs)]
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -197,7 +222,9 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 fourier_film_freqs: int = 0,
+                 fourier_film_sigma: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -223,7 +250,17 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
-        cond_dim = COND_DIMS.stop - COND_DIMS.start
+        cond_dim_raw = COND_DIMS.stop - COND_DIMS.start
+        self.use_fourier_film = fourier_film_freqs > 0
+        if self.use_fourier_film:
+            self.fourier_embed = FourierEmbedFiLM(
+                n_freqs=fourier_film_freqs,
+                sigma=fourier_film_sigma,
+                raw_dim=cond_dim_raw,
+            )
+            cond_dim = self.fourier_embed.out_dim
+        else:
+            cond_dim = cond_dim_raw
         self.film = FiLMConditioner(cond_dim=cond_dim, n_hidden=n_hidden, n_blocks=n_layers)
         self.apply(self._init_weights)
 
@@ -241,7 +278,9 @@ class Transolver(nn.Module):
         # Dims 13-23 are constant per sample. pad_collate puts padding at the END,
         # so node 0 is always a real node. Read the condition there to avoid
         # mean-with-zero bias from padded positions.
-        cond = x[:, 0, COND_DIMS]  # [B, cond_dim]
+        cond = x[:, 0, COND_DIMS]  # [B, cond_dim_raw]
+        if self.use_fourier_film:
+            cond = self.fourier_embed(cond)  # [B, cond_dim_raw * (1 + 2*n_freqs)]
         film_scale, film_shift = self.film(cond)  # each [B, n_blocks, n_hidden]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
@@ -457,6 +496,8 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "surf_p_l1_weight": cfg.surf_p_l1_weight,
+        "fourier_film_freqs": cfg.fourier_film_freqs,
+        "fourier_film_sigma": cfg.fourier_film_sigma,
         "epochs_configured": cfg.epochs,
         "ema_decay": EMA_DECAY,
     }
@@ -506,6 +547,10 @@ class Config:
     # Auxiliary L1 loss on surface-node pressure (normalized space). Aligns the
     # training objective with the L1 (MAE) eval metric. 0 disables the term.
     surf_p_l1_weight: float = 0.0
+    # Tancik-style Fourier feature embedding on the 11-dim FiLM cond vector.
+    # 0 disables the embedding (raw cond fed straight to the FiLM MLP).
+    fourier_film_freqs: int = 0
+    fourier_film_sigma: float = 1.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -551,6 +596,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    fourier_film_freqs=cfg.fourier_film_freqs,
+    fourier_film_sigma=cfg.fourier_film_sigma,
 )
 
 model = Transolver(**model_config).to(device)
@@ -596,6 +643,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf_p_l1 = 0.0
     epoch_scale_mean = epoch_scale_std = 0.0
     epoch_mask_mean = 0.0
+    epoch_film_scale_abs_mean = epoch_film_scale_std = 0.0
+    epoch_film_shift_abs_mean = epoch_film_shift_std = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -612,6 +661,16 @@ for epoch in range(MAX_EPOCHS):
         # Promote to fp32 so per-sample sums and scale-invariant loss avoid
         # mantissa truncation in the reductions over up to ~242K nodes.
         sq_err = sq_err.float()
+
+        # Snapshot per-batch FiLM scale/shift summary stats (no extra forward).
+        with torch.no_grad():
+            cond_raw = x_norm[:, 0, COND_DIMS]
+            cond_for_film = model.fourier_embed(cond_raw) if model.use_fourier_film else cond_raw
+            film_scale_b, film_shift_b = model.film(cond_for_film)
+            epoch_film_scale_abs_mean += film_scale_b.abs().mean().item()
+            epoch_film_scale_std += film_scale_b.std(unbiased=False).item()
+            epoch_film_shift_abs_mean += film_shift_b.abs().mean().item()
+            epoch_film_shift_std += film_shift_b.std(unbiased=False).item()
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -666,6 +725,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_scale_mean /= max(n_batches, 1)
     epoch_scale_std /= max(n_batches, 1)
     epoch_mask_mean /= max(n_batches, 1)
+    epoch_film_scale_abs_mean /= max(n_batches, 1)
+    epoch_film_scale_std /= max(n_batches, 1)
+    epoch_film_shift_abs_mean /= max(n_batches, 1)
+    epoch_film_shift_std /= max(n_batches, 1)
 
     # --- Validate (EMA weights) ---
     ema_model.eval()
@@ -700,6 +763,10 @@ for epoch in range(MAX_EPOCHS):
         "train/sample_scale_mean": epoch_scale_mean,
         "train/sample_scale_std": epoch_scale_std,
         "train/cautious_mask_mean": epoch_mask_mean,
+        "train/film_scale_abs_mean": epoch_film_scale_abs_mean,
+        "train/film_scale_std": epoch_film_scale_std,
+        "train/film_shift_abs_mean": epoch_film_shift_abs_mean,
+        "train/film_shift_std": epoch_film_shift_std,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -709,7 +776,9 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"surf_p_l1={epoch_surf_p_l1:.4f} "
         f"scale={epoch_scale_mean:.3f}±{epoch_scale_std:.3f} "
-        f"mask={epoch_mask_mean:.3f}]  "
+        f"mask={epoch_mask_mean:.3f} "
+        f"film[|s|={epoch_film_scale_abs_mean:.3f}±{epoch_film_scale_std:.3f} "
+        f"|b|={epoch_film_shift_abs_mean:.3f}±{epoch_film_shift_std:.3f}]]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
