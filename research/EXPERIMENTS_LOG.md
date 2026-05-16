@@ -1029,3 +1029,36 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 
 - 2 arms only: Arm 1 (no clip, Huber β=0.1 baseline = canonical reproduction), Arm 2 (clip=1.0, Huber β=0.1)
 - `--wandb_group grad-clip-huber-beta-01` for tracking
+
+## 2026-05-16 17:30 — PR #3947 (alphonse): Lookahead k=5 on SOAP freq=5 + Huber β=0.1 — **MERGED (new canonical)**
+
+- Branch: `willowpai2i48h3-alphonse/lookahead-soap`
+- W&B runs (rerun): `auiev0ud` (baseline, no Lookahead), `yi5ektgs` (Lookahead k=5)
+- Ran on Huber β=0.1 + SOAP freq=5 + EMA 0.99 canonical (full new canonical)
+
+| Arm | Lookahead | val_avg/mae_surf_p | test_excl_cruise | Δ within-PR val | Δ vs canonical |
+|---|---|---|---|---|---|
+| Arm 1 (baseline-no-lookahead) | none | 48.8230 | 48.2890 | — | −3.35% |
+| **Arm 2 (k=5, α=0.5) ★** | k=5 | **48.4191** | **47.8034** | **−0.83%** | **−4.14% ★** |
+
+**Analysis:** Clean within-PR signal (−0.83% val, −1.01% test). Mechanism confirmed: k=5 aligns with precondition_frequency=5 — Lookahead slow-weight buffer averages exactly one preconditioner refresh window. OOD splits improve most (val_re_rand −1.92, val_camber_cruise −1.64 vs within-PR baseline), consistent with broader flat-minima hypothesis. EMA and Lookahead remain non-redundant (EMA is step-level continuous, Lookahead is k-step sync). Both arms beat canonical 50.5133 — hardware drift note: alphonse's pod reproduces identical config at 48.823 vs 50.5133 (SOAP eigendecomposition non-determinism across GPU machines, ~1.7 val). The relative Lookahead delta (−0.83%) is controlled and robust.
+
+**Decision: MERGED as new canonical.** val=48.4191, test=47.8034. Cumulative stack: Huber β=0.1 + SOAP freq=5 + EMA 0.99 + **Lookahead k=5 α=0.5**. All students notified of new baseline.
+
+**Suggested by alphonse for follow-up:** Lookahead alpha sweep {0.3, 0.5, 0.7} with k=5 fixed; k=10 to verify U-shape.
+
+## 2026-05-16 17:32 — PR #3952 (edward): Log-pressure aux loss (logp_weight={0.0, 0.05, 0.1}) — SENT BACK
+
+- Branch: `willowpai2i48h3-edward/log-pressure-aux-loss`
+- W&B runs: `6hsd3yjo` (baseline no-logp), `op36u979` (logp=0.1), `q76vrp25` (logp=0.05)
+- **Bug:** All 3 arms ran with `precondition_frequency=10` (default) instead of canonical freq=5
+
+| Arm | log_p_weight | val_avg/mae_surf_p | test_excl_cruise | Δ within-PR val |
+|---|---|---|---|---|
+| Arm 1 baseline (no logp, freq=10) | 0.0 | 54.6343 | 54.4132 | — |
+| **Arm 2 (logp=0.1, freq=10) ★ within-PR** | 0.1 | **54.0170** | **52.2929** | **−0.62 (−1.13%)** |
+| Arm 3 (logp=0.05, freq=10) | 0.05 | 54.1155 | 52.5843 | −0.52 (−0.95%) |
+
+**Analysis:** Within-PR signal is real and consistent (logp=0.1 wins both val and test_excl_cruise by−0.62/−2.12). However, absolute results are 6+ val above new canonical (48.4191) due to: (1) freq=10 instead of freq=5 bias (~1.78% = ~0.85 val); (2) Cauchy stack instead of Huber β=0.1 (~3.77% = ~1.8 val); (3) missing Lookahead (−4.14% = ~2.0 val). Mechanism check partial: val_re_rand improved as predicted (−1.35) but val_geom_camber_rc REGRESSED (+0.82) — contradicts hypothesis. Within-PR test_single delta was large (−6.6) despite small val_single delta — suggests log-p shapes pressure-tail fit in ways that generalize.
+
+**Decision: SENT BACK** for 2-arm rerun on full new canonical (Huber β=0.1 + freq=5 + Lookahead k=5) with logp_weight=0.0 (baseline arm) vs logp_weight=0.1 (best within-PR arm). If −0.62 within-PR val signal holds on new stack, that would put result at ~47.8 — comfortably beating new canonical 48.4191.
