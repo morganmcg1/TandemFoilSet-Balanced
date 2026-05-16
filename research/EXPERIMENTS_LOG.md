@@ -850,3 +850,46 @@ vs **NEW canonical (54.494)**: freqs=4 at 54.895 is +0.73% WORSE. Cannot merge. 
 - **Critical insight:** cauchy_c>0 bypasses the Huber path entirely, so mep5yevo result is independent of the huber_beta default (0.5 vs 1.0). The result stands head-to-head against current canonical.
 - Branch was CONFLICTING (likely train.py loss-section conflict with PR #3316). Sent back for rebase-only — no new experiment needed.
 - Expected post-merge canonical: val ≈ 52.494, test ≈ 51.220 → cumulative gain ≈ −61.2% from old launch baseline (135.30)
+
+## 2026-05-16 12:00 — PR #3612: Cauchy robust loss c=1.0 on full canonical — MERGED (WINNER)
+- willowpai2i48h3-edward/cauchy-robust-loss
+- Hypothesis: Cauchy ρ(r)=c²/2 × log(1+(r/c)²) has redescending influence function, downweights extreme residuals more aggressively than Huber; confirmed across two stacks; rebase onto Huber β=0.5 canonical
+- W&B group: `cauchy-ema-decay99`
+
+| Arm | Loss | W&B id | val_avg/mae_surf_p | test_avg/mae_surf_p_excl_cruise | Δval vs arm1 |
+|---|---|---|---|---|---|
+| baseline-huber-ema99 | Huber β=1.0 | `lw3fus4p` | **56.117** | **54.659** | — |
+| **variant-cauchy-c1-ema99-freq5** | **Cauchy c=1.0** | `mep5yevo` | **52.494** | **51.220** | **−6.46%** |
+
+- vs canonical Huber β=0.5 (PR #3316, val=54.494, test=52.837): **−3.67% val, −3.06% test**
+- Cauchy wins on ALL 4 val splits and ALL 3 non-NaN test splits
+- Mechanism: redescending influence function outperforms Huber's linear tail on this task; orthogonal to EMA, SOAP, and Huber β reduction
+- Branch was CONFLICTING → student rebased quickly and resubmitted clean
+- Decision: MERGED. **New canonical: val=52.494, test=51.220**
+- Cumulative gain from launch baseline (135.30): **−61.2%** over 8 compounding improvements
+
+## 2026-05-16 12:00 — PR #3493: SOAP LR sweep {1e-3, 2e-3} — CLOSED (FALSIFIED)
+- willowpai2i48h3-alphonse/soap-lr-sweep
+- Hypothesis: SOAP's curvature-aware updates may shift the optimal peak LR; test lr=2e-3 (and planned lr=5e-4)
+- W&B group: `soap-lr-sweep` (and `cauchy-ema-decay99` for rebase arms)
+
+| Arm | LR | W&B id | val_avg/mae_surf_p | Δ vs baseline |
+|---|---|---|---|---|
+| baseline-lr1e-3-ema | 1e-3 | `1mrlkv22` | **56.117** | — |
+| variant-lr2e-3-ema | 2e-3 | `gm4ze1x6` | **56.683** | **+1.0% (worse)** |
+
+- lr=2e-3 is worse by 1.0%. lr=1e-3 stays canonical. variant-lr5e-4 was not run (student declared terminal with 2 arms).
+- Decision: CLOSED. lr=1e-3 is confirmed optimal for SOAP on this stack.
+- Note: lr=5e-4 remains untested; deprioritized — within-group delta would need to exceed 2% to beat new canonical (52.494).
+
+## 2026-05-16 12:00 — PR #3947 alphonse assigned: Lookahead wrapper on SOAP
+- willowpai2i48h3-alphonse/lookahead-soap
+- Hypothesis: Lookahead slow-weight sync (k=5, α=0.5) absorbs preconditioner-frame noise between SOAP refreshes; EMA and Lookahead are orthogonal (EMA=eval checkpoint smoothing, Lookahead=training trajectory smoothing)
+- Run 3 arms: baseline (no lookahead), k=5/α=0.5, k=10/α=0.5 in `lookahead-soap-sweep`
+- Expected gain: 1–3% val; mechanism targets specific SOAP limitation
+
+## 2026-05-16 12:00 — PR #3952 edward assigned: Log-pressure auxiliary loss
+- willowpai2i48h3-edward/log-pressure-aux-loss
+- Hypothesis: log-space auxiliary loss on pressure channel (ch idx 2) penalizes relative error regardless of Re-driven absolute scale; expected to improve val_re_rand and val_geom_camber_rc
+- Run 3 arms: baseline (no aux), log_p_weight=0.1, log_p_weight=0.05 in `log-p-aux-sweep`
+- Pre-flight: verify distribution of normalized pressure values before committing to the eps_log choice

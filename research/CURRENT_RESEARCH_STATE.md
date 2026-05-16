@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 11:35 — PR #3703 closed (falsified); PR #3612 sent back for rebase (WINNER, cauchy c=1.0 val=52.494); PR #3926 askeladd cosine-LR-floor assigned)
+- **Date:** 2026-05-16 (updated 12:05 — PR #3612 MERGED: Cauchy c=1.0 new canonical val=52.494; PR #3493 closed; alphonse #3947 Lookahead-SOAP assigned; edward #3952 log-pressure assigned)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 54.494`, `test_avg/mae_surf_p (excl cruise) = 52.837`
-  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)** + SOAP precond_freq=5 (PR #3495, −1.78%) + **EMA(0.999) (PR #3430, −18.8%)** + EMA decay=0.99 (PR #3591, −3.85%) + **Huber beta=0.5 (PR #3316, −6.05%)**
-  - Full stack config: SOAP **precondition_frequency=5**, lr=1e-3, warmup_epochs=3, ema_decay=0.99, **huber_beta=0.5**
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 52.494`, `test_avg/mae_surf_p (excl cruise) = 51.220`
+  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)** + SOAP precond_freq=5 (PR #3495, −1.78%) + **EMA(0.999) (PR #3430, −18.8%)** + EMA decay=0.99 (PR #3591, −3.85%) + Huber beta=0.5 (PR #3316, −6.05%) + **Cauchy c=1.0 (PR #3612, −3.67%)**
+  - Full stack config: SOAP **precondition_frequency=5**, lr=1e-3, warmup_epochs=3, ema_decay=0.99, **cauchy_c=1.0**
 
 ## Tracked infrastructure issue: cruise-test NaN
 
@@ -21,17 +21,10 @@
 | #3430 | nezuko | EMA of model weights (decay=0.999) | **−18.8%** | 61.43 |
 | #3495 | askeladd | SOAP precond_freq=5 | **−1.78%** | 60.33 |
 | #3591 | nezuko | EMA decay=0.99 | **−3.85%** | 58.005 |
-| **#3316** | **fern** | **Huber beta=0.5** | **−6.05%** | **54.494** |
+| #3316 | fern | Huber beta=0.5 | **−6.05%** | 54.494 |
+| **#3612** | **edward** | **Cauchy loss c=1.0** | **−3.67%** | **52.494** |
 
-Old launch baseline: 135.30. Total gain: **−59.7%** over 7 compounding improvements.
-
-## Pending winner (awaiting rebase)
-
-| PR | Student | Hypothesis | Result | Expected post-merge canonical |
-|---|---|---|---|---|
-| **#3612** | **edward** | **Cauchy c=1.0 (vs Huber)** | **val=52.494, test=51.220 (mep5yevo)** | **val≈52.494 (−3.67% vs current)** |
-
-- edward's PR sent back for rebase-only (merge conflict in train.py loss section). No new experiment needed — terminal result is valid. Expect merge on next wakeup.
+Old launch baseline: 135.30. Total gain: **−61.2%** over 8 compounding improvements.
 
 ## Closed hypotheses (complete)
 
@@ -46,56 +39,49 @@ Old launch baseline: 135.30. Total gain: **−59.7%** over 7 compounding improve
 | #3322 | frieren | AoA reflection aug | +15.5% — camber breaks symmetry |
 | #3323 | nezuko | Entropy reg (PhysicsAttn) | +4-7% — slice specialization is functional |
 | #3152 | edward | p×3 surface upweight | regressed on SOAP stack |
-| #3703 | askeladd | SOAP precond_freq {3,2} vs 5 | U-shape; freq=3 +5.5%, freq=2 +6.6% vs freq=5 — closed |
-| #3493 | alphonse | SOAP LR sweep {1e-3, 2e-3} | lr=2e-3 +1.0% worse; lr=1e-3 stays canonical — awaiting closure flip |
+| #3703 | askeladd | SOAP precond_freq {3,2} vs 5 | U-shape; freq=3 +5.5%, freq=2 +6.6% worse — closed |
+| #3493 | alphonse | SOAP LR sweep: lr=2e-3 vs 1e-3 | lr=2e-3 +1.0% worse; lr=1e-3 stays canonical — closed |
 
-## Active WIP experiments (all on EMA+SOAP+Huber0.5 canonical, target <54.494)
+## Active WIP experiments (all on full Cauchy+EMA+SOAP canonical, target <52.494)
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
-| **#3868** | **fern** | **Huber beta finer sweep {0.5, 0.25, 0.1}** | **Loss tuning** | **WIP — arm 1 running** |
-| **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} — BIGGEST signal (−12.1% within-PR)** | **Optimization** | **WIP — needs rebase onto Huber0.5; stale** |
-| **#3415** | **frieren** | **Log-Re freqs=4 on Huber0.5+EMA+SOAP (rebase)** | **Inputs** | **WIP — sent back; within-PR −2.18% → expect ~53.3 val** |
+| **#3868** | **fern** | **Huber beta finer sweep {0.5, 0.25, 0.1}** | **Loss tuning** | **WIP — arm 1 running (Huber stack, result may not beat new Cauchy canonical)** |
+| **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} — BIGGEST signal (−12.1% within-PR)** | **Optimization** | **WIP — stale, needs rebase onto Cauchy canonical** |
+| **#3415** | **frieren** | **Log-Re freqs=4 — rebase onto Cauchy canonical** | **Inputs** | **WIP — within-PR −2.18%, rebase in progress** |
 | **#3728** | **nezuko** | **EMA decay lower sweep {0.97, 0.95} vs 0.99** | **Training** | **WIP — notified of new canonical** |
-| **#3736** | **thorfinn** | **surf_weight finer sweep {10,5,3} on full canonical** | **Optimization** | **WIP — rebased, arms launching with huber_beta=0.5** |
-| **#3926** | **askeladd** | **Cosine LR floor (eta_min ∈ {0, 1e-5, 1e-4}) — stop LR decay-to-zero** | **Optimization** | **WIP — just assigned** |
-| **#3612** | **edward** | **Cauchy c=1.0 (winner, rebase pending)** | **Loss tuning** | **WIP — rebase only, no new experiment** |
+| **#3736** | **thorfinn** | **surf_weight finer sweep {10,5,3} on full canonical** | **Optimization** | **WIP — rebased, arms running** |
+| **#3926** | **askeladd** | **Cosine LR floor (eta_min ∈ {0, 1e-5, 1e-4})** | **Optimization** | **WIP — just assigned, implementing** |
+| **#3947** | **alphonse** | **Lookahead wrapper on SOAP (k=5 vs k=10)** | **Optimization** | **WIP — just assigned** |
+| **#3952** | **edward** | **Log-pressure aux loss (weight 0.05 vs 0.1)** | **Loss tuning** | **WIP — just assigned** |
 
 Zero idle students.
 
 ## Key learnings (cumulative)
 
-1. **EMA of model weights + SOAP compound.** EMA provides ~19% additional gain on top of SOAP. Mechanism: SOAP finds flat minima via curvature-aware steps; EMA averages across the flat basin.
-2. **Optimizer is the dominant single lever.** SOAP −31.7%, EMA −18.8%, Huber(beta=1.0) −18.1%, Huber(beta=0.5) −6.05%, LR warmup −8.9%.
-3. **Huber beta: monotone, smaller is better.** {2.0, 1.0, 0.5} showed strict monotone improvement. beta=0.5 canonical; {0.1, 0.25} under test (#3868).
-4. **Cauchy c=1.0 beats Huber: confirmed.** Cauchy loss gives −6.46% within-group vs Huber β=1.0 and −3.67% vs new Huber β=0.5 canonical. Orthogonal to optimizer and EMA. Pending rebase.
-5. **SOAP precond_freq=5 is optimal (U-shape).** Going more frequent (freq=3, freq=2) injects preconditioner-frame noise, causing +5-7% regressions. U-shape confirmed — freq=5 stays.
+1. **Cauchy loss beats Huber across all stacks.** Redescending influence function downweights outliers more aggressively than Huber's linear tail. Compounded with EMA+SOAP+Huber β reduction: −6.46% within-group, −3.67% vs Huber β=0.5 canonical.
+2. **EMA of model weights + SOAP compound.** EMA provides ~19% additional gain on top of SOAP. Mechanism: SOAP finds flat minima via curvature-aware steps; EMA averages across the flat basin.
+3. **Optimizer is the dominant single lever.** SOAP −31.7%, EMA −18.8%, Huber(beta=1.0) −18.1%, LR warmup −8.9%.
+4. **Huber beta: monotone, smaller is better.** {2.0, 1.0, 0.5} showed strict monotone improvement. beta=0.5 canonical; Cauchy c=1.0 is now the loss function.
+5. **SOAP precond_freq=5 is optimal (U-shape).** Going more frequent (freq=3, freq=2) injects preconditioner-frame noise, causing +5-7% regressions.
 6. **Capacity scaling blocked.** Width/depth/MLP-ratio all fail under 30-min cap. Family is closed.
-7. **SOAP generalizes strongly on OOD.** Largest gains on re_rand and geom_camber_rc splits.
-8. **Channel upweighting dead end.** p×3 upweight fails on both MSE and SOAP stacks.
-9. **Log-Re sinusoidal confirmed (within-PR).** freqs=4 gives −2.18% val vs paired baseline. Waiting for rebase onto Huber0.5 canonical.
-10. **LR=1e-3 is optimal for SOAP.** lr=2e-3 loses by +1.0% val in within-group sweep. lr=5e-4 untested but deprioritized.
-11. **Wall-clock cap is binding.** Best epoch consistently = 14 out of ~50 possible. LR schedule decays to near-zero by epoch 12-13. Cosine LR floor (eta_min) is the obvious fix: ~15% of epochs wasted at lr≈0.
+7. **LR=1e-3 is optimal for SOAP.** lr=2e-3 loses by +1.0% val; lr=5e-4 untested but deprioritized.
+8. **Log-Re sinusoidal confirmed (within-PR).** freqs=4 gives −2.18% val vs paired baseline. Rebase in progress.
+9. **Wall-clock cap is binding.** Best epoch consistently = 14 out of ~50. LR decays to near-zero by epoch 12-13. Cosine LR floor (eta_min) under test.
 
 ## Next directions (priority order)
 
 ### Immediate (active)
-- **Cauchy c=1.0 rebase (#3612, edward).** Highest-confidence winner, only needs rebase to merge.
-- **Huber beta finer sweep (#3868, fern).** Monotone confirmed — expect optimum at or below 0.25.
-- **Tanjiro grad-clip rebase (#3497).** BIGGEST within-PR signal (−12.1% on SOAP-only). Must verify on new canonical.
-- **Cosine LR floor (#3926, askeladd).** Near-zero-risk 2-line change; ~15% of epochs wasted at lr≈0.
-- **Frieren log-Re rebase (#3415).** Within-PR −2.18% should compound to ~53.3 on Huber0.5 stack.
+- **Tanjiro grad-clip rebase (#3497).** BIGGEST within-PR signal (−12.1% on SOAP-only). Must verify on Cauchy canonical.
+- **Frieren log-Re rebase (#3415).** Within-PR −2.18% should compound to ~52 on full canonical.
+- **Fern Huber beta finer sweep (#3868).** Note: Huber β sweeps on the Huber stack — may not beat Cauchy canonical. Result still informative for understanding loss landscape.
+- **Askeladd cosine LR floor (#3926).** Near-zero-risk 2-line change; ~15% of epochs wasted at lr≈0.
+- **Alphonse Lookahead on SOAP (#3947).** Slow-weight sync targeting SOAP preconditioner noise; orthogonal to EMA.
+- **Edward log-pressure aux loss (#3952).** Relative-error pressure loss; targets OOD Re generalization.
 
 ### Post-sweep stack
-1. Combine best huber_beta / cauchy / loss variant with full canonical.
-2. Lookahead wrapper on SOAP (k=5, alpha=0.5) — targets preconditioner-frame noise specifically.
-3. Adaptive Barron loss (Barron 2019) — learn α and c per-output-channel (Ux/Uy vs p).
-4. Log-pressure auxiliary loss — addresses Re-driven dynamic range asymmetry in normalized loss.
-5. bfloat16 autocast — free epoch budget increase within wall-clock cap.
-6. SAM on SOAP — OOD generalization via sharpness minimization.
-
-### Further-future
-1. SWA (Stochastic Weight Averaging) — complementary to EMA but cycle-LR based.
-2. Divergence-free auxiliary loss (incompressibility penalty).
-3. Physical-units scale-aware loss (edward's round-1 suggestion).
-4. Ada-Temp slice reparameterization (per-point softmax temperature).
+1. Adaptive Barron loss (Barron 2019): learn α and c per-output-channel (Ux/Uy vs p). Removes loss hyperparameter and targets channel-specific tail behavior.
+2. SAM on SOAP: sharpness-aware minimization for OOD generalization. High expected gain (2–4% OOD) but doubles forward cost.
+3. bf16 autocast: free epoch budget increase within wall-clock cap. Diagnostic value — tells us if wall-clock is the binding constraint.
+4. SWA (Stochastic Weight Averaging): complementary to EMA but cycle-LR based.
+5. Divergence-free auxiliary loss (incompressibility penalty on velocity field).
