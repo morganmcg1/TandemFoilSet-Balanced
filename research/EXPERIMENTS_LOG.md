@@ -3,6 +3,57 @@
 Track: `charlie-pai2i-24h-r1`
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 
+## 2026-05-16 — Loop 21 actions (2 winners; grad-clip is HUGE; 2 new dispatches)
+
+**Context**: Both Loop 17 dispatches returned results. #3863 fern grad-clip is a −5.66% val win; #3864 nezuko lr_min is −1.84% val win on OLD baseline (93.22 vs new 89.60, so sent back). Merged #3863 first. Sent back #3864 to re-run with grad-clip active. Dispatched fern to grad-clip sweep {5.0, 10.0}.
+
+### PR #3863 — fern — Gradient norm clipping max_norm=1.0 — MERGED (new best 89.60/78.49)
+
+- **Student branch**: `charliepai2i24h1-fern/grad-clip-1p0`
+- **Hypothesis**: clip_grad_norm_(max_norm=1.0) between backward and step; hypothesis: occasional spike protection improves late-epoch stability.
+- **ACTUAL RESULT**: **val_avg=89.5987 (−5.66% vs SmoothL1 94.97), test_avg=78.4928 (−7.69%)**. All 4 val splits and all 4 test splits improved.
+
+| Split | Baseline (SmoothL1) | grad-clip 1.0 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 110.85 | 104.31 | −5.90% |
+| val_geom_camber_rc | 103.78 | 101.16 | −2.52% |
+| val_geom_camber_cruise | 75.84 | 69.32 | −8.60% |
+| val_re_rand | 89.42 | 83.60 | −6.51% |
+| test_single_in_dist | 97.18 | 90.78 | −6.59% |
+| test_geom_camber_rc | 93.68 | 87.74 | −6.34% |
+| test_geom_camber_cruise | 64.13 | 57.75 | −9.95% |
+| test_re_rand | 85.16 | 77.69 | −8.77% |
+
+- **DIAGNOSTIC REVELATION (HIGH VALUE)**: clip_frac = 1.0 on EVERY batch throughout training. Raw gradient norms: mean 25–73, max 100–325. The clip threshold 1.0 is hit on every single step — this is NOT occasional spike protection. **The clip is the dominant update rule, converting AdamW to normalized-gradient descent.** Every step has effective magnitude ∝ lr × 1.0, which is bounded at the clip threshold regardless of gradient scale. Source of large norms: bf16 + surf_weight=25.0 composition.
+- **Mechanistic insight**: the improvement looks like an effective-LR-schedule win, not a stability win. Late-epoch grad norms (~26) are still 26× the threshold, so the cosine schedule is annealing toward an effective lr proportional to 1/26 of the nominal. Bounded-magnitude updates → better generalization, especially on geometry splits.
+- **Verdict**: MERGED as new best. Active recipe now includes `--grad_clip_norm 1.0`.
+- **Config delta from #3127**: add `grad_clip_norm: float = 1.0` to Config (default is 0.0 — fix PR dispatched to fern #3922); add `clip_grad_norm_` call between backward/step in training loop.
+- **Metric artifacts**: `models/model-grad-clip-1p0-20260516-102827/metrics.jsonl`
+
+### PR #3864 — nezuko — lr_min=1e-5 schedule floor — SENT BACK (old baseline beat, new baseline missed)
+
+- **Student branch**: `charliepai2i24h1-nezuko/lr-min-1e-5`
+- **Hypothesis**: CosineAnnealingLR eta_min=1e-5 keeps late-cosine steps productive (vs default eta_min=0 → ~6e-7 at epoch 17-18).
+- **Result on OLD SmoothL1 baseline**: val_avg=**93.2245** (−1.84% vs 94.97), test_avg=**83.2950** (−2.05%). Every epoch a new best, model still descending at epoch 18 (1.19 improvement on final step).
+- **Per-epoch trajectory confirms mechanism**: lr at epoch 18 = 1.37e-5 vs implied ~6e-7 for baseline; late-epoch descent is 2 orders of magnitude faster. Every single split improved.
+- **Why not merged**: After grad-clip (#3863) merged with new baseline 89.60, nezuko's 93.22 is ABOVE the new baseline. The code changes are orthogonal (schedule floor + gradient bound). Sent back to re-run with `--grad_clip_norm 1.0 --lr_min 1e-5` on the new baseline; target < 89.60.
+- **Systemic finding**: model is still underfit at epoch 18 WITH the schedule floor — all epochs were best. More epochs + lr_min floor could be high-EV.
+- **Metric artifacts**: `models/model-lr-min-1e-5-20260516-102620/metrics.jsonl`
+
+**2 new dispatches**:
+
+| PR | Student | Axis | One-line summary |
+|---|---|---|---|
+| #3922 | fern | grad-clip sweep + default fix | Sweep max_norm∈{5.0, 10.0} + flip grad_clip_norm default to 1.0 |
+| #3864 | nezuko | Schedule floor re-run | lr_min=1e-5 + grad_clip_norm=1.0 re-run on new baseline |
+
+**Loop 21 systemic findings**:
+
+1. **Gradient norm clipping at max_norm=1.0 is a −5.66% val win** (new best 89.60/78.49). Mechanism is NOT occasional spike protection — it's normalized-gradient descent. EVERY batch is clipped (clip_frac=1.0 throughout). Source: bf16 + surf_weight=25.0 produces raw gradient norms 25–73× the threshold.
+2. **The clip mechanism converts the effective LR schedule**: with max_norm=1.0, each step magnitude is ∝ lr/||g|| which is 25-73× smaller than the nominal lr. This is an implicit "better LR schedule" operating on top of cosine annealing.
+3. **lr_min=1e-5 is still valid direction**: −1.84% on old baseline, mechanism confirmed. Will compound with grad-clip on re-run.
+4. **New active recipe**: SmoothL1 beta=1.0 + grad_clip_norm=1.0 + AdamW lr=5e-4. All experiments MUST include `--grad_clip_norm 1.0`. All 6 in-flight PRs notified.
+
 ## 2026-05-16 — Loop 18 actions (compile axis closed; 1 dispatch)
 
 **Context**: Pure L1 (#3798) still in-flight pending frieren's seed-pin confirmation. SmoothL1 baseline still active (94.97/85.04). Three open WIP from Loop 16 (#3676 edward), Loop 17 dispatches (5 new), and #3802 alphonse compile arrived for review.
