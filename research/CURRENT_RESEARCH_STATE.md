@@ -1,15 +1,16 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 05:26
+- **Date:** 2026-05-16 06:25
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
 ## Current best
 
-- **PR #3438 (nezuko, merged):** Fourier n_freqs=14 + Huber-0.3 + T_max=20 + clip=0.25
-- **val_avg/mae_surf_p: 81.08** | **test_avg/mae_surf_p: 71.52**
-- Per-split test surf_p: single=81.31, rc=84.95, cruise=49.89, re_rand=69.92
-- **Note: clip=1.0 (from PR #3529) and n_freqs=14 (from PR #3438) were merged in parallel; the combined stack (n=14+clip=1.0) hasn't been tested yet — this is PR #3650 (nezuko), highest priority**
+- **PR #3593 (alphonse, merged):** Fourier n_freqs=10 + Huber-0.3 + T_max=20 + clip=0.25 + **LayerScale γ-init=0.01**
+- **val_avg/mae_surf_p: 72.77** | **test_avg/mae_surf_p: 65.12**
+- Per-split test surf_p: single=78.83, rc=75.82, cruise=43.86, re_rand=61.97
+- **Cumulative improvement: -43.5% val from round-5 start (~128.69)**
+- **Note: LayerScale + n_freqs=14 combination is untested and is the HIGHEST PRIORITY (PR #3730, alphonse)**
 
 ## Improvement history
 
@@ -21,20 +22,21 @@
 | #3221 (nezuko, merged) | Fourier n=10 + Huber-0.3 | 89.27 | 79.43 | -9.5% |
 | #3333 (frieren, merged) | Fourier+Huber+T_max=20+clip=0.25 | 84.59 | 73.89 | -5.2% |
 | #3529 (frieren, merged) | clip=0.25→1.0 on full stack | 84.01 | 72.95 | -0.7% |
-| **#3438 (nezuko, merged)** | **n_freqs=14 on full stack** | **81.08** | **71.52** | **-3.5%** |
+| #3438 (nezuko, merged) | n_freqs=14 on full stack | 81.08 | 71.52 | -3.5% |
+| **#3593 (alphonse, merged)** | **LayerScale γ-init=0.01 on full stack** | **72.77** | **65.12** | **-10.2%** |
 
 ## Active WIP
 
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
-| nezuko | #3650 | n_freqs=14+clip=1.0 AND n_freqs=18+clip=1.0 | NEW (wave-6) — highest priority |
-| frieren | #3648 | LR linear warmup {1,2 ep} + clip=1.0 on full stack | NEW (wave-6) |
-| alphonse | #3593 | LayerScale γ-init∈{0.01,0.1} on full stack | WIP (training) |
-| tanjiro | #3527 | Mixed precision BF16 + n_hidden=128/160 | WIP (training) |
-| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (training) |
-| thorfinn | #3682 | Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 | NEW (wave-7) |
-| edward | #3192 | EMA decay=0.999 + T_max=20 on full stack | Needs rebase |
-| fern | #3708 | AdamW β2 sweep {0.99, 0.95} on n_freqs=14+clip=1.0 | NEW (wave-7) |
+| alphonse | #3730 | LayerScale γ=0.01 + n_freqs=14 compound | NEW (wave-7) — HIGHEST PRIORITY |
+| nezuko | #3732 | n_freqs={18,20} + clip=0.25 (tight clip for Fourier scaling) | NEW (wave-7) |
+| frieren | #3648 | LR linear warmup {1,2 ep} + clip=1.0 on full stack | WIP (stale) |
+| tanjiro | #3527 | Mixed precision BF16 training | WIP (stale) |
+| askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (stale) |
+| thorfinn | #3682 | Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 | WIP |
+| edward | #3192 | EMA decay=0.999 + T_max=20 on full stack | WIP |
+| fern | #3708 | AdamW β2 sweep {0.99, 0.95} on n_freqs=14+clip=1.0 | WIP |
 
 ## Closed this round
 
@@ -50,38 +52,42 @@
 | #3509 (alphonse) | DropPath: underfit regime, 5-block net, convergence-speed penalty |
 | #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests, advisor branch moved 4+ merges ahead |
 | #3439 (fern) | RFF σ∈{1,3,5,7} all worse than log-spaced; σ=3 best at val=85.25 vs baseline 81.08 (-5%) |
+| #3650 (nezuko) | Compound fail: n=14+clip=1.0 val=81.20 (worse than 81.08); n=18+clip=1.0 val=84.71. clip=0.25 is regularizer at n_freqs≥14 |
 
 ## Current research themes
 
-1. **Compose merged wins (nezuko #3650) — HIGHEST PRIORITY**: clip=1.0 and n_freqs=14 were merged from parallel branches (both vs clip=0.25 base). Their combination is untested. arm-1 = n_freqs=14+clip=1.0 → expected ~80.5 val; arm-2 = n_freqs=18+clip=1.0 → spectrum scaling continues.
+1. **LayerScale + n_freqs=14 compound (alphonse #3730) — HIGHEST PRIORITY**: LayerScale γ=0.01 won by -10.2% (val=72.77) on n_freqs=10. n_freqs=14 won by -4.2% (val=81.08). Never combined. Expected val ~65-70 if composition holds. NOTE: Use clip=0.25 — PR #3650 confirmed clip=1.0 doesn't help at n_freqs≥14.
 
-2. **LR warmup (frieren #3648)**: Cold-start penalty visible at every epoch-1 (val ~210). clip=1.0's diagnostic showed clip_frac breaks below 1.0 at epoch 10, not earlier — warmup attacks the root cause (high gnorm_max=48 at epoch 1 due to random init).
+2. **n_freqs=18+clip=0.25 (nezuko #3732)**: PR #3650 tested n=18+clip=1.0 (bad). The correct test n=18+clip=0.25 is untested. If Fourier scaling continues beyond n=14, it'll compound further with LayerScale.
 
-3. **BF16 speed (tanjiro #3527)**: 2× speedup would unlock n_hidden=160 (killed by 4.6× slowdown), LayerScale longer runs, and more epochs for all experiments.
+3. **LR warmup (frieren #3648)**: Cold-start penalty visible at every epoch-1 (val ~210). clip=1.0's diagnostic showed clip_frac breaks below 1.0 at epoch 10, not earlier — warmup attacks the root cause (high gnorm_max=48 at epoch 1).
 
-4. **EMA checkpoint averaging (edward #3192)**: Confirmed large effect (-14.3% val contribution from EMA alone). Retesting with T_max=20. If EMA composes with n_freqs=14+clip=1.0, could land below val=75.
+4. **EMA checkpoint averaging (edward #3192)**: Confirmed large effect (-14.3% val at epoch 13). Retesting with T_max=20. If EMA composes with LayerScale+n_freqs=14, could land below val=60.
 
-5. **AdamW β2 sweep (fern #3708)**: β2=0.999 has effective half-life ~700 steps; with heavy-tailed gradients the second-moment estimate is contaminated for too long. Testing β2∈{0.99, 0.95} (half-life ~70 / ~14 steps). Last untouched optimizer hyperparameter.
+5. **AdamW β2 sweep (fern #3708)**: Heavy-tailed gradients (Huber + clip needed) contaminate β2=0.999 second moment. Testing β2∈{0.99, 0.95}.
 
-6. **LayerScale (alphonse #3593)**: Zero convergence penalty. Per-channel attenuation of residuals. Expected OOD improvement.
+6. **Peak LR sweep (thorfinn #3682)**: Testing lr=7e-4 and lr=1e-3 on n_freqs=14+clip=1.0 stack.
 
-7. **Tighter clip + Huber delta (askeladd #3424)**: Exploring clip=0.1.
+7. **BF16 speed (tanjiro #3527)**: 2× speedup would unlock more epochs for all experiments.
 
-8. **Peak LR sweep (thorfinn #3682)**: default lr=5e-4 set pre-Fourier, pre-clip. With clip=1.0 no longer saturating (clip_frac=0.984 at ep14), effective step size is now LR-bound for the first time. Testing lr=7e-4 and lr=1e-3 on the full stack (n_freqs=14 + clip=1.0).
+8. **Tighter clip + Huber delta (askeladd #3424)**: Exploring clip=0.1.
 
 ## Key insights accumulated
 
-- **Fourier scaling not saturated**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%). n=12 is mixed; n=14 improves all splits. n=18 warranted.
-- **clip_frac=1.000 → 0.984**: clip=1.0 is FIRST threshold where clip stops saturating within budget (epoch 10 onwards). clip=0.25 and 0.5 are both fully saturated throughout.
-- **EMA confirmed effective**: -14.3% val gain from EMA alone at epoch 13 (decay=0.999). Fills averaging window in ~3 epochs.
-- **Parallel merges create untested combination**: clip=1.0 × n_freqs=14 is highest priority to test.
+- **Fourier scaling not saturated at n=14**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%). n=12 mixed; n=14 all splits improve. n=18+clip=0.25 untested.
+- **clip=0.25 is regularization at n_freqs≥14**: PR #3650 confirmed — clip=1.0 removes implicit regularization at high n_freqs (cruise blows up +5-16%). Always use clip=0.25 when n_freqs≥12.
+- **clip=1.0 win at n=10 was likely split-noise**: margin was -0.69% (PR #3529); same order as variation in PR #3650 arm-1 (+0.15%). Not a real structural win.
+- **LayerScale γ=0.01 is the biggest win**: -10.2% val from per-channel selective residual gating. Mechanism: most γ-attn channels near zero, a few 8×; γ-mlp grows 3×. OOD splits improve most (rc -10.7%, cruise -12.1%, re_rand -11.4%).
+- **EMA confirmed effective**: -14.3% val gain from EMA alone at epoch 13 (decay=0.999).
+- **γ=0.1 high variance**: run-to-run spread of 7 points; γ=0.01 cleaner dynamics.
 
 ## Potential next research directions
 
-- **n_freqs=20** — if n=18 still saturates (timeout-bound), scale further
-- **EMA + n_freqs=14 + clip=1.0** — triple compound after edward rerun
-- **LR warmup + everything** — may replace need for tight clip
-- **Higher peak LR (7e-4, 1e-3)** — IN FLIGHT (thorfinn #3682)
+- **LayerScale + n_freqs=14 + EMA** — triple compound if all compose; could land sub-60 val
+- **LayerScale γ-init ∈ {0.003, 0.005}** — even smaller init may increase channel selectivity (γ-attn stays near zero anyway)
+- **Asymmetric LayerScale** — separate init for attn vs mlp branches (γ-mlp needs bigger; γ-attn barely moves)
+- **n_freqs=20** — if n=18 still saturates with clip=0.25
+- **LR warmup + everything** — may improve cold-start convergence
 - **Lookahead optimizer** — wrap AdamW
 - **SAM** — flat minima optimization
 

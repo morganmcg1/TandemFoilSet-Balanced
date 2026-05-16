@@ -484,6 +484,52 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 06:22 — PR #3593 (charliepai2i48h5-alphonse): LayerScale γ-init sweep — MERGED
+
+- branch: `charliepai2i48h5-alphonse/layerscale-gamma-init`
+- hypothesis: per-channel learnable residual gain (CaiT LayerScale) improves OOD generalization via selective channel attenuation
+- arms:
+
+  | arm | γ-init | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+  |---|---|---|---|---|
+  | arm-2 | 0.01 | **72.77** | **65.12** | 13 (timeout) |
+  | arm-1 (run 1) | 0.1 | 74.74 | 67.24 | 13 (timeout) |
+  | arm-1 (run 2) | 0.1 | 81.64 | 72.46 | 13 (timeout) |
+
+- artifacts: `models/model-layerscale-0.01-fullstack-20260516-042447/metrics.jsonl` (winner), `models/model-layerscale-0.1-fullstack-20260516-023526/metrics.jsonl`, `models/model-layerscale-0.1-fullstack-20260516-033703/metrics.jsonl`
+- stack: n_freqs=10 + Huber-0.3 + T_max=20 + clip=0.25 + LayerScale γ-init
+- per-split test surf_p (γ=0.01): single=78.83 (-3.0%), rc=75.82 (-10.7%), cruise=43.86 (-12.1%), re_rand=61.97 (-11.4%) — EVERY split improves
+- γ mechanism: `gamma_attn` mean ~0.01 (near init, ~0.085 max per channel — sparse selectivity); `gamma_mlp` grew 3× (mean ~0.03-0.04, max ~0.12 — MLP residual unlocked). Per-channel gate: most channels silent, a few 8× amplified.
+- γ=0.1 high variance (run-to-run spread 74.74 vs 81.64); γ=0.01 cleaner dynamics
+- clip_frac=1.000 throughout all runs — wins purely through model-side mechanism, not gradient regularization
+- verdict: **MERGED** as new round-5 best. val=72.77/test=65.12. -43.5% cumulative from start. Alphonse assigned LayerScale+n_freqs=14 compound (PR #3730).
+
+---
+
+## 2026-05-16 06:22 — PR #3650 (charliepai2i48h5-nezuko): Compose merged wins — CLOSED
+
+- branch: `charliepai2i48h5-nezuko/fourier-n14-n18-clip10`
+- hypothesis: clip=1.0 and n_freqs=14 were parallel wins (vs clip=0.25 base) — combining them should compound
+- arms:
+
+  | arm | n_freqs | clip | val | test | vs baseline |
+  |---|---|---|---|---|---|
+  | arm-1 | 14 | 1.0 | 81.20 | 72.79 | +0.15% val / +1.78% test ✗ |
+  | arm-2 | 18 | 1.0 | 84.71 | 76.96 | +4.48% val / +7.61% test ✗ |
+
+- key insight: **clip=0.25 acts as regularization at n_freqs≥14**. With clip=1.0, the clip becomes adaptive at epoch 5 (vs epoch 10 for n=10), which removes implicit regularization. Single_in_dist regresses +4.15%, cruise +5.09% with arm-1. Arm-2 cruise blows up +16.5%. clip=1.0's original win (PR #3529) was likely split-noise at n=10.
+- clip_frac at arm-1 ep14: 0.979 vs 1.000 for clip=0.25; clip became adaptive 5 epochs earlier than n=10 run
+- verdict: **CLOSED**. Compound hypothesis fails. New actionable finding: always use clip=0.25 at n_freqs≥14. Nezuko reassigned to n_freqs=18+clip=0.25 and n_freqs=20+clip=0.25 (PR #3732).
+
+---
+
+## 2026-05-16 06:24 — Wave-7 assignments
+
+- PR #3730 — charliepai2i48h5-alphonse: LayerScale γ=0.01 + n_freqs=14 (compound the two biggest wins — expected val ~65-70 if composition holds)
+- PR #3732 — charliepai2i48h5-nezuko: n_freqs={18,20} + clip=0.25 (missing test from PR #3650; n=18+clip=1.0 failed but n=18+clip=0.25 untested)
+
+---
+
 ## 2026-05-16 05:25 — PR #3439 (charliepai2i48h5-fern): Gaussian RFF σ-sweep rerun with T_max=20 — CLOSED
 
 - branch: `fern/gaussian-random-fourier-features`
