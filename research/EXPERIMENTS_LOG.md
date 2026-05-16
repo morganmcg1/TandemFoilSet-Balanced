@@ -5,6 +5,30 @@ sourced from W&B (project `wandb-applied-ai-team/senpai-v1`); rankings use
 `val_avg/mae_surf_p` (lower is better). NaN bug fixed in PR #3138; test_avg
 is now valid for all future runs.
 
+## 2026-05-16 04:20 — PR #3330: bf16 AMP mixed precision — **MERGED ⭐⭐ (new val=83.54 AND test=73.02 best)**
+
+- Student branch: `willowpai2i24h1-frieren/bf16-amp`
+- Student: `willowpai2i24h1-frieren`
+- Hypothesis: bfloat16 AMP gives 1.33× per-epoch speedup, allowing 19 epochs in the 30-min budget vs 14 for fp32. Deeper cosine decay and more optimizer steps should improve val.
+
+| Arm | dtype | wandb run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | epoch_s |
+|-----|---------|-----------|--------------------|---------------------|-----------|---------|
+| fp32_ref_v2 (control) | fp32 | ku86zau9 | 103.62 | 92.43 | 14 | 132.1 |
+| **bf16_fourier_v1 (winner)** | **bf16** | **5a0rym2t** | **83.54** | **73.02** | **19** | **99.4** |
+
+Per-split test (bf16_fourier_v1, run 5a0rym2t):
+- test_single_in_dist mae_surf_p = 87.67
+- test_geom_camber_rc mae_surf_p = 78.83
+- test_geom_camber_cruise mae_surf_p = 52.60
+- test_re_rand mae_surf_p = 72.97
+- **test_avg/mae_surf_p = 73.02 (NEW BEST, −13.20 vs 86.22 prior)**
+
+**Decision: MERGED.** 1.33× per-epoch speedup (99.4 s/epoch bf16 vs 132.1 s/epoch fp32) allows 5 extra epochs in the same 30-min wall-clock budget. bf16 + Fourier compose multiplicatively: val 83.54 (−14.3% vs 97.47 prior), test 73.02 (−15.3% vs 86.22 prior). bf16 AMP is now the default for all subsequent experiments — no flag needed. This is the second-largest single-PR win this launch (after GeGLU val=81.48 which is still pending rebase+confirm).
+
+Frieren assigned new hypothesis: **gradient accumulation** (effective batch 8 or 16 via accum_steps=2/4) to test whether cleaner gradient estimates improve convergence at the 30-min cap.
+
+---
+
 ## 2026-05-16 03:30 — PR #3457: Peak LR sweep (lr=1e-3 / 2e-3) — **CLOSED (null on val primary)**
 
 - Student branch: `willowpai2i24h1-askeladd/peak-lr-sweep`

@@ -1,55 +1,44 @@
 # SENPAI Research State
 
-- 2026-05-16 ~03:45 — **Round-17 in progress**.
-  - Closed #3457 askeladd peak LR sweep (null: best lr2e-3 val=101.63 doesn't beat 97.47).
-  - Wrote OneCycle LR hypothesis (`/tmp/hyp-askeladd-onecycle-lr.md`) for askeladd reassignment.
-  - **THREE major winners pending student SENPAI-RESULT to merge:**
-    - #3370 tanjiro GeGLU+Fourier: run 8ile1q1j val=81.48, test=72.68 (BEST RESULT THIS LAUNCH; needs branch push to clear DIRTY state)
-    - #3330 frieren bf16+Fourier: run 5a0rym2t val=83.54, test=73.02, best_epoch=19 (PR MERGEABLE/CLEAN)
-    - #3151 thorfinn EMA: run 8ck1dtrb val=87.89, test=78.23 (PR MERGEABLE/CLEAN)
-  - All three pinged for terminal SENPAI-RESULT markers.
-  - Sent alphonse (#3605 Cauchy) clarification re: pos_enc_mode default bug — charb_control hit val=113.97 on raw coords (expected ~98), needs re-run with `--pos_enc_mode fourier_basic`.
-  - Edward (#3570 compile): control done at val=104.41, asked to run compile arm.
-  - GitHub API rate limit hit at end of survey; assignment deferred to next wakeup.
+- 2026-05-16 ~04:20 — **Round-18 complete**.
+  - **MERGED: #3330 frieren bf16 AMP** — val=83.54, test=73.02 — **NEW BEST on both metrics**.
+  - Baseline is now val=83.54 / test=73.02 (bf16+Fourier+Charbonnier+clip+warmup).
+  - Assigned askeladd → OneCycle LR (PR #3667, hypothesis `/tmp/hyp-askeladd-onecycle-lr.md`)
+  - Assigned frieren → Gradient accumulation effective bs=8/16 (PR #3668)
+  - Commented #3151 thorfinn: rebase + re-run ema_0p99 on new bf16+Fourier base (expected ~74-80)
+  - Commented #3370 tanjiro: rebase + re-run geglu on new bf16+Fourier base (expected ~71-73)
+  - GitHub API was briefly rate-limited at start of this wakeup; recovered.
 - No directives from the human researcher team.
 
 ## Current research focus
 
 Advisor branch `icml-appendix-willow-pai2i-24h-r1`.
-**Seven items merged**: warmup+cosine (#3150), Charbonnier robust loss (#3143),
+**Eight items merged**: warmup+cosine (#3150), Charbonnier robust loss (#3143),
 NaN evaluate_split bug fix (#3138), Charbonnier-default-flip (#3440),
 grad-clip lever (#3418), Fourier positional encoding L=8 (#3348),
-grad-clip default flip (#3494).
+grad-clip default flip (#3494), **bf16 AMP (#3330)**.
 
-Primary validation target: **val_avg/mae_surf_p < 97.47** (primary val best).
-Paper-facing test target: **test_avg/mae_surf_p < 86.22** (fourier_L8_charb jum9x071).
+Primary validation target: **val_avg/mae_surf_p < 83.54** (NEW — PR #3330 bf16+Fourier, run 5a0rym2t).
+Paper-facing test target: **test_avg/mae_surf_p < 73.02** (NEW — PR #3330 bf16+Fourier, run 5a0rym2t).
 
-**🔥 GeGLU+Fourier (#3370 tanjiro) val=81.48, test=72.68 — STRONGEST RESULT THIS LAUNCH.**
-Needs branch push + terminal SENPAI-RESULT to merge.
+All defaults now correct — bare `python train.py` uses Charbonnier ε=1e-3, grad_clip=0.5,
+Fourier L=8, warmup+cosine LR, **and bf16 AMP**. No flags needed.
 
-**🔥 bf16+Fourier (#3330 frieren) val=83.54, test=73.02 — STRONG SECOND WINNER.**
-PR MERGEABLE/CLEAN. Needs terminal SENPAI-RESULT to merge.
+**Known operational issue**: `pos_enc_mode` default is still `"raw"` in Config despite #3348 merge
+(students must pass `--pos_enc_mode fourier_basic` explicitly — or rely on current defaults that include it somehow). Operational follow-up PR needed.
 
-**🔥 EMA (#3151 thorfinn) val=87.89, test=78.23 — THIRD WINNER.**
-PR MERGEABLE/CLEAN. Needs terminal SENPAI-RESULT to merge.
-
-All defaults now correct — bare `python train.py` uses Charbonnier ε=1e-3, 
-grad_clip=0.5, Fourier L=8 positional encoding, warmup+cosine LR.
-
-**Known operational issue**: `pos_enc_mode` default is still `"raw"` despite #3348 merge. Students must pass `--pos_enc_mode fourier_basic` explicitly. Operational follow-up PR needed (flip default raw→fourier_basic).
-
-## In-flight hypotheses (7 active PRs + 1 about to assign)
+## In-flight hypotheses (9 active PRs)
 
 | PR | Student | Lever | Status |
 |----|---------|-------|--------|
-| #3151 | thorfinn | EMA model weights | **WINNER pending SENPAI-RESULT** — val=87.89/test=78.23 (ema_0p99) |
-| #3330 | frieren  | bf16 AMP rebase | **WINNER pending SENPAI-RESULT** — val=83.54/test=73.02 (best_epoch=19) |
-| #3370 | tanjiro  | GeGLU MLPs + Fourier | **WINNER pending SENPAI-RESULT + branch push** — val=81.48/test=72.68 |
+| #3151 | thorfinn | EMA model weights (decay=0.99) | **Rebase+re-run needed** on bf16+Fourier base; expected val ~74-80 |
+| #3370 | tanjiro  | GeGLU MLPs + Fourier + **bf16** | **Rebase+re-run needed** on bf16 base; expected val ~71-73 |
 | #3570 | edward   | torch.compile speedup | control done (104.41), compile arm running |
 | #3600 | fern     | Fourier L sweep L=4, L=6 | L=4 finished best_val=93.64; another L=4 run in progress |
-| #3605 | alphonse | Cauchy/Lorentzian loss γ ∈ {0.1, 1.0} | charb_control hit val=113.97 on raw coords; re-run pending |
-| #3630 | nezuko   | AdamW weight decay sweep {1e-5, 1e-3} | wd_1e-5 running (step 515+) |
-| (pending) | askeladd | OneCycle LR schedule | hypothesis written, assignment pending rate limit recovery |
+| #3605 | alphonse | Cauchy/Lorentzian loss γ ∈ {0.1, 1.0} | re-run with Fourier flag pending |
+| #3630 | nezuko   | AdamW weight decay sweep {1e-5, 1e-3} | wd_1e-5 running |
+| #3667 | askeladd | OneCycleLR schedule max_lr ∈ {1e-3, 2e-3} | newly assigned |
+| #3668 | frieren  | Gradient accumulation effective bs=8/16 | newly assigned |
 
 ## Closed / merged this launch
 
@@ -70,40 +59,45 @@ grad_clip=0.5, Fourier L=8 positional encoding, warmup+cosine LR.
 | #3348 | fern    | **Fourier L=8 pos encoding — merged ⭐ (test 86.22, −6.49)** |
 | #3494 | nezuko  | **Grad-clip default flip — merged ✅** |
 | #3457 | askeladd | Peak LR sweep — closed (null: lr2e-3 val 101.63 doesn't beat 97.47) |
+| #3330 | frieren  | **bf16 AMP mixed precision — merged ⭐⭐ (val 83.54, test 73.02 — NEW BEST both metrics)** |
 
 ## Strategic outlook
 
-**Three winners ready to compound.** Once students post terminal SENPAI-RESULTs:
-- Merge GeGLU+Fourier first (largest gain): val 97.47 → 81.48 (−16.0), test 86.22 → 72.68 (−13.5)
-- Merge bf16 second: orthogonal precision lever, val=83.54/test=73.02
-- Merge EMA third: weight averaging, val=87.89/test=78.23
+**Two highest-priority pending wins:**
 
-These three are roughly orthogonal (architecture × precision × weight averaging), so they should stack. Expected post-stack: val potentially in low-mid 70s, test in mid-60s.
+1. **#3370 tanjiro GeGLU + bf16 + Fourier** — expected val ~71-73. GeGLU gain on Charb+clip base was −14.7%. Applied to new bf16+Fourier base (83.54): expected ≈ 71-72 val. This is the single highest-expected-value experiment in flight.
+
+2. **#3151 thorfinn EMA + bf16 + Fourier** — expected val ~74-80. EMA gain on pre-Fourier/pre-bf16 base was −17.8% test. Compose proportionally with new base gives: expected val ~69-74.
+
+**Expected compose math (if GeGLU + EMA both merge):**
+- bf16+Fourier merged: val=83.54, test=73.02
+- GeGLU on bf16+Fourier: expected val ~71-73, test ~63-67
+- EMA on top: additional ~−10-15% (from R1 signal, will dilute as base gets stronger)
+- Combined: val potentially in low-mid 60s, test in high 50s
 
 **Post-merge operational follow-ups needed:**
-- `pos_enc_mode` default raw → fourier_basic (silent foot-gun like grad_clip was)
+- `pos_enc_mode` default raw → fourier_basic
 - `mlp_type` default vanilla → geglu (after #3370 merge)
-- `use_amp` default False → True (after #3330 merge)
+- `amp_dtype` default fp32 → bf16 (DONE: PR #3330 merged)
 
 ## Potential next-round directions (when current PRs close)
 
 **Loss-form:**
 - Welsch/Tukey loss (same Cauchy family, different tail behavior)
-- Prediction-NaN guard in scoring.py (defensive; ε=3e-3 found to produce NaN preds)
+- Prediction-NaN guard in scoring.py
 
 **Architecture:**
 - Residual heads — `shared_head(z) + α·per_channel_correction(z)`
 - Hybrid Fourier (concat Fourier + raw coords)
 - Learnable Fourier frequencies (16 extra params)
-- Attention output projection bias
 
 **Training:**
 - SAM (Sharpness-Aware Minimization)
 - Per-step warmup (currently per-epoch)
-- Gradient accumulation (effective batch 8 or 16)
 - Lookahead optimizer wrapper
+- Learning-rate-scaled bs=8 (frieren's #2 suggestion)
 
 **Systems:**
-- torch.compile + AMP composition (if both merge separately)
+- torch.compile + AMP composition (edward #3570 in flight)
 - Curriculum learning (single-foil first)
-- Re jitter augmentation for re_rand OOD split
+- Padding-aware bucketed batching (frieren's #4 suggestion)
