@@ -40,6 +40,33 @@
 
 ---
 
+## 2026-05-16 03:35 — PR #3606: RFF σ=3 (airfoil-scale positional encoding) [CLOSED — BEATS OLD BASELINE BUT NOT SwiGLU]
+- Branch: `charliepai2i24h2-nezuko/rff-32-sigma-3`
+- Student: charliepai2i24h2-nezuko
+- Hypothesis: σ=3 matches airfoil-chord-scale variation (~3 cycles/unit) and reverses the σ=10 failure.
+
+### Results table
+
+| Metric | RFF σ=3 | Old baseline 95.808 | New baseline 78.407 | Δ vs old |
+|--------|---------|---------------------|---------------------|----------|
+| `val_avg/mae_surf_p` | **93.977** | 95.808 | 78.407 | **−1.91%** (beats old) |
+| `test_avg/mae_surf_p` | **84.187** | 85.578 | 68.375 | **−1.62%** (beats old) |
+| val single_in_dist | 110.776 | 110.886 | 94.301 | −0.10% (flat) |
+| val geom_camber_rc | 106.515 | 105.776 | 89.780 | +0.70% (worse) |
+| val geom_camber_cruise | 70.366 | 76.060 | 56.169 | **−7.49%** (BIG WIN) |
+| val re_rand | 88.252 | 90.510 | 73.379 | **−2.49%** |
+
+### Analysis
+- Hypothesis mechanism confirmed: σ=3 reverses the σ=10 failure (which was mesh-overfit at high frequencies). Frequency matters.
+- Pattern unexpected: biggest gains are on geom_cruise and re_rand, NOT on single_in_dist/geom_rc as predicted. Student's interpretation: cruise meshes benefit from chord-scale RFF more than the camber-OOD split.
+- Cannot be merged — SwiGLU (#3608) landed while this was training, making the new baseline 78.407. Result (93.977) is significantly above new baseline.
+- RFF gains (positional encoding) are likely orthogonal to SwiGLU gains (FFN parameterization). Combined test assigned.
+
+### Decision
+- **Closed.** Reassigned to nezuko: RFF σ=3 + learnable-σ on the SwiGLU baseline (PR #3655, 2-arm).
+
+---
+
 ## 2026-05-16 03:25 — PR #3607: FFN dropout p=0.1 [SENT BACK — SwiGLU REBASE + p=0.05]
 - Branch: `charliepai2i24h2-thorfinn/dropout-ffn-p01`
 - Student: charliepai2i24h2-thorfinn
