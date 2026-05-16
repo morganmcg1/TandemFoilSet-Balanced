@@ -1,5 +1,65 @@
 # SENPAI Research Results
 
+## 2026-05-16 04:35 — Round 5 cleanup + 3 new assignments
+
+### Closed PRs (informative negatives / superseded)
+
+**#3544 thorfinn — Lookahead optimizer (CLOSED — dead end across both substrates).**
+- Branch: `willowpai2i48h5-thorfinn/round3-lookahead`
+- Hypothesis: Lookahead wrapper (k-step slow-weight averaging) provides ensemble-like regularization on top of AdamW or Lion.
+- Results:
+
+| Arm | W&B run | Substrate | val_avg | test_avg | Δ vs baseline |
+|-----|---------|-----------|---------|----------|---------------|
+| A (initial) | `k39kdp6y` | Lookahead(k=6, α=0.5) + AdamW (R3 baseline 93.20) | 98.33 | 86.24 | +5.13 val |
+| A (post-pivot) | `drt9naou` | Lookahead(k=5, α=0.5) + Lion (R3 baseline 77.58) | **89.39** | **78.24** | +11.81 val |
+
+- Analysis: Lookahead is incompatible with both inner optimizers at our 14-effective-epoch budget. Hypothesized mechanism: the slow-weight averaging acts as a second-order smoother on top of the optimizer's own smoothing, and under tight wall-clock the slow weights never fully catch up to the fast weights. Lion's sign-based update is already a coarse approximation, so Lookahead's k-step averaging damps out exactly the signal Lion injects. Paper-relevant negative result for optimizer-family ablation section.
+
+**#3486 fern — σ=3 + Lion + EMA (CLOSED — superseded by FiLM merge).**
+- Branch: `willowpai2i48h5-fern/round3-fourier-sigma-under-ema`
+- Hypothesis: σ-monotonic finding from AdamW (σ=3 wins σ sweep under EMA) transfers to Lion+EMA substrate.
+- Results:
+
+| Arm | W&B run | Config | val_avg | test_avg | Δ vs Lion baseline (77.58) |
+|-----|---------|--------|---------|----------|---------------------------|
+| Lion-rebase | `dl4apv3e` | σ=3 + Lion + EMA(0.997) | **73.81** | **63.89** | −3.77 val / −4.99 test |
+
+- Analysis: σ=3 beats Lion baseline by ~4 val points — a real win on the old substrate. BUT: edward's no-Fourier Lion+EMA (`5pvi79f2`, val 73.10) slightly beats fern's σ=3 (73.81) on the same substrate. **The σ-monotonic finding from AdamW+EMA does NOT transfer to Lion+EMA.** Under Lion+EMA, Fourier features appear roughly equivalent to noise (or slightly harmful at any σ). Paper-valuable negative-transfer ablation. PR closed because new FiLM baseline (val 71.65) supersedes σ=3 result.
+
+**#3380 frieren — Multi-σ Fourier sweep (CLOSED — config bug, student agreed).**
+- Branch: `frieren/round2-sigma-sweep`
+- Hypothesis: Multi-scale Gaussian Fourier features (σ ∈ {3, 10, 30}) improve over single-σ=10.
+- Results:
+
+| Arm | W&B run | Intended config | Actual config | val_avg | test_avg |
+|-----|---------|------------------|----------------|---------|----------|
+| (only) | `54hmldzq` | multi-σ {3,10,30} | n_fourier=0 (bug) | 76.95 | 67.07 |
+
+- Analysis: Multi-σ Fourier flag never wired in — config shows `n_fourier=0` at runtime. Run is effectively Lion+EMA no-Fourier (comparable to edward's `5pvi79f2` val 73.10; σ ≈ 4.6 run-to-run variance band). PR closed by mutual agreement with student; multi-σ reassigned to frieren on the new FiLM+Lion+EMA substrate (#3697).
+
+### #3609 askeladd status update (Lion + LR warmup, paper-relevant negative in progress)
+
+| Arm | W&B run | warmup_steps | val_avg | test_avg | Status |
+|-----|---------|--------------|---------|----------|--------|
+| A | `379hrdie` | 0 | 79.13 | 68.98 | finished |
+| B | `j1pum3n7` | 500 | 79.89 | 69.83 | finished |
+| C | `jdaof5n2` | 1000 | (running) | — | ~50% complete |
+
+- Analysis (preliminary): **LR warmup adds nothing to plain Lion at our 14-effective-epoch budget.** Arm B (warmup=500) is even slightly worse than Arm A (no warmup). Cosine schedule already provides implicit warmup via low LR start-of-cycle when T_max=14 is matched to wall-clock. Awaiting Arm C to confirm. After Arm C, expected to close as informative negative (paper-relevant) and reassign askeladd to Lion β1 sweep.
+
+### Round 5 assignments created
+
+| PR | Student | Hypothesis | Implementation |
+|----|---------|------------|----------------|
+| #3695 | fern | **Sobolev loss on surface ∂p/∂s** (physics-motivated regularizer) | Add `--sobolev_weight` + `--sobolev_k`; compute k-NN finite-difference gradient of surface pressure; Huber on (pred grad − gt grad); 3-arm weight sweep ∈ {0, 0.1, 0.5} |
+| #3697 | frieren | **Multi-σ Gaussian Fourier under FiLM+Lion+EMA** (proper wiring this time) | `--fourier_sigmas "3,10,30"` + `--n_fourier_per_scale 8`; concatenate Gaussian features at each σ; 3-arm sweep: {σ=10 control, σ∈{3,10}, σ∈{3,10,30}} |
+| #3698 | thorfinn | **TTA via z-reflection symmetry** (free inference gain) | `--use_tta_reflection`; reflect z→−z at eval, average original + reflected predictions; 2-arm: control vs TTA |
+
+All assigned via direct GraphQL (REST API exhausted, GraphQL still has 3000+/5000 budget). Branches pushed, draft PRs created, labels {`status:wip`, `icml-appendix-willow-pai2i-48h-r5`, `student:<name>`} verified.
+
+---
+
 ## 2026-05-16 03:40 — PR #3405: FiLM conditioning + Lion + EMA [Round 4 nezuko] ← NEW BASELINE
 
 - Branch: `willowpai2i48h5-nezuko/film-conditioning-log-re`

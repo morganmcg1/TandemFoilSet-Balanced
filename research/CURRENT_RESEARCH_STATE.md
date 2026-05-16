@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (~03:45 UTC, Round 5 underway — FiLM+Lion+EMA #3405 merged as new baseline, `willow-pai2i-48h-r5`)
+- **Date:** 2026-05-16 (~04:50 UTC, Round 5 fully staffed — 8 of 8 students have active hypotheses on `willow-pai2i-48h-r5`)
 - **Human researcher directives:** None received this launch.
 
 ## Current best — merged
@@ -33,48 +33,55 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 - val: 135 → 71.65 (−47%)
 - test: ~130 → 62.11 (−52%)
 
-## Round 5 — Active assignments (6 of 8 students WIP)
+## Round 5 — fully staffed (8 of 8 students active)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #3609 | askeladd | Lion + LR warmup ablation (warmup ∈ {0, 500, 1000}) | WIP — Arm A control done (79.13), Arms B/C running |
-| #3544 | thorfinn | Lookahead-on-Lion (dead end result: val 89.39) | Pending close; thorfinn idle after close → NEW ASSIGNMENT |
-| #3486 | fern | Lion+EMA+σ=3 rerun done (val 73.81) | PR still open, informative ablation. Reassign fern. |
-| #3483 | edward | Lion+EMA ablation (no Fourier Arm A done, σ=3 Arm B running) | WIP |
-| #3380 | frieren | Multi-σ Fourier (config bug: n_fourier=0, val 76.95) | Pending re-run or close; reassign |
-| — | alphonse | #3379 closed — fresh assignment needed | IDLE |
-| — | nezuko | #3405 merged — fresh assignment needed | IDLE |
-| — | tanjiro | #3484 closed — fresh assignment needed | IDLE |
+| #3609 | askeladd | Lion + LR warmup ablation (warmup ∈ {0, 500, 1000}) | WIP — Arms A (79.13) + B (79.89) done, Arm C running; warmup hurts |
+| #3483 | edward | Lion+EMA ablation (no-Fourier 73.10 done, σ=3 + pure-Lion arms running) | WIP |
+| #3671 | nezuko | **FiLM at intermediate Transolver blocks (layer-wise conditioning)** | WIP (R5 H16) |
+| #3672 | alphonse | **Fourier ablation under FiLM+Lion+EMA (n_fourier=0 vs σ=3 vs σ=10)** | WIP (R5 H17) |
+| #3673 | tanjiro | **EMA decay sweep under FiLM+Lion (0.995 vs 0.997 vs 0.999)** | WIP (R5 H18) |
+| **#3695** | **fern** | **Sobolev loss on surface ∂p/∂s (physics-motivated)** | WIP (R5 H19, just assigned) |
+| **#3697** | **frieren** | **Multi-σ Gaussian Fourier features under FiLM+Lion+EMA (proper wiring)** | WIP (R5 H20, just assigned) |
+| **#3698** | **thorfinn** | **TTA via z-reflection symmetry (free inference gain)** | WIP (R5 H21, just assigned) |
 
-## Key Round 4 findings
+## Closed this turn (informative negative / superseded)
+
+- **#3544 thorfinn** — Lookahead-on-Lion val 89.39 (+17.7 regression). Dead end across both AdamW and Lion substrates. Paper-relevant negative for optimizer-family ablation.
+- **#3486 fern** — σ=3 + Lion + EMA val 73.81. Beats Lion baseline (−3.77) but loses to new FiLM baseline. Confirms σ-monotonic finding does NOT transfer from AdamW to Lion. Paper-valuable.
+- **#3380 frieren** — Multi-σ config bug (n_fourier=0 at runtime). Effectively Lion+EMA no-Fourier sample (val 76.95). Student agreed to close + reassign.
+
+## Key findings (cumulative)
 
 1. **FiLM on log(Re) is the biggest new mechanism on top of Lion+EMA.** Adds ~5.9 val / 6.8 test over Lion+EMA-only.
-2. **EMA(0.997) clearly compounds with Lion** (alphonse + tanjiro avg ~77.7; with EMA vs 77.58 without). Effect is noisy but real.
-3. **Fourier σ is marginal under Lion+EMA.** edward no-Fourier (73.10) ≈ fern σ=3 (73.81) ≈ alphonse σ=10 (76.15). FiLM dominates. **Round 5 should test FiLM+Lion+EMA without Fourier** to see if Fourier can be dropped.
-4. **Lookahead does NOT compound with Lion.** (thorfinn 89.39, +11.8 regression). Dead end.
-5. **Multi-scale Fourier had a config bug (n_fourier=0).** Need a clean run. Round 5 can test FiLM + multi-σ.
-6. **Lion LR warmup Arm A control (val 79.13) ≈ Lion baseline.** Arms B/C with actual warmup still running.
+2. **EMA(0.997) clearly compounds with Lion** (alphonse + tanjiro avg ~77.7 with EMA vs 77.58 without). Effect is noisy but real.
+3. **Fourier σ is marginal under Lion+EMA.** edward no-Fourier (73.10) ≈ fern σ=3 (73.81) ≈ alphonse σ=10 (76.15). FiLM dominates.
+4. **Lookahead does NOT compound with Lion or AdamW.** Two distinct optimizer substrates, both regress by ≥17 val points. Confirmed dead end.
+5. **LR warmup hurts Lion** at our 14-effective-epoch budget. askeladd Arm B (warmup=500, val 79.89) > Arm A (warmup=0, val 79.13). Cosine schedule already provides implicit warmup.
+6. **σ-monotonic finding does NOT transfer from AdamW to Lion.** Under AdamW+EMA, σ=3 was best; under Lion+EMA, σ doesn't matter much (and no-Fourier slightly wins).
 
-## Round 5 hypotheses in flight / planned
+## Round 5 hypothesis map (mechanism axes being tested)
 
-**Mechanism targets on new FiLM+Lion+EMA baseline (val 71.65 / test 62.11):**
-
-| Hypothesis | Expected yield | Assignment |
-|------------|----------------|------------|
-| FiLM + Lion + EMA — drop Fourier entirely | Does FiLM replace Fourier? | Planned for nezuko |
-| FiLM + Lion + EMA + σ=3 (fern's σ but under FiLM) | Is σ=3 better than σ=10 under FiLM? | Planned for alphonse |
-| FiLM conditioned on both log(Re) AND camber arc-length features | Extra context for camber OOD | Planned for tanjiro |
-| Lion LR warmup ablation Arms B/C | Does warmup help Lion? | askeladd (#3609) |
-| Lion + EMA ablation arms (edward Arms B/C) | No-Fourier vs σ=3 under FiLM | edward (#3483) |
-| Multi-σ Fourier with FiLM (fix config bug) | Multi-scale under FiLM | frieren |
+| Axis | Hypothesis | PR / student |
+|------|-----------|--------------|
+| FiLM topology | FiLM at intermediate layers (layer-wise conditioning) | #3671 nezuko |
+| Fourier under FiLM | n_fourier=0 vs σ=3 vs σ=10 (single-scale) | #3672 alphonse |
+| Fourier under FiLM | Multi-σ {3,10,30} (multi-scale) | #3697 frieren |
+| EMA decay | 0.995 vs 0.997 vs 0.999 | #3673 tanjiro |
+| Loss regularizer | Sobolev surface ∂p/∂s | #3695 fern |
+| Inference-time | TTA via z-reflection | #3698 thorfinn |
+| Optimizer | Lion + LR warmup | #3609 askeladd |
+| Ablation | Lion+EMA without Fourier (full sweep) | #3483 edward |
 
 ## Round 6+ / reserved hypotheses
 
-- **EMA decay sweep under FiLM+Lion** — confirm 0.997 is still optimal with FiLM
-- **Lion β sweep (β1 ∈ {0.9, 0.95})** — paper ablation
-- **Sobolev loss on surface ∂p/∂s** — physics-motivated, orthogonal
-- **TTA via geometric reflection symmetry** — free inference gain
-- **Layer-wise LR decay (LLRD)** — per-block LR
+- **Lion β1 sweep (β1 ∈ {0.9, 0.95})** — paper ablation. Reserved for askeladd's next round.
+- **Layer-wise LR decay (LLRD)** — per-block LR multiplier.
+- **Per-split loss weighting** — boost cruise/camber splits in training loss.
+- **Architectural variants** — wider slice_num, deeper layers (if budget allows).
+- **Geometric features** — chord-normal coordinates, curvature, etc., conditioning beyond log(Re).
+- **Distillation from longer-trained teacher** — if any arm starts converging well past 14 epochs.
 
 ## History
 
@@ -85,7 +92,9 @@ Per-split test: in_dist 71.30, camber_rc 73.87, camber_cruise 42.84, re_rand 60.
 | #3444 | cosine T_max=14 | ✅ Merged (val 93.20) |
 | #3296 | NaN guard | ✅ Merged |
 | #3098 | Huber loss | ✅ Merged (val 96.05) |
+| #3544 | thorfinn Lookahead | ❌ Closed 04:33Z (val 89.39, dead end on both substrates) |
+| #3486 | fern σ=3 Lion+EMA | ❌ Closed 04:33Z (val 73.81, superseded by FiLM merge) |
+| #3380 | frieren multi-σ (config bug) | ❌ Closed 04:33Z (val 76.95, student agreed) |
 | #3379 | alphonse EMA compound | Closed (superseded by nezuko) |
 | #3484 | tanjiro EMA decay sweep | Closed (superseded) |
-| #3544 | thorfinn Lookahead | Closing (dead end) |
 | #3412/#3407/#3410/#3409 | Various R2 dead ends | ❌ Closed |
