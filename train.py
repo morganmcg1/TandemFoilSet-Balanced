@@ -464,6 +464,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     use_onecycle: bool = False  # OneCycleLR (Smith&Topin) instead of CosineAnnealingLR
     onecycle_pct_start: float = 0.3  # fraction of training for rising LR phase
+    n_freq: int = 32  # number of RFF frequency samples (RFF output dim = 2 * n_freq)
 
 
 cfg = sp.parse(Config)
@@ -521,7 +522,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
-    rff_n_freq=32,
+    rff_n_freq=cfg.n_freq,
     rff_sigma=1.0,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -529,7 +530,13 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+rff_dim = 2 * cfg.n_freq
+preprocess_input_dim = rff_dim + (X_DIM - 2)
+preprocess_param_count = sum(p.numel() for p in model.preprocess.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"RFF n_freq={cfg.n_freq}, rff_dim={rff_dim}, "
+      f"preprocess_input_dim={preprocess_input_dim}, "
+      f"preprocess_params={preprocess_param_count}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 if cfg.use_onecycle:
@@ -572,6 +579,15 @@ with open(model_dir / "config.yaml", "w") as f:
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "config",
+    "n_freq": cfg.n_freq,
+    "rff_dim": rff_dim,
+    "preprocess_input_dim": preprocess_input_dim,
+    "preprocess_params": preprocess_param_count,
+    "n_params": n_params,
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
