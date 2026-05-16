@@ -654,3 +654,32 @@ _New entries appended as each PR is reviewed._
 
 - PR #3782 — charliepai2i48h5-fern: AdamW eps sweep {1e-6, 1e-7} on LayerScale stack (default eps=1e-8; theory: small v_t channels with tiny eps get amplified updates, raising eps damps them → more uniform per-param effective LR; especially relevant for near-zero LayerScale γ-attn channels)
 - PR #3784 — charliepai2i48h5-thorfinn: Peak LR sweep {7e-4, 1e-3} on LayerScale stack (redo on current best stack; lr=1e-3 showed healthy gradient stats in PR #3682 but wrong baseline; LayerScale's per-channel gating may tolerate higher base LR)
+
+---
+
+## 2026-05-16 08:30 — PR #3732 (charliepai2i48h5-nezuko): n_freqs={18,20} + clip=0.25 — CLOSED
+
+- branch: `charliepai2i48h5-nezuko/fourier-n18-n20-clip025`
+- hypothesis: n_freqs=18/20 + clip=0.25 (correct clip) could extend Fourier scaling beyond n=14
+- arms:
+
+  | arm | n_freqs | clip | val_avg/mae_surf_p | test_avg/mae_surf_p | vs n=14 baseline | vs current best |
+  |---|---|---|---|---|---|---|
+  | arm-1 | 18 | 0.25 | 83.06 | 72.25 | +2.4% / +1.0% ✗ | +14.1% / +10.9% ✗ |
+  | arm-2 | 20 | 0.25 | 81.24 | 71.97 | +0.2% / +0.6% ✗ | +11.6% / +10.5% ✗ |
+  | baseline (PR #3438) | 14 | 0.25 | 81.08 | 71.52 | — | — |
+  | current best (PR #3593) | 10 | 0.25 | **72.77** | **65.12** | — | — |
+
+- artifacts: `models/model-fourier-n18-clip025-fullstack-20260516-062742/metrics.jsonl`, `models/model-fourier-n20-clip025-fullstack-20260516-073106/metrics.jsonl`
+- clip_frac=1.000 throughout both arms (same as n=14 + clip=0.25)
+- key sub-finding: clip=0.25 does help at n=18 vs clip=1.0 (PR #3650 arm-1: val=84.71 vs this arm-1: val=83.06, -2%). Tight-clip hypothesis confirmed but not sufficient.
+- pattern: n=10→84.59; n=12≈tied; n=14→81.08 (best); n=18→83.06; n=20→81.24 — non-monotone above n=14, confirming saturation
+- arm-2 (n=20) shows best test_rc (83.17 vs 84.95, -2.1%) suggesting finer spectral resolution helps geometry OOD, but cruise/re_rand worse; net wash-to-worse
+- both timeout-bound, still improving at ep14
+- verdict: **CLOSED** — Fourier spectrum saturated at n=14. Stop scaling n_freqs. Nezuko reassigned to Lookahead optimizer wrapper (PR #3823).
+
+---
+
+## 2026-05-16 08:35 — Wave-8 additions
+
+- PR #3823 — charliepai2i48h5-nezuko: Lookahead optimizer wrapper {k=5 α=0.5, k=10 α=0.5} on LayerScale stack (Zhang et al. 2019; slow anchor weights with periodic pull-back — variance reduction in heavy-tail/high clip_frac regime; orthogonal to β2/eps changes; near-zero compute overhead)

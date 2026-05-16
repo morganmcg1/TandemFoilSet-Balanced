@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 07:42
+- **Date:** 2026-05-16 08:35
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -31,7 +31,7 @@
 | Student | PR | Hypothesis | Status |
 |---|---|---|---|
 | alphonse | #3730 | LayerScale γ=0.01 + n_freqs=14 compound | Wave-7 — HIGHEST PRIORITY |
-| nezuko | #3732 | n_freqs={18,20} + clip=0.25 (tight clip for Fourier scaling) | Wave-7 |
+| nezuko | #3823 | Lookahead optimizer wrapper {k=5, k=10} on LayerScale stack | NEW (wave-8) |
 | frieren | #3740 | Asymmetric LayerScale γ_attn=0.001 vs γ_mlp=0.01/0.03 | Wave-7 |
 | edward | #3192 | EMA 0.998 on LayerScale stack | Sent back (rebase in progress) |
 | askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (stale — picking up after API rate-limit recovery) |
@@ -57,6 +57,7 @@
 | #3648 (frieren) | LR warmup: start_factor=1e-6 kills epoch 1 in timeout-bound regime |
 | #3708 (fern) | AdamW β2 sweep falsified: both 0.99/0.95 much worse; default β2=0.999 optimal |
 | #3682 (thorfinn) | LR sweep on wrong stack (n14+clip=1.0 vs current LayerScale best); arm-2 (lr=1e-3) promising but retesting on LayerScale |
+| #3732 (nezuko) | Fourier saturated at n=14: n=18 val=83.06, n=20 val=81.24 — both much worse than LayerScale. Stop scaling n_freqs. |
 
 ## Current research themes
 
@@ -64,7 +65,7 @@
 
 2. **BF16 + LayerScale composition (tanjiro #3527 rebasing)**: BF16 alone ties LayerScale at val=72.75 (+4 epochs/1.30× speed). Composition BF16+LayerScale expected val 65-70. Needs rebase.
 
-3. **n_freqs=18,20 + clip=0.25 (nezuko #3732)**: Fourier scaling not saturated at n=14. n=18+clip=0.25 never tested (only n=18+clip=1.0 which failed badly). If scaling continues, further LayerScale compound.
+3. **Lookahead optimizer on LayerScale (nezuko #3823)**: Zhang et al. 2019 slow anchor weights with k-step pull-back. In heavy-tail/high clip_frac regime, Lookahead provides variance reduction without the β2-lowering instability (confirmed harmful by PR #3708). Two arms: k=5 (default) and k=10 (longer lookback). Near-zero compute overhead.
 
 4. **Asymmetric LayerScale (frieren #3740)**: γ-attn stays near 0.01, γ-mlp grows 3×. Separate inits (γ_attn=0.001, γ_mlp=0.01/0.03) target natural trajectory. Expected 1-3% beyond symmetric γ=0.01.
 
@@ -78,7 +79,7 @@
 
 ## Key insights accumulated
 
-- **Fourier scaling not saturated at n=14**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%). n=18+clip=0.25 untested.
+- **Fourier scaling SATURATED at n=14**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%), 14→18 (+2.4% regression), 14→20 (+0.2% regression, essentially tied). Non-monotone pattern above n=14. Stop scaling n_freqs. n=14 is sweet spot in this budget.
 - **clip=0.25 is regularization at n_freqs≥14**: PR #3650 confirmed — clip=1.0 removes implicit regularization at high n_freqs. Always use clip=0.25 when n_freqs≥12.
 - **LayerScale γ=0.01 is the biggest single win**: -10.2% val from per-channel selective residual gating. OOD splits improve most.
 - **BF16 virtual tie with LayerScale (independent paths to same performance)**: BF16 extra epochs ≈ LayerScale gating benefit. Both likely compose.
@@ -92,7 +93,7 @@
 - **LayerScale + n_freqs=14 + EMA** — triple compound; could land sub-60 val
 - **LayerScale + BF16 + n_freqs=14** — triple compound if BF16 confirmed to compose
 - **LayerScale γ-init ∈ {0.003, 0.005}** — even smaller init may increase channel selectivity
-- **n_freqs=20** — if n=18 doesn't saturate with clip=0.25
+- **Learned frequency basis** — Fourier scaling with fixed log-spaced freqs saturated; try learnable/adaptive freq components
 - **Lookahead optimizer** — wrap AdamW (no hyperparameter changes to the inner optimizer needed)
 - **SAM** — flat minima; theoretically motivated for OOD generalization
 
