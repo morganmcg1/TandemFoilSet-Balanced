@@ -539,3 +539,28 @@ cond_dim=3 beats cond_dim=11! Geometry tail dims (AoA2, NACA2, gap, stagger) zer
 Principle confirmed: Both EMA and SWA fail at this budget. Averaging requires a post-convergence regime.
 
 **Status: CLOSED — dead end. Revisit SWA only if budget exceeds ~20 epochs (swa_start_epoch=12+).**
+
+
+---
+
+## 2026-05-16 01:25 — PR #3549: H29: Per-channel Huber + clip=1.0 compound (nezuko) — CLOSED, informative negative
+
+- Branch: `charliepai2i48h3-nezuko/h29-perchan-huber-clip1-compound`
+- Hypothesis: Compound H25 (δ_vel=1.0/δ_p=0.25) + H20 (clip=1.0) — orthogonal improvements should stack.
+- Single arm: δ_vel=1.0, δ_p=0.25, clip_grad_norm=1.0 on H19 base.
+
+| Source | val_avg/mae_surf_p | test 3-split | vs H20 (75.50) |
+|--------|---------------------|--------------|----------------|
+| H29 compound | 76.7951 | 74.7093 | +1.30 (worse) |
+| H20 alone | 75.4955 | 73.1556 | 0 |
+| H25 alone | 75.7713 | 73.0704 | +0.28 |
+
+**Per-split:** H29 wins on val_geom_camber_cruise (53.14 vs 55.79) but loses on the three harder splits (single_in_dist +5.10, rc +3.44, re_rand only slightly better).
+
+**Key mechanism (nezuko's analysis):** The two interventions are NOT orthogonal — they interact through `clip_grad_norm_`'s global rescale. With δ_vel=1.0, velocity gradients are larger than pressure gradients. The global norm clip rescales the entire gradient vector by ‖g‖, which means pressure updates get scaled down disproportionately. The H25 velocity benefit (less clipping → bigger velocity steps) is canceled by the global clip's velocity-dominated rescale.
+
+This is a high-quality elimination of a plausible hypothesis. Pre-clip ‖g‖ was 3.8–18.0 throughout training, confirming clipping was meaningfully engaged (not a no-op).
+
+- Artifacts: `models/model-h29-perchan-vel10-p025-clip1-20260516-003604/`
+
+**Status: CLOSED — informative negative.** Follow-up H34 assigned to nezuko: element-wise clipping (`clip_grad_value_`) to bypass the global-rescale interaction and directly test the hypothesis.
