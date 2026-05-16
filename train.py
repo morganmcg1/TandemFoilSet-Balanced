@@ -48,6 +48,36 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Fourier positional encoding (Tancik et al., 2020, arXiv:2006.10739)
+# ---------------------------------------------------------------------------
+
+POS_COLS = slice(0, 2)  # (x, z) spatial coords — dims 0-1 per program.md
+
+
+def fourier_pos_encode(coords: torch.Tensor, num_freq: int) -> torch.Tensor:
+    """NeRF-style log-spaced sinusoidal features for 2D coordinates.
+
+    Returns ``(N, 4*num_freq)``: sin and cos at each of ``num_freq`` log-spaced
+    frequencies (``2^k * pi`` for k in 0..num_freq-1) for each of the 2 coords.
+    """
+    freqs = 2.0 ** torch.arange(num_freq, dtype=coords.dtype, device=coords.device)
+    angles = coords.unsqueeze(-1) * freqs[None, None, :] * math.pi   # (N, 2, num_freq)
+    enc = torch.cat([angles.sin(), angles.cos()], dim=-1)            # (N, 2, 2*num_freq)
+    return enc.reshape(coords.shape[0], -1)                          # (N, 4*num_freq)
+
+
+def encode_inputs(x_norm: torch.Tensor, num_freq: int) -> torch.Tensor:
+    """Replace (x, z) cols of normalized features with Fourier encoding."""
+    pos = x_norm[..., POS_COLS]
+    flat = pos.reshape(-1, 2)
+    enc = fourier_pos_encode(flat, num_freq).reshape(*x_norm.shape[:-1], 4 * num_freq)
+    non_pos = torch.cat(
+        [x_norm[..., : POS_COLS.start], x_norm[..., POS_COLS.stop :]], dim=-1
+    )
+    return torch.cat([enc, non_pos], dim=-1)
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -228,7 +258,7 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, loss_type: str = "l1") -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1") -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -248,8 +278,9 @@ def evaluate_split(model, loader, stats, surf_weight, device, loss_type: str = "
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_enc = encode_inputs(x_norm, num_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_enc})["preds"]
 
             # NaN guard: some samples (e.g. test_geom_camber_cruise idx 20) have
             # non-finite ground-truth. IEEE 754 propagates NaN through NaN * 0,
@@ -412,6 +443,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
+    num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
 
 
 cfg = sp.parse(Config)
@@ -440,9 +472,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+ENCODED_X_DIM = 4 * cfg.num_freq + (X_DIM - 2)  # 4*num_freq Fourier feats + 22 non-coord feats
 model_config = dict(
-    space_dim=2,
-    fun_dim=X_DIM - 2,
+    space_dim=2,  # unchanged; only used as input-dim split for preprocess MLP
+    fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
     out_dim=3,
     n_hidden=160,
     n_layers=5,
@@ -523,8 +556,9 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_enc = encode_inputs(x_norm, cfg.num_freq)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_enc})["preds"]
         err = _pointwise_loss(pred, y_norm, cfg.loss_type)
 
         vol_mask = mask & ~is_surface
@@ -555,7 +589,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_type)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -623,7 +657,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.loss_type)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
