@@ -260,23 +260,39 @@ def invert_asinh_p(pred, scale):
     return out
 
 
-def apply_asinh_vel(y_norm, scale):
-    """Compress the velocity channels (Ux, Uy) of a normalized target tensor with asinh."""
-    if scale <= 0:
+def apply_asinh_vel(y_norm, scale, ux_scale: float = 0.0, uy_scale: float = 0.0):
+    """Compress the velocity channels (Ux, Uy) of a normalized target tensor with asinh.
+
+    Per-channel overrides: ``ux_scale > 0`` overrides the Ux scale and ``uy_scale > 0``
+    overrides the Uy scale. Otherwise the shared ``scale`` is used. Channels with an
+    effective scale of 0 (or below) are left untouched.
+    """
+    ux_s = ux_scale if ux_scale > 0 else scale
+    uy_s = uy_scale if uy_scale > 0 else scale
+    if ux_s <= 0 and uy_s <= 0:
         return y_norm
     y = y_norm.clone()
-    y[..., 0] = torch.asinh(y_norm[..., 0] * scale) / scale
-    y[..., 1] = torch.asinh(y_norm[..., 1] * scale) / scale
+    if ux_s > 0:
+        y[..., 0] = torch.asinh(y_norm[..., 0] * ux_s) / ux_s
+    if uy_s > 0:
+        y[..., 1] = torch.asinh(y_norm[..., 1] * uy_s) / uy_s
     return y
 
 
-def invert_asinh_vel(pred, scale):
-    """Inverse of apply_asinh_vel; clamps before sinh to avoid overflow."""
-    if scale <= 0:
+def invert_asinh_vel(pred, scale, ux_scale: float = 0.0, uy_scale: float = 0.0):
+    """Inverse of apply_asinh_vel; clamps before sinh to avoid overflow.
+
+    Mirrors apply_asinh_vel's per-channel override logic.
+    """
+    ux_s = ux_scale if ux_scale > 0 else scale
+    uy_s = uy_scale if uy_scale > 0 else scale
+    if ux_s <= 0 and uy_s <= 0:
         return pred
     out = pred.clone()
-    out[..., 0] = torch.sinh(pred[..., 0].clamp(-10, 10) * scale) / scale
-    out[..., 1] = torch.sinh(pred[..., 1].clamp(-10, 10) * scale) / scale
+    if ux_s > 0:
+        out[..., 0] = torch.sinh(pred[..., 0].clamp(-10, 10) * ux_s) / ux_s
+    if uy_s > 0:
+        out[..., 1] = torch.sinh(pred[..., 1].clamp(-10, 10) * uy_s) / uy_s
     return out
 
 
@@ -286,7 +302,9 @@ def invert_asinh_vel(pred, scale):
 
 def evaluate_split(model, loader, stats, surf_weight, device,
                    asinh_p_scale: float = 0.0,
-                   asinh_vel_scale: float = 0.0) -> dict[str, float]:
+                   asinh_vel_scale: float = 0.0,
+                   asinh_ux_scale: float = 0.0,
+                   asinh_uy_scale: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -313,7 +331,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             y_target = apply_asinh_p(y_norm, asinh_p_scale)
-            y_target = apply_asinh_vel(y_target, asinh_vel_scale)
+            y_target = apply_asinh_vel(y_target, asinh_vel_scale,
+                                       ux_scale=asinh_ux_scale, uy_scale=asinh_uy_scale)
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_target) ** 2
@@ -330,7 +349,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             n_batches += 1
 
             pred_norm = invert_asinh_p(pred, asinh_p_scale)
-            pred_norm = invert_asinh_vel(pred_norm, asinh_vel_scale)
+            pred_norm = invert_asinh_vel(pred_norm, asinh_vel_scale,
+                                          ux_scale=asinh_ux_scale, uy_scale=asinh_uy_scale)
             pred_orig = pred_norm * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
@@ -469,6 +489,8 @@ class Config:
     ema_decay: float = 0.999  # EMA decay rate; smaller = faster shadow tracking
     asinh_p_scale: float = 0.0  # 0 disables; >0 enables asinh on pressure channel
     asinh_vel_scale: float = 0.0  # 0 disables; >0 enables asinh on Ux/Uy channels
+    asinh_ux_scale: float = 0.0  # 0 = use asinh_vel_scale; >0 overrides Ux channel independently
+    asinh_uy_scale: float = 0.0  # 0 = use asinh_vel_scale; >0 overrides Uy channel independently
     use_swiglu: bool = False  # swap GELU MLP for SwiGLU gated MLP inside TransolverBlocks
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
@@ -581,8 +603,26 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = apply_asinh_p(y_norm, cfg.asinh_p_scale)
-        y_target = apply_asinh_vel(y_target, cfg.asinh_vel_scale)
+        y_target = apply_asinh_vel(y_target, cfg.asinh_vel_scale,
+                                   ux_scale=cfg.asinh_ux_scale, uy_scale=cfg.asinh_uy_scale)
         pred = model({"x": x_norm})["preds"]
+        if cfg.debug and global_step == 0 and (
+            cfg.asinh_vel_scale > 0 or cfg.asinh_ux_scale > 0 or cfg.asinh_uy_scale > 0
+        ):
+            with torch.no_grad():
+                ux_s = cfg.asinh_ux_scale if cfg.asinh_ux_scale > 0 else cfg.asinh_vel_scale
+                uy_s = cfg.asinh_uy_scale if cfg.asinh_uy_scale > 0 else cfg.asinh_vel_scale
+                ux_norm = y_norm[..., 0][mask]
+                uy_norm = y_norm[..., 1][mask]
+                ux_tgt = y_target[..., 0][mask]
+                uy_tgt = y_target[..., 1][mask]
+                print(
+                    f"[VEL-ASINH-DEBUG ux_s={ux_s} uy_s={uy_s}] "
+                    f"y_norm[Ux] range=[{ux_norm.min().item():.3f},{ux_norm.max().item():.3f}] "
+                    f"y_norm[Uy] range=[{uy_norm.min().item():.3f},{uy_norm.max().item():.3f}] "
+                    f"y_target[Ux] range=[{ux_tgt.min().item():.3f},{ux_tgt.max().item():.3f}] "
+                    f"y_target[Uy] range=[{uy_tgt.min().item():.3f},{uy_tgt.max().item():.3f}]"
+                )
         if cfg.debug and global_step == 0 and cfg.asinh_p_scale > 0:
             with torch.no_grad():
                 yp = y_norm[..., 2][mask]
@@ -640,7 +680,9 @@ for epoch in range(MAX_EPOCHS):
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
                              asinh_p_scale=cfg.asinh_p_scale,
-                             asinh_vel_scale=cfg.asinh_vel_scale)
+                             asinh_vel_scale=cfg.asinh_vel_scale,
+                             asinh_ux_scale=cfg.asinh_ux_scale,
+                             asinh_uy_scale=cfg.asinh_uy_scale)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -723,7 +765,9 @@ if best_metrics:
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
                                  asinh_p_scale=cfg.asinh_p_scale,
-                                 asinh_vel_scale=cfg.asinh_vel_scale)
+                                 asinh_vel_scale=cfg.asinh_vel_scale,
+                                 asinh_ux_scale=cfg.asinh_ux_scale,
+                                 asinh_uy_scale=cfg.asinh_uy_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
