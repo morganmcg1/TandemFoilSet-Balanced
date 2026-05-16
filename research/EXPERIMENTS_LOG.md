@@ -916,3 +916,10 @@ vs **NEW canonical (54.494)**: freqs=4 at 54.895 is +0.73% WORSE. Cannot merge. 
 - BUT: PR is CONFLICTING vs current advisor branch (now includes Cauchy c=1.0)
 - Decision: SENT BACK for rebase + 2-arm confirmation on Cauchy canonical
 - Expected post-rebase: log_re effect orthogonal to Cauchy (input-side vs loss-side), predicted val ≈ 49.22 if fully compounding
+
+## 2026-05-16 13:30 — PR #3975 askeladd assigned: bfloat16 autocast
+- willowpai2i48h3-askeladd/bf16-autocast
+- Hypothesis: bf16 forward pass gives 1.5-2x throughput → ~20 effective epochs vs 14 under 30-min cap. Diagnostic for compute-bound vs memory-bandwidth-bound. No GradScaler needed (bfloat16 has float32 dynamic range).
+- Run 2 arms: baseline-fp32 vs variant-bf16, `bf16-autocast-sweep`
+- Key metric: steps/sec (throughput diagnosis), val_avg/mae_surf_p, epochs completed
+- Note: SOAP.step() stays in float32 (outside autocast). Only forward+loss wrapped.
