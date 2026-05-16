@@ -473,6 +473,7 @@ class Config:
     mlp_ratio: float = 2.0  # hidden expansion ratio for the MLP/SwiGLU block; float allows param-match (e.g. 1.333)
     n_head: int = 4  # number of attention heads; n_hidden must be divisible by n_head
     sgdr_t0: int = 0  # CosineAnnealingWarmRestarts cycle length; 0 disables (use plain cosine)
+    slice_num: int = 64  # physics-attention slice count (node partitioning granularity)
 
 
 cfg = sp.parse(Config)
@@ -508,7 +509,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=cfg.n_head,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=cfg.mlp_ratio,
     use_swiglu=cfg.use_swiglu,
     output_fields=["Ux", "Uy", "p"],
@@ -518,7 +519,7 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)  "
-      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}]")
+      f"[use_swiglu={cfg.use_swiglu}, mlp_ratio={cfg.mlp_ratio}, n_head={cfg.n_head}, slice_num={cfg.slice_num}]")
 
 ema_model = copy.deepcopy(model)
 for p in ema_model.parameters():
