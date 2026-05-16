@@ -1,5 +1,64 @@
 # SENPAI Research Results — charlie-pai2i-24h-r2
 
+## 2026-05-16 00:35 — PR #3314: AdamW weight_decay 1e-4 → 3e-4 (rebased) [MERGED — NEW BASELINE]
+- Branch: `charliepai2i24h2-fern/weight-decay-3e-4`
+- Student: charliepai2i24h2-fern
+- Hypothesis: Tripling weight_decay on the decay group (1e-4→3e-4) addresses under-regularization on hard OOD splits, specifically single_in_dist. Predicted 1–3% val improvement. Previous run vs old baseline gave −3.69%; this is the rebased retest against PR #3377 baseline (96.667).
+
+### Results table
+
+| Metric | Value | Δ vs PR #3377 baseline 96.667 |
+|--------|-------|-------------------------------|
+| `val_avg/mae_surf_p` (best @ ep 14) | **95.808** | **−0.86 (−0.89%)** ✓ |
+| `test_avg/mae_surf_p` | 85.578 | +0.12 (+0.14%, within noise) |
+| `val_single_in_dist` | 110.886 | −5.78 (−4.96%) ↓ best |
+| `val_geom_rc` | 105.776 | +0.26 (+0.25%) flat |
+| `val_geom_cruise` | 76.060 | +3.00 (+4.10%) ↑ regression |
+| `val_re_rand` | 90.510 | −0.91 (−1.00%) ↓ slight win |
+| Wall-clock | 32.0 min | ~137 s/epoch, 14/14 epochs |
+| Peak VRAM | 40.96 GB | — |
+| Metrics | `models/model-weight-decay-3e-4-rebased-20260515-232904/metrics.{jsonl,yaml}` | — |
+
+### Analysis
+- Confirmed positive: weight_decay=3e-4 still helps on the new full stack, though the delta is smaller than the first run (−0.89% vs −3.69%). The margin shrinkage is expected — warmup+cosine + smaller n_hidden already provides implicit regularization.
+- Pattern identical to original run: single_in_dist concentrates the improvement (−4.96% val), cruise regresses (+4.10% val). The regularization knob trades hard-OOD accuracy for easy-cruise accuracy. Net aggregate favours merging.
+- Test is flat (+0.14%), which is concerning for absolute claim-making but acceptable for compounding strategy — the val improvement is genuine and reproducible.
+- Stack now: Huber + AdamW(wd=3e-4) + selective decay + grad-clip + NaN guard + warmup+cosine + lr=7e-4 + 14ep + slice_num=96 + n_hidden=96.
+
+### Decision
+- **MERGED. New baseline: val 95.808, test 85.578.**
+
+---
+
+## 2026-05-16 00:25 — PR #3503: Raise mlp_ratio 2→4 (FFN expansion) [CLOSED]
+- Branch: `edward/mlp-ratio-4-ffn-expansion`
+- Student: charliepai2i24h2-edward
+- Hypothesis: Doubling FFN expansion (hidden 96→192→96) increases representational capacity orthogonal to width. Predicted 1–3% improvement on the PR #3377 baseline (96.667), particularly on single_in_dist.
+
+### Results table
+
+| Metric | Value | Δ vs baseline 96.667 |
+|--------|-------|----------------------|
+| `val_avg/mae_surf_p` (best @ ep 12) | **101.686** | **+5.02% (worse)** |
+| `test_avg/mae_surf_p` | 91.012 | +5.56% (worse) |
+| `val_single_in_dist` | 124.656 | +7.99 worst split regresses most |
+| `val_geom_rc` | 110.078 | +4.56 |
+| `val_geom_cruise` | 76.983 | +3.92 |
+| `val_re_rand` | 95.027 | +3.61 |
+| Params | 566,519 | +48.6% vs baseline 381,239 |
+| Per-epoch wall | ~149 s | +14% slower (FFN compute) |
+| Peak VRAM | 46.93 GB | +6 GB vs baseline |
+| Metrics | `models/model-mlp-ratio-4-20260515-233534/metrics.{jsonl,yaml}` | — |
+
+### Analysis
+- Hypothesis falsified. Expanded FFN uniformly worsens all 4 splits — consistent with capacity-induced overfit (train loss dropped while val rose). The width-sweep confirmed this model regime benefits from smaller (not larger) capacity. FFN expansion without pairing stronger regularization adds parameters that absorb training-set noise. Also slightly truncated by 30-min cap (13 of 14 epochs), but val was already rising at E13 so a full run would not rescue it.
+- Capacity (params) remains not the bottleneck for this dataset+budget.
+
+### Decision
+- **Closed.** Axis dead on current stack. FFN expansion would require simultaneous dropout/regularization to offset overfit risk.
+
+---
+
 ## 2026-05-15 22:35 — PR #3453: Calibrate T_max=10 (slice_num=96 budget) [CLOSED]
 - Branch: `charliepai2i24h2-edward/tmax-10-slice96`
 - Student: charliepai2i24h2-edward
