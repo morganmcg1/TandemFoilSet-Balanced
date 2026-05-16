@@ -484,3 +484,54 @@ Within-PR paired delta (variant vs baseline): val_avg −8.4%, val_re_rand −6.
 The slice_num=96 expansion increases per-epoch compute without metric payoff. The Fourier feature concept was partially rescued by the log-Re sinusoidal approach (PR #3415), which targets OOD Reynolds-number structure specifically rather than a general positional encoding overhaul.
 
 **Assigned thorfinn [PR #3501] SOAP surf_weight sweep {5, 10, 20}.**
+
+---
+
+## 2026-05-16 01:35 — PR #3430 (nezuko): EMA of model weights (decay=0.999) on SOAP stack — **MERGED** ✓
+
+- Branch: `willowpai2i48h3-nezuko/ema-weights` (rebased onto SOAP stack)
+- W&B group: `ema-weights-soap`
+- Baseline run: `fatm30ti` (SOAP, no EMA) | Variant run: `4iw1n8xw` (SOAP + EMA decay=0.999)
+
+**This was originally assigned before SOAP merged; sent back for SOAP-stack rebase. Nezuko rebased and re-ran both arms.**
+
+**Result (variant vs canonical, lower is better):**
+
+| Metric | Canonical (vbvixri5 / SOAP) | Baseline arm (fatm30ti) | EMA arm (4iw1n8xw) | Δ EMA vs canonical |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | **75.70** | 78.44 | **61.43** | **−18.8%** |
+| test_3split_avg (excl cruise) | 75.39 | n/a | **60.92** | **−19.3%** |
+| sec/epoch | ~135.7s | ~136s | ~136s | ≈0% overhead |
+| Total steps | — | 5265 | 5265 | 14 epochs |
+
+Test split breakdown: not separately logged to W&B (from PR comment only).
+
+**Decision: MERGED.** Clean result: val curve monotone descent (13.33→0.18 train loss), 14 epochs, no NaN, 5265 steps. Within-PR delta −21.6% vs baseline-soap arm (78.44). Δ vs canonical −18.8%. EMA overhead is near-zero (~0.1% per step for weight copy operation).
+
+**Mechanism:** EMA of model weights averages across the training trajectory, implicitly sampling multiple points along the SOAP optimization path. SOAP drives toward flat minima; EMA then averages across the flat region, further reducing generalization gap. The mechanisms are orthogonal and compound: SOAP reduces the sharpness of the loss landscape, EMA then finds a more central point within the resulting flat basin.
+
+**Val curve analysis:** EMA arm is monotonically decreasing with no oscillation; baseline-SOAP arm shows bounce (final val_avg 82.03 vs best 78.44). This suggests EMA is regularizing the post-plateau bounce seen in the online weights.
+
+**W&B tag note:** Runs only carry `willowpai2i48h3-nezuko` tag, not `willow-pai2i-48h-r3`. Run IDs verified directly.
+
+**Sets new canonical baseline:** `val_avg/mae_surf_p = 61.43`, `test_avg/mae_surf_p (excl cruise) = 60.92`. See BASELINE.md.
+
+**Strategic implication:** All subsequent PRs now target <61.43. The full stack (Huber + LR warmup + SOAP + EMA) is the new foundation. Next priorities: EMA decay sweep (nezuko #3591), plus winners from alphonse/askeladd/tanjiro/thorfinn sweeps rebased onto EMA+SOAP stack.
+
+---
+
+## 2026-05-16 01:38 — PR #3152 (edward): Surface-only p×3 upweight on SOAP stack — **CLOSED**
+
+- Branch: `willowpai2i48h3-edward/channel-loss-weight-p` (rebased onto SOAP stack)
+- W&B group: `channel-loss-weight-p-soap`
+- Baseline run: `qaep2zvu` (SOAP, no upweight) | Variant run: `zfrhgls1` (SOAP + p×3 surface only)
+
+**Result (variant vs baseline, lower is better):**
+
+| Metric | Baseline-SOAP (qaep2zvu) | Variant-surf-p3x (zfrhgls1) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **77.88** | 79.42 | **+1.9% (worse)** |
+
+**Decision: CLOSED.** Variant regresses within the PR (+1.9% worse than baseline on SOAP). The direction is definitively falsified. With SOAP's curvature-aware preconditioning, the per-channel upweighting introduces redundant gradient imbalance that SOAP already compensates for. The mechanism that led to channel-loss upweighting (MSE's uniform channel treatment) no longer applies with SOAP's layer-wise preconditioner.
+
+**Historical note:** The round-1 p×3 attempt on MSE (PR #3152 original) showed only +0.6% noise. Both MSE and SOAP iterations confirm the channel-upweighting direction is not productive for this task. The physical-units loss normalization direction (edward's own suggestion from round 1) remains an open hypothesis for a future round.
