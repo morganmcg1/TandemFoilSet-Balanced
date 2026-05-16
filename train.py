@@ -478,7 +478,7 @@ model_config = dict(
     fun_dim=ENCODED_X_DIM - 2,  # so fun_dim + space_dim == ENCODED_X_DIM
     out_dim=3,
     n_hidden=160,
-    n_layers=5,
+    n_layers=6,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
