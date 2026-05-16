@@ -720,3 +720,39 @@ Hypothesis: δ=1.0 was calibrated for raw-pressure residuals (|p| up to ~5+). Po
 - Arm B (conditional if A wins ≤82.5): `--huber_delta 0.3`; if A regresses >84: `--huber_delta 2.0`
 
 Stack: grad_clip=5.0, ema_decay=0.99, asinh_p_scale=1.0. No other changes.
+
+## 2026-05-16 05:30 — PR #3664 CLOSED: slice_num=128 on asinh baseline (tanjiro) — decisive regression
+
+| Metric | slice_num=128 | Baseline #3475 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 90.7693 | 81.9754 | **+10.73%** |
+| test_3split/mae_surf_p | 88.2840 | 81.3654 | **+8.50%** |
+| best_epoch | 11 | 14 | −3 (wall-clock bound) |
+| epoch_time_s | 171.3 | ~156 | +9.8% |
+
+Per-split val (all 4 regressed): single_in_dist 102.050 (+1%) | geom_camber_rc 106.328 (+17.2%) | geom_camber_cruise 67.710 (+13%) | re_rand 86.989 (+14.1%)
+
+W&B run: `m1r489ev`
+
+**Verdict: CLOSED (2nd close — axis definitively exhausted).** asinh did NOT unlock slice=128 capacity. Wall-clock bind confirmed: 11 epochs vs baseline 14, still monotonically descending at cutoff. slice=128 attention matrix is 4× more expensive (128²=16384 vs 64²=4096 tokens); amortization requires >25 epochs. Closed on pre-asinh (#3577) and post-asinh (#3664) stacks.
+
+**tanjiro reassigned** → PR #3723: SwiGLU MLP activation — GELU→SwiGLU swap in TransolverBlocks. High prior probability from modern transformer literature (LLaMA/PaLM); adds ~50% MLP params, only ~10-15% epoch overhead.
+
+## 2026-05-16 05:30 — PR #3663 SENT BACK: dropout=0.05 (edward) — mixed signal, lighter arm needed
+
+| Metric | dropout=0.05 | Baseline #3475 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 82.4592 | 81.9754 | **+0.59% (within ~3.8 MAE seed noise)** |
+| test_3split/mae_surf_p | 80.8435 | 81.3654 | **−0.64% (improvement!)** |
+
+Per-split val: single_in_dist 98.236 (−2.8%) | **geom_camber_rc 97.342 (+7.3%)** | geom_camber_cruise 58.348 (−2.6%) | re_rand 75.910 (−0.5%)
+
+W&B run: `mscr7q2t`
+
+**Analysis:** val_re_rand improved as predicted; test_3split improved; val_single_in_dist + geom_camber_cruise improved. Dominant hit: geom_camber_rc +7.3% (smallest-support split, 457 samples). Mechanism (co-adaptation suppression) showing real signal — dose is too high.
+
+**Decision: sent back for dropout=0.025** (lighter arm). val_re_rand and test trends suggest mechanism is real; rc regression suggests 0.05 over-doses on smallest-support split. Target: val_avg < 81.5. Skipped 0.1 arm entirely per student's recommendation.
+
+## 2026-05-16 05:30 — PR #3723 ASSIGNED: SwiGLU MLP activation (tanjiro)
+
+Stack: grad_clip=5.0, ema_decay=0.99, asinh_p_scale=1.0, huber_delta=1.0. Only change: --use_swiglu replaces GELU in TransolverBlock MLPs. SwiGLUMLP: SiLU(W_gate·x) ⊙ (W_value·x) → W_out. Arm B (param-matched mlp_ratio≈1.33) only if Arm A wins decisively (<80.5).
