@@ -1,9 +1,81 @@
 # TandemFoilSet Baseline
 
 **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-**Last updated:** 2026-05-16 10:55 UTC
+**Last updated:** 2026-05-16 13:27 UTC
 
-## Current best — PR #3789: vel-asinh scale=0.5 on SwiGLU + n_head=2 baseline — thorfinn
+## Current best — PR #3901: Huber δ=0.5 compound on full stack — alphonse
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| `val_avg/mae_surf_p` | **61.6105** | run `cc7wvqvi` (δ=0.5 @ epoch 15) |
+| `test_3split/mae_surf_p` (3 valid splits; cruise=NaN) | **60.8910** | run `cc7wvqvi` |
+
+Per-split validation (run `cc7wvqvi` vs prev baseline #3789 vel-asinh, 63.7383):
+
+| Split | mae_surf_p | Δ vs #3789 |
+|---|---|---|
+| val_single_in_dist | 71.5845 | **−1.58%** |
+| val_geom_camber_rc | 74.1791 | **−5.37%** |
+| val_geom_camber_cruise | 41.1771 | **−5.59%** |
+| val_re_rand | 59.5015 | **−1.20%** |
+
+Per-split test (run `cc7wvqvi`):
+
+| Split | mae_surf_p | Δ vs #3789 |
+|---|---|---|
+| test_single_in_dist | 63.9637 | **−2.89%** |
+| test_geom_camber_rc | 67.0300 | **−4.81%** |
+| test_geom_camber_cruise | NaN (data/scoring.py bug — known fleet-wide) | — |
+| test_re_rand | 51.6794 | **−1.55%** |
+
+Key mechanistic finding: **Huber δ=0.5 compounds cleanly with the full stack** (SwiGLU + n_head=2 + vel-asinh + asinh-p + EMA + clip). Tighter quadratic band keeps more residuals in L2-style learning territory post-asinh-p compression; this is most beneficial for surface-pressure prediction on OOD camber geometries (rc and cruise splits both −5.4%). Best epoch 15 — monotone at truncation, gain conservative.
+
+Merged from PR #3901, student `willowpai2i48h2-alphonse`.
+
+---
+
+## Current best configuration
+
+Huber δ=0.5 + vel-asinh s=0.5 + n_head=2 + SwiGLU MLP + Asinh pressure compression + EMA (fast decay) + gradient clipping:
+- **`--huber_delta 0.5`** ← NEW (PR #3901): tighter quadratic band; more residuals in L2-style regime post-asinh-p
+- **`--asinh_vel_scale 0.5`** (PR #3789): applies `asinh(vel / 0.5)` to velocity channels (Ux, Uy); pressure unchanged
+- **`--n_head 2`** (PR #3794): wider per-head attention dim (64 vs 32); also 14% faster per epoch
+- **`--use_swiglu --mlp_ratio 1.333`** (PR #3723): SwiGLU in all TransolverBlock MLPs; param-count matched
+- **`asinh_p_scale = 1.0`** (PR #3475)
+- **`ema_decay = 0.99`** (PR #3474)
+- **`grad_clip = 5.0`**
+- Validation, checkpoint selection, and test eval all use EMA shadow weights
+
+## Reproduce
+
+```bash
+cd target/ && python train.py \
+  --grad_clip 5.0 \
+  --huber_delta 0.5 \
+  --ema_decay 0.99 \
+  --asinh_p_scale 1.0 \
+  --use_swiglu \
+  --mlp_ratio 1.333 \
+  --n_head 2 \
+  --asinh_vel_scale 0.5 \
+  --agent <student>
+```
+
+## Baseline configuration
+
+- Model: Transolver — `n_hidden=128, n_layers=5, n_head=2, slice_num=64, mlp_ratio=1.333, use_swiglu=True, asinh_vel_scale=0.5`
+- Optimizer: AdamW — `lr=5e-4, weight_decay=1e-4`
+- Schedule: `CosineAnnealingLR(T_max=epochs)` (wall clock binds at ~15 epochs with n_head=2 at 124 s/epoch)
+- Loss: `F.huber_loss(delta=0.5)` → `vol_loss + surf_weight * surf_loss` with `surf_weight=10.0`
+- Gradient clip: `clip_grad_norm_(model.parameters(), 5.0)` before optimizer step
+- EMA: **`ema_decay=0.99`**, shadow model updated after every optimizer step
+- Sampler: balanced 3-domain `WeightedRandomSampler`
+- Batch size: 4
+- Hard caps: `SENPAI_MAX_EPOCHS=50`, `SENPAI_TIMEOUT_MINUTES=30`
+
+---
+
+## Previous best — PR #3789: vel-asinh scale=0.5 on SwiGLU + n_head=2 baseline — thorfinn
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -138,4 +210,5 @@ cd target/ && python train.py \
 | 2026-05-16 03:30 | #3475 askeladd asinh-pressure | 81.9754 | −9.53% | Every val split improves; val_re_rand −11.8%; 2 verify replicates both beat baseline; test_3split=81.37 (−8.4%) |
 | 2026-05-16 07:50 | #3723 tanjiro SwiGLU-mlp (param-matched) | 66.6130 | −18.74% | Every split improves 13-24%; gating mechanism confirmed as win (not params); param-matched Arm B > wider Arm A; test_3split=65.46 (−19.5%) |
 | 2026-05-16 09:35 | #3794 fern n_head=2 on SwiGLU | 64.3427 | −3.41% | Every split improves 2-5%; val_re_rand −5.17%; 14% faster per epoch → 2 more training epochs; test_3split=63.67 (−2.74%) |
-| **2026-05-16 10:55** | **#3789 thorfinn vel-asinh s=0.5 on SwiGLU+n_head=2** | **63.7383** | **−0.93%** | **val_single_in_dist −5.62%, val_re_rand −0.57%; scale=0.5 confirmed optimum (scale=0.25 regresses); replicate 7cw3m817=65.91 also beats prior SwiGLU baseline; test_3split=62.93 (−1.15%)** |
+| 2026-05-16 10:55 | #3789 thorfinn vel-asinh s=0.5 on SwiGLU+n_head=2 | 63.7383 | −0.93% | val_single_in_dist −5.62%, val_re_rand −0.57%; scale=0.5 confirmed optimum; test_3split=62.93 (−1.15%) |
+| **2026-05-16 13:27** | **#3901 alphonse Huber δ=0.5 compound on full stack** | **61.6105** | **−3.34%** | **Every split improves; camber_rc −5.37%, camber_cruise −5.59%; tighter quadratic band post-asinh-p; test_3split=60.89 (−3.23%)** |
