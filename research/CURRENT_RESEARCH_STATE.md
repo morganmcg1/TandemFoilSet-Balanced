@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 11:35 UTC (Cycle 23 — merge #3806 (fern, surface refinement); close #3816 (frieren, layerdrop); assign #3917 (fern, EMA compound) + #3920 (frieren, EMA decay sweep))
+- **Date:** 2026-05-16 12:15 UTC (Cycle 24 — review #3799 (edward, EMA winner) sent back for rebase; comment on #3856 + #3828 stale_wip)
 - **Advisor branch:** `icml-appendix-willow-pai2i-24h-r2`
 - **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-v1`
@@ -29,11 +29,20 @@ None — no human directives on this launch.
 | 2026-05-16 08:00 | #3669 | SWA on FiLM-Re | 76.61 | 68.20 | −4.1% |
 | **2026-05-16 11:28** | **#3806** | **Surface-Dedicated Refinement MLP** | **76.20** | **67.11** | **−0.5%** |
 
-## Cycle 23 actions (just executed)
+## Cycle 24 actions (just executed)
 
-**Merged:** PR #3806 (fern, surface refinement MLP) — new baseline val=76.2033, test=67.1099. Gain concentrated on test_geom_camber_rc (−3.18, −4%).
+**Sent back for rebase:** PR #3799 (edward, EMA decay sweep) — student posted terminal SENPAI-RESULT confirming the cycle-22 W&B audit: `xuugyx5t` (ema_decay=0.99) gives val_swa=70.5692, test_swa=61.9760 vs old baseline 76.61/68.20 (−6.04/−6.22). But the PR has merge conflicts against the post-#3806 advisor branch. Asked edward to rebase + re-run one confirmation arm at ema_decay=0.99 on the new baseline. Expected post-rebase val ~70 if the two mechanisms compound.
 
-**Closed:** PR #3816 (frieren, LayerDrop) — both p=0.05 arms worse than new baseline (val +0.88/+0.93, test +1.68/+0.92). Root cause: 5-layer Transolver has no redundant depth for LayerDrop to regularize away. Smoke test at p=0.10 diverged immediately.
+**Commented (awaiting student response):**
+
+- **PR #3856 (nezuko, multiscale BG probe)** — 3 finished arms show val_avg/mae_surf_p_swa ~55 (vs baseline 76.20) with the inverted property SWA > non-SWA. Likely a metric scope issue: train and val both subsampled to the multiscale token set, so the metric isn't comparable. Asked nezuko to confirm eval scope, push code, and consider a full-eval comparison run. 1 arm still running (probe-B-2000).
+- **PR #3828 (alphonse, hypernetwork rank-4)** — 2 finished arms inconsistent (val 75.63 / 77.15); best beats val by 0.57 but regresses test by 0.41 vs new baseline. Asked to either submit terminal as-is, add a rank=8 arm, or pivot to `to_q` projection. Given pending edward merge will shift baseline to ~70, the marginal 75.63 gain is unlikely to survive.
+
+## Cycle 23 actions (previous cycle)
+
+**Merged:** PR #3806 (fern, surface refinement MLP) — new baseline val=76.2033, test=67.1099.
+
+**Closed:** PR #3816 (frieren, LayerDrop) — both arms worse, 5-layer arch has no depth headroom.
 
 **Assigned (2 new PRs):**
 
@@ -42,25 +51,18 @@ None — no human directives on this launch.
 | fern | #3917 | EMA decay=0.99 on surface-refinement baseline (compound of two best wins) |
 | frieren | #3920 | EMA decay sweep {0.999, 0.95, 0.90} on surface-refinement baseline (complementary to fern's 0.99) |
 
-Together, #3917 (fern) + #3920 (frieren) map the full EMA decay response curve on the new compound baseline, covering {0.90, 0.95, 0.99, 0.999}. If 0.99 works on the new baseline as it did on the old (val −6.04), we expect val ~70 test ~61 as a new floor.
+## Active Research Directions — Cycle 24 in-flight
 
-## Active Research Directions — Cycle 23 in-flight
-
-| PR | Student | Idea / Mechanism | Started |
-|---|---|---|---|
-| #3813 | thorfinn | Per-Sample Re-Scaled Normalization (Idea 1) | cycle 19 |
-| #3828 | alphonse | Low-rank hypernetwork Re conditioning (Idea 4) | cycle 20 |
-| #3831 | askeladd | Bernoulli consistency aux loss (Idea 8) | cycle 20 |
-| #3856 | nezuko | Multiscale BG subsampling probe (Idea 5, staged) | cycle 21 |
-| **#3917** | **fern** | **EMA decay=0.99 compound on surface-refinement baseline** | **cycle 23 NEW** |
-| **#3920** | **frieren** | **EMA decay sweep {0.999, 0.95, 0.90} on surface-refinement baseline** | **cycle 23 NEW** |
-
-Awaiting student submission (code already trained, just needs push + SENPAI-RESULT):
-
-| PR | Student | Status |
-|---|---|---|
-| #3799 | edward | Major winner (val=70.57, test=61.98) pending push + SENPAI-RESULT |
-| #3803 | tanjiro | Sweep incomplete; awaiting pivot to swa_start ∈ {8,9,10} |
+| PR | Student | Idea / Mechanism | Started | Cycle 24 status |
+|---|---|---|---|---|
+| #3799 | edward | EMA-decay (rebase + re-run @ 0.99 on new baseline) | cycle 18 → 24 rebase | Sent back for rebase + 1-arm confirmation |
+| #3803 | tanjiro | SWA start sweep (pivot to {8,9,10}) | cycle 18 | Awaiting student pivot from swa_start=4 |
+| #3813 | thorfinn | Per-Sample Re-Scaled Normalization (Idea 1) | cycle 19 | In-flight |
+| #3828 | alphonse | Low-rank hypernetwork Re conditioning (Idea 4) | cycle 20 | Comment with mixed result; awaiting dialogue |
+| #3831 | askeladd | Bernoulli consistency aux loss (Idea 8) | cycle 20 | In-flight |
+| #3856 | nezuko | Multiscale BG subsampling probe (Idea 5, staged) | cycle 21 | Comment re anomalous metric; awaiting clarification |
+| #3917 | fern | EMA decay=0.99 compound on surface-refinement baseline | cycle 23 | In-flight |
+| #3920 | frieren | EMA decay sweep {0.999, 0.95, 0.90} on surface-refinement baseline | cycle 23 | In-flight |
 
 ## Plateau-break strategy (updated)
 
@@ -77,7 +79,7 @@ Awaiting student submission (code already trained, just needs push + SENPAI-RESU
 
 ## Goal
 
-Push val < 72, test < 65. **Edward's xuugyx5t (val=70.57, test=61.98) already crosses both thresholds** — once merged it becomes the new baseline. Fern (#3917) and frieren (#3920) testing whether EMA gains compound with surface-refinement further (expected val ~70, test ~61 if both mechanisms stack).
+Push val < 72, test < 65. **Edward's xuugyx5t (val=70.57, test=61.98)** already crosses both thresholds on the OLD baseline (pre-#3806). The cycle-24 rebase will retest on the NEW baseline (post-#3806 surface-refinement); if the gains compound, the merged baseline becomes val ~70 / test ~61 (a new floor). Fern (#3917) and frieren (#3920) testing the same EMA mechanism in parallel.
 
 ## What has been definitively ruled out (do not retry on this baseline)
 

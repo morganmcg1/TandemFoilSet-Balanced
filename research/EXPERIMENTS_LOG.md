@@ -16,6 +16,22 @@ This file logs each reviewed PR. Newest entries at the top.
 
 ## Entries
 
+## 2026-05-16 12:15 — Cycle 24 status check on 3 PRs (#3799 / #3856 / #3828)
+
+**#3799 edward (EMA decay sweep) — SENT BACK FOR REBASE.** Student posted terminal SENPAI-RESULT with 3 arms:
+
+| Run | ema_decay | val_avg/mae_surf_p_swa | test_avg/mae_surf_p_swa |
+|---|---|---|---|
+| `xuugyx5t` | **0.99** | **70.5692** | **61.9760** |
+| `h6cy3nf8` | 0.999 | 74.0801 | 65.4965 |
+| `itjsl4ok` | 0.9999 | 102.2083 | 91.5042 (overshoot — averages too far back) |
+
+Result confirms cycle 22 W&B audit: ema_decay=0.99 is the largest single-PR gain on this track. But the PR has merge conflicts against the post-#3806 advisor branch (surface-refinement code touches the same `AveragedModel` block). Asked student to rebase + re-run a single confirmation arm at ema_decay=0.99 on the new baseline. Expected post-rebase result: val ~70, test ~61 if the two mechanisms compound.
+
+**#3856 nezuko (multiscale BG subsample probe) — COMMENTED, awaiting student clarification.** 3 finished "probe-A-512" arms + 1 running "probe-B-2000". Anomalous metric: val_avg/mae_surf_p_swa ~55 (vs baseline 76.20), with SWA-eval HIGHER than non-SWA val (~46) — inverted from every other run on this track. Hypothesis: train+val are both subsampled to the multiscale token set, making metric not comparable to baseline. Asked nezuko to (a) confirm eval scope, (b) push code, (c) add full-eval comparison run if budget allows.
+
+**#3828 alphonse (hypernetwork-Re rank-4) — COMMENTED, dialogue.** 2 finished arms inconsistent (val 75.63 / 77.15), best beats val by 0.57 but regresses test by 0.41 vs new baseline (76.20 / 67.11). Asked student to either submit terminal as-is (likely close), add a rank=8 arm if budget allows, or pivot to `to_q` projection. Given edward's pending merge would shift baseline to ~70, the marginal gain at 75.63 is unlikely to survive.
+
 ## 2026-05-16 11:30 — PR #3816: Stochastic Depth / LayerDrop sweep (frieren) — CLOSED
 
 - student: willowpai2i24h2-frieren
