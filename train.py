@@ -439,7 +439,47 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Layer-wise LR decay (LLRD): geometric γ=0.85 across the 5 Transolver blocks.
+# Bottom block (input-adjacent) → lowest LR; top block (output-adjacent) → base LR.
+# Output head (mlp2/ln_3) lives inside blocks[-1], so it inherits the top-block LR.
+# Input embedding (preprocess + placeholder) sits in a "head_and_embed" group at base LR.
+LLRD_GAMMA = 0.85
+NUM_BLOCKS = len(model.blocks)  # 5
+
+param_groups: list[dict] = []
+for i, block in enumerate(model.blocks):
+    lr_mult = LLRD_GAMMA ** (NUM_BLOCKS - 1 - i)
+    param_groups.append({
+        "params": list(block.parameters()),
+        "lr": cfg.lr * lr_mult,
+        "name": f"block_{i}",
+        "lr_mult": lr_mult,
+    })
+
+block_param_ids = {id(p) for g in param_groups for p in g["params"]}
+other_params = [p for p in model.parameters() if id(p) not in block_param_ids]
+param_groups.append({
+    "params": other_params,
+    "lr": cfg.lr,
+    "name": "head_and_embed",
+    "lr_mult": 1.0,
+})
+
+# Sanity: every parameter is in exactly one group.
+all_in_groups = [p for g in param_groups for p in g["params"]]
+all_ids = {id(p) for p in all_in_groups}
+model_ids = {id(p) for p in model.parameters()}
+assert len(all_in_groups) == len(all_ids), "duplicate parameter across LLRD groups"
+assert all_ids == model_ids, "LLRD groups do not cover every model parameter"
+
+print(f"\nLLRD param groups (γ={LLRD_GAMMA}, base_lr={cfg.lr}):")
+llrd_summary: dict[str, dict] = {}
+for g in param_groups:
+    g_nparams = sum(p.numel() for p in g["params"])
+    print(f"  {g['name']:<16s} lr_mult={g['lr_mult']:.4f}  lr={g['lr']:.4e}  ({g_nparams:,} params)")
+    llrd_summary[g["name"]] = {"lr_mult": g["lr_mult"], "lr": g["lr"], "n_params": g_nparams}
+
+optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 run = wandb.init(
@@ -454,6 +494,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "llrd_gamma": LLRD_GAMMA,
+        "llrd_groups": llrd_summary,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -475,6 +517,35 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+
+# --- LLRD diagnostics: snapshot initial per-block / embedding params for drift ---
+def _group_l2(params) -> float:
+    sq = 0.0
+    for p in params:
+        sq += p.detach().double().pow(2).sum().item()
+    return sq ** 0.5
+
+initial_params: dict[str, list[torch.Tensor]] = {}
+initial_norms: dict[str, float] = {}
+for g in optimizer.param_groups:
+    snaps = [p.detach().clone() for p in g["params"]]
+    initial_params[g["name"]] = snaps
+    initial_norms[g["name"]] = _group_l2(snaps)
+
+print("\nLLRD initial per-group param L2 norms:")
+for name, val in initial_norms.items():
+    print(f"  {name:<16s} ||θ||₂ = {val:.4f}")
+
+# Log per-group LR (smoking-gun confirmation) at epoch 1 start.
+llrd_lr_log = {f"diag/{g['name']}/lr": g["lr"] for g in optimizer.param_groups}
+llrd_lr_log.update({f"diag/{g['name']}/init_param_l2": initial_norms[g["name"]]
+                    for g in optimizer.param_groups})
+llrd_lr_log["global_step"] = global_step
+wandb.log(llrd_lr_log)
+
+# Accumulators for per-group grad norms during epoch 1 (averaged over steps).
+grad_sq_accum: dict[str, float] = {g["name"]: 0.0 for g in optimizer.param_groups}
+grad_n_steps: int = 0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -509,6 +580,16 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # LLRD diagnostic: per-group grad L2 norm during epoch 1 only (smoking-gun
+        # that the per-block LR scaling translates into proportionally-scaled steps).
+        if epoch == 0:
+            for g in optimizer.param_groups:
+                gsq = 0.0
+                for p in g["params"]:
+                    if p.grad is not None:
+                        gsq += p.grad.detach().double().pow(2).sum().item()
+                grad_sq_accum[g["name"]] += gsq
+            grad_n_steps += 1
         optimizer.step()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
@@ -550,6 +631,15 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # LLRD diagnostic: log per-group mean grad-norm once at the end of epoch 1.
+    if epoch == 0 and grad_n_steps > 0:
+        print("\nLLRD per-group mean grad L2 norm (epoch 1):")
+        for g in optimizer.param_groups:
+            mean_gnorm = (grad_sq_accum[g["name"]] / grad_n_steps) ** 0.5
+            log_metrics[f"diag/{g['name']}/grad_norm_e1"] = mean_gnorm
+            print(f"  {g['name']:<16s} mean ||g||₂ = {mean_gnorm:.4f}")
+
     wandb.log(log_metrics)
 
     tag = ""
@@ -574,6 +664,30 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- LLRD diagnostic: per-group parameter drift ||θ_final − θ_init||₂ ---
+print("\nLLRD per-group parameter drift (end of training):")
+drift_log: dict[str, float] = {}
+for g in optimizer.param_groups:
+    name = g["name"]
+    snaps = initial_params[name]
+    drift_sq = 0.0
+    for p_init, p_final in zip(snaps, g["params"]):
+        drift_sq += (p_final.detach().double() - p_init.double()).pow(2).sum().item()
+    drift = drift_sq ** 0.5
+    final_norm = _group_l2(g["params"])
+    rel = drift / max(initial_norms[name], 1e-12)
+    print(
+        f"  {name:<16s} ||Δθ||₂={drift:.4f}  ||θ_final||₂={final_norm:.4f}  "
+        f"rel_drift={rel:.4f}"
+    )
+    drift_log[f"diag/{name}/param_drift"] = drift
+    drift_log[f"diag/{name}/final_param_l2"] = final_norm
+    drift_log[f"diag/{name}/rel_drift"] = rel
+wandb.summary.update(drift_log)
+# Also push to step series for plot consistency.
+drift_log["global_step"] = global_step
+wandb.log(drift_log)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
