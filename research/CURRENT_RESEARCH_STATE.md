@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 09:05 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 09:45 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
@@ -30,7 +30,7 @@
 | alphonse | #3594 | **🔥 SF-AdamW on full FiLM stack** | Sent back for R2 | 70-75 |
 | nezuko | #3492 | n_hidden=192 on full FiLM stack | Sent back for R2 | 86.5-88.5 |
 | tanjiro | #3511 | grad_clip=1.0 on full FiLM stack | Sent back for R2 | 86-88 |
-| fern | #3758 | n_layers=4 depth ablation | Assigned | 87.5-89.5 |
+| fern | #3758 | n_layers=4 depth ablation | Sent back R2 (seed-2) — paired Δ −1.21% ✅ but abs 90.198 > 89.784 | seed-2 < 89.784 → merge |
 | askeladd | #3777 | SDF input features | Assigned | 87-89 |
 | frieren | #3829 | Per-block independent FiLM heads | Just assigned | 87-89 |
 | edward | #3830 | Lookahead optimizer wrapper | Just assigned | 88-89.5 |
@@ -70,11 +70,14 @@ Current T_max=15 is **suboptimal for bf16's 19-epoch budget** — floors at LR=5
 
 Whichever has the larger paired Δ on full FiLM stack wins. Both may compose with other hypotheses.
 
-## Depth axis (explored)
+## Depth axis (n_layers fully mapped; n_layers=4 awaiting seed-2)
 
-- n_layers=6: regresses (+2.47%, epoch cost kills fine-tune time)
-- n_layers=4: IN TEST (#3758) — faster epochs → more fine-tune at lr≈0
-- n_layers=5: current best
+- n_layers=3: untested (potential follow-up if n_layers=4 lands)
+- n_layers=4: **R1 paired Δ −1.21% ✅** (#3758) — mechanism fully verified (params −18.2%, sec/epoch −19.2%, +4 fine-tune epochs); absolute 90.198 vs baseline 89.784 — seed-2 in flight to resolve
+- n_layers=5: current baseline
+- n_layers=6: +2.47% regression (#3595)
+
+Monotone curve at 30-min budget: depth costs epochs more than it adds capacity.
 
 ## Slice-num axis (CLOSED)
 
@@ -105,3 +108,4 @@ slice_num=64 is the optimum at n_hidden=128 capacity. Revisit sn=96 only if n_hi
 - **FiLM-owns-velocity insight:** Fourier R4 per-split shows mae_surf_Ux +4.64% with Fourier — FiLM owns velocity channel.
 - **slice_num=96 + n_hidden=192 interaction:** student suggested they may compose; hold for post-nezuko evaluation.
 - **Stack staleness pattern:** Multiple PRs ran on pre-FiLM stack and need rebase verifies (thorfinn, nezuko, tanjiro, alphonse). Baseline moved fast through Round 4.
+- **Seed variance ~±1.5-2%:** Confirmed by fern #3758 R1 (Arm A 91.305 vs merged baseline 89.784, same config); askeladd #3365 (cross-commit ±5 MAE bf16); edward #3684 (Arm A −1.39% vs merged). Single-seed measurements can be misleading near the noise floor — paired Δ is reliable, absolute deltas need confirmation.

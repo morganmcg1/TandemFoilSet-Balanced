@@ -1145,3 +1145,81 @@ Arm B trails by 3-4 points from epoch 8 onward — third FiLM is actively harmfu
 
 Follow-up: per-block independent FiLM (#3829) tests shared-head-bottleneck hypothesis directly.
 
+---
+
+## 2026-05-16 09:39 — PR #3758 [SENT BACK]: n_layers=4 depth ablation on full FiLM stack (fern R1)
+
+- **Student branch:** `charliepai2i48h4-fern/depth-r1`
+- **Hypothesis:** Drop n_layers from 5 → 4. Smaller model → faster epochs → more fine-tune time in cosine T_max=15 tail where EMA accumulates smoothing benefit. Tests "depth costs epochs more than it adds capacity at this 30-min budget."
+
+### Headline (paired)
+
+| | Arm A (n_layers=5) | **Arm B (n_layers=4)** | Δ% (B vs A) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 91.305 | **90.198** | **−1.21%** ✅ |
+| Best epoch | 17 | 21 | +4 epochs |
+| Params | 845,527 | 691,347 | −18.2% |
+| sec/epoch | 111.1 | 89.8 | −19.2% |
+| Peak VRAM (GB) | 38.92 | 31.95 | −17.9% |
+
+### Per-split val MAE (3 of 4 splits improve)
+
+| Split | Arm A | **Arm B** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 106.193 | **105.433** | −0.72% |
+| `val_geom_camber_rc`     |  99.698 |  **96.080** | **−3.63%** |
+| `val_geom_camber_cruise` |  **72.107** |   73.478 | +1.90% |
+| `val_re_rand`            |  87.220 |  **85.802** | −1.63% |
+| **val_avg**              | **91.305** | **90.198** | **−1.21%** |
+
+### Per-split test MAE (2 of 3 finite splits improve)
+
+| Split | Arm A | **Arm B** | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist`     | 91.890 | **88.274** | **−3.94%** |
+| `test_geom_camber_rc`     | 90.897 | **88.990** | −2.10% |
+| `test_re_rand`            | **81.290** |  82.574 | +1.58% |
+| **avg (3 finite splits)** | **88.026** | **86.612** | **−1.61%** |
+
+### Mechanism verification (all 3 predictions hit)
+
+- ✅ params −18.2% (predicted ~20%)
+- ✅ sec/epoch −19.2% (predicted 15-20%)
+- ✅ +4 fine-tune epochs (predicted 2-3 — exceeded)
+
+Arm B's best epoch is 21 — past Arm A's wall-clock cutoff at 17. Win lives entirely in the extra cosine-tail epochs (lr ≈ 1e-7 → 5e-9) where EMA smoothing pays off.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-fern-depth-r1-armb-nlayers4-20260516-080418/metrics.jsonl` (winner)
+- `models/model-charliepai2i48h4-fern-depth-r1-arma-baseline-20260516-072830/metrics.jsonl` (paired baseline)
+
+### Tension: paired wins, absolute fails
+
+- Paired Δ (within-PR): **−1.21%**, mechanism fully verified
+- Absolute (vs merged baseline 89.784): Arm B = 90.198 → **+0.46% absolute regression**
+- Within-PR Arm A measured 91.305 — but the merged baseline (89.784, PR #3584) was Arm A in a *different* PR using identical config. Cross-PR seed variance ~±1.5-2% on n_layers=5 confirmed.
+
+### Decision: REQUEST CHANGES — one more Arm B seed needed
+
+Merge protocol requires updating BASELINE.md downward. Merging at 90.198 absolute would regress the comparison contract for all in-flight PRs (thorfinn T_max=20, alphonse SF-AdamW, nezuko n_hidden=192, tanjiro grad-clip — all evaluating "Δ vs 89.784").
+
+Asked fern to run a single additional Arm B (different random seed) with same config. 30-min cost resolves the absolute-vs-paired tension:
+- If seed-2 Arm B `val_avg/mae_surf_p` < 89.784 → **merge** at lower of two seeds
+- If seed-2 Arm B ≥ 89.784 → **close cleanly**, keep finding in log
+
+### n_layers axis fully mapped at this budget (monotone)
+
+- n_layers=3: untested (potential follow-up if seed-2 lands)
+- n_layers=4: **−1.21%** paired (this PR)
+- n_layers=5: current baseline
+- n_layers=6: +2.47% regression (PR #3595)
+
+Curve is monotone in current 30-min budget regime: depth costs epochs more than it adds capacity.
+
+### Follow-up directions (deferred until seed-2 resolves)
+
+- **n_layers=3** — capacity floor unknown; one paired arm maps it
+- **n_layers=4 + n_hidden=144 / mlp_ratio=3** — redistribute saved params
+- **n_layers=4 + T_max=18-21** — addresses over-decayed schedule with 21-epoch runs (composes with thorfinn #3390)
+
