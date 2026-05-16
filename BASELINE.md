@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-05-16 00:30 — PR #3507: Width scaling n_hidden 128 → 160 (alphonse)
+
+- **val_avg/mae_surf_p: 96.0997** (best epoch 10/10, W&B run `7vxhbv8o`)
+- **test_avg/mae_surf_p: 85.5256** — clean finite metric
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| single_in_dist | (not logged per-epoch) | 103.7483 |
+| geom_camber_rc | (not logged per-epoch) | 92.4243 |
+| geom_camber_cruise | (not logged per-epoch) | 61.3787 |
+| re_rand | (not logged per-epoch) | 84.5510 |
+| **avg** | **96.0997** | **85.5256** |
+
+- **Model config:** Transolver `n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (~1.03M params, ↑ from 662k)
+- **Loss:** L1 (`Config.loss_type = "l1"`, default)
+- **Optimizer:** AdamW, lr=1e-3, weight_decay=1e-4
+- **Schedule:** Linear warmup 2 epochs, cosine to 0 (T_max=10)
+- **Grad clip:** max_norm=1.0
+- **Batch:** 4, surf_weight=10.0
+- **Budget:** 30-min wall clock → 10 epochs; per-epoch time ~168s (↑ from ~134s at n_hidden=128)
+- **Peak VRAM:** 50.1 GB (of 96 GB available — significant headroom remains)
+
+**Reproduce command:**
+```bash
+cd target/ && python train.py --epochs 10 --lr 1e-3 \
+  --agent <student-name> --wandb_name <run-name> --wandb_group <group>
+```
+*(Config.n_hidden is now 160 by default; no extra flag needed)*
+
+---
+
 ## 2026-05-15 22:31 — PR #3089: L1 loss + NaN scoring fix (alphonse)
 
 - **val_avg/mae_surf_p: 100.5275** (best epoch 10/10, W&B run `14w7wdyb`)
