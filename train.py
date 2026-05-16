@@ -160,8 +160,8 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        # GEGLU FFN: effective hidden=hidden_dim, gated feature selection
-        self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim)
+        # GEGLU FFN: intermediate=hidden_dim*mlp_ratio, gated feature selection
+        self.mlp = GEGLUBlock(hidden_dim, hidden_dim, hidden_dim=hidden_dim * mlp_ratio)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -431,7 +431,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=12,
-    mlp_ratio=1,
+    mlp_ratio=2,
     dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
