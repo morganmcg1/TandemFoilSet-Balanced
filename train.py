@@ -81,6 +81,17 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        norm = x.float().pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return (x * norm).type_as(x) * self.weight
+
+
 class SwiGLU(nn.Module):
     # SwiGLU(x) = W2( SiLU(W1 x) * (V x) ). Param-matched to GELU FFN when
     # hidden_inner ≈ (2/3) * (mlp_ratio * n_hidden).
@@ -155,12 +166,12 @@ class TransolverBlock(nn.Module):
                  ffn_type="gelu", ffn_hidden_inner=None):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         if ffn_type == "swiglu":
             # Param-match GELU FFN: 3*hidden_inner*hidden_dim ≈ 2*mlp_ratio*hidden_dim^2
             # => hidden_inner ≈ (2/3)*mlp_ratio*hidden_dim. With hidden_dim=96, mlp_ratio=2
@@ -173,7 +184,7 @@ class TransolverBlock(nn.Module):
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
