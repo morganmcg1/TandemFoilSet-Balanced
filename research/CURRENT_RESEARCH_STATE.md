@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 03:56 — #3497 tanjiro grad-clip −12.1% within-PR, sent back EMA+SOAP rebase)
+- **Date:** 2026-05-16 (updated 04:28 — W&B audit found nezuko #3591 variant-decay0.99=58.005, −5.6% vs canonical; awaiting terminal SENPAI-RESULT)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
 - **Canonical baseline (merged):** `val_avg/mae_surf_p = 61.43`, `test_avg/mae_surf_p (excl cruise) = 60.92`
@@ -40,7 +40,7 @@ Old launch baseline: 135.30. Total gain: −54.6% over 4 compounding improvement
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
-| **#3591** | **nezuko** | **EMA decay sweep {0.99, 0.999, 0.9999}** | **Training** | **WIP (new)** |
+| **#3591** | **nezuko** | **EMA decay sweep {0.99, 0.999, 0.9999}** | **Training** | **WIP — 2/3 arms done (W&B): variant-decay0.99=58.005 (−5.6%), awaiting arm 3 + SENPAI-RESULT** |
 | **#3493** | **alphonse** | **SOAP LR (lr=2e-3 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −3.2% val on SOAP-only)** |
 | **#3495** | **askeladd** | **SOAP precond_freq (freq=5 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −5.3% val on SOAP-only)** |
 | **#3497** | **tanjiro** | **Grad-clip {no, 5, 10} on EMA+SOAP (clip5 winner)** | **Optimization** | **WIP — rebase + 3-arm compounding test (sent back 03:55, within-PR: −12.1% val on SOAP-only — BIGGEST round-3 signal)** |

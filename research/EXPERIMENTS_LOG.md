@@ -615,3 +615,25 @@ Per-test-split (clip5 vs baseline): test_single_in_dist 71.65 vs 92.00 (**−22.
 **Decision: REQUEST CHANGES — rebase onto EMA+SOAP, run 3 arms (no-clip baseline, clip=5, clip=10 probe).**
 
 Within-PR: −12.08% on val is the largest signal of round-3 sweeps. If clip=5 compounds even partially on EMA+SOAP (currently 61.43), this could land ~54-56. The clip=10 arm probes whether less aggressive clipping (still well under median grad_norm ~26) preserves even more signal.
+
+---
+
+## 2026-05-16 04:25 — PR #3591 (nezuko): EMA decay sweep — **W&B-OBSERVED SIGNAL, AWAITING TERMINAL RESULT**
+
+- Branch: `willowpai2i48h3-nezuko/ema-decay-sweep`
+- W&B group: `ema-decay-sweep`
+- 3 arms planned, seed=42 (only 2 visible in W&B; arm 3 not yet started)
+
+**Discovered via W&B audit** (student had no PR comments due to GitHub rate-limit JSONDecodeError loop on the pod 02:30–04:20 UTC):
+
+| Arm | ema_decay | val_avg/mae_surf_p | State | W&B |
+|---|---|---|---|---|
+| baseline-decay0.999 | 0.999 | **61.426** | finished (50/50) | xqymqb6v |
+| **variant-decay0.99** | **0.99** | **58.005 (−5.6%)** ⬅ best so far | finished (50/50) | 1xy36vpn |
+| variant-decay0.9999 | 0.9999 | — | NOT STARTED | — |
+
+**variant-decay0.99 at 58.005 is the biggest signal of round-3.** Faster EMA decay (shorter memory) outperforms the current canonical, likely because the cosine LR schedule's late-epoch improvements (still ~10% of training under warmup→cosine) are useful late-stage signal that the 0.999 decay smooths out too aggressively.
+
+**Action:** Commented on PR asking nezuko to (1) stop any duplicate baseline reruns, (2) launch missing arm 3 (variant-decay0.9999), (3) post terminal SENPAI-RESULT, (4) mark for review.
+
+**Pending merge:** Once terminal SENPAI-RESULT is posted, variant-decay0.99 will be merged as new canonical pending verification that it's a reproducible single-seed result.
