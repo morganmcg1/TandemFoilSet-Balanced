@@ -538,3 +538,57 @@ Per-split breakdown (Arm B, pw=2.0, val): single_in_dist=59.91 (−3.71%), geom_
 - **Metrics:** `models/model-charliepai2i48h2-fern-pg-clip-A-20260516-132937/metrics.jsonl`, `models/model-charliepai2i48h2-fern-pg-clip-B-20260516-140449/metrics.jsonl`, `models/model-charliepai2i48h2-fern-pg-clip-C-20260516-143922/metrics.jsonl`
 - **Decision:** CLOSED no_improvement.
 - **Follow-up:** The diagnostic directly motivates the inverse test: tighten `other` clip *below* 1.0 (e.g., 0.5, 0.3) on the new 8-mech stack (where pressure_weight=2.0 likely elevated output-head MLP gradients further). Assigned as #4016.
+
+---
+
+## 2026-05-16 16:00 — PR #3989: EMA decay re-tune on 8-mech stack (ema_decay=0.995 wins)
+- charliepai2i48h2-askeladd/ema-decay-8mech
+- **Hypothesis:** EMA decay=0.999 was tuned on a 5-mech stack at T_max=80. Under T_max=30+pw=2.0, faster decay (shorter half-life) should better track the recent-weights regime produced by steeper annealing.
+- **Result:** Arm B (ema_decay=0.995) wins — val 51.4403 (−4.25% vs 53.72). Arm A (ema_decay=0.997) also beats baseline: val 52.6190 (−2.06%).
+
+| Arm | EMA decay | val_avg/mae_surf_p | Δ | test_avg/mae_surf_p |
+|-----|-----------|---------------------|---|---------------------|
+| Baseline | 0.999 | 53.7235 | — | 46.6011 |
+| **Arm B (winner)** | **0.995** | **51.4403** | **−4.25%** | **43.9473** |
+| Arm A | 0.997 | 52.6190 | −2.06% | 45.2369 |
+
+Per-split (Arm B): val_single_in_dist=56.17 (−3.71%), val_geom_camber_rc=68.07 (+1.49%), val_geom_camber_cruise=32.12 (−9.27%), val_re_rand=49.40 (−5.91%)
+Test (Arm B): test_single_in_dist=53.55, test_geom_camber_rc=56.79, test_geom_camber_cruise=26.94, test_re_rand=38.51
+
+- **Metrics:** `models/model-charliepai2i48h2-askeladd-ema-decay-8mech-0995-20260516-142331/metrics.jsonl`, `models/model-charliepai2i48h2-askeladd-ema-decay-8mech-0997-20260516-133820/metrics.jsonl`
+- **Decision:** MERGED — new baseline 51.4403. 9th compounding mechanism.
+- **Key finding:** The pre-bf16 finding (faster EMA decay wins) replicated cleanly on the 9-mech stack. Convergence-horizon hypothesis confirmed: T_max=30 collapses LR to 40% by epoch 18 → recent weights are trained at much lower LR → EMA shadow model benefits from tracking them more closely (shorter half-life). re_rand test split gains the most (44.63→38.51, −13.7%) — cross-regime Re generalization benefits most from tighter EMA tracking. Arm A vs Arm B gap is 1.18 pts (at noise floor), so 0.995 isn't conclusively better than 0.997 but both clearly beat 0.999. Askeladd assigned #4029 to push toward 0.993/0.990.
+
+---
+
+## 2026-05-16 16:00 — PR #3984: Pressure weight sweep pw=3.0/4.0 (no_improvement)
+- charliepai2i48h2-nezuko/pressure-weight-3p0 and 4p0
+- **Hypothesis:** pw curve was monotone in {0.5, 1.0, 2.0} — does it continue upward past 2.0?
+- **Result:** Both regressed. pw=2.0 is the unique peak.
+
+| pw | val_avg/mae_surf_p | Δ vs 53.72 |
+|----|---------------------|-------------|
+| **2.0 (baseline)** | **53.7235** | — |
+| 3.0 (Arm A) | 55.0026 | +2.38% |
+| 4.0 (Arm B) | 56.8016 | +5.73% |
+
+- **Metrics:** `models/model-charliepai2i48h2-nezuko-pressure-weight-3p0-20260516-134034/metrics.jsonl`, `models/model-charliepai2i48h2-nezuko-pressure-weight-4p0-20260516-144129/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. Pressure-weight axis closed at pw=2.0.
+- **Key finding:** At pw=3.0, velocity Ux/Uy MAE degrades +5-9%; at pw=4.0, +13%. When velocity is starved, the shared Transolver backbone can no longer represent flow physics well, and pressure itself stops improving. Complete inverted-U curve: 57.79 (pw=0.5) → 56.00 (pw=1.0) → 53.72 (pw=2.0) → 55.00 (pw=3.0) → 56.80 (pw=4.0). Nezuko assigned #4030 (velocity surface down-weighting) as a gentler reallocation approach.
+
+---
+
+## 2026-05-16 16:00 — PR #3887: Cosine T_max bracket 25/40 on 8-mech stack (no_improvement)
+- charliepai2i48h2-edward/cosine-tmax-25-pw2 and cosine-tmax-40-pw2
+- **Hypothesis:** T_max=30 was found optimal on the 7-mech stack (pre-pw=2.0). Does the optimum shift with pw=2.0?
+- **Result:** Both regressed. T_max=30 remains the peak.
+
+| T_max | Final LR at ep18 | val_avg/mae_surf_p | Δ |
+|-------|-------------------|---------------------|---|
+| 25 (Arm A) | 3.95e-5 (23% init) | 56.4444 | +5.07% |
+| **30 (baseline)** | **6.73e-5 (40% init)** | **53.7235** | — |
+| 40 (Arm B) | 1.05e-4 (62% init) | 55.2622 | +2.86% |
+
+- **Metrics:** `models/model-charliepai2i48h2-edward-cosine-tmax-25-pw2-20260516-134404/metrics.jsonl`, `models/model-charliepai2i48h2-edward-cosine-tmax-40-pw2-20260516-143620/metrics.jsonl`
+- **Decision:** CLOSED no_improvement. T_max axis closed at 30.
+- **Key finding:** T_max=30 is a relatively narrow peak. Both directions lose. The 40% final-LR-fraction is the sweet spot for this 18-epoch/batch=4 regime. Tighter anneal (T_max=25) costs more than looser (T_max=40) — confirming that killing late-epoch LR is worse than being slightly too warm. Edward assigned #4031 (Lion β2 sweep) as the next untested axis.
