@@ -2,6 +2,29 @@
 
 Per-PR results log. Earliest at the bottom; latest at the top.
 
+## 2026-05-16 07:45 — PR #3762: H34 RFF n_freq sweep {16,64} (thorfinn) — **assigned**
+
+- Branch: `charliepai2i24h4-thorfinn/rff-nfreq-sweep`
+- Hypothesis: H5 merged RFF at n_freq=32 (+3.9%). H28 closed (preprocess width not the bottleneck). Back to input encoding: does more/fewer Fourier frequencies help? Arm1: n_freq=16 (32-dim), Arm2: n_freq=64 (128-dim, preprocess input changes 86→150). Predicted: n_freq=64 wins for richer spatial basis.
+
+## 2026-05-16 07:45 — PR #3760: H35 AdamW no-decay param groups (fern) — **assigned**
+
+- Branch: `charliepai2i24h4-fern/no-decay-groups`
+- Hypothesis: Current AdamW applies WD uniformly including LayerScale gains, biases, LN. Canonical split (DeiT-III / ConvNeXt / CaIT): only Linear weights get decayed; biases, LN, LayerScale go to no_decay group. Single arm, wd=1e-4 (current default). Predicted -0.5% to -2%.
+
+## 2026-05-16 07:30 — PR #3627: H28 widen preprocess MLP w512+dropout=0.1 (thorfinn) — **CLOSED**
+
+- Branch: `charliepai2i24h4-thorfinn/preprocess-mlp`
+- Result: val_avg=81.97 vs baseline 67.64 → **+21% regression**. Two changes stacked (width 256→512 AND dropout 0.0→0.1); can't disentangle. Per-epoch slowdown 13% (170s vs 150s) ate budget. val_single degressed MOST (+33%) — opposite of prediction. Current 256-wide preprocess is NOT the bottleneck.
+- **Closed**: clear regression.
+
+## 2026-05-16 07:30 — PR #3583: H26 wd=0.001 retest on OneCycleLR (fern) — **CLOSED**
+
+- Branch: `charliepai2i24h4-fern/weight-decay-sweep`
+- Result: val_avg=75.97 vs baseline 67.64 → **+12.3% regression**. All splits worse.
+- Key insight: WD and OneCycleLR are NOT orthogonal. The integrated lr×wd AdamW shrinkage under OneCycleLR's long low-LR tail over-shrinks during fine-tuning. Same mechanism as H27 (max_lr), different lever: schedule's effective WD depends on the LR trajectory.
+- **Closed**: weight_decay=1e-4 (current default) confirmed for OneCycleLR baseline.
+
 ## 2026-05-16 07:30 — PR #3742: H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} (tanjiro) — **assigned**
 
 - Branch: `charliepai2i24h4-tanjiro/pct-start-sweep`

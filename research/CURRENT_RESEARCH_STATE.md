@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 07:35
+- **Date:** 2026-05-16 07:50
 - **Branch:** `icml-appendix-charlie-pai2i-24h-r4`
 - **Round:** charlie-pai2i-24h-r4 (24h, 8 students × 1 GPU, local JSONL metrics only)
 - **Most recent human research directive:** _none — issue queue empty_
@@ -39,8 +39,9 @@
 | **#3705** | **frieren** | **H32 robust loss L1 vs smooth_l1 (β=0.1) — MSE↔MAE mismatch fix** | **WIP (new)** |
 | **#3583** | **fern** | **H26 weight_decay=0.001 — winner on H18 (-7%); sent back for OneCycleLR retest** | **WIP (retest)** |
 | **#3559** | **edward** | **H25 n_layers=6 — winner on H18 with cam_rc -8% recovery; sent back for OneCycleLR retest** | **WIP (retest)** |
-| **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP (new)** |
-| #3627 | thorfinn | H28 widen preprocess MLP (256→512) | WIP |
+| **#3742** | **tanjiro** | **H33 OneCycleLR pct_start sweep {0.10,0.15,0.20} — more fine-tune budget** | **WIP** |
+| **#3762** | **thorfinn** | **H34 RFF n_freq sweep {16,64} — richer/sparser spatial Fourier basis** | **WIP (new)** |
+| **#3760** | **fern** | **H35 AdamW no-decay param groups (biases/LN/LayerScale exempt from WD)** | **WIP (new)** |
 | **#3686** | **askeladd** | **H31 SAM (Sharpness-Aware Minimization) ρ=0.05 — replaces failed EMA direction** | **WIP (new)** |
 | **#3687** | **nezuko** | **H30 gradient clipping max_norm=1.0 — 2-line stability fix** | **WIP (new)** |
 
@@ -64,6 +65,8 @@
 | #3628 | nezuko | H29 per-block geom_proj | Closed — +20% regression, gradient interference from 5× MLP duplication |
 | #3517 | frieren | H19 DropPath=0.20 + LayerScale+OneCycleLR rebase | Closed — +31.7% regression, ls2 depth pattern inverted, geom_gates failed, high seed variance |
 | #3625 | tanjiro | H27 OneCycleLR max_lr sweep {1e-3, 2e-3} | Closed — all arms regress; 30-min cap truncates schedule before fine-tune tail |
+| #3627 | thorfinn | H28 widen preprocess w512 + dropout=0.1 | Closed — +21%; two changes stacked; val_single worst hit; preprocess width not bottleneck |
+| #3583 | fern | H26 wd=0.001 retest on OneCycleLR | Closed — +12%; WD and OneCycleLR are not orthogonal; long low-LR tail amplifies integrated shrinkage |
 
 ## OneCycleLR budget constraint (critical insight)
 
@@ -83,14 +86,21 @@ The 30-min wall-clock cap reliably truncates 15-epoch runs to ~11 epochs. This h
 7. **Inverted-U for weight decay**: H26 found wd=0.001 (10× current 1e-4) is optimal; canonical DeiT-III 0.05 underperforms in this regime.
 8. **DropPath + LayerScale compete on the FFN-depth axis**: H19 DropPath +31.7% on full stack. LayerScale's monotone-growth depth pattern and DropPath's depth-scaled dropout fight over the same dimension. Non-compositional.
 9. **OneCycleLR max_lr is saturated at 5e-4 for 30-min budget**: H27 max_lr sweep both arms regress. Higher peak LR burns schedule budget before fine-tune tail. 5e-4 is near-optimal for this wall-clock window.
+10. **WD and OneCycleLR are not orthogonal**: H26 retest +12%. The integrated lr×wd shrinkage under OneCycleLR's long low-LR tail is much larger than under cosine annealing. WD=1e-4 is the confirmed default.
+11. **Preprocess MLP width is not a bottleneck**: H28 +21% with width 256→512. The current 256-wide preprocess (already 2-layer: 86→256→GELU→128) is not limiting. Capacity gains must go elsewhere.
+12. **No-decay param groups are unexplored**: canonical practice (DeiT-III, ConvNeXt) excludes biases/LN/LayerScale from WD. Currently all params decay uniformly at 1e-4, potentially shrinking H18's LayerScale gains. H35 tests this.
 
 ## Open questions
 
 - **Highest priority**: Does slice_num=32 compose with OneCycleLR? (alphonse H23 retest — prediction: ≤60 val_avg, new best of round)
+- **Highest priority**: Does slice_num=32 compose with OneCycleLR? (alphonse H23 retest — prediction: ≤60 val_avg, new best of round)
 - Does compressing pct_start give more fine-tune budget? (tanjiro H33 {0.10,0.15,0.20})
 - Does robust loss (L1/smooth_l1) improve OOD splits? (frieren H32)
-- Does wd=0.001 compose with OneCycleLR? (fern H26 retest)
+- Does no-decay param grouping protect LayerScale and improve WD? (fern H35)
+- Does n_freq=64 RFF improve spatial resolution? (thorfinn H34)
 - Does n_layers=6 compose with OneCycleLR? (edward H25 retest)
+- Does grad-clip stabilize OneCycleLR high-LR phase? (nezuko H30)
+- Does SAM replace EMA's flat-minimum role? (askeladd H31)
 - Does widening preprocess MLP to 512 help? (thorfinn H28)
 - Does gradient clipping stabilize OneCycleLR high-LR phase? (nezuko H30)
 - Does SAM replace EMA's role as flat-minimum regularizer? (askeladd H31)
