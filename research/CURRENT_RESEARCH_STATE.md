@@ -51,8 +51,8 @@ cd target && python train.py --agent <student> \
 | #4029 | askeladd | EMA decay fine sweep: 0.993 and 0.990 on compile stack | WIP | Notified of new baseline 39.83 |
 | #4030 | nezuko | Velocity surface down-weighting (re-test at lr=1.7e-4): Arm C (ux=uy=0.7), Arm D (ux=uy=0.8) | WIP — SENT BACK | Initial arms ran at lr=2.5e-4: Arm B (0.7) hit val=40.19, test=33.72 (test beats current baseline 33.89); need lr=1.7e-4 re-test for clean comparison |
 | #4154 | fern | Per-group grad-clip looser: other_grad_norm=1.5, 2.0 | WIP | Notified of new baseline 39.83; uses lr=1.7e-4 (correct) |
-| #4061 | tanjiro | Channel-decoupled output heads: split velocity from pressure | WIP | Notified of new baseline 39.83 |
-| #3734 | thorfinn | SwiGLU gated activation in TransolverBlock MLPs (v2) | WIP — STALE | Notified of new baseline 39.83 |
+| #4061 | tanjiro | Channel-decoupled output heads: split velocity from pressure | WIP — STALE (6h, 0% GPU) | Nudged for status; minimal-viable implementation hint posted |
+| #4230 | thorfinn | Weight decay sweep: wd=1e-4, 5e-4 bracketing 3e-4 | WIP — NEW | #3734 SwiGLU closed (17h stale, blocked); wd untouched since #3293 (Lion change) |
 
 ## Key open questions (round 15 — new baseline 39.83)
 
@@ -63,7 +63,7 @@ cd target && python train.py --agent <student> \
 5. **Can velocity surface down-weighting free gradient budget?** (#4030 nezuko) — Arm B (ux=uy=0.7) at lr=2.5e-4 hit test=33.72 (beats baseline test 33.89); val=40.19 fails at lr=2.5e-4. Re-running Arms C/D (0.7 and 0.8) at lr=1.7e-4 for clean comparison.
 6. **Do per-group clip (looser MLP budget) improve on the 12-mech stack?** (#4154 fern)
 7. **Do channel-decoupled output heads improve pressure specialization?** (#4061 tanjiro)
-8. **Does SwiGLU gating improve OOD generalization?** (#3734 thorfinn)
+8. **Does weight decay re-tuning unlock more headroom?** (#4230 thorfinn) — wd untouched at 3e-4 since Lion switch in #3293; bracket with 1e-4 and 5e-4.
 
 ## 12-mechanism stack: full pipeline
 
@@ -109,6 +109,7 @@ cd target && python train.py --agent <student> \
 | #4016 (fern tighter MLP clip) | no_improvement: arms A/B regressed; tighter other_grad_norm discards MLP signal; → #4154 |
 | #4078 (alphonse capacity-compile) | no_improvement: n192/n256 throughput-limited; T_max=30 miscalibrated for n192's ~22-epoch budget → #4167 |
 | #4167 (alphonse capacity-n192-tmax22) | no_improvement: val=50.32 (+26.3%); T_max=22 calibration was correct but model still throughput-limited at 79s/epoch (23 epochs in budget vs n128's 34); capacity direction closed → #4188 compile-mode-sweep |
+| #3734 (thorfinn swiglu-v2) | closed_stale: 17h elapsed, 45 pod restarts, 0% GPU, no commits — SwiGLU twice blocked (v1: #3275/#3383/#3442, v2: #3734); architectural complexity exceeds available implementation budget → #4230 weight-decay-sweep |
 
 ## Potential next research directions
 
@@ -119,8 +120,8 @@ cd target && python train.py --agent <student> \
 - **Velocity surface down-weighting** — IN PROGRESS as #4030 (nezuko)
 - **Per-group clip loosening** — IN PROGRESS as #4154 (fern); other_grad_norm=1.5/2.0
 - **Channel-decoupled heads** — IN PROGRESS as #4061 (tanjiro)
-- **SwiGLU gating** — IN PROGRESS as #3734 (thorfinn); stale
-- **Weight decay sweep**: wd ∈ {1e-4, 2e-4, 5e-4} — fixed at 3e-4 since PR #3293; untested under 12-mech stack
+- **SwiGLU gating** — CLOSED as #3734 (thorfinn 17h stale, blocked on implementation)
+- **Weight decay sweep**: IN PROGRESS as #4230 (thorfinn); wd ∈ {1e-4, 5e-4} bracketing 3e-4 on 12-mech stack
 - **Deeper capacity**: n_layers=6/7 on compile stack — separate from width scaling
 - **Slice count sweep**: slice_num ∈ {32, 48, 96} — fixed at 64; PhysicsAttention slice routing granularity
 - **Longer training** — val still descending at ep34; T_max=50/60 may extract more

@@ -800,3 +800,14 @@ Metric artifacts:
 
 - **Decision:** SENT BACK — re-run as Arms C (ux=uy=0.7) and D (ux=uy=0.8) at lr=1.7e-4 (current baseline LR). Edward's PR #4079 proved lr=1.7e-4 outperforms 2.5e-4 by ~0.86 pts on val at T_max=40; applying that delta to Arm B suggests ~39.3 val at correct LR — would beat baseline.
 
+
+---
+
+## 2026-05-16 23:40 — PR #3734: SwiGLU gated activation in TransolverBlock MLPs (v2) — closed stale
+
+- **Student:** charliepai2i48h2-thorfinn
+- **Hypothesis:** Replace GELU with SwiGLU gated activation in TransolverBlock MLPs to improve OOD generalization.
+- **Status:** CLOSED — stale; no commits in 17 hours, 45 pod restarts, GPU at 0% at advisor check time.
+- **Analysis:** SwiGLU has now been attempted twice without producing a runnable arm — v1 (PRs #3275/#3383/#3442 superseded as v2 #3734) and v2 (#3734). The gated activation requires non-trivial dimension bookkeeping changes (gating mechanism doubles the linear projection width then halves via element-wise product) which appears to be unstable with the current dynamic-shape compile path or bf16 autocast. No metrics produced.
+- **Decision:** Closed direction. Reassigned thorfinn to weight-decay-sweep (#4230) — a pure CLI-flag hyperparameter sweep with no code changes, unblocking the student's GPU budget.
+
