@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import schedulefree
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -348,6 +349,8 @@ def write_experiment_summary(
         "surf_weight": cfg.surf_weight,
         "ema_decay": cfg.ema_decay,
         "epochs_configured": cfg.epochs,
+        "optimizer": "schedulefree.AdamWScheduleFree",
+        "sf_warmup_steps": cfg.sf_warmup_steps,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -395,6 +398,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     ema_decay: float = 0.997  # EMA decay for shadow model evaluated at val/test
+    sf_warmup_steps: int = 200  # Schedule-Free linear LR warmup
 
 
 cfg = sp.parse(Config)
@@ -450,8 +454,13 @@ ema_model = torch.optim.swa_utils.AveragedModel(
 )
 print(f"EMA: decay={ema_decay}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+optimizer = schedulefree.AdamWScheduleFree(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    warmup_steps=cfg.sf_warmup_steps,
+)
+print(f"Optimizer: schedulefree.AdamWScheduleFree warmup_steps={cfg.sf_warmup_steps}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -479,6 +488,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    optimizer.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
@@ -508,12 +518,12 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
+    optimizer.eval()
     ema_model.eval()
     split_metrics = {
         name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
@@ -563,6 +573,7 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+    optimizer.eval()
 
     test_metrics = None
     test_avg = None
