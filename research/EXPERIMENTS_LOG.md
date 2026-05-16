@@ -1,5 +1,158 @@
 # SENPAI Research Results
 
+## 2026-05-16 14:00 — PR #3886: H: DropPath (Stochastic Depth) p=0.1 on SwiGLU ✗ CLOSED (2-seed μ̂=73.63; +8.19 regression; closes activation-noise regularisation family)
+
+- Branch: `willowpai2i48h1-alphonse/droppath_01_swiglu`
+- Student: willowpai2i48h1-alphonse
+
+### Results (W&B `2xloi4wi` seed=0, `1so1w8kh` seed=1, h=128/T_max=15/bf16/SwiGLU + drop_path_rate=0.1)
+
+| Metric | SwiGLU #3680 | DropPath p=0.1 (2-seed μ̂) | Δ vs SwiGLU |
+|--------|:------------:|:--------------------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **73.627 (σ̂=0.422)** | **+8.19** |
+| **test_avg/mae_surf_p** | **62.04** | **68.352 (σ̂=0.750)** | **+6.31** |
+
+### MAJOR finding: activation-noise regularisation family is exhausted on SwiGLU
+
+Combined with PR #3811 (dropout 0.1 null) and PR #3855 (Bilinear gate = 94% of GLU gain from gating mechanism alone), the chain becomes:
+
+> **Multiplicative gating IS the activation-noise regularisation primitive for this network at this data scale. Additional activation/block noise is at best redundant, at worst optimization-rate-limiting.**
+
+### Per-epoch failure mechanism — slow-down tax, not destabilization
+
+- Both seeds were STILL slowly descending at epoch 17 (timeout boundary). Per-epoch decrement is ~half of SwiGLU-baseline's early-training rate.
+- σ̂=0.42 ≈ #3811's 0.58 → noise structure unchanged, regression is deterministic.
+- Per-split val ordering preserved across all 4 splits → floor shifted uniformly, not warped.
+
+Mechanism: stochastic depth's effective batch size for any given block is `(1-p)·B`. At 5 layers with p=0.1, the model sees ~10% fewer block updates per layer per epoch — compounded across the 30-min/17-epoch budget, the slowdown tax cannot be paid back.
+
+### Decision
+
+Per decision tree: μ̂=73.63 > 68 → close. Reassigned alphonse to **weight_decay=1e-2 (AdamW)** — different regularisation primitive (weight-magnitude constraint, not activation noise). Single-knob test of a fresh axis.
+
+---
+
+## 2026-05-16 14:00 — PR #3904: H: GeGLU seed confirm (3-seed) ✗ CLOSED (μ̂=65.99; population tie with SwiGLU resolves GLU question)
+
+- Branch: `willowpai2i48h1-fern/geglu_seed_confirm`
+- Student: willowpai2i48h1-fern
+
+### Results (3-seed GeGLU vs 3-seed SwiGLU pooled comparison)
+
+| Architecture | seeds 0/1/2 val | μ̂ val | σ̂ val | μ̂ test | σ̂ test |
+|--------------|:----------------|:-----:|:-----:|:------:|:------:|
+| SwiGLU #3765 | 65.44 / 67.07 / 66.93 | 66.48 | 0.90 | 63.04 | 0.69 |
+| **GeGLU #3904** | 65.37 / 66.38 / 66.22 | **65.99** | **0.54** | **62.46** | **0.51** |
+| Δ (GeGLU − SwiGLU) | — | −0.49 | — | −0.58 | — |
+| Z-score | — | −0.81 | — | −0.98 | — |
+
+Both Δ are within 1σ — **population-level equivalence between GeGLU and SwiGLU.**
+
+### MAJOR finding: GLU activation choice is statistical noise; gating mechanism is the lever
+
+Combined with PR #3855 (Bilinear gate result):
+
+| GLU variant | Activation in gate | μ̂ val | Notes |
+|-------------|:-------------------|:-----:|:------|
+| GELU baseline | — (no gating) | 90.77 | reference floor |
+| Bilinear | identity (no activation) | 66.88 | gating alone gets 94% of GLU gain |
+| SwiGLU | SiLU | 66.48 | full GLU recipe |
+| GeGLU | GELU | 65.99 | full GLU recipe with GELU gate |
+
+**Final GLU family characterisation:** gating mechanism = 94% of gain; activation choice in gate (SiLU/GELU/identity) is ~6% and within noise. PR #3810's single-seed GeGLU win (65.37) was a lucky low draw within GeGLU's distribution — directionally correct (GeGLU 12/12 test-split direction-of-gap favors GeGLU) but sub-σ.
+
+### Programme-level update
+
+- **Combined GLU pooled floor:** μ̂≈66.24, σ̂≈0.74 (n=6 across SwiGLU+GeGLU)
+- **Strong 2-seed win bar:** val < 64.76 (essentially identical to the SwiGLU-only 64.7 bar)
+- GeGLU σ̂=0.54 — the LOWEST 3-seed σ̂ observed in this programme (vs SwiGLU 0.90, GELU 1.54). Real if modest signal that GeGLU may be marginally more reliable run-to-run; doesn't change merge-rule decisions.
+
+### Decision
+
+3-seed μ̂=65.99 does NOT beat the 65.37 single-seed programme best. Per merge rule, close. Reassigned fern to **AdamW β2=0.95 (LLaMA-style)** — orthogonal optimizer axis untouched in this programme.
+
+---
+
+## 2026-05-16 14:00 — PR #3932: H: head_and_embed 2.5× LR boost on SwiGLU ✗ CLOSED (val=70.31 zone-5 regression; steady-state mechanism CONFIRMED, early-step instability is the failure mode)
+
+- Branch: `willowpai2i48h1-askeladd/head_embed_lr_25x_swiglu`
+- Student: willowpai2i48h1-askeladd
+
+### Results (W&B per PR, seed=0, h=128/T_max=15/bf16/SwiGLU + head_and_embed lr=1.25e-3)
+
+| Metric | SwiGLU #3680 | head_and_embed 2.5× | Δ |
+|--------|:------------:|:-------------------:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **70.31** | **+4.87** |
+| **test_avg/mae_surf_p** | **62.04** | **65.62** | **+3.58** |
+
+### MAJOR finding: gradient-equilibrium argument is CORRECT at steady-state
+
+Per-block grad-norm at epoch 5:
+
+| Metric | Pre-boost (#3768) | 1.75× (#3832) | **2.5× (this)** |
+|---|---:|---:|---:|
+| head_and_embed grad_norm | 3.48 | 2.32 | **1.87** |
+| block_0 grad_norm | 1.12 | 0.71 | **0.61** |
+| **head/block_0 ratio** | **3.11×** | 3.27× | **3.09×** |
+
+The 2.5× multiplier **restored the gradient-equilibrium ratio** — same value as pre-boost (3.11×). The mechanistic argument that 1.75× was undersized was correct; 2.5× is the right magnitude.
+
+### What failed: bounded to early-step instability
+
+- Val at ep 1 = **185** (vs SwiGLU baseline ~80) — lr=1.25e-3 on head_and_embed took oversized first steps.
+- Model spent ~8 epochs recovering from the initial trajectory deviation.
+- No NaN, no divergence, no spike — just oversized first steps the cosine LR couldn't compensate.
+- **17-epoch budget cannot absorb a ~10-epoch recovery gap.**
+
+### Lever direction CONFIRMED, magnitude CONFIRMED, missing piece IDENTIFIED
+
+The window between "equilibrium-correct" (2.5×) and "early-stable without warmup" (1.75×) does not exist as a static multiplier. The natural rescue is **warmup**.
+
+### Decision
+
+Reassigned askeladd to **head_and_embed 2.5× LR + 500-step linear warmup on head_and_embed only** (PR #3993). Block groups stay at full LR from step 1 (already well-conditioned at 5e-4). Hypothesis becomes precise: "the lever works when given a warmup period to find the right linearization regime."
+
+---
+
+## 2026-05-16 14:00 — PR #3934: H: T_max=12 cosine on SwiGLU h=128 ✗ CLOSED (val=72.13 best, val=81.45 final; MAJOR PyTorch finding)
+
+- Branch: `willowpai2i48h1-thorfinn/tmax12_swiglu_h128`
+- Student: willowpai2i48h1-thorfinn
+
+### Results
+
+| Metric | SwiGLU #3680 | T_max=12 (best) | T_max=12 (final ep 17) | Δ (best) | Δ (final) |
+|--------|:------------:|:---------------:|:----------------------:|:---:|:---:|
+| **val_avg/mae_surf_p** | **65.44** | **72.13** (ep 14) | **81.45** | **+6.69** | **+16.01** |
+
+### MAJOR PYTORCH FINDING: `CosineAnnealingLR(T_max=N)` is NOT clamped at zero after T_max
+
+The PR's hypothesis ("near-zero LR tail does implicit averaging") relied on a schedule shape that **PyTorch does not produce**.
+
+**Behavior:** `CosineAnnealingLR(T_max=12)` follows the un-clamped half-cosine. At step `2*T_max` (=24, ep 24) the LR RETURNS TO PEAK. Over 17 epochs:
+
+| Epoch | LR (T_max=12) | Effect |
+|-------|--------------:|--------|
+| 12 | ≈0 | minimum of cosine |
+| 13 | rising | LR going UP from 0 toward peak |
+| 17 | ≈1.85e-4 | ~37% of peak, actively undoing convergence |
+
+The model converged to its best at ep 14 (val=72.13) and was then dragged AWAY from that minimum as the LR rebounded over ep 14-17 (val=81.45 at terminal).
+
+### Programme-wide warning
+
+**Any `T_max < total_epochs` is a footgun.** Validated schedule choices are:
+
+- **`T_max = total_epochs`** — full half-cosine matches budget, LR=0 exactly at the final epoch
+- **`T_max > total_epochs`** — cosine incomplete at the end; LR is still > 0 at final epoch (SwiGLU baseline's T_max=15 over 17 epochs: final LR ≈2.2e-5, harmless)
+- **`SequentialLR(cosine, constant(0))`** — manual annealed-then-flat (queued as a follow-up)
+
+### Decision
+
+Reassigned thorfinn to **T_max=17 cosine matched to training length** (PR #3994). Cleanest follow-up — full half-cosine completes exactly at ep 17, LR=0 at the final step, no rebound. Tests whether the SwiGLU-baseline's 2-epoch near-zero tail under T_max=15 was wasted budget that the matched schedule could turn into descent.
+
+---
+
 ## 2026-05-16 13:25 — PR #3888: H: fc_main LR boost 1.5× on SwiGLU ✗ CLOSED (val=67.40 null; per-projection LR asymmetry invalidated)
 
 - Branch: `willowpai2i48h1-frieren/fc_main_lr_swiglu`
