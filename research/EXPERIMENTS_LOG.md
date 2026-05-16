@@ -3,6 +3,68 @@
 Track: `charlie-pai2i-24h-r1`
 Advisor branch: `icml-appendix-charlie-pai2i-24h-r1`
 
+## 2026-05-16 — Loop 16 actions (post-SmoothL1 merge)
+
+**Context**: PR #3127 (SmoothL1) merged Loop 15 with new best val_avg=94.97 / test_avg=85.04 (−15.0%). 5 PRs landed for review against the new baseline; all 5 had results measured on the OLD MSE baseline (111.75).
+
+**PR closures (4)**:
+
+### PR #3719 — frieren — lr=5e-4 → 1e-3 (+warmup arm) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-frieren/lr-1e3`
+- **Hypothesis**: Baseline at 18 epochs is step-quality limited (loss descending at final cosine-annealed epoch). Doubling effective lr via integral should yield 1–5% improvement.
+- **Two-arm result**:
+  - Arm 1 (lr=1e-3 no-warm): val_avg=112.69 (+0.85% on OLD 111.75), asymmetric per-split (only camber_rc improved −1.69%)
+  - Arm 2 (lr=1e-3 + 375-step linear warmup): val_avg=112.09 (+0.31%), test_avg=99.83. Warmup recovered single_in_dist/cruise but lost camber_rc win.
+- **Verdict**: CLOSED — student's own conclusion: "Closes the global-lr-tuning axis."
+- **Systemic finding**: A single global lr cannot simultaneously optimize all 4 val splits at this epoch budget. Per-split convergence profiles diverge: camber_rc wants higher lr; single_in_dist/re_rand are at convergence at lr=5e-4; cruise is roughly lr-invariant in [5e-4, 1e-3]. The new SmoothL1 baseline reduced the camber_rc gap from +18.5% to +9.3%, weakening the motivation for further global-lr work.
+- **Metric artifacts**: `models/model-lr-1e3-20260516-053453/metrics.jsonl`, `models/model-lr-1e3-warmup-20260516-064253/metrics.jsonl`
+
+### PR #3624 — nezuko — Scale-only LayerNorm (bias=False) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-nezuko/scale-only-layernorm`
+- **Hypothesis**: If RMSNorm's matched-epoch gain (#3496) comes from dropping bias terms, scale-only LayerNorm should reproduce most of it.
+- **Result (4 independent seeds)**: val_avg mean=115.69 ±0.78 (+2.69% on OLD baseline), test_avg=104.42 ±1.10 (+5.16%). n_params verified at 660,951 (−1,408 from baseline 662,359 = exact 11 LN sites × 128 bias).
+- **Verdict**: CLOSED. Regression confirmed across 4 seeds; bias-drop alone is NOT the RMSNorm gain mechanism.
+- **Systemic finding (HIGH VALUE)**: Bias-drop closes only ~14% of the RMSNorm matched-epoch gap (#3496). **Mean-subtraction in LayerNorm is the load-bearing piece** (~86% of the gain). Bias term is mildly load-bearing for late-stage fine-tuning. Future norm work should target mean-subtraction removal (RMSNorm proper), not bias removal.
+- **Metric artifacts**: 4 `models/model-scale-only-layernorm-2026051*/metrics.jsonl` files
+
+### PR #3585 — fern — Per-domain weight (racecar_tandem 2.0×) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-fern/per-domain-loss-weight`
+- **Hypothesis**: Upweighting `racecar_tandem` loss 2.0× should push parameters serving camber_rc generalization (5-way convergent evidence on wider trunk).
+- **Result**: val_avg=112.59 (+0.76% on OLD baseline), test_avg=102.77 (+3.49%). camber_rc improved −0.78% (direction confirmed, magnitude small), but cruise regressed +3.91% (the budget squeeze: tandem 30%→46% share crowded cruise 30%→22%).
+- **Verdict**: CLOSED. Direction partially confirmed but net-negative; not sending back at 1.5× because (a) SmoothL1 already reduced camber_rc-as-discriminator gap from +18.5% to +9.3% (weakening the mechanism), and (b) the 5-way convergent evidence was from WIDER trunk (n_hidden=192); on narrow+bf16 the camber_rc cluster may be capacity-clipped.
+- **Metric artifacts**: `models/model-per-domain-weight-tandem2-20260516-063248/metrics.jsonl`
+
+### PR #3555 — alphonse — Coord jitter σ=0.01 on (x, z) — CLOSED
+
+- **Student branch**: `charliepai2i24h1-alphonse/coord-jitter-sigma01`
+- **Hypothesis**: Input-side denoising regularizer forces smoothness for memorized templates; biggest predicted improvement on val_geom_camber_rc.
+- **Result**: val_avg=112.64 (+0.80% on OLD baseline), test_avg=102.28 (+2.99%). Direction confirmed on rc (−0.91%) and single_in_dist (−1.20%), but cruise regressed +5.16% (large) and re_rand regressed +1.63%.
+- **Verdict**: CLOSED. Cost asymmetry (cruise −5.16% vs rc −0.91%) makes the axis low-EV. SmoothL1's L1 tail already absorbs much of the "force smoothness on memorized templates" mechanism by de-emphasizing large residuals.
+- **Metric artifacts**: `models/model-alphonse-coord-jitter-sigma01-20260516-062942/metrics.jsonl`
+
+**Send-back (1)**:
+
+### PR #3676 — edward — slice_num=48 — SENT BACK
+
+- **Student branch**: `charliepai2i24h1-edward/slice-num-48`
+- **Hypothesis**: slice_num=64 is over-parameterized at narrow trunk; reducing to 48 should save compute → more cosine-completed epochs.
+- **Result (2 seeds on OLD baseline)**: Run A val_avg=105.77 (−5.36%), Run B val_avg=111.76 (+0.012%). Mean −2.67%. Compute savings unambiguous and structural: 98s → 88s/epoch (−10%), 32.95 → 29.84 GB (−9.4%), 21 cosine-annealed epochs in 30.8 min.
+- **Verdict**: SENT BACK for rebased re-run on SmoothL1 baseline (94.97) with 3 seeds (42, 123, 7) at 21 epochs. Compute savings + Run A's promise make this a cheap repeat. Also asked edward to add deterministic seeding (since 2-seed variance was 5.99 — too noisy to interpret).
+- **Metric artifacts**: `models/model-slice-num-48-20260516-{052338,062231}/metrics.jsonl`
+
+**Dispatches (4 new + 1 send-back = 5 students re-engaged)**:
+
+| PR | Student | Slug | Axis | Why |
+|---|---|---|---|---|
+| #3676 (sent back) | edward | slice-num-48 | Slice mechanism | 3-seed rebased re-run on SmoothL1 + 21 epochs |
+| #3798 | frieren | pure-l1 | Loss formulation | F.l1_loss — limit test of SmoothL1 beta→0 |
+| #3800 | fern | surf-p-weight-4x | Per-channel weighting | surf_p 4× inside surface loss — direct metric attack |
+| #3802 | alphonse | compile-determinism | Throughput | torch.compile + 23-epoch budget-soak on SmoothL1 underfit |
+| #3804 | nezuko | n-hidden-160 | Capacity | Wider trunk on SmoothL1 (width × loss compounding test) |
+
 ## 2026-05-15 13:34 — PR #3130: Wider Transolver: n_hidden 128->192, n_head 4->6 — MERGED
 
 - **Student branch**: `charliepai2i24h1-edward/wider-h192-h6`
