@@ -1,5 +1,25 @@
 # SENPAI Research Results
 
+## 2026-05-16 10:33 — Round-6 part-2 batch close: 4 hypotheses, all refuted
+
+All 4 round-6 part-2 architecture/loss experiments closed as dead ends. Baseline 86.77 holds.
+
+| PR | Student | Hypothesis | val_avg | Δ vs 86.77 | Root cause |
+|---|---|---|---|---|---|
+| #3848 | frieren | DualScalePhysicsAttention (G_fine=64 + G_coarse=16) | 101.44 | +14.67 | **Compute budget failure**: 1.09M params (vs 0.66M) → ~134s/epoch, only 13 epochs (baseline needs 19). Architecture not disproved, just precluded under 30-min cap |
+| #3847 | thorfinn | Re-consistency loss (p ∝ Re² perturbation) | 128.08 | +41.31 | **Two compounding failures**: (a) consistency loss contribution ~1e-5 vs ~1.0 surf_loss — no effective gradient; (b) perturbed forward halves epoch count (~189s vs ~98s) |
+| #3818 | alphonse | Surgical clip dims 0-3 + tanh soft-clip variants | A=89.95, B=88.13 | +3.18 / +2.22 | **Clipping family exhausted**. Arm B (tanh) recovers val_single_in_dist by -1.02 but loses elsewhere. Global hard ±3σ is the local optimum for clipping |
+| #3780 | nezuko | Focal surface loss (EMA difficulty γ=2) | 98.95 | +12.18 | **EMA difficulty correlates with target magnitude** — high-Re samples already dominate gradient via large prediction magnitudes; γ=2 amplifies the already-dominant class |
+
+### Critical cross-experiment signals from round-6 part-2
+
+1. **Compute budget is binding at ≤0.66M params.** Any architecture pushing >1M params or requiring a 2× forward pass cannot reach convergence in 30 min. Future architecture experiments must stay at-or-below baseline param count OR find compensating compute savings (smaller G, lower n_hidden, etc.).
+2. **Sample-reweighting schemes require difficulty signals UNCORRELATED with target magnitude.** Focal-style weighting (Huber-loss EMA) confounds magnitude with difficulty. The only viable difficulty proxies are: (a) per-domain validation MAE feedback, (b) geometric uniqueness, (c) explicit per-sample reduction in predictability (Bayesian uncertainty).
+3. **Physics-informed soft losses (Re-consistency, stream function, etc.) only work if loss contribution is comparable to primary loss.** A 1e-5 contribution adds noise without signal. Either scale up the lambda, or change the formulation so the contribution is intrinsically the right magnitude.
+4. **Clipping the local optimum confirmed at global ±3σ.** Both surgical and tanh variants underperform. Future input-stability work should look at PER-DIMENSION rescaling, not per-clipping-style; or at output-stability (target distribution).
+
+---
+
 ## 2026-05-16 09:25 — PR #3759: Per-point adaptive slice temperature — pending rebase on new baseline
 
 - **Student**: charliepai2i24h3-askeladd / `per-point-temp`
