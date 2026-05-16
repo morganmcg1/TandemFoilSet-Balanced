@@ -573,6 +573,11 @@ torch.cuda.manual_seed_all(cfg.seed)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f"  seed={cfg.seed}")
 
+if cfg.seed is not None:
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seed: torch + cuda + sampler seeded to {cfg.seed}")
+
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
@@ -583,7 +588,13 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler_gen = None
+    if cfg.seed is not None:
+        sampler_gen = torch.Generator()
+        sampler_gen.manual_seed(cfg.seed)
+    sampler = WeightedRandomSampler(
+        sample_weights, num_samples=len(train_ds), replacement=True, generator=sampler_gen,
+    )
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
