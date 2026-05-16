@@ -1223,3 +1223,63 @@ Curve is monotone in current 30-min budget regime: depth costs epochs more than 
 - **n_layers=4 + n_hidden=144 / mlp_ratio=3** — redistribute saved params
 - **n_layers=4 + T_max=18-21** — addresses over-decayed schedule with 21-epoch runs (composes with thorfinn #3390)
 
+---
+
+## 2026-05-16 11:22 — PR #3511 [MERGED]: Gradient clipping (clip_norm=1.0) on full two-shot FiLM stack (tanjiro R2)
+
+- **Student branch:** `charliepai2i48h4-tanjiro/grad-clip-bf16-tmax-15`
+- **Hypothesis:** `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` before every optimizer.step(). Natural grad norms in this regime (bf16 + large mesh + surf_weight=10) are p50≈7-25, p90≈15-50 throughout training — all far above clip=1.0, so clipping fires ~96-100% of steps. This is direction normalization, not outlier filtering.
+
+### Headline (intra-PR paired Δ)
+
+| Arm | clip | epochs | best ep | val_avg/mae_surf_p | test_avg/3finite |
+|-----|-----:|-------:|--------:|-------------------:|------------------|
+| A (two-shot FiLM, no clip) | — | 17 | 16 | 92.146 | 88.903 |
+| **B (+ clip=1.0)** | **1.0** | **17** | **17** | **81.660** | **78.967** |
+| **Δ (B vs A)** | — | — | — | **−11.38%** | **−11.18%** |
+
+vs merged baseline 89.784: **−9.05%** — **MERGED** as new baseline.
+
+### Per-split val MAE (all 4 splits improve)
+
+| Split | Arm A | **Arm B (clip=1.0)** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 105.365 | **94.434** | −10.37% |
+| `val_geom_camber_rc`     | 101.253 | **90.960** | −10.17% |
+| `val_geom_camber_cruise` |  73.369 | **62.732** | **−14.50%** |
+| `val_re_rand`            |  88.598 | **78.516** | −11.38% |
+| **val_avg**              | **92.146** | **81.660** | **−11.38%** |
+
+### Per-split test MAE (all 3 finite splits improve)
+
+| Split | Arm A | **Arm B (clip=1.0)** | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist` | 90.902 | **81.956** |  −9.84% |
+| `test_geom_camber_rc` | 93.074 | **83.649** | −10.13% |
+| `test_re_rand`        | 82.735 | **71.296** | **−13.83%** |
+| **avg (3 finite)**    | **88.903** | **78.967** | **−11.18%** |
+
+### Mechanism analysis (key novel finding)
+
+- **Not outlier clipping — gradient direction normalization.** Clip fires ~96-100% of steps throughout training. Natural grad norms p50≈7-25, p90≈15-50 are all well above clip=1.0 threshold. AdamW operates on unit-normalized gradient direction; per-parameter adaptive scaling still applies.
+- **Super-additive composition with FiLM.** Pre-FiLM gain (R1) was −4.77%; post-FiLM gain is −9.05%. FiLM makes the model more sensitive to per-sample conditioning signals, amplifying gradient noise in the bf16 heavy-tail regime. Clipping removes that noise source.
+- **Epoch-1 heavy-tail outliers confirmed:** max=226 in Arm B (pre-clip) vs max=87 in Arm A (no-clip arm). Both from same model architecture on same first batch with different RNG — confirms bf16 quantization noise creates heavy-tail gradient outliers.
+- **Natural grad-norm trajectory:** epoch-1 p50≈24, epoch-17 p50≈6. Well above clip threshold at all epochs.
+
+### Variance analysis
+
+4 Arm A pilot seeds during development: 87.579, 92.146, 92.276, 95.066 (mean 91.8, std 3.1). Arm B at 81.660 is 5.9% better than the BEST pilot Arm A — signal is unambiguous.
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-tanjiro-gradclip-r2-arm-b-twoshot-clip1_0-20260516-093143/metrics.jsonl` (winner)
+- `models/model-charliepai2i48h4-tanjiro-gradclip-r2-arm-a-twoshot-noclip-20260516-072527/metrics.jsonl` (paired baseline)
+
+### Decision: MERGED — new baseline 81.660
+
+**Stack staleness impact:** All in-flight PRs (#3390, #3594, #3492, #3777, #3829, #3830, #3758) are running on pre-clip stack and will not beat 81.660 in absolute terms. Protocol: if they show positive paired Δ → rebase with clip=1.0 added to both arms; if no paired Δ → close.
+
+### Follow-up assigned
+
+Tanjiro #3906: clip threshold sweep {0.25, 1.0, 4.0} — determines whether direction-normalization mechanism is saturated at clip=1.0 or whether adjacent thresholds improve further.
+

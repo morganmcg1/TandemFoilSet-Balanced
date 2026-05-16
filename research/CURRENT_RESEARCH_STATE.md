@@ -1,19 +1,25 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 09:45 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 11:25 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
 ## Current research focus
 
-**Six axes confirmed and merged.** Compound stack: Huber + bf16 + cosine T_max=15 + EMA decay=0.999 + single-shot FiLM + two-shot FiLM.
+**Seven axes confirmed and merged.** Compound stack: Huber + bf16 + cosine T_max=15 + EMA decay=0.999 + single-shot FiLM + two-shot FiLM + **grad_clip_norm=1.0**.
 
-**Current best: 89.784 val_avg/mae_surf_p** (frieren #3584, two-shot FiLM on full stack, 2026-05-16 04:50)
+**Current best: 81.660 val_avg/mae_surf_p** (tanjiro #3511, grad clip=1.0 on two-shot FiLM stack, 2026-05-16 11:22)
 
-### 🔥 Two huge unmerged signals on stale stacks — both need composition verify (in progress)
+⚠️ **STACK STALENESS WARNING:** All in-flight experiments (#3390, #3594, #3492, #3777, #3829, #3830, #3758) are running WITHOUT --grad_clip_norm 1.0. They will not beat 81.660 in absolute terms. When they report: if paired Δ > 0 → send back for rebase with clip=1.0 in both arms; if paired Δ ≤ 0 → close.
 
-- **🔥 T_max=20 vs T_max=15 (thorfinn #3390 R2):** R1 showed Arm C (bf16+T_max=20) = **88.229** on bf16-only stack. Mechanism: T_max=15 floors at LR=5e-8 by epoch 16, wasting 3 of 19 bf16 epochs. Sent back for verify on full FiLM stack. Predicted: **80-85** if compose.
-- **🔥 Schedule-Free AdamW (alphonse #3594 R2):** R1 showed −20.75% (71.492 vs 90.207) on pre-two-shot-FiLM stack. Parallel attack on same LR-floor problem. Sent back for verify. Predicted: **70-75** if compose.
+### 🔥 MAJOR WIN: Gradient clipping merged (+−9.05% → new baseline 81.660)
+
+Grad clip=1.0 (direction normalization at ~96-100% clip rate) merged as the 7th axis. All experiments now must include `--grad_clip_norm 1.0` to beat the new baseline.
+
+### 🔥 Two high-priority signals running on stale stacks — predicted to need rebase
+
+- **🔥 T_max=20 (thorfinn #3390 R2):** Running on FiLM stack WITHOUT clip. Predicted ~87-92 in absolute (won't beat 81.660). If paired Δ positive → rebase with clip. Tanjiro R1 predicted T_max=20 could reach ~80-85 on full stack.
+- **🔥 SF-AdamW (alphonse #3594 R2):** Running on FiLM stack WITHOUT clip. R1 showed −20.75%. If paired Δ reproduces → rebase with clip. Could be transformative.
 
 ### Confirmed closed axes
 
@@ -24,16 +30,16 @@
 
 ### Key in-flight experiments
 
-| Student | PR | Hypothesis | Status | Expected range |
-|---------|----|-----------|--------|---------------|
-| thorfinn | #3390 | **🔥 T_max=20 on full FiLM stack** | Sent back for R2 | 80-85 |
-| alphonse | #3594 | **🔥 SF-AdamW on full FiLM stack** | Sent back for R2 | 70-75 |
-| nezuko | #3492 | n_hidden=192 on full FiLM stack | Sent back for R2 | 86.5-88.5 |
-| tanjiro | #3511 | grad_clip=1.0 on full FiLM stack | Sent back for R2 | 86-88 |
-| fern | #3758 | n_layers=4 depth ablation | Sent back R2 (seed-2) — paired Δ −1.21% ✅ but abs 90.198 > 89.784 | seed-2 < 89.784 → merge |
-| askeladd | #3777 | SDF input features | Assigned | 87-89 |
-| frieren | #3829 | Per-block independent FiLM heads | Just assigned | 87-89 |
-| edward | #3830 | Lookahead optimizer wrapper | Just assigned | 88-89.5 |
+| Student | PR | Hypothesis | Status | vs 81.660 baseline |
+|---------|----|-----------|--------|--------------------|
+| tanjiro | #3906 | Clip threshold sweep {0.25, 1.0, 4.0} | ✅ Just assigned | Primary — optimizing the clip axis |
+| thorfinn | #3390 | T_max=20 on FiLM stack (no clip) | Running | Will need rebase if paired Δ > 0 |
+| alphonse | #3594 | SF-AdamW on FiLM stack (no clip) | Running | Will need rebase if paired Δ > 0 |
+| nezuko | #3492 | n_hidden=192 on FiLM stack (no clip) | Running | Will need rebase if paired Δ > 0 |
+| askeladd | #3777 | SDF input features (no clip) | Running (pod restarted) | Will need rebase if paired Δ > 0 |
+| frieren | #3829 | Per-block FiLM heads (no clip) | Running | Will need rebase if paired Δ > 0 |
+| edward | #3830 | Lookahead optimizer (no clip) | Running | Will need rebase if paired Δ > 0 |
+| fern | #3758 | n_layers=4 seed-2 confirm (no clip) | Running seed-2 | Likely fail abs; if seed-2 < 89.784 → note depth win, close vs 81.660 |
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
@@ -46,7 +52,8 @@
 | #3289 | Cosine T_max=15 (thorfinn) | −10.3% vs Huber fp32 / −1.4% vs bf16 | 100.059 (fp32) |
 | #3126 | EMA decay=0.999 Karras-ramp (nezuko) | −1.06% vs bf16+T_max=15 arm | 96.464 |
 | #3122 | FiLM conditioning — log Re, AoA, NACA, gap, stagger (frieren) | −4.00% vs EMA baseline | 92.606 |
-| #3584 | Two-shot FiLM — attn + MLP per block, shared module, +0 params (frieren) | −3.05% vs FiLM baseline | **89.784** |
+| #3584 | Two-shot FiLM — attn + MLP per block, shared module, +0 params (frieren) | −3.05% vs FiLM baseline | 89.784 |
+| **#3511** | **Grad clip=1.0 — direction normalization on bf16+FiLM stack (tanjiro)** | **−9.05% vs two-shot FiLM** | **81.660** |
 
 ## Falsified / closed hypotheses
 
@@ -92,15 +99,21 @@ slice_num=64 is the optimum at n_hidden=128 capacity. Revisit sn=96 only if n_hi
 
 ## Potential next hypotheses (not yet assigned)
 
-1. **Lion optimizer** — gradient-sign updates; may be redundant if SF-AdamW lands. Test if SF-AdamW doesn't reproduce.
-2. **Sobolev / gradient loss** — physically motivated; adds gradient supervision near surface. Complex implementation. High-EV but high-effort.
-3. **n_layers=4 + n_hidden=192 compound** — only if both individually win on FiLM stack.
-4. **LR-scaled bigger batch** — askeladd #3365 falsified flat-LR; scaled (lr × √(B/4)) might still win.
-5. **Wider FiLM MLP hidden** — `film_mlp_hidden=256`; tests conditioner body capacity orthogonal to per-block heads.
+All future experiments must include `--grad_clip_norm 1.0` in the full stack.
+
+1. **Clip threshold optimum** — tanjiro #3906 testing {0.25, 1.0, 4.0}. Result pending.
+2. **Lion optimizer** — gradient-sign updates, natural direction normalization. Given clip=1.0 works by direction normalization, Lion may be redundant — or may be better (sign projection is more extreme than L2 clip). Test after clip sweep.
+3. **Sobolev / gradient loss** — physically motivated; adds gradient supervision near surface. High-EV but high-effort.
+4. **T_max=20 + clip** — natural composition; thorfinn #3390 will likely need rebase onto full stack.
+5. **SF-AdamW + clip** — eliminates cosine schedule; alphonse #3594 likely needs rebase.
+6. **n_layers=4 + clip** — fern's depth finding may compose with clipping.
+7. **n_hidden=192 + clip** — capacity expansion on new baseline.
+8. **Wider FiLM MLP hidden** — `film_mlp_hidden=256`; tests conditioner body capacity.
+9. **Adaptive Gradient Clipping (AGC, NFNet)** — per-parameter group clip based on param norm; finer-grained than global L2 clip.
 
 ## Operational notes
 
-- **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond --two_shot_film`
+- **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond --two_shot_film --grad_clip_norm 1.0`
 - **GH API rate limits:** recurring ~40-min windows; student pods auto-recover.
 - **test_geom_camber_cruise NaN:** cruise-sample overflow in read-only `data/scoring.py`; use 3-split partial mean for test comparisons.
 - **Depth-vs-epochs insight:** n_layers=6 loses 3 fine-tune epochs to n_layers=5. Wall-clock cost is the binding constraint.

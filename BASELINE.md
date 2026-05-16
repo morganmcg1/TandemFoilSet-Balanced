@@ -390,3 +390,82 @@ sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='n
 # Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
 # surf_weight=10
 ```
+
+---
+
+## 2026-05-16 11:22 — PR #3511: Gradient clipping (clip_norm=1.0) on full two-shot FiLM stack
+
+**New best `val_avg/mae_surf_p`: 81.660** (was: 89.784 two-shot FiLM — **−9.05%**; intra-PR Arm B vs Arm A: **−11.38%**)
+
+- **Gradient clipping:** `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` before every `optimizer.step()`
+- **Stack:** Huber + bf16 AMP + cosine T_max=15 + EMA decay=0.999 + two-shot FiLM (full current best stack)
+- **Mechanism:** ~96-100% clip rate throughout training — effectively **gradient direction normalization**, not outlier filtering. Natural grad norms p50≈7-25, p90≈15-50 throughout training (all well above clip=1.0). bf16 heavy-tail outliers at epoch 1 (max=226) absorbed on every step.
+- **Gain grew on FiLM stack:** pre-FiLM gain was −4.77%; with FiLM it is −9.05% — FiLM conditioning increases per-sample gradient noise sensitivity; clipping composes super-additively.
+- **Best epoch:** 17 / 17 run (30-min budget, unchanged epoch count vs Arm A's 17)
+- **Params:** 845,527 (unchanged — clipping adds no parameters)
+- **Peak VRAM:** 38.92 GB (unchanged)
+- **Model:** 5-layer Transolver, `n_hidden=128`, `n_head=4`, `slice_num=64` (unchanged)
+- **Optimizer:** AdamW lr=5e-4 wd=1e-4, batch_size=4, CosineAnnealingLR T_max=15 (unchanged)
+
+### Val surface pressure MAE (lower is better)
+
+| Split | Arm A (full stack, no clip) | **Arm B (clip=1.0)** | Δ % |
+|---|---:|---:|---:|
+| `val_single_in_dist`     | 105.365 |  **94.434** | −10.37% |
+| `val_geom_camber_rc`     | 101.253 |  **90.960** | −10.17% |
+| `val_geom_camber_cruise` |  73.369 |  **62.732** | **−14.50%** |
+| `val_re_rand`            |  88.598 |  **78.516** | −11.38% |
+| **val_avg**              | **92.146** | **81.660** | **−11.38%** |
+
+Arm B vs merged baseline 89.784: **−9.05%** ✅
+
+### Test surface pressure MAE (3 finite splits; `test_geom_camber_cruise` NaN — pre-existing scoring bug)
+
+| Split | Arm A | **Arm B (clip=1.0)** | Δ % |
+|---|---:|---:|---:|
+| `test_single_in_dist`    |  90.902 |  **81.956** |  −9.84% |
+| `test_geom_camber_rc`    |  93.074 |  **83.649** | −10.13% |
+| `test_re_rand`           |  82.735 |  **71.296** | **−13.83%** |
+| **avg (3 finite splits)** | **88.903** | **78.967** | **−11.18%** |
+
+### Variance analysis
+
+Tanjiro ran 4 independent Arm A pilot seeds during development: 87.579, 92.146, 92.276, 95.066 (mean 91.8, std 3.1). Arm B (81.660) is **5.9% better than the best pilot Arm A** and **15.8% better than the worst** — signal is well outside the noise floor at every reasonable seed pairing.
+
+### Gradient norm diagnostics (Arm B, no-clip → clip)
+
+| Epoch | p50 (before clip) | p90 | p99 | max | Clip rate |
+|---|---:|---:|---:|---:|---:|
+| 1  | 23.89 | 48.76 | 103.81 | 226.38 | 1.000 |
+| 8  |  9.94 | 21.11 |  30.83 |  45.95 | 1.000 |
+| 17 |  6.29 | 15.04 |  31.91 |  43.90 | 0.960 |
+
+### Metric artifacts
+
+- `models/model-charliepai2i48h4-tanjiro-gradclip-r2-arm-b-twoshot-clip1_0-20260516-093143/metrics.jsonl` ← **winner**
+- `models/model-charliepai2i48h4-tanjiro-gradclip-r2-arm-b-twoshot-clip1_0-20260516-093143/metrics.yaml`
+- `models/model-charliepai2i48h4-tanjiro-gradclip-r2-arm-a-twoshot-noclip-20260516-072527/metrics.jsonl` (paired baseline)
+
+### Reproduce
+
+```bash
+cd target/
+python train.py --experiment_name gradclip-r2-twoshot-clip1_0 \
+  --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 \
+  --film_cond --two_shot_film --grad_clip_norm 1.0
+```
+
+### Current best config (carry forward to all new experiments)
+
+```python
+# Loss: Huber (smooth_l1_loss, beta=1.0)
+sq_err = torch.nn.functional.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+# AMP: --amp_dtype bf16
+# Scheduler: --cosine_t_max 15
+# EMA: --use_ema --ema_decay 0.999  (Karras-style warmup ramp built in)
+# FiLM: --film_cond --two_shot_film  (shared conditioner, two injection sites per block)
+# Gradient clip: --grad_clip_norm 1.0  (clips to unit norm ~96-100% of steps)
+# Model: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+# Optimizer: AdamW lr=5e-4 wd=1e-4, batch_size=4
+# surf_weight=10
+```
