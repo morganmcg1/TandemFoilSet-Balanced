@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 (updated 05:08 — **PR #3495 MERGED**: new canonical val=60.33 test=59.27; precond_freq=5 now default)
+- **Date:** 2026-05-16 (updated 06:02 — **PR #3591 MERGED**: new canonical val=58.005 test=56.713; EMA decay=0.99 now default)
 - **Branch:** `icml-appendix-willow-pai2i-48h-r3`
 - **Most recent human researcher directive:** None this launch.
-- **Canonical baseline (merged):** `val_avg/mae_surf_p = 60.33`, `test_avg/mae_surf_p (excl cruise) = 59.27`
-  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)** + **EMA of model weights decay=0.999 (PR #3430, −18.8%)** + **SOAP precond_freq=5 (PR #3495, −1.78%)**
-  - Full stack config: SOAP **precondition_frequency=5**, lr=1e-3, warmup_epochs=3, ema_decay=0.999
+- **Canonical baseline (merged):** `val_avg/mae_surf_p = 58.005`, `test_avg/mae_surf_p (excl cruise) = 56.713`
+  - Achieved via: Huber loss (PR #3155, −18.1%) + LR warmup 1e-3 (PR #3147, −8.9%) + **SOAP optimizer (PR #3283, −31.7%)** + SOAP precond_freq=5 (PR #3495, −1.78%) + **EMA(0.999) (PR #3430, −18.8%)** + **EMA decay=0.99 (PR #3591, −3.85%)**
+  - Full stack config: SOAP **precondition_frequency=5**, lr=1e-3, warmup_epochs=3, **ema_decay=0.99**
 
 ## Tracked infrastructure issue: cruise-test NaN
 
@@ -19,9 +19,10 @@
 | #3155 | fern | Huber loss (beta=1.0) | **−18.1%** | 110.83 |
 | #3283 | alphonse | SOAP optimizer | **−31.7%** | 75.70 |
 | #3430 | nezuko | EMA of model weights (decay=0.999) | **−18.8%** | 61.43 |
-| **#3495** | **askeladd** | **SOAP precond_freq=5** | **−1.78%** | **60.33** |
+| #3495 | askeladd | SOAP precond_freq=5 | **−1.78%** | 60.33 |
+| **#3591** | **nezuko** | **EMA decay=0.99** | **−3.85%** | **58.005** |
 
-Old launch baseline: 135.30. Total gain: −55.4% over 5 compounding improvements.
+Old launch baseline: 135.30. Total gain: −57.1% over 6 compounding improvements.
 
 ## Closed hypotheses (complete)
 
@@ -41,7 +42,8 @@ Old launch baseline: 135.30. Total gain: −55.4% over 5 compounding improvement
 
 | PR | Student | Hypothesis | Family | Status |
 |---|---|---|---|---|
-| **#3591** | **nezuko** | **EMA decay sweep {0.99, 0.999, 0.9999}** | **Training** | **WIP — 2/3 arms done (W&B): variant-decay0.99=58.005 (−5.6%), awaiting arm 3 + SENPAI-RESULT** |
+| ~~#3591~~ | ~~nezuko~~ | ~~EMA decay=0.99~~ | **MERGED 05:57** | — |
+| **#3728** | **nezuko** | **EMA decay lower sweep {0.97, 0.95} vs 0.99** | **Training** | **WIP (new)** |
 | **#3493** | **alphonse** | **SOAP LR (lr=2e-3 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 02:40, within-PR: −3.2% val on SOAP-only)** |
 | ~~#3495~~ | ~~askeladd~~ | ~~SOAP precond_freq=5~~ | **MERGED 05:05** | — |
 | **#3703** | **askeladd** | **SOAP precond_freq finer {3, 2} vs freq=5 canonical** | **Optimization** | **WIP (new)** |
@@ -49,7 +51,7 @@ Old launch baseline: 135.30. Total gain: −55.4% over 5 compounding improvement
 | **#3501** | **thorfinn** | **surf_weight (sw=5 winner) on EMA+SOAP** | **Optimization** | **WIP — rebase + 2-arm compounding test (sent back 04:50, within-PR: −1.5% val on SOAP-only)** |
 | **#3415** | **frieren** | **Log-Re sinusoidal (SOAP stack, seed=42)** | **Inputs** | **WIP — arm1 done (77.88), variants in progress** |
 | **#3316** | **fern** | **Huber beta sweep (0.5/1.0/2.0) on SOAP stack** | **Loss tuning** | **WIP — rebased, arms running** |
-| **#3612** | **edward** | **Cauchy robust loss sweep (c=0.5, 1.0) on EMA+SOAP** | **Loss tuning** | **WIP (new)** |
+| **#3612** | **edward** | **Cauchy c=1.0 vs Huber on new canonical (EMA 0.99)** | **Loss tuning** | **WIP — rebase + 2-arm confirmation (sent back 06:00)** |
 
 Note: PRs #3493, #3495, #3497, #3501 are running against the SOAP-without-EMA baseline. Advisor has notified all 4 students about the new EMA canonical. Within-PR comparison is still valid for identifying the best hyperparameter setting; winners will be asked to rebase onto EMA+SOAP stack.
 

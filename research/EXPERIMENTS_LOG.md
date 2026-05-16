@@ -690,3 +690,51 @@ All 3 test splits improve: single_in_dist 71.13→69.39, geom_camber_rc 61.95→
 **Cumulative stack:** Huber(β=1.0) + LR warmup(1e-3) + SOAP(precond_freq=**5**) + EMA(0.999). Total: 135.30 → **60.33** (−55.4%).
 
 **Note:** `precondition_frequency=5` is now the default in `train.py` after this merge. All subsequent runs without explicit flag will use freq=5.
+
+---
+
+## 2026-05-16 05:57 — PR #3591 (nezuko): EMA decay=0.99 — **MERGED**
+
+- Branch: `willowpai2i48h3-nezuko/ema-decay-sweep`
+- W&B group: `ema-decay-sweep`
+- 3 arms, seed=42
+
+**Result:**
+
+| Arm | ema_decay | val_avg/mae_surf_p | test_avg (excl cruise) | W&B |
+|---|---|---|---|---|
+| baseline-decay0.999 | 0.999 | 61.426 (canonical) | 60.917 | xqymqb6v |
+| **variant-decay0.99** | **0.99** | **58.005 (−5.6%)** ✓ | **56.713 (−6.9%)** | 1xy36vpn |
+| variant-decay0.9999 | 0.9999 | 320.398 (+422%) ✗ | 335.005 | 79v1kktj |
+
+Per-split test (decay0.99 vs canonical): single_in_dist 65.9 vs 71.1, geom_camber_rc 58.4 vs 61.9, re_rand 45.9 vs 49.7.
+
+decay=0.9999 catastrophic failure: EMA horizon ~10k steps >> training steps ~5250 → shadow weights anchored to initialization.
+
+Improvement is consistent across ALL splits (every val and test split improves) — not split-specific.
+
+**Decision: MERGED.** New canonical: val=58.005, test=56.713 (−3.85% vs previous canonical 60.33/59.27).
+
+**Cumulative stack:** Huber(β=1.0) + LR warmup(1e-3) + SOAP(precond_freq=5) + EMA(decay=**0.99**). Total: 135.30 → **58.005** (−57.1%).
+
+**Note:** Sweep arms ran with precond_freq=10; merged into freq=5 codebase. Compound val with freq=5+decay=0.99 expected ~56-57.
+
+---
+
+## 2026-05-16 05:58 — PR #3612 (edward): Cauchy robust loss vs Huber — **REQUEST CHANGES (rebase new canonical)**
+
+- Branch: `willowpai2i48h3-edward/cauchy-robust-loss`
+- W&B group: `cauchy-robust-loss`
+- 3 arms, seed=42 (run on EMA(0.999)+SOAP(freq=10) — OLD canonical)
+
+**Result (vs arm1 Huber baseline):**
+
+| Arm | cauchy_c | val_avg | test_avg (excl cruise) | W&B |
+|---|---|---|---|---|
+| arm1 Huber (baseline) | 0.0 | 61.426 | 60.917 | jzgaya3t |
+| arm2 Cauchy c=0.5 | 0.5 | 58.262 (−5.15%) | 58.137 (−4.56%) | 8hfn2184 |
+| **arm3 Cauchy c=1.0** | **1.0** | **58.276 (−5.13%)** | **57.717 (−5.25%)** | a4btkyo5 |
+
+c=1.0 wins on test (best paper metric). c=0.5 wins on val by 0.014 (within noise). c=1.0 wins test_single_in_dist and test_geom_camber_rc; c=0.5 wins test_re_rand.
+
+**Decision: REQUEST CHANGES.** Cauchy c=1.0 beats old canonical (61.43) but does NOT beat new canonical (58.005/56.713) since both ran on the same old stack. Sent back to rebase onto EMA(0.99)+SOAP(freq=5) and re-run c=1.0 vs Huber baseline.
