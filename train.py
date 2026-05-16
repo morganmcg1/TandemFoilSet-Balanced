@@ -465,13 +465,30 @@ class Config:
     deterministic: bool = False
     use_swiglu: bool = False
     use_geglu: bool = False
+    # PR #3644: cosine10 + constant-LR tail + SWA-over-tail.
+    # Phase 1 (epochs 0..t_cosine-1):     cosine annealing from `lr` → ~0
+    # Phase 2 (epochs t_cosine..t_cosine+n_tail-1): constant `lr_swa` (the JUMP is intentional)
+    t_cosine: int = 10
+    lr_swa: float = 1e-4
+    n_tail: int = 8
 
 
 cfg = sp.parse(Config)
 set_all_seeds(cfg.seed)
 if cfg.deterministic:
     torch.use_deterministic_algorithms(True, warn_only=True)
-MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
+# PR #3644 piecewise schedule: cosine phase (T_COSINE) + constant-LR tail (N_TAIL).
+# In debug mode, run a tiny schedule (2 cosine + 2 tail) just to exercise the wiring.
+if cfg.debug:
+    T_COSINE = 2
+    N_TAIL = 2
+    MAX_EPOCHS = T_COSINE + N_TAIL
+else:
+    T_COSINE = cfg.t_cosine
+    N_TAIL = cfg.n_tail
+    # cfg.epochs is treated as an upper bound; the actual budget is T_COSINE + N_TAIL.
+    MAX_EPOCHS = min(cfg.epochs, T_COSINE + N_TAIL)
+SWA_TAIL_START = T_COSINE  # 0-indexed: first constant-LR epoch
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -523,7 +540,9 @@ n_ffn_params = sum(
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+# PR #3644: cosine for the first T_COSINE epochs (lr: cfg.lr → ~0). The constant-LR tail
+# (cfg.lr_swa) is applied manually after the cosine phase by overriding param_groups['lr'].
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_COSINE, eta_min=0.0)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -561,6 +580,25 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+
+# PR #3644 three-way comparison: track best-by-val separately for the cosine phase
+# (epochs 0..T_COSINE-1) and the constant-LR tail (epochs T_COSINE..MAX_EPOCHS-1).
+pre_swa_best_avg = float("inf")
+pre_swa_best_metrics: dict = {}
+pre_swa_path = model_dir / "pre_swa_best.pt"
+
+tail_best_avg = float("inf")
+tail_best_metrics: dict = {}
+tail_best_path = model_dir / "tail_best.pt"
+
+# SWA: collect a deep-cloned state_dict at the end of each tail epoch.
+# At end of training, average all N_TAIL snapshots (uniform weights) → SWA tail.
+swa_snapshots: list[dict] = []
+swa_path = model_dir / "swa_tail.pt"
+
+# Per-epoch trajectory of val_avg/mae_surf_p during the constant-LR tail —
+# diagnostic for the "bounce vs slow drift" question in the report.
+tail_trajectory: list[dict] = []
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -613,7 +651,20 @@ for epoch in range(MAX_EPOCHS):
         torch.cuda.synchronize()
     train_loop_dt = time.time() - train_loop_t0
 
-    scheduler.step()
+    # Capture the LR that was actually used by this epoch's training steps,
+    # BEFORE we advance the schedule for the next epoch.
+    epoch_train_lr = optimizer.param_groups[0]["lr"]
+
+    # PR #3644 piecewise schedule:
+    #   epochs 0..T_COSINE-2 : advance cosine (next epoch uses next cosine value)
+    #   epoch == T_COSINE-1  : jump — set next-epoch LR to cfg.lr_swa (constant tail begins)
+    #   epochs >= T_COSINE   : no-op (LR stays at cfg.lr_swa)
+    if epoch < T_COSINE - 1:
+        scheduler.step()
+    elif epoch == T_COSINE - 1:
+        for g in optimizer.param_groups:
+            g["lr"] = cfg.lr_swa
+
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -630,11 +681,14 @@ for epoch in range(MAX_EPOCHS):
 
     step_time_ms = train_loop_dt * 1000.0 / max(n_batches, 1)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    in_tail = epoch >= SWA_TAIL_START
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
-        "lr": scheduler.get_last_lr()[0],
+        "lr": epoch_train_lr,
+        "train/lr": epoch_train_lr,
+        "schedule/phase": 1 if in_tail else 0,
         "epoch_time_s": dt,
         "step_time_ms": step_time_ms,
         "gpu_mem_gb_peak": peak_gb,
@@ -658,9 +712,42 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # PR #3644 three-way tracking: best-by-val within each phase, plus SWA snapshot
+    # collection during the constant-LR tail. The "phase-best" checkpoints are used at
+    # end-of-training to evaluate each arm on val+test independently.
+    if not in_tail:
+        if avg_surf_p < pre_swa_best_avg:
+            pre_swa_best_avg = avg_surf_p
+            pre_swa_best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            torch.save(model.state_dict(), pre_swa_path)
+            tag += " [pre*]"
+    else:
+        if avg_surf_p < tail_best_avg:
+            tail_best_avg = avg_surf_p
+            tail_best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            torch.save(model.state_dict(), tail_best_path)
+            tag += " [tail*]"
+        # Append a deep-cloned snapshot of the post-step model for SWA averaging.
+        # bf16 autocast leaves weights in fp32, so .clone() preserves precision.
+        swa_snapshots.append({k: v.detach().clone() for k, v in model.state_dict().items()})
+        tail_trajectory.append({
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "per_split": {sp: split_metrics[sp]["mae_surf_p"] for sp in VAL_SPLIT_NAMES},
+        })
 
+    phase_tag = "TAIL" if in_tail else "COS"
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} [{phase_tag}] lr={epoch_train_lr:.2e} "
+        f"({dt:.0f}s, step={step_time_ms:.1f}ms) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
@@ -670,33 +757,165 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
-# --- Test evaluation + artifact upload ---
+# --- PR #3644: three-way evaluation (pre_swa / tail_best / swa_tail) ---
+# Hoist test loaders so they're reused across all three arm evaluations.
+test_loaders = None
+if not cfg.skip_test:
+    test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+    test_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in test_datasets.items()
+    }
+
+
+def _average_state_dicts(state_dicts: list[dict]) -> dict:
+    """Uniform mean of N state_dicts. Cast each tensor to float for precision,
+    then back to the original dtype so the averaged checkpoint is dtype-compatible
+    with the live model (Transolver uses fp32 weights, so this is a no-op cast)."""
+    n = len(state_dicts)
+    avg = {}
+    for key in state_dicts[0].keys():
+        stacked = torch.stack([sd[key].float() for sd in state_dicts], dim=0)
+        avg[key] = stacked.mean(dim=0).to(state_dicts[0][key].dtype)
+    return avg
+
+
+def _eval_arm(state: dict, label: str) -> tuple[dict, dict, dict | None, dict | None]:
+    """Load `state` into `model`, eval on val + test, return (v_metrics, v_avg, t_metrics, t_avg)."""
+    model.load_state_dict(state)
+    model.eval()
+    v_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    v_avg = aggregate_splits(v_metrics)
+    t_metrics = t_avg = None
+    if test_loaders is not None:
+        t_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        t_avg = aggregate_splits(t_metrics)
+    t_str = f"  test_avg/mae_surf_p={t_avg['avg/mae_surf_p']:.4f}" if t_avg is not None else ""
+    print(f"  [{label}] val_avg/mae_surf_p={v_avg['avg/mae_surf_p']:.4f}{t_str}")
+    return v_metrics, v_avg, t_metrics, t_avg
+
+
+print(
+    f"\nThree-way SWA evaluation: "
+    f"pre_swa_phase_best={pre_swa_best_avg:.4f} (ep {pre_swa_best_metrics.get('epoch', '-')})  "
+    f"tail_phase_best={tail_best_avg:.4f} (ep {tail_best_metrics.get('epoch', '-')})  "
+    f"snapshots={len(swa_snapshots)}"
+)
+
+arm_results: dict = {}  # flat dict for wandb.log / wandb.summary
+arm_payloads: dict = {}  # nested for artifact metadata
+
+
+def _record_arm(arm: str, v_metrics: dict, v_avg: dict, t_metrics, t_avg) -> None:
+    arm_results[f"{arm}/val_avg/mae_surf_p"] = v_avg["avg/mae_surf_p"]
+    for split in VAL_SPLIT_NAMES:
+        arm_results[f"{arm}/{split}/mae_surf_p"] = v_metrics[split]["mae_surf_p"]
+    if t_avg is not None:
+        arm_results[f"{arm}/test_avg/mae_surf_p"] = t_avg["avg/mae_surf_p"]
+        for split in TEST_SPLIT_NAMES:
+            arm_results[f"{arm}/{split}/mae_surf_p"] = t_metrics[split]["mae_surf_p"]
+    arm_payloads[arm] = {
+        "v_metrics": v_metrics,
+        "v_avg": v_avg,
+        "t_metrics": t_metrics,
+        "t_avg": t_avg,
+    }
+
+
+# Arm 1: best-by-val from cosine phase
+if pre_swa_best_metrics:
+    state = torch.load(pre_swa_path, map_location=device, weights_only=True)
+    v_m, v_a, t_m, t_a = _eval_arm(state, "pre_swa_best")
+    arm_results["pre_swa/epoch"] = pre_swa_best_metrics["epoch"]
+    _record_arm("pre_swa", v_m, v_a, t_m, t_a)
+
+# Arm 2: best-by-val from constant-LR tail
+if tail_best_metrics:
+    state = torch.load(tail_best_path, map_location=device, weights_only=True)
+    v_m, v_a, t_m, t_a = _eval_arm(state, "tail_best")
+    arm_results["tail_best/epoch"] = tail_best_metrics["epoch"]
+    _record_arm("tail_best", v_m, v_a, t_m, t_a)
+
+# Arm 3: uniform average of all snapshots collected during the constant-LR tail.
+# Transolver uses LayerNorm only (no BatchNorm running stats), so no BN recalibration needed.
+swa_state = None
+if len(swa_snapshots) >= 2:
+    swa_state = _average_state_dicts(swa_snapshots)
+    torch.save(swa_state, swa_path)
+    v_m, v_a, t_m, t_a = _eval_arm(swa_state, f"swa_tail (n={len(swa_snapshots)})")
+    arm_results["swa_tail/n_snapshots"] = len(swa_snapshots)
+    _record_arm("swa_tail", v_m, v_a, t_m, t_a)
+elif len(swa_snapshots) == 1:
+    print(f"\n[warn] only {len(swa_snapshots)} tail snapshot collected — SWA arm skipped")
+else:
+    print("\n[warn] no tail snapshots collected — SWA arm skipped")
+
+# Per-snapshot val_avg trajectory during the constant-LR tail.
+# Logged to W&B summary as a list so the bounce-vs-drift question is answerable post-hoc.
+if tail_trajectory:
+    arm_results["tail_trajectory/epochs"] = [t["epoch"] for t in tail_trajectory]
+    arm_results["tail_trajectory/val_avg_mae_surf_p"] = [
+        t["val_avg/mae_surf_p"] for t in tail_trajectory
+    ]
+    for split in VAL_SPLIT_NAMES:
+        arm_results[f"tail_trajectory/{split}/mae_surf_p"] = [
+            t["per_split"][split] for t in tail_trajectory
+        ]
+
+wandb.log(arm_results)
+wandb.summary.update(arm_results)
+
+# Pick the best-by-val arm as the canonical artifact (parity with baseline).
+arm_val_scores = {
+    arm: arm_results.get(f"{arm}/val_avg/mae_surf_p", float("inf"))
+    for arm in ("pre_swa", "tail_best", "swa_tail")
+}
+winning_arm = min(arm_val_scores, key=arm_val_scores.get)
+print(
+    f"\nArm comparison (val_avg/mae_surf_p):"
+    f"  pre_swa={arm_val_scores['pre_swa']:.4f}"
+    f"  tail_best={arm_val_scores['tail_best']:.4f}"
+    f"  swa_tail={arm_val_scores['swa_tail']:.4f}"
+    f"  → winner: {winning_arm}"
+)
+wandb.summary.update({"winning_arm": winning_arm})
+
+# --- Artifact upload: best-by-val checkpoint (parity with baseline trainer) ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val (any phase): epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    # If the SWA-averaged arm beat both best-by-val checkpoints, upload its weights as
+    # the artifact so downstream consumers get the winning model.
+    artifact_source_path = model_path
+    if swa_state is not None and arm_val_scores["swa_tail"] < best_avg_surf_p:
+        torch.save(swa_state, model_path)  # overwrite with SWA-averaged weights
+        artifact_source_path = model_path
+        print(f"  → swa_tail wins overall; uploading averaged weights as artifact")
+
+    model.load_state_dict(torch.load(artifact_source_path, map_location=device, weights_only=True))
     model.eval()
 
+    # Re-run test on the artifact-source state for parity logging (top-level test_*)
     test_metrics = None
     test_avg = None
-    if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
+    if test_loaders is not None:
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (artifact)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
 
