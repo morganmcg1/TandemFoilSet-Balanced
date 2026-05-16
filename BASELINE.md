@@ -2,10 +2,49 @@
 
 ## Current Best
 
-**PR #3966 — H59 Arm B: GEGLU + RMSNorm (fused kernel) (fern)**
-Merged 2026-05-16. 14 epochs completed (30-min timeout cap).
+**PR #4011 — H66 Arm A: slice_num=96 at n_layers=4 GEGLU base (thorfinn)**
+Merged 2026-05-16. 15 epochs completed (full cosine T_max=15 schedule within 30-min wall).
 
 Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits). Lower is better.
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| val_avg/mae_surf_p | **56.7504** | PR #4011 Arm A (best_epoch=15) |
+| val_single_in_dist/mae_surf_p | 60.9717 | PR #4011 Arm A |
+| val_geom_camber_rc/mae_surf_p | 70.7939 | PR #4011 Arm A |
+| val_geom_camber_cruise/mae_surf_p | 38.2785 | PR #4011 Arm A |
+| val_re_rand/mae_surf_p | 56.9576 | PR #4011 Arm A |
+| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #4011 |
+| test_avg/mae_surf_p (3-split, excl. cruise) | **54.5026** | PR #4011 Arm A |
+| test_single_in_dist/mae_surf_p | 54.5425 | PR #4011 Arm A |
+| test_geom_camber_rc/mae_surf_p | 61.8680 | PR #4011 Arm A |
+| test_re_rand/mae_surf_p | 47.0974 | PR #4011 Arm A |
+
+**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + ffn_act=geglu + n_layers=4 + **slice_num=96** + norm_type=layernorm (note: H66 was branched pre-H59 merge, so norm is still LayerNorm). n_params=864,907. Mean s/epoch=121.8. Peak GPU mem=42.60 GB.
+
+**Why slice_num=96 wins:** Transolver's `PhysicsAttention` projects mesh nodes into a fixed-size slice-token space (`in_project_slice = Linear(dim_head, slice_num)`). Widening this bottleneck from 64 → 96 (+50%) gives the model finer spatial selectivity. The gain concentrates exactly where the hypothesis predicted: **test_geom_camber_rc (−3.33 pts)** — the geometry-OOD split where local mesh structure of unseen camber shapes matters most. test_single_in_dist also improved meaningfully (−1.98 pts). Arm B (slice_num=128) regressed: it hit the wall one epoch short and even at equal-epoch comparison (ep14) trailed Arm A by 1.6 pts — capacity vs. small training set (1499) tips into overfit territory above 96.
+
+**Δ vs prior best (H59 GEGLU+RMSNorm, 56.9056 / 56.2420):** −0.16 pts val_avg, **−1.74 pts test 3-split** (big test-side gain).
+**Δ vs H37b (66.11):** −9.36 pts val_avg cumulative gain.
+
+**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
+
+**⚠ Configuration nuance — H66 vs H59:** H66 was branched against the pre-H59 advisor branch, so it uses **LayerNorm**, not the merged RMSNorm. The H59 RMSNorm change is still present in `train.py` on the post-H66 merge (squash merge took the union via mergeable=true). The default `norm_type` flag governs which is used at runtime — when reproducing, pass `--norm_type rmsnorm` explicitly to stack H59 with H66, or omit to use LayerNorm (matching H66's measured numbers). Combining the two is a high-priority follow-up — likely near-additive.
+
+**Artifacts:** `models/model-h66-slice96-geglu-n4-20260516-145043/`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 50 \
+  --experiment_name h66-slice96-geglu-n4 --agent <student> \
+  --slice_num 96 --n_layers 4 --ffn_act geglu \
+  --n_head 2 --lr 1e-3 --weight_decay 5e-5 --clip_grad_norm 1.0
+```
+
+## Previous Best (overridden by #4011)
+
+**PR #3966 — H59 Arm B: GEGLU + RMSNorm (fused kernel) (fern)**
+Merged 2026-05-16. 14 epochs completed (30-min timeout cap).
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -14,30 +53,10 @@ Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE acr
 | val_geom_camber_rc/mae_surf_p | 70.1136 | PR #3966 Arm B |
 | val_geom_camber_cruise/mae_surf_p | 35.7221 | PR #3966 Arm B |
 | val_re_rand/mae_surf_p | 57.3210 | PR #3966 Arm B |
-| test_avg/mae_surf_p | NaN (⚠ scoring bug) | PR #3966 |
 | test_avg/mae_surf_p (3-split, excl. cruise) | **56.2420** | PR #3966 Arm B |
-| test_single_in_dist/mae_surf_p | 56.0700 | PR #3966 Arm B |
-| test_geom_camber_rc/mae_surf_p | 65.7949 | PR #3966 Arm B |
-| test_re_rand/mae_surf_p | 46.8612 | PR #3966 Arm B |
 
-**Configuration:** FiLM cond_dim=11 + Huber δ_vel=0.5/δ_p=0.25 + CosineAnnealingLR T_max=15 + clip_grad_norm=1.0 + lr=1e-3 + n_head=2 + wd=5e-5 + ffn_act=geglu + n_layers=4 + **norm_type=rmsnorm** (fused `torch.nn.functional.rms_norm`). n_params=856,587. peak_memory_gb=49.54.
-
-**Why RMSNorm wins:** Using the fused `F.rms_norm` kernel (not naive pow→mean→add→sqrt→div→mul) matches LayerNorm's fused throughput. The fused kernel squeezes ~3s/epoch (137s vs 140s for LayerNorm), yielding an extra epoch within the 30-min wall budget — and at epoch 14, the model's training trajectory was still descending (train/surf_loss=0.01911). The gain is primarily from the additional training step, not from RMSNorm's normalization properties per se. pre_clip grad_norm=2.02 at epoch 14, confirming stable training.
-
-**Δ vs prior best (H60 n_layers=4 GEGLU, 57.5750):** −0.67 pts val_avg, −0.22 pts test 3-split.
-**Δ vs H37b (66.11):** −9.20 pts val_avg cumulative gain.
-
-**⚠ data/scoring.py NaN bug:** `test_geom_camber_cruise` sample 20 has non-finite GT. File is read-only.
-
+**Configuration:** + norm_type=rmsnorm (fused `F.rms_norm`). n_params=856,587.
 **Artifacts:** `models/model-h59-geglu-rmsnorm-20260516-142835/`
-
-**Reproduce:**
-```bash
-cd target/ && python train.py --epochs 50 \
-  --experiment_name h59-geglu-rmsnorm --agent <student> \
-  --n_head 2 --n_layers 4 --lr 1e-3 --weight_decay 5e-5 --clip_grad_norm 1.0 \
-  --ffn_act geglu --norm_type rmsnorm
-```
 
 ## Previous Best (overridden by #3966)
 
