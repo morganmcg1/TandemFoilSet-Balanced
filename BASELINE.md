@@ -64,8 +64,43 @@ A confirmation arm with all three levers stacked (`--mlp_type geglu --pos_enc_mo
 Compared to the published 81.48/72.68 (which lacked bf16+Fourier), the truly-stacked baseline is **−3.9 val / −4.6 test**. Stacking does compose. The new effective baseline for advisor decisions is **val=77.57 / test=68.77** (from d66p6r3s) — any PR must beat this number.
 
 **To beat baseline going forward**:
-- val_avg/mae_surf_p < **69.98** (PR #3600 fourier_L4, run 9nliedqj)
-- test_avg/mae_surf_p < **62.47** (same run)
+- val_avg/mae_surf_p < **47.57** (PR #3570 torch.compile seed42, run 7vuwr4wg)
+- test_avg/mae_surf_p < **41.73** (same run)
+
+---
+
+## 2026-05-16 — PR #3570: torch.compile speedup — **MERGED ⭐⭐⭐ (MASSIVE new val AND test best)**
+
+- **val_avg/mae_surf_p: 47.57** (NEW BEST, −22.41 vs 69.98 prior best, −32.0%)
+- **test_avg/mae_surf_p: 41.73** (NEW BEST, −20.74 vs 62.47 prior best, −33.2%)
+- **W&B run:** 7vuwr4wg (compile_stacked_seed42, `--use_compile --seed 42 --weight_decay 1e-3`)
+- **Speedup:** 2.02× per-step (0.295 → 0.146 s/step steady-state), 17 → 33 epochs in 30-min budget
+- **Mechanism:** deeper cosine decay — 30-min budget reaches ~66% of 50-epoch schedule vs ~34% pre-compile; the productive late-cosine regime is where most val improvement happens
+- **Confirmation:** second seed arm (f077n973, wd=1e-4, seed=default) landed val=49.14 — two seeds, ~1.6 unit gap, result is robust
+- **No regressions:** zero graph-break warnings, no OOM, VRAM slightly lower (kernel fusion)
+- **Surface MAE (val, compile_stacked_seed42, run 7vuwr4wg):**
+  - val_single_in_dist mae_surf_p = 50.50
+  - val_geom_camber_cruise mae_surf_p = 32.66
+  - val_geom_camber_rc mae_surf_p = 57.80
+  - val_re_rand mae_surf_p = 49.32
+- **Surface MAE (test, compile_stacked_seed42, run 7vuwr4wg):**
+  - test_single_in_dist mae_surf_p = 46.72
+  - test_geom_camber_cruise mae_surf_p = 28.43
+  - test_geom_camber_rc mae_surf_p = 50.58
+  - test_re_rand mae_surf_p = 41.20
+- **best_epoch:** 33 / 30.4 min
+- **Reproduce:**
+  ```
+  cd target/
+  python train.py --use_compile --seed 42 \
+    --pos_enc_num_freqs 4 --weight_decay 1e-3 \
+    --mlp_type geglu --pos_enc_mode fourier_basic --amp_dtype bf16 \
+    --wandb_group compile-stacked --wandb_name compile_stacked_seed42 --epochs 50
+  ```
+
+Notes: 2.02× per-step speedup (Triton/Inductor kernel fusion of Transolver's many small ops: slice-token attention, GeGLU MLPs, LN, residual). Effective epoch budget doubles within 30-min wall-clock cap. bf16 and compile stack multiplicatively — both already in best config. torch.compile is a **lever via `--use_compile` flag** (default False). All future experiments should include `--use_compile` to run on the new playing field.
+
+**Operational follow-up needed:** Consider flipping `use_compile` Config default False → True. Also: compile higher-tier modes (`reduce-overhead`, `max-autotune`) are queued as edward's next assignment.
 
 ---
 
