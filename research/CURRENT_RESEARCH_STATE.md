@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~04:35 UTC
+- **Last updated:** 2026-05-16 ~05:30 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -44,21 +44,26 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 7. **Grad clip max_norm=1.0**, warmup 2 epochs, batch=4.
 8. **Depth and width scaling both fail** at this budget: n_layers=6 and n_hidden=176/192 all regress. Model is training-time limited, not capacity limited.
 
-## Active in-flight PRs (status as of 04:35 UTC)
+## Active in-flight PRs (status as of 05:30 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
-| **#3632** | tanjiro | Coord noise augmentation std=0.01 | **MERGED** 04:30 → new baseline | 83.495 🏆 |
-| **#3637** | thorfinn | Width n_hidden=176 | **CLOSED** 04:30 (val=88.45 vs old 88.24) | — |
-| **#3635** | edward | Depth n_layers=6 | **CLOSED** 04:30 (val=94.50) | — |
-| **#3479** | frieren | Per-channel output heads | WIP (lr=1e-3 confirm rerun running: `5lcpht9s`) | awaiting |
-| **#3633** | askeladd | Learnable Fourier freqs | WIP (run `2cruoym3` done at val=88.02; retry `z2kg48ty` running) | ~88.02 |
-| **#3634** | fern | slice_num 64→96 | WIP (run `i19cjebc` done at val=88.82; retry `fagaonns` running) | ~88.82 |
-| **#3636** | nezuko | num_freq sweep {2, 6} | WIP (num_freq=2: val=89.45; num_freq=6: FAILED; retry `2fnr2k1z` running) | ~89.45 |
-| **#3638** | alphonse | p_weight=3 pressure upweighting | WIP (run `va4qt6uq` done at val=86.52; retry `fort2r4i` running) | ~86.52 |
-| **#3690** | edward | **lr=1e-3 + coord noise compound** | WIP (assigned 04:40) | awaiting |
-| **#3691** | thorfinn | **Longer training --epochs 12** | WIP (assigned 04:40) | awaiting |
-| **#3692** | tanjiro | **Feature condition noise aug (cols 2:24)** | WIP (assigned 04:40) | awaiting |
+| **#3632** | tanjiro | Coord noise augmentation std=0.01 | **MERGED** 04:30 → baseline | 83.495 🏆 |
+| **#3637** | thorfinn | Width n_hidden=176 | CLOSED (val=88.45) | — |
+| **#3635** | edward | Depth n_layers=6 | CLOSED (val=94.50) | — |
+| **#3479** | frieren | Per-channel output heads | CLOSED (val=88.55 at lr=1e-3 on new stack) | — |
+| **#3633** | askeladd | Learnable Fourier freqs | CLOSED (val=87.97) | — |
+| **#3634** | fern | slice_num=96 | CLOSED (val=89.10) | — |
+| **#3636** | nezuko | num_freq sweep | CLOSED (val=88.51, num_freq=6 crashed) | — |
+| **#3638** | alphonse | p_weight=3 | CLOSED (val=85.35, best round-3 retry) | — |
+| **#3690** | edward | lr=1e-3 + coord noise | WIP (running: `96tusrhs` started 05:22) | awaiting |
+| **#3691** | thorfinn | --epochs 12 longer training | WIP (running: `zqxkh9np` started 05:22) | awaiting |
+| **#3692** | tanjiro | Feature condition noise aug cols 2:24 | WIP (running: `xu5e6cul` started 05:23) | awaiting |
+| **#3714** | alphonse | **surf_weight=15 sweep** | WIP (assigned 05:28) | awaiting |
+| **#3715** | askeladd | **mlp_ratio=4 (FFN capacity)** | WIP (assigned 05:28) | awaiting |
+| **#3716** | fern | **n_head=8 (attention diversity)** | WIP (assigned 05:28) | awaiting |
+| **#3717** | frieren | **coord_noise_std sweep (0.03, 0.005)** | WIP (assigned 05:28) | awaiting |
+| **#3718** | nezuko | **AoA jitter augmentation** | WIP (assigned 05:30) | awaiting |
 
 ## Round-3 summary (vs old baseline val=88.24)
 
@@ -82,13 +87,23 @@ No GitHub Issues open for this track. Proceeding from the program contract only.
 | #3089 | L1 loss + scoring fix (alphonse) | 100.5275 | 90.1489 |
 | #3091 | LR warmup + clip + lr=1e-3 (edward) | 109.42 | NaN |
 
-## Round-4 active hypotheses (assigned 04:35 UTC)
+## Round-4 active hypotheses (8 PRs, all running or polling)
 
+### Round-4a (assigned 04:40 UTC, runs started 05:22)
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
 | #3690 | edward | lr=1e-3 + coord noise (single flag, zero code) | −2–5% (lr compound) |
 | #3691 | thorfinn | --epochs 12 longer training (zero code) | −1–3% (free gradient steps) |
 | #3692 | tanjiro | Feature noise aug on condition cols 2:24 | −1–3% (OOD splits) |
+
+### Round-4b (assigned 05:28-30 UTC, after round-3 closes)
+| PR | Student | Hypothesis | Expected gain |
+|---|---|---|---|
+| #3714 | alphonse | surf_weight=15 sweep (single flag) | −1–3% (direct metric alignment) |
+| #3715 | askeladd | mlp_ratio=4 (FFN capacity, untested arch lever) | −2–5% (if FFN-bottlenecked) |
+| #3716 | fern | n_head=8 (attention head diversity) | −1–3% (speculative) |
+| #3717 | frieren | coord_noise_std sweep (0.03, 0.005) | −0–2% (pin augmentation optimum) |
+| #3718 | nezuko | AoA jitter augmentation std=0.02 | −1–3% (OOD splits) |
 
 ## Potential next research directions (round 5+)
 
