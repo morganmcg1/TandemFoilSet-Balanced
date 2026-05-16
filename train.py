@@ -84,14 +84,17 @@ class MLP(nn.Module):
 class SwiGLU(nn.Module):
     # SwiGLU(x) = W2( SiLU(W1 x) * (V x) ). Param-matched to GELU FFN when
     # hidden_inner ≈ (2/3) * (mlp_ratio * n_hidden).
-    def __init__(self, n_hidden, hidden_inner):
+    def __init__(self, n_hidden, hidden_inner, dropout=0.0):
         super().__init__()
         self.W1 = nn.Linear(n_hidden, hidden_inner, bias=False)
         self.V = nn.Linear(n_hidden, hidden_inner, bias=False)
         self.W2 = nn.Linear(hidden_inner, n_hidden, bias=False)
+        self.dropout_p = dropout
 
     def forward(self, x):
-        return self.W2(F.silu(self.W1(x)) * self.V(x))
+        h = F.silu(self.W1(x)) * self.V(x)
+        h = F.dropout(h, p=self.dropout_p, training=self.training)
+        return self.W2(h)
 
 
 class PhysicsAttention(nn.Module):
@@ -152,7 +155,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None, ffn_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -166,7 +169,7 @@ class TransolverBlock(nn.Module):
             # => hidden_inner ≈ (2/3)*mlp_ratio*hidden_dim. With hidden_dim=96, mlp_ratio=2
             # that's 128 (rounded from 96*4/3=128.0). Caller can override.
             inner = ffn_hidden_inner if ffn_hidden_inner is not None else int(round((2 * mlp_ratio / 3) * hidden_dim))
-            self.mlp = SwiGLU(hidden_dim, hidden_inner=inner)
+            self.mlp = SwiGLU(hidden_dim, hidden_inner=inner, dropout=ffn_dropout)
         elif ffn_type == "gelu":
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                            n_layers=0, res=False, act=act)
@@ -193,7 +196,7 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 ffn_type="gelu", ffn_hidden_inner=None):
+                 ffn_type="gelu", ffn_hidden_inner=None, ffn_dropout=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -215,6 +218,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 ffn_type=ffn_type, ffn_hidden_inner=ffn_hidden_inner,
+                ffn_dropout=ffn_dropout,
             )
             for i in range(n_layers)
         ])
@@ -388,6 +392,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 14
+    ffn_dropout: float = 0.1  # SwiGLU FFN gated-activation dropout (PR #3607)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -432,6 +437,7 @@ model_config = dict(
     mlp_ratio=2,
     ffn_type="swiglu",
     ffn_hidden_inner=192,
+    ffn_dropout=cfg.ffn_dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
