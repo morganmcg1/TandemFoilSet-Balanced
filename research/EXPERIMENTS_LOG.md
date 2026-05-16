@@ -1138,3 +1138,38 @@ Also identified and fixed BASELINE.md reproduce command bug — missing `--preco
 - willowpai2i48h3-tanjiro/grad-clip-lower-bound
 - Hypothesis: Canonical clip=1.0 renormalizes 100% of steps; pre-clip p5=28, so even tighter clip (0.5, 0.1) may preserve the direction-preserving benefit. If SOAP is truly scale-invariant (only direction matters), lower thresholds should work equally well or better.
 - 3 arms: clip=1.0 (canonical reproduction), clip=0.5, clip=0.1
+
+## 2026-05-16 20:35 — PR #4037 (fern): Huber β lower bound {0.05, 0.025, 0.01} — **MERGED (new canonical)**
+
+- Branch: `willowpai2i48h3-fern/huber-beta-lower-bound-rerun`
+- W&B runs: `2u26sg4e` (arm1 β=0.10 no-clip), `trzgmdkp` (arm2 β=0.05 no-clip), `fhfhflwx` (arm3 β=0.025 no-clip), `ysoma18c` (arm4 β=0.01 + grad_clip=1.0)
+
+| Arm | β | grad_clip | val_avg/mae_surf_p | test_excl_cruise | Δ within-PR val | Notes |
+|---|---|---|---|---|---|---|
+| 1 (baseline) | 0.10 | OFF | 48.4191 | 47.8034 | — | Reproduces old canonical |
+| 2 (variant) | 0.05 | OFF | 48.1287 | 48.4227 | −0.60% | test regression (+1.30%) |
+| 3 (variant) | 0.025 | OFF | 47.4983 | 47.4221 | −1.90% | |
+| **4 (variant) ★** | **0.01** | **1.0** | **45.9199** | **45.1094** | **−2.51% vs new canonical** | **WINNER** |
+
+**Canonical comparison (arm 4 vs new canonical at β=0.1+grad_clip=1.0 = 47.1000/46.2590):**
+- val: 45.9199 vs 47.1000 = **−2.51%**
+- test: 45.1094 vs 46.2590 = **−2.49%**
+
+**W&B verification (ysoma18c):** val=45.9199 confirmed, best_epoch=14, config (β=0.01, grad_clip=1.0, Lookahead k=5/α=0.5) confirmed. Test 3-split mean = (50.89 + 48.61 + 35.83) / 3 = 45.11 ✓
+
+**Within-PR β trend (arms 1–3, no grad_clip, on Lookahead-only canonical):**
+- β=0.10→0.05: −0.60% (test regresses +1.30% — noisy at this step)
+- β=0.05→0.025: −1.30% (cleaner, monotone)
+- β=0.025→0.01 (adds grad_clip): −2.51% (combined β+clip effect)
+
+The arm 4 comparison to new canonical (which also has grad_clip) isolates β=0.01 vs β=0.10 cleanly — the extra variable (grad_clip) is controlled for.
+
+**Analysis:** Huber β=0.01 means the L1-dominant regime extends to residuals as small as 0.01. At typical surface pressure residuals (O(1-100) for this dataset), virtually 100% of gradients are in the linear zone (|r|>β). This is approaching pure MAE / L1 loss. The gradient clipping interacts with this: at smaller β, more residuals generate maximum-magnitude gradients (±1), which makes the grad_norm distribution even more explosive — but clip=1.0 handles this. Net effect: SOAP gets cleaner direction signal from a tighter, magnitude-normalized update.
+
+**Decision: MERGED as new canonical.** val=45.9199, test=45.1094. All 7 active students notified. Cumulative stack: SOAP freq=5 + **Huber β=0.01** + EMA 0.99 + Lookahead k=5 α=0.5 + grad_clip=1.0. Total: **12 compounding wins, −66.0% from launch baseline 135.30**.
+
+## 2026-05-16 20:40 — PR #4139 fern assigned: Huber β near-L1 sweep {0.005, 0.001, 0.0001}
+
+- willowpai2i48h3-fern/huber-beta-near-l1-sweep
+- Hypothesis: β monotone trend continues toward pure L1. β=0.01→0.005→0.001→0.0001 tests whether the floor is near-zero or whether gains saturate. Optional arm 5: pure MAE (L1Loss) as closure.
+- 4 arms: baseline (β=0.01), β=0.005, β=0.001, β=0.0001. All with grad_clip=1.0 on full 12-winner canonical.
