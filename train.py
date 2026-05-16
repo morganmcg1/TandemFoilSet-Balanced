@@ -49,6 +49,45 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# EMA helpers
+# ---------------------------------------------------------------------------
+
+WARMUP_EMA_START_DECAY = 0.9
+
+
+def make_warmup_ema_fn(target_decay: float, warmup_steps: int,
+                       start_decay: float = WARMUP_EMA_START_DECAY):
+    """Multi-avg fn ramping EMA decay linearly start→target over warmup_steps.
+
+    AveragedModel calls this with ``num_averaged`` starting at 1 (the first
+    averaging call; the n_averaged==0 case copies and skips multi_avg_fn).
+    """
+
+    @torch.no_grad()
+    def ema_update(ema_param_list, current_param_list, num_averaged):
+        step = int(num_averaged.item()) if hasattr(num_averaged, "item") else int(num_averaged)
+        if step < warmup_steps:
+            decay = start_decay + (target_decay - start_decay) * (step / warmup_steps)
+        else:
+            decay = target_decay
+        if torch.is_floating_point(ema_param_list[0]) or torch.is_complex(ema_param_list[0]):
+            torch._foreach_lerp_(ema_param_list, current_param_list, 1.0 - decay)
+        else:
+            for p_ema, p_model in zip(ema_param_list, current_param_list):
+                p_ema.copy_(p_ema * decay + p_model * (1.0 - decay))
+
+    return ema_update
+
+
+def warmup_ema_decay_at_step(step: int, target_decay: float, warmup_steps: int,
+                             start_decay: float = WARMUP_EMA_START_DECAY) -> float:
+    if warmup_steps <= 0 or step >= warmup_steps:
+        return target_decay
+    if step <= 0:
+        return start_decay
+    return start_decay + (target_decay - start_decay) * (step / warmup_steps)
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -401,6 +440,7 @@ def write_experiment_summary(
         "lr_t_max": cfg.lr_t_max,
         "layer_scale_init": cfg.layer_scale_init,
         "ema_decay": cfg.ema_decay,
+        "ema_warmup_steps": cfg.ema_warmup_steps,
     }
     if "raw_val_avg/mae_surf_p" in best_metrics:
         summary["best_raw_val_avg/mae_surf_p"] = best_metrics["raw_val_avg/mae_surf_p"]
@@ -456,6 +496,7 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     grad_clip_max_norm: float | None = None  # None disables clipping
     ema_decay: float | None = None  # None disables EMA; typical values 0.999 / 0.9995
+    ema_warmup_steps: int = 0  # 0 disables warmup; >0 linearly ramps decay 0.9→ema_decay over this many updates
 
 
 cfg = sp.parse(Config)
@@ -530,9 +571,15 @@ else:
 
 ema_model: AveragedModel | None = None
 if cfg.ema_decay is not None:
-    ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(cfg.ema_decay))
+    if cfg.ema_warmup_steps > 0:
+        avg_fn = make_warmup_ema_fn(cfg.ema_decay, cfg.ema_warmup_steps)
+        ema_model = AveragedModel(model, multi_avg_fn=avg_fn)
+        print(f"EMA enabled (target_decay={cfg.ema_decay}, warmup_steps={cfg.ema_warmup_steps}, "
+              f"start_decay={WARMUP_EMA_START_DECAY})")
+    else:
+        ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(cfg.ema_decay))
+        print(f"EMA enabled (decay={cfg.ema_decay})")
     ema_model.to(device)
-    print(f"EMA enabled (decay={cfg.ema_decay})")
 cosine_t_max = cfg.lr_t_max if cfg.lr_t_max is not None else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
 
@@ -676,6 +723,15 @@ for epoch in range(MAX_EPOCHS):
     if ema_model is not None:
         epoch_record["raw_val_avg/mae_surf_p"] = raw_avg_surf_p
         epoch_record["raw_val_splits"] = raw_split_metrics
+        ema_updates = int(ema_model.n_averaged.item())
+        epoch_record["ema_updates_total"] = ema_updates
+        epoch_record["ema_warmup_steps"] = cfg.ema_warmup_steps
+        # n_averaged was incremented after the last call to multi_avg_fn, so the
+        # most recent decay was computed at step = n_averaged - 1.
+        last_step = max(ema_updates - 1, 0)
+        epoch_record["ema_current_decay"] = warmup_ema_decay_at_step(
+            last_step, cfg.ema_decay, cfg.ema_warmup_steps,
+        )
     append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     ema_str = ""
     if ema_model is not None:
