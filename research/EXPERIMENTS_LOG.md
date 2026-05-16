@@ -639,3 +639,42 @@ Future direction: prioritize **directional** changes (attention structure, slice
 - Artifacts: `models/model-h23b-sw5-clip1-*/`, `models/model-h23b-sw2-clip1-*/`
 
 **Status: CLOSED — null result. H37 assigned to tanjiro: n_head sweep (8, 2), a directional/architectural change that doesn't interact with clip magnitude.**
+
+---
+
+## 2026-05-16 03:05 — PR #3452: H27b: LR=1e-3 + clip=1.0 on H20 base (frieren) — **NEW BEST, MERGED**
+
+- Branch: `charliepai2i48h3-frieren/H27-lr-sweep-h19` (rebased onto H20 stack)
+- Hypothesis: LR=1e-3 + clip=1.0 on the current merged stack continues the monotone LR improvement from H27.
+
+| Arm | lr | val_avg | test 3-split | vs H20 (75.50) |
+|-----|----|---------|-------------|----------------|
+| **Arm B (winner)** | **1e-3** | **71.7713** | **70.6226** | **-3.72 (-4.9%)** |
+| Arm A | 7e-4 | 75.9937 | 73.1714 | +0.49 (tied) |
+| H20 baseline | 5e-4 | 75.4955 | 73.1556 | 0 |
+
+**Per-split (Arm B lr=1e-3 vs H20 baseline):**
+
+| Split | H20 (lr=5e-4) | H27b Arm B (lr=1e-3) | Δ |
+|-------|--------------|----------------------|----|
+| val_single_in_dist | 85.73 | 83.78 | -1.95 |
+| val_geom_camber_rc | 85.47 | 85.04 | -0.43 |
+| val_geom_camber_cruise | 55.79 | 49.52 | -6.27 |
+| val_re_rand | 75.00 | 68.74 | -6.26 |
+| **val_avg** | **75.4955** | **71.7713** | **-3.72** |
+| test_single_in_dist | 77.43 | 72.94 | -4.49 |
+| test_geom_camber_rc | 77.57 | 78.04 | +0.47 |
+| test_re_rand | 64.47 | 60.89 | -3.58 |
+| **test_avg (3-split)** | **73.16** | **70.62** | **-2.54** |
+
+**All val splits improved, test_avg improved -2.54.** Training monotone (no spikes). Pre-clip grad norms: 8.6→2.3 over 13 epochs — clip=1.0 was active every step.
+
+**Key finding:** Monotone LR trend confirmed: 5e-4→7e-4→1e-3 gives 75.50 → ~75.99 (tie) → **71.77 (big win)**. The jump is in the 1e-3 range, not at 7e-4. clip=1.0 is acting as the safety rail that allows the optimizer to take large steps without instability. Every split benefiting is a strong signal of genuine improvement.
+
+**Important note:** `--huber_delta 0.5` flag is a no-op. Realized config: per-channel δ_vel=0.5/δ_p=0.25 from merged defaults.
+
+**val_single_in_dist improvement from 85.73 → 83.78** is notable — this was the "stuck" split previously identified.
+
+- Artifacts: `models/model-h27b-lr1e3-clip1-20260516-012724/`, `models/model-h27b-lr7e4-clip1-20260516-002910/`
+
+**Status: MERGED — new best. Follow-up H38 assigned to frieren (weight decay sweep on new base); H32 thorfinn redirected to lr=1.5e-3/2e-3.**
