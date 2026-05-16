@@ -23,7 +23,8 @@
 
 | PR | Student | Theme | Status | Baseline context |
 |----|---------|-------|--------|-----------------|
-| #3528 | fern | Grad-clip threshold sweep (2.0/5.0/10.0 vs 1.0) | WIP | Needs rebase; target 67.30 (surf_weight=25 now merged) |
+| #3656 | frieren | Finer surf_weight sweep: 22 and 27 around 25 optimum | WIP — NEW | On 5-mech baseline 67.30; tightening prior win |
+| #3528 | fern | Grad-clip max_norm=10.0 re-run on 5-mech (surf_weight=25) | WIP — REBASING | Prior 3-arm sweep found 10.0 best at val=67.54 (beat 70.25); needs rebase to confirm vs 67.30 |
 | #3442 | tanjiro | signed log1p on pressure (stronger compression) | WIP — REBASING | Rebase guided; target 67.30 |
 | #3470 | askeladd | EMA decay ablation: 0.997/0.995/0.990 | WIP — REBASING | Rebased on grad-clip; target 67.30 |
 | #3485 | alphonse | bf16 autocast: faster forward → more epochs | WIP — REBASING | Rebase guided; target 67.30 |
