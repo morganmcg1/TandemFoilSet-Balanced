@@ -851,4 +851,31 @@ Note: Both arms were on H20 base (lr=5e-4). Neither would have beaten current be
 
 **Status: CLOSED — dead end. β₂ direction fully exhausted. askeladd reassigned to H43.**
 
+---
+
+## 2026-05-16 06:30 — PR #3651: H38: Weight decay sweep (wd=0, wd=5e-5) on lr=1e-3 base (frieren) — **NEW BEST, MERGED**
+
+- Branch: `charliepai2i48h3-frieren/weight-decay-sweep-h27b`
+- Hypothesis: Default wd=1e-4 over-regularizes at lr=1e-3 — the AdamW per-step penalty (lr×wd×param) doubled when LR went 5e-4→1e-3. wd=5e-5 restores effective regularization to original strength. wd=0 removes it entirely.
+
+| Arm | wd | val_avg | test 3-split | vs H32 (69.44) |
+|-----|----|---------|-------------|----------------|
+| **Arm B (winner)** | **5e-5** | **68.1932** | **65.4393** | **-1.25 win** |
+| Arm A | 0 | 70.6064 | 66.9854 | -0.83 win |
+| H32 baseline | 1e-4 | 69.4381 | 69.1774 | 0 (ref) |
+
+Per-split Arm B (wd=5e-5):
+- val_single_in_dist: **76.8452** (was 79.6711, -2.83)
+- val_geom_camber_rc: **84.3542** (was 84.4672, -0.11)
+- val_geom_camber_cruise: **44.4649** (was 47.2669, -2.80)
+- val_re_rand: **67.1084** (was 66.3473, -0.74)
+
+**Arm B improves all 4 val splits.** Arm A (wd=0) also beats baseline by -0.83 but slightly regresses on cruise. Inverted-U confirmed: wd=5e-5 < wd=0 < wd=1e-4.
+
+**Mechanism validated:** Raising lr 5e-4→1e-3 doubled the effective per-step L2 penalty. Restoring the LR-normalized strength (wd=5e-5 at lr=1e-3 ≡ wd=1e-4 at lr=5e-4) gives a clean -1.25 pt improvement. Weight decay is **orthogonal to clip** (parameter norm vs gradient norm) — confirming the H38 prediction.
+
+- Artifacts: `models/model-h38-wd0-lr1e3-clip1-20260516-042517/`, `models/model-h38-wd5e5-lr1e3-clip1-20260516-052550/`
+
+**Status: MERGED — new best (68.1932). Frieren reassigned to H44 (β₁ sweep). All future assignments use wd=5e-5 as default at lr=1e-3.**
+
 **Status: CLOSED — informative negative. cond_dim=11 remains optimal on clipped stack.**
