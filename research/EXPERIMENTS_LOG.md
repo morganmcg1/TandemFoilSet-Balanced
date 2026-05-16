@@ -2335,3 +2335,44 @@ Gradient-norm trajectories confirmed expected mechanism: longer warmup → lower
 
 **edward → #4157**: SF-AdamW LR fine-tune {1.5e-3, 2e-3, 2.5e-3, 3e-3} — localize the lr=2e-3 peak discovered in askeladd #4038.
 
+---
+
+## 2026-05-16 21:55 — PR #4019 [SENT BACK]: SF-AdamW clip×EMA 2×2 factorial (R1, stale lr=5e-4 stack)
+
+- **Student branch:** `charliepai2i48h4-alphonse/sf-adamw-clip-ema-compose`
+- **Hypothesis:** Two mechanism questions under SF-AdamW — (1) Is clip=0.25 still optimal under SF's Polyak averaging? (2) Is external EMA still load-bearing or redundant with internal Polyak averaging?
+- **Stack (stale):** SF-AdamW lr=5e-4, bf16, FiLM+two-shot, with clip and EMA factorialized. Seed=1 across all 4 arms (PR-introduced `--seed` for paired reproducibility).
+
+### Results
+
+| Arm | clip | EMA | val_avg | Δ vs A | test 3-split mean | clip rate @ best |
+|---|---:|:---:|---:|---:|---:|---:|
+| A (control) | 1.0 | on | 63.300 | — | 62.359 | 0.9947 |
+| B | 0.25 | on | 63.520 | +0.347% | 62.748 | 1.0000 |
+| **C** | 1.0 | **off** | **62.914** | **−0.610%** | **62.047** | 0.9947 |
+| D | 0.25 | off | 63.162 | −0.218% | 62.417 | 1.0000 |
+
+**Direction signal:** EMA-off (C) wins on **3 of 4 val splits** + test 3-split mean. Pattern is internally consistent. But:
+
+- **Paired Δ 0.610% < noise floor 0.97%** (tanjiro #4003) — below seed-variance threshold.
+- **Absolute miss:** All 4 arms regress 15-16% vs current canonical SF-AdamW lr=2e-3 (54.769).
+- **Cannot generalize to lr=2e-3:** Higher gradient norms at higher LR could make EMA more critical (smoothing helps) OR more redundant (Polyak dominates).
+
+### Conclusions
+
+**Sent back for R2 at lr=2e-3.** The R1 ranking is consistent enough to be worth investigating at the correct LR. Three plausible outcomes for R2:
+- EMA-off gain grows (>0.5% paired) → merge candidate, update canonical
+- Gain shrinks below 0.3% → close EMA-removal hypothesis
+- Surprising winner (B or D) → investigate LR×clip×EMA interaction
+
+### Notable infrastructure contribution
+
+Alphonse introduced `--seed` flag for deterministic paired-arm reproducibility. This is excellent infra and should be standard for all future paired-Δ experiments.
+
+### Metric artifacts
+
+- Arm A: `models/model-charliepai2i48h4-alphonse-sf-r3-arma-clip1_ema-20260516-202503/metrics.jsonl`
+- Arm B: `models/model-charliepai2i48h4-alphonse-sf-r3-armb-clip0_25-ema-20260516-175159/metrics.jsonl`
+- Arm C: `models/model-charliepai2i48h4-alphonse-sf-r3-armc-clip1-noema-20260516-182613/metrics.jsonl`
+- Arm D: `models/model-charliepai2i48h4-alphonse-sf-r3-armd-clip0_25-noema-20260516-192255/metrics.jsonl`
+

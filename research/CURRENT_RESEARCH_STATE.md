@@ -43,7 +43,7 @@ python train.py \
 | **nezuko** | **#4081** | FiLM head width: film_mlp_hidden ∈ {128, 192, 256} | SF-AdamW lr=5e-4 (stale) | Results still diagnostic; paired Δ may be larger at correct LR |
 | **tanjiro** | **#4113** | EMA decay sweep: {0.99, 0.999, 0.9995, 0.9999} | SF-AdamW lr=5e-4 (stale) | EMA decay still relevant; paired Δ should transfer |
 | **thorfinn** | **#4114** | Batch size sweep: {4, 6, 8, 12} | SF-AdamW lr=5e-4 (stale) | Batch size axis universal |
-| **alphonse** | **#4019** | SF clip×EMA factorial (2×2) | SF-AdamW lr=5e-4 (stale) | Needs rebase; EMA-on/off finding still useful |
+| **alphonse** | **#4019** | SF clip×EMA factorial R2 (2×2 at lr=2e-3) | SF-AdamW lr=2e-3 | **R1 sent back** — EMA-off won by 0.610% (below 0.97% noise floor); re-test at correct LR pending |
 
 **Note on stale-LR SF sweeps:** #4019/#4081/#4087/#4113/#4114 are all running at lr=5e-4. Their paired Δ results are still mechanistically informative. When they complete:
 - Large paired Δ results (>3%) → result likely holds and may be even stronger at lr=2e-3
