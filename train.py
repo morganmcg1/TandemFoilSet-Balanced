@@ -284,8 +284,10 @@ def evaluate_split(model, fourier_encoder, loader, stats, surf_weight,
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             ff = fourier_encoder(x_norm[..., :2])
-            x_aug = torch.cat([x_norm, ff], dim=-1)
-            pred = model({"x": x_aug})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                x_aug = torch.cat([x_norm, ff], dim=-1)
+                pred = model({"x": x_aug})["preds"]
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -467,7 +469,7 @@ model_config = dict(
     fun_dim=X_DIM - 2 + 4 * cfg.fourier_bands,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=8,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -544,8 +546,10 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         ff = fourier_encoder(x_norm[..., :2])
         x_aug = torch.cat([x_norm, ff], dim=-1)
-        pred = model({"x": x_aug})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_aug})["preds"]
+            pred_fp32 = pred.float()
+        sq_err = (pred_fp32 - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -588,6 +592,9 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if epoch == 0:
+        log_metrics["epoch_wall_sec"] = dt
+        wandb.summary["epoch_wall_sec"] = dt
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
