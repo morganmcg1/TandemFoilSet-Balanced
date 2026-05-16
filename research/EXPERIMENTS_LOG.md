@@ -553,3 +553,42 @@ Composition is highly likely (Fourier is feature-side, EMA+T_max=15 are gradient
 ### Bug-fix flag
 
 PR also contains `evaluate_split` upstream NaN-sample filter in `train.py` (writable) — confirmed safe in prior round; no `data/scoring.py` touched. Fix is no-op on splits with finite targets; only rescues `test_geom_camber_cruise` from `NaN·0=NaN` poisoning. This stays in the PR as a quality fix.
+
+## 2026-05-16 01:28 — PR #3122 [MERGED]: FiLM conditioning on physics parameters
+
+- **Student branch:** `charliepai2i48h4-frieren/film-conditioning`
+- **Hypothesis:** FiLM (Feature-wise Linear Modulation) injects learned per-sample scale+shift at every TransolverBlock, conditioned on physics parameters [log(Re), AoA, NACA_encoded, gap, stagger]. Enables explicit cross-regime conditioning rather than relying on the model to extract regime from mesh features.
+
+### Results (Round 2 — full current best stack: Huber + bf16 + T_max=15 + EMA decay=0.999)
+
+| Arm | Config | `val_avg/mae_surf_p` | Δ vs Arm A | `test 3-split mean` | Δ vs Arm A |
+|-----|--------|----------------------|------------|---------------------|------------|
+| A | Full stack, no FiLM (baseline) | 97.360 | — | 93.924 | — |
+| B | Full stack + FiLM | **92.606** | **−4.88%** ✅ | **89.005** | **−5.24%** ✅ |
+
+**Arm B vs merged baseline (96.464): −4.00%** ✅
+
+### Per-split val (best checkpoint, mae_surf_p)
+
+| Split | Arm A | Arm B (FiLM) | Δ |
+|---|---|---|---|
+| `val_single_in_dist`     | 112.950 | **107.788** | −4.57% ✅ |
+| `val_geom_camber_rc`     | 105.171 | **101.033** | −3.93% ✅ |
+| `val_geom_camber_cruise` |  77.396 |  **73.993** | −4.41% ✅ |
+| `val_re_rand`            |  93.922 |  **87.611** | **−6.72%** ✅ |
+| **val_avg**              | **97.360** | **92.606** | **−4.88%** ✅ |
+
+### Analysis
+
+- **All 4 splits improve uniformly.** Unlike Round 1 (MSE-only stack, where FiLM anomalously helped single-in-dist more than re-rand), Round 2 on the Huber+EMA stack shows `val_re_rand` as the biggest winner (−6.72%) — exactly the cross-regime generalization the hypothesis predicted.
+- **Round 1 mechanism inversion was loss-curvature driven.** MSE over-weights high-Re outliers; Huber's bounded influence + EMA variance reduction let FiLM's cross-regime conditioning express itself properly.
+- **Compose is additive.** FiLM adds −4.88% on top of EMA's −1.06% — independent mechanisms (EMA smooths the optimizer path; FiLM conditions the representation).
+- **Compute overhead modest.** +27.6% params, +7% epoch time, +2.5 GB VRAM. At 18 best epoch (vs 19 for Arm A), per-epoch quality is markedly higher — FiLM converges faster in terms of validation metric per epoch.
+- **Zero-init FiLM warm-start works well.** Arm B epoch 1 ≈ Arm A (warm start preserved); diverges positively by epoch 4 and maintains the lead through epoch 18.
+
+### Decision: MERGED
+
+Clean −4.00% improvement on merged baseline; apples-to-apples (same full stack); terminal SENPAI-RESULT; mergeable state CLEAN.
+
+New best: **92.606 val_avg/mae_surf_p**
+Reproduce: `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond`

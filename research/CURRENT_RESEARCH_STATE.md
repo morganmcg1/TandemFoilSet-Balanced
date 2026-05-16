@@ -1,22 +1,18 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 01:25 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
+- **Date:** 2026-05-16 01:30 UTC (Round 4 in progress on `icml-appendix-charlie-pai2i-48h-r4`)
 - **Most recent human research direction:** None received on this track.
 - **Track:** `icml-appendix-charlie-pai2i-48h-r4` (Charlie local-metrics arm; 8 students, 1 GPU each, 30 min × 50 epoch caps)
 
 ## Current research focus
 
-**Four axes confirmed and merged.** The compound stack is now: Huber loss + bf16 AMP + cosine T_max=15 + EMA decay=0.999.
+**Five axes confirmed and merged.** The compound stack is now: Huber loss + bf16 AMP + cosine T_max=15 + EMA decay=0.999 + FiLM conditioning.
 
-Current best: **96.464 val_avg/mae_surf_p** (nezuko #3126, EMA + bf16 + T_max=15, 2026-05-15 22:32)
+Current best: **92.606 val_avg/mae_surf_p** (frieren #3122, FiLM on full EMA+bf16+T_max=15 stack, 2026-05-16 01:28)
 
-1. **Compose verification still pending:** thorfinn #3390 measuring bf16+T_max=15 (result: nezuko Arm A confirmed 97.492, close to the predicted 93–95 floor; thorfinn in-flight for 2nd seed)
-2. **LR axis (down direction):** alphonse #3443 testing lr ∈ {2.5e-4, 3.5e-4} on bf16+T_max=15. Higher LR falsified by two seeds.
-3. **Batch size:** askeladd #3365 (bs=6/8 on bf16; ~77 GB VRAM, actively training)
-4. **Architectural changes:** **fern #3117 (Fourier scale=2 concat raw) showed −9.10% intra-PR win (Arm B 93.967 vs Arm A 103.370 on bf16, no EMA/T_max) — sent back for rebase + recompose on full EMA+T_max=15 stack to confirm composition before merge.** frieren #3122 (FiLM, rebased 23:23, training)
-5. **Model capacity:** nezuko just assigned #3492 (n_hidden=192 on full best stack)
-6. **Slice num:** edward #3113 (slice_num=96 vs 64, rebased, training)
-7. **LR sweep (fp32 higher):** tanjiro #3321 (just completed arms, GPU idle — likely posting results)
+Two additional promising architectural wins pending composition confirmation:
+- Fourier features scale=2 (fern #3117): **−9.10% intra-PR on bf16-only**; sent back to rerun on full EMA+T_max=15+FiLM stack
+- Two-shot FiLM per block (frieren #3584): just assigned, expected to compound on FiLM baseline
 
 **Primary metric:** `val_avg/mae_surf_p` (lower is better)
 
@@ -27,7 +23,8 @@ Current best: **96.464 val_avg/mae_surf_p** (nezuko #3126, EMA + bf16 + T_max=15
 | #3094 | Huber loss (alphonse) | −15.7% vs MSE | 111.531 |
 | #3290 | bf16 AMP (askeladd) | −8.98% vs Huber | 101.519 |
 | #3289 | Cosine T_max=15 (thorfinn) | −10.3% vs Huber fp32 / −1.4% vs bf16 | 100.059 (fp32) |
-| #3126 | EMA decay=0.999 Karras-ramp (nezuko) | −1.06% vs bf16+T_max=15 paired arm | **96.464** |
+| #3126 | EMA decay=0.999 Karras-ramp (nezuko) | −1.06% vs bf16+T_max=15 paired arm | 96.464 |
+| #3122 | FiLM conditioning — log Re, AoA, NACA, gap, stagger (frieren) | −4.00% vs EMA baseline | **92.606** |
 
 ## Falsified hypotheses (closed, informative)
 
@@ -40,53 +37,53 @@ Current best: **96.464 val_avg/mae_surf_p** (nezuko #3126, EMA + bf16 + T_max=15
 ## Active experiments
 
 | Student | PR | Hypothesis | Stack | Status |
-|---------|----|-----------|----|--------|
-| thorfinn | #3390 | bf16+T_max=15/20 compose verify | bf16+T_max | 1 arm complete 22:58, post-training idle |
-| alphonse | #3443 | lr ∈ {2.5e-4, 3.5e-4} sweep | bf16+T_max=15 | 2+ arms complete by 22:55, post-training idle |
-| askeladd | #3365 | batch_size=6/8 | bf16 | Training (77 GB previously, now 0; analysis phase) |
-| tanjiro | #3511 | grad_clip ∈ {0.5, 1.0, ∞} | bf16+T_max=15+EMA | Just assigned (after #3321 closed-falsified) |
-| nezuko | #3492 | n_hidden=192 vs 128 | bf16+T_max=15+EMA | Just assigned |
-| edward | #3113 | slice_num=96 vs 64 | bf16+Huber | Pod restarted iter 9 — picking up |
-| frieren | #3122 | FiLM conditioning | bf16+T_max=15+EMA | Rebased 23:23, launching arms |
-| fern | #3117 | Fourier scale=2 + concat raw (R3) | bf16+T_max=15+EMA | **R2 strong winner sent back for rebase + recompose: Arm B 93.967 on bf16-only (−9.10% intra-PR); rerun on full stack to confirm composition** |
+|---------|----|-----------|----|----|
+| thorfinn | #3390 | bf16+T_max=15/20 compose verify | bf16+T_max | Stale_wip — pod active, likely finishing arms |
+| alphonse | #3443 | lr ∈ {2.5e-4, 3.5e-4} on bf16+T_max=15 | bf16+T_max=15 | Stale_wip — pod active, likely analyzing |
+| askeladd | #3365 | batch_size=6/8 on bf16 | bf16 | Stale_wip — pod active |
+| tanjiro | #3511 | grad_clip ∈ {0.5, 1.0, ∞} | bf16+T_max=15+EMA | Training (36 GB VRAM) |
+| nezuko | #3492 | n_hidden=192 vs 128 | bf16+T_max=15+EMA | Training (85 GB VRAM) |
+| edward | #3113 | slice_num=96 vs 64 | bf16+Huber | Rebased, training (has train signals) |
+| frieren | #3584 | Two-shot FiLM (attn + MLP per block) | bf16+T_max=15+EMA+FiLM | Just assigned |
+| fern | #3117 | Fourier scale=2 + concat raw (recompose R3) | bf16+T_max=15+EMA+FiLM | Sent back to rebase + rerun on full stack |
 
 ## Key research questions
 
-1. **EMA + compose:** What does bf16+T_max=15+EMA achieve on tanjiro/thorfinn seeds? Nezuko's paired Arm A (97.492) is first measurement; thorfinn will confirm.
-2. **Is there an optimal LR below 5e-4?** Alphonse #3443 tests 2.5e-4 and 3.5e-4. Lower LR may interact with EMA smoothing.
-3. **Does bigger batch help?** askeladd #3365 — if bs=8 wins, compose it with EMA stack.
-4. **Model capacity:** nezuko #3492 — n_hidden=192 on full stack tests whether representation width is a bottleneck.
-5. **Fourier / FiLM:** both blocked by merge conflicts. Priority to resolve.
-6. **Slice_num=96:** edward #3113 — additive to n_hidden test if both win.
+1. **Fourier composition:** fern #3117 showed −9.10% on bf16-only. Does scale=2 concat-Fourier still win when stacked on EMA+T_max=15+FiLM? Expected ~85-89 if composition holds.
+2. **Two-shot FiLM (frieren #3584):** incremental benefit of conditioning both attention and MLP per block. Expected −2-6% vs single-shot FiLM baseline (92.606).
+3. **LR axis:** alphonse #3443 — does 2.5e-4 or 3.5e-4 help on the EMA+FiLM stack? EMA smoothing may widen the optimal LR range.
+4. **Batch size:** askeladd #3365 — larger batch on bf16; if wins, compose with full stack.
+5. **Model capacity:** nezuko #3492 — n_hidden=192 on full EMA stack, before FiLM merge.
+6. **Grad clipping:** tanjiro #3511 — does clipping (0.5, 1.0) reduce bf16 noise outliers?
+7. **Slice_num=96:** edward #3113 — more spatial tokens; additive with capacity changes.
 
 ## LR axis summary
 
 | LR | dtype | T_max | val_avg/mae_surf_p | source |
 |---|---|---|---:|---|
-| 1.5e-3+warmup | fp32 | 50 | TBD | tanjiro Arm C (GPU idle, likely done) |
 | 1e-3+warmup | bf16 | 50 | 107.457 | alphonse #3364 Arm B |
 | 1e-3+warmup | bf16 | 50 | 100.272 | tanjiro #3321 Arm B |
-| **5e-4 (default)** | bf16 | 15 | 97.492 | nezuko #3126 Arm A (first compose measurement) |
-| **5e-4 (default)** | bf16 | 15+EMA | **96.464** | nezuko #3126 Arm B (merged) |
+| **5e-4 (default)** | bf16 | 15 | 97.492 | nezuko #3126 Arm A |
+| **5e-4 (default)** | bf16 | 15+EMA | 96.464 | nezuko #3126 Arm B (merged) |
+| **5e-4 (default)** | bf16 | 15+EMA+FiLM | **92.606** | frieren #3122 Arm B (merged) |
 | 2.5e-4 | bf16 | 15 | TBD | alphonse #3443 Arm B |
 | 3.5e-4 | bf16 | 15 | TBD | alphonse #3443 Arm C |
 
-## Potential next hypotheses (Round 4)
+## Potential next hypotheses
 
-1. **Compose full stack** — bf16 + T_max=15 + EMA + optimal LR (after alphonse #3443 lands) + bs (after askeladd #3365 lands).
-2. **EMA with current best LR** — once lower LR is characterized, re-test EMA at optimal LR.
-3. **SDF input features** — signed distance to surface as an explicit geometry signal. Untested.
-4. **Schedule-Free AdamW** — eliminates LR tuning. Strong candidate once we've characterized the LR axis.
-5. **Sobolev loss** — gradient supervision near the surface (pairs with Huber). Physically motivated.
-6. **Lower LR below 2.5e-4** — if alphonse #3443 Arm B best-epoch still improving at budget end.
-7. **n_layers=6 or n_layers=7** — after n_hidden=192 is characterized.
-8. **FiLM / Fourier** — once merge conflicts resolved; promising prior results from earlier rounds.
+1. **Compose Fourier+FiLM** — fern #3117 recompose on full stack likely to give ~85-88; very high priority.
+2. **Two-shot FiLM composition** — frieren #3584, in-flight.
+3. **Schedule-Free AdamW** — eliminates LR tuning. Strong candidate after LR axis closes.
+4. **Sobolev loss** — gradient supervision near surface (pairs with Huber). Physically motivated, untested.
+5. **SDF input features** — signed distance to surface as explicit geometry signal. Untested.
+6. **n_layers=6/7** — after n_hidden=192 characterized by nezuko.
+7. **FiLM on preprocess MLP** — frieren's suggestion #2; small additional param overhead.
+8. **Lower LR below 2.5e-4** — if alphonse #3443 shows monotone improvement at lower LR.
 
 ## Operational notes
 
-- **EMA merged (PR #3126):** decay=0.999 Karras-ramp, built into train.py as `--use_ema --ema_decay 0.999`
-- **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999`
+- **Current best command:** `python train.py --amp_dtype bf16 --cosine_t_max 15 --use_ema --ema_decay 0.999 --film_cond`
 - **GH API rate limit:** recurring ~40-min windows. Student pods auto-recover when limit clears.
-- **bf16+T_max=15 compose measured:** 97.492 (nezuko Arm A single seed); thorfinn #3390 verifying second seed
-- Local JSONL metrics only; known `test_geom_camber_cruise` NaN bug in read-only `data/scoring.py`
-- **Frieren/Fern merge conflicts:** both need rebase onto current advisor branch; pods re-invoked 22:23 and should be resolving
+- **test_geom_camber_cruise NaN:** known cruise-sample overflow in read-only `data/scoring.py`; use 3-split partial mean for test comparisons.
+- **Fourier features (fern #3117):** −9.10% intra-PR on bf16-only confirmed; recompose run on full stack in progress.
+- **edward #3113:** pre-EMA stack (Huber+bf16 only); result will be informative but not on full best stack.
