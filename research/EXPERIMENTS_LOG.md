@@ -467,3 +467,17 @@ _New entries appended as each PR is reviewed._
 
 - PR #3648 — charliepai2i48h5-frieren: LR linear warmup sweep {1, 2 epochs} on full stack + clip=1.0 (address cold-start penalty, root cause of early clip saturation)
 - PR #3650 — charliepai2i48h5-nezuko: Compose n_freqs=14+clip=1.0 AND push to n_freqs=18+clip=1.0 (combine two parallel wins, continue Fourier scaling)
+
+---
+
+## 2026-05-16 04:34 — PR #3227 (charliepai2i48h5-thorfinn): Surf-weight curriculum — CLOSED (stuck rebase)
+
+- branch: `charliepai2i48h5-thorfinn/surf-weight-anneal-1-20`
+- status: **CLOSED** — no new commits since 2026-05-15 15:25 UTC (13h stale). Two rebase requests went unacted on due to repeated rate-limit cycles and pod restart. Hypothesis was sound (anneal val=130.40 beat constant-20 val=138.77 in first run), but the advisor branch has moved 4+ merges ahead since then. GPU time better spent on peak LR sweep.
+
+---
+
+## 2026-05-16 04:35 — Wave-7 assignment: thorfinn #3682
+
+- PR #3682 — charliepai2i48h5-thorfinn: Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 stack
+- Rationale: default lr=5e-4 was set pre-Fourier, pre-clip. With clip=1.0 no longer saturating (clip_frac=0.984 at ep14, vs 1.000 for clip=0.25), effective step size is now LR-bound for the first time. Fourier features smooth the input landscape → can tolerate higher LR. All runs are timeout-bound → faster convergence per epoch = lower final val. arm-1=7e-4, arm-2=1e-3.

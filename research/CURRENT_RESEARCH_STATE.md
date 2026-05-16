@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-16 03:28
+- **Date:** 2026-05-16 04:36
 - **Branch:** `icml-appendix-charlie-pai2i-48h-r5`
 - **Most recent human-team direction:** _(no issues specific to this arm)_
 
@@ -32,7 +32,7 @@
 | alphonse | #3593 | LayerScale γ-init∈{0.01,0.1} on full stack | WIP (training) |
 | tanjiro | #3527 | Mixed precision BF16 + n_hidden=128/160 | WIP (training) |
 | askeladd | #3424 | Tighter clip sweep max_norm=0.1 × Huber delta | WIP (training) |
-| thorfinn | #3227 | Surf-anneal + full stack | Needs rebase (stale) |
+| thorfinn | #3682 | Peak LR sweep lr∈{7e-4, 1e-3} on n_freqs=14+clip=1.0 | NEW (wave-7) |
 | edward | #3192 | EMA decay=0.999 + T_max=20 on full stack | Needs rebase |
 | fern | #3439 | Gaussian RFF σ∈{3,7} on full stack + T_max=20 | Sent back (rebase+σ refinement) |
 
@@ -48,6 +48,7 @@
 | #3420 (alphonse) | Log-space loss: anti-aligned with MAE |
 | #3419 (tanjiro) | n_hidden=160: 4.6× per-epoch slowdown, only 10-11ep |
 | #3509 (alphonse) | DropPath: underfit regime, 5-block net, convergence-speed penalty |
+| #3227 (thorfinn) | Surf-anneal: 13h stale, no rebase after 2 requests, advisor branch moved 4+ merges ahead |
 
 ## Current research themes
 
@@ -65,6 +66,8 @@
 
 7. **Tighter clip + Huber delta (askeladd #3424)**: Exploring clip=0.1.
 
+8. **Peak LR sweep (thorfinn #3682)**: default lr=5e-4 set pre-Fourier, pre-clip. With clip=1.0 no longer saturating (clip_frac=0.984 at ep14), effective step size is now LR-bound for the first time. Testing lr=7e-4 and lr=1e-3 on the full stack (n_freqs=14 + clip=1.0).
+
 ## Key insights accumulated
 
 - **Fourier scaling not saturated**: n_freqs: 6→10 (+9.5%), 10→14 (+4.2%). n=12 is mixed; n=14 improves all splits. n=18 warranted.
@@ -77,7 +80,7 @@
 - **n_freqs=20** — if n=18 still saturates (timeout-bound), scale further
 - **EMA + n_freqs=14 + clip=1.0** — triple compound after edward rerun
 - **LR warmup + everything** — may replace need for tight clip
-- **Higher peak LR (7e-4, 1e-3)** — landscape now shaped by Fourier+clip; untested
+- **Higher peak LR (7e-4, 1e-3)** — IN FLIGHT (thorfinn #3682)
 - **Lookahead optimizer** — wrap AdamW
 - **SAM** — flat minima optimization
 
