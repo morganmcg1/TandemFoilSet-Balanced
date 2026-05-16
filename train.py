@@ -112,6 +112,28 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUFFN(nn.Module):
+    """SwiGLU FFN (Shazeer 2020, arXiv:2002.05202).
+
+    Replaces a vanilla 2-layer GeLU FFN with a gated variant:
+        out = w3( silu(w1(x)) * w2(x) )
+    Inner dim is set to `round_to_mult(hidden_dim * 2/3, 8)` so 3 matrices of
+    size (in_dim, inner) approximately match the param count of a vanilla
+    2-matrix FFN of width `hidden_dim`.
+    """
+
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int):
+        super().__init__()
+        inner = max(8, int((hidden_dim * 2 / 3 + 4) // 8) * 8)
+        self.inner = inner
+        self.w1 = nn.Linear(in_dim, inner, bias=False)
+        self.w2 = nn.Linear(in_dim, inner, bias=False)
+        self.w3 = nn.Linear(inner, out_dim, bias=False)
+
+    def forward(self, x):
+        return self.w3(F.silu(self.w1(x)) * self.w2(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -178,8 +200,7 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -489,7 +510,8 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+ffn_inner = next(m.inner for m in model.modules() if isinstance(m, SwiGLUFFN))
+print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN=SwiGLU inner={ffn_inner})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
@@ -513,6 +535,8 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "ffn_type": "swiglu",
+        "ffn_inner": ffn_inner,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "warmup_epochs": warmup_epochs,
