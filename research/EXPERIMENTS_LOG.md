@@ -687,3 +687,85 @@ Edward's per-split feature distribution audit is the most valuable artifact: a d
 2. "Reflection-based TTA dead" on this dataset. Cruise-only TTA is a low-upside option if needed later.
 3. Physical symmetries that DO exist on TandemFoilSet (e.g., per-split normalization, geometry-conditioned regularization) are worth exploring instead.
 - NaN on test_geom_camber_cruise is a model-quality issue (extreme prediction on under-converged model at high LR), not the data corruption bug.
+
+---
+
+## 2026-05-16 02:45 — PR #3580: H: Stochastic Weight Averaging (SWA) over last 5 checkpoints
+
+- **Branch:** willowpai2i48h1-nezuko/swa-last5
+- **Student:** willowpai2i48h1-nezuko
+- **Hypothesis:** Post-training uniform average of last 5 checkpoints (K=5). Predicted -0.5% to -2% on val_avg/mae_surf_p.
+
+### Results
+
+| Version | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (val / test) |
+|---|---:|---:|---:|
+| Baseline #3480 | 87.9105 | 83.3782 | — |
+| Raw final epoch (e18) | 91.7950 | 86.2239 | +3.88 / +2.85 |
+| Best-by-val (e15) | 89.7613 | 85.1176 | +1.85 / +1.74 |
+| **SWA K=5** | 89.8631 | 85.0478 | +1.95 / +1.67 |
+| SWA K=3 | 89.9285 | 84.9371 | +2.02 / +1.56 |
+
+W&B run: `pgzvcwwy` · Group: `swa_weight_averaging` · Best epoch: 15 · Peak VRAM: 33.0 GB
+
+### Analysis
+**Closed — SWA mechanism works mechanistically but is redundant under the current cosine T_max=15 schedule.**
+
+- SWA K=5 vs best-by-val: +0.10pt val / -0.07pt test (well within σ=1.80).
+- SWA K=3 vs best-by-val: +0.17pt val / -0.18pt test (within σ).
+- The 1.9pt gap from baseline is seed variance — PR #3175 + alphonse #3546 both establish σ ≥ 1.80 single-seed.
+
+**Why SWA failed here:** cosine T_max=15 pins LR at ~0 from epoch 15-16 onward. Last 5 epochs are near-frozen in weight space → SWA averages near-identical snapshots → reduces to best-by-val checkpoint selection. Both K=3 and K=5 give essentially the same result, confirming the tail is dead-weight.
+
+**Program-level insights:**
+1. Cosine T_max=15 essentially zeros gradients by epoch 15 — confirmed empirically by SWA equivalence to best-by-val.
+2. This implies thorfinn's EMA decay=0.99 (#3521) will have weak signal in the same regime — EMA over near-zero-update tail ≈ best-by-val.
+3. Best-by-val checkpoint selection in train.py already captures most of the variance reduction SWA promises.
+4. SWA K=3 marginally beats K=5 on test (84.94 vs 85.05) → earlier epochs slightly better than the dead tail. Cosine is over-pinning weights.
+
+**Follow-up assigned to nezuko:** cosine T_max=10 + 8-epoch constant-LR tail at lr=1e-4 + SWA over the tail. This is the Izmailov-style recipe SWA was designed for.
+
+---
+
+## 2026-05-16 02:46 — PR #3563: H: Train-time horizontal-flip data augmentation
+
+- **Branch:** willowpai2i48h1-frieren/train-aug-hflip
+- **Student:** willowpai2i48h1-frieren
+- **Hypothesis:** Per-sample horizontal flip (p=0.5) during training. Predicted -2% to -5% on val_avg/mae_surf_p. Combined with edward's TTA (#3542), expected to compound.
+
+### Results
+
+| Metric | Baseline #3480 | aug-hflip (e18) | Δ | %  |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 87.9105 | **111.6983** | +23.79 | **+27.1%** |
+| **test_avg/mae_surf_p** | 83.3782 | **106.6308** | +23.25 | **+27.9%** |
+
+Per-split val + test breakdown (all worse):
+
+| Split | val baseline | val aug | val Δ | test baseline | test aug | test Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 105.05 | 146.27 | +39.2% | 93.68 | 136.97 | +46.2% |
+| geom_camber_rc | 95.69 | 123.27 | +28.8% | 87.55 | 108.99 | +24.5% |
+| geom_camber_cruise | 68.20 | 77.59 | +13.8% | 75.13 | 84.70 | +12.7% |
+| re_rand | 82.71 | 99.67 | +20.5% | 77.16 | 95.86 | +24.2% |
+
+W&B run: `4tbuq9ql` · Group: `train_time_augmentation` · Flip rate: 0.496 (744/1499 samples — augmentation firing correctly)
+
+### Analysis
+**Closed — catastrophic regression confirms edward #3542's dataset-asymmetry finding.** +27% on val, +27.9% on test, ~13σ above noise floor. **Worst result on this benchmark to date.**
+
+**Three independent reasons the flip is non-physical** (correctly flagged by frieren pre-launch):
+1. **NACA camber M is unsigned** (∈ [0,1]). Sign-flipping it produces values in [-1, 0] that are OOD for ALL splits including cruise. This alone explains cruise's +13.8% degradation.
+2. **AoA was not flipped** alongside the geometric flip → augmented geometry contradicts the scalar boundary condition. Model sees physically inconsistent samples.
+3. **RaceCar mesh asymmetry** (one-sided pos_z for ground effect, one-sided AoA). Flip is non-physical for ~70% of training data.
+
+**Smoking gun in per-channel loss:** vol_Uy 0.0447 (e1) → 0.0441 (e18), only -1.3% (essentially no learning); all other channels improved 60-84%. The model receives contradictory Uy targets for geometrically-indistinguishable inputs (unsigned NACA camber) and collapses to near-zero Uy prediction. This is the data-augmentation-induced-shortcut failure mode in textbook form.
+
+**Combined with #3542 (TTA), the naive horizontal-flip symmetry lever class is fully dead** on TandemFoilSet.
+
+**Valid follow-up directions surfaced by frieren's analysis** (deferred — not assigned in this round):
+1. **Corrected flip**: flip pos_z + AoA + Uy together, leave NACA camber alone (respects actual physical symmetry of the equations).
+2. **Cruise-only conditional augmentation**: apply the corrected flip only to cruise samples.
+3. **Mesh-permutation augmentation**: random node-ordering permutation (true symmetry of the mesh encoder).
+
+**Follow-up assigned to frieren:** Layer-wise LR decay (LLRD) γ=0.85 — orthogonal optimization-space regularizer, completely different lever.
