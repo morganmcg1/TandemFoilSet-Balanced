@@ -54,23 +54,43 @@ from data import (
 POS_COLS = slice(0, 2)  # (x, z) spatial coords — dims 0-1 per program.md
 
 
-def fourier_pos_encode(coords: torch.Tensor, num_freq: int) -> torch.Tensor:
+def fourier_pos_encode(
+    coords: torch.Tensor,
+    num_freq: int,
+    freq_min_exp: float = 0.0,
+    freq_max_exp: float | None = None,
+) -> torch.Tensor:
     """NeRF-style log-spaced sinusoidal features for 2D coordinates.
 
     Returns ``(N, 4*num_freq)``: sin and cos at each of ``num_freq`` log-spaced
-    frequencies (``2^k * pi`` for k in 0..num_freq-1) for each of the 2 coords.
+    frequencies for each of the 2 coords. When ``freq_max_exp`` is ``None``
+    (default, baseline behaviour) the exponents are ``arange(num_freq)`` —
+    frequencies ``2^k * pi`` for k in 0..num_freq-1. Otherwise exponents are
+    ``linspace(freq_min_exp, freq_max_exp, num_freq)``.
     """
-    freqs = 2.0 ** torch.arange(num_freq, dtype=coords.dtype, device=coords.device)
+    if freq_max_exp is not None:
+        exps = torch.linspace(freq_min_exp, freq_max_exp, num_freq,
+                              dtype=coords.dtype, device=coords.device)
+    else:
+        exps = torch.arange(num_freq, dtype=coords.dtype, device=coords.device)
+    freqs = 2.0 ** exps
     angles = coords.unsqueeze(-1) * freqs[None, None, :] * math.pi   # (N, 2, num_freq)
     enc = torch.cat([angles.sin(), angles.cos()], dim=-1)            # (N, 2, 2*num_freq)
     return enc.reshape(coords.shape[0], -1)                          # (N, 4*num_freq)
 
 
-def encode_inputs(x_norm: torch.Tensor, num_freq: int) -> torch.Tensor:
+def encode_inputs(
+    x_norm: torch.Tensor,
+    num_freq: int,
+    freq_min_exp: float = 0.0,
+    freq_max_exp: float | None = None,
+) -> torch.Tensor:
     """Replace (x, z) cols of normalized features with Fourier encoding."""
     pos = x_norm[..., POS_COLS]
     flat = pos.reshape(-1, 2)
-    enc = fourier_pos_encode(flat, num_freq).reshape(*x_norm.shape[:-1], 4 * num_freq)
+    enc = fourier_pos_encode(flat, num_freq, freq_min_exp, freq_max_exp).reshape(
+        *x_norm.shape[:-1], 4 * num_freq
+    )
     non_pos = torch.cat(
         [x_norm[..., : POS_COLS.start], x_norm[..., POS_COLS.stop :]], dim=-1
     )
@@ -279,7 +299,9 @@ def _pointwise_loss(pred, y_norm, loss_type: str):
     raise ValueError(f"Unknown loss_type: {loss_type!r}")
 
 
-def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, num_freq,
+                   freq_min_exp: float = 0.0, freq_max_exp: float | None = None,
+                   loss_type: str = "l1", use_bf16: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -305,7 +327,7 @@ def evaluate_split(model, loader, stats, surf_weight, device, num_freq, loss_typ
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_enc = encode_inputs(x_norm, num_freq)
+            x_enc = encode_inputs(x_norm, num_freq, freq_min_exp, freq_max_exp)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with amp_ctx:
                 pred = model({"x": x_enc})["preds"]
@@ -474,6 +496,11 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_type: str = "l1"  # mse | l1 | huber — l1 won 12.9% over huber, locking it in
     num_freq: int = 4  # Fourier positional-encoding frequencies (Tancik 2020); 4 won vs 8
+    # Optional linspace control over Fourier-PE exponents. freq_max_exp=None keeps the
+    # baseline arange(num_freq) behaviour (freqs = 2^k for k in 0..num_freq-1).
+    # When set, exponents = linspace(freq_min_exp, freq_max_exp, num_freq) so freqs = 2^exps.
+    freq_min_exp: float = 0.0
+    freq_max_exp: float | None = None
     coord_noise_std: float = 0.01  # Gaussian noise std on normalized (x,z) coords during training
     mlp_ratio: int = 2  # FFN expansion ratio; SwiGLU inner = round_to_mult(hidden*mlp_ratio*2/3, 8)
     use_bf16: bool = False  # bf16 autocast (activations only; params/optimizer stay fp32)
@@ -604,7 +631,7 @@ for epoch in range(MAX_EPOCHS):
             noise = torch.randn_like(x_norm[..., :2]) * cfg.coord_noise_std * pad_mask
             x_norm = x_norm.clone()
             x_norm[..., :2] = x_norm[..., :2] + noise
-        x_enc = encode_inputs(x_norm, cfg.num_freq)
+        x_enc = encode_inputs(x_norm, cfg.num_freq, cfg.freq_min_exp, cfg.freq_max_exp)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         with train_amp_ctx():
             pred = model({"x": x_enc})["preds"]
@@ -640,7 +667,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq,
+                             cfg.freq_min_exp, cfg.freq_max_exp, cfg.loss_type, cfg.use_bf16)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -708,7 +736,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq, cfg.loss_type, cfg.use_bf16)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.num_freq,
+                                 cfg.freq_min_exp, cfg.freq_max_exp, cfg.loss_type, cfg.use_bf16)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
