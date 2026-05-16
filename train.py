@@ -136,21 +136,30 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+def make_norm(norm_type: str, dim: int) -> nn.Module:
+    if norm_type == "rmsnorm":
+        return nn.RMSNorm(dim, eps=1e-6)
+    if norm_type == "layernorm":
+        return nn.LayerNorm(dim)
+    raise ValueError(f"Unknown norm_type: {norm_type!r}")
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 norm_type="layernorm"):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = make_norm(norm_type, hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = make_norm(norm_type, hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = make_norm(norm_type, hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -169,7 +178,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 norm_type="layernorm"):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +200,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                norm_type=norm_type,
             )
             for i in range(n_layers)
         ])
@@ -203,6 +214,8 @@ class Transolver(nn.Module):
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
@@ -405,6 +418,7 @@ class Config:
     loss_fn: str = "charbonnier"   # "mse" or "charbonnier"
     charbonnier_eps: float = 1e-3  # ε for Charbonnier sqrt(r² + ε²)
     grad_clip_max_norm: float = 0.0  # 0.0 = no clipping, >0 = clip global L2 norm
+    norm_type: str = "layernorm"  # "layernorm" or "rmsnorm" for Transolver block norms
 
 
 def _per_node_loss(pred, y, fn, eps):
@@ -454,6 +468,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    norm_type=cfg.norm_type,
 )
 
 model = Transolver(**model_config).to(device)
