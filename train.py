@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import os
 import random
+import statistics
 import subprocess
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -522,7 +524,9 @@ n_ffn_params = sum(
 )
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, FFN={n_ffn_params})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=17)
 
 run = wandb.init(
@@ -562,6 +566,15 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# Wiring sanity: confirm AdamW betas reached every param group.
+_betas_per_group = [tuple(g["betas"]) for g in optimizer.param_groups]
+print(f"AdamW betas per group: {_betas_per_group}")
+run.summary["optim/betas"] = list(_betas_per_group[0])
+run.summary["optim/n_param_groups"] = len(_betas_per_group)
+
+# Rolling buffer for per-step train losses to compute volatility (window=100).
+_train_loss_window: deque[float] = deque(maxlen=100)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -600,8 +613,10 @@ for epoch in range(MAX_EPOCHS):
         )
         optimizer.step()
         global_step += 1
+        loss_val = loss.item()
+        _train_loss_window.append(loss_val)
         wandb.log({
-            "train/loss": loss.item(),
+            "train/loss": loss_val,
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
         })
@@ -609,6 +624,10 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+    # Train-loss volatility over last 100 steps in this epoch.
+    loss_std_last100 = (
+        statistics.pstdev(_train_loss_window) if len(_train_loss_window) >= 2 else 0.0
+    )
     if device.type == "cuda":
         torch.cuda.synchronize()
     train_loop_dt = time.time() - train_loop_t0
@@ -633,6 +652,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/loss_std_last100": loss_std_last100,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
