@@ -651,6 +651,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    with torch.no_grad():
+        weight_l2 = torch.sqrt(
+            sum(p.detach().double().pow(2).sum() for p in model.parameters() if p.requires_grad)
+        ).item()
+
     # --- Validate (with EMA-applied weights if enabled; save best while applied) ---
     model.eval()
     if cfg.use_schedule_free:
@@ -692,6 +697,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "use_schedule_free": cfg.use_schedule_free,
+        "weight_l2": weight_l2,
     }
     if cfg.use_schedule_free:
         epoch_record["sf_warmup_steps"] = cfg.sf_warmup_steps
