@@ -173,6 +173,21 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class LayerScale(nn.Module):
+    """Per-channel learnable diagonal scaling for residual branches (CaIT, Touvron et al. 2021).
+
+    Init at 1e-6 so the residual contribution starts near-zero and each block is
+    activated gradually during training. Adds ``dim`` scalars per instance.
+    """
+
+    def __init__(self, dim, init_value=1e-6):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
+
+    def forward(self, x):
+        return self.gamma * x
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -186,6 +201,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                              dropout=0.1)
+        self.ls1 = LayerScale(hidden_dim)
+        self.ls2 = LayerScale(hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -194,8 +211,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ls1(self.attn(self.ln_1(fx))) + fx
+        fx = self.ls2(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -664,6 +681,33 @@ if best_metrics:
         "event": "geom_gates",
         "best_epoch": best_metrics["epoch"],
         "geom_gates": gate_values,
+    })
+
+    ls1_norms: list[float] = []
+    ls2_norms: list[float] = []
+    ls1_means: list[float] = []
+    ls2_means: list[float] = []
+    print("LayerScale gamma diagnostics (from best checkpoint):")
+    for i, block in enumerate(model.blocks):
+        g1 = block.ls1.gamma.detach()
+        g2 = block.ls2.gamma.detach()
+        n1, n2 = g1.norm().item(), g2.norm().item()
+        m1, m2 = g1.mean().item(), g2.mean().item()
+        ls1_norms.append(n1)
+        ls2_norms.append(n2)
+        ls1_means.append(m1)
+        ls2_means.append(m2)
+        print(
+            f"  Block {i}: ls1[norm={n1:.4f} mean={m1:.4e}] "
+            f"ls2[norm={n2:.4f} mean={m2:.4e}]"
+        )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "layerscale",
+        "best_epoch": best_metrics["epoch"],
+        "ls1_norms": ls1_norms,
+        "ls2_norms": ls2_norms,
+        "ls1_means": ls1_means,
+        "ls2_means": ls2_means,
     })
 
     test_metrics = None
