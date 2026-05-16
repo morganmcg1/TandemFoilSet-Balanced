@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 17:45 UTC
+- **Last updated:** 2026-05-16 18:30 UTC
 - **Branch:** `icml-appendix-willow-pai2i-48h-r2`
-- **Most recent direction from human researcher team:** None (no open issues at 17:45 UTC)
+- **Most recent direction from human researcher team:** None (no open issues at 18:30 UTC)
 
 ## Current best baseline (after fern #3854 merge — MASSIVE WIN)
 
@@ -31,17 +31,20 @@ cd target/ && python train.py \
 
 **NO SGDR** in current baseline. Frieren #4013 confirmed SGDR+δ=0.5 super-compound conflicts.
 
-## Active PRs (2 WIP, 6 idle students)
+## Active PRs (8 WIP, 0 idle — zero idle GPUs)
 
-| PR | Student | Hypothesis | Status | Notes |
-|----|---------|-----------|--------|-------|
-| #4062 | fern | slice_num=8 (axis extension) | WIP | Highest confidence; direct extension of winning axis |
-| #3877 | tanjiro | temperature_init=0.1 on slice=16 baseline | WIP — draft rebase | Mechanism real (-1.86% to -3.20% per-split val on old baseline); needs re-test on new baseline |
+| PR | Student | Hypothesis | Status | Brief / Mechanism |
+|----|---------|-----------|--------|------------------|
+| #4062 | fern | slice_num=8 | WIP | Direct axis extension; 64→32 (−3.02%), 32→16 (−5.16%) accelerating |
+| #4065 | frieren | SGDR T_0=15 single-cycle | WIP | Frieren's own suggested follow-up; removes restart-bump that killed PR #4013 |
+| #4066 | thorfinn | slice_num=12 | WIP | Conservative midpoint; brackets fern's slice=8 |
+| #4067 | alphonse | AdamW β2=0.95 | WIP | Faster 2nd-moment EMA adaptation for short-budget training (RoBERTa intuition) |
+| #4074 | askeladd | n_hidden=192 (1.5× width) | WIP | More channels per slice token to compensate for slice=16 spatial coarsening |
+| #4075 | edward | RMSNorm vs LayerNorm | WIP | Preserve surface/volume scale contrast in feature norms (Llama-2 intuition) |
+| #4076 | nezuko | SWA tail averaging (last 5 EMA) | WIP | Flatter-minimum generalization via cross-epoch checkpoint averaging |
+| #3877 | tanjiro | temperature_init=0.1 on slice=16 | WIP — rebase | Mechanism real (-1.86% to -3.20%); needs re-test on new baseline |
 
-**Idle students** (6 — awaiting research-agent ideas due back ~17:50 UTC):
-willowpai2i48h2-alphonse, willowpai2i48h2-askeladd, willowpai2i48h2-edward, willowpai2i48h2-frieren, willowpai2i48h2-nezuko, willowpai2i48h2-thorfinn
-
-## Round-11 results (17:35 UTC)
+## Round-11 results (17:35 UTC, in summary)
 
 | PR | Student | Hypothesis | val | test_3split | Action |
 |----|---------|-----------|-----|-------------|--------|
@@ -72,7 +75,7 @@ willowpai2i48h2-alphonse, willowpai2i48h2-askeladd, willowpai2i48h2-edward, will
 - **temperature_init=0.1** (tanjiro #3877): −2.62% val vs alphonse baseline; rebased to slice=16 (in-flight)
 
 ### What does NOT work
-- SGDR (any T_0) with δ=0.5 (insufficient low-lr time at 15-epoch budget)
+- SGDR T_0=8 with δ=0.5 (frieren #4013 — restart bump destructive in 15-epoch budget)
 - p_weight=3.0 per-channel pressure upweight (overfits val_cruise; regresses test)
 - surf_weight=15, 20 with δ=0.5 (axis non-compounding)
 - lr=1e-3 with δ=0.5 (destabilizes)
@@ -84,27 +87,32 @@ willowpai2i48h2-alphonse, willowpai2i48h2-askeladd, willowpai2i48h2-edward, will
 
 **Target**: val < 56 (we just broke sub-58 with fern's slice=16). Current: 57.70. Need −2.9% more.
 
-### High-confidence direct extension paths
-1. **slice_num=8** (assigned to fern #4062): direct extension of the winning axis; 64→32 gave −3.02%, 32→16 gave −5.16% (accelerating). Expected val ∈ [54.5, 58.0].
-2. **temperature_init=0.1 on slice=16** (in-flight tanjiro #3877): val=59.99 on old baseline; expect val=[55.5, 57.5] on new baseline.
+### Round-12 axes being explored in parallel (current PR slate)
 
-### Open mechanisms not yet tested on new baseline
-- **SGDR T_0=15 single-cycle + δ=0.5**: frieren's own suggestion; removes the destructive restart-bump that killed PR #4013. Single cycle covers whole budget.
-- **AdamW betas tuning (β1=0.95)**: different momentum may help slice=16 dynamics.
-- **EMA decay=0.995**: slower decay for sharper-minimum new baseline.
-- **Best-checkpoint averaging (SWA across last 3 epochs)**: untested averaging technique.
-- **Surface-only p_weight (edward's follow-up)**: decoupled from volume.
-- **MLP ratio ↑ at slice=16**: coarser slicing may have unlocked MLP capacity.
-- **n_hidden=192 at slice=16**: more channels per node.
+**Architecture axes** (3):
+- slice_num=8 (fern, axis extension)
+- slice_num=12 (thorfinn, conservative bracket)
+- n_hidden=192 (askeladd, capacity-per-slice)
 
-### Speculative directions
+**Optimization axes** (3):
+- AdamW β2=0.95 (alphonse, faster 2nd-moment adaptation)
+- SGDR T_0=15 single-cycle (frieren, removed restart-bump)
+- SWA tail averaging (nezuko, ensemble of EMA shadows)
+
+**Normalization axis** (1):
+- RMSNorm vs LayerNorm (edward, scale-preservation)
+
+**Attention axis** (1):
+- temperature_init=0.1 (tanjiro, rebased to new baseline)
+
+### Pending follow-ups (queue for round-13)
+- If slice=8 wins big: try slice=4 to find true optimum on the slice axis
+- If RMSNorm wins: try Pre-LN+RMSNorm and AlphaInit
+- If SWA wins: try K=3 and K=10 to find optimum tail window
 - Mixed-δ schedule (δ=1.0 early, δ=0.5 late) — frieren's suggestion
 - Data augmentation (mesh rotation, Re jitter)
-- RMSNorm vs LayerNorm
 - Lookahead optimizer
-
-## Queued hypotheses
-- **Research-agent ideas** (due ~17:50 UTC) — pending background completion
+- Surface-only p_weight (edward's follow-up; decoupled from volume)
 
 ## Operational notes
 
@@ -112,3 +120,4 @@ willowpai2i48h2-alphonse, willowpai2i48h2-askeladd, willowpai2i48h2-edward, will
 - **data/scoring.py NaN bug**: cruise=NaN fleet-wide; use test_3split everywhere
 - **Per-run budget**: 30 min wall clock, ~15-17 epochs at slice=16 (~107s/epoch — slightly faster than slice=64)
 - **slice=16 dynamics**: epoch_time ~107s vs slice=64's ~124s → 14% faster per epoch (more capacity for SGDR or longer scheduling)
+- **GPU utilization**: 100% — all 8 students assigned active draft PRs as of 18:30 UTC
