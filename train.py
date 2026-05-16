@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -405,6 +407,9 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 2.0
+    warmup_epochs: int = 0  # 0 = no warmup; >0 = linear LR warmup over this many epochs
+    warmup_start_factor: float = 1e-2  # initial LR factor at warmup start (Lion: avoid <1e-2 since sign-rule makes tiny LR no-op)
+    seed: int = 42  # deterministic seed for torch/numpy/random (reduces run-to-run variance)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -416,6 +421,11 @@ class Config:
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+np.random.seed(cfg.seed)
+random.seed(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -457,7 +467,20 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.warmup_epochs > 0:
+    from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR as CosLR
+    warmup = LinearLR(
+        optimizer,
+        start_factor=cfg.warmup_start_factor,
+        end_factor=1.0,
+        total_iters=cfg.warmup_epochs,
+    )
+    cosine = CosLR(optimizer, T_max=MAX_EPOCHS - cfg.warmup_epochs)
+    scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine],
+                             milestones=[cfg.warmup_epochs])
+    print(f"LR schedule: linear warmup {cfg.warmup_epochs}ep (start_factor={cfg.warmup_start_factor}) + cosine T_max={MAX_EPOCHS - cfg.warmup_epochs}")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
