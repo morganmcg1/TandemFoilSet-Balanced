@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-16 ~12:50 UTC
+- **Last updated:** 2026-05-16 ~13:35 UTC
 - **Track / Research tag:** willow-pai2i-48h-r4
 - **Advisor branch:** `icml-appendix-willow-pai2i-48h-r4` (forked from `icml-appendix-willow`)
 - **Target metric:** `val_avg/mae_surf_p` (validation), `test_avg/mae_surf_p` (paper-facing). Lower is better.
@@ -52,23 +52,25 @@ No GitHub Issues open for this track as of last check. Proceeding from the progr
 9. **SwiGLU key detail:** `mlp2` (output head) is left as standard MLP; only `self.mlp` in TransolverBlock is replaced. inner_dim=216 = round_to_mult(160*2*2/3, 8).
 10. **DSDF distribution finding (nezuko #3836):** normalized DSDF max abs=2.88 → clip=3.0 is a no-op. Clip=2.0 or 2.5 would actually touch 0.33-1.37% of values.
 
-## Active in-flight PRs (status as of 12:50 UTC)
+## Active in-flight PRs (status as of 13:35 UTC)
 
 | # | Student | Hypothesis | State | val_avg/mae_surf_p |
 |---|---|---|---|---|
 | **#3905** | askeladd | **SwiGLU + epochs=12** | **MERGED 12:45** → new baseline | 60.7195 🏆 |
 | **#3814** | askeladd | SwiGLU FFN | MERGED 11:30 (prev baseline) | 64.2430 |
-| **#3833** | thorfinn | OneCycleLR on MLP baseline | CLOSED 12:15 — val=77.52 beats OLD baseline (−8.7% test); re-testing on SwiGLU | — |
-| **#3835** | edward | asinh on MLP baseline | CLOSED 12:45 — val=76.74 beats OLD baseline (−9.5% test); re-testing on SwiGLU stack | — |
-| **#3836** | nezuko | DSDF clip=2.5/2.0 | CLOSED 12:45 — both arms no-op; hypothesis dead on this dataset | — |
-| **#3857** | frieren | attn_dropout=0.1/0.2 | stale_wip — only p=0.1 ran (val=82.17 ≈ baseline); p=0.2 running | awaiting |
+| **#3951** | thorfinn | OneCycleLR + SwiGLU | CLOSED 13:30 — val=61.38 (+1.08% regress vs #3905); cosine+ep12 wins | 61.3774 |
+| **#3857** | frieren | attn_dropout (pre-SwiGLU baseline) | CLOSED 13:25 — stale; duplicate of #3912 on SwiGLU | — |
+| **#3833** | thorfinn | OneCycleLR on MLP baseline | CLOSED 12:15 — re-tested in #3951 (no win) | — |
+| **#3835** | edward | asinh on MLP baseline | CLOSED 12:45 — val=76.74 beats OLD baseline; re-testing in #3972 | — |
+| **#3836** | nezuko | DSDF clip=2.5/2.0 | CLOSED 12:45 — both arms no-op; hypothesis dead | — |
 | **#3908** | alphonse | SwiGLU mlp_ratio=3/4 sweep | WIP — assigned 11:45 | awaiting |
 | **#3912** | fern | SwiGLU + attn_dropout=0.1/0.2 | WIP — assigned 11:45 (on SwiGLU baseline) | awaiting |
 | **#3916** | tanjiro | SwiGLU gate output head (mlp2) | WIP — assigned 11:45 | awaiting |
-| **#3951** | thorfinn | OneCycleLR + SwiGLU compound | WIP — assigned 12:25 | awaiting |
-| **#3969** | askeladd | SwiGLU + epochs=14 | WIP — assigned 12:43 (rate limit; branch created, PR pending) | awaiting |
-| **pending** | edward | swiglu-asinh (scale=2.0/3.0) | Branch created; PR pending rate-limit reset at 13:20 | pending |
-| **pending** | nezuko | re-curriculum (Re-based training schedule) | Branch created; PR pending rate-limit reset at 13:20 | pending |
+| **#3969** | askeladd | SwiGLU + epochs=14 | WIP — assigned 12:43 | awaiting |
+| **#3972** | edward | SwiGLU + asinh (scale=2.0/3.0) | WIP — assigned 13:20 | awaiting |
+| **#3974** | nezuko | Re-based curriculum learning | WIP — assigned 13:22 | awaiting |
+| **#3979** | frieren | SwiGLU + n_hidden=176 | WIP — assigned 13:28 (replaces #3857) | awaiting |
+| **#3981** | thorfinn | bf16 mixed-precision + extended epochs | WIP — assigned 13:33 (replaces #3951) | awaiting |
 
 ## Dataset finding (from nezuko #3836 sanity check, 09:35 UTC)
 
@@ -85,25 +87,29 @@ Normalized DSDF (dims 4-11) across 100 train files / 108M values:
 
 **Why:** raw DSDF is hardcoded to [0.0, 5.0] in dataset preprocessing. Clip=3σ is a no-op. Tighter clip values (2.5, 2.0) would touch the surface-side tail near sharp leading/trailing edges.
 
-## Round-5 backlog (unassigned, ordered by priority — all vs new SwiGLU baseline 64.24)
+## Round-5 backlog (unassigned, ordered by priority — all vs new baseline 60.72)
 
-1. **SwiGLU + n_hidden=176** — width scaling failed pre-SwiGLU (val=88.45 at 83.50 baseline); SwiGLU changed the regime; worth one test at the new baseline
-2. **bf16 mixed-precision** — 2× throughput → ~20 epochs in 30 min. Previously tested as bf16+batch_size=8 (failed); SwiGLU may interact better with bf16 precision
-3. **re-curriculum** — sample-weight schedule by log_Re (MED-HIGH risk; dataset-preprocessing complexity)
-4. **camber symmetry augmentation** — (x→x, z→−z) along chord + flip AoA sign; doubles effective training data
-5. **slice_num=32** — fewer, more aggregated slice tokens; never tested at SwiGLU baseline
-6. **swiglu-mlp2-gate** — gate the output head `mlp2` with SwiGLU(hidden_dim, hidden_dim*mlp_ratio, out_dim); student suggestion #4 from #3814
+All highest-priority backlog items are now in-flight. Remaining unassigned:
 
-## Potential next research directions (post-round-5)
+1. **camber symmetry augmentation** — (x→x, z→−z) along chord + flip AoA sign; doubles effective training data. Risk: cambered airfoils break the simple z-flip — needs careful per-sample handling.
+2. **slice_num=32** — fewer, more aggregated slice tokens; never tested at SwiGLU baseline. Risk: under-tokenization.
+3. **AoA jitter augmentation** — small perturbations to angle of attack to expand training distribution. Risk: pressure field is non-linear in AoA so jitter must be small.
+4. **SwiGLU + n_layers=6** — depth scaling re-test on SwiGLU stack; may now have enough expressivity.
+5. **Multi-scale Fourier PE** — frequencies spanning multiple decades (e.g., 4 log-spaced from 1 to 32) instead of current num_freq=4.
+
+## Potential next research directions (post-round-6)
 
 ### Tier change candidates (high upside, higher risk)
-1. **SwiGLU + n_layers=6** — depth scaling failed pre-SwiGLU at epoch 8 (under-converged); with SwiGLU expressivity gain and epochs=12, might now be viable at this training budget
-2. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity field. High complexity but high upside.
-3. **Multi-scale Fourier PE** — frequencies spanning multiple decades (e.g., 4 log-spaced from 1 to 32)
-4. **Learnable slice positions** — make slice_num=64 positions trainable rather than fixed attention aggregation
+1. **Physics-informed loss** — divergence-free penalty (∇·u=0) on velocity field, or pressure-Bernoulli surface constraint. High complexity but high upside.
+2. **Learnable slice positions** — make slice_num=64 positions trainable rather than fixed attention aggregation
+3. **Surface-aware loss weighting** — weight per-point loss by local surface curvature (high-curvature regions = leading edges = where pressure peaks live)
+4. **Equivariance via cross-attention** — replace coord features with positional encoding only, use SE(2)-equivariant cross-attention for pressure-field decoding
 
-### Confirmed exhausted (do not retry)
-- n_hidden=176/192, n_layers=6 (pre-SwiGLU), slice_num=96/128, mlp_ratio=4 (vanilla), n_head=8
+### Confirmed exhausted (do not retry on this stack)
+- n_hidden=176/192 (pre-SwiGLU only — retesting on SwiGLU in #3979)
+- slice_num=96/128, mlp_ratio=4 (vanilla), n_head=8
 - lr=1e-3 + coord noise (3-seed fail), Huber loss, per-channel p-weighting, SGDR, SWA, EMA
 - Feature noise aug, AoA jitter, coord_noise std sweep (std=0.03/0.005), eta_min sweep
 - Per-domain output norm, per-channel output heads, learnable Fourier freqs
+- DSDF clip ±2σ/±2.5σ (no-op confirmed via #3836)
+- OneCycleLR + SwiGLU at epochs=12 (regress vs cosine+ep12; #3951 closed)

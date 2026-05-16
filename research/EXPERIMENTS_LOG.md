@@ -1,5 +1,33 @@
 # SENPAI Research Results — `willow-pai2i-48h-r4`
 
+## 2026-05-16 13:30 — PR #3951: OneCycleLR + SwiGLU (thorfinn) — **CLOSED** (slight regress vs current baseline)
+
+- **Student:** willowpai2i48h4-thorfinn (branch: `willowpai2i48h4-thorfinn/swiglu-onecycle`)
+- **Hypothesis:** OneCycleLR (max_lr=1e-3, pct_start=0.3) compounds with SwiGLU architecture — schedule vs FFN gating are orthogonal.
+- **Results (W&B `des0mqlm`, 12 epochs, 4500 steps):**
+
+| Metric | This run | Current baseline #3905 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 61.3774 | **60.7195** | +1.08% (regress) |
+| test_avg/mae_surf_p | 52.4960 | **51.9559** | +1.04% (regress) |
+
+Per-epoch val curve: best val=61.38 at the **final** epoch 12 (still descending). LR schedule verified correct (peak=1e-3 at step 1349, 30% of budget; final=1.03e-8).
+
+- **Why closed (not merged):** PR baseline reference was the OLD SwiGLU baseline (#3814: val=64.24/test=55.55), but PR #3905 (SwiGLU+epochs=12) merged 12 minutes before the experiment finished, dropping baseline to 60.72/51.96. The OneCycle result is +1.08% / +1.04% vs the new baseline. Student's analysis is sound on its own merits, but the result is a regress on the right comparison.
+- **Cross-baseline learning:** OneCycle marginal gain shrank from −8.7% test (pre-SwiGLU baseline) to −5.5% test (vs old SwiGLU baseline). SwiGLU + cosine + epochs=12 captures more of the loss-landscape benefit than OneCycle did. Cosine annealing on the new architecture is actually well-tuned for this problem.
+- **Suggested follow-up:** OneCycle + epochs=16 (longer cycle, full rescale) might rescue the approach, but askeladd is already on cosine+epochs=14 (#3969). If that wins, schedule LENGTH matters more than schedule SHAPE, so OneCycle stays dead. If cosine+epochs=14 also doesn't win, we'd want to test OneCycle+16 to disambiguate.
+- **Reassigned thorfinn to bf16 mixed-precision (PR #3981)** — orthogonal direction, throughput win that could enable longer training within budget.
+
+---
+
+## 2026-05-16 13:25 — PR #3857: attn_dropout p=0.1 (frieren) — **CLOSED** (stale, duplicate)
+
+- **Student:** willowpai2i48h4-frieren
+- **Why closed:** Assigned on pre-SwiGLU baseline (val=82.50) before both SwiGLU (#3814) and SwiGLU+epochs=12 (#3905) merged. GPU pod blocked on GH rate limits for hours, never started training. PR #3912 (fern) is testing the exact same hypothesis (attn_dropout p=0.1/0.2) on the current SwiGLU baseline — this PR is now a strict duplicate.
+- **Reassigned frieren to SwiGLU + n_hidden=176 (PR #3979)** — single-knob width scaling retest on the new FFN regime.
+
+---
+
 ## 2026-05-16 12:45 — PR #3905: SwiGLU + epochs=12 (askeladd) — **MERGED** → new baseline
 
 - **Student:** willowpai2i48h4-askeladd (branch: `willowpai2i48h4-askeladd/swiglu-epochs12`)
