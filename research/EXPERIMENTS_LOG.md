@@ -5,6 +5,39 @@ _New entries appended as each PR is reviewed._
 
 ---
 
+## 2026-05-16 16:55 — PR #4009 (charliepai2i48h5-nezuko): Gradient clip sweep {0.5, 1.0} on BF16+LS+n10 — **MERGED (NEW BEST)**
+
+- branch: `charliepai2i48h5-nezuko/bf16-clip-sweep`
+- hypothesis: clip=0.25 is double-regularizing with LayerScale's gating; test clip={0.5, 1.0}
+- results (both arms beat baseline 67.19/58.05 at clip=0.25, 17 epochs each):
+
+  | arm | clip | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline | clip_frac @ep17 |
+  |---|---|---|---|---|---|
+  | arm-1 | 0.5 | 66.068 | 57.686 | -1.67% / -0.63% ✓ | ~0.997 |
+  | **arm-2 (WINNER)** | **1.0** | **65.701** | **57.797** | **-2.22% / -0.44% ✓** | **~0.95** |
+
+- per-split test surf_p (arm-2 clip=1.0): single=65.24 (-3.24% ✓), rc=71.43 (+2.35% ✗), cruise=38.31 (-0.91% ✓), re_rand=56.21 (-0.25% ✓)
+- artifacts: `models/model-bf16-layerscale-clip10-20260516-152629/metrics.jsonl` (JSONL-verified)
+- commentary: **MERGED** — clear new best. Mechanism: clip acts as effective step-length scale in the fully-clipped regime (clip × grad/‖grad‖). Prior clip=0.25 was under-stepping by 4×. At clip=1.0, ~5% of late-epoch steps are unclipped (first time in this programme). LayerScale γ stable throughout (no blow-up). arm-1 (clip=0.5) edges arm-2 on test_avg (57.69 vs 57.80) but arm-2 wins decisively on val. RC split regresses (+2.35%) — likely due to the increased effective step overshooting fine-grained camber pattern; all other splits improve. **clip=1.0 is now the new default on BF16+LS+n10 stack.**
+
+---
+
+## 2026-05-16 17:00 — PR #3971 (charliepai2i48h5-edward): EMA warm-up ramping on FP32 triple — CLOSED
+
+- branch: `charliepai2i48h5-edward/ema-warmup-ramp`
+- hypothesis: ramp EMA start_decay from 0.9 → {0.998, 0.9995} to open the smoothing window faster
+- results:
+
+  | arm | schedule | val_avg/mae_surf_p | test_avg/mae_surf_p | vs FP32 baseline (71.20/62.71) |
+  |---|---|---|---|---|
+  | arm-1 | warmup 100 → 0.998 | 74.115 | 65.433 | +4.1% / +4.3% worse |
+  | arm-2 | warmup 200 → 0.9995 | 106.709 | 97.506 | +49.9% / +55.5% — completely divergent |
+
+- artifacts: `target/models/model-triple-ema0998-warmup100-20260516-152746/metrics.jsonl`, `target/models/model-triple-ema09995-warmup200-20260516-142519/metrics.jsonl`
+- commentary: CLOSED — mechanism confirmed (warm-up does open EMA faster: epoch 4 vs epoch 11 for static-0.999), but absolute val at 74.11 is worse than static-0.998 FP32 baseline (71.20) and far behind current BF16+LS+n10+clip=1.0 best (65.70). arm-2 fundamentally fails: decay=0.9995 with 4500 total updates → EMA window covers ~2000 steps, EMA never closes its 35% gap to raw-val in 12 epochs. Warm-up is not a route around the 12-epoch budget constraint. EMA experiments on any stack now definitively closed.
+
+---
+
 ## 2026-05-16 16:20 — PR #4005 (charliepai2i48h5-tanjiro): BF16+LS+n10+EMA 0.998 missing cell — CLOSED
 
 - branch: `charliepai2i48h5-tanjiro/bf16-layerscale-ema-n10`
