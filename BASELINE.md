@@ -5,6 +5,73 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 
 ---
 
+## 2026-05-16 20:10 — PR #3995: H: Triple-stack (T_max=17 + β2=0.95 + GeGLU) ← NEW PROGRAMME ALL-TIME BEST
+
+- **Student:** willowpai2i48h1-fern
+- **Branch:** `willowpai2i48h1-fern/adamw_beta2_095_swiglu`
+- **W&B run:** `insf46p8`
+- **Epochs:** 17/17 (best at epoch 17, cosine LR→0)
+
+### Validation metrics (best checkpoint, epoch 17)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| **val_avg/mae_surf_p** | **60.4338** ← NEW ALL-TIME BEST |
+| val_single_in_dist | 69.6590 |
+| val_geom_camber_rc | 72.6710 |
+| val_geom_camber_cruise | 41.7220 |
+| val_re_rand | 57.6830 |
+
+### Test metrics (best checkpoint — all 4 splits valid)
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 60.5660 |
+| test_geom_camber_rc | 66.8510 |
+| test_geom_camber_cruise | 51.9760 |
+| test_re_rand | 50.3600 |
+| **test_avg (all 4 splits)** | **57.4381** ← NEW ALL-TIME BEST |
+
+### Vs prior baseline (PR #3994 T_max=17 SwiGLU seed=0)
+
+| Metric | PR #3994 SwiGLU (T_max=17) | PR #3995 Triple-stack | Δ |
+|--------|--------------------------|----------------------|---|
+| val_avg | 62.1023 | **60.4338** | **−1.67** |
+| test_avg | 59.5529 | **57.4381** | **−2.13** |
+
+All four splits improve. Largest gains on test_re_rand (−2.29) and test_single_in_dist (−2.23).
+
+### Model config (h=128, T_max=17, GeGLU, β2=0.95) — TRIPLE-STACK
+
+- Transolver: 5 layers, **hidden=128**, heads=4, slice_num=64, mlp_ratio=2
+- **GeGLU FFN** (`--use_geglu`); `use_swiglu=False`
+- n_params: 663,429 (exact param parity)
+- Loss: `vol_huber(delta=0.1) + 10 * surf_huber(delta=0.1)` on normalized targets
+- AdamW lr=5e-4, **β1=0.9, β2=0.95** (LLaMA-style), weight_decay=1e-4, batch=4
+- **cosine T_max=17** (matched to epoch budget — PyTorch Gotcha #3 fix)
+- bf16 autocast; evaluation in pure fp32
+- seed=0
+
+### Key mechanism
+
+Three orthogonal improvements stacked:
+1. **GeGLU FFN** — multiplicative gating matches nonlinear coupling in fluid dynamics
+2. **β2=0.95** — slower squared-gradient EMA reduces variance in late-training, enabling tighter convergence near the basin
+3. **T_max=17** — cosine schedule matched to total epochs; no wasted zero-LR tail (PyTorch Gotcha #3)
+
+### Reproduce
+
+```bash
+cd target/ && python train.py --agent willowpai2i48h1-fern \
+  --wandb_name "willowpai2i48h1-fern/triple_stack_tmax17_b095_geglu_seed0" \
+  --wandb_group triple_stack_tmax17 \
+  --use_geglu --seed 0
+```
+
+Note: `betas=(0.9, 0.95)` and `T_max=17` are now **hardcoded defaults** in `train.py` (merged from this PR). The `--use_geglu` flag activates the GeGLU FFN.
+
+---
+
 ## 2026-05-15 14:30 — PR #3159: H1: Huber loss (delta=0.1) to align training with MAE metric
 
 - **Student:** willowpai2i48h1-alphonse
