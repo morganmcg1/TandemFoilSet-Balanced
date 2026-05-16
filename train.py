@@ -470,6 +470,7 @@ class Config:
     use_lookahead: bool = False    # Wrap optimizer with Lookahead (PR #3947, SOAP only).
     lookahead_k: int = 5           # Lookahead sync period (steps between slow-weight syncs).
     lookahead_alpha: float = 0.5   # Lookahead interpolation weight (slow += alpha*(fast-slow)).
+    grad_clip: float = 0.0  # PR #3497: max_norm for clip_grad_norm_; 0 disables (norm still logged)
 
 
 cfg = sp.parse(Config)
@@ -635,11 +636,20 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # PR #3497: log pre-clip grad_norm every step; clip if grad_clip > 0.
+        # `clip_grad_norm_` returns the un-clipped total norm regardless of max_norm,
+        # so float('inf') is a no-op clip that still gives the diagnostic.
+        clip_max = cfg.grad_clip if cfg.grad_clip > 0 else float("inf")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max)
         optimizer.step()
         if ema is not None:
             ema.update(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
